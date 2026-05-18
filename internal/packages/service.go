@@ -1,0 +1,231 @@
+package packages
+
+import (
+	"context"
+	"database/sql"
+	"time"
+
+	"panel/internal/linux"
+	"panel/internal/panelerr"
+	"panel/internal/server"
+	"panel/internal/sshx"
+	"panel/internal/tasks"
+)
+
+type Service struct {
+	db      *sql.DB
+	servers *server.Service
+	exec    sshx.RemoteExecutor
+	tasks   *tasks.Service
+	adapter linux.DebianAdapter
+}
+
+type UpdateList struct {
+	ServerID        string                `json:"serverId"`
+	LastRefreshedAt *time.Time            `json:"lastRefreshedAt"`
+	Updates         []linux.PackageUpdate `json:"updates"`
+}
+
+func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor, taskSvc *tasks.Service) *Service {
+	return &Service{db: db, servers: servers, exec: exec, tasks: taskSvc, adapter: linux.DebianAdapter{}}
+}
+
+func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name,installed_version,candidate_version,source FROM package_updates WHERE server_id=? ORDER BY name`, serverID)
+	if err != nil {
+		return UpdateList{}, err
+	}
+	defer rows.Close()
+	out := UpdateList{ServerID: serverID, Updates: []linux.PackageUpdate{}}
+	for rows.Next() {
+		var u linux.PackageUpdate
+		if err := rows.Scan(&u.Name, &u.InstalledVersion, &u.CandidateVersion, &u.Source); err != nil {
+			return UpdateList{}, err
+		}
+		out.Updates = append(out.Updates, u)
+	}
+	var ts sql.NullString
+	_ = s.db.QueryRowContext(ctx, `SELECT refreshed_at FROM package_refreshes WHERE server_id=?`, serverID).Scan(&ts)
+	if ts.Valid {
+		t, _ := time.Parse(time.RFC3339Nano, ts.String)
+		out.LastRefreshedAt = &t
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) Refresh(ctx context.Context, serverID string) (tasks.Task, error) {
+	srv, err := s.ensurePackageAllowed(ctx, serverID, false)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_refresh", ServerID: serverID, Summary: "Refreshing package updates"})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runRefresh(context.Background(), task.ID, srv)
+	return task, nil
+}
+
+func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []string) (tasks.Task, error) {
+	srv, err := s.ensurePackageAllowed(ctx, serverID, true)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if len(names) == 0 {
+		return tasks.Task{}, panelerr.Validation("packages_required", "At least one package is required")
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_upgrade_selected", ServerID: serverID, Summary: "Upgrading selected packages"})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runUpgradeSelected(context.Background(), task.ID, srv, names)
+	return task, nil
+}
+
+func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, error) {
+	srv, err := s.ensurePackageAllowed(ctx, serverID, true)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_upgrade_all", ServerID: serverID, Summary: "Upgrading all packages"})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runUpgradeAll(context.Background(), task.ID, srv)
+	return task, nil
+}
+
+func (s *Service) ensurePackageAllowed(ctx context.Context, serverID string, requireSudo bool) (server.Server, error) {
+	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return server.Server{}, err
+	}
+	if !srv.OS.Supported {
+		return server.Server{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	if requireSudo && !srv.Sudo.Passwordless {
+		return server.Server{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	}
+	return srv, nil
+}
+
+func (s *Service) runRefresh(ctx context.Context, taskID string, srv server.Server) {
+	_ = s.tasks.Start(ctx, taskID)
+	_ = s.tasks.Advance(ctx, taskID, "running", "refreshing package cache")
+	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.AppendLog(ctx, taskID, "system", "package refresh completed")
+	_ = s.tasks.Complete(ctx, taskID, "Package refresh completed")
+}
+
+func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, names []string) {
+	_ = s.tasks.Start(ctx, taskID)
+	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading selected packages")
+	err := s.adapter.UpgradeSelected(ctx, s.exec, srv.Target(), names, taskLogSink{s.tasks, taskID})
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
+	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "Selected packages upgraded")
+}
+
+func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.Server) {
+	_ = s.tasks.Start(ctx, taskID)
+	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading all packages")
+	err := s.adapter.UpgradeAll(ctx, s.exec, srv.Target(), taskLogSink{s.tasks, taskID})
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
+	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "All packages upgraded")
+}
+
+func (s *Service) replaceUpdates(ctx context.Context, serverID string, updates []linux.PackageUpdate) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM package_updates WHERE server_id=?`, serverID); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, u := range updates {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO package_updates(server_id,name,installed_version,candidate_version,source,refreshed_at) VALUES(?,?,?,?,?,?)`, serverID, u.Name, u.InstalledVersion, u.CandidateVersion, u.Source, now); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO package_refreshes(server_id,refreshed_at) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, serverID, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Service) Counts(ctx context.Context) (map[string]int, map[string]*time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT server_id, COUNT(*) FROM package_updates GROUP BY server_id`)
+	if err != nil {
+		return nil, nil, err
+	}
+	counts := map[string]int{}
+	for rows.Next() {
+		var id string
+		var c int
+		if err := rows.Scan(&id, &c); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		counts[id] = c
+	}
+	rows.Close()
+	rows, err = s.db.QueryContext(ctx, `SELECT server_id, refreshed_at FROM package_refreshes`)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	times := map[string]*time.Time{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return nil, nil, err
+		}
+		t, _ := time.Parse(time.RFC3339Nano, raw)
+		times[id] = &t
+	}
+	return counts, times, rows.Err()
+}
+
+type taskLogSink struct {
+	tasks  *tasks.Service
+	taskID string
+}
+
+func (s taskLogSink) AppendLog(ctx context.Context, stream, line string) error {
+	return s.tasks.AppendLog(ctx, s.taskID, stream, line)
+}

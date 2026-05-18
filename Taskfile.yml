@@ -1,0 +1,72 @@
+version: '3'
+
+vars:
+  WEB_DIR: web
+
+env:
+  GOCACHE: '{{.ROOT_DIR}}/.cache/go-build'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+
+  deps:
+    desc: Install backend and frontend dependencies
+    cmds:
+      - go mod download
+      - npm --prefix {{.WEB_DIR}} install
+
+  web:install:
+    desc: Install frontend dependencies
+    cmds:
+      - npm --prefix {{.WEB_DIR}} install
+
+  web:test:
+    desc: Run frontend tests
+    deps:
+      - web:install
+    cmds:
+      - npm --prefix {{.WEB_DIR}} run test
+
+  web:build:
+    desc: Build frontend bundle
+    deps:
+      - web:install
+    cmds:
+      - npm --prefix {{.WEB_DIR}} run build
+
+  backend:test:
+    desc: Run backend tests
+    cmds:
+      - go test ./...
+
+  backend:build:
+    desc: Compile backend packages
+    cmds:
+      - go build -buildvcs=false ./...
+
+  test:
+    desc: Run all tests
+    cmds:
+      - task backend:test
+      - task web:test
+
+  build:
+    desc: Build frontend and backend
+    cmds:
+      - task web:build
+      - task backend:build
+
+  run:
+    desc: Build frontend and start the panel service
+    cmds:
+      - task deps
+      - task web:build
+      - go run ./cmd/panel
+
+  dev:
+    desc: Start backend without rebuilding frontend
+    cmds:
+      - go run ./cmd/panel

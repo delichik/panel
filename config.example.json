@@ -1,0 +1,11 @@
+{
+  "listenAddress": "127.0.0.1:8080",
+  "adminUsername": "admin",
+  "sessionSecret": "replace-this-with-a-long-random-session-secret",
+  "dataRoot": "data",
+  "appDatabase": "data/db/app.db",
+  "metricsDatabase": "data/db/metrics.db",
+  "metricsRetentionDays": 7,
+  "metricsCollectionIntervalSeconds": 60,
+  "remoteCommandTimeoutSeconds": 30
+}
