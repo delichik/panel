@@ -42,6 +42,15 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Session(w http.ResponseWriter, r *http.Request) {
-	sess := FromContext(r.Context())
+	c, err := r.Cookie(CookieName)
+	if err != nil {
+		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
+		return
+	}
+	sess, ok := h.service.Validate(c.Value)
+	if !ok {
+		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
+		return
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": sess.Username})
 }

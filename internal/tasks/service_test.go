@@ -83,7 +83,7 @@ func TestListFiltersByStatusServerAndType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0].ID != matching.ID {
+	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].ID != matching.ID {
 		t.Fatalf("unexpected filtered tasks: %#v", got)
 	}
 }
@@ -97,10 +97,27 @@ func TestListReturnsEmptySliceWhenNoTasksMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got == nil {
+	if got.Items == nil {
 		t.Fatal("expected empty slice, got nil")
 	}
-	if len(got) != 0 {
+	if got.Total != 0 || len(got.Items) != 0 {
 		t.Fatalf("expected no tasks, got %#v", got)
+	}
+}
+
+func TestListPaginatesTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	for i := 0; i < 3; i++ {
+		if _, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := svc.List(ctx, ListFilter{Limit: 2, Offset: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 3 || got.Page != 2 || got.PageSize != 2 || len(got.Items) != 1 {
+		t.Fatalf("unexpected paginated tasks: %#v", got)
 	}
 }

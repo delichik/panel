@@ -18,11 +18,24 @@ func NewHandler(service *Service) *Handler {
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if pageSize > 0 {
+		limit = pageSize
+	}
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	offset := (page - 1) * limit
 	tasks, err := h.service.List(r.Context(), ListFilter{
 		Status:   r.URL.Query().Get("status"),
 		ServerID: r.URL.Query().Get("serverId"),
 		Type:     r.URL.Query().Get("type"),
 		Limit:    limit,
+		Offset:   offset,
 	})
 	if err != nil {
 		httpx.Error(w, err)

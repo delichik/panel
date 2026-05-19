@@ -12,7 +12,7 @@ This document defines development conventions so multiple contributors can build
 - Keep Debian command strings and parsers inside `internal/linux`.
 - Keep task state transitions inside `internal/tasks`.
 - Keep Docker CLI command behavior inside `internal/docker`.
-- Keep Compose project metadata, resources, templates, deployments, and migrations inside `internal/compose`.
+- Keep service template metadata, deployed service metadata, labels, files, rendering, deployments, sync, updates, and migrations inside `internal/compose`.
 - Keep DNS provider behavior inside `internal/dns`.
 - Keep certificate provider, renewal, and sync behavior inside `internal/certs`.
 - Keep frontend API calls inside `web/src/api`.
@@ -83,10 +83,10 @@ Application database owns:
 - Package update cache.
 - Task metadata and logs.
 - Docker capability cache.
-- Compose project metadata.
-- Compose resource metadata.
+- Service template metadata.
+- Deployed service metadata and file metadata.
 - DNS provider metadata, zone cache, record cache, and domain references.
-- Certificate metadata, renewal state, sync targets, and project references.
+- Certificate metadata, renewal state, sync targets, and service references.
 
 Metrics database owns:
 
@@ -100,7 +100,7 @@ Rules:
 
 - Do not store time-series metrics in the application database.
 - Do not store business state in the metrics database.
-- Do not store Compose file bytes, migration archives, or certificate private keys in SQLite by default.
+- Do not store service template file bytes, migration archives, or certificate private keys in SQLite by default.
 - Migrations must be deterministic and idempotent.
 - Repository methods receive `context.Context`.
 
@@ -145,10 +145,10 @@ Task-backed operations across phases:
 Filesystem artifacts live under the configured data root:
 
 - `data/keys/` for SSH private keys.
-- `data/compose/<server-id>/<project>/static/` for static Compose resources.
-- `data/compose/<server-id>/<project>/templates/` for template sources.
-- `data/compose/<server-id>/<project>/rendered/` for rendered outputs.
-- `data/compose/<server-id>/<project>/migration/` for migration bundles.
+- `data/service_templates/<template-id>/static/` for binary/static template files.
+- `data/service_templates/<template-id>/templates/` for text template files.
+- `data/compose/<server-id>/<service>/rendered/` for rendered outputs.
+- `data/compose/<server-id>/<service>/migration/` for migration bundles.
 - `data/certs/` for certificate bundles and ACME material.
 - `data/tmp/` for temporary staging files.
 
@@ -165,7 +165,7 @@ Rules:
 - Provider DTOs must be redacted.
 - Provider implementations must map remote API failures into typed domain errors.
 - Cloudflare-specific fields must not become generic DNS domain identifiers.
-- Let's Encrypt-specific metadata must not leak into Compose project schemas.
+- Let's Encrypt-specific metadata must not leak into service schemas.
 
 ### Backend Testing Rules
 
@@ -306,7 +306,7 @@ Docker:
 
 - Show Docker and Compose availability per server.
 - Show runtime project and service/container status.
-- Keep read-only discovery separate from mutating Compose project management.
+- Keep read-only discovery separate from mutating service template, service, cleanup, and update management.
 
 Compose:
 
@@ -328,7 +328,7 @@ Certificates:
 - Request certificates for managed domains.
 - Show issuance, renewal, and sync task progress.
 - Manage sync targets.
-- Link certificates to Compose project references.
+- Link certificates to service references.
 
 Settings:
 
@@ -355,9 +355,9 @@ Manual browser checks:
 - Package refresh and upgrade task polling.
 - Task Center log polling.
 - Docker unsupported and supported server states.
-- Compose resource creation, template rendering, deployment, and migration.
+- Service template file creation, template rendering, deployment, sync, update, cleanup, and migration.
 - DNS provider credential creation, zone refresh, and record CRUD.
-- Certificate issue, renew, sync, and Compose reference flows.
+- Certificate issue, renew, sync, and service reference flows.
 
 ## API Contract Rules
 

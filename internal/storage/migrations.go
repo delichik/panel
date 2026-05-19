@@ -53,6 +53,26 @@ func (s *Store) Migrate(ctx context.Context) error {
 			refreshed_at TEXT NOT NULL,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS docker_capabilities (
+			server_id TEXT PRIMARY KEY,
+			docker_installed INTEGER NOT NULL DEFAULT 0,
+			docker_version TEXT NOT NULL DEFAULT '',
+			compose_installed INTEGER NOT NULL DEFAULT 0,
+			compose_version TEXT NOT NULL DEFAULT '',
+			supported INTEGER NOT NULL DEFAULT 0,
+			last_checked_at TEXT NOT NULL,
+			last_error TEXT NOT NULL DEFAULT '',
+			stale INTEGER NOT NULL DEFAULT 0,
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS docker_runtime_cache (
+			server_id TEXT NOT NULL,
+			resource TEXT NOT NULL,
+			payload TEXT NOT NULL,
+			refreshed_at TEXT NOT NULL,
+			PRIMARY KEY(server_id, resource),
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
 			type TEXT NOT NULL,
@@ -79,6 +99,55 @@ func (s *Store) Migrate(ctx context.Context) error {
 			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS service_templates (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			compose_yaml TEXT NOT NULL,
+			visual_state TEXT NOT NULL DEFAULT '{}',
+			variables TEXT NOT NULL DEFAULT '[]',
+			version INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS service_template_files (
+			id TEXT PRIMARY KEY,
+			template_id TEXT NOT NULL,
+			path TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN ('binary','template')),
+			content_type TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0,
+			sha256 TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(template_id, path),
+			FOREIGN KEY(template_id) REFERENCES service_templates(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS server_variables (
+			server_id TEXT PRIMARY KEY,
+			variables TEXT NOT NULL DEFAULT '{}',
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS deployed_services (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			server_id TEXT NOT NULL,
+			template_id TEXT NOT NULL,
+			template_version INTEGER NOT NULL,
+			remote_path TEXT NOT NULL,
+			values_json TEXT NOT NULL DEFAULT '{}',
+			labels_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL DEFAULT 'draft',
+			drifted INTEGER NOT NULL DEFAULT 0,
+			last_task_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE,
+			FOREIGN KEY(template_id) REFERENCES service_templates(id)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_deployed_services_template ON deployed_services(template_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_deployed_services_server ON deployed_services(server_id)`,
 	}
 	for _, stmt := range app {
 		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {

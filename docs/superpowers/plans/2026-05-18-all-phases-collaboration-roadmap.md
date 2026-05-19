@@ -55,7 +55,7 @@ The roadmap intentionally does read-only discovery before mutating workflows:
 - Docker discovery before Compose deployment.
 - DNS CRUD before DNS-backed certificate validation.
 - Certificate issuance before renewal and server sync.
-- Compose certificate references after certificates and Compose projects both exist.
+- Service certificate references after certificates and deployed services both exist.
 
 The roadmap also front-loads infrastructure that every later phase needs:
 
@@ -190,7 +190,7 @@ The roadmap also front-loads infrastructure that every later phase needs:
 
 ## Phase 2B: Compose Management and Migration
 
-### Milestone 2.3: Compose Project Metadata and Resources
+### Milestone 2.3: Service Template, Service, File, and Variable Metadata
 
 **Owner:** Backend Operations and Frontend Features
 
@@ -203,9 +203,11 @@ The roadmap also front-loads infrastructure that every later phase needs:
 - Create: `internal/templatex/*`
 - Create: `web/src/features/compose/*`
 
-- [ ] Implement Compose project CRUD.
-- [ ] Implement static resource metadata and file storage.
-- [ ] Implement dynamic template resource metadata.
+- [ ] Implement service template CRUD.
+- [ ] Implement deployed service CRUD.
+- [ ] Implement binary/static template file metadata and file storage.
+- [ ] Implement dynamic text template file metadata.
+- [ ] Implement system variable and server custom variable resolution.
 - [ ] Implement local template validation and rendering.
 - [ ] Verify dynamic resources are text-only and render before deployment.
 
@@ -236,7 +238,7 @@ The roadmap also front-loads infrastructure that every later phase needs:
 
 - [ ] Implement migration bundle export.
 - [ ] Implement migration bundle import validation.
-- [ ] Include project metadata, static resources, template sources, render inputs, rendered outputs when required, and certificate references.
+- [ ] Include template metadata, service metadata, binary files, template files, render inputs, rendered outputs when required, labels, and certificate references.
 - [ ] Verify export/import across two managed servers.
 
 ## Phase 3A: DNS Provider and Cloudflare CRUD
@@ -353,8 +355,8 @@ The roadmap also front-loads infrastructure that every later phase needs:
 - [ ] Implement certificate sync targets.
 - [ ] Upload cert/key files to managed servers through SSH.
 - [ ] Set remote file permissions.
-- [ ] Allow Compose projects to reference certificate deployment paths.
-- [ ] Make project reload after certificate sync explicit and task-backed.
+- [ ] Allow deployed services to reference certificate deployment paths.
+- [ ] Make service reload after certificate sync explicit and task-backed.
 - [ ] Verify failed sync does not delete the last known good certificate.
 
 ## Cross-Phase Verification
@@ -369,7 +371,7 @@ The roadmap also front-loads infrastructure that every later phase needs:
 ## Global Done Criteria
 
 - [ ] Phase 1 MVP runs end to end on Debian 12/13 test servers.
-- [ ] Phase 2 manages Compose projects through SSH and supports migration.
+- [ ] Phase 2 manages service templates and deployed services through SSH and supports migration.
 - [ ] Phase 3 manages Cloudflare DNS records through provider-neutral contracts.
 - [ ] Phase 4 issues, renews, syncs, and references certificates safely.
 - [ ] No feature module bypasses `RemoteExecutor`, provider interfaces, or `TaskRunner`.

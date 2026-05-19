@@ -19,6 +19,14 @@ type ListFilter struct {
 	ServerID string
 	Type     string
 	Limit    int
+	Offset   int
+}
+
+type ListResult struct {
+	Items    []Task `json:"items"`
+	Total    int    `json:"total"`
+	Page     int    `json:"page"`
+	PageSize int    `json:"pageSize"`
 }
 
 func NewService(db *sql.DB) *Service {
@@ -83,11 +91,13 @@ func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
 	return task, err
 }
 
-func (s *Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
+func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, error) {
 	if filter.Limit <= 0 || filter.Limit > 200 {
 		filter.Limit = 50
 	}
-	query := `SELECT id,type,server_id,status,stage,percentage,summary,error,created_at,started_at,finished_at FROM tasks`
+	if filter.Offset < 0 {
+		filter.Offset = 0
+	}
 	args := []any{}
 	conditions := []string{}
 	if filter.Status != "" {
@@ -102,25 +112,34 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]Task, error) {
 		conditions = append(conditions, `type=?`)
 		args = append(args, filter.Type)
 	}
+	where := ""
 	if len(conditions) > 0 {
-		query += ` WHERE ` + strings.Join(conditions, ` AND `)
+		where = ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
-	query += ` ORDER BY created_at DESC LIMIT ?`
-	args = append(args, filter.Limit)
+	countQuery := `SELECT COUNT(*) FROM tasks` + where
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return ListResult{}, err
+	}
+	query := `SELECT id,type,server_id,status,stage,percentage,summary,error,created_at,started_at,finished_at FROM tasks` + where + ` ORDER BY created_at DESC LIMIT ? OFFSET ?`
+	args = append(args, filter.Limit, filter.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return ListResult{}, err
 	}
 	defer rows.Close()
 	out := []Task{}
 	for rows.Next() {
 		task, err := scanTask(rows)
 		if err != nil {
-			return nil, err
+			return ListResult{}, err
 		}
 		out = append(out, task)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return ListResult{}, err
+	}
+	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 }
 
 func (s *Service) Logs(ctx context.Context, taskID string, after int64) ([]Log, int64, error) {

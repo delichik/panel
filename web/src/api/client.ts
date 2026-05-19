@@ -49,8 +49,8 @@ export class ApiClient {
     return this.request<T>(path, this.withJson(init, 'PUT', body));
   }
 
-  delete(path: string, init?: RequestInit) {
-    return this.request<void>(path, { ...init, method: 'DELETE' });
+  delete<T = void>(path: string, init?: RequestInit) {
+    return this.request<T>(path, { ...init, method: 'DELETE' });
   }
 
   private withJson(init: RequestInit = {}, method: string, body?: unknown): RequestInit {

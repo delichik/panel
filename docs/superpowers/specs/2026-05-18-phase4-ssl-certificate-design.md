@@ -2,11 +2,11 @@
 
 Source design: `docs/superpowers/specs/2026-05-16-linux-server-panel-design.md`
 
-Phase 4 adds certificate lifecycle management. It depends on Phase 3 domain/provider abstractions and Phase 2 Compose project references, but it must remain provider-neutral so future certificate providers can be added without rewriting Compose or DNS modules.
+Phase 4 adds certificate lifecycle management. It depends on Phase 3 domain/provider abstractions and Phase 2 service references, but it must remain provider-neutral so future certificate providers can be added without rewriting Compose or DNS modules.
 
 ## Phase Goal
 
-Enable operators to issue, renew, sync, and reference SSL certificates for managed servers and Compose projects.
+Enable operators to issue, renew, sync, and reference SSL certificates for managed servers and deployed services.
 
 ## Scope
 
@@ -17,7 +17,7 @@ In scope:
 - Let's Encrypt certificate issuance.
 - Automatic renewal.
 - Certificate sync to managed servers over SSH.
-- Certificate references usable by Compose projects.
+- Certificate references usable by deployed services.
 - Task-backed issuance, renewal, and sync logs.
 
 Out of scope:
@@ -61,22 +61,22 @@ Backend requirements:
 - Certificate sync targets per server.
 - SSH upload of certificate/key files.
 - Remote file permission management.
-- Compose project certificate references.
-- Optional task-backed project reload after certificate sync.
+- Service certificate references.
+- Optional task-backed service reload after certificate sync.
 
 Frontend requirements:
 
 - Renewal state and expiry indicators.
 - Sync target management.
 - Sync task progress and logs.
-- Compose project certificate reference selector.
+- Service certificate reference selector.
 
 Acceptance checks:
 
 - Certificates renew before expiry.
 - Sync uploads cert/key files to selected servers.
 - Failed renewal or sync does not delete the last known good certificate.
-- Compose projects can reference deployed certificate paths.
+- Deployed services can reference certificate deployment paths.
 
 ## Backend Modules
 
@@ -118,7 +118,7 @@ Rules:
 - Certificate private keys never appear in API responses or logs.
 - Renewal must preserve the previous valid bundle until the new bundle is verified.
 - Server sync uses SSH upload and permission changes through `RemoteExecutor`.
-- Compose projects store certificate references, not provider-specific certificate internals.
+- Deployed services store certificate references, not provider-specific certificate internals.
 
 ## API Groups
 
@@ -160,5 +160,5 @@ Controls:
 - Store new bundles separately until verification succeeds.
 - Preserve previous valid bundles.
 - Use staging paths and atomic moves where possible.
-- Make project reload after sync optional and explicit.
+- Make service reload after sync optional and explicit.
 - Redact ACME account keys, provider tokens, certificate private keys, and passphrases.

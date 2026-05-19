@@ -91,7 +91,7 @@
 - [ ] Upload cert/key files through SSH.
 - [ ] Set remote file permissions.
 - [ ] Add Compose certificate reference selection.
-- [ ] Make project reload after sync explicit and task-backed.
+- [ ] Make service reload after sync explicit and task-backed.
 - [ ] Verify failed sync preserves the last known good certificate.
 
 ## Done Criteria
@@ -99,5 +99,5 @@
 - [ ] Certificates can be issued for managed domains.
 - [ ] Certificates renew before expiry.
 - [ ] Certificates can sync to selected servers.
-- [ ] Compose projects can reference synced certificate paths.
+- [ ] Deployed services can reference synced certificate paths.
 - [ ] Private keys and provider secrets are never exposed.

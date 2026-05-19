@@ -3,8 +3,11 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -26,23 +29,43 @@ func Open(cfg config.Config) (*Store, error) {
 			return nil, err
 		}
 	}
-	appDB, err := sql.Open("sqlite", cfg.AppDatabase)
+	appDB, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
 	if err != nil {
 		return nil, err
 	}
-	metricsDB, err := sql.Open("sqlite", cfg.MetricsDatabase)
+	metricsDB, err := sql.Open("sqlite", sqliteDSN(cfg.MetricsDatabase))
 	if err != nil {
 		_ = appDB.Close()
 		return nil, err
 	}
-	appDB.SetMaxOpenConns(1)
-	metricsDB.SetMaxOpenConns(1)
+	configureDB(appDB)
+	configureDB(metricsDB)
 	s := &Store{appDB: appDB, metricsDB: metricsDB}
 	if err := s.Migrate(context.Background()); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func sqliteDSN(path string) string {
+	normalized := filepath.ToSlash(path)
+	if strings.HasPrefix(normalized, "file:") {
+		return normalized
+	}
+	return "file:" + normalized + "?" + url.Values{
+		"_pragma": []string{
+			"busy_timeout(5000)",
+			"journal_mode(WAL)",
+			"foreign_keys(ON)",
+		},
+	}.Encode()
+}
+
+func configureDB(db *sql.DB) {
+	db.SetMaxOpenConns(8)
+	db.SetMaxIdleConns(4)
+	db.SetConnMaxLifetime(30 * time.Minute)
 }
 
 func (s *Store) AppDB() *sql.DB     { return s.appDB }

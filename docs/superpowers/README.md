@@ -23,6 +23,7 @@ Phase 2 Docker Compose:
 
 - Design: `specs/2026-05-18-phase2-docker-compose-design.md`
 - Plan: `plans/2026-05-18-phase2-docker-compose-collaboration-plan.md`
+- Acceptance gate: `../phase2-acceptance-gate.md`
 
 Phase 3 DNS:
 

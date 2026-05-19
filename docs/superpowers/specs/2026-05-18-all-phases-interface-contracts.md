@@ -84,7 +84,18 @@ Task types:
 type ContainerRuntime interface {
     Detect(ctx context.Context, exec RemoteExecutor, target Target) (DockerCapability, error)
     ListComposeProjects(ctx context.Context, exec RemoteExecutor, target Target) ([]ComposeRuntimeProject, error)
+    ListServices(ctx context.Context, exec RemoteExecutor, target Target) ([]RuntimeService, error)
+    ListNetworks(ctx context.Context, exec RemoteExecutor, target Target) ([]RuntimeNetwork, error)
+    ListVolumes(ctx context.Context, exec RemoteExecutor, target Target) ([]RuntimeVolume, error)
+    ListImages(ctx context.Context, exec RemoteExecutor, target Target) ([]RuntimeImage, error)
+    CheckImageUpdates(ctx context.Context, exec RemoteExecutor, target Target, images []RuntimeImage, log LogSink) ([]ImageUpdate, error)
     ReadComposeStatus(ctx context.Context, exec RemoteExecutor, target Target, project string) (ComposeStatus, error)
+    DeleteNetwork(ctx context.Context, exec RemoteExecutor, target Target, networkID string, log LogSink) error
+    DeleteVolume(ctx context.Context, exec RemoteExecutor, target Target, volumeID string, log LogSink) error
+    DeleteImage(ctx context.Context, exec RemoteExecutor, target Target, imageID string, log LogSink) error
+    PruneNetworks(ctx context.Context, exec RemoteExecutor, target Target, log LogSink) error
+    PruneVolumes(ctx context.Context, exec RemoteExecutor, target Target, log LogSink) error
+    PruneImages(ctx context.Context, exec RemoteExecutor, target Target, log LogSink) error
     Pull(ctx context.Context, exec RemoteExecutor, target Target, project ComposeDeployment, log LogSink) error
     Up(ctx context.Context, exec RemoteExecutor, target Target, project ComposeDeployment, log LogSink) error
     Restart(ctx context.Context, exec RemoteExecutor, target Target, project ComposeDeployment, services []string, log LogSink) error
@@ -97,6 +108,8 @@ Rules:
 - Implementation uses SSH plus `docker` and `docker compose` CLI.
 - Docker Engine API is not required.
 - Mutating operations must be task-backed.
+- Network, volume, and image create/update APIs are out of Phase 2 scope; Phase 2 supports list, delete, and prune.
+- Image update workflows follow the same selected/all update pattern as package updates.
 
 ### TemplateRenderer
 
@@ -112,16 +125,20 @@ Rules:
 - Dynamic resources are text only.
 - Rendering happens locally before upload.
 - Render failures block deployment.
+- Missing variables are hard validation errors.
+- Render values come from system variables, server custom variables, and service-specific values.
 
 ### MigrationBundle
 
 ```go
 type MigrationBundle struct {
     Version        string
-    Project        ComposeProject
-    StaticFiles    []ResourceManifest
-    Templates      []TemplateManifest
+    Template       ServiceTemplate
+    Service        *Service
+    BinaryFiles    []ResourceManifest
+    TemplateFiles  []TemplateManifest
     RenderValues   map[string]any
+    Labels         map[string]string
     Certificates   []CertificateReference
     CreatedAt      time.Time
 }
@@ -130,7 +147,7 @@ type MigrationBundle struct {
 Rules:
 
 - Bundle version must be explicit.
-- Import validates server capability and remote paths before deployment.
+- Import validates server capability, remote paths, variable availability, label compatibility, and bundle integrity before deployment.
 
 ## Phase 3 Interfaces
 
@@ -228,30 +245,57 @@ Docker capability and runtime:
 - `POST /api/v1/servers/{serverId}/docker/refresh`
 - `GET /api/v1/servers/{serverId}/docker/projects`
 - `GET /api/v1/servers/{serverId}/docker/projects/{projectName}/status`
+- `GET /api/v1/servers/{serverId}/docker/services`
+- `GET /api/v1/servers/{serverId}/docker/networks`
+- `DELETE /api/v1/servers/{serverId}/docker/networks/{networkId}`
+- `POST /api/v1/servers/{serverId}/docker/networks/prune`
+- `GET /api/v1/servers/{serverId}/docker/volumes`
+- `DELETE /api/v1/servers/{serverId}/docker/volumes/{volumeId}`
+- `POST /api/v1/servers/{serverId}/docker/volumes/prune`
+- `GET /api/v1/servers/{serverId}/docker/images`
+- `POST /api/v1/servers/{serverId}/docker/images/check-updates`
+- `POST /api/v1/servers/{serverId}/docker/images/update-selected`
+- `POST /api/v1/servers/{serverId}/docker/images/update-all`
+- `DELETE /api/v1/servers/{serverId}/docker/images/{imageId}`
+- `POST /api/v1/servers/{serverId}/docker/images/prune`
 
-Panel-managed Compose projects:
+Service templates and services:
 
-- `GET /api/v1/compose/projects`
-- `POST /api/v1/compose/projects`
-- `GET /api/v1/compose/projects/{projectId}`
-- `PUT /api/v1/compose/projects/{projectId}`
-- `DELETE /api/v1/compose/projects/{projectId}`
-- `POST /api/v1/compose/projects/{projectId}/render`
-- `POST /api/v1/compose/projects/{projectId}/deploy`
-- `POST /api/v1/compose/projects/{projectId}/restart`
-- `POST /api/v1/compose/projects/{projectId}/stop`
+- `GET /api/v1/service-templates`
+- `POST /api/v1/service-templates`
+- `GET /api/v1/service-templates/{templateId}`
+- `PUT /api/v1/service-templates/{templateId}`
+- `DELETE /api/v1/service-templates/{templateId}`
+- `POST /api/v1/service-templates/{templateId}/validate`
+- `POST /api/v1/service-templates/{templateId}/render-preview`
+- `GET /api/v1/service-templates/{templateId}/services`
+- `GET /api/v1/services`
+- `POST /api/v1/services`
+- `GET /api/v1/services/{serviceId}`
+- `PUT /api/v1/services/{serviceId}`
+- `DELETE /api/v1/services/{serviceId}`
+- `POST /api/v1/services/{serviceId}/render`
+- `POST /api/v1/services/{serviceId}/deploy`
+- `POST /api/v1/services/{serviceId}/sync`
+- `POST /api/v1/services/{serviceId}/restart`
+- `POST /api/v1/services/{serviceId}/stop`
+- `POST /api/v1/services/{serviceId}/remove`
+- `POST /api/v1/services/{serviceId}/update-images`
 
 Resources:
 
-- `GET /api/v1/compose/projects/{projectId}/resources`
-- `POST /api/v1/compose/projects/{projectId}/resources/static`
-- `POST /api/v1/compose/projects/{projectId}/resources/template`
-- `PUT /api/v1/compose/projects/{projectId}/resources/{resourceId}`
-- `DELETE /api/v1/compose/projects/{projectId}/resources/{resourceId}`
+- `GET /api/v1/service-templates/{templateId}/files`
+- `POST /api/v1/service-templates/{templateId}/files/binary`
+- `POST /api/v1/service-templates/{templateId}/files/template`
+- `PUT /api/v1/service-templates/{templateId}/files/{fileId}`
+- `DELETE /api/v1/service-templates/{templateId}/files/{fileId}`
+- `GET /api/v1/servers/{serverId}/variables`
+- `PUT /api/v1/servers/{serverId}/variables`
 
 Migration:
 
-- `POST /api/v1/compose/projects/{projectId}/migration/export`
+- `POST /api/v1/services/{serviceId}/migration/export`
+- `POST /api/v1/service-templates/{templateId}/migration/export`
 - `POST /api/v1/compose/migration/import`
 
 ### Phase 3 API Groups
@@ -293,8 +337,8 @@ Certificate sync:
 
 Compose certificate references:
 
-- `POST /api/v1/compose/projects/{projectId}/certificate-references`
-- `DELETE /api/v1/compose/projects/{projectId}/certificate-references/{referenceId}`
+- `POST /api/v1/services/{serviceId}/certificate-references`
+- `DELETE /api/v1/services/{serviceId}/certificate-references/{referenceId}`
 
 ## Frontend DTO Naming
 
@@ -304,7 +348,7 @@ Phase 1:
 
 Phase 2:
 
-- `DockerCapabilityDto`, `ComposeProjectDto`, `ComposeStatusDto`, `ComposeResourceDto`, `MigrationBundleDto`.
+- `DockerCapabilityDto`, `RuntimeServiceDto`, `RuntimeNetworkDto`, `RuntimeVolumeDto`, `RuntimeImageDto`, `ImageUpdateDto`, `ServiceTemplateDto`, `ServiceDto`, `TemplateFileDto`, `ServerVariableDto`, `ComposeStatusDto`, `MigrationBundleDto`.
 
 Phase 3:
 

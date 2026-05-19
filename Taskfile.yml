@@ -70,3 +70,8 @@ tasks:
     desc: Start backend without rebuilding frontend
     cmds:
       - go run ./cmd/panel
+
+  seed:test-servers:
+    desc: Seed local test servers through the HTTP API
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/seed-test-servers.ps1

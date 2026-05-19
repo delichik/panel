@@ -39,6 +39,10 @@ async function logout() {
           <el-icon><Upload /></el-icon>
           <span>Package Updates</span>
         </el-menu-item>
+        <el-menu-item index="/docker">
+          <el-icon><Box /></el-icon>
+          <span>Docker</span>
+        </el-menu-item>
         <el-menu-item index="/tasks">
           <el-icon><Box /></el-icon>
           <span>Task Center</span>

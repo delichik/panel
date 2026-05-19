@@ -29,3 +29,20 @@ func TestOpenCreatesSeparateSchemas(t *testing.T) {
 		t.Fatal("metrics table must not exist in app database")
 	}
 }
+
+func TestOpenAllowsConcurrentAppConnections(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	if got := store.AppDB().Stats().MaxOpenConnections; got < 2 {
+		t.Fatalf("app database should not be single-connection, got %d", got)
+	}
+}
