@@ -28,4 +28,16 @@ describe('tasksApi', () => {
   it('keeps the default exported client available', () => {
     expect(tasksApi.get).toBeDefined();
   });
+
+  it('runs scheduled tasks immediately', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { id: 'task_1' }, error: null }));
+    const api = createTasksApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await api.runNow('task 1');
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/tasks/task 1/run-now',
+      expect.objectContaining({ method: 'POST' }),
+    );
+  });
 });

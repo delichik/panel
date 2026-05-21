@@ -26,7 +26,7 @@ const statusType = computed(() => {
     case 'completed':
       return 'success';
     case 'failed':
-      return 'danger';
+      return 'error';
     case 'cancelled':
       return 'info';
     case 'queued':
@@ -104,7 +104,7 @@ onBeforeUnmount(() => {
       <div>
         <div class="task-title-row">
           <strong>{{ task?.summary || 'Task' }}</strong>
-          <el-tag v-if="task" :type="statusType" size="small">{{ task.status }}</el-tag>
+          <v-chip v-if="task" :color="statusType" size="small" label class="ml-2">{{ task.status }}</v-chip>
         </div>
         <div class="task-meta">
           <span>Server: {{ serverLabel }}</span>
@@ -116,24 +116,34 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <el-progress
+    <v-progress-linear
       v-if="task"
-      :percentage="progressValue"
+      :model-value="progressValue"
       :indeterminate="task.percentage === null && isActive"
-      :duration="1.2"
-      :status="task.status === 'failed' ? 'exception' : task.status === 'completed' ? 'success' : undefined"
-      :show-text="task.percentage !== null"
-    />
+      :color="task.status === 'failed' ? 'error' : task.status === 'completed' ? 'success' : 'primary'"
+      height="18"
+      rounded
+      class="my-2"
+    >
+      <template v-if="task.percentage !== null" v-slot:default="{ value }">
+        <strong class="text-caption text-white font-weight-bold">{{ Math.ceil(value) }}%</strong>
+      </template>
+    </v-progress-linear>
 
-    <el-alert v-if="error" type="error" :title="error" show-icon />
-    <el-alert v-if="task?.error" type="error" :title="task.error" show-icon />
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-2" density="compact">{{ error }}</v-alert>
+    <v-alert v-if="task?.error" type="error" variant="tonal" class="mb-2" density="compact">{{ task.error }}</v-alert>
 
-    <div class="log-box" v-loading="loading && logs.length === 0">
-      <div v-if="logs.length === 0" class="muted empty-log">No logs yet.</div>
-      <div v-for="entry in logs" :key="entry.cursor" class="log-line" :class="entry.stream">
-        <span class="log-time">{{ new Date(entry.time).toLocaleTimeString() }}</span>
-        <span class="log-stream">{{ entry.stream }}</span>
-        <span>{{ entry.line }}</span>
+    <div class="log-box-container position-relative">
+      <div class="log-box">
+        <div v-if="logs.length === 0 && !loading" class="muted empty-log">No logs yet.</div>
+        <div v-for="entry in logs" :key="entry.cursor" class="log-line" :class="entry.stream">
+          <span class="log-time">{{ new Date(entry.time).toLocaleTimeString() }}</span>
+          <span class="log-stream">{{ entry.stream }}</span>
+          <span>{{ entry.line }}</span>
+        </div>
+      </div>
+      <div v-if="loading && logs.length === 0" class="position-absolute d-flex justify-center align-center fill-height width-100" style="top: 0; left: 0; right: 0; bottom: 0; background: rgba(16, 24, 40, 0.7); border-radius: 8px; width: 100%;">
+        <v-progress-circular indeterminate color="primary" />
       </div>
     </div>
   </div>
@@ -155,7 +165,6 @@ onBeforeUnmount(() => {
 .task-title-row {
   display: flex;
   align-items: center;
-  gap: 10px;
 }
 
 .task-meta {
@@ -163,15 +172,16 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px 14px;
   margin-top: 8px;
-  color: #667085;
+  color: rgba(var(--v-theme-on-surface), 0.6);
   font-size: 12px;
 }
 
 .log-box {
   min-height: 180px;
   max-height: 360px;
-  overflow: auto;
-  border: 1px solid #dfe4ea;
+  overflow-auto: auto;
+  overflow-y: auto;
+  border: 1px solid rgba(var(--v-border-color), 0.12);
   border-radius: 8px;
   background: #101828;
   color: #e5e7eb;

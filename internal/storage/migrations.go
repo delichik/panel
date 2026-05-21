@@ -77,11 +77,16 @@ func (s *Store) Migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			type TEXT NOT NULL,
 			server_id TEXT NOT NULL DEFAULT '',
+			resource_type TEXT NOT NULL DEFAULT '',
+			resource_id TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL,
 			stage TEXT NOT NULL DEFAULT '',
 			percentage REAL,
 			summary TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			max_retries INTEGER NOT NULL DEFAULT 0,
+			next_run_at TEXT,
 			created_at TEXT NOT NULL,
 			started_at TEXT,
 			finished_at TEXT
@@ -123,6 +128,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 			UNIQUE(template_id, path),
 			FOREIGN KEY(template_id) REFERENCES service_templates(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS service_template_dependencies (
+			template_id TEXT NOT NULL,
+			depends_on_template_id TEXT NOT NULL,
+			PRIMARY KEY(template_id, depends_on_template_id),
+			FOREIGN KEY(template_id) REFERENCES service_templates(id) ON DELETE CASCADE,
+			FOREIGN KEY(depends_on_template_id) REFERENCES service_templates(id) ON DELETE RESTRICT
+		)`,
 		`CREATE TABLE IF NOT EXISTS server_variables (
 			server_id TEXT PRIMARY KEY,
 			variables TEXT NOT NULL DEFAULT '{}',
@@ -148,11 +160,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_deployed_services_template ON deployed_services(template_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_deployed_services_server ON deployed_services(server_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_deployed_services_server_template_unique ON deployed_services(server_id, template_id)`,
 	}
 	for _, stmt := range app {
 		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
+	}
+	if err := s.ensureAppColumns(ctx, "tasks", map[string]string{
+		"resource_type": "TEXT NOT NULL DEFAULT ''",
+		"resource_id":   "TEXT NOT NULL DEFAULT ''",
+		"retry_count":   "INTEGER NOT NULL DEFAULT 0",
+		"max_retries":   "INTEGER NOT NULL DEFAULT 0",
+		"next_run_at":   "TEXT",
+	}); err != nil {
+		return err
 	}
 	metrics := []string{
 		`CREATE TABLE IF NOT EXISTS metrics_snapshots (
@@ -176,6 +198,37 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	for _, stmt := range metrics {
 		if _, err := s.metricsDB.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[string]string) error {
+	rows, err := s.appDB.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	existing := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for name, definition := range columns {
+		if existing[name] {
+			continue
+		}
+		if _, err := s.appDB.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition); err != nil {
 			return err
 		}
 	}

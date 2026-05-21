@@ -198,6 +198,11 @@ func manifestDigest(raw string) string {
 func findDigest(v any) string {
 	switch x := v.(type) {
 	case map[string]any:
+		if descriptor, ok := x["Descriptor"]; ok {
+			if digest := findDigest(descriptor); digest != "" {
+				return digest
+			}
+		}
 		if digest, ok := x["digest"].(string); ok && strings.HasPrefix(digest, "sha256:") {
 			return digest
 		}

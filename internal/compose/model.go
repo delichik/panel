@@ -19,23 +19,25 @@ type TemplateVariable struct {
 }
 
 type ServiceTemplate struct {
-	ID          string             `json:"id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	ComposeYAML string             `json:"composeYaml"`
-	VisualState map[string]any     `json:"visual"`
-	Variables   []TemplateVariable `json:"variables"`
-	Version     int                `json:"version"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	UpdatedAt   time.Time          `json:"updatedAt"`
+	ID           string             `json:"id"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	ComposeYAML  string             `json:"composeYaml"`
+	VisualState  map[string]any     `json:"visual"`
+	Variables    []TemplateVariable `json:"variables"`
+	Dependencies []string           `json:"dependencies"`
+	Version      int                `json:"version"`
+	CreatedAt    time.Time          `json:"createdAt"`
+	UpdatedAt    time.Time          `json:"updatedAt"`
 }
 
 type SaveTemplateRequest struct {
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	ComposeYAML string             `json:"composeYaml"`
-	VisualState map[string]any     `json:"visual"`
-	Variables   []TemplateVariable `json:"variables"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	ComposeYAML  string             `json:"composeYaml"`
+	VisualState  map[string]any     `json:"visual"`
+	Variables    []TemplateVariable `json:"variables"`
+	Dependencies []string           `json:"dependencies"`
 }
 
 type TemplateFile struct {
@@ -63,12 +65,16 @@ type DeployedService struct {
 	ID              string            `json:"id"`
 	Name            string            `json:"name"`
 	ServerID        string            `json:"serverId"`
+	ServerName      string            `json:"serverName,omitempty"`
 	TemplateID      string            `json:"templateId"`
+	TemplateName    string            `json:"templateName,omitempty"`
 	TemplateVersion int               `json:"templateVersion"`
 	RemotePath      string            `json:"remotePath"`
 	Values          map[string]any    `json:"values"`
 	Labels          map[string]string `json:"labels"`
 	Status          string            `json:"status"`
+	ManagementState string            `json:"managementState,omitempty"`
+	RuntimeStatus   string            `json:"runtimeStatus,omitempty"`
 	Drifted         bool              `json:"drift"`
 	LastTaskID      string            `json:"lastTaskId,omitempty"`
 	CreatedAt       time.Time         `json:"createdAt"`

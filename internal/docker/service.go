@@ -73,9 +73,16 @@ func (s *Service) Refresh(ctx context.Context, serverID string) (tasks.Task, err
 	if task, ok, err := s.runningRefresh(ctx, serverID); err != nil {
 		return tasks.Task{}, err
 	} else if ok {
+		if task.Status != tasks.StatusRunning && (task.NextRunAt == nil || !task.NextRunAt.After(time.Now().UTC())) {
+			task, err = s.tasks.RunNow(ctx, task.ID)
+			if err != nil {
+				return tasks.Task{}, err
+			}
+			go s.runRefresh(context.Background(), task.ID, srv)
+		}
 		return task, nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "docker_status_refresh", ServerID: serverID, Summary: "Refreshing Docker runtime status"})
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "docker_status_refresh", ServerID: serverID, ResourceType: "server", ResourceID: serverID, Summary: "Refreshing Docker runtime status", MaxRetries: 8})
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -367,11 +374,11 @@ func (s *Service) runRefresh(ctx context.Context, taskID string, srv server.Serv
 	cap, err := s.runtime.Detect(ctx, srv.Target())
 	if err != nil {
 		_ = s.writeCapabilityFailure(ctx, srv.ID, err)
-		_ = s.tasks.Fail(ctx, taskID, err)
+		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	if err := s.writeCapability(ctx, cap); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	if !cap.Supported {
@@ -379,7 +386,7 @@ func (s *Service) runRefresh(ctx context.Context, taskID string, srv server.Serv
 		return
 	}
 	if err := s.refreshRuntimeLists(ctx, taskID, srv); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.Complete(ctx, taskID, "Docker runtime status refreshed")
@@ -447,7 +454,7 @@ func (s *Service) ensureSupported(ctx context.Context, serverID string) (server.
 
 func (s *Service) runningRefresh(ctx context.Context, serverID string) (tasks.Task, bool, error) {
 	var taskID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM tasks WHERE server_id=? AND type='docker_status_refresh' AND status IN ('queued','running') ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&taskID)
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM tasks WHERE server_id=? AND type='docker_status_refresh' AND status IN ('queued','scheduled','running','failed_retryable') ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&taskID)
 	if err == sql.ErrNoRows {
 		return tasks.Task{}, false, nil
 	}

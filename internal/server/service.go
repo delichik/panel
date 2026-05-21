@@ -15,6 +15,10 @@ import (
 )
 
 const connectivitySudoTimeout = 8 * time.Second
+const connectivityTaskType = "server_connectivity_test"
+const connectivityResourceType = "server"
+const connectivityMaxRetries = 8
+const connectivityStaleAfter = 10 * time.Minute
 
 type Service struct {
 	db      *sql.DB
@@ -36,7 +40,13 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 	labels, _ := json.Marshal(srv.Labels)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,labels,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
 		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, string(labels), srv.Notes, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
-	return srv, err
+	if err != nil {
+		return Server{}, err
+	}
+	if s.exec != nil {
+		_, _ = s.EnsureConnectivityTask(ctx, srv.ID, true)
+	}
+	return srv, nil
 }
 
 func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) (Server, error) {
@@ -54,7 +64,14 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	if affected == 0 {
 		return Server{}, panelerr.NotFound("server")
 	}
-	return s.Get(ctx, serverID)
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return Server{}, err
+	}
+	if s.exec != nil {
+		_, _ = s.EnsureConnectivityTask(ctx, serverID, true)
+	}
+	return srv, nil
 }
 
 func (s *Service) Delete(ctx context.Context, serverID string) error {
@@ -88,6 +105,14 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 		if err != nil {
 			return nil, err
 		}
+		if s.exec != nil && (srv.LastCheckedAt == nil || time.Since(*srv.LastCheckedAt) > connectivityStaleAfter) {
+			_, _ = s.EnsureConnectivityTask(ctx, srv.ID, false)
+		}
+		var load sql.NullString
+		_ = s.db.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, srv.ID).Scan(&load)
+		if load.Valid {
+			srv.LoadAverage = load.String
+		}
 		out = append(out, srv)
 	}
 	return out, rows.Err()
@@ -98,24 +123,80 @@ func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
 	if err == sql.ErrNoRows {
 		return Server{}, panelerr.NotFound("server")
 	}
+	if err == nil {
+		var load sql.NullString
+		_ = s.db.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, srv.ID).Scan(&load)
+		if load.Valid {
+			srv.LoadAverage = load.String
+		}
+	}
 	return srv, err
 }
 
 func (s *Service) TestConnectivity(ctx context.Context, serverID string) (tasks.Task, error) {
+	return s.EnsureConnectivityTask(ctx, serverID, true)
+}
+
+func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
 	srv, err := s.Get(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "server_connectivity_test", ServerID: serverID, Summary: "Testing SSH connectivity"})
+	if existing, ok, err := s.tasks.ExistingActive(ctx, connectivityTaskType, connectivityResourceType, serverID); err != nil {
+		return tasks.Task{}, err
+	} else if ok {
+		if runNow && existing.Status != tasks.StatusRunning {
+			existing, err = s.tasks.RunNow(ctx, existing.ID)
+			if err != nil {
+				return tasks.Task{}, err
+			}
+			s.startConnectivityTask(existing, srv)
+		}
+		return existing, nil
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         connectivityTaskType,
+		ServerID:     serverID,
+		ResourceType: connectivityResourceType,
+		ResourceID:   serverID,
+		Summary:      "Testing SSH connectivity",
+		MaxRetries:   connectivityMaxRetries,
+	})
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	if runNow {
+		s.startConnectivityTask(task, srv)
+	}
+	return task, nil
+}
+
+func (s *Service) RunDueConnectivityTests(ctx context.Context) error {
+	servers, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, srv := range servers {
+		task, ok, err := s.tasks.FirstRunnable(ctx, connectivityTaskType, connectivityResourceType, srv.ID)
+		if err != nil {
+			return err
+		}
+		if ok {
+			s.startConnectivityTask(task, srv)
+		}
+	}
+	return nil
+}
+
+func (s *Service) startConnectivityTask(task tasks.Task, srv Server) {
 	go func() {
 		taskCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
 		s.runConnectivityTest(taskCtx, task.ID, srv)
 	}()
-	return task, nil
 }
 
 func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Server) {
@@ -125,7 +206,7 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	osInfo, err := linux.Detect(ctx, s.exec, target)
 	if err != nil {
 		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, err.Error())
-		_ = s.tasks.Fail(ctx, taskID, err)
+		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking passwordless sudo")

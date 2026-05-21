@@ -1,17 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { Delete, Refresh, Search, Upload } from '@element-plus/icons-vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
 import ServerSelector from '@/components/ServerSelector.vue';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { dockerApi } from '@/api/docker';
 import { serversApi } from '@/api/servers';
 import type {
   DockerCapabilityDto,
-  DockerComposeStatusDto,
   DockerImageDto,
   DockerNetworkDto,
-  DockerRuntimeServiceDto,
   DockerVolumeDto,
   ServerDto,
 } from '@/types/api';
@@ -19,26 +15,56 @@ import type {
 const servers = ref<ServerDto[]>([]);
 const serverId = ref('');
 const capability = ref<DockerCapabilityDto | null>(null);
-const services = ref<DockerRuntimeServiceDto[]>([]);
 const networks = ref<DockerNetworkDto[]>([]);
 const volumes = ref<DockerVolumeDto[]>([]);
 const images = ref<DockerImageDto[]>([]);
-const selectedUpdateRows = ref<DockerImageDto[]>([]);
+const selectedImageIds = ref<string[]>([]);
 const taskId = ref('');
 const taskTitle = ref('Docker Task');
-const activeTab = ref('services');
-const serviceDrawer = ref(false);
-const selectedService = ref<DockerRuntimeServiceDto | null>(null);
-const composeStatus = ref<DockerComposeStatusDto | null>(null);
+const activeTab = ref('networks');
 const loadingServers = ref(false);
 const loadingCapability = ref(false);
 const loadingResources = ref(false);
 const checkingUpdates = ref(false);
-const loadingServiceStatus = ref(false);
 const actionLoading = ref('');
 const error = ref('');
 let bootstrapping = false;
 let reloadSeq = 0;
+
+// Snackbar notifications
+const snackbar = ref(false);
+const snackbarText = ref('');
+const snackbarColor = ref('success');
+
+function showMessage(text: string, color = 'success') {
+  snackbarText.value = text;
+  snackbarColor.value = color;
+  snackbar.value = true;
+}
+
+// Confirmation Dialog
+const confirmDialog = ref(false);
+const confirmTitle = ref('Confirm action');
+const confirmMessage = ref('');
+const confirmAction = ref<(() => Promise<void>) | null>(null);
+
+function confirm(title: string, message: string, action: () => Promise<void>) {
+  confirmTitle.value = title;
+  confirmMessage.value = message;
+  confirmAction.value = action;
+  confirmDialog.value = true;
+}
+
+async function executeConfirm() {
+  if (confirmAction.value) {
+    try {
+      await confirmAction.value();
+    } catch (err) {
+      showMessage(err instanceof Error ? err.message : 'Action failed', 'error');
+    }
+  }
+  confirmDialog.value = false;
+}
 
 const currentServer = computed(() => servers.value.find((server) => server.id === serverId.value));
 const dockerSupported = computed(() => capability.value?.supported === true);
@@ -46,6 +72,21 @@ const composeSupported = computed(() => capability.value?.composeInstalled === t
 const capabilityPending = computed(() => capability.value?.pending === true);
 const resourceDisabled = computed(() => !serverId.value || !dockerSupported.value || Boolean(actionLoading.value));
 const updateableRows = computed(() => images.value.filter((row) => row.update?.updateAvailable || row.updateAvailable));
+
+// Selection compute for updateable images
+const selectedUpdateRows = computed(() => updateableRows.value.filter(row => selectedImageIds.value.includes(row.id)));
+const selectAllUpdates = computed({
+  get() {
+    return updateableRows.value.length > 0 && selectedImageIds.value.length === updateableRows.value.length;
+  },
+  set(val) {
+    if (val) {
+      selectedImageIds.value = updateableRows.value.map(row => row.id);
+    } else {
+      selectedImageIds.value = [];
+    }
+  }
+});
 
 function displayLabels(labels?: Record<string, string>) {
   if (!labels) return [];
@@ -61,7 +102,7 @@ function imageName(image: DockerImageDto) {
 function capabilityType() {
   if (!capability.value || capabilityPending.value) return 'info';
   if (capability.value.lastError) return 'warning';
-  return dockerSupported.value ? 'success' : 'danger';
+  return dockerSupported.value ? 'success' : 'error';
 }
 
 async function loadServers() {
@@ -96,27 +137,24 @@ async function loadCapability(targetServerId = serverId.value) {
 
 async function loadResources(targetServerId = serverId.value) {
   if (!targetServerId || !dockerSupported.value) {
-    services.value = [];
     networks.value = [];
     volumes.value = [];
     images.value = [];
-    selectedUpdateRows.value = [];
+    selectedImageIds.value = [];
     return;
   }
   loadingResources.value = true;
   try {
-    const [serviceRows, networkRows, volumeRows, imageRows] = await Promise.all([
-      dockerApi.listServices(targetServerId),
+    const [networkRows, volumeRows, imageRows] = await Promise.all([
       dockerApi.listNetworks(targetServerId),
       dockerApi.listVolumes(targetServerId),
       dockerApi.listImages(targetServerId),
     ]);
     if (targetServerId !== serverId.value) return;
-    services.value = serviceRows.items ?? [];
     networks.value = networkRows.items ?? [];
     volumes.value = volumeRows.items ?? [];
     images.value = imageRows.items ?? [];
-    selectedUpdateRows.value = [];
+    selectedImageIds.value = [];
     error.value = '';
   } catch (err) {
     if (targetServerId !== serverId.value) return;
@@ -147,62 +185,48 @@ async function reloadAll(refreshRemote = false) {
   await loadResources(targetServerId);
 }
 
-async function openService(row: DockerRuntimeServiceDto) {
-  selectedService.value = row;
-  composeStatus.value = null;
-  serviceDrawer.value = true;
-  const projectName = row.projectName || row.project;
-  if (!serverId.value || !projectName) return;
-  loadingServiceStatus.value = true;
-  try {
-    composeStatus.value = await dockerApi.getProjectStatus(serverId.value, projectName);
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Unable to load service status');
-  } finally {
-    loadingServiceStatus.value = false;
-  }
-}
-
 async function runDelete(kind: 'network' | 'volume' | 'image', id: string, name: string) {
   if (!serverId.value) return;
-  await ElMessageBox.confirm(`Delete Docker ${kind} ${name}?`, 'Confirm delete', { type: 'warning' });
-  actionLoading.value = `${kind}:${id}`;
-  try {
-    const result =
-      kind === 'network'
-        ? await dockerApi.deleteNetwork(serverId.value, id)
-        : kind === 'volume'
-          ? await dockerApi.deleteVolume(serverId.value, id)
-          : await dockerApi.deleteImage(serverId.value, id);
-    taskId.value = result.taskId;
-    taskTitle.value = `Delete Docker ${kind}`;
-    ElMessage.success(`Docker ${kind} delete started`);
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : `Unable to delete Docker ${kind}`);
-  } finally {
-    actionLoading.value = '';
-  }
+  confirm('Confirm delete', `Delete Docker ${kind} ${name}?`, async () => {
+    actionLoading.value = `${kind}:${id}`;
+    try {
+      const result =
+        kind === 'network'
+          ? await dockerApi.deleteNetwork(serverId.value, id)
+          : kind === 'volume'
+            ? await dockerApi.deleteVolume(serverId.value, id)
+            : await dockerApi.deleteImage(serverId.value, id);
+      taskId.value = result.taskId;
+      taskTitle.value = `Delete Docker ${kind}`;
+      showMessage(`Docker ${kind} delete started`);
+    } catch (err) {
+      showMessage(err instanceof Error ? err.message : `Unable to delete Docker ${kind}`, 'error');
+    } finally {
+      actionLoading.value = '';
+    }
+  });
 }
 
 async function runPrune(kind: 'networks' | 'volumes' | 'images') {
   if (!serverId.value) return;
-  await ElMessageBox.confirm(`Delete unused Docker ${kind}?`, 'Confirm prune', { type: 'warning' });
-  actionLoading.value = `prune:${kind}`;
-  try {
-    const result =
-      kind === 'networks'
-        ? await dockerApi.pruneNetworks(serverId.value)
-        : kind === 'volumes'
-          ? await dockerApi.pruneVolumes(serverId.value)
-          : await dockerApi.pruneImages(serverId.value);
-    taskId.value = result.taskId;
-    taskTitle.value = `Prune Docker ${kind}`;
-    ElMessage.success(`Docker ${kind} prune started`);
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : `Unable to prune Docker ${kind}`);
-  } finally {
-    actionLoading.value = '';
-  }
+  confirm('Confirm prune', `Delete unused Docker ${kind}?`, async () => {
+    actionLoading.value = `prune:${kind}`;
+    try {
+      const result =
+        kind === 'networks'
+          ? await dockerApi.pruneNetworks(serverId.value)
+          : kind === 'volumes'
+            ? await dockerApi.pruneVolumes(serverId.value)
+            : await dockerApi.pruneImages(serverId.value);
+      taskId.value = result.taskId;
+      taskTitle.value = `Prune Docker ${kind}`;
+      showMessage(`Docker ${kind} prune started`);
+    } catch (err) {
+      showMessage(err instanceof Error ? err.message : `Unable to prune Docker ${kind}`, 'error');
+    } finally {
+      actionLoading.value = '';
+    }
+  });
 }
 
 async function checkUpdates() {
@@ -212,10 +236,10 @@ async function checkUpdates() {
     const result = await dockerApi.checkImageUpdates(serverId.value);
     taskId.value = result.taskId;
     taskTitle.value = 'Check Docker Image Updates';
-    selectedUpdateRows.value = [];
-    ElMessage.success('Docker image update check started');
+    selectedImageIds.value = [];
+    showMessage('Docker image update check started');
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Unable to check image updates');
+    showMessage(err instanceof Error ? err.message : 'Unable to check image updates', 'error');
   } finally {
     checkingUpdates.value = false;
   }
@@ -224,23 +248,31 @@ async function checkUpdates() {
 async function updateSelected() {
   if (!serverId.value || selectedUpdateRows.value.length === 0) return;
   const imageIds = selectedUpdateRows.value.map((row) => row.id);
-  const result = await dockerApi.updateSelectedImages(serverId.value, imageIds);
-  taskId.value = result.taskId;
-  taskTitle.value = 'Update Selected Images';
-  ElMessage.success('Selected Docker image update started');
+  try {
+    const result = await dockerApi.updateSelectedImages(serverId.value, imageIds);
+    taskId.value = result.taskId;
+    taskTitle.value = 'Update Selected Images';
+    showMessage('Selected Docker image update started');
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : 'Unable to update selected images', 'error');
+  }
 }
 
 async function updateAll() {
   if (!serverId.value) return;
-  const result = await dockerApi.updateAllImages(serverId.value);
-  taskId.value = result.taskId;
-  taskTitle.value = 'Update All Images';
-  ElMessage.success('Docker image update started');
+  try {
+    const result = await dockerApi.updateAllImages(serverId.value);
+    taskId.value = result.taskId;
+    taskTitle.value = 'Update All Images';
+    showMessage('Docker image update started');
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : 'Unable to update images', 'error');
+  }
 }
 
 async function handleTaskFinished() {
   await reloadAll();
-  ElMessage.success('Docker task finished');
+  showMessage('Docker task finished');
 }
 
 watch(serverId, async () => {
@@ -259,389 +291,417 @@ onMounted(async () => {
 
 <template>
   <div>
-    <div class="panel-header panel">
+    <div class="d-flex justify-space-between align-center mb-6">
       <div>
-        <p class="page-subtitle">Inspect Docker runtime resources and run task-backed cleanup or image updates.</p>
+        <h1 class="text-h4 font-weight-bold">Runtime Resources</h1>
+        <p class="text-subtitle-1 text-medium-emphasis">Inspect Docker runtime resources and run task-backed cleanup or image updates.</p>
       </div>
-      <div class="toolbar">
-        <el-button :icon="Refresh" :disabled="!serverId" :loading="loadingCapability || loadingResources" @click="reloadAll(true)">
+      <div>
+        <v-btn
+          prepend-icon="mdi-refresh"
+          :disabled="!serverId"
+          :loading="loadingCapability || loadingResources"
+          variant="flat"
+          color="primary"
+          @click="reloadAll(true)"
+          class="text-none font-weight-bold"
+        >
           Reload
-        </el-button>
+        </v-btn>
       </div>
     </div>
 
-    <el-alert v-if="error" class="page-alert" type="error" :title="error" show-icon />
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
     <div class="docker-grid">
       <ServerSelector v-model="serverId" :servers="servers" :loading="loadingServers" />
 
       <div class="runtime-column">
-        <section class="panel capability-panel" v-loading="loadingCapability">
-          <div class="panel-header">
-            <div>
-              <strong>{{ currentServer?.name || 'Select server' }}</strong>
-              <div class="muted">Checked: {{ capability?.lastCheckedAt || capability?.checkedAt || 'never' }}</div>
+        <!-- Capability Card -->
+        <v-card :loading="loadingCapability" variant="outlined" class="mb-4">
+          <v-card-item class="bg-surface-variant py-3">
+            <div class="d-flex justify-space-between align-center">
+              <div>
+                <v-card-title class="text-subtitle-1 font-weight-bold">{{ currentServer?.name || 'Select server' }}</v-card-title>
+                <v-card-subtitle class="text-caption">
+                  Checked: {{ capability?.lastCheckedAt || capability?.checkedAt || 'never' }}
+                </v-card-subtitle>
+              </div>
+              <div class="d-flex" style="gap: 6px;">
+                <v-chip :color="capabilityType()" size="small" label>
+                  {{ capabilityPending ? 'Checking Docker' : dockerSupported ? 'Docker ready' : capability ? 'Docker unsupported' : 'Not checked' }}
+                </v-chip>
+                <v-chip :color="composeSupported ? 'success' : 'warning'" size="small" label>
+                  {{ composeSupported ? 'Compose ready' : 'Compose unavailable' }}
+                </v-chip>
+              </div>
             </div>
-            <div class="toolbar">
-              <el-tag :type="capabilityType()">
-                {{ capabilityPending ? 'Checking Docker' : dockerSupported ? 'Docker ready' : capability ? 'Docker unsupported' : 'Not checked' }}
-              </el-tag>
-              <el-tag :type="composeSupported ? 'success' : 'warning'">
-                {{ composeSupported ? 'Compose ready' : 'Compose unavailable' }}
-              </el-tag>
-            </div>
-          </div>
-          <div class="capability-body">
-            <div>
-              <span class="muted">Docker</span>
-              <strong>{{ capability?.dockerVersion || '-' }}</strong>
-            </div>
-            <div>
-              <span class="muted">Compose</span>
-              <strong>{{ capability?.composeVersion || '-' }}</strong>
-            </div>
-            <div>
-              <span class="muted">State</span>
-              <strong>{{ capability?.stale ? 'stale cache' : capability ? 'current cache' : 'unknown' }}</strong>
-            </div>
-          </div>
-          <el-alert
-            v-if="capability?.lastError && !capabilityPending"
-            class="capability-alert"
-            type="warning"
-            :title="capability.lastError"
-            show-icon
-          />
-          <el-alert
-            v-if="capabilityPending"
-            class="capability-alert"
-            type="info"
-            title="Docker capability is being checked in the background."
-            show-icon
-          />
-        </section>
+          </v-card-item>
 
-        <el-alert
+          <v-card-text class="pa-4">
+            <div class="capability-body">
+              <div>
+                <span class="text-caption text-grey-darken-1">Docker</span>
+                <strong class="text-body-1">{{ capability?.dockerVersion || '-' }}</strong>
+              </div>
+              <div>
+                <span class="text-caption text-grey-darken-1">Compose</span>
+                <strong class="text-body-1">{{ capability?.composeVersion || '-' }}</strong>
+              </div>
+              <div>
+                <span class="text-caption text-grey-darken-1">State</span>
+                <strong class="text-body-1">{{ capability?.stale ? 'stale cache' : capability ? 'current cache' : 'unknown' }}</strong>
+              </div>
+            </div>
+
+            <v-alert
+              v-if="capability?.lastError && !capabilityPending"
+              type="warning"
+              variant="tonal"
+              class="mt-3"
+            >
+              {{ capability.lastError }}
+            </v-alert>
+            <v-alert
+              v-if="capabilityPending"
+              type="info"
+              variant="tonal"
+              class="mt-3"
+            >
+              Docker capability is being checked in the background.
+            </v-alert>
+          </v-card-text>
+        </v-card>
+
+        <v-alert
           v-if="capability && !dockerSupported && !capabilityPending"
-          class="page-alert"
           type="warning"
-          title="This server does not currently expose Docker runtime capability."
-          show-icon
-        />
+          variant="tonal"
+          class="mb-4"
+        >
+          This server does not currently expose Docker runtime capability.
+        </v-alert>
 
-        <section class="panel runtime-panel" v-loading="loadingResources">
-          <el-tabs v-model="activeTab" class="runtime-tabs">
-            <el-tab-pane label="Services" name="services">
-              <el-table :data="services" empty-text="No Docker services or containers discovered">
-                <el-table-column prop="name" label="Name" min-width="180" />
-                <el-table-column prop="image" label="Image" min-width="220" />
-                <el-table-column label="State" width="140">
-                  <template #default="{ row }">
-                    <el-tag :type="row.state === 'running' || row.status === 'running' ? 'success' : 'info'">
-                      {{ row.state || row.status || 'unknown' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="Project" min-width="150">
-                  <template #default="{ row }">{{ row.projectName || row.project || '-' }}</template>
-                </el-table-column>
-                <el-table-column label="Labels" min-width="220">
-                  <template #default="{ row }">
-                    <div class="label-list">
-                      <el-tag v-for="[key, value] in displayLabels(row.labels)" :key="key" size="small">
-                        {{ key }}={{ value }}
-                      </el-tag>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="Actions" width="130" fixed="right">
-                  <template #default="{ row }">
-                    <el-button size="small" :icon="Search" @click="openService(row)">Status</el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-tab-pane>
+        <!-- Resources Card with Tabs -->
+        <v-card :loading="loadingResources" variant="outlined">
+          <v-tabs v-model="activeTab" color="primary" border-bottom>
+            <v-tab value="networks" class="text-none font-weight-bold">Networks</v-tab>
+            <v-tab value="volumes" class="text-none font-weight-bold">Volumes</v-tab>
+            <v-tab value="images" class="text-none font-weight-bold">Images</v-tab>
+          </v-tabs>
 
-            <el-tab-pane label="Networks" name="networks">
-              <div class="tab-toolbar">
-                <el-button
-                  type="danger"
-                  :icon="Delete"
+          <v-window v-model="activeTab" class="pa-4">
+            <v-window-item value="networks">
+              <div class="d-flex justify-end mb-3">
+                <v-btn
+                  color="error"
+                  prepend-icon="mdi-delete-sweep"
+                  variant="outlined"
+                  size="small"
                   :disabled="resourceDisabled"
                   :loading="actionLoading === 'prune:networks'"
                   @click="runPrune('networks')"
+                  class="text-none"
                 >
                   Delete unused
-                </el-button>
+                </v-btn>
               </div>
-              <el-table :data="networks" empty-text="No Docker networks discovered">
-                <el-table-column prop="name" label="Name" min-width="180" />
-                <el-table-column prop="driver" label="Driver" width="140" />
-                <el-table-column prop="scope" label="Scope" width="120" />
-                <el-table-column label="Labels" min-width="220">
-                  <template #default="{ row }">
-                    <div class="label-list">
-                      <el-tag v-for="[key, value] in displayLabels(row.labels)" :key="key" size="small">
-                        {{ key }}={{ value }}
-                      </el-tag>
-                    </div>
-                  </template>
-                </el-table-column>
-                <el-table-column label="Actions" width="120" fixed="right">
-                  <template #default="{ row }">
-                    <el-button
-                      size="small"
-                      type="danger"
-                      :icon="Delete"
-                      :disabled="resourceDisabled"
-                      :loading="actionLoading === `network:${row.id}`"
-                      @click="runDelete('network', row.id, row.name)"
-                    >
-                      Delete
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-tab-pane>
 
-            <el-tab-pane label="Volumes" name="volumes">
-              <div class="tab-toolbar">
-                <el-button
-                  type="danger"
-                  :icon="Delete"
+              <v-table class="text-left" style="background: transparent;">
+                <thead>
+                  <tr>
+                    <th class="font-weight-bold">Name</th>
+                    <th class="font-weight-bold">Driver</th>
+                    <th class="font-weight-bold">Scope</th>
+                    <th class="font-weight-bold">Labels</th>
+                    <th class="font-weight-bold text-right" style="width: 120px;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="networks.length === 0">
+                    <td colspan="5" class="text-center py-6 text-grey-darken-1">No Docker networks discovered</td>
+                  </tr>
+                  <tr v-for="row in networks" :key="row.id">
+                    <td class="font-weight-bold">{{ row.name }}</td>
+                    <td>{{ row.driver }}</td>
+                    <td>{{ row.scope }}</td>
+                    <td>
+                      <div class="d-flex flex-wrap" style="gap: 4px;">
+                        <v-chip v-for="[key, value] in displayLabels(row.labels)" :key="key" size="x-small" label color="grey-lighten-1">
+                          {{ key }}={{ value }}
+                        </v-chip>
+                      </div>
+                    </td>
+                    <td class="text-right">
+                      <v-btn
+                        size="small"
+                        color="error"
+                        variant="outlined"
+                        prepend-icon="mdi-delete"
+                        :disabled="resourceDisabled"
+                        :loading="actionLoading === `network:${row.id}`"
+                        @click="runDelete('network', row.id, row.name)"
+                        class="text-none"
+                      >
+                        Delete
+                      </v-btn>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </v-window-item>
+
+            <v-window-item value="volumes">
+              <div class="d-flex justify-end mb-3">
+                <v-btn
+                  color="error"
+                  prepend-icon="mdi-delete-sweep"
+                  variant="outlined"
+                  size="small"
                   :disabled="resourceDisabled"
                   :loading="actionLoading === 'prune:volumes'"
                   @click="runPrune('volumes')"
+                  class="text-none"
                 >
                   Delete unused
-                </el-button>
+                </v-btn>
               </div>
-              <el-table :data="volumes" empty-text="No Docker volumes discovered">
-                <el-table-column prop="name" label="Name" min-width="200" />
-                <el-table-column prop="driver" label="Driver" width="140" />
-                <el-table-column prop="mountpoint" label="Mountpoint" min-width="260" show-overflow-tooltip />
-                <el-table-column label="Actions" width="120" fixed="right">
-                  <template #default="{ row }">
-                    <el-button
-                      size="small"
-                      type="danger"
-                      :icon="Delete"
-                      :disabled="resourceDisabled"
-                      :loading="actionLoading === `volume:${row.name}`"
-                      @click="runDelete('volume', row.name, row.name)"
-                    >
-                      Delete
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-tab-pane>
 
-            <el-tab-pane label="Images" name="images">
-              <div class="tab-toolbar">
-                <el-button :icon="Refresh" :disabled="resourceDisabled" :loading="checkingUpdates" @click="checkUpdates">
+              <v-table class="text-left" style="background: transparent;">
+                <thead>
+                  <tr>
+                    <th class="font-weight-bold">Name</th>
+                    <th class="font-weight-bold">Driver</th>
+                    <th class="font-weight-bold">Mountpoint</th>
+                    <th class="font-weight-bold text-right" style="width: 120px;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="volumes.length === 0">
+                    <td colspan="4" class="text-center py-6 text-grey-darken-1">No Docker volumes discovered</td>
+                  </tr>
+                  <tr v-for="row in volumes" :key="row.name">
+                    <td class="font-weight-bold text-truncate" style="max-width: 250px;">{{ row.name }}</td>
+                    <td>{{ row.driver }}</td>
+                    <td class="text-caption text-grey-darken-1 text-truncate" style="max-width: 300px;" :title="row.mountpoint">
+                      {{ row.mountpoint }}
+                    </td>
+                    <td class="text-right">
+                      <v-btn
+                        size="small"
+                        color="error"
+                        variant="outlined"
+                        prepend-icon="mdi-delete"
+                        :disabled="resourceDisabled"
+                        :loading="actionLoading === `volume:${row.name}`"
+                        @click="runDelete('volume', row.name, row.name)"
+                        class="text-none"
+                      >
+                        Delete
+                      </v-btn>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </v-window-item>
+
+            <v-window-item value="images">
+              <div class="d-flex flex-wrap mb-3" style="gap: 8px; justify-content: flex-end;">
+                <v-btn
+                  prepend-icon="mdi-refresh"
+                  variant="outlined"
+                  size="small"
+                  :disabled="resourceDisabled"
+                  :loading="checkingUpdates"
+                  @click="checkUpdates"
+                  class="text-none"
+                >
                   Check updates
-                </el-button>
-                <el-button
-                  type="primary"
-                  :icon="Upload"
+                </v-btn>
+                <v-btn
+                  color="primary"
+                  prepend-icon="mdi-arrow-up-bold-box"
+                  variant="flat"
+                  size="small"
                   :disabled="resourceDisabled || selectedUpdateRows.length === 0"
                   @click="updateSelected"
+                  class="text-none"
                 >
-                  Update selected
-                </el-button>
-                <el-button type="primary" :disabled="resourceDisabled || updateableRows.length === 0" @click="updateAll">
+                  Update selected ({{ selectedUpdateRows.length }})
+                </v-btn>
+                <v-btn
+                  color="primary"
+                  variant="outlined"
+                  size="small"
+                  :disabled="resourceDisabled || updateableRows.length === 0"
+                  @click="updateAll"
+                  class="text-none"
+                >
                   Update all
-                </el-button>
-                <el-button
-                  type="danger"
-                  :icon="Delete"
+                </v-btn>
+                <v-btn
+                  color="error"
+                  prepend-icon="mdi-delete-sweep"
+                  variant="outlined"
+                  size="small"
                   :disabled="resourceDisabled"
                   :loading="actionLoading === 'prune:images'"
                   @click="runPrune('images')"
+                  class="text-none"
                 >
                   Delete unused
-                </el-button>
+                </v-btn>
               </div>
 
-              <el-alert
+              <v-alert
                 v-if="updateableRows.length > 0"
-                class="image-update-alert"
                 type="info"
-                :title="`${updateableRows.length} image updates available`"
-                show-icon
-              />
-
-              <el-table
-                v-if="updateableRows.length > 0"
-                class="updates-table"
-                :data="updateableRows"
-                empty-text="No image update results"
-                @selection-change="selectedUpdateRows = $event"
+                variant="tonal"
+                class="mb-4"
               >
-                <el-table-column type="selection" width="48" />
-                <el-table-column label="Image" min-width="220">
-                  <template #default="{ row }">{{ imageName(row) }}</template>
-                </el-table-column>
-                <el-table-column label="Current" min-width="160">
-                  <template #default="{ row }">{{ row.update?.currentDigest || row.currentVersion || '-' }}</template>
-                </el-table-column>
-                <el-table-column label="Latest" min-width="160">
-                  <template #default="{ row }">{{ row.update?.latestDigest || row.latestVersion || '-' }}</template>
-                </el-table-column>
-                <el-table-column label="Status" width="140">
-                  <template #default="{ row }">
-                    <el-tag :type="row.update?.updateAvailable || row.updateAvailable ? 'warning' : 'success'">
-                      {{ row.update?.updateAvailable || row.updateAvailable ? 'update' : 'current' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-              </el-table>
+                {{ updateableRows.length }} image updates available
+              </v-alert>
 
-              <el-table :data="images" empty-text="No Docker images discovered">
-                <el-table-column type="selection" width="48" />
-                <el-table-column label="Image" min-width="240">
-                  <template #default="{ row }">{{ imageName(row) }}</template>
-                </el-table-column>
-                <el-table-column prop="id" label="ID" min-width="180" show-overflow-tooltip />
-                <el-table-column prop="size" label="Size" width="120" />
-                <el-table-column label="Update" width="120">
-                  <template #default="{ row }">
-                    <el-tag :type="row.update?.updateAvailable || row.updateAvailable ? 'warning' : 'info'">
-                      {{ row.update?.updateAvailable || row.updateAvailable ? 'available' : 'unknown' }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column label="Actions" width="120" fixed="right">
-                  <template #default="{ row }">
-                    <el-button
-                      size="small"
-                      type="danger"
-                      :icon="Delete"
-                      :disabled="resourceDisabled"
-                      :loading="actionLoading === `image:${row.id}`"
-                      @click="runDelete('image', row.id, imageName(row))"
-                    >
-                      Delete
-                    </el-button>
-                  </template>
-                </el-table-column>
-              </el-table>
-            </el-tab-pane>
-          </el-tabs>
-        </section>
+              <!-- Image Updates Table (Shown only if updates exist) -->
+              <v-card v-if="updateableRows.length > 0" variant="outlined" class="mb-4">
+                <v-card-title class="text-subtitle-2 font-weight-bold bg-orange-lighten-5 py-2">Available Updates</v-card-title>
+                <v-divider />
+                <v-table class="text-left" style="background: transparent;">
+                  <thead>
+                    <tr>
+                      <th style="width: 48px;">
+                        <v-checkbox-btn v-model="selectAllUpdates" color="primary" />
+                      </th>
+                      <th class="font-weight-bold">Image</th>
+                      <th class="font-weight-bold">Current</th>
+                      <th class="font-weight-bold">Latest</th>
+                      <th class="font-weight-bold">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="row in updateableRows" :key="row.id">
+                      <td>
+                        <v-checkbox-btn v-model="selectedImageIds" :value="row.id" color="primary" />
+                      </td>
+                      <td class="font-weight-bold">{{ imageName(row) }}</td>
+                      <td class="text-caption text-mono" style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {{ row.update?.currentDigest || row.currentVersion || '-' }}
+                      </td>
+                      <td class="text-caption text-mono" style="max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                        {{ row.update?.latestDigest || row.latestVersion || '-' }}
+                      </td>
+                      <td>
+                        <v-chip color="warning" size="small" label>update</v-chip>
+                      </td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </v-card>
+
+              <!-- All Images Table -->
+              <v-table class="text-left" style="background: transparent;">
+                <thead>
+                  <tr>
+                    <th class="font-weight-bold">Image</th>
+                    <th class="font-weight-bold">ID</th>
+                    <th class="font-weight-bold">Size</th>
+                    <th class="font-weight-bold">Update</th>
+                    <th class="font-weight-bold text-right" style="width: 120px;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="images.length === 0">
+                    <td colspan="5" class="text-center py-6 text-grey-darken-1">No Docker images discovered</td>
+                  </tr>
+                  <tr v-for="row in images" :key="row.id">
+                    <td class="font-weight-bold">{{ imageName(row) }}</td>
+                    <td class="text-caption text-mono text-truncate" style="max-width: 150px;" :title="row.id">{{ row.id }}</td>
+                    <td>{{ row.size }}</td>
+                    <td>
+                      <v-chip :color="row.update?.updateAvailable || row.updateAvailable ? 'warning' : 'info'" size="small" label>
+                        {{ row.update?.updateAvailable || row.updateAvailable ? 'available' : 'unknown' }}
+                      </v-chip>
+                    </td>
+                    <td class="text-right">
+                      <v-btn
+                        size="small"
+                        color="error"
+                        variant="outlined"
+                        prepend-icon="mdi-delete"
+                        :disabled="resourceDisabled"
+                        :loading="actionLoading === `image:${row.id}`"
+                        @click="runDelete('image', row.id, imageName(row))"
+                        class="text-none"
+                      >
+                        Delete
+                      </v-btn>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </v-window-item>
+          </v-window>
+        </v-card>
       </div>
     </div>
 
-    <section v-if="taskId" class="panel task-section">
-      <div class="panel-header"><strong>{{ taskTitle }}</strong></div>
-      <div class="panel-body">
+    <!-- Active Task Status Panel -->
+    <v-card v-if="taskId" class="mt-6 pa-4" variant="outlined">
+      <v-card-title class="px-0 pt-0 text-subtitle-1 font-weight-bold">{{ taskTitle }}</v-card-title>
+      <v-card-text class="px-0 pb-0">
         <TaskLogPanel :task-id="taskId" :server-name="currentServer?.name" compact @finished="handleTaskFinished" />
-      </div>
-    </section>
+      </v-card-text>
+    </v-card>
 
-    <el-drawer v-model="serviceDrawer" title="Runtime Service Status" size="520px">
-      <div v-loading="loadingServiceStatus" class="service-detail">
-        <section>
-          <div class="detail-label">Container</div>
-          <strong>{{ selectedService?.name || '-' }}</strong>
-        </section>
-        <section>
-          <div class="detail-label">Image</div>
-          <span>{{ selectedService?.image || '-' }}</span>
-        </section>
-        <section>
-          <div class="detail-label">Status</div>
-          <span>{{ selectedService?.status || selectedService?.state || '-' }}</span>
-        </section>
-        <section>
-          <div class="detail-label">Compose project</div>
-          <span>{{ selectedService?.projectName || selectedService?.project || 'not associated' }}</span>
-        </section>
-        <section v-if="composeStatus">
-          <div class="detail-label">Project status</div>
-          <span>{{ composeStatus.status || composeStatus.state }}</span>
-        </section>
-        <section>
-          <div class="detail-label">Labels</div>
-          <div class="label-list">
-            <el-tag v-for="[key, value] in displayLabels(selectedService?.labels)" :key="key" size="small">
-              {{ key }}={{ value }}
-            </el-tag>
-          </div>
-        </section>
-      </div>
-    </el-drawer>
+    <!-- Confirmation Dialog -->
+    <v-dialog v-model="confirmDialog" max-width="400px">
+      <v-card>
+        <v-card-title class="bg-surface-variant py-3 font-weight-bold">
+          {{ confirmTitle }}
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="pa-4 text-body-1">
+          {{ confirmMessage }}
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="pa-3 bg-surface-variant">
+          <v-spacer />
+          <v-btn variant="outlined" class="text-none font-weight-bold" @click="confirmDialog = false">Cancel</v-btn>
+          <v-btn color="error" variant="flat" class="text-none font-weight-bold" @click="executeConfirm">Confirm</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Global Snackbar -->
+    <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
+      {{ snackbarText }}
+      <template v-slot:actions>
+        <v-btn color="white" variant="text" @click="snackbar = false">Close</v-btn>
+      </template>
+    </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.page-alert,
-.docker-grid,
-.task-section {
-  margin-top: 20px;
-}
-
 .docker-grid {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
-  gap: 20px;
+  gap: 24px;
 }
 
 .runtime-column {
-  display: grid;
-  gap: 20px;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
 
 .capability-body {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  padding: 16px 20px;
+  gap: 16px;
 }
 
-.capability-body > div {
-  display: grid;
-  gap: 4px;
-}
-
-.capability-alert {
-  margin: 0 20px 18px;
-}
-
-.runtime-tabs {
-  padding: 0 20px 20px;
-}
-
-.tab-toolbar {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
-  margin-bottom: 12px;
-}
-
-.label-list {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.image-update-alert,
-.updates-table {
-  margin-bottom: 14px;
-}
-
-.service-detail {
-  display: grid;
-  gap: 18px;
-}
-
-.detail-label {
-  margin-bottom: 6px;
-  color: #667085;
-  font-size: 12px;
-  text-transform: uppercase;
+.text-mono {
+  font-family: monospace;
 }
 </style>

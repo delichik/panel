@@ -63,6 +63,15 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"nextCursor": next, "logs": logs})
 }
 
+func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.RunNow(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/run-now")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, task)
+}
+
 func taskID(path string) string {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 4 {

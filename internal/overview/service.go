@@ -27,6 +27,7 @@ type ServerSummary struct {
 	Reachable            bool       `json:"reachable"`
 	MetricsFresh         bool       `json:"metricsFresh"`
 	PackageUpdateCount   int        `json:"packageUpdateCount"`
+	LoadAverage          string     `json:"loadAverage"`
 	LastMetricsAt        *time.Time `json:"lastMetricsAt"`
 	LastPackageRefreshAt *time.Time `json:"lastPackageRefreshAt"`
 }
@@ -50,10 +51,14 @@ func (s *Service) Get(ctx context.Context) (Overview, error) {
 		if err != nil {
 			return Overview{}, err
 		}
+		load, err := s.metrics.LatestLoad(ctx, srv.ID)
+		if err != nil {
+			return Overview{}, err
+		}
 		fresh := lastMetrics != nil && time.Since(*lastMetrics) < 5*time.Minute
 		out.Servers = append(out.Servers, ServerSummary{
 			ID: srv.ID, Name: srv.Name, Host: srv.Host, Supported: srv.OS.Supported, Reachable: srv.Reachable,
-			MetricsFresh: fresh, PackageUpdateCount: counts[srv.ID], LastMetricsAt: lastMetrics, LastPackageRefreshAt: refreshes[srv.ID],
+			MetricsFresh: fresh, PackageUpdateCount: counts[srv.ID], LoadAverage: load, LastMetricsAt: lastMetrics, LastPackageRefreshAt: refreshes[srv.ID],
 		})
 	}
 	return out, nil

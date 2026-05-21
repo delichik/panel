@@ -6,7 +6,7 @@
 
 **Architecture:** The system remains a modular monolith: one Go backend, one Vue 3 frontend, separate SQLite databases for app state and metrics, and filesystem-backed artifacts for keys, Compose resources, migration bundles, and certificates. All remote server work flows through SSH abstractions and all long-running operations flow through shared task/log infrastructure.
 
-**Tech Stack:** Go, Gin or Echo, GORM, SQLite, `golang.org/x/crypto/ssh`, Vue 3, Vite, Element Plus, Pinia, Vue Router, ECharts, Go templates, Docker CLI, Docker Compose CLI, Cloudflare API, ACME/Let's Encrypt.
+**Tech Stack:** Go, Gin or Echo, GORM, SQLite, `golang.org/x/crypto/ssh`, Vue 3, Vite, Vuetify, Pinia, Vue Router, ECharts, Go templates, Docker CLI, Docker Compose CLI, Cloudflare API, ACME/Let's Encrypt.
 
 ---
 

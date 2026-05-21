@@ -122,3 +122,19 @@ func (s *Service) LatestAt(ctx context.Context, serverID string) (*time.Time, er
 	v, _ := time.Parse(time.RFC3339Nano, ts.String)
 	return &v, nil
 }
+
+func (s *Service) LatestLoad(ctx context.Context, serverID string) (string, error) {
+	var load sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, serverID).Scan(&load)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !load.Valid {
+		return "", nil
+	}
+	return load.String, nil
+}
+

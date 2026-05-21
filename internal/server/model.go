@@ -18,6 +18,7 @@ type Server struct {
 	OS            linux.OSRelease `json:"os"`
 	Sudo          SudoState       `json:"sudo"`
 	Reachable     bool            `json:"reachable"`
+	LoadAverage   string          `json:"loadAverage"`
 	LastCheckedAt *time.Time      `json:"lastCheckedAt"`
 	LastError     string          `json:"lastError,omitempty"`
 	CreatedAt     time.Time       `json:"createdAt"`

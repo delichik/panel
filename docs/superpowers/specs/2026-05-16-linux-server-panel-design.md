@@ -154,7 +154,7 @@ This keeps deployment simple while preserving clear module boundaries and extens
 
 - Vue 3
 - Vite
-- Element Plus
+- Vuetify
 - Pinia
 - Vue Router
 - ECharts

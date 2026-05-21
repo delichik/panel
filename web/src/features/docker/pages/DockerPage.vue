@@ -10,8 +10,8 @@ const router = useRouter();
 
 const activeTab = computed({
   get() {
-    const tab = String(route.query.tab || 'templates');
-    return ['templates', 'services', 'runtime'].includes(tab) ? tab : 'templates';
+    const tab = String(route.query.tab || 'services');
+    return ['templates', 'services', 'runtime'].includes(tab) ? tab : 'services';
   },
   set(tab: string) {
     void router.replace({ path: '/docker', query: { ...route.query, tab } });
@@ -21,31 +21,23 @@ const activeTab = computed({
 
 <template>
   <div class="docker-page">
-    <section class="panel docker-nav">
-      <el-tabs v-model="activeTab">
-        <el-tab-pane label="Service Templates" name="templates" />
-        <el-tab-pane label="Services" name="services" />
-        <el-tab-pane label="Runtime Resources" name="runtime" />
-      </el-tabs>
-    </section>
+    <v-card variant="outlined" class="mb-4">
+      <v-tabs v-model="activeTab" color="primary" border-bottom>
+        <v-tab value="services" class="text-none font-weight-bold">Services</v-tab>
+        <v-tab value="runtime" class="text-none font-weight-bold">Runtime Resources</v-tab>
+        <v-tab value="templates" class="text-none font-weight-bold">Service Templates</v-tab>
+      </v-tabs>
+    </v-card>
 
-    <ServiceTemplatesPage v-if="activeTab === 'templates'" />
-    <ServicesPage v-else-if="activeTab === 'services'" />
-    <DockerRuntimePage v-else />
+    <ServicesPage v-if="activeTab === 'services'" />
+    <DockerRuntimePage v-else-if="activeTab === 'runtime'" />
+    <ServiceTemplatesPage v-else />
   </div>
 </template>
 
 <style scoped>
 .docker-page {
-  display: grid;
-  gap: 20px;
-}
-
-.docker-nav {
-  padding: 0 20px;
-}
-
-.docker-nav :deep(.el-tabs__header) {
-  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
 }
 </style>

@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"panel/internal/compose"
 	"panel/internal/docker"
 	"panel/internal/metrics"
 	"panel/internal/packages"
@@ -19,14 +20,15 @@ type Scheduler struct {
 	servers  *server.Service
 	metrics  *metrics.Service
 	docker   *docker.Service
+	compose  *compose.Service
 	packages *packages.Service
 	tasks    *tasks.Service
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 }
 
-func New(settings *settings.Service, servers *server.Service, metrics *metrics.Service, dockerSvc *docker.Service, packages *packages.Service, tasks *tasks.Service) *Scheduler {
-	return &Scheduler{settings: settings, servers: servers, metrics: metrics, docker: dockerSvc, packages: packages, tasks: tasks}
+func New(settings *settings.Service, servers *server.Service, metrics *metrics.Service, dockerSvc *docker.Service, composeSvc *compose.Service, packages *packages.Service, tasks *tasks.Service) *Scheduler {
+	return &Scheduler{settings: settings, servers: servers, metrics: metrics, docker: dockerSvc, compose: composeSvc, packages: packages, tasks: tasks}
 }
 
 func (s *Scheduler) Start(parent context.Context) {
@@ -59,6 +61,14 @@ func (s *Scheduler) dockerLoop(ctx context.Context) {
 			lastRun = time.Now()
 			if err := s.docker.RefreshReachable(ctx); err != nil {
 				log.Printf("docker refresh: %v", err)
+			}
+			if err := s.servers.RunDueConnectivityTests(ctx); err != nil {
+				log.Printf("server connectivity reconcile: %v", err)
+			}
+			if s.compose != nil {
+				if err := s.compose.RunDueReconciliations(ctx); err != nil {
+					log.Printf("compose reconcile: %v", err)
+				}
 			}
 		}
 	}

@@ -6,7 +6,7 @@
 
 **Architecture:** Provider credentials are stored through a redacted provider credential layer. `internal/dns` owns provider-neutral DNS behavior and wraps Cloudflare behind `DNSProvider`.
 
-**Tech Stack:** Go, SQLite, Cloudflare API, Vue 3, Element Plus, Pinia.
+**Tech Stack:** Go, SQLite, Cloudflare API, Vue 3, Vuetify, Pinia.
 
 ---
 

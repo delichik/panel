@@ -53,7 +53,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, dockerSvc, packageSvc, taskSvc)
+	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, dockerSvc, composeSvc, packageSvc, taskSvc)
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
@@ -181,6 +181,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			composeH.DeleteService(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/tasks":
 			taskH.List(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/run-now") && strings.HasPrefix(path, "/api/v1/tasks/"):
+			taskH.RunNow(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/logs") && strings.HasPrefix(path, "/api/v1/tasks/"):
 			taskH.Logs(w, r)
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/tasks/"):

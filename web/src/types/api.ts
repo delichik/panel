@@ -1,4 +1,4 @@
-export type TaskStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled';
+export type TaskStatus = 'queued' | 'scheduled' | 'running' | 'completed' | 'failed' | 'failed_retryable' | 'blocked' | 'cancelled';
 export type TaskStage = 'connecting' | 'preparing' | 'running' | 'verifying' | 'finalizing' | string;
 
 export interface OSInfoDto {
@@ -25,6 +25,7 @@ export interface ServerDto {
   os?: OSInfoDto | null;
   sudo?: SudoInfoDto | null;
   reachable: boolean;
+  loadAverage: string | null;
   lastCheckedAt: string | null;
   lastError?: string;
   createdAt: string;
@@ -48,6 +49,7 @@ export interface OverviewServerDto {
   reachable: boolean;
   metricsFresh: boolean;
   packageUpdateCount: number;
+  loadAverage: string | null;
   lastMetricsAt: string | null;
   lastPackageRefreshAt: string | null;
 }
@@ -219,11 +221,32 @@ export interface ComposeTemplateVariableDto {
 export interface ComposeVisualServiceDto {
   name: string;
   image: string;
+  build?: string;
   labels?: Record<string, string>;
   ports?: string[];
   environment?: Record<string, string>;
   volumes?: string[];
   command?: string;
+  entrypoint?: string;
+  restart?: string;
+  dependsOn?: string[];
+  networks?: string[];
+  envFile?: string[];
+  extraHosts?: string[];
+  workingDir?: string;
+  user?: string;
+  networkMode?: string;
+  hostname?: string;
+  privileged?: boolean;
+  init?: boolean;
+  pullPolicy?: string;
+  stopGracePeriod?: string;
+  healthcheckTest?: string;
+  healthcheckInterval?: string;
+  healthcheckTimeout?: string;
+  healthcheckRetries?: number;
+  dns?: string[];
+  dnsSearch?: string[];
 }
 
 export interface ComposeVisualModelDto {
@@ -239,6 +262,7 @@ export interface ServiceTemplateDto {
   composeYaml: string;
   visual?: ComposeVisualModelDto | Record<string, unknown> | null;
   variables?: ComposeTemplateVariableDto[];
+  dependencies?: string[];
   fileCount?: number;
   linkedServiceCount?: number;
   createdAt: string;
@@ -251,6 +275,7 @@ export interface ServiceTemplateInputDto {
   composeYaml: string;
   visual?: ComposeVisualModelDto | Record<string, unknown> | null;
   variables?: ComposeTemplateVariableDto[];
+  dependencies?: string[];
 }
 
 export type TemplateFileKind = 'template' | 'binary' | string;
@@ -307,7 +332,9 @@ export interface ComposeServiceDto {
   serverName?: string;
   remotePath: string;
   values: Record<string, unknown>;
+  labels?: Record<string, string>;
   status?: ComposeServiceStatus;
+  managementState?: 'managed' | 'unmanaged' | 'missing_remote' | 'drifted' | 'orphaned' | 'pending' | string;
   syncStatus?: ComposeServiceSyncStatus;
   drift?: boolean;
   runtimeStatus?: string | null;
@@ -323,18 +350,23 @@ export interface ComposeServiceInputDto {
   templateId: string;
   serverId: string;
   remotePath: string;
-  values: Record<string, unknown>;
+  values?: Record<string, unknown>;
 }
 
 export interface TaskDto {
   id: string;
   type: string;
   serverId: string | null;
+  resourceType?: string;
+  resourceId?: string;
   status: TaskStatus;
   stage: TaskStage;
   percentage: number | null;
   summary: string;
   error?: string;
+  retryCount: number;
+  maxRetries: number;
+  nextRunAt?: string | null;
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;

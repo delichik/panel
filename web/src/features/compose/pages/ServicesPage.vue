@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { Delete, Edit, Plus, Refresh, Search, SwitchButton, Upload } from '@element-plus/icons-vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
 import { composeApi } from '@/api/compose';
 import { serversApi } from '@/api/servers';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
+import { serviceDeleteMode } from '@/features/compose/serviceDeleteMode';
 import type {
   ComposeRenderPreviewDto,
   ComposeServiceDto,
@@ -32,16 +31,58 @@ const taskId = ref('');
 const taskTitle = ref('Compose Service Task');
 const actionLoading = ref('');
 const error = ref('');
-const valuesJson = ref('{}');
-const serverVariablesJson = ref('{}');
 const renderPreview = ref<ComposeRenderPreviewDto | null>(null);
+
+// Snackbar notification state
+const snackbar = ref(false);
+const snackbarText = ref('');
+const snackbarColor = ref('success');
+
+function showMessage(text: string, color = 'success') {
+  snackbarText.value = text;
+  snackbarColor.value = color;
+  snackbar.value = true;
+}
+
+// Confirmation Dialog State
+const confirmDialog = ref(false);
+const confirmTitle = ref('Confirm action');
+const confirmMessage = ref('');
+const confirmAction = ref<(() => Promise<void>) | null>(null);
+
+function confirm(title: string, message: string, action: () => Promise<void>) {
+  confirmTitle.value = title;
+  confirmMessage.value = message;
+  confirmAction.value = action;
+  confirmDialog.value = true;
+}
+
+async function executeConfirm() {
+  if (confirmAction.value) {
+    try {
+      await confirmAction.value();
+    } catch (err) {
+      showMessage(err instanceof Error ? err.message : 'Action failed', 'error');
+    }
+  }
+  confirmDialog.value = false;
+}
 
 const form = reactive<ServiceForm>(emptyForm());
 
-const sortedServices = computed(() => [...services.value].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
-const selectedTemplate = computed(() => templates.value.find((template) => template.id === form.templateId));
-const selectedServer = computed(() => servers.value.find((server) => server.id === form.serverId));
+const sortedServices = computed(() => [...safeArray(services.value)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+const selectedTemplate = computed(() => safeArray(templates.value).find((template) => template.id === form.templateId));
+const selectedServer = computed(() => safeArray(servers.value).find((server) => server.id === form.serverId));
 const isEditing = computed(() => Boolean(form.id));
+const dependencyTemplates = computed(() =>
+  safeArray(selectedTemplate.value?.dependencies)
+    .map((id) => safeArray(templates.value).find((template) => template.id === id))
+    .filter((template): template is ServiceTemplateDto => Boolean(template)),
+);
+
+function safeArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
 
 function emptyForm(): ServiceForm {
   return {
@@ -53,41 +94,21 @@ function emptyForm(): ServiceForm {
   };
 }
 
-function resetForm(next = emptyForm(), values: Record<string, unknown> = {}) {
+function resetForm(next = emptyForm()) {
   Object.assign(form, next);
-  valuesJson.value = JSON.stringify(values, null, 2);
   renderPreview.value = null;
 }
 
-function defaultValues(template?: ServiceTemplateDto) {
-  return Object.fromEntries((template?.variables ?? []).map((item) => [item.name, item.defaultValue ?? '']));
-}
-
-function parseValues() {
-  try {
-    return JSON.parse(valuesJson.value || '{}') as Record<string, unknown>;
-  } catch {
-    throw new Error('Values must be valid JSON');
-  }
-}
-
-function parseServerVariables() {
-  try {
-    return JSON.parse(serverVariablesJson.value || '{}') as Record<string, unknown>;
-  } catch {
-    throw new Error('Server variables must be valid JSON');
-  }
-}
-
 function serviceTemplateName(service: ComposeServiceDto) {
-  return service.templateName || templates.value.find((template) => template.id === service.templateId)?.name || service.templateId;
+  return service.templateName || safeArray(templates.value).find((template) => template.id === service.templateId)?.name || '';
 }
 
 function serviceServerName(service: ComposeServiceDto) {
-  return service.serverName || servers.value.find((server) => server.id === service.serverId)?.name || service.serverId;
+  return service.serverName || safeArray(servers.value).find((server) => server.id === service.serverId)?.name || service.serverId;
 }
 
 function syncStatus(service: ComposeServiceDto) {
+  if (service.managementState) return service.managementState;
   if (service.drift) return 'drifted';
   return service.syncStatus || 'unknown';
 }
@@ -95,14 +116,16 @@ function syncStatus(service: ComposeServiceDto) {
 function syncStatusType(service: ComposeServiceDto) {
   const status = syncStatus(service);
   if (status === 'synced') return 'success';
-  if (status === 'drifted' || status === 'pending') return 'warning';
+  if (status === 'managed') return 'success';
+  if (status === 'drifted' || status === 'pending' || status === 'missing_remote') return 'warning';
+  if (status === 'orphaned') return 'error';
   return 'info';
 }
 
 function runtimeStatusType(service: ComposeServiceDto) {
   const status = service.runtimeStatus || service.status;
   if (status === 'running' || status === 'deployed') return 'success';
-  if (status === 'failed') return 'danger';
+  if (status === 'failed') return 'error';
   if (status === 'stopped') return 'warning';
   return 'info';
 }
@@ -115,9 +138,9 @@ async function load() {
       composeApi.listTemplates(),
       serversApi.listServers(),
     ]);
-    services.value = serviceRows;
-    templates.value = templateRows;
-    servers.value = serverRows;
+    services.value = safeArray(serviceRows);
+    templates.value = safeArray(templateRows).map((template) => ({ ...template, dependencies: safeArray(template.dependencies), variables: safeArray(template.variables) }));
+    servers.value = safeArray(serverRows);
     error.value = '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Unable to load services';
@@ -126,64 +149,40 @@ async function load() {
   }
 }
 
-async function loadServerVariables(serverId = form.serverId) {
-  if (!serverId) {
-    serverVariablesJson.value = '{}';
-    return;
-  }
-  try {
-    const variables = await composeApi.getServerVariables(serverId);
-    serverVariablesJson.value = JSON.stringify(variables ?? {}, null, 2);
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Unable to load server variables');
-  }
-}
-
 function openService(service?: ComposeServiceDto) {
   if (service) {
-    resetForm(
-      {
-        id: service.id,
-        name: service.name,
-        templateId: service.templateId,
-        serverId: service.serverId,
-        remotePath: service.remotePath,
-      },
-      service.values ?? {},
-    );
+    resetForm({
+      id: service.id,
+      name: service.name,
+      templateId: service.templateId,
+      serverId: service.serverId,
+      remotePath: service.remotePath,
+    });
   } else {
-    const firstTemplate = templates.value[0];
-    const firstServer = servers.value[0];
+    const firstTemplate = safeArray(templates.value)[0];
+    const firstServer = safeArray(servers.value)[0];
     resetForm({
       id: '',
       name: '',
       templateId: firstTemplate?.id ?? '',
       serverId: firstServer?.id ?? '',
-      remotePath: '/opt/panel/services/',
-    }, defaultValues(firstTemplate));
+      remotePath: defaultRemotePath(firstTemplate?.name),
+    });
   }
   drawerOpen.value = true;
-  void loadServerVariables(form.serverId);
 }
 
 function handleTemplateChange(templateId: string) {
-  const template = templates.value.find((item) => item.id === templateId);
-  valuesJson.value = JSON.stringify(defaultValues(template), null, 2);
-}
-
-function handleServerChange(serverId: string) {
-  void loadServerVariables(serverId);
-}
-
-async function saveServerVariables() {
-  if (!form.serverId) return;
-  try {
-    const saved = await composeApi.updateServerVariables(form.serverId, parseServerVariables());
-    serverVariablesJson.value = JSON.stringify(saved ?? {}, null, 2);
-    ElMessage.success('Server variables saved');
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Unable to save server variables');
+  const template = safeArray(templates.value).find((item) => item.id === templateId);
+  if (!isEditing.value) {
+    form.name = template?.name ?? form.name;
+    form.remotePath = defaultRemotePath(template?.name);
   }
+}
+
+function defaultRemotePath(name?: string) {
+  const slug = (name || 'service').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'service';
+  return `/opt/panel/services/${slug}`;
 }
 
 async function saveService() {
@@ -194,8 +193,9 @@ async function saveService() {
       templateId: form.templateId,
       serverId: form.serverId,
       remotePath: form.remotePath,
-      values: parseValues(),
+      values: {},
     };
+    const creating = !form.id;
     const saved = form.id ? await composeApi.updateService(form.id, input) : await composeApi.createService(input);
     resetForm(
       {
@@ -205,24 +205,44 @@ async function saveService() {
         serverId: saved.serverId,
         remotePath: saved.remotePath,
       },
-      saved.values,
     );
+    if (creating && saved.lastTaskId) {
+      taskId.value = saved.lastTaskId;
+      taskTitle.value = `Deploy ${saved.name}`;
+    }
     await load();
-    ElMessage.success('Service saved');
+    drawerOpen.value = false;
+    showMessage(creating && saved.lastTaskId ? 'Service created and deployment started' : 'Service saved successfully');
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Unable to save service');
+    showMessage(err instanceof Error ? err.message : 'Unable to save service', 'error');
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteService(service: ComposeServiceDto) {
-  await ElMessageBox.confirm(`Delete service metadata ${service.name}? Remote containers are not removed by this action.`, 'Confirm delete', {
-    type: 'warning',
+  const mode = serviceDeleteMode(service);
+  const message =
+    mode === 'metadata'
+      ? `Delete service ${service.name}?`
+      : `Delete service ${service.name}? This will remove the remote Compose project and then release this service slot.`;
+  confirm('Confirm delete', message, async () => {
+    if (mode === 'metadata') {
+      await composeApi.deleteService(service.id);
+      await load();
+      showMessage('Service deleted');
+      return;
+    }
+    actionLoading.value = `remove:${service.id}`;
+    try {
+      const result = await composeApi.removeService(service.id);
+      taskId.value = result.taskId;
+      taskTitle.value = `Delete ${service.name}`;
+      showMessage('Delete started');
+    } finally {
+      actionLoading.value = '';
+    }
   });
-  await composeApi.deleteService(service.id);
-  await load();
-  ElMessage.success('Service metadata deleted');
 }
 
 async function previewService() {
@@ -230,37 +250,42 @@ async function previewService() {
   rendering.value = true;
   try {
     renderPreview.value = await composeApi.renderService(form.id);
-    ElMessage.success('Service render preview refreshed');
+    showMessage('Service render preview refreshed');
   } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : 'Unable to render service');
+    showMessage(err instanceof Error ? err.message : 'Unable to render service', 'error');
   } finally {
     rendering.value = false;
   }
 }
 
 async function runAction(service: ComposeServiceDto, action: 'deploy' | 'sync' | 'restart' | 'stop' | 'remove') {
+  const proceed = async () => {
+    actionLoading.value = `${action}:${service.id}`;
+    try {
+      const result =
+        action === 'deploy'
+          ? await composeApi.deployService(service.id)
+          : action === 'sync'
+            ? await composeApi.syncService(service.id)
+            : action === 'restart'
+              ? await composeApi.restartService(service.id)
+              : action === 'stop'
+                ? await composeApi.stopService(service.id)
+                : await composeApi.removeService(service.id);
+      taskId.value = result.taskId;
+      taskTitle.value = `${action[0].toUpperCase()}${action.slice(1)} ${service.name}`;
+      showMessage(`${action[0].toUpperCase()}${action.slice(1)} started`);
+    } catch (err) {
+      showMessage(err instanceof Error ? err.message : `Unable to ${action} service`, 'error');
+    } finally {
+      actionLoading.value = '';
+    }
+  };
+
   if (action === 'remove') {
-    await ElMessageBox.confirm(`Remove remote Compose service ${service.name}?`, 'Confirm remove', { type: 'warning' });
-  }
-  actionLoading.value = `${action}:${service.id}`;
-  try {
-    const result =
-      action === 'deploy'
-        ? await composeApi.deployService(service.id)
-        : action === 'sync'
-          ? await composeApi.syncService(service.id)
-          : action === 'restart'
-            ? await composeApi.restartService(service.id)
-            : action === 'stop'
-              ? await composeApi.stopService(service.id)
-              : await composeApi.removeService(service.id);
-    taskId.value = result.taskId;
-    taskTitle.value = `${action[0].toUpperCase()}${action.slice(1)} ${service.name}`;
-    ElMessage.success(`${action} started`);
-  } catch (err) {
-    ElMessage.error(err instanceof Error ? err.message : `Unable to ${action} service`);
-  } finally {
-    actionLoading.value = '';
+    confirm('Confirm remove', `Remove remote Compose service ${service.name}?`, proceed);
+  } else {
+    await proceed();
   }
 }
 
@@ -273,208 +298,290 @@ onMounted(load);
 
 <template>
   <div>
-    <div class="panel-header panel">
+    <div class="d-flex justify-space-between align-center mb-6">
       <div>
-        <p class="page-subtitle">Deploy template-backed Compose services, edit values and paths, inspect drift, and run lifecycle tasks.</p>
+        <h1 class="text-h4 font-weight-bold">Services</h1>
+        <p class="text-subtitle-1 text-medium-emphasis">Deploy templates to servers, check sync state, and manage container lifecycles.</p>
       </div>
-      <div class="toolbar">
-        <el-button :icon="Refresh" :loading="loading" @click="load">Reload</el-button>
-        <el-button type="primary" :icon="Plus" :disabled="templates.length === 0 || servers.length === 0" @click="openService()">
+      <div class="d-flex" style="gap: 12px;">
+        <v-btn
+          prepend-icon="mdi-refresh"
+          :loading="loading"
+          variant="outlined"
+          @click="load"
+          class="text-none font-weight-bold"
+        >
+          Reload
+        </v-btn>
+        <v-btn
+          color="primary"
+          prepend-icon="mdi-plus"
+          :disabled="templates.length === 0 || servers.length === 0"
+          @click="openService()"
+          class="text-none font-weight-bold"
+        >
           New Service
-        </el-button>
+        </v-btn>
       </div>
     </div>
 
-    <el-alert v-if="error" class="page-alert" type="error" :title="error" show-icon />
-    <el-alert
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <v-alert
       v-if="!loading && (templates.length === 0 || servers.length === 0)"
-      class="page-alert"
       type="warning"
-      title="Create at least one service template and one server before creating services."
-      show-icon
-    />
+      variant="tonal"
+      class="mb-4"
+    >
+      Create at least one service template and one server before creating services.
+    </v-alert>
 
-    <section class="panel services-panel" v-loading="loading">
-      <el-table :data="sortedServices" empty-text="No deployed services">
-        <el-table-column prop="name" label="Name" min-width="170" />
-        <el-table-column label="Template" min-width="180">
-          <template #default="{ row }">{{ serviceTemplateName(row) }}</template>
-        </el-table-column>
-        <el-table-column label="Server" min-width="150">
-          <template #default="{ row }">{{ serviceServerName(row) }}</template>
-        </el-table-column>
-        <el-table-column prop="remotePath" label="Remote Path" min-width="230" show-overflow-tooltip />
-        <el-table-column label="Runtime" width="130">
-          <template #default="{ row }">
-            <el-tag :type="runtimeStatusType(row)">{{ row.runtimeStatus || row.status || 'unknown' }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="Sync" width="120">
-          <template #default="{ row }">
-            <el-tag :type="syncStatusType(row)">{{ syncStatus(row) }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="Template Version" width="160">
-          <template #default="{ row }">{{ row.lastAppliedTemplateVersion ?? '-' }} / {{ row.templateVersion ?? '-' }}</template>
-        </el-table-column>
-        <el-table-column label="Actions" width="430" fixed="right">
-          <template #default="{ row }">
-            <el-button size="small" :icon="Search" @click="openService(row)">Open</el-button>
-            <el-button
-              size="small"
-              type="primary"
-              :icon="Upload"
-              :loading="actionLoading === `deploy:${row.id}`"
-              @click="runAction(row, 'deploy')"
-            >
-              Deploy
-            </el-button>
-            <el-button
-              size="small"
-              :icon="Refresh"
-              :loading="actionLoading === `sync:${row.id}`"
-              @click="runAction(row, 'sync')"
-            >
-              Sync
-            </el-button>
-            <el-dropdown trigger="click">
-              <el-button size="small" :icon="SwitchButton">More</el-button>
-              <template #dropdown>
-                <el-dropdown-menu>
-                  <el-dropdown-item @click="runAction(row, 'restart')">Restart</el-dropdown-item>
-                  <el-dropdown-item @click="runAction(row, 'stop')">Stop</el-dropdown-item>
-                  <el-dropdown-item divided @click="runAction(row, 'remove')">Remove remote</el-dropdown-item>
-                  <el-dropdown-item divided @click="deleteService(row)">Delete metadata</el-dropdown-item>
-                </el-dropdown-menu>
-              </template>
-            </el-dropdown>
-          </template>
-        </el-table-column>
-      </el-table>
-    </section>
+    <v-card :loading="loading" variant="outlined" class="mb-6">
+      <v-table class="text-left" style="background: transparent;">
+        <thead>
+          <tr>
+            <th class="font-weight-bold">Name</th>
+            <th class="font-weight-bold">Template</th>
+            <th class="font-weight-bold">Server</th>
+            <th class="font-weight-bold">Remote Path</th>
+            <th class="font-weight-bold">Runtime</th>
+            <th class="font-weight-bold">Sync</th>
+            <th class="font-weight-bold">Template Version</th>
+            <th class="font-weight-bold text-right" style="width: 430px;">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr v-if="sortedServices.length === 0">
+            <td colspan="8" class="text-center py-6 text-grey-darken-1">No deployed services</td>
+          </tr>
+          <tr v-for="row in sortedServices" :key="row.id">
+            <td class="font-weight-bold">{{ row.name }}</td>
+            <td>
+              <v-chip v-if="serviceTemplateName(row)" color="success" size="small" label>{{ serviceTemplateName(row) }}</v-chip>
+              <v-chip v-else color="grey" size="small" label>Unmanaged</v-chip>
+            </td>
+            <td>{{ serviceServerName(row) }}</td>
+            <td class="text-caption text-grey-darken-1 text-truncate" style="max-width: 200px;" :title="row.remotePath">
+              {{ row.remotePath }}
+            </td>
+            <td>
+              <v-chip :color="runtimeStatusType(row)" size="small" label>
+                {{ row.runtimeStatus || row.status || 'unknown' }}
+              </v-chip>
+            </td>
+            <td>
+              <v-chip :color="syncStatusType(row)" size="small" label>{{ syncStatus(row) }}</v-chip>
+            </td>
+            <td>
+              {{ row.lastAppliedTemplateVersion ?? '-' }} / {{ row.templateVersion ?? '-' }}
+            </td>
+            <td class="text-right">
+              <div class="d-flex justify-end" style="gap: 6px;">
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-magnify" @click="openService(row)">Open</v-btn>
+                <!-- More actions dropdown -->
+                <v-menu>
+                  <template v-slot:activator="{ props }">
+                    <v-btn size="small" variant="outlined" append-icon="mdi-chevron-down" v-bind="props">
+                      More
+                    </v-btn>
+                  </template>
+                  <v-list density="compact">
+                    <v-list-item prepend-icon="mdi-restart" title="Restart" @click="runAction(row, 'restart')" />
+                    <v-list-item prepend-icon="mdi-stop" title="Stop" @click="runAction(row, 'stop')" />
+                    <v-divider class="my-1" />
+                    <v-list-item prepend-icon="mdi-delete" title="Delete" class="text-error" @click="deleteService(row)" />
+                  </v-list>
+                </v-menu>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </v-table>
+    </v-card>
 
-    <section v-if="taskId" class="panel task-section">
-      <div class="panel-header"><strong>{{ taskTitle }}</strong></div>
-      <div class="panel-body">
+    <!-- Active Task Status Panel -->
+    <v-card v-if="taskId" class="mb-6 pa-4" variant="outlined">
+      <v-card-title class="px-0 pt-0 text-subtitle-1 font-weight-bold">{{ taskTitle }}</v-card-title>
+      <v-card-text class="px-0 pb-0">
         <TaskLogPanel :task-id="taskId" compact @finished="handleTaskFinished" />
-      </div>
-    </section>
+      </v-card-text>
+    </v-card>
 
-    <el-drawer v-model="drawerOpen" title="Compose Service" size="68%">
-      <div class="service-detail">
-        <section class="panel">
-          <div class="panel-header">
-            <strong>{{ isEditing ? form.name || 'Service' : 'New Service' }}</strong>
-            <div class="toolbar">
-              <el-button :disabled="!isEditing" :loading="rendering" :icon="Search" @click="previewService">Render</el-button>
-              <el-button type="primary" :loading="saving" :icon="Edit" @click="saveService">Save</el-button>
+    <!-- Slide-out Drawer for Service Details -->
+    <v-navigation-drawer v-model="drawerOpen" location="right" temporary width="750" style="z-index: 1005;">
+      <div class="pa-4 fill-height d-flex flex-column">
+        <div class="d-flex justify-space-between align-center mb-4">
+          <div class="text-h6 font-weight-bold">{{ isEditing ? form.name || 'Service' : 'New Service' }}</div>
+          <div class="d-flex" style="gap: 8px;">
+            <v-btn :disabled="!isEditing" :loading="rendering" prepend-icon="mdi-magnify" variant="outlined" size="small" class="text-none font-weight-bold" @click="previewService">Render</v-btn>
+            <v-btn color="primary" :loading="saving" prepend-icon="mdi-content-save" variant="flat" size="small" class="text-none font-weight-bold" @click="saveService">Save</v-btn>
+            <v-btn icon="mdi-close" variant="text" size="small" @click="drawerOpen = false" />
+          </div>
+        </div>
+        <v-divider />
+
+        <div class="overflow-y-auto flex-grow-1 py-4 d-flex flex-column" style="gap: 16px;">
+          <!-- Basic Form Section -->
+          <v-card variant="outlined" class="pa-4">
+            <div class="service-form">
+              <div>
+                <v-form>
+                  <v-text-field v-model="form.name" label="Service Name" placeholder="customer-site" variant="outlined" density="comfortable" class="mb-3" />
+
+                  <v-select
+                    v-model="form.templateId"
+                    :items="templates"
+                    item-title="name"
+                    item-value="id"
+                    label="Service Template"
+                    placeholder="Select template"
+                    variant="outlined"
+                    density="comfortable"
+                    class="mb-3"
+                    @update:model-value="handleTemplateChange"
+                  />
+
+                  <v-select
+                    v-model="form.serverId"
+                    :items="servers"
+                    item-title="name"
+                    item-value="id"
+                    label="Target Server"
+                    placeholder="Select server"
+                    variant="outlined"
+                    density="comfortable"
+                    class="mb-3"
+                  />
+
+                  <v-text-field v-model="form.remotePath" label="Remote Path on Server" placeholder="/opt/panel/services/customer-site" variant="outlined" density="comfortable" />
+                </v-form>
+              </div>
+
+              <!-- Side Summary column -->
+              <div class="side-summary mt-4 mt-md-0">
+                <div>
+                  <div class="detail-label">Template</div>
+                  <strong class="text-body-2">{{ selectedTemplate?.name || '-' }}</strong>
+                  <div class="text-caption text-grey-darken-1">version {{ selectedTemplate?.version ?? '-' }}</div>
+                </div>
+                <v-divider class="my-2" />
+                <div>
+                  <div class="detail-label">Server</div>
+                  <strong class="text-body-2">{{ selectedServer?.name || '-' }}</strong>
+                  <div class="text-caption text-grey-darken-1">{{ selectedServer?.host || '-' }}</div>
+                </div>
+                <v-divider class="my-2" />
+                <div>
+                  <div class="detail-label">Template variables</div>
+                  <v-chip size="small" color="primary">{{ selectedTemplate?.variables?.length ?? 0 }}</v-chip>
+                </div>
+                <v-divider class="my-2" />
+                <div>
+                  <div class="detail-label">Dependencies</div>
+                  <div class="dependency-list mt-1">
+                    <v-chip v-for="template in dependencyTemplates" :key="template.id" color="warning" size="x-small" label>{{ template.name }}</v-chip>
+                    <span v-if="dependencyTemplates.length === 0" class="text-caption text-grey-darken-1">None</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-          <div class="panel-body service-form">
-            <el-form label-position="top">
-              <el-form-item label="Name">
-                <el-input v-model="form.name" placeholder="customer-site" />
-              </el-form-item>
-              <el-form-item label="Template">
-                <el-select v-model="form.templateId" filterable placeholder="Select template" @change="handleTemplateChange">
-                  <el-option v-for="template in templates" :key="template.id" :label="template.name" :value="template.id" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="Server">
-                <el-select v-model="form.serverId" filterable placeholder="Select server" @change="handleServerChange">
-                  <el-option v-for="server in servers" :key="server.id" :label="server.name" :value="server.id" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="Remote path">
-                <el-input v-model="form.remotePath" placeholder="/opt/panel/services/customer-site" />
-              </el-form-item>
-            </el-form>
+          </v-card>
 
-            <div class="side-summary">
-              <div>
-                <div class="detail-label">Template</div>
-                <strong>{{ selectedTemplate?.name || '-' }}</strong>
-                <div class="muted">version {{ selectedTemplate?.version ?? '-' }}</div>
-              </div>
-              <div>
-                <div class="detail-label">Server</div>
-                <strong>{{ selectedServer?.name || '-' }}</strong>
-                <div class="muted">{{ selectedServer?.host || '-' }}</div>
-              </div>
-              <div>
-                <div class="detail-label">Variables</div>
-                <el-tag>{{ selectedTemplate?.variables?.length ?? 0 }}</el-tag>
-              </div>
+          <!-- Deployment Plan Section -->
+          <v-card variant="outlined" class="pa-4">
+            <div class="text-subtitle-2 font-weight-bold mb-3">Deployment Plan</div>
+            <v-table density="compact" style="background: transparent;">
+              <tbody>
+                <tr>
+                  <td class="font-weight-bold text-caption text-grey-darken-1 px-0 py-2 text-uppercase" style="width: 180px;">Server</td>
+                  <td class="px-0 py-2">{{ selectedServer?.name || '-' }}</td>
+                </tr>
+                <tr>
+                  <td class="font-weight-bold text-caption text-grey-darken-1 px-0 py-2 text-uppercase">Template</td>
+                  <td class="px-0 py-2">{{ selectedTemplate?.name || '-' }}</td>
+                </tr>
+                <tr>
+                  <td class="font-weight-bold text-caption text-grey-darken-1 px-0 py-2 text-uppercase">Auto-deploy dependencies</td>
+                  <td class="px-0 py-2">
+                    <div class="dependency-list">
+                      <v-chip v-for="template in dependencyTemplates" :key="template.id" color="warning" size="x-small" label>{{ template.name }}</v-chip>
+                      <span v-if="dependencyTemplates.length === 0" class="text-caption text-grey-darken-1">None</span>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </v-table>
+          </v-card>
+
+          <!-- Rendered Config Preview -->
+          <v-card variant="outlined" class="pa-4">
+            <div class="text-subtitle-2 font-weight-bold mb-3">Rendered Config</div>
+            <div v-if="!renderPreview" class="text-center py-6 text-grey-darken-1 text-caption">
+              Save the service, then click Render preview
             </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header"><strong>Values</strong></div>
-          <div class="panel-body">
-            <el-input v-model="valuesJson" type="textarea" :rows="14" spellcheck="false" />
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header">
-            <strong>Server Variables</strong>
-            <el-button :disabled="!form.serverId" @click="saveServerVariables">Save Variables</el-button>
-          </div>
-          <div class="panel-body">
-            <el-input v-model="serverVariablesJson" type="textarea" :rows="10" spellcheck="false" />
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-header"><strong>Rendered Config</strong></div>
-          <div class="panel-body">
-            <el-empty v-if="!renderPreview" description="Save the service, then render preview" />
             <pre v-else class="code-preview">{{ renderPreview.renderedYaml }}</pre>
-          </div>
-        </section>
+          </v-card>
+        </div>
       </div>
-    </el-drawer>
+    </v-navigation-drawer>
+
+    <!-- Confirmation Dialog -->
+    <v-dialog v-model="confirmDialog" max-width="450px">
+      <v-card>
+        <v-card-title class="bg-surface-variant py-3 font-weight-bold">
+          {{ confirmTitle }}
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="pa-4 text-body-1">
+          {{ confirmMessage }}
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="pa-3 bg-surface-variant">
+          <v-spacer />
+          <v-btn variant="outlined" class="text-none font-weight-bold" @click="confirmDialog = false">Cancel</v-btn>
+          <v-btn color="error" variant="flat" class="text-none font-weight-bold" @click="executeConfirm">Confirm</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <!-- Global Snackbar -->
+    <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
+      {{ snackbarText }}
+      <template v-slot:actions>
+        <v-btn color="white" variant="text" @click="snackbar = false">Close</v-btn>
+      </template>
+    </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.page-alert,
-.services-panel,
-.task-section,
-.service-detail {
-  margin-top: 20px;
-}
-
-.services-panel {
-  padding: 0 20px 20px;
-}
-
-.service-detail {
-  display: grid;
-  gap: 18px;
-}
-
 .service-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 260px;
-  gap: 18px;
+  gap: 24px;
 }
 
 .side-summary {
-  display: grid;
-  gap: 16px;
-  align-content: start;
-  border: 1px solid #dfe4ea;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid rgba(var(--v-border-color), 0.12);
   border-radius: 8px;
-  padding: 14px;
+  padding: 16px;
+  background-color: rgba(var(--v-border-color), 0.05);
+}
+
+.dependency-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
 }
 
 .detail-label {
-  margin-bottom: 6px;
-  color: #667085;
-  font-size: 12px;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  font-size: 11px;
   text-transform: uppercase;
+  font-weight: 700;
+  margin-bottom: 4px;
 }
 
 .code-preview {
@@ -482,13 +589,14 @@ onMounted(load);
   max-height: 480px;
   overflow: auto;
   margin: 0;
-  border: 1px solid #dfe4ea;
+  border: 1px solid rgba(var(--v-border-color), 0.12);
   border-radius: 8px;
-  background: #101828;
-  color: #e5e7eb;
+  background: #1e1e1e;
+  color: #d4d4d4;
   padding: 12px;
-  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-family: monospace;
   font-size: 12px;
+  line-height: 1.5;
   white-space: pre-wrap;
 }
 

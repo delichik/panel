@@ -6,7 +6,7 @@
 
 **Architecture:** One Go backend serves a Vue 3 frontend and manages Debian servers over SSH. Application data and metrics data use separate SQLite databases, while long-running operations report through a shared task model.
 
-**Tech Stack:** Go, Gin or Echo, GORM, SQLite, `golang.org/x/crypto/ssh`, Vue 3, Vite, Element Plus, Pinia, Vue Router, ECharts.
+**Tech Stack:** Go, Gin or Echo, GORM, SQLite, `golang.org/x/crypto/ssh`, Vue 3, Vite, Vuetify, Pinia, Vue Router, ECharts.
 
 ---
 
@@ -101,7 +101,7 @@ QA/Docs owns:
 - Create: `web/src/api/client.ts`
 
 - [ ] Create the Vue 3 Vite app structure.
-- [ ] Configure Element Plus, Pinia, and Vue Router.
+- [ ] Configure Vuetify, Pinia, and Vue Router.
 - [ ] Implement the base API client for the response envelope.
 - [ ] Add a placeholder authenticated layout and login route.
 - [ ] Run frontend build and tests once tooling exists.

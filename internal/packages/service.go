@@ -50,6 +50,9 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 		t, _ := time.Parse(time.RFC3339Nano, ts.String)
 		out.LastRefreshedAt = &t
 	}
+	if out.LastRefreshedAt == nil || time.Since(*out.LastRefreshedAt) > 10*time.Minute {
+		_, _ = s.Refresh(ctx, serverID)
+	}
 	return out, rows.Err()
 }
 
@@ -58,7 +61,19 @@ func (s *Service) Refresh(ctx context.Context, serverID string) (tasks.Task, err
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_refresh", ServerID: serverID, Summary: "Refreshing package updates"})
+	if existing, ok, err := s.tasks.ExistingActive(ctx, "package_refresh", "server", serverID); err != nil {
+		return tasks.Task{}, err
+	} else if ok {
+		if existing.Status != tasks.StatusRunning && (existing.NextRunAt == nil || !existing.NextRunAt.After(time.Now().UTC())) {
+			existing, err = s.tasks.RunNow(ctx, existing.ID)
+			if err != nil {
+				return tasks.Task{}, err
+			}
+			go s.runRefresh(context.Background(), existing.ID, srv)
+		}
+		return existing, nil
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_refresh", ServerID: serverID, ResourceType: "server", ResourceID: serverID, Summary: "Refreshing package updates", MaxRetries: 8})
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -114,11 +129,11 @@ func (s *Service) runRefresh(ctx context.Context, taskID string, srv server.Serv
 	_ = s.tasks.Advance(ctx, taskID, "running", "refreshing package cache")
 	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.AppendLog(ctx, taskID, "system", "package refresh completed")

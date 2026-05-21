@@ -26,6 +26,9 @@ export function createTasksApi(client: ApiClient = apiClient) {
     logs(taskId: string, after = 0) {
       return client.get<TaskLogsDto>(`/tasks/${taskId}/logs?after=${after}`);
     },
+    runNow(taskId: string) {
+      return client.post<TaskDto>(`/tasks/${taskId}/run-now`);
+    },
   };
 }
 

@@ -10,39 +10,51 @@ defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: string];
 }>();
+
+// Extract 1-min load average from raw loadAverage string (e.g. "0.15 0.08 0.02")
+function getOneMinLoad(loadAverage: string | null | undefined): string {
+  if (!loadAverage) return '-';
+  const parts = loadAverage.trim().split(/\s+/);
+  return parts[0] || '-';
+}
 </script>
 
 <template>
-  <section class="panel server-selector" v-loading="loading">
-    <div class="panel-header">
-      <strong>Servers</strong>
-      <el-tag>{{ servers.length }}</el-tag>
-    </div>
-    <div v-if="servers.length" class="server-cards">
-      <button
-        v-for="server in servers"
-        :key="server.id"
-        class="server-card"
-        :class="{ active: server.id === modelValue }"
-        @click="emit('update:modelValue', server.id)"
-      >
-        <div class="server-name">{{ server.name }}</div>
-        <div class="muted">{{ server.host }}:{{ server.port }}</div>
-        <div class="server-flags">
-          <el-tag :type="server.reachable ? 'success' : 'danger'" size="small">
-            {{ server.reachable ? 'reachable' : 'offline' }}
-          </el-tag>
-          <el-tag :type="server.os?.supported ? 'success' : 'warning'" size="small">
-            {{ server.os?.prettyName || 'unknown' }}
-          </el-tag>
-          <el-tag :type="server.sudo?.passwordless ? 'success' : 'warning'" size="small">
-            {{ server.sudo?.passwordless ? 'sudo ready' : 'sudo unchecked' }}
-          </el-tag>
+  <v-card :loading="loading" class="server-selector d-flex flex-column h-100 overflow-hidden" variant="outlined">
+    <v-card-item class="bg-surface-variant py-3 flex-shrink-0">
+      <div class="d-flex justify-space-between align-center">
+        <v-card-title class="text-subtitle-1 font-weight-bold my-0 py-0">Servers</v-card-title>
+        <v-chip size="small" color="primary">{{ servers.length }}</v-chip>
+      </div>
+    </v-card-item>
+
+    <v-card-text class="flex-grow-1 overflow-y-auto pa-3">
+      <div v-if="servers.length" class="server-cards d-flex flex-column" style="gap: 10px;">
+        <div
+          v-for="server in servers"
+          :key="server.id"
+          class="server-item"
+          :class="{ 'selected': server.id === modelValue }"
+          @click="emit('update:modelValue', server.id)"
+        >
+          <div class="d-flex justify-space-between align-center mb-1">
+            <div class="d-flex align-center overflow-hidden">
+              <span class="status-pulse" :class="server.reachable ? 'online' : 'offline'"></span>
+              <span class="text-subtitle-2 font-weight-bold text-high-emphasis text-truncate">{{ server.name }}</span>
+            </div>
+
+            <div class="text-caption font-weight-bold text-medium-emphasis flex-shrink-0 ml-2">
+              Load: {{ getOneMinLoad(server.loadAverage) }}
+            </div>
+          </div>
         </div>
-      </button>
-    </div>
-    <el-empty v-else description="No servers registered" />
-  </section>
+      </div>
+      <div v-else class="text-center py-6 text-medium-emphasis h-100 d-flex flex-column align-center justify-center">
+        <v-icon size="40" color="grey-lighten-1" class="mb-2">mdi-server-off</v-icon>
+        <div class="text-caption">No servers registered</div>
+      </div>
+    </v-card-text>
+  </v-card>
 </template>
 
 <style scoped>
@@ -50,35 +62,71 @@ const emit = defineEmits<{
   min-width: 280px;
 }
 
-.server-cards {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
-}
-
-.server-card {
-  width: 100%;
-  padding: 14px;
-  text-align: left;
-  border: 1px solid #dfe4ea;
+/* Sleek Server List Items */
+.server-item {
+  position: relative;
+  border: 1px solid rgba(var(--v-border-color), 0.12);
   border-radius: 8px;
-  background: #fff;
+  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  padding: 12px 14px;
   cursor: pointer;
+  background: rgba(var(--v-theme-surface), 0.4);
 }
 
-.server-card.active {
-  border-color: #409eff;
-  box-shadow: inset 3px 0 0 #409eff;
+.server-item:hover {
+  transform: translateY(-1px);
+  border-color: rgba(var(--v-theme-primary), 0.4);
+  box-shadow: 0 4px 12px rgba(var(--v-theme-primary), 0.08);
 }
 
-.server-name {
-  font-weight: 700;
+.server-item.selected {
+  border-color: rgb(var(--v-theme-primary));
+  background-color: rgba(var(--v-theme-primary), 0.04);
+  box-shadow: 0 4px 16px rgba(var(--v-theme-primary), 0.12);
 }
 
-.server-flags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 12px;
+.server-item.selected::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 4px;
+  background-color: rgb(var(--v-theme-primary));
+  border-top-right-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+.server-item .status-pulse {
+  width: 8px;
+  height: 8px;
+  margin-right: 8px;
+  display: inline-block;
+  border-radius: 50%;
+}
+
+.server-item .status-pulse.online {
+  background-color: #10b981;
+  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
+  animation: pulse-green 2s infinite;
+}
+
+.server-item .status-pulse.offline {
+  background-color: #ef4444;
+}
+
+@keyframes pulse-green {
+  0% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+  }
+  70% {
+    transform: scale(1);
+    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+  }
+  100% {
+    transform: scale(0.95);
+    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+  }
 }
 </style>

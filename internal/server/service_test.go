@@ -118,6 +118,66 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	}
 }
 
+func TestCreateServerAutomaticallyStartsConnectivityTest(t *testing.T) {
+	svc, taskSvc, _ := testServerService(t, &connectivityFakeExec{})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var task tasks.Task
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: "server_connectivity_test", ServerID: srv.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Items) == 1 {
+			task = result.Items[0]
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if task.ID == "" {
+		t.Fatal("expected auto connectivity task")
+	}
+	waitTaskFinished(t, taskSvc, task.ID)
+}
+
+func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
+	svc, taskSvc, _ := testServerService(t, failingConnectivityExec{})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var task tasks.Task
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: "server_connectivity_test", ServerID: srv.ID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Items) == 1 {
+			task = result.Items[0]
+			if task.Status == tasks.StatusFailedRetryable {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if task.Status != tasks.StatusFailedRetryable || task.NextRunAt == nil || task.RetryCount != 1 {
+		t.Fatalf("expected retryable scheduled task, got %#v", task)
+	}
+	task, err = taskSvc.RunNow(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != tasks.StatusQueued || task.NextRunAt != nil {
+		t.Fatalf("run now should queue immediately, got %#v", task)
+	}
+}
+
 type connectivityFakeExec struct {
 	sudoTimeout time.Duration
 }
@@ -142,3 +202,56 @@ func (f *connectivityFakeExec) Download(ctx context.Context, target sshx.Target,
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+type failingConnectivityExec struct{}
+
+func (failingConnectivityExec) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{}, errString("dial timeout")
+}
+
+func (failingConnectivityExec) ExecSudo(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{}, errString("dial timeout")
+}
+
+func (failingConnectivityExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (failingConnectivityExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
+}
+
+func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks.Service, *storage.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	return NewService(store.AppDB(), exec, taskSvc), taskSvc, store
+}
+
+func waitTaskFinished(t *testing.T, taskSvc *tasks.Service, taskID string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := taskSvc.Get(context.Background(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status == tasks.StatusCompleted || task.Status == tasks.StatusFailed || task.Status == tasks.StatusFailedRetryable || task.Status == tasks.StatusBlocked {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("task did not finish")
+}

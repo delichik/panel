@@ -1,149 +1,100 @@
-# Phase 2 Docker Compose Collaboration Plan
+# Phase 2 Docker Compose Collaboration Plan (Actualized)
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
-
-**Goal:** Add Docker runtime discovery, service templates, deployed services, template-attached files, resource cleanup, image update workflows, and migration.
-
-**Architecture:** Docker and Compose operations run through SSH using `RemoteExecutor`. `internal/docker` owns runtime CLI behavior for services, networks, volumes, images, pruning, and update checks. `internal/compose` owns service templates, deployed services, labels, rendering, deployment, sync, updates, and migration. Every mutating operation uses `TaskRunner`.
-
-**Tech Stack:** Go, SQLite, SSH, Docker CLI, Docker Compose CLI, Go templates, Vue 3, Element Plus, Pinia.
+This document is the official implementation roadmap for Phase 2 (Docker Compose management) in the panel. It represents the transition from the initial MVP architecture to the actual, optimized implementation and covers the **Version 1 Refinement Milestone (Milestone 2C)**.
 
 ---
 
-## Milestone 2A.1: Docker Capability and Status
+## Milestone 2A: Docker Capability & Runtime Discovery (Completed)
 
-**Owner:** Backend Operations
+**Goal:** Establish read-only visibility into remote Docker engines over SSH without performing modifications, using low-overhead cached queries.
 
-**Closed loop:** API can refresh Docker capability for a real managed server, cache the result, list runtime services/containers, networks, volumes, and images, read selected service status, and preserve the last successful cache when refresh fails.
+### Backend Execution
+- **Key Modules**: `internal/docker/runtime.go`, `internal/docker/service.go`, `internal/docker/handler.go`
+- **Actions**:
+  - Implemented Docker and Compose CLI availability checks over SSH.
+  - Implemented caching for discovered Docker capability state per server in SQLite.
+  - Implemented parser logic for reading JSON output from remote commands:
+    - Compose Projects (`docker compose ls`)
+    - Container lists (`docker ps -a`)
+    - Networks (`docker network ls`)
+    - Volumes (`docker volume ls`)
+    - Images (`docker image ls`)
+  - Added background task handling to fetch Docker capability on demand.
+  - Ensured failed remote scans do not corrupt the last known successful cache.
 
-**Files:**
+### Frontend Integration
+- **Key Views**: `web/src/features/docker/pages/DockerPage.vue`, `web/src/features/docker/pages/DockerRuntimePage.vue`
+- **Actions**:
+  - Added Docker status summary indicator cards.
+  - Built tab interfaces for listing services, networks, volumes, and images.
+  - Rendered error banners and capability checks dynamically.
 
-- Create: `internal/docker/model.go`
-- Create: `internal/docker/runtime.go`
-- Create: `internal/docker/service.go`
-- Create: `internal/docker/handler.go`
-- Modify: `internal/server/model.go`
+---
 
-- [ ] Implement Docker and Compose CLI detection.
-- [ ] Store per-server Docker capability cache.
-- [ ] Implement service/container, network, volume, and image status reads.
-- [ ] Implement image update detection model.
-- [ ] Add Docker capability/status APIs.
-- [ ] Add tests for Docker output parsing and unsupported states.
-- [ ] Update `docs/phase2-acceptance-gate.md` with any implementation-specific verification notes.
+## Milestone 2B: Service Templates & Deployed Services (Completed)
 
-## Milestone 2A.2: Docker Read-Only UI
+**Goal:** Introduce reusable template blueprints, template-attached binary/text configurations, variables rendering, lifecycle tasks, and drift detection.
 
-**Owner:** Frontend Features
+### Backend Execution
+- **Key Modules**: `internal/compose/model.go`, `internal/compose/service.go`, `internal/compose/handler.go`
+- **Actions**:
+  - Implemented `ServiceTemplate` CRUD in `service.go`.
+  - Implemented `DeployedService` metadata state machine (Draft, Ready, Drifted, Removed).
+  - Implemented disk storage for attached binary and template text files under `data/service_templates/`.
+  - Built dynamic Go template parsing and evaluation for text-based resources before remote copying.
+  - Integrated with the `tasks` service to support background executions for deployment lifecycle hooks (`deploy`, `sync`, `restart`, `stop`, `remove`, `update-images`).
+  - Added label-based tracking matching panel metadata to active Docker configurations.
+  - Set up service drift detection triggers. If a template is updated, linked services automatically flag as drifted in the DB.
 
-**Closed loop:** Operator can move from server selection to capability refresh, services, networks, volumes, images, update prompts, and visible unsupported/error/empty states without mock data.
+### Frontend Integration
+- **Key Views**: `web/src/features/compose/pages/ServiceTemplatesPage.vue`, `web/src/features/compose/pages/ServicesPage.vue`, `web/src/features/compose/components/...`
+- **Actions**:
+  - Implemented a detailed Compose Template form enabling both visual configuration and direct YAML editing.
+  - Created file attachment panel lists to handle binaries and templates.
+  - Built a server preview selector allowing users to verify rendered YAML configurations.
+  - Provided action controls to deploy, start, restart, and remove active compose stacks.
 
-**Files:**
+---
 
-- Create: `web/src/features/docker/pages/DockerPage.vue`
-- Create: `web/src/features/docker/components/DockerCapabilityPanel.vue`
-- Create: `web/src/features/docker/components/ComposeRuntimeStatus.vue`
-- Create: `web/src/features/docker/api.ts`
-- Create: `web/src/features/docker/types.ts`
+## Milestone 2C: Version 1 Polish & Refinement (Current Active Phase)
 
-- [ ] Show Docker availability by server.
-- [ ] Show runtime services/containers, networks, volumes, and images.
-- [ ] Show image update availability, selected update, and update all actions.
-- [ ] Add delete and delete-unused actions for networks, volumes, and images.
-- [ ] Handle unsupported, empty, loading, error, and success states.
-- [ ] Link Docker refresh/status failures to task or API error details in the UI.
+**Goal:** Correct Version 1 design constraints, make YAML the unified source of truth, enable variable substitutions everywhere, enforce structured full-screen layouts, and establish cross-context task awareness.
 
-## Milestone 2B.1: Service Template, Service, File, and Variable Model
+### 2C.1: Unified YAML and Flexible Variables
+- [ ] **YAML as Truth**: Deprecate form-binding to strict SQL database columns for Compose properties. Make the raw `composeYaml` the definitive template target. Enable the frontend visual editor to dynamically parse and serialize directly to this YAML.
+- [ ] **Arbitrary Variable Support**: Modify the render pipeline in `internal/compose/service.go` to support Go template substitution in:
+  - Custom file pathways and mounts (e.g. `data/volumes/{{.server.custom_dir}}`).
+  - File contents of type `FileKindTemplate`.
+- [ ] **Context Richness**: Inject comprehensive built-ins:
+  - `.server`: Current server metadata (IP, username, server name, and key-value custom variables).
+  - `.servers`: Accessible array of all registered servers.
+  - `.files`: Direct variable map of all attached template files and contents.
+- [ ] **Server Variable Editing**: Provide a dedicated field/dialog in `web/src/features/servers/pages/ServersPage.vue` to edit custom variable key-values per server.
 
-**Owner:** Backend Operations
+### 2C.2: Visual Polish, Scrolling, and Layout Deduping
+- [ ] **Single-Column Form Flow**: Refactor the service template creation drawer from a confusing double-column view to a clean, single-column alignment.
+- [ ] **Sidebar Priority**: Order Docker operations inside the application shell as:
+  1. **Services** (Priority #1)
+  2. **Runtime Resources** (Networks, Volumes, Images)
+  3. **Service Templates** (Management and definitions)
+- [ ] **Resource Isolation**: Remove container list grids from the "Runtime Resources" tab. "Runtime Resources" will exclusively list host networks, volumes, and images to prevent view duplication.
+- [ ] **Template Badge Markers**: Display distinctive badges on container grids showing template origins. Directly discovered containers on target engines with no matching panel records must explicitly display `unmanaged` labels.
+- [ ] **Inline Preview & Testing**: Move target server selector for YAML rendering directly above the editor window. Remove the redundant validation table row, replacing it with inline validation errors under the specific inputs.
+- [ ] **Fixed Viewport Scroll**: Update stylesheet mappings (`web/src/styles/main.css`) to enforce fixed full-screen apps. Cards or content bodies that exceed bounds must handle internal scroll scopes (`overflow-y: auto`) so the primary top-bar and sidebar navigations never scroll off the page.
 
-**Closed loop:** Service templates, deployed service metadata, binary files, text template files, system variables, server custom variables, render values, and rendered outputs can be created, validated, listed, updated, deleted, and round-tripped from disk/database without touching a remote server.
+### 2C.3: Global Task Banner & Onboarding Flows
+- [ ] **Onboarding Guides**: Redesign the Overview page when no servers exist to render a welcoming onboarding screen, directing users to register their first Debian host.
+- [ ] **Scrolling Task Banner**: Inject a rotating, auto-scrolling active tasks indicator in `web/src/layouts/AppLayout.vue`'s header top-bar. It must pull from `/api/v1/tasks` to cycle through currently executing tasks in real time.
 
-**Files:**
+---
 
-- Create: `internal/compose/model.go`
-- Create: `internal/compose/repository.go`
-- Create: `internal/compose/template_service.go`
-- Create: `internal/compose/service_service.go`
-- Create: `internal/compose/resource_service.go`
-- Create: `internal/templatex/renderer.go`
-- Modify: `internal/server/model.go`
+## Phase 2 Done Criteria (Refined)
 
-- [ ] Implement `service_template` CRUD.
-- [ ] Implement deployed `service` CRUD.
-- [ ] Implement binary file metadata and storage.
-- [ ] Implement text template file metadata and rendering.
-- [ ] Implement system variable and server custom variable resolution.
-- [ ] Treat missing variables as hard validation errors.
-- [ ] Version templates and mark linked services drifted after template changes.
-- [ ] Validate data-root path safety.
-- [ ] Add repository and service tests.
-- [ ] Add tests for template/service/file name sanitization and path traversal rejection.
-- [ ] Add tests proving template render failures do not write rendered outputs.
-
-## Milestone 2B.2: Service Template and Service UI
-
-**Owner:** Frontend Features
-
-**Closed loop:** Operator can create a service template, switch between visual and YAML editing, manage binary/template files, preview render output, configure variables, see validation errors, create services, and reach deploy/sync actions only when the local state is valid.
-
-**Files:**
-
-- Create: `web/src/features/compose/pages/ServiceTemplatesPage.vue`
-- Create: `web/src/features/compose/pages/ServiceTemplateDetailPage.vue`
-- Create: `web/src/features/compose/pages/ServicesPage.vue`
-- Create: `web/src/features/compose/pages/ServiceDetailPage.vue`
-- Create: `web/src/features/compose/components/ServiceTemplateForm.vue`
-- Create: `web/src/features/compose/components/ServiceTemplateVisualEditor.vue`
-- Create: `web/src/features/compose/components/ServiceTemplateYamlEditor.vue`
-- Create: `web/src/features/compose/components/TemplateFileList.vue`
-- Create: `web/src/features/compose/components/ServerVariableEditor.vue`
-- Create: `web/src/features/compose/components/TemplateEditor.vue`
-- Create: `web/src/features/compose/api.ts`
-- Create: `web/src/features/compose/types.ts`
-
-- [ ] Implement service template list and detail pages.
-- [ ] Implement deployed service list and detail pages.
-- [ ] Implement visual and YAML template editing.
-- [ ] Implement binary file management UI.
-- [ ] Implement text template file editor and render preview.
-- [ ] Implement server custom variable UI.
-- [ ] Show linked services, template versions, and drift/sync state.
-- [ ] Show validation errors before deployment.
-- [ ] Display local artifact state: binary files, template files, rendered preview, and missing required values.
-- [ ] Keep deploy controls disabled or guarded while validation errors exist.
-
-## Milestone 2B.3: Deployment, Sync, Updates, Cleanup, and Migration
-
-**Owner:** Backend Operations and Frontend Features
-
-**Closed loop:** Operator can deploy a panel-owned service, inspect task logs and runtime status, sync after template changes, update selected/all images, clean up Docker resources, stop/restart/remove through tasks, export a bundle, import it to another server, and deploy the imported service.
-
-**Files:**
-
-- Create: `internal/compose/deployment_service.go`
-- Create: `internal/compose/migration_service.go`
-- Modify: `web/src/features/compose/*`
-- Create: `docs/compose-migration.md`
-
-- [ ] Implement staged upload.
-- [ ] Implement deploy, sync, pull, image update, up, restart, stop, and remove task workflows.
-- [ ] Implement network, volume, and image delete/prune task workflows.
-- [ ] Implement migration export and import.
-- [ ] Add deployment and migration task panels.
-- [ ] Verify export/import across two servers.
-- [ ] Define remote active and staging path layout in docs.
-- [ ] Log validation, rendering, staging upload, activation, Compose command, update, cleanup, and status refresh stages.
-- [ ] Document rollback behavior and manual cleanup paths for partial failures.
-
-## Done Criteria
-
-- [ ] Docker discovery works for supported and unsupported servers.
-- [ ] Service templates can be created, rendered, versioned, synced, and migrated.
-- [ ] Services can be created, deployed, updated, restarted, stopped, removed, and migrated.
-- [ ] Binary files and dynamic text template files are stored under the configured data root.
-- [ ] Networks, volumes, and images can be listed, deleted, and pruned through tasks.
-- [ ] Image updates show selected/all update prompts and execute through tasks.
-- [ ] Every mutating operation is task-backed and log-visible.
-- [ ] `docs/phase2-acceptance-gate.md` passes manually against real managed servers.
-- [ ] `task backend:test`, `task web:test`, and `task web:build` pass.
+- [x] Docker CLI capability check works for Debian 12 & 13 nodes over SSH.
+- [x] Service templates YAML definitions render with local system variables.
+- [x] Template version drift triggers correctly when YAML config changes.
+- [ ] Variables can be parsed inside template content, YAML fields, and arbitrary folder routes.
+- [ ] Managed services show template status badges, and extraneous containers show `unmanaged`.
+- [ ] Runtime resources (images, networks, volumes) can be audited and pruned via tasks.
+- [ ] Fixed layouts exist everywhere, supporting internal card-scrolling instead of body-scrolling.
+- [ ] Global active task indicator rotates running operations in the top bar.

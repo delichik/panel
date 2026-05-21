@@ -1,7 +1,5 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
-import { Refresh, Select } from '@element-plus/icons-vue';
-import { ElMessage } from 'element-plus';
 import { settingsApi } from '@/api/settings';
 import type { RuntimeSettingsDto } from '@/types/api';
 
@@ -14,6 +12,17 @@ const form = reactive({
   metricsCollectionIntervalSeconds: 60,
   cleanupSchedule: 'daily',
 });
+
+// Snackbar notification state
+const snackbar = ref(false);
+const snackbarText = ref('');
+const snackbarColor = ref('success');
+
+function showMessage(text: string, color = 'success') {
+  snackbarText.value = text;
+  snackbarColor.value = color;
+  snackbar.value = true;
+}
 
 function syncForm(next: RuntimeSettingsDto) {
   form.metricsRetentionDays = next.metricsRetentionDays;
@@ -40,7 +49,7 @@ async function saveSettings() {
     settings.value = await settingsApi.updateRuntime({ ...form });
     syncForm(settings.value);
     error.value = '';
-    ElMessage.success('Runtime settings saved');
+    showMessage('Runtime settings saved successfully');
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Unable to save runtime settings';
   } finally {
@@ -53,70 +62,122 @@ onMounted(loadSettings);
 
 <template>
   <div>
-    <div class="panel-header panel">
+    <div class="d-flex justify-space-between align-center mb-6">
       <div>
-        <p class="page-subtitle">Runtime settings are stored in the application database and apply without restart.</p>
+        <h1 class="text-h4 font-weight-bold">Settings</h1>
+        <p class="text-subtitle-1 text-medium-emphasis">Runtime settings are stored in the application database and apply without restart.</p>
       </div>
-      <div class="toolbar">
-        <el-button :icon="Refresh" :loading="loading" @click="loadSettings">Refresh</el-button>
-        <el-button type="primary" :icon="Select" :loading="saving" :disabled="!settings" @click="saveSettings">
+      <div class="d-flex" style="gap: 12px;">
+        <v-btn
+          prepend-icon="mdi-refresh"
+          :loading="loading"
+          variant="outlined"
+          @click="loadSettings"
+          class="text-none font-weight-bold"
+        >
+          Refresh
+        </v-btn>
+        <v-btn
+          color="primary"
+          prepend-icon="mdi-content-save"
+          :loading="saving"
+          :disabled="!settings"
+          @click="saveSettings"
+          class="text-none font-weight-bold"
+        >
           Save
-        </el-button>
+        </v-btn>
       </div>
     </div>
 
-    <el-alert v-if="error" class="page-alert" type="error" :title="error" show-icon />
+    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <section class="panel settings-panel" v-loading="loading">
+    <v-card :loading="loading" variant="outlined" class="pa-6">
       <template v-if="settings">
-        <el-form class="runtime-form" label-position="top">
-          <el-form-item label="Metrics retention">
-            <el-input-number v-model="form.metricsRetentionDays" :min="1" :max="3650" />
-            <span class="unit-label">days</span>
-          </el-form-item>
-          <el-form-item label="Collection interval">
-            <el-input-number v-model="form.metricsCollectionIntervalSeconds" :min="10" :max="86400" />
-            <span class="unit-label">seconds</span>
-          </el-form-item>
-          <el-form-item label="Cleanup schedule">
-            <el-radio-group v-model="form.cleanupSchedule">
-              <el-radio-button label="hourly">Hourly</el-radio-button>
-              <el-radio-button label="daily">Daily</el-radio-button>
-              <el-radio-button label="weekly">Weekly</el-radio-button>
-            </el-radio-group>
-          </el-form-item>
-        </el-form>
+        <v-form class="runtime-form mb-6">
+          <div class="d-flex flex-column" style="gap: 16px;">
+            <v-text-field
+              v-model.number="form.metricsRetentionDays"
+              type="number"
+              min="1"
+              max="3650"
+              label="Metrics Retention"
+              suffix="days"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-        <el-divider />
+            <v-text-field
+              v-model.number="form.metricsCollectionIntervalSeconds"
+              type="number"
+              min="10"
+              max="86400"
+              label="Collection Interval"
+              suffix="seconds"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="Listen address">{{ settings.listenAddress }}</el-descriptions-item>
-          <el-descriptions-item label="Application database">{{ settings.appDatabase }}</el-descriptions-item>
-          <el-descriptions-item label="Metrics database">{{ settings.metricsDatabase }}</el-descriptions-item>
-          <el-descriptions-item label="Data root">{{ settings.dataRoot }}</el-descriptions-item>
-        </el-descriptions>
+            <div>
+              <div class="text-subtitle-2 mb-2 text-grey-darken-3">Cleanup Schedule</div>
+              <v-btn-toggle v-model="form.cleanupSchedule" mandatory color="primary" density="compact">
+                <v-btn value="hourly" class="text-none">Hourly</v-btn>
+                <v-btn value="daily" class="text-none">Daily</v-btn>
+                <v-btn value="weekly" class="text-none">Weekly</v-btn>
+              </v-btn-toggle>
+            </div>
+          </div>
+        </v-form>
+
+        <v-divider class="my-6" />
+
+        <div class="text-subtitle-1 font-weight-bold mb-3">System Properties</div>
+        <v-card variant="flat" class="border" style="background: transparent;">
+          <v-table density="compact" style="background: transparent;" class="text-left">
+            <tbody>
+              <tr>
+                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase" style="width: 200px;">Listen address</td>
+                <td>{{ settings.listenAddress }}</td>
+              </tr>
+              <tr>
+                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase">Application database</td>
+                <td class="font-mono text-caption">{{ settings.appDatabase }}</td>
+              </tr>
+              <tr>
+                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase">Metrics database</td>
+                <td class="font-mono text-caption">{{ settings.metricsDatabase }}</td>
+              </tr>
+              <tr>
+                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase">Data root</td>
+                <td class="font-mono text-caption">{{ settings.dataRoot }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-card>
       </template>
-      <el-empty v-else description="Runtime settings unavailable" />
-    </section>
+      <div v-else class="text-center py-10 text-grey-darken-1">
+        <v-icon size="40" class="mb-2" color="grey-lighten-1">mdi-cog-off-outline</v-icon>
+        <div>Runtime settings unavailable</div>
+      </div>
+    </v-card>
+
+    <!-- Global Snackbar -->
+    <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
+      {{ snackbarText }}
+      <template v-slot:actions>
+        <v-btn color="white" variant="text" @click="snackbar = false">Close</v-btn>
+      </template>
+    </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.page-alert,
-.settings-panel {
-  margin-top: 20px;
-}
-
-.settings-panel {
-  padding: 20px;
-}
-
 .runtime-form {
   max-width: 520px;
 }
-
-.unit-label {
-  margin-left: 10px;
-  color: #667085;
+.font-mono {
+  font-family: monospace !important;
 }
 </style>
