@@ -125,6 +125,18 @@ func (r *CLIRuntime) ReadComposeStatus(ctx context.Context, target sshx.Target, 
 	return ComposeStatus{Project: project, State: state, Services: services, CheckedAt: time.Now().UTC()}, nil
 }
 
+func (r *CLIRuntime) StartContainer(ctx context.Context, target sshx.Target, containerID string) error {
+	return r.runDockerMutation(ctx, target, "docker_container_start_failed", `docker container start `+shellQuote(containerID))
+}
+
+func (r *CLIRuntime) StopContainer(ctx context.Context, target sshx.Target, containerID string) error {
+	return r.runDockerMutation(ctx, target, "docker_container_stop_failed", `docker container stop `+shellQuote(containerID))
+}
+
+func (r *CLIRuntime) DeleteContainer(ctx context.Context, target sshx.Target, containerID string) error {
+	return r.runDockerMutation(ctx, target, "docker_container_delete_failed", `docker container rm `+shellQuote(containerID))
+}
+
 func (r *CLIRuntime) DeleteNetwork(ctx context.Context, target sshx.Target, networkID string) error {
 	return r.runDockerMutation(ctx, target, "docker_network_delete_failed", `docker network rm `+shellQuote(networkID))
 }

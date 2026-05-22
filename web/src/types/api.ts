@@ -20,7 +20,7 @@ export interface ServerDto {
   port: number;
   sshUsername: string;
   credentialId: string | null;
-  labels?: string[];
+  traits?: Record<string, string>;
   notes?: string;
   os?: OSInfoDto | null;
   sudo?: SudoInfoDto | null;
@@ -263,6 +263,8 @@ export interface ServiceTemplateDto {
   visual?: ComposeVisualModelDto | Record<string, unknown> | null;
   variables?: ComposeTemplateVariableDto[];
   dependencies?: string[];
+  traitSelector?: string;
+  active?: boolean;
   fileCount?: number;
   linkedServiceCount?: number;
   createdAt: string;
@@ -276,6 +278,8 @@ export interface ServiceTemplateInputDto {
   visual?: ComposeVisualModelDto | Record<string, unknown> | null;
   variables?: ComposeTemplateVariableDto[];
   dependencies?: string[];
+  traitSelector?: string;
+  active?: boolean;
 }
 
 export type TemplateFileKind = 'template' | 'binary' | string;

@@ -106,6 +106,9 @@ type ContainerRuntime interface {
 	ListVolumes(ctx context.Context, target sshx.Target) ([]RuntimeVolume, error)
 	ListImages(ctx context.Context, target sshx.Target) ([]RuntimeImage, error)
 	ReadComposeStatus(ctx context.Context, target sshx.Target, project string) (ComposeStatus, error)
+	StartContainer(ctx context.Context, target sshx.Target, containerID string) error
+	StopContainer(ctx context.Context, target sshx.Target, containerID string) error
+	DeleteContainer(ctx context.Context, target sshx.Target, containerID string) error
 	DeleteNetwork(ctx context.Context, target sshx.Target, networkID string) error
 	DeleteVolume(ctx context.Context, target sshx.Target, volumeID string) error
 	DeleteImage(ctx context.Context, target sshx.Target, imageID string) error

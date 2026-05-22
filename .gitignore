@@ -4,3 +4,5 @@ bin/
 web/node_modules/
 web/dist/
 data
+go-build-cache
+.claude

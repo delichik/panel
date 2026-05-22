@@ -26,18 +26,22 @@ type ServiceTemplate struct {
 	VisualState  map[string]any     `json:"visual"`
 	Variables    []TemplateVariable `json:"variables"`
 	Dependencies []string           `json:"dependencies"`
+	TraitSelector string            `json:"traitSelector"`
+	Active       bool               `json:"active"`
 	Version      int                `json:"version"`
 	CreatedAt    time.Time          `json:"createdAt"`
 	UpdatedAt    time.Time          `json:"updatedAt"`
 }
 
 type SaveTemplateRequest struct {
-	Name         string             `json:"name"`
-	Description  string             `json:"description"`
-	ComposeYAML  string             `json:"composeYaml"`
-	VisualState  map[string]any     `json:"visual"`
-	Variables    []TemplateVariable `json:"variables"`
-	Dependencies []string           `json:"dependencies"`
+	Name          string             `json:"name"`
+	Description   string             `json:"description"`
+	ComposeYAML   string             `json:"composeYaml"`
+	VisualState   map[string]any     `json:"visual"`
+	Variables     []TemplateVariable `json:"variables"`
+	Dependencies  []string           `json:"dependencies"`
+	TraitSelector string             `json:"traitSelector"`
+	Active        bool               `json:"active"`
 }
 
 type TemplateFile struct {

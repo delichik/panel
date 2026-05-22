@@ -73,7 +73,15 @@ onBeforeUnmount(() => {
 
       <v-list nav class="py-4 px-3">
         <v-list-item to="/overview" prepend-icon="mdi-monitor" title="Overview" value="overview" />
-        <v-list-item to="/servers" prepend-icon="mdi-server" title="Servers" value="servers" />
+
+        <v-list-group value="servers">
+          <template #activator="{ props }">
+            <v-list-item v-bind="props" prepend-icon="mdi-server" title="Servers" />
+          </template>
+          <v-list-item to="/servers" title="Servers" value="servers" class="pl-8" />
+          <v-list-item to="/credentials" title="Credentials" value="credentials" class="pl-8" />
+        </v-list-group>
+
         <v-list-item to="/packages" prepend-icon="mdi-package-variant" title="Package Updates" value="packages" />
 
         <v-list-group value="docker">

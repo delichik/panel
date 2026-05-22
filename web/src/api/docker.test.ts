@@ -53,4 +53,29 @@ describe('dockerApi', () => {
       }),
     );
   });
+
+  it('calls task-backed container lifecycle endpoints', async () => {
+    const fetcher = vi.fn().mockImplementation(() => jsonResponse({ data: { taskId: 'task-1' }, error: null }));
+    const api = createDockerApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await api.startContainer('server-1', 'abc123');
+    await api.stopContainer('server-1', 'abc123');
+    await api.deleteContainer('server-1', 'abc123');
+
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      '/api/v1/servers/server-1/docker/containers/abc123/start',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      '/api/v1/servers/server-1/docker/containers/abc123/stop',
+      expect.objectContaining({ method: 'POST' }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      3,
+      '/api/v1/servers/server-1/docker/containers/abc123',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
 });

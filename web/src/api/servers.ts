@@ -7,7 +7,7 @@ export interface ServerInput {
   port: number;
   sshUsername: string;
   credentialId: string | null;
-  labels: string[];
+  traits: Record<string, string>;
   notes: string;
 }
 

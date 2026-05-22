@@ -36,6 +36,12 @@ interface VolumeRow {
   mode: '' | 'ro' | 'rw';
 }
 
+interface PlacementRule {
+  key: string;
+  operator: string;
+  value: string;
+}
+
 interface TemplateForm {
   id: string;
   name: string;
@@ -44,6 +50,9 @@ interface TemplateForm {
   visual: ComposeVisualModelDto;
   variables: ComposeTemplateVariableDto[];
   dependencies: string[];
+  traitSelector: string;
+  placementRules: PlacementRule[];
+  active: boolean;
 }
 
 interface FileForm {
@@ -196,6 +205,9 @@ function emptyTemplateForm(): TemplateForm {
     visual,
     variables: [],
     dependencies: [],
+    traitSelector: '',
+    placementRules: [],
+    active: false,
   };
 }
 
@@ -224,6 +236,9 @@ function templateToForm(template: ServiceTemplateDto): TemplateForm {
     visual,
     variables: safeArray(template.variables),
     dependencies: safeArray(template.dependencies),
+    traitSelector: template.traitSelector ?? '',
+    placementRules: selectorToRules(template.traitSelector ?? ''),
+    active: template.active ?? false,
   };
 }
 
@@ -387,14 +402,7 @@ async function openTemplate(template?: ServiceTemplateDto) {
   }
 }
 
-async function saveTemplate() {
-  saving.value = true;
-  if (mode.value === 'visual') {
-    syncYamlFromVisual();
-  } else {
-    form.visual = yamlToVisual(form.composeYaml);
-  }
-  templateService.value.name = form.name || templateService.value.name || 'app';
+async function executeSave() {
   try {
     const input = {
       name: form.name,
@@ -403,6 +411,8 @@ async function saveTemplate() {
       visual: form.visual,
       variables: safeArray(form.variables).filter((item) => item.name.trim()),
       dependencies: safeArray(form.dependencies),
+      traitSelector: rulesToSelector(form.placementRules),
+      active: form.active,
     };
     const saved = form.id ? await composeApi.updateTemplate(form.id, input) : await composeApi.createTemplate(input);
     resetForm(templateToForm(saved));
@@ -415,6 +425,29 @@ async function saveTemplate() {
   } finally {
     saving.value = false;
   }
+}
+
+async function saveTemplate() {
+  if (mode.value === 'visual') {
+    syncYamlFromVisual();
+  } else {
+    form.visual = yamlToVisual(form.composeYaml);
+  }
+  templateService.value.name = form.name || templateService.value.name || 'app';
+
+  const activeRules = safeArray(form.placementRules).filter((r) => r.key && r.operator && r.value);
+  if (activeRules.length === 0) {
+    confirm(
+      'Placement Rules Warning',
+      'You have specified 0 placement rules for this service. This template will not be automatically deployed to any servers in the fleet. Are you sure you want to save?',
+      async () => {
+        await executeSave();
+      }
+    );
+    return;
+  }
+
+  await executeSave();
 }
 
 async function deleteTemplate(template: ServiceTemplateDto) {
@@ -493,6 +526,120 @@ async function deleteFile(file: TemplateFileDto) {
   });
 }
 
+function rulesToSelector(rulesList: PlacementRule[]): string {
+  return rulesList
+    .filter((r) => r.key && r.operator && r.value)
+    .map((r) => {
+      const isNum = !isNaN(Number(r.value)) && r.value.trim() !== '';
+      const safeVal = isNum ? r.value : `"${r.value.replace(/"/g, '\\"')}"`;
+      return `${r.key} ${r.operator} ${safeVal}`;
+    })
+    .join(' && ');
+}
+
+function selectorToRules(selector: string): PlacementRule[] {
+  if (!selector) return [];
+  return selector.split('&&').map((part) => {
+    part = part.trim();
+    const operators = ['==', '!=', '>=', '<=', '>', '<'];
+    for (const op of operators) {
+      const idx = part.indexOf(op);
+      if (idx !== -1) {
+        const key = part.slice(0, idx).trim();
+        let val = part.slice(idx + op.length).trim();
+        if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+          val = val.slice(1, -1);
+        }
+        return { key, operator: op, value: val };
+      }
+    }
+    return { key: '', operator: '==', value: '' };
+  }).filter((r) => r.key);
+}
+
+const availableTraitKeys = computed(() => {
+  const keys = new Set<string>();
+  keys.add('sys.cpu_cores');
+  keys.add('sys.memory_total_mb');
+  keys.add('sys.disk_total_gb');
+  keys.add('sys.os');
+  keys.add('sys.hostname');
+
+  for (const srv of servers.value) {
+    if (srv.traits) {
+      for (const k of Object.keys(srv.traits)) {
+        keys.add(k);
+      }
+    }
+  }
+  return Array.from(keys);
+});
+
+const matchedServersPreview = computed(() => {
+  const activeRules = safeArray(form.placementRules).filter((r) => r.key && r.operator && r.value);
+  if (!activeRules.length) {
+    return servers.value.filter((s) => s.reachable && s.os?.supported);
+  }
+
+  return servers.value.filter((srv) => {
+    if (!srv.reachable || !srv.os?.supported) return false;
+
+    return activeRules.every((rule) => {
+      const actualVal = srv.traits?.[rule.key] ?? '';
+      const compareVal = rule.value;
+
+      if (rule.operator === '==') return actualVal === compareVal;
+      if (rule.operator === '!=') return actualVal !== compareVal;
+
+      const actNum = parseFloat(actualVal);
+      const compNum = parseFloat(compareVal);
+
+      if (!isNaN(actNum) && !isNaN(compNum)) {
+        if (rule.operator === '>=') return actNum >= compNum;
+        if (rule.operator === '<=') return actNum <= compNum;
+        if (rule.operator === '>') return actNum > compNum;
+        if (rule.operator === '<') return actNum < compNum;
+      }
+
+      if (rule.operator === '>=') return actualVal >= compareVal;
+      if (rule.operator === '<=') return actualVal <= compareVal;
+      if (rule.operator === '>') return actualVal > compareVal;
+      if (rule.operator === '<') return actualVal < compareVal;
+
+      return false;
+    });
+  });
+});
+
+function addPlacementRule() {
+  if (!form.placementRules) form.placementRules = [];
+  form.placementRules.push({ key: '', operator: '==', value: '' });
+}
+
+function removePlacementRule(index: number) {
+  form.placementRules.splice(index, 1);
+}
+
+async function toggleFleetDeployment(template: ServiceTemplateDto, val: any) {
+  try {
+    const input = {
+      name: template.name,
+      description: template.description ?? '',
+      composeYaml: template.composeYaml,
+      visual: template.visual as any,
+      variables: safeArray(template.variables),
+      dependencies: safeArray(template.dependencies),
+      traitSelector: template.traitSelector ?? '',
+      active: Boolean(val),
+    };
+    await composeApi.updateTemplate(template.id, input);
+    showMessage(val ? 'Fleet placement enabled (reconciliation active)' : 'Fleet placement disabled (eviction queued)');
+    await loadTemplates();
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : 'Failed to toggle fleet placement', 'error');
+  }
+}
+
 onMounted(loadTemplates);
 </script>
 
@@ -534,6 +681,7 @@ onMounted(loadTemplates);
             <th class="font-weight-bold">Description</th>
             <th class="font-weight-bold">Dependencies</th>
             <th class="font-weight-bold">Version</th>
+            <th class="font-weight-bold">Fleet Placement</th>
             <th class="font-weight-bold">Updated</th>
             <th class="font-weight-bold text-right" style="width: 210px;">Actions</th>
           </tr>
@@ -551,6 +699,16 @@ onMounted(loadTemplates);
               <v-chip size="small" label color="grey-lighten-1">{{ dependencyCount(row) }}</v-chip>
             </td>
             <td>{{ row.version }}</td>
+            <td>
+              <v-switch
+                :model-value="row.active"
+                color="success"
+                density="compact"
+                hide-details
+                label="Reconcile"
+                @update:model-value="(val) => toggleFleetDeployment(row, val)"
+              />
+            </td>
             <td class="text-caption text-grey-darken-1">
               {{ row.updatedAt ? new Date(row.updatedAt).toLocaleString() : '-' }}
             </td>
@@ -591,10 +749,97 @@ onMounted(loadTemplates);
             <v-card variant="outlined" class="pa-4 mb-4">
               <div class="text-subtitle-2 font-weight-bold mb-3">Template Metadata</div>
               <v-alert v-if="editorError" type="error" variant="tonal" class="mb-3">{{ editorError }}</v-alert>
-              <div class="basic-grid">
+              <div class="basic-grid mb-3">
                 <v-text-field v-model="form.name" label="Service Name" placeholder="postgres" variant="outlined" density="comfortable" @change="syncYamlFromVisual" />
                 <v-text-field v-model="form.description" label="Description" placeholder="Shared database container" variant="outlined" density="comfortable" />
+                <div class="d-flex align-center pl-2">
+                  <v-switch v-model="form.active" label="Enable Fleet Placement (Auto-Reconcile)" color="success" density="comfortable" hide-details />
+                </div>
               </div>
+              <v-divider class="my-4" />
+
+              <!-- Fleet Placement Rules (可视化集群调度规则配置) -->
+              <div class="d-flex justify-space-between align-center mb-3">
+                <span class="text-subtitle-2 font-weight-bold text-primary">
+                  <v-icon start icon="mdi-target" size="18" class="mr-1"></v-icon>
+                  Fleet Placement Rules (Traits Filtering)
+                </span>
+                <v-btn size="small" prepend-icon="mdi-plus" color="primary" variant="outlined" class="text-none" @click="addPlacementRule">
+                  Add Rule
+                </v-btn>
+              </div>
+
+              <div class="rules-editor mb-4">
+                <div v-for="(rule, index) in form.placementRules" :key="index" class="d-flex align-center mb-2" style="gap: 8px;">
+                  <!-- Trait Key 选择下拉框 (自动汇聚排重集群特征，100% 防错) -->
+                  <v-select
+                    v-model="rule.key"
+                    :items="availableTraitKeys"
+                    placeholder="Select Trait Key"
+                    density="compact"
+                    hide-details
+                    variant="outlined"
+                    style="flex: 2;"
+                  />
+
+                  <!-- 比较操作符 -->
+                  <v-select
+                    v-model="rule.operator"
+                    :items="['==', '!=', '>=', '<=', '>', '<']"
+                    placeholder="Op"
+                    density="compact"
+                    hide-details
+                    variant="outlined"
+                    style="flex: 1;"
+                  />
+
+                  <!-- 比较目标值 -->
+                  <v-text-field
+                    v-model="rule.value"
+                    placeholder="Target Value"
+                    density="compact"
+                    hide-details
+                    variant="outlined"
+                    style="flex: 2;"
+                  />
+
+                  <!-- 移除按钮 -->
+                  <v-btn icon="mdi-delete" color="error" variant="text" size="small" @click="removePlacementRule(index)" />
+                </div>
+
+                <v-alert v-if="!form.placementRules || form.placementRules.length === 0" type="info" variant="tonal" density="compact" class="text-caption text-left py-2">
+                  No placement rules specified. This template will automatically deploy to <strong>all reachable and supported server nodes</strong> in the fleet.
+                </v-alert>
+              </div>
+
+              <!-- Real-time Matcher Preview (实时节点匹配与对账预测) -->
+              <v-card variant="flat" color="grey-lighten-4" class="pa-3 rounded-lg border">
+                <div class="d-flex align-center mb-2">
+                  <v-icon start icon="mdi-bullseye-arrow" size="16" class="text-grey-darken-2 mr-1"></v-icon>
+                  <span class="text-caption font-weight-bold text-grey-darken-2">Real-Time Target Fleet Preview</span>
+                </div>
+
+                <div v-if="matchedServersPreview.length > 0" class="d-flex flex-wrap" style="gap: 6px;">
+                  <v-chip
+                    v-for="srv in matchedServersPreview"
+                    :key="srv.id"
+                    color="success"
+                    variant="flat"
+                    size="small"
+                    label
+                  >
+                    <v-icon start icon="mdi-server" size="12"></v-icon>
+                    {{ srv.name }} ({{ srv.host }})
+                  </v-chip>
+                  <div class="text-caption text-success w-100 mt-2 text-left">
+                    💡 This template will be automatically deployed and kept running on these {{ matchedServersPreview.length }} servers.
+                  </div>
+                </div>
+
+                <v-alert v-else type="warning" variant="tonal" density="compact" class="text-caption text-left py-2 mb-0">
+                  ⚠️ <strong>Warning:</strong> No active servers match these placement rules! If you save, any running instances on all servers will be automatically <strong>evicted (uninstalled)</strong>.
+                </v-alert>
+              </v-card>
             </v-card>
 
             <!-- Compose Configuration Card -->

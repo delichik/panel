@@ -23,6 +23,7 @@ export const router = createRouter({
         { path: '', redirect: '/overview' },
         { path: 'overview', name: 'overview', component: OverviewPage, meta: { title: 'Overview' } },
         { path: 'servers', name: 'servers', component: ServersPage, meta: { title: 'Servers' } },
+        { path: 'credentials', name: 'credentials', component: ServersPage, meta: { title: 'Credentials' } },
         { path: 'packages', name: 'packages', component: PackageUpdatesPage, meta: { title: 'Package Updates' } },
         { path: 'docker', redirect: '/services' },
         { path: 'services', name: 'services', component: ServicesPage, meta: { title: 'Services' } },

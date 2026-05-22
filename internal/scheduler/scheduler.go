@@ -3,6 +3,7 @@ package scheduler
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"panel/internal/docker"
 	"panel/internal/metrics"
 	"panel/internal/packages"
+	"panel/internal/panelerr"
 	"panel/internal/server"
 	"panel/internal/settings"
 	"panel/internal/tasks"
@@ -111,6 +113,29 @@ func (s *Scheduler) Stop() {
 		s.cancel()
 	}
 	s.wg.Wait()
+}
+
+func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
+	switch task.Type {
+	case "server_connectivity_test":
+		_, err := s.servers.EnsureConnectivityTask(ctx, task.ServerID, true)
+		return err
+	case "docker_status_refresh":
+		_, err := s.docker.Refresh(ctx, task.ServerID)
+		return err
+	case "package_refresh":
+		_, err := s.packages.Refresh(ctx, task.ServerID)
+		return err
+	}
+
+	if strings.HasPrefix(task.Type, "compose_service_") && task.ResourceType == "service" && task.ResourceID != "" {
+		op := strings.TrimPrefix(task.Type, "compose_service_")
+		op = strings.ReplaceAll(op, "_", "-")
+		_, err := s.compose.LifecycleTask(ctx, task.ResourceID, op)
+		return err
+	}
+
+	return panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center")
 }
 
 func (s *Scheduler) metricsLoop(ctx context.Context) {

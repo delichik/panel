@@ -149,6 +149,22 @@ func resourceOperation(r *http.Request) (ResourceOperation, bool) {
 		return ResourceOperation{}, false
 	}
 	resource := parts[5]
+	if resource == "containers" {
+		if len(parts) < 7 {
+			return ResourceOperation{}, false
+		}
+		id, err := url.PathUnescape(parts[6])
+		if err != nil || strings.TrimSpace(id) == "" {
+			return ResourceOperation{}, false
+		}
+		if r.Method == http.MethodDelete && len(parts) == 7 {
+			return ResourceOperation{Kind: "container", Action: "delete", ID: id, Summary: "Deleting Docker container " + id}, true
+		}
+		if r.Method == http.MethodPost && len(parts) == 8 && (parts[7] == "start" || parts[7] == "stop") {
+			return ResourceOperation{Kind: "container", Action: parts[7], ID: id, Summary: strings.Title(parts[7]) + "ing Docker container " + id}, true
+		}
+		return ResourceOperation{}, false
+	}
 	switch resource {
 	case "networks", "volumes", "images":
 	default:

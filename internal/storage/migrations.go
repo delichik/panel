@@ -23,7 +23,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			port INTEGER NOT NULL,
 			ssh_username TEXT NOT NULL DEFAULT '',
 			credential_id TEXT NOT NULL,
-			labels TEXT NOT NULL DEFAULT '[]',
+			traits TEXT NOT NULL DEFAULT '{}',
 			notes TEXT NOT NULL DEFAULT '',
 			os_id TEXT NOT NULL DEFAULT '',
 			os_version_id TEXT NOT NULL DEFAULT '',
@@ -111,6 +111,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			compose_yaml TEXT NOT NULL,
 			visual_state TEXT NOT NULL DEFAULT '{}',
 			variables TEXT NOT NULL DEFAULT '[]',
+			trait_selector TEXT NOT NULL DEFAULT '',
+			active INTEGER NOT NULL DEFAULT 0,
 			version INTEGER NOT NULL DEFAULT 1,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
@@ -173,6 +175,17 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"retry_count":   "INTEGER NOT NULL DEFAULT 0",
 		"max_retries":   "INTEGER NOT NULL DEFAULT 0",
 		"next_run_at":   "TEXT",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "servers", map[string]string{
+		"traits": "TEXT NOT NULL DEFAULT '{}'",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "service_templates", map[string]string{
+		"trait_selector": "TEXT NOT NULL DEFAULT ''",
+		"active":         "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
 		return err
 	}

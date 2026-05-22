@@ -57,7 +57,7 @@ func New(cfg config.Config) (*App, error) {
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), docker.NewHandler(dockerSvc), compose.NewHandler(composeSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), docker.NewHandler(dockerSvc), compose.NewHandler(composeSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
 	return a, nil
 }
 
@@ -121,6 +121,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			dockerH.ProjectStatus(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/services"):
 			dockerH.Services(w, r)
+		case r.Method == http.MethodPost && strings.Contains(path, "/docker/containers/"):
+			dockerH.NotImplemented(w, r)
+		case r.Method == http.MethodDelete && strings.Contains(path, "/docker/containers/"):
+			dockerH.NotImplemented(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/networks"):
 			dockerH.Networks(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/volumes"):

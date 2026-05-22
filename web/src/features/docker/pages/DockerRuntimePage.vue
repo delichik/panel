@@ -8,6 +8,7 @@ import type {
   DockerCapabilityDto,
   DockerImageDto,
   DockerNetworkDto,
+  DockerRuntimeServiceDto,
   DockerVolumeDto,
   ServerDto,
 } from '@/types/api';
@@ -18,10 +19,11 @@ const capability = ref<DockerCapabilityDto | null>(null);
 const networks = ref<DockerNetworkDto[]>([]);
 const volumes = ref<DockerVolumeDto[]>([]);
 const images = ref<DockerImageDto[]>([]);
+const unmanagedContainers = ref<DockerRuntimeServiceDto[]>([]);
 const selectedImageIds = ref<string[]>([]);
 const taskId = ref('');
 const taskTitle = ref('Docker Task');
-const activeTab = ref('networks');
+const activeTab = ref('containers');
 const loadingServers = ref(false);
 const loadingCapability = ref(false);
 const loadingResources = ref(false);
@@ -99,6 +101,30 @@ function imageName(image: DockerImageDto) {
   return `${repository}:${tag}`;
 }
 
+function containerName(container: DockerRuntimeServiceDto) {
+  return container.name || container.id;
+}
+
+function shortContainerId(container: DockerRuntimeServiceDto) {
+  return container.id.length > 12 ? container.id.slice(0, 12) : container.id;
+}
+
+function isContainerRunning(container: DockerRuntimeServiceDto) {
+  return container.state === 'running' || (container.status ?? '').toLowerCase().startsWith('up');
+}
+
+function containerStatusColor(container: DockerRuntimeServiceDto) {
+  if (isContainerRunning(container)) return 'success';
+  if (container.state === 'exited') return 'warning';
+  if (container.state === 'created') return 'info';
+  return 'grey';
+}
+
+function containerPorts(container: DockerRuntimeServiceDto) {
+  if (Array.isArray(container.ports)) return container.ports.join(', ') || '-';
+  return container.ports || '-';
+}
+
 function capabilityType() {
   if (!capability.value || capabilityPending.value) return 'info';
   if (capability.value.lastError) return 'warning';
@@ -140,20 +166,23 @@ async function loadResources(targetServerId = serverId.value) {
     networks.value = [];
     volumes.value = [];
     images.value = [];
+    unmanagedContainers.value = [];
     selectedImageIds.value = [];
     return;
   }
   loadingResources.value = true;
   try {
-    const [networkRows, volumeRows, imageRows] = await Promise.all([
+    const [networkRows, volumeRows, imageRows, serviceRows] = await Promise.all([
       dockerApi.listNetworks(targetServerId),
       dockerApi.listVolumes(targetServerId),
       dockerApi.listImages(targetServerId),
+      dockerApi.listServices(targetServerId),
     ]);
     if (targetServerId !== serverId.value) return;
     networks.value = networkRows.items ?? [];
     volumes.value = volumeRows.items ?? [];
     images.value = imageRows.items ?? [];
+    unmanagedContainers.value = (serviceRows.items ?? []).filter((container) => !container.managed);
     selectedImageIds.value = [];
     error.value = '';
   } catch (err) {
@@ -205,6 +234,41 @@ async function runDelete(kind: 'network' | 'volume' | 'image', id: string, name:
       actionLoading.value = '';
     }
   });
+}
+
+async function executeContainerAction(action: 'start' | 'stop' | 'delete', container: DockerRuntimeServiceDto) {
+  if (!serverId.value) return;
+  const id = container.id;
+  const name = containerName(container);
+  actionLoading.value = `container:${action}:${id}`;
+  try {
+    const result =
+      action === 'start'
+        ? await dockerApi.startContainer(serverId.value, id)
+        : action === 'stop'
+          ? await dockerApi.stopContainer(serverId.value, id)
+          : await dockerApi.deleteContainer(serverId.value, id);
+    taskId.value = result.taskId;
+    taskTitle.value = `${action[0].toUpperCase()}${action.slice(1)} Docker container`;
+    showMessage(`Docker container ${name} ${action} started`);
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : `Unable to ${action} Docker container`, 'error');
+  } finally {
+    actionLoading.value = '';
+  }
+}
+
+function runContainerAction(action: 'start' | 'stop' | 'delete', container: DockerRuntimeServiceDto) {
+  if (action === 'start') {
+    void executeContainerAction(action, container);
+    return;
+  }
+  const name = containerName(container);
+  confirm(
+    action === 'stop' ? 'Confirm stop' : 'Confirm delete',
+    `${action === 'stop' ? 'Stop' : 'Delete'} Docker container ${name}?`,
+    () => executeContainerAction(action, container),
+  );
 }
 
 async function runPrune(kind: 'networks' | 'volumes' | 'images') {
@@ -385,12 +449,96 @@ onMounted(async () => {
         <!-- Resources Card with Tabs -->
         <v-card :loading="loadingResources" variant="outlined">
           <v-tabs v-model="activeTab" color="primary" border-bottom>
+            <v-tab value="containers" class="text-none font-weight-bold">Containers</v-tab>
             <v-tab value="networks" class="text-none font-weight-bold">Networks</v-tab>
             <v-tab value="volumes" class="text-none font-weight-bold">Volumes</v-tab>
             <v-tab value="images" class="text-none font-weight-bold">Images</v-tab>
           </v-tabs>
 
           <v-window v-model="activeTab" class="pa-4">
+            <v-window-item value="containers">
+              <v-table class="text-left" style="background: transparent;">
+                <thead>
+                  <tr>
+                    <th class="font-weight-bold">Container</th>
+                    <th class="font-weight-bold">Image</th>
+                    <th class="font-weight-bold">State</th>
+                    <th class="font-weight-bold">Ports</th>
+                    <th class="font-weight-bold">Labels</th>
+                    <th class="font-weight-bold text-right" style="width: 260px;">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="unmanagedContainers.length === 0">
+                    <td colspan="6" class="text-center py-6 text-grey-darken-1">No unmanaged containers discovered</td>
+                  </tr>
+                  <tr v-for="row in unmanagedContainers" :key="row.id">
+                    <td class="py-3">
+                      <div class="font-weight-bold text-truncate" style="max-width: 220px;" :title="containerName(row)">{{ containerName(row) }}</div>
+                      <div class="text-caption text-mono text-grey-darken-1">{{ shortContainerId(row) }}</div>
+                    </td>
+                    <td class="text-truncate" style="max-width: 220px;" :title="row.image">{{ row.image || '-' }}</td>
+                    <td>
+                      <v-chip :color="containerStatusColor(row)" size="small" label>
+                        {{ row.state || row.status || 'unknown' }}
+                      </v-chip>
+                      <div v-if="row.status" class="text-caption text-grey-darken-1 mt-1">{{ row.status }}</div>
+                    </td>
+                    <td class="text-caption text-grey-darken-1 text-truncate" style="max-width: 220px;" :title="containerPorts(row)">
+                      {{ containerPorts(row) }}
+                    </td>
+                    <td>
+                      <div class="d-flex flex-wrap" style="gap: 4px;">
+                        <v-chip v-for="[key, value] in displayLabels(row.labels)" :key="key" size="x-small" label color="grey-lighten-1">
+                          {{ key }}={{ value }}
+                        </v-chip>
+                      </div>
+                    </td>
+                    <td class="text-right">
+                      <div class="d-flex justify-end" style="gap: 8px;">
+                        <v-btn
+                          size="small"
+                          color="success"
+                          variant="outlined"
+                          prepend-icon="mdi-play"
+                          :disabled="resourceDisabled || isContainerRunning(row)"
+                          :loading="actionLoading === `container:start:${row.id}`"
+                          @click="runContainerAction('start', row)"
+                          class="text-none"
+                        >
+                          Start
+                        </v-btn>
+                        <v-btn
+                          size="small"
+                          color="warning"
+                          variant="outlined"
+                          prepend-icon="mdi-stop"
+                          :disabled="resourceDisabled || !isContainerRunning(row)"
+                          :loading="actionLoading === `container:stop:${row.id}`"
+                          @click="runContainerAction('stop', row)"
+                          class="text-none"
+                        >
+                          Stop
+                        </v-btn>
+                        <v-btn
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          prepend-icon="mdi-delete"
+                          :disabled="resourceDisabled"
+                          :loading="actionLoading === `container:delete:${row.id}`"
+                          @click="runContainerAction('delete', row)"
+                          class="text-none"
+                        >
+                          Delete
+                        </v-btn>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </v-window-item>
+
             <v-window-item value="networks">
               <div class="d-flex justify-end mb-3">
                 <v-btn

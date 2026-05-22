@@ -18,6 +18,7 @@ import (
 	"text/template"
 	"time"
 
+	"panel/internal/orchestrator"
 	"panel/internal/id"
 	"panel/internal/panelerr"
 	"panel/internal/server"
@@ -44,7 +45,7 @@ func NewService(db *sql.DB, dataRoot string, servers *server.Service, taskSvc *t
 }
 
 func (s *Service) ListTemplates(ctx context.Context) ([]ServiceTemplate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,description,compose_yaml,visual_state,variables,version,created_at,updated_at FROM service_templates ORDER BY updated_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,description,compose_yaml,visual_state,variables,trait_selector,active,version,created_at,updated_at FROM service_templates ORDER BY updated_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -68,15 +69,15 @@ func (s *Service) CreateTemplate(ctx context.Context, req SaveTemplateRequest) (
 		return ServiceTemplate{}, err
 	}
 	now := time.Now().UTC()
-	tpl := ServiceTemplate{ID: id.New("tmpl"), Name: strings.TrimSpace(req.Name), Description: req.Description, ComposeYAML: req.ComposeYAML, VisualState: nonNilMap(req.VisualState), Variables: req.Variables, Dependencies: normalizedDependencies(req.Dependencies), Version: 1, CreatedAt: now, UpdatedAt: now}
+	tpl := ServiceTemplate{ID: id.New("tmpl"), Name: strings.TrimSpace(req.Name), Description: req.Description, ComposeYAML: req.ComposeYAML, VisualState: nonNilMap(req.VisualState), Variables: req.Variables, Dependencies: normalizedDependencies(req.Dependencies), TraitSelector: req.TraitSelector, Active: req.Active, Version: 1, CreatedAt: now, UpdatedAt: now}
 	visual, _ := json.Marshal(tpl.VisualState)
 	vars, _ := json.Marshal(tpl.Variables)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ServiceTemplate{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO service_templates(id,name,description,compose_yaml,visual_state,variables,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		tpl.ID, tpl.Name, tpl.Description, tpl.ComposeYAML, string(visual), string(vars), tpl.Version, ts(now), ts(now)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO service_templates(id,name,description,compose_yaml,visual_state,variables,trait_selector,active,version,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		tpl.ID, tpl.Name, tpl.Description, tpl.ComposeYAML, string(visual), string(vars), tpl.TraitSelector, map[bool]int{true: 1, false: 0}[tpl.Active], tpl.Version, ts(now), ts(now)); err != nil {
 		_ = tx.Rollback()
 		return ServiceTemplate{}, err
 	}
@@ -91,7 +92,7 @@ func (s *Service) CreateTemplate(ctx context.Context, req SaveTemplateRequest) (
 }
 
 func (s *Service) GetTemplate(ctx context.Context, templateID string) (ServiceTemplate, error) {
-	tpl, err := scanTemplate(s.db.QueryRowContext(ctx, `SELECT id,name,description,compose_yaml,visual_state,variables,version,created_at,updated_at FROM service_templates WHERE id=?`, templateID))
+	tpl, err := scanTemplate(s.db.QueryRowContext(ctx, `SELECT id,name,description,compose_yaml,visual_state,variables,trait_selector,active,version,created_at,updated_at FROM service_templates WHERE id=?`, templateID))
 	if err == sql.ErrNoRows {
 		return ServiceTemplate{}, panelerr.NotFound("service_template")
 	}
@@ -119,8 +120,8 @@ func (s *Service) UpdateTemplate(ctx context.Context, templateID string, req Sav
 	if err != nil {
 		return ServiceTemplate{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE service_templates SET name=?,description=?,compose_yaml=?,visual_state=?,variables=?,version=?,updated_at=? WHERE id=?`,
-		strings.TrimSpace(req.Name), req.Description, req.ComposeYAML, string(visual), string(vars), old.Version+1, ts(now), templateID); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE service_templates SET name=?,description=?,compose_yaml=?,visual_state=?,variables=?,trait_selector=?,active=?,version=?,updated_at=? WHERE id=?`,
+		strings.TrimSpace(req.Name), req.Description, req.ComposeYAML, string(visual), string(vars), req.TraitSelector, map[bool]int{true: 1, false: 0}[req.Active], old.Version+1, ts(now), templateID); err != nil {
 		_ = tx.Rollback()
 		return ServiceTemplate{}, err
 	}
@@ -588,7 +589,13 @@ func (s *Service) LifecycleTask(ctx context.Context, serviceID, op string) (task
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE deployed_services SET last_task_id=?,updated_at=? WHERE id=?`, task.ID, ts(time.Now().UTC()), serviceID)
+			statusClause := ""
+		if op == "deploy" || op == "sync" {
+			statusClause = ", status='deploying'"
+		} else if op == "remove" {
+			statusClause = ", status='removing'"
+		}
+		_, err = s.db.ExecContext(ctx, `UPDATE deployed_services SET last_task_id=?,updated_at=?`+statusClause+` WHERE id=?`, task.ID, ts(time.Now().UTC()), serviceID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -596,7 +603,127 @@ func (s *Service) LifecycleTask(ctx context.Context, serviceID, op string) (task
 	return task, nil
 }
 
+func (s *Service) hasActiveTask(ctx context.Context, serviceID string) bool {
+	var count int
+	err := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*) FROM tasks
+		WHERE resource_type='service' AND resource_id=? AND status IN ('queued','running','scheduled')
+	`, serviceID).Scan(&count)
+	return err == nil && count > 0
+}
+
 func (s *Service) RunDueReconciliations(ctx context.Context) error {
+	templates, err := s.ListTemplates(ctx)
+	if err != nil {
+		return err
+	}
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return err
+	}
+
+	for _, tpl := range templates {
+		// 1. 根据 trait_selector 计算目标节点
+		desiredServers := map[string]bool{}
+			if tpl.Active && strings.TrimSpace(tpl.TraitSelector) != "" {
+		for _, srv := range servers {
+			if !srv.Reachable || !srv.OS.Supported {
+				continue
+			}
+			matched, evalErr := orchestrator.Evaluate(tpl.TraitSelector, srv.Traits)
+			if evalErr != nil {
+				// 如果选择器语法出错，我们记录日志，并不予对账
+				continue
+			}
+			if matched {
+				desiredServers[srv.ID] = true
+			}
+		}
+
+		}
+			// 2. 查阅目前针对该模版已有的 DeployedServices 状态
+		type svcMini struct {
+			ID              string
+			ServerID        string
+			TemplateVersion int
+			Status          string
+			Drifted         bool
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT id, server_id, template_version, status, drifted FROM deployed_services WHERE template_id=?`, tpl.ID)
+		if err != nil {
+			return err
+		}
+
+		actual := map[string]svcMini{}
+		for rows.Next() {
+			var m svcMini
+			var driftedVal int
+			if err := rows.Scan(&m.ID, &m.ServerID, &m.TemplateVersion, &m.Status, &driftedVal); err != nil {
+				rows.Close()
+				return err
+			}
+			m.Drifted = driftedVal == 1
+			actual[m.ServerID] = m
+		}
+		rows.Close()
+
+		// 3. 自愈缩容与优雅驱逐 (Scale Down / Eviction)
+		// 只有当 Server reachable 时，我们才进行驱逐，防止网络瞬断误删容器
+		for serverID, svc := range actual {
+			if !desiredServers[serverID] {
+				// 节点不可达时不进行强制卸载，保证高可用
+				var isReachable bool
+				for _, srv := range servers {
+					if srv.ID == serverID {
+						isReachable = srv.Reachable
+						break
+					}
+				}
+				if !isReachable {
+					continue
+				}
+
+				// 发起优雅卸载驱逐任务
+				if svc.Status == "deploying" || svc.Status == "removing" || s.hasActiveTask(ctx, svc.ID) {
+						continue
+					}
+					if true {
+					_, _ = s.LifecycleTask(ctx, svc.ID, "remove")
+				}
+			}
+		}
+
+		// 4. 自愈扩容与上架 (Scale Up / Auto-Deployment)
+		for srvID := range desiredServers {
+			if _, exists := actual[srvID]; !exists {
+				// 创建 deployed_service 数据库记录，服务名默认直接使用模板名
+				svcRec, err := s.createServiceRecord(ctx, SaveServiceRequest{
+					Name:       tpl.Name,
+					ServerID:   srvID,
+					TemplateID: tpl.ID,
+					RemotePath: defaultRemotePath(tpl.Name),
+				})
+				if err == nil {
+					_, _ = s.LifecycleTask(ctx, svcRec.ID, "deploy")
+				}
+			}
+		}
+
+		// 5. 漂移自愈与滚动升级 (Reconcile Drift & Auto-Upgrade)
+		for srvID, svc := range actual {
+			if desiredServers[srvID] {
+				if svc.Status == "deploying" || svc.Status == "removing" || s.hasActiveTask(ctx, svc.ID) {
+						continue
+					}
+					if svc.Drifted || tpl.Version > svc.TemplateVersion {
+					// 自动触发平滑滚动自愈升级
+					_, _ = s.LifecycleTask(ctx, svc.ID, "deploy")
+				}
+			}
+		}
+	}
+
+	// 6. 执行遗留的已经排队的任务
 	services, err := s.ListServices(ctx)
 	if err != nil {
 		return err
@@ -610,6 +737,7 @@ func (s *Service) RunDueReconciliations(ctx context.Context) error {
 			go s.runLocalLifecycle(context.Background(), task.ID, svc.ID, "deploy")
 		}
 	}
+
 	return nil
 }
 
@@ -641,6 +769,9 @@ func (s *Service) runLocalLifecycle(ctx context.Context, taskID, serviceID, op s
 	if s.exec != nil {
 		_ = s.tasks.Advance(ctx, taskID, "remote", "running docker compose "+op)
 		if err := s.runRemoteLifecycle(ctx, serviceID, op); err != nil {
+				if op == "remove" {
+					_, _ = s.db.ExecContext(ctx, `UPDATE deployed_services SET status='eviction_failed' WHERE id=?`, serviceID)
+				}
 			_ = s.failLifecycleTask(ctx, taskID, err)
 			return
 		}
@@ -1046,7 +1177,7 @@ func serverValue(srv server.Server) map[string]any {
 		"sshUsername":  srv.SSHUsername,
 		"user":         srv.SSHUsername,
 		"credentialId": srv.CredentialID,
-		"labels":       srv.Labels,
+		"traits":       srv.Traits,
 		"notes":        srv.Notes,
 		"reachable":    srv.Reachable,
 	}
@@ -1412,9 +1543,11 @@ func safeJoin(base, rel string) (string, error) {
 func scanTemplate(row interface{ Scan(dest ...any) error }) (ServiceTemplate, error) {
 	var tpl ServiceTemplate
 	var visual, vars, created, updated string
-	if err := row.Scan(&tpl.ID, &tpl.Name, &tpl.Description, &tpl.ComposeYAML, &visual, &vars, &tpl.Version, &created, &updated); err != nil {
+	var activeVal int
+	if err := row.Scan(&tpl.ID, &tpl.Name, &tpl.Description, &tpl.ComposeYAML, &visual, &vars, &tpl.TraitSelector, &activeVal, &tpl.Version, &created, &updated); err != nil {
 		return ServiceTemplate{}, err
 	}
+	tpl.Active = activeVal == 1
 	tpl.VisualState = map[string]any{}
 	tpl.Variables = []TemplateVariable{}
 	_ = json.Unmarshal([]byte(visual), &tpl.VisualState)
@@ -1540,6 +1673,9 @@ func (s *Service) mergeRuntimeServices(ctx context.Context, local []DeployedServ
 			}
 			serviceID := labels["panel.service_id"]
 			if serviceID == "" {
+					continue
+				}
+				if false {
 				local = append(local, DeployedService{
 					ID:              "remote:" + remote.ID,
 					Name:            remote.Name,

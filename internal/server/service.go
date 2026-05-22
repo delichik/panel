@@ -36,10 +36,24 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		return Server{}, err
 	}
 	now := time.Now().UTC()
-	srv := Server{ID: id.New("srv"), Name: req.Name, Host: req.Host, Port: req.Port, SSHUsername: req.SSHUsername, CredentialID: req.CredentialID, Labels: req.Labels, Notes: req.Notes, CreatedAt: now, UpdatedAt: now}
-	labels, _ := json.Marshal(srv.Labels)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,labels,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, string(labels), srv.Notes, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	srv := Server{
+		ID:           id.New("srv"),
+		Name:         req.Name,
+		Host:         req.Host,
+		Port:         req.Port,
+		SSHUsername:  req.SSHUsername,
+		CredentialID: req.CredentialID,
+		Traits:       req.Traits,
+		Notes:        req.Notes,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if srv.Traits == nil {
+		srv.Traits = map[string]string{}
+	}
+	traits, _ := json.Marshal(srv.Traits)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, string(traits), srv.Notes, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return Server{}, err
 	}
@@ -53,10 +67,13 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	if err := validateSave(req); err != nil {
 		return Server{}, err
 	}
-	labels, _ := json.Marshal(req.Labels)
+	if req.Traits == nil {
+		req.Traits = map[string]string{}
+	}
+	traits, _ := json.Marshal(req.Traits)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,labels=?,notes=?,updated_at=? WHERE id=?`,
-		req.Name, req.Host, req.Port, req.SSHUsername, req.CredentialID, string(labels), req.Notes, now, serverID)
+	res, err := s.db.ExecContext(ctx, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,traits=?,notes=?,updated_at=? WHERE id=?`,
+		req.Name, req.Host, req.Port, req.SSHUsername, req.CredentialID, string(traits), req.Notes, now, serverID)
 	if err != nil {
 		return Server{}, err
 	}
@@ -94,7 +111,7 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 }
 
 func (s *Service) List(ctx context.Context) ([]Server, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,labels,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -119,7 +136,7 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
-	srv, err := scanServer(s.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,labels,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
+	srv, err := scanServer(s.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
 	if err == sql.ErrNoRows {
 		return Server{}, panelerr.NotFound("server")
 	}
@@ -205,7 +222,7 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	_ = s.tasks.Advance(ctx, taskID, "connecting", "connecting to server")
 	osInfo, err := linux.Detect(ctx, s.exec, target)
 	if err != nil {
-		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, err.Error())
+		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, nil, err.Error())
 		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
@@ -215,12 +232,26 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	if sudoErr != nil {
 		_ = s.tasks.AppendLog(ctx, taskID, "system", "passwordless sudo unavailable: "+sudoErr.Error())
 	}
+
+	sysTraits := map[string]string{}
+	if osInfo.Supported {
+		_ = s.tasks.Advance(ctx, taskID, "traits", "discovering server system traits")
+		detected, traitsErr := s.detectSystemTraits(ctx, target)
+		if traitsErr == nil {
+			sysTraits = detected
+		} else {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
+		}
+		sysTraits["sys.os"] = strings.ToLower(osInfo.ID + "-" + osInfo.VersionID)
+	}
+
 	if !osInfo.Supported {
-		_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, "unsupported distribution")
+		_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, "unsupported distribution")
 		_ = s.tasks.Complete(ctx, taskID, "Connected, but distribution is unsupported")
 		return
 	}
-	_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, "")
+
+	_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, "")
 	if passwordless {
 		_ = s.tasks.Complete(ctx, taskID, "Connectivity test passed")
 	} else {
@@ -228,10 +259,69 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	}
 }
 
-func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool, osInfo linux.OSRelease, sudo bool, msg string) error {
+func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (map[string]string, error) {
+	cmd := `sh -lc 'echo "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"; ` +
+		`echo "mem=$(grep MemTotal /proc/meminfo 2>/dev/null | awk "{print \$2}" | awk "{print int(\$1/1024)}" || echo 0)"; ` +
+		`echo "disk=$(df -m / 2>/dev/null | awk "NR==2{print \$2}" | awk "{print int(\$1/1024)}" || echo 0)"; ` +
+		`echo "hostname=$(hostname 2>/dev/null || echo unknown)"'`
+
+	res, err := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: cmd, Timeout: 12 * time.Second})
+	if err != nil {
+		return nil, err
+	}
+
+	traits := map[string]string{}
+	for _, line := range strings.Split(res.Stdout, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		switch key {
+		case "cores":
+			traits["sys.cpu_cores"] = value
+		case "mem":
+			traits["sys.memory_total_mb"] = value
+		case "disk":
+			traits["sys.disk_total_gb"] = value
+		case "hostname":
+			traits["sys.hostname"] = value
+		}
+	}
+	return traits, nil
+}
+
+func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool, osInfo linux.OSRelease, sudo bool, sysTraits map[string]string, msg string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,os_id=?,os_version_id=?,os_pretty_name=?,os_supported=?,sudo_passwordless=?,sudo_last_checked_at=?,last_checked_at=?,last_error=?,updated_at=? WHERE id=?`,
-		boolInt(reachable), osInfo.ID, osInfo.VersionID, osInfo.PrettyName, boolInt(osInfo.Supported), boolInt(sudo), now, now, msg, now, serverID)
+
+	// 首先拉取已有的 traits (包含用户打的 custom.env 等自定义特征)
+	var rawTraits string
+	err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	current := map[string]string{}
+	if rawTraits != "" {
+		_ = json.Unmarshal([]byte(rawTraits), &current)
+	}
+
+	// 剔除之前所有的 sys. 特征，用本次新探测到的 sysTraits 覆盖
+	for k := range current {
+		if strings.HasPrefix(k, "sys.") {
+			delete(current, k)
+		}
+	}
+	for k, v := range sysTraits {
+		current[k] = v
+	}
+
+	traitsJSON, _ := json.Marshal(current)
+
+	_, err = s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,os_id=?,os_version_id=?,os_pretty_name=?,os_supported=?,sudo_passwordless=?,sudo_last_checked_at=?,last_checked_at=?,traits=?,last_error=?,updated_at=? WHERE id=?`,
+		boolInt(reachable), osInfo.ID, osInfo.VersionID, osInfo.PrettyName, boolInt(osInfo.Supported), boolInt(sudo), now, now, string(traitsJSON), msg, now, serverID)
 	return err
 }
 
@@ -253,14 +343,15 @@ type serverScanner interface{ Scan(dest ...any) error }
 
 func scanServer(row serverScanner) (Server, error) {
 	var srv Server
-	var labels, created, updated string
+	var traits, created, updated string
 	var osSupported, reachable, sudo int
 	var sudoAt, checkedAt sql.NullString
-	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &labels, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &reachable, &sudo, &sudoAt, &checkedAt, &srv.LastError, &created, &updated)
+	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &traits, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &reachable, &sudo, &sudoAt, &checkedAt, &srv.LastError, &created, &updated)
 	if err != nil {
 		return Server{}, err
 	}
-	_ = json.Unmarshal([]byte(labels), &srv.Labels)
+	srv.Traits = map[string]string{}
+	_ = json.Unmarshal([]byte(traits), &srv.Traits)
 	srv.OS.Supported = osSupported == 1
 	srv.Reachable = reachable == 1
 	srv.Sudo.Passwordless = sudo == 1

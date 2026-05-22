@@ -145,12 +145,15 @@ func (fakeRuntime) ReadComposeStatus(context.Context, sshx.Target, string) (Comp
 	return ComposeStatus{}, nil
 }
 
-func (fakeRuntime) DeleteNetwork(context.Context, sshx.Target, string) error { return nil }
-func (fakeRuntime) DeleteVolume(context.Context, sshx.Target, string) error  { return nil }
-func (fakeRuntime) DeleteImage(context.Context, sshx.Target, string) error   { return nil }
-func (fakeRuntime) PruneNetworks(context.Context, sshx.Target) error         { return nil }
-func (fakeRuntime) PruneVolumes(context.Context, sshx.Target) error          { return nil }
-func (fakeRuntime) PruneImages(context.Context, sshx.Target) error           { return nil }
+func (fakeRuntime) StartContainer(context.Context, sshx.Target, string) error  { return nil }
+func (fakeRuntime) StopContainer(context.Context, sshx.Target, string) error   { return nil }
+func (fakeRuntime) DeleteContainer(context.Context, sshx.Target, string) error { return nil }
+func (fakeRuntime) DeleteNetwork(context.Context, sshx.Target, string) error   { return nil }
+func (fakeRuntime) DeleteVolume(context.Context, sshx.Target, string) error    { return nil }
+func (fakeRuntime) DeleteImage(context.Context, sshx.Target, string) error     { return nil }
+func (fakeRuntime) PruneNetworks(context.Context, sshx.Target) error           { return nil }
+func (fakeRuntime) PruneVolumes(context.Context, sshx.Target) error            { return nil }
+func (fakeRuntime) PruneImages(context.Context, sshx.Target) error             { return nil }
 func (fakeRuntime) CheckImageUpdate(context.Context, sshx.Target, RuntimeImage) (ImageUpdate, error) {
 	return ImageUpdate{}, nil
 }

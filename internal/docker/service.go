@@ -337,6 +337,12 @@ func (s *Service) runResourceOperation(ctx context.Context, taskID string, srv s
 	_ = s.tasks.Advance(ctx, taskID, "running", op.Summary)
 	var err error
 	switch {
+	case op.Kind == "container" && op.Action == "start":
+		err = s.runtime.StartContainer(ctx, srv.Target(), op.ID)
+	case op.Kind == "container" && op.Action == "stop":
+		err = s.runtime.StopContainer(ctx, srv.Target(), op.ID)
+	case op.Kind == "container" && op.Action == "delete":
+		err = s.runtime.DeleteContainer(ctx, srv.Target(), op.ID)
 	case op.Kind == "network" && op.Action == "delete":
 		err = s.runtime.DeleteNetwork(ctx, srv.Target(), op.ID)
 	case op.Kind == "network" && op.Action == "prune":

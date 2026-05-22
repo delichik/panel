@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -87,4 +88,47 @@ func TestComposeStatusParsesArrayOutput(t *testing.T) {
 	if len(services) != 1 || services[0].Project != "demo" || services[0].Service != "web" {
 		t.Fatalf("unexpected services: %#v", services)
 	}
+}
+
+func TestCLIRuntimeContainerMutationsUseContainerCommands(t *testing.T) {
+	exec := &recordingExecutor{}
+	runtime := NewCLIRuntime(exec)
+	target := sshx.Target{ServerID: "server-1"}
+
+	if err := runtime.StartContainer(context.Background(), target, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.StopContainer(context.Background(), target, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.DeleteContainer(context.Background(), target, "abc123"); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"docker container start 'abc123'",
+		"docker container stop 'abc123'",
+		"docker container rm 'abc123'",
+	}
+	if strings.Join(exec.commands, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected commands:\n%s", strings.Join(exec.commands, "\n"))
+	}
+}
+
+type recordingExecutor struct {
+	commands []string
+}
+
+func (e *recordingExecutor) Exec(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	e.commands = append(e.commands, command.Command)
+	return sshx.CommandResult{}, nil
+}
+
+func (e *recordingExecutor) ExecSudo(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	return e.Exec(ctx, target, command)
+}
+
+func (e *recordingExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec) error { return nil }
+func (e *recordingExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
 }

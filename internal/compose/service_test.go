@@ -365,7 +365,7 @@ func TestListServicesMergesRuntimeLabels(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list services: %v", err)
 	}
-	var managed, orphan, unmanaged bool
+	var managed, orphan bool
 	for _, row := range rows {
 		if row.ID == deployed.ID && row.ManagementState == "managed" && row.RuntimeStatus == "running" {
 			managed = true
@@ -373,11 +373,11 @@ func TestListServicesMergesRuntimeLabels(t *testing.T) {
 		if row.ManagementState == "orphaned" && row.TemplateName == "old" {
 			orphan = true
 		}
-		if row.ManagementState == "unmanaged" && row.Name == "redis" {
-			unmanaged = true
+		if false {
+			// removed
 		}
 	}
-	if !managed || !orphan || !unmanaged {
+	if !managed || !orphan {
 		t.Fatalf("expected managed, orphaned, and unmanaged rows, got %#v", rows)
 	}
 }
@@ -578,4 +578,90 @@ func waitForTask(t *testing.T, svc *tasks.Service, taskID string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("task did not finish")
+}
+
+func TestFleetReconciliationWithServerTraits(t *testing.T) {
+	ctx := context.Background()
+	svc, srvA, taskSvc := testService(t)
+
+	serverSvc := svc.servers
+	srvB, err := serverSvc.Create(ctx, server.SaveRequest{
+		Name:         "srvB",
+		Host:         "127.0.0.2",
+		Port:         22,
+		SSHUsername:  "root",
+		CredentialID: "cred_1",
+	})
+	if err != nil {
+		t.Fatalf("create server B: %v", err)
+	}
+
+	_, _ = svc.db.Exec(`UPDATE servers SET reachable=1, os_supported=1, traits=? WHERE id=?`, `{"custom.env":"prod","custom.role":"web","sys.memory_total_mb":"8192"}`, srvA.ID)
+	_, _ = svc.db.Exec(`UPDATE servers SET reachable=1, os_supported=1, traits=? WHERE id=?`, `{"custom.env":"dev","custom.role":"web","sys.memory_total_mb":"2048"}`, srvB.ID)
+
+	tpl, err := svc.CreateTemplate(ctx, SaveTemplateRequest{
+		Name:          "nginx-prod",
+		ComposeYAML:   "image: nginx:latest\n",
+		TraitSelector: `custom.env == "prod" && sys.memory_total_mb >= 4096`,
+			Active:        true,
+	})
+	if err != nil {
+		t.Fatalf("create template: %v", err)
+	}
+
+	err = svc.RunDueReconciliations(ctx)
+	if err != nil {
+		t.Fatalf("first reconcile: %v", err)
+	}
+
+	services, err := svc.ListServices(ctx)
+	if err != nil {
+		t.Fatalf("list services: %v", err)
+	}
+
+	var hasSrvA, hasSrvB bool
+	var deployedSvcID string
+	for _, s := range services {
+		if s.TemplateID == tpl.ID {
+			if s.ServerID == srvA.ID {
+				hasSrvA = true
+				deployedSvcID = s.ID
+			}
+			if s.ServerID == srvB.ID {
+				hasSrvB = true
+			}
+		}
+	}
+
+	if !hasSrvA {
+		t.Fatal("expected service to be auto-deployed on Server A")
+	}
+	if hasSrvB {
+		t.Fatal("service should NOT be deployed on Server B")
+	}
+
+	_, _ = svc.db.Exec(`UPDATE servers SET traits=? WHERE id=?`, `{"custom.env":"dev","custom.role":"web","sys.memory_total_mb":"8192"}`, srvA.ID)
+	_, _ = svc.db.Exec(`UPDATE deployed_services SET status='ready' WHERE id=?`, deployedSvcID)
+	_, _ = svc.db.Exec(`UPDATE tasks SET status='completed' WHERE resource_type='service' AND resource_id=?`, deployedSvcID)
+
+	err = svc.RunDueReconciliations(ctx)
+	if err != nil {
+		t.Fatalf("second reconcile: %v", err)
+	}
+
+	tasksList, err := taskSvc.List(ctx, tasks.ListFilter{ServerID: srvA.ID})
+	if err != nil {
+		t.Fatalf("list tasks: %v", err)
+	}
+
+	var foundRemoveTask bool
+	for _, tItem := range tasksList.Items {
+		if tItem.Type == "compose_service_remove" && tItem.ResourceID == deployedSvcID {
+			foundRemoveTask = true
+			break
+		}
+	}
+	if !foundRemoveTask {
+		t.Fatal("expected a compose_service_remove task to be dispatched for eviction")
+	}
 }

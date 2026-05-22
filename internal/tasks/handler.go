@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,12 +9,21 @@ import (
 	"panel/internal/httpx"
 )
 
-type Handler struct {
-	service *Service
+type RunNowRunner interface {
+	RunNow(ctx context.Context, task Task) error
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+type Handler struct {
+	service *Service
+	runner  RunNowRunner
+}
+
+func NewHandler(service *Service, runners ...RunNowRunner) *Handler {
+	var runner RunNowRunner
+	if len(runners) > 0 {
+		runner = runners[0]
+	}
+	return &Handler{service: service, runner: runner}
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -68,6 +78,12 @@ func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Error(w, err)
 		return
+	}
+	if h.runner != nil {
+		if err := h.runner.RunNow(r.Context(), task); err != nil {
+			httpx.Error(w, err)
+			return
+		}
 	}
 	httpx.JSON(w, http.StatusAccepted, task)
 }

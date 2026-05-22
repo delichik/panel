@@ -28,6 +28,15 @@ export function createDockerApi(client: ApiClient = apiClient) {
         `/servers/${serverId}/docker/projects/${encodeURIComponent(projectName)}/status`,
       );
     },
+    startContainer(serverId: string, containerId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/docker/containers/${encodeURIComponent(containerId)}/start`);
+    },
+    stopContainer(serverId: string, containerId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/docker/containers/${encodeURIComponent(containerId)}/stop`);
+    },
+    deleteContainer(serverId: string, containerId: string) {
+      return client.delete<TaskCreatedDto>(`/servers/${serverId}/docker/containers/${encodeURIComponent(containerId)}`);
+    },
     listNetworks(serverId: string) {
       return client.get<DockerRuntimeListDto<DockerNetworkDto>>(`/servers/${serverId}/docker/networks`);
     },
