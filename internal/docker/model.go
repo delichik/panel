@@ -13,6 +13,7 @@ type DockerCapability struct {
 	DockerVersion    string     `json:"dockerVersion"`
 	ComposeInstalled bool       `json:"composeInstalled"`
 	ComposeVersion   string     `json:"composeVersion"`
+	IncludeSupported bool       `json:"includeSupported"`
 	Supported        bool       `json:"supported"`
 	LastCheckedAt    *time.Time `json:"lastCheckedAt"`
 	LastError        string     `json:"lastError,omitempty"`
@@ -106,7 +107,9 @@ type ContainerRuntime interface {
 	ListVolumes(ctx context.Context, target sshx.Target) ([]RuntimeVolume, error)
 	ListImages(ctx context.Context, target sshx.Target) ([]RuntimeImage, error)
 	ReadComposeStatus(ctx context.Context, target sshx.Target, project string) (ComposeStatus, error)
+	ProbeComposeInclude(ctx context.Context, target sshx.Target) error
 	StartContainer(ctx context.Context, target sshx.Target, containerID string) error
+	RestartContainer(ctx context.Context, target sshx.Target, containerID string) error
 	StopContainer(ctx context.Context, target sshx.Target, containerID string) error
 	DeleteContainer(ctx context.Context, target sshx.Target, containerID string) error
 	DeleteNetwork(ctx context.Context, target sshx.Target, networkID string) error

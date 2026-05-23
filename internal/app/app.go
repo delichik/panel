@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"panel/internal/auth"
-	"panel/internal/compose"
 	"panel/internal/config"
+	"panel/internal/containerservice"
 	"panel/internal/credential"
 	"panel/internal/docker"
 	"panel/internal/httpx"
@@ -44,7 +44,7 @@ func New(cfg config.Config) (*App, error) {
 	executor := sshx.NewSSHExecutor(credSvc, cfg.RemoteTimeout())
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
 	dockerSvc := docker.NewService(store.AppDB(), serverSvc, docker.NewCLIRuntime(executor), taskSvc)
-	composeSvc := compose.NewService(store.AppDB(), cfg.DataRoot, serverSvc, taskSvc, executor)
+	containerSvc := containerservice.NewService(store.AppDB(), taskSvc)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
@@ -53,11 +53,11 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, dockerSvc, composeSvc, packageSvc, taskSvc)
+	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, dockerSvc, packageSvc, taskSvc)
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), docker.NewHandler(dockerSvc), compose.NewHandler(composeSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), docker.NewHandler(dockerSvc), containerservice.NewHandler(containerSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
 	return a, nil
 }
 
@@ -69,7 +69,7 @@ func (a *App) Close() error {
 }
 func (a *App) Handler() http.Handler { return a.mux }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, dockerH *docker.Handler, composeH *compose.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, dockerH *docker.Handler, containerH *containerservice.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuth(http.HandlerFunc(authH.Logout)))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
@@ -87,10 +87,6 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			credH.Delete(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/servers":
 			serverH.List(w, r)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/variables") && strings.HasPrefix(path, "/api/v1/servers/"):
-			composeH.GetServerVariables(w, r)
-		case r.Method == http.MethodPut && strings.HasSuffix(path, "/variables") && strings.HasPrefix(path, "/api/v1/servers/"):
-			composeH.PutServerVariables(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/servers":
 			serverH.Create(w, r)
 		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/servers/") && serverResourcePath(path):
@@ -143,50 +139,54 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			dockerH.NotImplemented(w, r)
 		case r.Method == http.MethodPost && strings.Contains(path, "/docker/images/"):
 			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/service-templates":
-			composeH.ListTemplates(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/service-templates":
-			composeH.CreateTemplate(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.HasSuffix(path, "/validate"):
-			composeH.ValidateTemplate(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.HasSuffix(path, "/render-preview"):
-			composeH.RenderTemplate(w, r)
-		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.HasSuffix(path, "/services"):
-			composeH.TemplateServices(w, r)
-		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.HasSuffix(path, "/files"):
-			composeH.ListFiles(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.HasSuffix(path, "/files/binary"):
-			composeH.CreateBinaryFile(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.HasSuffix(path, "/files/template"):
-			composeH.CreateTemplateFile(w, r)
-		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.Contains(path, "/files/"):
-			composeH.UpdateFile(w, r)
-		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/service-templates/") && strings.Contains(path, "/files/"):
-			composeH.DeleteFile(w, r)
-		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/service-templates/") && serviceTemplateResourcePath(path):
-			composeH.GetTemplate(w, r)
-		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/service-templates/") && serviceTemplateResourcePath(path):
-			composeH.UpdateTemplate(w, r)
-		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/service-templates/") && serviceTemplateResourcePath(path):
-			composeH.DeleteTemplate(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/services":
-			composeH.ListServices(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/services":
-			composeH.CreateService(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/services/") && strings.HasSuffix(path, "/render"):
-			composeH.RenderService(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/services/") && serviceLifecyclePath(path):
-			composeH.Lifecycle(w, r)
-		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/services/") && serviceResourcePath(path):
-			composeH.GetService(w, r)
-		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/services/") && serviceResourcePath(path):
-			composeH.UpdateService(w, r)
-		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/services/") && serviceResourcePath(path):
-			composeH.DeleteService(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && runtimeExplorerNodeResource(path):
+			dockerH.RuntimeExplorer(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && strings.Contains(path, "/containers/"):
+			dockerH.RuntimeExplorer(w, r)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && strings.Contains(path, "/containers/"):
+			dockerH.RuntimeExplorer(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && strings.HasSuffix(path, "/prune"):
+			dockerH.RuntimeExplorer(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/container-services":
+			containerH.List(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/container-services":
+			containerH.Create(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/validate"):
+			containerH.Validate(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/render-preview"):
+			containerH.Placeholder(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/schedule-preview"):
+			containerH.Placeholder(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/enable-preview"):
+			containerH.EnablePreview(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/enable"):
+			containerH.Enable(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/disable-preview"):
+			containerH.DisablePreview(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/disable"):
+			containerH.Disable(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/reconcile"):
+			containerH.Reconcile(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/restart"):
+			containerH.Restart(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/runtime"):
+			containerH.Runtime(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/logs"):
+			containerH.Logs(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/container-services/") && containerServiceResourcePath(path):
+			containerH.Get(w, r)
+		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/container-services/") && containerServiceResourcePath(path):
+			containerH.Update(w, r)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/container-services/") && containerServiceResourcePath(path):
+			containerH.Delete(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/tasks":
 			taskH.List(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/retry") && strings.HasPrefix(path, "/api/v1/tasks/"):
+			taskH.Retry(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/run-now") && strings.HasPrefix(path, "/api/v1/tasks/"):
 			taskH.RunNow(w, r)
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/steps") && strings.HasPrefix(path, "/api/v1/tasks/"):
+			taskH.Steps(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/logs") && strings.HasPrefix(path, "/api/v1/tasks/"):
 			taskH.Logs(w, r)
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/tasks/"):
@@ -208,27 +208,14 @@ func serverResourcePath(path string) bool {
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != ""
 }
 
-func serviceTemplateResourcePath(path string) bool {
+func containerServiceResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "service-templates" && parts[3] != ""
+	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "container-services" && parts[3] != ""
 }
 
-func serviceResourcePath(path string) bool {
+func runtimeExplorerNodeResource(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "services" && parts[3] != ""
-}
-
-func serviceLifecyclePath(path string) bool {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) != 5 || parts[0] != "api" || parts[1] != "v1" || parts[2] != "services" || parts[3] == "" {
-		return false
-	}
-	switch parts[4] {
-	case "deploy", "sync", "restart", "stop", "remove", "update-images":
-		return true
-	default:
-		return false
-	}
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "runtime-explorer" && parts[3] == "nodes" && parts[4] != ""
 }
 
 func (a *App) static(w http.ResponseWriter, r *http.Request) {

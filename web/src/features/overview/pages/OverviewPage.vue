@@ -9,8 +9,8 @@ import { LineChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { overviewApi } from '@/api/overview';
 import { tasksApi } from '@/api/tasks';
-import { composeApi } from '@/api/compose';
-import type { MetricsRange, MetricsSeriesDto, OverviewDto, OverviewServerDto, TaskDto, ComposeServiceDto } from '@/types/api';
+import { containerServicesApi } from '@/api/containerServices';
+import type { ContainerServiceDto, MetricsRange, MetricsSeriesDto, OverviewDto, OverviewServerDto, TaskDto } from '@/types/api';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent]);
 
@@ -36,8 +36,7 @@ const metricsLoading = ref(false);
 const error = ref('');
 const metricsError = ref('');
 
-// Services drift detection
-const composeServices = ref<ComposeServiceDto[]>([]);
+const containerServices = ref<ContainerServiceDto[]>([]);
 
 // Task Ticker States
 const activeTasks = ref<TaskDto[]>([]);
@@ -54,14 +53,15 @@ const currentTickerTask = computed(() =>
   activeTasks.value.length > 0 ? activeTasks.value[taskIndex.value % activeTasks.value.length] : null
 );
 
-// Drift count for selected server
-const selectedServerDriftedCount = computed(() => {
+// Services needing attention on the selected server
+const selectedServerAttentionCount = computed(() => {
   if (!selectedServerId.value) return 0;
-  return composeServices.value.filter(
-    (s) =>
-      s.serverId === selectedServerId.value &&
-      (s.managementState === 'drifted' || s.drift || s.syncStatus === 'drifted')
-  ).length;
+  return containerServices.value.filter((service) => {
+    const onNode = service.nodeId === selectedServerId.value;
+    const mismatch = service.runtimeGeneration != null && service.runtimeGeneration !== service.generation;
+    const unhealthy = ['missing', 'unhealthy', 'exited', 'stale'].includes(service.runtimeStatus || '');
+    return onNode && (mismatch || unhealthy || Boolean(service.lastError));
+  }).length;
 });
 
 // Extract 1-min load average from raw loadAverage string (e.g. "0.15 0.08 0.02")
@@ -288,11 +288,11 @@ async function loadMetrics() {
   }
 }
 
-async function loadComposeServices() {
+async function loadContainerServices() {
   try {
-    composeServices.value = await composeApi.listServices();
+    containerServices.value = await containerServicesApi.list();
   } catch (err) {
-    console.error('Failed to load compose services', err);
+    console.error('Failed to load container services', err);
   }
 }
 
@@ -316,13 +316,13 @@ watch([selectedServerId, range], loadMetrics);
 onMounted(async () => {
   await loadOverview();
   await loadMetrics();
-  await loadComposeServices();
+  await loadContainerServices();
   await loadActiveTasks();
 
   refreshTimer = window.setInterval(async () => {
     await loadOverview();
     await loadMetrics();
-    await loadComposeServices();
+    await loadContainerServices();
   }, 15000);
 
   taskTimer = window.setInterval(loadActiveTasks, 8000);
@@ -422,8 +422,8 @@ onBeforeUnmount(() => {
           <div class="d-flex align-start mb-3">
             <v-icon color="success" class="mr-3 mt-1" size="small">mdi-checkbox-marked-circle</v-icon>
             <div>
-              <div class="font-weight-bold text-body-2 text-high-emphasis">Full Docker & Compose Management</div>
-              <div class="text-caption text-medium-emphasis">Inspect container runtimes, volumes, networks, pull images, and deploy services directly from visual compose templates.</div>
+              <div class="font-weight-bold text-body-2 text-high-emphasis">Container Services Management</div>
+              <div class="text-caption text-medium-emphasis">Inspect runtime resources and operate managed Container Services from one workspace.</div>
             </div>
           </div>
 
@@ -508,7 +508,7 @@ onBeforeUnmount(() => {
           <!-- Core Actionable Banners for Package and Container Updates -->
           <div v-if="selectedServer" class="update-banners-container mb-4">
             <div
-              v-if="selectedServer.packageUpdateCount > 0 || selectedServerDriftedCount > 0"
+              v-if="selectedServer.packageUpdateCount > 0 || selectedServerAttentionCount > 0"
               class="d-flex flex-column flex-md-row"
               style="gap: 16px;"
             >
@@ -537,18 +537,18 @@ onBeforeUnmount(() => {
                 </v-btn>
               </div>
 
-              <!-- Container/Compose Services Drift Card -->
+              <!-- Container Services Attention Card -->
               <div
-                v-if="selectedServerDriftedCount > 0"
+                v-if="selectedServerAttentionCount > 0"
                 class="update-banner-card drifted flex-grow-1 d-flex align-center justify-space-between px-4 py-3 rounded-lg cursor-pointer"
-                @click="router.push('/services')"
+                @click="router.push('/container-services')"
               >
                 <div class="d-flex align-center mr-3">
                   <v-icon color="primary" class="mr-3" size="default">mdi-docker</v-icon>
                   <div>
-                    <div class="text-subtitle-2 font-weight-bold text-high-emphasis">Docker Service Drift</div>
+                    <div class="text-subtitle-2 font-weight-bold text-high-emphasis">Container Services Attention</div>
                     <div class="text-caption text-medium-emphasis">
-                      There are <strong>{{ selectedServerDriftedCount }}</strong> container services requiring synchronization.
+                      There are <strong>{{ selectedServerAttentionCount }}</strong> managed services requiring attention.
                     </div>
                   </div>
                 </div>
@@ -558,7 +558,7 @@ onBeforeUnmount(() => {
                   size="small"
                   class="text-none font-weight-bold flex-shrink-0"
                 >
-                  Re-Sync Now
+                  Open Services
                 </v-btn>
               </div>
             </div>

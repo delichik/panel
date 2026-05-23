@@ -1,560 +1,1041 @@
-# Container Services Redesign
+# Container Services Full Redesign
 
 ## Goal
 
-Redesign Docker management as **Container Services**, a lightweight single-instance service control plane. This is a full replacement of the current service template / deployed service model, not an incremental compatibility layer.
+Container Services is a full replacement for the current Docker Compose service template / deployed service model.
 
-The system remains a server panel. Overview should include Container Services health summaries, while the Container Services module becomes the primary service-management workspace.
+This redesign is not a compatibility layer and not an incremental migration. The old service template, deployed service, compose deployment, and legacy `/services` / `/service-templates` product model must be removed during implementation. The new product has one user-created application resource: **Container Service**.
 
-## Core principles
+The implementation must close the loop end to end:
 
-- **Service is the only user-created application resource.** It is a declarative application definition, similar to a single-instance Deployment.
-- **No replicas.** A Service can have exactly one active instance globally.
-- **Node selection is automatic.** Users define selectors, constraints, conflicts, and preferences; the system chooses the best Node.
-- **All deployment and runtime actions are tasks.** Every create, update, move, restart, stop, cleanup, and verification step appears in Task Center.
-- **Visual + YAML editing stays.** The current dual-mode editing model is valuable and should become the Service spec editor.
-- **UI can be redesigned freely.** Existing pages do not constrain the new Container Services experience.
+1. A user creates or edits a Service.
+2. The system validates the Service spec.
+3. The system schedules it onto one eligible node.
+4. The system renders service artifacts.
+5. The system updates the node-level Compose root file.
+6. Docker Compose starts or updates the runtime.
+7. The system verifies runtime state.
+8. Runtime status, logs, tasks, and errors are visible in the UI.
 
-## Resource model
+## Non-Goals
 
-### Service
+- No compatibility with `service_templates`, `deployed_services`, legacy Compose deployments, or old product routes.
+- No migration flow from old template/deployed-service data.
+- No full Compose project authoring by users.
+- No replicas. A Service has at most one active runtime placement globally.
+- No manual node pinning or manual override in the first version.
+- No custom HTTP/TCP health probe system. Users should use Docker healthcheck.
+- No secrets system in this redesign.
+- No `.env` generation.
+- No Docker Engine API requirement. The runtime adapter uses remote command execution and Docker/Compose CLI.
 
-The top-level user resource. It contains:
+## Core Principles
 
-- name and description
-- enabled state
-- selector
-- constraints
-- anti-affinity / conflict rules
-- placement preferences
-- visual model
-- compose YAML
-- variables
-- attached files
-- data cleanup policy
-- update policy
+- **Service is the only user-created application resource.**
+- **Service name is stable runtime identity.** It is the Compose service key, dependency reference, remote path component, and primary UI name.
+- **Docker labels are Docker labels.** The word label only means Compose/Docker runtime labels.
+- **Claims are derived port occupation facts.** They are not manually managed scheduling resources except for host-network port labels.
+- **Generation is Service configuration generation.** It is not a deployment attempt number.
+- **DB stores desired configuration. Docker stores runtime truth. Tasks store operation history.**
+- **Repeated deploy of the same current version must be idempotent.**
+- **Missing runtime is recoverable.** If a Service is enabled and runtime is missing, reconcile deploys the current generation again.
+- **Every mutation is a task.** Deploy, enable, disable, restart, cleanup, unmanaged runtime actions, and capability probes all produce traceable tasks.
 
-Users create, edit, enable, disable, and reconcile Services. Users do not create templates or per-node deployed services.
+## Removed Old Product Surface
+
+Implementation must remove the old model instead of hiding it behind new UI:
+
+- Old backend service template and deployed service modules.
+- Old `/api/v1/services` and `/api/v1/service-templates` business APIs.
+- Old frontend Services and Service Templates pages/routes/navigation.
+- Old tests that only validate removed concepts.
+- Old DB schema creation for service templates and deployed services.
+
+Reusable low-level helpers may be moved into new modules, but old business concepts must not remain as active abstractions.
+
+## Resource Model
+
+### Container Service
+
+A Container Service contains:
+
+- `id`
+- immutable `name`
+- `enabled`
+- Compose service body YAML
+- per-Service variables
+- per-Service files
+- selector map
+- generation
+- spec revision/hash
+- last error summary
+- timestamps
+
+There is no `display_name` in the first version. The immutable `name` is also the UI display name.
+
+Service `name` must use a safe Docker/Compose/container-name-compatible subset:
+
+- lowercase letters, digits, and `-`
+- starts with lowercase letter or digit
+- ends with lowercase letter or digit
+- length 1-32
+- unique across Container Services
+- immutable after creation
 
 ### Node
 
-A Container Services view of an existing server.
+A node is an existing managed server that may run Container Services if it passes capability checks.
 
-Scheduling uses a unified node attributes object. It should include server fields and traits in one queryable model, such as:
+Built-in scheduling requirements:
 
-- name
-- host / IP
-- OS information
-- Docker / Compose capability
-- resource summary
-- maintenance state
-- user-defined traits
+- reachable
+- supported OS
+- Docker available
+- Docker Compose available
+- Docker Compose `include` supported
+- not in maintenance
+- no managed port-claim conflict
 
-Selectors and constraints operate on this unified attributes model. Server name and IP are therefore usable like traits.
+User-controlled scheduling input is a simple key/value selector over server fields and user traits. There is no node pinning and no scheduling DSL in the first version.
 
-### Service Instance
+### Runtime Unit
 
-The current instance of a Service. Each Service has at most one instance.
+Runtime units are observed from Docker/Compose. They are not the source of desired state.
 
-Important fields:
+Runtime status values should include:
 
-- desired node
-- current node
-- active container reference
-- previous container reference
-- desired generation
-- running generation
-- status
-- last reconcile task
-- last error
+- `missing`
+- `starting`
+- `running`
+- `healthy`
+- `unhealthy`
+- `exited`
+- `unknown`
+- `stale`
 
-A Service Instance is not a replica set. It represents the single active runtime placement for the Service.
+Runtime identity is recognized through Docker labels.
 
-### Container Runtime Unit
+### Task
 
-A runtime observation object from Docker / Compose. New and old containers may briefly coexist during updates, but only one container becomes active when reconciliation completes.
+A task is a durable DB queued operation. A task has steps, logs, trigger metadata, operation metadata, and retry/recovery state.
 
-Runtime units support observability and operations:
+There is no complex parent/child/grandchild task tree in the first version. Related tasks share `operation_id`.
 
-- state and status
-- image
-- ports
-- labels
-- logs
-- managed/unmanaged marker
-- restart / stop / replace actions through tasks
+## Service Spec Model
 
-## Scheduling model
+### Compose Input
 
-Scheduling picks one Node for a Service.
+The user edits a Compose **service body**, not a full `docker-compose.yaml`.
 
-Inputs:
+Example user input:
 
-- **selector:** hard filter over node attributes.
-- **constraints:** hard requirements such as Docker capability, resource thresholds, or maintenance state.
-- **anti-affinity / conflicts:** rules such as not colocating with specific Services, avoiding port conflicts, or avoiding path conflicts.
-- **placement preferences:** soft scoring rules such as low load first, preferred region, or existing image cache.
+```yaml
+image: mysql:8
+restart: unless-stopped
+environment:
+  MYSQL_DATABASE: "{{ .variables.DB_NAME }}"
+volumes:
+  - "{{ .service.data_dir }}/mysql:/var/lib/mysql"
+ports:
+  - "3306:3306"
+```
 
-Outputs:
+The system wraps it as:
 
-- selected Node
-- rejected Nodes with reasons
-- score breakdown for candidates
-- required action: create, update, move, replace, remove, or no-op
-- task graph
+```yaml
+services:
+  <serviceName>:
+    <user service body>
+```
 
-A schedule preview API should expose the same reasoning before saving or reconciling.
+Strictly disallowed in the user service body:
 
-## Update model
+- top-level Compose document keys such as `services`, `include`, `volumes`, `networks`
+- `container_name`
+- system-reserved `panel.*` labels, except host-network `panel.claims.ports`
 
-All Service updates, config changes, image changes, and node moves use the same fixed sequence:
+Allowed:
 
-1. **Create new container**
-   - render compose/spec/files
-   - prepare target Node directory
-   - create the new runtime container
-2. **Stop old container**
-   - gracefully stop the current active container if one exists
-3. **Start new container**
-   - start the new runtime unit
-   - verify health, ports, and compose status
-4. **Delete old container**
-   - remove the old runtime unit and temporary files
-   - do not delete persistent volumes/data unless the Service data policy explicitly allows it
+- Compose service fields supported by Docker Compose
+- `depends_on` short syntax and common long syntax
+- normal user labels outside `panel.*`
 
-Failure rules:
+Advanced Compose semantics such as `profiles`, `extends`, and user-authored `include` are not part of the user input model because users can only provide the value of one Compose service map entry.
 
-- If creating the new container fails, leave the old container untouched.
-- If stopping the old container fails, do not start the new container.
-- If starting the new container fails, try to restore the old container if possible and mark the task failed or blocked.
-- If deleting the old container fails after the new one is active, keep the new container active and create or mark cleanup work.
+### Visual Editor
 
-## Task model
+YAML is the source of truth. Visual editing is an assistant for common fields and writes back to the same service body.
 
-Task Center needs parent/child tasks.
+If YAML contains fields the visual editor cannot fully represent, UI may show an advanced-field marker, but the YAML remains valid if system validation passes.
 
-Parent task:
+### Variables
 
-- `service_reconcile`
-- bound to `resourceType=service` and `resourceId=serviceId`
-- represents one desired-state reconciliation
-
-Child tasks:
-
-- `service_schedule`
-- `service_create_container`
-- `service_stop_old_container`
-- `service_start_new_container`
-- `service_delete_old_container`
-- `service_verify`
-- `service_remove`
-- cleanup tasks when needed
-
-Task Center should support:
-
-- parent task expansion
-- service filter
-- node filter
-- status filter
-- failed-only filter
-- real-time logs per task
-- retrying failed or retryable steps
-- jumping from a Service detail page to the active task graph
-
-## Data model
-
-### `container_services`
-
-Stores Service desired state.
-
-Suggested fields:
-
-- `id`
-- `name`
-- `description`
-- `enabled`
-- `selector_json`
-- `constraints_json`
-- `anti_affinity_json`
-- `placement_preference_json`
-- `compose_yaml`
-- `visual_state_json`
-- `variables_json`
-- `files_manifest_json`
-- `data_policy_json`
-- `update_policy_json`
-- `spec_hash`
-- `generation`
-- `created_at`
-- `updated_at`
+Variables are per-Service and use `map[string]string`.
 
 Rules:
 
-- Increment `generation` on spec changes.
-- Recalculate `spec_hash` on spec changes.
-- If saved with `enabled=true`, enqueue a `service_reconcile` task.
+- Render with Go templates.
+- Use `missingkey=error`.
+- No `.env` file generation.
+- No typed variables.
+- No secrets in this redesign.
 
-### `container_service_files`
+Template context:
 
-Stores Service-owned files.
+```yaml
+service:
+  name: string
+  generation: number
+  current_dir: string
+  data_dir: string
+variables:
+  <key>: string
+```
 
-Suggested fields:
+### Files
+
+Files are owned by a Service.
+
+Rules:
+
+- File path must be relative.
+- Empty path is invalid.
+- Absolute path is invalid.
+- `..` is invalid.
+- Windows drive paths are invalid.
+- Files may be template or binary.
+- File content/path changes increment generation.
+- Files are rendered/copied into `{current_dir}/files/{relativePath}`.
+- `data/` is never written through the files API.
+
+Compose can reference files with:
+
+```yaml
+volumes:
+  - "{{ .service.current_dir }}/files/nginx.conf:/etc/nginx/nginx.conf:ro"
+```
+
+### Volumes
+
+The system does not hard-block arbitrary Compose volume/bind mounts.
+
+It should warn on clearly dangerous sources such as:
+
+- `/`
+- `/var/run/docker.sock`
+- Docker data root
+- panel control directories
+- obvious system-critical directories
+
+Warnings do not block save or deploy. Docker/Compose remains responsible for runtime success or failure. The panel only protects its own managed files API and control directories.
+
+## Labels And Claims
+
+### System Labels
+
+System labels are injected by the system through Compose override output.
+
+Required keys:
+
+```yaml
+panel.managed: "true"
+panel.service.id: "<id>"
+panel.service.name: "<name>"
+panel.service.spec_revision: "<revision>"
+panel.service.generation: "<generation>"
+panel.project: "panel_managed"
+panel.node.id: "<nodeId>"
+```
+
+All values are strings.
+
+The `panel.*` namespace is reserved. Users cannot write any `panel.*` label except `panel.claims.ports` in host network mode.
+
+### Port Claims
+
+Claims only mark host TCP port occupation.
+
+Non-host network:
+
+- claims are derived from Compose `ports`
+- user cannot write `panel.claims.ports`
+
+Host network:
+
+- user must write `panel.claims.ports`
+- empty string is allowed and means no fixed host ports are claimed
+
+Accepted syntax:
+
+```yaml
+labels:
+  panel.claims.ports: "80,443"
+```
+
+List syntax is also parsed:
+
+```yaml
+labels:
+  - panel.claims.ports=80,443
+```
+
+Docs and UI should write map syntax.
+
+First version is TCP only. UDP claims are not included.
+
+Unmanaged Docker resources do not participate in scheduling conflicts. If an unmanaged container already occupies a port and Compose fails, the task should surface the Docker error clearly.
+
+## Generation And Artifacts
+
+Generation is the Service configuration generation.
+
+Generation increments only when render-affecting Service content changes:
+
+- Compose service body
+- variables
+- file path/content/kind
+- `depends_on` because it changes rendered service definition
+
+Generation does not increment for:
+
+- enable/disable
+- restart
+- reconcile
+- runtime refresh
+- selector/scheduling constraint changes
+- UI-only state
+- last error/task status
+
+`spec_revision`/hash is recomputed in the same DB transaction as generation increments. The same generation must not have multiple spec hashes.
+
+Repeated reconcile of the same generation does not create a new generation. If runtime is missing or labels do not match, the system redeploys the current generation.
+
+### Remote Layout
+
+Global setting:
+
+- `containerServiceRootDir`, default `/opt/panel/container-services`
+- `containerServiceComposeProject`, default `panel_managed`
+- `containerServiceGenerationRetention`, default `3`
+
+Per node:
+
+```text
+/opt/panel/container-services/
+  root.compose.yaml
+  <serviceName>/
+    current/
+      compose.yaml
+      panel.override.yaml
+      manifest.json
+      files/
+    generations/
+      1/
+      2/
+      3/
+    data/
+```
+
+`data/` is the built-in persistent data layer shared by all generations and exposed as `.service.data_dir`.
+
+The target node artifact is not a trusted source of truth. DB spec is the source of truth. Reconcile may delete and recreate the current generation artifact from DB spec.
+
+Manifest is for troubleshooting, cleanup, and display. It is not used to decide whether the current version is already deployed.
+
+Idempotent deploy decisions use Docker labels.
+
+## Compose Root And Include
+
+Each node has one root Compose file:
+
+```text
+{containerServiceRootDir}/root.compose.yaml
+```
+
+It includes current artifacts for enabled Services on that node.
+
+Root project name is globally configurable and defaults to `panel_managed`.
+
+Root compose maintenance:
+
+- promote/write current artifact updates the include list
+- disable removes Service from include
+- delete removes Service from include
+- move removes old node include and adds new node include
+- before any Compose command, regenerate/validate root compose from DB/runtime artifact state
+
+Docker Compose `include` support is mandatory. Capability check must use a real probe:
+
+1. Create a temporary remote directory.
+2. Write a minimal child compose file.
+3. Write a root compose with `include`.
+4. Run `docker compose -f root.yaml config`.
+5. Record success/failure and stderr.
+6. Clean the temporary directory.
+
+Version string checks are not enough.
+
+## Dependencies
+
+Dependencies are read from Compose `depends_on` in the user service body.
+
+Supported:
+
+```yaml
+depends_on:
+  - mysql
+  - redis
+```
+
+Supported:
+
+```yaml
+depends_on:
+  mysql:
+    condition: service_healthy
+  redis:
+    condition: service_started
+```
+
+The system reads only dependency Service names for validation, scheduling, previews, and graph operations. Runtime semantics such as `condition` are handled by Compose.
+
+Validation rules:
+
+- dependency name must exist as a Container Service
+- no self dependency
+- no dependency cycle
+- dependency names must be valid Service names
+
+If a Service is saved as disabled, dependencies may also be disabled or not deployed. Save still requires static dependency validity.
+
+If a Service is saved/enabled as enabled, dependency enable behavior follows the normal enable preview and confirmation flow.
+
+Deployment/reconcile rules:
+
+- The dependency must be schedulable on the same target node.
+- The dependency must have current artifact included/available on that node, otherwise Compose would not find the service definition.
+- The system blocks static Compose-not-found situations before running Compose.
+- The system does not check whether dependency runtime is running or healthy.
+- If dependency runtime is not running, Compose handles it.
+- The system does not secretly render/upload dependency artifacts inside the dependent's task.
+
+If A can schedule to node1 but dependency B cannot schedule to node1, A's deploy task fails with a clear missing-dependency/scheduling reason. The user must adjust B.
+
+## Scheduling
+
+Scheduling happens during reconcile. Schedule preview is advisory and does not reserve or persist a node.
+
+Inputs:
+
+- Service selector map
+- server fields
+- user traits
+- built-in requirements
+- dependency co-scheduling requirements
+- managed port claims
+
+No resource threshold scheduler is required in the first version.
+
+No manual node pinning is supported.
+
+Stable preference:
+
+1. prefer existing active node when still eligible
+2. then stable sort by node name/id
+
+Selector changes trigger reconcile/move behavior but do not increment generation.
+
+## Save, Enable, Disable, Delete
+
+### Save
+
+Save performs static validation.
+
+If `enabled=false`:
+
+- save spec
+- increment generation only if render-affecting content changed
+- do not deploy
+
+If `enabled=true`:
+
+- save spec
+- increment generation only if render-affecting content changed
+- if dependencies require enabling, return enable-preview style impact and require user confirmation
+- after confirmation or if no dependency enable is needed, enqueue reconcile
+
+An enabled Service with spec changes must automatically create a reconcile task. Saving is not a manual draft/deploy split for enabled Services.
+
+### Enable
+
+Enable has preview and confirm phases.
+
+Preview returns:
+
+- target Service
+- disabled direct/indirect dependencies that must be enabled
+- dependency order
+- expected tasks
+- validation errors
+
+Confirm:
+
+- sets all affected Services `enabled=true`
+- creates tasks using one `operation_id`
+- reconciles in dependency-first order
+
+The user does not choose a subset. Enabling A means enabling the dependency chain needed by A.
+
+### Disable
+
+Disable has preview and confirm phases.
+
+Preview returns:
+
+- target Service
+- direct/indirect dependents that will also be disabled
+- disable order
+- expected runtime removal tasks
+
+Confirm:
+
+- disables dependents first
+- disables dependency last
+- sets each affected Service `enabled=false`
+- removes runtime containers
+- removes root include entries
+- keeps spec, current artifact, generations, and data
+
+Disable is propagation, not warning/blocking.
+
+### Delete
+
+Delete rules:
+
+- Service must already be disabled.
+- Service cannot be deleted while any other Service depends on it.
+- Delete does not propagate.
+- Delete does not rewrite other Services.
+- Delete removes Service spec and managed artifacts according to implementation policy, but never removes unrelated unmanaged Docker resources.
+
+## Reconcile And Idempotency
+
+Reconcile uses the current DB spec and current generation.
+
+Idempotency check:
+
+- inspect runtime through Docker/Compose
+- if container/service exists and system labels match current Service name, generation, and spec revision, task succeeds as no-op
+- if runtime is missing, deploy current generation
+- if labels mismatch, recreate/update
+- if same-name unmanaged container exists, fail with a clear conflict
+
+Do not trust remote artifact for idempotency.
+
+Same current generation can be rendered and uploaded again. The system may clear the current generation artifact directory before writing, excluding `data/`.
+
+Typical reconcile steps:
+
+1. acquire Service lock
+2. schedule
+3. acquire Node lock
+4. validate dependencies
+5. inspect labels/idempotency
+6. render current generation from DB spec
+7. upload/write artifact
+8. write current copy
+9. refresh root compose
+10. run `docker compose -p <project> -f root.compose.yaml up -d <serviceName>`
+11. verify runtime
+12. cleanup old generations
+13. release locks
+
+If Compose or verification fails, task fails and reports stderr/status. There is no hidden rollback requirement in the first version.
+
+## Health Verification
+
+After `docker compose up -d <serviceName>` succeeds, verify:
+
+- `docker compose ps --format json <serviceName>` can find the service/container
+- container is running
+- if Docker healthcheck exists, wait until healthy
+- unhealthy means failed
+- starting waits until timeout
+- no healthcheck means running passes
+
+Global setting:
+
+- `containerServiceHealthTimeoutSeconds`, default `60`
+
+## Logs And Runtime Refresh
+
+Task logs:
+
+- command summary
+- stdout
+- stderr
+- failure error
+
+Container logs:
+
+- not stored in DB
+- fetched live when user opens logs
+- default tail 200
+- refresh supported
+- first version does not require continuous streaming
+
+Runtime cache:
+
+- containers / Compose service state refreshed every 1 second
+- interval is fixed and not configurable
+- images / networks / volumes refreshed every 10th cycle, approximately every 10 seconds
+- refresh failures mark cache stale/error
+- desired state is not changed by refresh failures
+
+## Task Model
+
+Use durable DB queue tasks.
+
+Required task fields:
 
 - `id`
-- `service_id`
-- `path`
-- `kind`: `template` or `binary`
-- `content_type`
-- `size`
-- `sha256`
-- `created_at`
-- `updated_at`
-
-Files belong directly to Services.
-
-### `container_service_instances`
-
-Stores the single current Service instance.
-
-Suggested fields:
-
-- `id`
-- `service_id`
-- `desired_node_id`
-- `current_node_id`
-- `active_container_ref`
-- `previous_container_ref`
-- `desired_generation`
-- `running_generation`
-- `status`
-- `last_reconcile_task_id`
-- `last_error`
-- `created_at`
-- `updated_at`
-
-Constraint:
-
-- `UNIQUE(service_id)`
-
-### `container_runtime_units`
-
-Stores runtime observations.
-
-Suggested fields:
-
-- `id`
-- `service_id`
-- `instance_id`
-- `node_id`
-- `runtime_container_id`
-- `name`
-- `image`
-- `state`
-- `status`
-- `ports_json`
-- `labels_json`
-- `is_active`
-- `created_at`
-- `observed_at`
-
-### Tasks
-
-The task schema should support:
-
-- `parent_id`
+- `operation_id`
+- `type`
 - `resource_type`
 - `resource_id`
 - `node_id`
-- `step`
-- `metadata_json`
+- `trigger_type`
+- `trigger_resource_type`
+- `trigger_resource_id`
+- `trigger_task_id`
+- `triggered_by`
+- `status`
+- `stage`
 - `percentage`
+- `summary`
+- `error`
+- retry fields
+- timestamps
 
-The Task Center concept remains, but the schema and API should be rebuilt around operation trees.
+Trigger examples:
 
-## API model
+- `user`
+- `scheduler`
+- `service_enable`
+- `service_disable`
+- `retry`
+- `runtime_explorer`
 
-Use `/api/container-services` as the unified API namespace.
+`task_steps` table:
 
-### Service APIs
+- `id`
+- `task_id`
+- `step`
+- `status`
+- `percentage`
+- `metadata_json`
+- `started_at`
+- `finished_at`
+- `error`
 
-- `GET /container-services`
-- `POST /container-services`
-- `GET /container-services/{id}`
-- `PUT /container-services/{id}`
-- `DELETE /container-services/{id}`
-- `POST /container-services/{id}/enable`
-- `POST /container-services/{id}/disable`
-- `POST /container-services/{id}/reconcile`
-- `POST /container-services/{id}/render-preview`
-- `POST /container-services/{id}/validate`
-- `POST /container-services/{id}/schedule-preview`
-- `GET /container-services/{id}/instances`
-- `GET /container-services/{id}/runtime-units`
-- `GET /container-services/{id}/tasks`
+Retry first version retries whole task. Step retry can be added later.
 
-### File APIs
+Worker recovery:
 
-- `GET /container-services/{id}/files`
-- `POST /container-services/{id}/files/template`
-- `POST /container-services/{id}/files/binary`
-- `PUT /container-services/{id}/files/{fileId}`
-- `DELETE /container-services/{id}/files/{fileId}`
+- running tasks are durable in DB
+- worker can recover retryable tasks after restart
+- stale locks can expire and be reclaimed
 
-### Node and scheduling APIs
+## Locks
 
-- `GET /container-services/nodes`
-- `GET /container-services/nodes/{nodeId}/services`
-- `POST /container-services/{id}/schedule-preview`
+Use DB lease locks.
 
-### Runtime action APIs
+Table:
 
-All runtime actions create tasks:
+```sql
+operation_locks (
+  scope TEXT NOT NULL,
+  resource_id TEXT NOT NULL,
+  owner_task_id TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  heartbeat_at TEXT NOT NULL,
+  PRIMARY KEY(scope, resource_id)
+)
+```
 
-- `POST /container-services/{id}/restart`
-- `POST /container-services/{id}/stop`
-- `POST /container-services/{id}/replace`
-- `POST /container-services/{id}/remove-runtime`
+Scopes:
 
-## Backend modules
+- `service`
+- `node`
 
-### `internal/containerservice`
+Rules:
 
-The main control-plane module.
+- same Service cannot have concurrent active Container Services tasks
+- same Node cannot concurrently modify root compose, Docker runtime, or generation cleanup
+- enable/disable chains acquire Service locks in sorted order
+- Node lock is acquired around node operations
+- locks heartbeat and expire
+- completed/failed/cancelled tasks release locks
 
-Responsibilities:
+## Runtime Explorer
 
-- Service CRUD
-- spec validation
-- visual/YAML render
-- Service files
-- spec hash and generation
-- instance state
-- reconcile request creation
+Runtime Explorer is part of the new system, not a legacy Compose entry.
 
-This replaces the current compose template/deployed-service business model.
-
-### `internal/placement`
-
-The scheduler/placement module.
-
-Responsibilities:
-
-- build node attributes
-- selector matching
-- constraints filtering
-- anti-affinity and conflict checks
-- placement scoring
-- schedule preview output
-
-### `internal/runtime/docker`
-
-The Docker runtime adapter.
-
-Responsibilities:
-
-- Docker and Compose capability detection
-- container/compose operations
-- runtime discovery
-- start/stop/delete/pull/log/status operations
-- runtime unit cache refresh
-
-### `internal/operations`
-
-Executes task graphs.
-
-Responsibilities:
-
-- create container
-- stop old container
-- start new container
-- delete old container
-- verify runtime state
-- remove runtime
-- cleanup failed leftovers
-
-Business modules create operation graphs; this module performs the steps and writes task logs.
-
-### `internal/tasks`
-
-Task Center backend.
-
-Responsibilities:
-
-- parent/child task trees
-- resource binding
-- node binding
-- step metadata
-- retry state
-- real-time logs
-
-## UI design
-
-### Navigation
-
-- **Overview** includes Container Services summary cards.
-- **Container Services** is the Service-first main workspace.
-- **Task Center** shows all operation tasks.
-- **Servers / Nodes** keeps server management and adds service/runtime context.
-
-### Container Services page
-
-Main dashboard sections:
-
-- health summary: total, running, updating, failed, disabled, blocked
-- Service list with enabled state, selected Node, active container, generation, status, last task, last error
-- quick actions: Edit, Reconcile, Restart, Disable
-- detail drawer or detail page with runtime and task context
-
-### Service editor
-
-The editor keeps Visual + YAML mode and becomes the Service Spec Editor.
-
-Sections:
-
-- basic information
-- enabled state
-- visual service model
-- YAML compose model
-- variables
-- files
-- selector builder
-- constraints
-- anti-affinity / conflicts
-- placement preferences
-- data policy
-- update policy
-
-A fixed preview area should show:
-
-- render preview
-- schedule preview
-- selected Node
-- candidate Nodes
-- rejection reasons
-- score breakdown
-- pending impact
-- task graph that will be created
-
-Saving an enabled Service immediately creates a reconcile task. The UI should show task progress instead of asking the user whether to deploy.
-
-### Service detail
-
-Show desired state against current state:
-
-- desired spec summary
-- selected Node
-- current instance
-- active container
-- previous container during switching/updating
-- current task graph
-- runtime logs
-- recent events
-- actions: Reconcile now, Restart, Replace, Disable, Remove runtime
-
-### Task Center
-
-Upgrade the flat task table into an operation timeline:
-
-- parent/child task tree
-- service and node columns
-- step progress
-- logs per child task
-- retry failed step
-- filters for service, node, type, status, failed-only
-
-### Runtime Explorer
-
-The old Docker runtime pages can become a Runtime Explorer:
+It shows:
 
 - containers
 - networks
 - volumes
 - images
-- managed/unmanaged markers
-- links back to owning Service for managed runtime units
+- Docker/Compose capability
+- managed/unmanaged marker
 
-Runtime Explorer is for observation and troubleshooting, not the main creation workflow.
+Managed runtime is identified by system Docker labels.
 
-## Automation rules
+Managed resources:
 
-### Save Service
+- destructive stop/delete/remove actions are not allowed here
+- UI says managed resources should be operated from Container Service
+- restart is allowed and creates a `service_restart_runtime` task
+- restart uses Service/Node locks
+- restart does not change spec, generation, or enabled
 
-1. Save spec.
-2. Increment generation if desired state changed.
-3. Calculate spec hash.
-4. If enabled, create `service_reconcile` task graph.
+Unmanaged resources:
 
-### Reconcile Service
+- limited stop/delete/prune actions are allowed
+- actions create tasks with `resource_type=docker_runtime`
+- unmanaged resources are not used for scheduling conflict checks
 
-1. Read desired Service spec.
-2. Build node attributes.
-3. Filter by selector and constraints.
-4. Apply anti-affinity and conflicts.
-5. Score candidates by placement preferences.
-6. Choose one Node.
-7. Compare desired state with current instance.
-8. Create, update, move, replace, remove, or no-op.
-9. Execute through task children.
-10. Update instance and runtime unit state.
+## API Design
 
-### Intelligent guidance
+Use `/api/v1/container-services` as the Container Services namespace.
 
-The system should explain decisions:
+### Service APIs
 
-- why a Node was selected
-- why Nodes were rejected
-- which constraint failed
-- which port/path/service caused a conflict
-- whether a failure is retryable
-- what action the user can take next
+- `GET /api/v1/container-services`
+- `POST /api/v1/container-services`
+- `GET /api/v1/container-services/{id}`
+- `PUT /api/v1/container-services/{id}`
+- `DELETE /api/v1/container-services/{id}`
+- `POST /api/v1/container-services/{id}/validate`
+- `POST /api/v1/container-services/{id}/render-preview`
+- `POST /api/v1/container-services/{id}/schedule-preview`
+- `POST /api/v1/container-services/{id}/reconcile`
+- `POST /api/v1/container-services/{id}/restart`
 
-Capability problems, port conflicts, and resource shortages should become visible task or schedule-preview information instead of hidden errors.
+### Enable / Disable APIs
 
-## Error handling
+- `POST /api/v1/container-services/{id}/enable-preview`
+- `POST /api/v1/container-services/{id}/enable`
+- `POST /api/v1/container-services/{id}/disable-preview`
+- `POST /api/v1/container-services/{id}/disable`
 
-- No schedulable Node: instance and parent task become `blocked`, with rejected reasons.
-- New container creation failure: old container remains active.
-- Old container stop failure: new container is not started.
-- New container start failure: attempt to restore old container if possible.
-- Old container deletion failure after successful switch: new container remains active, cleanup is tracked.
-- Disabled Service: runtime is removed according to policy, Service spec remains.
+Enable/disable confirm responses return created tasks and shared `operation_id`.
 
-## Verification plan
+### File APIs
 
-### Backend tests
+- `GET /api/v1/container-services/{id}/files`
+- `POST /api/v1/container-services/{id}/files`
+- `PUT /api/v1/container-services/{id}/files/{fileId}`
+- `DELETE /api/v1/container-services/{id}/files/{fileId}`
+
+### Runtime APIs
+
+- `GET /api/v1/container-services/{id}/runtime`
+- `GET /api/v1/container-services/{id}/logs?tail=200`
+- `GET /api/v1/runtime-explorer/nodes/{nodeId}`
+- `POST /api/v1/runtime-explorer/nodes/{nodeId}/containers/{containerId}/restart`
+- `POST /api/v1/runtime-explorer/nodes/{nodeId}/containers/{containerId}/stop`
+- `DELETE /api/v1/runtime-explorer/nodes/{nodeId}/containers/{containerId}`
+- `POST /api/v1/runtime-explorer/nodes/{nodeId}/prune`
+
+Runtime Explorer must reject destructive managed-resource operations except restart.
+
+### Task APIs
+
+- `GET /api/v1/tasks`
+- `GET /api/v1/tasks/{id}`
+- `GET /api/v1/tasks/{id}/steps`
+- `GET /api/v1/tasks?operation_id=<id>`
+- `POST /api/v1/tasks/{id}/retry`
+
+## Data Model
+
+### `container_services`
+
+- `id`
+- `name`
+- `enabled`
+- `compose_service_yaml`
+- `variables_json`
+- `selector_json`
+- `generation`
+- `spec_revision`
+- `spec_hash`
+- `last_error`
+- `created_at`
+- `updated_at`
+
+`name` is unique and immutable.
+
+### `container_service_files`
+
+- `id`
+- `service_id`
+- `path`
+- `kind`
+- `content_type`
+- `size`
+- `sha256`
+- `content` or storage reference
+- `created_at`
+- `updated_at`
+
+### `container_runtime_cache`
+
+- `id`
+- `node_id`
+- `service_id`
+- `container_id`
+- `name`
+- `image`
+- `state`
+- `status`
+- `health`
+- `ports_json`
+- `labels_json`
+- `managed`
+- `observed_at`
+- `stale`
+- `error`
+
+### `tasks`
+
+Use the task fields listed in Task Model.
+
+### `task_steps`
+
+Use the step fields listed in Task Model.
+
+### `operation_locks`
+
+Use the lock schema listed in Locks.
+
+## Backend Modules
+
+### `internal/containerservice`
+
+Responsibilities:
 
 - Service CRUD
-- visual/YAML roundtrip
-- file CRUD
-- selector matching
-- node attributes construction
-- constraints filtering
-- anti-affinity conflict detection
-- placement scoring
-- schedule preview rejection reasons
-- generation and spec hash drift detection
-- task graph creation
-- fixed update sequence order
-- failure recovery behavior
-- parent/child task APIs
-- Docker runtime adapter commands
+- name validation
+- service body validation
+- dependency graph extraction
+- generation/spec hash management
+- enable/disable/delete orchestration
+- render preview
+- file validation and storage
 
-### Frontend tests
+### `internal/containerrender`
+
+Responsibilities:
+
+- Go template render
+- service body wrapping
+- system label injection
+- compose/override artifact generation
+- manifest generation
+- file rendering/copy planning
+
+### `internal/placement`
+
+Responsibilities:
+
+- build node attributes
+- selector matching
+- Docker/Compose/include capability filtering
+- dependency co-scheduling validation
+- managed port claim conflict detection
+- stable node choice
+- schedule preview reasoning
+
+### `internal/runtime/docker`
+
+Responsibilities:
+
+- remote Docker/Compose CLI commands
+- capability probes
+- compose up/restart/down/rm
+- `docker compose ps` parsing
+- live logs
+- runtime cache refresh
+- managed/unmanaged discovery through labels
+
+### `internal/containerops`
+
+Responsibilities:
+
+- DB queue workers for Container Services tasks
+- reconcile execution
+- enable/disable chain execution
+- cleanup generation execution
+- lock acquisition and heartbeat
+- worker recovery
+
+### `internal/tasks`
+
+Responsibilities:
+
+- durable task creation
+- task steps
+- logs
+- retry metadata
+- operation grouping
+- task APIs
+
+## Frontend Information Architecture
+
+Navigation:
+
+- Overview: Container Services summary.
+- Container Services: primary Service workspace.
+- Runtime Explorer: Docker observation and unmanaged limited actions.
+- Task Center: operation and task timeline.
+- Servers/Nodes: node details, traits, Docker capability.
+
+### Container Services Page
+
+Main page should be operational, not a landing page.
+
+It needs:
+
+- Service list
+- enabled state
+- runtime state
+- node
+- generation/spec status from runtime labels
+- last task
+- last error
+- quick actions: edit, reconcile, restart, enable, disable, delete when allowed
+
+### Service Editor
+
+Sections:
+
+- name on create only
+- enabled toggle/save behavior
+- YAML editor for Compose service body
+- visual editor for common fields
+- variables
+- files
+- selector
+- validation results
+- render preview
+- schedule preview
+- dependency impact preview
+
+Saving an enabled Service with changes should show the created reconcile task. If dependencies need enabling, UI shows the enable impact confirmation.
+
+### Service Detail
+
+Show:
+
+- current DB generation/spec hash
+- runtime observed labels/generation/hash
+- enabled state
+- runtime status
+- node
+- dependency graph
+- live logs
+- recent tasks
+- actions
+
+### Task Center
+
+Show:
+
+- task list grouped by `operation_id`
+- trigger information
+- resource and node
+- status/stage/percentage
+- task steps timeline
+- stdout/stderr logs
+- retry whole task
+
+### Runtime Explorer
+
+Show Docker resources with managed/unmanaged marker. Managed destructive actions are replaced with a message and link to the owning Service; restart is allowed.
+
+## Strong Constraints
+
+- No old template/deployed-service compatibility.
+- Users only provide one Compose service map value.
+- `name` is immutable and no `display_name`.
+- `container_name` is forbidden.
+- `panel.*` labels are forbidden except host `panel.claims.ports`.
+- Host network must explicitly provide `panel.claims.ports`, empty string allowed.
+- Non-host network must not provide `panel.claims.ports`.
+- Dependencies must reference existing Service names.
+- Dependency cycles are invalid.
+- Delete requires disabled state and no dependents.
+- Disable propagates to dependents after preview/confirmation.
+- Enable propagates to dependencies after preview/confirmation.
+- Same Service active Container Services task is locked.
+- Same Node runtime/root-compose mutation is locked.
+- Docker Compose `include` support is mandatory and probed by execution.
+- Remote artifact is not trusted for deployment idempotency.
+- Runtime idempotency is based on Docker labels.
+- `missing` runtime is recoverable by reconcile.
+
+## Verification Plan
+
+Backend tests:
+
+- Service name validation
+- service body parser rejects full compose and `container_name`
+- label namespace validation
+- host/non-host claims validation
+- port extraction from `ports`
+- dependency extraction short/long syntax
+- dependency missing/self/cycle validation
+- generation increments only on render-affecting changes
+- selector changes do not increment generation
+- save enabled creates reconcile task
+- save disabled does not deploy
+- enable-preview dependency ordering
+- disable-preview dependent propagation
+- delete blocked by dependents
+- schedule rejects unsatisfied dependency co-location
+- include capability probe command handling
+- idempotency by Docker labels
+- missing runtime reconcile path
+- unmanaged same-name conflict
+- task steps persistence
+- service/node lock lease behavior
+- runtime refresh cache intervals
+
+Frontend tests:
 
 - Service list status rendering
-- Visual/YAML editor behavior
-- schedule preview rendering
-- save triggers reconcile task display
-- task tree rendering
-- failed task retry UI
-- Service desired/current diff
-- Runtime Explorer managed/unmanaged markers
+- editor validation display
+- YAML/visual roundtrip for common fields
+- dependency impact confirmation
+- save enabled task display
+- disable propagation preview
+- runtime labels/generation mismatch display
+- managed/unmanaged Runtime Explorer actions
+- task operation grouping and steps timeline
 
-### Manual verification
+Manual verification:
 
-- Creating an enabled Service automatically deploys it.
-- Updating image/config uses create new → stop old → start new → delete old.
-- Selector changes move the Service to a new Node.
-- Port conflicts block scheduling and show the conflict reason.
-- Disabling a Service removes runtime but keeps the spec.
-- All deployment and runtime actions appear in Task Center.
+- create disabled Service
+- enable Service and deploy
+- update enabled Service and observe automatic reconcile
+- repeat reconcile current generation and observe no-op when labels match
+- delete runtime manually and reconcile missing state
+- create host-network Service with empty port claims
+- create dependency chain and enable top Service
+- disable a base Service and confirm dependent propagation
+- attempt delete while depended on and see block
+- attempt deploy with same-name unmanaged container and see conflict
+- inspect live logs from Service detail

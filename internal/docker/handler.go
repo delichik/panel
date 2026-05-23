@@ -87,6 +87,36 @@ func (h *Handler) Images(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, out)
 }
 
+func (h *Handler) RuntimeExplorer(w http.ResponseWriter, r *http.Request) {
+	nodeID := runtimeExplorerNodeID(r.URL.Path)
+	if r.Method == http.MethodGet {
+		capability, _ := h.service.Capability(r.Context(), nodeID)
+		containers, _ := h.service.ListServices(r.Context(), nodeID)
+		networks, _ := h.service.ListNetworks(r.Context(), nodeID)
+		volumes, _ := h.service.ListVolumes(r.Context(), nodeID)
+		images, _ := h.service.ListImages(r.Context(), nodeID)
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"nodeId":     nodeID,
+			"capability": capability,
+			"containers": containers.Items,
+			"networks":   networks.Items,
+			"volumes":    volumes.Items,
+			"images":     images.Items,
+		})
+		return
+	}
+	if op, ok := runtimeExplorerOperation(r); ok {
+		task, err := h.service.RuntimeExplorerResourceTask(r.Context(), nodeID, op)
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID, "operationId": task.OperationID})
+		return
+	}
+	httpx.Error(w, panelerr.NotFound("route"))
+}
+
 func (h *Handler) NotImplemented(w http.ResponseWriter, r *http.Request) {
 	if op, ok, err := imageUpdateOperation(r); err != nil {
 		httpx.Error(w, err)
@@ -160,7 +190,7 @@ func resourceOperation(r *http.Request) (ResourceOperation, bool) {
 		if r.Method == http.MethodDelete && len(parts) == 7 {
 			return ResourceOperation{Kind: "container", Action: "delete", ID: id, Summary: "Deleting Docker container " + id}, true
 		}
-		if r.Method == http.MethodPost && len(parts) == 8 && (parts[7] == "start" || parts[7] == "stop") {
+		if r.Method == http.MethodPost && len(parts) == 8 && (parts[7] == "start" || parts[7] == "stop" || parts[7] == "restart") {
 			return ResourceOperation{Kind: "container", Action: parts[7], ID: id, Summary: strings.Title(parts[7]) + "ing Docker container " + id}, true
 		}
 		return ResourceOperation{}, false
@@ -221,6 +251,37 @@ func serverID(path string) string {
 		return parts[3]
 	}
 	return ""
+}
+
+func runtimeExplorerNodeID(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 5 {
+		return parts[4]
+	}
+	return ""
+}
+
+func runtimeExplorerOperation(r *http.Request) (ResourceOperation, bool) {
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 7 || parts[0] != "api" || parts[1] != "v1" || parts[2] != "runtime-explorer" || parts[3] != "nodes" {
+		return ResourceOperation{}, false
+	}
+	if len(parts) >= 7 && parts[5] == "containers" {
+		id, err := url.PathUnescape(parts[6])
+		if err != nil || strings.TrimSpace(id) == "" {
+			return ResourceOperation{}, false
+		}
+		if r.Method == http.MethodDelete && len(parts) == 7 {
+			return ResourceOperation{Kind: "container", Action: "delete", ID: id, Summary: "Deleting Docker container " + id}, true
+		}
+		if r.Method == http.MethodPost && len(parts) == 8 && (parts[7] == "restart" || parts[7] == "stop") {
+			return ResourceOperation{Kind: "container", Action: parts[7], ID: id, Summary: strings.Title(parts[7]) + "ing Docker container " + id}, true
+		}
+	}
+	if r.Method == http.MethodPost && len(parts) == 6 && parts[5] == "prune" {
+		return ResourceOperation{Kind: "image", Action: "prune", Summary: "Pruning unused Docker resources"}, true
+	}
+	return ResourceOperation{}, false
 }
 
 func serverAndProject(path string) (string, string) {

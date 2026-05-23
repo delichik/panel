@@ -1,15 +1,18 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
-import type { ServerDto, TaskDto, TaskStatus } from '@/types/api';
+import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
+import { groupTasksByOperation } from '../taskOperations';
 
 const tasks = ref<TaskDto[]>([]);
+const steps = ref<TaskStepDto[]>([]);
 const servers = ref<ServerDto[]>([]);
 const selectedTaskId = ref('');
+const selectedOperationId = ref('');
 const statusFilter = ref<TaskStatus | 'all'>('all');
-const serverFilter = ref('');
+const operationFilter = ref('');
 const typeFilter = ref('');
 const loading = ref(false);
 const error = ref('');
@@ -18,12 +21,11 @@ const pageSize = ref(20);
 const total = ref(0);
 let timer: number | undefined;
 
-const taskTypeOptions = computed(() => {
-  const known = new Set(tasks.value.map((task) => task.type));
-  return Array.from(known).sort();
-});
-
-const totalPages = computed(() => Math.ceil(total.value / pageSize.value));
+const operationGroups = computed(() => groupTasksByOperation(tasks.value));
+const selectedTask = computed(() => tasks.value.find((task) => task.id === selectedTaskId.value) ?? null);
+const selectedOperation = computed(() => operationGroups.value.find((group) => group.operationId === selectedOperationId.value) ?? null);
+const taskTypeOptions = computed(() => Array.from(new Set(tasks.value.map((task) => task.type))).sort());
+const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 
 async function loadTasks() {
   loading.value = true;
@@ -31,8 +33,8 @@ async function loadTasks() {
     const [taskPage, serverRows] = await Promise.all([
       tasksApi.list({
         status: statusFilter.value,
-        serverId: serverFilter.value,
         type: typeFilter.value.trim(),
+        operationId: operationFilter.value.trim(),
         page: page.value,
         pageSize: pageSize.value,
       }),
@@ -41,8 +43,13 @@ async function loadTasks() {
     tasks.value = taskPage.items ?? [];
     total.value = taskPage.total ?? 0;
     servers.value = serverRows ?? [];
-    if (!tasks.value.some((task) => task.id === selectedTaskId.value) && tasks.value.length > 0) {
-      selectedTaskId.value = tasks.value[0]?.id ?? '';
+    if (!selectedOperationId.value && operationGroups.value.length) selectedOperationId.value = operationGroups.value[0].operationId;
+    if (selectedOperationId.value && !operationGroups.value.some((group) => group.operationId === selectedOperationId.value)) {
+      selectedOperationId.value = operationGroups.value[0]?.operationId ?? '';
+    }
+    if (!selectedTaskId.value && selectedOperation.value?.tasks.length) selectedTaskId.value = selectedOperation.value.tasks[0].id;
+    if (selectedTaskId.value && !tasks.value.some((task) => task.id === selectedTaskId.value)) {
+      selectedTaskId.value = selectedOperation.value?.tasks[0]?.id ?? tasks.value[0]?.id ?? '';
     }
     error.value = '';
   } catch (err) {
@@ -52,24 +59,25 @@ async function loadTasks() {
   }
 }
 
+async function loadSteps() {
+  if (!selectedTaskId.value) {
+    steps.value = [];
+    return;
+  }
+  try {
+    steps.value = await tasksApi.steps(selectedTaskId.value);
+  } catch {
+    steps.value = [];
+  }
+}
+
 function reloadFirstPage() {
   page.value = 1;
   void loadTasks();
 }
 
-function handlePageChange(nextPage: number) {
-  page.value = nextPage;
-  void loadTasks();
-}
-
-function handlePageSizeChange(nextSize: number) {
-  pageSize.value = nextSize;
-  page.value = 1;
-  void loadTasks();
-}
-
 function serverName(serverId?: string | null) {
-  if (!serverId) return 'No server';
+  if (!serverId) return 'No node';
   return servers.value.find((server) => server.id === serverId)?.name || serverId;
 }
 
@@ -77,11 +85,7 @@ function formatTaskType(value: string) {
   return value.replace(/_/g, ' ');
 }
 
-function canRunNow(task: TaskDto) {
-  return ['queued', 'scheduled', 'failed_retryable'].includes(task.status);
-}
-
-function taskStatusColor(status: TaskStatus) {
+function taskStatusColor(status: TaskStatus | string) {
   if (status === 'failed' || status === 'blocked') return 'error';
   if (status === 'completed') return 'success';
   if (status === 'running') return 'primary';
@@ -89,25 +93,31 @@ function taskStatusColor(status: TaskStatus) {
   return 'info';
 }
 
-function formatNextRun(task: TaskDto) {
-  if (!task.nextRunAt) return '-';
-  return new Date(task.nextRunAt).toLocaleString();
+function selectOperation(operationId: string) {
+  selectedOperationId.value = operationId;
+  selectedTaskId.value = selectedOperation.value?.tasks[0]?.id ?? '';
 }
 
-async function runNow(task: TaskDto) {
+async function retryTask(task: TaskDto) {
   try {
-    const updated = await tasksApi.runNow(task.id);
+    const updated = await tasksApi.retry(task.id);
     const idx = tasks.value.findIndex((item) => item.id === updated.id);
     if (idx >= 0) tasks.value[idx] = updated;
     selectedTaskId.value = updated.id;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to run task now';
+    error.value = err instanceof Error ? err.message : 'Unable to retry task';
   }
 }
 
-function selectedTaskServerName() {
-  const selected = tasks.value.find((task) => task.id === selectedTaskId.value);
-  return serverName(selected?.serverId);
+function canRetry(task: TaskDto) {
+  return ['failed', 'failed_retryable', 'blocked'].includes(task.status);
+}
+
+function clearFilters() {
+  statusFilter.value = 'all';
+  operationFilter.value = '';
+  typeFilter.value = '';
+  reloadFirstPage();
 }
 
 function startPolling() {
@@ -116,14 +126,7 @@ function startPolling() {
   timer = window.setInterval(loadTasks, 5000);
 }
 
-function clearFilters() {
-  statusFilter.value = 'all';
-  serverFilter.value = '';
-  typeFilter.value = '';
-  page.value = 1;
-  void loadTasks();
-}
-
+watch(selectedTaskId, loadSteps);
 onMounted(startPolling);
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer);
@@ -135,42 +138,15 @@ onBeforeUnmount(() => {
     <div class="d-flex justify-space-between align-center mb-6">
       <div>
         <h1 class="text-h4 font-weight-bold">Task Center</h1>
-        <p class="text-subtitle-1 text-medium-emphasis">Inspect running and recent operations with real-time log streaming.</p>
+        <p class="text-subtitle-1 text-medium-emphasis">Operations grouped by operation_id with trigger metadata, steps, and logs.</p>
       </div>
+      <v-btn prepend-icon="mdi-refresh" :loading="loading" color="primary" class="text-none font-weight-bold" @click="loadTasks">Refresh</v-btn>
     </div>
 
-    <!-- Filters Header Card -->
-    <v-card variant="outlined" class="pa-4 mb-6">
+    <v-card variant="outlined" class="pa-4 mb-5">
       <div class="d-flex flex-wrap align-center" style="gap: 12px;">
-        <v-select
-          v-model="serverFilter"
-          :items="servers"
-          item-title="name"
-          item-value="id"
-          label="Server"
-          placeholder="All servers"
-          variant="outlined"
-          density="compact"
-          hide-details
-          clearable
-          style="max-width: 220px;"
-          @update:model-value="reloadFirstPage"
-        />
-
-        <v-select
-          v-model="typeFilter"
-          :items="taskTypeOptions"
-          label="Type"
-          placeholder="All types"
-          variant="outlined"
-          density="compact"
-          hide-details
-          clearable
-          filterable
-          style="max-width: 200px;"
-          @update:model-value="reloadFirstPage"
-        />
-
+        <v-text-field v-model="operationFilter" label="Operation ID" variant="outlined" density="compact" hide-details style="max-width: 240px;" @keydown.enter="reloadFirstPage" />
+        <v-select v-model="typeFilter" :items="taskTypeOptions" label="Type" variant="outlined" density="compact" hide-details clearable style="max-width: 220px;" @update:model-value="reloadFirstPage" />
         <v-select
           v-model="statusFilter"
           :items="[
@@ -190,116 +166,99 @@ onBeforeUnmount(() => {
           variant="outlined"
           density="compact"
           hide-details
-          style="max-width: 160px;"
+          style="max-width: 170px;"
           @update:model-value="reloadFirstPage"
         />
-
-        <v-btn variant="outlined" class="text-none font-weight-bold" @click="clearFilters">
-          Clear
-        </v-btn>
-        <v-btn prepend-icon="mdi-refresh" :loading="loading" color="primary" class="text-none font-weight-bold" @click="loadTasks">
-          Refresh
-        </v-btn>
+        <v-btn variant="outlined" class="text-none" @click="clearFilters">Clear</v-btn>
       </div>
     </v-card>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <div class="task-grid">
-      <!-- Tasks List Table -->
-      <v-card :loading="loading" variant="outlined" class="d-flex flex-column">
-        <v-table class="text-left flex-grow-1" style="background: transparent;">
+    <div class="task-layout">
+      <v-card variant="outlined" :loading="loading" class="operation-list">
+        <v-list lines="three" density="compact">
+          <v-list-item
+            v-for="group in operationGroups"
+            :key="group.operationId"
+            :active="group.operationId === selectedOperationId"
+            @click="selectOperation(group.operationId)"
+          >
+            <template #prepend>
+              <v-chip :color="taskStatusColor(group.status)" size="small" label>{{ group.status }}</v-chip>
+            </template>
+            <v-list-item-title class="font-weight-bold">{{ group.operationId }}</v-list-item-title>
+            <v-list-item-subtitle>
+              trigger={{ group.triggerType || '-' }} resource={{ group.triggerResourceType || '-' }} tasks={{ group.tasks.length }}
+            </v-list-item-subtitle>
+          </v-list-item>
+          <v-list-item v-if="operationGroups.length === 0" title="No task operations" />
+        </v-list>
+        <v-divider />
+        <div class="d-flex align-center justify-end pa-3" style="gap: 12px;">
+          <v-select v-model="pageSize" :items="[10, 20, 50, 100]" density="compact" hide-details variant="outlined" style="width: 90px;" @update:model-value="reloadFirstPage" />
+          <v-pagination v-model="page" :length="totalPages" density="compact" total-visible="4" @update:model-value="loadTasks" />
+        </div>
+      </v-card>
+
+      <v-card variant="outlined" class="task-list">
+        <v-card-title class="text-subtitle-1 font-weight-bold">Tasks</v-card-title>
+        <v-table density="compact">
           <thead>
             <tr>
-              <th class="font-weight-bold">Type</th>
-              <th class="font-weight-bold">Server</th>
-              <th class="font-weight-bold">Status</th>
-              <th class="font-weight-bold">Stage</th>
-              <th class="font-weight-bold">Retry</th>
-              <th class="font-weight-bold">Next Run</th>
-              <th class="font-weight-bold">Summary</th>
-              <th class="font-weight-bold text-right">Action</th>
+              <th>Type</th>
+              <th>Node</th>
+              <th>Status</th>
+              <th>Trigger</th>
+              <th>Progress</th>
+              <th class="text-right">Action</th>
             </tr>
           </thead>
           <tbody>
-            <tr v-if="tasks.length === 0">
-              <td colspan="8" class="text-center py-6 text-grey-darken-1">No tasks</td>
+            <tr v-if="!(selectedOperation?.tasks.length)">
+              <td colspan="6" class="text-center py-6 text-medium-emphasis">Select an operation</td>
             </tr>
             <tr
-              v-for="row in tasks"
-              :key="row.id"
-              @click="selectedTaskId = row.id"
-              :class="{ 'selected-row': selectedTaskId === row.id }"
+              v-for="task in selectedOperation?.tasks || []"
+              :key="task.id"
               class="cursor-pointer"
+              :class="{ selected: task.id === selectedTaskId }"
+              @click="selectedTaskId = task.id"
             >
-              <td class="font-weight-bold text-truncate" style="max-width: 150px;">{{ formatTaskType(row.type) }}</td>
-              <td>{{ serverName(row.serverId) }}</td>
-              <td>
-                <v-chip :color="taskStatusColor(row.status)" size="x-small" label>
-                  {{ row.status }}
-                </v-chip>
-              </td>
-              <td>{{ row.stage || '-' }}</td>
-              <td class="font-tabular">{{ row.retryCount || 0 }} / {{ row.maxRetries || 0 }}</td>
-              <td class="text-caption font-tabular">{{ formatNextRun(row) }}</td>
-              <td class="text-caption text-truncate" style="max-width: 200px;" :title="row.summary">{{ row.summary || '-' }}</td>
+              <td>{{ formatTaskType(task.type) }}</td>
+              <td>{{ serverName(task.nodeId || task.serverId) }}</td>
+              <td><v-chip :color="taskStatusColor(task.status)" size="x-small" label>{{ task.status }}</v-chip></td>
+              <td class="text-caption">{{ task.triggerType || '-' }}</td>
+              <td class="font-tabular">{{ task.percentage ?? 0 }}%</td>
               <td class="text-right">
-                <v-btn
-                  v-if="canRunNow(row)"
-                  size="x-small"
-                  variant="outlined"
-                  prepend-icon="mdi-play"
-                  @click.stop="runNow(row)"
-                >
-                  Run now
-                </v-btn>
+                <v-btn v-if="canRetry(task)" size="x-small" variant="outlined" prepend-icon="mdi-reload" @click.stop="retryTask(task)">Retry</v-btn>
               </td>
             </tr>
           </tbody>
         </v-table>
-
-        <v-divider />
-
-        <!-- Pagination -->
-        <div class="pagination-row d-flex align-center justify-end pa-3" style="gap: 16px;">
-          <div class="d-flex align-center" style="gap: 8px;">
-            <span class="text-caption text-grey-darken-1">Rows per page:</span>
-            <v-select
-              v-model="pageSize"
-              :items="[10, 20, 50, 100]"
-              density="compact"
-              hide-details
-              variant="outlined"
-              style="width: 90px;"
-              @update:model-value="handlePageSizeChange"
-            />
-          </div>
-          <v-pagination
-            v-model="page"
-            :length="totalPages"
-            density="compact"
-            total-visible="5"
-            @update:model-value="handlePageChange"
-          />
-        </div>
       </v-card>
 
-      <!-- Task Details & Logs -->
-      <v-card variant="outlined" class="pa-4">
-        <v-card-title class="px-0 pt-0 text-subtitle-1 font-weight-bold mb-3">Task Detail & Logs</v-card-title>
-        <v-divider class="mb-4" />
-        <v-card-text class="pa-0">
-          <TaskLogPanel
-            v-if="selectedTaskId"
-            :key="selectedTaskId"
-            :task-id="selectedTaskId"
-            :server-name="selectedTaskServerName()"
-            @finished="loadTasks"
-          />
-          <div v-else class="text-center py-10 text-grey-darken-1 text-caption">
-            <v-icon size="40" class="mb-2" color="grey-lighten-1">mdi-clipboard-text-outline</v-icon>
-            <div>Select a task from the list to view logs</div>
+      <v-card variant="outlined" class="task-detail">
+        <v-card-title class="text-subtitle-1 font-weight-bold">Steps & Logs</v-card-title>
+        <v-card-text>
+          <div v-if="selectedTask" class="mb-4">
+            <div class="text-caption text-medium-emphasis">Resource</div>
+            <div class="font-weight-bold">{{ selectedTask.resourceType || '-' }} / {{ selectedTask.resourceId || '-' }}</div>
+            <div class="text-caption text-medium-emphasis mt-2">Trigger</div>
+            <div>{{ selectedTask.triggerType || '-' }} {{ selectedTask.triggeredBy ? `by ${selectedTask.triggeredBy}` : '' }}</div>
           </div>
+
+          <v-timeline v-if="steps.length" side="end" density="compact" class="mb-4">
+            <v-timeline-item v-for="step in steps" :key="step.id" :dot-color="taskStatusColor(step.status)" size="small">
+              <div class="font-weight-bold">{{ step.step }}</div>
+              <div class="text-caption text-medium-emphasis">{{ step.status }} - {{ step.percentage ?? 0 }}%</div>
+              <div v-if="step.error" class="text-caption text-error">{{ step.error }}</div>
+            </v-timeline-item>
+          </v-timeline>
+          <div v-else class="text-medium-emphasis mb-4">No task steps returned</div>
+
+          <TaskLogPanel v-if="selectedTaskId" :key="selectedTaskId" :task-id="selectedTaskId" :server-name="serverName(selectedTask?.nodeId || selectedTask?.serverId)" @finished="loadTasks" />
+          <div v-else class="text-center py-8 text-medium-emphasis">Select a task to view logs</div>
         </v-card-text>
       </v-card>
     </div>
@@ -307,21 +266,33 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.task-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 0.8fr) minmax(480px, 1.1fr);
+  grid-template-areas:
+    "operations tasks"
+    "operations detail";
+  gap: 16px;
+  align-items: start;
+}
+
+.operation-list {
+  grid-area: operations;
+}
+
+.task-list {
+  grid-area: tasks;
+}
+
+.task-detail {
+  grid-area: detail;
+}
+
 .cursor-pointer {
   cursor: pointer;
 }
 
-.selected-row {
-  background-color: rgba(var(--v-theme-primary), 0.08) !important;
-}
-
-.task-grid {
-  display: grid;
-  grid-template-columns: minmax(420px, 1.2fr) minmax(420px, 1fr);
-  gap: 24px;
-}
-
-.pagination-row {
-  background-color: rgba(var(--v-border-color), 0.04);
+tr.selected {
+  background: rgba(var(--v-theme-primary), 0.06);
 }
 </style>

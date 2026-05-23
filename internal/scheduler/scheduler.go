@@ -3,11 +3,9 @@ package scheduler
 import (
 	"context"
 	"log"
-	"strings"
 	"sync"
 	"time"
 
-	"panel/internal/compose"
 	"panel/internal/docker"
 	"panel/internal/metrics"
 	"panel/internal/packages"
@@ -22,15 +20,14 @@ type Scheduler struct {
 	servers  *server.Service
 	metrics  *metrics.Service
 	docker   *docker.Service
-	compose  *compose.Service
 	packages *packages.Service
 	tasks    *tasks.Service
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 }
 
-func New(settings *settings.Service, servers *server.Service, metrics *metrics.Service, dockerSvc *docker.Service, composeSvc *compose.Service, packages *packages.Service, tasks *tasks.Service) *Scheduler {
-	return &Scheduler{settings: settings, servers: servers, metrics: metrics, docker: dockerSvc, compose: composeSvc, packages: packages, tasks: tasks}
+func New(settings *settings.Service, servers *server.Service, metrics *metrics.Service, dockerSvc *docker.Service, packages *packages.Service, tasks *tasks.Service) *Scheduler {
+	return &Scheduler{settings: settings, servers: servers, metrics: metrics, docker: dockerSvc, packages: packages, tasks: tasks}
 }
 
 func (s *Scheduler) Start(parent context.Context) {
@@ -66,11 +63,6 @@ func (s *Scheduler) dockerLoop(ctx context.Context) {
 			}
 			if err := s.servers.RunDueConnectivityTests(ctx); err != nil {
 				log.Printf("server connectivity reconcile: %v", err)
-			}
-			if s.compose != nil {
-				if err := s.compose.RunDueReconciliations(ctx); err != nil {
-					log.Printf("compose reconcile: %v", err)
-				}
 			}
 		}
 	}
@@ -125,13 +117,6 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 		return err
 	case "package_refresh":
 		_, err := s.packages.Refresh(ctx, task.ServerID)
-		return err
-	}
-
-	if strings.HasPrefix(task.Type, "compose_service_") && task.ResourceType == "service" && task.ResourceID != "" {
-		op := strings.TrimPrefix(task.Type, "compose_service_")
-		op = strings.ReplaceAll(op, "_", "-")
-		_, err := s.compose.LifecycleTask(ctx, task.ResourceID, op)
 		return err
 	}
 

@@ -121,3 +121,60 @@ func TestListPaginatesTasks(t *testing.T) {
 		t.Fatalf("unexpected paginated tasks: %#v", got)
 	}
 }
+
+func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{
+		OperationID:         "op_1",
+		Type:                "container_service_reconcile",
+		ServerID:            "srv_1",
+		NodeID:              "srv_1",
+		ResourceType:        "container_service",
+		ResourceID:          "svc_1",
+		TriggerType:         "user",
+		TriggerResourceType: "container_service",
+		TriggerResourceID:   "svc_1",
+		TriggerTaskID:       "task_parent",
+		TriggeredBy:         "alice",
+		Summary:             "reconcile api",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OperationID != "op_1" || got.NodeID != "srv_1" || got.TriggerType != "user" || got.TriggeredBy != "alice" {
+		t.Fatalf("task metadata was not persisted: %#v", got)
+	}
+	step, err := svc.UpsertStep(ctx, task.ID, StepInput{Step: "schedule", Status: StatusRunning, Percentage: 25, MetadataJSON: `{"node":"srv_1"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.ID == "" || step.StartedAt == nil {
+		t.Fatalf("expected started step: %#v", step)
+	}
+	step, err = svc.UpsertStep(ctx, task.ID, StepInput{Step: "schedule", Status: StatusCompleted, Percentage: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.FinishedAt == nil {
+		t.Fatalf("expected finished step: %#v", step)
+	}
+	steps, err := svc.Steps(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 1 || steps[0].Step != "schedule" || steps[0].Status != StatusCompleted {
+		t.Fatalf("unexpected steps: %#v", steps)
+	}
+	retry, err := svc.Retry(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID == task.ID || retry.OperationID != task.OperationID || retry.TriggerType != "retry" || retry.TriggerTaskID != task.ID {
+		t.Fatalf("unexpected retry task: %#v", retry)
+	}
+}

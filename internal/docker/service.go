@@ -244,6 +244,20 @@ func (s *Service) ResourceTask(ctx context.Context, serverID string, op Resource
 	return task, nil
 }
 
+func (s *Service) RuntimeExplorerResourceTask(ctx context.Context, serverID string, op ResourceOperation) (tasks.Task, error) {
+	if op.Kind == "container" && (op.Action == "stop" || op.Action == "delete") {
+		cached, err := readRuntimeCache[RuntimeService](ctx, s.db, serverID, "services")
+		if err == nil {
+			for _, item := range cached.Items {
+				if (item.ID == op.ID || item.Name == op.ID) && item.Managed {
+					return tasks.Task{}, panelerr.Conflict("managed_runtime_action_forbidden", "Managed resources must be operated from Container Services")
+				}
+			}
+		}
+	}
+	return s.ResourceTask(ctx, serverID, op)
+}
+
 func (s *Service) ImageUpdateTask(ctx context.Context, serverID string, op ImageUpdateOperation) (tasks.Task, error) {
 	srv, err := s.ensureSupported(ctx, serverID)
 	if err != nil {
@@ -339,6 +353,8 @@ func (s *Service) runResourceOperation(ctx context.Context, taskID string, srv s
 	switch {
 	case op.Kind == "container" && op.Action == "start":
 		err = s.runtime.StartContainer(ctx, srv.Target(), op.ID)
+	case op.Kind == "container" && op.Action == "restart":
+		err = s.runtime.RestartContainer(ctx, srv.Target(), op.ID)
 	case op.Kind == "container" && op.Action == "stop":
 		err = s.runtime.StopContainer(ctx, srv.Target(), op.ID)
 	case op.Kind == "container" && op.Action == "delete":
@@ -477,8 +493,8 @@ func (s *Service) runningRefresh(ctx context.Context, serverID string) (tasks.Ta
 func (s *Service) readCapability(ctx context.Context, serverID string) (DockerCapability, error) {
 	var cap DockerCapability
 	var checkedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT server_id,docker_installed,docker_version,compose_installed,compose_version,supported,last_checked_at,last_error,stale FROM docker_capabilities WHERE server_id=?`, serverID).
-		Scan(&cap.ServerID, &cap.DockerInstalled, &cap.DockerVersion, &cap.ComposeInstalled, &cap.ComposeVersion, &cap.Supported, &checkedAt, &cap.LastError, &cap.Stale)
+	err := s.db.QueryRowContext(ctx, `SELECT server_id,docker_installed,docker_version,compose_installed,compose_version,include_supported,supported,last_checked_at,last_error,stale FROM docker_capabilities WHERE server_id=?`, serverID).
+		Scan(&cap.ServerID, &cap.DockerInstalled, &cap.DockerVersion, &cap.ComposeInstalled, &cap.ComposeVersion, &cap.IncludeSupported, &cap.Supported, &checkedAt, &cap.LastError, &cap.Stale)
 	if err != nil {
 		return DockerCapability{}, err
 	}
@@ -492,19 +508,19 @@ func (s *Service) writeCapability(ctx context.Context, cap DockerCapability) err
 	if cap.LastCheckedAt == nil {
 		cap.LastCheckedAt = &now
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO docker_capabilities(server_id,docker_installed,docker_version,compose_installed,compose_version,supported,last_checked_at,last_error,stale)
-		VALUES(?,?,?,?,?,?,?,?,0)
-		ON CONFLICT(server_id) DO UPDATE SET docker_installed=excluded.docker_installed,docker_version=excluded.docker_version,compose_installed=excluded.compose_installed,compose_version=excluded.compose_version,supported=excluded.supported,last_checked_at=excluded.last_checked_at,last_error=excluded.last_error,stale=0`,
-		cap.ServerID, cap.DockerInstalled, cap.DockerVersion, cap.ComposeInstalled, cap.ComposeVersion, cap.Supported, cap.LastCheckedAt.Format(time.RFC3339Nano), cap.LastError)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO docker_capabilities(server_id,docker_installed,docker_version,compose_installed,compose_version,include_supported,supported,last_checked_at,last_error,stale)
+		VALUES(?,?,?,?,?,?,?,?,?,0)
+		ON CONFLICT(server_id) DO UPDATE SET docker_installed=excluded.docker_installed,docker_version=excluded.docker_version,compose_installed=excluded.compose_installed,compose_version=excluded.compose_version,include_supported=excluded.include_supported,supported=excluded.supported,last_checked_at=excluded.last_checked_at,last_error=excluded.last_error,stale=0`,
+		cap.ServerID, cap.DockerInstalled, cap.DockerVersion, cap.ComposeInstalled, cap.ComposeVersion, cap.IncludeSupported, cap.Supported, cap.LastCheckedAt.Format(time.RFC3339Nano), cap.LastError)
 	return err
 }
 
 func (s *Service) writeCapabilityFailure(ctx context.Context, serverID string, cause error) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO docker_capabilities(server_id,docker_installed,docker_version,compose_installed,compose_version,supported,last_checked_at,last_error,stale)
-		VALUES(?,?,?,?,?,?,?,?,1)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO docker_capabilities(server_id,docker_installed,docker_version,compose_installed,compose_version,include_supported,supported,last_checked_at,last_error,stale)
+		VALUES(?,?,?,?,?,?,?,?,?,1)
 		ON CONFLICT(server_id) DO UPDATE SET last_checked_at=excluded.last_checked_at,last_error=excluded.last_error,stale=1`,
-		serverID, false, "", false, "", false, now, cause.Error())
+		serverID, false, "", false, "", false, false, now, cause.Error())
 	return err
 }
 

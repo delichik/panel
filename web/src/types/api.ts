@@ -209,160 +209,215 @@ export interface DockerRuntimeListDto<T> {
   items: T[];
 }
 
-export interface ComposeTemplateVariableDto {
-  name: string;
-  label?: string;
-  type?: 'string' | 'number' | 'boolean' | 'secret' | string;
-  defaultValue?: unknown;
-  required?: boolean;
-  description?: string;
-}
+export type RuntimeStatus = 'missing' | 'starting' | 'running' | 'healthy' | 'unhealthy' | 'exited' | 'unknown' | 'stale' | string;
 
-export interface ComposeVisualServiceDto {
-  name: string;
-  image: string;
-  build?: string;
-  labels?: Record<string, string>;
-  ports?: string[];
-  environment?: Record<string, string>;
-  volumes?: string[];
-  command?: string;
-  entrypoint?: string;
-  restart?: string;
-  dependsOn?: string[];
-  networks?: string[];
-  envFile?: string[];
-  extraHosts?: string[];
-  workingDir?: string;
-  user?: string;
-  networkMode?: string;
-  hostname?: string;
-  privileged?: boolean;
-  init?: boolean;
-  pullPolicy?: string;
-  stopGracePeriod?: string;
-  healthcheckTest?: string;
-  healthcheckInterval?: string;
-  healthcheckTimeout?: string;
-  healthcheckRetries?: number;
-  dns?: string[];
-  dnsSearch?: string[];
-}
-
-export interface ComposeVisualModelDto {
-  version?: string;
-  services: ComposeVisualServiceDto[];
-}
-
-export interface ServiceTemplateDto {
-  id: string;
-  name: string;
-  description?: string;
-  version: number;
-  composeYaml: string;
-  visual?: ComposeVisualModelDto | Record<string, unknown> | null;
-  variables?: ComposeTemplateVariableDto[];
-  dependencies?: string[];
-  traitSelector?: string;
-  active?: boolean;
-  fileCount?: number;
-  linkedServiceCount?: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ServiceTemplateInputDto {
-  name: string;
-  description?: string;
-  composeYaml: string;
-  visual?: ComposeVisualModelDto | Record<string, unknown> | null;
-  variables?: ComposeTemplateVariableDto[];
-  dependencies?: string[];
-  traitSelector?: string;
-  active?: boolean;
-}
-
-export type TemplateFileKind = 'template' | 'binary' | string;
-
-export interface TemplateFileDto {
-  id: string;
-  templateId?: string;
-  kind: TemplateFileKind;
-  path: string;
-  content?: string;
-  base64Content?: string;
-  sizeBytes?: number;
-  mode?: string;
-  createdAt?: string;
-  updatedAt?: string;
-}
-
-export interface TemplateFileInputDto {
-  path: string;
-  content?: string;
-  base64Content?: string;
-  mode?: string;
-}
-
-export interface ComposeValidationIssueDto {
+export interface ValidationIssueDto {
   path?: string;
-  variable?: string;
   message: string;
   severity?: 'error' | 'warning' | string;
 }
 
-export interface ComposeValidationResultDto {
-  valid: boolean;
-  issues?: ComposeValidationIssueDto[];
-  renderedYaml?: string;
-}
-
-export interface ComposeRenderPreviewDto {
-  renderedYaml: string;
-  files?: TemplateFileDto[];
-  values?: Record<string, unknown>;
-  issues?: ComposeValidationIssueDto[];
-}
-
-export type ComposeServiceStatus = 'draft' | 'deployed' | 'running' | 'stopped' | 'failed' | string;
-export type ComposeServiceSyncStatus = 'synced' | 'drifted' | 'pending' | 'unknown' | string;
-
-export interface ComposeServiceDto {
+export interface ContainerServiceDto {
   id: string;
   name: string;
-  templateId: string;
-  templateName?: string;
-  serverId: string;
-  serverName?: string;
-  remotePath: string;
-  values: Record<string, unknown>;
-  labels?: Record<string, string>;
-  status?: ComposeServiceStatus;
-  managementState?: 'managed' | 'unmanaged' | 'missing_remote' | 'drifted' | 'orphaned' | 'pending' | string;
-  syncStatus?: ComposeServiceSyncStatus;
-  drift?: boolean;
-  runtimeStatus?: string | null;
-  lastAppliedTemplateVersion?: number | null;
-  templateVersion?: number | null;
+  enabled: boolean;
+  composeServiceYaml: string;
+  variables?: Record<string, string>;
+  selector?: Record<string, string>;
+  generation: number;
+  specRevision?: string;
+  specHash?: string;
+  runtimeStatus?: RuntimeStatus | null;
+  runtimeGeneration?: number | null;
+  runtimeSpecRevision?: string | null;
+  nodeId?: string | null;
+  nodeName?: string | null;
+  dependencyNames?: string[];
+  dependentNames?: string[];
+  lastTask?: TaskDto | null;
   lastTaskId?: string | null;
+  lastError?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface ComposeServiceInputDto {
+export interface ContainerServiceInputDto {
+  name?: string;
+  enabled: boolean;
+  composeServiceYaml: string;
+  variables?: Record<string, string>;
+  selector?: Record<string, string>;
+}
+
+export interface ContainerServiceFileDto {
+  id: string;
+  serviceId?: string;
+  path: string;
+  kind: 'template' | 'binary' | string;
+  contentType?: string;
+  size?: number;
+  sha256?: string;
+  content?: string;
+  base64Content?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ContainerServiceFileInputDto {
+  path: string;
+  kind: 'template' | 'binary' | string;
+  content?: string;
+  base64Content?: string;
+  contentType?: string;
+}
+
+export interface ContainerServiceValidationResultDto {
+  valid: boolean;
+  issues?: ValidationIssueDto[];
+  dependencyNames?: string[];
+  dangerousMountWarnings?: ValidationIssueDto[];
+}
+
+export interface RenderPreviewDto {
+  composeYaml?: string;
+  overrideYaml?: string;
+  manifestJson?: string;
+  renderedYaml?: string;
+  files?: ContainerServiceFileDto[];
+  issues?: ValidationIssueDto[];
+}
+
+export interface SchedulePreviewCandidateDto {
+  nodeId: string;
+  nodeName?: string;
+  eligible: boolean;
+  reasons?: string[];
+}
+
+export interface SchedulePreviewDto {
+  selectedNodeId?: string | null;
+  selectedNodeName?: string | null;
+  candidates?: SchedulePreviewCandidateDto[];
+  errors?: ValidationIssueDto[];
+  warnings?: ValidationIssueDto[];
+}
+
+export interface DependencyImpactPreviewDto {
+  operation?: 'enable' | 'disable' | string;
+  targetServiceId?: string;
+  targetServiceName?: string;
+  affectedServices?: ContainerServiceDto[];
+  dependencyOrder?: string[];
+  disableOrder?: string[];
+  expectedTasks?: TaskDto[];
+  validationErrors?: ValidationIssueDto[];
+  operationId?: string;
+  tasks?: TaskDto[];
+}
+
+export interface ContainerServiceRuntimeDto {
+  serviceId: string;
+  serviceName: string;
+  nodeId?: string | null;
+  nodeName?: string | null;
+  status: RuntimeStatus;
+  observedGeneration?: number | null;
+  observedSpecRevision?: string | null;
+  labels?: Record<string, string>;
+  ports?: string[];
+  containerId?: string | null;
+  stale?: boolean;
+  error?: string | null;
+  observedAt?: string | null;
+}
+
+export interface ContainerServiceLogsDto {
+  serviceId: string;
+  tail: number;
+  lines: string[];
+}
+
+export interface ContainerServiceRuntimeOperationDto {
+  operationId?: string;
+  taskId?: string;
+  tasks?: TaskDto[];
+}
+
+export interface RuntimeExplorerContainerDto {
+  id: string;
   name: string;
-  templateId: string;
-  serverId: string;
-  remotePath: string;
-  values?: Record<string, unknown>;
+  image: string;
+  state: string;
+  status: string;
+  health?: string | null;
+  ports?: string[] | string;
+  labels?: Record<string, string>;
+  managed: boolean;
+  serviceId?: string | null;
+  serviceName?: string | null;
+  observedAt?: string | null;
+  stale?: boolean;
+  error?: string | null;
+}
+
+export interface RuntimeExplorerNetworkDto {
+  id: string;
+  name: string;
+  driver?: string;
+  scope?: string;
+  labels?: Record<string, string>;
+  managed: boolean;
+}
+
+export interface RuntimeExplorerVolumeDto {
+  name: string;
+  driver?: string;
+  mountpoint?: string;
+  labels?: Record<string, string>;
+  managed: boolean;
+}
+
+export interface RuntimeExplorerImageDto {
+  id: string;
+  repository: string;
+  tag: string;
+  size?: string;
+  labels?: Record<string, string>;
+  managed: boolean;
+}
+
+export interface RuntimeExplorerNodeDto {
+  nodeId: string;
+  nodeName?: string;
+  capability?: DockerCapabilityDto | null;
+  containers: RuntimeExplorerContainerDto[];
+  networks: RuntimeExplorerNetworkDto[];
+  volumes: RuntimeExplorerVolumeDto[];
+  images: RuntimeExplorerImageDto[];
+  stale?: boolean;
+  error?: string | null;
+  observedAt?: string | null;
+}
+
+export interface RuntimeExplorerOperationDto {
+  operationId?: string;
+  taskId?: string;
+  tasks?: TaskDto[];
 }
 
 export interface TaskDto {
   id: string;
+  operationId?: string;
   type: string;
   serverId: string | null;
+  nodeId?: string | null;
   resourceType?: string;
   resourceId?: string;
+  triggerType?: string;
+  triggerResourceType?: string;
+  triggerResourceId?: string;
+  triggerTaskId?: string;
+  triggeredBy?: string;
   status: TaskStatus;
   stage: TaskStage;
   percentage: number | null;
@@ -374,6 +429,18 @@ export interface TaskDto {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+}
+
+export interface TaskStepDto {
+  id: string;
+  taskId: string;
+  step: string;
+  status: TaskStatus | string;
+  percentage?: number | null;
+  metadata?: Record<string, unknown>;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  error?: string | null;
 }
 
 export interface TaskListDto {

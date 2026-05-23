@@ -145,7 +145,10 @@ func (fakeRuntime) ReadComposeStatus(context.Context, sshx.Target, string) (Comp
 	return ComposeStatus{}, nil
 }
 
+func (fakeRuntime) ProbeComposeInclude(context.Context, sshx.Target) error { return nil }
+
 func (fakeRuntime) StartContainer(context.Context, sshx.Target, string) error  { return nil }
+func (fakeRuntime) RestartContainer(context.Context, sshx.Target, string) error { return nil }
 func (fakeRuntime) StopContainer(context.Context, sshx.Target, string) error   { return nil }
 func (fakeRuntime) DeleteContainer(context.Context, sshx.Target, string) error { return nil }
 func (fakeRuntime) DeleteNetwork(context.Context, sshx.Target, string) error   { return nil }

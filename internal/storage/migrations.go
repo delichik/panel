@@ -59,6 +59,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			docker_version TEXT NOT NULL DEFAULT '',
 			compose_installed INTEGER NOT NULL DEFAULT 0,
 			compose_version TEXT NOT NULL DEFAULT '',
+			include_supported INTEGER NOT NULL DEFAULT 0,
 			supported INTEGER NOT NULL DEFAULT 0,
 			last_checked_at TEXT NOT NULL,
 			last_error TEXT NOT NULL DEFAULT '',
@@ -73,12 +74,36 @@ func (s *Store) Migrate(ctx context.Context) error {
 			PRIMARY KEY(server_id, resource),
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS container_runtime_cache (
+			id TEXT PRIMARY KEY,
+			node_id TEXT NOT NULL,
+			service_id TEXT NOT NULL DEFAULT '',
+			container_id TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL DEFAULT '',
+			image TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			health TEXT NOT NULL DEFAULT '',
+			ports_json TEXT NOT NULL DEFAULT '[]',
+			labels_json TEXT NOT NULL DEFAULT '{}',
+			managed INTEGER NOT NULL DEFAULT 0,
+			observed_at TEXT NOT NULL,
+			stale INTEGER NOT NULL DEFAULT 0,
+			error TEXT NOT NULL DEFAULT ''
+		)`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
+			operation_id TEXT NOT NULL DEFAULT '',
 			type TEXT NOT NULL,
 			server_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
 			resource_type TEXT NOT NULL DEFAULT '',
 			resource_id TEXT NOT NULL DEFAULT '',
+			trigger_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_id TEXT NOT NULL DEFAULT '',
+			trigger_task_id TEXT NOT NULL DEFAULT '',
+			triggered_by TEXT NOT NULL DEFAULT '',
 			status TEXT NOT NULL,
 			stage TEXT NOT NULL DEFAULT '',
 			percentage REAL,
@@ -90,6 +115,27 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			started_at TEXT,
 			finished_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS task_steps (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			step TEXT NOT NULL,
+			status TEXT NOT NULL,
+			percentage REAL NOT NULL DEFAULT 0,
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			started_at TEXT,
+			finished_at TEXT,
+			error TEXT NOT NULL DEFAULT '',
+			UNIQUE(task_id, step),
+			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS operation_locks (
+			scope TEXT NOT NULL,
+			resource_id TEXT NOT NULL,
+			owner_task_id TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			heartbeat_at TEXT NOT NULL,
+			PRIMARY KEY(scope, resource_id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS task_logs (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,65 +150,37 @@ func (s *Store) Migrate(ctx context.Context) error {
 			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
-		`CREATE TABLE IF NOT EXISTS service_templates (
+		`CREATE TABLE IF NOT EXISTS container_services (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
-			description TEXT NOT NULL DEFAULT '',
-			compose_yaml TEXT NOT NULL,
-			visual_state TEXT NOT NULL DEFAULT '{}',
-			variables TEXT NOT NULL DEFAULT '[]',
-			trait_selector TEXT NOT NULL DEFAULT '',
-			active INTEGER NOT NULL DEFAULT 0,
-			version INTEGER NOT NULL DEFAULT 1,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			compose_service_yaml TEXT NOT NULL,
+			variables_json TEXT NOT NULL DEFAULT '{}',
+			selector_json TEXT NOT NULL DEFAULT '{}',
+			generation INTEGER NOT NULL DEFAULT 1,
+			spec_revision TEXT NOT NULL DEFAULT '',
+			spec_hash TEXT NOT NULL DEFAULT '',
+			last_error TEXT NOT NULL DEFAULT '',
+			last_task_id TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
+			updated_at TEXT NOT NULL,
+			UNIQUE(name)
 		)`,
-		`CREATE TABLE IF NOT EXISTS service_template_files (
+		`CREATE TABLE IF NOT EXISTS container_service_files (
 			id TEXT PRIMARY KEY,
-			template_id TEXT NOT NULL,
+			service_id TEXT NOT NULL,
 			path TEXT NOT NULL,
 			kind TEXT NOT NULL CHECK(kind IN ('binary','template')),
 			content_type TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0,
 			sha256 TEXT NOT NULL DEFAULT '',
+			content BLOB,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
-			UNIQUE(template_id, path),
-			FOREIGN KEY(template_id) REFERENCES service_templates(id) ON DELETE CASCADE
+			UNIQUE(service_id, path),
+			FOREIGN KEY(service_id) REFERENCES container_services(id) ON DELETE CASCADE
 		)`,
-		`CREATE TABLE IF NOT EXISTS service_template_dependencies (
-			template_id TEXT NOT NULL,
-			depends_on_template_id TEXT NOT NULL,
-			PRIMARY KEY(template_id, depends_on_template_id),
-			FOREIGN KEY(template_id) REFERENCES service_templates(id) ON DELETE CASCADE,
-			FOREIGN KEY(depends_on_template_id) REFERENCES service_templates(id) ON DELETE RESTRICT
-		)`,
-		`CREATE TABLE IF NOT EXISTS server_variables (
-			server_id TEXT PRIMARY KEY,
-			variables TEXT NOT NULL DEFAULT '{}',
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS deployed_services (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			server_id TEXT NOT NULL,
-			template_id TEXT NOT NULL,
-			template_version INTEGER NOT NULL,
-			remote_path TEXT NOT NULL,
-			values_json TEXT NOT NULL DEFAULT '{}',
-			labels_json TEXT NOT NULL DEFAULT '{}',
-			status TEXT NOT NULL DEFAULT 'draft',
-			drifted INTEGER NOT NULL DEFAULT 0,
-			last_task_id TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE,
-			FOREIGN KEY(template_id) REFERENCES service_templates(id)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_deployed_services_template ON deployed_services(template_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_deployed_services_server ON deployed_services(server_id)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_deployed_services_server_template_unique ON deployed_services(server_id, template_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_container_services_name ON container_services(name)`,
 	}
 	for _, stmt := range app {
 		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
@@ -170,22 +188,28 @@ func (s *Store) Migrate(ctx context.Context) error {
 		}
 	}
 	if err := s.ensureAppColumns(ctx, "tasks", map[string]string{
-		"resource_type": "TEXT NOT NULL DEFAULT ''",
-		"resource_id":   "TEXT NOT NULL DEFAULT ''",
-		"retry_count":   "INTEGER NOT NULL DEFAULT 0",
-		"max_retries":   "INTEGER NOT NULL DEFAULT 0",
-		"next_run_at":   "TEXT",
+		"operation_id":          "TEXT NOT NULL DEFAULT ''",
+		"node_id":               "TEXT NOT NULL DEFAULT ''",
+		"resource_type":         "TEXT NOT NULL DEFAULT ''",
+		"resource_id":           "TEXT NOT NULL DEFAULT ''",
+		"trigger_type":          "TEXT NOT NULL DEFAULT ''",
+		"trigger_resource_type": "TEXT NOT NULL DEFAULT ''",
+		"trigger_resource_id":   "TEXT NOT NULL DEFAULT ''",
+		"trigger_task_id":       "TEXT NOT NULL DEFAULT ''",
+		"triggered_by":          "TEXT NOT NULL DEFAULT ''",
+		"retry_count":           "INTEGER NOT NULL DEFAULT 0",
+		"max_retries":           "INTEGER NOT NULL DEFAULT 0",
+		"next_run_at":           "TEXT",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "docker_capabilities", map[string]string{
+		"include_supported": "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "servers", map[string]string{
 		"traits": "TEXT NOT NULL DEFAULT '{}'",
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "service_templates", map[string]string{
-		"trait_selector": "TEXT NOT NULL DEFAULT ''",
-		"active":         "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
 		return err
 	}

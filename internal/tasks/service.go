@@ -15,11 +15,12 @@ type Service struct {
 }
 
 type ListFilter struct {
-	Status   string
-	ServerID string
-	Type     string
-	Limit    int
-	Offset   int
+	Status      string
+	ServerID    string
+	Type        string
+	OperationID string
+	Limit       int
+	Offset      int
 }
 
 type ListResult struct {
@@ -43,24 +44,31 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
 		status = StatusQueued
 	}
 	t := Task{
-		ID:           id.New("task"),
-		Type:         in.Type,
-		ServerID:     in.ServerID,
-		ResourceType: in.ResourceType,
-		ResourceID:   in.ResourceID,
-		Status:       status,
-		Summary:      in.Summary,
-		RetryCount:   in.RetryCount,
-		MaxRetries:   in.MaxRetries,
-		NextRunAt:    in.NextRunAt,
-		CreatedAt:    now,
+		ID:                  id.New("task"),
+		OperationID:         firstNonEmpty(in.OperationID, id.New("op")),
+		Type:                in.Type,
+		ServerID:            in.ServerID,
+		NodeID:              firstNonEmpty(in.NodeID, in.ServerID),
+		ResourceType:        in.ResourceType,
+		ResourceID:          in.ResourceID,
+		TriggerType:         in.TriggerType,
+		TriggerResourceType: in.TriggerResourceType,
+		TriggerResourceID:   in.TriggerResourceID,
+		TriggerTaskID:       in.TriggerTaskID,
+		TriggeredBy:         in.TriggeredBy,
+		Status:              status,
+		Summary:             in.Summary,
+		RetryCount:          in.RetryCount,
+		MaxRetries:          in.MaxRetries,
+		NextRunAt:           in.NextRunAt,
+		CreatedAt:           now,
 	}
 	nextRunAt := ""
 	if in.NextRunAt != nil {
 		nextRunAt = in.NextRunAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(id,type,server_id,resource_type,resource_id,status,stage,summary,retry_count,max_retries,next_run_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.Type, t.ServerID, t.ResourceType, t.ResourceID, t.Status, t.Stage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,summary,retry_count,max_retries,next_run_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.Status, t.Stage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano))
 	return t, err
 }
 
@@ -147,7 +155,7 @@ func (s *Service) RunNow(ctx context.Context, taskID string) (Task, error) {
 
 func (s *Service) FirstRunnable(ctx context.Context, taskType, resourceType, resourceID string) (Task, bool, error) {
 	args := []any{taskType, resourceType, resourceID, StatusQueued, StatusScheduled, StatusFailedRetryable}
-	row := s.db.QueryRowContext(ctx, `SELECT id,type,server_id,resource_type,resource_id,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at
+	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
 		FROM tasks
 		WHERE type=? AND resource_type=? AND resource_id=? AND status IN (?,?,?)
 		  AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)
@@ -163,7 +171,7 @@ func (s *Service) FirstRunnable(ctx context.Context, taskType, resourceType, res
 }
 
 func (s *Service) ExistingActive(ctx context.Context, taskType, resourceType, resourceID string) (Task, bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,type,server_id,resource_type,resource_id,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at
+	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
 		FROM tasks
 		WHERE type=? AND resource_type=? AND resource_id=? AND status IN (?,?,?,?)
 		ORDER BY created_at DESC LIMIT 1`, taskType, resourceType, resourceID, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
@@ -178,7 +186,7 @@ func (s *Service) ExistingActive(ctx context.Context, taskType, resourceType, re
 }
 
 func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,type,server_id,resource_type,resource_id,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at FROM tasks WHERE id=?`, taskID)
+	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks WHERE id=?`, taskID)
 	task, err := scanTask(row)
 	if err == sql.ErrNoRows {
 		return Task{}, panelerr.NotFound("task")
@@ -207,6 +215,10 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 		conditions = append(conditions, `type=?`)
 		args = append(args, filter.Type)
 	}
+	if filter.OperationID != "" {
+		conditions = append(conditions, `operation_id=?`)
+		args = append(args, filter.OperationID)
+	}
 	where := ""
 	if len(conditions) > 0 {
 		where = ` WHERE ` + strings.Join(conditions, ` AND `)
@@ -216,7 +228,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return ListResult{}, err
 	}
-	query := `SELECT id,type,server_id,resource_type,resource_id,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at FROM tasks` + where + ` ORDER BY COALESCE(next_run_at, created_at) ASC, created_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT ` + taskColumns + ` FROM tasks` + where + ` ORDER BY COALESCE(next_run_at, created_at) ASC, created_at DESC LIMIT ? OFFSET ?`
 	args = append(args, filter.Limit, filter.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -258,14 +270,98 @@ func (s *Service) Logs(ctx context.Context, taskID string, after int64) ([]Log, 
 	return logs, next, rows.Err()
 }
 
+func (s *Service) UpsertStep(ctx context.Context, taskID string, in StepInput) (Step, error) {
+	if strings.TrimSpace(in.Step) == "" {
+		return Step{}, panelerr.Validation("task_step_required", "Task step is required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var existingID string
+	err := s.db.QueryRowContext(ctx, `SELECT id FROM task_steps WHERE task_id=? AND step=?`, taskID, in.Step).Scan(&existingID)
+	if err == sql.ErrNoRows {
+		existingID = id.New("step")
+		started := any(nil)
+		finished := any(nil)
+		if in.Status == StatusRunning || in.Status == StatusCompleted {
+			started = now
+		}
+		if in.Status == StatusCompleted || in.Status == StatusFailed || in.Status == StatusCancelled {
+			finished = now
+		}
+		_, err = s.db.ExecContext(ctx, `INSERT INTO task_steps(id,task_id,step,status,percentage,metadata_json,started_at,finished_at,error) VALUES(?,?,?,?,?,?,?,?,?)`,
+			existingID, taskID, in.Step, in.Status, in.Percentage, in.MetadataJSON, started, finished, in.Error)
+		if err != nil {
+			return Step{}, err
+		}
+		return s.step(ctx, existingID)
+	}
+	if err != nil {
+		return Step{}, err
+	}
+	assignments := `status=?,percentage=?,metadata_json=?,error=?`
+	args := []any{in.Status, in.Percentage, in.MetadataJSON, in.Error}
+	if in.Status == StatusRunning {
+		assignments += `,started_at=COALESCE(started_at,?)`
+		args = append(args, now)
+	}
+	if in.Status == StatusCompleted || in.Status == StatusFailed || in.Status == StatusCancelled {
+		assignments += `,finished_at=?`
+		args = append(args, now)
+	}
+	args = append(args, existingID)
+	if _, err := s.db.ExecContext(ctx, `UPDATE task_steps SET `+assignments+` WHERE id=?`, args...); err != nil {
+		return Step{}, err
+	}
+	return s.step(ctx, existingID)
+}
+
+func (s *Service) Steps(ctx context.Context, taskID string) ([]Step, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,task_id,step,status,percentage,metadata_json,started_at,finished_at,error FROM task_steps WHERE task_id=? ORDER BY id ASC`, taskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Step{}
+	for rows.Next() {
+		step, err := scanStep(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, step)
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
+	old, err := s.Get(ctx, taskID)
+	if err != nil {
+		return Task{}, err
+	}
+	return s.Create(ctx, CreateInput{
+		OperationID:         old.OperationID,
+		Type:                old.Type,
+		ServerID:            old.ServerID,
+		NodeID:              old.NodeID,
+		ResourceType:        old.ResourceType,
+		ResourceID:          old.ResourceID,
+		TriggerType:         "retry",
+		TriggerResourceType: old.ResourceType,
+		TriggerResourceID:   old.ResourceID,
+		TriggerTaskID:       old.ID,
+		Summary:             "Retrying " + old.Summary,
+		MaxRetries:          old.MaxRetries,
+	})
+}
+
 type scanner interface{ Scan(dest ...any) error }
+
+const taskColumns = `id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
 
 func scanTask(row scanner) (Task, error) {
 	var t Task
 	var pct sql.NullFloat64
 	var created string
 	var startedNS, finishedNS, nextRunNS sql.NullString
-	err := row.Scan(&t.ID, &t.Type, &t.ServerID, &t.ResourceType, &t.ResourceID, &t.Status, &t.Stage, &pct, &t.Summary, &t.Error, &t.RetryCount, &t.MaxRetries, &nextRunNS, &created, &startedNS, &finishedNS)
+	err := row.Scan(&t.ID, &t.OperationID, &t.Type, &t.ServerID, &t.NodeID, &t.ResourceType, &t.ResourceID, &t.TriggerType, &t.TriggerResourceType, &t.TriggerResourceID, &t.TriggerTaskID, &t.TriggeredBy, &t.Status, &t.Stage, &pct, &t.Summary, &t.Error, &t.RetryCount, &t.MaxRetries, &nextRunNS, &created, &startedNS, &finishedNS)
 	if err != nil {
 		return Task{}, err
 	}
@@ -288,6 +384,28 @@ func scanTask(row scanner) (Task, error) {
 	return t, nil
 }
 
+func (s *Service) step(ctx context.Context, stepID string) (Step, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,task_id,step,status,percentage,metadata_json,started_at,finished_at,error FROM task_steps WHERE id=?`, stepID)
+	return scanStep(row)
+}
+
+func scanStep(row scanner) (Step, error) {
+	var step Step
+	var started, finished sql.NullString
+	if err := row.Scan(&step.ID, &step.TaskID, &step.Step, &step.Status, &step.Percentage, &step.MetadataJSON, &started, &finished, &step.Error); err != nil {
+		return Step{}, err
+	}
+	if started.Valid {
+		v, _ := time.Parse(time.RFC3339Nano, started.String)
+		step.StartedAt = &v
+	}
+	if finished.Valid {
+		v, _ := time.Parse(time.RFC3339Nano, finished.String)
+		step.FinishedAt = &v
+	}
+	return step, nil
+}
+
 func backoffDuration(retryCount int) time.Duration {
 	if retryCount <= 1 {
 		return 30 * time.Second
@@ -307,6 +425,15 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func Redact(s string) string {

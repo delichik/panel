@@ -88,9 +88,8 @@ onBeforeUnmount(() => {
           <template #activator="{ props }">
             <v-list-item v-bind="props" prepend-icon="mdi-docker" title="Docker" />
           </template>
-          <v-list-item to="/services" title="Services" value="services" class="pl-8" />
-          <v-list-item to="/runtime-resources" title="Runtime Resources" value="runtime" class="pl-8" />
-          <v-list-item to="/service-templates" title="Service Templates" value="templates" class="pl-8" />
+          <v-list-item to="/container-services" title="Container Services" value="container-services" class="pl-8" />
+          <v-list-item to="/runtime-explorer" title="Runtime Explorer" value="runtime-explorer" class="pl-8" />
         </v-list-group>
 
         <v-list-item to="/tasks" prepend-icon="mdi-clipboard-list" title="Task Center" value="tasks" />

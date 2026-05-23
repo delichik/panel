@@ -19,9 +19,8 @@ describe('ServersPage Docker style alignment', () => {
   it('uses right-side drawers for Server page editors', () => {
     expect(serversPage).toContain('<v-navigation-drawer v-model="serverDialog" location="right" temporary width="560"');
     expect(serversPage).toContain('<v-navigation-drawer v-model="credentialDialog" location="right" temporary width="620"');
-    expect(serversPage).toContain('<v-navigation-drawer v-model="variablesDialog" location="right" temporary width="620"');
+    expect(serversPage).not.toContain('variablesDialog');
     expect(serversPage).not.toContain('<v-dialog v-model="serverDialog"');
     expect(serversPage).not.toContain('<v-dialog v-model="credentialDialog"');
-    expect(serversPage).not.toContain('<v-dialog v-model="variablesDialog"');
   });
 });

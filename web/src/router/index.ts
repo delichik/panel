@@ -5,9 +5,8 @@ import LoginPage from '@/features/auth/pages/LoginPage.vue';
 import OverviewPage from '@/features/overview/pages/OverviewPage.vue';
 import ServersPage from '@/features/servers/pages/ServersPage.vue';
 import PackageUpdatesPage from '@/features/packages/pages/PackageUpdatesPage.vue';
-import DockerRuntimePage from '@/features/docker/pages/DockerRuntimePage.vue';
-import ServicesPage from '@/features/compose/pages/ServicesPage.vue';
-import ServiceTemplatesPage from '@/features/compose/pages/ServiceTemplatesPage.vue';
+import ContainerServicesPage from '@/features/container-services/pages/ContainerServicesPage.vue';
+import RuntimeExplorerPage from '@/features/runtime-explorer/pages/RuntimeExplorerPage.vue';
 import TaskCenterPage from '@/features/tasks/pages/TaskCenterPage.vue';
 import SettingsPage from '@/features/settings/pages/SettingsPage.vue';
 
@@ -25,10 +24,9 @@ export const router = createRouter({
         { path: 'servers', name: 'servers', component: ServersPage, meta: { title: 'Servers' } },
         { path: 'credentials', name: 'credentials', component: ServersPage, meta: { title: 'Credentials' } },
         { path: 'packages', name: 'packages', component: PackageUpdatesPage, meta: { title: 'Package Updates' } },
-        { path: 'docker', redirect: '/services' },
-        { path: 'services', name: 'services', component: ServicesPage, meta: { title: 'Services' } },
-        { path: 'runtime-resources', name: 'runtime-resources', component: DockerRuntimePage, meta: { title: 'Runtime Resources' } },
-        { path: 'service-templates', name: 'service-templates', component: ServiceTemplatesPage, meta: { title: 'Service Templates' } },
+        { path: 'docker', redirect: '/runtime-explorer' },
+        { path: 'container-services', name: 'container-services', component: ContainerServicesPage, meta: { title: 'Container Services' } },
+        { path: 'runtime-explorer', name: 'runtime-explorer', component: RuntimeExplorerPage, meta: { title: 'Runtime Explorer' } },
         { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { title: 'Task Center' } },
         { path: 'settings', name: 'settings', component: SettingsPage, meta: { title: 'Settings' } },
       ],

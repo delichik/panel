@@ -2,7 +2,6 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { serversApi, type CredentialInput } from '@/api/servers';
-import { composeApi } from '@/api/compose';
 import type { CredentialDto, ServerDto } from '@/types/api';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 
@@ -13,13 +12,10 @@ const loading = ref(false);
 const error = ref('');
 const serverDialog = ref(false);
 const credentialDialog = ref(false);
-const variablesDialog = ref(false);
 const editing = ref<ServerDto | null>(null);
 const editingCredential = ref<CredentialDto | null>(null);
-const variableServer = ref<ServerDto | null>(null);
 const activeTaskId = ref('');
 const activeTaskServerName = ref('');
-const serverVariablesJson = ref('{}');
 const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' : 'servers'));
 const pageTitle = computed(() => (activeTab.value === 'credentials' ? 'Credentials' : 'Servers'));
 const pageSubtitle = computed(() =>
@@ -162,30 +158,6 @@ async function load() {
   }
 }
 
-async function loadServerVariables(serverId: string) {
-  try {
-    const variables = await composeApi.getServerVariables(serverId);
-    serverVariablesJson.value = JSON.stringify(variables ?? {}, null, 2);
-  } catch (err) {
-    showMessage(err instanceof Error ? err.message : 'Unable to load server variables', 'error');
-  }
-}
-
-async function openVariables(server: ServerDto) {
-  variableServer.value = server;
-  serverVariablesJson.value = '{}';
-  variablesDialog.value = true;
-  await loadServerVariables(server.id);
-}
-
-function parseServerVariables() {
-  try {
-    return JSON.parse(serverVariablesJson.value || '{}') as Record<string, unknown>;
-  } catch {
-    throw new Error('Server variables must be valid JSON');
-  }
-}
-
 async function saveServer() {
   try {
     const traits: Record<string, string> = {};
@@ -224,17 +196,6 @@ async function saveServer() {
     await load();
   } catch (err) {
     showMessage(err instanceof Error ? err.message : 'Failed to save server', 'error');
-  }
-}
-
-async function saveServerVariables() {
-  if (!variableServer.value) return;
-  try {
-    await composeApi.updateServerVariables(variableServer.value.id, parseServerVariables());
-    variablesDialog.value = false;
-    showMessage('Server variables saved');
-  } catch (err) {
-    showMessage(err instanceof Error ? err.message : 'Failed to save server variables', 'error');
   }
 }
 
@@ -395,7 +356,6 @@ onMounted(load);
               <div class="d-flex justify-end" style="gap: 6px;">
                 <v-btn size="small" color="primary" variant="outlined" prepend-icon="mdi-swap-horizontal" @click="testServer(row)">Test connection</v-btn>
                 <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="resetServerForm(row)">Edit</v-btn>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-variable" @click="openVariables(row)">Variables</v-btn>
                 <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="deleteServer(row)">Delete</v-btn>
               </div>
             </td>
@@ -559,33 +519,6 @@ onMounted(load);
                 class="mb-3"
               />
             </template>
-          </v-form>
-        </div>
-      </div>
-    </v-navigation-drawer>
-
-    <v-navigation-drawer v-model="variablesDialog" location="right" temporary width="620" style="z-index: 1005;">
-      <div class="pa-4 fill-height d-flex flex-column">
-        <div class="d-flex justify-space-between align-center mb-4">
-          <div class="text-h6 font-weight-bold">Variables: {{ variableServer?.name || '' }}</div>
-          <div class="d-flex align-center" style="gap: 8px;">
-            <v-btn color="primary" variant="flat" size="small" class="text-none font-weight-bold" @click="saveServerVariables">Save Variables</v-btn>
-            <v-btn icon="mdi-close" variant="text" size="small" @click="variablesDialog = false" />
-          </div>
-        </div>
-        <v-divider />
-        <div class="flex-grow-1 overflow-auto mt-4">
-          <v-form @submit.prevent="saveServerVariables">
-            <v-textarea
-              v-model="serverVariablesJson"
-              label="Custom variables (JSON)"
-              placeholder="{}"
-              variant="outlined"
-              density="comfortable"
-              rows="14"
-              class="font-mono"
-              spellcheck="false"
-            />
           </v-form>
         </div>
       </div>

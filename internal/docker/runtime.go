@@ -35,15 +35,34 @@ func (r *CLIRuntime) Detect(ctx context.Context, target sshx.Target) (DockerCapa
 	cap.ComposeInstalled = values["compose_installed"] == "true"
 	cap.ComposeVersion = values["compose_version"]
 	daemonReachable := values["docker_daemon_reachable"] == "true"
-	cap.Supported = cap.DockerInstalled && cap.ComposeInstalled && daemonReachable
+	cap.IncludeSupported = false
+	if cap.DockerInstalled && cap.ComposeInstalled && daemonReachable {
+		if err := r.ProbeComposeInclude(ctx, target); err == nil {
+			cap.IncludeSupported = true
+		} else {
+			cap.LastError = err.Error()
+		}
+	}
+	cap.Supported = cap.DockerInstalled && cap.ComposeInstalled && daemonReachable && cap.IncludeSupported
 	if !cap.DockerInstalled {
 		cap.LastError = "docker is not installed or not available in PATH"
 	} else if !daemonReachable {
 		cap.LastError = "docker daemon is not reachable by this SSH user"
 	} else if !cap.ComposeInstalled {
 		cap.LastError = "docker compose plugin is not installed or not available"
+	} else if !cap.IncludeSupported && cap.LastError == "" {
+		cap.LastError = "docker compose include is not supported"
 	}
 	return cap, nil
+}
+
+func (r *CLIRuntime) ProbeComposeInclude(ctx context.Context, target sshx.Target) error {
+	cmd := `tmp="$(mktemp -d /tmp/panel-compose-include.XXXXXX)" && trap 'rm -rf "$tmp"' EXIT && printf 'services:\n  child:\n    image: busybox\n    command: "true"\n' > "$tmp/child.yaml" && printf 'include:\n  - child.yaml\n' > "$tmp/root.yaml" && docker compose -f "$tmp/root.yaml" config >/dev/null`
+	res, err := r.exec.Exec(ctx, target, sshx.CommandSpec{Command: `sh -lc ` + shellQuote(cmd), Timeout: commandTimeout})
+	if err != nil {
+		return dockerCommandError("docker_compose_include_probe_failed", res)
+	}
+	return nil
 }
 
 func (r *CLIRuntime) ListComposeProjects(ctx context.Context, target sshx.Target) ([]ComposeProject, error) {
@@ -127,6 +146,10 @@ func (r *CLIRuntime) ReadComposeStatus(ctx context.Context, target sshx.Target, 
 
 func (r *CLIRuntime) StartContainer(ctx context.Context, target sshx.Target, containerID string) error {
 	return r.runDockerMutation(ctx, target, "docker_container_start_failed", `docker container start `+shellQuote(containerID))
+}
+
+func (r *CLIRuntime) RestartContainer(ctx context.Context, target sshx.Target, containerID string) error {
+	return r.runDockerMutation(ctx, target, "docker_container_restart_failed", `docker container restart `+shellQuote(containerID))
 }
 
 func (r *CLIRuntime) StopContainer(ctx context.Context, target sshx.Target, containerID string) error {
@@ -249,7 +272,7 @@ func ParseServices(raw string) ([]RuntimeService, error) {
 			Project:   labels["com.docker.compose.project"],
 			Service:   labels["com.docker.compose.service"],
 			Labels:    labels,
-			Managed:   labels["panel.managed"] == "true",
+			Managed:   isManaged(labels),
 		}
 		out = append(out, svc)
 		return nil
@@ -268,7 +291,7 @@ func ParseNetworks(raw string) ([]RuntimeNetwork, error) {
 			Scope:    str(row["Scope"]),
 			Internal: strings.EqualFold(str(row["Internal"]), "true"),
 			Labels:   labels,
-			Managed:  labels["panel.managed"] == "true",
+			Managed:  isManaged(labels),
 		})
 		return nil
 	})
@@ -284,7 +307,7 @@ func ParseVolumes(raw string) ([]RuntimeVolume, error) {
 			Driver:  str(row["Driver"]),
 			Scope:   str(row["Scope"]),
 			Labels:  labels,
-			Managed: labels["panel.managed"] == "true",
+			Managed: isManaged(labels),
 		})
 		return nil
 	})
@@ -303,7 +326,7 @@ func ParseImages(raw string) ([]RuntimeImage, error) {
 			Size:       str(row["Size"]),
 			CreatedAt:  str(row["CreatedAt"]),
 			Labels:     labels,
-			Managed:    labels["panel.managed"] == "true",
+			Managed:    isManaged(labels),
 		})
 		return nil
 	})
@@ -350,8 +373,12 @@ func composeRow(row map[string]any, project string) RuntimeService {
 		Project: firstNonEmpty(labels["com.docker.compose.project"], project),
 		Service: firstNonEmpty(labels["com.docker.compose.service"], str(row["Service"])),
 		Labels:  labels,
-		Managed: labels["panel.managed"] == "true",
+		Managed: isManaged(labels),
 	}
+}
+
+func isManaged(labels map[string]string) bool {
+	return labels["panel.managed"] == "true"
 }
 
 func parseJSONLines(raw string, handle func(map[string]any) error) error {
