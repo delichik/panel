@@ -6,3 +6,5 @@ web/dist/
 data
 go-build-cache
 .claude
+.vscode
+.idea
