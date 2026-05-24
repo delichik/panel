@@ -84,11 +84,11 @@ onBeforeUnmount(() => {
 
         <v-list-item to="/packages" prepend-icon="mdi-package-variant" title="Package Updates" value="packages" />
 
-        <v-list-group value="docker">
+        <v-list-group value="runtime">
           <template #activator="{ props }">
-            <v-list-item v-bind="props" prepend-icon="mdi-docker" title="Docker" />
+            <v-list-item v-bind="props" prepend-icon="mdi-cloud-braces" title="Runtime" />
           </template>
-          <v-list-item to="/container-services" title="Container Services" value="container-services" class="pl-8" />
+          <v-list-item to="/applications" title="Applications" value="applications" class="pl-8" />
           <v-list-item to="/runtime-explorer" title="Runtime Explorer" value="runtime-explorer" class="pl-8" />
         </v-list-group>
 

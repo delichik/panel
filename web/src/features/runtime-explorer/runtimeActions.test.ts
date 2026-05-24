@@ -27,7 +27,7 @@ describe('runtimeContainerActions', () => {
     expect(actions.delete.disabled).toBe(false);
     expect(actions.stop.reason).toContain('Container Service');
     expect(actions.delete.reason).toContain('automatically redeploy');
-    expect(actions.serviceLink).toBe('/container-services?service=svc-1');
+    expect(actions.serviceLink).toBe('/applications?application=svc-1');
   });
 
   it('allows limited unmanaged stop and delete actions', () => {

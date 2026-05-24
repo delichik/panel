@@ -9,8 +9,8 @@ import { LineChart } from 'echarts/charts';
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
 import { overviewApi } from '@/api/overview';
 import { tasksApi } from '@/api/tasks';
-import { containerServicesApi } from '@/api/containerServices';
-import type { ContainerServiceDto, MetricsRange, MetricsSeriesDto, OverviewDto, OverviewServerDto, TaskDto } from '@/types/api';
+import { applicationsApi } from '@/api/applications';
+import type { ApplicationDto, MetricsRange, MetricsSeriesDto, OverviewDto, OverviewServerDto, TaskDto } from '@/types/api';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent]);
 
@@ -36,7 +36,7 @@ const metricsLoading = ref(false);
 const error = ref('');
 const metricsError = ref('');
 
-const containerServices = ref<ContainerServiceDto[]>([]);
+const applications = ref<ApplicationDto[]>([]);
 
 // Task Ticker States
 const activeTasks = ref<TaskDto[]>([]);
@@ -53,14 +53,11 @@ const currentTickerTask = computed(() =>
   activeTasks.value.length > 0 ? activeTasks.value[taskIndex.value % activeTasks.value.length] : null
 );
 
-// Services needing attention on the selected server
-const selectedServerAttentionCount = computed(() => {
-  if (!selectedServerId.value) return 0;
-  return containerServices.value.filter((service) => {
-    const onNode = service.nodeId === selectedServerId.value;
-    const mismatch = service.runtimeGeneration != null && service.runtimeGeneration !== service.generation;
-    const unhealthy = ['missing', 'unhealthy', 'exited', 'stale'].includes(service.runtimeStatus || '');
-    return onNode && (mismatch || unhealthy || Boolean(service.lastError));
+// Applications needing attention from Nomad runtime state.
+const applicationAttentionCount = computed(() => {
+  return applications.value.filter((app) => {
+    const unhealthy = ['failed', 'pending', 'unknown'].includes(app.runtimeStatus || '');
+    return unhealthy || Boolean(app.lastError);
   }).length;
 });
 
@@ -288,11 +285,11 @@ async function loadMetrics() {
   }
 }
 
-async function loadContainerServices() {
+async function loadApplications() {
   try {
-    containerServices.value = await containerServicesApi.list();
+    applications.value = await applicationsApi.list();
   } catch (err) {
-    console.error('Failed to load container services', err);
+    console.error('Failed to load applications', err);
   }
 }
 
@@ -316,13 +313,13 @@ watch([selectedServerId, range], loadMetrics);
 onMounted(async () => {
   await loadOverview();
   await loadMetrics();
-  await loadContainerServices();
+  await loadApplications();
   await loadActiveTasks();
 
   refreshTimer = window.setInterval(async () => {
     await loadOverview();
     await loadMetrics();
-    await loadContainerServices();
+    await loadApplications();
   }, 15000);
 
   taskTimer = window.setInterval(loadActiveTasks, 8000);
@@ -422,8 +419,8 @@ onBeforeUnmount(() => {
           <div class="d-flex align-start mb-3">
             <v-icon color="success" class="mr-3 mt-1" size="small">mdi-checkbox-marked-circle</v-icon>
             <div>
-              <div class="font-weight-bold text-body-2 text-high-emphasis">Container Services Management</div>
-              <div class="text-caption text-medium-emphasis">Inspect runtime resources and operate managed Container Services from one workspace.</div>
+              <div class="font-weight-bold text-body-2 text-high-emphasis">Applications Management</div>
+              <div class="text-caption text-medium-emphasis">Render Nomad jobs, deploy applications, and inspect runtime state from one workspace.</div>
             </div>
           </div>
 
@@ -508,7 +505,7 @@ onBeforeUnmount(() => {
           <!-- Core Actionable Banners for Package and Container Updates -->
           <div v-if="selectedServer" class="update-banners-container mb-4">
             <div
-              v-if="selectedServer.packageUpdateCount > 0 || selectedServerAttentionCount > 0"
+              v-if="selectedServer.packageUpdateCount > 0 || applicationAttentionCount > 0"
               class="d-flex flex-column flex-md-row"
               style="gap: 16px;"
             >
@@ -537,18 +534,18 @@ onBeforeUnmount(() => {
                 </v-btn>
               </div>
 
-              <!-- Container Services Attention Card -->
+              <!-- Applications Attention Card -->
               <div
-                v-if="selectedServerAttentionCount > 0"
+                v-if="applicationAttentionCount > 0"
                 class="update-banner-card drifted flex-grow-1 d-flex align-center justify-space-between px-4 py-3 rounded-lg cursor-pointer"
-                @click="router.push('/container-services')"
+                @click="router.push('/applications')"
               >
                 <div class="d-flex align-center mr-3">
-                  <v-icon color="primary" class="mr-3" size="default">mdi-docker</v-icon>
+                  <v-icon color="primary" class="mr-3" size="default">mdi-apps</v-icon>
                   <div>
-                    <div class="text-subtitle-2 font-weight-bold text-high-emphasis">Container Services Attention</div>
+                    <div class="text-subtitle-2 font-weight-bold text-high-emphasis">Applications Attention</div>
                     <div class="text-caption text-medium-emphasis">
-                      There are <strong>{{ selectedServerAttentionCount }}</strong> managed services requiring attention.
+                      There are <strong>{{ applicationAttentionCount }}</strong> applications requiring attention.
                     </div>
                   </div>
                 </div>
@@ -558,7 +555,7 @@ onBeforeUnmount(() => {
                   size="small"
                   class="text-none font-weight-bold flex-shrink-0"
                 >
-                  Open Services
+                  Open Applications
                 </v-btn>
               </div>
             </div>

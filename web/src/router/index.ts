@@ -5,7 +5,7 @@ import LoginPage from '@/features/auth/pages/LoginPage.vue';
 import OverviewPage from '@/features/overview/pages/OverviewPage.vue';
 import ServersPage from '@/features/servers/pages/ServersPage.vue';
 import PackageUpdatesPage from '@/features/packages/pages/PackageUpdatesPage.vue';
-import ContainerServicesPage from '@/features/container-services/pages/ContainerServicesPage.vue';
+import ApplicationsPage from '@/features/applications/pages/ApplicationsPage.vue';
 import RuntimeExplorerPage from '@/features/runtime-explorer/pages/RuntimeExplorerPage.vue';
 import TaskCenterPage from '@/features/tasks/pages/TaskCenterPage.vue';
 import SettingsPage from '@/features/settings/pages/SettingsPage.vue';
@@ -25,7 +25,8 @@ export const router = createRouter({
         { path: 'credentials', name: 'credentials', component: ServersPage, meta: { title: 'Credentials' } },
         { path: 'packages', name: 'packages', component: PackageUpdatesPage, meta: { title: 'Package Updates' } },
         { path: 'docker', redirect: '/runtime-explorer' },
-        { path: 'container-services', name: 'container-services', component: ContainerServicesPage, meta: { title: 'Container Services' } },
+        { path: 'container-services', redirect: '/applications' },
+        { path: 'applications', name: 'applications', component: ApplicationsPage, meta: { title: 'Applications' } },
         { path: 'runtime-explorer', name: 'runtime-explorer', component: RuntimeExplorerPage, meta: { title: 'Runtime Explorer' } },
         { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { title: 'Task Center' } },
         { path: 'settings', name: 'settings', component: SettingsPage, meta: { title: 'Settings' } },

@@ -349,6 +349,176 @@ export interface ContainerServiceRuntimeOperationDto {
   tasks?: TaskDto[];
 }
 
+export interface ApplicationDto {
+  id: string;
+  name: string;
+  enabled: boolean;
+  specYaml: string;
+  variables: Record<string, string>;
+  generation: number;
+  specHash: string;
+  jobId: string;
+  namespace: string;
+  lastEvalId?: string;
+  lastDeploymentId?: string;
+  lastError?: string;
+  runtimeStatus?: string;
+  allocationCount?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApplicationSaveDto {
+  name: string;
+  enabled: boolean;
+  specYaml: string;
+  variables: Record<string, string>;
+}
+
+export interface ApplicationValidationIssueDto {
+  field?: string;
+  path?: string;
+  severity?: 'error' | 'warning' | string;
+  message: string;
+}
+
+export interface ApplicationValidationDto {
+  valid: boolean;
+  issues: ApplicationValidationIssueDto[];
+}
+
+export interface NomadPortMappingDto {
+  Label?: string;
+  Value?: number;
+  To?: number;
+}
+
+export interface NomadNetworkDto {
+  Mode?: string;
+  ReservedPorts?: NomadPortMappingDto[];
+  DynamicPorts?: NomadPortMappingDto[];
+}
+
+export interface NomadCheckDto {
+  Name?: string;
+  Type?: string;
+  Path?: string;
+  PortLabel?: string;
+  Interval?: number;
+  Timeout?: number;
+}
+
+export interface NomadServiceDto {
+  Name?: string;
+  PortLabel?: string;
+  Tags?: string[];
+  Checks?: NomadCheckDto[];
+}
+
+export interface NomadTaskDto {
+  Name?: string;
+  Driver?: string;
+  Config?: Record<string, unknown>;
+  Env?: Record<string, string>;
+  Resources?: { CPU?: number; MemoryMB?: number };
+  Services?: NomadServiceDto[];
+}
+
+export interface NomadTaskGroupDto {
+  Name?: string;
+  Count?: number;
+  Networks?: NomadNetworkDto[];
+  Tasks?: NomadTaskDto[];
+  Services?: NomadServiceDto[];
+}
+
+export interface NomadJobDto {
+  ID?: string;
+  Name?: string;
+  Type?: string;
+  Region?: string;
+  Namespace?: string;
+  Datacenters?: string[];
+  Meta?: Record<string, string>;
+  TaskGroups?: NomadTaskGroupDto[];
+}
+
+export interface NomadEvaluationDto {
+  ID?: string;
+  Namespace?: string;
+  JobID?: string;
+  Status?: string;
+  Type?: string;
+  TriggeredBy?: string;
+}
+
+export interface NomadDeploymentDto {
+  ID?: string;
+  JobID?: string;
+  Namespace?: string;
+  Status?: string;
+  StatusDescription?: string;
+}
+
+export interface NomadAllocationDto {
+  ID?: string;
+  EvalID?: string;
+  Name?: string;
+  NodeID?: string;
+  JobID?: string;
+  TaskGroup?: string;
+  ClientStatus?: string;
+  DesiredStatus?: string;
+  TaskStates?: Record<string, unknown>;
+  AllocatedResources?: unknown;
+  ModifyIndex?: number;
+  CreateIndex?: number;
+}
+
+export interface NomadServiceRegistrationDto {
+  ID?: string;
+  ServiceName?: string;
+  Namespace?: string;
+  NodeID?: string;
+  Datacenter?: string;
+  JobID?: string;
+  AllocID?: string;
+  Tags?: string[];
+  Port?: number;
+}
+
+export interface ApplicationPlanDto {
+  application: ApplicationDto;
+  job: NomadJobDto;
+  plan: Record<string, unknown>;
+}
+
+export interface ApplicationOperationDto {
+  taskId?: string;
+  evalId?: string;
+  deploymentId?: string;
+  application?: ApplicationDto;
+  runtime?: ApplicationRuntimeDto;
+}
+
+export interface ApplicationRuntimeDto {
+  applicationId: string;
+  jobId: string;
+  jobStatus: string;
+  deployment?: NomadDeploymentDto;
+  evaluations: NomadEvaluationDto[];
+  allocations: NomadAllocationDto[];
+  services?: NomadServiceRegistrationDto[];
+  observedAt: string;
+}
+
+export interface ApplicationLogsDto {
+  allocId: string;
+  task: string;
+  type: string;
+  logs: string;
+}
+
 export interface RuntimeExplorerContainerDto {
   id: string;
   name: string;
