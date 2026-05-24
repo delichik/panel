@@ -24,12 +24,12 @@ func (h *Handler) Capability(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
-	task, err := h.service.Refresh(r.Context(), serverID(r.URL.Path))
+	out, err := h.service.Refresh(r.Context(), serverID(r.URL.Path))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+	httpx.JSON(w, http.StatusAccepted, out)
 }
 
 func (h *Handler) Projects(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +263,7 @@ func runtimeExplorerNodeID(path string) string {
 
 func runtimeExplorerOperation(r *http.Request) (ResourceOperation, bool) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	if len(parts) < 7 || parts[0] != "api" || parts[1] != "v1" || parts[2] != "runtime-explorer" || parts[3] != "nodes" {
+	if len(parts) < 6 || parts[0] != "api" || parts[1] != "v1" || parts[2] != "runtime-explorer" || parts[3] != "nodes" {
 		return ResourceOperation{}, false
 	}
 	if len(parts) >= 7 && parts[5] == "containers" {

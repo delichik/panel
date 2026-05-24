@@ -102,6 +102,12 @@ export interface PackageUpdatesDto {
   serverId: string;
   lastRefreshedAt: string | null;
   updates: PackageUpdateDto[];
+  refreshing: boolean;
+}
+
+export interface PackageRefreshDto {
+  serverId: string;
+  refreshing: boolean;
 }
 
 export interface DockerCapabilityDto {

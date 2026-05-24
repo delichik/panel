@@ -9,7 +9,7 @@ import (
 )
 
 func TestParseServicesReadsComposeAndPanelLabels(t *testing.T) {
-	raw := `{"ID":"abc123","Image":"nginx:latest","Names":"web-1","State":"running","Status":"Up 3 minutes","Ports":"80/tcp","Labels":"com.docker.compose.project=demo,com.docker.compose.service=web,panel.managed=true,panel.service_id=svc_1"}`
+	raw := `{"ID":"abc123","Image":"nginx:latest","Names":"web-1","State":"running","Status":"Up 3 minutes","Ports":"80/tcp","Labels":"com.docker.compose.project=demo,com.docker.compose.service=web,panel.managed=true,panel.service.id=svc_1"}`
 	services, err := ParseServices(raw)
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestParseServicesReadsComposeAndPanelLabels(t *testing.T) {
 	if got.Project != "demo" || got.Service != "web" || !got.Managed {
 		t.Fatalf("labels were not mapped: %#v", got)
 	}
-	if got.Labels["panel.service_id"] != "svc_1" {
+	if got.Labels["panel.service.id"] != "svc_1" {
 		t.Fatalf("panel label missing: %#v", got.Labels)
 	}
 }

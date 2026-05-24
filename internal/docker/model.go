@@ -37,18 +37,20 @@ type ComposeStatus struct {
 }
 
 type RuntimeService struct {
-	ID        string            `json:"id"`
-	Name      string            `json:"name"`
-	Image     string            `json:"image"`
-	Command   string            `json:"command,omitempty"`
-	State     string            `json:"state"`
-	Status    string            `json:"status"`
-	Ports     string            `json:"ports,omitempty"`
-	Project   string            `json:"project,omitempty"`
-	Service   string            `json:"service,omitempty"`
-	CreatedAt string            `json:"createdAt,omitempty"`
-	Labels    map[string]string `json:"labels"`
-	Managed   bool              `json:"managed"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Image       string            `json:"image"`
+	Command     string            `json:"command,omitempty"`
+	State       string            `json:"state"`
+	Status      string            `json:"status"`
+	Ports       string            `json:"ports,omitempty"`
+	Project     string            `json:"project,omitempty"`
+	Service     string            `json:"service,omitempty"`
+	ServiceID   string            `json:"serviceId,omitempty"`
+	ServiceName string            `json:"serviceName,omitempty"`
+	CreatedAt   string            `json:"createdAt,omitempty"`
+	Labels      map[string]string `json:"labels"`
+	Managed     bool              `json:"managed"`
 }
 
 type RuntimeNetwork struct {

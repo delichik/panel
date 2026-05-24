@@ -35,6 +35,18 @@ func NewService(db *sql.DB) *Service {
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
+	return createTask(ctx, s.db, in)
+}
+
+func (s *Service) CreateTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Task, error) {
+	return createTask(ctx, tx, in)
+}
+
+type taskExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func createTask(ctx context.Context, exec taskExecer, in CreateInput) (Task, error) {
 	if strings.TrimSpace(in.Type) == "" {
 		return Task{}, panelerr.Validation("task_type_required", "Task type is required")
 	}
@@ -67,7 +79,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
 	if in.NextRunAt != nil {
 		nextRunAt = in.NextRunAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,summary,retry_count,max_retries,next_run_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,summary,retry_count,max_retries,next_run_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.Status, t.Stage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano))
 	return t, err
 }

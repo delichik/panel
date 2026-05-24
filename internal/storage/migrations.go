@@ -180,6 +180,17 @@ func (s *Store) Migrate(ctx context.Context) error {
 			UNIQUE(service_id, path),
 			FOREIGN KEY(service_id) REFERENCES container_services(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS container_service_placements (
+			service_id TEXT PRIMARY KEY,
+			node_id TEXT NOT NULL,
+			generation INTEGER NOT NULL DEFAULT 0,
+			spec_revision TEXT NOT NULL DEFAULT '',
+			container_id TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(service_id) REFERENCES container_services(id) ON DELETE CASCADE,
+			FOREIGN KEY(node_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
 		`CREATE INDEX IF NOT EXISTS idx_container_services_name ON container_services(name)`,
 	}
 	for _, stmt := range app {

@@ -63,17 +63,40 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.Delete(r.Context(), serviceID(r.URL.Path)); err != nil {
+	task, err := h.service.Delete(r.Context(), serviceID(r.URL.Path))
+	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID, "operationId": task.OperationID})
 }
 
 func (h *Handler) Validate(w http.ResponseWriter, r *http.Request) {
 	var req SaveRequest
 	_ = json.NewDecoder(r.Body).Decode(&req)
-	out, err := h.service.Validate(r.Context(), serviceID(r.URL.Path), req)
+	out, err := h.service.ValidateResult(r.Context(), serviceID(r.URL.Path), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) RenderPreview(w http.ResponseWriter, r *http.Request) {
+	var req SaveRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	out, err := h.service.RenderPreview(r.Context(), serviceID(r.URL.Path), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) SchedulePreview(w http.ResponseWriter, r *http.Request) {
+	var req SaveRequest
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	out, err := h.service.SchedulePreview(r.Context(), serviceID(r.URL.Path), req)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -154,14 +177,63 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"lines": out})
 }
 
-func (h *Handler) Placeholder(w http.ResponseWriter, r *http.Request) {
-	httpx.JSON(w, http.StatusOK, map[string]any{})
+func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
+	out, err := h.service.ListFiles(r.Context(), serviceID(r.URL.Path))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) CreateFile(w http.ResponseWriter, r *http.Request) {
+	var req FileInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid JSON request body"))
+		return
+	}
+	out, err := h.service.CreateFile(r.Context(), serviceID(r.URL.Path), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, out)
+}
+
+func (h *Handler) UpdateFile(w http.ResponseWriter, r *http.Request) {
+	var req FileInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid JSON request body"))
+		return
+	}
+	out, err := h.service.UpdateFile(r.Context(), serviceID(r.URL.Path), fileID(r.URL.Path), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
+	if err := h.service.DeleteFile(r.Context(), serviceID(r.URL.Path), fileID(r.URL.Path)); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func serviceID(path string) string {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 4 {
 		return parts[3]
+	}
+	return ""
+}
+
+func fileID(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) >= 6 {
+		return parts[5]
 	}
 	return ""
 }

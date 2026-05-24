@@ -6,9 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"panel/internal/auth"
 	"panel/internal/config"
+	"panel/internal/containerops"
 	"panel/internal/containerservice"
 	"panel/internal/credential"
 	"panel/internal/docker"
@@ -45,6 +47,9 @@ func New(cfg config.Config) (*App, error) {
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
 	dockerSvc := docker.NewService(store.AppDB(), serverSvc, docker.NewCLIRuntime(executor), taskSvc)
 	containerSvc := containerservice.NewService(store.AppDB(), taskSvc)
+	containerSvc.SetLogReader(containerservice.NewDockerLogReader(serverSvc, executor))
+	dockerSvc.SetContainerServiceRestarter(containerSvc)
+	containerWorker := containerops.NewWorker(taskSvc, containerops.NewLeaseService(store.AppDB(), time.Minute), containerSvc, serverSvc, executor)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
@@ -53,7 +58,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, dockerSvc, packageSvc, taskSvc)
+	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, dockerSvc, packageSvc, taskSvc, containerWorker)
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
@@ -154,9 +159,17 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/validate"):
 			containerH.Validate(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/render-preview"):
-			containerH.Placeholder(w, r)
+			containerH.RenderPreview(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/schedule-preview"):
-			containerH.Placeholder(w, r)
+			containerH.SchedulePreview(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/files"):
+			containerH.ListFiles(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/files"):
+			containerH.CreateFile(w, r)
+		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/container-services/") && strings.Contains(path, "/files/"):
+			containerH.UpdateFile(w, r)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/container-services/") && strings.Contains(path, "/files/"):
+			containerH.DeleteFile(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/enable-preview"):
 			containerH.EnablePreview(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/container-services/") && strings.HasSuffix(path, "/enable"):

@@ -2,12 +2,14 @@ package docker
 
 import (
 	"context"
+	"net/http"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"panel/internal/config"
 	"panel/internal/credential"
+	"panel/internal/panelerr"
 	"panel/internal/server"
 	"panel/internal/sshx"
 	"panel/internal/storage"
@@ -29,8 +31,15 @@ func TestCapabilityQueuesBackgroundRefreshWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cap.Pending || cap.TaskID == "" {
+	if !cap.Pending || cap.TaskID != "" {
 		t.Fatalf("expected pending background task, got %#v", cap)
+	}
+	var count int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='docker_status_refresh'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no docker refresh task records, got %d", count)
 	}
 }
 
@@ -46,24 +55,24 @@ func TestListServicesBlocksUnsupportedCapability(t *testing.T) {
 	}
 }
 
-func TestRefreshReturnsExistingRunningTaskWithoutBlocking(t *testing.T) {
+func TestRefreshRunsWithoutCreatingTask(t *testing.T) {
 	svc, srvID, closeStore := newTestService(t)
 	defer closeStore()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: "docker_status_refresh", ServerID: srvID, Summary: "refreshing"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.tasks.Start(ctx, task.ID); err != nil {
-		t.Fatal(err)
-	}
 	got, err := svc.Refresh(ctx, srvID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.ID != task.ID {
-		t.Fatalf("expected existing task %s, got %s", task.ID, got.ID)
+	if !got.Refreshing {
+		t.Fatalf("expected refresh to be running, got %#v", got)
+	}
+	var count int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='docker_status_refresh'`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected no docker refresh task records, got %d", count)
 	}
 }
 
@@ -85,6 +94,50 @@ func TestComposeStatusUsesCachedServices(t *testing.T) {
 	}
 	if got.State != "running" || len(got.Services) != 1 || got.Services[0].Service != "web" {
 		t.Fatalf("unexpected cached status: %#v", got)
+	}
+}
+
+func TestRuntimeExplorerPruneRouteParses(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "/api/v1/runtime-explorer/nodes/node-1/prune", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, ok := runtimeExplorerOperation(req)
+	if !ok {
+		t.Fatal("expected prune route to parse")
+	}
+	if op.Kind != "image" || op.Action != "prune" {
+		t.Fatalf("unexpected prune operation: %#v", op)
+	}
+}
+
+func TestRuntimeExplorerManagedRestartCreatesContainerServiceTask(t *testing.T) {
+	svc, srvID, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := svc.writeCapability(ctx, DockerCapability{ServerID: srvID, DockerInstalled: true, DockerVersion: "25", ComposeInstalled: true, ComposeVersion: "2", IncludeSupported: true, Supported: true, LastCheckedAt: &now}); err != nil {
+		t.Fatal(err)
+	}
+	restartTask, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: "container_service_restart", ResourceType: "container_service", ResourceID: "csvc_1", Summary: "Restarting api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.containerServices = fakeContainerServiceRestarter{task: restartTask}
+	if err := svc.writeCache(ctx, srvID, "services", []RuntimeService{{
+		ID:      "container-1",
+		Name:    "api",
+		Managed: true,
+		Labels:  map[string]string{"panel.service.id": "csvc_1", "panel.service.name": "api"},
+	}}, now); err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.RuntimeExplorerResourceTask(ctx, srvID, ResourceOperation{Kind: "container", Action: "restart", ID: "container-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.ID != restartTask.ID || task.Type != "container_service_restart" {
+		t.Fatalf("expected Container Service restart task, got %#v", task)
 	}
 }
 
@@ -115,6 +168,17 @@ func newTestService(t *testing.T) (*Service, string, func()) {
 }
 
 type fakeRuntime struct{}
+
+type fakeContainerServiceRestarter struct {
+	task tasks.Task
+}
+
+func (f fakeContainerServiceRestarter) Restart(ctx context.Context, serviceID string) (tasks.Task, error) {
+	if serviceID != "csvc_1" {
+		return tasks.Task{}, panelerr.NotFound("container_service")
+	}
+	return f.task, nil
+}
 
 func (fakeRuntime) Detect(context.Context, sshx.Target) (DockerCapability, error) {
 	now := time.Now().UTC()
@@ -147,16 +211,16 @@ func (fakeRuntime) ReadComposeStatus(context.Context, sshx.Target, string) (Comp
 
 func (fakeRuntime) ProbeComposeInclude(context.Context, sshx.Target) error { return nil }
 
-func (fakeRuntime) StartContainer(context.Context, sshx.Target, string) error  { return nil }
+func (fakeRuntime) StartContainer(context.Context, sshx.Target, string) error   { return nil }
 func (fakeRuntime) RestartContainer(context.Context, sshx.Target, string) error { return nil }
-func (fakeRuntime) StopContainer(context.Context, sshx.Target, string) error   { return nil }
-func (fakeRuntime) DeleteContainer(context.Context, sshx.Target, string) error { return nil }
-func (fakeRuntime) DeleteNetwork(context.Context, sshx.Target, string) error   { return nil }
-func (fakeRuntime) DeleteVolume(context.Context, sshx.Target, string) error    { return nil }
-func (fakeRuntime) DeleteImage(context.Context, sshx.Target, string) error     { return nil }
-func (fakeRuntime) PruneNetworks(context.Context, sshx.Target) error           { return nil }
-func (fakeRuntime) PruneVolumes(context.Context, sshx.Target) error            { return nil }
-func (fakeRuntime) PruneImages(context.Context, sshx.Target) error             { return nil }
+func (fakeRuntime) StopContainer(context.Context, sshx.Target, string) error    { return nil }
+func (fakeRuntime) DeleteContainer(context.Context, sshx.Target, string) error  { return nil }
+func (fakeRuntime) DeleteNetwork(context.Context, sshx.Target, string) error    { return nil }
+func (fakeRuntime) DeleteVolume(context.Context, sshx.Target, string) error     { return nil }
+func (fakeRuntime) DeleteImage(context.Context, sshx.Target, string) error      { return nil }
+func (fakeRuntime) PruneNetworks(context.Context, sshx.Target) error            { return nil }
+func (fakeRuntime) PruneVolumes(context.Context, sshx.Target) error             { return nil }
+func (fakeRuntime) PruneImages(context.Context, sshx.Target) error              { return nil }
 func (fakeRuntime) CheckImageUpdate(context.Context, sshx.Target, RuntimeImage) (ImageUpdate, error) {
 	return ImageUpdate{}, nil
 }

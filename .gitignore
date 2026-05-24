@@ -1,4 +1,5 @@
 data/
+.cache
 bin/
 web/node_modules/
 web/dist/

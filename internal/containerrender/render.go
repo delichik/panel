@@ -22,6 +22,7 @@ type Input struct {
 	NodeID             string
 	Generation         int
 	SpecRevision       string
+	PortClaims         []int
 	RootDir            string
 	ComposeProjectName string
 	ComposeServiceYAML string
@@ -95,9 +96,16 @@ func Render(in Input) (Output, error) {
 		"panel.project":               project,
 		"panel.node.id":               in.NodeID,
 	}
+	if len(in.PortClaims) > 0 {
+		parts := make([]string, 0, len(in.PortClaims))
+		for _, port := range in.PortClaims {
+			parts = append(parts, strconv.Itoa(port))
+		}
+		labels["panel.claims.ports"] = strings.Join(parts, ",")
+	}
 	override := map[string]any{
 		"services": map[string]any{
-			in.ServiceName: map[string]any{"labels": labels},
+			in.ServiceName: map[string]any{"container_name": in.ServiceName, "labels": labels},
 		},
 	}
 	overrideYAML, err := yaml.Marshal(override)

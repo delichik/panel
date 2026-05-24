@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import ServerSelector from '@/components/ServerSelector.vue';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { packagesApi } from '@/api/packages';
@@ -13,7 +13,9 @@ const selectedPackageNames = ref<string[]>([]);
 const taskId = ref('');
 const loadingServers = ref(false);
 const loadingUpdates = ref(false);
+const packageRefreshRunning = ref(false);
 const error = ref('');
+let refreshPollTimer: number | undefined;
 
 // Snackbar notification state
 const snackbar = ref(false);
@@ -33,6 +35,7 @@ const operationBlocked = computed(() => {
 });
 
 const selectedPackages = computed(() => (updates.value?.updates ?? []).filter(item => selectedPackageNames.value.includes(item.name)));
+const refreshInProgress = computed(() => packageRefreshRunning.value || updates.value?.refreshing === true);
 const selectAll = computed({
   get() {
     const items = updates.value?.updates ?? [];
@@ -58,30 +61,56 @@ async function loadServers() {
   }
 }
 
-async function loadUpdates() {
+function stopRefreshPolling() {
+  if (refreshPollTimer) {
+    window.clearInterval(refreshPollTimer);
+    refreshPollTimer = undefined;
+  }
+}
+
+function startRefreshPolling() {
+  if (refreshPollTimer) return;
+  stopRefreshPolling();
+  refreshPollTimer = window.setInterval(async () => {
+    await loadUpdates(false);
+    if (!updates.value?.refreshing) {
+      packageRefreshRunning.value = false;
+      stopRefreshPolling();
+    }
+  }, 1500);
+}
+
+async function loadUpdates(showLoading = true) {
   if (!serverId.value) {
     updates.value = null;
+    packageRefreshRunning.value = false;
+    stopRefreshPolling();
     return;
   }
-  loadingUpdates.value = true;
+  if (showLoading) loadingUpdates.value = true;
   try {
     updates.value = await packagesApi.listUpdates(serverId.value);
+    packageRefreshRunning.value = updates.value.refreshing;
     selectedPackageNames.value = [];
     error.value = '';
+    if (updates.value.refreshing) {
+      startRefreshPolling();
+    }
   } catch (err) {
     updates.value = null;
     error.value = err instanceof Error ? err.message : 'Unable to load package updates';
   } finally {
-    loadingUpdates.value = false;
+    if (showLoading) loadingUpdates.value = false;
   }
 }
 
 async function refreshUpdates() {
-  if (!serverId.value) return;
+  if (!serverId.value || refreshInProgress.value) return;
   try {
     const result = await packagesApi.refresh(serverId.value);
-    taskId.value = result.taskId;
-    showMessage('Package refresh started');
+    packageRefreshRunning.value = result.refreshing;
+    await loadUpdates(false);
+    if (result.refreshing) startRefreshPolling();
   } catch (err) {
     showMessage(err instanceof Error ? err.message : 'Failed to refresh packages', 'error');
   }
@@ -115,11 +144,12 @@ async function handleTaskFinished() {
   showMessage('Package task finished');
 }
 
-watch(serverId, loadUpdates);
+watch(serverId, () => loadUpdates());
 onMounted(async () => {
   await loadServers();
   await loadUpdates();
 });
+onBeforeUnmount(stopRefreshPolling);
 </script>
 
 <template>
@@ -167,11 +197,14 @@ onMounted(async () => {
               </v-card-subtitle>
             </div>
             <div class="d-flex" style="gap: 8px;">
+              <v-chip v-if="refreshInProgress" size="small" color="info" variant="tonal" prepend-icon="mdi-sync">
+                Refreshing
+              </v-chip>
               <v-btn
                 prepend-icon="mdi-sync"
                 size="small"
                 variant="outlined"
-                :disabled="!serverId || operationBlocked"
+                :disabled="!serverId || operationBlocked || refreshInProgress"
                 @click="refreshUpdates"
                 class="text-none"
               >

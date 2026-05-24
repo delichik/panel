@@ -12,6 +12,7 @@ func TestRenderWrapsServiceBodyAndInjectsSystemLabels(t *testing.T) {
 		NodeID:             "srv_1",
 		Generation:         3,
 		SpecRevision:       "rev",
+		PortClaims:         []int{8080, 8443},
 		RootDir:            "/opt/panel/container-services",
 		ComposeProjectName: "panel_managed",
 		ComposeServiceYAML: "image: nginx\ncommand: '{{ .variables.CMD }}'\nvolumes:\n  - '{{ .service.data_dir }}:/data'\n",
@@ -36,6 +37,8 @@ func TestRenderWrapsServiceBodyAndInjectsSystemLabels(t *testing.T) {
 		"panel.service.spec_revision: rev",
 		"panel.project: panel_managed",
 		"panel.node.id: srv_1",
+		"panel.claims.ports: 8080,8443",
+		"container_name: api",
 	} {
 		if !strings.Contains(out.OverrideYAML, fragment) && !strings.Contains(out.ComposeYAML, fragment) {
 			t.Fatalf("rendered artifacts missing %q\ncompose:\n%s\noverride:\n%s", fragment, out.ComposeYAML, out.OverrideYAML)

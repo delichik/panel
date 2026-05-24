@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"sync"
 	"time"
 
 	"panel/internal/panelerr"
@@ -16,11 +17,18 @@ const capabilityRefreshAfter = 5 * time.Minute
 const dockerRefreshTimeout = 2 * time.Minute
 
 type Service struct {
-	db         *sql.DB
-	servers    *server.Service
-	runtime    ContainerRuntime
-	tasks      *tasks.Service
-	refreshSem chan struct{}
+	db                *sql.DB
+	servers           *server.Service
+	runtime           ContainerRuntime
+	tasks             *tasks.Service
+	containerServices ContainerServiceRestarter
+	refreshSem        chan struct{}
+	refreshing        map[string]bool
+	mu                sync.Mutex
+}
+
+type ContainerServiceRestarter interface {
+	Restart(ctx context.Context, serviceID string) (tasks.Task, error)
 }
 
 type ResourceOperation struct {
@@ -36,8 +44,17 @@ type ImageUpdateOperation struct {
 	Summary  string
 }
 
+type RefreshResult struct {
+	ServerID    string `json:"serverId"`
+	Refreshing bool   `json:"refreshing"`
+}
+
 func NewService(db *sql.DB, servers *server.Service, runtime ContainerRuntime, taskSvc *tasks.Service) *Service {
-	return &Service{db: db, servers: servers, runtime: runtime, tasks: taskSvc, refreshSem: make(chan struct{}, 1)}
+	return &Service{db: db, servers: servers, runtime: runtime, tasks: taskSvc, refreshSem: make(chan struct{}, 1), refreshing: map[string]bool{}}
+}
+
+func (s *Service) SetContainerServiceRestarter(restarter ContainerServiceRestarter) {
+	s.containerServices = restarter
 }
 
 func (s *Service) Capability(ctx context.Context, serverID string) (DockerCapability, error) {
@@ -46,48 +63,34 @@ func (s *Service) Capability(ctx context.Context, serverID string) (DockerCapabi
 	}
 	cap, err := s.readCapability(ctx, serverID)
 	if err == sql.ErrNoRows {
-		task, taskErr := s.Refresh(ctx, serverID)
+		_, taskErr := s.Refresh(ctx, serverID)
 		if taskErr != nil {
 			return DockerCapability{}, taskErr
 		}
-		return DockerCapability{ServerID: serverID, Supported: false, Pending: true, Stale: true, TaskID: task.ID, LastError: "Docker capability check is queued"}, nil
+		return DockerCapability{ServerID: serverID, Supported: false, Pending: true, Stale: true, LastError: "Docker capability check is queued"}, nil
 	}
 	if err != nil {
 		return cap, err
 	}
 	if cap.LastCheckedAt == nil || time.Since(*cap.LastCheckedAt) > capabilityRefreshAfter {
-		if task, taskErr := s.Refresh(ctx, serverID); taskErr == nil {
+		if _, taskErr := s.Refresh(ctx, serverID); taskErr == nil {
 			cap.Pending = true
-			cap.TaskID = task.ID
 			cap.Stale = true
 		}
 	}
 	return cap, nil
 }
 
-func (s *Service) Refresh(ctx context.Context, serverID string) (tasks.Task, error) {
+func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, error) {
 	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
-		return tasks.Task{}, err
+		return RefreshResult{}, err
 	}
-	if task, ok, err := s.runningRefresh(ctx, serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		if task.Status != tasks.StatusRunning && (task.NextRunAt == nil || !task.NextRunAt.After(time.Now().UTC())) {
-			task, err = s.tasks.RunNow(ctx, task.ID)
-			if err != nil {
-				return tasks.Task{}, err
-			}
-			go s.runRefresh(context.Background(), task.ID, srv)
-		}
-		return task, nil
+	if !s.markRefreshing(serverID) {
+		return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "docker_status_refresh", ServerID: serverID, ResourceType: "server", ResourceID: serverID, Summary: "Refreshing Docker runtime status", MaxRetries: 8})
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	go s.runRefresh(context.Background(), task.ID, srv)
-	return task, nil
+	go s.runRefresh(context.Background(), srv)
+	return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 }
 
 func (s *Service) RefreshReachable(ctx context.Context) error {
@@ -100,6 +103,30 @@ func (s *Service) RefreshReachable(ctx context.Context) error {
 			continue
 		}
 		if _, err := s.Refresh(ctx, srv.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) RefreshContainersReachable(ctx context.Context) error {
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, srv := range servers {
+		if !srv.Reachable {
+			continue
+		}
+		cap, err := s.readCapability(ctx, srv.ID)
+		if err != nil || !cap.Supported {
+			continue
+		}
+		services, err := s.runtime.ListServices(ctx, srv.Target())
+		if err != nil {
+			return err
+		}
+		if err := s.writeCache(ctx, srv.ID, "services", services, time.Now().UTC()); err != nil {
 			return err
 		}
 	}
@@ -169,6 +196,7 @@ func (s *Service) ListServices(ctx context.Context, serverID string) (RuntimeLis
 	if err != nil {
 		return RuntimeList[RuntimeService]{}, err
 	}
+	enrichManagedServices(out.Items)
 	return out, nil
 }
 
@@ -245,11 +273,21 @@ func (s *Service) ResourceTask(ctx context.Context, serverID string, op Resource
 }
 
 func (s *Service) RuntimeExplorerResourceTask(ctx context.Context, serverID string, op ResourceOperation) (tasks.Task, error) {
-	if op.Kind == "container" && (op.Action == "stop" || op.Action == "delete") {
+	if op.Kind == "container" && (op.Action == "stop" || op.Action == "delete" || op.Action == "restart") {
 		cached, err := readRuntimeCache[RuntimeService](ctx, s.db, serverID, "services")
 		if err == nil {
 			for _, item := range cached.Items {
 				if (item.ID == op.ID || item.Name == op.ID) && item.Managed {
+					if op.Action == "restart" {
+						serviceID := item.Labels["panel.service.id"]
+						if serviceID == "" {
+							return tasks.Task{}, panelerr.Conflict("managed_runtime_missing_service_id", "Managed container is missing panel.service.id")
+						}
+						if s.containerServices == nil {
+							return tasks.Task{}, panelerr.Conflict("managed_runtime_restart_unavailable", "Container Service restart is unavailable")
+						}
+						return s.containerServices.Restart(ctx, serviceID)
+					}
 					return tasks.Task{}, panelerr.Conflict("managed_runtime_action_forbidden", "Managed resources must be operated from Container Services")
 				}
 			}
@@ -386,37 +424,29 @@ func (s *Service) runResourceOperation(ctx context.Context, taskID string, srv s
 	_ = s.tasks.Complete(ctx, taskID, op.Summary+" completed")
 }
 
-func (s *Service) runRefresh(ctx context.Context, taskID string, srv server.Server) {
+func (s *Service) runRefresh(ctx context.Context, srv server.Server) {
+	defer s.clearRefreshing(srv.ID)
 	s.refreshSem <- struct{}{}
 	defer func() { <-s.refreshSem }()
 	ctx, cancel := context.WithTimeout(ctx, dockerRefreshTimeout)
 	defer cancel()
-	_ = s.tasks.Start(ctx, taskID)
-	_ = s.tasks.Advance(ctx, taskID, "capability", "checking Docker and Compose availability")
 	cap, err := s.runtime.Detect(ctx, srv.Target())
 	if err != nil {
 		_ = s.writeCapabilityFailure(ctx, srv.ID, err)
-		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	if err := s.writeCapability(ctx, cap); err != nil {
-		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
 	if !cap.Supported {
-		_ = s.tasks.Complete(ctx, taskID, "Docker is unsupported on this server")
 		return
 	}
-	if err := s.refreshRuntimeLists(ctx, taskID, srv); err != nil {
-		_ = s.tasks.FailRetryable(ctx, taskID, err)
-		return
-	}
-	_ = s.tasks.Complete(ctx, taskID, "Docker runtime status refreshed")
+	_ = s.refreshRuntimeLists(ctx, "", srv)
 }
 
 func (s *Service) refreshRuntimeLists(ctx context.Context, taskID string, srv server.Server) error {
 	now := time.Now().UTC()
-	_ = s.tasks.Advance(ctx, taskID, "services", "reading Docker containers")
+	s.advanceRefreshTask(ctx, taskID, "services", "reading Docker containers")
 	services, err := s.runtime.ListServices(ctx, srv.Target())
 	if err != nil {
 		return err
@@ -424,7 +454,7 @@ func (s *Service) refreshRuntimeLists(ctx context.Context, taskID string, srv se
 	if err := s.writeCache(ctx, srv.ID, "services", services, now); err != nil {
 		return err
 	}
-	_ = s.tasks.Advance(ctx, taskID, "networks", "reading Docker networks")
+	s.advanceRefreshTask(ctx, taskID, "networks", "reading Docker networks")
 	networks, err := s.runtime.ListNetworks(ctx, srv.Target())
 	if err != nil {
 		return err
@@ -432,7 +462,7 @@ func (s *Service) refreshRuntimeLists(ctx context.Context, taskID string, srv se
 	if err := s.writeCache(ctx, srv.ID, "networks", networks, now); err != nil {
 		return err
 	}
-	_ = s.tasks.Advance(ctx, taskID, "volumes", "reading Docker volumes")
+	s.advanceRefreshTask(ctx, taskID, "volumes", "reading Docker volumes")
 	volumes, err := s.runtime.ListVolumes(ctx, srv.Target())
 	if err != nil {
 		return err
@@ -440,7 +470,7 @@ func (s *Service) refreshRuntimeLists(ctx context.Context, taskID string, srv se
 	if err := s.writeCache(ctx, srv.ID, "volumes", volumes, now); err != nil {
 		return err
 	}
-	_ = s.tasks.Advance(ctx, taskID, "images", "reading Docker images")
+	s.advanceRefreshTask(ctx, taskID, "images", "reading Docker images")
 	images, err := s.runtime.ListImages(ctx, srv.Target())
 	if err != nil {
 		return err
@@ -472,22 +502,6 @@ func (s *Service) ensureSupported(ctx context.Context, serverID string) (server.
 		return server.Server{}, panelerr.Validation("docker_unsupported", "Docker or Docker Compose is not available on this server")
 	}
 	return srv, nil
-}
-
-func (s *Service) runningRefresh(ctx context.Context, serverID string) (tasks.Task, bool, error) {
-	var taskID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM tasks WHERE server_id=? AND type='docker_status_refresh' AND status IN ('queued','scheduled','running','failed_retryable') ORDER BY created_at DESC LIMIT 1`, serverID).Scan(&taskID)
-	if err == sql.ErrNoRows {
-		return tasks.Task{}, false, nil
-	}
-	if err != nil {
-		return tasks.Task{}, false, err
-	}
-	task, err := s.tasks.Get(ctx, taskID)
-	if err != nil {
-		return tasks.Task{}, false, err
-	}
-	return task, true, nil
 }
 
 func (s *Service) readCapability(ctx context.Context, serverID string) (DockerCapability, error) {
@@ -554,4 +568,44 @@ func readRuntimeCache[T any](ctx context.Context, db *sql.DB, serverID, resource
 	}
 	t, _ := time.Parse(time.RFC3339Nano, refreshedAt)
 	return RuntimeList[T]{ServerID: serverID, LastRefreshedAt: &t, Items: items}, nil
+}
+
+func enrichManagedServices(items []RuntimeService) {
+	for i := range items {
+		if items[i].Labels == nil {
+			items[i].Labels = map[string]string{}
+		}
+		if items[i].ServiceID == "" {
+			items[i].ServiceID = items[i].Labels["panel.service.id"]
+		}
+		if items[i].ServiceName == "" {
+			items[i].ServiceName = items[i].Labels["panel.service.name"]
+		}
+		if items[i].Managed || items[i].Labels["panel.managed"] == "true" {
+			items[i].Managed = true
+		}
+	}
+}
+
+func (s *Service) advanceRefreshTask(ctx context.Context, taskID, stage, message string) {
+	if taskID == "" {
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, stage, message)
+}
+
+func (s *Service) markRefreshing(serverID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refreshing[serverID] {
+		return false
+	}
+	s.refreshing[serverID] = true
+	return true
+}
+
+func (s *Service) clearRefreshing(serverID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.refreshing, serverID)
 }
