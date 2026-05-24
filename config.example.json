@@ -5,7 +5,12 @@
   "dataRoot": "data",
   "appDatabase": "data/db/app.db",
   "metricsDatabase": "data/db/metrics.db",
-  "metricsRetentionDays": 7,
-  "metricsCollectionIntervalSeconds": 60,
-  "remoteCommandTimeoutSeconds": 30
+  "remoteCommandTimeoutSeconds": 30,
+  "nomad": {
+    "address": "http://127.0.0.1:4646",
+    "token": "",
+    "namespace": "default",
+    "region": "global",
+    "datacenter": "dc1"
+  }
 }

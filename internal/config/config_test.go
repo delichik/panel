@@ -25,6 +25,46 @@ func TestConfigValidationRejectsWeakSessionSecret(t *testing.T) {
 	}
 }
 
+func TestLoadNomadConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	raw := `{
+		"listenAddress": "127.0.0.1:8080",
+		"adminUsername": "admin",
+		"sessionSecret": "secret-session-value",
+		"dataRoot": "data",
+		"appDatabase": "data/db/app.db",
+		"metricsDatabase": "data/db/metrics.db",
+		"nomad": {
+			"address": "https://nomad.service:4646",
+			"token": "root-token",
+			"namespace": "apps",
+			"region": "global",
+			"datacenter": "dc1"
+		}
+	}`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Nomad.Address != "https://nomad.service:4646" || cfg.Nomad.Token != "root-token" || cfg.Nomad.Namespace != "apps" || cfg.Nomad.Region != "global" || cfg.Nomad.Datacenter != "dc1" {
+		t.Fatalf("nomad config = %#v", cfg.Nomad)
+	}
+}
+
+func TestLoadNomadConfigDefaults(t *testing.T) {
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Nomad.Address != "http://127.0.0.1:4646" || cfg.Nomad.Token != "" || cfg.Nomad.Namespace != "default" || cfg.Nomad.Region != "global" || cfg.Nomad.Datacenter != "dc1" {
+		t.Fatalf("nomad defaults = %#v", cfg.Nomad)
+	}
+}
+
 func TestLoadRejectsRuntimeSettingsInConfigFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	body := `{

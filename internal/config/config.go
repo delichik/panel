@@ -13,14 +13,23 @@ import (
 )
 
 type Config struct {
-	ListenAddress               string `json:"listenAddress"`
-	AdminUsername               string `json:"adminUsername"`
-	AdminPasswordHash           string `json:"adminPasswordHash"`
-	SessionSecret               string `json:"sessionSecret"`
-	DataRoot                    string `json:"dataRoot"`
-	AppDatabase                 string `json:"appDatabase"`
-	MetricsDatabase             string `json:"metricsDatabase"`
-	RemoteCommandTimeoutSeconds int    `json:"remoteCommandTimeoutSeconds"`
+	ListenAddress               string      `json:"listenAddress"`
+	AdminUsername               string      `json:"adminUsername"`
+	AdminPasswordHash           string      `json:"adminPasswordHash"`
+	SessionSecret               string      `json:"sessionSecret"`
+	DataRoot                    string      `json:"dataRoot"`
+	AppDatabase                 string      `json:"appDatabase"`
+	MetricsDatabase             string      `json:"metricsDatabase"`
+	RemoteCommandTimeoutSeconds int         `json:"remoteCommandTimeoutSeconds"`
+	Nomad                       NomadConfig `json:"nomad"`
+}
+
+type NomadConfig struct {
+	Address    string `json:"address"`
+	Token      string `json:"token"`
+	Namespace  string `json:"namespace"`
+	Region     string `json:"region"`
+	Datacenter string `json:"datacenter"`
 }
 
 const defaultAdminPassword = "admin"
@@ -43,6 +52,12 @@ func Default() Config {
 		AppDatabase:                 filepath.Join("data", "db", "app.db"),
 		MetricsDatabase:             filepath.Join("data", "db", "metrics.db"),
 		RemoteCommandTimeoutSeconds: 30,
+		Nomad: NomadConfig{
+			Address:    "http://127.0.0.1:4646",
+			Namespace:  "default",
+			Region:     "global",
+			Datacenter: "dc1",
+		},
 	}
 }
 
@@ -59,11 +74,28 @@ func Load(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
+	applyNomadDefaults(&cfg)
 	applyEnv(&cfg)
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 	return cfg, nil
+}
+
+func applyNomadDefaults(cfg *Config) {
+	defaults := Default().Nomad
+	if cfg.Nomad.Address == "" {
+		cfg.Nomad.Address = defaults.Address
+	}
+	if cfg.Nomad.Namespace == "" {
+		cfg.Nomad.Namespace = defaults.Namespace
+	}
+	if cfg.Nomad.Region == "" {
+		cfg.Nomad.Region = defaults.Region
+	}
+	if cfg.Nomad.Datacenter == "" {
+		cfg.Nomad.Datacenter = defaults.Datacenter
+	}
 }
 
 func applyEnv(cfg *Config) {
