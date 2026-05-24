@@ -1,0 +1,61 @@
+package appspec
+
+import "testing"
+
+func TestValidateRejectsInvalidName(t *testing.T) {
+	issues := Validate(Spec{Name: "Bad_Name", Image: "nginx"})
+	if !hasIssue(issues, "name") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsMissingImage(t *testing.T) {
+	issues := Validate(Spec{Name: "web"})
+	if !hasIssue(issues, "image") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsInvalidPortRange(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 70000}}})
+	if !hasIssue(issues, "ports[0].to") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsCheckReferencingMissingPort(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Checks: []Check{{Name: "http", Type: "http", Port: "admin"}}})
+	if !hasIssue(issues, "checks[0].port") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsServiceReferencingMissingPort(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Services: []Service{{Name: "web", Port: "admin"}}})
+	if !hasIssue(issues, "services[0].port") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsRelativeVolumeTarget(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Volumes: []Volume{{Source: "data", Target: "var/www"}}})
+	if !hasIssue(issues, "volumes[0].target") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestDecodeYAMLReturnsIssueForMalformedYAML(t *testing.T) {
+	_, issues := DecodeYAML("name: [")
+	if !hasIssue(issues, "specYaml") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func hasIssue(issues []Issue, field string) bool {
+	for _, issue := range issues {
+		if issue.Field == field {
+			return true
+		}
+	}
+	return false
+}
