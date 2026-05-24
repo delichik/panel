@@ -13,14 +13,14 @@ describe('tasksApi', () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { items: [], total: 0, page: 2, pageSize: 20 }, error: null }));
     const api = createTasksApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
 
-    await expect(api.list({ page: 2, pageSize: 20, status: 'running', serverId: 'srv_1', type: 'docker' })).resolves.toEqual({
+    await expect(api.list({ page: 2, pageSize: 20, status: 'running', serverId: 'srv_1', type: 'application_deploy' })).resolves.toEqual({
       items: [],
       total: 0,
       page: 2,
       pageSize: 20,
     });
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/v1/tasks?page=2&pageSize=20&status=running&serverId=srv_1&type=docker',
+      '/api/v1/tasks?page=2&pageSize=20&status=running&serverId=srv_1&type=application_deploy',
       expect.objectContaining({ method: 'GET' }),
     );
   });

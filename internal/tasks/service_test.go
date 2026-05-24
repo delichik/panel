@@ -127,17 +127,17 @@ func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	ctx := context.Background()
 	task, err := svc.Create(ctx, CreateInput{
 		OperationID:         "op_1",
-		Type:                "container_service_reconcile",
+		Type:                "application_deploy",
 		ServerID:            "srv_1",
 		NodeID:              "srv_1",
-		ResourceType:        "container_service",
-		ResourceID:          "svc_1",
+		ResourceType:        "application",
+		ResourceID:          "app_1",
 		TriggerType:         "user",
-		TriggerResourceType: "container_service",
-		TriggerResourceID:   "svc_1",
+		TriggerResourceType: "application",
+		TriggerResourceID:   "app_1",
 		TriggerTaskID:       "task_parent",
 		TriggeredBy:         "alice",
-		Summary:             "reconcile api",
+		Summary:             "deploy api",
 	})
 	if err != nil {
 		t.Fatal(err)

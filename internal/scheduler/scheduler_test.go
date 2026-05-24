@@ -47,7 +47,7 @@ func TestCollectMetricsDoesNotCreateTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, fakeMetricsExecutor{})
-	sched := New(settingsSvc, serverSvc, metricsSvc, nil, nil, taskSvc, nil)
+	sched := New(settingsSvc, serverSvc, metricsSvc, nil, taskSvc)
 
 	if err := sched.collectMetrics(ctx, srv); err != nil {
 		t.Fatal(err)

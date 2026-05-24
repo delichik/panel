@@ -399,7 +399,7 @@ onBeforeUnmount(() => {
 
         <h2 class="text-h5 font-weight-bold mb-2">Connect Your First SSH Server</h2>
         <p class="text-body-1 text-medium-emphasis mb-8 max-width-600">
-          Welcome to your Linux Panel control plane! To unlock detailed health metrics, automated package updates, container resource visualization, and easy application deployments, let's get your first server hooked up.
+          Welcome to your Linux Panel control plane! To unlock detailed health metrics, automated package updates, Nomad runtime visibility, and easy application deployments, let's get your first server hooked up.
         </p>
 
         <div class="features-checklist text-left mb-8 px-5 py-6 rounded-lg bg-surface-variant max-width-600 w-100">
@@ -502,7 +502,7 @@ onBeforeUnmount(() => {
         <v-card-text class="flex-grow-1 overflow-y-auto pa-4">
           <v-alert v-if="metricsError" type="error" variant="tonal" class="mb-4">{{ metricsError }}</v-alert>
 
-          <!-- Core Actionable Banners for Package and Container Updates -->
+          <!-- Core actionable banners for package updates and application attention. -->
           <div v-if="selectedServer" class="update-banners-container mb-4">
             <div
               v-if="selectedServer.packageUpdateCount > 0 || applicationAttentionCount > 0"

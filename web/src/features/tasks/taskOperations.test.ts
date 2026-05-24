@@ -24,17 +24,17 @@ function task(overrides: Partial<TaskDto>): TaskDto {
 describe('groupTasksByOperation', () => {
   it('groups tasks by operation_id and keeps trigger metadata visible', () => {
     const groups = groupTasksByOperation([
-      task({ id: 'task-a', operationId: 'op-1', triggerType: 'user', triggerResourceType: 'container_service', createdAt: '2026-05-23T00:00:00Z' }),
-      task({ id: 'task-b', operationId: 'op-1', triggerType: 'service_enable', createdAt: '2026-05-23T00:01:00Z' }),
-      task({ id: 'task-c', operationId: '', triggerType: 'runtime_explorer', createdAt: '2026-05-23T00:02:00Z' }),
+      task({ id: 'task-a', operationId: 'op-1', triggerType: 'user', triggerResourceType: 'application', createdAt: '2026-05-23T00:00:00Z' }),
+      task({ id: 'task-b', operationId: 'op-1', triggerType: 'application_deploy', createdAt: '2026-05-23T00:01:00Z' }),
+      task({ id: 'task-c', operationId: '', triggerType: 'nomad_runtime', createdAt: '2026-05-23T00:02:00Z' }),
     ]);
 
     expect(groups).toHaveLength(2);
     expect(groups[0].operationId).toBe('task-c');
-    expect(groups[0].triggerType).toBe('runtime_explorer');
+    expect(groups[0].triggerType).toBe('nomad_runtime');
     expect(groups[1].operationId).toBe('op-1');
     expect(groups[1].tasks.map((item) => item.id)).toEqual(['task-b', 'task-a']);
     expect(groups[1].triggerType).toBe('user');
-    expect(groups[1].triggerResourceType).toBe('container_service');
+    expect(groups[1].triggerResourceType).toBe('application');
   });
 });

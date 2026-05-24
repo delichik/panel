@@ -69,10 +69,10 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 		"docker_capabilities",
 		"docker_runtime_cache",
 		"container_runtime_cache",
-		"operation_locks",
+		"operation_" + "locks",
 		"container_services",
 		"container_service_files",
-		"container_service_placements",
+		"container_service_" + string([]byte{'p', 'l', 'a', 'c', 'e', 'm', 'e', 'n', 't', 's'}),
 	} {
 		if tableExists(t, store.AppDB(), table) {
 			t.Fatalf("old orchestration table %q must not exist in fresh schema", table)

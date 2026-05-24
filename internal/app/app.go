@@ -6,15 +6,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"panel/internal/applications"
 	"panel/internal/auth"
 	"panel/internal/config"
-	"panel/internal/containerops"
-	"panel/internal/containerservice"
 	"panel/internal/credential"
-	"panel/internal/docker"
 	"panel/internal/httpx"
 	"panel/internal/metrics"
 	"panel/internal/nomad"
@@ -47,11 +43,6 @@ func New(cfg config.Config) (*App, error) {
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	executor := sshx.NewSSHExecutor(credSvc, cfg.RemoteTimeout())
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
-	dockerSvc := docker.NewService(store.AppDB(), serverSvc, docker.NewCLIRuntime(executor), taskSvc)
-	containerSvc := containerservice.NewService(store.AppDB(), taskSvc)
-	containerSvc.SetLogReader(containerservice.NewDockerLogReader(serverSvc, executor))
-	dockerSvc.SetContainerServiceRestarter(containerSvc)
-	containerWorker := containerops.NewWorker(taskSvc, containerops.NewLeaseService(store.AppDB(), time.Minute), containerSvc, serverSvc, executor)
 	nomadClient := nomad.NewClient(nomad.Config{
 		Address:    cfg.Nomad.Address,
 		Token:      cfg.Nomad.Token,
@@ -72,11 +63,11 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, dockerSvc, packageSvc, taskSvc, containerWorker)
+	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), docker.NewHandler(dockerSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
 	return a, nil
 }
 
@@ -88,7 +79,7 @@ func (a *App) Close() error {
 }
 func (a *App) Handler() http.Handler { return a.mux }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, dockerH *docker.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuth(http.HandlerFunc(authH.Logout)))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
@@ -126,46 +117,6 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			packageH.UpgradeSelected(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/packages/upgrade-all"):
 			packageH.UpgradeAll(w, r)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/capability"):
-			dockerH.Capability(w, r)
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/docker/refresh"):
-			dockerH.Refresh(w, r)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/projects"):
-			dockerH.Projects(w, r)
-		case r.Method == http.MethodGet && strings.Contains(path, "/docker/projects/") && strings.HasSuffix(path, "/status"):
-			dockerH.ProjectStatus(w, r)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/services"):
-			dockerH.Services(w, r)
-		case r.Method == http.MethodPost && strings.Contains(path, "/docker/containers/"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodDelete && strings.Contains(path, "/docker/containers/"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/networks"):
-			dockerH.Networks(w, r)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/volumes"):
-			dockerH.Volumes(w, r)
-		case r.Method == http.MethodGet && strings.HasSuffix(path, "/docker/images"):
-			dockerH.Images(w, r)
-		case r.Method == http.MethodDelete && strings.Contains(path, "/docker/networks/"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/docker/networks/prune"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodDelete && strings.Contains(path, "/docker/volumes/"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodPost && strings.HasSuffix(path, "/docker/volumes/prune"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodDelete && strings.Contains(path, "/docker/images/"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodPost && strings.Contains(path, "/docker/images/"):
-			dockerH.NotImplemented(w, r)
-		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && runtimeExplorerNodeResource(path):
-			dockerH.RuntimeExplorer(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && strings.Contains(path, "/containers/"):
-			dockerH.RuntimeExplorer(w, r)
-		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && strings.Contains(path, "/containers/"):
-			dockerH.RuntimeExplorer(w, r)
-		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/runtime-explorer/nodes/") && strings.HasSuffix(path, "/prune"):
-			dockerH.RuntimeExplorer(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/applications":
 			applicationH.List(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/applications":
@@ -234,11 +185,6 @@ func serverResourcePath(path string) bool {
 func applicationResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "applications" && parts[3] != ""
-}
-
-func runtimeExplorerNodeResource(path string) bool {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "runtime-explorer" && parts[3] == "nodes" && parts[4] != ""
 }
 
 func (a *App) static(w http.ResponseWriter, r *http.Request) {

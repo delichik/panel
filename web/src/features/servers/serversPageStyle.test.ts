@@ -6,7 +6,7 @@ const serversPage = readFileSync(resolve(__dirname, 'pages/ServersPage.vue'), 'u
 const appLayout = readFileSync(resolve(__dirname, '../../layouts/AppLayout.vue'), 'utf8');
 const router = readFileSync(resolve(__dirname, '../../router/index.ts'), 'utf8');
 
-describe('ServersPage Docker style alignment', () => {
+describe('ServersPage shell style alignment', () => {
   it('uses sidebar submenu routes instead of page tabs', () => {
     expect(appLayout).toContain('<v-list-group value="servers">');
     expect(appLayout).toContain('<v-list-item to="/servers" title="Servers" value="servers" class="pl-8" />');
