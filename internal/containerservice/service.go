@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -377,6 +378,64 @@ func (s *Service) Reconcile(ctx context.Context, serviceID string) (tasks.Task, 
 		return tasks.Task{}, err
 	}
 	return s.enqueue(ctx, item.ID, TaskTypeReconcile, TriggerUser, "Reconciling Container Service "+item.Name)
+}
+
+func (s *Service) EnsureDesiredState(ctx context.Context) error {
+	items, err := s.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if !item.Enabled {
+			continue
+		}
+		needsReconcile, err := s.needsReconcile(ctx, item)
+		if err != nil {
+			return err
+		}
+		if !needsReconcile {
+			continue
+		}
+		if ok, err := s.hasActiveServiceOperation(ctx, item.ID); err != nil {
+			return err
+		} else if ok {
+			continue
+		}
+		task, err := s.enqueue(ctx, item.ID, TaskTypeReconcile, "desired_state", "Reconciling missing or stale Container Service "+item.Name)
+		if err != nil {
+			return err
+		}
+		_, _ = s.db.ExecContext(ctx, `UPDATE container_services SET last_task_id=? WHERE id=?`, task.ID, item.ID)
+	}
+	return nil
+}
+
+func (s *Service) hasActiveServiceOperation(ctx context.Context, serviceID string) (bool, error) {
+	for _, taskType := range []string{TaskTypeReconcile, TaskTypeEnable, TaskTypeDisable, TaskTypeRestart, TaskTypeDelete} {
+		if _, ok, err := s.tasks.ExistingActive(ctx, taskType, ResourceTypeContainerService, serviceID); err != nil {
+			return false, err
+		} else if ok {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (s *Service) needsReconcile(ctx context.Context, item ContainerService) (bool, error) {
+	runtime, err := s.Runtime(ctx, item.ID)
+	if err != nil {
+		return false, err
+	}
+	if runtime.Status == "missing" || runtime.Status == "exited" || runtime.Status == "unhealthy" {
+		return true, nil
+	}
+	if runtime.ObservedGeneration == nil || *runtime.ObservedGeneration != item.Generation {
+		return true, nil
+	}
+	if runtime.ObservedSpecRevision != "" && runtime.ObservedSpecRevision != item.SpecRevision {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *Service) Restart(ctx context.Context, serviceID string) (tasks.Task, error) {
@@ -782,9 +841,12 @@ func (s *Service) CreateFile(ctx context.Context, serviceID string, in FileInput
 		return File{}, panelerr.Validation("container_service_file_kind_invalid", "Service file kind must be binary or template")
 	}
 	now := time.Now().UTC()
-	content := []byte(in.Content)
+	content, err := fileContent(in)
+	if err != nil {
+		return File{}, err
+	}
 	sum := sha256.Sum256(content)
-	file := File{ID: id.New("csfile"), ServiceID: serviceID, Path: rel, Kind: in.Kind, ContentType: in.ContentType, Size: len(content), SHA256: hex.EncodeToString(sum[:]), Content: in.Content, CreatedAt: now, UpdatedAt: now}
+	file := File{ID: id.New("csfile"), ServiceID: serviceID, Path: rel, Kind: in.Kind, ContentType: in.ContentType, Size: len(content), SHA256: hex.EncodeToString(sum[:]), Content: string(content), CreatedAt: now, UpdatedAt: now}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return File{}, err
@@ -816,7 +878,10 @@ func (s *Service) UpdateFile(ctx context.Context, serviceID, fileID string, in F
 		return File{}, panelerr.Validation("container_service_file_kind_invalid", "Service file kind must be binary or template")
 	}
 	now := time.Now().UTC()
-	content := []byte(in.Content)
+	content, err := fileContent(in)
+	if err != nil {
+		return File{}, err
+	}
 	sum := sha256.Sum256(content)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1301,6 +1366,17 @@ func cleanFilePath(p string) (string, error) {
 		return "", fmt.Errorf("invalid file path")
 	}
 	return p, nil
+}
+
+func fileContent(in FileInput) ([]byte, error) {
+	if strings.TrimSpace(in.Base64Content) == "" {
+		return []byte(in.Content), nil
+	}
+	content, err := base64.StdEncoding.DecodeString(in.Base64Content)
+	if err != nil {
+		return nil, panelerr.BadRequest("container_service_file_base64_invalid", "File content is not valid base64")
+	}
+	return content, nil
 }
 
 func maskTemplateActions(source string) string {

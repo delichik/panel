@@ -142,6 +142,9 @@ func (s *Scheduler) containerServicesLoop(ctx context.Context) {
 			if err := s.containerOps.RunDue(ctx); err != nil {
 				log.Printf("container services worker: %v", err)
 			}
+			if err := s.containerOps.EnsureDesiredState(ctx); err != nil {
+				log.Printf("container services desired state: %v", err)
+			}
 		}
 	}
 }

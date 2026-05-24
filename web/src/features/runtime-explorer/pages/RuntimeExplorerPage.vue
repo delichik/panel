@@ -17,6 +17,8 @@ const loading = ref(false);
 const loadingServers = ref(false);
 const actionLoading = ref('');
 const error = ref('');
+const managedDeleteDialog = ref(false);
+const managedDeleteTarget = ref<RuntimeExplorerContainerDto | null>(null);
 
 const currentServer = computed(() => servers.value.find((server) => server.id === nodeId.value));
 const containers = computed(() => runtime.value?.containers ?? []);
@@ -70,6 +72,15 @@ async function loadRuntime() {
 }
 
 async function runContainerAction(action: 'restart' | 'stop' | 'delete', container: RuntimeExplorerContainerDto) {
+  if (action === 'delete' && container.managed) {
+    managedDeleteTarget.value = container;
+    managedDeleteDialog.value = true;
+    return;
+  }
+  await executeContainerAction(action, container);
+}
+
+async function executeContainerAction(action: 'restart' | 'stop' | 'delete', container: RuntimeExplorerContainerDto) {
   if (!nodeId.value) return;
   actionLoading.value = `${action}:${container.id}`;
   try {
@@ -85,6 +96,14 @@ async function runContainerAction(action: 'restart' | 'stop' | 'delete', contain
   } finally {
     actionLoading.value = '';
   }
+}
+
+async function confirmManagedDelete() {
+  const target = managedDeleteTarget.value;
+  if (!target) return;
+  managedDeleteDialog.value = false;
+  managedDeleteTarget.value = null;
+  await executeContainerAction('delete', target);
 }
 
 async function prune() {
@@ -243,6 +262,28 @@ onMounted(async () => {
         </v-card>
       </div>
     </div>
+
+    <v-dialog v-model="managedDeleteDialog" max-width="560">
+      <v-card>
+        <v-card-title class="text-subtitle-1 font-weight-bold">Delete managed container?</v-card-title>
+        <v-card-text>
+          <v-alert type="warning" variant="tonal" class="mb-3">
+            This container is managed by Container Service. Deleting it removes only the current Docker container; if the service is enabled, panel will automatically redeploy it.
+          </v-alert>
+          <div class="text-body-2">
+            Container: <strong>{{ managedDeleteTarget?.name || managedDeleteTarget?.id }}</strong>
+          </div>
+          <div v-if="managedDeleteTarget?.serviceName" class="text-body-2">
+            Service: <strong>{{ managedDeleteTarget.serviceName }}</strong>
+          </div>
+        </v-card-text>
+        <v-card-actions>
+          <v-spacer />
+          <v-btn variant="text" class="text-none" @click="managedDeleteDialog = false">Cancel</v-btn>
+          <v-btn color="error" variant="flat" class="text-none font-weight-bold" :loading="actionLoading === `delete:${managedDeleteTarget?.id}`" @click="confirmManagedDelete">Delete container</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 

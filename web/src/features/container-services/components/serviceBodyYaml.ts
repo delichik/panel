@@ -7,7 +7,7 @@ export interface ServiceVisualModel {
   labels?: Record<string, string>;
   dependsOn?: string[];
   networkMode?: string;
-  command?: string;
+  command?: string | string[];
 }
 
 export function visualToServiceBodyYaml(service: ServiceVisualModel) {
@@ -15,7 +15,8 @@ export function visualToServiceBodyYaml(service: ServiceVisualModel) {
   if (service.image) lines.push(`image: ${quoteYaml(service.image)}`);
   if (service.restart) lines.push(`restart: ${quoteYaml(service.restart)}`);
   if (service.networkMode) lines.push(`network_mode: ${quoteYaml(service.networkMode)}`);
-  if (service.command) lines.push(`command: ${quoteYaml(service.command)}`);
+  if (Array.isArray(service.command)) appendList(lines, 'command', service.command);
+  else if (service.command) lines.push(`command: ${quoteYaml(service.command)}`);
   appendList(lines, 'ports', service.ports);
   appendList(lines, 'volumes', service.volumes);
   appendList(lines, 'depends_on', service.dependsOn);
@@ -29,7 +30,7 @@ export function serviceBodyYamlToVisual(yaml: string): ServiceVisualModel {
     image: scalarValue(yaml, 'image') || '',
     restart: scalarValue(yaml, 'restart') || undefined,
     networkMode: scalarValue(yaml, 'network_mode') || undefined,
-    command: scalarValue(yaml, 'command') || undefined,
+    command: listValues(yaml, 'command').length ? listValues(yaml, 'command') : scalarValue(yaml, 'command') || undefined,
     ports: listValues(yaml, 'ports'),
     volumes: listValues(yaml, 'volumes'),
     dependsOn: dependsOnValues(yaml),

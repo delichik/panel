@@ -99,10 +99,11 @@ type File struct {
 }
 
 type FileInput struct {
-	Path        string `json:"path"`
-	Kind        string `json:"kind"`
-	Content     string `json:"content"`
-	ContentType string `json:"contentType"`
+	Path          string `json:"path"`
+	Kind          string `json:"kind"`
+	Content       string `json:"content"`
+	Base64Content string `json:"base64Content"`
+	ContentType   string `json:"contentType"`
 }
 
 type ValidationResult struct {

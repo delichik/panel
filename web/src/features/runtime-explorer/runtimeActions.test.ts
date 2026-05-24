@@ -19,13 +19,14 @@ function container(overrides: Partial<RuntimeExplorerContainerDto>): RuntimeExpl
 }
 
 describe('runtimeContainerActions', () => {
-  it('allows managed restart but blocks managed destructive actions', () => {
+  it('allows managed restart and delete but blocks managed stop', () => {
     const actions = runtimeContainerActions(container({ managed: true, serviceId: 'svc-1', serviceName: 'web' }));
 
     expect(actions.restart.disabled).toBe(false);
     expect(actions.stop.disabled).toBe(true);
-    expect(actions.delete.disabled).toBe(true);
+    expect(actions.delete.disabled).toBe(false);
     expect(actions.stop.reason).toContain('Container Service');
+    expect(actions.delete.reason).toContain('automatically redeploy');
     expect(actions.serviceLink).toBe('/container-services?service=svc-1');
   });
 

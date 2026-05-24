@@ -31,29 +31,29 @@ function statusColor(value: string) {
   <v-card variant="outlined" class="runtime-status-panel">
     <v-card-item class="py-3">
       <div class="d-flex justify-space-between align-center">
-        <div>
+        <div class="runtime-heading">
           <v-card-title class="text-subtitle-1 font-weight-bold pa-0">Runtime Status</v-card-title>
           <v-card-subtitle class="pa-0">{{ service?.nodeName || runtime?.nodeName || 'No placement' }}</v-card-subtitle>
         </div>
-        <v-chip :color="statusColor(status)" size="small" label>{{ status }}</v-chip>
+        <v-chip :color="statusColor(status)" size="small" variant="tonal" label>{{ status }}</v-chip>
       </div>
     </v-card-item>
     <v-divider />
     <v-card-text class="pa-4">
       <div class="status-grid">
-        <div>
+        <div class="metric-tile">
           <div class="text-caption text-medium-emphasis">DB generation</div>
           <div class="font-weight-bold font-tabular">{{ service?.generation ?? '-' }}</div>
         </div>
-        <div>
+        <div class="metric-tile">
           <div class="text-caption text-medium-emphasis">Runtime generation</div>
           <div class="font-weight-bold font-tabular">{{ runtimeGeneration ?? '-' }}</div>
         </div>
-        <div>
+        <div class="metric-tile">
           <div class="text-caption text-medium-emphasis">Spec revision</div>
           <div class="text-truncate">{{ service?.specRevision || service?.specHash || '-' }}</div>
         </div>
-        <div>
+        <div class="metric-tile">
           <div class="text-caption text-medium-emphasis">Observed revision</div>
           <div class="text-truncate">{{ runtimeRevision || '-' }}</div>
         </div>
@@ -74,9 +74,38 @@ function statusColor(value: string) {
   min-width: 0;
 }
 
+.runtime-heading {
+  min-width: 0;
+}
+
+.runtime-heading :deep(.v-card-subtitle) {
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .status-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  gap: 10px;
+}
+
+.metric-tile {
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(var(--v-theme-surface-variant), 0.46);
+}
+
+.metric-tile .font-weight-bold,
+.metric-tile .text-truncate {
+  margin-top: 2px;
+}
+
+@media (max-width: 520px) {
+  .status-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

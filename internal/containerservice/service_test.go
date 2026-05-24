@@ -252,8 +252,11 @@ func TestRenderSchedulePreviewAndFileCRUD(t *testing.T) {
 func TestEnabledFileChangeRecomputesSpecAndQueuesReconcileOnlyWhenChanged(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
-	created, err := svc.Create(ctx, SaveRequest{Name: "api", Enabled: true, ComposeServiceYAML: "image: nginx\n"})
+	created, err := svc.Create(ctx, SaveRequest{Name: "api", Enabled: false, ComposeServiceYAML: "image: nginx\n"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE container_services SET enabled=1,last_task_id='' WHERE id=?`, created.ID); err != nil {
 		t.Fatal(err)
 	}
 	initialTask := created.LastTaskID
@@ -323,6 +326,80 @@ func TestRuntimeStatusUsesDockerCacheLabels(t *testing.T) {
 	}
 	if runtime.ContainerID != "container-1" || !runtime.Managed {
 		t.Fatalf("runtime ownership not derived: %#v", runtime)
+	}
+}
+
+func TestEnsureDesiredStateQueuesReconcileForMissingEnabledService(t *testing.T) {
+	svc, taskSvc := newTestService(t)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, SaveRequest{Name: "api", Enabled: false, ComposeServiceYAML: "image: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE container_services SET enabled=1,last_task_id='' WHERE id=?`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnsureDesiredState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LastTaskID == "" || updated.LastTaskID == created.LastTaskID {
+		t.Fatalf("expected desired-state reconcile task, got %#v", updated)
+	}
+	task, err := taskSvc.Get(ctx, updated.LastTaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Type != TaskTypeReconcile || task.TriggerType != "desired_state" {
+		t.Fatalf("unexpected desired-state task: %#v", task)
+	}
+	if err := svc.EnsureDesiredState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	afterSecondCheck, err := svc.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterSecondCheck.LastTaskID != updated.LastTaskID {
+		t.Fatal("desired-state check should not queue duplicate active reconcile tasks")
+	}
+}
+
+func TestEnsureDesiredStateDoesNotQueueWhileServiceOperationIsActive(t *testing.T) {
+	svc, taskSvc := newTestService(t)
+	ctx := context.Background()
+	created, err := svc.Create(ctx, SaveRequest{Name: "api", Enabled: false, ComposeServiceYAML: "image: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE container_services SET enabled=1,last_task_id='' WHERE id=?`, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	active, err := taskSvc.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeDisable,
+		ResourceType: ResourceTypeContainerService,
+		ResourceID:   created.ID,
+		TriggerType:  TriggerUser,
+		Summary:      "Disabling Container Service api",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE container_services SET last_task_id=? WHERE id=?`, active.ID, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.EnsureDesiredState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Get(ctx, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.LastTaskID != active.ID {
+		t.Fatalf("desired-state check should not queue while disable is active; got last task %q, want %q", updated.LastTaskID, active.ID)
 	}
 }
 

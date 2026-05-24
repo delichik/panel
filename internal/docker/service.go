@@ -45,7 +45,7 @@ type ImageUpdateOperation struct {
 }
 
 type RefreshResult struct {
-	ServerID    string `json:"serverId"`
+	ServerID   string `json:"serverId"`
 	Refreshing bool   `json:"refreshing"`
 }
 
@@ -287,6 +287,9 @@ func (s *Service) RuntimeExplorerResourceTask(ctx context.Context, serverID stri
 							return tasks.Task{}, panelerr.Conflict("managed_runtime_restart_unavailable", "Container Service restart is unavailable")
 						}
 						return s.containerServices.Restart(ctx, serviceID)
+					}
+					if op.Action == "delete" {
+						return s.ResourceTask(ctx, serverID, op)
 					}
 					return tasks.Task{}, panelerr.Conflict("managed_runtime_action_forbidden", "Managed resources must be operated from Container Services")
 				}

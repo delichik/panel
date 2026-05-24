@@ -141,6 +141,31 @@ func TestRuntimeExplorerManagedRestartCreatesContainerServiceTask(t *testing.T) 
 	}
 }
 
+func TestRuntimeExplorerManagedDeleteCreatesDockerDeleteTask(t *testing.T) {
+	svc, srvID, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+	if err := svc.writeCapability(ctx, DockerCapability{ServerID: srvID, DockerInstalled: true, DockerVersion: "25", ComposeInstalled: true, ComposeVersion: "2", IncludeSupported: true, Supported: true, LastCheckedAt: &now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.writeCache(ctx, srvID, "services", []RuntimeService{{
+		ID:      "container-1",
+		Name:    "api",
+		Managed: true,
+		Labels:  map[string]string{"panel.service.id": "csvc_1", "panel.service.name": "api"},
+	}}, now); err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.RuntimeExplorerResourceTask(ctx, srvID, ResourceOperation{Kind: "container", Action: "delete", ID: "container-1", Summary: "Deleting Docker container container-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Type != "docker_container_delete" {
+		t.Fatalf("expected Docker delete task for managed container deletion, got %#v", task)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, string, func()) {
 	t.Helper()
 	dir := t.TempDir()

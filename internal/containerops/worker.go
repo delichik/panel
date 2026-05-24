@@ -51,6 +51,10 @@ func (w *Worker) RunDue(ctx context.Context) error {
 	return nil
 }
 
+func (w *Worker) EnsureDesiredState(ctx context.Context) error {
+	return w.services.EnsureDesiredState(ctx)
+}
+
 func (w *Worker) RunNow(ctx context.Context, task tasks.Task) error {
 	switch task.Type {
 	case containerservice.TaskTypeReconcile:
