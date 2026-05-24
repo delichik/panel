@@ -436,11 +436,26 @@ export interface NomadJobDto {
   ID?: string;
   Name?: string;
   Type?: string;
+  Status?: string;
   Region?: string;
   Namespace?: string;
   Datacenters?: string[];
   Meta?: Record<string, string>;
   TaskGroups?: NomadTaskGroupDto[];
+}
+
+export interface NomadStatusDto {
+  connected: boolean;
+  leader?: string;
+}
+
+export interface NomadNodeDto {
+  ID?: string;
+  Name?: string;
+  Datacenter?: string;
+  Status?: string;
+  SchedulingEligibility?: string;
+  Eligibility?: string;
 }
 
 export interface NomadEvaluationDto {

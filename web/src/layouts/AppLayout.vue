@@ -89,7 +89,9 @@ onBeforeUnmount(() => {
             <v-list-item v-bind="props" prepend-icon="mdi-cloud-braces" title="Runtime" />
           </template>
           <v-list-item to="/applications" title="Applications" value="applications" class="pl-8" />
-          <v-list-item to="/runtime-explorer" title="Runtime Explorer" value="runtime-explorer" class="pl-8" />
+          <v-list-item to="/nomad/nodes" title="Nomad Nodes" value="nomad-nodes" class="pl-8" />
+          <v-list-item to="/nomad/jobs" title="Nomad Jobs" value="nomad-jobs" class="pl-8" />
+          <v-list-item to="/deployments" title="Deployments" value="deployments" class="pl-8" />
         </v-list-group>
 
         <v-list-item to="/tasks" prepend-icon="mdi-clipboard-list" title="Task Center" value="tasks" />
