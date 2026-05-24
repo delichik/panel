@@ -43,6 +43,14 @@ func (c *Client) ListJobs(ctx context.Context, prefix string) ([]JobListItem, er
 	return out, c.do(ctx, http.MethodGet, "/v1/jobs", query, nil, &out)
 }
 
+func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
+	var leader string
+	if err := c.do(ctx, http.MethodGet, "/v1/status/leader", nil, nil, &leader); err != nil {
+		return StatusResponse{Connected: false}, err
+	}
+	return StatusResponse{Connected: true, Leader: leader}, nil
+}
+
 func (c *Client) ReadJob(ctx context.Context, id string) (Job, error) {
 	var out Job
 	return out, c.do(ctx, http.MethodGet, "/v1/job/"+url.PathEscape(id), nil, nil, &out)

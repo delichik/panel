@@ -117,3 +117,65 @@ func TestClientJobMutationEndpointPaths(t *testing.T) {
 		}
 	}
 }
+
+func TestClientInventoryEndpointPaths(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/status/leader":
+			_ = json.NewEncoder(w).Encode("127.0.0.1:4647")
+		case "/v1/nodes":
+			_ = json.NewEncoder(w).Encode([]NodeListItem{})
+		case "/v1/deployments":
+			_ = json.NewEncoder(w).Encode([]Deployment{})
+		case "/v1/evaluations":
+			_ = json.NewEncoder(w).Encode([]Evaluation{})
+		case "/v1/services":
+			_ = json.NewEncoder(w).Encode([]ServiceRegistration{})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Address: server.URL}, server.Client())
+	if _, err := client.Status(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Nodes(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Deployments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Evaluations(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Services(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{
+		"GET /v1/status/leader",
+		"GET /v1/nodes",
+		"GET /v1/deployments",
+		"GET /v1/evaluations",
+		"GET /v1/services",
+	}
+	if !equalStringSlices(requests, want) {
+		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -76,7 +76,7 @@ func New(cfg config.Config) (*App, error) {
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), docker.NewHandler(dockerSvc), applications.NewHandler(applicationSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), docker.NewHandler(dockerSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
 	return a, nil
 }
 
@@ -88,7 +88,7 @@ func (a *App) Close() error {
 }
 func (a *App) Handler() http.Handler { return a.mux }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, dockerH *docker.Handler, applicationH *applications.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, dockerH *docker.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuth(http.HandlerFunc(authH.Logout)))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
@@ -190,6 +190,18 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			applicationH.Update(w, r)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/applications/") && applicationResourcePath(path):
 			applicationH.Delete(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/status":
+			nomadH.Status(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/nodes":
+			nomadH.Nodes(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/jobs":
+			nomadH.Jobs(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/deployments":
+			nomadH.Deployments(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/evaluations":
+			nomadH.Evaluations(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/services":
+			nomadH.Services(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/tasks":
 			taskH.List(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/retry") && strings.HasPrefix(path, "/api/v1/tasks/"):

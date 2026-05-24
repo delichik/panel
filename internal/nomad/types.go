@@ -93,6 +93,11 @@ type JobListItem struct {
 	Datacenters []string `json:"Datacenters,omitempty"`
 }
 
+type StatusResponse struct {
+	Connected bool   `json:"connected"`
+	Leader    string `json:"leader,omitempty"`
+}
+
 type ValidateResponse struct {
 	DriverConfigValidated bool     `json:"DriverConfigValidated,omitempty"`
 	ValidationErrors      []string `json:"ValidationErrors,omitempty"`
