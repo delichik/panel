@@ -2,12 +2,14 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { serversApi, type CredentialInput } from '@/api/servers';
-import type { CredentialDto, ServerDto } from '@/types/api';
+import { nomadApi } from '@/api/nomad';
+import type { CredentialDto, NomadControlPlaneDto, ProjectedNomadNodeDto, ServerDto } from '@/types/api';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 
 const route = useRoute();
 const servers = ref<ServerDto[]>([]);
 const credentials = ref<CredentialDto[]>([]);
+const controlPlane = ref<NomadControlPlaneDto | null>(null);
 const loading = ref(false);
 const error = ref('');
 const serverDialog = ref(false);
@@ -89,6 +91,20 @@ function credentialById(id?: string | null) {
   return credentials.value.find((credential) => credential.id === id);
 }
 
+function nomadProjectionForServer(serverId: string): ProjectedNomadNodeDto | null {
+  return controlPlane.value?.nodes.find((node) => node.serverId === serverId) ?? null;
+}
+
+function nomadStatusForServer(serverId: string) {
+  const projection = nomadProjectionForServer(serverId);
+  if (!projection) return { label: 'Not joined', color: 'grey' };
+  if (projection.status === 'bootstrapping') return { label: 'Bootstrapping server', color: 'warning' };
+  if (projection.status === 'joining') return { label: 'Joining client', color: 'warning' };
+  if (projection.status === 'failed') return { label: 'Join failed', color: 'error' };
+  if (projection.kind === 'managed') return { label: 'Managed node', color: 'primary' };
+  return { label: projection.status || 'Not joined', color: 'grey' };
+}
+
 function resetServerForm(server?: ServerDto) {
   editing.value = server ?? null;
 
@@ -144,12 +160,14 @@ function editCredential(credential: CredentialDto) {
 async function load() {
   loading.value = true;
   try {
-    const [serverRows, credentialRows] = await Promise.all([
+    const [serverRows, credentialRows, nomadState] = await Promise.all([
       serversApi.listServers(),
       serversApi.listCredentials(),
+      nomadApi.controlPlane().catch(() => null),
     ]);
     servers.value = serverRows;
     credentials.value = credentialRows;
+    controlPlane.value = nomadState;
     error.value = '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Unable to load servers';
@@ -302,6 +320,7 @@ onMounted(load);
             <th class="font-weight-bold">Name & Traits</th>
             <th class="font-weight-bold">Host</th>
             <th class="font-weight-bold">SSH User</th>
+            <th class="font-weight-bold">Nomad</th>
             <th class="font-weight-bold">Distro</th>
             <th class="font-weight-bold">Sudo</th>
             <th class="font-weight-bold text-right" style="width: 380px;">Actions</th>
@@ -309,7 +328,7 @@ onMounted(load);
         </thead>
         <tbody>
           <tr v-if="servers.length === 0">
-            <td colspan="6" class="text-center py-6 text-grey-darken-1">No servers registered</td>
+            <td colspan="7" class="text-center py-6 text-grey-darken-1">No servers registered</td>
           </tr>
           <tr v-for="row in servers" :key="row.id">
             <td class="font-weight-bold py-3">
@@ -340,6 +359,11 @@ onMounted(load);
               <div class="text-caption text-grey-darken-1">
                 {{ row.sshUsername ? 'override' : 'from credential' }}
               </div>
+            </td>
+            <td>
+              <v-chip :color="nomadStatusForServer(row.id).color" size="small" variant="tonal" label>
+                {{ nomadStatusForServer(row.id).label }}
+              </v-chip>
             </td>
             <td>
               <v-chip :color="row.os?.supported ? 'success' : 'warning'" size="small" label>

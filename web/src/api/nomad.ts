@@ -1,12 +1,18 @@
 import { apiClient, type ApiClient } from './client';
 import type {
+  NomadControlPlaneDto,
   NomadDeploymentDto,
   NomadEvaluationDto,
   NomadJobDto,
   NomadNodeDto,
   NomadServiceRegistrationDto,
   NomadStatusDto,
+  ServerDto,
 } from '@/types/api';
+
+export interface TaskCreatedDto {
+  taskId: string;
+}
 
 export function createNomadApi(client: ApiClient = apiClient) {
   return {
@@ -27,6 +33,18 @@ export function createNomadApi(client: ApiClient = apiClient) {
     },
     services() {
       return client.get<NomadServiceRegistrationDto[]>('/nomad/services');
+    },
+    controlPlane() {
+      return client.get<NomadControlPlaneDto>('/nomad/control-plane');
+    },
+    joinCandidates() {
+      return client.get<ServerDto[]>('/nomad/join-candidates');
+    },
+    joinServer(serverId: string) {
+      return client.post<TaskCreatedDto>('/nomad/join', { serverId });
+    },
+    bootstrapServer(serverId: string) {
+      return client.post<TaskCreatedDto>('/nomad/bootstrap-server', { serverId });
     },
   };
 }

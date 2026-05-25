@@ -5,6 +5,8 @@ import (
 	"net/http"
 
 	"panel/internal/httpx"
+	"panel/internal/server"
+	"panel/internal/tasks"
 )
 
 type inventoryClient interface {
@@ -18,10 +20,22 @@ type inventoryClient interface {
 
 type Handler struct {
 	client inventoryClient
+	join   joinService
 }
 
-func NewHandler(client inventoryClient) *Handler {
-	return &Handler{client: client}
+type joinService interface {
+	ControlPlane(ctx context.Context) (ControlPlane, error)
+	Candidates(ctx context.Context) ([]server.Server, error)
+	JoinClient(ctx context.Context, serverID string) (tasks.Task, error)
+	BootstrapServer(ctx context.Context, serverID string) (tasks.Task, error)
+}
+
+func NewHandler(client inventoryClient, join ...joinService) *Handler {
+	var joinSvc joinService
+	if len(join) > 0 {
+		joinSvc = join[0]
+	}
+	return &Handler{client: client, join: joinSvc}
 }
 
 func (h *Handler) Status(w http.ResponseWriter, r *http.Request) {
@@ -76,4 +90,52 @@ func (h *Handler) Services(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ControlPlane(w http.ResponseWriter, r *http.Request) {
+	result, err := h.join.ControlPlane(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) JoinCandidates(w http.ResponseWriter, r *http.Request) {
+	result, err := h.join.Candidates(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) JoinClient(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServerID string `json:"serverId"`
+	}
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	task, err := h.join.JoinClient(r.Context(), req.ServerID)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
+func (h *Handler) BootstrapServer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ServerID string `json:"serverId"`
+	}
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	task, err := h.join.BootstrapServer(r.Context(), req.ServerID)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }

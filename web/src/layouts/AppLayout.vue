@@ -78,7 +78,7 @@ onBeforeUnmount(() => {
           <template #activator="{ props }">
             <v-list-item v-bind="props" prepend-icon="mdi-server" title="Servers" />
           </template>
-          <v-list-item to="/servers" title="Servers" value="servers" class="pl-8" />
+          <v-list-item to="/servers" title="Node" value="node" class="pl-8" />
           <v-list-item to="/credentials" title="Credentials" value="credentials" class="pl-8" />
         </v-list-group>
 

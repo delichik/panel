@@ -9,7 +9,7 @@ const router = readFileSync(resolve(__dirname, '../../router/index.ts'), 'utf8')
 describe('ServersPage shell style alignment', () => {
   it('uses sidebar submenu routes instead of page tabs', () => {
     expect(appLayout).toContain('<v-list-group value="servers">');
-    expect(appLayout).toContain('<v-list-item to="/servers" title="Servers" value="servers" class="pl-8" />');
+    expect(appLayout).toContain('<v-list-item to="/servers" title="Node" value="node" class="pl-8" />');
     expect(appLayout).toContain('<v-list-item to="/credentials" title="Credentials" value="credentials" class="pl-8" />');
     expect(router).toContain("{ path: 'credentials', name: 'credentials', component: ServersPage");
     expect(serversPage).not.toContain('<v-tabs');
@@ -22,5 +22,17 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).not.toContain('variablesDialog');
     expect(serversPage).not.toContain('<v-dialog v-model="serverDialog"');
     expect(serversPage).not.toContain('<v-dialog v-model="credentialDialog"');
+  });
+
+  it('shows derived Nomad status without adding server-level Nomad actions', () => {
+    expect(serversPage).toContain('nomadApi.controlPlane');
+    expect(serversPage).toContain('nomadStatusForServer');
+    expect(serversPage).toContain('Not joined');
+    expect(serversPage).toContain('Bootstrapping server');
+    expect(serversPage).toContain('Joining client');
+    expect(serversPage).toContain('Managed node');
+    expect(serversPage).toContain('Join failed');
+    expect(serversPage).not.toContain('nomadApi.joinServer');
+    expect(serversPage).not.toContain('nomadApi.bootstrapServer');
   });
 });

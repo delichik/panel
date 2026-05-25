@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -70,8 +71,10 @@ func (e *SSHExecutor) exec(ctx context.Context, target Target, command CommandSp
 	defer session.Close()
 
 	var stdout, stderr bytes.Buffer
-	session.Stdout = &stdout
-	session.Stderr = &stderr
+	stdoutWriter := newStreamWriter(&stdout, command.OnStdout)
+	stderrWriter := newStreamWriter(&stderr, command.OnStderr)
+	session.Stdout = stdoutWriter
+	session.Stderr = stderrWriter
 	errCh := make(chan error, 1)
 	go func() {
 		errCh <- session.Run(command.Command)
@@ -80,12 +83,16 @@ func (e *SSHExecutor) exec(ctx context.Context, target Target, command CommandSp
 	select {
 	case <-ctx.Done():
 		_ = session.Close()
+		stdoutWriter.Flush()
+		stderrWriter.Flush()
 		result.Stdout = stdout.String()
 		result.Stderr = stderr.String()
 		result.FinishedAt = time.Now().UTC()
 		result.TimedOut = true
 		return result, panelerr.Timeout("Remote command timed out")
 	case err := <-errCh:
+		stdoutWriter.Flush()
+		stderrWriter.Flush()
 		result.Stdout = stdout.String()
 		result.Stderr = stderr.String()
 		result.FinishedAt = time.Now().UTC()
@@ -152,4 +159,50 @@ func authMethod(c credential.ResolvedCredential) (ssh.AuthMethod, error) {
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+type streamWriter struct {
+	dst      io.Writer
+	onLine   func(string)
+	pending  strings.Builder
+	lastByte byte
+}
+
+func newStreamWriter(dst io.Writer, onLine func(string)) *streamWriter {
+	return &streamWriter{dst: dst, onLine: onLine}
+}
+
+func (w *streamWriter) Write(p []byte) (int, error) {
+	n, err := w.dst.Write(p)
+	if w.onLine == nil {
+		return n, err
+	}
+	for _, b := range p {
+		switch b {
+		case '\n':
+			if w.lastByte != '\r' {
+				w.emit()
+			}
+		case '\r':
+			w.emit()
+		default:
+			w.pending.WriteByte(b)
+		}
+		w.lastByte = b
+	}
+	return n, err
+}
+
+func (w *streamWriter) Flush() {
+	if w.onLine != nil && w.pending.Len() > 0 {
+		w.emit()
+	}
+}
+
+func (w *streamWriter) emit() {
+	line := strings.TrimSpace(w.pending.String())
+	w.pending.Reset()
+	if line != "" {
+		w.onLine(line)
+	}
 }

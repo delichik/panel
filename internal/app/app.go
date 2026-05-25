@@ -55,6 +55,7 @@ func New(cfg config.Config) (*App, error) {
 		Region:     cfg.Nomad.Region,
 		Datacenter: cfg.Nomad.Datacenter,
 	})
+	nomadJoinSvc := nomad.NewJoinService(serverSvc, nomadClient, executor, taskSvc, cfg.Nomad)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
@@ -67,7 +68,7 @@ func New(cfg config.Config) (*App, error) {
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
 	return a, nil
 }
 
@@ -153,6 +154,14 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			nomadH.Evaluations(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/nomad/services":
 			nomadH.Services(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/control-plane":
+			nomadH.ControlPlane(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/nomad/join-candidates":
+			nomadH.JoinCandidates(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/nomad/join":
+			nomadH.JoinClient(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/nomad/bootstrap-server":
+			nomadH.BootstrapServer(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/tasks":
 			taskH.List(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/retry") && strings.HasPrefix(path, "/api/v1/tasks/"):

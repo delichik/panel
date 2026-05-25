@@ -1,6 +1,7 @@
 package nomad
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -8,6 +9,8 @@ import (
 	"testing"
 
 	"panel/internal/httpx"
+	"panel/internal/server"
+	"panel/internal/tasks"
 )
 
 func TestHandlerInventoryEndpoints(t *testing.T) {
@@ -52,6 +55,91 @@ func TestHandlerInventoryEndpoints(t *testing.T) {
 	}
 }
 
+func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
+	fake := &fakeJoinService{
+		candidates: []server.Server{{ID: "srv_1", Name: "worker-1", Host: "10.0.0.10", Port: 22}},
+		controlPlane: ControlPlane{
+			Status: ControlPlaneBootstrapping,
+			Nodes: []ProjectedNode{{
+				Kind:     ProjectedNodePending,
+				ServerID: "srv_1",
+				Name:     "worker-1",
+				Role:     ProjectedNodeRoleServer,
+				Status:   "bootstrapping",
+				TaskID:   "task_bootstrap",
+			}},
+			BootstrapCandidates: []server.Server{{ID: "srv_1", Name: "worker-1", Host: "10.0.0.10", Port: 22}},
+		},
+		task:       tasks.Task{ID: "task_1"},
+		bootstrap:  tasks.Task{ID: "task_bootstrap"},
+	}
+	handler := NewHandler(&fakeInventoryClient{}, fake)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/nomad/join-candidates", nil)
+	handler.JoinCandidates(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("candidates status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var listEnv struct {
+		Data []server.Server `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listEnv); err != nil {
+		t.Fatal(err)
+	}
+	if len(listEnv.Data) != 1 || listEnv.Data[0].ID != "srv_1" {
+		t.Fatalf("unexpected candidates: %#v", listEnv.Data)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/nomad/control-plane", nil)
+	handler.ControlPlane(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("control-plane status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var cpEnv struct {
+		Data ControlPlane `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &cpEnv); err != nil {
+		t.Fatal(err)
+	}
+	if cpEnv.Data.Status != ControlPlaneBootstrapping || len(cpEnv.Data.Nodes) != 1 || cpEnv.Data.Nodes[0].TaskID != "task_bootstrap" {
+		t.Fatalf("unexpected control-plane result: %#v", cpEnv.Data)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/join", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	handler.JoinClient(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("join status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var joinEnv struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &joinEnv); err != nil {
+		t.Fatal(err)
+	}
+	if fake.joinedServerID != "srv_1" || joinEnv.Data["taskId"] != "task_1" {
+		t.Fatalf("unexpected join result joined=%q body=%#v", fake.joinedServerID, joinEnv.Data)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/bootstrap-server", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	handler.BootstrapServer(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("bootstrap status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var bootstrapEnv struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &bootstrapEnv); err != nil {
+		t.Fatal(err)
+	}
+	if fake.bootstrappedServerID != "srv_1" || bootstrapEnv.Data["taskId"] != "task_bootstrap" {
+		t.Fatalf("unexpected bootstrap result server=%q body=%#v", fake.bootstrappedServerID, bootstrapEnv.Data)
+	}
+}
+
 type fakeInventoryClient struct {
 	status      StatusResponse
 	nodes       []NodeListItem
@@ -59,6 +147,33 @@ type fakeInventoryClient struct {
 	deployments []Deployment
 	evaluations []Evaluation
 	services    []ServiceRegistration
+}
+
+type fakeJoinService struct {
+	candidates           []server.Server
+	controlPlane         ControlPlane
+	task                 tasks.Task
+	bootstrap            tasks.Task
+	joinedServerID       string
+	bootstrappedServerID string
+}
+
+func (f *fakeJoinService) Candidates(context.Context) ([]server.Server, error) {
+	return f.candidates, nil
+}
+
+func (f *fakeJoinService) ControlPlane(context.Context) (ControlPlane, error) {
+	return f.controlPlane, nil
+}
+
+func (f *fakeJoinService) JoinClient(_ context.Context, serverID string) (tasks.Task, error) {
+	f.joinedServerID = serverID
+	return f.task, nil
+}
+
+func (f *fakeJoinService) BootstrapServer(_ context.Context, serverID string) (tasks.Task, error) {
+	f.bootstrappedServerID = serverID
+	return f.bootstrap, nil
 }
 
 func (f *fakeInventoryClient) Status(ctx context.Context) (StatusResponse, error) {

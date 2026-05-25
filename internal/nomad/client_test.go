@@ -3,10 +3,13 @@ package nomad
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"panel/internal/panelerr"
 )
 
 func TestClientAddsTokenAndNamespace(t *testing.T) {
@@ -71,6 +74,28 @@ func TestClientDecodesNomadErrors(t *testing.T) {
 	if !strings.Contains(err.Error(), "bad job") || !strings.Contains(err.Error(), "missing group") {
 		t.Fatalf("error = %v", err)
 	}
+	var domain *panelerr.Error
+	if !errors.As(err, &domain) || domain.Code != "nomad_api_error" || domain.HTTPStatus != http.StatusBadGateway {
+		t.Fatalf("expected nomad_api_error bad gateway, got %#v", err)
+	}
+}
+
+func TestClientWrapsTransportErrorsForHTTPResponse(t *testing.T) {
+	client := NewClient(Config{Address: "http://nomad.invalid:4646"}, &http.Client{Transport: failingRoundTripper{}})
+	_, err := client.Status(context.Background())
+	var domain *panelerr.Error
+	if !errors.As(err, &domain) {
+		t.Fatalf("expected panel error, got %T %v", err, err)
+	}
+	if domain.Code != "nomad_unreachable" || domain.HTTPStatus != http.StatusBadGateway {
+		t.Fatalf("unexpected panel error: %#v", domain)
+	}
+}
+
+type failingRoundTripper struct{}
+
+func (failingRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, errors.New("dial tcp: connection refused")
 }
 
 func TestClientJobMutationEndpointPaths(t *testing.T) {
@@ -163,6 +188,35 @@ func TestClientInventoryEndpointPaths(t *testing.T) {
 		"GET /v1/evaluations",
 		"GET /v1/services",
 	}
+	if !equalStringSlices(requests, want) {
+		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+}
+
+func TestClientNodesEnrichesNodeMetaFromDetails(t *testing.T) {
+	var requests []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.Path)
+		switch r.URL.Path {
+		case "/v1/nodes":
+			_ = json.NewEncoder(w).Encode([]NodeListItem{{ID: "node-1", Name: "worker"}})
+		case "/v1/node/node-1":
+			_ = json.NewEncoder(w).Encode(NodeListItem{ID: "node-1", Meta: map[string]string{"panel_server_id": "srv_1"}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Address: server.URL}, server.Client())
+	nodes, err := client.Nodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := nodes[0].Meta["panel_server_id"]; got != "srv_1" {
+		t.Fatalf("panel_server_id = %q", got)
+	}
+	want := []string{"GET /v1/nodes", "GET /v1/node/node-1"}
 	if !equalStringSlices(requests, want) {
 		t.Fatalf("requests = %#v, want %#v", requests, want)
 	}

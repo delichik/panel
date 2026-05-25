@@ -155,11 +155,13 @@ type Evaluation struct {
 }
 
 type NodeListItem struct {
-	ID          string `json:"ID,omitempty"`
-	Name        string `json:"Name,omitempty"`
-	Datacenter  string `json:"Datacenter,omitempty"`
-	Status      string `json:"Status,omitempty"`
-	Eligibility string `json:"SchedulingEligibility,omitempty"`
+	ID          string            `json:"ID,omitempty"`
+	Name        string            `json:"Name,omitempty"`
+	Address     string            `json:"Address,omitempty"`
+	Datacenter  string            `json:"Datacenter,omitempty"`
+	Status      string            `json:"Status,omitempty"`
+	Eligibility string            `json:"SchedulingEligibility,omitempty"`
+	Meta        map[string]string `json:"Meta,omitempty"`
 }
 
 type ServiceRegistration struct {

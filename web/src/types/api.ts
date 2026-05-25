@@ -210,13 +210,40 @@ export interface NomadStatusDto {
   leader?: string;
 }
 
+export type NomadControlPlaneStatus = 'unconfigured' | 'bootstrapping' | 'connected' | 'degraded';
+export type ProjectedNomadNodeKind = 'managed' | 'pending' | 'unmanaged';
+export type ProjectedNomadNodeRole = 'server' | 'client' | 'unknown';
+export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'ready' | 'down' | 'failed' | 'unmanaged' | string;
+
+export interface ProjectedNomadNodeDto {
+  kind: ProjectedNomadNodeKind;
+  serverId?: string;
+  nodeId?: string;
+  name: string;
+  host?: string;
+  role: ProjectedNomadNodeRole;
+  status: ProjectedNomadNodeStatus;
+  taskId?: string;
+  error?: string;
+}
+
+export interface NomadControlPlaneDto {
+  status: NomadControlPlaneStatus;
+  leader?: string;
+  nodes: ProjectedNomadNodeDto[];
+  joinCandidates: ServerDto[];
+  bootstrapCandidates: ServerDto[];
+}
+
 export interface NomadNodeDto {
   ID?: string;
   Name?: string;
+  Address?: string;
   Datacenter?: string;
   Status?: string;
   SchedulingEligibility?: string;
   Eligibility?: string;
+  Meta?: Record<string, string>;
 }
 
 export interface NomadEvaluationDto {

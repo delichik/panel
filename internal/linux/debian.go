@@ -77,18 +77,34 @@ func (DebianAdapter) UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, t
 }
 
 func runLogged(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, cmd string, log LogSink) error {
-	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: cmd})
-	for _, line := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
-		if strings.TrimSpace(line) != "" {
+	stdoutStreamed := false
+	stderrStreamed := false
+	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
+		Command: cmd,
+		OnStdout: func(line string) {
+			stdoutStreamed = true
 			_ = log.AppendLog(ctx, "stdout", line)
-		}
-	}
-	for _, line := range strings.Split(strings.TrimSpace(res.Stderr), "\n") {
-		if strings.TrimSpace(line) != "" {
+		},
+		OnStderr: func(line string) {
+			stderrStreamed = true
 			_ = log.AppendLog(ctx, "stderr", line)
-		}
+		},
+	})
+	if !stdoutStreamed {
+		appendBufferedLog(ctx, log, "stdout", res.Stdout)
+	}
+	if !stderrStreamed {
+		appendBufferedLog(ctx, log, "stderr", res.Stderr)
 	}
 	return err
+}
+
+func appendBufferedLog(ctx context.Context, log LogSink, stream, out string) {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			_ = log.AppendLog(ctx, stream, line)
+		}
+	}
 }
 
 func ParseAptListUpgradable(out string) []PackageUpdate {

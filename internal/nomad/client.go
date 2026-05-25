@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,11 +11,15 @@ import (
 	"path"
 	"strconv"
 	"strings"
+	"sync"
+
+	"panel/internal/panelerr"
 )
 
 type Client struct {
 	cfg        Config
 	httpClient *http.Client
+	mu         sync.RWMutex
 	baseURL    *url.URL
 }
 
@@ -32,6 +35,17 @@ func NewClient(cfg Config, httpClient *http.Client) *Client {
 		baseURL = &url.URL{Scheme: "http", Host: "127.0.0.1:4646"}
 	}
 	return &Client{cfg: cfg, httpClient: httpClient, baseURL: baseURL}
+}
+
+func (c *Client) SetAddress(address string) {
+	baseURL, err := url.Parse(strings.TrimRight(address, "/"))
+	if err != nil || baseURL.Host == "" {
+		return
+	}
+	c.mu.Lock()
+	c.cfg.Address = address
+	c.baseURL = baseURL
+	c.mu.Unlock()
 }
 
 func (c *Client) ListJobs(ctx context.Context, prefix string) ([]JobListItem, error) {
@@ -97,7 +111,20 @@ func (c *Client) JobEvaluations(ctx context.Context, id string) ([]Evaluation, e
 
 func (c *Client) Nodes(ctx context.Context) ([]NodeListItem, error) {
 	var out []NodeListItem
-	return out, c.do(ctx, http.MethodGet, "/v1/nodes", nil, nil, &out)
+	if err := c.do(ctx, http.MethodGet, "/v1/nodes", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	for i := range out {
+		if out[i].ID == "" || out[i].Meta != nil {
+			continue
+		}
+		var detail NodeListItem
+		if err := c.do(ctx, http.MethodGet, "/v1/node/"+url.PathEscape(out[i].ID), nil, nil, &detail); err != nil {
+			return nil, err
+		}
+		out[i].Meta = detail.Meta
+	}
+	return out, nil
 }
 
 func (c *Client) Deployments(ctx context.Context) ([]Deployment, error) {
@@ -141,14 +168,17 @@ func jobPayload(job Job) map[string]Job {
 }
 
 func (c *Client) do(ctx context.Context, method, endpoint string, query url.Values, body any, out any) error {
+	c.mu.RLock()
 	reqURL := *c.baseURL
-	reqURL.Path = path.Join(c.baseURL.Path, endpoint)
+	cfg := c.cfg
+	c.mu.RUnlock()
+	reqURL.Path = path.Join(reqURL.Path, endpoint)
 	values := reqURL.Query()
-	if c.cfg.Namespace != "" {
-		values.Set("namespace", c.cfg.Namespace)
+	if cfg.Namespace != "" {
+		values.Set("namespace", cfg.Namespace)
 	}
-	if c.cfg.Region != "" {
-		values.Set("region", c.cfg.Region)
+	if cfg.Region != "" {
+		values.Set("region", cfg.Region)
 	}
 	for key, vals := range query {
 		for _, val := range vals {
@@ -173,13 +203,13 @@ func (c *Client) do(ctx context.Context, method, endpoint string, query url.Valu
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.cfg.Token != "" {
-		req.Header.Set("X-Nomad-Token", c.cfg.Token)
+	if cfg.Token != "" {
+		req.Header.Set("X-Nomad-Token", cfg.Token)
 	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return panelerr.BadGateway("nomad_unreachable", "Nomad API unreachable: "+err.Error())
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -207,14 +237,14 @@ func decodeError(status int, raw []byte) error {
 	if err := json.Unmarshal(raw, &body); err == nil {
 		switch {
 		case len(body.Errors) > 0:
-			return fmt.Errorf("nomad api error %d: %s", status, strings.Join(body.Errors, "; "))
+			return panelerr.BadGateway("nomad_api_error", fmt.Sprintf("Nomad API error %d: %s", status, strings.Join(body.Errors, "; ")))
 		case body.Error != "":
-			return fmt.Errorf("nomad api error %d: %s", status, body.Error)
+			return panelerr.BadGateway("nomad_api_error", fmt.Sprintf("Nomad API error %d: %s", status, body.Error))
 		}
 	}
 	msg := strings.TrimSpace(string(raw))
 	if msg == "" {
-		return fmt.Errorf("nomad api error %d", status)
+		return panelerr.BadGateway("nomad_api_error", fmt.Sprintf("Nomad API error %d", status))
 	}
-	return errors.New("nomad api error " + strconv.Itoa(status) + ": " + msg)
+	return panelerr.BadGateway("nomad_api_error", "Nomad API error "+strconv.Itoa(status)+": "+msg)
 }

@@ -1,6 +1,11 @@
 package linux
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"panel/internal/sshx"
+)
 
 func TestParseOSReleaseSupportsDebian12And13(t *testing.T) {
 	adapter := DebianAdapter{}
@@ -35,4 +40,62 @@ func TestParseMetricsOutput(t *testing.T) {
 	if snap.CPUUsagePercent != 60 || snap.MemoryUsedBytes != 2000 || snap.Status.Hostname != "host" {
 		t.Fatalf("unexpected snapshot: %#v", snap)
 	}
+}
+
+func TestRunLoggedStreamsOutputBeforeCommandReturns(t *testing.T) {
+	sink := &recordingLogSink{}
+	exec := &streamingFakeExecutor{duringRun: func() {
+		if len(sink.lines) != 1 || sink.lines[0] != "stdout:first" {
+			t.Fatalf("expected stdout to be logged while command is still running, got %#v", sink.lines)
+		}
+	}}
+
+	if err := runLogged(context.Background(), exec, sshx.Target{}, "apt-get upgrade", sink); err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"stdout:first", "stderr:warn", "stdout:last"}
+	if len(sink.lines) != len(want) {
+		t.Fatalf("expected %d log lines, got %#v", len(want), sink.lines)
+	}
+	for i := range want {
+		if sink.lines[i] != want[i] {
+			t.Fatalf("line %d = %q, want %q; all lines %#v", i, sink.lines[i], want[i], sink.lines)
+		}
+	}
+}
+
+type recordingLogSink struct {
+	lines []string
+}
+
+func (s *recordingLogSink) AppendLog(_ context.Context, stream, line string) error {
+	s.lines = append(s.lines, stream+":"+line)
+	return nil
+}
+
+type streamingFakeExecutor struct {
+	duringRun func()
+}
+
+func (f *streamingFakeExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{}, nil
+}
+
+func (f *streamingFakeExecutor) ExecSudo(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	command.OnStdout("first")
+	if f.duringRun != nil {
+		f.duringRun()
+	}
+	command.OnStderr("warn")
+	command.OnStdout("last")
+	return sshx.CommandResult{Stdout: "first\nlast\n", Stderr: "warn\n"}, nil
+}
+
+func (f *streamingFakeExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *streamingFakeExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
 }
