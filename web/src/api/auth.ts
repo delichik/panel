@@ -7,6 +7,8 @@ export interface LoginRequest {
 
 export interface LoginResponse {
   authenticated: boolean;
+  token: string;
+  username: string;
 }
 
 export interface SessionResponse {

@@ -26,15 +26,18 @@ export class ApiError extends Error {
 export interface ApiClientOptions {
   baseUrl?: string;
   fetcher?: typeof fetch;
+  getToken?: () => string;
 }
 
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly fetcher: typeof fetch;
+  private readonly getToken: () => string;
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? '/api/v1';
     this.fetcher = options.fetcher ?? fetch.bind(globalThis);
+    this.getToken = options.getToken ?? readAuthToken;
   }
 
   get<T>(path: string, init?: RequestInit) {
@@ -67,9 +70,14 @@ export class ApiClient {
   }
 
   private async request<T>(path: string, init: RequestInit): Promise<T> {
+    const headers = new Headers(init.headers);
+    const token = this.getToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
     const response = await this.fetcher(`${this.baseUrl}${path}`, {
-      credentials: 'include',
       ...init,
+      headers,
     });
 
     if (response.status === 204) {
@@ -91,3 +99,7 @@ export class ApiClient {
 }
 
 export const apiClient = new ApiClient();
+
+export function readAuthToken() {
+  return globalThis.localStorage?.getItem('authToken') ?? '';
+}

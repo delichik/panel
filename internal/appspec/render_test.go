@@ -104,6 +104,12 @@ func TestRenderApplicationSpecAsNomadJob(t *testing.T) {
 	if checks := group.Services[0].Checks; len(checks) != 1 || checks[0].Name != "http" || checks[0].Type != "http" || checks[0].Port != "http" || checks[0].Path != "/" {
 		t.Fatalf("checks = %#v", group.Services[0].Checks)
 	}
+	if volume := group.Volumes["web-data"]; volume.Type != "host" || volume.Source != "web-data" || volume.ReadOnly {
+		t.Fatalf("volumes = %#v", group.Volumes)
+	}
+	if mounts := task.VolumeMounts; len(mounts) != 1 || mounts[0].Volume != "web-data" || mounts[0].Destination != "/usr/share/nginx/html" || mounts[0].ReadOnly {
+		t.Fatalf("volume mounts = %#v", mounts)
+	}
 }
 
 func TestHashIsStableAcrossVariableMapOrder(t *testing.T) {

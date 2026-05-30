@@ -6,7 +6,7 @@ import (
 	"panel/internal/httpx"
 )
 
-const CookieName = "panel_session"
+const bearerPrefix = "Bearer "
 
 type Handler struct {
 	service *Service
@@ -29,28 +29,31 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: h.service.CookieValue(sess.ID), Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, Expires: sess.ExpiresAt})
-	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true})
+	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true, "token": sess.Token, "username": sess.Username})
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(CookieName); err == nil {
-		h.service.Logout(c.Value)
-	}
-	http.SetCookie(w, &http.Cookie{Name: CookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true})
 	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 }
 
 func (h *Handler) Session(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(CookieName)
-	if err != nil {
+	token := bearerToken(r)
+	if token == "" {
 		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	sess, ok := h.service.Validate(c.Value)
+	sess, ok := h.service.Validate(token)
 	if !ok {
 		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": sess.Username})
+}
+
+func bearerToken(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	if len(header) <= len(bearerPrefix) || header[:len(bearerPrefix)] != bearerPrefix {
+		return ""
+	}
+	return header[len(bearerPrefix):]
 }

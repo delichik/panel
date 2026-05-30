@@ -75,18 +75,35 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput) (Task, err
 		NextRunAt:           in.NextRunAt,
 		CreatedAt:           now,
 	}
+	var percentage any
+	var startedAt any
+	var finishedAt any
+	switch status {
+	case StatusCompleted:
+		done := float64(100)
+		t.Percentage = &done
+		t.FinishedAt = &now
+		percentage = done
+		finishedAt = now.Format(time.RFC3339Nano)
+		if t.Stage == "" {
+			t.Stage = "completed"
+		}
+	case StatusRunning:
+		t.StartedAt = &now
+		startedAt = now.Format(time.RFC3339Nano)
+	}
 	nextRunAt := ""
 	if in.NextRunAt != nil {
 		nextRunAt = in.NextRunAt.UTC().Format(time.RFC3339Nano)
 	}
-	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,summary,retry_count,max_retries,next_run_at,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.Status, t.Stage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano))
+	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,percentage,summary,retry_count,max_retries,next_run_at,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.Status, t.Stage, percentage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano), startedAt, finishedAt)
 	return t, err
 }
 
 func (s *Service) Start(ctx context.Context, taskID string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error='', next_run_at=NULL, started_at=?, finished_at=NULL WHERE id=?`, StatusRunning, now, taskID)
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=?`, StatusRunning, now, taskID)
 	return err
 }
 
@@ -109,7 +126,7 @@ func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) er
 
 func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, summary=?, next_run_at=NULL, finished_at=? WHERE id=?`, StatusCompleted, "finalizing", summary, now, taskID)
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=?`, StatusCompleted, "completed", summary, now, taskID)
 	return err
 }
 
@@ -380,6 +397,9 @@ func scanTask(row scanner) (Task, error) {
 	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	if pct.Valid {
 		t.Percentage = &pct.Float64
+	} else if t.Status == StatusCompleted {
+		done := float64(100)
+		t.Percentage = &done
 	}
 	if nextRunNS.Valid {
 		v, _ := time.Parse(time.RFC3339Nano, nextRunNS.String)
@@ -449,7 +469,7 @@ func firstNonEmpty(values ...string) string {
 }
 
 func Redact(s string) string {
-	replacers := []string{"password=", "privateKey=", "passphrase=", "PANEL_SESSION_SECRET="}
+	replacers := []string{"password=", "privateKey=", "passphrase="}
 	for _, r := range replacers {
 		idx := strings.Index(strings.ToLower(s), strings.ToLower(r))
 		if idx >= 0 {

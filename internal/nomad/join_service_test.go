@@ -65,6 +65,8 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 	command := fake.sudoCommands[0]
 	for _, want := range []string{
 		"command -v nomad",
+		"apt-get install -y docker.io",
+		"apt-get install -y containernetworking-plugins",
 		"panel_server_id = \"" + srv.ID + "\"",
 		"server_join",
 		"10.0.0.1:4647",
@@ -80,6 +82,38 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 	}
 	if stored.Status != tasks.StatusCompleted {
 		t.Fatalf("expected completed task, got %#v", stored)
+	}
+}
+
+func TestRunJoinClientInfersBootstrappedServerWhenConfigIsLocal(t *testing.T) {
+	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	svc.cfg.Address = "http://127.0.0.1:4646"
+	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "control one", "10.0.0.20")
+	worker := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.12")
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeServerBootstrap,
+		ServerID:     control.ID,
+		ResourceType: "server",
+		ResourceID:   control.ID,
+		Status:       tasks.StatusCompleted,
+		Summary:      "Nomad server bootstrap requested",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeClientJoin, ServerID: worker.ID, ResourceType: "server", ResourceID: worker.ID, Summary: "Joining server to Nomad"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.runJoinClient(ctx, task.ID, worker)
+
+	if len(fake.sudoCommands) != 1 {
+		t.Fatalf("expected one sudo command, got %#v", fake.sudoCommands)
+	}
+	if command := fake.sudoCommands[0]; !strings.Contains(command, `retry_join = ["10.0.0.20:4647"]`) {
+		t.Fatalf("expected join script to use bootstrapped server host:\n%s", command)
 	}
 }
 
@@ -154,6 +188,8 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 		"server {",
 		"bootstrap_expect = 1",
 		"client {",
+		"apt-get install -y docker.io",
+		"apt-get install -y containernetworking-plugins",
 		"panel_server_id = \"" + srv.ID + "\"",
 		"systemctl restart nomad",
 	} {

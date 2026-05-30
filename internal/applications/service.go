@@ -11,6 +11,7 @@ import (
 	"panel/internal/nomad"
 	"panel/internal/panelerr"
 	"panel/internal/tasks"
+	"panel/internal/templatex"
 )
 
 type Config struct {
@@ -32,10 +33,12 @@ type NomadClient interface {
 }
 
 type Service struct {
-	db     *sql.DB
-	nomad  NomadClient
-	tasks  *tasks.Service
-	config Config
+	db              *sql.DB
+	nomad           NomadClient
+	tasks           *tasks.Service
+	config          Config
+	renderer        templatex.Renderer
+	builtinResolver BuiltinVariableResolver
 }
 
 type ApplicationRuntime = Runtime
@@ -60,6 +63,10 @@ type LogResult struct {
 	Logs    string `json:"logs"`
 }
 
+type BuiltinVariableResolver interface {
+	BuiltinVariables(ctx context.Context) (map[string]any, error)
+}
+
 func NewService(db *sql.DB, nomadClient NomadClient, taskSvc *tasks.Service, cfg Config) *Service {
 	if cfg.Namespace == "" {
 		cfg.Namespace = "default"
@@ -70,7 +77,11 @@ func NewService(db *sql.DB, nomadClient NomadClient, taskSvc *tasks.Service, cfg
 	if cfg.Datacenter == "" {
 		cfg.Datacenter = "dc1"
 	}
-	return &Service{db: db, nomad: nomadClient, tasks: taskSvc, config: cfg}
+	return &Service{db: db, nomad: nomadClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer()}
+}
+
+func (s *Service) SetBuiltinVariableResolver(resolver BuiltinVariableResolver) {
+	s.builtinResolver = resolver
 }
 
 func (s *Service) List(ctx context.Context) ([]Application, error) {
@@ -100,7 +111,7 @@ func (s *Service) Get(ctx context.Context, appID string) (Application, error) {
 }
 
 func (s *Service) Create(ctx context.Context, in SaveInput) (Application, error) {
-	prepared, err := s.prepare(in, 1, "")
+	prepared, err := s.prepare(ctx, in, 1, "")
 	if err != nil {
 		return Application{}, err
 	}
@@ -141,13 +152,13 @@ func (s *Service) Update(ctx context.Context, appID string, in SaveInput) (Appli
 		return Application{}, err
 	}
 	generation := current.Generation
-	prepared, err := s.prepare(in, generation, appID)
+	prepared, err := s.prepare(ctx, in, generation, appID)
 	if err != nil {
 		return Application{}, err
 	}
 	if prepared.hash != current.SpecHash {
 		generation++
-		prepared, err = s.prepare(in, generation, appID)
+		prepared, err = s.prepare(ctx, in, generation, appID)
 		if err != nil {
 			return Application{}, err
 		}
@@ -165,10 +176,17 @@ func (s *Service) Update(ctx context.Context, appID string, in SaveInput) (Appli
 	app.JobID = prepared.job.ID
 	app.Namespace = s.config.Namespace
 	app.UpdatedAt = time.Now().UTC()
-	if app.Enabled && prepared.hash != current.SpecHash {
+	if app.Enabled && (!current.Enabled || prepared.hash != current.SpecHash) {
 		if err := s.validatePlanRegister(ctx, prepared.job, &app); err != nil {
 			return Application{}, err
 		}
+	}
+	if current.Enabled && !app.Enabled {
+		resp, err := s.nomad.StopJob(ctx, current.JobID, false)
+		if err != nil {
+			return Application{}, err
+		}
+		app.LastEvalID = resp.EvalID
 	}
 	if err := s.updateApplication(ctx, app); err != nil {
 		return Application{}, err
@@ -198,7 +216,7 @@ func (s *Service) Validate(ctx context.Context, appID string) (ValidationResult,
 	if err != nil {
 		return ValidationResult{}, err
 	}
-	job, issues, err := s.renderApplication(app)
+	job, issues, err := s.renderApplication(ctx, app)
 	if err != nil || len(issues) > 0 {
 		return validationResult(issues), err
 	}
@@ -217,7 +235,7 @@ func (s *Service) Plan(ctx context.Context, appID string) (PlanResult, error) {
 	if err != nil {
 		return PlanResult{}, err
 	}
-	job, issues, err := s.renderApplication(app)
+	job, issues, err := s.renderApplication(ctx, app)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -236,7 +254,7 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
-	job, issues, err := s.renderApplication(app)
+	job, issues, err := s.renderApplication(ctx, app)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -358,14 +376,18 @@ type preparedApplication struct {
 	job       nomad.Job
 }
 
-func (s *Service) prepare(in SaveInput, generation int, appID string) (preparedApplication, error) {
-	spec, specIssues := appspec.DecodeYAML(in.SpecYAML)
-	if len(specIssues) > 0 {
-		return preparedApplication{}, panelerr.Validation("application_invalid", specIssues[0].Message)
-	}
+func (s *Service) prepare(ctx context.Context, in SaveInput, generation int, appID string) (preparedApplication, error) {
 	variables := in.Variables
 	if variables == nil {
 		variables = map[string]string{}
+	}
+	renderedYAML, err := s.renderSpecYAML(ctx, in.SpecYAML, variables)
+	if err != nil {
+		return preparedApplication{}, err
+	}
+	spec, specIssues := appspec.DecodeYAML(renderedYAML)
+	if len(specIssues) > 0 {
+		return preparedApplication{}, panelerr.Validation("application_invalid", specIssues[0].Message)
 	}
 	hash, err := appspec.Hash(spec, variables)
 	if err != nil {
@@ -386,8 +408,12 @@ func (s *Service) prepare(in SaveInput, generation int, appID string) (preparedA
 	return preparedApplication{spec: spec, variables: variables, hash: hash, job: job}, nil
 }
 
-func (s *Service) renderApplication(app Application) (nomad.Job, []ValidationIssue, error) {
-	spec, specIssues := appspec.DecodeYAML(app.SpecYAML)
+func (s *Service) renderApplication(ctx context.Context, app Application) (nomad.Job, []ValidationIssue, error) {
+	renderedYAML, err := s.renderSpecYAML(ctx, app.SpecYAML, app.Variables)
+	if err != nil {
+		return nomad.Job{}, nil, err
+	}
+	spec, specIssues := appspec.DecodeYAML(renderedYAML)
 	issues := make([]ValidationIssue, 0, len(specIssues))
 	for _, issue := range specIssues {
 		issues = append(issues, ValidationIssue{Field: issue.Field, Message: issue.Message})
@@ -408,6 +434,33 @@ func (s *Service) renderApplication(app Application) (nomad.Job, []ValidationIss
 		issues = append(issues, ValidationIssue{Field: issue.Field, Message: issue.Message})
 	}
 	return job, issues, nil
+}
+
+func (s *Service) renderSpecYAML(ctx context.Context, source string, variables map[string]string) (string, error) {
+	if s.renderer == nil {
+		return source, nil
+	}
+	data := map[string]any{}
+	varMap := map[string]any{}
+	for key, value := range variables {
+		data[key] = value
+		varMap[key] = value
+	}
+	data["vars"] = varMap
+	if s.builtinResolver != nil {
+		builtins, err := s.builtinResolver.BuiltinVariables(ctx)
+		if err != nil {
+			return "", err
+		}
+		for key, value := range builtins {
+			data[key] = value
+		}
+	}
+	rendered, err := s.renderer.Render(ctx, source, data)
+	if err != nil {
+		return "", err
+	}
+	return rendered, nil
 }
 
 func (s *Service) validatePlanRegister(ctx context.Context, job nomad.Job, app *Application) error {

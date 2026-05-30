@@ -41,6 +41,57 @@ export interface CredentialDto {
   updatedAt: string;
 }
 
+export type CertificateScope = 'single' | 'wildcard';
+
+export interface CertificateDto {
+  id: string;
+  name: string;
+  domainId: string;
+  domain: string;
+  prefix: string;
+  scope: CertificateScope;
+  domains: string[];
+  variableName: string;
+  certificatePath: string;
+  privateKeyPath: string;
+  issuer: string;
+  autoRenew: boolean;
+  nextRenewAt?: string;
+  notBefore?: string;
+  notAfter?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CertificateIssueInput {
+  name: string;
+  domainId: string;
+  prefix: string;
+  scope: CertificateScope;
+  variableName: string;
+}
+
+export interface CertificateIssueDto {
+  certificate: CertificateDto;
+  taskId?: string;
+}
+
+export interface DnsDomainDto {
+  id: string;
+  name: string;
+  provider: 'cloudflare';
+  accountId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DnsDomainInput {
+  name: string;
+  provider: 'cloudflare';
+  apiToken?: string;
+  accountId?: string;
+}
+
 export interface OverviewServerDto {
   id: string;
   name: string;

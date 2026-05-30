@@ -120,6 +120,35 @@ func (s *Store) Migrate(ctx context.Context) error {
 			UNIQUE(application_id, generation),
 			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS dns_domains (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE,
+			provider TEXT NOT NULL CHECK(provider IN ('cloudflare')),
+			api_token_secret TEXT NOT NULL DEFAULT '',
+			account_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS certificates (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			domain_id TEXT NOT NULL DEFAULT '',
+			domain TEXT NOT NULL,
+			prefix TEXT NOT NULL DEFAULT '@',
+			scope TEXT NOT NULL CHECK(scope IN ('single','wildcard')),
+			domains_json TEXT NOT NULL DEFAULT '[]',
+			variable_name TEXT NOT NULL UNIQUE,
+			certificate_path TEXT NOT NULL,
+			private_key_path TEXT NOT NULL,
+			issuer TEXT NOT NULL DEFAULT '',
+			auto_renew INTEGER NOT NULL DEFAULT 1,
+			next_renew_at TEXT NOT NULL DEFAULT '',
+			not_before TEXT NOT NULL DEFAULT '',
+			not_after TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(domain_id) REFERENCES dns_domains(id)
+		)`,
 		`CREATE TABLE IF NOT EXISTS task_steps (
 			id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
@@ -170,6 +199,19 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	if err := s.ensureAppColumns(ctx, "servers", map[string]string{
 		"traits": "TEXT NOT NULL DEFAULT '{}'",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "certificates", map[string]string{
+		"domain_id":     "TEXT NOT NULL DEFAULT ''",
+		"prefix":        "TEXT NOT NULL DEFAULT '@'",
+		"auto_renew":    "INTEGER NOT NULL DEFAULT 1",
+		"next_renew_at": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "dns_domains", map[string]string{
+		"account_id": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}

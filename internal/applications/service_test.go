@@ -81,6 +81,84 @@ func TestUpdateDisabledAppIncrementsGenerationOnlyWhenSpecHashChanges(t *testing
 	}
 }
 
+func TestUpdateDisabledAppToEnabledRegistersExistingSpec(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	fake.registerResponse = nomad.RegisterResponse{EvalID: "eval-enable"}
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	enabled, err := svc.Update(ctx, app.ID, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !enabled.Enabled || enabled.LastEvalID != "eval-enable" {
+		t.Fatalf("enabled app = %#v", enabled)
+	}
+	want := []string{"validate:panel-web", "plan:panel-web", "register:panel-web"}
+	if !equalStrings(fake.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", fake.calls, want)
+	}
+}
+
+func TestUpdateEnabledAppToDisabledStopsJob(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabled, err := svc.Update(ctx, app.ID, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if disabled.Enabled {
+		t.Fatalf("app should be disabled: %#v", disabled)
+	}
+	if got := fake.calls[len(fake.calls)-1]; got != "stop:panel-web:false" {
+		t.Fatalf("last call = %q", got)
+	}
+}
+
+func TestCreateAppRendersUserAndBuiltinVariables(t *testing.T) {
+	svc, _, closeStore := newTestService(t)
+	defer closeStore()
+	svc.SetBuiltinVariableResolver(fakeBuiltinResolver{
+		"certs": map[string]any{
+			"example_com": map[string]any{
+				"certificatePem": "CERT",
+			},
+		},
+	})
+
+	app, err := svc.Create(context.Background(), SaveInput{
+		Name:      "web",
+		SpecYAML:  "name: web\nimage: '{{ .vars.image }}'\nenv:\n  TLS_CERT: '{{ .certs.example_com.certificatePem }}'\n",
+		Variables: map[string]string{"image": "nginx:1.27"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, issues, err := svc.renderApplication(context.Background(), app)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(issues) > 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	task := job.TaskGroups[0].Tasks[0]
+	if task.Config["image"] != "nginx:1.27" || task.Env["TLS_CERT"] != "CERT" {
+		t.Fatalf("rendered task = %#v", task)
+	}
+}
+
 func TestStopAppCallsNomadAndDisablesApp(t *testing.T) {
 	svc, fake, closeStore := newTestService(t)
 	defer closeStore()
@@ -221,4 +299,10 @@ func boolString(v bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+type fakeBuiltinResolver map[string]any
+
+func (f fakeBuiltinResolver) BuiltinVariables(ctx context.Context) (map[string]any, error) {
+	return map[string]any(f), nil
 }

@@ -55,6 +55,24 @@ func TestTaskLifecycleAndLogs(t *testing.T) {
 	if got.Status != StatusCompleted || got.FinishedAt == nil {
 		t.Fatalf("unexpected task state: %#v", got)
 	}
+	if got.Percentage == nil || *got.Percentage != 100 {
+		t.Fatalf("expected completed task progress to be 100, got %#v", got.Percentage)
+	}
+}
+
+func TestCreateCompletedTaskHasFinishedState(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "application_deploy", Status: StatusCompleted, Summary: "registered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FinishedAt == nil || got.Percentage == nil || *got.Percentage != 100 {
+		t.Fatalf("expected completed task to have finished time and 100 percent progress: %#v", got)
+	}
 }
 
 func TestListFiltersByStatusServerAndType(t *testing.T) {

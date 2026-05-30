@@ -136,7 +136,7 @@ func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv serv
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing or updating Nomad client")
 	target := srv.Target()
-	err := s.execSudoLogged(ctx, taskID, target, s.joinScript(srv))
+	err := s.execSudoLogged(ctx, taskID, target, s.joinScript(srv, s.serverJoinRPCAddress(ctx)))
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -190,9 +190,8 @@ func (s *JoinService) appendCommandOutput(ctx context.Context, taskID, stream, o
 	}
 }
 
-func (s *JoinService) joinScript(srv server.Server) string {
+func (s *JoinService) joinScript(srv server.Server, rpc string) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
-	rpc := nomadRPCAddress(s.cfg.Address)
 	datacenter := firstNonEmpty(strings.TrimSpace(s.cfg.Datacenter), "dc1")
 	return fmt.Sprintf(`set -eu
 export DEBIAN_FRONTEND=noninteractive
@@ -204,6 +203,7 @@ if ! command -v nomad >/dev/null 2>&1; then
   apt-get update
   apt-get install -y nomad
 fi
+%s
 install -d -m 0755 /etc/nomad.d /opt/nomad/data
 cat >/etc/nomad.d/panel-client.hcl <<'EOF'
 name = "%s"
@@ -226,7 +226,7 @@ EOF
 systemctl enable nomad
 systemctl restart nomad
 nomad version
-`, nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), shellEscapeHCL(rpc))
+`, runtimePrereqsScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), shellEscapeHCL(rpc))
 }
 
 func (s *JoinService) bootstrapScript(srv server.Server) string {
@@ -242,6 +242,7 @@ if ! command -v nomad >/dev/null 2>&1; then
   apt-get update
   apt-get install -y nomad
 fi
+%s
 install -d -m 0755 /etc/nomad.d /opt/nomad/data
 cat >/etc/nomad.d/panel-server.hcl <<'EOF'
 name = "%s"
@@ -265,7 +266,61 @@ EOF
 systemctl enable nomad
 systemctl restart nomad
 nomad version
-`, nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name))
+`, runtimePrereqsScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name))
+}
+
+func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
+	configured := nomadRPCAddress(s.cfg.Address)
+	if !isLocalRPCAddress(configured) {
+		return configured
+	}
+	if client, ok := s.nomad.(statusClient); ok {
+		status, err := client.Status(ctx)
+		if err == nil && status.Connected {
+			if rpc := normalizeNomadRPCAddress(status.Leader); rpc != "" && !isLocalRPCAddress(rpc) {
+				return rpc
+			}
+		}
+	}
+	latestTasks, err := s.latestNomadTasks(ctx)
+	if err == nil {
+		var latest tasks.Task
+		for _, task := range latestTasks {
+			if task.Type != TaskTypeServerBootstrap || task.Status != tasks.StatusCompleted {
+				continue
+			}
+			if latest.ID == "" || task.CreatedAt.After(latest.CreatedAt) {
+				latest = task
+			}
+		}
+		if latest.ServerID != "" {
+			if srv, err := s.servers.Get(ctx, latest.ServerID); err == nil && strings.TrimSpace(srv.Host) != "" {
+				return net.JoinHostPort(srv.Host, "4647")
+			}
+		}
+	}
+	return configured
+}
+
+func runtimePrereqsScript() string {
+	return `if ! command -v docker >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y docker.io
+fi
+systemctl enable docker
+systemctl restart docker
+if [ ! -x /opt/cni/bin/bridge ]; then
+  apt-get update
+  apt-get install -y containernetworking-plugins
+  install -d -m 0755 /opt/cni/bin
+  for plugin in bridge firewall host-local loopback portmap; do
+    for dir in /usr/lib/cni /usr/libexec/cni /opt/cni/bin; do
+      if [ -x "$dir/$plugin" ] && [ "$dir" != "/opt/cni/bin" ]; then
+        cp "$dir/$plugin" "/opt/cni/bin/$plugin"
+      fi
+    done
+  done
+fi`
 }
 
 func nomadRPCAddress(address string) string {
@@ -279,6 +334,33 @@ func nomadRPCAddress(address string) string {
 		port = "4647"
 	}
 	return net.JoinHostPort(host, port)
+}
+
+func normalizeNomadRPCAddress(address string) string {
+	address = strings.TrimSpace(address)
+	if address == "" {
+		return ""
+	}
+	if strings.Contains(address, "://") {
+		return nomadRPCAddress(address)
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err == nil {
+		if port == "" {
+			port = "4647"
+		}
+		return net.JoinHostPort(host, port)
+	}
+	return net.JoinHostPort(address, "4647")
+}
+
+func isLocalRPCAddress(address string) bool {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		host = address
+	}
+	host = strings.Trim(strings.ToLower(host), "[]")
+	return host == "" || host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
 var nodeNamePattern = regexp.MustCompile(`[^a-zA-Z0-9-]+`)

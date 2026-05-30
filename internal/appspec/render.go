@@ -39,6 +39,8 @@ func Render(in RenderInput) (nomad.Job, []Issue) {
 	if len(spec.Args) > 0 {
 		task.Config["args"] = spec.Args
 	}
+	volumes, mounts := renderVolumes(spec.Volumes)
+	task.VolumeMounts = mounts
 
 	group := nomad.TaskGroup{
 		Name:        spec.Name,
@@ -47,6 +49,7 @@ func Render(in RenderInput) (nomad.Job, []Issue) {
 		Tasks:       []nomad.Task{task},
 		Services:    renderServices(spec.Services, spec.Checks),
 		Constraints: renderConstraints(spec.Constraints),
+		Volumes:     volumes,
 	}
 
 	return nomad.Job{
@@ -120,4 +123,25 @@ func renderConstraints(constraints []Constraint) []nomad.Constraint {
 		})
 	}
 	return out
+}
+
+func renderVolumes(volumes []Volume) (map[string]nomad.VolumeRequest, []nomad.VolumeMount) {
+	if len(volumes) == 0 {
+		return nil, nil
+	}
+	requests := map[string]nomad.VolumeRequest{}
+	mounts := make([]nomad.VolumeMount, 0, len(volumes))
+	for _, volume := range volumes {
+		requests[volume.Source] = nomad.VolumeRequest{
+			Type:     "host",
+			Source:   volume.Source,
+			ReadOnly: volume.ReadOnly,
+		}
+		mounts = append(mounts, nomad.VolumeMount{
+			Volume:      volume.Source,
+			Destination: volume.Target,
+			ReadOnly:    volume.ReadOnly,
+		})
+	}
+	return requests, mounts
 }

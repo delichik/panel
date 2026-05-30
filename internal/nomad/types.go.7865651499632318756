@@ -12,25 +12,25 @@ type Job struct {
 }
 
 type TaskGroup struct {
-	Name          string                   `json:"Name,omitempty"`
-	Count         int                      `json:"Count,omitempty"`
-	Networks      []Network                `json:"Networks,omitempty"`
-	Tasks         []Task                   `json:"Tasks,omitempty"`
-	Services      []Service                `json:"Services,omitempty"`
-	Constraints   []Constraint             `json:"Constraints,omitempty"`
+	Name          string         `json:"Name,omitempty"`
+	Count         int            `json:"Count,omitempty"`
+	Networks      []Network      `json:"Networks,omitempty"`
+	Tasks         []Task         `json:"Tasks,omitempty"`
+	Services      []Service      `json:"Services,omitempty"`
+	Constraints   []Constraint   `json:"Constraints,omitempty"`
 	Volumes       map[string]VolumeRequest `json:"Volumes,omitempty"`
-	RestartPolicy *RestartPolicy           `json:"RestartPolicy,omitempty"`
+	RestartPolicy *RestartPolicy `json:"RestartPolicy,omitempty"`
 }
 
 type Task struct {
-	Name         string            `json:"Name,omitempty"`
-	Driver       string            `json:"Driver,omitempty"`
-	Config       map[string]any    `json:"Config,omitempty"`
-	Env          map[string]string `json:"Env,omitempty"`
-	Resources    *Resources        `json:"Resources,omitempty"`
-	Services     []Service         `json:"Services,omitempty"`
-	Templates    []Template        `json:"Templates,omitempty"`
-	VolumeMounts []VolumeMount     `json:"VolumeMounts,omitempty"`
+	Name      string            `json:"Name,omitempty"`
+	Driver    string            `json:"Driver,omitempty"`
+	Config    map[string]any    `json:"Config,omitempty"`
+	Env       map[string]string `json:"Env,omitempty"`
+	Resources *Resources        `json:"Resources,omitempty"`
+	Services  []Service         `json:"Services,omitempty"`
+	Templates []Template        `json:"Templates,omitempty"`
+	VolumeMounts []VolumeMount  `json:"VolumeMounts,omitempty"`
 }
 
 type Network struct {

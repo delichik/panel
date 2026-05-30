@@ -20,21 +20,31 @@ type Scheduler struct {
 	metrics  *metrics.Service
 	packages *packages.Service
 	tasks    *tasks.Service
+	certs    certificateRenewer
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+}
+
+type certificateRenewer interface {
+	RenewDue(ctx context.Context, now time.Time) (int, error)
 }
 
 func New(settings *settings.Service, servers *server.Service, metrics *metrics.Service, packages *packages.Service, tasks *tasks.Service) *Scheduler {
 	return &Scheduler{settings: settings, servers: servers, metrics: metrics, packages: packages, tasks: tasks}
 }
 
+func (s *Scheduler) SetCertificateRenewer(renewer certificateRenewer) {
+	s.certs = renewer
+}
+
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.wg.Add(3)
+	s.wg.Add(4)
 	go s.metricsLoop(ctx)
 	go s.packageLoop(ctx)
 	go s.cleanupLoop(ctx)
+	go s.certificateLoop(ctx)
 }
 
 func (s *Scheduler) packageLoop(ctx context.Context) {
@@ -87,6 +97,27 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 	}
 
 	return panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center")
+}
+
+func (s *Scheduler) certificateLoop(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			if s.certs == nil {
+				continue
+			}
+			if renewed, err := s.certs.RenewDue(ctx, now); err != nil {
+				log.Printf("certificate renewal: %v", err)
+			} else if renewed > 0 {
+				log.Printf("certificate renewal completed for %d certificate(s)", renewed)
+			}
+		}
+	}
 }
 
 func (s *Scheduler) metricsLoop(ctx context.Context) {

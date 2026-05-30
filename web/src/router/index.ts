@@ -6,6 +6,8 @@ import OverviewPage from '@/features/overview/pages/OverviewPage.vue';
 import ServersPage from '@/features/servers/pages/ServersPage.vue';
 import PackageUpdatesPage from '@/features/packages/pages/PackageUpdatesPage.vue';
 import ApplicationsPage from '@/features/applications/pages/ApplicationsPage.vue';
+import CertificatesPage from '@/features/certificates/pages/CertificatesPage.vue';
+import DomainsPage from '@/features/dns/pages/DomainsPage.vue';
 import NomadNodesPage from '@/features/nomad/pages/NomadNodesPage.vue';
 import NomadSetupPage from '@/features/nomad/pages/NomadSetupPage.vue';
 import NomadJobsPage from '@/features/nomad/pages/NomadJobsPage.vue';
@@ -28,6 +30,9 @@ export const router = createRouter({
         { path: 'credentials', name: 'credentials', component: ServersPage, meta: { title: 'Credentials' } },
         { path: 'packages', name: 'packages', component: PackageUpdatesPage, meta: { title: 'Package Updates' } },
         { path: 'applications', name: 'applications', component: ApplicationsPage, meta: { title: 'Applications' } },
+        { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { title: 'DNS Domains' } },
+        { path: 'dns/certificates', name: 'dns-certificates', component: CertificatesPage, meta: { title: 'Certificates' } },
+        { path: 'certificates', redirect: '/dns/certificates' },
         { path: 'nomad/setup', name: 'nomad-setup', component: NomadSetupPage, meta: { title: 'Nomad Setup' } },
         { path: 'nomad/nodes', name: 'nomad-nodes', component: NomadNodesPage, meta: { title: 'Nomad Nodes' } },
         { path: 'nomad/jobs', name: 'nomad-jobs', component: NomadJobsPage, meta: { title: 'Nomad Jobs' } },

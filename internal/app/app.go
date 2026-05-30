@@ -9,8 +9,10 @@ import (
 
 	"panel/internal/applications"
 	"panel/internal/auth"
+	"panel/internal/certs"
 	"panel/internal/config"
 	"panel/internal/credential"
+	"panel/internal/dns"
 	"panel/internal/httpx"
 	"panel/internal/metrics"
 	"panel/internal/nomad"
@@ -59,16 +61,20 @@ func New(cfg config.Config) (*App, error) {
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
+	dnsSvc := dns.NewService(store.AppDB())
+	certSvc := certs.NewService(store.AppDB(), cfg, dnsSvc, taskSvc)
 	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
 	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
+	sched.SetCertificateRenewer(certSvc)
 	sched.Start(context.Background())
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
+	applicationSvc.SetBuiltinVariableResolver(certSvc)
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
 	return a, nil
 }
 
@@ -80,7 +86,7 @@ func (a *App) Close() error {
 }
 func (a *App) Handler() http.Handler { return a.mux }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuth(http.HandlerFunc(authH.Logout)))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
@@ -96,6 +102,20 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, serverH *se
 			credH.Update(w, r)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/credentials/"):
 			credH.Delete(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/dns/domains":
+			dnsH.ListDomains(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/dns/domains":
+			dnsH.CreateDomain(w, r)
+		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/dns/domains/"):
+			dnsH.UpdateDomain(w, r)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/dns/domains/"):
+			dnsH.DeleteDomain(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/certificates":
+			certH.List(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/certificates":
+			certH.Issue(w, r)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/certificates/"):
+			certH.Delete(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/servers":
 			serverH.List(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/servers":

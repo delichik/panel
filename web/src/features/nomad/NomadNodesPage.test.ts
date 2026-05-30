@@ -15,6 +15,7 @@ describe('NomadNodesPage', () => {
     expect(page).toContain('candidateServers');
     expect(page).toContain('ProjectedNomadNodeDto');
     expect(page).toContain('unmanaged');
+    expect(page).toContain('registering');
   });
 
   it('keeps first-server bootstrap isolated on the setup page', () => {

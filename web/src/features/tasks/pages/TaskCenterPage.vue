@@ -15,6 +15,7 @@ const statusFilter = ref<TaskStatus | 'all'>('all');
 const operationFilter = ref('');
 const typeFilter = ref('');
 const loading = ref(false);
+const actionLoading = ref('');
 const error = ref('');
 const page = ref(1);
 const pageSize = ref(20);
@@ -26,6 +27,14 @@ const selectedTask = computed(() => tasks.value.find((task) => task.id === selec
 const selectedOperation = computed(() => operationGroups.value.find((group) => group.operationId === selectedOperationId.value) ?? null);
 const taskTypeOptions = computed(() => Array.from(new Set(tasks.value.map((task) => task.type))).sort());
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
+
+const taskCounts = computed(() => ({
+  active: tasks.value.filter((task) => ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status)).length,
+  queued: tasks.value.filter((task) => task.status === 'queued' || task.status === 'scheduled').length,
+  running: tasks.value.filter((task) => task.status === 'running').length,
+  failed: tasks.value.filter((task) => task.status === 'failed' || task.status === 'blocked').length,
+  completed: tasks.value.filter((task) => task.status === 'completed').length,
+}));
 
 async function loadTasks() {
   loading.value = true;
@@ -43,6 +52,7 @@ async function loadTasks() {
     tasks.value = taskPage.items ?? [];
     total.value = taskPage.total ?? 0;
     servers.value = serverRows ?? [];
+
     if (!selectedOperationId.value && operationGroups.value.length) selectedOperationId.value = operationGroups.value[0].operationId;
     if (selectedOperationId.value && !operationGroups.value.some((group) => group.operationId === selectedOperationId.value)) {
       selectedOperationId.value = operationGroups.value[0]?.operationId ?? '';
@@ -81,8 +91,43 @@ function serverName(serverId?: string | null) {
   return servers.value.find((server) => server.id === serverId)?.name || serverId;
 }
 
-function formatTaskType(value: string) {
-  return value.replace(/_/g, ' ');
+function formatTaskType(value?: string) {
+  return value ? value.replace(/_/g, ' ') : '-';
+}
+
+function shortId(value?: string | null) {
+  if (!value) return '-';
+  return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
+}
+
+function formatDateTime(value?: string | null) {
+  return value ? new Date(value).toLocaleString() : '-';
+}
+
+function formatClock(value?: string | null) {
+  return value ? new Date(value).toLocaleTimeString() : '-';
+}
+
+function durationBetween(start?: string | null, end?: string | null) {
+  if (!start) return '-';
+  const startMs = new Date(start).getTime();
+  const endMs = end ? new Date(end).getTime() : Date.now();
+  const seconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ${seconds % 60}s`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function taskProgress(task: TaskDto) {
+  if (task.status === 'completed') return 100;
+  return Math.round(task.percentage ?? 0);
+}
+
+function progressText(task: TaskDto) {
+  if (task.status === 'running' && task.percentage === null) return 'running';
+  return `${taskProgress(task)}%`;
 }
 
 function taskStatusColor(status: TaskStatus | string) {
@@ -90,7 +135,37 @@ function taskStatusColor(status: TaskStatus | string) {
   if (status === 'completed') return 'success';
   if (status === 'running') return 'primary';
   if (status === 'failed_retryable' || status === 'scheduled') return 'warning';
-  return 'info';
+  if (status === 'queued') return 'info';
+  return 'default';
+}
+
+function statusLabel(status: TaskStatus | string) {
+  const labels: Record<string, string> = {
+    queued: 'Queued',
+    scheduled: 'Scheduled',
+    running: 'Running',
+    completed: 'Completed',
+    failed: 'Failed',
+    failed_retryable: 'Retry wait',
+    blocked: 'Blocked',
+    cancelled: 'Cancelled',
+  };
+  return labels[status] ?? status;
+}
+
+function queueReason(task: TaskDto) {
+  if (task.status === 'scheduled') return task.nextRunAt ? 'Waiting for scheduled start time' : 'Scheduled by background policy';
+  if (task.status === 'failed_retryable') return task.nextRunAt ? `Retry ${task.retryCount}/${task.maxRetries || '-'} after backoff` : 'Retry is ready to run';
+  if (task.status === 'queued') {
+    if (task.nextRunAt) return 'Queued until its planned start time';
+    if (task.triggerTaskId) return `Queued by ${shortId(task.triggerTaskId)}`;
+    return 'Ready; waiting for the matching worker to start it';
+  }
+  if (task.status === 'running') return task.stage ? `Running: ${task.stage}` : 'Running';
+  if (task.status === 'completed') return 'Finished successfully';
+  if (task.status === 'blocked') return task.error || 'Manual attention required';
+  if (task.status === 'failed') return task.error || 'Finished with an error';
+  return '-';
 }
 
 function selectOperation(operationId: string) {
@@ -99,18 +174,39 @@ function selectOperation(operationId: string) {
 }
 
 async function retryTask(task: TaskDto) {
+  actionLoading.value = `retry:${task.id}`;
   try {
     const updated = await tasksApi.retry(task.id);
-    const idx = tasks.value.findIndex((item) => item.id === updated.id);
-    if (idx >= 0) tasks.value[idx] = updated;
+    await loadTasks();
+    selectedOperationId.value = updated.operationId || updated.id;
     selectedTaskId.value = updated.id;
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Unable to retry task';
+  } finally {
+    actionLoading.value = '';
+  }
+}
+
+async function runNowTask(task: TaskDto) {
+  actionLoading.value = `run:${task.id}`;
+  try {
+    const updated = await tasksApi.runNow(task.id);
+    await loadTasks();
+    selectedOperationId.value = updated.operationId || task.operationId || task.id;
+    selectedTaskId.value = updated.id;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : 'Unable to run task now';
+  } finally {
+    actionLoading.value = '';
   }
 }
 
 function canRetry(task: TaskDto) {
   return ['failed', 'failed_retryable', 'blocked'].includes(task.status);
+}
+
+function canRunNow(task: TaskDto) {
+  return ['queued', 'scheduled', 'failed_retryable'].includes(task.status);
 }
 
 function clearFilters() {
@@ -134,130 +230,252 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div>
-    <div class="d-flex justify-space-between align-center mb-6">
+  <div class="task-center">
+    <div class="page-heading">
       <div>
-        <h1 class="text-h4 font-weight-bold">Task Center</h1>
-        <p class="text-subtitle-1 text-medium-emphasis">Operations grouped by operation_id with trigger metadata, steps, and logs.</p>
+        <h1 class="text-h4 font-weight-bold">任务中心</h1>
+        <div class="task-kpis">
+          <v-chip color="primary" variant="tonal" label>Active {{ taskCounts.active }}</v-chip>
+          <v-chip color="info" variant="tonal" label>Queued {{ taskCounts.queued }}</v-chip>
+          <v-chip color="warning" variant="tonal" label>Running {{ taskCounts.running }}</v-chip>
+          <v-chip color="error" variant="tonal" label>Failed {{ taskCounts.failed }}</v-chip>
+          <v-chip color="success" variant="tonal" label>Done {{ taskCounts.completed }}</v-chip>
+        </div>
       </div>
       <v-btn prepend-icon="mdi-refresh" :loading="loading" color="primary" class="text-none font-weight-bold" @click="loadTasks">Refresh</v-btn>
     </div>
 
-    <v-card variant="outlined" class="pa-4 mb-5">
-      <div class="d-flex flex-wrap align-center" style="gap: 12px;">
-        <v-text-field v-model="operationFilter" label="Operation ID" variant="outlined" density="compact" hide-details style="max-width: 240px;" @keydown.enter="reloadFirstPage" />
-        <v-select v-model="typeFilter" :items="taskTypeOptions" label="Type" variant="outlined" density="compact" hide-details clearable style="max-width: 220px;" @update:model-value="reloadFirstPage" />
-        <v-select
-          v-model="statusFilter"
-          :items="[
-            { title: 'All', value: 'all' },
-            { title: 'Queued', value: 'queued' },
-            { title: 'Scheduled', value: 'scheduled' },
-            { title: 'Running', value: 'running' },
-            { title: 'Completed', value: 'completed' },
-            { title: 'Failed', value: 'failed' },
-            { title: 'Retrying', value: 'failed_retryable' },
-            { title: 'Blocked', value: 'blocked' },
-            { title: 'Cancelled', value: 'cancelled' }
-          ]"
-          item-title="title"
-          item-value="value"
-          label="Status"
-          variant="outlined"
-          density="compact"
-          hide-details
-          style="max-width: 170px;"
-          @update:model-value="reloadFirstPage"
-        />
-        <v-btn variant="outlined" class="text-none" @click="clearFilters">Clear</v-btn>
-      </div>
+    <v-card variant="outlined" class="filter-bar">
+      <v-text-field v-model="operationFilter" label="Operation ID" variant="outlined" density="compact" hide-details clearable @keydown.enter="reloadFirstPage" />
+      <v-select v-model="typeFilter" :items="taskTypeOptions" label="Type" variant="outlined" density="compact" hide-details clearable @update:model-value="reloadFirstPage" />
+      <v-select
+        v-model="statusFilter"
+        :items="[
+          { title: 'All', value: 'all' },
+          { title: 'Queued', value: 'queued' },
+          { title: 'Scheduled', value: 'scheduled' },
+          { title: 'Running', value: 'running' },
+          { title: 'Completed', value: 'completed' },
+          { title: 'Failed', value: 'failed' },
+          { title: 'Retry wait', value: 'failed_retryable' },
+          { title: 'Blocked', value: 'blocked' },
+          { title: 'Cancelled', value: 'cancelled' },
+        ]"
+        item-title="title"
+        item-value="value"
+        label="Status"
+        variant="outlined"
+        density="compact"
+        hide-details
+        @update:model-value="reloadFirstPage"
+      />
+      <v-btn variant="outlined" prepend-icon="mdi-filter-remove" class="text-none" @click="clearFilters">Clear</v-btn>
     </v-card>
 
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <div class="task-layout">
-      <v-card variant="outlined" :loading="loading" class="operation-list">
-        <v-list lines="three" density="compact">
+    <div class="task-workspace">
+      <v-card variant="outlined" :loading="loading" class="operation-panel">
+        <div class="panel-title">
+          <div>
+            <div class="text-subtitle-1 font-weight-bold">Operations</div>
+            <div class="text-caption text-medium-emphasis">{{ total }} tasks across this page</div>
+          </div>
+        </div>
+        <v-divider />
+        <v-list lines="three" density="compact" class="operation-list">
           <v-list-item
             v-for="group in operationGroups"
             :key="group.operationId"
             :active="group.operationId === selectedOperationId"
+            rounded="0"
             @click="selectOperation(group.operationId)"
           >
             <template #prepend>
-              <v-chip :color="taskStatusColor(group.status)" size="small" label>{{ group.status }}</v-chip>
+              <v-icon :color="taskStatusColor(group.status)" :icon="group.status === 'completed' ? 'mdi-check-circle' : group.failedCount ? 'mdi-alert-circle' : 'mdi-progress-clock'" />
             </template>
-            <v-list-item-title class="font-weight-bold">{{ group.operationId }}</v-list-item-title>
+            <v-list-item-title class="operation-title">
+              <span>{{ group.summary || formatTaskType(group.tasks[0]?.type) }}</span>
+              <v-chip :color="taskStatusColor(group.status)" size="x-small" label>{{ statusLabel(group.status) }}</v-chip>
+            </v-list-item-title>
             <v-list-item-subtitle>
-              trigger={{ group.triggerType || '-' }} resource={{ group.triggerResourceType || '-' }} tasks={{ group.tasks.length }}
+              <div class="operation-meta">
+                <span class="mono">{{ shortId(group.operationId) }}</span>
+                <span>{{ group.resourceType || group.triggerResourceType || 'resource' }} / {{ shortId(group.resourceId || group.triggerResourceId) }}</span>
+                <span>{{ group.tasks.length }} task{{ group.tasks.length === 1 ? '' : 's' }}</span>
+              </div>
+              <v-progress-linear :model-value="group.progress" :color="taskStatusColor(group.status)" height="6" rounded class="mt-2" />
             </v-list-item-subtitle>
           </v-list-item>
           <v-list-item v-if="operationGroups.length === 0" title="No task operations" />
         </v-list>
         <v-divider />
-        <div class="d-flex align-center justify-end pa-3" style="gap: 12px;">
-          <v-select v-model="pageSize" :items="[10, 20, 50, 100]" density="compact" hide-details variant="outlined" style="width: 90px;" @update:model-value="reloadFirstPage" />
+        <div class="pager">
+          <v-select v-model="pageSize" :items="[10, 20, 50, 100]" density="compact" hide-details variant="outlined" class="page-size" @update:model-value="reloadFirstPage" />
           <v-pagination v-model="page" :length="totalPages" density="compact" total-visible="4" @update:model-value="loadTasks" />
         </div>
       </v-card>
 
-      <v-card variant="outlined" class="task-list">
-        <v-card-title class="text-subtitle-1 font-weight-bold">Tasks</v-card-title>
-        <v-table density="compact">
-          <thead>
-            <tr>
-              <th>Type</th>
-              <th>Node</th>
-              <th>Status</th>
-              <th>Trigger</th>
-              <th>Progress</th>
-              <th class="text-right">Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="!(selectedOperation?.tasks.length)">
-              <td colspan="6" class="text-center py-6 text-medium-emphasis">Select an operation</td>
-            </tr>
-            <tr
-              v-for="task in selectedOperation?.tasks || []"
-              :key="task.id"
-              class="cursor-pointer"
-              :class="{ selected: task.id === selectedTaskId }"
-              @click="selectedTaskId = task.id"
-            >
-              <td>{{ formatTaskType(task.type) }}</td>
-              <td>{{ serverName(task.nodeId || task.serverId) }}</td>
-              <td><v-chip :color="taskStatusColor(task.status)" size="x-small" label>{{ task.status }}</v-chip></td>
-              <td class="text-caption">{{ task.triggerType || '-' }}</td>
-              <td class="font-tabular">{{ task.percentage ?? 0 }}%</td>
-              <td class="text-right">
-                <v-btn v-if="canRetry(task)" size="x-small" variant="outlined" prepend-icon="mdi-reload" @click.stop="retryTask(task)">Retry</v-btn>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </v-card>
-
-      <v-card variant="outlined" class="task-detail">
-        <v-card-title class="text-subtitle-1 font-weight-bold">Steps & Logs</v-card-title>
-        <v-card-text>
-          <div v-if="selectedTask" class="mb-4">
-            <div class="text-caption text-medium-emphasis">Resource</div>
-            <div class="font-weight-bold">{{ selectedTask.resourceType || '-' }} / {{ selectedTask.resourceId || '-' }}</div>
-            <div class="text-caption text-medium-emphasis mt-2">Trigger</div>
-            <div>{{ selectedTask.triggerType || '-' }} {{ selectedTask.triggeredBy ? `by ${selectedTask.triggeredBy}` : '' }}</div>
+      <section class="main-panel">
+        <v-card variant="outlined" class="lifecycle-panel">
+          <div class="panel-title">
+            <div>
+              <div class="text-subtitle-1 font-weight-bold">{{ selectedTask?.summary || 'Select a task' }}</div>
+              <div class="text-caption text-medium-emphasis">
+                {{ selectedTask ? `${formatTaskType(selectedTask.type)} on ${serverName(selectedTask.nodeId || selectedTask.serverId)}` : '-' }}
+              </div>
+            </div>
+            <v-chip v-if="selectedTask" :color="taskStatusColor(selectedTask.status)" label>{{ statusLabel(selectedTask.status) }}</v-chip>
           </div>
 
+          <template v-if="selectedTask">
+            <div class="selected-progress">
+              <v-progress-linear
+                :model-value="taskProgress(selectedTask)"
+                :indeterminate="selectedTask.status === 'running' && selectedTask.percentage === null"
+                :color="taskStatusColor(selectedTask.status)"
+                height="16"
+                rounded
+              />
+              <span class="font-tabular">{{ progressText(selectedTask) }}</span>
+            </div>
+
+            <div class="diagnostics-grid">
+              <div>
+                <span>Created</span>
+                <strong>{{ formatDateTime(selectedTask.createdAt) }}</strong>
+              </div>
+              <div>
+                <span>Should start</span>
+                <strong>{{ selectedTask.nextRunAt ? formatDateTime(selectedTask.nextRunAt) : 'Now' }}</strong>
+              </div>
+              <div>
+                <span>Actually started</span>
+                <strong>{{ formatDateTime(selectedTask.startedAt) }}</strong>
+              </div>
+              <div>
+                <span>Finished</span>
+                <strong>{{ formatDateTime(selectedTask.finishedAt) }}</strong>
+              </div>
+              <div>
+                <span>Queued for</span>
+                <strong>{{ durationBetween(selectedTask.createdAt, selectedTask.startedAt) }}</strong>
+              </div>
+              <div>
+                <span>Runtime</span>
+                <strong>{{ durationBetween(selectedTask.startedAt, selectedTask.finishedAt) }}</strong>
+              </div>
+            </div>
+
+            <v-alert :color="taskStatusColor(selectedTask.status)" variant="tonal" density="compact" class="mb-4">
+              {{ queueReason(selectedTask) }}
+            </v-alert>
+
+            <div class="action-row">
+              <v-btn
+                v-if="canRunNow(selectedTask)"
+                size="small"
+                color="primary"
+                variant="outlined"
+                prepend-icon="mdi-play"
+                :loading="actionLoading === `run:${selectedTask.id}`"
+                @click="runNowTask(selectedTask)"
+              >
+                Run now
+              </v-btn>
+              <v-btn
+                v-if="canRetry(selectedTask)"
+                size="small"
+                variant="outlined"
+                prepend-icon="mdi-reload"
+                :loading="actionLoading === `retry:${selectedTask.id}`"
+                @click="retryTask(selectedTask)"
+              >
+                Retry
+              </v-btn>
+            </div>
+          </template>
+        </v-card>
+
+        <v-card variant="outlined" class="task-table-panel">
+          <div class="panel-title">
+            <div class="text-subtitle-1 font-weight-bold">Tasks in operation</div>
+            <div class="text-caption text-medium-emphasis">{{ selectedOperation?.operationId ? shortId(selectedOperation.operationId) : '-' }}</div>
+          </div>
+          <v-table density="compact" class="task-table">
+            <thead>
+              <tr>
+                <th>Task</th>
+                <th>Node</th>
+                <th>Status</th>
+                <th>Progress</th>
+                <th>Should start</th>
+                <th>Started</th>
+                <th>Finished</th>
+                <th>Why queued / result</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="!(selectedOperation?.tasks.length)">
+                <td colspan="8" class="text-center py-6 text-medium-emphasis">Select an operation</td>
+              </tr>
+              <tr
+                v-for="task in selectedOperation?.tasks || []"
+                :key="task.id"
+                class="cursor-pointer"
+                :class="{ selected: task.id === selectedTaskId }"
+                @click="selectedTaskId = task.id"
+              >
+                <td>
+                  <div class="font-weight-medium">{{ formatTaskType(task.type) }}</div>
+                  <div class="text-caption text-medium-emphasis mono">{{ shortId(task.id) }}</div>
+                </td>
+                <td>{{ serverName(task.nodeId || task.serverId) }}</td>
+                <td><v-chip :color="taskStatusColor(task.status)" size="x-small" label>{{ statusLabel(task.status) }}</v-chip></td>
+                <td class="progress-cell">
+                  <v-progress-linear :model-value="taskProgress(task)" :color="taskStatusColor(task.status)" height="8" rounded />
+                  <span class="font-tabular">{{ progressText(task) }}</span>
+                </td>
+                <td>{{ task.nextRunAt ? formatClock(task.nextRunAt) : 'Now' }}</td>
+                <td>{{ formatClock(task.startedAt) }}</td>
+                <td>{{ formatClock(task.finishedAt) }}</td>
+                <td class="queue-reason">{{ queueReason(task) }}</td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-card>
+      </section>
+
+      <v-card variant="outlined" class="detail-panel">
+        <div class="panel-title">
+          <div>
+            <div class="text-subtitle-1 font-weight-bold">Steps & Logs</div>
+            <div class="text-caption text-medium-emphasis">{{ selectedTask ? `${selectedTask.resourceType || '-'} / ${shortId(selectedTask.resourceId)}` : '-' }}</div>
+          </div>
+        </div>
+        <v-divider />
+        <v-card-text>
           <v-timeline v-if="steps.length" side="end" density="compact" class="mb-4">
             <v-timeline-item v-for="step in steps" :key="step.id" :dot-color="taskStatusColor(step.status)" size="small">
-              <div class="font-weight-bold">{{ step.step }}</div>
-              <div class="text-caption text-medium-emphasis">{{ step.status }} - {{ step.percentage ?? 0 }}%</div>
+              <div class="step-row">
+                <strong>{{ step.step }}</strong>
+                <span class="font-tabular">{{ Math.round(step.percentage ?? 0) }}%</span>
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                {{ statusLabel(step.status) }} · {{ formatClock(step.startedAt) }} - {{ formatClock(step.finishedAt) }}
+              </div>
               <div v-if="step.error" class="text-caption text-error">{{ step.error }}</div>
             </v-timeline-item>
           </v-timeline>
           <div v-else class="text-medium-emphasis mb-4">No task steps returned</div>
 
-          <TaskLogPanel v-if="selectedTaskId" :key="selectedTaskId" :task-id="selectedTaskId" :server-name="serverName(selectedTask?.nodeId || selectedTask?.serverId)" @finished="loadTasks" />
+          <TaskLogPanel
+            v-if="selectedTaskId"
+            :key="selectedTaskId"
+            :task-id="selectedTaskId"
+            :server-name="serverName(selectedTask?.nodeId || selectedTask?.serverId)"
+            @finished="loadTasks"
+          />
           <div v-else class="text-center py-8 text-medium-emphasis">Select a task to view logs</div>
         </v-card-text>
       </v-card>
@@ -266,26 +484,164 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.task-layout {
+.task-center {
   display: grid;
-  grid-template-columns: minmax(320px, 0.8fr) minmax(480px, 1.1fr);
-  grid-template-areas:
-    "operations tasks"
-    "operations detail";
+  gap: 16px;
+}
+
+.page-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.task-kpis {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.filter-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px) minmax(170px, 220px) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+}
+
+.task-workspace {
+  display: grid;
+  grid-template-columns: minmax(300px, 0.72fr) minmax(620px, 1.35fr) minmax(380px, 0.93fr);
   gap: 16px;
   align-items: start;
 }
 
+.main-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.panel-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  min-height: 64px;
+  padding: 14px 16px;
+}
+
 .operation-list {
-  grid-area: operations;
+  max-height: 620px;
+  overflow: auto;
 }
 
-.task-list {
-  grid-area: tasks;
+.operation-title {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
 }
 
-.task-detail {
-  grid-area: detail;
+.operation-title span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.operation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 12px;
+}
+
+.page-size {
+  max-width: 90px;
+}
+
+.selected-progress {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 0 16px 14px;
+}
+
+.diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 16px 14px;
+}
+
+.diagnostics-grid div {
+  border: 1px solid rgba(var(--v-border-color), 0.16);
+  border-radius: 8px;
+  padding: 10px;
+  min-width: 0;
+}
+
+.diagnostics-grid span {
+  display: block;
+  color: rgba(var(--v-theme-on-surface), 0.62);
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.diagnostics-grid strong {
+  display: block;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.lifecycle-panel :deep(.v-alert) {
+  margin: 0 16px 14px;
+}
+
+.action-row {
+  display: flex;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+.task-table {
+  overflow-x: auto;
+}
+
+.task-table th,
+.task-table td {
+  white-space: nowrap;
+}
+
+.progress-cell {
+  min-width: 120px;
+}
+
+.progress-cell span {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.queue-reason {
+  max-width: 260px;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.detail-panel {
+  position: sticky;
+  top: 16px;
 }
 
 .cursor-pointer {
@@ -293,6 +649,45 @@ onBeforeUnmount(() => {
 }
 
 tr.selected {
-  background: rgba(var(--v-theme-primary), 0.06);
+  background: rgba(var(--v-theme-primary), 0.07);
+}
+
+.mono {
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+}
+
+.font-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+.step-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (max-width: 1280px) {
+  .task-workspace {
+    grid-template-columns: minmax(280px, 0.8fr) minmax(560px, 1.2fr);
+  }
+
+  .detail-panel {
+    grid-column: 1 / -1;
+    position: static;
+  }
+}
+
+@media (max-width: 860px) {
+  .page-heading,
+  .panel-title {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filter-bar,
+  .task-workspace,
+  .diagnostics-grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

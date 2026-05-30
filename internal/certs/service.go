@@ -1,0 +1,464 @@
+package certs
+
+import (
+	"context"
+	"crypto/x509"
+	"database/sql"
+	"encoding/json"
+	"encoding/pem"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"time"
+
+	"panel/internal/config"
+	"panel/internal/dns"
+	"panel/internal/id"
+	"panel/internal/panelerr"
+	"panel/internal/tasks"
+)
+
+var (
+	domainPattern       = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+	variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+)
+
+type Service struct {
+	db               *sql.DB
+	dataRoot         string
+	cfg              config.Config
+	domains          domainResolver
+	providerOverride Provider
+	tasks            *tasks.Service
+	issuer           string
+}
+
+type domainResolver interface {
+	ResolveDomain(ctx context.Context, domainID string) (dns.ResolvedDomain, error)
+}
+
+func NewService(db *sql.DB, cfg config.Config, domains domainResolver, taskSvc *tasks.Service) *Service {
+	return &Service{db: db, dataRoot: cfg.DataRoot, cfg: cfg, domains: domains, tasks: taskSvc, issuer: "acme"}
+}
+
+func NewServiceWithProvider(db *sql.DB, cfg config.Config, provider Provider, taskSvc *tasks.Service) *Service {
+	return &Service{db: db, dataRoot: cfg.DataRoot, cfg: cfg, providerOverride: provider, tasks: taskSvc, issuer: "acme"}
+}
+
+func (s *Service) Issue(ctx context.Context, in IssueRequest) (IssueResult, error) {
+	resolved, err := s.resolveDomain(ctx, in.DomainID)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	prepared, err := prepareIssueRequest(in, resolved.Name)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	provider, err := s.providerForDomain(resolved)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	bundle, err := provider.Issue(ctx, Request{Domain: prepared.Domain, Domains: prepared.Domains})
+	if err != nil {
+		return IssueResult{}, err
+	}
+	if err := validateBundle(bundle); err != nil {
+		return IssueResult{}, err
+	}
+
+	now := time.Now().UTC()
+	cert := Certificate{
+		ID:           id.New("cert"),
+		Name:         prepared.Name,
+		DomainID:     resolved.ID,
+		Domain:       prepared.Domain,
+		Prefix:       prepared.Prefix,
+		Scope:        prepared.Scope,
+		Domains:      prepared.Domains,
+		VariableName: prepared.VariableName,
+		Issuer:       s.issuer,
+		AutoRenew:    true,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
+	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
+	certDir := filepath.Join(s.dataRoot, "certs", cert.ID)
+	if err := os.MkdirAll(certDir, 0700); err != nil {
+		return IssueResult{}, err
+	}
+	cert.CertificatePath = filepath.Join(certDir, "certificate.pem")
+	cert.PrivateKeyPath = filepath.Join(certDir, "private-key.pem")
+	if err := os.WriteFile(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), 0600); err != nil {
+		return IssueResult{}, err
+	}
+	if err := os.WriteFile(cert.PrivateKeyPath, bundle.PrivateKeyPEM, 0600); err != nil {
+		return IssueResult{}, err
+	}
+	if err := s.insert(ctx, cert); err != nil {
+		return IssueResult{}, err
+	}
+	taskID, err := s.recordTask(ctx, TaskTypeIssue, cert, "Issued certificate for "+cert.Domain)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	cert, err = s.Get(ctx, cert.ID)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	return IssueResult{Certificate: cert, TaskID: taskID}, nil
+}
+
+func (s *Service) RenewDue(ctx context.Context, now time.Time) (int, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+certificateColumns+` FROM certificates WHERE auto_renew=1 AND next_renew_at<>'' AND next_renew_at<=? ORDER BY next_renew_at ASC`, formatTime(now.UTC()))
+	if err != nil {
+		return 0, err
+	}
+	defer rows.Close()
+	certs := []Certificate{}
+	for rows.Next() {
+		cert, err := scanCertificate(rows)
+		if err != nil {
+			return 0, err
+		}
+		certs = append(certs, cert)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	renewed := 0
+	for _, cert := range certs {
+		if err := s.Renew(ctx, cert.ID); err != nil {
+			return renewed, err
+		}
+		renewed++
+	}
+	return renewed, nil
+}
+
+func (s *Service) Renew(ctx context.Context, certID string) error {
+	cert, err := s.Get(ctx, certID)
+	if err != nil {
+		return err
+	}
+	resolved, err := s.resolveDomain(ctx, cert.DomainID)
+	if err != nil {
+		return err
+	}
+	provider, err := s.providerForDomain(resolved)
+	if err != nil {
+		return err
+	}
+	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains})
+	if err != nil {
+		return err
+	}
+	if err := validateBundle(bundle); err != nil {
+		return err
+	}
+	if err := os.WriteFile(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(cert.PrivateKeyPath, bundle.PrivateKeyPEM, 0600); err != nil {
+		return err
+	}
+	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
+	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
+	cert.UpdatedAt = time.Now().UTC()
+	if err := s.updateRenewal(ctx, cert); err != nil {
+		return err
+	}
+	_, err = s.recordTask(ctx, TaskTypeRenew, cert, "Renewed certificate for "+cert.Domain)
+	return err
+}
+
+func (s *Service) List(ctx context.Context) ([]Certificate, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+certificateColumns+` FROM certificates ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Certificate{}
+	for rows.Next() {
+		cert, err := scanCertificate(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, cert)
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) Get(ctx context.Context, certID string) (Certificate, error) {
+	cert, err := scanCertificate(s.db.QueryRowContext(ctx, `SELECT `+certificateColumns+` FROM certificates WHERE id=?`, certID))
+	if err == sql.ErrNoRows {
+		return Certificate{}, panelerr.NotFound("certificate")
+	}
+	return cert, err
+}
+
+func (s *Service) Delete(ctx context.Context, certID string) error {
+	cert, err := s.Get(ctx, certID)
+	if err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM certificates WHERE id=?`, certID)
+	if err != nil {
+		return err
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		return panelerr.NotFound("certificate")
+	}
+	if cert.CertificatePath != "" {
+		_ = os.Remove(cert.CertificatePath)
+	}
+	if cert.PrivateKeyPath != "" {
+		_ = os.Remove(cert.PrivateKeyPath)
+	}
+	_ = os.Remove(filepath.Dir(cert.CertificatePath))
+	return nil
+}
+
+func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) {
+	certs, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	certVars := map[string]any{}
+	for _, cert := range certs {
+		certPEM, err := os.ReadFile(cert.CertificatePath)
+		if err != nil {
+			return nil, err
+		}
+		keyPEM, err := os.ReadFile(cert.PrivateKeyPath)
+		if err != nil {
+			return nil, err
+		}
+		certVars[cert.VariableName] = map[string]any{
+			"certificatePem": string(certPEM),
+			"privateKeyPem":  string(keyPEM),
+			"domains":        append([]string(nil), cert.Domains...),
+		}
+	}
+	return map[string]any{"certs": certVars}, nil
+}
+
+func (s *Service) insert(ctx context.Context, cert Certificate) error {
+	domains, err := json.Marshal(cert.Domains)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO certificates(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		cert.ID, cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.CertificatePath, cert.PrivateKeyPath, cert.Issuer, boolInt(cert.AutoRenew), formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.CreatedAt), formatTime(cert.UpdatedAt))
+	return err
+}
+
+func (s *Service) updateRenewal(ctx context.Context, cert Certificate) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET not_before=?,not_after=?,next_renew_at=?,updated_at=? WHERE id=?`,
+		formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatOptionalTime(cert.NextRenewAt), formatTime(cert.UpdatedAt), cert.ID)
+	return err
+}
+
+func (s *Service) recordTask(ctx context.Context, taskType string, cert Certificate, summary string) (string, error) {
+	if s.tasks == nil {
+		return "", nil
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         taskType,
+		ResourceType: "certificate",
+		ResourceID:   cert.ID,
+		Status:       tasks.StatusCompleted,
+		Summary:      summary,
+	})
+	if err != nil {
+		return "", err
+	}
+	return task.ID, nil
+}
+
+type preparedIssueRequest struct {
+	Name         string
+	Domain       string
+	Prefix       string
+	Scope        string
+	Domains      []string
+	VariableName string
+}
+
+func prepareIssueRequest(in IssueRequest, managedDomain string) (preparedIssueRequest, error) {
+	prefix := normalizePrefix(in.Prefix)
+	domain := joinDomain(prefix, managedDomain)
+	if !domainPattern.MatchString(domain) {
+		return preparedIssueRequest{}, panelerr.Validation("certificate_domain_invalid", "Domain must be a valid DNS name")
+	}
+	scope := strings.TrimSpace(in.Scope)
+	if scope == "" {
+		scope = ScopeSingle
+	}
+	if scope != ScopeSingle && scope != ScopeWildcard {
+		return preparedIssueRequest{}, panelerr.Validation("certificate_scope_invalid", "Certificate scope must be single or wildcard")
+	}
+	domains := []string{domain}
+	if scope == ScopeWildcard {
+		domains = []string{domain, "*." + domain}
+	}
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		name = domain
+	}
+	variableName := strings.TrimSpace(in.VariableName)
+	if variableName == "" {
+		variableName = defaultVariableName(domain)
+	}
+	if !variableNamePattern.MatchString(variableName) {
+		return preparedIssueRequest{}, panelerr.Validation("certificate_variable_invalid", "Variable name must start with a letter or underscore and contain only letters, digits, or underscores")
+	}
+	return preparedIssueRequest{Name: name, Domain: domain, Prefix: prefix, Scope: scope, Domains: domains, VariableName: variableName}, nil
+}
+
+func normalizePrefix(prefix string) string {
+	prefix = strings.ToLower(strings.TrimSpace(prefix))
+	prefix = strings.TrimPrefix(prefix, "*.")
+	prefix = strings.TrimSuffix(prefix, ".")
+	if prefix == "" {
+		return "@"
+	}
+	return prefix
+}
+
+func joinDomain(prefix, managedDomain string) string {
+	managedDomain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(managedDomain), "."))
+	if prefix == "@" {
+		return managedDomain
+	}
+	return prefix + "." + managedDomain
+}
+
+func defaultVariableName(domain string) string {
+	replacer := strings.NewReplacer(".", "_", "-", "_")
+	return replacer.Replace(domain)
+}
+
+func validateBundle(bundle Bundle) error {
+	if len(bundle.CertificatePEM) == 0 || len(bundle.PrivateKeyPEM) == 0 {
+		return panelerr.BadGateway("certificate_issue_failed", "Certificate provider returned an incomplete certificate bundle")
+	}
+	if block, _ := pem.Decode(bundle.CertificatePEM); block == nil || block.Type != "CERTIFICATE" {
+		return panelerr.BadGateway("certificate_issue_failed", "Certificate provider returned invalid certificate PEM")
+	}
+	if block, _ := pem.Decode(bundle.PrivateKeyPEM); block == nil {
+		return panelerr.BadGateway("certificate_issue_failed", "Certificate provider returned invalid private key PEM")
+	}
+	return nil
+}
+
+func certificateValidity(certPEM []byte) (time.Time, time.Time) {
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return time.Time{}, time.Time{}
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return time.Time{}, time.Time{}
+	}
+	return cert.NotBefore, cert.NotAfter
+}
+
+type certScanner interface{ Scan(dest ...any) error }
+
+const certificateColumns = `id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at`
+
+func scanCertificate(row certScanner) (Certificate, error) {
+	var cert Certificate
+	var domains string
+	var autoRenew int
+	var nextRenewAt, notBefore, notAfter string
+	var created, updated string
+	if err := row.Scan(&cert.ID, &cert.Name, &cert.DomainID, &cert.Domain, &cert.Prefix, &cert.Scope, &domains, &cert.VariableName, &cert.CertificatePath, &cert.PrivateKeyPath, &cert.Issuer, &autoRenew, &nextRenewAt, &notBefore, &notAfter, &created, &updated); err != nil {
+		return Certificate{}, err
+	}
+	if domains != "" {
+		_ = json.Unmarshal([]byte(domains), &cert.Domains)
+	}
+	cert.AutoRenew = autoRenew == 1
+	cert.NextRenewAt = parseTime(nextRenewAt)
+	cert.NotBefore = parseTime(notBefore)
+	cert.NotAfter = parseTime(notAfter)
+	cert.CreatedAt = parseTime(created)
+	cert.UpdatedAt = parseTime(updated)
+	return cert, nil
+}
+
+func (s *Service) resolveDomain(ctx context.Context, domainID string) (dns.ResolvedDomain, error) {
+	if s.providerOverride != nil {
+		if domainID == "" {
+			domainID = "test-domain"
+		}
+		return dns.ResolvedDomain{Domain: dns.Domain{ID: domainID, Name: "example.com", Provider: dns.ProviderCloudflare, AccountID: "acct_test"}, APIToken: "test"}, nil
+	}
+	if s.domains == nil {
+		return dns.ResolvedDomain{}, panelerr.BadGateway("certificate_provider_not_configured", "DNS domain service is not configured")
+	}
+	return s.domains.ResolveDomain(ctx, domainID)
+}
+
+func (s *Service) providerForDomain(domain dns.ResolvedDomain) (Provider, error) {
+	if s.providerOverride != nil {
+		return s.providerOverride, nil
+	}
+	switch domain.Provider {
+	case dns.ProviderCloudflare:
+		return NewACMEProvider(s.cfg, dns.NewCloudflareProvider(domain.APIToken, domain.AccountID, nil), nil)
+	default:
+		return nil, panelerr.Validation("dns_provider_invalid", "Unsupported DNS provider")
+	}
+}
+
+func nextRenewAt(notAfter time.Time) time.Time {
+	if notAfter.IsZero() {
+		return time.Now().UTC().Add(24 * time.Hour)
+	}
+	next := notAfter.Add(-30 * 24 * time.Hour)
+	if next.Before(time.Now().UTC()) {
+		return time.Now().UTC().Add(24 * time.Hour)
+	}
+	return next
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func formatTime(value time.Time) string {
+	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func formatOptionalTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	return formatTime(value)
+}
+
+func parseTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, _ := time.Parse(time.RFC3339Nano, value)
+	return parsed
+}
+
+type notConfiguredProvider struct{}
+
+func (notConfiguredProvider) Issue(context.Context, Request) (Bundle, error) {
+	return Bundle{}, panelerr.BadGateway("certificate_provider_not_configured", "Certificate provider is not configured")
+}
+
+func (notConfiguredProvider) Renew(context.Context, string) (Bundle, error) {
+	return Bundle{}, panelerr.BadGateway("certificate_provider_not_configured", "Certificate provider is not configured")
+}

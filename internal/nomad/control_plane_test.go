@@ -62,6 +62,36 @@ func TestControlPlaneShowsBootstrappingServerAsPendingNode(t *testing.T) {
 	}
 }
 
+func TestControlPlaneKeepsCompletedJoinVisibleUntilNomadNodeRegisters(t *testing.T) {
+	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createControlPlaneServer(t, svc.servers, credSvc, ctx, "worker", "10.0.0.34")
+	fake.status = StatusResponse{Connected: true, Leader: "10.0.0.1:4647"}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeClientJoin, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Summary: "Nomad client join requested", Status: tasks.StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.ControlPlane(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ControlPlaneConnected {
+		t.Fatalf("status = %q", got.Status)
+	}
+	if len(got.Nodes) != 1 {
+		t.Fatalf("nodes = %#v", got.Nodes)
+	}
+	node := got.Nodes[0]
+	if node.Kind != ProjectedNodePending || node.Role != ProjectedNodeRoleClient || node.Status != "registering" || node.TaskID != task.ID {
+		t.Fatalf("unexpected projected node: %#v", node)
+	}
+	if len(got.JoinCandidates) != 0 {
+		t.Fatalf("completed join should stay out of candidates while registering: %#v", got.JoinCandidates)
+	}
+}
+
 func TestControlPlaneProjectsManagedAndUnmanagedNodes(t *testing.T) {
 	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
 	defer cleanup()

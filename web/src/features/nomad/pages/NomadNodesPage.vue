@@ -32,6 +32,7 @@ function statusColor(nodeStatus?: string) {
   if (nodeStatus === 'ready') return 'success';
   if (nodeStatus === 'down' || nodeStatus === 'failed') return 'error';
   if (nodeStatus === 'unmanaged') return 'grey';
+  if (nodeStatus === 'registering') return 'info';
   return 'warning';
 }
 

@@ -9,10 +9,10 @@ import (
 )
 
 const (
-	ControlPlaneUnconfigured  = "unconfigured"
+	ControlPlaneUnconfigured = "unconfigured"
 	ControlPlaneBootstrapping = "bootstrapping"
-	ControlPlaneConnected     = "connected"
-	ControlPlaneDegraded      = "degraded"
+	ControlPlaneConnected    = "connected"
+	ControlPlaneDegraded     = "degraded"
 
 	ProjectedNodeManaged   = "managed"
 	ProjectedNodePending   = "pending"

@@ -84,6 +84,15 @@ onBeforeUnmount(() => {
 
         <v-list-item to="/packages" prepend-icon="mdi-package-variant" title="Package Updates" value="packages" />
 
+        <v-list-group value="dns">
+          <template #activator="{ props }">
+            <v-list-item v-bind="props" prepend-icon="mdi-dns-outline" title="DNS" />
+          </template>
+          <v-list-item to="/dns/domains" title="Domains" value="dns-domains" class="pl-8" />
+          <v-list-item title="Records" value="dns-records" class="pl-8" disabled />
+          <v-list-item to="/dns/certificates" title="Certificates" value="dns-certificates" class="pl-8" />
+        </v-list-group>
+
         <v-list-group value="runtime">
           <template #activator="{ props }">
             <v-list-item v-bind="props" prepend-icon="mdi-cloud-braces" title="Runtime" />
