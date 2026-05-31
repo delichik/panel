@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
-import { settingsApi } from '@/api/settings';
+import { useI18n } from '@/i18n';
+import { useSettingsStore } from '@/stores/settings';
 import type { RuntimeSettingsDto } from '@/types/api';
 
+const settingsStore = useSettingsStore();
+const { t, translateCleanupSchedule } = useI18n();
 const settings = ref<RuntimeSettingsDto | null>(null);
 const loading = ref(false);
 const saving = ref(false);
@@ -11,6 +14,7 @@ const form = reactive({
   metricsRetentionDays: 7,
   metricsCollectionIntervalSeconds: 60,
   cleanupSchedule: 'daily',
+  language: 'en',
 });
 
 // Snackbar notification state
@@ -28,16 +32,20 @@ function syncForm(next: RuntimeSettingsDto) {
   form.metricsRetentionDays = next.metricsRetentionDays;
   form.metricsCollectionIntervalSeconds = next.metricsCollectionIntervalSeconds;
   form.cleanupSchedule = next.cleanupSchedule;
+  form.language = next.language;
 }
 
 async function loadSettings() {
   loading.value = true;
   try {
-    settings.value = await settingsApi.runtime();
-    syncForm(settings.value);
+    const next = await settingsStore.loadRuntime(true);
+    if (next) {
+      settings.value = next;
+      syncForm(next);
+    }
     error.value = '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to load runtime settings';
+    error.value = err instanceof Error ? err.message : t('settingsPage.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -46,12 +54,13 @@ async function loadSettings() {
 async function saveSettings() {
   saving.value = true;
   try {
-    settings.value = await settingsApi.updateRuntime({ ...form });
-    syncForm(settings.value);
+    const next = await settingsStore.updateRuntime({ ...form });
+    settings.value = next;
+    syncForm(next);
     error.value = '';
-    showMessage('Runtime settings saved successfully');
+    showMessage(t('settingsPage.saveSuccess'));
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to save runtime settings';
+    error.value = err instanceof Error ? err.message : t('settingsPage.saveFailed');
   } finally {
     saving.value = false;
   }
@@ -62,32 +71,17 @@ onMounted(loadSettings);
 
 <template>
   <div>
-    <div class="d-flex justify-space-between align-center mb-6">
-      <div>
-        <h1 class="text-h4 font-weight-bold">Settings</h1>
-        <p class="text-subtitle-1 text-medium-emphasis">Runtime settings are stored in the application database and apply without restart.</p>
-      </div>
-      <div class="d-flex" style="gap: 12px;">
-        <v-btn
-          prepend-icon="mdi-refresh"
-          :loading="loading"
-          variant="outlined"
-          @click="loadSettings"
-          class="text-none font-weight-bold"
-        >
-          Refresh
-        </v-btn>
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-content-save"
-          :loading="saving"
-          :disabled="!settings"
-          @click="saveSettings"
-          class="text-none font-weight-bold"
-        >
-          Save
-        </v-btn>
-      </div>
+    <div class="d-flex justify-end mb-4" style="gap: 12px;">
+      <v-btn
+        color="primary"
+        prepend-icon="mdi-content-save"
+        :loading="saving"
+        :disabled="!settings"
+        @click="saveSettings"
+        class="text-none font-weight-bold"
+      >
+        {{ t('common.save') }}
+      </v-btn>
     </div>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
@@ -101,8 +95,8 @@ onMounted(loadSettings);
               type="number"
               min="1"
               max="3650"
-              label="Metrics Retention"
-              suffix="days"
+              :label="t('settingsPage.metricsRetention')"
+              :suffix="t('settingsPage.days')"
               variant="outlined"
               density="comfortable"
               hide-details="auto"
@@ -113,53 +107,64 @@ onMounted(loadSettings);
               type="number"
               min="10"
               max="86400"
-              label="Collection Interval"
-              suffix="seconds"
+              :label="t('settingsPage.collectionInterval')"
+              :suffix="t('settingsPage.seconds')"
               variant="outlined"
               density="comfortable"
               hide-details="auto"
             />
 
             <div>
-              <div class="text-subtitle-2 mb-2 text-grey-darken-3">Cleanup Schedule</div>
+              <div class="text-subtitle-2 mb-2 text-medium-emphasis">{{ t('settingsPage.cleanupSchedule') }}</div>
               <v-btn-toggle v-model="form.cleanupSchedule" mandatory color="primary" density="compact">
-                <v-btn value="hourly" class="text-none">Hourly</v-btn>
-                <v-btn value="daily" class="text-none">Daily</v-btn>
-                <v-btn value="weekly" class="text-none">Weekly</v-btn>
+                <v-btn value="hourly" class="text-none">{{ translateCleanupSchedule('hourly') }}</v-btn>
+                <v-btn value="daily" class="text-none">{{ translateCleanupSchedule('daily') }}</v-btn>
+                <v-btn value="weekly" class="text-none">{{ translateCleanupSchedule('weekly') }}</v-btn>
               </v-btn-toggle>
             </div>
+            <v-select
+              v-model="form.language"
+              :items="[
+                { title: t('languages.en'), value: 'en' },
+                { title: t('languages.zh-CN'), value: 'zh-CN' },
+              ]"
+              :label="t('settingsPage.language')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
           </div>
         </v-form>
 
         <v-divider class="my-6" />
 
-        <div class="text-subtitle-1 font-weight-bold mb-3">System Properties</div>
+        <div class="text-subtitle-1 font-weight-bold mb-3">{{ t('settingsPage.systemProperties') }}</div>
         <v-card variant="flat" class="border" style="background: transparent;">
           <v-table density="compact" style="background: transparent;" class="text-left">
             <tbody>
               <tr>
-                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase" style="width: 200px;">Listen address</td>
+                <td class="font-weight-bold text-caption text-medium-emphasis py-3 text-uppercase" style="width: 200px;">{{ t('settingsPage.listenAddress') }}</td>
                 <td>{{ settings.listenAddress }}</td>
               </tr>
               <tr>
-                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase">Application database</td>
+                <td class="font-weight-bold text-caption text-medium-emphasis py-3 text-uppercase">{{ t('settingsPage.applicationDatabase') }}</td>
                 <td class="font-mono text-caption">{{ settings.appDatabase }}</td>
               </tr>
               <tr>
-                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase">Metrics database</td>
+                <td class="font-weight-bold text-caption text-medium-emphasis py-3 text-uppercase">{{ t('settingsPage.metricsDatabase') }}</td>
                 <td class="font-mono text-caption">{{ settings.metricsDatabase }}</td>
               </tr>
               <tr>
-                <td class="font-weight-bold text-caption text-grey-darken-1 py-3 text-uppercase">Data root</td>
+                <td class="font-weight-bold text-caption text-medium-emphasis py-3 text-uppercase">{{ t('settingsPage.dataRoot') }}</td>
                 <td class="font-mono text-caption">{{ settings.dataRoot }}</td>
               </tr>
             </tbody>
           </v-table>
         </v-card>
       </template>
-      <div v-else class="text-center py-10 text-grey-darken-1">
-        <v-icon size="40" class="mb-2" color="grey-lighten-1">mdi-cog-off-outline</v-icon>
-        <div>Runtime settings unavailable</div>
+      <div v-else class="text-center py-10 text-medium-emphasis">
+        <v-icon size="40" class="mb-2" color="medium-emphasis">mdi-cog-off-outline</v-icon>
+        <div>{{ t('settingsPage.unavailable') }}</div>
       </div>
     </v-card>
 
@@ -167,7 +172,7 @@ onMounted(loadSettings);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
-        <v-btn color="white" variant="text" @click="snackbar = false">Close</v-btn>
+        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
       </template>
     </v-snackbar>
   </div>

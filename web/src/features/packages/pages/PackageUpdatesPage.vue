@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useI18n } from '@/i18n';
 import ServerSelector from '@/components/ServerSelector.vue';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { packagesApi } from '@/api/packages';
 import { serversApi } from '@/api/servers';
-import type { PackageUpdateDto, PackageUpdatesDto, ServerDto } from '@/types/api';
+import type { PackageUpdatesDto, ServerDto } from '@/types/api';
 
 const servers = ref<ServerDto[]>([]);
 const serverId = ref('');
@@ -21,6 +22,7 @@ let refreshPollTimer: number | undefined;
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
+const { t, formatDateTime } = useI18n();
 
 function showMessage(text: string, color = 'success') {
   snackbarText.value = text;
@@ -98,21 +100,9 @@ async function loadUpdates(showLoading = true) {
     }
   } catch (err) {
     updates.value = null;
-    error.value = err instanceof Error ? err.message : 'Unable to load package updates';
+    error.value = err instanceof Error ? err.message : t('packagesPage.loadFailed');
   } finally {
     if (showLoading) loadingUpdates.value = false;
-  }
-}
-
-async function refreshUpdates() {
-  if (!serverId.value || refreshInProgress.value) return;
-  try {
-    const result = await packagesApi.refresh(serverId.value);
-    packageRefreshRunning.value = result.refreshing;
-    await loadUpdates(false);
-    if (result.refreshing) startRefreshPolling();
-  } catch (err) {
-    showMessage(err instanceof Error ? err.message : 'Failed to refresh packages', 'error');
   }
 }
 
@@ -122,9 +112,9 @@ async function upgradeSelected() {
   try {
     const result = await packagesApi.upgradeSelected(serverId.value, names);
     taskId.value = result.taskId;
-    showMessage('Selected package upgrade started');
+    showMessage(t('packagesPage.selectedUpgradeStarted'));
   } catch (err) {
-    showMessage(err instanceof Error ? err.message : 'Upgrade failed', 'error');
+    showMessage(err instanceof Error ? err.message : t('packagesPage.upgradeFailed'), 'error');
   }
 }
 
@@ -133,15 +123,15 @@ async function upgradeAll() {
   try {
     const result = await packagesApi.upgradeAll(serverId.value);
     taskId.value = result.taskId;
-    showMessage('Full package upgrade started');
+    showMessage(t('packagesPage.fullUpgradeStarted'));
   } catch (err) {
-    showMessage(err instanceof Error ? err.message : 'Full upgrade failed', 'error');
+    showMessage(err instanceof Error ? err.message : t('packagesPage.fullUpgradeFailed'), 'error');
   }
 }
 
 async function handleTaskFinished() {
   await Promise.all([loadServers(), loadUpdates()]);
-  showMessage('Package task finished');
+  showMessage(t('packagesPage.packageTaskFinished'));
 }
 
 watch(serverId, () => loadUpdates());
@@ -154,26 +144,6 @@ onBeforeUnmount(stopRefreshPolling);
 
 <template>
   <div>
-    <div class="d-flex justify-space-between align-center mb-6">
-      <div>
-        <h1 class="text-h4 font-weight-bold">Package Updates</h1>
-        <p class="text-subtitle-1 text-medium-emphasis">Refresh package caches and execute Debian upgrades as tracked tasks.</p>
-      </div>
-      <div>
-        <v-btn
-          prepend-icon="mdi-refresh"
-          :disabled="!serverId"
-          :loading="loadingUpdates"
-          variant="flat"
-          color="primary"
-          @click="loadUpdates"
-          class="text-none font-weight-bold"
-        >
-          Reload
-        </v-btn>
-      </div>
-    </div>
-
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
     <v-alert
       v-if="operationBlocked && currentServer"
@@ -181,7 +151,7 @@ onBeforeUnmount(stopRefreshPolling);
       variant="tonal"
       class="mb-4"
     >
-      This server is not eligible for package operations until distro support and passwordless sudo are confirmed.
+      {{ t('packagesPage.blockedHint') }}
     </v-alert>
 
     <div class="package-grid">
@@ -191,25 +161,15 @@ onBeforeUnmount(stopRefreshPolling);
         <v-card-item class="bg-surface-variant py-3">
           <div class="d-flex justify-space-between align-center">
             <div>
-              <v-card-title class="text-subtitle-1 font-weight-bold">{{ currentServer?.name || 'Select server' }}</v-card-title>
+              <v-card-title class="text-subtitle-1 font-weight-bold">{{ currentServer?.name || t('common.selectServer') }}</v-card-title>
               <v-card-subtitle class="text-caption">
-                Last refreshed: {{ updates?.lastRefreshedAt ? new Date(updates.lastRefreshedAt).toLocaleString() : 'never' }}
+                {{ t('packagesPage.lastRefreshed') }}: {{ updates?.lastRefreshedAt ? formatDateTime(updates.lastRefreshedAt) : t('common.never') }}
               </v-card-subtitle>
             </div>
             <div class="d-flex" style="gap: 8px;">
               <v-chip v-if="refreshInProgress" size="small" color="info" variant="tonal" prepend-icon="mdi-sync">
-                Refreshing
+                {{ t('packagesPage.refreshing') }}
               </v-chip>
-              <v-btn
-                prepend-icon="mdi-sync"
-                size="small"
-                variant="outlined"
-                :disabled="!serverId || operationBlocked || refreshInProgress"
-                @click="refreshUpdates"
-                class="text-none"
-              >
-                Refresh updates
-              </v-btn>
               <v-btn
                 color="primary"
                 prepend-icon="mdi-upload"
@@ -219,7 +179,7 @@ onBeforeUnmount(stopRefreshPolling);
                 @click="upgradeSelected"
                 class="text-none"
               >
-                Upgrade selected
+                {{ t('packagesPage.upgradeSelected') }}
               </v-btn>
               <v-btn
                 color="error"
@@ -230,7 +190,7 @@ onBeforeUnmount(stopRefreshPolling);
                 @click="upgradeAll"
                 class="text-none"
               >
-                Upgrade all
+                {{ t('packagesPage.upgradeAll') }}
               </v-btn>
             </div>
           </div>
@@ -243,15 +203,15 @@ onBeforeUnmount(stopRefreshPolling);
                 <th style="width: 48px;">
                   <v-checkbox-btn v-model="selectAll" color="primary" :disabled="operationBlocked || !updates?.updates.length" />
                 </th>
-                <th class="font-weight-bold">Package</th>
-                <th class="font-weight-bold">Installed Version</th>
-                <th class="font-weight-bold">Candidate Version</th>
-                <th class="font-weight-bold">Source</th>
+                <th class="font-weight-bold">{{ t('packagesPage.package') }}</th>
+                <th class="font-weight-bold">{{ t('packagesPage.installedVersion') }}</th>
+                <th class="font-weight-bold">{{ t('packagesPage.candidateVersion') }}</th>
+                <th class="font-weight-bold">{{ t('packagesPage.source') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="!updates || updates.updates.length === 0">
-                <td colspan="5" class="text-center py-6 text-grey-darken-1">No upgradeable packages</td>
+                <td colspan="5" class="text-center py-6 text-medium-emphasis">{{ t('packagesPage.noPackages') }}</td>
               </tr>
               <tr v-for="row in updates?.updates ?? []" :key="row.name">
                 <td>
@@ -270,7 +230,7 @@ onBeforeUnmount(stopRefreshPolling);
 
     <!-- Active Task Progress -->
     <v-card v-slot:prepend v-if="taskId" class="mt-6 pa-4" variant="outlined">
-      <v-card-title class="px-0 pt-0 text-subtitle-1 font-weight-bold">Running Task</v-card-title>
+      <v-card-title class="px-0 pt-0 text-subtitle-1 font-weight-bold">{{ t('packagesPage.runningTask') }}</v-card-title>
       <v-card-text class="px-0 pb-0">
         <TaskLogPanel :task-id="taskId" :server-name="currentServer?.name" @finished="handleTaskFinished" />
       </v-card-text>
@@ -280,7 +240,7 @@ onBeforeUnmount(stopRefreshPolling);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
-        <v-btn color="white" variant="text" @click="snackbar = false">Close</v-btn>
+        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
       </template>
     </v-snackbar>
   </div>

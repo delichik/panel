@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"panel/internal/applications"
 	"panel/internal/auth"
@@ -74,6 +75,15 @@ func New(cfg config.Config) (*App, error) {
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
+	applicationSvc.SetReverseProxyReconciler(nomadJoinSvc)
+	nomadJoinSvc.SetApplicationProxySource(applicationSvc)
+	certSvc.SetApplicationRefresher(applicationSvc)
+	nomadJoinSvc.RestoreNomadAddressFromBootstrap(context.Background())
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		_ = nomadJoinSvc.ReconcileReverseProxy(ctx)
+	}()
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
 	return a, nil
 }
@@ -118,6 +128,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			certH.Delete(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/servers":
 			serverH.List(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/servers/probe":
+			serverH.Probe(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/servers":
 			serverH.Create(w, r)
 		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/servers/") && serverResourcePath(path):
@@ -138,14 +150,34 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			packageH.UpgradeSelected(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/packages/upgrade-all"):
 			packageH.UpgradeAll(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/application-save-sessions":
+			applicationH.BeginSaveSession(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/application-save-sessions/") && strings.HasSuffix(path, "/files") && applicationSaveSessionFilesPath(path):
+			applicationH.UploadSaveSessionFile(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/application-save-sessions/") && strings.HasSuffix(path, "/files/delete") && applicationSaveSessionFileDeletePath(path):
+			applicationH.DeleteSaveSessionFile(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/application-save-sessions/") && strings.HasSuffix(path, "/commit") && applicationSaveSessionCommitPath(path):
+			applicationH.CommitSaveSession(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/applications":
 			applicationH.List(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/applications":
 			applicationH.Create(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/files") && applicationFilesPath(path):
+			applicationH.ListFiles(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/files") && applicationFilesPath(path):
+			applicationH.SaveFile(w, r)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/applications/") && applicationFileResourcePath(path):
+			applicationH.DeleteFile(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/applications/") && applicationPackagePath(path):
+			applicationH.Package(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/validate"):
 			applicationH.Validate(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/plan"):
 			applicationH.Plan(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/image/check"):
+			applicationH.CheckImageUpdate(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/image/update"):
+			applicationH.UpdateImage(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/deploy"):
 			applicationH.Deploy(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/stop"):
@@ -182,6 +214,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			nomadH.JoinClient(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/nomad/bootstrap-server":
 			nomadH.BootstrapServer(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/nomad/remove-node":
+			nomadH.RemoveNode(w, r)
+		case r.Method == http.MethodPut && path == "/api/v1/nomad/reverse-proxy":
+			nomadH.UpdateReverseProxy(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/tasks":
 			taskH.List(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/retry") && strings.HasPrefix(path, "/api/v1/tasks/"):
@@ -214,6 +250,36 @@ func serverResourcePath(path string) bool {
 func applicationResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "applications" && parts[3] != ""
+}
+
+func applicationFilesPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "applications" && parts[3] != "" && parts[4] == "files"
+}
+
+func applicationPackagePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "applications" && parts[3] != "" && parts[4] == "package"
+}
+
+func applicationFileResourcePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "applications" && parts[3] != "" && parts[4] == "files" && parts[5] != ""
+}
+
+func applicationSaveSessionFilesPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "application-save-sessions" && parts[3] != "" && parts[4] == "files"
+}
+
+func applicationSaveSessionFileDeletePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "application-save-sessions" && parts[3] != "" && parts[4] == "files" && parts[5] == "delete"
+}
+
+func applicationSaveSessionCommitPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "application-save-sessions" && parts[3] != "" && parts[4] == "commit"
 }
 
 func (a *App) static(w http.ResponseWriter, r *http.Request) {

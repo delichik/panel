@@ -70,8 +70,8 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 			}},
 			BootstrapCandidates: []server.Server{{ID: "srv_1", Name: "worker-1", Host: "10.0.0.10", Port: 22}},
 		},
-		task:       tasks.Task{ID: "task_1"},
-		bootstrap:  tasks.Task{ID: "task_bootstrap"},
+		task:      tasks.Task{ID: "task_1"},
+		bootstrap: tasks.Task{ID: "task_bootstrap"},
 	}
 	handler := NewHandler(&fakeInventoryClient{}, fake)
 
@@ -138,6 +138,32 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	if fake.bootstrappedServerID != "srv_1" || bootstrapEnv.Data["taskId"] != "task_bootstrap" {
 		t.Fatalf("unexpected bootstrap result server=%q body=%#v", fake.bootstrappedServerID, bootstrapEnv.Data)
 	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/remove-node", bytes.NewBufferString(`{"serverId":"srv_1","nodeId":"node_1"}`))
+	handler.RemoveNode(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("remove status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var removeEnv struct {
+		Data map[string]string `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &removeEnv); err != nil {
+		t.Fatal(err)
+	}
+	if fake.removed.ServerID != "srv_1" || fake.removed.NodeID != "node_1" || removeEnv.Data["taskId"] != "task_remove" {
+		t.Fatalf("unexpected remove result input=%#v body=%#v", fake.removed, removeEnv.Data)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/nomad/reverse-proxy", bytes.NewBufferString(`{"serverId":"srv_1","enabled":true,"staticFiles":true}`))
+	handler.UpdateReverseProxy(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("reverse proxy status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.reverseProxy.ServerID != "srv_1" || !fake.reverseProxy.Enabled || !fake.reverseProxy.StaticFiles {
+		t.Fatalf("unexpected reverse proxy input=%#v", fake.reverseProxy)
+	}
 }
 
 type fakeInventoryClient struct {
@@ -154,6 +180,9 @@ type fakeJoinService struct {
 	controlPlane         ControlPlane
 	task                 tasks.Task
 	bootstrap            tasks.Task
+	remove               tasks.Task
+	removed              RemoveNodeInput
+	reverseProxy         ReverseProxyInput
 	joinedServerID       string
 	bootstrappedServerID string
 }
@@ -174,6 +203,22 @@ func (f *fakeJoinService) JoinClient(_ context.Context, serverID string) (tasks.
 func (f *fakeJoinService) BootstrapServer(_ context.Context, serverID string) (tasks.Task, error) {
 	f.bootstrappedServerID = serverID
 	return f.bootstrap, nil
+}
+
+func (f *fakeJoinService) RemoveNode(_ context.Context, in RemoveNodeInput) (tasks.Task, error) {
+	f.removed = in
+	if f.remove.ID == "" {
+		f.remove.ID = "task_remove"
+	}
+	return f.remove, nil
+}
+
+func (f *fakeJoinService) UpdateReverseProxy(_ context.Context, in ReverseProxyInput) (server.Server, error) {
+	f.reverseProxy = in
+	return server.Server{ID: in.ServerID, Name: "worker-1", Traits: map[string]string{
+		TraitReverseProxyEnabled:     "true",
+		TraitReverseProxyStaticFiles: "true",
+	}}, nil
 }
 
 func (f *fakeInventoryClient) Status(ctx context.Context) (StatusResponse, error) {

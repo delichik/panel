@@ -55,6 +55,8 @@ export interface CertificateDto {
   certificatePath: string;
   privateKeyPath: string;
   issuer: string;
+  status: 'pending' | 'issuing' | 'issued' | 'failed' | string;
+  lastError?: string;
   autoRenew: boolean;
   nextRenewAt?: string;
   notBefore?: string;
@@ -109,7 +111,7 @@ export interface OverviewDto {
   servers: OverviewServerDto[];
 }
 
-export type MetricsRange = '1h' | '6h' | '24h';
+export type MetricsRange = '1h' | '6h' | '1d' | '7d';
 
 export interface CpuPointDto {
   time: string;
@@ -167,8 +169,19 @@ export interface ApplicationDto {
   enabled: boolean;
   specYaml: string;
   variables: Record<string, string>;
+  resolvedVariables?: Record<string, unknown>;
+  persistentPath?: string;
+  deploymentMode?: 'all' | 'selected' | string;
+  deploymentServers?: string[];
+  reverseProxy?: ApplicationReverseProxyRuleDto[];
   generation: number;
   specHash: string;
+  imageReference?: string;
+  imageDigest?: string;
+  imageLatestDigest?: string;
+  imageCheckedAt?: string;
+  imageUpdateAvailable?: boolean;
+  imageLastError?: string;
   jobId: string;
   namespace: string;
   lastEvalId?: string;
@@ -185,6 +198,58 @@ export interface ApplicationSaveDto {
   enabled: boolean;
   specYaml: string;
   variables: Record<string, string>;
+  persistentPath?: string;
+  deploymentMode?: 'all' | 'selected' | string;
+  deploymentServers?: string[];
+  reverseProxy?: ApplicationReverseProxyRuleDto[];
+}
+
+export interface ApplicationReverseProxyRuleDto {
+  domain: string;
+  targetPort: number;
+  paths: ApplicationReverseProxyPathDto[];
+}
+
+export interface ApplicationReverseProxyPathDto {
+  path: string;
+  webSocket: boolean;
+}
+
+export type ApplicationFileKind = 'binary' | 'template';
+
+export interface ApplicationFileDto {
+  id: string;
+  applicationId: string;
+  path: string;
+  kind: ApplicationFileKind;
+  contentType: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApplicationFileSaveDto {
+  path: string;
+  kind: ApplicationFileKind;
+  contentType?: string;
+  contentBase64: string;
+}
+
+export interface ApplicationFileDeleteDto {
+  path: string;
+}
+
+export interface ApplicationSaveSessionBeginDto {
+  applicationId?: string;
+  save: ApplicationSaveDto;
+}
+
+export interface ApplicationSaveSessionDto {
+  id: string;
+  applicationId?: string;
+  expiresAt: string;
+  files: ApplicationFileDto[];
 }
 
 export interface ApplicationValidationIssueDto {
@@ -234,6 +299,8 @@ export interface NomadTaskDto {
   Env?: Record<string, string>;
   Resources?: { CPU?: number; MemoryMB?: number };
   Services?: NomadServiceDto[];
+  Templates?: Array<{ EmbeddedTmpl?: string; DestPath?: string; Perms?: string; ChangeMode?: string }>;
+  Lifecycle?: { Hook?: string; Sidecar?: boolean };
 }
 
 export interface NomadTaskGroupDto {
@@ -262,9 +329,9 @@ export interface NomadStatusDto {
 }
 
 export type NomadControlPlaneStatus = 'unconfigured' | 'bootstrapping' | 'connected' | 'degraded';
-export type ProjectedNomadNodeKind = 'managed' | 'pending' | 'unmanaged';
+export type ProjectedNomadNodeKind = 'managed' | 'missing' | 'pending' | 'unmanaged';
 export type ProjectedNomadNodeRole = 'server' | 'client' | 'unknown';
-export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'ready' | 'down' | 'failed' | 'unmanaged' | string;
+export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'registering' | 'removing' | 'ready' | 'down' | 'failed' | 'missing' | 'nomad_unreachable' | 'unmanaged' | string;
 
 export interface ProjectedNomadNodeDto {
   kind: ProjectedNomadNodeKind;
@@ -274,8 +341,28 @@ export interface ProjectedNomadNodeDto {
   host?: string;
   role: ProjectedNomadNodeRole;
   status: ProjectedNomadNodeStatus;
+  reverseProxy: boolean;
+  reverseProxyStatic: boolean;
+  reverseProxyStaticSites: NomadReverseProxyStaticSiteDto[];
   taskId?: string;
   error?: string;
+}
+
+export interface NomadReverseProxyRouteDto {
+  domain: string;
+  targetPort: number;
+  paths: NomadReverseProxyPathDto[];
+}
+
+export interface NomadReverseProxyPathDto {
+  path: string;
+  webSocket: boolean;
+}
+
+export interface NomadReverseProxyStaticSiteDto {
+  domain: string;
+  root: string;
+  index: string;
 }
 
 export interface NomadControlPlaneDto {
@@ -304,6 +391,20 @@ export interface NomadEvaluationDto {
   Status?: string;
   Type?: string;
   TriggeredBy?: string;
+  StatusDescription?: string;
+  FailedTGAllocs?: Record<string, NomadFailedTGAllocDto>;
+}
+
+export interface NomadFailedTGAllocDto {
+  NodesEvaluated?: number;
+  NodesFiltered?: number;
+  NodesExhausted?: number;
+  ClassFiltered?: Record<string, number>;
+  ConstraintFiltered?: Record<string, number>;
+  DimensionExhausted?: Record<string, number>;
+  QuotaExhausted?: string[];
+  ResourcesExhausted?: Record<string, unknown>;
+  CoalescedFailures?: number;
 }
 
 export interface NomadDeploymentDto {
@@ -361,6 +462,7 @@ export interface ApplicationRuntimeDto {
   jobStatus: string;
   deployment?: NomadDeploymentDto;
   evaluations: NomadEvaluationDto[];
+  evaluationDetails?: NomadEvaluationDto[];
   allocations: NomadAllocationDto[];
   services?: NomadServiceRegistrationDto[];
   observedAt: string;
@@ -438,10 +540,12 @@ export interface RuntimeSettingsDto {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
   cleanupSchedule: string;
+  language: string;
 }
 
 export interface RuntimeSettingsUpdate {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
   cleanupSchedule: string;
+  language: string;
 }

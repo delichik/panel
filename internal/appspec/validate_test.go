@@ -44,6 +44,27 @@ func TestValidateRejectsRelativeVolumeTarget(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsInvalidMountSource(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{{Type: "file", Source: "../secret", Target: "/etc/secret"}}})
+	if !hasIssue(issues, "mounts[0].source") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsInvalidRestartPolicy(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Restart: Restart{Policy: "sometimes"}})
+	if !hasIssue(issues, "restart.policy") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsPortsWithHostNetwork(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", NetworkMode: "host", Ports: []Port{{Label: "http", To: 80}}})
+	if !hasIssue(issues, "ports") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
 func TestDecodeYAMLReturnsIssueForMalformedYAML(t *testing.T) {
 	_, issues := DecodeYAML("name: [")
 	if !hasIssue(issues, "specYaml") {

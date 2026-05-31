@@ -15,6 +15,7 @@ import (
 
 	"panel/internal/config"
 	"panel/internal/storage"
+	"panel/internal/tasks"
 )
 
 func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *testing.T) {
@@ -29,8 +30,28 @@ func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *te
 		t.Fatalf("certificate = %#v", result.Certificate)
 	}
 	want := []string{"example.com", "*.example.com"}
-	if !equalStrings(fake.last.Domains, want) || !equalStrings(result.Certificate.Domains, want) {
-		t.Fatalf("domains issued=%#v stored=%#v want %#v", fake.last.Domains, result.Certificate.Domains, want)
+	if result.TaskID == "" || result.Certificate.Status != StatusPending {
+		t.Fatalf("expected queued issue task, got %#v", result)
+	}
+	if !equalStrings(result.Certificate.Domains, want) {
+		t.Fatalf("stored domains=%#v want %#v", result.Certificate.Domains, want)
+	}
+	if len(fake.last.Domains) != 0 {
+		t.Fatalf("provider should not be called before background task runs")
+	}
+	task, err := svc.tasks.Get(context.Background(), result.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunIssueTask(context.Background(), task); err != nil {
+		t.Fatal(err)
+	}
+	issued, err := svc.Get(context.Background(), result.Certificate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issued.Status != StatusIssued || !equalStrings(fake.last.Domains, want) {
+		t.Fatalf("issued=%#v provider=%#v want domains %#v", issued, fake.last.Domains, want)
 	}
 	vars, err := svc.BuiltinVariables(context.Background())
 	if err != nil {
@@ -68,7 +89,7 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 		t.Fatal(err)
 	}
 	fake := &fakeProvider{bundle: testBundle(t)}
-	return NewServiceWithProvider(store.AppDB(), cfg, fake, nil), fake, func() { _ = store.Close() }
+	return NewServiceWithProvider(store.AppDB(), cfg, fake, tasks.NewService(store.AppDB())), fake, func() { _ = store.Close() }
 }
 
 type fakeProvider struct {

@@ -2,6 +2,7 @@ package appspec
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	"panel/internal/nomad"
@@ -39,17 +40,32 @@ func Render(in RenderInput) (nomad.Job, []Issue) {
 	if len(spec.Args) > 0 {
 		task.Config["args"] = spec.Args
 	}
-	volumes, mounts := renderVolumes(spec.Volumes)
-	task.VolumeMounts = mounts
+	if spec.Privileged {
+		task.Config["privileged"] = true
+	}
+	if !strings.Contains(spec.Image, "@sha256:") {
+		task.Config["force_pull"] = true
+	}
+	if labels := portLabels(spec.Ports); len(labels) > 0 {
+		task.Config["ports"] = labels
+	}
+	if mounts := renderDockerMounts(in.AppID, spec.Volumes, spec.Mounts); len(mounts) > 0 {
+		task.Config["mounts"] = mounts
+	}
 
 	group := nomad.TaskGroup{
 		Name:        spec.Name,
 		Count:       spec.Count,
-		Networks:    []nomad.Network{renderNetwork(spec.Ports)},
+		Networks:    []nomad.Network{renderNetwork(spec.NetworkMode, spec.Ports)},
 		Tasks:       []nomad.Task{task},
 		Services:    renderServices(spec.Services, spec.Checks),
 		Constraints: renderConstraints(spec.Constraints),
-		Volumes:     volumes,
+		RestartPolicy: &nomad.RestartPolicy{
+			Attempts: spec.Restart.Attempts,
+			Interval: int64(time.Duration(spec.Restart.IntervalSeconds) * time.Second),
+			Delay:    int64(time.Duration(spec.Restart.DelaySeconds) * time.Second),
+			Mode:     spec.Restart.Mode,
+		},
 	}
 
 	return nomad.Job{
@@ -69,8 +85,18 @@ func Render(in RenderInput) (nomad.Job, []Issue) {
 	}, nil
 }
 
-func renderNetwork(ports []Port) nomad.Network {
-	network := nomad.Network{Mode: "bridge"}
+func portLabels(ports []Port) []string {
+	labels := make([]string, 0, len(ports))
+	for _, port := range ports {
+		if port.Label != "" {
+			labels = append(labels, port.Label)
+		}
+	}
+	return labels
+}
+
+func renderNetwork(mode string, ports []Port) nomad.Network {
+	network := nomad.Network{Mode: mode}
 	for _, port := range ports {
 		mapping := nomad.PortMapping{Label: port.Label, To: port.To}
 		if port.Static > 0 {
@@ -125,23 +151,44 @@ func renderConstraints(constraints []Constraint) []nomad.Constraint {
 	return out
 }
 
-func renderVolumes(volumes []Volume) (map[string]nomad.VolumeRequest, []nomad.VolumeMount) {
-	if len(volumes) == 0 {
-		return nil, nil
-	}
-	requests := map[string]nomad.VolumeRequest{}
-	mounts := make([]nomad.VolumeMount, 0, len(volumes))
+func renderDockerMounts(appID string, volumes []Volume, mounts []Mount) []map[string]any {
+	out := make([]map[string]any, 0, len(volumes)+len(mounts))
 	for _, volume := range volumes {
-		requests[volume.Source] = nomad.VolumeRequest{
-			Type:     "host",
-			Source:   volume.Source,
-			ReadOnly: volume.ReadOnly,
-		}
-		mounts = append(mounts, nomad.VolumeMount{
-			Volume:      volume.Source,
-			Destination: volume.Target,
-			ReadOnly:    volume.ReadOnly,
+		out = append(out, map[string]any{
+			"type":     "volume",
+			"source":   volume.Source,
+			"target":   volume.Target,
+			"readonly": volume.ReadOnly,
 		})
 	}
-	return requests, mounts
+	for _, mount := range mounts {
+		mountType := strings.TrimSpace(mount.Type)
+		if mountType == "file" {
+			continue
+		}
+		source := strings.TrimSpace(mount.Source)
+		dockerType := "bind"
+		if mountType == "volume" {
+			dockerType = "volume"
+		}
+		if mountType == "persistent" {
+			source = persistentMountSource(appID, source)
+		}
+		out = append(out, map[string]any{
+			"type":     dockerType,
+			"source":   source,
+			"target":   mount.Target,
+			"readonly": mount.ReadOnly,
+		})
+	}
+	return out
+}
+
+func persistentMountSource(appID, source string) string {
+	base := "/opt/panel/apps/" + appID + "/persistent"
+	source = strings.Trim(source, "/")
+	if source == "" {
+		return base
+	}
+	return base + "/" + source
 }

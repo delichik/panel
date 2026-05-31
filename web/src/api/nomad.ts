@@ -5,6 +5,7 @@ import type {
   NomadEvaluationDto,
   NomadJobDto,
   NomadNodeDto,
+  NomadReverseProxyStaticSiteDto,
   NomadServiceRegistrationDto,
   NomadStatusDto,
   ServerDto,
@@ -12,6 +13,18 @@ import type {
 
 export interface TaskCreatedDto {
   taskId: string;
+}
+
+export interface RemoveNomadNodeInput {
+  serverId?: string;
+  nodeId?: string;
+}
+
+export interface ReverseProxyInput {
+  serverId: string;
+  enabled: boolean;
+  staticFiles: boolean;
+  staticSites: NomadReverseProxyStaticSiteDto[];
 }
 
 export function createNomadApi(client: ApiClient = apiClient) {
@@ -45,6 +58,12 @@ export function createNomadApi(client: ApiClient = apiClient) {
     },
     bootstrapServer(serverId: string) {
       return client.post<TaskCreatedDto>('/nomad/bootstrap-server', { serverId });
+    },
+    removeNode(input: RemoveNomadNodeInput) {
+      return client.post<TaskCreatedDto>('/nomad/remove-node', input);
+    },
+    updateReverseProxy(input: ReverseProxyInput) {
+      return client.put<ServerDto>('/nomad/reverse-proxy', input);
     },
   };
 }

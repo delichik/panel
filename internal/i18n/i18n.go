@@ -1,0 +1,182 @@
+package i18n
+
+import (
+	"strings"
+	"sync"
+)
+
+const (
+	LocaleEnglish             = "en"
+	LocaleSimplifiedChinese   = "zh-CN"
+	defaultLocale             = LocaleEnglish
+)
+
+var (
+	mu            sync.RWMutex
+	currentLocale = defaultLocale
+
+	codeTranslations = map[string]map[string]string{
+		LocaleSimplifiedChinese: {
+			"internal_error":                    "服务器内部错误",
+			"bad_request":                       "请求体 JSON 无效",
+			"unauthorized":                      "未授权",
+			"invalid_metrics_retention":         "指标保留时间至少为 1 天",
+			"invalid_metrics_interval":          "指标采集间隔至少为 10 秒",
+			"invalid_cleanup_schedule":          "清理计划必须为每小时、每天或每周",
+			"invalid_language":                  "语言必须为 English 或简体中文",
+			"credential_invalid":                "凭据名称和用户名不能为空",
+			"credential_type_invalid":           "凭据类型必须为 password 或 private_key",
+			"credential_password_required":      "密码凭据需要密码",
+			"credential_private_key_required":   "私钥凭据需要私钥",
+			"server_invalid":                    "服务器名称、主机和 credentialId 不能为空",
+			"server_port_invalid":               "服务器端口必须在 1 到 65535 之间",
+			"server_not_supported":              "服务器发行版不受支持",
+			"server_executor_unavailable":       "服务器连通性测试执行器不可用",
+			"passwordless_sudo_required":        "需要免密 sudo",
+			"dns_domain_invalid":                "域名必须是有效的 DNS 名称",
+			"dns_provider_invalid":              "DNS 提供商必须为 cloudflare",
+			"dns_api_token_required":            "DNS 提供商 API 令牌不能为空",
+			"cloudflare_api_token_required":     "Cloudflare API 令牌不能为空",
+			"certificate_domain_invalid":        "域名必须是有效的 DNS 名称",
+			"certificate_scope_invalid":         "证书范围必须为 single 或 wildcard",
+			"certificate_variable_invalid":      "变量名必须以下划线或字母开头，且只能包含字母、数字或下划线",
+			"certificate_provider_not_configured": "证书提供器未配置",
+			"certificate_dns_provider_invalid":  "证书 DNS 提供器未配置",
+			"packages_required":                 "至少需要一个软件包",
+			"range_invalid":                     "时间范围必须为 1h、6h、1d 或 7d",
+			"task_type_required":                "任务类型不能为空",
+			"task_step_required":                "任务步骤不能为空",
+			"task_run_now_unsupported":          "该任务当前不支持立即运行",
+			"nomad_join_executor_unavailable":   "Nomad 客户端加入执行器不可用",
+			"nomad_bootstrap_executor_unavailable": "Nomad 服务端引导执行器不可用",
+			"nomad_remove_target_required":      "必须提供服务器 ID 或 Nomad 节点 ID",
+			"nomad_reverse_proxy_server_required": "必须提供服务器 ID",
+			"application_invalid":               "应用配置无效",
+			"application_enabled":               "删除前请先禁用应用",
+			"application_disabled":              "更新镜像前请先启用应用",
+			"application_image_empty":           "应用镜像不能为空",
+			"application_image_invalid":         "应用镜像无效",
+			"application_deployment_mode_invalid": "部署模式必须为 all 或 selected",
+			"application_deployment_servers_required": "请至少选择一个部署服务器",
+			"application_persistent_single_target_required": "持久化应用必须且只能部署到一个服务器",
+			"application_reverse_proxy_target_port_invalid": "反向代理目标端口必须在 1 到 65535 之间",
+			"application_reverse_proxy_path_invalid": "反向代理路径必须以 / 开头",
+			"application_reverse_proxy_domain_invalid": "反向代理域名无效",
+		},
+	}
+
+	exactTranslations = map[string]map[string]string{
+		LocaleSimplifiedChinese: {
+			"Authentication required":                                        "需要登录认证",
+			"Invalid username or password":                                   "用户名或密码错误",
+			"Invalid JSON request body":                                      "请求体 JSON 无效",
+			"Metrics retention must be at least 1 day":                       "指标保留时间至少为 1 天",
+			"Metrics collection interval must be at least 10 seconds":        "指标采集间隔至少为 10 秒",
+			"Cleanup schedule must be hourly, daily, or weekly":              "清理计划必须为每小时、每天或每周",
+			"Language must be English or Simplified Chinese":                 "语言必须为 English 或简体中文",
+			"Credential is still used by one or more servers":                "该凭据仍被一个或多个服务器使用",
+			"Password credential requires a password":                        "密码凭据需要密码",
+			"Private key credential requires a private key":                  "私钥凭据需要私钥",
+			"Password credential requires a password when changing type":     "切换到密码凭据时必须提供密码",
+			"Private key credential requires a private key when changing type": "切换到私钥凭据时必须提供私钥",
+			"Server distribution is not supported":                           "服务器发行版不受支持",
+			"Passwordless sudo is required":                                  "需要免密 sudo",
+			"At least one package is required":                               "至少需要一个软件包",
+			"This task type cannot be run from the task center":              "该任务类型不能从任务中心直接运行",
+			"Certificate issuer is not configured":                           "证书签发器未配置",
+			"Domain must be a valid DNS name":                                "域名必须是有效的 DNS 名称",
+			"DNS provider must be cloudflare":                                "DNS 提供商必须为 cloudflare",
+			"DNS provider API token is required":                             "DNS 提供商 API 令牌不能为空",
+			"Cloudflare API token is required":                               "Cloudflare API 令牌不能为空",
+			"DNS domain is still used by one or more certificates":           "该 DNS 域仍被一个或多个证书使用",
+			"Certificate scope must be single or wildcard":                   "证书范围必须为 single 或 wildcard",
+			"Variable name must start with a letter or underscore and contain only letters, digits, or underscores": "变量名必须以下划线或字母开头，且只能包含字母、数字或下划线",
+			"Certificate provider is not configured":                         "证书提供器未配置",
+			"Unsupported DNS provider":                                       "不支持的 DNS 提供商",
+			"Credential type must be password or private_key":                "凭据类型必须为 password 或 private_key",
+			"Server connectivity test executor is unavailable":               "服务器连通性测试执行器不可用",
+			"Server name, host, and credentialId are required":               "服务器名称、主机和 credentialId 不能为空",
+			"Server host and credentialId are required":                      "服务器主机和 credentialId 不能为空",
+			"Server port must be between 1 and 65535":                        "服务器端口必须在 1 到 65535 之间",
+			"Task type is required":                                          "任务类型不能为空",
+			"Task step is required":                                          "任务步骤不能为空",
+			"Range must be 1h, 6h, 1d, or 7d":                                "时间范围必须为 1h、6h、1d 或 7d",
+			"Nomad client join executor is unavailable":                      "Nomad 客户端加入执行器不可用",
+			"Nomad server bootstrap executor is unavailable":                 "Nomad 服务端引导执行器不可用",
+			"Server is already linked to a Nomad node":                       "该服务器已关联到 Nomad 节点",
+			"Server ID is required":                                          "必须提供服务器 ID",
+			"Server ID or Nomad node ID is required":                         "必须提供服务器 ID 或 Nomad 节点 ID",
+			"Application image is empty":                                     "应用镜像不能为空",
+			"Disable the application before deleting it":                     "删除前请先禁用应用",
+			"enable the application before updating its image":               "更新镜像前请先启用应用",
+			"deployment mode must be all or selected":                        "部署模式必须为 all 或 selected",
+			"select at least one deployment server":                          "请至少选择一个部署服务器",
+			"persistent applications must target exactly one server":         "持久化应用必须且只能部署到一个服务器",
+			"reverse proxy target port must be between 1 and 65535":          "反向代理目标端口必须在 1 到 65535 之间",
+			"reverse proxy path must start with /":                           "反向代理路径必须以 / 开头",
+			"reverse proxy domain is invalid":                                "反向代理域名无效",
+		},
+	}
+)
+
+func SupportedLocales() []string {
+	return []string{LocaleEnglish, LocaleSimplifiedChinese}
+}
+
+func NormalizeLocale(value string) string {
+	candidate := strings.TrimSpace(strings.ToLower(value))
+	switch candidate {
+	case "", "en", "en-us", "en-gb":
+		return LocaleEnglish
+	case "zh", "zh-cn", "zh-hans", "zh-hans-cn", "cn":
+		return LocaleSimplifiedChinese
+	default:
+		return ""
+	}
+}
+
+func IsSupportedLocale(value string) bool {
+	return NormalizeLocale(value) != ""
+}
+
+func DefaultLocale() string {
+	mu.RLock()
+	defer mu.RUnlock()
+	return currentLocale
+}
+
+func SetDefaultLocale(value string) {
+	locale := NormalizeLocale(value)
+	if locale == "" {
+		locale = defaultLocale
+	}
+	mu.Lock()
+	currentLocale = locale
+	mu.Unlock()
+}
+
+func Translate(code, fallback string) string {
+	return TranslateLocale(DefaultLocale(), code, fallback)
+}
+
+func TranslateLocale(locale, code, fallback string) string {
+	normalized := NormalizeLocale(locale)
+	if normalized == "" || normalized == LocaleEnglish {
+		return fallback
+	}
+	if byCode := codeTranslations[normalized]; byCode != nil {
+		if translated := byCode[code]; translated != "" {
+			return translated
+		}
+	}
+	if exact := exactTranslations[normalized][fallback]; exact != "" {
+		return exact
+	}
+	if strings.HasSuffix(fallback, " not found") {
+		resource := strings.TrimSuffix(fallback, " not found")
+		if resource != "" {
+			return resource + " 未找到"
+		}
+	}
+	return fallback
+}

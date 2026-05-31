@@ -30,7 +30,13 @@ type Task struct {
 	Resources    *Resources        `json:"Resources,omitempty"`
 	Services     []Service         `json:"Services,omitempty"`
 	Templates    []Template        `json:"Templates,omitempty"`
+	Lifecycle    *Lifecycle        `json:"Lifecycle,omitempty"`
 	VolumeMounts []VolumeMount     `json:"VolumeMounts,omitempty"`
+}
+
+type Lifecycle struct {
+	Hook    string `json:"Hook,omitempty"`
+	Sidecar bool   `json:"Sidecar,omitempty"`
 }
 
 type Network struct {
@@ -88,6 +94,8 @@ type VolumeMount struct {
 type Template struct {
 	EmbeddedTmpl string `json:"EmbeddedTmpl,omitempty"`
 	DestPath     string `json:"DestPath,omitempty"`
+	Perms        string `json:"Perms,omitempty"`
+	ChangeMode   string `json:"ChangeMode,omitempty"`
 }
 
 type RestartPolicy struct {
@@ -159,12 +167,26 @@ type Deployment struct {
 }
 
 type Evaluation struct {
-	ID          string `json:"ID,omitempty"`
-	Namespace   string `json:"Namespace,omitempty"`
-	JobID       string `json:"JobID,omitempty"`
-	Status      string `json:"Status,omitempty"`
-	Type        string `json:"Type,omitempty"`
-	TriggeredBy string `json:"TriggeredBy,omitempty"`
+	ID                string                   `json:"ID,omitempty"`
+	Namespace         string                   `json:"Namespace,omitempty"`
+	JobID             string                   `json:"JobID,omitempty"`
+	Status            string                   `json:"Status,omitempty"`
+	Type              string                   `json:"Type,omitempty"`
+	TriggeredBy       string                   `json:"TriggeredBy,omitempty"`
+	StatusDescription string                   `json:"StatusDescription,omitempty"`
+	FailedTGAllocs    map[string]FailedTGAlloc `json:"FailedTGAllocs,omitempty"`
+}
+
+type FailedTGAlloc struct {
+	NodesEvaluated     int            `json:"NodesEvaluated,omitempty"`
+	NodesFiltered      int            `json:"NodesFiltered,omitempty"`
+	NodesExhausted     int            `json:"NodesExhausted,omitempty"`
+	ClassFiltered      map[string]int `json:"ClassFiltered,omitempty"`
+	ConstraintFiltered map[string]int `json:"ConstraintFiltered,omitempty"`
+	DimensionExhausted map[string]int `json:"DimensionExhausted,omitempty"`
+	QuotaExhausted     []string       `json:"QuotaExhausted,omitempty"`
+	ResourcesExhausted map[string]any `json:"ResourcesExhausted,omitempty"`
+	CoalescedFailures  int            `json:"CoalescedFailures,omitempty"`
 }
 
 type NodeListItem struct {

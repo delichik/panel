@@ -15,6 +15,7 @@ const (
 	ControlPlaneDegraded      = "degraded"
 
 	ProjectedNodeManaged   = "managed"
+	ProjectedNodeMissing   = "missing"
 	ProjectedNodePending   = "pending"
 	ProjectedNodeUnmanaged = "unmanaged"
 
@@ -38,15 +39,18 @@ type ControlPlane struct {
 }
 
 type ProjectedNode struct {
-	Kind     string `json:"kind"`
-	ServerID string `json:"serverId,omitempty"`
-	NodeID   string `json:"nodeId,omitempty"`
-	Name     string `json:"name"`
-	Host     string `json:"host,omitempty"`
-	Role     string `json:"role"`
-	Status   string `json:"status"`
-	TaskID   string `json:"taskId,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Kind                    string                   `json:"kind"`
+	ServerID                string                   `json:"serverId,omitempty"`
+	NodeID                  string                   `json:"nodeId,omitempty"`
+	Name                    string                   `json:"name"`
+	Host                    string                   `json:"host,omitempty"`
+	Role                    string                   `json:"role"`
+	Status                  string                   `json:"status"`
+	ReverseProxy            bool                     `json:"reverseProxy"`
+	ReverseProxyStatic      bool                     `json:"reverseProxyStatic"`
+	ReverseProxyStaticSites []ReverseProxyStaticSite `json:"reverseProxyStaticSites"`
+	TaskID                  string                   `json:"taskId,omitempty"`
+	Error                   string                   `json:"error,omitempty"`
 }
 
 func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
@@ -58,6 +62,8 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 	for _, srv := range servers {
 		serverByID[srv.ID] = srv
 	}
+
+	s.restoreNomadAddressFromBootstrap(ctx)
 
 	status := StatusResponse{}
 	connected := false
@@ -82,27 +88,85 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 	}
 
 	managedServers := map[string]struct{}{}
-	projected := []ProjectedNode{}
+	nodesByServer := map[string]NodeListItem{}
+	unmanagedNodes := []NodeListItem{}
 	if connected {
 		for _, node := range nodes {
-			serverID := ""
-			if node.Meta != nil {
-				serverID = node.Meta["panel_server_id"]
-			}
-			if serverID != "" {
-				managedServers[serverID] = struct{}{}
-				srv := serverByID[serverID]
-				projected = append(projected, ProjectedNode{
-					Kind:     ProjectedNodeManaged,
-					ServerID: serverID,
-					NodeID:   node.ID,
-					Name:     firstNonEmpty(node.Name, srv.Name, node.ID),
-					Host:     firstNonEmpty(node.Address, srv.Host),
-					Role:     roleForTask(latestTasks[serverID]),
-					Status:   firstNonEmpty(node.Status, "unknown"),
-				})
+			serverID := serverIDForNode(node)
+			if serverID == "" {
+				unmanagedNodes = append(unmanagedNodes, node)
 				continue
 			}
+			if _, ok := serverByID[serverID]; !ok {
+				unmanagedNodes = append(unmanagedNodes, node)
+				continue
+			}
+			if taskCompletedRemove(latestTasks[serverID]) {
+				continue
+			}
+			nodesByServer[serverID] = node
+			managedServers[serverID] = struct{}{}
+		}
+	}
+
+	projected := []ProjectedNode{}
+	for _, srv := range servers {
+		task := latestTasks[srv.ID]
+		if taskCompletedRemove(task) {
+			continue
+		}
+		if node, ok := nodesByServer[srv.ID]; ok {
+			projected = append(projected, ProjectedNode{
+				Kind:                    ProjectedNodeManaged,
+				ServerID:                srv.ID,
+				NodeID:                  node.ID,
+				Name:                    firstNonEmpty(node.Name, srv.Name, node.ID),
+				Host:                    firstNonEmpty(node.Address, srv.Host),
+				Role:                    roleForTask(task),
+				Status:                  firstNonEmpty(node.Status, "unknown"),
+				ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
+				ReverseProxyStatic:      traitBool(srv.Traits, TraitReverseProxyStaticFiles),
+				ReverseProxyStaticSites: reverseProxyStaticSitesFromTraits(srv.Traits),
+			})
+			continue
+		}
+		if taskProjectsAsPending(task) {
+			projected = append(projected, ProjectedNode{
+				Kind:                    ProjectedNodePending,
+				ServerID:                srv.ID,
+				Name:                    firstNonEmpty(srv.Name, srv.ID),
+				Host:                    srv.Host,
+				Role:                    roleForTask(task),
+				Status:                  projectionStatus(task),
+				ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
+				ReverseProxyStatic:      traitBool(srv.Traits, TraitReverseProxyStaticFiles),
+				ReverseProxyStaticSites: reverseProxyStaticSitesFromTraits(srv.Traits),
+				TaskID:                  task.ID,
+				Error:                   task.Error,
+			})
+			continue
+		}
+		status := "missing"
+		if !connected {
+			status = "nomad_unreachable"
+		}
+		projected = append(projected, ProjectedNode{
+			Kind:                    ProjectedNodeMissing,
+			ServerID:                srv.ID,
+			Name:                    firstNonEmpty(srv.Name, srv.ID),
+			Host:                    srv.Host,
+			Role:                    roleForTask(task),
+			Status:                  status,
+			ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
+			ReverseProxyStatic:      traitBool(srv.Traits, TraitReverseProxyStaticFiles),
+			ReverseProxyStaticSites: reverseProxyStaticSitesFromTraits(srv.Traits),
+			TaskID:                  task.ID,
+			Error:                   task.Error,
+		})
+	}
+
+	if connected {
+		for _, node := range unmanagedNodes {
 			projected = append(projected, ProjectedNode{
 				Kind:   ProjectedNodeUnmanaged,
 				NodeID: node.ID,
@@ -115,15 +179,19 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 	}
 
 	for serverID, task := range latestTasks {
+		if serverID == "" {
+			continue
+		}
+		if _, ok := serverByID[serverID]; ok {
+			continue
+		}
 		if _, ok := managedServers[serverID]; ok || !taskProjectsAsPending(task) {
 			continue
 		}
-		srv := serverByID[serverID]
 		projected = append(projected, ProjectedNode{
 			Kind:     ProjectedNodePending,
 			ServerID: serverID,
-			Name:     firstNonEmpty(srv.Name, serverID),
-			Host:     srv.Host,
+			Name:     serverID,
 			Role:     roleForTask(task),
 			Status:   projectionStatus(task),
 			TaskID:   task.ID,
@@ -136,7 +204,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 		if _, ok := managedServers[srv.ID]; ok {
 			continue
 		}
-		if taskProjectsAsPending(latestTasks[srv.ID]) {
+		if taskBlocksJoin(latestTasks[srv.ID]) {
 			continue
 		}
 		joinCandidates = append(joinCandidates, srv)
@@ -164,7 +232,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 
 func (s *JoinService) latestNomadTasks(ctx context.Context) (map[string]tasks.Task, error) {
 	out := map[string]tasks.Task{}
-	for _, taskType := range []string{TaskTypeServerBootstrap, TaskTypeClientJoin} {
+	for _, taskType := range []string{TaskTypeServerBootstrap, TaskTypeClientJoin, TaskTypeNodeRemove} {
 		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, Limit: 200})
 		if err != nil {
 			return nil, err
@@ -182,6 +250,9 @@ func taskProjectsAsPending(task tasks.Task) bool {
 	if task.ID == "" {
 		return false
 	}
+	if task.Type == TaskTypeNodeRemove && task.Status == tasks.StatusCompleted {
+		return false
+	}
 	switch task.Status {
 	case tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusRunning, tasks.StatusFailed, tasks.StatusFailedRetryable, tasks.StatusBlocked:
 		return true
@@ -190,6 +261,34 @@ func taskProjectsAsPending(task tasks.Task) bool {
 	default:
 		return false
 	}
+}
+
+func taskBlocksJoin(task tasks.Task) bool {
+	if task.ID == "" {
+		return false
+	}
+	if task.Type == TaskTypeNodeRemove && task.Status == tasks.StatusCompleted {
+		return false
+	}
+	switch task.Status {
+	case tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusRunning, tasks.StatusFailedRetryable:
+		return true
+	case tasks.StatusCompleted:
+		return time.Since(task.CreatedAt) <= completedTaskProjectionWindow
+	default:
+		return false
+	}
+}
+
+func serverIDForNode(node NodeListItem) string {
+	if node.Meta == nil {
+		return ""
+	}
+	return node.Meta["panel_server_id"]
+}
+
+func taskCompletedRemove(task tasks.Task) bool {
+	return task.Type == TaskTypeNodeRemove && task.Status == tasks.StatusCompleted
 }
 
 func hasActiveBootstrap(taskByServer map[string]tasks.Task) bool {
@@ -215,6 +314,9 @@ func roleForTask(task tasks.Task) string {
 func projectionStatus(task tasks.Task) string {
 	if task.Status == tasks.StatusFailed || task.Status == tasks.StatusBlocked {
 		return "failed"
+	}
+	if task.Type == TaskTypeNodeRemove {
+		return "removing"
 	}
 	if task.Status == tasks.StatusCompleted {
 		return "registering"

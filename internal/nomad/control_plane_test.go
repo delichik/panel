@@ -30,7 +30,7 @@ func TestControlPlaneIsUnconfiguredWhenNomadUnavailableAndNoTasks(t *testing.T) 
 	if len(got.BootstrapCandidates) != 1 {
 		t.Fatalf("bootstrap candidates = %#v", got.BootstrapCandidates)
 	}
-	if len(got.Nodes) != 0 {
+	if len(got.Nodes) != 1 || got.Nodes[0].Kind != ProjectedNodeMissing || got.Nodes[0].Status != "nomad_unreachable" {
 		t.Fatalf("nodes = %#v", got.Nodes)
 	}
 }
@@ -111,18 +111,64 @@ func TestControlPlaneProjectsManagedAndUnmanagedNodes(t *testing.T) {
 	if got.Status != ControlPlaneConnected {
 		t.Fatalf("status = %q", got.Status)
 	}
-	if len(got.Nodes) != 2 {
+	if len(got.Nodes) != 3 {
 		t.Fatalf("nodes = %#v", got.Nodes)
 	}
-	if got.Nodes[0].Kind != ProjectedNodeManaged || got.Nodes[0].ServerID != managed.ID {
-		t.Fatalf("managed node = %#v", got.Nodes[0])
+	managedNode := findProjectedNode(got.Nodes, ProjectedNodeManaged, managed.ID)
+	if managedNode == nil || managedNode.NodeID != "node-1" || managedNode.Status != "ready" {
+		t.Fatalf("managed node = %#v", got.Nodes)
 	}
-	if got.Nodes[1].Kind != ProjectedNodeUnmanaged || got.Nodes[1].ServerID != "" || got.Nodes[1].Status != "unmanaged" {
-		t.Fatalf("unmanaged node = %#v", got.Nodes[1])
+	missingNode := findProjectedNode(got.Nodes, ProjectedNodeMissing, unjoined.ID)
+	if missingNode == nil || missingNode.Status != "missing" {
+		t.Fatalf("missing server node = %#v", got.Nodes)
+	}
+	unmanagedNode := findProjectedNode(got.Nodes, ProjectedNodeUnmanaged, "")
+	if unmanagedNode == nil || unmanagedNode.NodeID != "node-2" || unmanagedNode.Status != "unmanaged" {
+		t.Fatalf("unmanaged node = %#v", got.Nodes)
 	}
 	if len(got.JoinCandidates) != 1 || got.JoinCandidates[0].ID != unjoined.ID {
 		t.Fatalf("join candidates = %#v", got.JoinCandidates)
 	}
+}
+
+func TestControlPlaneHidesServerAfterCompletedRemove(t *testing.T) {
+	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createControlPlaneServer(t, svc.servers, credSvc, ctx, "removed", "10.0.0.35")
+	fake.status = StatusResponse{Connected: true, Leader: "10.0.0.1:4647"}
+	fake.nodes = []NodeListItem{{ID: "node-removed", Name: "old-node", Status: "down", Meta: map[string]string{"panel_server_id": srv.ID}}}
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeNodeRemove,
+		ServerID:     srv.ID,
+		NodeID:       "node-removed",
+		ResourceType: "nomad_node",
+		ResourceID:   "node-removed",
+		Summary:      "Nomad node remove requested",
+		Status:       tasks.StatusCompleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.ControlPlane(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Nodes) != 0 {
+		t.Fatalf("removed server should be hidden from node list, got %#v", got.Nodes)
+	}
+	if len(got.JoinCandidates) != 1 || got.JoinCandidates[0].ID != srv.ID {
+		t.Fatalf("removed server should be available to rejoin, got %#v", got.JoinCandidates)
+	}
+}
+
+func findProjectedNode(nodes []ProjectedNode, kind, serverID string) *ProjectedNode {
+	for i := range nodes {
+		if nodes[i].Kind == kind && nodes[i].ServerID == serverID {
+			return &nodes[i]
+		}
+	}
+	return nil
 }
 
 func newControlPlaneTestService(t *testing.T) (*JoinService, *credential.Service, *controlPlaneFakeNomad, func()) {

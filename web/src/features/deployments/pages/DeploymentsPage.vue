@@ -30,10 +30,6 @@ onMounted(load);
 
 <template>
   <div>
-    <div class="page-heading mb-5">
-      <div><div class="eyebrow">Nomad runtime</div><h1 class="text-h4 font-weight-bold">Deployments</h1></div>
-      <v-btn prepend-icon="mdi-refresh" color="primary" variant="flat" :loading="loading" class="text-none" @click="load">Refresh</v-btn>
-    </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
     <div class="deployments-grid">
       <v-card variant="outlined" :loading="loading">
@@ -62,8 +58,6 @@ onMounted(load);
 </template>
 
 <style scoped>
-.page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.eyebrow { margin-bottom: 4px; color: rgb(var(--v-theme-primary)); font-size: 0.72rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
 .deployments-grid { display: grid; gap: 16px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
 </style>

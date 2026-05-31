@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { watch } from 'vue';
 import { useTheme } from 'vuetify';
+import { isPanelThemeName, persistTheme, syncThemeAttribute } from '@/theme';
 
 const theme = useTheme();
 
-onMounted(() => {
-  const savedTheme = localStorage.getItem('theme');
-  if (savedTheme) {
-    theme.global.name.value = savedTheme;
-  }
-});
+watch(
+  () => theme.global.name.value,
+  (name) => {
+    if (!isPanelThemeName(name)) return;
+    syncThemeAttribute(name);
+    persistTheme(name);
+  },
+  { immediate: true },
+);
 </script>
 
 <template>

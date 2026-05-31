@@ -1,3 +1,5 @@
+import { getLocaleHeader } from '@/i18n';
+
 export interface ApiEnvelope<T> {
   data: T | null;
   error: ApiErrorBody | null;
@@ -56,6 +58,34 @@ export class ApiClient {
     return this.request<T>(path, { ...init, method: 'DELETE' });
   }
 
+  async download(path: string, init: RequestInit = {}) {
+    const headers = new Headers(init.headers);
+    const token = this.getToken();
+    headers.set('Accept-Language', getLocaleHeader());
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+    const response = await this.fetcher(`${this.baseUrl}${path}`, {
+      ...init,
+      method: init.method ?? 'GET',
+      headers,
+    });
+    if (!response.ok) {
+      const envelope = (await response.json().catch(() => ({ error: null }))) as ApiEnvelope<unknown>;
+      throw new ApiError(
+        response.status,
+        envelope.error ?? {
+          code: 'http_error',
+          message: `Request failed with status ${response.status}`,
+        },
+      );
+    }
+    return {
+      blob: await response.blob(),
+      filename: filenameFromDisposition(response.headers.get('Content-Disposition')),
+    };
+  }
+
   private withJson(init: RequestInit = {}, method: string, body?: unknown): RequestInit {
     const headers = new Headers(init.headers);
     if (body !== undefined) {
@@ -72,6 +102,7 @@ export class ApiClient {
   private async request<T>(path: string, init: RequestInit): Promise<T> {
     const headers = new Headers(init.headers);
     const token = this.getToken();
+    headers.set('Accept-Language', getLocaleHeader());
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }
@@ -102,4 +133,9 @@ export const apiClient = new ApiClient();
 
 export function readAuthToken() {
   return globalThis.localStorage?.getItem('authToken') ?? '';
+}
+
+function filenameFromDisposition(disposition: string | null) {
+  const match = disposition?.match(/filename="([^"]+)"/i) ?? disposition?.match(/filename=([^;]+)/i);
+  return match?.[1]?.trim() || 'download.bin';
 }

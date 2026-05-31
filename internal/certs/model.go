@@ -6,6 +6,11 @@ const (
 	ScopeSingle   = "single"
 	ScopeWildcard = "wildcard"
 
+	StatusPending = "pending"
+	StatusIssuing = "issuing"
+	StatusIssued  = "issued"
+	StatusFailed  = "failed"
+
 	TaskTypeIssue = "certificate_issue"
 	TaskTypeRenew = "certificate_renew"
 )
@@ -22,6 +27,8 @@ type Certificate struct {
 	CertificatePath string    `json:"certificatePath"`
 	PrivateKeyPath  string    `json:"privateKeyPath"`
 	Issuer          string    `json:"issuer"`
+	Status          string    `json:"status"`
+	LastError       string    `json:"lastError,omitempty"`
 	AutoRenew       bool      `json:"autoRenew"`
 	NextRenewAt     time.Time `json:"nextRenewAt,omitempty"`
 	NotBefore       time.Time `json:"notBefore,omitempty"`

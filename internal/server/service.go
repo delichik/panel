@@ -154,6 +154,59 @@ func (s *Service) TestConnectivity(ctx context.Context, serverID string) (tasks.
 	return s.EnsureConnectivityTask(ctx, serverID, true)
 }
 
+func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (ProbeResult, error) {
+	if s.exec == nil {
+		return ProbeResult{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
+	if err := validateProbe(req); err != nil {
+		return ProbeResult{}, err
+	}
+
+	target := sshx.Target{
+		Host:         req.Host,
+		Port:         req.Port,
+		Username:     req.SSHUsername,
+		CredentialID: req.CredentialID,
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+
+	osInfo, err := linux.Detect(probeCtx, s.exec, target)
+	if err != nil {
+		return ProbeResult{Reachable: false, Error: err.Error(), Traits: map[string]string{}}, nil
+	}
+
+	rootRes, rootErr := s.exec.Exec(probeCtx, target, sshx.CommandSpec{Command: "id -u", Timeout: connectivitySudoTimeout})
+	root := rootErr == nil && strings.TrimSpace(rootRes.Stdout) == "0"
+
+	sudoRes, sudoErr := s.exec.ExecSudo(probeCtx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
+	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
+
+	sysTraits := map[string]string{}
+	if osInfo.Supported {
+		if detected, traitsErr := s.detectSystemTraits(probeCtx, target); traitsErr == nil {
+			sysTraits = detected
+		}
+		sysTraits["sys.os"] = strings.ToLower(osInfo.ID + "-" + osInfo.VersionID)
+	}
+
+	result := ProbeResult{
+		Reachable:        true,
+		PasswordlessSudo: passwordless,
+		Root:             root,
+		Privileged:       root || passwordless,
+		OS:               osInfo,
+		Traits:           sysTraits,
+	}
+	if sudoErr != nil && !root {
+		result.PasswordlessSudoText = sudoErr.Error()
+	}
+	if !osInfo.Supported {
+		result.Error = "unsupported distribution"
+	}
+	return result, nil
+}
+
 func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
@@ -332,6 +385,16 @@ func (srv Server) Target() sshx.Target {
 func validateSave(req SaveRequest) error {
 	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Host) == "" || strings.TrimSpace(req.CredentialID) == "" {
 		return panelerr.Validation("server_invalid", "Server name, host, and credentialId are required")
+	}
+	if req.Port <= 0 || req.Port > 65535 {
+		return panelerr.Validation("server_port_invalid", "Server port must be between 1 and 65535")
+	}
+	return nil
+}
+
+func validateProbe(req SaveRequest) error {
+	if strings.TrimSpace(req.Host) == "" || strings.TrimSpace(req.CredentialID) == "" {
+		return panelerr.Validation("server_invalid", "Server host and credentialId are required")
 	}
 	if req.Port <= 0 || req.Port > 65535 {
 		return panelerr.Validation("server_port_invalid", "Server port must be between 1 and 65535")

@@ -27,6 +27,8 @@ type Scheduler struct {
 
 type certificateRenewer interface {
 	RenewDue(ctx context.Context, now time.Time) (int, error)
+	RunDueIssueTasks(ctx context.Context) (int, error)
+	RunIssueTask(ctx context.Context, task tasks.Task) error
 }
 
 func New(settings *settings.Service, servers *server.Service, metrics *metrics.Service, packages *packages.Service, tasks *tasks.Service) *Scheduler {
@@ -40,11 +42,37 @@ func (s *Scheduler) SetCertificateRenewer(renewer certificateRenewer) {
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.wg.Add(4)
+	s.wg.Add(5)
+	go s.connectivityLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.packageLoop(ctx)
 	go s.cleanupLoop(ctx)
 	go s.certificateLoop(ctx)
+}
+
+func (s *Scheduler) connectivityLoop(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	lastRun := time.Time{}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if time.Since(lastRun) < 5*time.Second {
+				continue
+			}
+			lastRun = time.Now()
+			if err := s.runDueConnectivityTests(ctx); err != nil {
+				log.Printf("scheduler run connectivity tests: %v", err)
+			}
+		}
+	}
+}
+
+func (s *Scheduler) runDueConnectivityTests(ctx context.Context) error {
+	return s.servers.RunDueConnectivityTests(ctx)
 }
 
 func (s *Scheduler) packageLoop(ctx context.Context) {
@@ -94,6 +122,11 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 	case "package_refresh":
 		_, err := s.packages.Refresh(ctx, task.ServerID)
 		return err
+	case "certificate_issue":
+		if s.certs == nil {
+			return panelerr.Validation("task_run_now_unsupported", "Certificate issuer is not configured")
+		}
+		return s.certs.RunIssueTask(ctx, task)
 	}
 
 	return panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center")
@@ -101,8 +134,9 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 
 func (s *Scheduler) certificateLoop(ctx context.Context) {
 	defer s.wg.Done()
-	ticker := time.NewTicker(time.Hour)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
+	lastRenewal := time.Now()
 	for {
 		select {
 		case <-ctx.Done():
@@ -111,6 +145,15 @@ func (s *Scheduler) certificateLoop(ctx context.Context) {
 			if s.certs == nil {
 				continue
 			}
+			if issued, err := s.certs.RunDueIssueTasks(ctx); err != nil {
+				log.Printf("certificate issue task: %v", err)
+			} else if issued > 0 {
+				log.Printf("certificate issue completed for %d certificate(s)", issued)
+			}
+			if time.Since(lastRenewal) < time.Hour {
+				continue
+			}
+			lastRenewal = now
 			if renewed, err := s.certs.RenewDue(ctx, now); err != nil {
 				log.Printf("certificate renewal: %v", err)
 			} else if renewed > 0 {
@@ -135,25 +178,36 @@ func (s *Scheduler) metricsLoop(ctx context.Context) {
 				continue
 			}
 			lastRun = time.Now()
-			servers, err := s.servers.List(ctx)
-			if err != nil {
-				log.Printf("scheduler list servers: %v", err)
-				continue
-			}
-			for _, srv := range servers {
-				if !srv.OS.Supported || !srv.Reachable {
-					continue
-				}
-				if err := s.collectMetrics(ctx, srv); err != nil {
-					log.Printf("metrics collect server %s: %v", srv.ID, err)
-				}
+			if err := s.runDueMetricsCollection(ctx); err != nil {
+				log.Printf("scheduler collect metrics: %v", err)
 			}
 		}
 	}
 }
 
 func (s *Scheduler) collectMetrics(ctx context.Context, srv server.Server) error {
-	if err := s.metrics.Collect(ctx, srv.ID); err != nil {
+	return s.collectMetricsAt(ctx, srv, time.Now().UTC().Truncate(time.Second))
+}
+
+func (s *Scheduler) runDueMetricsCollection(ctx context.Context) error {
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return err
+	}
+	collectedAt := time.Now().UTC().Truncate(time.Second)
+	for _, srv := range servers {
+		if !srv.OS.Supported || !srv.Reachable {
+			continue
+		}
+		if err := s.collectMetricsAt(ctx, srv, collectedAt); err != nil {
+			log.Printf("metrics collect server %s: %v", srv.ID, err)
+		}
+	}
+	return nil
+}
+
+func (s *Scheduler) collectMetricsAt(ctx context.Context, srv server.Server, collectedAt time.Time) error {
+	if err := s.metrics.CollectAt(ctx, srv.ID, collectedAt); err != nil {
 		return err
 	}
 	return nil

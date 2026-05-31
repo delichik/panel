@@ -26,10 +26,7 @@ onMounted(load);
 
 <template>
   <div>
-    <div class="page-heading mb-5">
-      <div><div class="eyebrow">Nomad runtime</div><h1 class="text-h4 font-weight-bold">Nomad Jobs</h1></div>
-      <div class="actions"><v-text-field v-model="prefix" label="Filter prefix" density="compact" variant="outlined" hide-details /><v-btn prepend-icon="mdi-refresh" color="primary" variant="flat" :loading="loading" class="text-none" @click="load">Refresh</v-btn></div>
-    </div>
+    <div class="actions mb-4"><v-text-field v-model="prefix" label="Filter prefix" density="compact" variant="outlined" hide-details /></div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
     <v-card variant="outlined" :loading="loading">
       <v-table>
@@ -46,9 +43,7 @@ onMounted(load);
 </template>
 
 <style scoped>
-.page-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
-.actions { display: flex; gap: 10px; align-items: center; }
+.actions { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
 .actions :deep(.v-input) { width: 220px; }
-.eyebrow { margin-bottom: 4px; color: rgb(var(--v-theme-primary)); font-size: 0.72rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
 </style>

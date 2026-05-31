@@ -8,30 +8,33 @@ const router = readFileSync(resolve(__dirname, '../../router/index.ts'), 'utf8')
 
 describe('ServersPage shell style alignment', () => {
   it('uses sidebar submenu routes instead of page tabs', () => {
-    expect(appLayout).toContain('<v-list-group value="servers">');
-    expect(appLayout).toContain('<v-list-item to="/servers" title="Node" value="node" class="pl-8" />');
-    expect(appLayout).toContain('<v-list-item to="/credentials" title="Credentials" value="credentials" class="pl-8" />');
+    expect(appLayout).toContain("key: 'servers'");
+    expect(appLayout).toContain("to: '/servers'");
+    expect(appLayout).toContain("t('layout.nav.node')");
+    expect(appLayout).toContain("to: '/credentials'");
+    expect(appLayout).toContain("t('layout.nav.credentials')");
     expect(router).toContain("{ path: 'credentials', name: 'credentials', component: ServersPage");
     expect(serversPage).not.toContain('<v-tabs');
     expect(serversPage).not.toMatch(/<v-tab[\s>]/);
   });
 
-  it('uses right-side drawers for Server page editors', () => {
-    expect(serversPage).toContain('<v-navigation-drawer v-model="serverDialog" location="right" temporary width="560"');
-    expect(serversPage).toContain('<v-navigation-drawer v-model="credentialDialog" location="right" temporary width="620"');
+  it('uses application-style dialogs for Server page editors', () => {
+    expect(serversPage).toContain('<v-dialog v-model="serverDialog" width="640"');
+    expect(serversPage).toContain('<v-dialog v-model="credentialDialog" width="680"');
+    expect(serversPage).toContain('class="app-dialog-card"');
     expect(serversPage).not.toContain('variablesDialog');
-    expect(serversPage).not.toContain('<v-dialog v-model="serverDialog"');
-    expect(serversPage).not.toContain('<v-dialog v-model="credentialDialog"');
+    expect(serversPage).not.toContain('<v-navigation-drawer v-model="serverDialog"');
+    expect(serversPage).not.toContain('<v-navigation-drawer v-model="credentialDialog"');
   });
 
   it('shows derived Nomad status without adding server-level Nomad actions', () => {
     expect(serversPage).toContain('nomadApi.controlPlane');
     expect(serversPage).toContain('nomadStatusForServer');
-    expect(serversPage).toContain('Not joined');
-    expect(serversPage).toContain('Bootstrapping server');
-    expect(serversPage).toContain('Joining client');
-    expect(serversPage).toContain('Managed node');
-    expect(serversPage).toContain('Join failed');
+    expect(serversPage).toContain("t('serversPage.notJoined')");
+    expect(serversPage).toContain("t('serversPage.bootstrappingServer')");
+    expect(serversPage).toContain("t('serversPage.joiningClient')");
+    expect(serversPage).toContain("t('serversPage.managedNode')");
+    expect(serversPage).toContain("t('serversPage.joinFailed')");
     expect(serversPage).not.toContain('nomadApi.joinServer');
     expect(serversPage).not.toContain('nomadApi.bootstrapServer');
   });

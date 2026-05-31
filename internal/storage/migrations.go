@@ -84,8 +84,19 @@ func (s *Store) Migrate(ctx context.Context) error {
 			enabled INTEGER NOT NULL DEFAULT 0,
 			spec_yaml TEXT NOT NULL,
 			variables_json TEXT NOT NULL DEFAULT '{}',
+			resolved_variables_json TEXT NOT NULL DEFAULT '{}',
+			persistent_path TEXT NOT NULL DEFAULT '',
+			deployment_mode TEXT NOT NULL DEFAULT 'all',
+			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+			reverse_proxy_json TEXT NOT NULL DEFAULT '[]',
 			generation INTEGER NOT NULL DEFAULT 1,
 			spec_hash TEXT NOT NULL DEFAULT '',
+			image_reference TEXT NOT NULL DEFAULT '',
+			image_digest TEXT NOT NULL DEFAULT '',
+			image_latest_digest TEXT NOT NULL DEFAULT '',
+			image_checked_at TEXT,
+			image_update_available INTEGER NOT NULL DEFAULT 0,
+			image_last_error TEXT NOT NULL DEFAULT '',
 			job_id TEXT NOT NULL,
 			namespace TEXT NOT NULL DEFAULT 'default',
 			last_eval_id TEXT NOT NULL DEFAULT '',
@@ -141,6 +152,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			certificate_path TEXT NOT NULL,
 			private_key_path TEXT NOT NULL,
 			issuer TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL DEFAULT 'pending',
+			last_error TEXT NOT NULL DEFAULT '',
 			auto_renew INTEGER NOT NULL DEFAULT 1,
 			next_renew_at TEXT NOT NULL DEFAULT '',
 			not_before TEXT NOT NULL DEFAULT '',
@@ -197,6 +210,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.ensureAppColumns(ctx, "applications", map[string]string{
+		"persistent_path":            "TEXT NOT NULL DEFAULT ''",
+		"resolved_variables_json":    "TEXT NOT NULL DEFAULT '{}'",
+		"deployment_mode":            "TEXT NOT NULL DEFAULT 'all'",
+		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+		"reverse_proxy_json":         "TEXT NOT NULL DEFAULT '[]'",
+		"image_reference":            "TEXT NOT NULL DEFAULT ''",
+		"image_digest":               "TEXT NOT NULL DEFAULT ''",
+		"image_latest_digest":        "TEXT NOT NULL DEFAULT ''",
+		"image_checked_at":           "TEXT",
+		"image_update_available":     "INTEGER NOT NULL DEFAULT 0",
+		"image_last_error":           "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
 	if err := s.ensureAppColumns(ctx, "servers", map[string]string{
 		"traits": "TEXT NOT NULL DEFAULT '{}'",
 	}); err != nil {
@@ -205,6 +233,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.ensureAppColumns(ctx, "certificates", map[string]string{
 		"domain_id":     "TEXT NOT NULL DEFAULT ''",
 		"prefix":        "TEXT NOT NULL DEFAULT '@'",
+		"status":        "TEXT NOT NULL DEFAULT 'pending'",
+		"last_error":    "TEXT NOT NULL DEFAULT ''",
 		"auto_renew":    "INTEGER NOT NULL DEFAULT 1",
 		"next_renew_at": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {

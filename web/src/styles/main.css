@@ -4,6 +4,43 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  color-scheme: light;
+
+  --lp-background: #f6f8fb;
+  --lp-surface: #ffffff;
+  --lp-surface-container: #f8fafc;
+  --lp-surface-muted: #eef2f7;
+  --lp-border: #d7dee8;
+  --lp-text: #182230;
+  --lp-text-muted: #667085;
+  --lp-text-subtle: #98a2b3;
+  --lp-shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.05);
+  --lp-shadow-md: 0 10px 24px rgba(16, 24, 40, 0.08);
+  --lp-shadow-dialog: 0 24px 48px rgba(16, 24, 40, 0.14);
+  --lp-log-background: #101828;
+  --lp-log-text: #e5e7eb;
+  --lp-log-muted: #98a2b3;
+  --lp-log-error: #fecaca;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+
+  --lp-background: #090b10;
+  --lp-surface: #121722;
+  --lp-surface-container: #151c28;
+  --lp-surface-muted: #1b2230;
+  --lp-border: #2d3748;
+  --lp-text: #e6edf7;
+  --lp-text-muted: #aab5c4;
+  --lp-text-subtle: #7f8da3;
+  --lp-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.32);
+  --lp-shadow-md: 0 14px 34px rgba(0, 0, 0, 0.34);
+  --lp-shadow-dialog: 0 28px 64px rgba(0, 0, 0, 0.52);
+  --lp-log-background: #070a10;
+  --lp-log-text: #d8e0ec;
+  --lp-log-muted: #8a97a8;
+  --lp-log-error: #fca5a5;
 }
 
 * {
@@ -15,12 +52,31 @@ body {
   min-width: 320px;
   height: 100vh;
   overflow: hidden;
-  background-color: rgb(var(--v-theme-background));
-  color: rgb(var(--v-theme-on-background));
+  background-color: var(--lp-background);
+  color: var(--lp-text);
 }
 
 #app {
   height: 100vh;
+}
+
+.v-application {
+  background: var(--lp-background) !important;
+  color: var(--lp-text) !important;
+}
+
+.v-main {
+  background:
+    linear-gradient(180deg, rgba(var(--v-theme-primary), 0.03), transparent 240px),
+    var(--lp-background) !important;
+}
+
+:root.theme-changing *,
+:root.theme-changing *::before,
+:root.theme-changing *::after {
+  transition-property: background-color, border-color, color, box-shadow, fill, stroke !important;
+  transition-duration: 160ms !important;
+  transition-timing-function: ease !important;
 }
 
 a {
@@ -39,12 +95,12 @@ a {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(var(--v-border-color), 0.12);
+  background: color-mix(in srgb, var(--lp-border), transparent 40%);
   border-radius: 99px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(var(--v-border-color), 0.24);
+  background: color-mix(in srgb, var(--lp-border), transparent 10%);
 }
 
 /* Tabular numbers for clean layout metrics */
@@ -55,18 +111,18 @@ a {
 
 /* Theme-compliant modern panels */
 .panel {
-  border: 1px solid rgba(var(--v-border-color), 0.06);
-  border-radius: 14px;
-  background: rgb(var(--v-theme-surface));
-  color: rgb(var(--v-theme-on-surface));
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  background: var(--lp-surface);
+  color: var(--lp-text);
   min-height: 0;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.02), 0 1px 2px -1px rgba(0, 0, 0, 0.02);
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: var(--lp-shadow-sm);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
 .panel:hover {
   border-color: rgba(var(--v-theme-primary), 0.15);
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.04), 0 4px 6px -4px rgba(0, 0, 0, 0.02);
+  box-shadow: var(--lp-shadow-md);
 }
 
 .panel-header {
@@ -75,7 +131,7 @@ a {
   justify-content: space-between;
   gap: 16px;
   padding: 18px 20px;
-  border-bottom: 1px solid rgba(var(--v-border-color), 0.06);
+  border-bottom: 1px solid var(--lp-border);
 }
 
 .panel-body {
@@ -85,7 +141,7 @@ a {
 }
 
 .muted {
-  color: rgba(var(--v-theme-on-surface), 0.6) !important;
+  color: var(--lp-text-muted) !important;
 }
 
 .toolbar {
@@ -101,41 +157,43 @@ a {
   height: 8px;
   border-radius: 50%;
   margin-right: 6px;
-  background: #94a3b8;
+  background: rgb(var(--v-theme-secondary));
 }
 
 .status-dot.ok {
-  background: #10b981;
+  background: rgb(var(--v-theme-success));
 }
 
 .status-dot.warn {
-  background: #f59e0b;
+  background: rgb(var(--v-theme-warning));
 }
 
 .status-dot.error {
-  background: #ef4444;
+  background: rgb(var(--v-theme-error));
 }
 
 /* Global design overrides to make Vuetify components feel premium and sleek */
 .v-card {
-  border-radius: 14px !important;
-  border: 1px solid rgba(var(--v-border-color), 0.06) !important;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.02), 0 1px 2px -1px rgba(0, 0, 0, 0.02) !important;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  border-radius: 8px !important;
+  border-color: var(--lp-border) !important;
+  background-color: var(--lp-surface) !important;
+  color: var(--lp-text) !important;
+  box-shadow: var(--lp-shadow-sm) !important;
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease !important;
 }
 
 .v-card:hover {
   border-color: rgba(var(--v-theme-primary), 0.15) !important;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.04), 0 4px 6px -4px rgba(0, 0, 0, 0.02) !important;
+  box-shadow: var(--lp-shadow-md) !important;
 }
 
 .v-btn {
   border-radius: 8px !important;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease !important;
 }
 
 .v-btn--variant-elevated, .v-btn--variant-flat {
-  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05) !important;
+  box-shadow: var(--lp-shadow-sm) !important;
 }
 
 .v-btn--variant-elevated:hover, .v-btn--variant-flat:hover {
@@ -158,8 +216,45 @@ a {
 }
 
 .v-dialog .v-card {
-  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1) !important;
-  border: 1px solid rgba(var(--v-border-color), 0.08) !important;
+  box-shadow: var(--lp-shadow-dialog) !important;
+  border: 1px solid var(--lp-border) !important;
+}
+
+.app-dialog-card {
+  border-radius: 8px !important;
+  overflow: hidden;
+}
+
+.app-dialog-title {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  padding: 16px 20px !important;
+}
+
+.app-dialog-title-text {
+  min-width: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.app-dialog-body {
+  max-height: min(68vh, 720px);
+  overflow: auto;
+  padding: 20px !important;
+}
+
+.app-dialog-actions {
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px !important;
+}
+
+.app-dialog-actions .v-btn {
+  min-width: 92px;
 }
 
 /* Modern chip styling */
@@ -168,9 +263,49 @@ a {
   font-weight: 500 !important;
 }
 
+.v-table,
+.v-table .v-table__wrapper > table {
+  background: transparent !important;
+  color: var(--lp-text) !important;
+}
+
+.v-table th {
+  color: var(--lp-text-muted) !important;
+}
+
+.v-table td,
+.v-table th {
+  border-bottom-color: color-mix(in srgb, var(--lp-border), transparent 26%) !important;
+}
+
+.bg-surface-variant {
+  background-color: var(--lp-surface-muted) !important;
+  color: var(--lp-text) !important;
+}
+
+.text-grey-darken-1,
+.text-grey-darken-2,
+.text-grey-darken-3 {
+  color: var(--lp-text-muted) !important;
+}
+
+.border {
+  border-color: var(--lp-border) !important;
+}
+
 /* Glassmorphism custom components */
 .glass-panel {
-  background: rgba(var(--v-theme-surface), 0.75) !important;
+  background: color-mix(in srgb, var(--lp-surface), transparent 18%) !important;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
 }

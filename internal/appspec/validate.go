@@ -11,8 +11,9 @@ import (
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
 
 func Normalize(spec Spec) Spec {
-	if spec.Count == 0 {
-		spec.Count = 1
+	spec.Count = 1
+	if spec.NetworkMode == "" {
+		spec.NetworkMode = "bridge"
 	}
 	if spec.Resources.CPU == 0 {
 		spec.Resources.CPU = 100
@@ -22,6 +23,31 @@ func Normalize(spec Spec) Spec {
 	}
 	if spec.Env == nil {
 		spec.Env = map[string]string{}
+	}
+	spec.Restart.Policy = strings.TrimSpace(spec.Restart.Policy)
+	if spec.Restart.Policy == "" {
+		spec.Restart.Policy = "unless-stopped"
+	}
+	if spec.Restart.IntervalSeconds == 0 {
+		spec.Restart.IntervalSeconds = 1800
+	}
+	if spec.Restart.DelaySeconds == 0 {
+		spec.Restart.DelaySeconds = 15
+	}
+	switch spec.Restart.Policy {
+	case "no":
+		spec.Restart.Attempts = 0
+		spec.Restart.Mode = "fail"
+	case "on-failure":
+		if spec.Restart.Attempts == 0 {
+			spec.Restart.Attempts = 2
+		}
+		spec.Restart.Mode = "fail"
+	case "always", "unless-stopped":
+		if spec.Restart.Attempts == 0 {
+			spec.Restart.Attempts = 2
+		}
+		spec.Restart.Mode = "delay"
 	}
 	return spec
 }
@@ -35,8 +61,8 @@ func Validate(spec Spec) []Issue {
 	if strings.TrimSpace(spec.Image) == "" {
 		issues = append(issues, Issue{Field: "image", Message: "image is required"})
 	}
-	if spec.Count < 0 {
-		issues = append(issues, Issue{Field: "count", Message: "count cannot be negative"})
+	if spec.NetworkMode != "bridge" && spec.NetworkMode != "host" {
+		issues = append(issues, Issue{Field: "networkMode", Message: "networkMode must be bridge or host"})
 	}
 	if spec.Resources.CPU < 0 {
 		issues = append(issues, Issue{Field: "resources.cpu", Message: "cpu cannot be negative"})
@@ -44,8 +70,28 @@ func Validate(spec Spec) []Issue {
 	if spec.Resources.MemoryMB < 0 {
 		issues = append(issues, Issue{Field: "resources.memoryMb", Message: "memoryMb cannot be negative"})
 	}
+	switch spec.Restart.Policy {
+	case "no", "on-failure", "always", "unless-stopped":
+	default:
+		issues = append(issues, Issue{Field: "restart.policy", Message: "restart policy must be no, on-failure, always, or unless-stopped"})
+	}
+	if spec.Restart.Attempts < 0 {
+		issues = append(issues, Issue{Field: "restart.attempts", Message: "restart attempts cannot be negative"})
+	}
+	if spec.Restart.IntervalSeconds < 0 {
+		issues = append(issues, Issue{Field: "restart.intervalSeconds", Message: "restart interval cannot be negative"})
+	}
+	if spec.Restart.DelaySeconds < 0 {
+		issues = append(issues, Issue{Field: "restart.delaySeconds", Message: "restart delay cannot be negative"})
+	}
+	if spec.Restart.Mode != "" && spec.Restart.Mode != "fail" && spec.Restart.Mode != "delay" {
+		issues = append(issues, Issue{Field: "restart.mode", Message: "restart mode must be fail or delay"})
+	}
 
 	portLabels := map[string]struct{}{}
+	if spec.NetworkMode == "host" && len(spec.Ports) > 0 {
+		issues = append(issues, Issue{Field: "ports", Message: "ports cannot be configured when networkMode is host"})
+	}
 	for i, port := range spec.Ports {
 		if !validName(port.Label) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].label", i), Message: "port label must use application name format"})
@@ -89,6 +135,26 @@ func Validate(spec Spec) []Issue {
 			issues = append(issues, Issue{Field: fmt.Sprintf("volumes[%d].target", i), Message: "volume target must be an absolute Linux path"})
 		}
 	}
+	for i, mount := range spec.Mounts {
+		mountType := strings.TrimSpace(mount.Type)
+		switch mountType {
+		case "volume", "host", "global", "file", "persistent":
+		default:
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].type", i), Message: "mount type must be volume, host, global, file, or persistent"})
+		}
+		if strings.TrimSpace(mount.Source) == "" && mountType != "persistent" {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "mount source is required"})
+		}
+		if (mountType == "file" || mountType == "persistent") && !validWorkspacePath(mount.Source) {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "workspace mount source must be a relative path inside the application workspace"})
+		}
+		if (mountType == "host" || mountType == "global") && !strings.HasPrefix(mount.Source, "/") {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "host path mount source must be an absolute Linux path"})
+		}
+		if !strings.HasPrefix(mount.Target, "/") {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].target", i), Message: "mount target must be an absolute Linux path"})
+		}
+	}
 	return issues
 }
 
@@ -107,4 +173,20 @@ func validName(value string) bool {
 
 func validPort(value int) bool {
 	return value >= 1 && value <= 65535
+}
+
+func validWorkspacePath(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return true
+	}
+	if strings.HasPrefix(value, "/") || strings.Contains(value, "\\") {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." {
+			return false
+		}
+	}
+	return true
 }

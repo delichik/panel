@@ -24,7 +24,9 @@ func TestMetricsSaveQueryCleanup(t *testing.T) {
 	defer store.Close()
 	svc := NewService(store.MetricsDB(), nil, nil)
 	ctx := context.Background()
-	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv", Time: time.Now().UTC(), CPUUsagePercent: 50, MemoryUsedBytes: 1, MemoryTotalBytes: 2, DiskUsedBytes: 3, DiskTotalBytes: 4}); err != nil {
+	base := time.Now().UTC().Add(-time.Minute)
+	sampledAt := time.Date(base.Year(), base.Month(), base.Day(), base.Hour(), base.Minute(), base.Second(), 345678901, time.UTC)
+	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv", Time: sampledAt, CPUUsagePercent: 50, MemoryUsedBytes: 1, MemoryTotalBytes: 2, DiskUsedBytes: 3, DiskTotalBytes: 4}); err != nil {
 		t.Fatal(err)
 	}
 	series, err := svc.Query(ctx, "srv", "1h")
@@ -33,6 +35,12 @@ func TestMetricsSaveQueryCleanup(t *testing.T) {
 	}
 	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 50 {
 		t.Fatalf("unexpected series: %#v", series)
+	}
+	if want := sampledAt.UTC().Truncate(time.Second); !series.CPU[0].Time.Equal(want) {
+		t.Fatalf("expected timestamp aligned to %s, got %s", want, series.CPU[0].Time)
+	}
+	if _, err := svc.Query(ctx, "srv", "7d"); err != nil {
+		t.Fatalf("expected 7d range to be accepted: %v", err)
 	}
 	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv", Time: time.Now().UTC().Add(-48 * time.Hour)}); err != nil {
 		t.Fatal(err)

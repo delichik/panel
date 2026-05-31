@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
+import { t } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
 
@@ -20,7 +21,7 @@ async function loadLogs() {
     logs.value = result.logs;
     error.value = '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to load logs';
+    error.value = err instanceof Error ? err.message : t('applicationLogs.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -29,15 +30,15 @@ async function loadLogs() {
 
 <template>
   <v-card variant="outlined" class="logs-card">
-    <div class="text-subtitle-1 font-weight-bold mb-3">Logs</div>
+    <div class="text-subtitle-1 font-weight-bold mb-3">{{ t('applicationLogs.logs') }}</div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <div class="logs-controls">
-      <v-text-field v-model="allocId" label="Allocation ID" density="compact" variant="outlined" hide-details />
-      <v-text-field v-model="task" label="Task" density="compact" variant="outlined" hide-details />
-      <v-text-field v-model.number="tail" label="Tail" type="number" density="compact" variant="outlined" hide-details />
-      <v-btn color="primary" variant="flat" class="text-none" :disabled="!canLoad" :loading="loading" @click="loadLogs">Load</v-btn>
+      <v-text-field v-model="allocId" :label="t('applicationLogs.allocationId')" density="compact" variant="outlined" hide-details />
+      <v-text-field v-model="task" :label="t('applicationLogs.task')" density="compact" variant="outlined" hide-details />
+      <v-text-field v-model.number="tail" :label="t('applicationLogs.tail')" type="number" density="compact" variant="outlined" hide-details />
+      <v-btn color="primary" variant="flat" class="text-none" :disabled="!canLoad" :loading="loading" @click="loadLogs">{{ t('common.load') }}</v-btn>
     </div>
-    <pre class="log-output">{{ logs || 'Select an allocation and task to load logs.' }}</pre>
+    <pre class="log-output">{{ logs || t('applicationLogs.empty') }}</pre>
   </v-card>
 </template>
 
@@ -45,6 +46,6 @@ async function loadLogs() {
 .logs-card { padding: 16px; }
 .logs-controls { display: grid; grid-template-columns: minmax(0, 1fr) 120px 92px auto; gap: 8px; align-items: center; }
 .logs-controls .v-btn { min-height: 40px; }
-.log-output { min-height: 120px; max-height: 260px; overflow: auto; margin: 12px 0 0; padding: 12px; border-radius: 8px; background: rgba(var(--v-theme-on-surface), 0.04); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; white-space: pre-wrap; }
+.log-output { min-height: 120px; max-height: 260px; overflow: auto; margin: 12px 0 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: var(--lp-log-background); color: var(--lp-log-text); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; white-space: pre-wrap; }
 @media (max-width: 760px) { .logs-controls { grid-template-columns: 1fr; } }
 </style>

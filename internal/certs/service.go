@@ -32,10 +32,15 @@ type Service struct {
 	providerOverride Provider
 	tasks            *tasks.Service
 	issuer           string
+	applications     applicationRefresher
 }
 
 type domainResolver interface {
 	ResolveDomain(ctx context.Context, domainID string) (dns.ResolvedDomain, error)
+}
+
+type applicationRefresher interface {
+	RedeployChangedApplications(ctx context.Context) (int, error)
 }
 
 func NewService(db *sql.DB, cfg config.Config, domains domainResolver, taskSvc *tasks.Service) *Service {
@@ -46,24 +51,21 @@ func NewServiceWithProvider(db *sql.DB, cfg config.Config, provider Provider, ta
 	return &Service{db: db, dataRoot: cfg.DataRoot, cfg: cfg, providerOverride: provider, tasks: taskSvc, issuer: "acme"}
 }
 
+func (s *Service) SetApplicationRefresher(refresher applicationRefresher) {
+	s.applications = refresher
+}
+
 func (s *Service) Issue(ctx context.Context, in IssueRequest) (IssueResult, error) {
+	return s.QueueIssue(ctx, in)
+}
+
+func (s *Service) QueueIssue(ctx context.Context, in IssueRequest) (IssueResult, error) {
 	resolved, err := s.resolveDomain(ctx, in.DomainID)
 	if err != nil {
 		return IssueResult{}, err
 	}
 	prepared, err := prepareIssueRequest(in, resolved.Name)
 	if err != nil {
-		return IssueResult{}, err
-	}
-	provider, err := s.providerForDomain(resolved)
-	if err != nil {
-		return IssueResult{}, err
-	}
-	bundle, err := provider.Issue(ctx, Request{Domain: prepared.Domain, Domains: prepared.Domains})
-	if err != nil {
-		return IssueResult{}, err
-	}
-	if err := validateBundle(bundle); err != nil {
 		return IssueResult{}, err
 	}
 
@@ -78,28 +80,21 @@ func (s *Service) Issue(ctx context.Context, in IssueRequest) (IssueResult, erro
 		Domains:      prepared.Domains,
 		VariableName: prepared.VariableName,
 		Issuer:       s.issuer,
+		Status:       StatusPending,
 		AutoRenew:    true,
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
-	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
-	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
 	certDir := filepath.Join(s.dataRoot, "certs", cert.ID)
 	if err := os.MkdirAll(certDir, 0700); err != nil {
 		return IssueResult{}, err
 	}
 	cert.CertificatePath = filepath.Join(certDir, "certificate.pem")
 	cert.PrivateKeyPath = filepath.Join(certDir, "private-key.pem")
-	if err := os.WriteFile(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), 0600); err != nil {
-		return IssueResult{}, err
-	}
-	if err := os.WriteFile(cert.PrivateKeyPath, bundle.PrivateKeyPEM, 0600); err != nil {
-		return IssueResult{}, err
-	}
 	if err := s.insert(ctx, cert); err != nil {
 		return IssueResult{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeIssue, cert, "Issued certificate for "+cert.Domain)
+	taskID, err := s.recordTask(ctx, TaskTypeIssue, cert, tasks.StatusQueued, "Issue certificate for "+cert.Domain)
 	if err != nil {
 		return IssueResult{}, err
 	}
@@ -108,6 +103,98 @@ func (s *Service) Issue(ctx context.Context, in IssueRequest) (IssueResult, erro
 		return IssueResult{}, err
 	}
 	return IssueResult{Certificate: cert, TaskID: taskID}, nil
+}
+
+func (s *Service) RunDueIssueTasks(ctx context.Context) (int, error) {
+	if s.tasks == nil {
+		return 0, nil
+	}
+	ran := 0
+	for _, status := range []string{tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusFailedRetryable} {
+		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeIssue, Status: status, Limit: 20})
+		if err != nil {
+			return ran, err
+		}
+		for _, task := range result.Items {
+			if task.ResourceType != "certificate" || task.ResourceID == "" {
+				continue
+			}
+			if err := s.RunIssueTask(ctx, task); err != nil {
+				return ran, err
+			}
+			ran++
+		}
+	}
+	return ran, nil
+}
+
+func (s *Service) RunIssueTask(ctx context.Context, task tasks.Task) error {
+	if s.tasks == nil {
+		return nil
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return err
+	}
+	if err := s.tasks.Advance(ctx, task.ID, "preparing", "Preparing certificate request"); err != nil {
+		return err
+	}
+	cert, err := s.Get(ctx, task.ResourceID)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return err
+	}
+	if cert.Status == StatusIssued {
+		return s.tasks.Complete(ctx, task.ID, "Certificate already issued for "+cert.Domain)
+	}
+	if err := s.updateStatus(ctx, cert.ID, StatusIssuing, ""); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return err
+	}
+	if err := s.tasks.Advance(ctx, task.ID, "running", "Running ACME DNS-01 challenge"); err != nil {
+		return err
+	}
+	if err := s.issueIntoCertificate(ctx, cert); err != nil {
+		_ = s.updateStatus(ctx, cert.ID, StatusFailed, err.Error())
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return err
+	}
+	if err := s.updateStatus(ctx, cert.ID, StatusIssued, ""); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return err
+	}
+	if err := s.refreshApplications(ctx); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return err
+	}
+	return s.tasks.Complete(ctx, task.ID, "Issued certificate for "+cert.Domain)
+}
+
+func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate) error {
+	resolved, err := s.resolveDomain(ctx, cert.DomainID)
+	if err != nil {
+		return err
+	}
+	provider, err := s.providerForDomain(resolved)
+	if err != nil {
+		return err
+	}
+	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains})
+	if err != nil {
+		return err
+	}
+	if err := validateBundle(bundle); err != nil {
+		return err
+	}
+	if err := os.WriteFile(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile(cert.PrivateKeyPath, bundle.PrivateKeyPEM, 0600); err != nil {
+		return err
+	}
+	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
+	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
+	cert.UpdatedAt = time.Now().UTC()
+	return s.updateRenewal(ctx, cert)
 }
 
 func (s *Service) RenewDue(ctx context.Context, now time.Time) (int, error) {
@@ -169,7 +256,10 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 	if err := s.updateRenewal(ctx, cert); err != nil {
 		return err
 	}
-	_, err = s.recordTask(ctx, TaskTypeRenew, cert, "Renewed certificate for "+cert.Domain)
+	if err := s.refreshApplications(ctx); err != nil {
+		return err
+	}
+	_, err = s.recordTask(ctx, TaskTypeRenew, cert, tasks.StatusCompleted, "Renewed certificate for "+cert.Domain)
 	return err
 }
 
@@ -228,6 +318,9 @@ func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) 
 	}
 	certVars := map[string]any{}
 	for _, cert := range certs {
+		if cert.Status != StatusIssued {
+			continue
+		}
 		certPEM, err := os.ReadFile(cert.CertificatePath)
 		if err != nil {
 			return nil, err
@@ -250,8 +343,8 @@ func (s *Service) insert(ctx context.Context, cert Certificate) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO certificates(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		cert.ID, cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.CertificatePath, cert.PrivateKeyPath, cert.Issuer, boolInt(cert.AutoRenew), formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.CreatedAt), formatTime(cert.UpdatedAt))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO certificates(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		cert.ID, cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.CertificatePath, cert.PrivateKeyPath, cert.Issuer, cert.Status, cert.LastError, boolInt(cert.AutoRenew), formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.CreatedAt), formatTime(cert.UpdatedAt))
 	return err
 }
 
@@ -261,7 +354,13 @@ func (s *Service) updateRenewal(ctx context.Context, cert Certificate) error {
 	return err
 }
 
-func (s *Service) recordTask(ctx context.Context, taskType string, cert Certificate, summary string) (string, error) {
+func (s *Service) updateStatus(ctx context.Context, certID, status, lastError string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET status=?,last_error=?,updated_at=? WHERE id=?`,
+		status, lastError, formatTime(time.Now().UTC()), certID)
+	return err
+}
+
+func (s *Service) recordTask(ctx context.Context, taskType string, cert Certificate, status string, summary string) (string, error) {
 	if s.tasks == nil {
 		return "", nil
 	}
@@ -269,13 +368,21 @@ func (s *Service) recordTask(ctx context.Context, taskType string, cert Certific
 		Type:         taskType,
 		ResourceType: "certificate",
 		ResourceID:   cert.ID,
-		Status:       tasks.StatusCompleted,
+		Status:       status,
 		Summary:      summary,
 	})
 	if err != nil {
 		return "", err
 	}
 	return task.ID, nil
+}
+
+func (s *Service) refreshApplications(ctx context.Context) error {
+	if s.applications == nil {
+		return nil
+	}
+	_, err := s.applications.RedeployChangedApplications(ctx)
+	return err
 }
 
 type preparedIssueRequest struct {
@@ -368,7 +475,7 @@ func certificateValidity(certPEM []byte) (time.Time, time.Time) {
 
 type certScanner interface{ Scan(dest ...any) error }
 
-const certificateColumns = `id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at`
+const certificateColumns = `id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at`
 
 func scanCertificate(row certScanner) (Certificate, error) {
 	var cert Certificate
@@ -376,7 +483,7 @@ func scanCertificate(row certScanner) (Certificate, error) {
 	var autoRenew int
 	var nextRenewAt, notBefore, notAfter string
 	var created, updated string
-	if err := row.Scan(&cert.ID, &cert.Name, &cert.DomainID, &cert.Domain, &cert.Prefix, &cert.Scope, &domains, &cert.VariableName, &cert.CertificatePath, &cert.PrivateKeyPath, &cert.Issuer, &autoRenew, &nextRenewAt, &notBefore, &notAfter, &created, &updated); err != nil {
+	if err := row.Scan(&cert.ID, &cert.Name, &cert.DomainID, &cert.Domain, &cert.Prefix, &cert.Scope, &domains, &cert.VariableName, &cert.CertificatePath, &cert.PrivateKeyPath, &cert.Issuer, &cert.Status, &cert.LastError, &autoRenew, &nextRenewAt, &notBefore, &notAfter, &created, &updated); err != nil {
 		return Certificate{}, err
 	}
 	if domains != "" {

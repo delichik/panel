@@ -129,6 +129,20 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	}
 }
 
+func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
+	svc, _, _ := testServerService(t, &connectivityFakeExec{root: true})
+	result, err := svc.ProbeConnectivity(context.Background(), SaveRequest{Host: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Reachable || !result.Root || !result.Privileged {
+		t.Fatalf("expected reachable root probe, got %#v", result)
+	}
+	if result.Traits["sys.cpu_cores"] != "8" || result.OS.PrettyName != "Debian GNU/Linux 13" {
+		t.Fatalf("unexpected probe detail: %#v", result)
+	}
+}
+
 func TestCreateServerAutomaticallyStartsConnectivityTest(t *testing.T) {
 	svc, taskSvc, _ := testServerService(t, &connectivityFakeExec{})
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
@@ -191,6 +205,7 @@ func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
 
 type connectivityFakeExec struct {
 	sudoTimeout time.Duration
+	root        bool
 }
 
 func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
@@ -199,6 +214,12 @@ func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, com
 	}
 	if strings.Contains(command.Command, "cores=") {
 		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "id -u") {
+		if f.root {
+			return sshx.CommandResult{Stdout: "0\n", ExitCode: 0}, nil
+		}
+		return sshx.CommandResult{Stdout: "1000\n", ExitCode: 0}, nil
 	}
 	return sshx.CommandResult{ExitCode: 0}, nil
 }

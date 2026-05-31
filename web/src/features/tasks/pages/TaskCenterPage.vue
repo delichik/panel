@@ -1,10 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { formatDateTime, formatTime, t, translateTaskStatus, useI18n } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
 import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
 import { groupTasksByOperation } from '../taskOperations';
+
+useI18n();
 
 const tasks = ref<TaskDto[]>([]);
 const steps = ref<TaskStepDto[]>([]);
@@ -27,6 +30,17 @@ const selectedTask = computed(() => tasks.value.find((task) => task.id === selec
 const selectedOperation = computed(() => operationGroups.value.find((group) => group.operationId === selectedOperationId.value) ?? null);
 const taskTypeOptions = computed(() => Array.from(new Set(tasks.value.map((task) => task.type))).sort());
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
+const statusFilterItems = computed(() => [
+  { title: t('common.all'), value: 'all' },
+  { title: translateTaskStatus('queued'), value: 'queued' },
+  { title: translateTaskStatus('scheduled'), value: 'scheduled' },
+  { title: translateTaskStatus('running'), value: 'running' },
+  { title: translateTaskStatus('completed'), value: 'completed' },
+  { title: translateTaskStatus('failed'), value: 'failed' },
+  { title: translateTaskStatus('failed_retryable'), value: 'failed_retryable' },
+  { title: translateTaskStatus('blocked'), value: 'blocked' },
+  { title: translateTaskStatus('cancelled'), value: 'cancelled' },
+]);
 
 const taskCounts = computed(() => ({
   active: tasks.value.filter((task) => ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status)).length,
@@ -63,7 +77,7 @@ async function loadTasks() {
     }
     error.value = '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to load tasks';
+    error.value = err instanceof Error ? err.message : t('taskCenter.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -87,7 +101,7 @@ function reloadFirstPage() {
 }
 
 function serverName(serverId?: string | null) {
-  if (!serverId) return 'No node';
+  if (!serverId) return t('taskCenter.noNode');
   return servers.value.find((server) => server.id === serverId)?.name || serverId;
 }
 
@@ -96,20 +110,16 @@ function formatTaskType(value?: string) {
 }
 
 function shortId(value?: string | null) {
-  if (!value) return '-';
+  if (!value) return t('common.notAvailable');
   return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
 }
 
-function formatDateTime(value?: string | null) {
-  return value ? new Date(value).toLocaleString() : '-';
-}
-
 function formatClock(value?: string | null) {
-  return value ? new Date(value).toLocaleTimeString() : '-';
+  return value ? formatTime(value) : t('common.notAvailable');
 }
 
 function durationBetween(start?: string | null, end?: string | null) {
-  if (!start) return '-';
+  if (!start) return t('common.notAvailable');
   const startMs = new Date(start).getTime();
   const endMs = end ? new Date(end).getTime() : Date.now();
   const seconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
@@ -126,7 +136,7 @@ function taskProgress(task: TaskDto) {
 }
 
 function progressText(task: TaskDto) {
-  if (task.status === 'running' && task.percentage === null) return 'running';
+  if (task.status === 'running' && task.percentage === null) return t('taskCenter.progressRunning');
   return `${taskProgress(task)}%`;
 }
 
@@ -140,37 +150,28 @@ function taskStatusColor(status: TaskStatus | string) {
 }
 
 function statusLabel(status: TaskStatus | string) {
-  const labels: Record<string, string> = {
-    queued: 'Queued',
-    scheduled: 'Scheduled',
-    running: 'Running',
-    completed: 'Completed',
-    failed: 'Failed',
-    failed_retryable: 'Retry wait',
-    blocked: 'Blocked',
-    cancelled: 'Cancelled',
-  };
-  return labels[status] ?? status;
+  return translateTaskStatus(status);
 }
 
 function queueReason(task: TaskDto) {
-  if (task.status === 'scheduled') return task.nextRunAt ? 'Waiting for scheduled start time' : 'Scheduled by background policy';
-  if (task.status === 'failed_retryable') return task.nextRunAt ? `Retry ${task.retryCount}/${task.maxRetries || '-'} after backoff` : 'Retry is ready to run';
+  if (task.status === 'scheduled') return task.nextRunAt ? t('taskCenter.waitingScheduledStart') : t('taskCenter.scheduledByPolicy');
+  if (task.status === 'failed_retryable') return task.nextRunAt ? t('taskCenter.retryAfterBackoff', { retry: task.retryCount, max: task.maxRetries || '-' }) : t('taskCenter.retryReady');
   if (task.status === 'queued') {
-    if (task.nextRunAt) return 'Queued until its planned start time';
-    if (task.triggerTaskId) return `Queued by ${shortId(task.triggerTaskId)}`;
-    return 'Ready; waiting for the matching worker to start it';
+    if (task.nextRunAt) return t('taskCenter.queuedUntilPlannedStart');
+    if (task.triggerTaskId) return t('taskCenter.queuedBy', { id: shortId(task.triggerTaskId) });
+    return t('taskCenter.waitingWorker');
   }
-  if (task.status === 'running') return task.stage ? `Running: ${task.stage}` : 'Running';
-  if (task.status === 'completed') return 'Finished successfully';
-  if (task.status === 'blocked') return task.error || 'Manual attention required';
-  if (task.status === 'failed') return task.error || 'Finished with an error';
-  return '-';
+  if (task.status === 'running') return task.stage ? t('taskCenter.runningStage', { stage: task.stage }) : t('taskCenter.runningPlain');
+  if (task.status === 'completed') return t('taskCenter.finishedSuccessfully');
+  if (task.status === 'blocked') return task.error || t('taskCenter.manualAttention');
+  if (task.status === 'failed') return task.error || t('taskCenter.finishedWithError');
+  return t('common.notAvailable');
 }
 
 function selectOperation(operationId: string) {
   selectedOperationId.value = operationId;
-  selectedTaskId.value = selectedOperation.value?.tasks[0]?.id ?? '';
+  const group = operationGroups.value.find((item) => item.operationId === operationId);
+  selectedTaskId.value = group?.tasks[0]?.id ?? '';
 }
 
 async function retryTask(task: TaskDto) {
@@ -181,7 +182,7 @@ async function retryTask(task: TaskDto) {
     selectedOperationId.value = updated.operationId || updated.id;
     selectedTaskId.value = updated.id;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to retry task';
+    error.value = err instanceof Error ? err.message : t('taskCenter.retryFailed');
   } finally {
     actionLoading.value = '';
   }
@@ -195,7 +196,7 @@ async function runNowTask(task: TaskDto) {
     selectedOperationId.value = updated.operationId || task.operationId || task.id;
     selectedTaskId.value = updated.id;
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to run task now';
+    error.value = err instanceof Error ? err.message : t('taskCenter.runNowFailed');
   } finally {
     actionLoading.value = '';
   }
@@ -231,45 +232,29 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="task-center">
-    <div class="page-heading">
-      <div>
-        <h1 class="text-h4 font-weight-bold">任务中心</h1>
-        <div class="task-kpis">
-          <v-chip color="primary" variant="tonal" label>Active {{ taskCounts.active }}</v-chip>
-          <v-chip color="info" variant="tonal" label>Queued {{ taskCounts.queued }}</v-chip>
-          <v-chip color="warning" variant="tonal" label>Running {{ taskCounts.running }}</v-chip>
-          <v-chip color="error" variant="tonal" label>Failed {{ taskCounts.failed }}</v-chip>
-          <v-chip color="success" variant="tonal" label>Done {{ taskCounts.completed }}</v-chip>
-        </div>
+    <div class="task-kpis mb-4">
+      <v-chip color="primary" variant="tonal" label>{{ t('taskCenter.active') }} {{ taskCounts.active }}</v-chip>
+      <v-chip color="info" variant="tonal" label>{{ t('taskCenter.queued') }} {{ taskCounts.queued }}</v-chip>
+      <v-chip color="warning" variant="tonal" label>{{ t('taskCenter.running') }} {{ taskCounts.running }}</v-chip>
+      <v-chip color="error" variant="tonal" label>{{ t('taskCenter.failed') }} {{ taskCounts.failed }}</v-chip>
+      <v-chip color="success" variant="tonal" label>{{ t('taskCenter.done') }} {{ taskCounts.completed }}</v-chip>
       </div>
-      <v-btn prepend-icon="mdi-refresh" :loading="loading" color="primary" class="text-none font-weight-bold" @click="loadTasks">Refresh</v-btn>
-    </div>
 
     <v-card variant="outlined" class="filter-bar">
-      <v-text-field v-model="operationFilter" label="Operation ID" variant="outlined" density="compact" hide-details clearable @keydown.enter="reloadFirstPage" />
-      <v-select v-model="typeFilter" :items="taskTypeOptions" label="Type" variant="outlined" density="compact" hide-details clearable @update:model-value="reloadFirstPage" />
+      <v-text-field v-model="operationFilter" :label="t('taskCenter.operationId')" variant="outlined" density="compact" hide-details clearable @keydown.enter="reloadFirstPage" />
+      <v-select v-model="typeFilter" :items="taskTypeOptions" :label="t('taskCenter.type')" variant="outlined" density="compact" hide-details clearable @update:model-value="reloadFirstPage" />
       <v-select
         v-model="statusFilter"
-        :items="[
-          { title: 'All', value: 'all' },
-          { title: 'Queued', value: 'queued' },
-          { title: 'Scheduled', value: 'scheduled' },
-          { title: 'Running', value: 'running' },
-          { title: 'Completed', value: 'completed' },
-          { title: 'Failed', value: 'failed' },
-          { title: 'Retry wait', value: 'failed_retryable' },
-          { title: 'Blocked', value: 'blocked' },
-          { title: 'Cancelled', value: 'cancelled' },
-        ]"
+        :items="statusFilterItems"
         item-title="title"
         item-value="value"
-        label="Status"
+        :label="t('taskCenter.status')"
         variant="outlined"
         density="compact"
         hide-details
         @update:model-value="reloadFirstPage"
       />
-      <v-btn variant="outlined" prepend-icon="mdi-filter-remove" class="text-none" @click="clearFilters">Clear</v-btn>
+      <v-btn variant="outlined" prepend-icon="mdi-filter-remove" class="text-none" @click="clearFilters">{{ t('taskCenter.clear') }}</v-btn>
     </v-card>
 
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
@@ -278,8 +263,8 @@ onBeforeUnmount(() => {
       <v-card variant="outlined" :loading="loading" class="operation-panel">
         <div class="panel-title">
           <div>
-            <div class="text-subtitle-1 font-weight-bold">Operations</div>
-            <div class="text-caption text-medium-emphasis">{{ total }} tasks across this page</div>
+            <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.operations') }}</div>
+            <div class="text-caption text-medium-emphasis">{{ t('taskCenter.tasksAcrossPage', { count: total }) }}</div>
           </div>
         </div>
         <v-divider />
@@ -301,13 +286,13 @@ onBeforeUnmount(() => {
             <v-list-item-subtitle>
               <div class="operation-meta">
                 <span class="mono">{{ shortId(group.operationId) }}</span>
-                <span>{{ group.resourceType || group.triggerResourceType || 'resource' }} / {{ shortId(group.resourceId || group.triggerResourceId) }}</span>
-                <span>{{ group.tasks.length }} task{{ group.tasks.length === 1 ? '' : 's' }}</span>
+                <span>{{ group.resourceType || group.triggerResourceType || t('taskCenter.resource') }} / {{ shortId(group.resourceId || group.triggerResourceId) }}</span>
+                <span>{{ group.tasks.length }} {{ group.tasks.length === 1 ? t('taskCenter.taskSingular') : t('taskCenter.taskPlural') }}</span>
               </div>
               <v-progress-linear :model-value="group.progress" :color="taskStatusColor(group.status)" height="6" rounded class="mt-2" />
             </v-list-item-subtitle>
           </v-list-item>
-          <v-list-item v-if="operationGroups.length === 0" title="No task operations" />
+          <v-list-item v-if="operationGroups.length === 0" :title="t('taskCenter.noTaskOperations')" />
         </v-list>
         <v-divider />
         <div class="pager">
@@ -320,9 +305,9 @@ onBeforeUnmount(() => {
         <v-card variant="outlined" class="lifecycle-panel">
           <div class="panel-title">
             <div>
-              <div class="text-subtitle-1 font-weight-bold">{{ selectedTask?.summary || 'Select a task' }}</div>
+              <div class="text-subtitle-1 font-weight-bold">{{ selectedTask?.summary || t('taskCenter.selectTask') }}</div>
               <div class="text-caption text-medium-emphasis">
-                {{ selectedTask ? `${formatTaskType(selectedTask.type)} on ${serverName(selectedTask.nodeId || selectedTask.serverId)}` : '-' }}
+                {{ selectedTask ? t('taskCenter.onServer', { type: formatTaskType(selectedTask.type), server: serverName(selectedTask.nodeId || selectedTask.serverId) }) : t('common.notAvailable') }}
               </div>
             </div>
             <v-chip v-if="selectedTask" :color="taskStatusColor(selectedTask.status)" label>{{ statusLabel(selectedTask.status) }}</v-chip>
@@ -342,27 +327,27 @@ onBeforeUnmount(() => {
 
             <div class="diagnostics-grid">
               <div>
-                <span>Created</span>
+                <span>{{ t('taskCenter.created') }}</span>
                 <strong>{{ formatDateTime(selectedTask.createdAt) }}</strong>
               </div>
               <div>
-                <span>Should start</span>
-                <strong>{{ selectedTask.nextRunAt ? formatDateTime(selectedTask.nextRunAt) : 'Now' }}</strong>
+                <span>{{ t('taskCenter.shouldStart') }}</span>
+                <strong>{{ selectedTask.nextRunAt ? formatDateTime(selectedTask.nextRunAt) : t('taskCenter.now') }}</strong>
               </div>
               <div>
-                <span>Actually started</span>
+                <span>{{ t('taskCenter.actuallyStarted') }}</span>
                 <strong>{{ formatDateTime(selectedTask.startedAt) }}</strong>
               </div>
               <div>
-                <span>Finished</span>
+                <span>{{ t('taskCenter.finished') }}</span>
                 <strong>{{ formatDateTime(selectedTask.finishedAt) }}</strong>
               </div>
               <div>
-                <span>Queued for</span>
+                <span>{{ t('taskCenter.queuedFor') }}</span>
                 <strong>{{ durationBetween(selectedTask.createdAt, selectedTask.startedAt) }}</strong>
               </div>
               <div>
-                <span>Runtime</span>
+                <span>{{ t('taskCenter.runtime') }}</span>
                 <strong>{{ durationBetween(selectedTask.startedAt, selectedTask.finishedAt) }}</strong>
               </div>
             </div>
@@ -381,7 +366,7 @@ onBeforeUnmount(() => {
                 :loading="actionLoading === `run:${selectedTask.id}`"
                 @click="runNowTask(selectedTask)"
               >
-                Run now
+                {{ t('common.runNow') }}
               </v-btn>
               <v-btn
                 v-if="canRetry(selectedTask)"
@@ -391,7 +376,7 @@ onBeforeUnmount(() => {
                 :loading="actionLoading === `retry:${selectedTask.id}`"
                 @click="retryTask(selectedTask)"
               >
-                Retry
+                {{ t('common.retry') }}
               </v-btn>
             </div>
           </template>
@@ -399,25 +384,25 @@ onBeforeUnmount(() => {
 
         <v-card variant="outlined" class="task-table-panel">
           <div class="panel-title">
-            <div class="text-subtitle-1 font-weight-bold">Tasks in operation</div>
-            <div class="text-caption text-medium-emphasis">{{ selectedOperation?.operationId ? shortId(selectedOperation.operationId) : '-' }}</div>
+            <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.tasksInOperation') }}</div>
+            <div class="text-caption text-medium-emphasis">{{ selectedOperation?.operationId ? shortId(selectedOperation.operationId) : t('common.notAvailable') }}</div>
           </div>
           <v-table density="compact" class="task-table">
             <thead>
               <tr>
-                <th>Task</th>
-                <th>Node</th>
-                <th>Status</th>
-                <th>Progress</th>
-                <th>Should start</th>
-                <th>Started</th>
-                <th>Finished</th>
-                <th>Why queued / result</th>
+                <th>{{ t('taskCenter.task') }}</th>
+                <th>{{ t('taskCenter.node') }}</th>
+                <th>{{ t('taskCenter.status') }}</th>
+                <th>{{ t('taskCenter.progress') }}</th>
+                <th>{{ t('taskCenter.shouldStart') }}</th>
+                <th>{{ t('taskCenter.actuallyStarted') }}</th>
+                <th>{{ t('taskCenter.finished') }}</th>
+                <th>{{ t('taskCenter.whyQueuedOrResult') }}</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="!(selectedOperation?.tasks.length)">
-                <td colspan="8" class="text-center py-6 text-medium-emphasis">Select an operation</td>
+                <td colspan="8" class="text-center py-6 text-medium-emphasis">{{ t('taskCenter.selectOperation') }}</td>
               </tr>
               <tr
                 v-for="task in selectedOperation?.tasks || []"
@@ -436,7 +421,7 @@ onBeforeUnmount(() => {
                   <v-progress-linear :model-value="taskProgress(task)" :color="taskStatusColor(task.status)" height="8" rounded />
                   <span class="font-tabular">{{ progressText(task) }}</span>
                 </td>
-                <td>{{ task.nextRunAt ? formatClock(task.nextRunAt) : 'Now' }}</td>
+                <td>{{ task.nextRunAt ? formatClock(task.nextRunAt) : t('taskCenter.now') }}</td>
                 <td>{{ formatClock(task.startedAt) }}</td>
                 <td>{{ formatClock(task.finishedAt) }}</td>
                 <td class="queue-reason">{{ queueReason(task) }}</td>
@@ -449,8 +434,8 @@ onBeforeUnmount(() => {
       <v-card variant="outlined" class="detail-panel">
         <div class="panel-title">
           <div>
-            <div class="text-subtitle-1 font-weight-bold">Steps & Logs</div>
-            <div class="text-caption text-medium-emphasis">{{ selectedTask ? `${selectedTask.resourceType || '-'} / ${shortId(selectedTask.resourceId)}` : '-' }}</div>
+            <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.stepsAndLogs') }}</div>
+            <div class="text-caption text-medium-emphasis">{{ selectedTask ? `${selectedTask.resourceType || t('common.notAvailable')} / ${shortId(selectedTask.resourceId)}` : t('common.notAvailable') }}</div>
           </div>
         </div>
         <v-divider />
@@ -467,7 +452,7 @@ onBeforeUnmount(() => {
               <div v-if="step.error" class="text-caption text-error">{{ step.error }}</div>
             </v-timeline-item>
           </v-timeline>
-          <div v-else class="text-medium-emphasis mb-4">No task steps returned</div>
+          <div v-else class="text-medium-emphasis mb-4">{{ t('taskCenter.noTaskSteps') }}</div>
 
           <TaskLogPanel
             v-if="selectedTaskId"
@@ -476,7 +461,7 @@ onBeforeUnmount(() => {
             :server-name="serverName(selectedTask?.nodeId || selectedTask?.serverId)"
             @finished="loadTasks"
           />
-          <div v-else class="text-center py-8 text-medium-emphasis">Select a task to view logs</div>
+          <div v-else class="text-center py-8 text-medium-emphasis">{{ t('taskCenter.selectTaskForLogs') }}</div>
         </v-card-text>
       </v-card>
     </div>
@@ -487,13 +472,6 @@ onBeforeUnmount(() => {
 .task-center {
   display: grid;
   gap: 16px;
-}
-
-.page-heading {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 20px;
 }
 
 .task-kpis {
@@ -585,7 +563,7 @@ onBeforeUnmount(() => {
 }
 
 .diagnostics-grid div {
-  border: 1px solid rgba(var(--v-border-color), 0.16);
+  border: 1px solid var(--lp-border);
   border-radius: 8px;
   padding: 10px;
   min-width: 0;
@@ -593,7 +571,7 @@ onBeforeUnmount(() => {
 
 .diagnostics-grid span {
   display: block;
-  color: rgba(var(--v-theme-on-surface), 0.62);
+  color: var(--lp-text-muted);
   font-size: 12px;
   margin-bottom: 4px;
 }
@@ -678,7 +656,6 @@ tr.selected {
 }
 
 @media (max-width: 860px) {
-  .page-heading,
   .panel-title {
     align-items: stretch;
     flex-direction: column;

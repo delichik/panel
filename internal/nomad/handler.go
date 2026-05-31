@@ -28,6 +28,8 @@ type joinService interface {
 	Candidates(ctx context.Context) ([]server.Server, error)
 	JoinClient(ctx context.Context, serverID string) (tasks.Task, error)
 	BootstrapServer(ctx context.Context, serverID string) (tasks.Task, error)
+	RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks.Task, error)
+	UpdateReverseProxy(ctx context.Context, in ReverseProxyInput) (server.Server, error)
 }
 
 func NewHandler(client inventoryClient, join ...joinService) *Handler {
@@ -138,4 +140,30 @@ func (h *Handler) BootstrapServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
+func (h *Handler) RemoveNode(w http.ResponseWriter, r *http.Request) {
+	var req RemoveNodeInput
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	task, err := h.join.RemoveNode(r.Context(), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
+func (h *Handler) UpdateReverseProxy(w http.ResponseWriter, r *http.Request) {
+	var req ReverseProxyInput
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	srv, err := h.join.UpdateReverseProxy(r.Context(), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, srv)
 }

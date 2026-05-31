@@ -90,6 +90,9 @@ func TestClientWrapsTransportErrorsForHTTPResponse(t *testing.T) {
 	if domain.Code != "nomad_unreachable" || domain.HTTPStatus != http.StatusBadGateway {
 		t.Fatalf("unexpected panel error: %#v", domain)
 	}
+	if strings.Contains(domain.Message, "/v1/") || strings.Contains(domain.Message, "dial tcp") {
+		t.Fatalf("message should be user-facing, got %q", domain.Message)
+	}
 }
 
 type failingRoundTripper struct{}
@@ -190,6 +193,27 @@ func TestClientInventoryEndpointPaths(t *testing.T) {
 	}
 	if !equalStringSlices(requests, want) {
 		t.Fatalf("requests = %#v, want %#v", requests, want)
+	}
+}
+
+func TestClientPurgeNodeEndpointPath(t *testing.T) {
+	var got string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got = r.Method + " " + r.URL.Path
+		if r.URL.Path != "/v1/node/node-1/purge" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client := NewClient(Config{Address: server.URL}, server.Client())
+	if err := client.PurgeNode(context.Background(), "node-1"); err != nil {
+		t.Fatal(err)
+	}
+	if got != "POST /v1/node/node-1/purge" {
+		t.Fatalf("request = %q", got)
 	}
 }
 

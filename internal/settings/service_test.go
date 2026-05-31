@@ -34,11 +34,12 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 		MetricsRetentionDays:             30,
 		MetricsCollectionIntervalSeconds: 120,
 		CleanupSchedule:                  "weekly",
+		Language:                         "zh-CN",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" {
+	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.Language != "zh-CN" {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
 	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {
@@ -52,6 +53,20 @@ func TestRuntimeSettingsRejectInvalidSchedule(t *testing.T) {
 		MetricsRetentionDays:             7,
 		MetricsCollectionIntervalSeconds: 60,
 		CleanupSchedule:                  "sometimes",
+		Language:                         "en",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestRuntimeSettingsRejectInvalidLanguage(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.Update(context.Background(), RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		CleanupSchedule:                  "daily",
+		Language:                         "fr",
 	})
 	if err == nil {
 		t.Fatal("expected validation error")

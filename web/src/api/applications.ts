@@ -1,11 +1,16 @@
 import { apiClient, type ApiClient } from './client';
 import type {
   ApplicationDto,
+  ApplicationFileDeleteDto,
+  ApplicationFileDto,
+  ApplicationFileSaveDto,
   ApplicationLogsDto,
   ApplicationOperationDto,
   ApplicationPlanDto,
   ApplicationRuntimeDto,
   ApplicationSaveDto,
+  ApplicationSaveSessionBeginDto,
+  ApplicationSaveSessionDto,
   ApplicationValidationDto,
 } from '@/types/api';
 
@@ -46,11 +51,41 @@ export function createApplicationsApi(client: ApiClient = apiClient) {
     delete(applicationId: string) {
       return client.delete(applicationPath(applicationId));
     },
+    files(applicationId: string) {
+      return client.get<ApplicationFileDto[]>(`${applicationPath(applicationId)}/files`);
+    },
+    saveFile(applicationId: string, input: ApplicationFileSaveDto) {
+      return client.post<ApplicationFileDto>(`${applicationPath(applicationId)}/files`, input);
+    },
+    deleteFile(applicationId: string, fileId: string) {
+      return client.delete(`${applicationPath(applicationId)}/files/${encodeURIComponent(fileId)}`);
+    },
+    beginSaveSession(input: ApplicationSaveSessionBeginDto) {
+      return client.post<ApplicationSaveSessionDto>('/application-save-sessions', input);
+    },
+    uploadSaveSessionFile(sessionId: string, input: ApplicationFileSaveDto) {
+      return client.post<ApplicationFileDto>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files`, input);
+    },
+    deleteSaveSessionFile(sessionId: string, input: ApplicationFileDeleteDto) {
+      return client.post<void>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files/delete`, input);
+    },
+    commitSaveSession(sessionId: string) {
+      return client.post<ApplicationDto>(`/application-save-sessions/${encodeURIComponent(sessionId)}/commit`);
+    },
+    package(applicationId: string) {
+      return client.download(`${applicationPath(applicationId)}/package`);
+    },
     validate(applicationId: string) {
       return client.post<ApplicationValidationDto>(`${applicationPath(applicationId)}/validate`);
     },
     plan(applicationId: string) {
       return client.post<ApplicationPlanDto>(`${applicationPath(applicationId)}/plan`);
+    },
+    checkImage(applicationId: string) {
+      return client.post<ApplicationDto>(`${applicationPath(applicationId)}/image/check`);
+    },
+    updateImage(applicationId: string) {
+      return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/image/update`);
     },
     deploy(applicationId: string) {
       return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/deploy`);

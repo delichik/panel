@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
+import { useI18n } from '@/i18n';
 import { dnsApi } from '@/api/dns';
 import type { DnsDomainDto, DnsDomainInput } from '@/types/api';
 
@@ -9,9 +10,13 @@ const saving = ref(false);
 const error = ref('');
 const dialog = ref(false);
 const editing = ref<DnsDomainDto | null>(null);
+const deleteDialog = ref(false);
+const deleting = ref(false);
+const deletingDomain = ref<DnsDomainDto | null>(null);
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
+const { t, formatDateTime } = useI18n();
 
 const form = reactive<DnsDomainInput>({
   name: '',
@@ -43,7 +48,7 @@ async function load() {
     domains.value = await dnsApi.listDomains();
     error.value = '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to load domains';
+    error.value = err instanceof Error ? err.message : t('domainsPage.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -56,28 +61,39 @@ async function saveDomain() {
     if (editing.value && !payload.apiToken) delete payload.apiToken;
     if (editing.value) {
       await dnsApi.updateDomain(editing.value.id, payload);
-      showMessage('Domain updated');
+      showMessage(t('domainsPage.updated'));
     } else {
       await dnsApi.createDomain(payload);
-      showMessage('Domain added');
+      showMessage(t('domainsPage.added'));
     }
     dialog.value = false;
     await load();
   } catch (err) {
-    showMessage(err instanceof Error ? err.message : 'Failed to save domain', 'error');
+    showMessage(err instanceof Error ? err.message : t('domainsPage.saveFailed'), 'error');
   } finally {
     saving.value = false;
   }
 }
 
-async function deleteDomain(domain: DnsDomainDto) {
-  if (!confirm(`Delete domain ${domain.name}?`)) return;
+function askDeleteDomain(domain: DnsDomainDto) {
+  deletingDomain.value = domain;
+  deleteDialog.value = true;
+}
+
+async function deleteDomain() {
+  const domain = deletingDomain.value;
+  if (!domain) return;
+  deleting.value = true;
   try {
     await dnsApi.deleteDomain(domain.id);
-    showMessage('Domain deleted');
+    deleteDialog.value = false;
+    deletingDomain.value = null;
+    showMessage(t('domainsPage.deleted'));
     await load();
   } catch (err) {
-    showMessage(err instanceof Error ? err.message : 'Failed to delete domain', 'error');
+    showMessage(err instanceof Error ? err.message : t('domainsPage.deleteFailed'), 'error');
+  } finally {
+    deleting.value = false;
   }
 }
 
@@ -86,19 +102,10 @@ onMounted(load);
 
 <template>
   <div>
-    <div class="d-flex justify-space-between align-center mb-6">
-      <div>
-        <h1 class="text-h4 font-weight-bold">Domains</h1>
-        <p class="text-subtitle-1 text-medium-emphasis">Manage DNS zones and provider credentials for certificate validation.</p>
-      </div>
-      <div class="d-flex" style="gap: 12px;">
-        <v-btn prepend-icon="mdi-refresh" :loading="loading" variant="outlined" class="text-none font-weight-bold" @click="load">
-          Refresh
-        </v-btn>
-        <v-btn color="primary" prepend-icon="mdi-plus" class="text-none font-weight-bold" @click="resetForm()">
-          Add Domain
-        </v-btn>
-      </div>
+    <div class="d-flex justify-end mb-4" style="gap: 12px;">
+      <v-btn color="primary" prepend-icon="mdi-plus" class="text-none font-weight-bold" @click="resetForm()">
+        {{ t('domainsPage.addDomain') }}
+      </v-btn>
     </div>
 
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
@@ -107,26 +114,26 @@ onMounted(load);
       <v-table class="text-left" style="background: transparent;">
         <thead>
           <tr>
-            <th class="font-weight-bold">Domain</th>
-            <th class="font-weight-bold">Provider</th>
-            <th class="font-weight-bold">Account</th>
-            <th class="font-weight-bold">Updated</th>
-            <th class="font-weight-bold text-right" style="width: 220px;">Actions</th>
+            <th class="font-weight-bold">{{ t('domainsPage.domain') }}</th>
+            <th class="font-weight-bold">{{ t('domainsPage.provider') }}</th>
+            <th class="font-weight-bold">{{ t('domainsPage.account') }}</th>
+            <th class="font-weight-bold">{{ t('domainsPage.updatedAt') }}</th>
+            <th class="font-weight-bold text-right" style="width: 220px;">{{ t('common.actions') }}</th>
           </tr>
         </thead>
         <tbody>
           <tr v-if="domains.length === 0">
-            <td colspan="5" class="text-center py-6 text-grey-darken-1">No domains registered</td>
+            <td colspan="5" class="text-center py-6 text-medium-emphasis">{{ t('domainsPage.noDomains') }}</td>
           </tr>
           <tr v-for="row in domains" :key="row.id">
             <td class="font-weight-bold">{{ row.name }}</td>
             <td><v-chip size="small" label color="primary" variant="tonal">{{ row.provider }}</v-chip></td>
             <td class="font-mono">{{ row.accountId || '-' }}</td>
-            <td>{{ new Date(row.updatedAt).toLocaleString() }}</td>
+            <td>{{ formatDateTime(row.updatedAt) }}</td>
             <td class="text-right">
               <div class="d-flex justify-end" style="gap: 6px;">
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="resetForm(row)">Edit</v-btn>
-                <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="deleteDomain(row)">Delete</v-btn>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="resetForm(row)">{{ t('common.edit') }}</v-btn>
+                <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteDomain(row)">{{ t('common.delete') }}</v-btn>
               </div>
             </td>
           </tr>
@@ -134,35 +141,30 @@ onMounted(load);
       </v-table>
     </v-card>
 
-    <v-navigation-drawer v-model="dialog" location="right" temporary width="560" style="z-index: 1005;">
-      <div class="pa-4 fill-height d-flex flex-column">
-        <div class="d-flex justify-space-between align-center mb-4">
-          <div class="text-h6 font-weight-bold">{{ editing ? 'Edit domain' : 'Add domain' }}</div>
-          <div class="d-flex align-center" style="gap: 8px;">
-            <v-btn color="primary" variant="flat" size="small" :loading="saving" class="text-none font-weight-bold" @click="saveDomain">
-              {{ editing ? 'Save' : 'Create' }}
-            </v-btn>
-            <v-btn icon="mdi-close" variant="text" size="small" @click="dialog = false" />
-          </div>
-        </div>
+    <v-dialog v-model="dialog" width="560">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ editing ? t('domainsPage.editDomain') : t('domainsPage.createDomain') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="dialog = false" />
+        </v-card-title>
         <v-divider />
-        <div class="flex-grow-1 overflow-auto mt-4">
+        <v-card-text class="app-dialog-body">
           <v-form @submit.prevent="saveDomain">
-            <v-text-field v-model="form.name" label="Domain" placeholder="example.com" variant="outlined" density="comfortable" class="mb-3" />
+            <v-text-field v-model="form.name" :label="t('domainsPage.domain')" placeholder="example.com" variant="outlined" density="comfortable" class="mb-3" />
             <v-select
               v-model="form.provider"
-              :items="[{ label: 'Cloudflare', value: 'cloudflare' }]"
+              :items="[{ label: t('domainsPage.cloudflare'), value: 'cloudflare' }]"
               item-title="label"
               item-value="value"
-              label="Provider"
+              :label="t('domainsPage.provider')"
               variant="outlined"
               density="comfortable"
               class="mb-3"
             />
             <v-text-field
               v-model="form.accountId"
-              label="Account ID"
-              placeholder="Optional Cloudflare account_id"
+              :label="t('domainsPage.accountId')"
+              :placeholder="t('domainsPage.accountIdHint')"
               variant="outlined"
               density="comfortable"
               class="mb-3"
@@ -170,21 +172,46 @@ onMounted(load);
             <v-text-field
               v-model="form.apiToken"
               type="password"
-              label="API token"
-              :placeholder="editing ? 'Leave blank to keep current token' : 'Cloudflare DNS API token'"
+              :label="t('domainsPage.apiToken')"
+              :placeholder="editing ? t('domainsPage.keepTokenHint') : t('domainsPage.apiTokenHint')"
               variant="outlined"
               density="comfortable"
               class="mb-3"
             />
           </v-form>
-        </div>
-      </div>
-    </v-navigation-drawer>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="dialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="primary" variant="flat" :loading="saving" class="text-none" @click="saveDomain">
+            {{ editing ? t('common.save') : t('common.create') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="deleteDialog" width="420">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('domainsPage.deleteDomain') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="deleteDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body text-body-1">
+          {{ t('domainsPage.deleteDomainConfirm', { name: deletingDomain?.name ?? '' }) }}
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="deleteDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="error" variant="flat" :loading="deleting" class="text-none" @click="deleteDomain">{{ t('common.delete') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
 
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
-        <v-btn color="white" variant="text" @click="snackbar = false">Close</v-btn>
+        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
       </template>
     </v-snackbar>
   </div>

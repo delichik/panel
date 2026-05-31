@@ -53,6 +53,48 @@ func TestHandlerCreateApplication(t *testing.T) {
 	}
 }
 
+func TestHandlerApplicationFiles(t *testing.T) {
+	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", ApplicationID: "app-1", Path: "config/app.conf", Kind: "template"}}}
+	handler := NewHandler(fake)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/applications/app-1/files", nil)
+	handler.ListFiles(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list files status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/applications/app-1/files", bytes.NewBufferString(`{"path":"config/app.conf","kind":"template","contentBase64":"aGVsbG8="}`))
+	handler.SaveFile(rec, req)
+	if rec.Code != http.StatusOK || fake.fileInput.Path != "config/app.conf" || fake.fileInput.Kind != "template" {
+		t.Fatalf("save file status=%d input=%#v body=%s", rec.Code, fake.fileInput, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/applications/app-1/files/file-1", nil)
+	handler.DeleteFile(rec, req)
+	if rec.Code != http.StatusNoContent || fake.deletedFileID != "file-1" {
+		t.Fatalf("delete file status=%d id=%q body=%s", rec.Code, fake.deletedFileID, rec.Body.String())
+	}
+}
+
+func TestHandlerPackageApplication(t *testing.T) {
+	fake := &fakeApplicationService{pkg: PackageResult{Filename: "web-package.zip", Content: []byte("zip")}}
+	handler := NewHandler(fake)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/applications/app-1/package", nil)
+	handler.Package(rec, req)
+
+	if rec.Code != http.StatusOK || fake.packagedID != "app-1" || rec.Body.String() != "zip" {
+		t.Fatalf("package status=%d id=%q body=%q", rec.Code, fake.packagedID, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/zip" {
+		t.Fatalf("content type = %q", got)
+	}
+}
+
 func TestHandlerDeployAndStopApplication(t *testing.T) {
 	fake := &fakeApplicationService{op: OperationResult{TaskID: "task-1", EvalID: "eval-1", Application: Application{ID: "app-1"}}}
 	handler := NewHandler(fake)
@@ -95,18 +137,27 @@ func TestHandlerRuntimeAndLogs(t *testing.T) {
 }
 
 type fakeApplicationService struct {
-	apps       []Application
-	app        Application
-	saved      SaveInput
-	op         OperationResult
-	runtime    ApplicationRuntime
-	logs       LogResult
-	deployedID string
-	stoppedID  string
-	stopPurge  bool
-	runtimeID  string
-	logID      string
-	logInput   LogInput
+	apps           []Application
+	app            Application
+	files          []ApplicationFile
+	saved          SaveInput
+	fileInput      FileSaveInput
+	op             OperationResult
+	runtime        ApplicationRuntime
+	logs           LogResult
+	deployedID     string
+	stoppedID      string
+	stopPurge      bool
+	runtimeID      string
+	logID          string
+	logInput       LogInput
+	deletedFileID  string
+	pkg            PackageResult
+	packagedID     string
+	session        SaveSessionResult
+	sessionID      string
+	checkedID      string
+	updatedImageID string
 }
 
 func (f *fakeApplicationService) List(ctx context.Context) ([]Application, error) {
@@ -131,12 +182,69 @@ func (f *fakeApplicationService) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeApplicationService) ListFiles(ctx context.Context, id string) ([]ApplicationFile, error) {
+	return f.files, nil
+}
+
+func (f *fakeApplicationService) SaveFile(ctx context.Context, id string, in FileSaveInput) (ApplicationFile, error) {
+	f.fileInput = in
+	if len(f.files) > 0 {
+		return f.files[0], nil
+	}
+	return ApplicationFile{ID: "file-1", ApplicationID: id, Path: in.Path, Kind: in.Kind}, nil
+}
+
+func (f *fakeApplicationService) DeleteFile(ctx context.Context, id, fileID string) error {
+	f.deletedFileID = fileID
+	return nil
+}
+
+func (f *fakeApplicationService) BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error) {
+	f.saved = in.Save
+	if f.session.ID == "" {
+		f.session.ID = "asave_1"
+	}
+	return f.session, nil
+}
+
+func (f *fakeApplicationService) UploadSaveSessionFile(ctx context.Context, sessionID string, in FileSaveInput) (ApplicationFile, error) {
+	f.sessionID = sessionID
+	f.fileInput = in
+	return ApplicationFile{ID: "file-1", Path: in.Path, Kind: in.Kind}, nil
+}
+
+func (f *fakeApplicationService) DeleteSaveSessionFile(ctx context.Context, sessionID string, in FileDeleteInput) error {
+	f.sessionID = sessionID
+	f.fileInput.Path = in.Path
+	return nil
+}
+
+func (f *fakeApplicationService) CommitSaveSession(ctx context.Context, sessionID string) (Application, error) {
+	f.sessionID = sessionID
+	return f.app, nil
+}
+
+func (f *fakeApplicationService) Package(ctx context.Context, id string) (PackageResult, error) {
+	f.packagedID = id
+	return f.pkg, nil
+}
+
 func (f *fakeApplicationService) Validate(ctx context.Context, id string) (ValidationResult, error) {
 	return ValidationResult{Valid: true}, nil
 }
 
 func (f *fakeApplicationService) Plan(ctx context.Context, id string) (PlanResult, error) {
 	return PlanResult{}, nil
+}
+
+func (f *fakeApplicationService) CheckImageUpdate(ctx context.Context, id string) (Application, error) {
+	f.checkedID = id
+	return f.app, nil
+}
+
+func (f *fakeApplicationService) UpdateImage(ctx context.Context, id string) (OperationResult, error) {
+	f.updatedImageID = id
+	return f.op, nil
 }
 
 func (f *fakeApplicationService) Deploy(ctx context.Context, id string) (OperationResult, error) {

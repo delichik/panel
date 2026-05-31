@@ -5,7 +5,6 @@ import "testing"
 const sampleSpecYAML = `
 name: web
 image: nginx:1.27
-count: 2
 command: []
 args: []
 env:
@@ -36,6 +35,13 @@ volumes:
   - source: web-data
     target: /usr/share/nginx/html
     readOnly: false
+mounts:
+  - type: host
+    source: /srv/web-extra
+    target: /srv/extra
+    readOnly: true
+restart:
+  policy: unless-stopped
 `
 
 func TestRenderApplicationSpecAsNomadJob(t *testing.T) {
@@ -73,7 +79,7 @@ func TestRenderApplicationSpecAsNomadJob(t *testing.T) {
 		t.Fatalf("task groups = %#v", job.TaskGroups)
 	}
 	group := job.TaskGroups[0]
-	if group.Name != "web" || group.Count != 2 {
+	if group.Name != "web" || group.Count != 1 {
 		t.Fatalf("group = %#v", group)
 	}
 	if len(group.Networks) != 1 || group.Networks[0].Mode != "bridge" {
@@ -92,6 +98,9 @@ func TestRenderApplicationSpecAsNomadJob(t *testing.T) {
 	if task.Config["image"] != "nginx:1.27" {
 		t.Fatalf("task config = %#v", task.Config)
 	}
+	if ports, ok := task.Config["ports"].([]string); !ok || len(ports) != 1 || ports[0] != "http" {
+		t.Fatalf("task ports = %#v", task.Config["ports"])
+	}
 	if task.Env["MODE"] != "prod" {
 		t.Fatalf("env = %#v", task.Env)
 	}
@@ -104,11 +113,18 @@ func TestRenderApplicationSpecAsNomadJob(t *testing.T) {
 	if checks := group.Services[0].Checks; len(checks) != 1 || checks[0].Name != "http" || checks[0].Type != "http" || checks[0].Port != "http" || checks[0].Path != "/" {
 		t.Fatalf("checks = %#v", group.Services[0].Checks)
 	}
-	if volume := group.Volumes["web-data"]; volume.Type != "host" || volume.Source != "web-data" || volume.ReadOnly {
-		t.Fatalf("volumes = %#v", group.Volumes)
+	if group.RestartPolicy == nil || group.RestartPolicy.Attempts != 2 || group.RestartPolicy.Interval != 1800000000000 || group.RestartPolicy.Delay != 15000000000 || group.RestartPolicy.Mode != "delay" {
+		t.Fatalf("restart = %#v", group.RestartPolicy)
 	}
-	if mounts := task.VolumeMounts; len(mounts) != 1 || mounts[0].Volume != "web-data" || mounts[0].Destination != "/usr/share/nginx/html" || mounts[0].ReadOnly {
-		t.Fatalf("volume mounts = %#v", mounts)
+	mounts, ok := task.Config["mounts"].([]map[string]any)
+	if !ok || len(mounts) != 2 {
+		t.Fatalf("docker mounts = %#v", task.Config["mounts"])
+	}
+	if mounts[0]["type"] != "volume" || mounts[0]["source"] != "web-data" || mounts[0]["target"] != "/usr/share/nginx/html" || mounts[0]["readonly"] != false {
+		t.Fatalf("volume mount = %#v", mounts[0])
+	}
+	if mounts[1]["type"] != "bind" || mounts[1]["source"] != "/srv/web-extra" || mounts[1]["target"] != "/srv/extra" || mounts[1]["readonly"] != true {
+		t.Fatalf("host mount = %#v", mounts[1])
 	}
 }
 
@@ -128,5 +144,36 @@ func TestHashIsStableAcrossVariableMapOrder(t *testing.T) {
 	}
 	if first != second {
 		t.Fatalf("hashes differ: %q != %q", first, second)
+	}
+}
+
+func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
+	job, issues := Render(RenderInput{
+		AppID:      "app-1",
+		Generation: 1,
+		SpecHash:   "hash-1",
+		Namespace:  "apps",
+		Region:     "global",
+		Datacenter: "dc1",
+		Spec: Spec{
+			Name:        "agent",
+			Image:       "alpine",
+			NetworkMode: "host",
+			Privileged:  true,
+		},
+	})
+	if len(issues) > 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	group := job.TaskGroups[0]
+	if group.Networks[0].Mode != "host" {
+		t.Fatalf("network = %#v", group.Networks)
+	}
+	task := group.Tasks[0]
+	if task.Config["privileged"] != true {
+		t.Fatalf("task config = %#v", task.Config)
+	}
+	if _, ok := task.Config["ports"]; ok {
+		t.Fatalf("host mode should not render ports: %#v", task.Config)
 	}
 }

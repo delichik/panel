@@ -24,12 +24,31 @@ export interface TaskCreatedDto {
   taskId: string;
 }
 
+export interface ServerProbeDto {
+  reachable: boolean;
+  passwordlessSudo: boolean;
+  root: boolean;
+  privileged: boolean;
+  os: {
+    id: string;
+    versionId: string;
+    prettyName: string;
+    supported: boolean;
+  };
+  traits: Record<string, string>;
+  error?: string;
+  passwordlessSudoText?: string;
+}
+
 export const serversApi = {
   listServers() {
     return apiClient.get<ServerDto[]>('/servers');
   },
   createServer(input: ServerInput) {
     return apiClient.post<ServerDto>('/servers', input);
+  },
+  probeServer(input: ServerInput) {
+    return apiClient.post<ServerProbeDto>('/servers/probe', input);
   },
   updateServer(serverId: string, input: ServerInput) {
     return apiClient.put<ServerDto>(`/servers/${serverId}`, input);

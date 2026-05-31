@@ -109,6 +109,11 @@ func (c *Client) JobEvaluations(ctx context.Context, id string) ([]Evaluation, e
 	return out, c.do(ctx, http.MethodGet, "/v1/job/"+url.PathEscape(id)+"/evaluations", nil, nil, &out)
 }
 
+func (c *Client) Evaluation(ctx context.Context, id string) (Evaluation, error) {
+	var out Evaluation
+	return out, c.do(ctx, http.MethodGet, "/v1/evaluation/"+url.PathEscape(id), nil, nil, &out)
+}
+
 func (c *Client) Nodes(ctx context.Context) ([]NodeListItem, error) {
 	var out []NodeListItem
 	if err := c.do(ctx, http.MethodGet, "/v1/nodes", nil, nil, &out); err != nil {
@@ -125,6 +130,10 @@ func (c *Client) Nodes(ctx context.Context) ([]NodeListItem, error) {
 		out[i].Meta = detail.Meta
 	}
 	return out, nil
+}
+
+func (c *Client) PurgeNode(ctx context.Context, id string) error {
+	return c.do(ctx, http.MethodPost, "/v1/node/"+url.PathEscape(id)+"/purge", nil, nil, nil)
 }
 
 func (c *Client) Deployments(ctx context.Context) ([]Deployment, error) {
@@ -209,7 +218,7 @@ func (c *Client) do(ctx context.Context, method, endpoint string, query url.Valu
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return panelerr.BadGateway("nomad_unreachable", "Nomad API unreachable: "+err.Error())
+		return panelerr.BadGateway("nomad_unreachable", nomadUnreachableMessage(reqURL.Host))
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
@@ -227,6 +236,13 @@ func (c *Client) do(ctx context.Context, method, endpoint string, query url.Valu
 		return nil
 	}
 	return json.Unmarshal(raw, out)
+}
+
+func nomadUnreachableMessage(host string) string {
+	if strings.TrimSpace(host) == "" {
+		return "Panel cannot connect to the Nomad control plane. Check that a Nomad server has been bootstrapped and is reachable from Panel."
+	}
+	return "Panel cannot connect to the Nomad control plane at " + host + ". Check that the Nomad server is running and reachable from Panel."
 }
 
 func decodeError(status int, raw []byte) error {

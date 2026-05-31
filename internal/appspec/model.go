@@ -4,15 +4,19 @@ type Spec struct {
 	Name        string            `json:"name" yaml:"name"`
 	Image       string            `json:"image" yaml:"image"`
 	Count       int               `json:"count" yaml:"count"`
+	NetworkMode string            `json:"networkMode" yaml:"networkMode"`
 	Command     []string          `json:"command" yaml:"command"`
 	Args        []string          `json:"args" yaml:"args"`
 	Env         map[string]string `json:"env" yaml:"env"`
 	Ports       []Port            `json:"ports" yaml:"ports"`
 	Resources   Resources         `json:"resources" yaml:"resources"`
+	Privileged  bool              `json:"privileged" yaml:"privileged"`
 	Constraints []Constraint      `json:"constraints" yaml:"constraints"`
 	Services    []Service         `json:"services" yaml:"services"`
 	Checks      []Check           `json:"checks" yaml:"checks"`
 	Volumes     []Volume          `json:"volumes" yaml:"volumes"`
+	Mounts      []Mount           `json:"mounts" yaml:"mounts"`
+	Restart     Restart           `json:"restart" yaml:"restart"`
 }
 
 type Port struct {
@@ -52,6 +56,21 @@ type Volume struct {
 	Source   string `json:"source" yaml:"source"`
 	Target   string `json:"target" yaml:"target"`
 	ReadOnly bool   `json:"readOnly" yaml:"readOnly"`
+}
+
+type Mount struct {
+	Type     string `json:"type" yaml:"type"`
+	Source   string `json:"source" yaml:"source"`
+	Target   string `json:"target" yaml:"target"`
+	ReadOnly bool   `json:"readOnly" yaml:"readOnly"`
+}
+
+type Restart struct {
+	Policy          string `json:"policy" yaml:"policy"`
+	Attempts        int    `json:"attempts" yaml:"attempts"`
+	IntervalSeconds int    `json:"intervalSeconds" yaml:"intervalSeconds"`
+	DelaySeconds    int    `json:"delaySeconds" yaml:"delaySeconds"`
+	Mode            string `json:"mode" yaml:"mode"`
 }
 
 type Issue struct {

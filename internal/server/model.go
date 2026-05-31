@@ -39,3 +39,14 @@ type SaveRequest struct {
 	Traits       map[string]string `json:"traits"`
 	Notes        string            `json:"notes"`
 }
+
+type ProbeResult struct {
+	Reachable            bool              `json:"reachable"`
+	PasswordlessSudo     bool              `json:"passwordlessSudo"`
+	Root                 bool              `json:"root"`
+	Privileged           bool              `json:"privileged"`
+	OS                   linux.OSRelease   `json:"os"`
+	Traits               map[string]string `json:"traits"`
+	Error                string            `json:"error,omitempty"`
+	PasswordlessSudoText string            `json:"passwordlessSudoText,omitempty"`
+}

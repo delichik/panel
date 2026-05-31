@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"panel/internal/i18n"
 	"panel/internal/panelerr"
 )
 
@@ -37,7 +38,9 @@ func Error(w http.ResponseWriter, err error) {
 	if errors.As(err, &domain) {
 		status = domain.HTTPStatus
 		code = domain.Code
-		message = domain.Message
+		message = i18n.Translate(domain.Code, domain.Message)
+	} else {
+		message = i18n.Translate(code, message)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

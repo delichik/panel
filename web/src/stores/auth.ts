@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia';
 import { authApi } from '@/api/auth';
 import { ApiError } from '@/api/client';
+import { t } from '@/i18n';
+import { useSettingsStore } from '@/stores/settings';
 
 function readStoredToken() {
   return globalThis.localStorage?.getItem('authToken') ?? '';
@@ -77,13 +79,14 @@ export const useAuthStore = defineStore('auth', {
         this.username = '';
         this.token = '';
         clearStoredToken();
-        this.error = error instanceof Error ? error.message : 'Login failed';
+        this.error = error instanceof Error ? error.message : t('login.failed');
         throw error;
       } finally {
         this.loading = false;
       }
     },
     async logout() {
+      const settings = useSettingsStore();
       try {
         await authApi.logout();
       } finally {
@@ -92,6 +95,7 @@ export const useAuthStore = defineStore('auth', {
         this.token = '';
         clearStoredToken();
         this.checked = true;
+        settings.reset();
       }
     },
   },

@@ -2,6 +2,7 @@ package linux
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"panel/internal/sshx"
@@ -32,13 +33,34 @@ curl/stable 8.0.1 amd64 [upgradable from: 8.0.0]`
 }
 
 func TestParseMetricsOutput(t *testing.T) {
-	out := "100 40\n8000 2000\n100000 50000\n10 20\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3 1/2 3"
+	out := "100 40\n8000 2000\n100000 50000\n1000000000 100000000000 200000000000\n2000000000 100000001024 200000002048\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3 1/2 3"
 	snap, err := ParseMetricsOutput("srv", out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.CPUUsagePercent != 60 || snap.MemoryUsedBytes != 2000 || snap.Status.Hostname != "host" {
+	if snap.CPUUsagePercent != 60 || snap.MemoryUsedBytes != 2000 || snap.Status.Hostname != "host" || snap.NetworkRxBytesRate != 1024 || snap.NetworkTxBytesRate != 2048 {
 		t.Fatalf("unexpected snapshot: %#v", snap)
+	}
+}
+
+func TestParseMetricsOutputUsesNetworkDeltas(t *testing.T) {
+	out := "100 40\n8000 2000\n100000 50000\n1000000000 987654321000 123456789000\n3000000000 987654321512 123456789256\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3 1/2 3"
+	snap, err := ParseMetricsOutput("srv", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap.NetworkRxBytesRate != 256 || snap.NetworkTxBytesRate != 128 {
+		t.Fatalf("expected rates to be based on counter deltas, got rx=%v tx=%v", snap.NetworkRxBytesRate, snap.NetworkTxBytesRate)
+	}
+}
+
+func TestCollectMetricsSamplesNetworkCounters(t *testing.T) {
+	exec := &metricsCommandExecutor{stdout: "100 40\n8000 2000\n100000 50000\n1000000000 10 20\n2000000000 20 30\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3 1/2 3"}
+	if _, err := (DebianAdapter{}).CollectMetrics(context.Background(), exec, sshx.Target{ServerID: "srv"}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(exec.command, "sleep 1") || !strings.Contains(exec.command, `iface=="lo"`) {
+		t.Fatalf("metrics command should sample non-loopback network counters over time, got %q", exec.command)
 	}
 }
 
@@ -63,6 +85,28 @@ func TestRunLoggedStreamsOutputBeforeCommandReturns(t *testing.T) {
 			t.Fatalf("line %d = %q, want %q; all lines %#v", i, sink.lines[i], want[i], sink.lines)
 		}
 	}
+}
+
+type metricsCommandExecutor struct {
+	command string
+	stdout  string
+}
+
+func (f *metricsCommandExecutor) Exec(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	f.command = command.Command
+	return sshx.CommandResult{Stdout: f.stdout}, nil
+}
+
+func (f *metricsCommandExecutor) ExecSudo(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{}, nil
+}
+
+func (f *metricsCommandExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *metricsCommandExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
 }
 
 type recordingLogSink struct {
