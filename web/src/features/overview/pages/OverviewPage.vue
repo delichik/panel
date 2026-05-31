@@ -525,8 +525,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="overview-workspace">
-    <div class="overview-actions-row mb-4">
+  <div class="overview-workspace page-shell">
+    <div class="overview-actions-row page-toolbar">
       <div class="text-body-2 text-medium-emphasis">
         {{ t('overviewPage.onlineSummary', { online: onlineCount, total: overview.servers.length }) }} /
         {{ t('overviewPage.dashboardSummary', { count: configuredServerIds.size || overview.servers.length }) }} /
@@ -549,7 +549,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
     <div v-if="!loading && overview.servers.length === 0" class="empty-state">
       <v-icon size="44" color="primary">mdi-server-network-off</v-icon>
@@ -747,18 +747,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.overview-workspace {
-  display: flex;
-  flex-direction: column;
-  min-height: calc(100vh - 120px);
-}
-
-.overview-actions-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
+.overview-workspace { min-height: calc(100vh - 120px); }
 
 .overview-actions {
   display: flex;
@@ -914,17 +903,7 @@ onBeforeUnmount(() => {
   font-size: 0.88rem;
 }
 
-.empty-state {
-  display: grid;
-  place-items: center;
-  gap: 12px;
-  min-height: 360px;
-  padding: 32px;
-  text-align: center;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
-  background: var(--lp-surface);
-}
+.empty-state { min-height: 360px; border: 1px solid var(--lp-border); background: var(--lp-surface); }
 
 .size-grid {
   display: grid;

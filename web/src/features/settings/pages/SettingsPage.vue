@@ -70,23 +70,22 @@ onMounted(loadSettings);
 </script>
 
 <template>
-  <div>
-    <div class="d-flex justify-end mb-4" style="gap: 12px;">
-      <v-btn
-        color="primary"
-        prepend-icon="mdi-content-save"
-        :loading="saving"
-        :disabled="!settings"
-        @click="saveSettings"
-        class="text-none font-weight-bold"
-      >
-        {{ t('common.save') }}
-      </v-btn>
-    </div>
-
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+  <div class="page-shell">
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
     <v-card :loading="loading" variant="outlined" class="pa-6">
+      <div class="settings-header">
+        <v-btn
+          color="primary"
+          prepend-icon="mdi-content-save"
+          :loading="saving"
+          :disabled="!settings"
+          @click="saveSettings"
+          class="text-none font-weight-bold action-btn"
+        >
+          {{ t('common.save') }}
+        </v-btn>
+      </div>
       <template v-if="settings">
         <v-form class="runtime-form mb-6">
           <div class="d-flex flex-column" style="gap: 16px;">
@@ -179,10 +178,13 @@ onMounted(loadSettings);
 </template>
 
 <style scoped>
+.settings-header {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: 20px;
+}
+
 .runtime-form {
   max-width: 520px;
-}
-.font-mono {
-  font-family: monospace !important;
 }
 </style>

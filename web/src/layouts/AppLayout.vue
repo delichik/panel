@@ -31,8 +31,6 @@ const { t, translateTaskStatus } = useI18n();
 
 const isDark = computed(() => theme.global.current.value.dark);
 const pageTitle = computed(() => t(String(route.meta.titleKey || 'app.name')));
-const pageSubtitle = computed(() => route.meta.subtitleKey ? t(String(route.meta.subtitleKey)) : '');
-const pageEyebrow = computed(() => route.meta.eyebrowKey ? t(String(route.meta.eyebrowKey)) : '');
 const navGroups = computed<NavGroup[]>(() => [
   {
     key: 'overview',
@@ -153,37 +151,38 @@ onBeforeUnmount(() => {
       </v-list>
     </v-navigation-drawer>
 
-    <v-app-bar flat height="92" class="glass-bar">
-      <div class="app-header">
-        <div class="app-header-title min-width-0">
-          <div v-if="pageEyebrow" class="app-eyebrow">{{ pageEyebrow }}</div>
-          <h1 class="app-title text-truncate">{{ pageTitle }}</h1>
-          <p v-if="pageSubtitle" class="app-subtitle text-truncate">{{ pageSubtitle }}</p>
-        </div>
-
-        <div class="app-header-actions">
-          <Transition name="task-slide" mode="out-in">
-            <div v-if="currentTask" :key="currentTask.id" class="task-ticker">
-              <v-icon size="small" color="primary">mdi-play-circle-outline</v-icon>
-              <span class="task-line">
-                {{ currentTask.summary || currentTask.type }}
-                <span class="task-stage">{{ translateTaskStatus(currentTask.status) }} - {{ currentTask.stage || t('layout.taskTicker.queuedStage') }}</span>
-              </span>
-            </div>
-          </Transition>
-          <v-btn icon size="small" variant="text" :aria-label="isDark ? t('layout.theme.toLight') : t('layout.theme.toDark')" @click="toggleTheme">
-            <v-icon>{{ isDark ? 'mdi-weather-sunny' : 'mdi-weather-night' }}</v-icon>
-          </v-btn>
-          <span class="user-name">{{ auth.username }}</span>
-          <v-btn variant="outlined" size="small" prepend-icon="mdi-logout" class="text-none" @click="logout">
-            {{ t('layout.logout') }}
-          </v-btn>
-        </div>
-      </div>
-    </v-app-bar>
-
     <v-main class="fill-height overflow-y-auto" style="height: 100vh;">
-      <div class="pa-6">
+      <div class="main-content">
+        <header class="app-header panel">
+          <div class="app-header-title min-width-0">
+            <h1 class="app-title text-truncate">{{ pageTitle }}</h1>
+          </div>
+
+          <div class="app-header-actions">
+            <Transition name="task-slide" mode="out-in">
+              <div v-if="currentTask" :key="currentTask.id" class="task-ticker">
+                <v-icon size="16" color="primary">mdi-progress-clock</v-icon>
+                <span class="task-line">
+                  {{ currentTask.summary || currentTask.type }}
+                  <span class="task-stage">{{ translateTaskStatus(currentTask.status) }} - {{ currentTask.stage || t('layout.taskTicker.queuedStage') }}</span>
+                </span>
+              </div>
+            </Transition>
+
+            <div class="header-utility-strip">
+              <v-btn icon size="small" variant="text" class="utility-btn" :aria-label="isDark ? t('layout.theme.toLight') : t('layout.theme.toDark')" @click="toggleTheme">
+                <v-icon>{{ isDark ? 'mdi-weather-sunny' : 'mdi-weather-night' }}</v-icon>
+              </v-btn>
+              <div class="user-pill">
+                <v-icon size="16">mdi-account-circle-outline</v-icon>
+                <span class="user-name">{{ auth.username }}</span>
+              </div>
+              <v-btn variant="outlined" size="small" prepend-icon="mdi-logout" class="text-none logout-btn" @click="logout">
+                {{ t('layout.logout') }}
+              </v-btn>
+            </div>
+          </div>
+        </header>
         <RouterView />
       </div>
     </v-main>
@@ -210,53 +209,70 @@ onBeforeUnmount(() => {
   transition: background-color 0.25s ease, border-color 0.25s ease, box-shadow 0.25s ease;
 }
 
-/* Translucent premium glass top bar */
-.glass-bar {
-  background: color-mix(in srgb, var(--lp-surface), transparent 16%) !important;
-  backdrop-filter: blur(12px) !important;
-  -webkit-backdrop-filter: blur(12px) !important;
-  border-bottom: 1px solid var(--lp-border) !important;
-  transition: background-color 0.25s ease, border-color 0.25s ease;
-}
-
 .app-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
-  gap: 24px;
-  width: 100%;
-  padding: 12px 24px;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 64px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
 }
 
-.app-eyebrow {
-  margin-bottom: 3px;
-  color: rgb(var(--v-theme-primary));
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0;
-  text-transform: uppercase;
+.app-header:hover {
+  border-color: var(--lp-border);
+  box-shadow: var(--lp-shadow-sm);
+}
+
+.app-header-title {
+  min-width: 0;
 }
 
 .app-title {
   margin: 0;
-  font-size: 1.5rem;
-  font-weight: 750;
-  line-height: 1.2;
-}
-
-.app-subtitle {
-  margin: 4px 0 0;
-  color: var(--lp-text-muted);
-  font-size: 0.95rem;
-  line-height: 1.25;
+  color: var(--lp-text);
+  font-size: 1.28rem;
+  font-weight: 760;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
 }
 
 .app-header-actions {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 12px;
+  gap: 10px;
   min-width: 0;
+}
+
+.header-utility-strip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-height: 40px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.utility-btn {
+  color: var(--lp-text-muted);
+}
+
+.user-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 36px;
+  padding: 0 4px;
+  color: var(--lp-text-muted);
+}
+
+.logout-btn {
+  min-width: 88px;
+  box-shadow: none !important;
 }
 
 /* Offset top-bar positioning for breathing room if needed (or standard flush) */
@@ -303,12 +319,12 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 8px;
   min-width: 180px;
-  max-width: min(420px, 32vw);
+  max-width: min(380px, 28vw);
   overflow: hidden;
   padding: 8px 10px;
   border: 1px solid var(--lp-border);
   border-radius: 8px;
-  background: color-mix(in srgb, var(--lp-surface-muted), transparent 34%);
+  background: var(--lp-surface);
   font-size: 13px;
 }
 
@@ -317,6 +333,8 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
 
 .task-stage {
@@ -325,13 +343,17 @@ onBeforeUnmount(() => {
 }
 
 .user-name {
-  color: var(--lp-text-muted);
-  font-size: 0.88rem;
-  font-weight: 700;
+  color: var(--lp-text);
+  font-size: 0.86rem;
+  font-weight: 650;
   max-width: 120px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.main-content {
+  padding: 24px;
 }
 
 .task-slide-enter-active,
@@ -384,17 +406,48 @@ onBeforeUnmount(() => {
 
 @media (max-width: 980px) {
   .app-header {
-    grid-template-columns: 1fr;
-    gap: 8px;
-    padding: 10px 16px;
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
   }
 
   .app-header-actions {
     justify-content: flex-start;
+    width: 100%;
+    flex-wrap: wrap;
   }
 
   .task-ticker {
     max-width: 100%;
+  }
+
+  .header-utility-strip {
+    justify-content: space-between;
+    max-width: 100%;
+  }
+
+  .main-content {
+    padding: 18px;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-title {
+    font-size: 1.18rem;
+  }
+
+  .header-utility-strip {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .user-pill {
+    flex: 1 1 140px;
+    justify-content: center;
+  }
+
+  .logout-btn {
+    flex: 1 1 100%;
   }
 }
 </style>

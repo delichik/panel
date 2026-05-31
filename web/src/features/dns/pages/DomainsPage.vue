@@ -101,16 +101,15 @@ onMounted(load);
 </script>
 
 <template>
-  <div>
-    <div class="d-flex justify-end mb-4" style="gap: 12px;">
-      <v-btn color="primary" prepend-icon="mdi-plus" class="text-none font-weight-bold" @click="resetForm()">
-        {{ t('domainsPage.addDomain') }}
-      </v-btn>
-    </div>
+  <div class="page-shell">
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-
-    <v-card variant="outlined" class="pa-4">
+    <v-card variant="outlined" class="table-card">
+      <div class="app-card-header">
+        <v-btn color="primary" prepend-icon="mdi-plus" class="text-none font-weight-bold action-btn" @click="resetForm()">
+          {{ t('domainsPage.addDomain') }}
+        </v-btn>
+      </div>
       <v-table class="text-left" style="background: transparent;">
         <thead>
           <tr>
@@ -131,7 +130,7 @@ onMounted(load);
             <td class="font-mono">{{ row.accountId || '-' }}</td>
             <td>{{ formatDateTime(row.updatedAt) }}</td>
             <td class="text-right">
-              <div class="d-flex justify-end" style="gap: 6px;">
+              <div class="app-table-actions">
                 <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="resetForm(row)">{{ t('common.edit') }}</v-btn>
                 <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteDomain(row)">{{ t('common.delete') }}</v-btn>
               </div>
@@ -218,7 +217,7 @@ onMounted(load);
 </template>
 
 <style scoped>
-.font-mono {
-  font-family: monospace !important;
+.table-card {
+  overflow: hidden;
 }
 </style>

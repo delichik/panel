@@ -302,34 +302,11 @@ onMounted(load);
 </script>
 
 <template>
-  <div>
-    <div class="page-actions mb-4">
-      <v-btn
-        v-if="activeTab === 'credentials'"
-        color="primary"
-        prepend-icon="mdi-plus"
-        variant="flat"
-        class="text-none font-weight-bold action-btn"
-        @click="resetCredentialForm()"
-      >
-        {{ t('serversPage.addCredential') }}
-      </v-btn>
-      <v-btn
-        v-else
-        color="primary"
-        prepend-icon="mdi-plus"
-        variant="flat"
-        class="text-none font-weight-bold action-btn"
-        @click="resetServerForm()"
-      >
-        {{ t('serversPage.addServer') }}
-      </v-btn>
-    </div>
-
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+  <div class="page-shell">
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
     <template v-if="activeTab === 'servers'">
-      <div class="summary-strip mb-4">
+      <div class="summary-strip">
         <v-card variant="outlined" class="summary-card">
           <div class="summary-icon surface-primary"><v-icon size="18">mdi-server</v-icon></div>
           <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.servers') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ servers.length }}</div></div>
@@ -347,9 +324,17 @@ onMounted(load);
       <div class="servers-workspace">
         <v-card variant="outlined" :loading="loading" class="server-list">
           <div class="list-header">
-            <div>
+            <div class="list-header-main">
+              <v-btn
+                color="primary"
+                prepend-icon="mdi-plus"
+                variant="flat"
+                class="text-none font-weight-bold action-btn"
+                @click="resetServerForm()"
+              >
+                {{ t('serversPage.addServer') }}
+              </v-btn>
               <div class="text-subtitle-1 font-weight-bold">{{ t('serversPage.registeredServers') }}</div>
-              <div class="text-caption text-medium-emphasis">{{ t('serversPage.registeredServersHint') }}</div>
             </div>
             <v-chip size="small" variant="tonal" color="primary" label>{{ t('common.total', { count: servers.length }) }}</v-chip>
           </div>
@@ -457,7 +442,18 @@ onMounted(load);
       </div>
     </template>
 
-    <v-card v-else variant="outlined" class="pa-4 mb-4">
+    <v-card v-else variant="outlined" class="credential-table-card">
+      <div class="app-card-header">
+        <v-btn
+          color="primary"
+          prepend-icon="mdi-plus"
+          variant="flat"
+          class="text-none font-weight-bold action-btn"
+          @click="resetCredentialForm()"
+        >
+          {{ t('serversPage.addCredential') }}
+        </v-btn>
+      </div>
       <v-table class="text-left">
         <thead>
           <tr>
@@ -476,7 +472,7 @@ onMounted(load);
             <td>{{ row.username }}</td>
             <td><v-chip size="small" label color="secondary" variant="tonal">{{ row.type }}</v-chip></td>
             <td class="text-right">
-              <div class="d-flex justify-end" style="gap: 6px;">
+              <div class="app-table-actions">
                 <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="editCredential(row)">{{ t('common.edit') }}</v-btn>
                 <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="deleteCredential(row)">{{ t('common.delete') }}</v-btn>
               </div>
@@ -626,18 +622,11 @@ onMounted(load);
 </template>
 
 <style scoped>
-.page-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
-.action-btn { min-height: 40px; }
-.summary-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; max-width: 780px; }
-.summary-card { display: flex; align-items: center; gap: 12px; padding: 14px; }
-.summary-icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; }
-.surface-primary { color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), 0.1); }
-.surface-success { color: rgb(var(--v-theme-success)); background: rgba(var(--v-theme-success), 0.1); }
-.surface-warning { color: rgb(var(--v-theme-warning)); background: rgba(var(--v-theme-warning), 0.12); }
+.summary-strip { max-width: 780px; }
 .servers-workspace { display: grid; grid-template-columns: minmax(360px, 0.45fr) minmax(520px, 0.55fr); gap: 18px; align-items: start; }
 .server-list, .detail-column { min-width: 0; }
 .server-list { overflow: hidden; }
-.list-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 18px 10px; }
+.list-header-main { display: grid; gap: 10px; justify-items: start; }
 .server-list-body { display: grid; gap: 8px; padding: 10px; }
 .server-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background-color 0.16s ease, border-color 0.16s ease; }
 .server-row:hover { background: rgba(var(--v-theme-on-surface), 0.025); }
@@ -648,14 +637,13 @@ onMounted(load);
 .status-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 999px; background: rgb(var(--v-theme-info)); box-shadow: 0 0 0 4px rgba(var(--v-theme-info), 0.12); }
 .status-dot.success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12); }
 .status-dot.warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14); }
-.empty-list, .empty-detail { display: grid; place-items: center; gap: 10px; min-height: 220px; padding: 32px; text-align: center; }
+.empty-list { display: grid; place-items: center; gap: 10px; min-height: 220px; padding: 32px; text-align: center; }
 .detail-card { padding: 16px; }
 .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .detail-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .metric-tile { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
 .detail-sections { display: grid; gap: 18px; }
-.section-title { margin-bottom: 8px; color: rgba(var(--v-theme-on-surface), 0.72); font-size: 0.76rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
 .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .property-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .property-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
@@ -669,12 +657,11 @@ onMounted(load);
 .probe-result { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .probe-result > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .probe-result span { color: var(--lp-text-muted); font-size: 0.76rem; }
-.font-mono { font-family: monospace !important; }
+.credential-table-card { overflow: hidden; }
 .font-tabular { font-variant-numeric: tabular-nums; }
 .min-width-0 { min-width: 0; }
 @media (max-width: 1280px) { .servers-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .page-actions, .page-actions .v-btn { width: 100%; }
   .summary-strip, .metric-grid, .property-grid, .form-grid, .probe-result { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .probe-panel { flex-direction: column; align-items: stretch; }
 }

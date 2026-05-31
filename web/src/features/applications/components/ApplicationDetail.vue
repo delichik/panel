@@ -133,7 +133,7 @@ async function updateImage() {
 .image-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
 .image-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .digest-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
+.mono { font-size: 0.8rem; }
 @media (max-width: 900px) {
   .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .image-panel { grid-template-columns: 1fr; }

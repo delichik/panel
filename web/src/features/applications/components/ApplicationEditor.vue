@@ -798,7 +798,7 @@ async function save(deploy = false) {
 .field-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .span-2 { grid-column: span 2; }
 .span-all { grid-column: 1 / -1; }
-.section-title { margin: 14px 0 8px; color: rgba(var(--v-theme-on-surface), 0.72); font-size: 0.76rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+.section-title { margin: 14px 0 8px; }
 .repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; }
 .placement-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
 .ports-row { grid-template-columns: minmax(160px, 1fr) auto 140px auto auto 140px 40px; }
@@ -809,21 +809,21 @@ async function save(deploy = false) {
 .network-actions,
 .proxy-actions { display: flex; justify-content: flex-start; margin-bottom: 10px; }
 .network-arrow,
-.network-target-name { color: rgba(var(--v-theme-on-surface), 0.62); white-space: nowrap; }
+.network-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .network-arrow { justify-self: center; }
-.network-target-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.network-target-name { font-size: 0.82rem; }
 .proxy-rule-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto 140px 40px; gap: 8px; align-items: center; margin-bottom: 10px; }
 .proxy-arrow,
-.proxy-target-name { color: rgba(var(--v-theme-on-surface), 0.62); white-space: nowrap; }
+.proxy-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .proxy-arrow { justify-self: center; }
-.proxy-target-name { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.proxy-target-name { font-size: 0.82rem; }
 .proxy-path-row { grid-template-columns: minmax(0, 1fr) 130px 40px; }
 .file-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
 .repeat-row > .v-btn,
 .proxy-rule-header > .v-btn {
   justify-self: end;
 }
-.mono, .mono-input :deep(textarea) { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.mono, .mono-input :deep(textarea) { font-size: 0.82rem; }
 .hash-cell { max-width: 180px; }
 @media (max-width: 1100px) {
   .header-row, .mount-row, .ports-row, .env-row, .proxy-rule-header, .proxy-path-row, .file-form, .placement-row { grid-template-columns: 1fr; }

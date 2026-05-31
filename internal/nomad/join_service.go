@@ -24,6 +24,11 @@ const TaskTypeClientJoin = "nomad_client_join"
 const TaskTypeServerBootstrap = "nomad_server_bootstrap"
 const TaskTypeNodeRemove = "nomad_node_remove"
 
+const (
+	nomadInstallTimeout     = 20 * time.Minute
+	nomadMaintenanceTimeout = 2 * time.Minute
+)
+
 type nodeClient interface {
 	Nodes(ctx context.Context) ([]NodeListItem, error)
 }
@@ -305,7 +310,7 @@ func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv serv
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing or updating Nomad client")
 	target := srv.Target()
-	err := s.execSudoLogged(ctx, taskID, target, s.joinScript(srv, s.serverJoinRPCAddress(ctx)))
+	err := s.execSudoLogged(ctx, taskID, target, s.joinScript(srv, s.serverJoinRPCAddress(ctx)), nomadInstallTimeout)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -319,7 +324,7 @@ func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "bootstrapping", "installing and starting Nomad server")
 	target := srv.Target()
-	err := s.execSudoLogged(ctx, taskID, target, s.bootstrapScript(srv))
+	err := s.execSudoLogged(ctx, taskID, target, s.bootstrapScript(srv), nomadInstallTimeout)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -343,7 +348,7 @@ func (s *JoinService) runRemoveNode(ctx context.Context, taskID string, srv serv
 			return
 		}
 		_ = s.tasks.Advance(ctx, taskID, "stopping", "stopping Nomad on managed server")
-		if err := s.execSudoLogged(ctx, taskID, srv.Target(), removeNodeScript()); err != nil {
+		if err := s.execSudoLogged(ctx, taskID, srv.Target(), removeNodeScript(), nomadMaintenanceTimeout); err != nil {
 			_ = s.tasks.Fail(ctx, taskID, err)
 			return
 		}
@@ -363,12 +368,12 @@ func (s *JoinService) runRemoveNode(ctx context.Context, taskID string, srv serv
 	_ = s.tasks.Complete(ctx, taskID, "Nomad node remove requested")
 }
 
-func (s *JoinService) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string) error {
+func (s *JoinService) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string, timeout time.Duration) error {
 	stdoutStreamed := false
 	stderrStreamed := false
 	res, err := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{
 		Command: command,
-		Timeout: 5 * time.Minute,
+		Timeout: timeout,
 		OnStdout: func(line string) {
 			stdoutStreamed = true
 			_ = s.tasks.AppendLog(ctx, taskID, "stdout", line)

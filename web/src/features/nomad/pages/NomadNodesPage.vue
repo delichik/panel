@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { t, useI18n } from '@/i18n';
 import { nomadApi } from '@/api/nomad';
-import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import type { NomadControlPlaneDto, NomadReverseProxyStaticSiteDto, ProjectedNomadNodeDto } from '@/types/api';
 
 const router = useRouter();
@@ -15,9 +14,6 @@ const actionLoading = ref('');
 const error = ref('');
 const joinDialog = ref(false);
 const selectedServerId = ref('');
-const activeTaskId = ref('');
-const activeTaskServerName = ref('');
-const activeTaskTitleKey = ref<'nomadNodesPage.nomadTask' | 'nomadNodesPage.nomadJoinTask' | 'nomadNodesPage.nomadRemoveTask'>('nomadNodesPage.nomadTask');
 const proxyDialog = ref(false);
 const editingNode = ref<ProjectedNomadNodeDto | null>(null);
 const proxyForm = ref({
@@ -30,7 +26,6 @@ const candidateServers = computed(() => controlPlane.value?.joinCandidates ?? []
 const readyCount = computed(() => nodes.value.filter((node) => node.status === 'ready').length);
 const managedCount = computed(() => nodes.value.filter((node) => node.kind === 'managed').length);
 const pendingCount = computed(() => nodes.value.filter((node) => node.kind === 'pending').length);
-const activeTaskTitle = computed(() => t(activeTaskTitleKey.value));
 const selectedServer = computed(() => candidateServers.value.find((server) => server.id === selectedServerId.value) ?? null);
 const candidateOptions = computed(() =>
   candidateServers.value.map((server) => ({
@@ -54,10 +49,6 @@ function kindColor(kind?: string) {
   if (kind === 'pending') return 'warning';
   if (kind === 'missing') return 'error';
   return 'grey';
-}
-
-function taskServerName(node: ProjectedNomadNodeDto) {
-  return node.name || node.host || node.serverId || '';
 }
 
 function openJoinDialog() {
@@ -93,11 +84,7 @@ async function joinSelectedServer() {
   if (!selectedServerId.value) return;
   joining.value = true;
   try {
-    const server = selectedServer.value;
-    const result = await nomadApi.joinServer(selectedServerId.value);
-    activeTaskId.value = result.taskId;
-    activeTaskServerName.value = server?.name ?? '';
-    activeTaskTitleKey.value = 'nomadNodesPage.nomadJoinTask';
+    await nomadApi.joinServer(selectedServerId.value);
     joinDialog.value = false;
     error.value = '';
     await load();
@@ -112,10 +99,7 @@ async function joinNode(node: ProjectedNomadNodeDto) {
   if (!node.serverId) return;
   actionLoading.value = `join:${node.serverId}`;
   try {
-    const result = await nomadApi.joinServer(node.serverId);
-    activeTaskId.value = result.taskId;
-    activeTaskServerName.value = taskServerName(node);
-    activeTaskTitleKey.value = 'nomadNodesPage.nomadJoinTask';
+    await nomadApi.joinServer(node.serverId);
     error.value = '';
     await load();
   } catch (err) {
@@ -128,10 +112,7 @@ async function joinNode(node: ProjectedNomadNodeDto) {
 async function removeNode(node: ProjectedNomadNodeDto) {
   actionLoading.value = `remove:${node.serverId || node.nodeId}`;
   try {
-    const result = await nomadApi.removeNode({ serverId: node.serverId, nodeId: node.nodeId });
-    activeTaskId.value = result.taskId;
-    activeTaskServerName.value = taskServerName(node);
-    activeTaskTitleKey.value = 'nomadNodesPage.nomadRemoveTask';
+    await nomadApi.removeNode({ serverId: node.serverId, nodeId: node.nodeId });
     error.value = '';
     await load();
   } catch (err) {
@@ -186,45 +167,35 @@ async function saveProxyConfig() {
   }
 }
 
-async function handleTaskFinished() {
-  await load();
-}
-
 onMounted(load);
 </script>
 
 <template>
-  <div>
-    <div class="page-actions mb-4">
-      <v-btn prepend-icon="mdi-account-network" color="primary" variant="flat" class="text-none" :disabled="candidateServers.length === 0" @click="openJoinDialog">{{ t('nomadNodesPage.joinNode') }}</v-btn>
-    </div>
-
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <v-alert v-else-if="controlPlane?.status === 'bootstrapping'" type="info" variant="tonal" class="mb-4">
+  <div class="page-shell">
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
+    <v-alert v-else-if="controlPlane?.status === 'bootstrapping'" type="info" variant="tonal">
       {{ t('nomadNodesPage.bootstrappingHint') }}
     </v-alert>
-    <v-alert v-else-if="controlPlane?.status === 'degraded'" type="warning" variant="tonal" class="mb-4">
+    <v-alert v-else-if="controlPlane?.status === 'degraded'" type="warning" variant="tonal">
       {{ t('nomadNodesPage.degradedHint') }}
     </v-alert>
-    <v-alert v-else-if="controlPlane?.status === 'connected'" type="success" variant="tonal" class="mb-4">
+    <v-alert v-else-if="controlPlane?.status === 'connected'" type="success" variant="tonal">
       {{ t('nomadNodesPage.connectedLeader', { leader: controlPlane.leader || t('common.unknown') }) }}
     </v-alert>
 
-    <div class="summary-strip mb-4">
+    <div class="summary-strip">
       <v-card variant="outlined" class="summary-card"><div class="text-caption text-medium-emphasis">{{ t('nomadNodesPage.nodes') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ nodes.length }}</div></v-card>
       <v-card variant="outlined" class="summary-card"><div class="text-caption text-medium-emphasis">{{ t('nomadNodesPage.ready') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ readyCount }}</div></v-card>
       <v-card variant="outlined" class="summary-card"><div class="text-caption text-medium-emphasis">{{ t('nomadNodesPage.managed') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ managedCount }}</div></v-card>
       <v-card variant="outlined" class="summary-card"><div class="text-caption text-medium-emphasis">{{ t('nomadNodesPage.pending') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ pendingCount }}</div></v-card>
     </div>
 
-    <v-card v-if="activeTaskId" class="mb-4 pa-4" variant="outlined">
-      <v-card-title class="px-0 pt-0 text-subtitle-1 font-weight-bold">{{ activeTaskTitle }}</v-card-title>
-      <TaskLogPanel :task-id="activeTaskId" :server-name="activeTaskServerName" compact @finished="handleTaskFinished" />
-    </v-card>
-
     <v-card variant="outlined" :loading="loading">
+      <div class="app-card-header">
+        <v-btn prepend-icon="mdi-account-network" color="primary" variant="flat" class="text-none action-btn" :disabled="candidateServers.length === 0" @click="openJoinDialog">{{ t('nomadNodesPage.joinNode') }}</v-btn>
+      </div>
       <v-table>
-        <thead><tr><th>{{ t('common.name') }}</th><th>Node ID</th><th>{{ t('serversPage.host') }}</th><th>{{ t('nomadNodesPage.role') }}</th><th>{{ t('common.status') }}</th><th>{{ t('nomadNodesPage.reverseProxy') }}</th><th>{{ t('packagesPage.source') }}</th><th>{{ t('nomadNodesPage.task') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
+        <thead><tr><th>{{ t('common.name') }}</th><th>Node ID</th><th>{{ t('serversPage.host') }}</th><th>{{ t('nomadNodesPage.role') }}</th><th>{{ t('common.status') }}</th><th>{{ t('nomadNodesPage.reverseProxy') }}</th><th>{{ t('packagesPage.source') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
         <tbody>
           <tr v-for="node in nodes" :key="node.nodeId || node.serverId || node.name">
             <td class="font-weight-bold">{{ node.name || '-' }}</td>
@@ -245,10 +216,6 @@ onMounted(load);
             <td>
               <v-chip :color="kindColor(node.kind)" size="small" variant="tonal" label>{{ node.kind }}</v-chip>
               <div v-if="node.serverId" class="text-caption text-medium-emphasis mt-1">{{ node.serverId }}</div>
-            </td>
-            <td>
-              <v-btn v-if="node.taskId" size="small" variant="text" color="primary" class="text-none" @click="activeTaskId = node.taskId; activeTaskServerName = taskServerName(node); activeTaskTitleKey = 'nomadNodesPage.nomadTask'">{{ t('nomadNodesPage.taskLog') }}</v-btn>
-              <span v-else class="text-medium-emphasis">-</span>
             </td>
             <td class="text-right">
               <div class="row-actions">
@@ -291,7 +258,7 @@ onMounted(load);
               </div>
             </td>
           </tr>
-          <tr v-if="nodes.length === 0"><td colspan="9" class="text-center py-8 text-medium-emphasis">{{ t('nomadNodesPage.noProjectedNodes') }}</td></tr>
+          <tr v-if="nodes.length === 0"><td colspan="8" class="text-center py-8 text-medium-emphasis">{{ t('nomadNodesPage.noProjectedNodes') }}</td></tr>
         </tbody>
       </v-table>
     </v-card>
@@ -360,18 +327,15 @@ onMounted(load);
 </template>
 
 <style scoped>
-.page-actions { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
-.summary-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 180px)); gap: 12px; }
-.summary-card { padding: 14px; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
+.summary-strip { grid-template-columns: repeat(4, minmax(0, 180px)); }
+.mono { font-size: 0.8rem; }
 .row-actions { display: inline-flex; justify-content: flex-end; gap: 4px; min-width: 0; }
 .proxy-summary { display: flex; gap: 8px; align-items: center; min-width: 180px; }
-.section-title { margin: 10px 0 8px; color: rgba(var(--v-theme-on-surface), 0.72); font-size: 0.76rem; font-weight: 700; letter-spacing: 0; text-transform: uppercase; }
+.section-title { margin-top: 10px; }
 .repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; }
 .static-site-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 180px 40px; }
 .server-preview { border-radius: 8px; padding: 12px; background: rgba(var(--v-theme-primary), 0.06); }
 @media (max-width: 900px) {
-  .page-actions, .page-actions .v-btn { width: 100%; }
   .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .static-site-row { grid-template-columns: 1fr; }
 }

@@ -20,6 +20,7 @@ const typeFilter = ref('');
 const loading = ref(false);
 const actionLoading = ref('');
 const error = ref('');
+const detailsDialog = ref(false);
 const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
@@ -84,7 +85,7 @@ async function loadTasks() {
 }
 
 async function loadSteps() {
-  if (!selectedTaskId.value) {
+  if (!detailsDialog.value || !selectedTaskId.value) {
     steps.value = [];
     return;
   }
@@ -217,13 +218,18 @@ function clearFilters() {
   reloadFirstPage();
 }
 
+function openDetailsDialog() {
+  if (!selectedTaskId.value) return;
+  detailsDialog.value = true;
+}
+
 function startPolling() {
   if (timer) window.clearInterval(timer);
   void loadTasks();
   timer = window.setInterval(loadTasks, 5000);
 }
 
-watch(selectedTaskId, loadSteps);
+watch([selectedTaskId, detailsDialog], loadSteps);
 onMounted(startPolling);
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer);
@@ -231,8 +237,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="task-center">
-    <div class="task-kpis mb-4">
+  <div class="task-center page-shell">
+    <div class="task-kpis">
       <v-chip color="primary" variant="tonal" label>{{ t('taskCenter.active') }} {{ taskCounts.active }}</v-chip>
       <v-chip color="info" variant="tonal" label>{{ t('taskCenter.queued') }} {{ taskCounts.queued }}</v-chip>
       <v-chip color="warning" variant="tonal" label>{{ t('taskCenter.running') }} {{ taskCounts.running }}</v-chip>
@@ -262,10 +268,7 @@ onBeforeUnmount(() => {
     <div class="task-workspace">
       <v-card variant="outlined" :loading="loading" class="operation-panel">
         <div class="panel-title">
-          <div>
-            <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.operations') }}</div>
-            <div class="text-caption text-medium-emphasis">{{ t('taskCenter.tasksAcrossPage', { count: total }) }}</div>
-          </div>
+          <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.operations') }}</div>
         </div>
         <v-divider />
         <v-list lines="three" density="compact" class="operation-list">
@@ -304,12 +307,7 @@ onBeforeUnmount(() => {
       <section class="main-panel">
         <v-card variant="outlined" class="lifecycle-panel">
           <div class="panel-title">
-            <div>
-              <div class="text-subtitle-1 font-weight-bold">{{ selectedTask?.summary || t('taskCenter.selectTask') }}</div>
-              <div class="text-caption text-medium-emphasis">
-                {{ selectedTask ? t('taskCenter.onServer', { type: formatTaskType(selectedTask.type), server: serverName(selectedTask.nodeId || selectedTask.serverId) }) : t('common.notAvailable') }}
-              </div>
-            </div>
+            <div class="text-subtitle-1 font-weight-bold">{{ selectedTask?.summary || t('taskCenter.selectTask') }}</div>
             <v-chip v-if="selectedTask" :color="taskStatusColor(selectedTask.status)" label>{{ statusLabel(selectedTask.status) }}</v-chip>
           </div>
 
@@ -358,6 +356,14 @@ onBeforeUnmount(() => {
 
             <div class="action-row">
               <v-btn
+                size="small"
+                variant="outlined"
+                prepend-icon="mdi-text-box-search-outline"
+                @click="openDetailsDialog"
+              >
+                {{ t('taskCenter.stepsAndLogs') }}
+              </v-btn>
+              <v-btn
                 v-if="canRunNow(selectedTask)"
                 size="small"
                 color="primary"
@@ -385,7 +391,6 @@ onBeforeUnmount(() => {
         <v-card variant="outlined" class="task-table-panel">
           <div class="panel-title">
             <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.tasksInOperation') }}</div>
-            <div class="text-caption text-medium-emphasis">{{ selectedOperation?.operationId ? shortId(selectedOperation.operationId) : t('common.notAvailable') }}</div>
           </div>
           <v-table density="compact" class="task-table">
             <thead>
@@ -431,15 +436,16 @@ onBeforeUnmount(() => {
         </v-card>
       </section>
 
-      <v-card variant="outlined" class="detail-panel">
-        <div class="panel-title">
-          <div>
-            <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.stepsAndLogs') }}</div>
-            <div class="text-caption text-medium-emphasis">{{ selectedTask ? `${selectedTask.resourceType || t('common.notAvailable')} / ${shortId(selectedTask.resourceId)}` : t('common.notAvailable') }}</div>
-          </div>
-        </div>
+    </div>
+
+    <v-dialog v-model="detailsDialog" width="980">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('taskCenter.stepsAndLogs') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="detailsDialog = false" />
+        </v-card-title>
         <v-divider />
-        <v-card-text>
+        <v-card-text class="app-dialog-body task-details-dialog">
           <v-timeline v-if="steps.length" side="end" density="compact" class="mb-4">
             <v-timeline-item v-for="step in steps" :key="step.id" :dot-color="taskStatusColor(step.status)" size="small">
               <div class="step-row">
@@ -455,7 +461,7 @@ onBeforeUnmount(() => {
           <div v-else class="text-medium-emphasis mb-4">{{ t('taskCenter.noTaskSteps') }}</div>
 
           <TaskLogPanel
-            v-if="selectedTaskId"
+            v-if="detailsDialog && selectedTaskId"
             :key="selectedTaskId"
             :task-id="selectedTaskId"
             :server-name="serverName(selectedTask?.nodeId || selectedTask?.serverId)"
@@ -464,15 +470,12 @@ onBeforeUnmount(() => {
           <div v-else class="text-center py-8 text-medium-emphasis">{{ t('taskCenter.selectTaskForLogs') }}</div>
         </v-card-text>
       </v-card>
-    </div>
+    </v-dialog>
   </div>
 </template>
 
 <style scoped>
-.task-center {
-  display: grid;
-  gap: 16px;
-}
+.task-center { min-width: 0; }
 
 .task-kpis {
   display: flex;
@@ -491,7 +494,7 @@ onBeforeUnmount(() => {
 
 .task-workspace {
   display: grid;
-  grid-template-columns: minmax(300px, 0.72fr) minmax(620px, 1.35fr) minmax(380px, 0.93fr);
+  grid-template-columns: minmax(300px, 0.72fr) minmax(620px, 1.35fr);
   gap: 16px;
   align-items: start;
 }
@@ -499,15 +502,6 @@ onBeforeUnmount(() => {
 .main-panel {
   display: grid;
   gap: 16px;
-}
-
-.panel-title {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  min-height: 64px;
-  padding: 14px 16px;
 }
 
 .operation-list {
@@ -617,11 +611,6 @@ onBeforeUnmount(() => {
   line-height: 1.35;
 }
 
-.detail-panel {
-  position: sticky;
-  top: 16px;
-}
-
 .cursor-pointer {
   cursor: pointer;
 }
@@ -644,14 +633,14 @@ tr.selected {
   gap: 12px;
 }
 
+.task-details-dialog {
+  display: grid;
+  gap: 12px;
+}
+
 @media (max-width: 1280px) {
   .task-workspace {
     grid-template-columns: minmax(280px, 0.8fr) minmax(560px, 1.2fr);
-  }
-
-  .detail-panel {
-    grid-column: 1 / -1;
-    position: static;
   }
 }
 

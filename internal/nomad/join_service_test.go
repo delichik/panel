@@ -112,6 +112,9 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 	if strings.Contains(command, "\nserver_join {") {
 		t.Fatalf("join script should not write a top-level server_join block:\n%s", command)
 	}
+	if fake.sudoTimeouts[0] != nomadInstallTimeout {
+		t.Fatalf("expected join timeout %s, got %s", nomadInstallTimeout, fake.sudoTimeouts[0])
+	}
 	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
 }
 
@@ -245,6 +248,9 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 	if len(execFake.sudoCommands) != 1 {
 		t.Fatalf("expected one sudo command, got %#v", execFake.sudoCommands)
 	}
+	if execFake.sudoTimeouts[0] != nomadInstallTimeout {
+		t.Fatalf("expected bootstrap timeout %s, got %s", nomadInstallTimeout, execFake.sudoTimeouts[0])
+	}
 	command := execFake.sudoCommands[0]
 	for _, want := range []string{
 		"server {",
@@ -280,6 +286,9 @@ func TestRemoveManagedNodeStopsServiceAndPurgesNomadNode(t *testing.T) {
 
 	if len(execFake.sudoCommands) != 1 || !strings.Contains(execFake.sudoCommands[0], "systemctl disable --now nomad") {
 		t.Fatalf("expected nomad stop command, got %#v", execFake.sudoCommands)
+	}
+	if execFake.sudoTimeouts[0] != nomadMaintenanceTimeout {
+		t.Fatalf("expected remove timeout %s, got %s", nomadMaintenanceTimeout, execFake.sudoTimeouts[0])
 	}
 	if command := execFake.sudoCommands[0]; !strings.Contains(command, "find /etc/nomad.d -maxdepth 1 -type f") {
 		t.Fatalf("expected nomad config cleanup command, got %s", command)
@@ -510,6 +519,7 @@ func (f *joinFakeNomadClient) StopJob(_ context.Context, id string, _ bool) (Sto
 
 type joinFakeExecutor struct {
 	sudoCommands []string
+	sudoTimeouts []time.Duration
 	stdoutLines  []string
 	stderrLines  []string
 	duringRun    func()
@@ -522,6 +532,7 @@ func (f *joinFakeExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) 
 
 func (f *joinFakeExecutor) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
 	f.sudoCommands = append(f.sudoCommands, command.Command)
+	f.sudoTimeouts = append(f.sudoTimeouts, command.Timeout)
 	if f.sudoCalled != nil {
 		select {
 		case f.sudoCalled <- struct{}{}:

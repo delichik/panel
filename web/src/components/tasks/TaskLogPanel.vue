@@ -169,7 +169,7 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px 14px;
   margin-top: 8px;
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: var(--lp-text-muted);
   font-size: 12px;
 }
 
@@ -178,7 +178,7 @@ onBeforeUnmount(() => {
   max-height: 360px;
   overflow-y: auto;
   border: 1px solid var(--lp-border);
-  border-radius: 8px;
+  border-radius: var(--lp-radius-md);
   background: var(--lp-log-background);
   color: var(--lp-log-text);
   padding: 12px;
@@ -189,7 +189,7 @@ onBeforeUnmount(() => {
 .log-loading {
   inset: 0;
   width: 100%;
-  border-radius: 8px;
+  border-radius: var(--lp-radius-md);
   background: color-mix(in srgb, var(--lp-log-background), transparent 18%);
 }
 

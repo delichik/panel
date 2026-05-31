@@ -126,16 +126,15 @@ onMounted(load);
 </script>
 
 <template>
-  <div>
-    <div class="d-flex justify-end mb-4" style="gap: 12px;">
-      <v-btn color="primary" prepend-icon="mdi-certificate" class="text-none font-weight-bold" @click="resetForm">
-        {{ t('certificatesPage.issueCertificate') }}
-      </v-btn>
-    </div>
+  <div class="page-shell">
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-
-    <v-card variant="outlined" class="pa-4">
+    <v-card variant="outlined" class="table-card">
+      <div class="app-card-header">
+        <v-btn color="primary" prepend-icon="mdi-certificate" class="text-none font-weight-bold action-btn" @click="resetForm">
+          {{ t('certificatesPage.issueCertificate') }}
+        </v-btn>
+      </div>
       <v-table class="text-left" style="background: transparent;">
         <thead>
           <tr>
@@ -266,14 +265,14 @@ onMounted(load);
 </template>
 
 <style scoped>
-.font-mono {
-  font-family: monospace !important;
-}
-
 .cert-domain-grid {
   display: grid;
   grid-template-columns: minmax(120px, 0.45fr) minmax(180px, 0.55fr);
   gap: 8px;
+}
+
+.table-card {
+  overflow: hidden;
 }
 
 .preview {

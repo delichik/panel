@@ -86,7 +86,7 @@ async function submit() {
 
 .login-card {
   width: min(440px, 100%);
-  border-radius: 8px !important;
+  border-radius: var(--lp-radius-lg) !important;
   background-color: var(--lp-surface) !important;
   border: 1px solid var(--lp-border) !important;
   box-shadow: var(--lp-shadow-md) !important;
@@ -97,7 +97,7 @@ async function submit() {
   place-items: center;
   width: 48px;
   height: 48px;
-  border-radius: 8px;
+  border-radius: var(--lp-radius-md);
   background: linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, rgba(var(--v-theme-primary), 0.72) 100%);
   color: #ffffff;
   font-size: 1.25rem;

@@ -70,9 +70,7 @@ meta: { titleKey: 'routes.settings.title' }
 
 同理适用于：
 
-- `eyebrowKey`
 - `titleKey`
-- `subtitleKey`
 
 ### 4. 持久化配置不要保存展示文案
 

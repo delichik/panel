@@ -14,6 +14,11 @@ import (
 
 type DebianAdapter struct{}
 
+const (
+	packageListTimeout    = 3 * time.Minute
+	packageUpgradeTimeout = time.Hour
+)
+
 func (DebianAdapter) ID() string { return "debian" }
 
 func (DebianAdapter) Supports(info OSRelease) bool {
@@ -52,7 +57,10 @@ func (DebianAdapter) CollectMetrics(ctx context.Context, exec sshx.RemoteExecuto
 }
 
 func (DebianAdapter) ListUpgradeable(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) ([]PackageUpdate, error) {
-	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "apt-get update >/dev/null && apt list --upgradable 2>/dev/null"})
+	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
+		Command: "apt-get update >/dev/null && apt list --upgradable 2>/dev/null",
+		Timeout: packageListTimeout,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -69,18 +77,19 @@ func (DebianAdapter) UpgradeSelected(ctx context.Context, exec sshx.RemoteExecut
 		}
 	}
 	cmd := "DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade " + strings.Join(packages, " ")
-	return runLogged(ctx, exec, target, cmd, log)
+	return runLogged(ctx, exec, target, cmd, packageUpgradeTimeout, log)
 }
 
 func (DebianAdapter) UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, log LogSink) error {
-	return runLogged(ctx, exec, target, "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y", log)
+	return runLogged(ctx, exec, target, "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y", packageUpgradeTimeout, log)
 }
 
-func runLogged(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, cmd string, log LogSink) error {
+func runLogged(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, cmd string, timeout time.Duration, log LogSink) error {
 	stdoutStreamed := false
 	stderrStreamed := false
 	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
 		Command: cmd,
+		Timeout: timeout,
 		OnStdout: func(line string) {
 			stdoutStreamed = true
 			_ = log.AppendLog(ctx, "stdout", line)

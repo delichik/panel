@@ -2,7 +2,6 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import ServerSelector from '@/components/ServerSelector.vue';
-import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { packagesApi } from '@/api/packages';
 import { serversApi } from '@/api/servers';
 import type { PackageUpdatesDto, ServerDto } from '@/types/api';
@@ -11,7 +10,6 @@ const servers = ref<ServerDto[]>([]);
 const serverId = ref('');
 const updates = ref<PackageUpdatesDto | null>(null);
 const selectedPackageNames = ref<string[]>([]);
-const taskId = ref('');
 const loadingServers = ref(false);
 const loadingUpdates = ref(false);
 const packageRefreshRunning = ref(false);
@@ -110,8 +108,7 @@ async function upgradeSelected() {
   if (!serverId.value || selectedPackages.value.length === 0) return;
   const names = selectedPackages.value.map((item) => item.name);
   try {
-    const result = await packagesApi.upgradeSelected(serverId.value, names);
-    taskId.value = result.taskId;
+    await packagesApi.upgradeSelected(serverId.value, names);
     showMessage(t('packagesPage.selectedUpgradeStarted'));
   } catch (err) {
     showMessage(err instanceof Error ? err.message : t('packagesPage.upgradeFailed'), 'error');
@@ -121,17 +118,11 @@ async function upgradeSelected() {
 async function upgradeAll() {
   if (!serverId.value) return;
   try {
-    const result = await packagesApi.upgradeAll(serverId.value);
-    taskId.value = result.taskId;
+    await packagesApi.upgradeAll(serverId.value);
     showMessage(t('packagesPage.fullUpgradeStarted'));
   } catch (err) {
     showMessage(err instanceof Error ? err.message : t('packagesPage.fullUpgradeFailed'), 'error');
   }
-}
-
-async function handleTaskFinished() {
-  await Promise.all([loadServers(), loadUpdates()]);
-  showMessage(t('packagesPage.packageTaskFinished'));
 }
 
 watch(serverId, () => loadUpdates());
@@ -143,13 +134,12 @@ onBeforeUnmount(stopRefreshPolling);
 </script>
 
 <template>
-  <div>
-    <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
+  <div class="page-shell">
+    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
     <v-alert
       v-if="operationBlocked && currentServer"
       type="warning"
       variant="tonal"
-      class="mb-4"
     >
       {{ t('packagesPage.blockedHint') }}
     </v-alert>
@@ -228,14 +218,6 @@ onBeforeUnmount(stopRefreshPolling);
       </v-card>
     </div>
 
-    <!-- Active Task Progress -->
-    <v-card v-slot:prepend v-if="taskId" class="mt-6 pa-4" variant="outlined">
-      <v-card-title class="px-0 pt-0 text-subtitle-1 font-weight-bold">{{ t('packagesPage.runningTask') }}</v-card-title>
-      <v-card-text class="px-0 pb-0">
-        <TaskLogPanel :task-id="taskId" :server-name="currentServer?.name" @finished="handleTaskFinished" />
-      </v-card-text>
-    </v-card>
-
     <!-- Global Snackbar -->
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
@@ -250,6 +232,6 @@ onBeforeUnmount(stopRefreshPolling);
 .package-grid {
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
-  gap: 24px;
+  gap: 20px;
 }
 </style>

@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"panel/internal/sshx"
 )
@@ -72,7 +73,7 @@ func TestRunLoggedStreamsOutputBeforeCommandReturns(t *testing.T) {
 		}
 	}}
 
-	if err := runLogged(context.Background(), exec, sshx.Target{}, "apt-get upgrade", sink); err != nil {
+	if err := runLogged(context.Background(), exec, sshx.Target{}, "apt-get upgrade", 10*time.Minute, sink); err != nil {
 		t.Fatal(err)
 	}
 
@@ -84,6 +85,29 @@ func TestRunLoggedStreamsOutputBeforeCommandReturns(t *testing.T) {
 		if sink.lines[i] != want[i] {
 			t.Fatalf("line %d = %q, want %q; all lines %#v", i, sink.lines[i], want[i], sink.lines)
 		}
+	}
+}
+
+func TestListUpgradeableUsesExtendedTimeout(t *testing.T) {
+	exec := &streamingFakeExecutor{}
+
+	if _, err := (DebianAdapter{}).ListUpgradeable(context.Background(), exec, sshx.Target{}); err != nil {
+		t.Fatal(err)
+	}
+	if exec.lastTimeout != packageListTimeout {
+		t.Fatalf("expected list timeout %s, got %s", packageListTimeout, exec.lastTimeout)
+	}
+}
+
+func TestUpgradeAllUsesLongTimeout(t *testing.T) {
+	exec := &streamingFakeExecutor{}
+	sink := &recordingLogSink{}
+
+	if err := (DebianAdapter{}).UpgradeAll(context.Background(), exec, sshx.Target{}, sink); err != nil {
+		t.Fatal(err)
+	}
+	if exec.lastTimeout != packageUpgradeTimeout {
+		t.Fatalf("expected upgrade timeout %s, got %s", packageUpgradeTimeout, exec.lastTimeout)
 	}
 }
 
@@ -119,7 +143,8 @@ func (s *recordingLogSink) AppendLog(_ context.Context, stream, line string) err
 }
 
 type streamingFakeExecutor struct {
-	duringRun func()
+	duringRun   func()
+	lastTimeout time.Duration
 }
 
 func (f *streamingFakeExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
@@ -127,12 +152,19 @@ func (f *streamingFakeExecutor) Exec(context.Context, sshx.Target, sshx.CommandS
 }
 
 func (f *streamingFakeExecutor) ExecSudo(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
-	command.OnStdout("first")
+	f.lastTimeout = command.Timeout
+	if command.OnStdout != nil {
+		command.OnStdout("first")
+	}
 	if f.duringRun != nil {
 		f.duringRun()
 	}
-	command.OnStderr("warn")
-	command.OnStdout("last")
+	if command.OnStderr != nil {
+		command.OnStderr("warn")
+	}
+	if command.OnStdout != nil {
+		command.OnStdout("last")
+	}
 	return sshx.CommandResult{Stdout: "first\nlast\n", Stderr: "warn\n"}, nil
 }
 
