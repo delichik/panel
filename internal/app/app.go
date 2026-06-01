@@ -2,7 +2,9 @@ package app
 
 import (
 	"context"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,24 +43,38 @@ func New(cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	nomadTLS, err := nomad.EnsureTLSAssets(cfg.DataRoot)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	authSvc := auth.NewService(cfg)
 	taskSvc := tasks.NewService(store.AppDB())
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	executor := sshx.NewSSHExecutor(credSvc, cfg.RemoteTimeout())
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
-	nomadClient := nomad.NewClient(nomad.Config{
+	nomadClientCfg := nomad.Config{
 		Address:    cfg.Nomad.Address,
 		Token:      cfg.Nomad.Token,
 		Namespace:  cfg.Nomad.Namespace,
 		Region:     cfg.Nomad.Region,
 		Datacenter: cfg.Nomad.Datacenter,
-	}, nil)
+	}
+	if usesManagedNomadTLS(cfg.Nomad.Address) {
+		nomadClientCfg.TLS = &nomad.TLSConfig{
+			CAFile:             nomadTLS.CAPath,
+			CertFile:           nomadTLS.ClientCertPath,
+			KeyFile:            nomadTLS.ClientKeyPath,
+			SkipVerifyHostname: true,
+		}
+	}
+	nomadClient := nomad.NewClient(nomadClientCfg, nil)
 	applicationSvc := applications.NewService(store.AppDB(), nomadClient, taskSvc, applications.Config{
 		Namespace:  cfg.Nomad.Namespace,
 		Region:     cfg.Nomad.Region,
 		Datacenter: cfg.Nomad.Datacenter,
 	})
-	nomadJoinSvc := nomad.NewJoinService(serverSvc, nomadClient, executor, taskSvc, cfg.Nomad)
+	nomadJoinSvc := nomad.NewJoinService(serverSvc, nomadClient, executor, taskSvc, cfg.Nomad, nomadTLS)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
@@ -280,6 +296,21 @@ func applicationSaveSessionFileDeletePath(path string) bool {
 func applicationSaveSessionCommitPath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "application-save-sessions" && parts[3] != "" && parts[4] == "commit"
+}
+
+func usesManagedNomadTLS(address string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(address))
+	if err != nil || parsed.Host == "" {
+		return true
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" || host == "localhost" {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }
 
 func (a *App) static(w http.ResponseWriter, r *http.Request) {

@@ -3,11 +3,13 @@ package nomad
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -25,7 +27,7 @@ type Client struct {
 
 func NewClient(cfg Config, httpClient *http.Client) *Client {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = defaultHTTPClient(cfg)
 	}
 	if cfg.Address == "" {
 		cfg.Address = "http://127.0.0.1:4646"
@@ -35,6 +37,38 @@ func NewClient(cfg Config, httpClient *http.Client) *Client {
 		baseURL = &url.URL{Scheme: "http", Host: "127.0.0.1:4646"}
 	}
 	return &Client{cfg: cfg, httpClient: httpClient, baseURL: baseURL}
+}
+
+func defaultHTTPClient(cfg Config) *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg.TLS != nil {
+		tlsConfig, err := newClientTLSConfig(*cfg.TLS)
+		if err == nil {
+			transport.TLSClientConfig = tlsConfig
+		}
+	}
+	return &http.Client{Transport: transport}
+}
+
+func newClientTLSConfig(cfg TLSConfig) (*tls.Config, error) {
+	assets := &TLSAssets{
+		CAPath:         cfg.CAFile,
+		ClientCertPath: cfg.CertFile,
+		ClientKeyPath:  cfg.KeyFile,
+	}
+	assets.CAPEM, _ = os.ReadFile(cfg.CAFile)
+	if len(assets.CAPEM) == 0 {
+		return nil, os.ErrNotExist
+	}
+	tlsConfig, err := assets.ClientTLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	if !cfg.SkipVerifyHostname {
+		tlsConfig.InsecureSkipVerify = false
+		tlsConfig.VerifyPeerCertificate = nil
+	}
+	return tlsConfig, nil
 }
 
 func (c *Client) SetAddress(address string) {

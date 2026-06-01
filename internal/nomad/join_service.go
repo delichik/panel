@@ -54,11 +54,12 @@ type JoinService struct {
 	exec           sshx.RemoteExecutor
 	tasks          *tasks.Service
 	cfg            config.NomadConfig
+	tlsAssets      *TLSAssets
 	appProxySource applicationProxySource
 }
 
-func NewJoinService(servers *server.Service, nomadClient nodeClient, exec sshx.RemoteExecutor, taskSvc *tasks.Service, cfg config.NomadConfig) *JoinService {
-	return &JoinService{servers: servers, nomad: nomadClient, exec: exec, tasks: taskSvc, cfg: cfg}
+func NewJoinService(servers *server.Service, nomadClient nodeClient, exec sshx.RemoteExecutor, taskSvc *tasks.Service, cfg config.NomadConfig, tlsAssets *TLSAssets) *JoinService {
+	return &JoinService{servers: servers, nomad: nomadClient, exec: exec, tasks: taskSvc, cfg: cfg, tlsAssets: tlsAssets}
 }
 
 type applicationProxySource interface {
@@ -171,7 +172,7 @@ func (s *JoinService) BootstrapServer(ctx context.Context, serverID string) (tas
 		return tasks.Task{}, err
 	}
 	if setter, ok := s.nomad.(addressSetter); ok {
-		s.setNomadAddress(setter, "http://"+net.JoinHostPort(srv.Host, "4646"))
+		s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
 	}
 	go s.runBootstrapServer(context.Background(), task.ID, srv)
 	return task, nil
@@ -294,7 +295,7 @@ func (s *JoinService) restoreNomadAddressFromBootstrap(ctx context.Context) {
 	if err != nil || strings.TrimSpace(srv.Host) == "" {
 		return
 	}
-	s.setNomadAddress(setter, "http://"+net.JoinHostPort(srv.Host, "4646"))
+	s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
 }
 
 func (s *JoinService) RestoreNomadAddressFromBootstrap(ctx context.Context) {
@@ -415,11 +416,23 @@ if ! command -v nomad >/dev/null 2>&1; then
 fi
 %s
 %s
+%s
 cat >/etc/nomad.d/panel-client.hcl <<'EOF'
 name = "%s"
 datacenter = "%s"
 data_dir = "/opt/nomad/data"
 bind_addr = "0.0.0.0"
+
+tls {
+  http = true
+  rpc = true
+  rpc_upgrade_mode = true
+  verify_https_client = true
+  verify_server_hostname = false
+  ca_file = "/etc/nomad.d/tls/ca.pem"
+  cert_file = "/etc/nomad.d/tls/agent.pem"
+  key_file = "/etc/nomad.d/tls/agent-key.pem"
+}
 
 server {
   enabled = false
@@ -440,7 +453,7 @@ systemctl enable nomad
 systemctl restart nomad
 systemctl is-active --quiet nomad
 nomad version
-`, runtimePrereqsScript(), resetNomadConfigScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, runtimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) bootstrapScript(srv server.Server) string {
@@ -458,11 +471,23 @@ if ! command -v nomad >/dev/null 2>&1; then
 fi
 %s
 %s
+%s
 cat >/etc/nomad.d/panel-server.hcl <<'EOF'
 name = "%s"
 datacenter = "%s"
 data_dir = "/opt/nomad/data"
 bind_addr = "0.0.0.0"
+
+tls {
+  http = true
+  rpc = true
+  rpc_upgrade_mode = true
+  verify_https_client = true
+  verify_server_hostname = false
+  ca_file = "/etc/nomad.d/tls/ca.pem"
+  cert_file = "/etc/nomad.d/tls/agent.pem"
+  key_file = "/etc/nomad.d/tls/agent-key.pem"
+}
 
 server {
   enabled = true
@@ -483,7 +508,7 @@ systemctl enable nomad
 systemctl restart nomad
 systemctl is-active --quiet nomad
 nomad version
-`, runtimePrereqsScript(), resetNomadConfigScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, runtimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
@@ -547,8 +572,9 @@ fi`
 }
 
 func resetNomadConfigScript() string {
-	return `install -d -m 0755 /etc/nomad.d /opt/nomad/data
-find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' \) -delete`
+	return `rm -rf /etc/nomad.d/tls
+install -d -m 0755 /etc/nomad.d /etc/nomad.d/tls /opt/nomad/data
+find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' -o -name '*.pem' \) -delete`
 }
 
 func removeNodeScript() string {
@@ -969,4 +995,18 @@ func boolTrait(value bool) string {
 		return "true"
 	}
 	return "false"
+}
+
+func (s *JoinService) nomadTLSWriteScript() string {
+	if s.tlsAssets == nil {
+		return ""
+	}
+	return fmt.Sprintf(`cat >/etc/nomad.d/tls/ca.pem <<'EOF'
+%sEOF
+cat >/etc/nomad.d/tls/agent.pem <<'EOF'
+%sEOF
+cat >/etc/nomad.d/tls/agent-key.pem <<'EOF'
+%sEOF
+chmod 0600 /etc/nomad.d/tls/ca.pem /etc/nomad.d/tls/agent.pem /etc/nomad.d/tls/agent-key.pem
+`, string(s.tlsAssets.CAPEM), string(s.tlsAssets.AgentCertPEM), string(s.tlsAssets.AgentKeyPEM))
 }

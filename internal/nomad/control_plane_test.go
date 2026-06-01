@@ -182,11 +182,15 @@ func newControlPlaneTestService(t *testing.T) (*JoinService, *credential.Service
 	if err != nil {
 		t.Fatal(err)
 	}
+	tlsAssets, err := EnsureTLSAssets(cfg.DataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	taskSvc := tasks.NewService(store.AppDB())
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	fake := &controlPlaneFakeNomad{}
-	return NewJoinService(serverSvc, fake, &joinFakeExecutor{}, taskSvc, cfg.Nomad), credSvc, fake, func() { _ = store.Close() }
+	return NewJoinService(serverSvc, fake, &joinFakeExecutor{}, taskSvc, cfg.Nomad, tlsAssets), credSvc, fake, func() { _ = store.Close() }
 }
 
 func createControlPlaneServer(t *testing.T, svc *server.Service, credSvc *credential.Service, ctx context.Context, name, host string) server.Server {

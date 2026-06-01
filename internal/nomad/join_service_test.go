@@ -95,6 +95,9 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 		"command -v nomad",
 		"apt-get install -y docker.io",
 		"apt-get install -y containernetworking-plugins",
+		"cat >/etc/nomad.d/tls/ca.pem <<'EOF'",
+		"verify_https_client = true",
+		`ca_file = "/etc/nomad.d/tls/ca.pem"`,
 		"find /etc/nomad.d -maxdepth 1 -type f",
 		"-name '*.hcl'",
 		"-name '*.json'",
@@ -172,7 +175,7 @@ func TestControlPlaneRestoresNomadAddressFromCompletedBootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if nomadFake.address != "http://10.0.0.20:4646" {
+	if nomadFake.address != "https://10.0.0.20:4646" {
 		t.Fatalf("expected restored nomad address, got %q", nomadFake.address)
 	}
 }
@@ -242,7 +245,7 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 	if task.Type != TaskTypeServerBootstrap || task.ResourceType != "server" || task.ResourceID != srv.ID {
 		t.Fatalf("unexpected task metadata: %#v", task)
 	}
-	if nomadFake.address != "http://10.0.0.20:4646" {
+	if nomadFake.address != "https://10.0.0.20:4646" {
 		t.Fatalf("expected runtime Nomad address to point at bootstrapped server, got %q", nomadFake.address)
 	}
 	if len(execFake.sudoCommands) != 1 {
@@ -258,6 +261,9 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 		"client {",
 		"apt-get install -y docker.io",
 		"apt-get install -y containernetworking-plugins",
+		"cat >/etc/nomad.d/tls/agent.pem <<'EOF'",
+		"verify_https_client = true",
+		"verify_server_hostname = false",
 		"find /etc/nomad.d -maxdepth 1 -type f",
 		"-name '*.hcl'",
 		"-name '*.json'",
@@ -453,6 +459,10 @@ func newJoinTestService(t *testing.T) (*JoinService, *credential.Service, *joinF
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.Nomad.Address = "http://10.0.0.1:4646"
 	cfg.Nomad.Datacenter = "dc1"
+	tlsAssets, err := EnsureTLSAssets(cfg.DataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +472,7 @@ func newJoinTestService(t *testing.T) (*JoinService, *credential.Service, *joinF
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	nomadClient := &joinFakeNomadClient{}
-	return NewJoinService(serverSvc, nomadClient, exec, taskSvc, cfg.Nomad), credSvc, nomadClient, exec, func() { _ = store.Close() }
+	return NewJoinService(serverSvc, nomadClient, exec, taskSvc, cfg.Nomad, tlsAssets), credSvc, nomadClient, exec, func() { _ = store.Close() }
 }
 
 func createJoinTestServer(t *testing.T, svc *server.Service, credSvc *credential.Service, ctx context.Context, name, host string) server.Server {
