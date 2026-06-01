@@ -1,0 +1,12 @@
+.git
+.github
+.idea
+.codegraph
+.claude
+tmp
+data
+web/dist
+web/node_modules
+node_modules
+session.md
+CLAUDE.md
