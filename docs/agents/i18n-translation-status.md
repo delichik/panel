@@ -48,17 +48,14 @@
 
 ## 当前仍未完全覆盖
 
-### 前端仍有部分技术值直接展示
+### 前端仍有少量第三方原始文本
 
-以下内容仍以技术枚举或第三方原始值形式展示，尚未完全本地化：
+以下内容仍会展示第三方系统直接返回的原始描述，当前保留原样以避免误译：
 
 - `web/src/features/applications/components/ApplicationRuntimePanel.vue`
-  - `jobStatus`
-  - allocation / evaluation 的部分原始状态值
-- `web/src/features/nomad/pages/NomadNodesPage.vue`
-  - 节点 `status` / `kind` / `role` 的原始值
-- `web/src/features/applications/components/ApplicationEditor.vue`
-  - 部分底层策略值仍直接展示为技术标识，如 `unless-stopped`
+  - `deployment.StatusDescription`
+  - `evaluation.StatusDescription`
+  - `evaluation.Type`
 
 ### 仍未纳入本轮整理的页面
 
@@ -80,13 +77,13 @@
 
 ### P1
 
-- 继续清理前端表格和 chip 中直接展示的技术状态值
+- 补齐高频 Nomad / 基础设施第三方原始描述的简体中文映射策略
 - 补齐高频后端错误码的简体中文映射
 
 ### P2
 
 - 为尚未启用的页面预留统一翻译接入方式
-- 梳理应用运行时、Nomad 运行时的状态值映射策略
+- 持续梳理新增运行时枚举值，避免前端出现新的直出技术值
 
 ## 更新规则
 

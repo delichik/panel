@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from 'vue';
-import { t, useI18n } from '@/i18n';
+import {
+  t,
+  translateApplicationFileKind,
+  translateApplicationRestartPolicy,
+  useI18n,
+} from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ServerDto } from '@/types/api';
@@ -571,10 +576,10 @@ async function save(deploy = false) {
                   <v-select
                     v-model="specForm.restartPolicy"
                     :items="[
-                      { title: 'unless-stopped', value: 'unless-stopped' },
-                      { title: 'always', value: 'always' },
-                      { title: 'on-failure', value: 'on-failure' },
-                      { title: 'no', value: 'no' },
+                      { title: translateApplicationRestartPolicy('unless-stopped'), value: 'unless-stopped' },
+                      { title: translateApplicationRestartPolicy('always'), value: 'always' },
+                      { title: translateApplicationRestartPolicy('on-failure'), value: 'on-failure' },
+                      { title: translateApplicationRestartPolicy('no'), value: 'no' },
                     ]"
                     :label="t('applicationEditor.policy')"
                     density="compact"
@@ -650,10 +655,10 @@ async function save(deploy = false) {
                   </div>
                   <div v-for="(port, index) in specForm.ports" :key="index" class="repeat-row ports-row">
                     <v-text-field v-model="port.label" :label="t('applicationEditor.label')" density="compact" variant="outlined" hide-details />
-                    <span class="network-target-name">{{ specForm.name || 'app' }}:</span>
+                    <span class="network-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
                     <v-text-field v-model.number="port.to" type="number" :label="t('applicationEditor.containerPort')" density="compact" variant="outlined" hide-details />
                     <v-icon icon="mdi-arrow-right" size="20" class="network-arrow" />
-                    <span class="network-target-name">node:</span>
+                    <span class="network-target-name">{{ t('applicationEditor.nodeTarget') }}:</span>
                     <v-text-field v-model.number="port.static" type="number" :label="t('applicationEditor.hostPort')" density="compact" variant="outlined" hide-details />
                     <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.ports, index)" />
                   </div>
@@ -663,11 +668,11 @@ async function save(deploy = false) {
                 <div class="proxy-actions">
                   <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyRule">{{ t('common.addProxyRule') }}</v-btn>
                 </div>
-                <div v-for="(rule, ruleIndex) in form.reverseProxy" :key="ruleIndex" class="proxy-rule">
+                  <div v-for="(rule, ruleIndex) in form.reverseProxy" :key="ruleIndex" class="proxy-rule">
                   <div class="proxy-rule-header">
                     <v-text-field v-model="rule.domain" :label="t('applicationEditor.domain')" density="compact" variant="outlined" hide-details />
                     <v-icon icon="mdi-arrow-right" size="20" class="proxy-arrow" />
-                    <span class="proxy-target-name">{{ specForm.name || 'app' }}:</span>
+                    <span class="proxy-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
                     <v-text-field v-model.number="rule.targetPort" type="number" min="1" max="65535" :label="t('applicationEditor.target')" density="compact" variant="outlined" hide-details />
                     <v-btn icon="mdi-delete" variant="text" color="error" @click="removeProxyRule(ruleIndex)" />
                   </div>
@@ -726,7 +731,7 @@ async function save(deploy = false) {
                   <tbody>
                     <tr v-for="(file, index) in files" :key="`${file.id}:${file.path}`">
                       <td class="mono text-truncate">{{ file.path }}</td>
-                      <td><v-chip size="small" variant="tonal" label>{{ file.kind }}</v-chip></td>
+                      <td><v-chip size="small" variant="tonal" label>{{ translateApplicationFileKind(file.kind) }}</v-chip></td>
                       <td>{{ sizeLabel(file.size) }}</td>
                       <td class="mono text-truncate hash-cell">{{ file.sha256 }}</td>
                       <td class="text-right"><v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeFile(index)" /></td>

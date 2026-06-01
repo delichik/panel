@@ -364,11 +364,19 @@ const messages = {
       yamlSpec: "YAML spec",
       loadFilesFailed: "Unable to load application files",
       saveFailed: "Unable to save application",
+      restartPolicyUnlessStopped: "unless stopped",
+      restartPolicyAlways: "always",
+      restartPolicyOnFailure: "on failure",
+      restartPolicyNo: "no restart",
       bridge: "bridge",
       host: "host",
       file: "file",
       volume: "volume",
       binary: "binary",
+      templateKind: "template",
+      binaryKind: "binary",
+      nodeTarget: "node",
+      appTargetFallback: "app",
       sourcePathHost: "Host absolute path",
       sourcePathVolume: "Volume name",
     },
@@ -390,6 +398,21 @@ const messages = {
       noAllocations: "No allocations",
       evaluationColumn: "Evaluation",
       noEvaluations: "No evaluations",
+      statusPending: "pending",
+      statusRunning: "running",
+      statusDead: "dead",
+      statusFailed: "failed",
+      statusLost: "lost",
+      statusComplete: "complete",
+      statusSuccessful: "successful",
+      statusBlocked: "blocked",
+      statusCancelled: "cancelled",
+      statusStopping: "stopping",
+      statusStarting: "starting",
+      statusQueued: "queued",
+      desiredRun: "run",
+      desiredStop: "stop",
+      desiredEvict: "evict",
     },
     applicationLogs: {
       logs: "Logs",
@@ -556,6 +579,24 @@ const messages = {
       staticRoot: "Static root",
       index: "Index",
       saveProxyConfig: "Save proxy config",
+      nodeId: "Node ID",
+      roleServer: "server",
+      roleClient: "client",
+      roleUnknown: "unknown",
+      statusBootstrapping: "bootstrapping",
+      statusJoining: "joining",
+      statusRegistering: "registering",
+      statusRemoving: "removing",
+      statusReady: "ready",
+      statusDown: "down",
+      statusFailed: "failed",
+      statusMissing: "missing",
+      statusNomadUnreachable: "Nomad unreachable",
+      statusUnmanaged: "unmanaged",
+      kindManaged: "managed",
+      kindMissing: "missing",
+      kindPending: "pending",
+      kindUnmanaged: "unmanaged",
     },
     nomadSetupPage: {
       loadFailed: "Unable to load Nomad setup state",
@@ -960,11 +1001,19 @@ const messages = {
       yamlSpec: "YAML Spec",
       loadFilesFailed: "无法加载应用文件",
       saveFailed: "无法保存应用",
+      restartPolicyUnlessStopped: "除非手动停止",
+      restartPolicyAlways: "总是重启",
+      restartPolicyOnFailure: "失败时重启",
+      restartPolicyNo: "不自动重启",
       bridge: "bridge",
       host: "host",
       file: "file",
       volume: "volume",
       binary: "binary",
+      templateKind: "模板",
+      binaryKind: "二进制",
+      nodeTarget: "节点",
+      appTargetFallback: "应用",
       sourcePathHost: "主机绝对路径",
       sourcePathVolume: "卷名称",
     },
@@ -986,6 +1035,21 @@ const messages = {
       noAllocations: "暂无分配",
       evaluationColumn: "评估",
       noEvaluations: "暂无评估",
+      statusPending: "待处理",
+      statusRunning: "运行中",
+      statusDead: "已停止",
+      statusFailed: "失败",
+      statusLost: "已丢失",
+      statusComplete: "已完成",
+      statusSuccessful: "成功",
+      statusBlocked: "已阻塞",
+      statusCancelled: "已取消",
+      statusStopping: "停止中",
+      statusStarting: "启动中",
+      statusQueued: "排队中",
+      desiredRun: "运行",
+      desiredStop: "停止",
+      desiredEvict: "驱逐",
     },
     applicationLogs: {
       logs: "日志",
@@ -1152,6 +1216,24 @@ const messages = {
       staticRoot: "静态根目录",
       index: "索引页",
       saveProxyConfig: "保存代理配置",
+      nodeId: "节点 ID",
+      roleServer: "服务端",
+      roleClient: "客户端",
+      roleUnknown: "未知",
+      statusBootstrapping: "引导中",
+      statusJoining: "加入中",
+      statusRegistering: "注册中",
+      statusRemoving: "移除中",
+      statusReady: "就绪",
+      statusDown: "离线",
+      statusFailed: "失败",
+      statusMissing: "缺失",
+      statusNomadUnreachable: "Nomad 不可达",
+      statusUnmanaged: "未托管",
+      kindManaged: "已托管",
+      kindMissing: "缺失",
+      kindPending: "待定",
+      kindUnmanaged: "未托管",
     },
     nomadSetupPage: {
       loadFailed: "无法加载 Nomad 初始化状态",
@@ -1279,9 +1361,28 @@ export function useI18n() {
     setLocale,
     translateTaskStatus,
     translateCleanupSchedule,
+    translateApplicationRestartPolicy,
+    translateApplicationFileKind,
+    translateNomadNodeRole,
+    translateNomadNodeStatus,
+    translateNomadNodeKind,
+    translateNomadRuntimeStatus,
+    translateNomadAllocationDesiredStatus,
     formatDateTime,
     formatTime,
   };
+}
+
+function lookupWithFallback(path: string, fallback: string) {
+  return (
+    lookup(path, messages[locale.value]) ??
+    lookup(path, messages.en) ??
+    fallback
+  );
+}
+
+function humanizeEnum(value: string) {
+  return value.replace(/[_-]+/g, " ");
 }
 
 export function translateTaskStatus(value?: string | null) {
@@ -1300,6 +1401,93 @@ export function translateCleanupSchedule(value?: string | null) {
     lookup(`cleanupSchedule.${value}`, messages.en) ??
     value
   );
+}
+
+export function translateApplicationRestartPolicy(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const key = {
+    "unless-stopped": "applicationEditor.restartPolicyUnlessStopped",
+    always: "applicationEditor.restartPolicyAlways",
+    "on-failure": "applicationEditor.restartPolicyOnFailure",
+    no: "applicationEditor.restartPolicyNo",
+  }[value];
+  return key ? lookupWithFallback(key, humanizeEnum(value)) : humanizeEnum(value);
+}
+
+export function translateApplicationFileKind(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const key = {
+    template: "applicationEditor.templateKind",
+    binary: "applicationEditor.binaryKind",
+  }[value];
+  return key ? lookupWithFallback(key, value) : humanizeEnum(value);
+}
+
+export function translateNomadNodeRole(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const key = {
+    server: "nomadNodesPage.roleServer",
+    client: "nomadNodesPage.roleClient",
+    unknown: "nomadNodesPage.roleUnknown",
+  }[value];
+  return key ? lookupWithFallback(key, value) : humanizeEnum(value);
+}
+
+export function translateNomadNodeStatus(value?: string | null) {
+  if (!value) return t("common.unknown");
+  const key = {
+    bootstrapping: "nomadNodesPage.statusBootstrapping",
+    joining: "nomadNodesPage.statusJoining",
+    registering: "nomadNodesPage.statusRegistering",
+    removing: "nomadNodesPage.statusRemoving",
+    ready: "nomadNodesPage.statusReady",
+    down: "nomadNodesPage.statusDown",
+    failed: "nomadNodesPage.statusFailed",
+    missing: "nomadNodesPage.statusMissing",
+    nomad_unreachable: "nomadNodesPage.statusNomadUnreachable",
+    unmanaged: "nomadNodesPage.statusUnmanaged",
+  }[value];
+  return key ? lookupWithFallback(key, humanizeEnum(value)) : humanizeEnum(value);
+}
+
+export function translateNomadNodeKind(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const key = {
+    managed: "nomadNodesPage.kindManaged",
+    missing: "nomadNodesPage.kindMissing",
+    pending: "nomadNodesPage.kindPending",
+    unmanaged: "nomadNodesPage.kindUnmanaged",
+  }[value];
+  return key ? lookupWithFallback(key, humanizeEnum(value)) : humanizeEnum(value);
+}
+
+export function translateNomadRuntimeStatus(value?: string | null) {
+  if (!value) return t("common.unknown");
+  const key = {
+    pending: "applicationRuntime.statusPending",
+    running: "applicationRuntime.statusRunning",
+    dead: "applicationRuntime.statusDead",
+    failed: "applicationRuntime.statusFailed",
+    lost: "applicationRuntime.statusLost",
+    complete: "applicationRuntime.statusComplete",
+    successful: "applicationRuntime.statusSuccessful",
+    blocked: "applicationRuntime.statusBlocked",
+    cancelled: "applicationRuntime.statusCancelled",
+    stopping: "applicationRuntime.statusStopping",
+    starting: "applicationRuntime.statusStarting",
+    queued: "applicationRuntime.statusQueued",
+  }[value];
+  return key ? lookupWithFallback(key, humanizeEnum(value)) : humanizeEnum(value);
+}
+
+export function translateNomadAllocationDesiredStatus(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const key = {
+    run: "applicationRuntime.desiredRun",
+    stop: "applicationRuntime.desiredStop",
+    evict: "applicationRuntime.desiredEvict",
+  }[value];
+  return key ? lookupWithFallback(key, humanizeEnum(value)) : humanizeEnum(value);
 }
 
 export function formatDateTime(value?: string | null) {

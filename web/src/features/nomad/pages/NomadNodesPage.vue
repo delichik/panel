@@ -1,7 +1,13 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { t, useI18n } from '@/i18n';
+import {
+  t,
+  translateNomadNodeKind,
+  translateNomadNodeRole,
+  translateNomadNodeStatus,
+  useI18n,
+} from '@/i18n';
 import { nomadApi } from '@/api/nomad';
 import type { NomadControlPlaneDto, NomadReverseProxyStaticSiteDto, ProjectedNomadNodeDto } from '@/types/api';
 
@@ -195,15 +201,15 @@ onMounted(load);
         <v-btn prepend-icon="mdi-account-network" color="primary" variant="flat" class="text-none action-btn" :disabled="candidateServers.length === 0" @click="openJoinDialog">{{ t('nomadNodesPage.joinNode') }}</v-btn>
       </div>
       <v-table>
-        <thead><tr><th>{{ t('common.name') }}</th><th>Node ID</th><th>{{ t('serversPage.host') }}</th><th>{{ t('nomadNodesPage.role') }}</th><th>{{ t('common.status') }}</th><th>{{ t('nomadNodesPage.reverseProxy') }}</th><th>{{ t('packagesPage.source') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
+        <thead><tr><th>{{ t('common.name') }}</th><th>{{ t('nomadNodesPage.nodeId') }}</th><th>{{ t('serversPage.host') }}</th><th>{{ t('nomadNodesPage.role') }}</th><th>{{ t('common.status') }}</th><th>{{ t('nomadNodesPage.reverseProxy') }}</th><th>{{ t('packagesPage.source') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
         <tbody>
           <tr v-for="node in nodes" :key="node.nodeId || node.serverId || node.name">
             <td class="font-weight-bold">{{ node.name || '-' }}</td>
             <td class="mono">{{ node.nodeId || '-' }}</td>
             <td>{{ node.host || '-' }}</td>
-            <td><v-chip size="small" variant="tonal" label>{{ node.role }}</v-chip></td>
+            <td><v-chip size="small" variant="tonal" label>{{ translateNomadNodeRole(node.role) }}</v-chip></td>
             <td>
-              <v-chip :color="statusColor(node.status)" size="small" variant="tonal" label>{{ node.status || t('common.unknown') }}</v-chip>
+              <v-chip :color="statusColor(node.status)" size="small" variant="tonal" label>{{ translateNomadNodeStatus(node.status) }}</v-chip>
               <div v-if="node.error" class="text-caption text-error mt-1">{{ node.error }}</div>
             </td>
             <td>
@@ -214,7 +220,7 @@ onMounted(load);
               <span v-else class="text-medium-emphasis">-</span>
             </td>
             <td>
-              <v-chip :color="kindColor(node.kind)" size="small" variant="tonal" label>{{ node.kind }}</v-chip>
+              <v-chip :color="kindColor(node.kind)" size="small" variant="tonal" label>{{ translateNomadNodeKind(node.kind) }}</v-chip>
               <div v-if="node.serverId" class="text-caption text-medium-emphasis mt-1">{{ node.serverId }}</div>
             </td>
             <td class="text-right">

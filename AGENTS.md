@@ -6,11 +6,11 @@
 
 # 多语言要求
 
-- 所有新增或修改的用户可见文案，必须遵守 [docs/i18n-guide.md](docs/i18n-guide.md)
+- 所有新增或修改的用户可见文案，必须遵守 [docs/agents/i18n-guide.md](docs/agents/i18n-guide.md)
 - 开始改动多语言相关代码前，先阅读：
-  - [docs/i18n-guide.md](docs/i18n-guide.md)
-  - [docs/i18n-translation-status.md](docs/i18n-translation-status.md)
-- 当你新增了翻译、迁移了文案、或发现新的未翻译区域时，必须同步更新 [docs/i18n-translation-status.md](docs/i18n-translation-status.md)
+  - [docs/agents/i18n-guide.md](docs/agents/i18n-guide.md)
+  - [docs/agents/i18n-translation-status.md](docs/agents/i18n-translation-status.md)
+- 当你新增了翻译、迁移了文案、或发现新的未翻译区域时，必须同步更新 [docs/agents/i18n-translation-status.md](docs/agents/i18n-translation-status.md)
 - 禁止在前端页面、共享组件、路由元信息、后端错误响应中继续直接硬编码用户可见文案，除非同时完成该文案的多语言接入
 - 任何会被持久化的展示配置，不要保存当前语言下的标题或文案，必须保存稳定 key / kind / value，并在渲染时翻译
 
