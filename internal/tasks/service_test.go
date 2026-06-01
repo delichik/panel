@@ -55,6 +55,24 @@ func TestTaskLifecycleAndLogs(t *testing.T) {
 	if got.Status != StatusCompleted || got.FinishedAt == nil {
 		t.Fatalf("unexpected task state: %#v", got)
 	}
+	if got.Percentage == nil || *got.Percentage != 100 {
+		t.Fatalf("expected completed task progress to be 100, got %#v", got.Percentage)
+	}
+}
+
+func TestCreateCompletedTaskHasFinishedState(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "application_deploy", Status: StatusCompleted, Summary: "registered"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FinishedAt == nil || got.Percentage == nil || *got.Percentage != 100 {
+		t.Fatalf("expected completed task to have finished time and 100 percent progress: %#v", got)
+	}
 }
 
 func TestListFiltersByStatusServerAndType(t *testing.T) {
@@ -119,5 +137,62 @@ func TestListPaginatesTasks(t *testing.T) {
 	}
 	if got.Total != 3 || got.Page != 2 || got.PageSize != 2 || len(got.Items) != 1 {
 		t.Fatalf("unexpected paginated tasks: %#v", got)
+	}
+}
+
+func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{
+		OperationID:         "op_1",
+		Type:                "application_deploy",
+		ServerID:            "srv_1",
+		NodeID:              "srv_1",
+		ResourceType:        "application",
+		ResourceID:          "app_1",
+		TriggerType:         "user",
+		TriggerResourceType: "application",
+		TriggerResourceID:   "app_1",
+		TriggerTaskID:       "task_parent",
+		TriggeredBy:         "alice",
+		Summary:             "deploy api",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OperationID != "op_1" || got.NodeID != "srv_1" || got.TriggerType != "user" || got.TriggeredBy != "alice" {
+		t.Fatalf("task metadata was not persisted: %#v", got)
+	}
+	step, err := svc.UpsertStep(ctx, task.ID, StepInput{Step: "schedule", Status: StatusRunning, Percentage: 25, MetadataJSON: `{"node":"srv_1"}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.ID == "" || step.StartedAt == nil {
+		t.Fatalf("expected started step: %#v", step)
+	}
+	step, err = svc.UpsertStep(ctx, task.ID, StepInput{Step: "schedule", Status: StatusCompleted, Percentage: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if step.FinishedAt == nil {
+		t.Fatalf("expected finished step: %#v", step)
+	}
+	steps, err := svc.Steps(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) != 1 || steps[0].Step != "schedule" || steps[0].Status != StatusCompleted {
+		t.Fatalf("unexpected steps: %#v", steps)
+	}
+	retry, err := svc.Retry(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ID == task.ID || retry.OperationID != task.OperationID || retry.TriggerType != "retry" || retry.TriggerTaskID != task.ID {
+		t.Fatalf("unexpected retry task: %#v", retry)
 	}
 }

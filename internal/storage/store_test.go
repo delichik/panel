@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 
@@ -45,4 +46,49 @@ func TestOpenAllowsConcurrentAppConnections(t *testing.T) {
 	if got := store.AppDB().Stats().MaxOpenConnections; got < 2 {
 		t.Fatalf("app database should not be single-connection, got %d", got)
 	}
+}
+
+func TestFreshSchemaUsesApplicationTables(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	for _, table := range []string{"applications", "application_files", "application_revisions"} {
+		if !tableExists(t, store.AppDB(), table) {
+			t.Fatalf("expected table %q to exist", table)
+		}
+	}
+	for _, table := range []string{
+		"docker_capabilities",
+		"docker_runtime_cache",
+		"container_runtime_cache",
+		"operation_" + "locks",
+		"container_services",
+		"container_service_files",
+		"container_service_" + string([]byte{'p', 'l', 'a', 'c', 'e', 'm', 'e', 'n', 't', 's'}),
+	} {
+		if tableExists(t, store.AppDB(), table) {
+			t.Fatalf("old orchestration table %q must not exist in fresh schema", table)
+		}
+	}
+}
+
+func tableExists(t *testing.T, db *sql.DB, table string) bool {
+	t.Helper()
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("query table %q: %v", table, err)
+	}
+	return true
 }

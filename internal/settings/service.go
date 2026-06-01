@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"panel/internal/config"
+	"panel/internal/i18n"
 	"panel/internal/panelerr"
 )
 
@@ -15,6 +16,7 @@ type RuntimeUpdate struct {
 	MetricsRetentionDays             int    `json:"metricsRetentionDays"`
 	MetricsCollectionIntervalSeconds int    `json:"metricsCollectionIntervalSeconds"`
 	CleanupSchedule                  string `json:"cleanupSchedule"`
+	Language                         string `json:"language"`
 }
 
 type RuntimeSettings struct {
@@ -25,6 +27,7 @@ type RuntimeSettings struct {
 	MetricsRetentionDays             int    `json:"metricsRetentionDays"`
 	MetricsCollectionIntervalSeconds int    `json:"metricsCollectionIntervalSeconds"`
 	CleanupSchedule                  string `json:"cleanupSchedule"`
+	Language                         string `json:"language"`
 }
 
 type Service struct {
@@ -61,6 +64,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		"metricsRetentionDays":             strconv.Itoa(input.MetricsRetentionDays),
 		"metricsCollectionIntervalSeconds": strconv.Itoa(input.MetricsCollectionIntervalSeconds),
 		"cleanupSchedule":                  input.CleanupSchedule,
+		"language":                         i18n.NormalizeLocale(input.Language),
 	}
 	for key, value := range values {
 		if _, err := tx.ExecContext(ctx, `
@@ -79,8 +83,10 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.MetricsRetentionDays = input.MetricsRetentionDays
 	s.rt.MetricsCollectionIntervalSeconds = input.MetricsCollectionIntervalSeconds
 	s.rt.CleanupSchedule = input.CleanupSchedule
+	s.rt.Language = i18n.NormalizeLocale(input.Language)
 	next := s.rt
 	s.mu.Unlock()
+	i18n.SetDefaultLocale(next.Language)
 	return next, nil
 }
 
@@ -107,6 +113,10 @@ func (s *Service) load(ctx context.Context) error {
 			}
 		case "cleanupSchedule":
 			next.CleanupSchedule = value
+		case "language":
+			if locale := i18n.NormalizeLocale(value); locale != "" {
+				next.Language = locale
+			}
 		}
 	}
 	if err := rows.Err(); err != nil {
@@ -122,6 +132,7 @@ func (s *Service) load(ctx context.Context) error {
 	s.mu.Lock()
 	s.rt = next
 	s.mu.Unlock()
+	i18n.SetDefaultLocale(next.Language)
 	return nil
 }
 
@@ -134,6 +145,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		MetricsRetentionDays:             7,
 		MetricsCollectionIntervalSeconds: 60,
 		CleanupSchedule:                  "daily",
+		Language:                         i18n.DefaultLocale(),
 	}
 }
 
@@ -146,8 +158,11 @@ func validateRuntimeUpdate(input RuntimeUpdate) error {
 	}
 	switch input.CleanupSchedule {
 	case "hourly", "daily", "weekly":
-		return nil
 	default:
 		return panelerr.Validation("invalid_cleanup_schedule", "Cleanup schedule must be hourly, daily, or weekly")
 	}
+	if locale := i18n.NormalizeLocale(input.Language); locale == "" {
+		return panelerr.Validation("invalid_language", "Language must be English or Simplified Chinese")
+	}
+	return nil
 }

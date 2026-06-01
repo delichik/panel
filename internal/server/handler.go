@@ -37,6 +37,19 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, srv)
 }
 
+func (h *Handler) Probe(w http.ResponseWriter, r *http.Request) {
+	var req SaveRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	result, err := h.service.ProbeConnectivity(r.Context(), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 	var req SaveRequest
 	if !httpx.Decode(w, r, &req) {

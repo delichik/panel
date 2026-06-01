@@ -10,7 +10,7 @@ import (
 	"panel/internal/httpx"
 )
 
-func TestSessionReturnsUnauthenticatedWithoutCookie(t *testing.T) {
+func TestSessionReturnsUnauthenticatedWithoutToken(t *testing.T) {
 	handler := NewHandler(NewService(config.Default()))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
 	rec := httptest.NewRecorder()
@@ -33,7 +33,7 @@ func TestSessionReturnsUnauthenticatedWithoutCookie(t *testing.T) {
 	}
 }
 
-func TestSessionReturnsAuthenticatedWithValidCookie(t *testing.T) {
+func TestSessionReturnsAuthenticatedWithValidToken(t *testing.T) {
 	service := NewService(config.Default())
 	sess, err := service.Login("admin", "admin")
 	if err != nil {
@@ -41,7 +41,7 @@ func TestSessionReturnsAuthenticatedWithValidCookie(t *testing.T) {
 	}
 	handler := NewHandler(service)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/session", nil)
-	req.AddCookie(&http.Cookie{Name: CookieName, Value: service.CookieValue(sess.ID)})
+	req.Header.Set("Authorization", "Bearer "+sess.Token)
 	rec := httptest.NewRecorder()
 
 	handler.Session(rec, req)

@@ -47,6 +47,10 @@ func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor) *
 }
 
 func (s *Service) Collect(ctx context.Context, serverID string) error {
+	return s.CollectAt(ctx, serverID, time.Now().UTC())
+}
+
+func (s *Service) CollectAt(ctx context.Context, serverID string, collectedAt time.Time) error {
 	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
 		return err
@@ -59,6 +63,7 @@ func (s *Service) Collect(ctx context.Context, serverID string) error {
 		return err
 	}
 	snap.ServerID = serverID
+	snap.Time = collectedAt
 	return s.Save(ctx, snap)
 }
 
@@ -66,15 +71,16 @@ func (s *Service) Save(ctx context.Context, snap linux.MetricsSnapshot) error {
 	if snap.Time.IsZero() {
 		snap.Time = time.Now().UTC()
 	}
+	snap.Time = alignMetricTime(snap.Time)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO metrics_snapshots(server_id,time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps,load_average,uptime_seconds,hostname,kernel_version,os_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		snap.ServerID, snap.Time.Format(time.RFC3339Nano), snap.CPUUsagePercent, snap.MemoryUsedBytes, snap.MemoryTotalBytes, snap.DiskUsedBytes, snap.DiskTotalBytes, snap.NetworkRxBytesRate, snap.NetworkTxBytesRate, snap.Status.LoadAverage, snap.Status.UptimeSeconds, snap.Status.Hostname, snap.Status.KernelVersion, snap.Status.OSVersion)
 	return err
 }
 
 func (s *Service) Query(ctx context.Context, serverID, rng string) (Series, error) {
-	duration := map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "24h": 24 * time.Hour}[rng]
+	duration := map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "1d": 24 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}[rng]
 	if duration == 0 {
-		return Series{}, panelerr.Validation("range_invalid", "Range must be 1h, 6h, or 24h")
+		return Series{}, panelerr.Validation("range_invalid", "Range must be 1h, 6h, 1d, or 7d")
 	}
 	since := time.Now().UTC().Add(-duration).Format(time.RFC3339Nano)
 	rows, err := s.db.QueryContext(ctx, `SELECT time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps FROM metrics_snapshots WHERE server_id=? AND time>=? ORDER BY time ASC`, serverID, since)
@@ -138,3 +144,6 @@ func (s *Service) LatestLoad(ctx context.Context, serverID string) (string, erro
 	return load.String, nil
 }
 
+func alignMetricTime(t time.Time) time.Time {
+	return t.UTC().Truncate(time.Second)
+}

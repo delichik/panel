@@ -1,6 +1,11 @@
-.cache/
 data/
+.cache
 bin/
 web/node_modules/
 web/dist/
 data
+.claude
+.vscode
+.idea
+tmp
+.codegraph

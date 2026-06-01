@@ -3,6 +3,7 @@ package packages
 import (
 	"context"
 	"database/sql"
+	"sync"
 	"time"
 
 	"panel/internal/linux"
@@ -13,21 +14,35 @@ import (
 )
 
 type Service struct {
-	db      *sql.DB
-	servers *server.Service
-	exec    sshx.RemoteExecutor
-	tasks   *tasks.Service
-	adapter linux.DebianAdapter
+	db         *sql.DB
+	servers    *server.Service
+	exec       sshx.RemoteExecutor
+	tasks      *tasks.Service
+	adapter    packageAdapter
+	refreshing map[string]bool
+	mu         sync.Mutex
 }
 
 type UpdateList struct {
 	ServerID        string                `json:"serverId"`
 	LastRefreshedAt *time.Time            `json:"lastRefreshedAt"`
 	Updates         []linux.PackageUpdate `json:"updates"`
+	Refreshing      bool                  `json:"refreshing"`
+}
+
+type RefreshResult struct {
+	ServerID    string `json:"serverId"`
+	Refreshing bool   `json:"refreshing"`
+}
+
+type packageAdapter interface {
+	ListUpgradeable(context.Context, sshx.RemoteExecutor, sshx.Target) ([]linux.PackageUpdate, error)
+	UpgradeSelected(context.Context, sshx.RemoteExecutor, sshx.Target, []string, linux.LogSink) error
+	UpgradeAll(context.Context, sshx.RemoteExecutor, sshx.Target, linux.LogSink) error
 }
 
 func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor, taskSvc *tasks.Service) *Service {
-	return &Service{db: db, servers: servers, exec: exec, tasks: taskSvc, adapter: linux.DebianAdapter{}}
+	return &Service{db: db, servers: servers, exec: exec, tasks: taskSvc, adapter: linux.DebianAdapter{}, refreshing: map[string]bool{}}
 }
 
 func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error) {
@@ -53,32 +68,20 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 	if out.LastRefreshedAt == nil || time.Since(*out.LastRefreshedAt) > 10*time.Minute {
 		_, _ = s.Refresh(ctx, serverID)
 	}
+	out.Refreshing = s.isRefreshing(serverID)
 	return out, rows.Err()
 }
 
-func (s *Service) Refresh(ctx context.Context, serverID string) (tasks.Task, error) {
+func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, error) {
 	srv, err := s.ensurePackageAllowed(ctx, serverID, false)
 	if err != nil {
-		return tasks.Task{}, err
+		return RefreshResult{}, err
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, "package_refresh", "server", serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		if existing.Status != tasks.StatusRunning && (existing.NextRunAt == nil || !existing.NextRunAt.After(time.Now().UTC())) {
-			existing, err = s.tasks.RunNow(ctx, existing.ID)
-			if err != nil {
-				return tasks.Task{}, err
-			}
-			go s.runRefresh(context.Background(), existing.ID, srv)
-		}
-		return existing, nil
+	if !s.markRefreshing(serverID) {
+		return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_refresh", ServerID: serverID, ResourceType: "server", ResourceID: serverID, Summary: "Refreshing package updates", MaxRetries: 8})
-	if err != nil {
-		return tasks.Task{}, err
-	}
-	go s.runRefresh(context.Background(), task.ID, srv)
-	return task, nil
+	go s.runRefresh(context.Background(), srv)
+	return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 }
 
 func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []string) (tasks.Task, error) {
@@ -124,20 +127,13 @@ func (s *Service) ensurePackageAllowed(ctx context.Context, serverID string, req
 	return srv, nil
 }
 
-func (s *Service) runRefresh(ctx context.Context, taskID string, srv server.Server) {
-	_ = s.tasks.Start(ctx, taskID)
-	_ = s.tasks.Advance(ctx, taskID, "running", "refreshing package cache")
+func (s *Service) runRefresh(ctx context.Context, srv server.Server) {
+	defer s.clearRefreshing(srv.ID)
 	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {
-		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
-	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
-		_ = s.tasks.FailRetryable(ctx, taskID, err)
-		return
-	}
-	_ = s.tasks.AppendLog(ctx, taskID, "system", "package refresh completed")
-	_ = s.tasks.Complete(ctx, taskID, "Package refresh completed")
+	_ = s.replaceUpdates(ctx, srv.ID, updates)
 }
 
 func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, names []string) {
@@ -243,4 +239,26 @@ type taskLogSink struct {
 
 func (s taskLogSink) AppendLog(ctx context.Context, stream, line string) error {
 	return s.tasks.AppendLog(ctx, s.taskID, stream, line)
+}
+
+func (s *Service) markRefreshing(serverID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.refreshing[serverID] {
+		return false
+	}
+	s.refreshing[serverID] = true
+	return true
+}
+
+func (s *Service) clearRefreshing(serverID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.refreshing, serverID)
+}
+
+func (s *Service) isRefreshing(serverID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refreshing[serverID]
 }

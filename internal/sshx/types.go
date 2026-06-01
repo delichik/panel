@@ -16,9 +16,11 @@ type Target struct {
 }
 
 type CommandSpec struct {
-	Command string
-	Env     map[string]string
-	Timeout time.Duration
+	Command  string
+	Env      map[string]string
+	Timeout  time.Duration
+	OnStdout func(line string)
+	OnStderr func(line string)
 }
 
 type CommandResult struct {

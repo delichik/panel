@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { ServerDto } from '@/types/api';
+import { useI18n } from '@/i18n';
 
 defineProps<{
   modelValue: string;
@@ -10,6 +11,7 @@ defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: string];
 }>();
+const { t } = useI18n();
 
 // Extract 1-min load average from raw loadAverage string (e.g. "0.15 0.08 0.02")
 function getOneMinLoad(loadAverage: string | null | undefined): string {
@@ -23,7 +25,7 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
   <v-card :loading="loading" class="server-selector d-flex flex-column h-100 overflow-hidden" variant="outlined">
     <v-card-item class="bg-surface-variant py-3 flex-shrink-0">
       <div class="d-flex justify-space-between align-center">
-        <v-card-title class="text-subtitle-1 font-weight-bold my-0 py-0">Servers</v-card-title>
+        <v-card-title class="text-subtitle-1 font-weight-bold my-0 py-0">{{ t('shared.serverSelector.title') }}</v-card-title>
         <v-chip size="small" color="primary">{{ servers.length }}</v-chip>
       </div>
     </v-card-item>
@@ -44,14 +46,14 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
             </div>
 
             <div class="text-caption font-weight-bold text-medium-emphasis flex-shrink-0 ml-2">
-              Load: {{ getOneMinLoad(server.loadAverage) }}
+              {{ t('shared.serverSelector.load') }}: {{ getOneMinLoad(server.loadAverage) }}
             </div>
           </div>
         </div>
       </div>
       <div v-else class="text-center py-6 text-medium-emphasis h-100 d-flex flex-column align-center justify-center">
-        <v-icon size="40" color="grey-lighten-1" class="mb-2">mdi-server-off</v-icon>
-        <div class="text-caption">No servers registered</div>
+        <v-icon size="40" color="medium-emphasis" class="mb-2">mdi-server-off</v-icon>
+        <div class="text-caption">{{ t('shared.serverSelector.empty') }}</div>
       </div>
     </v-card-text>
   </v-card>
@@ -65,12 +67,12 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
 /* Sleek Server List Items */
 .server-item {
   position: relative;
-  border: 1px solid rgba(var(--v-border-color), 0.12);
+  border: 1px solid var(--lp-border);
   border-radius: 8px;
-  transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   padding: 12px 14px;
   cursor: pointer;
-  background: rgba(var(--v-theme-surface), 0.4);
+  background: color-mix(in srgb, var(--lp-surface), transparent 18%);
 }
 
 .server-item:hover {
@@ -106,13 +108,13 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
 }
 
 .server-item .status-pulse.online {
-  background-color: #10b981;
+  background-color: rgb(var(--v-theme-success));
   box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
   animation: pulse-green 2s infinite;
 }
 
 .server-item .status-pulse.offline {
-  background-color: #ef4444;
+  background-color: rgb(var(--v-theme-error));
 }
 
 @keyframes pulse-green {

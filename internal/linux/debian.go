@@ -14,6 +14,11 @@ import (
 
 type DebianAdapter struct{}
 
+const (
+	packageListTimeout    = 3 * time.Minute
+	packageUpgradeTimeout = time.Hour
+)
+
 func (DebianAdapter) ID() string { return "debian" }
 
 func (DebianAdapter) Supports(info OSRelease) bool {
@@ -43,7 +48,7 @@ func (DebianAdapter) ReadStatus(ctx context.Context, exec sshx.RemoteExecutor, t
 }
 
 func (DebianAdapter) CollectMetrics(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) (MetricsSnapshot, error) {
-	cmd := `awk '/^cpu /{idle=$5; total=0; for(i=2;i<=NF;i++) total+=$i; print total,idle}' /proc/stat; free -b | awk '/^Mem:/{print $2,$3}'; df -B1 / | awk 'NR==2{print $2,$3}'; awk 'NR>2{rx+=$2; tx+=$10} END{print rx,tx}' /proc/net/dev; hostname; uname -r; . /etc/os-release && echo "$PRETTY_NAME"; cut -d. -f1 /proc/uptime; cat /proc/loadavg`
+	cmd := `net_sample() { ts=$(date +%s%N); awk -v ts="$ts" 'NR>2{iface=$1; sub(":", "", iface); if(iface=="lo") next; rx+=$2; tx+=$10} END{printf "%s %.0f %.0f\n", ts, rx, tx}' /proc/net/dev; }; awk '/^cpu /{idle=$5; total=0; for(i=2;i<=NF;i++) total+=$i; print total,idle}' /proc/stat; free -b | awk '/^Mem:/{print $2,$3}'; df -B1 / | awk 'NR==2{print $2,$3}'; net_sample; sleep 1; net_sample; hostname; uname -r; . /etc/os-release && echo "$PRETTY_NAME"; cut -d. -f1 /proc/uptime; cat /proc/loadavg`
 	res, err := exec.Exec(ctx, target, sshx.CommandSpec{Command: cmd})
 	if err != nil {
 		return MetricsSnapshot{}, err
@@ -52,7 +57,10 @@ func (DebianAdapter) CollectMetrics(ctx context.Context, exec sshx.RemoteExecuto
 }
 
 func (DebianAdapter) ListUpgradeable(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) ([]PackageUpdate, error) {
-	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "apt-get update >/dev/null && apt list --upgradable 2>/dev/null"})
+	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
+		Command: "apt-get update >/dev/null && apt list --upgradable 2>/dev/null",
+		Timeout: packageListTimeout,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -69,26 +77,43 @@ func (DebianAdapter) UpgradeSelected(ctx context.Context, exec sshx.RemoteExecut
 		}
 	}
 	cmd := "DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade " + strings.Join(packages, " ")
-	return runLogged(ctx, exec, target, cmd, log)
+	return runLogged(ctx, exec, target, cmd, packageUpgradeTimeout, log)
 }
 
 func (DebianAdapter) UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, log LogSink) error {
-	return runLogged(ctx, exec, target, "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y", log)
+	return runLogged(ctx, exec, target, "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y", packageUpgradeTimeout, log)
 }
 
-func runLogged(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, cmd string, log LogSink) error {
-	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: cmd})
-	for _, line := range strings.Split(strings.TrimSpace(res.Stdout), "\n") {
-		if strings.TrimSpace(line) != "" {
+func runLogged(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, cmd string, timeout time.Duration, log LogSink) error {
+	stdoutStreamed := false
+	stderrStreamed := false
+	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
+		Command: cmd,
+		Timeout: timeout,
+		OnStdout: func(line string) {
+			stdoutStreamed = true
 			_ = log.AppendLog(ctx, "stdout", line)
-		}
-	}
-	for _, line := range strings.Split(strings.TrimSpace(res.Stderr), "\n") {
-		if strings.TrimSpace(line) != "" {
+		},
+		OnStderr: func(line string) {
+			stderrStreamed = true
 			_ = log.AppendLog(ctx, "stderr", line)
-		}
+		},
+	})
+	if !stdoutStreamed {
+		appendBufferedLog(ctx, log, "stdout", res.Stdout)
+	}
+	if !stderrStreamed {
+		appendBufferedLog(ctx, log, "stderr", res.Stderr)
 	}
 	return err
+}
+
+func appendBufferedLog(ctx context.Context, log LogSink, stream, out string) {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			_ = log.AppendLog(ctx, stream, line)
+		}
+	}
 }
 
 func ParseAptListUpgradable(out string) []PackageUpdate {
@@ -109,8 +134,8 @@ func ParseAptListUpgradable(out string) []PackageUpdate {
 
 func ParseMetricsOutput(serverID, out string) (MetricsSnapshot, error) {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if len(lines) < 9 {
-		return MetricsSnapshot{}, fmt.Errorf("metrics output has %d lines, expected at least 9", len(lines))
+	if len(lines) < 10 {
+		return MetricsSnapshot{}, fmt.Errorf("metrics output has %d lines, expected at least 10", len(lines))
 	}
 	ints := func(line string) []int64 {
 		fields := strings.Fields(line)
@@ -124,8 +149,8 @@ func ParseMetricsOutput(serverID, out string) (MetricsSnapshot, error) {
 	cpu := ints(lines[0])
 	mem := ints(lines[1])
 	disk := ints(lines[2])
-	netv := ints(lines[3])
-	uptime, _ := strconv.ParseInt(strings.TrimSpace(lines[7]), 10, 64)
+	rxRate, txRate := networkBytesPerSecond(ints(lines[3]), ints(lines[4]))
+	uptime, _ := strconv.ParseInt(strings.TrimSpace(lines[8]), 10, 64)
 	usage := 0.0
 	if len(cpu) >= 2 && cpu[0] > 0 {
 		usage = 100 - (float64(cpu[1]) / float64(cpu[0]) * 100)
@@ -138,10 +163,29 @@ func ParseMetricsOutput(serverID, out string) (MetricsSnapshot, error) {
 		MemoryUsedBytes:    pick(mem, 1),
 		DiskTotalBytes:     pick(disk, 0),
 		DiskUsedBytes:      pick(disk, 1),
-		NetworkRxBytesRate: float64(pick(netv, 0)),
-		NetworkTxBytesRate: float64(pick(netv, 1)),
-		Status:             SystemStatus{Hostname: lines[4], KernelVersion: lines[5], OSVersion: lines[6], UptimeSeconds: uptime, LoadAverage: lines[8]},
+		NetworkRxBytesRate: rxRate,
+		NetworkTxBytesRate: txRate,
+		Status:             SystemStatus{Hostname: lines[5], KernelVersion: lines[6], OSVersion: lines[7], UptimeSeconds: uptime, LoadAverage: lines[9]},
 	}, nil
+}
+
+func networkBytesPerSecond(first, second []int64) (float64, float64) {
+	if len(first) < 3 || len(second) < 3 {
+		return 0, 0
+	}
+	elapsed := float64(second[0]-first[0]) / float64(time.Second)
+	if elapsed <= 0 {
+		return 0, 0
+	}
+	rx := second[1] - first[1]
+	tx := second[2] - first[2]
+	if rx < 0 {
+		rx = 0
+	}
+	if tx < 0 {
+		tx = 0
+	}
+	return float64(rx) / elapsed, float64(tx) / elapsed
 }
 
 func pick(v []int64, i int) int64 {

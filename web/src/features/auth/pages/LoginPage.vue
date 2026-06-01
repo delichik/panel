@@ -2,10 +2,12 @@
 import { ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
+import { useI18n } from '@/i18n';
 
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
+const { t } = useI18n();
 const username = ref('');
 const password = ref('');
 const showPassword = ref(false);
@@ -24,14 +26,14 @@ async function submit() {
       </div>
 
       <div class="text-center mb-6">
-        <h1 class="text-h5 font-weight-bold tracking-tight mb-1">Linux Server Panel</h1>
-        <p class="text-body-2 text-medium-emphasis">SSH control plane for Debian servers</p>
+        <h1 class="text-h5 font-weight-bold tracking-tight mb-1">{{ t('login.title') }}</h1>
+        <p class="text-body-2 text-medium-emphasis">{{ t('login.subtitle') }}</p>
       </div>
 
       <v-form @submit.prevent="submit">
         <v-text-field
           v-model="username"
-          label="Username"
+          :label="t('login.username')"
           prepend-inner-icon="mdi-account"
           variant="outlined"
           density="comfortable"
@@ -42,7 +44,7 @@ async function submit() {
 
         <v-text-field
           v-model="password"
-          label="Password"
+          :label="t('login.password')"
           prepend-inner-icon="mdi-lock"
           :append-inner-icon="showPassword ? 'mdi-eye' : 'mdi-eye-off'"
           :type="showPassword ? 'text' : 'password'"
@@ -66,7 +68,7 @@ async function submit() {
           :loading="auth.loading"
           class="text-none font-weight-bold shadow-glow"
         >
-          Login to Console
+          {{ t('login.submit') }}
         </v-btn>
       </v-form>
     </v-card>
@@ -79,15 +81,15 @@ async function submit() {
   min-height: 100vh;
   place-items: center;
   padding: 24px;
-  background: radial-gradient(circle at top, rgba(var(--v-theme-primary), 0.05) 0%, rgb(var(--v-theme-background)) 70%);
+  background: radial-gradient(circle at top, rgba(var(--v-theme-primary), 0.08) 0%, var(--lp-background) 70%);
 }
 
 .login-card {
   width: min(440px, 100%);
-  border-radius: 14px !important;
-  background-color: rgb(var(--v-theme-surface)) !important;
-  border: 1px solid rgba(var(--v-border-color), 0.06) !important;
-  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.06), 0 1px 3px 0 rgba(0, 0, 0, 0.02) !important;
+  border-radius: var(--lp-radius-lg) !important;
+  background-color: var(--lp-surface) !important;
+  border: 1px solid var(--lp-border) !important;
+  box-shadow: var(--lp-shadow-md) !important;
 }
 
 .brand-logo {
@@ -95,8 +97,8 @@ async function submit() {
   place-items: center;
   width: 48px;
   height: 48px;
-  border-radius: 10px;
-  background: linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, #4f46e5 100%);
+  border-radius: var(--lp-radius-md);
+  background: linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, rgba(var(--v-theme-primary), 0.72) 100%);
   color: #ffffff;
   font-size: 1.25rem;
   font-weight: 800;

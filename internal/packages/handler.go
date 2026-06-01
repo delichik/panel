@@ -21,12 +21,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Refresh(w http.ResponseWriter, r *http.Request) {
-	task, err := h.service.Refresh(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/packages/refresh")))
+	out, err := h.service.Refresh(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/packages/refresh")))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+	httpx.JSON(w, http.StatusAccepted, out)
 }
 
 func (h *Handler) UpgradeSelected(w http.ResponseWriter, r *http.Request) {

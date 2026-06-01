@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -8,12 +9,21 @@ import (
 	"panel/internal/httpx"
 )
 
-type Handler struct {
-	service *Service
+type RunNowRunner interface {
+	RunNow(ctx context.Context, task Task) error
 }
 
-func NewHandler(service *Service) *Handler {
-	return &Handler{service: service}
+type Handler struct {
+	service *Service
+	runner  RunNowRunner
+}
+
+func NewHandler(service *Service, runners ...RunNowRunner) *Handler {
+	var runner RunNowRunner
+	if len(runners) > 0 {
+		runner = runners[0]
+	}
+	return &Handler{service: service, runner: runner}
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -31,11 +41,12 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 	tasks, err := h.service.List(r.Context(), ListFilter{
-		Status:   r.URL.Query().Get("status"),
-		ServerID: r.URL.Query().Get("serverId"),
-		Type:     r.URL.Query().Get("type"),
-		Limit:    limit,
-		Offset:   offset,
+		Status:      r.URL.Query().Get("status"),
+		ServerID:    r.URL.Query().Get("serverId"),
+		Type:        r.URL.Query().Get("type"),
+		OperationID: r.URL.Query().Get("operation_id"),
+		Limit:       limit,
+		Offset:      offset,
 	})
 	if err != nil {
 		httpx.Error(w, err)
@@ -63,11 +74,35 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"nextCursor": next, "logs": logs})
 }
 
+func (h *Handler) Steps(w http.ResponseWriter, r *http.Request) {
+	steps, err := h.service.Steps(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/steps")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, steps)
+}
+
+func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.Retry(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/retry")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, task)
+}
+
 func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 	task, err := h.service.RunNow(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/run-now")))
 	if err != nil {
 		httpx.Error(w, err)
 		return
+	}
+	if h.runner != nil {
+		if err := h.runner.RunNow(r.Context(), task); err != nil {
+			httpx.Error(w, err)
+			return
+		}
 	}
 	httpx.JSON(w, http.StatusAccepted, task)
 }

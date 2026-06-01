@@ -20,7 +20,7 @@ export interface ServerDto {
   port: number;
   sshUsername: string;
   credentialId: string | null;
-  labels?: string[];
+  traits?: Record<string, string>;
   notes?: string;
   os?: OSInfoDto | null;
   sudo?: SudoInfoDto | null;
@@ -41,6 +41,59 @@ export interface CredentialDto {
   updatedAt: string;
 }
 
+export type CertificateScope = 'single' | 'wildcard';
+
+export interface CertificateDto {
+  id: string;
+  name: string;
+  domainId: string;
+  domain: string;
+  prefix: string;
+  scope: CertificateScope;
+  domains: string[];
+  variableName: string;
+  certificatePath: string;
+  privateKeyPath: string;
+  issuer: string;
+  status: 'pending' | 'issuing' | 'issued' | 'failed' | string;
+  lastError?: string;
+  autoRenew: boolean;
+  nextRenewAt?: string;
+  notBefore?: string;
+  notAfter?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CertificateIssueInput {
+  name: string;
+  domainId: string;
+  prefix: string;
+  scope: CertificateScope;
+  variableName: string;
+}
+
+export interface CertificateIssueDto {
+  certificate: CertificateDto;
+  taskId?: string;
+}
+
+export interface DnsDomainDto {
+  id: string;
+  name: string;
+  provider: 'cloudflare';
+  accountId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DnsDomainInput {
+  name: string;
+  provider: 'cloudflare';
+  apiToken?: string;
+  accountId?: string;
+}
+
 export interface OverviewServerDto {
   id: string;
   name: string;
@@ -58,7 +111,7 @@ export interface OverviewDto {
   servers: OverviewServerDto[];
 }
 
-export type MetricsRange = '1h' | '6h' | '24h';
+export type MetricsRange = '1h' | '6h' | '1d' | '7d';
 
 export interface CpuPointDto {
   time: string;
@@ -102,263 +155,339 @@ export interface PackageUpdatesDto {
   serverId: string;
   lastRefreshedAt: string | null;
   updates: PackageUpdateDto[];
+  refreshing: boolean;
 }
 
-export interface DockerCapabilityDto {
+export interface PackageRefreshDto {
   serverId: string;
-  dockerInstalled: boolean;
-  dockerVersion: string;
-  composeInstalled: boolean;
-  composeVersion: string;
-  supported?: boolean;
-  lastCheckedAt?: string | null;
-  checkedAt?: string | null;
-  lastError?: string | null;
-  stale?: boolean;
-  pending?: boolean;
-  taskId?: string;
+  refreshing: boolean;
 }
 
-export interface DockerRuntimeServiceDto {
+export interface ApplicationDto {
   id: string;
   name: string;
-  image: string;
-  status: string;
-  state?: string;
-  command?: string;
-  project?: string;
-  service?: string;
-  projectName?: string | null;
-  serviceName?: string | null;
-  ports?: string[] | string;
-  labels?: Record<string, string>;
-  managed?: boolean;
-  createdAt?: string | null;
-}
-
-export interface DockerComposeStatusDto {
-  projectName?: string;
-  project?: string;
-  status?: string;
-  state?: string;
-  services?: DockerRuntimeServiceDto[];
-  checkedAt?: string | null;
-  lastError?: string | null;
-}
-
-export interface DockerNetworkDto {
-  id: string;
-  name: string;
-  driver: string;
-  scope?: string;
-  internal?: boolean;
-  attachable?: boolean;
-  labels?: Record<string, string>;
-  managed?: boolean;
-  createdAt?: string | null;
-}
-
-export interface DockerVolumeDto {
-  name: string;
-  driver: string;
-  mountpoint?: string;
-  scope?: string;
-  labels?: Record<string, string>;
-  managed?: boolean;
-  createdAt?: string | null;
-}
-
-export interface DockerImageDto {
-  id: string;
-  repository: string;
-  tag: string;
-  digest?: string;
-  size?: string;
-  createdAt?: string | null;
-  labels?: Record<string, string>;
-  managed?: boolean;
-  update?: DockerImageUpdateDto | null;
-  updateAvailable?: boolean;
-  currentVersion?: string | null;
-  latestVersion?: string | null;
-}
-
-export interface DockerImageUpdateDto {
-  imageId: string;
-  repository: string;
-  tag: string;
-  currentDigest?: string | null;
-  latestDigest?: string | null;
-  currentVersion?: string | null;
-  latestVersion?: string | null;
-  updateAvailable: boolean;
-  checkedAt?: string | null;
-  lastError?: string | null;
-  error?: string | null;
-}
-
-export interface DockerImageUpdatesDto {
-  serverId: string;
-  checkedAt: string | null;
-  updates: DockerImageUpdateDto[];
-}
-
-export interface DockerRuntimeListDto<T> {
-  serverId: string;
-  lastRefreshedAt?: string | null;
-  items: T[];
-}
-
-export interface ComposeTemplateVariableDto {
-  name: string;
-  label?: string;
-  type?: 'string' | 'number' | 'boolean' | 'secret' | string;
-  defaultValue?: unknown;
-  required?: boolean;
-  description?: string;
-}
-
-export interface ComposeVisualServiceDto {
-  name: string;
-  image: string;
-  build?: string;
-  labels?: Record<string, string>;
-  ports?: string[];
-  environment?: Record<string, string>;
-  volumes?: string[];
-  command?: string;
-  entrypoint?: string;
-  restart?: string;
-  dependsOn?: string[];
-  networks?: string[];
-  envFile?: string[];
-  extraHosts?: string[];
-  workingDir?: string;
-  user?: string;
-  networkMode?: string;
-  hostname?: string;
-  privileged?: boolean;
-  init?: boolean;
-  pullPolicy?: string;
-  stopGracePeriod?: string;
-  healthcheckTest?: string;
-  healthcheckInterval?: string;
-  healthcheckTimeout?: string;
-  healthcheckRetries?: number;
-  dns?: string[];
-  dnsSearch?: string[];
-}
-
-export interface ComposeVisualModelDto {
-  version?: string;
-  services: ComposeVisualServiceDto[];
-}
-
-export interface ServiceTemplateDto {
-  id: string;
-  name: string;
-  description?: string;
-  version: number;
-  composeYaml: string;
-  visual?: ComposeVisualModelDto | Record<string, unknown> | null;
-  variables?: ComposeTemplateVariableDto[];
-  dependencies?: string[];
-  fileCount?: number;
-  linkedServiceCount?: number;
+  enabled: boolean;
+  specYaml: string;
+  variables: Record<string, string>;
+  resolvedVariables?: Record<string, unknown>;
+  persistentPath?: string;
+  deploymentMode?: 'all' | 'selected' | string;
+  deploymentServers?: string[];
+  reverseProxy?: ApplicationReverseProxyRuleDto[];
+  generation: number;
+  specHash: string;
+  imageReference?: string;
+  imageDigest?: string;
+  imageLatestDigest?: string;
+  imageCheckedAt?: string;
+  imageUpdateAvailable?: boolean;
+  imageLastError?: string;
+  jobId: string;
+  namespace: string;
+  lastEvalId?: string;
+  lastDeploymentId?: string;
+  lastError?: string;
+  runtimeStatus?: string;
+  allocationCount?: number;
   createdAt: string;
   updatedAt: string;
 }
 
-export interface ServiceTemplateInputDto {
+export interface ApplicationSaveDto {
   name: string;
-  description?: string;
-  composeYaml: string;
-  visual?: ComposeVisualModelDto | Record<string, unknown> | null;
-  variables?: ComposeTemplateVariableDto[];
-  dependencies?: string[];
+  enabled: boolean;
+  specYaml: string;
+  variables: Record<string, string>;
+  persistentPath?: string;
+  deploymentMode?: 'all' | 'selected' | string;
+  deploymentServers?: string[];
+  reverseProxy?: ApplicationReverseProxyRuleDto[];
 }
 
-export type TemplateFileKind = 'template' | 'binary' | string;
+export interface ApplicationReverseProxyRuleDto {
+  domain: string;
+  targetPort: number;
+  paths: ApplicationReverseProxyPathDto[];
+}
 
-export interface TemplateFileDto {
+export interface ApplicationReverseProxyPathDto {
+  path: string;
+  webSocket: boolean;
+}
+
+export type ApplicationFileKind = 'binary' | 'template';
+
+export interface ApplicationFileDto {
   id: string;
-  templateId?: string;
-  kind: TemplateFileKind;
+  applicationId: string;
   path: string;
-  content?: string;
-  base64Content?: string;
-  sizeBytes?: number;
-  mode?: string;
-  createdAt?: string;
-  updatedAt?: string;
+  kind: ApplicationFileKind;
+  contentType: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
-export interface TemplateFileInputDto {
+export interface ApplicationFileSaveDto {
   path: string;
-  content?: string;
-  base64Content?: string;
-  mode?: string;
+  kind: ApplicationFileKind;
+  contentType?: string;
+  contentBase64: string;
 }
 
-export interface ComposeValidationIssueDto {
+export interface ApplicationFileDeleteDto {
+  path: string;
+}
+
+export interface ApplicationSaveSessionBeginDto {
+  applicationId?: string;
+  save: ApplicationSaveDto;
+}
+
+export interface ApplicationSaveSessionDto {
+  id: string;
+  applicationId?: string;
+  expiresAt: string;
+  files: ApplicationFileDto[];
+}
+
+export interface ApplicationValidationIssueDto {
+  field?: string;
   path?: string;
-  variable?: string;
-  message: string;
   severity?: 'error' | 'warning' | string;
+  message: string;
 }
 
-export interface ComposeValidationResultDto {
+export interface ApplicationValidationDto {
   valid: boolean;
-  issues?: ComposeValidationIssueDto[];
-  renderedYaml?: string;
+  issues: ApplicationValidationIssueDto[];
 }
 
-export interface ComposeRenderPreviewDto {
-  renderedYaml: string;
-  files?: TemplateFileDto[];
-  values?: Record<string, unknown>;
-  issues?: ComposeValidationIssueDto[];
+export interface NomadPortMappingDto {
+  Label?: string;
+  Value?: number;
+  To?: number;
 }
 
-export type ComposeServiceStatus = 'draft' | 'deployed' | 'running' | 'stopped' | 'failed' | string;
-export type ComposeServiceSyncStatus = 'synced' | 'drifted' | 'pending' | 'unknown' | string;
+export interface NomadNetworkDto {
+  Mode?: string;
+  ReservedPorts?: NomadPortMappingDto[];
+  DynamicPorts?: NomadPortMappingDto[];
+}
 
-export interface ComposeServiceDto {
-  id: string;
+export interface NomadCheckDto {
+  Name?: string;
+  Type?: string;
+  Path?: string;
+  PortLabel?: string;
+  Interval?: number;
+  Timeout?: number;
+}
+
+export interface NomadServiceDto {
+  Name?: string;
+  PortLabel?: string;
+  Tags?: string[];
+  Checks?: NomadCheckDto[];
+}
+
+export interface NomadTaskDto {
+  Name?: string;
+  Driver?: string;
+  Config?: Record<string, unknown>;
+  Env?: Record<string, string>;
+  Resources?: { CPU?: number; MemoryMB?: number };
+  Services?: NomadServiceDto[];
+  Templates?: Array<{ EmbeddedTmpl?: string; DestPath?: string; Perms?: string; ChangeMode?: string }>;
+  Lifecycle?: { Hook?: string; Sidecar?: boolean };
+}
+
+export interface NomadTaskGroupDto {
+  Name?: string;
+  Count?: number;
+  Networks?: NomadNetworkDto[];
+  Tasks?: NomadTaskDto[];
+  Services?: NomadServiceDto[];
+}
+
+export interface NomadJobDto {
+  ID?: string;
+  Name?: string;
+  Type?: string;
+  Status?: string;
+  Region?: string;
+  Namespace?: string;
+  Datacenters?: string[];
+  Meta?: Record<string, string>;
+  TaskGroups?: NomadTaskGroupDto[];
+}
+
+export interface NomadStatusDto {
+  connected: boolean;
+  leader?: string;
+}
+
+export type NomadControlPlaneStatus = 'unconfigured' | 'bootstrapping' | 'connected' | 'degraded';
+export type ProjectedNomadNodeKind = 'managed' | 'missing' | 'pending' | 'unmanaged';
+export type ProjectedNomadNodeRole = 'server' | 'client' | 'unknown';
+export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'registering' | 'removing' | 'ready' | 'down' | 'failed' | 'missing' | 'nomad_unreachable' | 'unmanaged' | string;
+
+export interface ProjectedNomadNodeDto {
+  kind: ProjectedNomadNodeKind;
+  serverId?: string;
+  nodeId?: string;
   name: string;
-  templateId: string;
-  templateName?: string;
-  serverId: string;
-  serverName?: string;
-  remotePath: string;
-  values: Record<string, unknown>;
-  labels?: Record<string, string>;
-  status?: ComposeServiceStatus;
-  managementState?: 'managed' | 'unmanaged' | 'missing_remote' | 'drifted' | 'orphaned' | 'pending' | string;
-  syncStatus?: ComposeServiceSyncStatus;
-  drift?: boolean;
-  runtimeStatus?: string | null;
-  lastAppliedTemplateVersion?: number | null;
-  templateVersion?: number | null;
-  lastTaskId?: string | null;
-  createdAt: string;
-  updatedAt: string;
+  host?: string;
+  role: ProjectedNomadNodeRole;
+  status: ProjectedNomadNodeStatus;
+  reverseProxy: boolean;
+  reverseProxyStatic: boolean;
+  reverseProxyStaticSites: NomadReverseProxyStaticSiteDto[];
+  taskId?: string;
+  error?: string;
 }
 
-export interface ComposeServiceInputDto {
-  name: string;
-  templateId: string;
-  serverId: string;
-  remotePath: string;
-  values?: Record<string, unknown>;
+export interface NomadReverseProxyRouteDto {
+  domain: string;
+  targetPort: number;
+  paths: NomadReverseProxyPathDto[];
+}
+
+export interface NomadReverseProxyPathDto {
+  path: string;
+  webSocket: boolean;
+}
+
+export interface NomadReverseProxyStaticSiteDto {
+  domain: string;
+  root: string;
+  index: string;
+}
+
+export interface NomadControlPlaneDto {
+  status: NomadControlPlaneStatus;
+  leader?: string;
+  nodes: ProjectedNomadNodeDto[];
+  joinCandidates: ServerDto[];
+  bootstrapCandidates: ServerDto[];
+}
+
+export interface NomadNodeDto {
+  ID?: string;
+  Name?: string;
+  Address?: string;
+  Datacenter?: string;
+  Status?: string;
+  SchedulingEligibility?: string;
+  Eligibility?: string;
+  Meta?: Record<string, string>;
+}
+
+export interface NomadEvaluationDto {
+  ID?: string;
+  Namespace?: string;
+  JobID?: string;
+  Status?: string;
+  Type?: string;
+  TriggeredBy?: string;
+  StatusDescription?: string;
+  FailedTGAllocs?: Record<string, NomadFailedTGAllocDto>;
+}
+
+export interface NomadFailedTGAllocDto {
+  NodesEvaluated?: number;
+  NodesFiltered?: number;
+  NodesExhausted?: number;
+  ClassFiltered?: Record<string, number>;
+  ConstraintFiltered?: Record<string, number>;
+  DimensionExhausted?: Record<string, number>;
+  QuotaExhausted?: string[];
+  ResourcesExhausted?: Record<string, unknown>;
+  CoalescedFailures?: number;
+}
+
+export interface NomadDeploymentDto {
+  ID?: string;
+  JobID?: string;
+  Namespace?: string;
+  Status?: string;
+  StatusDescription?: string;
+}
+
+export interface NomadAllocationDto {
+  ID?: string;
+  EvalID?: string;
+  Name?: string;
+  NodeID?: string;
+  JobID?: string;
+  TaskGroup?: string;
+  ClientStatus?: string;
+  DesiredStatus?: string;
+  TaskStates?: Record<string, unknown>;
+  AllocatedResources?: unknown;
+  ModifyIndex?: number;
+  CreateIndex?: number;
+}
+
+export interface NomadServiceRegistrationDto {
+  ID?: string;
+  ServiceName?: string;
+  Namespace?: string;
+  NodeID?: string;
+  Datacenter?: string;
+  JobID?: string;
+  AllocID?: string;
+  Tags?: string[];
+  Port?: number;
+}
+
+export interface ApplicationPlanDto {
+  application: ApplicationDto;
+  job: NomadJobDto;
+  plan: Record<string, unknown>;
+}
+
+export interface ApplicationOperationDto {
+  taskId?: string;
+  evalId?: string;
+  deploymentId?: string;
+  application?: ApplicationDto;
+  runtime?: ApplicationRuntimeDto;
+}
+
+export interface ApplicationRuntimeDto {
+  applicationId: string;
+  jobId: string;
+  jobStatus: string;
+  deployment?: NomadDeploymentDto;
+  evaluations: NomadEvaluationDto[];
+  evaluationDetails?: NomadEvaluationDto[];
+  allocations: NomadAllocationDto[];
+  services?: NomadServiceRegistrationDto[];
+  observedAt: string;
+}
+
+export interface ApplicationLogsDto {
+  allocId: string;
+  task: string;
+  type: string;
+  logs: string;
 }
 
 export interface TaskDto {
   id: string;
+  operationId?: string;
   type: string;
   serverId: string | null;
+  nodeId?: string | null;
   resourceType?: string;
   resourceId?: string;
+  triggerType?: string;
+  triggerResourceType?: string;
+  triggerResourceId?: string;
+  triggerTaskId?: string;
+  triggeredBy?: string;
   status: TaskStatus;
   stage: TaskStage;
   percentage: number | null;
@@ -370,6 +499,18 @@ export interface TaskDto {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+}
+
+export interface TaskStepDto {
+  id: string;
+  taskId: string;
+  step: string;
+  status: TaskStatus | string;
+  percentage?: number | null;
+  metadata?: Record<string, unknown>;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  error?: string | null;
 }
 
 export interface TaskListDto {
@@ -399,10 +540,12 @@ export interface RuntimeSettingsDto {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
   cleanupSchedule: string;
+  language: string;
 }
 
 export interface RuntimeSettingsUpdate {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
   cleanupSchedule: string;
+  language: string;
 }

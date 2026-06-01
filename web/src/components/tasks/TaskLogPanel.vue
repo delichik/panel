@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { tasksApi } from '@/api/tasks';
+import { formatDateTime, t, translateTaskStatus } from '@/i18n';
 import type { TaskDto, TaskLogDto } from '@/types/api';
 
 const props = defineProps<{
@@ -38,11 +39,7 @@ const statusType = computed(() => {
 
 const isActive = computed(() => task.value?.status === 'queued' || task.value?.status === 'running');
 const progressValue = computed(() => task.value?.percentage ?? (isActive.value ? 100 : 0));
-const serverLabel = computed(() => props.serverName || task.value?.serverId || 'No server');
-
-function formatTime(value?: string | null) {
-  return value ? new Date(value).toLocaleString() : '-';
-}
+const serverLabel = computed(() => props.serverName || task.value?.serverId || t('shared.taskLogPanel.noServer'));
 
 function formatTaskType(value?: string) {
   return value ? value.replace(/_/g, ' ') : '-';
@@ -76,7 +73,7 @@ async function load() {
       }
     }
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Unable to load task';
+    error.value = err instanceof Error ? err.message : t('shared.taskLogPanel.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -103,15 +100,15 @@ onBeforeUnmount(() => {
     <div class="task-summary">
       <div>
         <div class="task-title-row">
-          <strong>{{ task?.summary || 'Task' }}</strong>
-          <v-chip v-if="task" :color="statusType" size="small" label class="ml-2">{{ task.status }}</v-chip>
+          <strong>{{ task?.summary || t('shared.taskLogPanel.defaultTitle') }}</strong>
+          <v-chip v-if="task" :color="statusType" size="small" label class="ml-2">{{ translateTaskStatus(task.status) }}</v-chip>
         </div>
         <div class="task-meta">
-          <span>Server: {{ serverLabel }}</span>
-          <span>Type: {{ formatTaskType(task?.type) }}</span>
-          <span>Stage: {{ task?.stage || 'pending' }}</span>
-          <span>Started: {{ formatTime(task?.startedAt) }}</span>
-          <span v-if="task?.finishedAt">Finished: {{ formatTime(task.finishedAt) }}</span>
+          <span>{{ t('shared.taskLogPanel.server') }}: {{ serverLabel }}</span>
+          <span>{{ t('shared.taskLogPanel.type') }}: {{ formatTaskType(task?.type) }}</span>
+          <span>{{ t('shared.taskLogPanel.stage') }}: {{ task?.stage || t('shared.taskLogPanel.pending') }}</span>
+          <span>{{ t('shared.taskLogPanel.started') }}: {{ formatDateTime(task?.startedAt) }}</span>
+          <span v-if="task?.finishedAt">{{ t('shared.taskLogPanel.finished') }}: {{ formatDateTime(task.finishedAt) }}</span>
         </div>
       </div>
     </div>
@@ -135,14 +132,14 @@ onBeforeUnmount(() => {
 
     <div class="log-box-container position-relative">
       <div class="log-box">
-        <div v-if="logs.length === 0 && !loading" class="muted empty-log">No logs yet.</div>
+        <div v-if="logs.length === 0 && !loading" class="muted empty-log">{{ t('shared.taskLogPanel.noLogs') }}</div>
         <div v-for="entry in logs" :key="entry.cursor" class="log-line" :class="entry.stream">
-          <span class="log-time">{{ new Date(entry.time).toLocaleTimeString() }}</span>
+          <span class="log-time">{{ formatDateTime(entry.time) }}</span>
           <span class="log-stream">{{ entry.stream }}</span>
           <span>{{ entry.line }}</span>
         </div>
       </div>
-      <div v-if="loading && logs.length === 0" class="position-absolute d-flex justify-center align-center fill-height width-100" style="top: 0; left: 0; right: 0; bottom: 0; background: rgba(16, 24, 40, 0.7); border-radius: 8px; width: 100%;">
+      <div v-if="loading && logs.length === 0" class="log-loading position-absolute d-flex justify-center align-center fill-height width-100">
         <v-progress-circular indeterminate color="primary" />
       </div>
     </div>
@@ -172,22 +169,28 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px 14px;
   margin-top: 8px;
-  color: rgba(var(--v-theme-on-surface), 0.6);
+  color: var(--lp-text-muted);
   font-size: 12px;
 }
 
 .log-box {
   min-height: 180px;
   max-height: 360px;
-  overflow-auto: auto;
   overflow-y: auto;
-  border: 1px solid rgba(var(--v-border-color), 0.12);
-  border-radius: 8px;
-  background: #101828;
-  color: #e5e7eb;
+  border: 1px solid var(--lp-border);
+  border-radius: var(--lp-radius-md);
+  background: var(--lp-log-background);
+  color: var(--lp-log-text);
   padding: 12px;
   font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
   font-size: 12px;
+}
+
+.log-loading {
+  inset: 0;
+  width: 100%;
+  border-radius: var(--lp-radius-md);
+  background: color-mix(in srgb, var(--lp-log-background), transparent 18%);
 }
 
 .compact .log-box {
@@ -203,12 +206,12 @@ onBeforeUnmount(() => {
 }
 
 .log-line.stderr {
-  color: #fecaca;
+  color: var(--lp-log-error);
 }
 
 .log-stream,
 .log-time,
 .empty-log {
-  color: #98a2b3;
+  color: var(--lp-log-muted);
 }
 </style>

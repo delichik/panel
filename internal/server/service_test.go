@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -43,7 +44,7 @@ func TestCreateListServer(t *testing.T) {
 	}
 	taskSvc := tasks.NewService(store.AppDB())
 	svc := NewService(store.AppDB(), nil, taskSvc)
-	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID, Labels: []string{"lab"}})
+	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID, Traits: map[string]string{"custom.env": "prod"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestCreateListServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(servers) != 1 || servers[0].Labels[0] != "lab" {
+	if len(servers) != 1 || servers[0].Traits["custom.env"] != "prod" {
 		t.Fatalf("unexpected servers: %#v", servers)
 	}
 }
@@ -103,6 +104,16 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if exec.sudoTimeout != connectivitySudoTimeout {
 		t.Fatalf("expected sudo timeout %s, got %s", connectivitySudoTimeout, exec.sudoTimeout)
 	}
+
+	// 验证系统特征是否成功探测并自动入库
+	srv, err = svc.Get(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.os"] != "debian-13" {
+		t.Fatalf("unexpected system traits detected: %#v", srv.Traits)
+	}
+
 	logs, _, err := taskSvc.Logs(context.Background(), task.ID, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +126,20 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected sudo unavailable log, got %#v", logs)
+	}
+}
+
+func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
+	svc, _, _ := testServerService(t, &connectivityFakeExec{root: true})
+	result, err := svc.ProbeConnectivity(context.Background(), SaveRequest{Host: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Reachable || !result.Root || !result.Privileged {
+		t.Fatalf("expected reachable root probe, got %#v", result)
+	}
+	if result.Traits["sys.cpu_cores"] != "8" || result.OS.PrettyName != "Debian GNU/Linux 13" {
+		t.Fatalf("unexpected probe detail: %#v", result)
 	}
 }
 
@@ -180,10 +205,23 @@ func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
 
 type connectivityFakeExec struct {
 	sudoTimeout time.Duration
+	root        bool
 }
 
 func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
-	return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
+	if strings.Contains(command.Command, "cat /etc/os-release") {
+		return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "cores=") {
+		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "id -u") {
+		if f.root {
+			return sshx.CommandResult{Stdout: "0\n", ExitCode: 0}, nil
+		}
+		return sshx.CommandResult{Stdout: "1000\n", ExitCode: 0}, nil
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
 }
 
 func (f *connectivityFakeExec) ExecSudo(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {

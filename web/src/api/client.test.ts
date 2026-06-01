@@ -13,7 +13,17 @@ describe('ApiClient', () => {
     const client = new ApiClient({ baseUrl: '/api/v1', fetcher });
 
     await expect(client.get<{ ok: boolean }>('/health')).resolves.toEqual({ ok: true });
-    expect(fetcher).toHaveBeenCalledWith('/api/v1/health', expect.objectContaining({ credentials: 'include' }));
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/health', expect.objectContaining({ method: 'GET' }));
+  });
+
+  it('adds bearer tokens when present', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true }, error: null }));
+    const client = new ApiClient({ fetcher, getToken: () => 'jwt-token' });
+
+    await client.get<{ ok: boolean }>('/health');
+
+    const init = fetcher.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get('Authorization')).toBe('Bearer jwt-token');
   });
 
   it('throws typed errors from error envelopes', async () => {
