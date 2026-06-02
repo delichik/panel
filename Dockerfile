@@ -1,19 +1,26 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-alpine AS web-build
+FROM --platform=$BUILDPLATFORM node:22-alpine AS web-build
 WORKDIR /src/web
 
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+  npm config set fetch-retries 5 \
+  && npm config set fetch-retry-factor 2 \
+  && npm config set fetch-retry-mintimeout 10000 \
+  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm config set fetch-timeout 300000 \
+  && npm ci
 
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.25-alpine AS backend-build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend-build
 WORKDIR /src
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+  go mod download
 
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
