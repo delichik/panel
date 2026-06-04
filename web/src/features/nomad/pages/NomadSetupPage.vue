@@ -25,8 +25,9 @@ async function load() {
   loading.value = true;
   try {
     const result = await nomadApi.controlPlane();
+    const bootstrapCandidates = result.bootstrapCandidates ?? [];
     controlPlane.value = result;
-    selectedServerId.value ||= result.bootstrapCandidates[0]?.id ?? '';
+    selectedServerId.value ||= bootstrapCandidates[0]?.id ?? '';
     error.value = '';
     if (result.status !== 'unconfigured') {
       await router.replace('/nomad/nodes');

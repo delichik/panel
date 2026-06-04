@@ -1,0 +1,2 @@
+#!/usr/bin/with-contenv sh
+exec s6-setuidgid abc /app/panel

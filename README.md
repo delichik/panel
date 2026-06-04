@@ -21,20 +21,9 @@ Panel 是一个面向 Linux 服务器的运维控制面板，采用 Go 后端和
 - 存储：本地 SQLite
 - 编排：HashiCorp Nomad
 
-## 目录结构
+## 使用
 
-```text
-cmd/panel           程序入口
-internal/           后端核心业务
-web/                前端工程
-docs/agents/        仓库内协作与 i18n 规范
-data/               默认数据目录
-tmp/                测试与构建缓存
-Taskfile.yml        开发任务入口
-config.example.json 示例配置
-```
-
-## 环境要求
+### 环境要求
 
 - Go
 - Node.js 22+
@@ -43,15 +32,15 @@ config.example.json 示例配置
 
 如果本地没有 `task`，请先安装 [go-task](https://taskfile.dev/)。
 
-## 快速开始
+### 快速开始
 
-### 1. 安装前端依赖
+#### 1. 安装前端依赖
 
 ```bash
 npm --prefix web install
 ```
 
-### 2. 准备配置文件
+#### 2. 准备配置文件
 
 可直接基于示例配置启动：
 
@@ -73,11 +62,11 @@ $env:PANEL_CONFIG = ".\config.json"
 
 说明：
 
-- 未显式配置管理员密码哈希时，默认管理员账号为 `admin`
+- 未显式配置管理员密码哈希时，默认管理员账户为 `admin`
 - 默认密码为 `admin`
 - 正式环境请务必修改 `jwtSecret`
 
-### 3. 启动后端
+#### 3. 启动后端
 
 ```bash
 task run:backend
@@ -85,7 +74,7 @@ task run:backend
 
 默认监听地址为 `127.0.0.1:8080`。
 
-### 4. 启动前端开发服务器
+#### 4. 启动前端开发服务
 
 另开一个终端执行：
 
@@ -100,42 +89,7 @@ task run:web
 
 开发模式下，Vite 会将 `/api` 请求代理到后端。
 
-## 构建
-
-构建前后端：
-
-```bash
-task build
-```
-
-分别构建：
-
-```bash
-task build:backend
-task build:web
-```
-
-说明：
-
-- `task build:web` 会产出 `web/dist`
-- 后端启动后，如果检测到 `web/dist` 存在，会直接托管前端静态资源
-
-## 测试
-
-运行全部测试：
-
-```bash
-task test
-```
-
-分别执行：
-
-```bash
-task test:backend
-task test:web
-```
-
-## 配置说明
+### 配置说明
 
 程序会先读取默认值，再按以下顺序覆盖：
 
@@ -175,34 +129,85 @@ task test:web
 - `PANEL_CERT_EMAIL`
 - `PANEL_CERT_DNS_PROPAGATION_DELAY_SECONDS`
 
-## Docker
+### Docker
 
-仓库已提供多阶段构建的 `Dockerfile`。
+仓库已提供多阶段构建的 [Dockerfile](C:/Users/illya/Desktop/panel/Dockerfile)。
 
 示例：
 
 ```bash
 docker build -t panel .
-docker run --rm -p 8080:8080 -v $(pwd)/data:/app/data panel
+docker run --rm -p 8080:8080 -v $(pwd)/config:/config panel
 ```
 
 容器默认：
 
+- 基于 `lscr.io/linuxserver/baseimage-alpine:3.22`
 - 监听 `0.0.0.0:8080`
-- 将数据写入 `/app/data`
+- 将配置与数据写入 `/config`
 - 自动托管构建后的前端页面
 
-## 开发说明
+## 开发
 
-- 后端入口在 [cmd/panel/main.go](/D:/NewSpace/panel/cmd/panel/main.go)
-- 路由装配与静态资源托管在 [internal/app/app.go](/D:/NewSpace/panel/internal/app/app.go)
-- 前端路由在 [web/src/router/index.ts](/D:/NewSpace/panel/web/src/router/index.ts)
-- 多语言实现位于 [web/src/i18n/index.ts](/D:/NewSpace/panel/web/src/i18n/index.ts)
+### 目录结构
+
+```text
+cmd/panel           程序入口
+internal/           后端核心业务
+web/                前端工程
+docs/agents/        仓库内协作与 i18n 规范
+data/               默认数据目录
+tmp/                测试与构建缓存
+Taskfile.yml        开发任务入口
+config.example.json 示例配置
+```
+
+### 构建
+
+构建前后端：
+
+```bash
+task build
+```
+
+分别构建：
+
+```bash
+task build:backend
+task build:web
+```
+
+说明：
+
+- `task build:web` 会产出 `web/dist`
+- 后端启动后，如果检测到 `web/dist` 存在，会直接托管前端静态资源
+
+### 测试
+
+运行全部测试：
+
+```bash
+task test
+```
+
+分别执行：
+
+```bash
+task test:backend
+task test:web
+```
+
+### 开发说明
+
+- 后端入口在 [cmd/panel/main.go](C:/Users/illya/Desktop/panel/cmd/panel/main.go)
+- 路由装配与静态资源托管在 [internal/app/app.go](C:/Users/illya/Desktop/panel/internal/app/app.go)
+- 前端路由在 [web/src/router/index.ts](C:/Users/illya/Desktop/panel/web/src/router/index.ts)
+- 多语言实现位于 [web/src/i18n/index.ts](C:/Users/illya/Desktop/panel/web/src/i18n/index.ts)
 
 仓库内开发协作还需注意：
 
-- 多语言相关改动需先阅读 [docs/agents/i18n-guide.md](/D:/NewSpace/panel/docs/agents/i18n-guide.md)
-- 翻译状态记录在 [docs/agents/i18n-translation-status.md](/D:/NewSpace/panel/docs/agents/i18n-translation-status.md)
+- 多语言相关改动需先阅读 [docs/agents/i18n-guide.md](C:/Users/illya/Desktop/panel/docs/agents/i18n-guide.md)
+- 翻译状态记录在 [docs/agents/i18n-translation-status.md](C:/Users/illya/Desktop/panel/docs/agents/i18n-translation-status.md)
 - 测试和构建缓存统一放在 `tmp/`
 
 ## 后续可补充

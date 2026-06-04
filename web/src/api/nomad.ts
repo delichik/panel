@@ -27,6 +27,19 @@ export interface ReverseProxyInput {
   staticSites: NomadReverseProxyStaticSiteDto[];
 }
 
+function normalizeList<T>(items: T[] | null | undefined) {
+  return Array.isArray(items) ? items : [];
+}
+
+function normalizeControlPlane(controlPlane: NomadControlPlaneDto) {
+  return {
+    ...controlPlane,
+    nodes: normalizeList(controlPlane.nodes),
+    joinCandidates: normalizeList(controlPlane.joinCandidates),
+    bootstrapCandidates: normalizeList(controlPlane.bootstrapCandidates),
+  };
+}
+
 export function createNomadApi(client: ApiClient = apiClient) {
   return {
     status() {
@@ -47,11 +60,11 @@ export function createNomadApi(client: ApiClient = apiClient) {
     services() {
       return client.get<NomadServiceRegistrationDto[]>('/nomad/services');
     },
-    controlPlane() {
-      return client.get<NomadControlPlaneDto>('/nomad/control-plane');
+    async controlPlane() {
+      return normalizeControlPlane(await client.get<NomadControlPlaneDto>('/nomad/control-plane'));
     },
-    joinCandidates() {
-      return client.get<ServerDto[]>('/nomad/join-candidates');
+    async joinCandidates() {
+      return normalizeList(await client.get<ServerDto[] | null>('/nomad/join-candidates'));
     },
     joinServer(serverId: string) {
       return client.post<TaskCreatedDto>('/nomad/join', { serverId });

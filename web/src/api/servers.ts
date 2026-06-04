@@ -40,35 +40,43 @@ export interface ServerProbeDto {
   passwordlessSudoText?: string;
 }
 
-export const serversApi = {
-  listServers() {
-    return apiClient.get<ServerDto[]>('/servers');
-  },
-  createServer(input: ServerInput) {
-    return apiClient.post<ServerDto>('/servers', input);
-  },
-  probeServer(input: ServerInput) {
-    return apiClient.post<ServerProbeDto>('/servers/probe', input);
-  },
-  updateServer(serverId: string, input: ServerInput) {
-    return apiClient.put<ServerDto>(`/servers/${serverId}`, input);
-  },
-  deleteServer(serverId: string) {
-    return apiClient.delete(`/servers/${serverId}`);
-  },
-  testConnection(serverId: string) {
-    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/test`);
-  },
-  listCredentials() {
-    return apiClient.get<CredentialDto[]>('/credentials');
-  },
-  createCredential(input: CredentialInput) {
-    return apiClient.post<CredentialDto>('/credentials', input);
-  },
-  updateCredential(credentialId: string, input: CredentialInput) {
-    return apiClient.put<CredentialDto>(`/credentials/${credentialId}`, input);
-  },
-  deleteCredential(credentialId: string) {
-    return apiClient.delete(`/credentials/${credentialId}`);
-  },
-};
+function normalizeList<T>(items: T[] | null | undefined) {
+  return Array.isArray(items) ? items : [];
+}
+
+export function createServersApi(client = apiClient) {
+  return {
+    async listServers() {
+      return normalizeList(await client.get<ServerDto[] | null>('/servers'));
+    },
+    createServer(input: ServerInput) {
+      return client.post<ServerDto>('/servers', input);
+    },
+    probeServer(input: ServerInput) {
+      return client.post<ServerProbeDto>('/servers/probe', input);
+    },
+    updateServer(serverId: string, input: ServerInput) {
+      return client.put<ServerDto>(`/servers/${serverId}`, input);
+    },
+    deleteServer(serverId: string) {
+      return client.delete(`/servers/${serverId}`);
+    },
+    testConnection(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/test`);
+    },
+    async listCredentials() {
+      return normalizeList(await client.get<CredentialDto[] | null>('/credentials'));
+    },
+    createCredential(input: CredentialInput) {
+      return client.post<CredentialDto>('/credentials', input);
+    },
+    updateCredential(credentialId: string, input: CredentialInput) {
+      return client.put<CredentialDto>(`/credentials/${credentialId}`, input);
+    },
+    deleteCredential(credentialId: string) {
+      return client.delete(`/credentials/${credentialId}`);
+    },
+  };
+}
+
+export const serversApi = createServersApi();

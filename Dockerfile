@@ -29,28 +29,27 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/panel ./cmd/panel
 
-FROM alpine:3.22 AS runtime
+FROM lscr.io/linuxserver/baseimage-alpine:3.22 AS runtime
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates tzdata \
-  && addgroup -S panel \
-  && adduser -S -G panel -h /app panel \
-  && mkdir -p /app/data /app/web/dist \
-  && chown -R panel:panel /app
+  && mkdir -p /app/web/dist /config/data /defaults
 
 COPY --from=backend-build /out/panel /app/panel
 COPY --from=web-build /src/web/dist /app/web/dist
 COPY config.example.json /app/config.example.json
+COPY config.example.json /defaults/config.example.json
+COPY root/ /
+
+RUN chmod +x /etc/cont-init.d/10-panel-paths /etc/services.d/panel/run
 
 ENV PANEL_LISTEN_ADDRESS=0.0.0.0:8080 \
-    PANEL_DATA_ROOT=/app/data \
-    PANEL_APP_DATABASE=/app/data/db/app.db \
-    PANEL_METRICS_DATABASE=/app/data/db/metrics.db
+    PANEL_CONFIG=/config/config.json \
+    PANEL_DATA_ROOT=/config/data \
+    PANEL_APP_DATABASE=/config/data/db/app.db \
+    PANEL_METRICS_DATABASE=/config/data/db/metrics.db
 
 EXPOSE 8080
-VOLUME ["/app/data"]
+VOLUME ["/config"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1
-
-USER panel
-ENTRYPOINT ["/app/panel"]

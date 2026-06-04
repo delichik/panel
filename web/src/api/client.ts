@@ -132,7 +132,11 @@ export class ApiClient {
 export const apiClient = new ApiClient();
 
 export function readAuthToken() {
-  return globalThis.localStorage?.getItem('authToken') ?? '';
+  const storage = globalThis.localStorage;
+  if (!storage || typeof storage.getItem !== 'function') {
+    return '';
+  }
+  return storage.getItem('authToken') ?? '';
 }
 
 function filenameFromDisposition(disposition: string | null) {

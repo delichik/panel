@@ -55,9 +55,10 @@ const credentialForm = reactive<CredentialInput>({
 const selectedServer = computed(() => servers.value.find((server) => server.id === selectedServerId.value) ?? null);
 const reachableCount = computed(() => servers.value.filter((server) => server.reachable).length);
 const managedCount = computed(() => servers.value.filter((server) => nomadProjectionForServer(server.id)?.kind === 'managed').length);
+const credentialRows = computed(() => credentials.value ?? []);
 
 const credentialOptions = computed(() =>
-  credentials.value.map((credential) => ({
+  credentialRows.value.map((credential) => ({
     label: `${credential.name} (${credential.username}, ${credential.type})`,
     value: credential.id,
   })),
@@ -94,11 +95,11 @@ async function executeConfirm() {
 }
 
 function credentialById(id?: string | null) {
-  return credentials.value.find((credential) => credential.id === id);
+  return credentialRows.value.find((credential) => credential.id === id);
 }
 
 function nomadProjectionForServer(serverId: string): ProjectedNomadNodeDto | null {
-  return controlPlane.value?.nodes.find((node) => node.serverId === serverId) ?? null;
+  return (controlPlane.value?.nodes ?? []).find((node) => node.serverId === serverId) ?? null;
 }
 
 function nomadStatusForServer(serverId: string) {
@@ -464,10 +465,10 @@ onMounted(load);
           </tr>
         </thead>
         <tbody>
-          <tr v-if="credentials.length === 0">
+          <tr v-if="credentialRows.length === 0">
             <td colspan="4" class="text-center py-6 text-medium-emphasis">{{ t('serversPage.noCredentials') }}</td>
           </tr>
-          <tr v-for="row in credentials" :key="row.id">
+          <tr v-for="row in credentialRows" :key="row.id">
             <td class="font-weight-bold">{{ row.name }}</td>
             <td>{{ row.username }}</td>
             <td><v-chip size="small" label color="secondary" variant="tonal">{{ row.type }}</v-chip></td>

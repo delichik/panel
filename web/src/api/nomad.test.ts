@@ -39,4 +39,28 @@ describe('nomadApi', () => {
     expect(fetcher).toHaveBeenNthCalledWith(11, '/api/v1/nomad/remove-node', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', nodeId: 'node_1' }) }));
     expect(fetcher).toHaveBeenNthCalledWith(12, '/api/v1/nomad/reverse-proxy', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ serverId: 'srv_1', enabled: true, staticFiles: false, staticSites: [] }) }));
   });
+
+  it('normalizes nullable control-plane arrays', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      jsonResponse({
+        data: {
+          status: 'connected',
+          leader: 'node-1',
+          nodes: null,
+          joinCandidates: null,
+          bootstrapCandidates: null,
+        },
+        error: null,
+      }),
+    );
+    const api = createNomadApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await expect(api.controlPlane()).resolves.toEqual({
+      status: 'connected',
+      leader: 'node-1',
+      nodes: [],
+      joinCandidates: [],
+      bootstrapCandidates: [],
+    });
+  });
 });
