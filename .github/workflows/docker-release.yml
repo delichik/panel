@@ -184,7 +184,7 @@ jobs:
         shell: bash
         run: |
           docker buildx imagetools create \
-            $(printf '%s ' '-t' ${{ steps.meta.outputs.tags }}) \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
       - name: Inspect published image
