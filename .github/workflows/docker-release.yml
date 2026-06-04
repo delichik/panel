@@ -190,3 +190,7 @@ jobs:
       - name: Inspect published image
         shell: bash
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ github.ref_name }}
+
+      - name: Inspect published latest image
+        shell: bash
+        run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:latest
