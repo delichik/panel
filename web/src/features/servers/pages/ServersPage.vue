@@ -21,6 +21,7 @@ const editingCredential = ref<CredentialDto | null>(null);
 const probeLoading = ref(false);
 const probeResult = ref<ServerProbeDto | null>(null);
 const probeError = ref('');
+const ufwInstalling = ref<Record<string, boolean>>({});
 
 const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' : 'servers'));
 
@@ -284,6 +285,39 @@ function traitValue(server: ServerDto | null, key: string) {
   return server?.traits?.[key] || t('common.notAvailable');
 }
 
+function ufwStatusFromTraits(traits?: Record<string, string> | null) {
+  if (traits?.['sys.ufw_installed'] === 'true') {
+    if (traits?.['sys.ufw_active'] === 'true') return { label: t('serversPage.ufwActive'), color: 'success', installed: true };
+    return { label: t('serversPage.ufwInstalled'), color: 'primary', installed: true };
+  }
+  if (traits?.['sys.ufw_installed'] === 'false') return { label: t('serversPage.ufwNotInstalled'), color: 'warning', installed: false };
+  return { label: t('common.unknown'), color: 'secondary', installed: false };
+}
+
+function ufwStatusForServer(server: ServerDto | null) {
+  return ufwStatusFromTraits(server?.traits);
+}
+
+function canInstallUFW(server: ServerDto | null) {
+  if (!server) return false;
+  return server.reachable && server.os?.supported === true && server.sudo?.passwordless === true && !ufwStatusForServer(server).installed;
+}
+
+async function installUFW(server: ServerDto) {
+  ufwInstalling.value = { ...ufwInstalling.value, [server.id]: true };
+  try {
+    await serversApi.installUFW(server.id);
+    showMessage(t('serversPage.ufwInstallStarted'));
+    await load();
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : t('serversPage.ufwInstallFailed'), 'error');
+  } finally {
+    const next = { ...ufwInstalling.value };
+    delete next[server.id];
+    ufwInstalling.value = next;
+  }
+}
+
 function memoryLabel(server: ServerDto | null) {
   const mb = Number(server?.traits?.['sys.memory_total_mb'] || 0);
   return mb > 0 ? `${(mb / 1024).toFixed(1)} GB` : t('common.notAvailable');
@@ -404,6 +438,24 @@ onMounted(load);
                 <div class="property-grid">
                   <div><span>{{ t('serversPage.nomad') }}</span><v-chip :color="nomadStatusForServer(selectedServer.id).color" size="small" variant="tonal" label>{{ nomadStatusForServer(selectedServer.id).label }}</v-chip></div>
                   <div><span>{{ t('serversPage.distro') }}</span><v-chip :color="selectedServer.os?.supported ? 'success' : 'warning'" size="small" variant="tonal" label>{{ selectedServer.os?.prettyName || t('common.unknown') }}</v-chip></div>
+                  <div>
+                    <span>{{ t('serversPage.ufw') }}</span>
+                    <div class="ufw-actions">
+                      <v-chip :color="ufwStatusForServer(selectedServer).color" size="small" variant="tonal" label>{{ ufwStatusForServer(selectedServer).label }}</v-chip>
+                      <v-btn
+                        v-if="canInstallUFW(selectedServer)"
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                        prepend-icon="mdi-shield-plus"
+                        class="text-none"
+                        :loading="ufwInstalling[selectedServer.id]"
+                        @click.stop="installUFW(selectedServer)"
+                      >
+                        {{ t('serversPage.installUfw') }}
+                      </v-btn>
+                    </div>
+                  </div>
                   <div><span>{{ t('serversPage.kernelHost') }}</span><strong>{{ traitValue(selectedServer, 'sys.hostname') }}</strong></div>
                   <div><span>{{ t('serversPage.loadAverage') }}</span><strong>{{ selectedServer.loadAverage || t('common.notAvailable') }}</strong></div>
                 </div>
@@ -543,6 +595,7 @@ onMounted(load);
               <div><span>{{ t('serversPage.reachableLabel') }}</span><v-chip :color="probeResult.reachable ? 'success' : 'error'" size="small" variant="tonal" label>{{ probeResult.reachable ? t('common.yes') : t('common.no') }}</v-chip></div>
               <div><span>{{ t('serversPage.privilege') }}</span><v-chip :color="probeResult.privileged ? 'success' : 'warning'" size="small" variant="tonal" label>{{ probeResult.root ? t('serversPage.root') : probeResult.passwordlessSudo ? t('serversPage.passwordlessSudo') : t('serversPage.limited') }}</v-chip></div>
               <div><span>{{ t('serversPage.distro') }}</span><strong>{{ probeResult.os.prettyName || t('common.unknown') }}</strong></div>
+              <div><span>{{ t('serversPage.ufw') }}</span><v-chip :color="ufwStatusFromTraits(probeResult.traits).color" size="small" variant="tonal" label>{{ ufwStatusFromTraits(probeResult.traits).label }}</v-chip></div>
               <div><span>CPU</span><strong>{{ probeResult.traits['sys.cpu_cores'] || t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.memory') }}</span><strong>{{ probeResult.traits['sys.memory_total_mb'] ? `${(Number(probeResult.traits['sys.memory_total_mb']) / 1024).toFixed(1)} GB` : t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.disk') }}</span><strong>{{ probeResult.traits['sys.disk_total_gb'] ? `${probeResult.traits['sys.disk_total_gb']} GB` : t('common.notAvailable') }}</strong></div>
@@ -649,6 +702,7 @@ onMounted(load);
 .property-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .property-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
 .property-grid strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-size: 0.86rem; }
+.ufw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .trait-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .notes { margin: 0; color: var(--lp-text-muted); white-space: pre-wrap; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }

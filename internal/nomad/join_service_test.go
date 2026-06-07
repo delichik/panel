@@ -142,6 +142,11 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 		"enabled = false",
 		"panel_server_id = \"" + srv.ID + "\"",
 		`servers = ["10.0.0.1:4647"]`,
+		"command -v ufw",
+		"ufw allow 4646/tcp",
+		"ufw allow 4647/tcp",
+		"ufw allow 4648/tcp",
+		"ufw allow 4648/udp",
 		"systemctl restart nomad",
 		"systemctl is-active --quiet nomad",
 	} {
@@ -305,6 +310,11 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 		"-name '*.hcl'",
 		"-name '*.json'",
 		"panel_server_id = \"" + srv.ID + "\"",
+		"command -v ufw",
+		"ufw allow 4646/tcp",
+		"ufw allow 4647/tcp",
+		"ufw allow 4648/tcp",
+		"ufw allow 4648/udp",
 		"systemctl restart nomad",
 		"systemctl is-active --quiet nomad",
 	} {

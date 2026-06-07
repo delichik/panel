@@ -154,6 +154,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.Delete(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/test"):
 			serverH.Test(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/install"):
+			serverH.InstallUFW(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/overview":
 			overviewH.Get(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/metrics"):

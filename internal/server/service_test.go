@@ -110,7 +110,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.os"] != "debian-13" {
+	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_installed"] != "false" {
 		t.Fatalf("unexpected system traits detected: %#v", srv.Traits)
 	}
 
@@ -140,6 +140,39 @@ func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
 	}
 	if result.Traits["sys.cpu_cores"] != "8" || result.OS.PrettyName != "Debian GNU/Linux 13" {
 		t.Fatalf("unexpected probe detail: %#v", result)
+	}
+}
+
+func TestInstallUFWCreatesTaskAndRefreshesTraits(t *testing.T) {
+	exec := &ufwInstallFakeExec{}
+	svc, taskSvc, _ := testServerService(t, exec)
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv = waitServerReady(t, svc, srv.ID)
+
+	task, err := svc.InstallUFW(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTaskFinished(t, taskSvc, task.ID)
+
+	if task.Type != ufwInstallTaskType || task.ResourceType != connectivityResourceType || task.ResourceID != srv.ID {
+		t.Fatalf("unexpected task metadata: %#v", task)
+	}
+	if !strings.Contains(exec.installCommand, "apt-get install -y ufw") || !strings.Contains(exec.installCommand, "ufw --version") {
+		t.Fatalf("unexpected install command: %s", exec.installCommand)
+	}
+	if exec.installTimeout != ufwInstallTimeout {
+		t.Fatalf("expected install timeout %s, got %s", ufwInstallTimeout, exec.installTimeout)
+	}
+	stored, err := svc.Get(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "false" {
+		t.Fatalf("expected refreshed UFW traits, got %#v", stored.Traits)
 	}
 }
 
@@ -213,7 +246,7 @@ func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, com
 		return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
 	}
 	if strings.Contains(command.Command, "cores=") {
-		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\n", ExitCode: 0}, nil
+		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\nufw_installed=false\nufw_active=false\n", ExitCode: 0}, nil
 	}
 	if strings.Contains(command.Command, "id -u") {
 		if f.root {
@@ -234,6 +267,47 @@ func (f *connectivityFakeExec) Upload(ctx context.Context, target sshx.Target, t
 }
 
 func (f *connectivityFakeExec) Download(ctx context.Context, target sshx.Target, transfer sshx.DownloadSpec) error {
+	return nil
+}
+
+type ufwInstallFakeExec struct {
+	installed      bool
+	installCommand string
+	installTimeout time.Duration
+}
+
+func (f *ufwInstallFakeExec) Exec(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if strings.Contains(command.Command, "cat /etc/os-release") {
+		return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "cores=") {
+		installed := "false"
+		if f.installed {
+			installed = "true"
+		}
+		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\nufw_installed=" + installed + "\nufw_active=false\n", ExitCode: 0}, nil
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *ufwInstallFakeExec) ExecSudo(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if strings.TrimSpace(command.Command) == "true" {
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	f.installCommand = command.Command
+	f.installTimeout = command.Timeout
+	f.installed = true
+	if command.OnStdout != nil {
+		command.OnStdout("installed ufw")
+	}
+	return sshx.CommandResult{Stdout: "installed ufw\n", ExitCode: 0}, nil
+}
+
+func (f *ufwInstallFakeExec) Upload(ctx context.Context, target sshx.Target, transfer sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *ufwInstallFakeExec) Download(ctx context.Context, target sshx.Target, transfer sshx.DownloadSpec) error {
 	return nil
 }
 
@@ -292,4 +366,25 @@ func waitTaskFinished(t *testing.T, taskSvc *tasks.Service, taskID string) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("task did not finish")
+}
+
+func waitServerReady(t *testing.T, svc *Service, serverID string) Server {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		srv, err := svc.Get(context.Background(), serverID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if srv.Reachable && srv.OS.Supported && srv.Sudo.Passwordless {
+			return srv
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	srv, err := svc.Get(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("server did not become ready: %#v", srv)
+	return Server{}
 }

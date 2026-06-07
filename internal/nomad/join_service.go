@@ -477,8 +477,9 @@ client {
 }
 EOF
 %s
+%s
 nomad version
-`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), adapter.NomadServiceRestartScript())
+`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), nomadUFWAllowScript(), adapter.NomadServiceRestartScript())
 }
 
 func (s *JoinService) bootstrapScript(srv server.Server, adapter linux.DistroAdapter) string {
@@ -522,8 +523,9 @@ client {
 }
 EOF
 %s
+%s
 nomad version
-`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), adapter.NomadServiceRestartScript())
+`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), nomadUFWAllowScript(), adapter.NomadServiceRestartScript())
 }
 
 func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
@@ -569,6 +571,15 @@ func resetNomadConfigScript() string {
 	return `rm -rf /etc/nomad.d/tls
 install -d -m 0755 /etc/nomad.d /etc/nomad.d/tls /opt/nomad/data
 find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' -o -name '*.pem' \) -delete`
+}
+
+func nomadUFWAllowScript() string {
+	return `if command -v ufw >/dev/null 2>&1; then
+  ufw allow 4646/tcp
+  ufw allow 4647/tcp
+  ufw allow 4648/tcp
+  ufw allow 4648/udp
+fi`
 }
 
 func removeNodeScript(adapter linux.DistroAdapter) string {

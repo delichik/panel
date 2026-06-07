@@ -19,6 +19,8 @@ const connectivityTaskType = "server_connectivity_test"
 const connectivityResourceType = "server"
 const connectivityMaxRetries = 8
 const connectivityStaleAfter = 10 * time.Minute
+const ufwInstallTaskType = "server_ufw_install"
+const ufwInstallTimeout = 5 * time.Minute
 
 type Service struct {
 	db    *sql.DB
@@ -151,6 +153,44 @@ func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
 
 func (s *Service) TestConnectivity(ctx context.Context, serverID string) (tasks.Task, error) {
 	return s.EnsureConnectivityTask(ctx, serverID, true)
+}
+
+func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, error) {
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if !srv.OS.Supported {
+		return tasks.Task{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	if !srv.Reachable {
+		return tasks.Task{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
+	}
+	if !srv.Sudo.Passwordless {
+		return tasks.Task{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	}
+	if existing, ok, err := s.tasks.ExistingActive(ctx, ufwInstallTaskType, connectivityResourceType, serverID); err != nil {
+		return tasks.Task{}, err
+	} else if ok {
+		return existing, nil
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         ufwInstallTaskType,
+		ServerID:     serverID,
+		ResourceType: connectivityResourceType,
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      "Installing UFW",
+		MaxRetries:   0,
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runInstallUFW(context.Background(), task.ID, srv)
+	return task, nil
 }
 
 func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (ProbeResult, error) {
@@ -311,11 +351,50 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	}
 }
 
+func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server) {
+	_ = s.tasks.Start(ctx, taskID)
+	target := srv.Target()
+	_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
+	if err := s.execSudoLogged(ctx, taskID, target, installUFWScript(), ufwInstallTimeout); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing server system traits")
+	osInfo, err := linux.Detect(ctx, s.exec, target)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
+	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
+	sysTraits := map[string]string{}
+	if osInfo.Supported {
+		detected, traitsErr := s.detectSystemTraits(ctx, target)
+		if traitsErr == nil {
+			sysTraits = detected
+		} else {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
+		}
+		sysTraits["sys.os"] = strings.ToLower(osInfo.ID + "-" + osInfo.VersionID)
+	}
+	msg := ""
+	if !osInfo.Supported {
+		msg = "unsupported distribution"
+	}
+	if err := s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, msg); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "UFW installed")
+}
+
 func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (map[string]string, error) {
 	cmd := `sh -lc 'echo "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"; ` +
 		`echo "mem=$(grep MemTotal /proc/meminfo 2>/dev/null | awk "{print \$2}" | awk "{print int(\$1/1024)}" || echo 0)"; ` +
 		`echo "disk=$(df -m / 2>/dev/null | awk "NR==2{print \$2}" | awk "{print int(\$1/1024)}" || echo 0)"; ` +
-		`echo "hostname=$(hostname 2>/dev/null || echo unknown)"'`
+		`echo "hostname=$(hostname 2>/dev/null || echo unknown)"; ` +
+		`if command -v ufw >/dev/null 2>&1; then echo "ufw_installed=true"; if systemctl is-active --quiet ufw 2>/dev/null || ufw status 2>/dev/null | grep -qi "^Status: active"; then echo "ufw_active=true"; else echo "ufw_active=false"; fi; else echo "ufw_installed=false"; echo "ufw_active=false"; fi'`
 
 	res, err := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: cmd, Timeout: 12 * time.Second})
 	if err != nil {
@@ -341,9 +420,55 @@ func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (m
 			traits["sys.disk_total_gb"] = value
 		case "hostname":
 			traits["sys.hostname"] = value
+		case "ufw_installed":
+			traits["sys.ufw_installed"] = value
+		case "ufw_active":
+			traits["sys.ufw_active"] = value
 		}
 	}
 	return traits, nil
+}
+
+func installUFWScript() string {
+	return `set -eu
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v ufw >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y ufw
+fi
+ufw --version`
+}
+
+func (s *Service) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string, timeout time.Duration) error {
+	stdoutStreamed := false
+	stderrStreamed := false
+	res, err := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{
+		Command: command,
+		Timeout: timeout,
+		OnStdout: func(line string) {
+			stdoutStreamed = true
+			_ = s.tasks.AppendLog(ctx, taskID, "stdout", line)
+		},
+		OnStderr: func(line string) {
+			stderrStreamed = true
+			_ = s.tasks.AppendLog(ctx, taskID, "stderr", line)
+		},
+	})
+	if !stdoutStreamed {
+		s.appendCommandOutput(ctx, taskID, "stdout", res.Stdout)
+	}
+	if !stderrStreamed {
+		s.appendCommandOutput(ctx, taskID, "stderr", res.Stderr)
+	}
+	return err
+}
+
+func (s *Service) appendCommandOutput(ctx context.Context, taskID, stream, out string) {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.TrimSpace(line) != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, stream, line)
+		}
+	}
 }
 
 func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool, osInfo linux.OSRelease, sudo bool, sysTraits map[string]string, msg string) error {

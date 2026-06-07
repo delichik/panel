@@ -64,6 +64,9 @@ export function createServersApi(client = apiClient) {
     testConnection(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/test`);
     },
+    installUFW(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/install`);
+    },
     async listCredentials() {
       return normalizeList(await client.get<CredentialDto[] | null>('/credentials'));
     },

@@ -80,6 +80,15 @@ func (h *Handler) Test(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
+func (h *Handler) InstallUFW(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.InstallUFW(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw/install")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
 func serverID(path string) string {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 4 {

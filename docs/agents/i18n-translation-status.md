@@ -11,6 +11,10 @@
   - 补齐共享 `common.*` 词条
   - 为总览页补充专用词条
   - 更新登录副标题的 Debian / Ubuntu 多发行版描述
+  - 更新 Nomad 引导页的多发行版与免密 sudo eligibility 提示
+  - 为服务器页补充 UFW 状态与安装入口词条
+- `internal/i18n/i18n.go`
+  - 补充 `server_not_reachable` 后端错误码的简体中文翻译
 - `web/src/stores/settings.ts`
   - 运行时设置加载后同步前端语言
 - `internal/settings/service.go`
