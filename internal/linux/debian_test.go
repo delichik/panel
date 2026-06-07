@@ -33,8 +33,10 @@ func TestParseOSReleaseSupportsRegisteredDistros(t *testing.T) {
 	}
 	if !strings.Contains(selected.NomadInstallScript(), "apt.releases.hashicorp.com") ||
 		!strings.Contains(selected.NomadRuntimePrereqsScript(), "docker.io") ||
-		!strings.Contains(selected.NomadServiceRestartScript(), "systemctl restart nomad") {
-		t.Fatalf("Ubuntu adapter should expose apt-based Nomad scripts")
+		!strings.Contains(selected.NomadServiceRestartScript(), "systemctl restart nomad") ||
+		!selected.SupportsUFW() ||
+		!strings.Contains(selected.UFWInstallScript(), "apt-get install -y ufw") {
+		t.Fatalf("Ubuntu adapter should expose apt-based Nomad and UFW support")
 	}
 }
 

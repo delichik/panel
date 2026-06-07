@@ -110,7 +110,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_installed"] != "false" {
+	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_supported"] != "true" || srv.Traits["sys.ufw_installed"] != "false" {
 		t.Fatalf("unexpected system traits detected: %#v", srv.Traits)
 	}
 
@@ -138,7 +138,7 @@ func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
 	if !result.Reachable || !result.Root || !result.Privileged {
 		t.Fatalf("expected reachable root probe, got %#v", result)
 	}
-	if result.Traits["sys.cpu_cores"] != "8" || result.OS.PrettyName != "Debian GNU/Linux 13" {
+	if result.Traits["sys.cpu_cores"] != "8" || result.Traits["sys.ufw_supported"] != "true" || result.OS.PrettyName != "Debian GNU/Linux 13" {
 		t.Fatalf("unexpected probe detail: %#v", result)
 	}
 }
@@ -171,7 +171,7 @@ func TestInstallUFWCreatesTaskAndRefreshesTraits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "false" {
+	if stored.Traits["sys.ufw_supported"] != "true" || stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "false" {
 		t.Fatalf("expected refreshed UFW traits, got %#v", stored.Traits)
 	}
 }

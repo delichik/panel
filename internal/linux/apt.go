@@ -122,6 +122,20 @@ func (aptAdapter) NomadServiceStopScript() string {
 systemctl reset-failed nomad || true`
 }
 
+func (aptAdapter) SupportsUFW() bool {
+	return true
+}
+
+func (aptAdapter) UFWInstallScript() string {
+	return `set -eu
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v ufw >/dev/null 2>&1; then
+  apt-get update
+  apt-get install -y ufw
+fi
+ufw --version`
+}
+
 func runLogged(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, cmd string, timeout time.Duration, log LogSink) error {
 	stdoutStreamed := false
 	stderrStreamed := false

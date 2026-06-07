@@ -22,6 +22,7 @@ const probeLoading = ref(false);
 const probeResult = ref<ServerProbeDto | null>(null);
 const probeError = ref('');
 const ufwInstalling = ref<Record<string, boolean>>({});
+let controlPlaneLoadSeq = 0;
 
 const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' : 'servers'));
 
@@ -113,6 +114,12 @@ function nomadStatusForServer(serverId: string) {
   return { label: projection.status || t('serversPage.notJoined'), color: 'secondary' };
 }
 
+function nomadMembershipForServer(serverId: string) {
+  const projection = nomadProjectionForServer(serverId);
+  if (projection?.kind === 'managed') return { label: t('serversPage.managedNode'), color: 'primary' };
+  return { label: t('serversPage.notJoined'), color: 'secondary' };
+}
+
 function resetServerForm(server?: ServerDto) {
   editing.value = server ?? null;
   probeResult.value = null;
@@ -167,23 +174,32 @@ function editCredential(credential: CredentialDto) {
 async function load() {
   loading.value = true;
   try {
-    const [serverRows, credentialRows, nomadState] = await Promise.all([
+    const [serverRows, credentialRows] = await Promise.all([
       serversApi.listServers(),
       serversApi.listCredentials(),
-      nomadApi.controlPlane().catch(() => null),
     ]);
     servers.value = serverRows;
     credentials.value = credentialRows;
-    controlPlane.value = nomadState;
     if (!selectedServerId.value && serverRows.length) selectedServerId.value = serverRows[0].id;
     if (selectedServerId.value && !serverRows.some((server) => server.id === selectedServerId.value)) {
       selectedServerId.value = serverRows[0]?.id ?? '';
     }
     error.value = '';
+    void loadControlPlane();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('serversPage.unableToLoadServers');
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadControlPlane() {
+  const seq = ++controlPlaneLoadSeq;
+  try {
+    const result = await nomadApi.controlPlane();
+    if (seq === controlPlaneLoadSeq) controlPlane.value = result;
+  } catch {
+    if (seq === controlPlaneLoadSeq) controlPlane.value = null;
   }
 }
 
@@ -286,12 +302,18 @@ function traitValue(server: ServerDto | null, key: string) {
 }
 
 function ufwStatusFromTraits(traits?: Record<string, string> | null) {
-  if (traits?.['sys.ufw_installed'] === 'true') {
-    if (traits?.['sys.ufw_active'] === 'true') return { label: t('serversPage.ufwActive'), color: 'success', installed: true };
-    return { label: t('serversPage.ufwInstalled'), color: 'primary', installed: true };
+  const supported = traits?.['sys.ufw_supported'] === 'true';
+  if (traits?.['sys.ufw_supported'] === 'false') {
+    return { label: t('serversPage.ufwUnsupported'), color: 'secondary', installed: false, supported: false };
   }
-  if (traits?.['sys.ufw_installed'] === 'false') return { label: t('serversPage.ufwNotInstalled'), color: 'warning', installed: false };
-  return { label: t('common.unknown'), color: 'secondary', installed: false };
+  if (traits?.['sys.ufw_installed'] === 'true') {
+    if (traits?.['sys.ufw_active'] === 'true') return { label: t('serversPage.ufwActive'), color: 'success', installed: true, supported };
+    return { label: t('serversPage.ufwInstalled'), color: 'primary', installed: true, supported };
+  }
+  if (traits?.['sys.ufw_installed'] === 'false' && supported) {
+    return { label: t('serversPage.ufwNotInstalled'), color: 'warning', installed: false, supported: true };
+  }
+  return { label: t('common.unknown'), color: 'secondary', installed: false, supported: false };
 }
 
 function ufwStatusForServer(server: ServerDto | null) {
@@ -300,7 +322,8 @@ function ufwStatusForServer(server: ServerDto | null) {
 
 function canInstallUFW(server: ServerDto | null) {
   if (!server) return false;
-  return server.reachable && server.os?.supported === true && server.sudo?.passwordless === true && !ufwStatusForServer(server).installed;
+  const status = ufwStatusForServer(server);
+  return server.reachable && server.sudo?.passwordless === true && status.supported && !status.installed;
 }
 
 async function installUFW(server: ServerDto) {
@@ -383,13 +406,12 @@ onMounted(load);
               type="button"
               @click="selectedServerId = server.id"
             >
-              <span class="status-dot" :class="server.reachable ? 'success' : 'warning'" />
               <span class="min-width-0">
                 <span class="server-name text-truncate">{{ server.name }}</span>
                 <span class="server-meta text-truncate">{{ server.host }}:{{ server.port }}</span>
               </span>
-              <v-chip :color="nomadStatusForServer(server.id).color" size="x-small" variant="tonal" label>
-                {{ nomadStatusForServer(server.id).label }}
+              <v-chip :color="nomadMembershipForServer(server.id).color" size="x-small" variant="tonal" label>
+                {{ nomadMembershipForServer(server.id).label }}
               </v-chip>
             </button>
             <div v-if="servers.length === 0" class="empty-list">
@@ -682,7 +704,7 @@ onMounted(load);
 .server-list { overflow: hidden; }
 .list-header-main { display: grid; gap: 10px; justify-items: start; }
 .server-list-body { display: grid; gap: 8px; padding: 10px; }
-.server-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background-color 0.16s ease, border-color 0.16s ease; }
+.server-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background-color 0.16s ease, border-color 0.16s ease; }
 .server-row:hover { background: rgba(var(--v-theme-on-surface), 0.025); }
 .server-row.selected { border-color: rgba(var(--v-theme-primary), 0.26); background: rgba(var(--v-theme-primary), 0.06); }
 .server-name, .server-meta { display: block; }

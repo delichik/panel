@@ -80,6 +80,91 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 }
 
+func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE credentials (
+		id TEXT PRIMARY KEY,
+		name TEXT,
+		type TEXT,
+		username TEXT,
+		password_secret TEXT,
+		private_key_path TEXT,
+		passphrase_secret TEXT,
+		created_at TEXT,
+		updated_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO credentials(id,name,type,username,password_secret,private_key_path,passphrase_secret,created_at,updated_at)
+		VALUES('cred_legacy',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE servers (
+		id TEXT PRIMARY KEY,
+		name TEXT,
+		host TEXT,
+		port INTEGER,
+		ssh_username TEXT,
+		credential_id TEXT,
+		traits TEXT,
+		notes TEXT,
+		os_id TEXT,
+		os_version_id TEXT,
+		os_pretty_name TEXT,
+		os_supported INTEGER,
+		reachable INTEGER,
+		sudo_passwordless INTEGER,
+		sudo_last_checked_at TEXT,
+		last_checked_at TEXT,
+		last_error TEXT,
+		created_at TEXT,
+		updated_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at)
+		VALUES('srv_legacy',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	var credName, credType, credUsername, credCreated, credUpdated string
+	if err := store.AppDB().QueryRow(`SELECT name,type,username,created_at,updated_at FROM credentials WHERE id='cred_legacy'`).
+		Scan(&credName, &credType, &credUsername, &credCreated, &credUpdated); err != nil {
+		t.Fatal(err)
+	}
+	if credName != "" || credType != "password" || credUsername != "" || credCreated == "" || credUpdated == "" {
+		t.Fatalf("credential defaults not normalized: name=%q type=%q username=%q created=%q updated=%q", credName, credType, credUsername, credCreated, credUpdated)
+	}
+
+	var serverName, serverHost, serverSSHUser, credentialID, traits, notes, osID, osVersionID, osPrettyName, lastError, serverCreated, serverUpdated string
+	var port, osSupported, reachable, sudo int
+	if err := store.AppDB().QueryRow(`SELECT name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,last_error,created_at,updated_at FROM servers WHERE id='srv_legacy'`).
+		Scan(&serverName, &serverHost, &port, &serverSSHUser, &credentialID, &traits, &notes, &osID, &osVersionID, &osPrettyName, &osSupported, &reachable, &sudo, &lastError, &serverCreated, &serverUpdated); err != nil {
+		t.Fatal(err)
+	}
+	if serverName != "" || serverHost != "" || port != 22 || serverSSHUser != "" || credentialID != "cred_legacy" || traits != "{}" || notes != "" || osID != "" || osVersionID != "" || osPrettyName != "" || osSupported != 0 || reachable != 0 || sudo != 0 || lastError != "" || serverCreated == "" || serverUpdated == "" {
+		t.Fatalf("server defaults not normalized: name=%q host=%q port=%d ssh=%q credential=%q traits=%q notes=%q os=%q/%q/%q supported=%d reachable=%d sudo=%d lastError=%q created=%q updated=%q", serverName, serverHost, port, serverSSHUser, credentialID, traits, notes, osID, osVersionID, osPrettyName, osSupported, reachable, sudo, lastError, serverCreated, serverUpdated)
+	}
+}
+
 func tableExists(t *testing.T, db *sql.DB, table string) bool {
 	t.Helper()
 	var name string

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"panel/internal/config"
 	"panel/internal/credential"
@@ -59,6 +60,35 @@ func TestControlPlaneShowsBootstrappingServerAsPendingNode(t *testing.T) {
 	node := got.Nodes[0]
 	if node.Kind != ProjectedNodePending || node.Role != ProjectedNodeRoleServer || node.Status != "bootstrapping" || node.TaskID != task.ID {
 		t.Fatalf("unexpected projected node: %#v", node)
+	}
+}
+
+func TestControlPlaneTimesOutNomadStatusAndStillReturnsProjection(t *testing.T) {
+	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	createControlPlaneServer(t, svc.servers, credSvc, ctx, "first", "10.0.0.36")
+	fake.blockStatus = true
+	oldTimeout := controlPlaneNomadQueryTimeout
+	controlPlaneNomadQueryTimeout = 20 * time.Millisecond
+	defer func() { controlPlaneNomadQueryTimeout = oldTimeout }()
+
+	start := time.Now()
+	got, err := svc.ControlPlane(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("control-plane should not wait on Nomad indefinitely, took %s", elapsed)
+	}
+	if got.Status != ControlPlaneUnconfigured {
+		t.Fatalf("status = %q", got.Status)
+	}
+	if len(got.Nodes) != 1 || got.Nodes[0].Kind != ProjectedNodeMissing || got.Nodes[0].Status != "nomad_unreachable" {
+		t.Fatalf("nodes = %#v", got.Nodes)
+	}
+	if len(got.BootstrapCandidates) != 1 {
+		t.Fatalf("bootstrap candidates = %#v", got.BootstrapCandidates)
 	}
 }
 
@@ -216,13 +246,18 @@ func createControlPlaneServer(t *testing.T, svc *server.Service, credSvc *creden
 }
 
 type controlPlaneFakeNomad struct {
-	status    StatusResponse
-	statusErr error
-	nodes     []NodeListItem
-	nodesErr  error
+	status      StatusResponse
+	statusErr   error
+	blockStatus bool
+	nodes       []NodeListItem
+	nodesErr    error
 }
 
-func (f *controlPlaneFakeNomad) Status(context.Context) (StatusResponse, error) {
+func (f *controlPlaneFakeNomad) Status(ctx context.Context) (StatusResponse, error) {
+	if f.blockStatus {
+		<-ctx.Done()
+		return StatusResponse{Connected: false}, ctx.Err()
+	}
 	return f.status, f.statusErr
 }
 

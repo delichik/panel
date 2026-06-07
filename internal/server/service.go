@@ -123,6 +123,7 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 		if err != nil {
 			return nil, err
 		}
+		applyDistroSystemTraits(srv.OS, srv.Traits)
 		if s.exec != nil && (srv.LastCheckedAt == nil || time.Since(*srv.LastCheckedAt) > connectivityStaleAfter) {
 			_, _ = s.EnsureConnectivityTask(ctx, srv.ID, false)
 		}
@@ -142,6 +143,7 @@ func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
 		return Server{}, panelerr.NotFound("server")
 	}
 	if err == nil {
+		applyDistroSystemTraits(srv.OS, srv.Traits)
 		var load sql.NullString
 		_ = s.db.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, srv.ID).Scan(&load)
 		if load.Valid {
@@ -172,6 +174,13 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 	if !srv.Sudo.Passwordless {
 		return tasks.Task{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
 	}
+	adapter, ok := linux.AdapterFor(srv.OS)
+	if !ok {
+		return tasks.Task{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	if !adapter.SupportsUFW() {
+		return tasks.Task{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
+	}
 	if existing, ok, err := s.tasks.ExistingActive(ctx, ufwInstallTaskType, connectivityResourceType, serverID); err != nil {
 		return tasks.Task{}, err
 	} else if ok {
@@ -189,7 +198,7 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runInstallUFW(context.Background(), task.ID, srv)
+	go s.runInstallUFW(context.Background(), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -226,8 +235,8 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 		if detected, traitsErr := s.detectSystemTraits(probeCtx, target); traitsErr == nil {
 			sysTraits = detected
 		}
-		sysTraits["sys.os"] = strings.ToLower(osInfo.ID + "-" + osInfo.VersionID)
 	}
+	applyDistroSystemTraits(osInfo, sysTraits)
 
 	result := ProbeResult{
 		Reachable:        true,
@@ -334,8 +343,8 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 		} else {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
 		}
-		sysTraits["sys.os"] = strings.ToLower(osInfo.ID + "-" + osInfo.VersionID)
 	}
+	applyDistroSystemTraits(osInfo, sysTraits)
 
 	if !osInfo.Supported {
 		_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, "unsupported distribution")
@@ -351,11 +360,11 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	}
 }
 
-func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server) {
+func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
-	if err := s.execSudoLogged(ctx, taskID, target, installUFWScript(), ufwInstallTimeout); err != nil {
+	if err := s.execSudoLogged(ctx, taskID, target, adapter.UFWInstallScript(), ufwInstallTimeout); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
@@ -376,8 +385,8 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server) 
 		} else {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
 		}
-		sysTraits["sys.os"] = strings.ToLower(osInfo.ID + "-" + osInfo.VersionID)
 	}
+	applyDistroSystemTraits(osInfo, sysTraits)
 	msg := ""
 	if !osInfo.Supported {
 		msg = "unsupported distribution"
@@ -429,16 +438,6 @@ func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (m
 	return traits, nil
 }
 
-func installUFWScript() string {
-	return `set -eu
-export DEBIAN_FRONTEND=noninteractive
-if ! command -v ufw >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y ufw
-fi
-ufw --version`
-}
-
 func (s *Service) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string, timeout time.Duration) error {
 	stdoutStreamed := false
 	stderrStreamed := false
@@ -468,6 +467,20 @@ func (s *Service) appendCommandOutput(ctx context.Context, taskID, stream, out s
 		if strings.TrimSpace(line) != "" {
 			_ = s.tasks.AppendLog(ctx, taskID, stream, line)
 		}
+	}
+}
+
+func applyDistroSystemTraits(osInfo linux.OSRelease, traits map[string]string) {
+	if traits == nil {
+		return
+	}
+	if osInfo.Supported {
+		traits["sys.os"] = strings.ToLower(osInfo.ID + "-" + osInfo.VersionID)
+	}
+	if adapter, ok := linux.AdapterFor(osInfo); ok {
+		traits["sys.ufw_supported"] = boolString(adapter.SupportsUFW())
+	} else if osInfo.ID != "" || osInfo.VersionID != "" || osInfo.PrettyName != "" {
+		traits["sys.ufw_supported"] = "false"
 	}
 }
 
@@ -560,4 +573,11 @@ func boolInt(v bool) int {
 		return 1
 	}
 	return 0
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
 }

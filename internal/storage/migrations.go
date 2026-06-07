@@ -210,6 +210,18 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.ensureAppColumns(ctx, "credentials", map[string]string{
+		"name":              "TEXT NOT NULL DEFAULT ''",
+		"type":              "TEXT NOT NULL DEFAULT 'password'",
+		"username":          "TEXT NOT NULL DEFAULT ''",
+		"password_secret":   "TEXT NOT NULL DEFAULT ''",
+		"private_key_path":  "TEXT NOT NULL DEFAULT ''",
+		"passphrase_secret": "TEXT NOT NULL DEFAULT ''",
+		"created_at":        "TEXT NOT NULL DEFAULT ''",
+		"updated_at":        "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
 	if err := s.ensureAppColumns(ctx, "applications", map[string]string{
 		"persistent_path":            "TEXT NOT NULL DEFAULT ''",
 		"resolved_variables_json":    "TEXT NOT NULL DEFAULT '{}'",
@@ -226,8 +238,28 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "servers", map[string]string{
-		"traits": "TEXT NOT NULL DEFAULT '{}'",
+		"name":                 "TEXT NOT NULL DEFAULT ''",
+		"host":                 "TEXT NOT NULL DEFAULT ''",
+		"port":                 "INTEGER NOT NULL DEFAULT 22",
+		"ssh_username":         "TEXT NOT NULL DEFAULT ''",
+		"credential_id":        "TEXT NOT NULL DEFAULT ''",
+		"traits":               "TEXT NOT NULL DEFAULT '{}'",
+		"notes":                "TEXT NOT NULL DEFAULT ''",
+		"os_id":                "TEXT NOT NULL DEFAULT ''",
+		"os_version_id":        "TEXT NOT NULL DEFAULT ''",
+		"os_pretty_name":       "TEXT NOT NULL DEFAULT ''",
+		"os_supported":         "INTEGER NOT NULL DEFAULT 0",
+		"reachable":            "INTEGER NOT NULL DEFAULT 0",
+		"sudo_passwordless":    "INTEGER NOT NULL DEFAULT 0",
+		"sudo_last_checked_at": "TEXT",
+		"last_checked_at":      "TEXT",
+		"last_error":           "TEXT NOT NULL DEFAULT ''",
+		"created_at":           "TEXT NOT NULL DEFAULT ''",
+		"updated_at":           "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
+		return err
+	}
+	if err := s.normalizeAppDefaults(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "certificates", map[string]string{
@@ -267,6 +299,46 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	for _, stmt := range metrics {
 		if _, err := s.metricsDB.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) normalizeAppDefaults(ctx context.Context) error {
+	nowExpr := `strftime('%Y-%m-%dT%H:%M:%SZ','now')`
+	statements := []string{
+		`UPDATE credentials SET
+			name=COALESCE(name, ''),
+			type=CASE WHEN type IN ('password','private_key') THEN type ELSE 'password' END,
+			username=COALESCE(username, ''),
+			password_secret=COALESCE(password_secret, ''),
+			private_key_path=COALESCE(private_key_path, ''),
+			passphrase_secret=COALESCE(passphrase_secret, ''),
+			created_at=COALESCE(NULLIF(created_at, ''), ` + nowExpr + `),
+			updated_at=COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), ` + nowExpr + `)`,
+		`UPDATE servers SET credential_id=(SELECT id FROM credentials WHERE id IS NOT NULL AND id != '' ORDER BY created_at DESC LIMIT 1)
+			WHERE (credential_id IS NULL OR credential_id = '')
+			  AND EXISTS (SELECT 1 FROM credentials WHERE id IS NOT NULL AND id != '')`,
+		`UPDATE servers SET
+			name=COALESCE(name, ''),
+			host=COALESCE(host, ''),
+			port=COALESCE(port, 22),
+			ssh_username=COALESCE(ssh_username, ''),
+			traits=COALESCE(traits, '{}'),
+			notes=COALESCE(notes, ''),
+			os_id=COALESCE(os_id, ''),
+			os_version_id=COALESCE(os_version_id, ''),
+			os_pretty_name=COALESCE(os_pretty_name, ''),
+			os_supported=COALESCE(os_supported, 0),
+			reachable=COALESCE(reachable, 0),
+			sudo_passwordless=COALESCE(sudo_passwordless, 0),
+			last_error=COALESCE(last_error, ''),
+			created_at=COALESCE(NULLIF(created_at, ''), ` + nowExpr + `),
+			updated_at=COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), ` + nowExpr + `)`,
+	}
+	for _, stmt := range statements {
+		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}

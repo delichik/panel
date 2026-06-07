@@ -26,6 +26,8 @@ const (
 	completedTaskProjectionWindow = 15 * time.Minute
 )
 
+var controlPlaneNomadQueryTimeout = 3 * time.Second
+
 type statusClient interface {
 	Status(ctx context.Context) (StatusResponse, error)
 }
@@ -68,8 +70,10 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 
 	status := StatusResponse{}
 	connected := false
+	nomadCtx, cancelNomad := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
+	defer cancelNomad()
 	if client, ok := s.nomad.(statusClient); ok {
-		if got, err := client.Status(ctx); err == nil && got.Connected {
+		if got, err := client.Status(nomadCtx); err == nil && got.Connected {
 			status = got
 			connected = true
 		}
@@ -77,7 +81,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 
 	nodes := []NodeListItem{}
 	if connected {
-		nodes, err = s.nomad.Nodes(ctx)
+		nodes, err = s.nomad.Nodes(nomadCtx)
 		if err != nil {
 			connected = false
 		}

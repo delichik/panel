@@ -59,4 +59,6 @@ type DistroAdapter interface {
 	NomadRuntimePrereqsScript() string
 	NomadServiceRestartScript() string
 	NomadServiceStopScript() string
+	SupportsUFW() bool
+	UFWInstallScript() string
 }
