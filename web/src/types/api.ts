@@ -344,6 +344,7 @@ export interface ProjectedNomadNodeDto {
   reverseProxy: boolean;
   reverseProxyStatic: boolean;
   reverseProxyStaticSites: NomadReverseProxyStaticSiteDto[];
+  joinEligible?: boolean;
   taskId?: string;
   error?: string;
 }

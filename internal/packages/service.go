@@ -31,7 +31,7 @@ type UpdateList struct {
 }
 
 type RefreshResult struct {
-	ServerID    string `json:"serverId"`
+	ServerID   string `json:"serverId"`
 	Refreshing bool   `json:"refreshing"`
 }
 
@@ -42,7 +42,7 @@ type packageAdapter interface {
 }
 
 func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor, taskSvc *tasks.Service) *Service {
-	return &Service{db: db, servers: servers, exec: exec, tasks: taskSvc, adapter: linux.DebianAdapter{}, refreshing: map[string]bool{}}
+	return &Service{db: db, servers: servers, exec: exec, tasks: taskSvc, refreshing: map[string]bool{}}
 }
 
 func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error) {
@@ -77,15 +77,23 @@ func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, 
 	if err != nil {
 		return RefreshResult{}, err
 	}
+	adapter, err := s.adapterFor(srv)
+	if err != nil {
+		return RefreshResult{}, err
+	}
 	if !s.markRefreshing(serverID) {
 		return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 	}
-	go s.runRefresh(context.Background(), srv)
+	go s.runRefresh(context.Background(), srv, adapter)
 	return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 }
 
 func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []string) (tasks.Task, error) {
 	srv, err := s.ensurePackageAllowed(ctx, serverID, true)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	adapter, err := s.adapterFor(srv)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -96,7 +104,7 @@ func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runUpgradeSelected(context.Background(), task.ID, srv, names)
+	go s.runUpgradeSelected(context.Background(), task.ID, srv, adapter, names)
 	return task, nil
 }
 
@@ -105,11 +113,15 @@ func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	adapter, err := s.adapterFor(srv)
+	if err != nil {
+		return tasks.Task{}, err
+	}
 	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_upgrade_all", ServerID: serverID, Summary: "Upgrading all packages"})
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runUpgradeAll(context.Background(), task.ID, srv)
+	go s.runUpgradeAll(context.Background(), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -127,25 +139,36 @@ func (s *Service) ensurePackageAllowed(ctx context.Context, serverID string, req
 	return srv, nil
 }
 
-func (s *Service) runRefresh(ctx context.Context, srv server.Server) {
+func (s *Service) adapterFor(srv server.Server) (packageAdapter, error) {
+	if s.adapter != nil {
+		return s.adapter, nil
+	}
+	adapter, ok := linux.AdapterFor(srv.OS)
+	if !ok {
+		return nil, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	return adapter, nil
+}
+
+func (s *Service) runRefresh(ctx context.Context, srv server.Server, adapter packageAdapter) {
 	defer s.clearRefreshing(srv.ID)
-	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
+	updates, err := adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {
 		return
 	}
 	_ = s.replaceUpdates(ctx, srv.ID, updates)
 }
 
-func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, names []string) {
+func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter, names []string) {
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading selected packages")
-	err := s.adapter.UpgradeSelected(ctx, s.exec, srv.Target(), names, taskLogSink{s.tasks, taskID})
+	err := adapter.UpgradeSelected(ctx, s.exec, srv.Target(), names, taskLogSink{s.tasks, taskID})
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
-	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
+	updates, err := adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -157,16 +180,16 @@ func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv ser
 	_ = s.tasks.Complete(ctx, taskID, "Selected packages upgraded")
 }
 
-func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.Server) {
+func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading all packages")
-	err := s.adapter.UpgradeAll(ctx, s.exec, srv.Target(), taskLogSink{s.tasks, taskID})
+	err := adapter.UpgradeAll(ctx, s.exec, srv.Target(), taskLogSink{s.tasks, taskID})
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
-	updates, err := s.adapter.ListUpgradeable(ctx, s.exec, srv.Target())
+	updates, err := adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return

@@ -189,8 +189,12 @@ func newControlPlaneTestService(t *testing.T) (*JoinService, *credential.Service
 	taskSvc := tasks.NewService(store.AppDB())
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	unregister := registerJoinTestDB(serverSvc, store.AppDB())
 	fake := &controlPlaneFakeNomad{}
-	return NewJoinService(serverSvc, fake, &joinFakeExecutor{}, taskSvc, cfg.Nomad, tlsAssets), credSvc, fake, func() { _ = store.Close() }
+	return NewJoinService(serverSvc, fake, &joinFakeExecutor{}, taskSvc, cfg.Nomad, tlsAssets), credSvc, fake, func() {
+		unregister()
+		_ = store.Close()
+	}
 }
 
 func createControlPlaneServer(t *testing.T, svc *server.Service, credSvc *credential.Service, ctx context.Context, name, host string) server.Server {
@@ -203,7 +207,12 @@ func createControlPlaneServer(t *testing.T, svc *server.Service, credSvc *creden
 	if err != nil {
 		t.Fatal(err)
 	}
-	return srv
+	markJoinTestServerEligible(t, svc, srv.ID)
+	stored, err := svc.Get(ctx, srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored
 }
 
 type controlPlaneFakeNomad struct {

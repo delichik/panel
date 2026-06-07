@@ -14,7 +14,7 @@ func Detect(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) (
 		return OSRelease{}, err
 	}
 	info := ParseOSRelease(res.Stdout)
-	info.Supported = DebianAdapter{}.Supports(info)
+	info.Supported = Supported(info)
 	return info, nil
 }
 

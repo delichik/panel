@@ -15,7 +15,7 @@ type Service struct {
 	db      *sql.DB
 	servers *server.Service
 	exec    sshx.RemoteExecutor
-	adapter linux.DebianAdapter
+	adapter linux.DistroAdapter
 }
 
 type Series struct {
@@ -43,7 +43,7 @@ type NetPoint struct {
 }
 
 func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor) *Service {
-	return &Service{db: db, servers: servers, exec: exec, adapter: linux.DebianAdapter{}}
+	return &Service{db: db, servers: servers, exec: exec}
 }
 
 func (s *Service) Collect(ctx context.Context, serverID string) error {
@@ -58,13 +58,28 @@ func (s *Service) CollectAt(ctx context.Context, serverID string, collectedAt ti
 	if !srv.OS.Supported {
 		return panelerr.Validation("server_not_supported", "Server distribution is not supported")
 	}
-	snap, err := s.adapter.CollectMetrics(ctx, s.exec, srv.Target())
+	adapter, err := s.adapterFor(srv)
+	if err != nil {
+		return err
+	}
+	snap, err := adapter.CollectMetrics(ctx, s.exec, srv.Target())
 	if err != nil {
 		return err
 	}
 	snap.ServerID = serverID
 	snap.Time = collectedAt
 	return s.Save(ctx, snap)
+}
+
+func (s *Service) adapterFor(srv server.Server) (linux.DistroAdapter, error) {
+	if s.adapter != nil {
+		return s.adapter, nil
+	}
+	adapter, ok := linux.AdapterFor(srv.OS)
+	if !ok {
+		return nil, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	return adapter, nil
 }
 
 func (s *Service) Save(ctx context.Context, snap linux.MetricsSnapshot) error {

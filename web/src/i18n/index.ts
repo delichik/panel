@@ -139,7 +139,7 @@ const messages = {
     },
     login: {
       title: "Linux Server Panel",
-      subtitle: "SSH control plane for Debian servers",
+      subtitle: "SSH control plane for Debian and Ubuntu servers",
       username: "Username",
       password: "Password",
       submit: "Login to Console",
@@ -603,9 +603,9 @@ const messages = {
       bootstrapFailed: "Unable to bootstrap Nomad server",
       selectServerTitle: "Select one SSH Server",
       selectServerHint:
-        "Panel will install Nomad, start a single-server control plane, and project the deployment task into Nomad Nodes while the API is coming online.",
+        "Panel will install Nomad on a supported Debian or Ubuntu server with confirmed passwordless sudo, then project the deployment task into Nomad Nodes while the API is coming online.",
       noServersHint:
-        "No SSH Servers exist yet. Add a server first, then return here to bootstrap Nomad.",
+        "No eligible SSH servers are available. Add or test a supported Debian or Ubuntu server with passwordless sudo, then return here to bootstrap Nomad.",
       sshServer: "SSH Server",
       bootstrapFirstServer: "Bootstrap first Nomad server",
       addSshServer: "Add SSH Server",
@@ -778,7 +778,7 @@ const messages = {
     },
     login: {
       title: "Linux Server Panel",
-      subtitle: "面向 Debian 服务器的 SSH 控制平面",
+      subtitle: "面向 Debian 和 Ubuntu 服务器的 SSH 控制平面",
       username: "用户名",
       password: "密码",
       submit: "登录控制台",
@@ -1240,9 +1240,9 @@ const messages = {
       bootstrapFailed: "无法引导 Nomad 服务器",
       selectServerTitle: "选择一台 SSH 服务器",
       selectServerHint:
-        "Panel 将安装 Nomad，启动单服务器控制平面，并在 API 上线过程中把部署任务投影到 Nomad 节点。",
+        "Panel 将在已确认免密 sudo 的 Debian 或 Ubuntu 服务器上安装 Nomad，并在 API 上线过程中把部署任务投影到 Nomad 节点。",
       noServersHint:
-        "当前还没有 SSH 服务器。请先添加服务器，然后再回来引导 Nomad。",
+        "当前没有符合条件的 SSH 服务器。请先添加或测试一台支持的 Debian 或 Ubuntu 服务器，并确认免密 sudo，然后再回来引导 Nomad。",
       sshServer: "SSH 服务器",
       bootstrapFirstServer: "引导首个 Nomad 服务器",
       addSshServer: "新增 SSH 服务器",

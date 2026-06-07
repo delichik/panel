@@ -1,6 +1,6 @@
 # Panel
 
-Panel 是一个面向 Linux 服务器的运维控制面板，采用 Go 后端和 Vue 3 前端的一体化架构。项目当前聚焦于通过 SSH 管理 Debian 系服务器，并围绕 Nomad、应用部署、软件包更新、DNS 与证书管理提供统一操作入口。
+Panel 是一个面向 Linux 服务器的运维控制面板，采用 Go 后端和 Vue 3 前端的一体化架构。项目当前聚焦于通过 SSH 管理 Debian / Ubuntu 服务器，并围绕 Nomad、应用部署、软件包更新、DNS 与证书管理提供统一操作入口。
 
 ## 当前能力
 

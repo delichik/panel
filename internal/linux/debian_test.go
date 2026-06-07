@@ -9,17 +9,44 @@ import (
 	"panel/internal/sshx"
 )
 
-func TestParseOSReleaseSupportsDebian12And13(t *testing.T) {
+func TestParseOSReleaseSupportsRegisteredDistros(t *testing.T) {
 	adapter := DebianAdapter{}
 	for _, version := range []string{"12", "13"} {
 		info := ParseOSRelease("ID=debian\nVERSION_ID=\"" + version + "\"\nPRETTY_NAME=\"Debian\"\n")
 		if !adapter.Supports(info) {
 			t.Fatalf("Debian %s should be supported", version)
 		}
+		if !Supported(info) {
+			t.Fatalf("Debian %s should be supported by registry", version)
+		}
 	}
-	info := ParseOSRelease("ID=ubuntu\nVERSION_ID=\"24.04\"\n")
+	info := ParseOSRelease("ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04 LTS\"\n")
 	if adapter.Supports(info) {
-		t.Fatal("ubuntu must not be supported in phase 1")
+		t.Fatal("ubuntu must not be supported by the Debian adapter")
+	}
+	if !Supported(info) {
+		t.Fatal("Ubuntu 24.04 should be supported by registry")
+	}
+	selected, ok := AdapterFor(info)
+	if !ok || selected.ID() != "ubuntu" {
+		t.Fatalf("expected Ubuntu adapter, got %#v", selected)
+	}
+	if !strings.Contains(selected.NomadInstallScript(), "apt.releases.hashicorp.com") ||
+		!strings.Contains(selected.NomadRuntimePrereqsScript(), "docker.io") ||
+		!strings.Contains(selected.NomadServiceRestartScript(), "systemctl restart nomad") {
+		t.Fatalf("Ubuntu adapter should expose apt-based Nomad scripts")
+	}
+}
+
+func TestDetectUsesRegisteredDistroAdapters(t *testing.T) {
+	exec := &metricsCommandExecutor{stdout: "ID=ubuntu\nVERSION_ID=\"24.04\"\nPRETTY_NAME=\"Ubuntu 24.04 LTS\"\n"}
+
+	info, err := Detect(context.Background(), exec, sshx.Target{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Supported || info.ID != "ubuntu" || info.VersionID != "24.04" {
+		t.Fatalf("unexpected detection result: %#v", info)
 	}
 }
 

@@ -10,6 +10,7 @@
   - 建立前端词典与格式化工具
   - 补齐共享 `common.*` 词条
   - 为总览页补充专用词条
+  - 更新登录副标题的 Debian / Ubuntu 多发行版描述
 - `web/src/stores/settings.ts`
   - 运行时设置加载后同步前端语言
 - `internal/settings/service.go`

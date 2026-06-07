@@ -21,14 +21,13 @@ const connectivityMaxRetries = 8
 const connectivityStaleAfter = 10 * time.Minute
 
 type Service struct {
-	db      *sql.DB
-	exec    sshx.RemoteExecutor
-	tasks   *tasks.Service
-	adapter linux.DebianAdapter
+	db    *sql.DB
+	exec  sshx.RemoteExecutor
+	tasks *tasks.Service
 }
 
 func NewService(db *sql.DB, exec sshx.RemoteExecutor, taskSvc *tasks.Service) *Service {
-	return &Service{db: db, exec: exec, tasks: taskSvc, adapter: linux.DebianAdapter{}}
+	return &Service{db: db, exec: exec, tasks: taskSvc}
 }
 
 func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {

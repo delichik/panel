@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"panel/internal/config"
+	"panel/internal/linux"
 	"panel/internal/panelerr"
 	"panel/internal/server"
 	"panel/internal/sshx"
@@ -78,6 +79,28 @@ func (s *JoinService) SetApplicationProxySource(source applicationProxySource) {
 	s.appProxySource = source
 }
 
+func (s *JoinService) ensureNomadEligible(srv server.Server) (linux.DistroAdapter, error) {
+	adapter, ok := linux.AdapterFor(srv.OS)
+	if !srv.OS.Supported || !ok {
+		return nil, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	if !srv.Reachable {
+		return nil, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
+	}
+	if !srv.Sudo.Passwordless {
+		return nil, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	}
+	return adapter, nil
+}
+
+func nomadJoinEligible(srv server.Server) bool {
+	if !srv.OS.Supported || !srv.Reachable || !srv.Sudo.Passwordless {
+		return false
+	}
+	_, ok := linux.AdapterFor(srv.OS)
+	return ok
+}
+
 func (s *JoinService) Candidates(ctx context.Context) ([]server.Server, error) {
 	servers, err := s.servers.List(ctx)
 	if err != nil {
@@ -105,6 +128,9 @@ func (s *JoinService) Candidates(ctx context.Context) ([]server.Server, error) {
 	}
 	out := []server.Server{}
 	for _, srv := range servers {
+		if !nomadJoinEligible(srv) {
+			continue
+		}
 		if _, ok := managed[srv.ID]; ok {
 			continue
 		}
@@ -118,6 +144,10 @@ func (s *JoinService) JoinClient(ctx context.Context, serverID string) (tasks.Ta
 		return tasks.Task{}, panelerr.Validation("nomad_join_executor_unavailable", "Nomad client join executor is unavailable")
 	}
 	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	adapter, err := s.ensureNomadEligible(srv)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -147,7 +177,7 @@ func (s *JoinService) JoinClient(ctx context.Context, serverID string) (tasks.Ta
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runJoinClient(context.Background(), task.ID, srv)
+	go s.runJoinClient(context.Background(), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -156,6 +186,10 @@ func (s *JoinService) BootstrapServer(ctx context.Context, serverID string) (tas
 		return tasks.Task{}, panelerr.Validation("nomad_bootstrap_executor_unavailable", "Nomad server bootstrap executor is unavailable")
 	}
 	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	adapter, err := s.ensureNomadEligible(srv)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -174,7 +208,7 @@ func (s *JoinService) BootstrapServer(ctx context.Context, serverID string) (tas
 	if setter, ok := s.nomad.(addressSetter); ok {
 		s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
 	}
-	go s.runBootstrapServer(context.Background(), task.ID, srv)
+	go s.runBootstrapServer(context.Background(), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -307,11 +341,11 @@ func (s *JoinService) setNomadAddress(setter addressSetter, address string) {
 	s.cfg.Address = address
 }
 
-func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv server.Server) {
+func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing or updating Nomad client")
 	target := srv.Target()
-	err := s.execSudoLogged(ctx, taskID, target, s.joinScript(srv, s.serverJoinRPCAddress(ctx)), nomadInstallTimeout)
+	err := s.execSudoLogged(ctx, taskID, target, s.joinScript(srv, adapter, s.serverJoinRPCAddress(ctx)), nomadInstallTimeout)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -321,11 +355,11 @@ func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv serv
 	_ = s.tasks.Complete(ctx, taskID, "Nomad client join requested")
 }
 
-func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv server.Server) {
+func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "bootstrapping", "installing and starting Nomad server")
 	target := srv.Target()
-	err := s.execSudoLogged(ctx, taskID, target, s.bootstrapScript(srv), nomadInstallTimeout)
+	err := s.execSudoLogged(ctx, taskID, target, s.bootstrapScript(srv, adapter), nomadInstallTimeout)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -349,7 +383,8 @@ func (s *JoinService) runRemoveNode(ctx context.Context, taskID string, srv serv
 			return
 		}
 		_ = s.tasks.Advance(ctx, taskID, "stopping", "stopping Nomad on managed server")
-		if err := s.execSudoLogged(ctx, taskID, srv.Target(), removeNodeScript(), nomadMaintenanceTimeout); err != nil {
+		adapter, _ := linux.AdapterFor(srv.OS)
+		if err := s.execSudoLogged(ctx, taskID, srv.Target(), removeNodeScript(adapter), nomadMaintenanceTimeout); err != nil {
 			_ = s.tasks.Fail(ctx, taskID, err)
 			return
 		}
@@ -401,19 +436,11 @@ func (s *JoinService) appendCommandOutput(ctx context.Context, taskID, stream, o
 	}
 }
 
-func (s *JoinService) joinScript(srv server.Server, rpc string) string {
+func (s *JoinService) joinScript(srv server.Server, adapter linux.DistroAdapter, rpc string) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
 	datacenter := firstNonEmpty(strings.TrimSpace(s.cfg.Datacenter), "dc1")
 	return fmt.Sprintf(`set -eu
-export DEBIAN_FRONTEND=noninteractive
-if ! command -v nomad >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y gpg wget lsb-release
-  wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-  echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
-  apt-get update
-  apt-get install -y nomad
-fi
+%s
 %s
 %s
 %s
@@ -449,26 +476,16 @@ client {
   }
 }
 EOF
-systemctl enable nomad
-systemctl restart nomad
-systemctl is-active --quiet nomad
+%s
 nomad version
-`, runtimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), adapter.NomadServiceRestartScript())
 }
 
-func (s *JoinService) bootstrapScript(srv server.Server) string {
+func (s *JoinService) bootstrapScript(srv server.Server, adapter linux.DistroAdapter) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
 	datacenter := firstNonEmpty(strings.TrimSpace(s.cfg.Datacenter), "dc1")
 	return fmt.Sprintf(`set -eu
-export DEBIAN_FRONTEND=noninteractive
-if ! command -v nomad >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y gpg wget lsb-release
-  wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
-  echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
-  apt-get update
-  apt-get install -y nomad
-fi
+%s
 %s
 %s
 %s
@@ -504,11 +521,9 @@ client {
   }
 }
 EOF
-systemctl enable nomad
-systemctl restart nomad
-systemctl is-active --quiet nomad
+%s
 nomad version
-`, runtimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), adapter.NomadServiceRestartScript())
 }
 
 func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
@@ -550,38 +565,24 @@ func (s *JoinService) latestCompletedBootstrapTask(ctx context.Context) tasks.Ta
 	return latest
 }
 
-func runtimePrereqsScript() string {
-	return `if ! command -v docker >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y docker.io
-fi
-systemctl enable docker
-systemctl restart docker
-if [ ! -x /opt/cni/bin/bridge ]; then
-  apt-get update
-  apt-get install -y containernetworking-plugins
-  install -d -m 0755 /opt/cni/bin
-  for plugin in bridge firewall host-local loopback portmap; do
-    for dir in /usr/lib/cni /usr/libexec/cni /opt/cni/bin; do
-      if [ -x "$dir/$plugin" ] && [ "$dir" != "/opt/cni/bin" ]; then
-        cp "$dir/$plugin" "/opt/cni/bin/$plugin"
-      fi
-    done
-  done
-fi`
-}
-
 func resetNomadConfigScript() string {
 	return `rm -rf /etc/nomad.d/tls
 install -d -m 0755 /etc/nomad.d /etc/nomad.d/tls /opt/nomad/data
 find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' -o -name '*.pem' \) -delete`
 }
 
-func removeNodeScript() string {
+func removeNodeScript(adapter linux.DistroAdapter) string {
+	stopScript := genericNomadServiceStopScript()
+	if adapter != nil {
+		stopScript = adapter.NomadServiceStopScript()
+	}
 	return `set -eu
-systemctl disable --now nomad || true
-systemctl reset-failed nomad || true
-` + resetNomadConfigScript()
+` + stopScript + "\n" + resetNomadConfigScript()
+}
+
+func genericNomadServiceStopScript() string {
+	return `systemctl disable --now nomad || true
+systemctl reset-failed nomad || true`
 }
 
 func (s *JoinService) ReconcileReverseProxy(ctx context.Context) error {

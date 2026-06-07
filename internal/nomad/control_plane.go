@@ -49,6 +49,7 @@ type ProjectedNode struct {
 	ReverseProxy            bool                     `json:"reverseProxy"`
 	ReverseProxyStatic      bool                     `json:"reverseProxyStatic"`
 	ReverseProxyStaticSites []ReverseProxyStaticSite `json:"reverseProxyStaticSites"`
+	JoinEligible            bool                     `json:"joinEligible"`
 	TaskID                  string                   `json:"taskId,omitempty"`
 	Error                   string                   `json:"error,omitempty"`
 }
@@ -115,6 +116,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 		if taskCompletedRemove(task) {
 			continue
 		}
+		joinEligible := nomadJoinEligible(srv)
 		if node, ok := nodesByServer[srv.ID]; ok {
 			projected = append(projected, ProjectedNode{
 				Kind:                    ProjectedNodeManaged,
@@ -127,6 +129,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 				ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
 				ReverseProxyStatic:      traitBool(srv.Traits, TraitReverseProxyStaticFiles),
 				ReverseProxyStaticSites: reverseProxyStaticSitesFromTraits(srv.Traits),
+				JoinEligible:            false,
 			})
 			continue
 		}
@@ -141,6 +144,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 				ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
 				ReverseProxyStatic:      traitBool(srv.Traits, TraitReverseProxyStaticFiles),
 				ReverseProxyStaticSites: reverseProxyStaticSitesFromTraits(srv.Traits),
+				JoinEligible:            joinEligible,
 				TaskID:                  task.ID,
 				Error:                   task.Error,
 			})
@@ -160,6 +164,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 			ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
 			ReverseProxyStatic:      traitBool(srv.Traits, TraitReverseProxyStaticFiles),
 			ReverseProxyStaticSites: reverseProxyStaticSitesFromTraits(srv.Traits),
+			JoinEligible:            joinEligible,
 			TaskID:                  task.ID,
 			Error:                   task.Error,
 		})
@@ -201,6 +206,9 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 
 	joinCandidates := []server.Server{}
 	for _, srv := range servers {
+		if !nomadJoinEligible(srv) {
+			continue
+		}
 		if _, ok := managedServers[srv.ID]; ok {
 			continue
 		}
@@ -208,6 +216,12 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 			continue
 		}
 		joinCandidates = append(joinCandidates, srv)
+	}
+	bootstrapCandidates := []server.Server{}
+	for _, srv := range servers {
+		if nomadJoinEligible(srv) {
+			bootstrapCandidates = append(bootstrapCandidates, srv)
+		}
 	}
 
 	cpStatus := ControlPlaneConnected
@@ -226,7 +240,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 		Leader:              status.Leader,
 		Nodes:               projected,
 		JoinCandidates:      joinCandidates,
-		BootstrapCandidates: servers,
+		BootstrapCandidates: bootstrapCandidates,
 	}, nil
 }
 

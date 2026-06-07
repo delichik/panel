@@ -2,6 +2,7 @@ package nomad
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"panel/internal/config"
 	"panel/internal/credential"
+	"panel/internal/panelerr"
 	"panel/internal/server"
 	"panel/internal/sshx"
 	"panel/internal/storage"
@@ -59,6 +61,27 @@ func TestJoinCandidatesIgnoreNodeAfterCompletedRemove(t *testing.T) {
 	}
 }
 
+func TestJoinCandidatesRequireEligibleServer(t *testing.T) {
+	svc, credSvc, _, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	eligible := createJoinTestServer(t, svc.servers, credSvc, ctx, "eligible", "10.0.0.14")
+	unsupported := createJoinTestServer(t, svc.servers, credSvc, ctx, "unsupported", "10.0.0.15")
+	unreachable := createJoinTestServer(t, svc.servers, credSvc, ctx, "unreachable", "10.0.0.16")
+	limited := createJoinTestServer(t, svc.servers, credSvc, ctx, "limited", "10.0.0.17")
+	setJoinTestServerState(t, svc.servers, unsupported.ID, "fedora", "40", "Fedora Linux 40", false, true, true)
+	setJoinTestServerState(t, svc.servers, unreachable.ID, "debian", "12", "Debian GNU/Linux 12", true, false, true)
+	setJoinTestServerState(t, svc.servers, limited.ID, "debian", "12", "Debian GNU/Linux 12", true, true, false)
+
+	got, err := svc.Candidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != eligible.ID {
+		t.Fatalf("expected only eligible server, got %#v", got)
+	}
+}
+
 func TestJoinClientCreatesTask(t *testing.T) {
 	svc, credSvc, _, _, cleanup := newJoinTestService(t)
 	defer cleanup()
@@ -75,6 +98,20 @@ func TestJoinClientCreatesTask(t *testing.T) {
 	}
 }
 
+func TestJoinClientRejectsUnsupportedServer(t *testing.T) {
+	svc, credSvc, _, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "unsupported", "10.0.0.18")
+	setJoinTestServerState(t, svc.servers, srv.ID, "fedora", "40", "Fedora Linux 40", false, true, true)
+
+	_, err := svc.JoinClient(ctx, srv.ID)
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "server_not_supported" {
+		t.Fatalf("expected server_not_supported, got %v", err)
+	}
+}
+
 func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
 	defer cleanup()
@@ -85,7 +122,7 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc.runJoinClient(ctx, task.ID, srv)
+	svc.runJoinClient(ctx, task.ID, srv, mustNomadAdapter(t, svc, srv))
 
 	if len(fake.sudoCommands) != 1 {
 		t.Fatalf("expected one sudo command, got %#v", fake.sudoCommands)
@@ -143,7 +180,7 @@ func TestRunJoinClientInfersBootstrappedServerWhenConfigIsLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	svc.runJoinClient(ctx, task.ID, worker)
+	svc.runJoinClient(ctx, task.ID, worker, mustNomadAdapter(t, svc, worker))
 
 	if len(fake.sudoCommands) != 1 {
 		t.Fatalf("expected one sudo command, got %#v", fake.sudoCommands)
@@ -201,7 +238,7 @@ func TestRunJoinClientStreamsScriptOutputBeforeCommandReturns(t *testing.T) {
 		}
 	}
 
-	svc.runJoinClient(ctx, task.ID, srv)
+	svc.runJoinClient(ctx, task.ID, srv, mustNomadAdapter(t, svc, srv))
 
 	logs, _, err := svc.tasks.Logs(ctx, task.ID, 0)
 	if err != nil {
@@ -471,8 +508,12 @@ func newJoinTestService(t *testing.T) (*JoinService, *credential.Service, *joinF
 	exec := &joinFakeExecutor{}
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	unregister := registerJoinTestDB(serverSvc, store.AppDB())
 	nomadClient := &joinFakeNomadClient{}
-	return NewJoinService(serverSvc, nomadClient, exec, taskSvc, cfg.Nomad, tlsAssets), credSvc, nomadClient, exec, func() { _ = store.Close() }
+	return NewJoinService(serverSvc, nomadClient, exec, taskSvc, cfg.Nomad, tlsAssets), credSvc, nomadClient, exec, func() {
+		unregister()
+		_ = store.Close()
+	}
 }
 
 func createJoinTestServer(t *testing.T, svc *server.Service, credSvc *credential.Service, ctx context.Context, name, host string) server.Server {
@@ -485,7 +526,12 @@ func createJoinTestServer(t *testing.T, svc *server.Service, credSvc *credential
 	if err != nil {
 		t.Fatal(err)
 	}
-	return srv
+	markJoinTestServerEligible(t, svc, srv.ID)
+	stored, err := svc.Get(ctx, srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored
 }
 
 type joinFakeNomadClient struct {

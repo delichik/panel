@@ -63,7 +63,7 @@ function openJoinDialog() {
 }
 
 function canJoinNode(node: ProjectedNomadNodeDto) {
-  return Boolean(node.serverId) && ['missing', 'nomad_unreachable', 'failed'].includes(node.status || '');
+  return Boolean(node.serverId && node.joinEligible) && ['missing', 'nomad_unreachable', 'failed'].includes(node.status || '');
 }
 
 function canRemoveNode(node: ProjectedNomadNodeDto) {
