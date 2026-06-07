@@ -25,11 +25,25 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w" -o /out/panel ./cmd/panel
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+RUN set -eux; \
+  test -n "${TARGETPLATFORM}"; \
+  test -n "${TARGETOS}"; \
+  test -n "${TARGETARCH}"; \
+  case "${TARGETPLATFORM}" in \
+    "${TARGETOS}/${TARGETARCH}"|"${TARGETOS}/${TARGETARCH}/"*) ;; \
+    *) echo "TARGETPLATFORM=${TARGETPLATFORM} does not match ${TARGETOS}/${TARGETARCH}"; exit 1 ;; \
+  esac; \
+  CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath -ldflags="-s -w" -o /out/panel ./cmd/panel; \
+  machine="$(od -An -tx1 -j18 -N2 /out/panel | tr -d ' \n')"; \
+  case "${TARGETARCH}/${machine}" in \
+    amd64/3e00|arm64/b700|arm/2800|386/0300) ;; \
+    *) echo "compiled /out/panel ELF machine ${machine} does not match TARGETARCH=${TARGETARCH}"; exit 1 ;; \
+  esac
 
-FROM alpine:3.22 AS runtime
+FROM --platform=$TARGETPLATFORM alpine:3.22 AS runtime
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates tzdata \
