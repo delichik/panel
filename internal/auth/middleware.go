@@ -19,7 +19,7 @@ func (s *Service) RequireAuth(next http.Handler) http.Handler {
 			httpx.Error(w, panelerr.Unauthorized("Authentication required"))
 			return
 		}
-		sess, ok := s.Validate(token)
+		sess, ok := s.Validate(r.Context(), token)
 		if !ok {
 			httpx.Error(w, panelerr.Unauthorized("Authentication required"))
 			return

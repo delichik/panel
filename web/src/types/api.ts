@@ -541,12 +541,16 @@ export interface RuntimeSettingsDto {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
   cleanupSchedule: string;
+  tokenExpiration: TokenExpiration;
   language: string;
 }
+
+export type TokenExpiration = '10m' | '1h' | '1d' | '5d' | '30d' | 'never';
 
 export interface RuntimeSettingsUpdate {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
   cleanupSchedule: string;
+  tokenExpiration: TokenExpiration;
   language: string;
 }

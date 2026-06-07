@@ -8,12 +8,10 @@ export interface LoginRequest {
 export interface LoginResponse {
   authenticated: boolean;
   token: string;
-  username: string;
 }
 
 export interface SessionResponse {
   authenticated: boolean;
-  username?: string;
 }
 
 export const authApi = {
@@ -21,7 +19,7 @@ export const authApi = {
     return apiClient.post<LoginResponse>('/auth/login', input);
   },
   logout() {
-    return apiClient.post<LoginResponse>('/auth/logout');
+    return apiClient.post<SessionResponse>('/auth/logout');
   },
   session() {
     return apiClient.get<SessionResponse>('/auth/session');

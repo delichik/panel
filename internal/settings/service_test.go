@@ -34,12 +34,13 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 		MetricsRetentionDays:             30,
 		MetricsCollectionIntervalSeconds: 120,
 		CleanupSchedule:                  "weekly",
+		TokenExpiration:                  TokenExpiration5Days,
 		Language:                         "zh-CN",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.Language != "zh-CN" {
+	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
 	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {
@@ -53,6 +54,7 @@ func TestRuntimeSettingsRejectInvalidSchedule(t *testing.T) {
 		MetricsRetentionDays:             7,
 		MetricsCollectionIntervalSeconds: 60,
 		CleanupSchedule:                  "sometimes",
+		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         "en",
 	})
 	if err == nil {
@@ -66,7 +68,22 @@ func TestRuntimeSettingsRejectInvalidLanguage(t *testing.T) {
 		MetricsRetentionDays:             7,
 		MetricsCollectionIntervalSeconds: 60,
 		CleanupSchedule:                  "daily",
+		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         "fr",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestRuntimeSettingsRejectInvalidTokenExpiration(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.Update(context.Background(), RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		CleanupSchedule:                  "daily",
+		TokenExpiration:                  "2h",
+		Language:                         "en",
 	})
 	if err == nil {
 		t.Fatal("expected validation error")

@@ -30,17 +30,17 @@ describe('auth store', () => {
 
   it('restores an authenticated session', async () => {
     storage.set('authToken', 'jwt-token');
-    vi.mocked(authApi.session).mockResolvedValue({ authenticated: true, username: 'admin' });
+    vi.mocked(authApi.session).mockResolvedValue({ authenticated: true });
     const store = useAuthStore();
 
     await expect(store.restoreSession()).resolves.toBe(true);
     expect(store.authenticated).toBe(true);
-    expect(store.username).toBe('admin');
+    expect(store.username).toBe('');
     expect(store.checked).toBe(true);
   });
 
   it('sets authenticated state after login', async () => {
-    vi.mocked(authApi.login).mockResolvedValue({ authenticated: true, username: 'admin', token: 'jwt-token' });
+    vi.mocked(authApi.login).mockResolvedValue({ authenticated: true, token: 'jwt-token' });
     const store = useAuthStore();
 
     await store.login('admin', 'secret');

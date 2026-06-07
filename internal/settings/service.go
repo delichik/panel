@@ -16,6 +16,7 @@ type RuntimeUpdate struct {
 	MetricsRetentionDays             int    `json:"metricsRetentionDays"`
 	MetricsCollectionIntervalSeconds int    `json:"metricsCollectionIntervalSeconds"`
 	CleanupSchedule                  string `json:"cleanupSchedule"`
+	TokenExpiration                  string `json:"tokenExpiration"`
 	Language                         string `json:"language"`
 }
 
@@ -27,8 +28,22 @@ type RuntimeSettings struct {
 	MetricsRetentionDays             int    `json:"metricsRetentionDays"`
 	MetricsCollectionIntervalSeconds int    `json:"metricsCollectionIntervalSeconds"`
 	CleanupSchedule                  string `json:"cleanupSchedule"`
+	TokenExpiration                  string `json:"tokenExpiration"`
 	Language                         string `json:"language"`
 }
+
+const (
+	RuntimeSettingTokenExpiration = "tokenExpiration"
+
+	TokenExpiration10Minutes = "10m"
+	TokenExpiration1Hour     = "1h"
+	TokenExpiration1Day      = "1d"
+	TokenExpiration5Days     = "5d"
+	TokenExpiration30Days    = "30d"
+	TokenExpirationNever     = "never"
+
+	DefaultTokenExpiration = TokenExpiration1Day
+)
 
 type Service struct {
 	db  *sql.DB
@@ -52,9 +67,13 @@ func (s *Service) Runtime() RuntimeSettings {
 }
 
 func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSettings, error) {
+	if input.TokenExpiration == "" {
+		input.TokenExpiration = s.Runtime().TokenExpiration
+	}
 	if err := validateRuntimeUpdate(input); err != nil {
 		return RuntimeSettings{}, err
 	}
+	tokenExpiration := NormalizeTokenExpiration(input.TokenExpiration)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -64,6 +83,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		"metricsRetentionDays":             strconv.Itoa(input.MetricsRetentionDays),
 		"metricsCollectionIntervalSeconds": strconv.Itoa(input.MetricsCollectionIntervalSeconds),
 		"cleanupSchedule":                  input.CleanupSchedule,
+		RuntimeSettingTokenExpiration:      tokenExpiration,
 		"language":                         i18n.NormalizeLocale(input.Language),
 	}
 	for key, value := range values {
@@ -83,6 +103,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.MetricsRetentionDays = input.MetricsRetentionDays
 	s.rt.MetricsCollectionIntervalSeconds = input.MetricsCollectionIntervalSeconds
 	s.rt.CleanupSchedule = input.CleanupSchedule
+	s.rt.TokenExpiration = tokenExpiration
 	s.rt.Language = i18n.NormalizeLocale(input.Language)
 	next := s.rt
 	s.mu.Unlock()
@@ -113,6 +134,10 @@ func (s *Service) load(ctx context.Context) error {
 			}
 		case "cleanupSchedule":
 			next.CleanupSchedule = value
+		case RuntimeSettingTokenExpiration:
+			if tokenExpiration := NormalizeTokenExpiration(value); tokenExpiration != "" {
+				next.TokenExpiration = tokenExpiration
+			}
 		case "language":
 			if locale := i18n.NormalizeLocale(value); locale != "" {
 				next.Language = locale
@@ -126,6 +151,8 @@ func (s *Service) load(ctx context.Context) error {
 		MetricsRetentionDays:             next.MetricsRetentionDays,
 		MetricsCollectionIntervalSeconds: next.MetricsCollectionIntervalSeconds,
 		CleanupSchedule:                  next.CleanupSchedule,
+		TokenExpiration:                  next.TokenExpiration,
+		Language:                         next.Language,
 	}); err != nil {
 		return err
 	}
@@ -145,6 +172,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		MetricsRetentionDays:             7,
 		MetricsCollectionIntervalSeconds: 60,
 		CleanupSchedule:                  "daily",
+		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         i18n.DefaultLocale(),
 	}
 }
@@ -161,8 +189,39 @@ func validateRuntimeUpdate(input RuntimeUpdate) error {
 	default:
 		return panelerr.Validation("invalid_cleanup_schedule", "Cleanup schedule must be hourly, daily, or weekly")
 	}
+	if tokenExpiration := NormalizeTokenExpiration(input.TokenExpiration); tokenExpiration == "" {
+		return panelerr.Validation("invalid_token_expiration", "Token expiration must be 10 minutes, 1 hour, 1 day, 5 days, 30 days, or never")
+	}
 	if locale := i18n.NormalizeLocale(input.Language); locale == "" {
 		return panelerr.Validation("invalid_language", "Language must be English or Simplified Chinese")
 	}
 	return nil
+}
+
+func NormalizeTokenExpiration(value string) string {
+	switch value {
+	case TokenExpiration10Minutes, TokenExpiration1Hour, TokenExpiration1Day, TokenExpiration5Days, TokenExpiration30Days, TokenExpirationNever:
+		return value
+	default:
+		return ""
+	}
+}
+
+func TokenExpirationDuration(value string) (time.Duration, bool) {
+	switch NormalizeTokenExpiration(value) {
+	case TokenExpiration10Minutes:
+		return 10 * time.Minute, true
+	case TokenExpiration1Hour:
+		return time.Hour, true
+	case TokenExpiration1Day:
+		return 24 * time.Hour, true
+	case TokenExpiration5Days:
+		return 5 * 24 * time.Hour, true
+	case TokenExpiration30Days:
+		return 30 * 24 * time.Hour, true
+	case TokenExpirationNever:
+		return 0, true
+	default:
+		return 0, false
+	}
 }

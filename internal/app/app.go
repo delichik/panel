@@ -48,7 +48,11 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	authSvc := auth.NewService(cfg)
+	authSvc, err := auth.NewService(store.AppDB(), cfg)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	taskSvc := tasks.NewService(store.AppDB())
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	executor := sshx.NewSSHExecutor(credSvc, cfg.RemoteTimeout())

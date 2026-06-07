@@ -2,7 +2,7 @@
 import { onMounted, reactive, ref } from 'vue';
 import { useI18n } from '@/i18n';
 import { useSettingsStore } from '@/stores/settings';
-import type { RuntimeSettingsDto } from '@/types/api';
+import type { RuntimeSettingsDto, TokenExpiration } from '@/types/api';
 
 const settingsStore = useSettingsStore();
 const { t, translateCleanupSchedule } = useI18n();
@@ -10,10 +10,17 @@ const settings = ref<RuntimeSettingsDto | null>(null);
 const loading = ref(false);
 const saving = ref(false);
 const error = ref('');
-const form = reactive({
+const form = reactive<{
+  metricsRetentionDays: number;
+  metricsCollectionIntervalSeconds: number;
+  cleanupSchedule: string;
+  tokenExpiration: TokenExpiration;
+  language: string;
+}>({
   metricsRetentionDays: 7,
   metricsCollectionIntervalSeconds: 60,
   cleanupSchedule: 'daily',
+  tokenExpiration: '1d',
   language: 'en',
 });
 
@@ -32,6 +39,7 @@ function syncForm(next: RuntimeSettingsDto) {
   form.metricsRetentionDays = next.metricsRetentionDays;
   form.metricsCollectionIntervalSeconds = next.metricsCollectionIntervalSeconds;
   form.cleanupSchedule = next.cleanupSchedule;
+  form.tokenExpiration = next.tokenExpiration || '1d';
   form.language = next.language;
 }
 
@@ -121,6 +129,22 @@ onMounted(loadSettings);
                 <v-btn value="weekly" class="text-none">{{ translateCleanupSchedule('weekly') }}</v-btn>
               </v-btn-toggle>
             </div>
+            <v-select
+              v-model="form.tokenExpiration"
+              :items="[
+                { title: t('tokenExpiration.10m'), value: '10m' },
+                { title: t('tokenExpiration.1h'), value: '1h' },
+                { title: t('tokenExpiration.1d'), value: '1d' },
+                { title: t('tokenExpiration.5d'), value: '5d' },
+                { title: t('tokenExpiration.30d'), value: '30d' },
+                { title: t('tokenExpiration.never'), value: 'never' },
+              ]"
+              :label="t('settingsPage.tokenExpiration')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
+
             <v-select
               v-model="form.language"
               :items="[

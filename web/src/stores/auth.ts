@@ -47,7 +47,7 @@ export const useAuthStore = defineStore('auth', {
       try {
         const session = await authApi.session();
         this.authenticated = session.authenticated;
-        this.username = session.username ?? '';
+        this.username = '';
         this.error = '';
         return this.authenticated;
       } catch (error) {
@@ -70,7 +70,7 @@ export const useAuthStore = defineStore('auth', {
       try {
         const response = await authApi.login({ username, password });
         this.authenticated = response.authenticated;
-        this.username = response.username || username;
+        this.username = username;
         this.token = response.token;
         storeToken(response.token);
         this.checked = true;

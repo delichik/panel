@@ -175,7 +175,7 @@ onBeforeUnmount(() => {
               </v-btn>
               <div class="user-pill">
                 <v-icon size="16">mdi-account-circle-outline</v-icon>
-                <span class="user-name">{{ auth.username }}</span>
+                <span v-if="auth.username" class="user-name">{{ auth.username }}</span>
               </div>
               <v-btn variant="outlined" size="small" prepend-icon="mdi-logout" class="text-none logout-btn" @click="logout">
                 {{ t('layout.logout') }}

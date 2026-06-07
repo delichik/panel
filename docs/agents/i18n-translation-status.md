@@ -4,6 +4,13 @@
 
 ## 当前仍未完全覆盖
 
+### 最近已补齐
+
+- `web/src/features/settings/pages/SettingsPage.vue`
+  - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
+- `internal/auth`
+  - 登录失败的通用错误文案 `Authentication failed` 已接入 `internal/i18n/i18n.go`
+
 ### 前端仍有少量第三方原始文本
 
 以下内容仍会展示第三方系统直接返回的原始描述，当前保留原样以避免误译：

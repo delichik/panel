@@ -154,6 +154,7 @@ const messages = {
       collectionInterval: "Collection Interval",
       seconds: "seconds",
       cleanupSchedule: "Cleanup Schedule",
+      tokenExpiration: "Token expiration",
       language: "Language",
       systemProperties: "System Properties",
       listenAddress: "Listen address",
@@ -623,6 +624,14 @@ const messages = {
       daily: "Daily",
       weekly: "Weekly",
     },
+    tokenExpiration: {
+      "10m": "10 minutes",
+      "1h": "1 hour",
+      "1d": "1 day",
+      "5d": "5 days",
+      "30d": "30 days",
+      never: "Never expires",
+    },
     shared: {
       serverSelector: {
         title: "Servers",
@@ -801,6 +810,7 @@ const messages = {
       collectionInterval: "采集间隔",
       seconds: "秒",
       cleanupSchedule: "清理计划",
+      tokenExpiration: "令牌过期时间",
       language: "语言",
       systemProperties: "系统属性",
       listenAddress: "监听地址",
@@ -1267,6 +1277,14 @@ const messages = {
       hourly: "每小时",
       daily: "每天",
       weekly: "每周",
+    },
+    tokenExpiration: {
+      "10m": "10 分钟",
+      "1h": "1 小时",
+      "1d": "1 天",
+      "5d": "5 天",
+      "30d": "30 天",
+      never: "永不过期",
     },
     shared: {
       serverSelector: {

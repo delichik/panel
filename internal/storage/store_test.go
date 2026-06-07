@@ -60,7 +60,7 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 	defer store.Close()
 
-	for _, table := range []string{"applications", "application_files", "application_revisions"} {
+	for _, table := range []string{"applications", "application_files", "application_revisions", "auth_state"} {
 		if !tableExists(t, store.AppDB(), table) {
 			t.Fatalf("expected table %q to exist", table)
 		}

@@ -24,15 +24,19 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	sess, err := h.service.Login(req.Username, req.Password)
+	sess, err := h.service.Login(r.Context(), req.Username, req.Password)
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true, "token": sess.Token, "username": sess.Username})
+	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true, "token": sess.Token})
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
+	if err := h.service.Logout(r.Context()); err != nil {
+		httpx.Error(w, err)
+		return
+	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 }
 
@@ -42,12 +46,11 @@ func (h *Handler) Session(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	sess, ok := h.service.Validate(token)
-	if !ok {
+	if _, ok := h.service.Validate(r.Context(), token); !ok {
 		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": sess.Username})
+	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true})
 }
 
 func bearerToken(r *http.Request) string {
