@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useTheme } from 'vuetify';
+import { useDisplay, useTheme } from 'vuetify';
 import { useAuthStore } from '@/stores/auth';
 import { tasksApi } from '@/api/tasks';
 import type { TaskDto } from '@/types/api';
@@ -27,10 +27,13 @@ const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
 const theme = useTheme();
+const display = useDisplay();
 const { t, translateTaskStatus } = useI18n();
 
 const isDark = computed(() => theme.global.current.value.dark);
+const isCompactLayout = computed(() => display.mdAndDown.value);
 const pageTitle = computed(() => t(String(route.meta.titleKey || 'app.name')));
+const drawerOpen = ref(true);
 const navGroups = computed<NavGroup[]>(() => [
   {
     key: 'overview',
@@ -80,6 +83,15 @@ function toggleTheme() {
   markThemeChanging();
   theme.global.name.value = nextTheme;
 }
+
+watch(isCompactLayout, (compact) => {
+  drawerOpen.value = !compact;
+}, { immediate: true });
+
+watch(() => route.fullPath, () => {
+  if (isCompactLayout.value) drawerOpen.value = false;
+});
+
 const activeTasks = ref<TaskDto[]>([]);
 const taskIndex = ref(0);
 let taskTimer: number | undefined;
@@ -121,7 +133,14 @@ onBeforeUnmount(() => {
 
 <template>
   <v-layout class="fill-height">
-    <v-navigation-drawer width="264" permanent floating style="background: transparent;">
+    <v-navigation-drawer
+      v-model="drawerOpen"
+      width="280"
+      :permanent="!isCompactLayout"
+      :temporary="isCompactLayout"
+      floating
+      class="app-drawer"
+    >
       <div class="brand">
         <div class="brand-mark">LP</div>
         <div>
@@ -151,10 +170,21 @@ onBeforeUnmount(() => {
       </v-list>
     </v-navigation-drawer>
 
-    <v-main class="fill-height overflow-y-auto" style="height: 100vh;">
+    <v-main class="fill-height overflow-y-auto">
       <div class="main-content">
         <header class="app-header panel">
           <div class="app-header-title min-width-0">
+            <v-btn
+              v-if="isCompactLayout"
+              icon
+              size="small"
+              variant="text"
+              class="utility-btn nav-toggle"
+              :aria-label="t('layout.nav.openNavigation')"
+              @click="drawerOpen = true"
+            >
+              <v-icon>mdi-menu</v-icon>
+            </v-btn>
             <h1 class="app-title text-truncate">{{ pageTitle }}</h1>
           </div>
 
@@ -190,7 +220,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* Glassmorphism sidebar drawer container floating */
 :deep(.v-navigation-drawer) {
   background-color: transparent !important;
   border: none !important;
@@ -198,7 +227,7 @@ onBeforeUnmount(() => {
 
 :deep(.v-navigation-drawer__content) {
   margin: 16px;
-  height: calc(100vh - 32px) !important;
+  height: calc(100dvh - 32px) !important;
   border-radius: 8px !important;
   border: 1px solid var(--lp-border) !important;
   background: var(--lp-surface) !important;
@@ -225,6 +254,9 @@ onBeforeUnmount(() => {
 }
 
 .app-header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
 }
 
@@ -234,7 +266,8 @@ onBeforeUnmount(() => {
   font-size: 1.28rem;
   font-weight: 760;
   line-height: 1.15;
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
+  text-wrap: balance;
 }
 
 .app-header-actions {
@@ -275,9 +308,8 @@ onBeforeUnmount(() => {
   box-shadow: none !important;
 }
 
-/* Offset top-bar positioning for breathing room if needed (or standard flush) */
 :deep(.v-main) {
-  height: 100vh;
+  height: 100dvh;
   overflow-y: auto;
   transition: background-color 0.25s ease;
 }
@@ -305,7 +337,7 @@ onBeforeUnmount(() => {
 
 .brand-title {
   font-weight: 700;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
 }
 
 .brand-subtitle {
@@ -353,7 +385,9 @@ onBeforeUnmount(() => {
 }
 
 .main-content {
-  padding: 24px;
+  width: min(100%, 1640px);
+  margin: 0 auto;
+  padding: clamp(16px, 2vw, 28px);
 }
 
 .task-slide-enter-active,
@@ -405,6 +439,11 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 980px) {
+  :deep(.v-navigation-drawer__content) {
+    margin: 12px;
+    height: calc(100dvh - 24px) !important;
+  }
+
   .app-header {
     align-items: flex-start;
     flex-direction: column;
@@ -427,7 +466,7 @@ onBeforeUnmount(() => {
   }
 
   .main-content {
-    padding: 18px;
+    padding: 16px;
   }
 }
 

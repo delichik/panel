@@ -92,6 +92,7 @@ const messages = {
         nomadNodes: "Nomad Nodes",
         taskCenter: "Task Center",
         settings: "Settings",
+        openNavigation: "Open navigation",
       },
       taskTicker: {
         queuedStage: "queued",
@@ -748,6 +749,7 @@ const messages = {
         nomadNodes: "Nomad 节点",
         taskCenter: "任务中心",
         settings: "设置",
+        openNavigation: "打开导航",
       },
       taskTicker: {
         queuedStage: "排队中",

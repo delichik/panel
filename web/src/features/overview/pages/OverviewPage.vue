@@ -91,14 +91,14 @@ const form = reactive({
 });
 
 const palette = computed(() => ({
-  text: isDark.value ? '#aab5c4' : '#667085',
-  grid: isDark.value ? 'rgba(170, 181, 196, 0.16)' : 'rgba(102, 112, 133, 0.16)',
-  tooltipBackground: isDark.value ? '#121722' : '#ffffff',
-  tooltipBorder: isDark.value ? 'rgba(170, 181, 196, 0.22)' : 'rgba(102, 112, 133, 0.18)',
-  tooltipText: isDark.value ? '#e6edf7' : '#182230',
+  text: isDark.value ? '#b3beb6' : '#5f6f68',
+  grid: isDark.value ? 'rgba(179, 190, 182, 0.16)' : 'rgba(95, 111, 104, 0.16)',
+  tooltipBackground: isDark.value ? '#151a17' : '#ffffff',
+  tooltipBorder: isDark.value ? 'rgba(179, 190, 182, 0.22)' : 'rgba(95, 111, 104, 0.18)',
+  tooltipText: isDark.value ? '#e7ece6' : '#1f2724',
   series: isDark.value
-    ? ['#818cf8', '#34d399', '#fbbf24', '#60a5fa', '#f87171', '#c084fc']
-    : ['#4f46e5', '#059669', '#d97706', '#2563eb', '#dc2626', '#7c3aed'],
+    ? ['#2dd4bf', '#4ade80', '#f59e0b', '#60a5fa', '#fb7185', '#a78bfa']
+    : ['#0f766e', '#16a34a', '#b45309', '#2563eb', '#dc2626', '#7c3aed'],
 }));
 
 const serverOptions = computed(() => overview.value.servers.map((server) => ({
@@ -109,6 +109,29 @@ const serverOptions = computed(() => overview.value.servers.map((server) => ({
 const configuredServerIds = computed(() => new Set(cards.value.flatMap((card) => resolveCardServerIds(card))));
 const onlineCount = computed(() => overview.value.servers.filter((server) => server.reachable).length);
 const issueCount = computed(() => packageRowsForServers(overview.value.servers).length + containerRowsForServers(overview.value.servers.map((server) => server.id)).length);
+const overviewSignals = computed(() => [
+  {
+    key: 'online',
+    icon: 'mdi-server-network',
+    color: 'success',
+    value: `${onlineCount.value}/${overview.value.servers.length}`,
+    label: t('overviewPage.onlineSummary', { online: onlineCount.value, total: overview.value.servers.length }),
+  },
+  {
+    key: 'dashboard',
+    icon: 'mdi-view-dashboard-outline',
+    color: 'primary',
+    value: configuredServerIds.value.size || overview.value.servers.length,
+    label: t('overviewPage.dashboardSummary', { count: configuredServerIds.value.size || overview.value.servers.length }),
+  },
+  {
+    key: 'issues',
+    icon: 'mdi-alert-circle-outline',
+    color: issueCount.value > 0 ? 'warning' : 'success',
+    value: issueCount.value,
+    label: t('overviewPage.issueSummary', { count: issueCount.value }),
+  },
+]);
 const presetItems = computed(() => cardPresets.map((preset) => ({
   ...preset,
   title: cardTitle(preset.kind),
@@ -527,10 +550,16 @@ onBeforeUnmount(() => {
 <template>
   <div class="overview-workspace page-shell">
     <div class="overview-actions-row page-toolbar">
-      <div class="text-body-2 text-medium-emphasis">
-        {{ t('overviewPage.onlineSummary', { online: onlineCount, total: overview.servers.length }) }} /
-        {{ t('overviewPage.dashboardSummary', { count: configuredServerIds.size || overview.servers.length }) }} /
-        {{ t('overviewPage.issueSummary', { count: issueCount }) }}
+      <div class="overview-signals">
+        <div v-for="signal in overviewSignals" :key="signal.key" class="overview-signal">
+          <span class="overview-signal__icon" :class="`surface-${signal.color}`">
+            <v-icon size="18">{{ signal.icon }}</v-icon>
+          </span>
+          <span class="min-width-0">
+            <span class="overview-signal__value font-tabular">{{ signal.value }}</span>
+            <span class="overview-signal__label text-truncate">{{ signal.label }}</span>
+          </span>
+        </div>
       </div>
       <div class="overview-actions">
         <template v-if="editMode">
@@ -576,7 +605,8 @@ onBeforeUnmount(() => {
         @dragover="handleCardDragOver(card.id, $event)"
         @drop="dropCard(card.id, $event)"
       >
-          <div v-if="card.kind !== 'placeholder'" class="card-header">
+        <span v-if="card.kind !== 'placeholder'" class="card-accent" :class="`card-accent--${presetFor(card.kind).color}`" />
+        <div v-if="card.kind !== 'placeholder'" class="card-header">
           <div class="card-title">
             <span class="card-icon" :class="`surface-${presetFor(card.kind).color}`">
               <v-icon size="18">{{ presetFor(card.kind).icon }}</v-icon>
@@ -747,7 +777,61 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.overview-workspace { min-height: calc(100vh - 120px); }
+.overview-workspace { min-height: calc(100dvh - 120px); }
+
+.overview-actions-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: start;
+}
+
+.overview-signals {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(160px, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+
+.overview-signal {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lp-surface), transparent 10%);
+  box-shadow: var(--lp-shadow-sm);
+}
+
+.overview-signal__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  flex: 0 0 auto;
+}
+
+.overview-signal__value,
+.overview-signal__label {
+  display: block;
+}
+
+.overview-signal__value {
+  color: var(--lp-text);
+  font-size: 1.05rem;
+  font-weight: 760;
+  line-height: 1.1;
+}
+
+.overview-signal__label {
+  margin-top: 3px;
+  color: var(--lp-text-muted);
+  font-size: 0.78rem;
+}
 
 .overview-actions {
   display: flex;
@@ -761,7 +845,7 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(6, minmax(0, 1fr));
   grid-auto-rows: 132px;
   grid-auto-flow: dense;
-  gap: 14px;
+  gap: 16px;
   align-items: stretch;
 }
 
@@ -772,7 +856,27 @@ onBeforeUnmount(() => {
   min-height: 0;
   overflow: hidden;
   flex-direction: column;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 36%), var(--lp-surface) 70%) !important;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease !important;
 }
+
+.dashboard-card:hover {
+  transform: translateY(-1px);
+}
+
+.card-accent {
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  opacity: 0.82;
+}
+
+.card-accent--primary { background: rgb(var(--v-theme-primary)); }
+.card-accent--success { background: rgb(var(--v-theme-success)); }
+.card-accent--warning { background: rgb(var(--v-theme-warning)); }
+.card-accent--info { background: rgb(var(--v-theme-info)); }
+.card-accent--secondary { background: rgb(var(--v-theme-secondary)); }
 
 .dashboard-card--placeholder {
   background: transparent !important;
@@ -791,6 +895,7 @@ onBeforeUnmount(() => {
 
 .dashboard-card--dragging {
   opacity: 0.48;
+  transform: scale(0.99);
 }
 
 .dashboard-card--drag-over {
@@ -846,6 +951,11 @@ onBeforeUnmount(() => {
   height: 34px;
   border-radius: 8px;
   flex: 0 0 auto;
+  transition: transform 0.18s ease;
+}
+
+.dashboard-card:hover .card-icon {
+  transform: translateY(-1px);
 }
 
 .surface-primary { color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), 0.1); }
@@ -887,12 +997,13 @@ onBeforeUnmount(() => {
   border-radius: 8px;
   background: color-mix(in srgb, var(--lp-surface-container), transparent 30%);
   cursor: pointer;
-  transition: background-color 0.16s ease, border-color 0.16s ease;
+  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
 }
 
 .message-row:hover {
   border-color: rgba(var(--v-theme-primary), 0.24);
   background: rgba(var(--v-theme-primary), 0.05);
+  transform: translateX(2px);
 }
 
 .empty-card-text {
@@ -903,7 +1014,13 @@ onBeforeUnmount(() => {
   font-size: 0.88rem;
 }
 
-.empty-state { min-height: 360px; border: 1px solid var(--lp-border); background: var(--lp-surface); }
+.empty-state {
+  min-height: 360px;
+  border: 1px solid var(--lp-border);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 24%), var(--lp-surface));
+  box-shadow: var(--lp-shadow-sm);
+}
 
 .size-grid {
   display: grid;
@@ -922,6 +1039,10 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 1180px) {
+  .overview-actions-row {
+    grid-template-columns: 1fr;
+  }
+
   .dashboard-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
@@ -932,9 +1053,8 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
-  .overview-actions-row {
-    flex-direction: column;
-    align-items: stretch;
+  .overview-signals {
+    grid-template-columns: 1fr;
   }
 
   .overview-actions,

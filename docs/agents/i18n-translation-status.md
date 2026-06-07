@@ -6,6 +6,8 @@
 
 ### 最近已补齐
 
+- `web/src/layouts/AppLayout.vue`
+  - 移动端导航入口文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/settings/pages/SettingsPage.vue`
   - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
 - `internal/auth`

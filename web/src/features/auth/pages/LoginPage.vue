@@ -78,10 +78,15 @@ async function submit() {
 <style scoped>
 .login-page {
   display: grid;
-  min-height: 100vh;
+  min-height: 100dvh;
   place-items: center;
   padding: 24px;
-  background: radial-gradient(circle at top, rgba(var(--v-theme-primary), 0.08) 0%, var(--lp-background) 70%);
+  background:
+    linear-gradient(180deg, rgba(var(--v-theme-primary), 0.06), transparent 260px),
+    linear-gradient(90deg, color-mix(in srgb, var(--lp-border), transparent 72%) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-border), transparent 76%) 1px, transparent 1px),
+    var(--lp-background);
+  background-size: auto, 44px 44px, 44px 44px, auto;
 }
 
 .login-card {
@@ -106,7 +111,7 @@ async function submit() {
 }
 
 .tracking-tight {
-  letter-spacing: -0.02em;
+  letter-spacing: 0;
 }
 
 .shadow-glow {
