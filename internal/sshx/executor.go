@@ -17,12 +17,17 @@ import (
 )
 
 type SSHExecutor struct {
-	resolver       CredentialResolver
-	defaultTimeout time.Duration
+	resolver        CredentialResolver
+	defaultTimeout  time.Duration
+	timeoutProvider func() time.Duration
 }
 
 func NewSSHExecutor(resolver CredentialResolver, defaultTimeout time.Duration) *SSHExecutor {
 	return &SSHExecutor{resolver: resolver, defaultTimeout: defaultTimeout}
+}
+
+func NewSSHExecutorWithTimeoutProvider(resolver CredentialResolver, defaultTimeout time.Duration, provider func() time.Duration) *SSHExecutor {
+	return &SSHExecutor{resolver: resolver, defaultTimeout: defaultTimeout, timeoutProvider: provider}
 }
 
 func (e *SSHExecutor) Exec(ctx context.Context, target Target, command CommandSpec) (CommandResult, error) {
@@ -45,7 +50,7 @@ func (e *SSHExecutor) Download(ctx context.Context, target Target, transfer Down
 func (e *SSHExecutor) exec(ctx context.Context, target Target, command CommandSpec) (CommandResult, error) {
 	timeout := command.Timeout
 	if timeout == 0 {
-		timeout = e.defaultTimeout
+		timeout = e.timeout()
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -121,7 +126,7 @@ func (e *SSHExecutor) dial(ctx context.Context, target Target) (*ssh.Client, err
 	if user == "" {
 		user = resolved.Username
 	}
-	cfg := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{auth}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: e.defaultTimeout}
+	cfg := &ssh.ClientConfig{User: user, Auth: []ssh.AuthMethod{auth}, HostKeyCallback: ssh.InsecureIgnoreHostKey(), Timeout: e.timeout()}
 	address := fmt.Sprintf("%s:%d", target.Host, target.Port)
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "tcp", address)
@@ -134,6 +139,15 @@ func (e *SSHExecutor) dial(ctx context.Context, target Target) (*ssh.Client, err
 		return nil, panelerr.BadGateway("ssh_auth_failed", "SSH authentication failed")
 	}
 	return ssh.NewClient(c, chans, reqs), nil
+}
+
+func (e *SSHExecutor) timeout() time.Duration {
+	if e.timeoutProvider != nil {
+		if timeout := e.timeoutProvider(); timeout > 0 {
+			return timeout
+		}
+	}
+	return e.defaultTimeout
 }
 
 func authMethod(c credential.ResolvedCredential) (ssh.AuthMethod, error) {

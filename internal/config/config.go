@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -155,24 +154,11 @@ func applyEnv(cfg *Config) {
 			*target = v
 		}
 	}
-	setInt := func(key string, target *int) {
-		if v := os.Getenv(key); v != "" {
-			if n, err := strconv.Atoi(v); err == nil {
-				*target = n
-			}
-		}
-	}
 	setString("PANEL_LISTEN_ADDRESS", &cfg.ListenAddress)
-	setString("PANEL_ADMIN_USERNAME", &cfg.AdminUsername)
-	setString("PANEL_ADMIN_PASSWORD_HASH", &cfg.AdminPasswordHash)
-	setString("PANEL_JWT_SECRET", &cfg.JWTSecret)
 	setString("PANEL_DATA_ROOT", &cfg.DataRoot)
 	setString("PANEL_APP_DATABASE", &cfg.AppDatabase)
 	setString("PANEL_METRICS_DATABASE", &cfg.MetricsDatabase)
-	setInt("PANEL_REMOTE_COMMAND_TIMEOUT_SECONDS", &cfg.RemoteCommandTimeoutSeconds)
 	setString("PANEL_CERT_ACME_DIRECTORY_URL", &cfg.Certificates.ACMEDirectoryURL)
-	setString("PANEL_CERT_EMAIL", &cfg.Certificates.Email)
-	setInt("PANEL_CERT_DNS_PROPAGATION_DELAY_SECONDS", &cfg.Certificates.DNSPropagationDelaySeconds)
 }
 
 func (c Config) Validate() error {

@@ -8,30 +8,41 @@ const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
 const { t } = useI18n();
-const username = ref('');
-const password = ref('');
-const showPassword = ref(false);
+
+const username = ref(auth.username || 'admin');
+const currentPassword = ref('');
+const newPassword = ref('');
+const confirmPassword = ref('');
+const showCurrentPassword = ref(false);
+const showNewPassword = ref(false);
+const showConfirmPassword = ref(false);
+const error = ref('');
 
 async function submit() {
-  await auth.login(username.value, password.value);
-  if (auth.passwordChangeRequired) {
-    await router.push({ path: '/change-password', query: { redirect: String(route.query.redirect || '/overview') } });
+  if (newPassword.value !== confirmPassword.value) {
+    error.value = t('changePassword.passwordMismatch');
     return;
   }
+  error.value = '';
+  await auth.updateAccount({
+    currentPassword: currentPassword.value,
+    username: username.value,
+    newPassword: newPassword.value,
+  });
   await router.push(String(route.query.redirect || '/overview'));
 }
 </script>
 
 <template>
-  <main class="login-page">
-    <v-card class="login-card pa-8" variant="outlined">
+  <main class="change-password-page">
+    <v-card class="change-card pa-8" variant="outlined">
       <div class="d-flex align-center justify-center mb-6">
         <div class="brand-logo">LP</div>
       </div>
 
       <div class="text-center mb-6">
-        <h1 class="text-h5 font-weight-bold tracking-tight mb-1">{{ t('login.title') }}</h1>
-        <p class="text-body-2 text-medium-emphasis">{{ t('login.subtitle') }}</p>
+        <h1 class="text-h5 font-weight-bold tracking-tight mb-1">{{ t('changePassword.title') }}</h1>
+        <p class="text-body-2 text-medium-emphasis">{{ t('changePassword.subtitle') }}</p>
       </div>
 
       <v-form @submit.prevent="submit">
@@ -47,21 +58,49 @@ async function submit() {
         />
 
         <v-text-field
-          v-model="password"
-          :label="t('login.password')"
+          v-model="currentPassword"
+          :label="t('changePassword.currentPassword')"
           prepend-inner-icon="mdi-lock"
-          :append-inner-icon="showPassword ? 'mdi-eye' : 'mdi-eye-off'"
-          :type="showPassword ? 'text' : 'password'"
-          @click:append-inner="showPassword = !showPassword"
+          :append-inner-icon="showCurrentPassword ? 'mdi-eye' : 'mdi-eye-off'"
+          :type="showCurrentPassword ? 'text' : 'password'"
+          @click:append-inner="showCurrentPassword = !showCurrentPassword"
           variant="outlined"
           density="comfortable"
           autocomplete="current-password"
+          class="mb-4"
+          hide-details="auto"
+        />
+
+        <v-text-field
+          v-model="newPassword"
+          :label="t('changePassword.newPassword')"
+          prepend-inner-icon="mdi-shield-key"
+          :append-inner-icon="showNewPassword ? 'mdi-eye' : 'mdi-eye-off'"
+          :type="showNewPassword ? 'text' : 'password'"
+          @click:append-inner="showNewPassword = !showNewPassword"
+          variant="outlined"
+          density="comfortable"
+          autocomplete="new-password"
+          class="mb-4"
+          hide-details="auto"
+        />
+
+        <v-text-field
+          v-model="confirmPassword"
+          :label="t('changePassword.confirmPassword')"
+          prepend-inner-icon="mdi-check-decagram"
+          :append-inner-icon="showConfirmPassword ? 'mdi-eye' : 'mdi-eye-off'"
+          :type="showConfirmPassword ? 'text' : 'password'"
+          @click:append-inner="showConfirmPassword = !showConfirmPassword"
+          variant="outlined"
+          density="comfortable"
+          autocomplete="new-password"
           class="mb-5"
           hide-details="auto"
         />
 
-        <v-alert v-if="auth.error" type="error" variant="tonal" class="mb-4 text-body-2" density="comfortable">
-          {{ auth.error }}
+        <v-alert v-if="error || auth.error" type="error" variant="tonal" class="mb-4 text-body-2" density="comfortable">
+          {{ error || auth.error }}
         </v-alert>
 
         <v-btn
@@ -72,7 +111,7 @@ async function submit() {
           :loading="auth.loading"
           class="text-none font-weight-bold shadow-glow"
         >
-          {{ t('login.submit') }}
+          {{ t('changePassword.submit') }}
         </v-btn>
       </v-form>
     </v-card>
@@ -80,7 +119,7 @@ async function submit() {
 </template>
 
 <style scoped>
-.login-page {
+.change-password-page {
   display: grid;
   min-height: 100dvh;
   place-items: center;
@@ -93,8 +132,8 @@ async function submit() {
   background-size: auto, 44px 44px, 44px 44px, auto;
 }
 
-.login-card {
-  width: min(440px, 100%);
+.change-card {
+  width: min(480px, 100%);
   border-radius: var(--lp-radius-lg) !important;
   background-color: var(--lp-surface) !important;
   border: 1px solid var(--lp-border) !important;

@@ -28,6 +28,7 @@ type Service struct {
 	db               *sql.DB
 	dataRoot         string
 	cfg              config.Config
+	configProvider   func(config.Config) config.Config
 	domains          domainResolver
 	providerOverride Provider
 	tasks            *tasks.Service
@@ -53,6 +54,18 @@ func NewServiceWithProvider(db *sql.DB, cfg config.Config, provider Provider, ta
 
 func (s *Service) SetApplicationRefresher(refresher applicationRefresher) {
 	s.applications = refresher
+}
+
+func (s *Service) SetConfigProvider(provider func(config.Config) config.Config) {
+	s.configProvider = provider
+}
+
+func (s *Service) currentConfig() config.Config {
+	cfg := s.cfg
+	if s.configProvider != nil {
+		cfg = s.configProvider(cfg)
+	}
+	return cfg
 }
 
 func (s *Service) Issue(ctx context.Context, in IssueRequest) (IssueResult, error) {
@@ -517,7 +530,7 @@ func (s *Service) providerForDomain(domain dns.ResolvedDomain) (Provider, error)
 	}
 	switch domain.Provider {
 	case dns.ProviderCloudflare:
-		return NewACMEProvider(s.cfg, dns.NewCloudflareProvider(domain.APIToken, domain.AccountID, nil), nil)
+		return NewACMEProvider(s.currentConfig(), dns.NewCloudflareProvider(domain.APIToken, domain.AccountID, nil), nil)
 	default:
 		return nil, panelerr.Validation("dns_provider_invalid", "Unsupported DNS provider")
 	}

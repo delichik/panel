@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useSettingsStore } from '@/stores/settings';
 import AppLayout from '@/layouts/AppLayout.vue';
+import ChangePasswordPage from '@/features/auth/pages/ChangePasswordPage.vue';
 import LoginPage from '@/features/auth/pages/LoginPage.vue';
 import OverviewPage from '@/features/overview/pages/OverviewPage.vue';
 import ServersPage from '@/features/servers/pages/ServersPage.vue';
@@ -18,6 +19,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
+    { path: '/change-password', name: 'change-password', component: ChangePasswordPage, meta: { requiresAuth: true, allowPasswordChange: true } },
     {
       path: '/',
       component: AppLayout,
@@ -38,7 +40,12 @@ export const router = createRouter({
         { path: 'nomad/jobs', redirect: '/tasks' },
         { path: 'deployments', redirect: '/tasks' },
         { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { titleKey: 'routes.tasks.title' } },
-        { path: 'settings', name: 'settings', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings', redirect: '/settings/general' },
+        { path: 'settings/general', name: 'settings-general', component: SettingsPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },
+        { path: 'settings/security', name: 'settings-security', component: SettingsPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
+        { path: 'settings/nomad', name: 'settings-nomad', component: SettingsPage, meta: { titleKey: 'routes.settingsNomad.title', settingsCategory: 'nomad' } },
+        { path: 'settings/certificates', name: 'settings-certificates', component: SettingsPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
+        { path: 'settings/system', name: 'settings-system', component: SettingsPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
       ],
     },
   ],
@@ -50,7 +57,7 @@ router.beforeEach(async (to) => {
   if (!auth.checked) {
     await auth.restoreSession();
   }
-  if (auth.authenticated) {
+  if (auth.authenticated && !auth.passwordChangeRequired) {
     try {
       await settings.loadRuntime();
     } catch {
@@ -58,10 +65,16 @@ router.beforeEach(async (to) => {
     }
   }
   if (to.meta.public && auth.authenticated) {
-    return '/overview';
+    return auth.passwordChangeRequired ? '/change-password' : '/overview';
   }
   if (!to.meta.public && !auth.authenticated) {
     return { path: '/login', query: { redirect: to.fullPath } };
+  }
+  if (auth.authenticated && auth.passwordChangeRequired && !to.meta.allowPasswordChange) {
+    return { path: '/change-password', query: { redirect: to.fullPath } };
+  }
+  if (to.name === 'change-password' && auth.authenticated && !auth.passwordChangeRequired) {
+    return '/overview';
   }
   return true;
 });

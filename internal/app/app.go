@@ -48,21 +48,27 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	authSvc, err := auth.NewService(store.AppDB(), cfg)
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
 	taskSvc := tasks.NewService(store.AppDB())
 	credSvc := credential.NewService(store.AppDB(), cfg)
-	executor := sshx.NewSSHExecutor(credSvc, cfg.RemoteTimeout())
+	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
+	runtimeNomad := settingsSvc.NomadConfig(cfg.Nomad)
 	nomadClientCfg := nomad.Config{
-		Address:    cfg.Nomad.Address,
-		Token:      cfg.Nomad.Token,
-		Namespace:  cfg.Nomad.Namespace,
-		Region:     cfg.Nomad.Region,
-		Datacenter: cfg.Nomad.Datacenter,
+		Address:    runtimeNomad.Address,
+		Token:      runtimeNomad.Token,
+		Namespace:  runtimeNomad.Namespace,
+		Region:     runtimeNomad.Region,
+		Datacenter: runtimeNomad.Datacenter,
 	}
 	if usesManagedNomadTLS(cfg.Nomad.Address) {
 		nomadClientCfg.TLS = &nomad.TLSConfig{
@@ -73,22 +79,37 @@ func New(cfg config.Config) (*App, error) {
 		}
 	}
 	nomadClient := nomad.NewClient(nomadClientCfg, nil)
-	applicationSvc := applications.NewService(store.AppDB(), nomadClient, taskSvc, applications.Config{
-		Namespace:  cfg.Nomad.Namespace,
-		Region:     cfg.Nomad.Region,
-		Datacenter: cfg.Nomad.Datacenter,
+	nomadClient.SetConfigProvider(func(base nomad.Config) nomad.Config {
+		runtime := settingsSvc.NomadConfig(config.NomadConfig{
+			Address:    base.Address,
+			Token:      base.Token,
+			Namespace:  base.Namespace,
+			Region:     base.Region,
+			Datacenter: base.Datacenter,
+		})
+		base.Namespace = runtime.Namespace
+		base.Region = runtime.Region
+		base.Datacenter = runtime.Datacenter
+		return base
 	})
-	nomadJoinSvc := nomad.NewJoinService(serverSvc, nomadClient, executor, taskSvc, cfg.Nomad, nomadTLS)
+	appNomad := settingsSvc.ApplicationNomadConfig()
+	applicationSvc := applications.NewService(store.AppDB(), nomadClient, taskSvc, applications.Config{
+		Namespace:  appNomad.Namespace,
+		Region:     appNomad.Region,
+		Datacenter: appNomad.Datacenter,
+	})
+	applicationSvc.SetConfigProvider(func() applications.Config {
+		runtime := settingsSvc.ApplicationNomadConfig()
+		return applications.Config{Namespace: runtime.Namespace, Region: runtime.Region, Datacenter: runtime.Datacenter}
+	})
+	nomadJoinSvc := nomad.NewJoinService(serverSvc, nomadClient, executor, taskSvc, runtimeNomad, nomadTLS)
+	nomadJoinSvc.SetConfigProvider(settingsSvc.NomadConfig)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
 	dnsSvc := dns.NewService(store.AppDB())
 	certSvc := certs.NewService(store.AppDB(), cfg, dnsSvc, taskSvc)
-	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
-	if err != nil {
-		_ = store.Close()
-		return nil, err
-	}
+	certSvc.SetConfigProvider(settingsSvc.ApplyToConfig)
 	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
 	sched.SetCertificateRenewer(certSvc)
 	sched.Start(context.Background())
@@ -118,7 +139,9 @@ func (a *App) Handler() http.Handler { return a.mux }
 
 func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
-	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuth(http.HandlerFunc(authH.Logout)))
+	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
+	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
+	a.mux.Handle("POST /api/v1/auth/jwt-secret", a.auth.RequireAuth(http.HandlerFunc(authH.UpdateJWTSecret)))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
 
 	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -29,7 +29,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true, "token": sess.Token})
+	httpx.JSON(w, http.StatusOK, sessionPayload(sess, true))
 }
 
 func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
@@ -46,11 +46,40 @@ func (h *Handler) Session(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	if _, ok := h.service.Validate(r.Context(), token); !ok {
+	sess, ok := h.service.Validate(r.Context(), token)
+	if !ok {
 		httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"authenticated": true})
+	httpx.JSON(w, http.StatusOK, sessionPayload(sess, true))
+}
+
+func (h *Handler) UpdateAccount(w http.ResponseWriter, r *http.Request) {
+	var req AccountUpdate
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	sess, err := h.service.UpdateAccount(r.Context(), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, sessionPayload(sess, true))
+}
+
+func (h *Handler) UpdateJWTSecret(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		JWTSecret string `json:"jwtSecret"`
+	}
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	sess, err := h.service.UpdateJWTSecret(r.Context(), req.JWTSecret)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, sessionPayload(sess, true))
 }
 
 func bearerToken(r *http.Request) string {
@@ -59,4 +88,13 @@ func bearerToken(r *http.Request) string {
 		return ""
 	}
 	return header[len(bearerPrefix):]
+}
+
+func sessionPayload(sess Session, authenticated bool) map[string]any {
+	return map[string]any{
+		"authenticated":          authenticated,
+		"token":                  sess.Token,
+		"username":               sess.Username,
+		"passwordChangeRequired": sess.PasswordChangeRequired,
+	}
 }

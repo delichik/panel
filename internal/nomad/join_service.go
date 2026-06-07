@@ -55,12 +55,25 @@ type JoinService struct {
 	exec           sshx.RemoteExecutor
 	tasks          *tasks.Service
 	cfg            config.NomadConfig
+	configProvider func(config.NomadConfig) config.NomadConfig
 	tlsAssets      *TLSAssets
 	appProxySource applicationProxySource
 }
 
 func NewJoinService(servers *server.Service, nomadClient nodeClient, exec sshx.RemoteExecutor, taskSvc *tasks.Service, cfg config.NomadConfig, tlsAssets *TLSAssets) *JoinService {
 	return &JoinService{servers: servers, nomad: nomadClient, exec: exec, tasks: taskSvc, cfg: cfg, tlsAssets: tlsAssets}
+}
+
+func (s *JoinService) SetConfigProvider(provider func(config.NomadConfig) config.NomadConfig) {
+	s.configProvider = provider
+}
+
+func (s *JoinService) currentConfig() config.NomadConfig {
+	cfg := s.cfg
+	if s.configProvider != nil {
+		cfg = s.configProvider(cfg)
+	}
+	return cfg
 }
 
 type applicationProxySource interface {
@@ -318,7 +331,8 @@ func (s *JoinService) RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks
 
 func (s *JoinService) restoreNomadAddressFromBootstrap(ctx context.Context) {
 	setter, ok := s.nomad.(addressSetter)
-	if !ok || !isLocalRPCAddress(nomadRPCAddress(s.cfg.Address)) {
+	cfg := s.currentConfig()
+	if !ok || !isLocalRPCAddress(nomadRPCAddress(cfg.Address)) {
 		return
 	}
 	task := s.latestCompletedBootstrapTask(ctx)
@@ -438,7 +452,8 @@ func (s *JoinService) appendCommandOutput(ctx context.Context, taskID, stream, o
 
 func (s *JoinService) joinScript(srv server.Server, adapter linux.DistroAdapter, rpc string) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
-	datacenter := firstNonEmpty(strings.TrimSpace(s.cfg.Datacenter), "dc1")
+	cfg := s.currentConfig()
+	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
 	return fmt.Sprintf(`set -eu
 %s
 %s
@@ -484,7 +499,8 @@ nomad version
 
 func (s *JoinService) bootstrapScript(srv server.Server, adapter linux.DistroAdapter) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
-	datacenter := firstNonEmpty(strings.TrimSpace(s.cfg.Datacenter), "dc1")
+	cfg := s.currentConfig()
+	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
 	return fmt.Sprintf(`set -eu
 %s
 %s
@@ -529,7 +545,8 @@ nomad version
 }
 
 func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
-	configured := nomadRPCAddress(s.cfg.Address)
+	cfg := s.currentConfig()
+	configured := nomadRPCAddress(cfg.Address)
 	if !isLocalRPCAddress(configured) {
 		return configured
 	}
@@ -637,13 +654,14 @@ func (s *JoinService) reconcileReverseProxyJob(ctx context.Context) error {
 const reverseProxyJobID = "panel-nginx"
 
 func (s *JoinService) renderReverseProxyJob(servers []server.Server, appConfigs []ApplicationReverseProxyConfig) (Job, bool) {
-	datacenter := firstNonEmpty(strings.TrimSpace(s.cfg.Datacenter), "dc1")
+	cfg := s.currentConfig()
+	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
 	job := Job{
 		ID:          reverseProxyJobID,
 		Name:        "panel-nginx",
 		Type:        "service",
-		Namespace:   firstNonEmpty(strings.TrimSpace(s.cfg.Namespace), "default"),
-		Region:      firstNonEmpty(strings.TrimSpace(s.cfg.Region), "global"),
+		Namespace:   firstNonEmpty(strings.TrimSpace(cfg.Namespace), "default"),
+		Region:      firstNonEmpty(strings.TrimSpace(cfg.Region), "global"),
 		Datacenters: []string{datacenter},
 		Meta: map[string]string{
 			"panel.component": "reverse-proxy",

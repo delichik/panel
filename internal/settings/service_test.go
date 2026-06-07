@@ -36,15 +36,36 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 		CleanupSchedule:                  "weekly",
 		TokenExpiration:                  TokenExpiration5Days,
 		Language:                         "zh-CN",
+		RemoteCommandTimeoutSeconds:      45,
+		Nomad:                            &RuntimeNomadSettings{Namespace: "apps", Region: "eu", Datacenter: "dc2"},
+		Certificates:                     &RuntimeCertificateSettings{Email: "admin@example.com", DNSPropagationDelaySeconds: 10},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" {
+	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.RemoteCommandTimeoutSeconds != 45 || got.Nomad.Namespace != "apps" || got.Nomad.Region != "eu" || got.Nomad.Datacenter != "dc2" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
 	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {
 		t.Fatalf("runtime cache did not update: %#v", got)
+	}
+}
+
+func TestRuntimeSettingsSetJWTSecretPersists(t *testing.T) {
+	svc := newTestService(t)
+	got, err := svc.SetJWTSecret(context.Background(), "a-new-long-jwt-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.JWTSecret != "a-new-long-jwt-secret" || !got.JWTSecretConfigured {
+		t.Fatalf("unexpected jwt state: %#v", got)
+	}
+	reloaded, err := NewService(svc.db, svc.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.JWTSecret() != "a-new-long-jwt-secret" {
+		t.Fatalf("jwt secret was not persisted: %q", reloaded.JWTSecret())
 	}
 }
 

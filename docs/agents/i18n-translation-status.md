@@ -10,8 +10,12 @@
   - 移动端导航入口文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/settings/pages/SettingsPage.vue`
   - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
+  - 设置分类子菜单、通用设置、安全设置、Nomad 设置、证书设置、系统信息文案已接入 `web/src/i18n/index.ts`
+- `web/src/features/auth/pages/ChangePasswordPage.vue`
+  - 首次强制改密页面文案已接入 `web/src/i18n/index.ts`
 - `internal/auth`
   - 登录失败的通用错误文案 `Authentication failed` 已接入 `internal/i18n/i18n.go`
+  - 强制改密、账号更新、JWT 密钥更新相关错误文案已接入 `internal/i18n/i18n.go`
 
 ### 前端仍有少量第三方原始文本
 

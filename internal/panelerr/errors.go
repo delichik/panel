@@ -18,6 +18,7 @@ func BadRequest(code, message string) *Error { return New(http.StatusBadRequest,
 func Unauthorized(message string) *Error {
 	return New(http.StatusUnauthorized, "unauthorized", message)
 }
+func Forbidden(code, message string) *Error { return New(http.StatusForbidden, code, message) }
 func NotFound(resource string) *Error {
 	return New(http.StatusNotFound, "not_found", resource+" not found")
 }

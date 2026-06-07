@@ -8,10 +8,25 @@ export interface LoginRequest {
 export interface LoginResponse {
   authenticated: boolean;
   token: string;
+  username: string;
+  passwordChangeRequired: boolean;
 }
 
 export interface SessionResponse {
   authenticated: boolean;
+  token?: string;
+  username?: string;
+  passwordChangeRequired?: boolean;
+}
+
+export interface AccountUpdateRequest {
+  currentPassword: string;
+  username: string;
+  newPassword: string;
+}
+
+export interface JwtSecretUpdateRequest {
+  jwtSecret: string;
 }
 
 export const authApi = {
@@ -23,5 +38,11 @@ export const authApi = {
   },
   session() {
     return apiClient.get<SessionResponse>('/auth/session');
+  },
+  updateAccount(input: AccountUpdateRequest) {
+    return apiClient.post<LoginResponse>('/auth/account', input);
+  },
+  updateJwtSecret(input: JwtSecretUpdateRequest) {
+    return apiClient.post<LoginResponse>('/auth/jwt-secret', input);
   },
 };

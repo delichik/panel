@@ -74,7 +74,15 @@ const navGroups = computed<NavGroup[]>(() => [
   },
   {
     key: 'settings',
-    items: [{ to: '/settings', icon: 'mdi-cog', title: t('layout.nav.settings'), value: 'settings' }],
+    icon: 'mdi-cog',
+    title: t('layout.nav.settings'),
+    items: [
+      { to: '/settings/general', title: t('layout.nav.settingsGeneral'), value: 'settings-general' },
+      { to: '/settings/security', title: t('layout.nav.settingsSecurity'), value: 'settings-security' },
+      { to: '/settings/nomad', title: t('layout.nav.settingsNomad'), value: 'settings-nomad' },
+      { to: '/settings/certificates', title: t('layout.nav.settingsCertificates'), value: 'settings-certificates' },
+      { to: '/settings/system', title: t('layout.nav.settingsSystem'), value: 'settings-system' },
+    ],
   },
 ]);
 

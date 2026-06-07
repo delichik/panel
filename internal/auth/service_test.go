@@ -21,6 +21,9 @@ func TestLoginValidate(t *testing.T) {
 	if sess.Token == "" {
 		t.Fatal("expected jwt token")
 	}
+	if !sess.PasswordChangeRequired {
+		t.Fatal("seeded admin account should require a password change")
+	}
 	claims, ok := svc.verifyJWT(sess.Token)
 	if !ok {
 		t.Fatal("token should verify")
@@ -82,11 +85,18 @@ func TestLogoutInvalidatesExistingTokens(t *testing.T) {
 func TestLoginUsesRuntimeTokenExpiration(t *testing.T) {
 	ctx := context.Background()
 	svc := newTestService(t)
-	if _, err := svc.db.ExecContext(ctx, `
-		INSERT INTO runtime_settings(key, value, updated_at)
-		VALUES (?, ?, ?)
-		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-	`, settings.RuntimeSettingTokenExpiration, settings.TokenExpirationNever, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	runtime := svc.runtime.Runtime()
+	_, err := svc.runtime.Update(ctx, settings.RuntimeUpdate{
+		MetricsRetentionDays:             runtime.MetricsRetentionDays,
+		MetricsCollectionIntervalSeconds: runtime.MetricsCollectionIntervalSeconds,
+		CleanupSchedule:                  runtime.CleanupSchedule,
+		TokenExpiration:                  settings.TokenExpirationNever,
+		Language:                         runtime.Language,
+		RemoteCommandTimeoutSeconds:      runtime.RemoteCommandTimeoutSeconds,
+		Nomad:                            &runtime.Nomad,
+		Certificates:                     &runtime.Certificates,
+	})
+	if err != nil {
 		t.Fatalf("set token expiration: %v", err)
 	}
 
@@ -103,6 +113,36 @@ func TestLoginUsesRuntimeTokenExpiration(t *testing.T) {
 	}
 	if _, ok := svc.Validate(ctx, sess.Token); !ok {
 		t.Fatal("never-expiring token should validate")
+	}
+}
+
+func TestUpdateAccountClearsPasswordChangeAndRotatesJWTSecret(t *testing.T) {
+	ctx := context.Background()
+	svc := newTestService(t)
+	first, err := svc.Login(ctx, "admin", "admin")
+	if err != nil {
+		t.Fatalf("login: %v", err)
+	}
+	oldSecret := svc.runtime.JWTSecret()
+	updated, err := svc.UpdateAccount(ctx, AccountUpdate{
+		CurrentPassword: "admin",
+		Username:        "root",
+		NewPassword:     "new-admin-password",
+	})
+	if err != nil {
+		t.Fatalf("update account: %v", err)
+	}
+	if updated.Username != "root" || updated.PasswordChangeRequired {
+		t.Fatalf("unexpected updated session: %#v", updated)
+	}
+	if svc.runtime.JWTSecret() == oldSecret {
+		t.Fatal("password change should rotate jwt secret")
+	}
+	if _, ok := svc.Validate(ctx, first.Token); ok {
+		t.Fatal("token signed with previous secret should not validate")
+	}
+	if _, ok := svc.Validate(ctx, updated.Token); !ok {
+		t.Fatal("new token should validate")
 	}
 }
 
@@ -134,7 +174,11 @@ func newTestService(t *testing.T) *Service {
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	svc, err := NewService(store.AppDB(), cfg)
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatalf("new settings service: %v", err)
+	}
+	svc, err := NewService(store.AppDB(), cfg, settingsSvc)
 	if err != nil {
 		t.Fatalf("new auth service: %v", err)
 	}

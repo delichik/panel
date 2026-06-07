@@ -1,21 +1,13 @@
 {
   "listenAddress": "127.0.0.1:8080",
-  "adminUsername": "admin",
-  "jwtSecret": "replace-this-with-a-long-random-jwt-secret",
   "dataRoot": "data",
   "appDatabase": "data/db/app.db",
   "metricsDatabase": "data/db/metrics.db",
-  "remoteCommandTimeoutSeconds": 30,
   "nomad": {
     "address": "http://127.0.0.1:4646",
-    "token": "",
-    "namespace": "default",
-    "region": "global",
-    "datacenter": "dc1"
+    "token": ""
   },
   "certificates": {
-    "acmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory",
-    "email": "admin@example.com",
-    "dnsPropagationDelaySeconds": 30
+    "acmeDirectoryUrl": "https://acme-v02.api.letsencrypt.org/directory"
   }
 }

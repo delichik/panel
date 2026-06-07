@@ -52,6 +52,7 @@ type Service struct {
 	nomad           NomadClient
 	tasks           *tasks.Service
 	config          Config
+	configProvider  func() Config
 	renderer        templatex.Renderer
 	builtinResolver BuiltinVariableResolver
 	proxyReconciler ReverseProxyReconciler
@@ -142,12 +143,45 @@ func NewService(db *sql.DB, nomadClient NomadClient, taskSvc *tasks.Service, cfg
 	return s
 }
 
+func (s *Service) currentConfig() Config {
+	cfg := s.config
+	if s.configProvider != nil {
+		next := s.configProvider()
+		if next.Namespace != "" {
+			cfg.Namespace = next.Namespace
+		}
+		if next.Region != "" {
+			cfg.Region = next.Region
+		}
+		if next.Datacenter != "" {
+			cfg.Datacenter = next.Datacenter
+		}
+		if next.SaveSessionDir != "" {
+			cfg.SaveSessionDir = next.SaveSessionDir
+		}
+	}
+	if cfg.Namespace == "" {
+		cfg.Namespace = "default"
+	}
+	if cfg.Region == "" {
+		cfg.Region = "global"
+	}
+	if cfg.Datacenter == "" {
+		cfg.Datacenter = "dc1"
+	}
+	return cfg
+}
+
 func (s *Service) SetBuiltinVariableResolver(resolver BuiltinVariableResolver) {
 	s.builtinResolver = resolver
 }
 
 func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
 	s.proxyReconciler = reconciler
+}
+
+func (s *Service) SetConfigProvider(provider func() Config) {
+	s.configProvider = provider
 }
 
 func (s *Service) SetImageDigestResolver(resolver ImageDigestResolver) {
@@ -212,7 +246,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 		Generation:        1,
 		SpecHash:          prepared.hash,
 		JobID:             prepared.job.ID,
-		Namespace:         s.config.Namespace,
+		Namespace:         s.currentConfig().Namespace,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -301,7 +335,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 	app.Generation = generation
 	app.SpecHash = prepared.hash
 	app.JobID = prepared.job.ID
-	app.Namespace = s.config.Namespace
+	app.Namespace = s.currentConfig().Namespace
 	app.UpdatedAt = time.Now().UTC()
 	if app.Enabled && (!current.Enabled || prepared.hash != current.SpecHash) {
 		job, issues, err := s.renderApplicationWithFiles(ctx, app, files)
@@ -930,13 +964,14 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if err != nil {
 		return preparedApplication{}, err
 	}
+	cfg := s.currentConfig()
 	job, renderIssues := appspec.Render(appspec.RenderInput{
 		AppID:      appID,
 		Generation: generation,
 		SpecHash:   hash,
-		Namespace:  s.config.Namespace,
-		Region:     s.config.Region,
-		Datacenter: s.config.Datacenter,
+		Namespace:  cfg.Namespace,
+		Region:     cfg.Region,
+		Datacenter: cfg.Datacenter,
 		Spec:       spec,
 	})
 	if len(renderIssues) > 0 {
@@ -973,13 +1008,14 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 	if len(issues) > 0 {
 		return nomad.Job{}, issues, nil
 	}
+	cfg := s.currentConfig()
 	job, renderIssues := appspec.Render(appspec.RenderInput{
 		AppID:      app.ID,
 		Generation: app.Generation,
 		SpecHash:   app.SpecHash,
-		Namespace:  s.config.Namespace,
-		Region:     s.config.Region,
-		Datacenter: s.config.Datacenter,
+		Namespace:  cfg.Namespace,
+		Region:     cfg.Region,
+		Datacenter: cfg.Datacenter,
 		Spec:       spec,
 	})
 	for _, issue := range renderIssues {
@@ -1787,7 +1823,7 @@ func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Applic
 	app.Generation = generation
 	app.SpecHash = prepared.hash
 	app.JobID = prepared.job.ID
-	app.Namespace = s.config.Namespace
+	app.Namespace = s.currentConfig().Namespace
 	app.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplication(ctx, app); err != nil {
 		return Application{}, err

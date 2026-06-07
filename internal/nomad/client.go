@@ -19,10 +19,11 @@ import (
 )
 
 type Client struct {
-	cfg        Config
-	httpClient *http.Client
-	mu         sync.RWMutex
-	baseURL    *url.URL
+	cfg            Config
+	httpClient     *http.Client
+	mu             sync.RWMutex
+	baseURL        *url.URL
+	configProvider func(Config) Config
 }
 
 func NewClient(cfg Config, httpClient *http.Client) *Client {
@@ -37,6 +38,12 @@ func NewClient(cfg Config, httpClient *http.Client) *Client {
 		baseURL = &url.URL{Scheme: "http", Host: "127.0.0.1:4646"}
 	}
 	return &Client{cfg: cfg, httpClient: httpClient, baseURL: baseURL}
+}
+
+func (c *Client) SetConfigProvider(provider func(Config) Config) {
+	c.mu.Lock()
+	c.configProvider = provider
+	c.mu.Unlock()
 }
 
 func defaultHTTPClient(cfg Config) *http.Client {
@@ -214,7 +221,11 @@ func (c *Client) do(ctx context.Context, method, endpoint string, query url.Valu
 	c.mu.RLock()
 	reqURL := *c.baseURL
 	cfg := c.cfg
+	provider := c.configProvider
 	c.mu.RUnlock()
+	if provider != nil {
+		cfg = provider(cfg)
+	}
 	reqURL.Path = path.Join(reqURL.Path, endpoint)
 	values := reqURL.Query()
 	if cfg.Namespace != "" {

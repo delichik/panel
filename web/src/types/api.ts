@@ -543,9 +543,24 @@ export interface RuntimeSettingsDto {
   cleanupSchedule: string;
   tokenExpiration: TokenExpiration;
   language: string;
+  remoteCommandTimeoutSeconds: number;
+  nomad: RuntimeNomadSettingsDto;
+  certificates: RuntimeCertificateSettingsDto;
+  jwtSecretConfigured: boolean;
 }
 
 export type TokenExpiration = '10m' | '1h' | '1d' | '5d' | '30d' | 'never';
+
+export interface RuntimeNomadSettingsDto {
+  namespace: string;
+  region: string;
+  datacenter: string;
+}
+
+export interface RuntimeCertificateSettingsDto {
+  email: string;
+  dnsPropagationDelaySeconds: number;
+}
 
 export interface RuntimeSettingsUpdate {
   metricsRetentionDays: number;
@@ -553,4 +568,7 @@ export interface RuntimeSettingsUpdate {
   cleanupSchedule: string;
   tokenExpiration: TokenExpiration;
   language: string;
+  remoteCommandTimeoutSeconds: number;
+  nomad: RuntimeNomadSettingsDto;
+  certificates: RuntimeCertificateSettingsDto;
 }

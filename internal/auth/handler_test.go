@@ -62,12 +62,15 @@ func TestSessionReturnsAuthenticatedWithValidToken(t *testing.T) {
 	if data["authenticated"] != true {
 		t.Fatalf("authenticated = %v, want true", data["authenticated"])
 	}
-	if _, ok := data["username"]; ok {
-		t.Fatal("session response must not expose username")
+	if data["username"] != "admin" {
+		t.Fatalf("username = %v, want admin", data["username"])
+	}
+	if data["passwordChangeRequired"] != true {
+		t.Fatalf("passwordChangeRequired = %v, want true", data["passwordChangeRequired"])
 	}
 }
 
-func TestLoginReturnsMinimalResponse(t *testing.T) {
+func TestLoginReturnsSessionResponse(t *testing.T) {
 	handler := NewHandler(newTestService(t))
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"admin","password":"admin"}`))
 	rec := httptest.NewRecorder()
@@ -88,8 +91,11 @@ func TestLoginReturnsMinimalResponse(t *testing.T) {
 	if data["authenticated"] != true || data["token"] == "" {
 		t.Fatalf("login response missing authenticated token: %#v", data)
 	}
-	if _, ok := data["username"]; ok {
-		t.Fatal("login response must not expose username")
+	if data["username"] != "admin" {
+		t.Fatalf("username = %v, want admin", data["username"])
+	}
+	if data["passwordChangeRequired"] != true {
+		t.Fatalf("passwordChangeRequired = %v, want true", data["passwordChangeRequired"])
 	}
 }
 

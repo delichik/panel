@@ -193,6 +193,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS auth_accounts (
+			id TEXT PRIMARY KEY CHECK(id = 'admin'),
+			username TEXT NOT NULL,
+			password_hash TEXT NOT NULL,
+			password_change_required INTEGER NOT NULL DEFAULT 1,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 	}
 	for _, stmt := range app {
 		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
