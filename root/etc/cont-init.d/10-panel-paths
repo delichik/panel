@@ -1,9 +1,0 @@
-#!/usr/bin/with-contenv sh
-
-mkdir -p /config/data/db /config/log
-
-if [ ! -f /config/config.json ]; then
-  cp /defaults/config.example.json /config/config.json
-fi
-
-chown -R abc:abc /app /config
