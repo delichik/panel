@@ -16,6 +16,10 @@
 - `internal/auth`
   - 登录失败的通用错误文案 `Authentication failed` 已接入 `internal/i18n/i18n.go`
   - 强制改密、账号更新、JWT 密钥更新相关错误文案已接入 `internal/i18n/i18n.go`
+- `web/src/features/nomad/pages/NomadNodesPage.vue`
+  - Nomad 节点重部署、集群重建、server 切换操作文案已接入 `web/src/i18n/index.ts`
+- `internal/nomad`
+  - Nomad 重部署、集群重建、server 切换相关 API 错误码已接入 `internal/i18n/i18n.go`
 
 ### 前端仍有少量第三方原始文本
 
@@ -41,6 +45,7 @@
 - SSH / 远程执行 / 超时相关错误码
 - 模板渲染、选择器解析等底层错误码
 - 第三方系统直接返回的原始错误文本
+- 任务摘要、任务 system 日志与远程命令诊断文本仍以原始执行文本展示，包括 Nomad 引导/加入流程日志
 
 ## 更新规则
 
