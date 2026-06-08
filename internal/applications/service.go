@@ -1782,6 +1782,10 @@ func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error 
 	return s.reconcileReverseProxy(ctx)
 }
 
+func (s *Service) ReconcileReverseProxy(ctx context.Context) error {
+	return s.reconcileReverseProxy(ctx)
+}
+
 func (s *Service) reconcileReverseProxy(ctx context.Context) error {
 	if s.proxyReconciler == nil {
 		return nil

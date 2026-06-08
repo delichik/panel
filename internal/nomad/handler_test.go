@@ -140,6 +140,36 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/redeploy-node", bytes.NewBufferString(`{"serverId":"srv_1","role":"server"}`))
+	handler.RedeployNode(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("redeploy status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.redeploy.ServerID != "srv_1" || fake.redeploy.Role != "server" {
+		t.Fatalf("unexpected redeploy input=%#v", fake.redeploy)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/rebuild-cluster", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	handler.RebuildCluster(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("rebuild status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.rebuild.ServerID != "srv_1" {
+		t.Fatalf("unexpected rebuild input=%#v", fake.rebuild)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/switch-server", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	handler.SwitchServer(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("switch status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fake.switched.ServerID != "srv_1" {
+		t.Fatalf("unexpected switch input=%#v", fake.switched)
+	}
+
+	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/remove-node", bytes.NewBufferString(`{"serverId":"srv_1","nodeId":"node_1"}`))
 	handler.RemoveNode(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -181,6 +211,9 @@ type fakeJoinService struct {
 	task                 tasks.Task
 	bootstrap            tasks.Task
 	remove               tasks.Task
+	redeploy             RedeployNodeInput
+	rebuild              RebuildClusterInput
+	switched             SwitchServerInput
 	removed              RemoveNodeInput
 	reverseProxy         ReverseProxyInput
 	joinedServerID       string
@@ -203,6 +236,21 @@ func (f *fakeJoinService) JoinClient(_ context.Context, serverID string) (tasks.
 func (f *fakeJoinService) BootstrapServer(_ context.Context, serverID string) (tasks.Task, error) {
 	f.bootstrappedServerID = serverID
 	return f.bootstrap, nil
+}
+
+func (f *fakeJoinService) RedeployNode(_ context.Context, in RedeployNodeInput) (tasks.Task, error) {
+	f.redeploy = in
+	return tasks.Task{ID: "task_redeploy"}, nil
+}
+
+func (f *fakeJoinService) RebuildCluster(_ context.Context, in RebuildClusterInput) (tasks.Task, error) {
+	f.rebuild = in
+	return tasks.Task{ID: "task_rebuild"}, nil
+}
+
+func (f *fakeJoinService) SwitchServer(_ context.Context, in SwitchServerInput) (tasks.Task, error) {
+	f.switched = in
+	return tasks.Task{ID: "task_switch"}, nil
 }
 
 func (f *fakeJoinService) RemoveNode(_ context.Context, in RemoveNodeInput) (tasks.Task, error) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,6 +22,9 @@ const connectivityMaxRetries = 8
 const connectivityStaleAfter = 10 * time.Minute
 const ufwInstallTaskType = "server_ufw_install"
 const ufwInstallTimeout = 5 * time.Minute
+const reverseProxyEnabledTrait = "nomad.reverse_proxy.enabled"
+
+var reverseProxyTCPPorts = []int{80, 443}
 
 type Service struct {
 	db    *sql.DB
@@ -364,7 +368,7 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
-	if err := s.execSudoLogged(ctx, taskID, target, adapter.UFWInstallScript(), ufwInstallTimeout); err != nil {
+	if err := s.execSudoLogged(ctx, taskID, target, ufwInstallScript(adapter, srv), ufwInstallTimeout); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
@@ -467,6 +471,39 @@ func (s *Service) appendCommandOutput(ctx context.Context, taskID, stream, out s
 		if strings.TrimSpace(line) != "" {
 			_ = s.tasks.AppendLog(ctx, taskID, stream, line)
 		}
+	}
+}
+
+func ufwInstallScript(adapter linux.DistroAdapter, srv Server) string {
+	command := strings.TrimSpace(adapter.UFWInstallScript())
+	ports := []int{normalizedTCPPort(srv.Port)}
+	if traitEnabled(srv.Traits[reverseProxyEnabledTrait]) {
+		ports = append(ports, reverseProxyTCPPorts...)
+	}
+	seen := map[int]struct{}{}
+	for _, port := range ports {
+		if _, ok := seen[port]; ok {
+			continue
+		}
+		seen[port] = struct{}{}
+		command += "\nufw allow " + strconv.Itoa(port) + "/tcp"
+	}
+	return command
+}
+
+func normalizedTCPPort(port int) int {
+	if port <= 0 || port > 65535 {
+		return 22
+	}
+	return port
+}
+
+func traitEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }
 

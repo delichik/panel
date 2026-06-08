@@ -250,7 +250,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 
 func (s *JoinService) latestNomadTasks(ctx context.Context) (map[string]tasks.Task, error) {
 	out := map[string]tasks.Task{}
-	for _, taskType := range []string{TaskTypeServerBootstrap, TaskTypeClientJoin, TaskTypeNodeRemove} {
+	for _, taskType := range []string{TaskTypeServerBootstrap, TaskTypeClientJoin, TaskTypeClusterRebuild, TaskTypeNodeRemove} {
 		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, Limit: 200})
 		if err != nil {
 			return nil, err
@@ -311,7 +311,7 @@ func taskCompletedRemove(task tasks.Task) bool {
 
 func hasActiveBootstrap(taskByServer map[string]tasks.Task) bool {
 	for _, task := range taskByServer {
-		if task.Type == TaskTypeServerBootstrap && taskProjectsAsPending(task) && task.Status != tasks.StatusFailed && task.Status != tasks.StatusBlocked {
+		if (task.Type == TaskTypeServerBootstrap || task.Type == TaskTypeClusterRebuild) && taskProjectsAsPending(task) && task.Status != tasks.StatusFailed && task.Status != tasks.StatusBlocked {
 			return true
 		}
 	}
@@ -321,6 +321,8 @@ func hasActiveBootstrap(taskByServer map[string]tasks.Task) bool {
 func roleForTask(task tasks.Task) string {
 	switch task.Type {
 	case TaskTypeServerBootstrap:
+		return ProjectedNodeRoleServer
+	case TaskTypeClusterRebuild:
 		return ProjectedNodeRoleServer
 	case TaskTypeClientJoin:
 		return ProjectedNodeRoleClient
@@ -335,6 +337,9 @@ func projectionStatus(task tasks.Task) string {
 	}
 	if task.Type == TaskTypeNodeRemove {
 		return "removing"
+	}
+	if task.Type == TaskTypeClusterRebuild {
+		return "rebuilding"
 	}
 	if task.Status == tasks.StatusCompleted {
 		return "registering"

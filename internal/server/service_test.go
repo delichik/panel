@@ -161,9 +161,12 @@ func TestInstallUFWCreatesTaskAndRefreshesTraits(t *testing.T) {
 	if task.Type != ufwInstallTaskType || task.ResourceType != connectivityResourceType || task.ResourceID != srv.ID {
 		t.Fatalf("unexpected task metadata: %#v", task)
 	}
-	if !strings.Contains(exec.installCommand, "apt-get install -y ufw") || !strings.Contains(exec.installCommand, "ufw --version") {
+	if !strings.Contains(exec.installCommand, "apt-get install -y ufw") ||
+		!strings.Contains(exec.installCommand, "ufw --version") ||
+		!strings.Contains(exec.installCommand, "ufw allow 22/tcp") {
 		t.Fatalf("unexpected install command: %s", exec.installCommand)
 	}
+	assertNoDestructiveUFWCommands(t, exec.installCommand)
 	if exec.installTimeout != ufwInstallTimeout {
 		t.Fatalf("expected install timeout %s, got %s", ufwInstallTimeout, exec.installTimeout)
 	}
@@ -173,6 +176,48 @@ func TestInstallUFWCreatesTaskAndRefreshesTraits(t *testing.T) {
 	}
 	if stored.Traits["sys.ufw_supported"] != "true" || stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "false" {
 		t.Fatalf("expected refreshed UFW traits, got %#v", stored.Traits)
+	}
+}
+
+func TestInstallUFWAllowsConfiguredSSHAndReverseProxyPorts(t *testing.T) {
+	exec := &ufwInstallFakeExec{}
+	svc, taskSvc, _ := testServerService(t, exec)
+	srv, err := svc.Create(context.Background(), SaveRequest{
+		Name:         "s",
+		Host:         "127.0.0.1",
+		Port:         22022,
+		SSHUsername:  "du",
+		CredentialID: "cred_1",
+		Traits:       map[string]string{reverseProxyEnabledTrait: "true"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv = waitServerReady(t, svc, srv.ID)
+
+	task, err := svc.InstallUFW(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitTaskFinished(t, taskSvc, task.ID)
+
+	for _, want := range []string{"ufw allow 22022/tcp", "ufw allow 80/tcp", "ufw allow 443/tcp"} {
+		if !strings.Contains(exec.installCommand, want) {
+			t.Fatalf("install command missing %q:\n%s", want, exec.installCommand)
+		}
+	}
+	assertNoDestructiveUFWCommands(t, exec.installCommand)
+}
+
+func assertNoDestructiveUFWCommands(t *testing.T, command string) {
+	t.Helper()
+	lower := strings.ToLower(command)
+	for _, verb := range []string{"delete", "reset", "deny", "default", "enable", "disable", "reload"} {
+		for _, prefix := range []string{"ufw " + verb, "ufw --force " + verb} {
+			if strings.Contains(lower, prefix) {
+				t.Fatalf("UFW script must not manage existing rules with %q:\n%s", prefix, command)
+			}
+		}
 	}
 }
 

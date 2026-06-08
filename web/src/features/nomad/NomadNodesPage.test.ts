@@ -19,10 +19,15 @@ describe('NomadNodesPage', () => {
     expect(page).toContain('missing');
     expect(page).toContain('nomad_unreachable');
     expect(page).toContain('nomadApi.removeNode');
+    expect(page).toContain('nomadApi.redeployNode');
+    expect(page).toContain('nomadApi.rebuildCluster');
+    expect(page).toContain('nomadApi.switchServer');
     expect(page).toContain('nomadApi.updateReverseProxy');
     expect(page).toContain("t('nomadNodesPage.reverseProxy')");
     expect(page).toContain('canJoinNode');
+    expect(page).toContain('canRedeployNode');
     expect(page).toContain('canRemoveNode');
+    expect(page).toContain('rebuilding');
   });
 
   it('keeps first-server bootstrap isolated on the setup page', () => {

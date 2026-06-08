@@ -150,6 +150,9 @@ jobs:
     needs:
       - build-amd64
       - build-arm64
+    permissions:
+      contents: write
+      packages: write
 
     steps:
       - name: Download image digests
@@ -194,3 +197,11 @@ jobs:
       - name: Inspect published latest image
         shell: bash
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:latest
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          make_latest: true

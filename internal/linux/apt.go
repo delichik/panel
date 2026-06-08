@@ -79,27 +79,68 @@ func (aptAdapter) UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, targ
 }
 
 func (aptAdapter) NomadInstallScript() string {
-	return `export DEBIAN_FRONTEND=noninteractive
-if ! command -v nomad >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y gpg wget lsb-release
-  wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+	return aptNomadScriptPrelude() + `
+panel_step "checking Nomad package"
+if command -v nomad >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 && systemctl cat nomad >/dev/null 2>&1; then
+  panel_step "Nomad binary and systemd unit are already installed"
+else
+  panel_step "installing Nomad from the HashiCorp apt repository"
+  apt_get update
+  apt_get install -y ca-certificates gpg wget lsb-release
+  rm -f /tmp/panel-hashicorp-key.gpg /usr/share/keyrings/hashicorp-archive-keyring.gpg
+  panel_timeout 120 wget -qO /tmp/panel-hashicorp-key.gpg https://apt.releases.hashicorp.com/gpg
+  gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg /tmp/panel-hashicorp-key.gpg
+  rm -f /tmp/panel-hashicorp-key.gpg
   echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
-  apt-get update
-  apt-get install -y nomad
-fi`
+  apt_get update
+  apt_get install -y nomad
+fi
+if ! command -v nomad >/dev/null 2>&1; then
+  echo "[panel] Nomad binary is still missing after installation" >&2
+  exit 1
+fi
+if command -v systemctl >/dev/null 2>&1 && ! systemctl cat nomad >/dev/null 2>&1; then
+  echo "[panel] nomad.service is missing after installation" >&2
+  exit 1
+fi
+nomad version`
 }
 
 func (aptAdapter) NomadRuntimePrereqsScript() string {
-	return `if ! command -v docker >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y docker.io
+	return aptNomadScriptPrelude() + `
+panel_step "checking Docker runtime"
+if ! command -v docker >/dev/null 2>&1; then
+  panel_step "installing Docker"
+  apt_get update
+  apt_get install -y docker.io
 fi
-systemctl enable docker
-systemctl restart docker
+if command -v systemctl >/dev/null 2>&1 && ! systemctl cat docker >/dev/null 2>&1; then
+  panel_step "installing docker.io because docker.service is missing"
+  apt_get update
+  apt_get install -y docker.io
+fi
+if command -v systemctl >/dev/null 2>&1; then
+  panel_step "enabling Docker service"
+  panel_timeout 60 systemctl enable docker
+  panel_step "restarting Docker service"
+  panel_timeout 120 systemctl restart docker
+  if ! systemctl is-active --quiet docker; then
+    echo "[panel] docker.service is not active after restart" >&2
+    systemctl status docker --no-pager -l >&2 || true
+    journalctl -u docker -n 80 --no-pager >&2 || true
+    exit 1
+  fi
+else
+  panel_step "restarting Docker service"
+  service docker restart
+fi
+panel_step "checking Docker daemon"
+panel_timeout 30 docker info >/dev/null
+
+panel_step "checking Nomad CNI plugins"
 if [ ! -x /opt/cni/bin/bridge ]; then
-  apt-get update
-  apt-get install -y containernetworking-plugins
+  apt_get update
+  apt_get install -y containernetworking-plugins
   install -d -m 0755 /opt/cni/bin
   for plugin in bridge firewall host-local loopback portmap; do
     for dir in /usr/lib/cni /usr/libexec/cni /opt/cni/bin; do
@@ -108,18 +149,63 @@ if [ ! -x /opt/cni/bin/bridge ]; then
       fi
     done
   done
+fi
+missing_plugins=""
+for plugin in bridge firewall host-local loopback portmap; do
+  if [ ! -x "/opt/cni/bin/$plugin" ]; then
+    missing_plugins="$missing_plugins $plugin"
+  fi
+done
+if [ -n "$missing_plugins" ]; then
+  echo "[panel] missing CNI plugins:$missing_plugins" >&2
+  exit 1
 fi`
 }
 
 func (aptAdapter) NomadServiceRestartScript() string {
-	return `systemctl enable nomad
-systemctl restart nomad
-systemctl is-active --quiet nomad`
+	return aptNomadScriptPrelude() + `
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "[panel] systemctl is required to manage nomad.service" >&2
+  exit 1
+fi
+if ! systemctl cat nomad >/dev/null 2>&1; then
+  echo "[panel] nomad.service is missing" >&2
+  exit 1
+fi
+panel_step "enabling Nomad service"
+panel_timeout 60 systemctl enable nomad
+panel_step "restarting Nomad service"
+panel_timeout 120 systemctl restart nomad
+panel_step "checking Nomad service"
+if ! systemctl is-active --quiet nomad; then
+  echo "[panel] nomad.service is not active after restart" >&2
+  systemctl status nomad --no-pager -l >&2 || true
+  journalctl -u nomad -n 80 --no-pager >&2 || true
+  exit 1
+fi`
 }
 
 func (aptAdapter) NomadServiceStopScript() string {
 	return `systemctl disable --now nomad || true
 systemctl reset-failed nomad || true`
+}
+
+func aptNomadScriptPrelude() string {
+	return `export DEBIAN_FRONTEND=noninteractive
+panel_step() { printf '[panel] %s\n' "$1"; }
+panel_timeout() {
+  seconds="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$seconds" "$@"
+  else
+    "$@"
+  fi
+}
+apt_get() {
+  panel_timeout 900 apt-get -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "$@"
+}
+`
 }
 
 func (aptAdapter) SupportsUFW() bool {

@@ -15,6 +15,7 @@ import (
 	"panel/internal/config"
 	"panel/internal/dns"
 	"panel/internal/id"
+	"panel/internal/nomad"
 	"panel/internal/panelerr"
 	"panel/internal/tasks"
 )
@@ -42,6 +43,7 @@ type domainResolver interface {
 
 type applicationRefresher interface {
 	RedeployChangedApplications(ctx context.Context) (int, error)
+	ReconcileReverseProxy(ctx context.Context) error
 }
 
 func NewService(db *sql.DB, cfg config.Config, domains domainResolver, taskSvc *tasks.Service) *Service {
@@ -351,6 +353,34 @@ func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) 
 	return map[string]any{"certs": certVars}, nil
 }
 
+func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.ReverseProxyCertificate, error) {
+	certs, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := []nomad.ReverseProxyCertificate{}
+	for _, cert := range certs {
+		if cert.Status != StatusIssued {
+			continue
+		}
+		certPEM, err := os.ReadFile(cert.CertificatePath)
+		if err != nil {
+			return nil, err
+		}
+		keyPEM, err := os.ReadFile(cert.PrivateKeyPath)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, nomad.ReverseProxyCertificate{
+			ID:             cert.ID,
+			Domains:        append([]string(nil), cert.Domains...),
+			CertificatePEM: string(certPEM),
+			PrivateKeyPEM:  string(keyPEM),
+		})
+	}
+	return out, nil
+}
+
 func (s *Service) insert(ctx context.Context, cert Certificate) error {
 	domains, err := json.Marshal(cert.Domains)
 	if err != nil {
@@ -394,8 +424,10 @@ func (s *Service) refreshApplications(ctx context.Context) error {
 	if s.applications == nil {
 		return nil
 	}
-	_, err := s.applications.RedeployChangedApplications(ctx)
-	return err
+	if _, err := s.applications.RedeployChangedApplications(ctx); err != nil {
+		return err
+	}
+	return s.applications.ReconcileReverseProxy(ctx)
 }
 
 type preparedIssueRequest struct {

@@ -20,6 +20,15 @@ export interface RemoveNomadNodeInput {
   nodeId?: string;
 }
 
+export interface RedeployNomadNodeInput {
+  serverId: string;
+  role: string;
+}
+
+export interface NomadServerInput {
+  serverId: string;
+}
+
 export interface ReverseProxyInput {
   serverId: string;
   enabled: boolean;
@@ -71,6 +80,15 @@ export function createNomadApi(client: ApiClient = apiClient) {
     },
     bootstrapServer(serverId: string) {
       return client.post<TaskCreatedDto>('/nomad/bootstrap-server', { serverId });
+    },
+    redeployNode(input: RedeployNomadNodeInput) {
+      return client.post<TaskCreatedDto>('/nomad/redeploy-node', input);
+    },
+    rebuildCluster(input: NomadServerInput) {
+      return client.post<TaskCreatedDto>('/nomad/rebuild-cluster', input);
+    },
+    switchServer(input: NomadServerInput) {
+      return client.post<TaskCreatedDto>('/nomad/switch-server', input);
     },
     removeNode(input: RemoveNomadNodeInput) {
       return client.post<TaskCreatedDto>('/nomad/remove-node', input);

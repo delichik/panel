@@ -24,10 +24,21 @@ import (
 const TaskTypeClientJoin = "nomad_client_join"
 const TaskTypeServerBootstrap = "nomad_server_bootstrap"
 const TaskTypeNodeRemove = "nomad_node_remove"
+const TaskTypeClusterRebuild = "nomad_cluster_rebuild"
+const TaskTypeServerSwitch = "nomad_server_switch"
 
 const (
-	nomadInstallTimeout     = 20 * time.Minute
-	nomadMaintenanceTimeout = 2 * time.Minute
+	nomadInstallTimeout                = 20 * time.Minute
+	nomadMaintenanceTimeout            = 2 * time.Minute
+	nomadFirewallTimeout               = time.Minute
+	nomadServiceTimeout                = 3 * time.Minute
+	nomadLocalHealthTimeout            = 2 * time.Minute
+	nomadPanelReachabilityRetryMessage = "checking Nomad API reachability from Panel"
+)
+
+var (
+	nomadPanelReachabilityTimeout       = 30 * time.Second
+	nomadPanelReachabilityRetryInterval = 2 * time.Second
 )
 
 type nodeClient interface {
@@ -58,6 +69,7 @@ type JoinService struct {
 	configProvider func(config.NomadConfig) config.NomadConfig
 	tlsAssets      *TLSAssets
 	appProxySource applicationProxySource
+	certSource     reverseProxyCertificateSource
 }
 
 func NewJoinService(servers *server.Service, nomadClient nodeClient, exec sshx.RemoteExecutor, taskSvc *tasks.Service, cfg config.NomadConfig, tlsAssets *TLSAssets) *JoinService {
@@ -90,6 +102,21 @@ type ApplicationReverseProxyConfig struct {
 
 func (s *JoinService) SetApplicationProxySource(source applicationProxySource) {
 	s.appProxySource = source
+}
+
+type reverseProxyCertificateSource interface {
+	ReverseProxyCertificates(ctx context.Context) ([]ReverseProxyCertificate, error)
+}
+
+type ReverseProxyCertificate struct {
+	ID             string
+	Domains        []string
+	CertificatePEM string
+	PrivateKeyPEM  string
+}
+
+func (s *JoinService) SetReverseProxyCertificateSource(source reverseProxyCertificateSource) {
+	s.certSource = source
 }
 
 func (s *JoinService) ensureNomadEligible(srv server.Server) (linux.DistroAdapter, error) {
@@ -225,9 +252,141 @@ func (s *JoinService) BootstrapServer(ctx context.Context, serverID string) (tas
 	return task, nil
 }
 
+func (s *JoinService) RedeployNode(ctx context.Context, in RedeployNodeInput) (tasks.Task, error) {
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("nomad_redeploy_executor_unavailable", "Nomad redeploy executor is unavailable")
+	}
+	serverID := strings.TrimSpace(in.ServerID)
+	if serverID == "" {
+		return tasks.Task{}, panelerr.Validation("nomad_redeploy_server_required", "Server ID is required")
+	}
+	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	adapter, err := s.ensureNomadEligible(srv)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	role := normalizeProjectedNodeRole(in.Role)
+	if role == "" || role == ProjectedNodeRoleUnknown {
+		role = s.nomadRoleForServer(ctx, srv)
+	}
+	if role != ProjectedNodeRoleServer && role != ProjectedNodeRoleClient {
+		return tasks.Task{}, panelerr.Validation("nomad_redeploy_role_required", "Nomad node role is required for redeploy")
+	}
+	taskType := TaskTypeClientJoin
+	summary := "Redeploying Nomad client"
+	if role == ProjectedNodeRoleServer {
+		taskType = TaskTypeServerBootstrap
+		summary = "Redeploying Nomad server"
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         taskType,
+		ServerID:     serverID,
+		ResourceType: "server",
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      summary,
+		MaxRetries:   0,
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if role == ProjectedNodeRoleServer {
+		if setter, ok := s.nomad.(addressSetter); ok {
+			s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
+		}
+		go s.runBootstrapServer(context.Background(), task.ID, srv, adapter)
+		return task, nil
+	}
+	go s.runJoinClient(context.Background(), task.ID, srv, adapter)
+	return task, nil
+}
+
+func (s *JoinService) RebuildCluster(ctx context.Context, in RebuildClusterInput) (tasks.Task, error) {
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("nomad_rebuild_executor_unavailable", "Nomad rebuild executor is unavailable")
+	}
+	serverID := strings.TrimSpace(in.ServerID)
+	if serverID == "" {
+		return tasks.Task{}, panelerr.Validation("nomad_rebuild_server_required", "Server ID is required")
+	}
+	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	adapter, err := s.ensureNomadEligible(srv)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeClusterRebuild,
+		ServerID:     serverID,
+		ResourceType: "nomad_cluster",
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      "Rebuilding Nomad cluster",
+		MaxRetries:   0,
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if setter, ok := s.nomad.(addressSetter); ok {
+		s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
+	}
+	go s.runRebuildCluster(context.Background(), task.ID, srv, adapter)
+	return task, nil
+}
+
+func (s *JoinService) SwitchServer(ctx context.Context, in SwitchServerInput) (tasks.Task, error) {
+	setter, ok := s.nomad.(addressSetter)
+	if !ok {
+		return tasks.Task{}, panelerr.Validation("nomad_switch_api_unavailable", "Nomad server switch API is unavailable")
+	}
+	serverID := strings.TrimSpace(in.ServerID)
+	if serverID == "" {
+		return tasks.Task{}, panelerr.Validation("nomad_switch_server_required", "Server ID is required")
+	}
+	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if strings.TrimSpace(srv.Host) == "" {
+		return tasks.Task{}, panelerr.Validation("nomad_switch_server_host_required", "Server host is required")
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeServerSwitch,
+		ServerID:     serverID,
+		ResourceType: "nomad_server",
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      "Switching Nomad server",
+		MaxRetries:   0,
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runSwitchServer(context.Background(), task.ID, srv, setter)
+	return task, nil
+}
+
 type RemoveNodeInput struct {
 	ServerID string `json:"serverId"`
 	NodeID   string `json:"nodeId"`
+}
+
+type RedeployNodeInput struct {
+	ServerID string `json:"serverId"`
+	Role     string `json:"role"`
+}
+
+type RebuildClusterInput struct {
+	ServerID string `json:"serverId"`
+}
+
+type SwitchServerInput struct {
+	ServerID string `json:"serverId"`
 }
 
 type ReverseProxyInput struct {
@@ -278,6 +437,11 @@ func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInp
 	if len(staticSites) > 0 {
 		in.StaticFiles = true
 	}
+	if in.Enabled {
+		if err := s.allowReverseProxyUFWPort(ctx, srv); err != nil {
+			return server.Server{}, err
+		}
+	}
 	staticJSON, _ := json.Marshal(staticSites)
 	traits[TraitReverseProxyEnabled] = boolTrait(in.Enabled)
 	traits[TraitReverseProxyStaticFiles] = boolTrait(in.StaticFiles)
@@ -298,6 +462,20 @@ func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInp
 		return server.Server{}, err
 	}
 	return updated, nil
+}
+
+func (s *JoinService) allowReverseProxyUFWPort(ctx context.Context, srv server.Server) error {
+	if s.exec == nil {
+		return nil
+	}
+	if _, err := s.ensureNomadEligible(srv); err != nil {
+		return err
+	}
+	_, err := s.exec.ExecSudo(ctx, srv.Target(), sshx.CommandSpec{
+		Command: reverseProxyUFWAllowScript(),
+		Timeout: nomadFirewallTimeout,
+	})
+	return err
 }
 
 func (s *JoinService) RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks.Task, error) {
@@ -357,30 +535,95 @@ func (s *JoinService) setNomadAddress(setter addressSetter, address string) {
 
 func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
-	_ = s.tasks.Advance(ctx, taskID, "installing", "installing or updating Nomad client")
 	target := srv.Target()
-	err := s.execSudoLogged(ctx, taskID, target, s.joinScript(srv, adapter, s.serverJoinRPCAddress(ctx)), nomadInstallTimeout)
-	if err != nil {
+	if err := s.runNomadCommandSteps(ctx, taskID, target, []nomadCommandStep{
+		{Stage: "installing_nomad", Message: "checking or installing Nomad", Command: adapter.NomadInstallScript(), Timeout: nomadInstallTimeout},
+		{Stage: "preparing_runtime", Message: "checking Docker and Nomad CNI runtime", Command: adapter.NomadRuntimePrereqsScript(), Timeout: nomadInstallTimeout},
+		{Stage: "configuring", Message: "writing Nomad client configuration", Command: s.joinConfigScript(srv, s.serverJoinRPCAddress(ctx)), Timeout: nomadMaintenanceTimeout},
+		{Stage: "opening_firewall", Message: "opening local Nomad firewall ports", Command: nomadUFWAllowScript(traitBool(srv.Traits, TraitReverseProxyEnabled)), Timeout: nomadFirewallTimeout},
+		{Stage: "starting", Message: "starting Nomad client service", Command: adapter.NomadServiceRestartScript(), Timeout: nomadServiceTimeout},
+		{Stage: "verifying_local", Message: "checking local Nomad client API", Command: nomadLocalHealthScript(), Timeout: nomadLocalHealthTimeout},
+	}); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
-	_ = s.tasks.Advance(ctx, taskID, "registered", "Nomad client service restarted")
 	s.reconcileReverseProxyJobLogged(ctx, taskID)
 	_ = s.tasks.Complete(ctx, taskID, "Nomad client join requested")
 }
 
 func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
-	_ = s.tasks.Advance(ctx, taskID, "bootstrapping", "installing and starting Nomad server")
-	target := srv.Target()
-	err := s.execSudoLogged(ctx, taskID, target, s.bootstrapScript(srv, adapter), nomadInstallTimeout)
+	if err := s.runBootstrapServerSteps(ctx, taskID, srv, adapter); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.waitForPanelNomadReachability(ctx, taskID); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	s.reconcileReverseProxyJobLogged(ctx, taskID)
+	_ = s.tasks.Complete(ctx, taskID, "Nomad server bootstrap requested")
+}
+
+func (s *JoinService) runBootstrapServerSteps(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) error {
+	return s.runNomadCommandSteps(ctx, taskID, srv.Target(), []nomadCommandStep{
+		{Stage: "installing_nomad", Message: "checking or installing Nomad", Command: adapter.NomadInstallScript(), Timeout: nomadInstallTimeout},
+		{Stage: "preparing_runtime", Message: "checking Docker and Nomad CNI runtime", Command: adapter.NomadRuntimePrereqsScript(), Timeout: nomadInstallTimeout},
+		{Stage: "configuring", Message: "writing Nomad server configuration", Command: s.bootstrapConfigScript(srv), Timeout: nomadMaintenanceTimeout},
+		{Stage: "opening_firewall", Message: "opening local Nomad firewall ports", Command: nomadUFWAllowScript(traitBool(srv.Traits, TraitReverseProxyEnabled)), Timeout: nomadFirewallTimeout},
+		{Stage: "starting", Message: "starting Nomad server service", Command: adapter.NomadServiceRestartScript(), Timeout: nomadServiceTimeout},
+		{Stage: "verifying_local", Message: "checking local Nomad server API", Command: nomadLocalHealthScript(), Timeout: nomadLocalHealthTimeout},
+	})
+}
+
+func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, bootstrap server.Server, adapter linux.DistroAdapter) {
+	_ = s.tasks.Start(ctx, taskID)
+	managed, err := s.panelManagedServers(ctx, bootstrap)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
-	_ = s.tasks.Advance(ctx, taskID, "started", "Nomad server service restarted")
+	if err := s.tasks.Advance(ctx, taskID, "resetting_nodes", "resetting existing Panel-managed Nomad nodes"); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	for _, srv := range managed {
+		if srv.ID == bootstrap.ID {
+			continue
+		}
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "resetting Nomad on "+firstNonEmpty(srv.Name, srv.ID, srv.Host))
+		nodeAdapter, _ := linux.AdapterFor(srv.OS)
+		if err := s.execSudoLogged(ctx, taskID, srv.Target(), removeNodeScript(nodeAdapter), nomadMaintenanceTimeout); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+	}
+	if err := s.runBootstrapServerSteps(ctx, taskID, bootstrap, adapter); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.waitForPanelNomadReachability(ctx, taskID); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	s.reconcileReverseProxyJobLogged(ctx, taskID)
-	_ = s.tasks.Complete(ctx, taskID, "Nomad server bootstrap requested")
+	_ = s.tasks.Complete(ctx, taskID, "Nomad cluster rebuild requested")
+}
+
+func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv server.Server, setter addressSetter) {
+	_ = s.tasks.Start(ctx, taskID)
+	previous := s.currentConfig().Address
+	next := "https://" + net.JoinHostPort(srv.Host, "4646")
+	_ = s.tasks.Advance(ctx, taskID, "switching", "switching Nomad server address")
+	s.setNomadAddress(setter, next)
+	if err := s.waitForPanelNomadReachability(ctx, taskID); err != nil {
+		if strings.TrimSpace(previous) != "" {
+			s.setNomadAddress(setter, previous)
+		}
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "Nomad server switched")
 }
 
 func (s *JoinService) reconcileReverseProxyJobLogged(ctx context.Context, taskID string) {
@@ -418,6 +661,137 @@ func (s *JoinService) runRemoveNode(ctx context.Context, taskID string, srv serv
 	_ = s.tasks.Complete(ctx, taskID, "Nomad node remove requested")
 }
 
+type nomadCommandStep struct {
+	Stage   string
+	Message string
+	Command string
+	Timeout time.Duration
+}
+
+func (s *JoinService) runNomadCommandSteps(ctx context.Context, taskID string, target sshx.Target, steps []nomadCommandStep) error {
+	for _, step := range steps {
+		if strings.TrimSpace(step.Command) == "" {
+			continue
+		}
+		timeout := step.Timeout
+		if timeout == 0 {
+			timeout = nomadMaintenanceTimeout
+		}
+		if err := s.tasks.Advance(ctx, taskID, step.Stage, step.Message); err != nil {
+			return err
+		}
+		if err := s.execSudoLogged(ctx, taskID, target, shellScript(step.Command), timeout); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *JoinService) panelManagedServers(ctx context.Context, bootstrap server.Server) ([]server.Server, error) {
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serverByID := map[string]server.Server{}
+	for _, srv := range servers {
+		serverByID[srv.ID] = srv
+	}
+	ids := map[string]struct{}{}
+	if bootstrap.ID != "" {
+		ids[bootstrap.ID] = struct{}{}
+	}
+	latestTasks, err := s.latestNomadTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for serverID, task := range latestTasks {
+		if serverID == "" || taskCompletedRemove(task) {
+			continue
+		}
+		ids[serverID] = struct{}{}
+	}
+	nodesCtx, cancelNodes := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
+	defer cancelNodes()
+	if nodes, err := s.nomad.Nodes(nodesCtx); err == nil {
+		for _, node := range nodes {
+			serverID := serverIDForNode(node)
+			if serverID != "" {
+				ids[serverID] = struct{}{}
+			}
+		}
+	}
+	out := make([]server.Server, 0, len(ids))
+	for id := range ids {
+		if srv, ok := serverByID[id]; ok {
+			out = append(out, srv)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ID == bootstrap.ID {
+			return true
+		}
+		if out[j].ID == bootstrap.ID {
+			return false
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out, nil
+}
+
+func (s *JoinService) nomadRoleForServer(ctx context.Context, srv server.Server) string {
+	latestTasks, err := s.latestNomadTasks(ctx)
+	if err == nil {
+		if role := roleForTask(latestTasks[srv.ID]); role == ProjectedNodeRoleServer || role == ProjectedNodeRoleClient {
+			return role
+		}
+	}
+	if nomadHTTPAddressMatchesServer(s.currentConfig().Address, srv) {
+		return ProjectedNodeRoleServer
+	}
+	return ProjectedNodeRoleUnknown
+}
+
+func (s *JoinService) waitForPanelNomadReachability(ctx context.Context, taskID string) error {
+	client, ok := s.nomad.(statusClient)
+	if !ok {
+		return nil
+	}
+	cfg := s.currentConfig()
+	address := strings.TrimSpace(cfg.Address)
+	if err := s.tasks.Advance(ctx, taskID, "verifying_panel", nomadPanelReachabilityRetryMessage); err != nil {
+		return err
+	}
+	if address != "" {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "Panel will connect to "+address+". If this check fails, open TCP 4646 from the Panel host to the Nomad server.")
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, nomadPanelReachabilityTimeout)
+	defer cancel()
+	var lastErr error
+	for {
+		status, err := client.Status(checkCtx)
+		if err == nil && status.Connected {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "Panel can reach the Nomad API.")
+			return nil
+		}
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = fmt.Errorf("Nomad status endpoint did not report connected")
+		}
+		select {
+		case <-checkCtx.Done():
+			if lastErr == nil {
+				lastErr = checkCtx.Err()
+			}
+			if address == "" {
+				return fmt.Errorf("Panel cannot reach the Nomad API from this host. Open TCP 4646 from the Panel host to the Nomad server and retry. Last error: %w", lastErr)
+			}
+			return fmt.Errorf("Panel cannot reach the Nomad API at %s from this host. Open TCP 4646 from the Panel host to the Nomad server and retry. Last error: %w", address, lastErr)
+		case <-time.After(nomadPanelReachabilityRetryInterval):
+		}
+	}
+}
+
 func (s *JoinService) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string, timeout time.Duration) error {
 	stdoutStreamed := false
 	stderrStreamed := false
@@ -450,14 +824,11 @@ func (s *JoinService) appendCommandOutput(ctx context.Context, taskID, stream, o
 	}
 }
 
-func (s *JoinService) joinScript(srv server.Server, adapter linux.DistroAdapter, rpc string) string {
+func (s *JoinService) joinConfigScript(srv server.Server, rpc string) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
 	cfg := s.currentConfig()
 	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
-	return fmt.Sprintf(`set -eu
-%s
-%s
-%s
+	return fmt.Sprintf(`%s
 %s
 cat >/etc/nomad.d/panel-client.hcl <<'EOF'
 name = "%s"
@@ -491,20 +862,14 @@ client {
   }
 }
 EOF
-%s
-%s
-nomad version
-`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), nomadUFWAllowScript(), adapter.NomadServiceRestartScript())
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
-func (s *JoinService) bootstrapScript(srv server.Server, adapter linux.DistroAdapter) string {
+func (s *JoinService) bootstrapConfigScript(srv server.Server) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
 	cfg := s.currentConfig()
 	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
-	return fmt.Sprintf(`set -eu
-%s
-%s
-%s
+	return fmt.Sprintf(`%s
 %s
 cat >/etc/nomad.d/panel-server.hcl <<'EOF'
 name = "%s"
@@ -538,10 +903,7 @@ client {
   }
 }
 EOF
-%s
-%s
-nomad version
-`, adapter.NomadInstallScript(), adapter.NomadRuntimePrereqsScript(), resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)), nomadUFWAllowScript(), adapter.NomadServiceRestartScript())
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
@@ -551,7 +913,9 @@ func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
 		return configured
 	}
 	if client, ok := s.nomad.(statusClient); ok {
-		status, err := client.Status(ctx)
+		statusCtx, cancel := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
+		defer cancel()
+		status, err := client.Status(statusCtx)
 		if err == nil && status.Connected {
 			if rpc := normalizeNomadRPCAddress(status.Leader); rpc != "" && !isLocalRPCAddress(rpc) {
 				return rpc
@@ -568,35 +932,90 @@ func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
 }
 
 func (s *JoinService) latestCompletedBootstrapTask(ctx context.Context) tasks.Task {
-	latestTasks, err := s.latestNomadTasks(ctx)
-	if err != nil {
-		return tasks.Task{}
-	}
 	var latest tasks.Task
-	for _, task := range latestTasks {
-		if task.Type != TaskTypeServerBootstrap || task.Status != tasks.StatusCompleted {
+	for _, taskType := range []string{TaskTypeServerBootstrap, TaskTypeClusterRebuild, TaskTypeServerSwitch} {
+		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, Limit: 200})
+		if err != nil {
 			continue
 		}
-		if latest.ID == "" || task.CreatedAt.After(latest.CreatedAt) {
-			latest = task
+		for _, task := range result.Items {
+			if task.Status != tasks.StatusCompleted {
+				continue
+			}
+			if latest.ID == "" || task.CreatedAt.After(latest.CreatedAt) {
+				latest = task
+			}
 		}
 	}
 	return latest
 }
 
 func resetNomadConfigScript() string {
-	return `rm -rf /etc/nomad.d/tls
+	return `echo "[panel] resetting Panel-managed Nomad configuration"
+rm -rf /etc/nomad.d/tls
 install -d -m 0755 /etc/nomad.d /etc/nomad.d/tls /opt/nomad/data
 find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' -o -name '*.pem' \) -delete`
 }
 
-func nomadUFWAllowScript() string {
+func nomadUFWAllowScript(reverseProxy bool) string {
+	rules := []string{
+		"  ufw allow 4646/tcp",
+		"  ufw allow 4647/tcp",
+		"  ufw allow 4648/tcp",
+		"  ufw allow 4648/udp",
+	}
+	if reverseProxy {
+		for _, port := range reverseProxyTCPPorts {
+			rules = append(rules, "  ufw allow "+strconv.Itoa(port)+"/tcp")
+		}
+	}
 	return `if command -v ufw >/dev/null 2>&1; then
-  ufw allow 4646/tcp
-  ufw allow 4647/tcp
-  ufw allow 4648/tcp
-  ufw allow 4648/udp
+  echo "[panel] allowing Nomad ports in UFW"
+` + strings.Join(rules, "\n") + `
+else
+  echo "[panel] UFW is not installed; skipping local UFW rules"
 fi`
+}
+
+func reverseProxyUFWAllowScript() string {
+	rules := make([]string, 0, len(reverseProxyTCPPorts))
+	for _, port := range reverseProxyTCPPorts {
+		rules = append(rules, "  ufw allow "+strconv.Itoa(port)+"/tcp")
+	}
+	return `set -eu
+if command -v ufw >/dev/null 2>&1; then
+` + strings.Join(rules, "\n") + `
+fi`
+}
+
+func nomadLocalHealthScript() string {
+	return `export NOMAD_ADDR="https://127.0.0.1:4646"
+export NOMAD_CACERT="/etc/nomad.d/tls/ca.pem"
+export NOMAD_CLIENT_CERT="/etc/nomad.d/tls/agent.pem"
+export NOMAD_CLIENT_KEY="/etc/nomad.d/tls/agent-key.pem"
+echo "[panel] waiting for Nomad HTTP API on 127.0.0.1:4646"
+attempts=0
+while ! nomad status >/dev/null 2>&1; do
+  attempts=$((attempts + 1))
+  if [ "$attempts" -ge 30 ]; then
+    echo "[panel] Nomad HTTP API did not become ready on 127.0.0.1:4646" >&2
+    systemctl status nomad --no-pager -l >&2 || true
+    journalctl -u nomad -n 80 --no-pager >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
+echo "[panel] Nomad HTTP API is responding locally"`
+}
+
+func shellScript(parts ...string) string {
+	out := []string{"set -eu"}
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			out = append(out, strings.TrimSpace(part))
+		}
+	}
+	return strings.Join(out, "\n") + "\n"
 }
 
 func removeNodeScript(adapter linux.DistroAdapter) string {
@@ -633,7 +1052,14 @@ func (s *JoinService) reconcileReverseProxyJob(ctx context.Context) error {
 			return err
 		}
 	}
-	job, enabled := s.renderReverseProxyJob(servers, appConfigs)
+	var certs []ReverseProxyCertificate
+	if s.certSource != nil {
+		certs, err = s.certSource.ReverseProxyCertificates(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	job, enabled := s.renderReverseProxyJob(servers, appConfigs, certs)
 	if !enabled {
 		_, err := client.StopJob(ctx, reverseProxyJobID, true)
 		if err != nil && !strings.Contains(err.Error(), "404") {
@@ -653,9 +1079,12 @@ func (s *JoinService) reconcileReverseProxyJob(ctx context.Context) error {
 
 const reverseProxyJobID = "panel-nginx"
 
-func (s *JoinService) renderReverseProxyJob(servers []server.Server, appConfigs []ApplicationReverseProxyConfig) (Job, bool) {
+var reverseProxyTCPPorts = []int{80, 443}
+
+func (s *JoinService) renderReverseProxyJob(servers []server.Server, appConfigs []ApplicationReverseProxyConfig, certs []ReverseProxyCertificate) (Job, bool) {
 	cfg := s.currentConfig()
 	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
+	certIndex := newReverseProxyCertificateIndex(certs)
 	job := Job{
 		ID:          reverseProxyJobID,
 		Name:        "panel-nginx",
@@ -672,7 +1101,8 @@ func (s *JoinService) renderReverseProxyJob(servers []server.Server, appConfigs 
 		if !traitBool(srv.Traits, TraitReverseProxyEnabled) {
 			continue
 		}
-		appSnippets := reverseProxyAppSnippetsForServer(srv.ID, appConfigs)
+		tlsResolver := newReverseProxyTLSResolver(certIndex)
+		appSnippets := reverseProxyAppSnippetsForServer(srv.ID, appConfigs, tlsResolver)
 		staticSites := reverseProxyStaticSitesFromTraits(srv.Traits)
 		templates := []Template{{
 			EmbeddedTmpl: renderNginxBaseConfig(),
@@ -695,12 +1125,13 @@ func (s *JoinService) renderReverseProxyJob(servers []server.Server, appConfigs 
 		}
 		if len(staticSites) > 0 {
 			templates = append(templates, Template{
-				EmbeddedTmpl: renderNginxStaticConfig(staticSites),
+				EmbeddedTmpl: renderNginxStaticConfig(staticSites, tlsResolver),
 				DestPath:     "local/nginx.conf.d/panel-static.conf",
 				Perms:        "0644",
 				ChangeMode:   "restart",
 			})
 		}
+		templates = append(templates, tlsResolver.Templates()...)
 		group := TaskGroup{
 			Name:  "nginx-" + safeNodeName(srv.ID),
 			Count: 1,
@@ -734,7 +1165,7 @@ type nginxSnippet struct {
 	Content string
 }
 
-func reverseProxyAppSnippetsForServer(serverID string, apps []ApplicationReverseProxyConfig) []nginxSnippet {
+func reverseProxyAppSnippetsForServer(serverID string, apps []ApplicationReverseProxyConfig, tlsResolver *reverseProxyTLSResolver) []nginxSnippet {
 	out := []nginxSnippet{}
 	for _, app := range apps {
 		if len(app.Routes) == 0 || !applicationTargetsServer(app, serverID) {
@@ -742,7 +1173,7 @@ func reverseProxyAppSnippetsForServer(serverID string, apps []ApplicationReverse
 		}
 		out = append(out, nginxSnippet{
 			Name:    reverseProxyAppConfigName(app),
-			Content: renderNginxProxyConfig(app.ApplicationName, app.Routes),
+			Content: renderNginxProxyConfig(app.ApplicationName, app.Routes, tlsResolver),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -799,64 +1230,261 @@ http {
 `
 }
 
-func renderNginxProxyConfig(appName string, routes []ReverseProxyRoute) string {
+func renderNginxProxyConfig(appName string, routes []ReverseProxyRoute, tlsResolver *reverseProxyTLSResolver) string {
 	var b strings.Builder
 	b.WriteString("# Managed by Panel. Application: ")
 	b.WriteString(appName)
 	b.WriteString("\n")
 	for _, route := range routes {
+		if tls, ok := tlsResolver.Match(route.Domain); ok {
+			writeNginxHTTPSRedirectServer(&b, route.Domain)
+			b.WriteString("\nserver {\n")
+			b.WriteString("    listen 443 ssl;\n")
+			b.WriteString("    server_name ")
+			b.WriteString(route.Domain)
+			b.WriteString(";\n")
+			writeNginxTLSDirectives(&b, tls)
+			writeNginxProxyLocations(&b, route)
+			b.WriteString("}\n")
+			continue
+		}
 		b.WriteString("\nserver {\n")
 		b.WriteString("    listen 80;\n")
 		b.WriteString("    server_name ")
 		b.WriteString(route.Domain)
 		b.WriteString(";\n")
-		for _, item := range route.Paths {
-			b.WriteString("\n    location ")
-			b.WriteString(item.Path)
-			b.WriteString(" {\n")
-			b.WriteString("        proxy_pass http://127.0.0.1:")
-			b.WriteString(strconv.Itoa(route.TargetPort))
-			b.WriteString(";\n")
-			b.WriteString("        proxy_set_header Host $host;\n")
-			b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
-			b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
-			b.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
-			if item.WebSocket {
-				b.WriteString("        proxy_http_version 1.1;\n")
-				b.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
-				b.WriteString("        proxy_set_header Connection $connection_upgrade;\n")
-			}
-			b.WriteString("    }\n")
-		}
+		writeNginxProxyLocations(&b, route)
 		b.WriteString("}\n")
 	}
 	return b.String()
 }
 
-func renderNginxStaticConfig(staticSites []ReverseProxyStaticSite) string {
+func renderNginxStaticConfig(staticSites []ReverseProxyStaticSite, tlsResolver *reverseProxyTLSResolver) string {
 	var b strings.Builder
 	b.WriteString("# Managed by Panel. Node static sites.\n")
 	for index, site := range staticSites {
 		root := "/panel-static/static-" + strconv.Itoa(index)
-		b.WriteString("\nserver {\n")
-		b.WriteString("    listen 80;\n")
-		b.WriteString("    server_name ")
-		b.WriteString(site.Domain)
-		b.WriteString(";\n")
-		b.WriteString("    root ")
-		b.WriteString(root)
-		b.WriteString(";\n")
-		b.WriteString("    index ")
-		b.WriteString(site.Index)
-		b.WriteString(";\n")
-		b.WriteString("    location / {\n")
-		b.WriteString("        try_files $uri $uri/ /")
-		b.WriteString(firstIndex(site.Index))
-		b.WriteString(";\n")
-		b.WriteString("    }\n")
-		b.WriteString("}\n")
+		if tls, ok := tlsResolver.Match(site.Domain); ok {
+			writeNginxHTTPSRedirectServer(&b, site.Domain)
+			writeNginxStaticServer(&b, site, root, "443 ssl", tls)
+			continue
+		}
+		writeNginxStaticServer(&b, site, root, "80", nil)
 	}
 	return b.String()
+}
+
+func writeNginxProxyLocations(b *strings.Builder, route ReverseProxyRoute) {
+	for _, item := range route.Paths {
+		b.WriteString("\n    location ")
+		b.WriteString(item.Path)
+		b.WriteString(" {\n")
+		b.WriteString("        proxy_pass http://127.0.0.1:")
+		b.WriteString(strconv.Itoa(route.TargetPort))
+		b.WriteString(";\n")
+		b.WriteString("        proxy_set_header Host $host;\n")
+		b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
+		b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+		b.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
+		if item.WebSocket {
+			b.WriteString("        proxy_http_version 1.1;\n")
+			b.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
+			b.WriteString("        proxy_set_header Connection $connection_upgrade;\n")
+		}
+		b.WriteString("    }\n")
+	}
+}
+
+func writeNginxHTTPSRedirectServer(b *strings.Builder, domain string) {
+	b.WriteString("\nserver {\n")
+	b.WriteString("    listen 80;\n")
+	b.WriteString("    server_name ")
+	b.WriteString(domain)
+	b.WriteString(";\n")
+	b.WriteString("    return 301 https://$host$request_uri;\n")
+	b.WriteString("}\n")
+}
+
+func writeNginxTLSDirectives(b *strings.Builder, tls *reverseProxyTLSConfig) {
+	b.WriteString("\n")
+	b.WriteString("    ssl_certificate ")
+	b.WriteString(tls.CertificatePath)
+	b.WriteString(";\n")
+	b.WriteString("    ssl_certificate_key ")
+	b.WriteString(tls.PrivateKeyPath)
+	b.WriteString(";\n")
+	b.WriteString("    ssl_protocols TLSv1.2 TLSv1.3;\n")
+}
+
+func writeNginxStaticServer(b *strings.Builder, site ReverseProxyStaticSite, root string, listen string, tls *reverseProxyTLSConfig) {
+	b.WriteString("\nserver {\n")
+	b.WriteString("    listen ")
+	b.WriteString(listen)
+	b.WriteString(";\n")
+	b.WriteString("    server_name ")
+	b.WriteString(site.Domain)
+	b.WriteString(";\n")
+	if tls != nil {
+		writeNginxTLSDirectives(b, tls)
+	}
+	b.WriteString("    root ")
+	b.WriteString(root)
+	b.WriteString(";\n")
+	b.WriteString("    index ")
+	b.WriteString(site.Index)
+	b.WriteString(";\n")
+	b.WriteString("    location / {\n")
+	b.WriteString("        try_files $uri $uri/ /")
+	b.WriteString(firstIndex(site.Index))
+	b.WriteString(";\n")
+	b.WriteString("    }\n")
+	b.WriteString("}\n")
+}
+
+type reverseProxyTLSConfig struct {
+	CertificatePath string
+	PrivateKeyPath  string
+}
+
+type reverseProxyCertificateRef struct {
+	Cert     ReverseProxyCertificate
+	FileBase string
+	Domains  []string
+}
+
+type reverseProxyCertificateIndex struct {
+	refs []reverseProxyCertificateRef
+}
+
+func newReverseProxyCertificateIndex(certs []ReverseProxyCertificate) *reverseProxyCertificateIndex {
+	refs := make([]reverseProxyCertificateRef, 0, len(certs))
+	usedNames := map[string]int{}
+	for index, cert := range certs {
+		fileBase := safeNodeName(cert.ID)
+		if fileBase == "panel-node" {
+			fileBase = "cert-" + strconv.Itoa(index+1)
+		}
+		if seen := usedNames[fileBase]; seen > 0 {
+			usedNames[fileBase] = seen + 1
+			fileBase += "-" + strconv.Itoa(seen+1)
+		} else {
+			usedNames[fileBase] = 1
+		}
+		domains := make([]string, 0, len(cert.Domains))
+		for _, domain := range cert.Domains {
+			if normalized := normalizeCertificateDomain(domain); normalized != "" {
+				domains = append(domains, normalized)
+			}
+		}
+		if len(domains) == 0 || strings.TrimSpace(cert.CertificatePEM) == "" || strings.TrimSpace(cert.PrivateKeyPEM) == "" {
+			continue
+		}
+		refs = append(refs, reverseProxyCertificateRef{Cert: cert, FileBase: fileBase, Domains: domains})
+	}
+	return &reverseProxyCertificateIndex{refs: refs}
+}
+
+func (idx *reverseProxyCertificateIndex) Match(domain string) (reverseProxyCertificateRef, bool) {
+	if idx == nil {
+		return reverseProxyCertificateRef{}, false
+	}
+	normalized := normalizeCertificateDomain(domain)
+	if normalized == "" {
+		return reverseProxyCertificateRef{}, false
+	}
+	for _, ref := range idx.refs {
+		for _, certDomain := range ref.Domains {
+			if certDomain == normalized {
+				return ref, true
+			}
+		}
+	}
+	for _, ref := range idx.refs {
+		for _, certDomain := range ref.Domains {
+			if wildcardCertificateDomainMatches(certDomain, normalized) {
+				return ref, true
+			}
+		}
+	}
+	return reverseProxyCertificateRef{}, false
+}
+
+type reverseProxyTLSResolver struct {
+	index *reverseProxyCertificateIndex
+	used  map[string]reverseProxyCertificateRef
+}
+
+func newReverseProxyTLSResolver(index *reverseProxyCertificateIndex) *reverseProxyTLSResolver {
+	return &reverseProxyTLSResolver{index: index, used: map[string]reverseProxyCertificateRef{}}
+}
+
+func (r *reverseProxyTLSResolver) Match(domain string) (*reverseProxyTLSConfig, bool) {
+	if r == nil || r.index == nil {
+		return nil, false
+	}
+	ref, ok := r.index.Match(domain)
+	if !ok {
+		return nil, false
+	}
+	r.used[ref.FileBase] = ref
+	return &reverseProxyTLSConfig{
+		CertificatePath: "/local/certs/" + ref.FileBase + ".pem",
+		PrivateKeyPath:  "/local/certs/" + ref.FileBase + "-key.pem",
+	}, true
+}
+
+func (r *reverseProxyTLSResolver) Templates() []Template {
+	if r == nil || len(r.used) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(r.used))
+	for name := range r.used {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	templates := make([]Template, 0, len(names)*2)
+	for _, name := range names {
+		ref := r.used[name]
+		templates = append(templates, Template{
+			EmbeddedTmpl: strings.TrimSpace(ref.Cert.CertificatePEM) + "\n",
+			DestPath:     "local/certs/" + name + ".pem",
+			Perms:        "0644",
+			ChangeMode:   "restart",
+		}, Template{
+			EmbeddedTmpl: strings.TrimSpace(ref.Cert.PrivateKeyPEM) + "\n",
+			DestPath:     "local/certs/" + name + "-key.pem",
+			Perms:        "0600",
+			ChangeMode:   "restart",
+		})
+	}
+	return templates
+}
+
+func normalizeCertificateDomain(domain string) string {
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	if strings.HasPrefix(domain, "*.") {
+		base := strings.TrimPrefix(domain, "*.")
+		if base == "" || strings.Contains(base, "*") {
+			return ""
+		}
+		return "*." + base
+	}
+	if strings.Contains(domain, "*") {
+		return ""
+	}
+	return domain
+}
+
+func wildcardCertificateDomainMatches(pattern string, domain string) bool {
+	if !strings.HasPrefix(pattern, "*.") {
+		return false
+	}
+	base := strings.TrimPrefix(pattern, "*.")
+	if !strings.HasSuffix(domain, "."+base) {
+		return false
+	}
+	prefix := strings.TrimSuffix(domain, "."+base)
+	return prefix != "" && !strings.Contains(prefix, ".")
 }
 
 func nginxStaticMounts(sites []ReverseProxyStaticSite) []map[string]any {
@@ -985,6 +1613,41 @@ func normalizeNomadRPCAddress(address string) string {
 		return net.JoinHostPort(host, port)
 	}
 	return net.JoinHostPort(address, "4647")
+}
+
+func normalizeProjectedNodeRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case ProjectedNodeRoleServer:
+		return ProjectedNodeRoleServer
+	case ProjectedNodeRoleClient:
+		return ProjectedNodeRoleClient
+	case ProjectedNodeRoleUnknown:
+		return ProjectedNodeRoleUnknown
+	default:
+		return ""
+	}
+}
+
+func nomadHTTPAddressMatchesServer(address string, srv server.Server) bool {
+	parsed, err := url.Parse(strings.TrimSpace(address))
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return sameHost(parsed.Hostname(), srv.Host)
+}
+
+func sameHost(left, right string) bool {
+	left = strings.Trim(strings.ToLower(strings.TrimSpace(left)), "[]")
+	right = strings.Trim(strings.ToLower(strings.TrimSpace(right)), "[]")
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	leftIP := net.ParseIP(left)
+	rightIP := net.ParseIP(right)
+	return leftIP != nil && rightIP != nil && leftIP.Equal(rightIP)
 }
 
 func isLocalRPCAddress(address string) bool {

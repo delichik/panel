@@ -64,6 +64,41 @@ func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *te
 	}
 }
 
+func TestReverseProxyCertificatesReturnsOnlyIssuedPEM(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	result, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "@", Scope: ScopeWildcard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Get(ctx, result.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunIssueTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "api"}); err != nil {
+		t.Fatal(err)
+	}
+
+	certs, err := svc.ReverseProxyCertificates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(certs) != 1 || certs[0].ID != result.Certificate.ID {
+		t.Fatalf("expected only issued cert, got %#v", certs)
+	}
+	if certs[0].CertificatePEM != string(fake.bundle.CertificatePEM) || certs[0].PrivateKeyPEM != string(fake.bundle.PrivateKeyPEM) {
+		t.Fatalf("reverse proxy cert PEM mismatch: %#v", certs[0])
+	}
+	if !equalStrings(certs[0].Domains, []string{"example.com", "*.example.com"}) {
+		t.Fatalf("reverse proxy cert domains = %#v", certs[0].Domains)
+	}
+}
+
 func TestIssueRejectsInvalidVariableName(t *testing.T) {
 	svc, _, closeStore := newTestService(t)
 	defer closeStore()

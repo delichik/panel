@@ -124,14 +124,15 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 
 	svc.runJoinClient(ctx, task.ID, srv, mustNomadAdapter(t, svc, srv))
 
-	if len(fake.sudoCommands) != 1 {
-		t.Fatalf("expected one sudo command, got %#v", fake.sudoCommands)
+	if len(fake.sudoCommands) != 6 {
+		t.Fatalf("expected staged sudo commands, got %#v", fake.sudoCommands)
 	}
-	command := fake.sudoCommands[0]
+	command := joinedSudoCommands(fake.sudoCommands)
+	assertNoDestructiveUFWCommands(t, command)
 	for _, want := range []string{
 		"command -v nomad",
-		"apt-get install -y docker.io",
-		"apt-get install -y containernetworking-plugins",
+		"apt_get install -y docker.io",
+		"apt_get install -y containernetworking-plugins",
 		"cat >/etc/nomad.d/tls/ca.pem <<'EOF'",
 		"verify_https_client = true",
 		`ca_file = "/etc/nomad.d/tls/ca.pem"`,
@@ -149,6 +150,8 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 		"ufw allow 4648/udp",
 		"systemctl restart nomad",
 		"systemctl is-active --quiet nomad",
+		"NOMAD_ADDR=\"https://127.0.0.1:4646\"",
+		"nomad status",
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("join script missing %q:\n%s", want, command)
@@ -157,8 +160,8 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 	if strings.Contains(command, "\nserver_join {") {
 		t.Fatalf("join script should not write a top-level server_join block:\n%s", command)
 	}
-	if fake.sudoTimeouts[0] != nomadInstallTimeout {
-		t.Fatalf("expected join timeout %s, got %s", nomadInstallTimeout, fake.sudoTimeouts[0])
+	if fake.sudoTimeouts[0] != nomadInstallTimeout || fake.sudoTimeouts[1] != nomadInstallTimeout || fake.sudoTimeouts[2] != nomadMaintenanceTimeout || fake.sudoTimeouts[3] != nomadFirewallTimeout || fake.sudoTimeouts[4] != nomadServiceTimeout || fake.sudoTimeouts[5] != nomadLocalHealthTimeout {
+		t.Fatalf("unexpected join timeouts: %#v", fake.sudoTimeouts)
 	}
 	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
 }
@@ -187,11 +190,49 @@ func TestRunJoinClientInfersBootstrappedServerWhenConfigIsLocal(t *testing.T) {
 
 	svc.runJoinClient(ctx, task.ID, worker, mustNomadAdapter(t, svc, worker))
 
-	if len(fake.sudoCommands) != 1 {
-		t.Fatalf("expected one sudo command, got %#v", fake.sudoCommands)
+	if len(fake.sudoCommands) != 6 {
+		t.Fatalf("expected staged sudo commands, got %#v", fake.sudoCommands)
 	}
-	if command := fake.sudoCommands[0]; !strings.Contains(command, `servers = ["10.0.0.20:4647"]`) {
+	if command := joinedSudoCommands(fake.sudoCommands); !strings.Contains(command, `servers = ["10.0.0.20:4647"]`) {
 		t.Fatalf("expected join script to use bootstrapped server host:\n%s", command)
+	}
+}
+
+func TestRunJoinClientAllowsReverseProxyPortWhenEnabled(t *testing.T) {
+	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.42")
+	traits := map[string]string{}
+	for key, value := range srv.Traits {
+		traits[key] = value
+	}
+	traits[TraitReverseProxyEnabled] = "true"
+	srv, err := svc.servers.Update(ctx, srv.ID, server.SaveRequest{
+		Name:         srv.Name,
+		Host:         srv.Host,
+		Port:         srv.Port,
+		SSHUsername:  srv.SSHUsername,
+		CredentialID: srv.CredentialID,
+		Traits:       traits,
+		Notes:        srv.Notes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeClientJoin, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Summary: "Joining server to Nomad"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.runJoinClient(ctx, task.ID, srv, mustNomadAdapter(t, svc, srv))
+
+	command := joinedSudoCommands(fake.sudoCommands)
+	assertNoDestructiveUFWCommands(t, command)
+	for _, want := range []string{"ufw allow 80/tcp", "ufw allow 443/tcp"} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("join script should allow reverse proxy port %q:\n%s", want, command)
+		}
 	}
 }
 
@@ -233,7 +274,12 @@ func TestRunJoinClientStreamsScriptOutputBeforeCommandReturns(t *testing.T) {
 	}
 	fake.stdoutLines = []string{"installing nomad", "nomad started"}
 	fake.stderrLines = []string{"warning"}
+	checkedDuringRun := false
 	fake.duringRun = func() {
+		if checkedDuringRun {
+			return
+		}
+		checkedDuringRun = true
 		logs, _, err := svc.tasks.Logs(ctx, task.ID, 0)
 		if err != nil {
 			t.Fatal(err)
@@ -290,19 +336,21 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 	if nomadFake.address != "https://10.0.0.20:4646" {
 		t.Fatalf("expected runtime Nomad address to point at bootstrapped server, got %q", nomadFake.address)
 	}
-	if len(execFake.sudoCommands) != 1 {
-		t.Fatalf("expected one sudo command, got %#v", execFake.sudoCommands)
+	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
+	if len(execFake.sudoCommands) != 6 {
+		t.Fatalf("expected staged sudo commands, got %#v", execFake.sudoCommands)
 	}
-	if execFake.sudoTimeouts[0] != nomadInstallTimeout {
-		t.Fatalf("expected bootstrap timeout %s, got %s", nomadInstallTimeout, execFake.sudoTimeouts[0])
+	if execFake.sudoTimeouts[0] != nomadInstallTimeout || execFake.sudoTimeouts[1] != nomadInstallTimeout || execFake.sudoTimeouts[2] != nomadMaintenanceTimeout || execFake.sudoTimeouts[3] != nomadFirewallTimeout || execFake.sudoTimeouts[4] != nomadServiceTimeout || execFake.sudoTimeouts[5] != nomadLocalHealthTimeout {
+		t.Fatalf("unexpected bootstrap timeouts: %#v", execFake.sudoTimeouts)
 	}
-	command := execFake.sudoCommands[0]
+	command := joinedSudoCommands(execFake.sudoCommands)
+	assertNoDestructiveUFWCommands(t, command)
 	for _, want := range []string{
 		"server {",
 		"bootstrap_expect = 1",
 		"client {",
-		"apt-get install -y docker.io",
-		"apt-get install -y containernetworking-plugins",
+		"apt_get install -y docker.io",
+		"apt_get install -y containernetworking-plugins",
 		"cat >/etc/nomad.d/tls/agent.pem <<'EOF'",
 		"verify_https_client = true",
 		"verify_server_hostname = false",
@@ -317,12 +365,161 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 		"ufw allow 4648/udp",
 		"systemctl restart nomad",
 		"systemctl is-active --quiet nomad",
+		"NOMAD_ADDR=\"https://127.0.0.1:4646\"",
+		"nomad status",
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("bootstrap script missing %q:\n%s", want, command)
 		}
 	}
+}
+
+func TestRunBootstrapServerFailsWhenPanelCannotReachNomadAPI(t *testing.T) {
+	svc, credSvc, _, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	oldTimeout := nomadPanelReachabilityTimeout
+	oldInterval := nomadPanelReachabilityRetryInterval
+	nomadPanelReachabilityTimeout = 20 * time.Millisecond
+	nomadPanelReachabilityRetryInterval = time.Millisecond
+	defer func() {
+		nomadPanelReachabilityTimeout = oldTimeout
+		nomadPanelReachabilityRetryInterval = oldInterval
+	}()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "control blocked", "10.0.0.21")
+	statusFake := &statusJoinFakeNomadClient{
+		joinFakeNomadClient: &joinFakeNomadClient{},
+		statusErr:           errors.New("dial tcp 10.0.0.21:4646: i/o timeout"),
+	}
+	svc.nomad = statusFake
+	svc.cfg.Address = "https://10.0.0.21:4646"
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeServerBootstrap, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Summary: "Bootstrapping Nomad server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.runBootstrapServer(ctx, task.ID, srv, mustNomadAdapter(t, svc, srv))
+
+	stored, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != tasks.StatusFailed || !strings.Contains(stored.Error, "Open TCP 4646") {
+		t.Fatalf("expected panel reachability failure, got %#v", stored)
+	}
+	if statusFake.statusCalls == 0 {
+		t.Fatal("expected Nomad status to be checked from Panel")
+	}
+	logs, _, err := svc.tasks.Logs(ctx, task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, log := range logs {
+		if strings.Contains(log.Line, "Panel will connect to https://10.0.0.21:4646") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected panel connectivity hint in logs, got %#v", logs)
+	}
+}
+
+func TestRedeployClientBypassesManagedCandidateFilter(t *testing.T) {
+	svc, credSvc, nomadFake, execFake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker redeploy", "10.0.0.22")
+	nomadFake.nodes = []NodeListItem{{ID: "node-worker", Meta: map[string]string{"panel_server_id": srv.ID}}}
+	execFake.sudoCalled = make(chan struct{}, 1)
+
+	task, err := svc.RedeployNode(ctx, RedeployNodeInput{ServerID: srv.ID, Role: ProjectedNodeRoleClient})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-execFake.sudoCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for redeploy sudo command")
+	}
 	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
+
+	if task.Type != TaskTypeClientJoin {
+		t.Fatalf("expected client join task type, got %#v", task)
+	}
+	if !strings.Contains(joinedSudoCommands(execFake.sudoCommands), "enabled = false") {
+		t.Fatalf("expected client configuration in redeploy script: %#v", execFake.sudoCommands)
+	}
+}
+
+func TestRebuildClusterResetsManagedServersAndBootstrapsSelectedServer(t *testing.T) {
+	svc, credSvc, _, execFake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "new control", "10.0.0.23")
+	worker := createJoinTestServer(t, svc.servers, credSvc, ctx, "old worker", "10.0.0.24")
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeClientJoin,
+		ServerID:     worker.ID,
+		ResourceType: "server",
+		ResourceID:   worker.ID,
+		Status:       tasks.StatusCompleted,
+		Summary:      "Nomad client join requested",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	execFake.sudoCalled = make(chan struct{}, 1)
+
+	task, err := svc.RebuildCluster(ctx, RebuildClusterInput{ServerID: control.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-execFake.sudoCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for rebuild sudo command")
+	}
+	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
+
+	commands := joinedSudoCommands(execFake.sudoCommands)
+	if !strings.Contains(commands, "systemctl disable --now nomad") {
+		t.Fatalf("expected rebuild to reset existing managed nodes:\n%s", commands)
+	}
+	if !strings.Contains(commands, "bootstrap_expect = 1") || !strings.Contains(commands, "panel_server_id = \""+control.ID+"\"") {
+		t.Fatalf("expected rebuild to bootstrap selected server:\n%s", commands)
+	}
+}
+
+func TestSwitchServerRestoresPreviousAddressWhenPanelCannotReachNomad(t *testing.T) {
+	svc, credSvc, _, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	oldTimeout := nomadPanelReachabilityTimeout
+	oldInterval := nomadPanelReachabilityRetryInterval
+	nomadPanelReachabilityTimeout = 20 * time.Millisecond
+	nomadPanelReachabilityRetryInterval = time.Millisecond
+	defer func() {
+		nomadPanelReachabilityTimeout = oldTimeout
+		nomadPanelReachabilityRetryInterval = oldInterval
+	}()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "blocked switch", "10.0.0.25")
+	statusFake := &statusJoinFakeNomadClient{
+		joinFakeNomadClient: &joinFakeNomadClient{},
+		statusErr:           errors.New("dial tcp 10.0.0.25:4646: i/o timeout"),
+	}
+	svc.nomad = statusFake
+	previous := svc.cfg.Address
+
+	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: srv.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusFailed)
+
+	if svc.cfg.Address != previous || statusFake.address != previous {
+		t.Fatalf("expected switch failure to restore %q, got cfg=%q fake=%q", previous, svc.cfg.Address, statusFake.address)
+	}
 }
 
 func TestRemoveManagedNodeStopsServiceAndPurgesNomadNode(t *testing.T) {
@@ -378,7 +575,7 @@ func TestRemoveUnmanagedNodePurgesOnlyNomadNode(t *testing.T) {
 }
 
 func TestUpdateReverseProxyStoresNodeConfigAndRegistersNginxJob(t *testing.T) {
-	svc, credSvc, nomadFake, _, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, execFake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "edge one", "10.0.0.40")
@@ -408,6 +605,10 @@ func TestUpdateReverseProxyStoresNodeConfigAndRegistersNginxJob(t *testing.T) {
 	if !traitBool(updated.Traits, TraitReverseProxyEnabled) || !traitBool(updated.Traits, TraitReverseProxyStaticFiles) {
 		t.Fatalf("reverse proxy traits = %#v", updated.Traits)
 	}
+	if len(execFake.sudoCommands) != 1 || !strings.Contains(execFake.sudoCommands[0], "ufw allow 80/tcp") || !strings.Contains(execFake.sudoCommands[0], "ufw allow 443/tcp") {
+		t.Fatalf("expected reverse proxy firewall rule, got %#v", execFake.sudoCommands)
+	}
+	assertNoDestructiveUFWCommands(t, execFake.sudoCommands[0])
 	if nomadFake.registeredJob.ID != reverseProxyJobID || len(nomadFake.registeredJob.TaskGroups) != 1 {
 		t.Fatalf("registered job = %#v", nomadFake.registeredJob)
 	}
@@ -422,12 +623,100 @@ func TestUpdateReverseProxyStoresNodeConfigAndRegistersNginxJob(t *testing.T) {
 			t.Fatalf("nginx config missing %q:\n%s", want, config)
 		}
 	}
+	for _, notWant := range []string{"listen 443 ssl;", "return 301 https://$host$request_uri;"} {
+		if strings.Contains(config, notWant) {
+			t.Fatalf("nginx config should remain HTTP without a matching cert; found %q:\n%s", notWant, config)
+		}
+	}
 	if !hasTemplateDest(task.Templates, "local/nginx.conf.d/panel-empty.conf") {
 		t.Fatalf("expected empty include template, got %#v", task.Templates)
 	}
 	mounts, ok := task.Config["mounts"].([]map[string]any)
 	if !ok || len(mounts) != 1 || mounts[0]["source"] != "/srv/www/static" {
 		t.Fatalf("static mounts = %#v", task.Config["mounts"])
+	}
+}
+
+func TestUpdateReverseProxyUsesHTTPSForDomainsCoveredByCertificate(t *testing.T) {
+	svc, credSvc, nomadFake, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "edge tls", "10.0.0.42")
+	svc.SetReverseProxyCertificateSource(staticReverseProxyCertificateSource{certs: []ReverseProxyCertificate{{
+		ID:             "cert_wild",
+		Domains:        []string{"example.com", "*.example.com"},
+		CertificatePEM: "CERT",
+		PrivateKeyPEM:  "KEY",
+	}}})
+	svc.SetApplicationProxySource(staticApplicationProxySource{configs: []ApplicationReverseProxyConfig{{
+		ApplicationID:   "app-1",
+		ApplicationName: "web",
+		DeploymentMode:  "all",
+		Routes: []ReverseProxyRoute{{
+			Domain:     "app.example.com",
+			TargetPort: 8080,
+			Paths:      []ReverseProxyPath{{Path: "/"}},
+		}},
+	}}})
+
+	if _, err := svc.UpdateReverseProxy(ctx, ReverseProxyInput{
+		ServerID: srv.ID,
+		Enabled:  true,
+		StaticSites: []ReverseProxyStaticSite{{
+			Domain: "static.example.com",
+			Root:   "/srv/www/static",
+			Index:  "index.html",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	task := nomadFake.registeredJob.TaskGroups[0].Tasks[0]
+	config := joinTemplateContent(task.Templates)
+	for _, want := range []string{
+		"server_name app.example.com;",
+		"server_name static.example.com;",
+		"return 301 https://$host$request_uri;",
+		"listen 443 ssl;",
+		"ssl_certificate /local/certs/cert-wild.pem;",
+		"ssl_certificate_key /local/certs/cert-wild-key.pem;",
+		"proxy_pass http://127.0.0.1:8080;",
+		"root /panel-static/static-0;",
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("TLS nginx config missing %q:\n%s", want, config)
+		}
+	}
+	for _, dest := range []string{"local/certs/cert-wild.pem", "local/certs/cert-wild-key.pem"} {
+		if !hasTemplateDest(task.Templates, dest) {
+			t.Fatalf("expected certificate template %q, got %#v", dest, task.Templates)
+		}
+	}
+}
+
+func TestReverseProxyCertificateIndexMatchesExactBeforeSingleLabelWildcard(t *testing.T) {
+	index := newReverseProxyCertificateIndex([]ReverseProxyCertificate{{
+		ID:             "wild",
+		Domains:        []string{"*.example.com"},
+		CertificatePEM: "WILD CERT",
+		PrivateKeyPEM:  "WILD KEY",
+	}, {
+		ID:             "exact",
+		Domains:        []string{"app.example.com"},
+		CertificatePEM: "EXACT CERT",
+		PrivateKeyPEM:  "EXACT KEY",
+	}})
+
+	ref, ok := index.Match("app.example.com")
+	if !ok || ref.FileBase != "exact" {
+		t.Fatalf("expected exact certificate match, got ok=%v ref=%#v", ok, ref)
+	}
+	ref, ok = index.Match("api.example.com")
+	if !ok || ref.FileBase != "wild" {
+		t.Fatalf("expected wildcard certificate match, got ok=%v ref=%#v", ok, ref)
+	}
+	if ref, ok := index.Match("deep.api.example.com"); ok {
+		t.Fatalf("wildcard should not match multi-label subdomain: %#v", ref)
 	}
 }
 
@@ -469,12 +758,36 @@ func hasTemplateDest(templates []Template, dest string) bool {
 	return false
 }
 
+func joinedSudoCommands(commands []string) string {
+	return strings.Join(commands, "\n--- command ---\n")
+}
+
+func assertNoDestructiveUFWCommands(t *testing.T, command string) {
+	t.Helper()
+	lower := strings.ToLower(command)
+	for _, verb := range []string{"delete", "reset", "deny", "default", "enable", "disable", "reload"} {
+		for _, prefix := range []string{"ufw " + verb, "ufw --force " + verb} {
+			if strings.Contains(lower, prefix) {
+				t.Fatalf("UFW script must not manage existing rules with %q:\n%s", prefix, command)
+			}
+		}
+	}
+}
+
 type staticApplicationProxySource struct {
 	configs []ApplicationReverseProxyConfig
 }
 
 func (s staticApplicationProxySource) ApplicationReverseProxyConfigs(context.Context) ([]ApplicationReverseProxyConfig, error) {
 	return s.configs, nil
+}
+
+type staticReverseProxyCertificateSource struct {
+	certs []ReverseProxyCertificate
+}
+
+func (s staticReverseProxyCertificateSource) ReverseProxyCertificates(context.Context) ([]ReverseProxyCertificate, error) {
+	return s.certs, nil
 }
 
 func waitForTaskStatus(t *testing.T, svc *tasks.Service, ctx context.Context, id, status string) {
@@ -581,6 +894,18 @@ func (f *joinFakeNomadClient) RegisterJob(_ context.Context, _ string, job Job) 
 func (f *joinFakeNomadClient) StopJob(_ context.Context, id string, _ bool) (StopResponse, error) {
 	f.stoppedJobs = append(f.stoppedJobs, id)
 	return StopResponse{}, nil
+}
+
+type statusJoinFakeNomadClient struct {
+	*joinFakeNomadClient
+	status      StatusResponse
+	statusErr   error
+	statusCalls int
+}
+
+func (f *statusJoinFakeNomadClient) Status(context.Context) (StatusResponse, error) {
+	f.statusCalls++
+	return f.status, f.statusErr
 }
 
 type joinFakeExecutor struct {

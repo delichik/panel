@@ -118,6 +118,7 @@ func New(cfg config.Config) (*App, error) {
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
 	applicationSvc.SetReverseProxyReconciler(nomadJoinSvc)
 	nomadJoinSvc.SetApplicationProxySource(applicationSvc)
+	nomadJoinSvc.SetReverseProxyCertificateSource(certSvc)
 	certSvc.SetApplicationRefresher(applicationSvc)
 	nomadJoinSvc.RestoreNomadAddressFromBootstrap(context.Background())
 	go func() {
@@ -259,6 +260,12 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			nomadH.JoinClient(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/nomad/bootstrap-server":
 			nomadH.BootstrapServer(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/nomad/redeploy-node":
+			nomadH.RedeployNode(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/nomad/rebuild-cluster":
+			nomadH.RebuildCluster(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/nomad/switch-server":
+			nomadH.SwitchServer(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/nomad/remove-node":
 			nomadH.RemoveNode(w, r)
 		case r.Method == http.MethodPut && path == "/api/v1/nomad/reverse-proxy":

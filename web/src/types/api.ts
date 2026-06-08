@@ -331,7 +331,7 @@ export interface NomadStatusDto {
 export type NomadControlPlaneStatus = 'unconfigured' | 'bootstrapping' | 'connected' | 'degraded';
 export type ProjectedNomadNodeKind = 'managed' | 'missing' | 'pending' | 'unmanaged';
 export type ProjectedNomadNodeRole = 'server' | 'client' | 'unknown';
-export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'registering' | 'removing' | 'ready' | 'down' | 'failed' | 'missing' | 'nomad_unreachable' | 'unmanaged' | string;
+export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'registering' | 'rebuilding' | 'removing' | 'ready' | 'down' | 'failed' | 'missing' | 'nomad_unreachable' | 'unmanaged' | string;
 
 export interface ProjectedNomadNodeDto {
   kind: ProjectedNomadNodeKind;

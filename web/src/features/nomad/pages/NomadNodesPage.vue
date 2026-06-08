@@ -19,7 +19,11 @@ const joining = ref(false);
 const actionLoading = ref('');
 const error = ref('');
 const joinDialog = ref(false);
+const rebuildDialog = ref(false);
+const switchDialog = ref(false);
 const selectedServerId = ref('');
+const selectedRebuildServerId = ref('');
+const selectedSwitchServerId = ref('');
 const proxyDialog = ref(false);
 const editingNode = ref<ProjectedNomadNodeDto | null>(null);
 const proxyForm = ref({
@@ -29,16 +33,39 @@ const proxyForm = ref({
 
 const nodes = computed(() => controlPlane.value?.nodes ?? []);
 const candidateServers = computed(() => controlPlane.value?.joinCandidates ?? []);
+const bootstrapServers = computed(() => controlPlane.value?.bootstrapCandidates ?? []);
 const readyCount = computed(() => nodes.value.filter((node) => node.status === 'ready').length);
 const managedCount = computed(() => nodes.value.filter((node) => node.kind === 'managed').length);
 const pendingCount = computed(() => nodes.value.filter((node) => node.kind === 'pending').length);
 const selectedServer = computed(() => candidateServers.value.find((server) => server.id === selectedServerId.value) ?? null);
+const selectedRebuildServer = computed(() => bootstrapServers.value.find((server) => server.id === selectedRebuildServerId.value) ?? null);
 const candidateOptions = computed(() =>
   candidateServers.value.map((server) => ({
     label: `${server.name} (${server.host}:${server.port})`,
     value: server.id,
   })),
 );
+const rebuildServerOptions = computed(() =>
+  bootstrapServers.value.map((server) => ({
+    label: `${server.name} (${server.host}:${server.port})`,
+    value: server.id,
+  })),
+);
+const switchServerOptions = computed(() => {
+  const seen = new Set<string>();
+  const options: Array<{ label: string; value: string }> = [];
+  for (const server of bootstrapServers.value) {
+    seen.add(server.id);
+    options.push({ label: `${server.name} (${server.host}:${server.port})`, value: server.id });
+  }
+  for (const node of nodes.value) {
+    if (!node.serverId || seen.has(node.serverId)) continue;
+    seen.add(node.serverId);
+    options.push({ label: `${node.name || node.serverId} (${node.host || node.serverId})`, value: node.serverId });
+  }
+  return options;
+});
+const selectedSwitchServer = computed(() => switchServerOptions.value.find((server) => server.value === selectedSwitchServerId.value) ?? null);
 
 function statusColor(nodeStatus?: string) {
   if (nodeStatus === 'ready') return 'success';
@@ -46,7 +73,7 @@ function statusColor(nodeStatus?: string) {
   if (nodeStatus === 'unmanaged') return 'grey';
   if (nodeStatus === 'registering') return 'info';
   if (nodeStatus === 'missing' || nodeStatus === 'nomad_unreachable') return 'error';
-  if (nodeStatus === 'removing') return 'warning';
+  if (nodeStatus === 'rebuilding' || nodeStatus === 'removing') return 'warning';
   return 'warning';
 }
 
@@ -62,12 +89,26 @@ function openJoinDialog() {
   joinDialog.value = true;
 }
 
+function openRebuildDialog() {
+  selectedRebuildServerId.value = rebuildServerOptions.value[0]?.value ?? '';
+  rebuildDialog.value = true;
+}
+
+function openSwitchDialog() {
+  selectedSwitchServerId.value = switchServerOptions.value[0]?.value ?? '';
+  switchDialog.value = true;
+}
+
 function canJoinNode(node: ProjectedNomadNodeDto) {
   return Boolean(node.serverId && node.joinEligible) && ['missing', 'nomad_unreachable', 'failed'].includes(node.status || '');
 }
 
+function canRedeployNode(node: ProjectedNomadNodeDto) {
+  return Boolean(node.serverId) && ['server', 'client'].includes(node.role || '') && !['bootstrapping', 'joining', 'registering', 'rebuilding', 'removing'].includes(node.status || '');
+}
+
 function canRemoveNode(node: ProjectedNomadNodeDto) {
-  return Boolean(node.serverId || node.nodeId) && !['removing', 'joining', 'bootstrapping'].includes(node.status || '');
+  return Boolean(node.serverId || node.nodeId) && !['removing', 'joining', 'bootstrapping', 'rebuilding'].includes(node.status || '');
 }
 
 async function load() {
@@ -110,6 +151,50 @@ async function joinNode(node: ProjectedNomadNodeDto) {
     await load();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('nomadNodesPage.joinFailed');
+  } finally {
+    actionLoading.value = '';
+  }
+}
+
+async function redeployNode(node: ProjectedNomadNodeDto) {
+  if (!node.serverId) return;
+  actionLoading.value = `redeploy:${node.serverId}`;
+  try {
+    await nomadApi.redeployNode({ serverId: node.serverId, role: node.role });
+    error.value = '';
+    await load();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('nomadNodesPage.redeployFailed');
+  } finally {
+    actionLoading.value = '';
+  }
+}
+
+async function rebuildSelectedCluster() {
+  if (!selectedRebuildServerId.value) return;
+  actionLoading.value = 'rebuild-cluster';
+  try {
+    await nomadApi.rebuildCluster({ serverId: selectedRebuildServerId.value });
+    rebuildDialog.value = false;
+    error.value = '';
+    await load();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('nomadNodesPage.rebuildFailed');
+  } finally {
+    actionLoading.value = '';
+  }
+}
+
+async function switchSelectedServer() {
+  if (!selectedSwitchServerId.value) return;
+  actionLoading.value = 'switch-server';
+  try {
+    await nomadApi.switchServer({ serverId: selectedSwitchServerId.value });
+    switchDialog.value = false;
+    error.value = '';
+    await load();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('nomadNodesPage.switchFailed');
   } finally {
     actionLoading.value = '';
   }
@@ -199,6 +284,8 @@ onMounted(load);
     <v-card variant="outlined" :loading="loading">
       <div class="app-card-header">
         <v-btn prepend-icon="mdi-account-network" color="primary" variant="flat" class="text-none action-btn" :disabled="candidateServers.length === 0" @click="openJoinDialog">{{ t('nomadNodesPage.joinNode') }}</v-btn>
+        <v-btn prepend-icon="mdi-swap-horizontal" variant="outlined" class="text-none action-btn" :disabled="switchServerOptions.length === 0" :loading="actionLoading === 'switch-server'" @click="openSwitchDialog">{{ t('nomadNodesPage.switchServer') }}</v-btn>
+        <v-btn prepend-icon="mdi-database-refresh" color="warning" variant="outlined" class="text-none action-btn" :disabled="rebuildServerOptions.length === 0" :loading="actionLoading === 'rebuild-cluster'" @click="openRebuildDialog">{{ t('nomadNodesPage.rebuildCluster') }}</v-btn>
       </div>
       <v-table>
         <thead><tr><th>{{ t('common.name') }}</th><th>{{ t('nomadNodesPage.nodeId') }}</th><th>{{ t('serversPage.host') }}</th><th>{{ t('nomadNodesPage.role') }}</th><th>{{ t('common.status') }}</th><th>{{ t('nomadNodesPage.reverseProxy') }}</th><th>{{ t('packagesPage.source') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
@@ -248,6 +335,18 @@ onMounted(load);
                   @click="joinNode(node)"
                 >
                   {{ t('nomadNodesPage.join') }}
+                </v-btn>
+                <v-btn
+                  v-if="canRedeployNode(node)"
+                  size="small"
+                  variant="text"
+                  color="primary"
+                  prepend-icon="mdi-refresh"
+                  class="text-none"
+                  :loading="actionLoading === `redeploy:${node.serverId}`"
+                  @click="redeployNode(node)"
+                >
+                  {{ t('nomadNodesPage.redeploy') }}
                 </v-btn>
                 <v-btn
                   v-if="canRemoveNode(node)"
@@ -303,6 +402,79 @@ onMounted(load);
       </v-card>
     </v-dialog>
 
+    <v-dialog v-model="switchDialog" width="560">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('nomadNodesPage.switchServerTitle') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="switchDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          <v-alert v-if="switchServerOptions.length === 0" type="info" variant="tonal" class="mb-4">
+            {{ t('nomadNodesPage.noSwitchCandidates') }}
+          </v-alert>
+          <v-select
+            v-model="selectedSwitchServerId"
+            :items="switchServerOptions"
+            item-title="label"
+            item-value="value"
+            :label="t('nomadNodesPage.sshServer')"
+            variant="outlined"
+            density="comfortable"
+            class="mb-4"
+          />
+          <v-alert type="info" variant="tonal" density="compact">
+            {{ t('nomadNodesPage.switchServerHint') }}
+          </v-alert>
+          <div v-if="selectedSwitchServer" class="server-preview mt-4">
+            <div class="font-weight-bold">{{ selectedSwitchServer.label }}</div>
+          </div>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="switchDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="primary" variant="flat" class="text-none" :loading="actionLoading === 'switch-server'" :disabled="!selectedSwitchServerId" @click="switchSelectedServer">{{ t('nomadNodesPage.switchServer') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="rebuildDialog" width="620">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('nomadNodesPage.rebuildClusterTitle') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="rebuildDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          <v-alert v-if="rebuildServerOptions.length === 0" type="info" variant="tonal" class="mb-4">
+            {{ t('nomadNodesPage.noRebuildCandidates') }}
+          </v-alert>
+          <v-alert type="warning" variant="tonal" density="compact" class="mb-4">
+            {{ t('nomadNodesPage.rebuildClusterHint') }}
+          </v-alert>
+          <v-select
+            v-model="selectedRebuildServerId"
+            :items="rebuildServerOptions"
+            item-title="label"
+            item-value="value"
+            :label="t('nomadNodesPage.sshServer')"
+            variant="outlined"
+            density="comfortable"
+            class="mb-4"
+          />
+          <div v-if="selectedRebuildServer" class="server-preview">
+            <div class="font-weight-bold">{{ selectedRebuildServer.name }}</div>
+            <div class="text-caption text-medium-emphasis">{{ selectedRebuildServer.host }}:{{ selectedRebuildServer.port }}</div>
+          </div>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="rebuildDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="warning" variant="flat" class="text-none" :loading="actionLoading === 'rebuild-cluster'" :disabled="!selectedRebuildServerId" @click="rebuildSelectedCluster">{{ t('nomadNodesPage.rebuildCluster') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-dialog v-model="proxyDialog" width="920">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
@@ -334,8 +506,9 @@ onMounted(load);
 
 <style scoped>
 .summary-strip { grid-template-columns: repeat(4, minmax(0, 180px)); }
+.app-card-header { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .mono { font-size: 0.8rem; }
-.row-actions { display: inline-flex; justify-content: flex-end; gap: 4px; min-width: 0; }
+.row-actions { display: inline-flex; justify-content: flex-end; gap: 4px; min-width: 0; flex-wrap: wrap; }
 .proxy-summary { display: flex; gap: 8px; align-items: center; min-width: 180px; }
 .section-title { margin-top: 10px; }
 .repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; }

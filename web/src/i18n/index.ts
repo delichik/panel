@@ -614,9 +614,15 @@ const messages = {
     nomadNodesPage: {
       loadFailed: "Unable to load Nomad control plane",
       joinFailed: "Unable to join Nomad node",
+      redeployFailed: "Unable to redeploy Nomad node",
+      rebuildFailed: "Unable to rebuild Nomad cluster",
+      switchFailed: "Unable to switch Nomad server",
       removeFailed: "Unable to remove Nomad node",
       saveProxyFailed: "Unable to update reverse proxy settings",
       joinNode: "Join Node",
+      redeploy: "Redeploy",
+      rebuildCluster: "Rebuild cluster",
+      switchServer: "Switch server",
       bootstrappingHint:
         "First Nomad server is bootstrapping. Pending nodes below are projected from Panel tasks until Nomad API registration succeeds.",
       degradedHint:
@@ -638,6 +644,14 @@ const messages = {
       joinNodeTitle: "Join Node",
       noJoinCandidates:
         "All SSH servers are already managed, pending, or unavailable as join candidates.",
+      switchServerTitle: "Switch Nomad server",
+      switchServerHint:
+        "Panel will point Nomad API traffic at the selected server and verify TCP 4646 before keeping the change.",
+      noSwitchCandidates: "No server is available for switching.",
+      rebuildClusterTitle: "Rebuild Nomad cluster",
+      rebuildClusterHint:
+        "Panel will reset Panel-managed Nomad nodes and bootstrap a new single-server cluster on the selected server.",
+      noRebuildCandidates: "No eligible SSH server is available for rebuilding.",
       sshServer: "SSH Server",
       reverseProxyTitle: "Reverse Proxy - {name}",
       enableReverseProxy: "Enable reverse proxy on this node",
@@ -652,6 +666,7 @@ const messages = {
       statusBootstrapping: "bootstrapping",
       statusJoining: "joining",
       statusRegistering: "registering",
+      statusRebuilding: "rebuilding",
       statusRemoving: "removing",
       statusReady: "ready",
       statusDown: "down",
@@ -1325,9 +1340,15 @@ const messages = {
     nomadNodesPage: {
       loadFailed: "无法加载 Nomad 控制平面",
       joinFailed: "无法加入 Nomad 节点",
+      redeployFailed: "无法重部署 Nomad 节点",
+      rebuildFailed: "无法重建 Nomad 集群",
+      switchFailed: "无法切换 Nomad server",
       removeFailed: "无法移除 Nomad 节点",
       saveProxyFailed: "无法更新反向代理设置",
       joinNode: "加入节点",
+      redeploy: "重部署",
+      rebuildCluster: "重建集群",
+      switchServer: "切换 server",
       bootstrappingHint:
         "首个 Nomad 服务器正在引导。下面的待定节点来自 Panel 任务投影，直到 Nomad API 注册成功。",
       degradedHint:
@@ -1349,6 +1370,14 @@ const messages = {
       joinNodeTitle: "加入节点",
       noJoinCandidates:
         "所有 SSH 服务器都已被托管、处于待定状态，或不可作为加入候选。",
+      switchServerTitle: "切换 Nomad server",
+      switchServerHint:
+        "Panel 会把 Nomad API 流量指向所选 server，并在确认 TCP 4646 可达后保留该切换。",
+      noSwitchCandidates: "当前没有可切换的 server。",
+      rebuildClusterTitle: "重建 Nomad 集群",
+      rebuildClusterHint:
+        "Panel 会重置已托管的 Nomad 节点，并在所选 SSH 服务器上重新引导一个单 server 集群。",
+      noRebuildCandidates: "当前没有可用于重建的 SSH 服务器。",
       sshServer: "SSH 服务器",
       reverseProxyTitle: "反向代理 - {name}",
       enableReverseProxy: "在该节点启用反向代理",
@@ -1363,6 +1392,7 @@ const messages = {
       statusBootstrapping: "引导中",
       statusJoining: "加入中",
       statusRegistering: "注册中",
+      statusRebuilding: "重建中",
       statusRemoving: "移除中",
       statusReady: "就绪",
       statusDown: "离线",
@@ -1587,6 +1617,7 @@ export function translateNomadNodeStatus(value?: string | null) {
     bootstrapping: "nomadNodesPage.statusBootstrapping",
     joining: "nomadNodesPage.statusJoining",
     registering: "nomadNodesPage.statusRegistering",
+    rebuilding: "nomadNodesPage.statusRebuilding",
     removing: "nomadNodesPage.statusRemoving",
     ready: "nomadNodesPage.statusReady",
     down: "nomadNodesPage.statusDown",

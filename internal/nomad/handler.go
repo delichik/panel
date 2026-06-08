@@ -28,6 +28,9 @@ type joinService interface {
 	Candidates(ctx context.Context) ([]server.Server, error)
 	JoinClient(ctx context.Context, serverID string) (tasks.Task, error)
 	BootstrapServer(ctx context.Context, serverID string) (tasks.Task, error)
+	RedeployNode(ctx context.Context, in RedeployNodeInput) (tasks.Task, error)
+	RebuildCluster(ctx context.Context, in RebuildClusterInput) (tasks.Task, error)
+	SwitchServer(ctx context.Context, in SwitchServerInput) (tasks.Task, error)
 	RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks.Task, error)
 	UpdateReverseProxy(ctx context.Context, in ReverseProxyInput) (server.Server, error)
 }
@@ -135,6 +138,45 @@ func (h *Handler) BootstrapServer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	task, err := h.join.BootstrapServer(r.Context(), req.ServerID)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
+func (h *Handler) RedeployNode(w http.ResponseWriter, r *http.Request) {
+	var req RedeployNodeInput
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	task, err := h.join.RedeployNode(r.Context(), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
+func (h *Handler) RebuildCluster(w http.ResponseWriter, r *http.Request) {
+	var req RebuildClusterInput
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	task, err := h.join.RebuildCluster(r.Context(), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
+func (h *Handler) SwitchServer(w http.ResponseWriter, r *http.Request) {
+	var req SwitchServerInput
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	task, err := h.join.SwitchServer(r.Context(), req)
 	if err != nil {
 		httpx.Error(w, err)
 		return
