@@ -40,7 +40,7 @@
 
 ## 验证
 
-- 先按根目录 `AGENTS.md` 的“检查和测试范围”判断是否需要验证。
+- 先按模块索引的“检查和测试范围”判断是否需要验证。
 - 需要验证后端改动时，运行 `task test:backend`，重点关注 `internal/dns`、`internal/certs`、`internal/scheduler`。
 - 前端页面、设置或 API 类型改动只按需要运行 `task test:web` 或 `task build:web`。
 
