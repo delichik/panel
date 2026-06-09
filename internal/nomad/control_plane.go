@@ -250,7 +250,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 
 func (s *JoinService) latestNomadTasks(ctx context.Context) (map[string]tasks.Task, error) {
 	out := map[string]tasks.Task{}
-	for _, taskType := range []string{TaskTypeServerBootstrap, TaskTypeClientJoin, TaskTypeClusterRebuild, TaskTypeNodeRemove} {
+	for _, taskType := range []string{TaskTypeServerBootstrap, TaskTypeClientJoin, TaskTypeClusterRebuild, TaskTypeNodeRemove, TaskTypeServerSwitch} {
 		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, Limit: 200})
 		if err != nil {
 			return nil, err
@@ -338,11 +338,11 @@ func projectionStatus(task tasks.Task) string {
 	if task.Type == TaskTypeNodeRemove {
 		return "removing"
 	}
-	if task.Type == TaskTypeClusterRebuild {
-		return "rebuilding"
-	}
 	if task.Status == tasks.StatusCompleted {
 		return "registering"
+	}
+	if task.Type == TaskTypeClusterRebuild {
+		return "rebuilding"
 	}
 	if task.Type == TaskTypeServerBootstrap {
 		return "bootstrapping"

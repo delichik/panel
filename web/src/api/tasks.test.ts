@@ -65,4 +65,16 @@ describe('tasksApi', () => {
       expect.objectContaining({ method: 'POST' }),
     );
   });
+
+  it('ignores cleared and blank list filters', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { items: [], total: 0, page: 1, pageSize: 20 }, error: null }));
+    const api = createTasksApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await api.list({ serverId: null, type: null, operationId: '   ' });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/tasks?page=1&pageSize=20',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
 });

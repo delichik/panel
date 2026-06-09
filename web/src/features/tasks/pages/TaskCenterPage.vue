@@ -15,8 +15,8 @@ const servers = ref<ServerDto[]>([]);
 const selectedTaskId = ref('');
 const selectedOperationId = ref('');
 const statusFilter = ref<TaskStatus | 'all'>('all');
-const operationFilter = ref('');
-const typeFilter = ref('');
+const operationFilter = ref<string | null>('');
+const typeFilter = ref<string | null>('');
 const loading = ref(false);
 const actionLoading = ref('');
 const error = ref('');
@@ -57,8 +57,8 @@ async function loadTasks() {
     const [taskPage, serverRows] = await Promise.all([
       tasksApi.list({
         status: statusFilter.value,
-        type: typeFilter.value.trim(),
-        operationId: operationFilter.value.trim(),
+        type: typeFilter.value,
+        operationId: operationFilter.value,
         page: page.value,
         pageSize: pageSize.value,
       }),

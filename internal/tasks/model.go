@@ -3,6 +3,8 @@ package tasks
 import "time"
 
 const (
+	StaleRunningTaskAfter = 24 * time.Hour
+
 	StatusQueued          = "queued"
 	StatusScheduled       = "scheduled"
 	StatusRunning         = "running"

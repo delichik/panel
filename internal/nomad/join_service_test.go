@@ -82,6 +82,29 @@ func TestJoinCandidatesRequireEligibleServer(t *testing.T) {
 	}
 }
 
+func TestJoinCandidatesTimesOutNomadNodesAndReturnsEligibleServers(t *testing.T) {
+	svc, credSvc, fake, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	oldTimeout := controlPlaneNomadQueryTimeout
+	controlPlaneNomadQueryTimeout = 20 * time.Millisecond
+	defer func() { controlPlaneNomadQueryTimeout = oldTimeout }()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "eligible", "10.0.0.19")
+	fake.blockNodes = true
+
+	start := time.Now()
+	got, err := svc.Candidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("candidates should not wait on Nomad indefinitely, took %s", elapsed)
+	}
+	if len(got) != 1 || got[0].ID != srv.ID {
+		t.Fatalf("expected eligible server despite Nomad timeout, got %#v", got)
+	}
+}
+
 func TestJoinClientCreatesTask(t *testing.T) {
 	svc, credSvc, _, _, cleanup := newJoinTestService(t)
 	defer cleanup()
@@ -392,7 +415,7 @@ func TestRunBootstrapServerFailsWhenPanelCannotReachNomadAPI(t *testing.T) {
 		statusErr:           errors.New("dial tcp 10.0.0.21:4646: i/o timeout"),
 	}
 	svc.nomad = statusFake
-	svc.cfg.Address = "https://10.0.0.21:4646"
+	previous := svc.cfg.Address
 	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeServerBootstrap, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Summary: "Bootstrapping Nomad server"})
 	if err != nil {
 		t.Fatal(err)
@@ -409,6 +432,9 @@ func TestRunBootstrapServerFailsWhenPanelCannotReachNomadAPI(t *testing.T) {
 	}
 	if statusFake.statusCalls == 0 {
 		t.Fatal("expected Nomad status to be checked from Panel")
+	}
+	if svc.cfg.Address != previous || statusFake.address != previous {
+		t.Fatalf("expected bootstrap failure to restore %q, got cfg=%q fake=%q", previous, svc.cfg.Address, statusFake.address)
 	}
 	logs, _, err := svc.tasks.Logs(ctx, task.ID, 0)
 	if err != nil {
@@ -483,11 +509,68 @@ func TestRebuildClusterResetsManagedServersAndBootstrapsSelectedServer(t *testin
 	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
 
 	commands := joinedSudoCommands(execFake.sudoCommands)
+	bootstrapIndex := strings.Index(commands, "bootstrap_expect = 1")
+	resetIndex := strings.Index(commands, "systemctl disable --now nomad")
+	if bootstrapIndex < 0 || resetIndex < 0 || bootstrapIndex > resetIndex {
+		t.Fatalf("expected rebuild to bootstrap selected server before resetting old nodes:\n%s", commands)
+	}
 	if !strings.Contains(commands, "systemctl disable --now nomad") {
 		t.Fatalf("expected rebuild to reset existing managed nodes:\n%s", commands)
 	}
 	if !strings.Contains(commands, "bootstrap_expect = 1") || !strings.Contains(commands, "panel_server_id = \""+control.ID+"\"") {
 		t.Fatalf("expected rebuild to bootstrap selected server:\n%s", commands)
+	}
+}
+
+func TestRebuildClusterDoesNotResetExistingNodesWhenNewServerIsUnreachableFromPanel(t *testing.T) {
+	svc, credSvc, _, execFake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	oldTimeout := nomadPanelReachabilityTimeout
+	oldInterval := nomadPanelReachabilityRetryInterval
+	nomadPanelReachabilityTimeout = 20 * time.Millisecond
+	nomadPanelReachabilityRetryInterval = time.Millisecond
+	defer func() {
+		nomadPanelReachabilityTimeout = oldTimeout
+		nomadPanelReachabilityRetryInterval = oldInterval
+	}()
+	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "blocked control", "10.0.0.26")
+	worker := createJoinTestServer(t, svc.servers, credSvc, ctx, "old worker blocked", "10.0.0.27")
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeClientJoin,
+		ServerID:     worker.ID,
+		ResourceType: "server",
+		ResourceID:   worker.ID,
+		Status:       tasks.StatusCompleted,
+		Summary:      "Nomad client join requested",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	statusFake := &statusJoinFakeNomadClient{
+		joinFakeNomadClient: &joinFakeNomadClient{},
+		statusErr:           errors.New("dial tcp 10.0.0.26:4646: i/o timeout"),
+	}
+	svc.nomad = statusFake
+	previous := svc.cfg.Address
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeClusterRebuild, ServerID: control.ID, ResourceType: "nomad_cluster", ResourceID: control.ID, Summary: "Rebuilding Nomad cluster"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.runRebuildCluster(ctx, task.ID, control, mustNomadAdapter(t, svc, control))
+
+	stored, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != tasks.StatusFailed || !strings.Contains(stored.Error, "Open TCP 4646") {
+		t.Fatalf("expected panel reachability failure, got %#v", stored)
+	}
+	if command := joinedSudoCommands(execFake.sudoCommands); strings.Contains(command, "systemctl disable --now nomad") {
+		t.Fatalf("old nodes should not be reset before the new server is reachable:\n%s", command)
+	}
+	if svc.cfg.Address != previous || statusFake.address != previous {
+		t.Fatalf("expected rebuild failure to restore %q, got cfg=%q fake=%q", previous, svc.cfg.Address, statusFake.address)
 	}
 }
 
@@ -859,14 +942,20 @@ func createJoinTestServer(t *testing.T, svc *server.Service, credSvc *credential
 
 type joinFakeNomadClient struct {
 	nodes         []NodeListItem
+	nodesErr      error
+	blockNodes    bool
 	address       string
 	purgedNodes   []string
 	registeredJob Job
 	stoppedJobs   []string
 }
 
-func (f *joinFakeNomadClient) Nodes(context.Context) ([]NodeListItem, error) {
-	return f.nodes, nil
+func (f *joinFakeNomadClient) Nodes(ctx context.Context) ([]NodeListItem, error) {
+	if f.blockNodes {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	return f.nodes, f.nodesErr
 }
 
 func (f *joinFakeNomadClient) SetAddress(address string) {

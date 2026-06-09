@@ -23,6 +23,8 @@ type ListFilter struct {
 	Offset      int
 }
 
+const internalConnectivityTaskType = "server_connectivity_test"
+
 type ListResult struct {
 	Items    []Task `json:"items"`
 	Total    int    `json:"total"`
@@ -243,6 +245,9 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	if filter.Type != "" {
 		conditions = append(conditions, `type=?`)
 		args = append(args, filter.Type)
+	} else {
+		conditions = append(conditions, `type<>?`)
+		args = append(args, internalConnectivityTaskType)
 	}
 	if filter.OperationID != "" {
 		conditions = append(conditions, `operation_id=?`)
@@ -257,7 +262,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return ListResult{}, err
 	}
-	query := `SELECT ` + taskColumns + ` FROM tasks` + where + ` ORDER BY COALESCE(next_run_at, created_at) ASC, created_at DESC LIMIT ? OFFSET ?`
+	query := `SELECT ` + taskColumns + ` FROM tasks` + where + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
 	args = append(args, filter.Limit, filter.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -276,6 +281,24 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 		return ListResult{}, err
 	}
 	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
+}
+
+func (s *Service) ExpireStaleRunning(ctx context.Context, now time.Time, maxAge time.Duration) (int, error) {
+	if maxAge <= 0 {
+		return 0, nil
+	}
+	finishedAt := now.UTC().Format(time.RFC3339Nano)
+	cutoff := now.UTC().Add(-maxAge).Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status=? AND COALESCE(NULLIF(started_at,''), created_at)<=?`,
+		StatusFailed, "Task did not report completion before the stale task timeout and was marked failed", finishedAt, StatusRunning, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil
+	}
+	return int(affected), nil
 }
 
 func (s *Service) Logs(ctx context.Context, taskID string, after int64) ([]Log, int64, error) {

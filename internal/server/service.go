@@ -17,6 +17,7 @@ import (
 
 const connectivitySudoTimeout = 8 * time.Second
 const connectivityTaskType = "server_connectivity_test"
+const serverInfoTaskType = "server_info_collect"
 const connectivityResourceType = "server"
 const connectivityMaxRetries = 8
 const connectivityStaleAfter = 10 * time.Minute
@@ -63,7 +64,7 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		return Server{}, err
 	}
 	if s.exec != nil {
-		_, _ = s.EnsureConnectivityTask(ctx, srv.ID, true)
+		_, _ = s.EnsureInitialInfoTask(ctx, srv.ID, true)
 	}
 	return srv, nil
 }
@@ -260,6 +261,14 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 }
 
 func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
+	return s.ensureConnectivityTask(ctx, serverID, runNow, connectivityTaskType, "Testing SSH connectivity")
+}
+
+func (s *Service) EnsureInitialInfoTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
+	return s.ensureConnectivityTask(ctx, serverID, runNow, serverInfoTaskType, "Collecting server information")
+}
+
+func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, runNow bool, taskType string, summary string) (tasks.Task, error) {
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
 	}
@@ -267,7 +276,7 @@ func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, r
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, connectivityTaskType, connectivityResourceType, serverID); err != nil {
+	if existing, ok, err := s.existingActiveConnectivityTask(ctx, serverID); err != nil {
 		return tasks.Task{}, err
 	} else if ok {
 		if runNow && existing.Status != tasks.StatusRunning {
@@ -280,11 +289,11 @@ func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, r
 		return existing, nil
 	}
 	task, err := s.tasks.Create(ctx, tasks.CreateInput{
-		Type:         connectivityTaskType,
+		Type:         taskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
 		ResourceID:   serverID,
-		Summary:      "Testing SSH connectivity",
+		Summary:      summary,
 		MaxRetries:   connectivityMaxRetries,
 	})
 	if err != nil {
@@ -296,18 +305,40 @@ func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, r
 	return task, nil
 }
 
+func (s *Service) existingActiveConnectivityTask(ctx context.Context, serverID string) (tasks.Task, bool, error) {
+	var latest tasks.Task
+	found := false
+	for _, taskType := range []string{serverInfoTaskType, connectivityTaskType} {
+		task, ok, err := s.tasks.ExistingActive(ctx, taskType, connectivityResourceType, serverID)
+		if err != nil {
+			return tasks.Task{}, false, err
+		}
+		if !ok {
+			continue
+		}
+		if !found || task.CreatedAt.After(latest.CreatedAt) {
+			latest = task
+			found = true
+		}
+	}
+	return latest, found, nil
+}
+
 func (s *Service) RunDueConnectivityTests(ctx context.Context) error {
 	servers, err := s.List(ctx)
 	if err != nil {
 		return err
 	}
 	for _, srv := range servers {
-		task, ok, err := s.tasks.FirstRunnable(ctx, connectivityTaskType, connectivityResourceType, srv.ID)
-		if err != nil {
-			return err
-		}
-		if ok {
-			s.startConnectivityTask(task, srv)
+		for _, taskType := range []string{serverInfoTaskType, connectivityTaskType} {
+			task, ok, err := s.tasks.FirstRunnable(ctx, taskType, connectivityResourceType, srv.ID)
+			if err != nil {
+				return err
+			}
+			if ok {
+				s.startConnectivityTask(task, srv)
+				break
+			}
 		}
 	}
 	return nil

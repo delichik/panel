@@ -116,7 +116,7 @@ func (s *Scheduler) Stop() {
 
 func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 	switch task.Type {
-	case "server_connectivity_test":
+	case "server_connectivity_test", "server_info_collect":
 		_, err := s.servers.EnsureConnectivityTask(ctx, task.ServerID, true)
 		return err
 	case "package_refresh":
@@ -217,6 +217,7 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 	defer s.wg.Done()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	s.expireStaleRunningTasks(ctx)
 	lastRun := time.Now()
 	for {
 		select {
@@ -229,6 +230,7 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 				continue
 			}
 			lastRun = time.Now()
+			s.expireStaleRunningTasks(ctx)
 			deleted, err := s.metrics.Cleanup(ctx, runtime.MetricsRetentionDays)
 			if err != nil {
 				log.Printf("metrics cleanup: %v", err)
@@ -236,6 +238,17 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 			}
 			log.Printf("metrics cleanup deleted %d rows", deleted)
 		}
+	}
+}
+
+func (s *Scheduler) expireStaleRunningTasks(ctx context.Context) {
+	expired, err := s.tasks.ExpireStaleRunning(ctx, time.Now().UTC(), tasks.StaleRunningTaskAfter)
+	if err != nil {
+		log.Printf("task stale-running cleanup: %v", err)
+		return
+	}
+	if expired > 0 {
+		log.Printf("task stale-running cleanup marked %d task(s) failed", expired)
 	}
 }
 

@@ -41,6 +41,7 @@
 - 系统探测通过 SSH 执行远程命令，并交给 `internal/linux/` 解析支持的 Debian/Ubuntu 版本。
 - 维护操作通常要求 root 或免密 sudo；相关检查结果写回服务器记录。
 - 软件包维护基于 APT，只对支持的系统执行。
+- 新增服务器时只创建一个可见的 `server_info_collect` 首连信息采集任务；后续编辑、手动测试和陈旧刷新复用内部 `server_connectivity_test` 连通性任务，默认不在任务中心展示。
 - 长耗时操作应记录为任务，日志和步骤交给 `internal/tasks/`。
 
 ## 验证

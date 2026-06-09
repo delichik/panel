@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"panel/internal/config"
 	"panel/internal/storage"
@@ -123,6 +124,62 @@ func TestListReturnsEmptySliceWhenNoTasksMatch(t *testing.T) {
 	}
 }
 
+func TestListHidesInternalConnectivityTasksUnlessFiltered(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	hidden, err := svc.Create(ctx, CreateInput{Type: "server_connectivity_test", Summary: "hidden connectivity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.Create(ctx, CreateInput{Type: "server_info_collect", Summary: "visible discovery"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 1 || len(got.Items) != 1 || got.Items[0].ID != visible.ID {
+		t.Fatalf("expected only visible task, got %#v", got)
+	}
+
+	filtered, err := svc.List(ctx, ListFilter{Type: "server_connectivity_test", Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Total != 1 || len(filtered.Items) != 1 || filtered.Items[0].ID != hidden.ID {
+		t.Fatalf("explicit type filter should return internal task, got %#v", filtered)
+	}
+}
+
+func TestListOrdersNewestTasksFirst(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	oldTask, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newTask, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, time.Now().UTC().Add(-2*time.Hour).Format(time.RFC3339Nano), oldTask.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, time.Now().UTC().Format(time.RFC3339Nano), newTask.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Items) != 2 || got.Items[0].ID != newTask.ID || got.Items[1].ID != oldTask.ID {
+		t.Fatalf("expected newest task first, got %#v", got.Items)
+	}
+}
+
 func TestListPaginatesTasks(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
@@ -137,6 +194,35 @@ func TestListPaginatesTasks(t *testing.T) {
 	}
 	if got.Total != 3 || got.Page != 2 || got.PageSize != 2 || len(got.Items) != 1 {
 		t.Fatalf("unexpected paginated tasks: %#v", got)
+	}
+}
+
+func TestExpireStaleRunningMarksOldRunningTasksFailed(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	task, err := svc.Create(ctx, CreateInput{Type: "nomad_client_join", Summary: "joining", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=?, started_at=? WHERE id=?`, old, old, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	expired, err := svc.ExpireStaleRunning(ctx, now, StaleRunningTaskAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected one expired task, got %d", expired)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FinishedAt == nil || !strings.Contains(got.Error, "stale task timeout") {
+		t.Fatalf("expected failed stale task, got %#v", got)
 	}
 }
 

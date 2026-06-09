@@ -221,7 +221,7 @@ func assertNoDestructiveUFWCommands(t *testing.T, command string) {
 	}
 }
 
-func TestCreateServerAutomaticallyStartsConnectivityTest(t *testing.T) {
+func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 	svc, taskSvc, _ := testServerService(t, &connectivityFakeExec{})
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
@@ -231,7 +231,7 @@ func TestCreateServerAutomaticallyStartsConnectivityTest(t *testing.T) {
 	var task tasks.Task
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: "server_connectivity_test", ServerID: srv.ID})
+		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: serverInfoTaskType, ServerID: srv.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -242,7 +242,10 @@ func TestCreateServerAutomaticallyStartsConnectivityTest(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	if task.ID == "" {
-		t.Fatal("expected auto connectivity task")
+		t.Fatal("expected auto server info task")
+	}
+	if task.Type != serverInfoTaskType || task.Summary != "Collecting server information" {
+		t.Fatalf("unexpected initial task: %#v", task)
 	}
 	waitTaskFinished(t, taskSvc, task.ID)
 }
@@ -257,7 +260,7 @@ func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
 	var task tasks.Task
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: "server_connectivity_test", ServerID: srv.ID})
+		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: serverInfoTaskType, ServerID: srv.ID})
 		if err != nil {
 			t.Fatal(err)
 		}

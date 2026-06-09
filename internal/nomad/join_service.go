@@ -146,7 +146,9 @@ func (s *JoinService) Candidates(ctx context.Context) ([]server.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	nodes, err := s.nomad.Nodes(ctx)
+	nodesCtx, cancelNodes := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
+	defer cancelNodes()
+	nodes, err := s.nomad.Nodes(nodesCtx)
 	if err != nil {
 		nodes = nil
 	}
@@ -245,9 +247,6 @@ func (s *JoinService) BootstrapServer(ctx context.Context, serverID string) (tas
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	if setter, ok := s.nomad.(addressSetter); ok {
-		s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
-	}
 	go s.runBootstrapServer(context.Background(), task.ID, srv, adapter)
 	return task, nil
 }
@@ -294,9 +293,6 @@ func (s *JoinService) RedeployNode(ctx context.Context, in RedeployNodeInput) (t
 		return tasks.Task{}, err
 	}
 	if role == ProjectedNodeRoleServer {
-		if setter, ok := s.nomad.(addressSetter); ok {
-			s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
-		}
 		go s.runBootstrapServer(context.Background(), task.ID, srv, adapter)
 		return task, nil
 	}
@@ -331,9 +327,6 @@ func (s *JoinService) RebuildCluster(ctx context.Context, in RebuildClusterInput
 	})
 	if err != nil {
 		return tasks.Task{}, err
-	}
-	if setter, ok := s.nomad.(addressSetter); ok {
-		s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
 	}
 	go s.runRebuildCluster(context.Background(), task.ID, srv, adapter)
 	return task, nil
@@ -533,6 +526,32 @@ func (s *JoinService) setNomadAddress(setter addressSetter, address string) {
 	s.cfg.Address = address
 }
 
+type nomadAddressChange struct {
+	setter   addressSetter
+	previous string
+	next     string
+	active   bool
+}
+
+func (s *JoinService) beginNomadServerAddressChange(srv server.Server) nomadAddressChange {
+	setter, ok := s.nomad.(addressSetter)
+	if !ok {
+		return nomadAddressChange{}
+	}
+	previous := s.currentConfig().Address
+	next := nomadHTTPAddressForServer(srv)
+	s.setNomadAddress(setter, next)
+	return nomadAddressChange{setter: setter, previous: previous, next: next, active: true}
+}
+
+func (s *JoinService) restoreNomadAddressAfterFailure(ctx context.Context, taskID string, change nomadAddressChange) {
+	if !change.active || strings.TrimSpace(change.previous) == "" || change.previous == change.next {
+		return
+	}
+	_ = s.tasks.AppendLog(ctx, taskID, "system", "restoring previous Nomad server address after failed operation")
+	s.setNomadAddress(change.setter, change.previous)
+}
+
 func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
@@ -553,6 +572,13 @@ func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv serv
 
 func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
 	_ = s.tasks.Start(ctx, taskID)
+	addressChange := s.beginNomadServerAddressChange(srv)
+	keepAddress := false
+	defer func() {
+		if !keepAddress {
+			s.restoreNomadAddressAfterFailure(ctx, taskID, addressChange)
+		}
+	}()
 	if err := s.runBootstrapServerSteps(ctx, taskID, srv, adapter); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -561,6 +587,7 @@ func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
+	keepAddress = true
 	s.reconcileReverseProxyJobLogged(ctx, taskID)
 	_ = s.tasks.Complete(ctx, taskID, "Nomad server bootstrap requested")
 }
@@ -583,6 +610,22 @@ func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, boot
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
+	addressChange := s.beginNomadServerAddressChange(bootstrap)
+	keepAddress := false
+	defer func() {
+		if !keepAddress {
+			s.restoreNomadAddressAfterFailure(ctx, taskID, addressChange)
+		}
+	}()
+	if err := s.runBootstrapServerSteps(ctx, taskID, bootstrap, adapter); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.waitForPanelNomadReachability(ctx, taskID); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	keepAddress = true
 	if err := s.tasks.Advance(ctx, taskID, "resetting_nodes", "resetting existing Panel-managed Nomad nodes"); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -598,14 +641,6 @@ func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, boot
 			return
 		}
 	}
-	if err := s.runBootstrapServerSteps(ctx, taskID, bootstrap, adapter); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
-	if err := s.waitForPanelNomadReachability(ctx, taskID); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return
-	}
 	s.reconcileReverseProxyJobLogged(ctx, taskID)
 	_ = s.tasks.Complete(ctx, taskID, "Nomad cluster rebuild requested")
 }
@@ -613,7 +648,7 @@ func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, boot
 func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv server.Server, setter addressSetter) {
 	_ = s.tasks.Start(ctx, taskID)
 	previous := s.currentConfig().Address
-	next := "https://" + net.JoinHostPort(srv.Host, "4646")
+	next := nomadHTTPAddressForServer(srv)
 	_ = s.tasks.Advance(ctx, taskID, "switching", "switching Nomad server address")
 	s.setNomadAddress(setter, next)
 	if err := s.waitForPanelNomadReachability(ctx, taskID); err != nil {
@@ -1634,6 +1669,10 @@ func nomadHTTPAddressMatchesServer(address string, srv server.Server) bool {
 		return false
 	}
 	return sameHost(parsed.Hostname(), srv.Host)
+}
+
+func nomadHTTPAddressForServer(srv server.Server) string {
+	return "https://" + net.JoinHostPort(srv.Host, "4646")
 }
 
 func sameHost(left, right string) bool {

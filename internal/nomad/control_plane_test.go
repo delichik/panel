@@ -122,6 +122,30 @@ func TestControlPlaneKeepsCompletedJoinVisibleUntilNomadNodeRegisters(t *testing
 	}
 }
 
+func TestControlPlaneShowsCompletedRebuildAsRegisteringUntilNodeRegisters(t *testing.T) {
+	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createControlPlaneServer(t, svc.servers, credSvc, ctx, "control", "10.0.0.37")
+	fake.status = StatusResponse{Connected: true, Leader: "10.0.0.37:4647"}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeClusterRebuild, ServerID: srv.ID, ResourceType: "nomad_cluster", ResourceID: srv.ID, Summary: "Nomad cluster rebuild requested", Status: tasks.StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.ControlPlane(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Nodes) != 1 {
+		t.Fatalf("nodes = %#v", got.Nodes)
+	}
+	node := got.Nodes[0]
+	if node.Kind != ProjectedNodePending || node.Role != ProjectedNodeRoleServer || node.Status != "registering" || node.TaskID != task.ID {
+		t.Fatalf("unexpected projected node: %#v", node)
+	}
+}
+
 func TestControlPlaneProjectsManagedAndUnmanagedNodes(t *testing.T) {
 	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
 	defer cleanup()
