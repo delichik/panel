@@ -85,6 +85,9 @@ func (s *Scheduler) packageLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			if err := s.runDuePackageRefreshTasks(ctx); err != nil {
+				log.Printf("package refresh task: %v", err)
+			}
 			interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
 			if time.Since(lastRun) < interval {
 				continue
@@ -117,8 +120,7 @@ func (s *Scheduler) Stop() {
 func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 	switch task.Type {
 	case "server_connectivity_test", "server_info_collect":
-		_, err := s.servers.EnsureConnectivityTask(ctx, task.ServerID, true)
-		return err
+		return s.servers.RunConnectivityTask(ctx, task)
 	case "package_refresh":
 		if s.packages == nil {
 			return panelerr.Validation("task_run_now_unsupported", "Package refresh runner is not configured")
@@ -132,6 +134,37 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 	}
 
 	return panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center")
+}
+
+func (s *Scheduler) runDuePackageRefreshTasks(ctx context.Context) error {
+	if s.packages == nil || s.tasks == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	startedByServer := map[string]struct{}{}
+	for _, status := range []string{tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusFailedRetryable} {
+		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: "package_refresh", Status: status, Limit: 50})
+		if err != nil {
+			return err
+		}
+		for _, task := range result.Items {
+			if task.NextRunAt != nil && task.NextRunAt.After(now) {
+				continue
+			}
+			serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+			if serverID == "" {
+				continue
+			}
+			if _, ok := startedByServer[serverID]; ok {
+				continue
+			}
+			if err := s.packages.RunRefreshTask(ctx, task); err != nil {
+				return err
+			}
+			startedByServer[serverID] = struct{}{}
+		}
+	}
+	return nil
 }
 
 func (s *Scheduler) CanRun(task tasks.Task) bool {
@@ -276,4 +309,13 @@ func cleanupInterval(schedule string) time.Duration {
 	default:
 		return 24 * time.Hour
 	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

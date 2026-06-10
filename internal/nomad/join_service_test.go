@@ -673,7 +673,7 @@ func TestUpdateReverseProxyStoresNodeConfigAndRegistersNginxJob(t *testing.T) {
 		}},
 	}}})
 
-	updated, err := svc.UpdateReverseProxy(ctx, ReverseProxyInput{
+	result, err := svc.UpdateReverseProxy(ctx, ReverseProxyInput{
 		ServerID: srv.ID,
 		Enabled:  true,
 		StaticSites: []ReverseProxyStaticSite{{
@@ -684,6 +684,17 @@ func TestUpdateReverseProxyStoresNodeConfigAndRegistersNginxJob(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	updated := result.Server
+	if result.TaskID == "" {
+		t.Fatal("expected reverse proxy task id")
+	}
+	taskResult, err := svc.tasks.Get(ctx, result.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskResult.Type != TaskTypeReverseProxySync || taskResult.Status != tasks.StatusCompleted {
+		t.Fatalf("reverse proxy task = %#v", taskResult)
 	}
 	if !traitBool(updated.Traits, TraitReverseProxyEnabled) || !traitBool(updated.Traits, TraitReverseProxyStaticFiles) {
 		t.Fatalf("reverse proxy traits = %#v", updated.Traits)

@@ -180,10 +180,6 @@ func (f *fakeProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 	return f.bundle, nil
 }
 
-func (f *fakeProvider) Renew(ctx context.Context, certID string) (Bundle, error) {
-	return f.bundle, nil
-}
-
 func testBundle(t *testing.T) Bundle {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

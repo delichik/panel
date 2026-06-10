@@ -34,7 +34,7 @@
 
 - DNS 域名存储在 `dns_domains`，证书记录存储在 `certificates`。
 - 当前 DNS provider 以 Cloudflare 为主，API token 和 account ID 属于敏感配置。
-- ACME 签发会创建 DNS-01 challenge，等待 DNS 传播后完成签发。
+- ACME 签发会创建 DNS-01 challenge，等待 DNS 传播后完成签发；一旦 challenge 记录已创建，后续等待、授权或签发失败也必须尝试清理 DNS 记录。
 - 通配符证书会展开需要的域名集合；签发成功后写入证书路径、私钥路径、有效期和续签时间。
 - 证书可注册为应用内置变量，并被应用模块和 Nomad 反向代理读取。
 - 签发、失败和续签应记录任务日志；第三方错误文本是否翻译需要按 i18n 指南评估。

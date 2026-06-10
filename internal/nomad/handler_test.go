@@ -194,6 +194,15 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	if fake.reverseProxy.ServerID != "srv_1" || !fake.reverseProxy.Enabled || !fake.reverseProxy.StaticFiles {
 		t.Fatalf("unexpected reverse proxy input=%#v", fake.reverseProxy)
 	}
+	var proxyEnv struct {
+		Data ReverseProxyUpdateResult `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &proxyEnv); err != nil {
+		t.Fatal(err)
+	}
+	if proxyEnv.Data.TaskID != "task_proxy" || proxyEnv.Data.Server.ID != "srv_1" {
+		t.Fatalf("unexpected reverse proxy result=%#v", proxyEnv.Data)
+	}
 }
 
 type fakeInventoryClient struct {
@@ -261,12 +270,12 @@ func (f *fakeJoinService) RemoveNode(_ context.Context, in RemoveNodeInput) (tas
 	return f.remove, nil
 }
 
-func (f *fakeJoinService) UpdateReverseProxy(_ context.Context, in ReverseProxyInput) (server.Server, error) {
+func (f *fakeJoinService) UpdateReverseProxy(_ context.Context, in ReverseProxyInput) (ReverseProxyUpdateResult, error) {
 	f.reverseProxy = in
-	return server.Server{ID: in.ServerID, Name: "worker-1", Traits: map[string]string{
+	return ReverseProxyUpdateResult{TaskID: "task_proxy", Server: server.Server{ID: in.ServerID, Name: "worker-1", Traits: map[string]string{
 		TraitReverseProxyEnabled:     "true",
 		TraitReverseProxyStaticFiles: "true",
-	}}, nil
+	}}}, nil
 }
 
 func (f *fakeInventoryClient) Status(ctx context.Context) (StatusResponse, error) {

@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { formatDateTime, t, useI18n } from '@/i18n';
+import { formatDateTime, t } from '@/i18n';
 import { serversApi, type CredentialInput, type ServerInput, type ServerProbeDto } from '@/api/servers';
 import { nomadApi } from '@/api/nomad';
 import type { CredentialDto, NomadControlPlaneDto, ProjectedNomadNodeDto, ServerDto } from '@/types/api';
 
 const route = useRoute();
-const { } = useI18n();
 const servers = ref<ServerDto[]>([]);
 const credentials = ref<CredentialDto[]>([]);
 const controlPlane = ref<NomadControlPlaneDto | null>(null);
@@ -29,6 +28,7 @@ const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' :
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
+const snackbarTaskId = ref('');
 
 const confirmDialog = ref(false);
 const confirmTitle = ref(t('common.confirm'));
@@ -40,7 +40,7 @@ const serverForm = reactive({
   host: '',
   port: 22,
   sshUsername: '',
-  credentialId: null as string | null,
+  credentialId: '',
   traitsRaw: [] as string[],
   notes: '',
 });
@@ -58,6 +58,7 @@ const selectedServer = computed(() => servers.value.find((server) => server.id =
 const reachableCount = computed(() => servers.value.filter((server) => server.reachable).length);
 const managedCount = computed(() => servers.value.filter((server) => nomadProjectionForServer(server.id)?.kind === 'managed').length);
 const credentialRows = computed(() => credentials.value ?? []);
+const serverCredentialMissing = computed(() => !serverForm.credentialId);
 
 const credentialOptions = computed(() =>
   credentialRows.value.map((credential) => ({
@@ -72,10 +73,15 @@ watch(activeTab, () => {
   }
 });
 
-function showMessage(text: string, color = 'success') {
+function showMessage(text: string, color = 'success', taskId = '') {
   snackbarText.value = text;
   snackbarColor.value = color;
+  snackbarTaskId.value = taskId;
   snackbar.value = true;
+}
+
+function taskRoute(taskId = snackbarTaskId.value) {
+  return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
 }
 
 function confirm(title: string, message: string, action: () => Promise<void>) {
@@ -138,7 +144,7 @@ function resetServerForm(server?: ServerDto) {
     host: server?.host ?? '',
     port: server?.port ?? 22,
     sshUsername: server?.sshUsername ?? '',
-    credentialId: server?.credentialId ?? null,
+    credentialId: server?.credentialId || credentialRows.value[0]?.id || '',
     traitsRaw,
     notes: server?.notes ?? '',
   });
@@ -222,13 +228,17 @@ function buildServerPayload(): ServerInput {
     host: serverForm.host,
     port: serverForm.port,
     sshUsername: serverForm.sshUsername,
-    credentialId: serverForm.credentialId,
+    credentialId: serverForm.credentialId.trim(),
     traits,
     notes: serverForm.notes,
   };
 }
 
 async function probeServerForm() {
+  if (serverCredentialMissing.value) {
+    showMessage(t('serversPage.credentialRequired'), 'error');
+    return;
+  }
   probeLoading.value = true;
   probeError.value = '';
   probeResult.value = null;
@@ -242,6 +252,10 @@ async function probeServerForm() {
 }
 
 async function saveServer() {
+  if (serverCredentialMissing.value) {
+    showMessage(t('serversPage.credentialRequired'), 'error');
+    return;
+  }
   try {
     const payload = buildServerPayload();
     const saved = editing.value
@@ -329,8 +343,8 @@ function canInstallUFW(server: ServerDto | null) {
 async function installUFW(server: ServerDto) {
   ufwInstalling.value = { ...ufwInstalling.value, [server.id]: true };
   try {
-    await serversApi.installUFW(server.id);
-    showMessage(t('serversPage.ufwInstallStarted'));
+    const result = await serversApi.installUFW(server.id);
+    showMessage(t('serversPage.ufwInstallStarted'), 'success', result.taskId);
     await load();
   } catch (err) {
     showMessage(err instanceof Error ? err.message : t('serversPage.ufwInstallFailed'), 'error');
@@ -566,6 +580,10 @@ onMounted(load);
         <v-divider />
         <v-card-text class="app-dialog-body">
           <v-form @submit.prevent="saveServer">
+            <v-alert v-if="credentialRows.length === 0" type="info" variant="tonal" density="compact" class="credential-required-alert mb-3">
+              <span>{{ t('serversPage.credentialRequired') }}</span>
+              <v-btn size="small" variant="text" class="text-none" @click="resetCredentialForm">{{ t('serversPage.addCredential') }}</v-btn>
+            </v-alert>
             <div class="form-grid">
               <v-text-field v-model="serverForm.name" :label="t('serversPage.name')" variant="outlined" density="comfortable" />
               <v-text-field v-model="serverForm.host" :label="t('serversPage.host')" variant="outlined" density="comfortable" />
@@ -579,7 +597,8 @@ onMounted(load);
                 :placeholder="t('serversPage.selectCredential')"
                 variant="outlined"
                 density="comfortable"
-                clearable
+                :disabled="credentialOptions.length === 0"
+                :rules="[value => Boolean(value) || t('serversPage.credentialRequired')]"
               />
               <v-text-field
                 v-model="serverForm.sshUsername"
@@ -608,7 +627,7 @@ onMounted(load);
                 <div class="text-subtitle-2 font-weight-bold">{{ t('serversPage.connectionTest') }}</div>
                 <div class="text-caption text-medium-emphasis">{{ t('serversPage.connectionTestHint') }}</div>
               </div>
-              <v-btn prepend-icon="mdi-lan-check" variant="outlined" class="text-none" :loading="probeLoading" @click="probeServerForm">{{ t('serversPage.testConnection') }}</v-btn>
+              <v-btn prepend-icon="mdi-lan-check" variant="outlined" class="text-none" :loading="probeLoading" :disabled="serverCredentialMissing" @click="probeServerForm">{{ t('serversPage.testConnection') }}</v-btn>
             </div>
 
             <v-alert v-if="probeError" type="error" variant="tonal" density="compact" class="mt-3">{{ probeError }}</v-alert>
@@ -627,7 +646,7 @@ onMounted(load);
         <v-divider />
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="serverDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" @click="saveServer">{{ t('common.save') }}</v-btn>
+          <v-btn color="primary" variant="flat" class="text-none" :disabled="serverCredentialMissing" @click="saveServer">{{ t('common.save') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -691,6 +710,7 @@ onMounted(load);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template #actions>
+        <v-btn v-if="snackbarTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
         <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
       </template>
     </v-snackbar>
@@ -731,6 +751,7 @@ onMounted(load);
 .span-all { grid-column: 1 / -1; }
 .probe-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 26%); }
 .probe-copy { min-width: 0; }
+.credential-required-alert :deep(.v-alert__content) { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .probe-result { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
 .probe-result > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .probe-result span { color: var(--lp-text-muted); font-size: 0.76rem; }

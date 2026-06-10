@@ -4,15 +4,13 @@ import {
   t,
   translateApplicationFileKind,
   translateApplicationRestartPolicy,
-  useI18n,
 } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ServerDto } from '@/types/api';
 
 const props = defineProps<{ application: ApplicationDto | null; open: boolean }>();
-const emit = defineEmits<{ close: []; saved: [ApplicationDto] }>();
-useI18n();
+const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
 
 interface PortForm { label: string; to: number; static: number | null }
 interface EnvForm { key: string; value: string }
@@ -528,8 +526,12 @@ async function save(deploy = false) {
       });
     }
     const app = await applicationsApi.commitSaveSession(session.id);
-    if (deploy) await applicationsApi.deploy(app.id);
-    emit('saved', app);
+    if (deploy) {
+      const result = await applicationsApi.deploy(app.id);
+      emit('saved', result.application ?? app, result.taskId);
+    } else {
+      emit('saved', app);
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('applicationEditor.saveFailed');
   } finally {

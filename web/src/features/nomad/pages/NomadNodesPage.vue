@@ -1,18 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import {
   t,
   translateNomadNodeKind,
   translateNomadNodeRole,
   translateNomadNodeStatus,
-  useI18n,
 } from '@/i18n';
 import { nomadApi } from '@/api/nomad';
 import type { NomadControlPlaneDto, NomadReverseProxyStaticSiteDto, ProjectedNomadNodeDto } from '@/types/api';
 
 const router = useRouter();
-useI18n();
+const route = useRoute();
 const controlPlane = ref<NomadControlPlaneDto | null>(null);
 const loading = ref(false);
 const joining = ref(false);
@@ -76,6 +75,10 @@ function taskRoute(taskId = operationTaskId.value) {
   return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
 }
 
+function routeTaskId() {
+  return typeof route.query.task === 'string' ? route.query.task : '';
+}
+
 function showTaskMessage(taskId: string | undefined, message: string) {
   operationTaskId.value = taskId || '';
   operationMessage.value = message;
@@ -136,6 +139,10 @@ async function load() {
     const result = await nomadApi.controlPlane();
     controlPlane.value = result;
     error.value = '';
+    const linkedTaskId = routeTaskId();
+    if (linkedTaskId && !operationTaskId.value) {
+      showTaskMessage(linkedTaskId, t('nomadNodesPage.bootstrapStarted'));
+    }
     if (result.status === 'unconfigured') {
       await router.replace('/nomad/setup');
     }
@@ -282,12 +289,13 @@ async function saveProxyConfig() {
     const staticSites = proxyForm.value.staticSites
       .filter((site) => site.domain.trim() || site.root.trim())
       .map((site) => ({ domain: site.domain.trim(), root: site.root.trim(), index: site.index.trim() || 'index.html' }));
-    await nomadApi.updateReverseProxy({
+    const result = await nomadApi.updateReverseProxy({
       serverId: node.serverId,
       enabled: proxyForm.value.enabled,
       staticFiles: staticSites.length > 0,
       staticSites,
     });
+    showTaskMessage(result.taskId, t('nomadNodesPage.proxySyncStarted'));
     error.value = '';
     proxyDialog.value = false;
     await load();

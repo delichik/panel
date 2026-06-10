@@ -81,6 +81,11 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 	}
 
 	cleanups := []func(){}
+	defer func() {
+		for i := len(cleanups) - 1; i >= 0; i-- {
+			cleanups[i]()
+		}
+	}()
 	for _, authzURL := range order.AuthzURLs {
 		authz, err := p.client.GetAuthorization(ctx, authzURL)
 		if err != nil {
@@ -101,7 +106,9 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 		if err := p.dns.Present(ctx, domain, challenge.Token, value); err != nil {
 			return Bundle{}, err
 		}
-		cleanups = append(cleanups, func() { _ = p.dns.CleanUp(context.Background(), domain, challenge.Token, value) })
+		cleanups = append(cleanups, func(domain, token, value string) func() {
+			return func() { _ = p.dns.CleanUp(context.Background(), domain, token, value) }
+		}(domain, challenge.Token, value))
 		if p.propagationDelay > 0 {
 			if err := sleepContext(ctx, p.propagationDelay); err != nil {
 				return Bundle{}, err
@@ -114,10 +121,6 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 			return Bundle{}, panelerr.BadGateway("acme_authorization_failed", "ACME authorization failed: "+err.Error())
 		}
 	}
-	for i := len(cleanups) - 1; i >= 0; i-- {
-		cleanups[i]()
-	}
-
 	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return Bundle{}, err
@@ -139,10 +142,6 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 		return Bundle{}, err
 	}
 	return Bundle{CertificatePEM: certPEM, CAChainPEM: chainPEM, PrivateKeyPEM: keyPEM}, nil
-}
-
-func (p *ACMEProvider) Renew(ctx context.Context, certID string) (Bundle, error) {
-	return Bundle{}, panelerr.Validation("certificate_renew_not_supported", "Certificate renewal is not implemented yet")
 }
 
 func dnsChallenge(challenges []*acme.Challenge) *acme.Challenge {

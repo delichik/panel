@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { formatDateTime, formatTime, t, translateTaskStatus, useI18n } from '@/i18n';
+import { formatDateTime, formatTime, t, translateTaskStatus } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
 import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
 import { groupTasksByOperation } from '../taskOperations';
 
-useI18n();
 const route = useRoute();
 
 const tasks = ref<TaskDto[]>([]);
@@ -165,11 +164,15 @@ async function loadRouteTask() {
   }
   try {
     const linkedTask = await tasksApi.get(id);
-    operationFilter.value = linkedTask.operationId || linkedTask.id;
+    operationFilter.value = linkedTask.operationId || '';
     statusFilter.value = 'all';
     typeFilter.value = linkedTask.type === 'server_connectivity_test' ? linkedTask.type : '';
     page.value = 1;
     await loadTasks();
+    if (!tasks.value.some((task) => task.id === linkedTask.id)) {
+      tasks.value = [linkedTask];
+      total.value = 1;
+    }
     selectedOperationId.value = linkedTask.operationId || linkedTask.id;
     selectedTaskId.value = linkedTask.id;
   } catch (err) {

@@ -10,7 +10,6 @@ const (
 	TaskTypeDeploy      = "application_deploy"
 	TaskTypeStop        = "application_stop"
 	TaskTypeRestart     = "application_restart"
-	TaskTypeDelete      = "application_delete"
 	TaskTypeRefresh     = "nomad_refresh"
 	TaskTypeImageCheck  = "application_image_check"
 	TaskTypeImageUpdate = "application_image_update"

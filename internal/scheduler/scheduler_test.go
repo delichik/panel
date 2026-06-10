@@ -10,6 +10,7 @@ import (
 	"panel/internal/config"
 	"panel/internal/credential"
 	"panel/internal/metrics"
+	"panel/internal/packages"
 	"panel/internal/server"
 	"panel/internal/settings"
 	"panel/internal/sshx"
@@ -202,6 +203,98 @@ func TestRunDueConnectivityTestsStartsQueuedTask(t *testing.T) {
 	t.Fatalf("expected queued connectivity task to complete, got %#v", got)
 }
 
+func TestRunNowConnectivityTaskStartsProvidedTask(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	credSvc := credential.NewService(store.AppDB(), cfg)
+	cred, err := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	createServerSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	srv, err := createServerSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := taskSvc.Create(ctx, tasks.CreateInput{
+		Type:         "server_connectivity_test",
+		ServerID:     srv.ID,
+		ResourceType: "server",
+		ResourceID:   srv.ID,
+		Summary:      "Retrying Testing SSH connectivity",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runServerSvc := server.NewService(store.AppDB(), fakeConnectivityExecutor{}, taskSvc)
+	sched := New(settingsSvc, runServerSvc, nil, nil, taskSvc)
+
+	if err := sched.RunNow(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+}
+
+func TestRunDuePackageRefreshTasksStartsQueuedTask(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	task, err := taskSvc.Create(ctx, tasks.CreateInput{
+		Type:         "package_refresh",
+		ServerID:     "srv",
+		ResourceType: "server",
+		ResourceID:   "srv",
+		TriggerType:  "retry",
+		Summary:      "Retrying Refreshing package updates",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	packageSvc := packages.NewService(store.AppDB(), serverSvc, fakePackageExecutor{}, taskSvc)
+	sched := New(settingsSvc, serverSvc, nil, packageSvc, taskSvc)
+
+	if err := sched.runDuePackageRefreshTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+}
+
 type fakeMetricsExecutor struct{}
 
 func (fakeMetricsExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
@@ -242,4 +335,42 @@ func (fakeConnectivityExecutor) Upload(context.Context, sshx.Target, sshx.Upload
 
 func (fakeConnectivityExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
+}
+
+type fakePackageExecutor struct{}
+
+func (fakePackageExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{}, nil
+}
+
+func (fakePackageExecutor) ExecSudo(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{Stdout: "Listing...\nopenssl/stable-security 3.0.17-1 amd64 [upgradable from: 3.0.16-1]\n", ExitCode: 0}, nil
+}
+
+func (fakePackageExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (fakePackageExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
+}
+
+func waitForTaskStatus(t *testing.T, taskSvc *tasks.Service, taskID string, status string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := taskSvc.Get(context.Background(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status == status {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	task, err := taskSvc.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("expected task %s to reach %s, got %#v", taskID, status, task)
 }

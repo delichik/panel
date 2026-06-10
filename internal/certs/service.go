@@ -649,7 +649,3 @@ type notConfiguredProvider struct{}
 func (notConfiguredProvider) Issue(context.Context, Request) (Bundle, error) {
 	return Bundle{}, panelerr.BadGateway("certificate_provider_not_configured", "Certificate provider is not configured")
 }
-
-func (notConfiguredProvider) Renew(context.Context, string) (Bundle, error) {
-	return Bundle{}, panelerr.BadGateway("certificate_provider_not_configured", "Certificate provider is not configured")
-}

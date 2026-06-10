@@ -16,5 +16,4 @@ type Bundle struct {
 
 type Provider interface {
 	Issue(ctx context.Context, req Request) (Bundle, error)
-	Renew(ctx context.Context, certID string) (Bundle, error)
 }

@@ -43,9 +43,9 @@ async function bootstrapSelectedServer() {
   if (!selectedServerId.value) return;
   bootstrapping.value = true;
   try {
-    await nomadApi.bootstrapServer(selectedServerId.value);
+    const result = await nomadApi.bootstrapServer(selectedServerId.value);
     error.value = '';
-    await router.replace('/nomad/nodes');
+    await router.replace({ path: '/nomad/nodes', query: { task: result.taskId } });
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('nomadSetupPage.bootstrapFailed');
   } finally {

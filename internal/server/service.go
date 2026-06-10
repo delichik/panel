@@ -268,6 +268,22 @@ func (s *Service) EnsureInitialInfoTask(ctx context.Context, serverID string, ru
 	return s.ensureConnectivityTask(ctx, serverID, runNow, serverInfoTaskType, "Collecting server information")
 }
 
+func (s *Service) RunConnectivityTask(ctx context.Context, task tasks.Task) error {
+	if s.exec == nil {
+		return panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
+	serverID := task.ServerID
+	if serverID == "" {
+		serverID = task.ResourceID
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	s.startConnectivityTask(task, srv)
+	return nil
+}
+
 func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, runNow bool, taskType string, summary string) (tasks.Task, error) {
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
@@ -345,6 +361,7 @@ func (s *Service) RunDueConnectivityTests(ctx context.Context) error {
 }
 
 func (s *Service) startConnectivityTask(task tasks.Task, srv Server) {
+	_ = s.tasks.Start(context.Background(), task.ID)
 	go func() {
 		taskCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()

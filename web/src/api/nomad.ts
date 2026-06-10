@@ -6,6 +6,7 @@ import type {
   NomadJobDto,
   NomadNodeDto,
   NomadReverseProxyStaticSiteDto,
+  NomadReverseProxyUpdateDto,
   NomadServiceRegistrationDto,
   NomadStatusDto,
   ServerDto,
@@ -94,7 +95,7 @@ export function createNomadApi(client: ApiClient = apiClient) {
       return client.post<TaskCreatedDto>('/nomad/remove-node', input);
     },
     updateReverseProxy(input: ReverseProxyInput) {
-      return client.put<ServerDto>('/nomad/reverse-proxy', input);
+      return client.put<NomadReverseProxyUpdateDto>('/nomad/reverse-proxy', input);
     },
   };
 }

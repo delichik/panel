@@ -32,7 +32,7 @@ type joinService interface {
 	RebuildCluster(ctx context.Context, in RebuildClusterInput) (tasks.Task, error)
 	SwitchServer(ctx context.Context, in SwitchServerInput) (tasks.Task, error)
 	RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks.Task, error)
-	UpdateReverseProxy(ctx context.Context, in ReverseProxyInput) (server.Server, error)
+	UpdateReverseProxy(ctx context.Context, in ReverseProxyInput) (ReverseProxyUpdateResult, error)
 }
 
 func NewHandler(client inventoryClient, join ...joinService) *Handler {
@@ -202,10 +202,10 @@ func (h *Handler) UpdateReverseProxy(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	srv, err := h.join.UpdateReverseProxy(r.Context(), req)
+	result, err := h.join.UpdateReverseProxy(r.Context(), req)
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, srv)
+	httpx.JSON(w, http.StatusOK, result)
 }

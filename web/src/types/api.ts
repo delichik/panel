@@ -19,7 +19,7 @@ export interface ServerDto {
   host: string;
   port: number;
   sshUsername: string;
-  credentialId: string | null;
+  credentialId: string;
   traits?: Record<string, string>;
   notes?: string;
   os?: OSInfoDto | null;
@@ -365,6 +365,11 @@ export interface NomadReverseProxyStaticSiteDto {
   domain: string;
   root: string;
   index: string;
+}
+
+export interface NomadReverseProxyUpdateDto {
+  server: ServerDto;
+  taskId?: string;
 }
 
 export interface NomadControlPlaneDto {

@@ -26,6 +26,7 @@ const TaskTypeServerBootstrap = "nomad_server_bootstrap"
 const TaskTypeNodeRemove = "nomad_node_remove"
 const TaskTypeClusterRebuild = "nomad_cluster_rebuild"
 const TaskTypeServerSwitch = "nomad_server_switch"
+const TaskTypeReverseProxySync = "nomad_reverse_proxy_sync"
 
 const (
 	nomadInstallTimeout                = 20 * time.Minute
@@ -389,6 +390,11 @@ type ReverseProxyInput struct {
 	StaticSites []ReverseProxyStaticSite `json:"staticSites"`
 }
 
+type ReverseProxyUpdateResult struct {
+	Server server.Server `json:"server"`
+	TaskID string        `json:"taskId,omitempty"`
+}
+
 type ReverseProxyRoute struct {
 	Domain     string             `json:"domain"`
 	TargetPort int                `json:"targetPort"`
@@ -406,18 +412,46 @@ type ReverseProxyStaticSite struct {
 	Index  string `json:"index"`
 }
 
-func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInput) (server.Server, error) {
+func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInput) (ReverseProxyUpdateResult, error) {
 	serverID := strings.TrimSpace(in.ServerID)
 	if serverID == "" {
-		return server.Server{}, panelerr.Validation("nomad_reverse_proxy_server_required", "Server ID is required")
+		return ReverseProxyUpdateResult{}, panelerr.Validation("nomad_reverse_proxy_server_required", "Server ID is required")
 	}
 	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
-		return server.Server{}, err
+		return ReverseProxyUpdateResult{}, err
 	}
 	staticSites, err := normalizeReverseProxyStaticSites(in.StaticSites)
 	if err != nil {
-		return server.Server{}, err
+		return ReverseProxyUpdateResult{}, err
+	}
+	taskID := ""
+	if s.tasks != nil {
+		task, err := s.tasks.Create(ctx, tasks.CreateInput{
+			Type:         TaskTypeReverseProxySync,
+			ServerID:     srv.ID,
+			ResourceType: "server",
+			ResourceID:   srv.ID,
+			TriggerType:  "user",
+			Status:       tasks.StatusRunning,
+			Summary:      "Synchronizing reverse proxy for " + firstNonEmpty(srv.Name, srv.ID),
+		})
+		if err != nil {
+			return ReverseProxyUpdateResult{}, err
+		}
+		taskID = task.ID
+	}
+	fail := func(err error) (ReverseProxyUpdateResult, error) {
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.Fail(ctx, taskID, err)
+		}
+		return ReverseProxyUpdateResult{TaskID: taskID}, err
+	}
+	advance := func(stage, message string) error {
+		if s.tasks == nil || taskID == "" {
+			return nil
+		}
+		return s.tasks.Advance(ctx, taskID, stage, message)
 	}
 	traits := map[string]string{}
 	for key, value := range srv.Traits {
@@ -431,14 +465,29 @@ func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInp
 		in.StaticFiles = true
 	}
 	if in.Enabled {
-		if err := s.allowReverseProxyUFWPort(ctx, srv); err != nil {
-			return server.Server{}, err
+		if _, err := s.ensureNomadEligible(srv); err != nil {
+			return fail(err)
+		}
+		if s.exec != nil {
+			if err := advance("opening_firewall", "opening reverse proxy firewall ports"); err != nil {
+				return fail(err)
+			}
+			if taskID != "" {
+				if err := s.execSudoLogged(ctx, taskID, srv.Target(), reverseProxyUFWAllowScript(), nomadFirewallTimeout); err != nil {
+					return fail(err)
+				}
+			} else if _, err := s.exec.ExecSudo(ctx, srv.Target(), sshx.CommandSpec{Command: reverseProxyUFWAllowScript(), Timeout: nomadFirewallTimeout}); err != nil {
+				return fail(err)
+			}
 		}
 	}
 	staticJSON, _ := json.Marshal(staticSites)
 	traits[TraitReverseProxyEnabled] = boolTrait(in.Enabled)
 	traits[TraitReverseProxyStaticFiles] = boolTrait(in.StaticFiles)
 	traits[TraitReverseProxyStaticSites] = string(staticJSON)
+	if err := advance("saving_config", "saving reverse proxy server traits"); err != nil {
+		return fail(err)
+	}
 	updated, err := s.servers.Update(ctx, serverID, server.SaveRequest{
 		Name:         srv.Name,
 		Host:         srv.Host,
@@ -449,26 +498,20 @@ func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInp
 		Notes:        srv.Notes,
 	})
 	if err != nil {
-		return server.Server{}, err
+		return fail(err)
+	}
+	if err := advance("reconciling", "reconciling reverse proxy Nomad job"); err != nil {
+		return fail(err)
 	}
 	if err := s.reconcileReverseProxyJob(ctx); err != nil {
-		return server.Server{}, err
+		return fail(err)
 	}
-	return updated, nil
-}
-
-func (s *JoinService) allowReverseProxyUFWPort(ctx context.Context, srv server.Server) error {
-	if s.exec == nil {
-		return nil
+	if s.tasks != nil && taskID != "" {
+		if err := s.tasks.Complete(ctx, taskID, "Reverse proxy synchronized"); err != nil {
+			return ReverseProxyUpdateResult{}, err
+		}
 	}
-	if _, err := s.ensureNomadEligible(srv); err != nil {
-		return err
-	}
-	_, err := s.exec.ExecSudo(ctx, srv.Target(), sshx.CommandSpec{
-		Command: reverseProxyUFWAllowScript(),
-		Timeout: nomadFirewallTimeout,
-	})
-	return err
+	return ReverseProxyUpdateResult{Server: updated, TaskID: taskID}, nil
 }
 
 func (s *JoinService) RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks.Task, error) {

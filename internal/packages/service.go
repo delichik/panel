@@ -100,7 +100,9 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 		return RefreshResult{}, err
 	} else if ok {
 		if existing.Status != tasks.StatusRunning && s.markRefreshing(serverID) {
-			go s.runRefreshTask(context.Background(), existing, srv, adapter)
+			if err := s.startRefreshTask(ctx, existing, srv, adapter); err != nil {
+				return RefreshResult{}, err
+			}
 		}
 		return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: existing.ID}, nil
 	}
@@ -120,7 +122,9 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 		s.clearRefreshing(serverID)
 		return RefreshResult{}, err
 	}
-	go s.runRefreshTask(context.Background(), task, srv, adapter)
+	if err := s.startRefreshTask(ctx, task, srv, adapter); err != nil {
+		return RefreshResult{}, err
+	}
 	return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: task.ID}, nil
 }
 
@@ -142,6 +146,14 @@ func (s *Service) RunRefreshTask(ctx context.Context, task tasks.Task) error {
 	}
 	if !s.markRefreshing(serverID) {
 		return nil
+	}
+	return s.startRefreshTask(ctx, task, srv, adapter)
+}
+
+func (s *Service) startRefreshTask(ctx context.Context, task tasks.Task, srv server.Server, adapter packageAdapter) error {
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		s.clearRefreshing(srv.ID)
+		return err
 	}
 	go s.runRefreshTask(context.Background(), task, srv, adapter)
 	return nil
@@ -225,7 +237,6 @@ func (s *Service) adapterFor(srv server.Server) (packageAdapter, error) {
 
 func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv server.Server, adapter packageAdapter) {
 	defer s.clearRefreshing(srv.ID)
-	_ = s.tasks.Start(ctx, task.ID)
 	_ = s.tasks.Advance(ctx, task.ID, "running", "refreshing package updates")
 	updates, err := adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {

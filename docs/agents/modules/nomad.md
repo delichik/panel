@@ -32,7 +32,7 @@
 - 控制平面：`GET /api/v1/nomad/control-plane`
 - 加入流程：`GET /api/v1/nomad/join-candidates`，`POST /api/v1/nomad/join`
 - 引导、重部署、重建、切换与移除：`POST /api/v1/nomad/bootstrap-server`，`/redeploy-node`，`/rebuild-cluster`，`/switch-server`，`/remove-node`，这些接口返回 `taskId`
-- 反向代理：`PUT /api/v1/nomad/reverse-proxy`
+- 反向代理：`PUT /api/v1/nomad/reverse-proxy`，返回更新后的 `server` 和 `taskId`
 
 ## 行为约定
 
@@ -43,10 +43,11 @@
 - 集群重建必须先引导并验证新的单 server 集群，再重置其他 Panel 托管节点，避免新 server 端口未开放时提前停止旧节点。
 - 长耗时流程必须写入任务、步骤和日志。
 - 前端 Nomad 节点页提交加入、重部署、重建、切换或移除后必须保留 `taskId`，并给出跳转任务中心的入口。
+- 首个 server 引导从设置页跳回节点页时必须保留 `taskId`，节点页应展示任务中心入口。
 - 移除 Nomad 节点属于高风险操作，前端必须先显示确认对话框。
 - `/nomad/jobs` 展示 Nomad job 清单；`/deployments` 展示 deployments、evaluations 和 services，`/nomad/deployments` 只作为兼容重定向。
 - Nomad 控制平面投影依赖最新 `nomad_*` 任务，任务查询需要保持最新优先，避免旧任务分页遮挡新近的引导、加入、重建、移除和 server 切换操作。
-- 反向代理同步会读取应用模块和证书模块的数据，避免在 Nomad 模块持久化已翻译展示文案。
+- 反向代理同步会读取应用模块和证书模块的数据；保存接口会创建 `nomad_reverse_proxy_sync` 任务，记录远程 UFW 放行和 Nomad job reconcile 的结果，前端必须保留任务中心入口。
 
 ## 验证
 

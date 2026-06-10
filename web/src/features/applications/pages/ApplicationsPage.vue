@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { t, useI18n } from '@/i18n';
+import { t } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
 import ApplicationDetail from '../components/ApplicationDetail.vue';
@@ -9,7 +9,6 @@ import ApplicationEditor from '../components/ApplicationEditor.vue';
 
 const route = useRoute();
 const router = useRouter();
-useI18n();
 const applications = ref<ApplicationDto[]>([]);
 const selectedId = ref('');
 const editorOpen = ref(false);
@@ -67,9 +66,10 @@ function editApplication(app: ApplicationDto) {
   editorOpen.value = true;
 }
 
-async function handleSaved(app: ApplicationDto) {
+async function handleSaved(app: ApplicationDto, taskId?: string) {
   editorOpen.value = false;
   message.value = app.enabled ? t('applicationsPage.savedAndDeploymentRequested') : t('applicationsPage.saved');
+  lastTaskId.value = taskId || '';
   await load();
   selectedId.value = app.id;
 }

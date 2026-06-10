@@ -731,7 +731,7 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err := s.updateApplication(ctx, app); err != nil {
 		return OperationResult{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
+	taskID, err := s.recordTask(ctx, TaskTypeDeploy, app.ID, "Submitted deployment for "+app.Name)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -744,7 +744,14 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{TaskID: taskID, EvalID: app.LastEvalID, Application: app}, nil
+	result := OperationResult{TaskID: taskID, EvalID: app.LastEvalID, Application: app}
+	if runtime, err := s.Runtime(ctx, app.ID); err == nil {
+		result.ApplicationRuntime = &runtime
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "Current application runtime status: "+runtime.JobStatus)
+		}
+	}
+	return result, nil
 }
 
 func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) {
@@ -1281,6 +1288,9 @@ func (s *Service) recordNomadOperationLog(ctx context.Context, taskID, action, j
 	}
 	if purge != "" {
 		lines = append(lines, "Purge job: "+purge)
+	}
+	if action == "deploy" {
+		lines = append(lines, "Nomad accepted the deployment request; application runtime shows allocation health after scheduling")
 	}
 	for _, line := range lines {
 		if err := s.tasks.AppendLog(ctx, taskID, "system", line); err != nil {
