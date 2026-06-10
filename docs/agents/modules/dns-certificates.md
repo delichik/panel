@@ -26,6 +26,7 @@
 ## API 范围
 
 - DNS 域名：`GET/POST /api/v1/dns/domains`，`PUT/DELETE /api/v1/dns/domains/{id}`
+- Panel 不提供用户可见的 DNS 记录管理页面、导航入口或 `/dns/records` API；Cloudflare 记录操作仅用于证书 DNS-01 challenge 的内部创建与清理。
 - 证书：`GET/POST /api/v1/certificates`，`DELETE /api/v1/certificates/{id}`
 - 证书默认值和 ACME 目录通过运行时设置读写：`GET/PUT /api/v1/settings/runtime`
 

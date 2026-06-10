@@ -22,6 +22,7 @@
 
 - 前端使用 Vue 3、Vue Router、Pinia、Vuetify、ECharts 和 Vitest。
 - 页面按 `web/src/features/<feature>/` 分组，共享组件放在 `web/src/components/`。
+- 全局布局在 `web/src/layouts/AppLayout.vue`；侧边导航列表必须在抽屉内部独立滚动，避免菜单项超出视口后不可访问。
 - API 调用经 `ApiClient`，默认 base URL 是 `/api/v1`；后端 API 变更时同步更新 `web/src/api/`、`web/src/types/api.ts` 和相关测试。
 - 路由标题使用 `meta.titleKey`，不要在路由元信息里写用户可见文案。
 - 新增或修改用户可见文案必须走 `useI18n()` 和 `web/src/i18n/index.ts`，并更新多语言状态文档。
@@ -33,7 +34,7 @@
 - 服务器与凭据：`web/src/features/servers/pages/ServersPage.vue`
 - 软件包：`web/src/features/packages/pages/PackageUpdatesPage.vue`
 - 应用：`web/src/features/applications/`
-- DNS 域名：`web/src/features/dns/pages/DomainsPage.vue`
+- DNS 域名：`web/src/features/dns/pages/DomainsPage.vue`；不要新增或恢复 DNS 记录管理入口。
 - 证书：`web/src/features/certificates/pages/CertificatesPage.vue`
 - Nomad：`web/src/features/nomad/`
 - 任务中心：`web/src/features/tasks/`

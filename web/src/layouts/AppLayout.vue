@@ -55,7 +55,6 @@ const navGroups = computed<NavGroup[]>(() => [
     title: t('layout.nav.dns'),
     items: [
       { to: '/dns/domains', title: t('layout.nav.domains'), value: 'dns-domains' },
-      { title: t('layout.nav.records'), value: 'dns-records', disabled: true },
       { to: '/dns/certificates', title: t('layout.nav.certificates'), value: 'dns-certificates' },
     ],
   },
@@ -157,7 +156,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
 
-      <v-list nav class="py-4 px-3">
+      <v-list nav class="app-drawer-nav py-4 px-3">
         <template v-for="group in navGroups" :key="group.key">
           <v-list-group v-if="group.items.length > 1" :value="group.key">
             <template #activator="{ props }">
@@ -352,6 +351,14 @@ onBeforeUnmount(() => {
   color: var(--lp-text-muted);
   font-size: 11px;
   font-weight: 500;
+}
+
+.app-drawer-nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .task-ticker {

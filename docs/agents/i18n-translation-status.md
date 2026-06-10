@@ -8,6 +8,7 @@
 
 - `web/src/layouts/AppLayout.vue`
   - 移动端导航入口文案已接入 `web/src/i18n/index.ts`
+  - 未启用的 DNS 记录导航入口已移除，对应 `layout.nav.records` 词条不再保留。
 - `web/src/features/settings/pages/SettingsPage.vue`
   - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
   - 设置分类子菜单、通用设置、安全设置、Nomad 设置、证书设置、系统信息文案已接入 `web/src/i18n/index.ts`
