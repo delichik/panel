@@ -25,6 +25,22 @@ describe('tasksApi', () => {
     );
   });
 
+  it('requests multi-select task filters and all task types', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { items: [], total: 0, page: 1, pageSize: 20 }, error: null }));
+    const api = createTasksApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await api.list({
+      statuses: ['running', 'failed'],
+      types: ['server_connectivity_test', 'metrics_collect'],
+      includeInternal: true,
+    });
+
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/v1/tasks?page=1&pageSize=20&status=running&status=failed&type=server_connectivity_test&type=metrics_collect&includeInternal=true',
+      expect.objectContaining({ method: 'GET' }),
+    );
+  });
+
   it('keeps the default exported client available', () => {
     expect(tasksApi.get).toBeDefined();
   });
@@ -70,7 +86,7 @@ describe('tasksApi', () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { items: [], total: 0, page: 1, pageSize: 20 }, error: null }));
     const api = createTasksApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
 
-    await api.list({ serverId: null, type: null, operationId: '   ' });
+    await api.list({ serverId: null, type: null, types: [' ', 'all'], statuses: ['all'], operationId: '   ' });
 
     expect(fetcher).toHaveBeenCalledWith(
       '/api/v1/tasks?page=1&pageSize=20',

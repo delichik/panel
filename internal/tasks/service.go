@@ -15,15 +15,18 @@ type Service struct {
 }
 
 type ListFilter struct {
-	Status      string
-	ServerID    string
-	Type        string
-	OperationID string
-	Limit       int
-	Offset      int
+	Status          string
+	Statuses        []string
+	ServerID        string
+	Type            string
+	Types           []string
+	IncludeInternal bool
+	OperationID     string
+	Limit           int
+	Offset          int
 }
 
-const internalConnectivityTaskType = "server_connectivity_test"
+var defaultHiddenTaskTypes = []string{"server_connectivity_test", "metrics_collect"}
 
 type ListResult struct {
 	Items    []Task `json:"items"`
@@ -234,20 +237,20 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	}
 	args := []any{}
 	conditions := []string{}
-	if filter.Status != "" {
-		conditions = append(conditions, `status=?`)
-		args = append(args, filter.Status)
-	}
+	statuses := cleanFilterValues(append(filter.Statuses, filter.Status)...)
+	appendEqualOrIn(&conditions, &args, "status", statuses)
 	if filter.ServerID != "" {
 		conditions = append(conditions, `server_id=?`)
 		args = append(args, filter.ServerID)
 	}
-	if filter.Type != "" {
-		conditions = append(conditions, `type=?`)
-		args = append(args, filter.Type)
-	} else {
-		conditions = append(conditions, `type<>?`)
-		args = append(args, internalConnectivityTaskType)
+	types := cleanFilterValues(append(filter.Types, filter.Type)...)
+	if len(types) > 0 {
+		appendEqualOrIn(&conditions, &args, "type", types)
+	} else if !filter.IncludeInternal {
+		conditions = append(conditions, `type NOT IN (`+placeholders(len(defaultHiddenTaskTypes))+`)`)
+		for _, taskType := range defaultHiddenTaskTypes {
+			args = append(args, taskType)
+		}
 	}
 	if filter.OperationID != "" {
 		conditions = append(conditions, `operation_id=?`)
@@ -281,6 +284,49 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 		return ListResult{}, err
 	}
 	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
+}
+
+func cleanFilterValues(values ...string) []string {
+	out := []string{}
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || value == "all" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	return out
+}
+
+func appendEqualOrIn(conditions *[]string, args *[]any, column string, values []string) {
+	if len(values) == 0 {
+		return
+	}
+	if len(values) == 1 {
+		*conditions = append(*conditions, column+`=?`)
+		*args = append(*args, values[0])
+		return
+	}
+	*conditions = append(*conditions, column+` IN (`+placeholders(len(values))+`)`)
+	for _, value := range values {
+		*args = append(*args, value)
+	}
+}
+
+func placeholders(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	items := make([]string, count)
+	for i := range items {
+		items[i] = "?"
+	}
+	return strings.Join(items, ",")
 }
 
 func (s *Service) ExpireStaleRunning(ctx context.Context, now time.Time, maxAge time.Duration) (int, error) {

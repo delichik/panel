@@ -543,7 +543,12 @@ const messages = {
       operationId: "Operation ID",
       type: "Type",
       status: "Status",
+      search: "Search",
       clear: "Clear",
+      commonTypes: "Common types",
+      allTypes: "All types",
+      typePlaceholder: "Common types",
+      statusPlaceholder: "All statuses",
       loadFailed: "Unable to load tasks",
       noNode: "No node",
       operations: "Operations",
@@ -791,6 +796,29 @@ const messages = {
       failed_retryable: "Retry wait",
       blocked: "Blocked",
       cancelled: "Cancelled",
+    },
+    taskType: {
+      application_deploy: "Application deploy",
+      application_stop: "Application stop",
+      application_restart: "Application restart",
+      application_image_check: "Image check",
+      application_image_update: "Image update",
+      nomad_refresh: "Nomad refresh",
+      nomad_client_join: "Nomad client join",
+      nomad_server_bootstrap: "Nomad server bootstrap",
+      nomad_node_remove: "Nomad node removal",
+      nomad_cluster_rebuild: "Nomad cluster rebuild",
+      nomad_server_switch: "Nomad server switch",
+      nomad_reverse_proxy_sync: "Reverse proxy sync",
+      server_connectivity_test: "Server connectivity check",
+      server_info_collect: "Server info collection",
+      server_ufw_install: "UFW install",
+      metrics_collect: "Metrics collection",
+      package_refresh: "Package refresh",
+      package_upgrade_selected: "Selected package upgrade",
+      package_upgrade_all: "Full package upgrade",
+      certificate_issue: "Certificate issue",
+      certificate_renew: "Certificate renewal",
     },
   },
   "zh-CN": {
@@ -1328,7 +1356,12 @@ const messages = {
       operationId: "操作 ID",
       type: "类型",
       status: "状态",
+      search: "搜索",
       clear: "清除",
+      commonTypes: "常用类型",
+      allTypes: "所有类型",
+      typePlaceholder: "常用类型",
+      statusPlaceholder: "全部状态",
       loadFailed: "无法加载任务",
       noNode: "无节点",
       operations: "操作",
@@ -1577,6 +1610,29 @@ const messages = {
       blocked: "已阻塞",
       cancelled: "已取消",
     },
+    taskType: {
+      application_deploy: "应用部署",
+      application_stop: "应用停止",
+      application_restart: "应用重启",
+      application_image_check: "镜像检查",
+      application_image_update: "镜像更新",
+      nomad_refresh: "Nomad 刷新",
+      nomad_client_join: "Nomad client 加入",
+      nomad_server_bootstrap: "Nomad server 引导",
+      nomad_node_remove: "Nomad 节点移除",
+      nomad_cluster_rebuild: "Nomad 集群重建",
+      nomad_server_switch: "Nomad server 切换",
+      nomad_reverse_proxy_sync: "反向代理同步",
+      server_connectivity_test: "服务器连通性检查",
+      server_info_collect: "服务器信息采集",
+      server_ufw_install: "UFW 安装",
+      metrics_collect: "指标采集",
+      package_refresh: "软件包刷新",
+      package_upgrade_selected: "选中软件包升级",
+      package_upgrade_all: "全量软件包升级",
+      certificate_issue: "证书签发",
+      certificate_renew: "证书续期",
+    },
   },
 } as const;
 
@@ -1656,6 +1712,7 @@ export function useI18n() {
     t,
     setLocale,
     translateTaskStatus,
+    translateTaskType,
     translateCleanupSchedule,
     translateApplicationRestartPolicy,
     translateApplicationFileKind,
@@ -1688,6 +1745,15 @@ export function translateTaskStatus(value?: string | null) {
     lookup(`taskStatus.${value}`, messages.en);
   if (translated) return translated;
   return value.replace(/_/g, " ");
+}
+
+export function translateTaskType(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const translated =
+    lookup(`taskType.${value}`, messages[locale.value]) ??
+    lookup(`taskType.${value}`, messages.en);
+  if (translated) return translated;
+  return humanizeEnum(value);
 }
 
 export function translateCleanupSchedule(value?: string | null) {

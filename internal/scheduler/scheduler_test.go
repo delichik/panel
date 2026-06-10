@@ -18,7 +18,7 @@ import (
 	"panel/internal/tasks"
 )
 
-func TestCollectMetricsDoesNotCreateTask(t *testing.T) {
+func TestCollectMetricsCreatesTaskRecord(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -55,12 +55,15 @@ func TestCollectMetricsDoesNotCreateTask(t *testing.T) {
 	if err := sched.collectMetrics(ctx, srv); err != nil {
 		t.Fatal(err)
 	}
-	var taskCount int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='metrics_collect'`).Scan(&taskCount); err != nil {
+	result, err := taskSvc.List(ctx, tasks.ListFilter{Type: "metrics_collect", IncludeInternal: true, Limit: 10})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if taskCount != 0 {
-		t.Fatalf("expected no metrics task records, got %d", taskCount)
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected one metrics task record, got %#v", result)
+	}
+	if result.Items[0].Status != tasks.StatusCompleted || result.Items[0].ServerID != srv.ID {
+		t.Fatalf("expected completed metrics task for server, got %#v", result.Items[0])
 	}
 	var metricCount int
 	if err := store.MetricsDB().QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id=?`, srv.ID).Scan(&metricCount); err != nil {
@@ -138,6 +141,25 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	}
 	if aligned.Nanosecond() != 0 {
 		t.Fatalf("expected second-aligned timestamp, got %s", aligned)
+	}
+	taskRows, err := store.AppDB().Query(`SELECT operation_id FROM tasks WHERE type='metrics_collect' ORDER BY server_id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taskRows.Close()
+	operationIDs := []string{}
+	for taskRows.Next() {
+		var operationID string
+		if err := taskRows.Scan(&operationID); err != nil {
+			t.Fatal(err)
+		}
+		operationIDs = append(operationIDs, operationID)
+	}
+	if err := taskRows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if len(operationIDs) != 2 || operationIDs[0] == "" || operationIDs[0] != operationIDs[1] {
+		t.Fatalf("expected metrics tasks to share an operation, got %#v", operationIDs)
 	}
 }
 

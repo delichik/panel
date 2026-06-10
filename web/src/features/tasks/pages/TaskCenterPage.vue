@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { formatDateTime, formatTime, t, translateTaskStatus } from '@/i18n';
+import { formatDateTime, formatTime, t, translateTaskStatus, translateTaskType } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
@@ -9,15 +9,44 @@ import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
 import { groupTasksByOperation } from '../taskOperations';
 
 const route = useRoute();
+const TYPE_FILTER_COMMON = '__common';
+const TYPE_FILTER_ALL = '__all';
+const hiddenByCommonTaskTypes = new Set(['server_connectivity_test', 'metrics_collect']);
+const supportedTaskTypes = [
+  'application_deploy',
+  'application_stop',
+  'application_restart',
+  'application_image_check',
+  'application_image_update',
+  'nomad_refresh',
+  'nomad_client_join',
+  'nomad_server_bootstrap',
+  'nomad_node_remove',
+  'nomad_cluster_rebuild',
+  'nomad_server_switch',
+  'nomad_reverse_proxy_sync',
+  'server_connectivity_test',
+  'server_info_collect',
+  'server_ufw_install',
+  'metrics_collect',
+  'package_refresh',
+  'package_upgrade_selected',
+  'package_upgrade_all',
+  'certificate_issue',
+  'certificate_renew',
+];
 
 const tasks = ref<TaskDto[]>([]);
 const steps = ref<TaskStepDto[]>([]);
 const servers = ref<ServerDto[]>([]);
 const selectedTaskId = ref('');
 const selectedOperationId = ref('');
-const statusFilter = ref<TaskStatus | 'all'>('all');
-const operationFilter = ref<string | null>('');
-const typeFilter = ref<string | null>('');
+const statusFilter = ref<TaskStatus[]>([]);
+const appliedStatusFilter = ref<TaskStatus[]>([]);
+const operationFilter = ref('');
+const appliedOperationFilter = ref('');
+const typeFilter = ref<string[]>([TYPE_FILTER_COMMON]);
+const appliedTypeFilter = ref<string[]>([TYPE_FILTER_COMMON]);
 const loading = ref(false);
 const actionLoading = ref('');
 const error = ref('');
@@ -31,10 +60,15 @@ const runnableTaskTypes = new Set(['server_connectivity_test', 'server_info_coll
 const operationGroups = computed(() => groupTasksByOperation(tasks.value));
 const selectedTask = computed(() => tasks.value.find((task) => task.id === selectedTaskId.value) ?? null);
 const selectedOperation = computed(() => operationGroups.value.find((group) => group.operationId === selectedOperationId.value) ?? null);
-const taskTypeOptions = computed(() => Array.from(new Set(tasks.value.map((task) => task.type))).sort());
+const taskTypeFilterItems = computed(() => [
+  { title: t('taskCenter.commonTypes'), value: TYPE_FILTER_COMMON },
+  { title: t('taskCenter.allTypes'), value: TYPE_FILTER_ALL },
+  ...Array.from(new Set([...supportedTaskTypes, ...tasks.value.map((task) => task.type)]))
+    .sort((a, b) => translateTaskType(a).localeCompare(translateTaskType(b)))
+    .map((value) => ({ title: translateTaskType(value), value })),
+]);
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 const statusFilterItems = computed(() => [
-  { title: t('common.all'), value: 'all' },
   { title: translateTaskStatus('queued'), value: 'queued' },
   { title: translateTaskStatus('scheduled'), value: 'scheduled' },
   { title: translateTaskStatus('running'), value: 'running' },
@@ -53,14 +87,55 @@ const taskCounts = computed(() => ({
   completed: tasks.value.filter((task) => task.status === 'completed').length,
 }));
 
+function isSpecialTypeFilter(value: string) {
+  return value === TYPE_FILTER_COMMON || value === TYPE_FILTER_ALL;
+}
+
+function normalizeTypeFilter(values: string[] | string | null | undefined, previous: string[] = []) {
+  const selected = Array.isArray(values) ? values : values ? [values] : [];
+  const selectedSet = new Set(selected);
+  const previousSet = new Set(previous);
+  if (selectedSet.has(TYPE_FILTER_ALL) && !previousSet.has(TYPE_FILTER_ALL)) return [TYPE_FILTER_ALL];
+  if (selectedSet.has(TYPE_FILTER_COMMON) && !previousSet.has(TYPE_FILTER_COMMON)) return [TYPE_FILTER_COMMON];
+  const exactTypes = selected.filter((value) => !isSpecialTypeFilter(value));
+  if (exactTypes.length > 0) return Array.from(new Set(exactTypes));
+  return [TYPE_FILTER_COMMON];
+}
+
+function onTypeFilterChange(values: string[] | string | null) {
+  typeFilter.value = normalizeTypeFilter(values, typeFilter.value);
+}
+
+function taskTypeApiFilter(values: string[]) {
+  const normalized = normalizeTypeFilter(values, values);
+  if (normalized.includes(TYPE_FILTER_ALL)) return { includeInternal: true, types: [] };
+  return {
+    includeInternal: false,
+    types: normalized.filter((value) => !isSpecialTypeFilter(value)),
+  };
+}
+
+function typeFilterForLinkedTask(task: TaskDto) {
+  return hiddenByCommonTaskTypes.has(task.type) ? [task.type] : [TYPE_FILTER_COMMON];
+}
+
+function searchTasks() {
+  appliedStatusFilter.value = [...statusFilter.value];
+  appliedOperationFilter.value = operationFilter.value.trim();
+  appliedTypeFilter.value = normalizeTypeFilter(typeFilter.value, typeFilter.value);
+  reloadFirstPage();
+}
+
 async function loadTasks() {
   loading.value = true;
+  const typeApiFilter = taskTypeApiFilter(appliedTypeFilter.value);
   try {
     const [taskPage, serverRows] = await Promise.all([
       tasksApi.list({
-        status: statusFilter.value,
-        type: typeFilter.value,
-        operationId: operationFilter.value,
+        statuses: appliedStatusFilter.value,
+        types: typeApiFilter.types,
+        includeInternal: typeApiFilter.includeInternal,
+        operationId: appliedOperationFilter.value,
         page: page.value,
         pageSize: pageSize.value,
       }),
@@ -109,7 +184,12 @@ function serverName(serverId?: string | null) {
 }
 
 function formatTaskType(value?: string) {
-  return value ? value.replace(/_/g, ' ') : '-';
+  return translateTaskType(value);
+}
+
+function taskDisplayTitle(task?: TaskDto | null) {
+  if (!task) return t('taskCenter.selectTask');
+  return task.summary || formatTaskType(task.type);
 }
 
 function shortId(value?: string | null) {
@@ -165,8 +245,11 @@ async function loadRouteTask() {
   try {
     const linkedTask = await tasksApi.get(id);
     operationFilter.value = linkedTask.operationId || '';
-    statusFilter.value = 'all';
-    typeFilter.value = linkedTask.type === 'server_connectivity_test' ? linkedTask.type : '';
+    appliedOperationFilter.value = operationFilter.value;
+    statusFilter.value = [];
+    appliedStatusFilter.value = [];
+    typeFilter.value = typeFilterForLinkedTask(linkedTask);
+    appliedTypeFilter.value = [...typeFilter.value];
     page.value = 1;
     await loadTasks();
     if (!tasks.value.some((task) => task.id === linkedTask.id)) {
@@ -243,9 +326,12 @@ function canRunNow(task: TaskDto) {
 }
 
 function clearFilters() {
-  statusFilter.value = 'all';
+  statusFilter.value = [];
+  appliedStatusFilter.value = [];
   operationFilter.value = '';
-  typeFilter.value = '';
+  appliedOperationFilter.value = '';
+  typeFilter.value = [TYPE_FILTER_COMMON];
+  appliedTypeFilter.value = [TYPE_FILTER_COMMON];
   reloadFirstPage();
 }
 
@@ -278,22 +364,42 @@ onBeforeUnmount(() => {
       <v-chip color="warning" variant="tonal" label>{{ t('taskCenter.running') }} {{ taskCounts.running }}</v-chip>
       <v-chip color="error" variant="tonal" label>{{ t('taskCenter.failed') }} {{ taskCounts.failed }}</v-chip>
       <v-chip color="success" variant="tonal" label>{{ t('taskCenter.done') }} {{ taskCounts.completed }}</v-chip>
-      </div>
+    </div>
 
     <v-card variant="outlined" class="filter-bar">
-      <v-text-field v-model="operationFilter" :label="t('taskCenter.operationId')" variant="outlined" density="compact" hide-details clearable @keydown.enter="reloadFirstPage" />
-      <v-select v-model="typeFilter" :items="taskTypeOptions" :label="t('taskCenter.type')" variant="outlined" density="compact" hide-details clearable @update:model-value="reloadFirstPage" />
+      <v-text-field v-model="operationFilter" :label="t('taskCenter.operationId')" variant="outlined" density="compact" hide-details clearable @keydown.enter="searchTasks" />
+      <v-select
+        v-model="typeFilter"
+        :items="taskTypeFilterItems"
+        item-title="title"
+        item-value="value"
+        :label="t('taskCenter.type')"
+        :placeholder="t('taskCenter.typePlaceholder')"
+        variant="outlined"
+        density="compact"
+        hide-details
+        multiple
+        chips
+        closable-chips
+        clearable
+        @update:model-value="onTypeFilterChange"
+      />
       <v-select
         v-model="statusFilter"
         :items="statusFilterItems"
         item-title="title"
         item-value="value"
         :label="t('taskCenter.status')"
+        :placeholder="t('taskCenter.statusPlaceholder')"
         variant="outlined"
         density="compact"
         hide-details
-        @update:model-value="reloadFirstPage"
+        multiple
+        chips
+        closable-chips
+        clearable
       />
+      <v-btn color="primary" variant="flat" prepend-icon="mdi-magnify" class="text-none" @click="searchTasks">{{ t('taskCenter.search') }}</v-btn>
       <v-btn variant="outlined" prepend-icon="mdi-filter-remove" class="text-none" @click="clearFilters">{{ t('taskCenter.clear') }}</v-btn>
     </v-card>
 
@@ -341,7 +447,7 @@ onBeforeUnmount(() => {
       <section class="main-panel">
         <v-card variant="outlined" class="lifecycle-panel">
           <div class="panel-title">
-            <div class="text-subtitle-1 font-weight-bold">{{ selectedTask?.summary || t('taskCenter.selectTask') }}</div>
+            <div class="text-subtitle-1 font-weight-bold">{{ taskDisplayTitle(selectedTask) }}</div>
             <v-chip v-if="selectedTask" :color="taskStatusColor(selectedTask.status)" label>{{ statusLabel(selectedTask.status) }}</v-chip>
           </div>
 
@@ -520,7 +626,7 @@ onBeforeUnmount(() => {
 
 .filter-bar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(180px, 260px) minmax(170px, 220px) auto;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 300px) minmax(220px, 300px) auto auto;
   gap: 12px;
   align-items: center;
   padding: 14px;

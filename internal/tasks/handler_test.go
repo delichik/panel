@@ -2,9 +2,12 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"panel/internal/httpx"
 )
 
 type recordingRunner struct {
@@ -109,5 +112,50 @@ func TestHandlerRetryRejectsNonFailedTask(t *testing.T) {
 
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("expected queued retry to be rejected, got %d", rec.Code)
+	}
+}
+
+func TestHandlerListParsesMultiValueFilters(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	running, err := svc.Create(ctx, CreateInput{Type: "application_deploy", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := svc.Create(ctx, CreateInput{Type: "package_refresh", Status: StatusFailed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, CreateInput{Type: "application_restart", Status: StatusCompleted}); err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(svc)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?status=running&status=failed&type=application_deploy&type=package_refresh&includeInternal=true", nil)
+	rec := httptest.NewRecorder()
+
+	handler.List(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected list to succeed, got %d", rec.Code)
+	}
+	var envelope httpx.Envelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result ListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 2 || len(result.Items) != 2 {
+		t.Fatalf("expected two filtered tasks, got %#v", result)
+	}
+	ids := map[string]bool{result.Items[0].ID: true, result.Items[1].ID: true}
+	if !ids[running.ID] || !ids[failed.ID] {
+		t.Fatalf("unexpected filtered task ids: %#v", result.Items)
 	}
 }

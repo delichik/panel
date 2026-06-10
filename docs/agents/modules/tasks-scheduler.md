@@ -29,12 +29,13 @@
 - 任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。
 - 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移和前端同步。
 - 任务中心的筛选控件清空时可能产生 `null`；前端任务 API 应统一归一化空值和空白字符串，不发送空筛选参数。
-- 任务中心默认隐藏内部 `server_connectivity_test` 刷新任务，列表按最新创建时间优先展示，避免后台健康检查挤掉用户操作任务。
+- 任务中心类型筛选默认使用“常用类型”，隐藏内部/高频的 `server_connectivity_test` 和 `metrics_collect`；切到“所有类型”或精确选择对应类型时可显示这些任务。列表按最新创建时间优先展示，避免后台健康检查和指标采集挤掉用户操作任务。
+- 任务中心筛选支持多选 `status` / `type`，前端通过搜索按钮提交；API 使用重复的 `status` / `type` 查询参数，`includeInternal=true` 表示“所有类型”。
 - `running` 状态任务超过 `tasks.StaleRunningTaskAfter`（当前 24 小时）仍未完成时，会在启动或清理循环中自动标记为失败，避免旧任务长期卡住。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性任务（Nomad 加入/引导/重建/切换/移除、UFW 安装）必须在 API 返回前先标记为 `running`；遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter`（当前 10 分钟）会在清理循环中标记为失败并提示用户重试，避免永久排队。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - `nomad_reverse_proxy_sync` 用于追踪反向代理配置保存、远程防火墙放行和 Nomad 反向代理 job reconcile；该任务当前由保存接口同步完成或失败，不提供 `run-now` / `retry`。
-- `scheduler` 负责周期性指标采集、软件包刷新、证书续签和 due 的包刷新任务补扫，并可作为 `run-now` 执行入口；同一轮调度为多台服务器创建任务时，应共享一个 `operationId`，由任务中心展示为一个 operation 下的多个 task。
+- `scheduler` 负责周期性指标采集、软件包刷新、证书续签和 due 的包刷新任务补扫，并可作为 `run-now` 执行入口；同一轮调度为多台服务器创建任务时，应共享一个 `operationId`，由任务中心展示为一个 operation 下的多个 task。周期性指标采集记录为 `metrics_collect` 任务，默认由“常用类型”筛选隐藏。
 - 任务中心的 `run-now` / `retry` 必须按任务类型受控；当前只允许 `server_connectivity_test`、`server_info_collect`、`package_refresh`、`certificate_issue` 这类有调度器执行器的任务。后端 handler 会按状态和类型拒绝不支持的调用，前端也只展示可闭环的操作。
 - `retry` 创建的新任务会立即交给调度器执行；如果调度器在启动前返回错误，handler 会把新任务标记为失败，避免产生永久排队任务。`package_refresh` 的已排队任务还会被调度器持续补扫，避免被周期刷新节流或已有刷新状态长期挡住。
 - 软件包刷新现在记录为 `package_refresh` 任务；手动刷新返回 `taskId`，自动/周期刷新失败会在任务中心可见，并对近期失败做短时间节流；周期刷新同一轮创建的多台服务器任务必须共享一个 operation。

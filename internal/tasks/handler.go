@@ -46,12 +46,13 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 	tasks, err := h.service.List(r.Context(), ListFilter{
-		Status:      r.URL.Query().Get("status"),
-		ServerID:    r.URL.Query().Get("serverId"),
-		Type:        r.URL.Query().Get("type"),
-		OperationID: r.URL.Query().Get("operation_id"),
-		Limit:       limit,
-		Offset:      offset,
+		Statuses:        queryList(r, "status"),
+		ServerID:        r.URL.Query().Get("serverId"),
+		Types:           queryList(r, "type"),
+		IncludeInternal: truthyQuery(r, "includeInternal") || truthyQuery(r, "include_internal"),
+		OperationID:     r.URL.Query().Get("operation_id"),
+		Limit:           limit,
+		Offset:          offset,
 	})
 	if err != nil {
 		httpx.Error(w, err)
@@ -194,4 +195,26 @@ func taskID(path string) string {
 		return parts[3]
 	}
 	return ""
+}
+
+func queryList(r *http.Request, key string) []string {
+	values := []string{}
+	for _, raw := range r.URL.Query()[key] {
+		for _, part := range strings.Split(raw, ",") {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				values = append(values, part)
+			}
+		}
+	}
+	return values
+}
+
+func truthyQuery(r *http.Request, key string) bool {
+	switch strings.ToLower(strings.TrimSpace(r.URL.Query().Get(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }

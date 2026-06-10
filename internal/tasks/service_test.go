@@ -107,6 +107,43 @@ func TestListFiltersByStatusServerAndType(t *testing.T) {
 	}
 }
 
+func TestListFiltersByMultipleStatusesAndTypes(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	runningApp, err := svc.Create(ctx, CreateInput{Type: "application_deploy", ServerID: "srv_1", Summary: "deploy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, runningApp.ID); err != nil {
+		t.Fatal(err)
+	}
+	failedPackage, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", Summary: "packages", Status: StatusFailed})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completedApp, err := svc.Create(ctx, CreateInput{Type: "application_restart", ServerID: "srv_1", Summary: "restart", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{
+		Statuses: []string{StatusRunning, StatusFailed},
+		Types:    []string{"application_deploy", "package_refresh"},
+		ServerID: "srv_1",
+		Limit:    50,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 2 || len(got.Items) != 2 {
+		t.Fatalf("expected two matching tasks, got %#v", got)
+	}
+	ids := map[string]bool{got.Items[0].ID: true, got.Items[1].ID: true}
+	if !ids[runningApp.ID] || !ids[failedPackage.ID] || ids[completedApp.ID] {
+		t.Fatalf("unexpected filtered task ids: %#v", got.Items)
+	}
+}
+
 func TestListReturnsEmptySliceWhenNoTasksMatch(t *testing.T) {
 	svc := newTestService(t)
 	got, err := svc.List(context.Background(), ListFilter{
@@ -127,7 +164,11 @@ func TestListReturnsEmptySliceWhenNoTasksMatch(t *testing.T) {
 func TestListHidesInternalConnectivityTasksUnlessFiltered(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
-	hidden, err := svc.Create(ctx, CreateInput{Type: "server_connectivity_test", Summary: "hidden connectivity"})
+	hiddenConnectivity, err := svc.Create(ctx, CreateInput{Type: "server_connectivity_test", Summary: "hidden connectivity"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hiddenMetrics, err := svc.Create(ctx, CreateInput{Type: "metrics_collect", Summary: "hidden metrics"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,8 +189,23 @@ func TestListHidesInternalConnectivityTasksUnlessFiltered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filtered.Total != 1 || len(filtered.Items) != 1 || filtered.Items[0].ID != hidden.ID {
+	if filtered.Total != 1 || len(filtered.Items) != 1 || filtered.Items[0].ID != hiddenConnectivity.ID {
 		t.Fatalf("explicit type filter should return internal task, got %#v", filtered)
+	}
+
+	all, err := svc.List(ctx, ListFilter{IncludeInternal: true, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Total != 3 || len(all.Items) != 3 {
+		t.Fatalf("all type filter should include internal tasks, got %#v", all)
+	}
+	ids := map[string]bool{}
+	for _, task := range all.Items {
+		ids[task.ID] = true
+	}
+	if !ids[hiddenConnectivity.ID] || !ids[hiddenMetrics.ID] || !ids[visible.ID] {
+		t.Fatalf("all type filter missed task ids: %#v", all.Items)
 	}
 }
 

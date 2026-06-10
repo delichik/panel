@@ -24,6 +24,8 @@
   - 服务器凭据必选提示、UFW 安装任务入口、系统架构/CPU/网卡详情文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/firewall/pages/FirewallPage.vue`
   - UFW 防火墙状态、规则表单、规则列表、删除确认和任务入口文案已接入 `web/src/i18n/index.ts`
+- `web/src/features/tasks/pages/TaskCenterPage.vue`
+  - 任务类型名称、类型筛选特殊选项、搜索按钮和多选筛选占位文案已接入 `web/src/i18n/index.ts`
 - raw Nomad jobs/deployments 清单入口已移除，对应页面文案和路由词条不再保留。
 - `internal/nomad`
   - Nomad 重部署、集群重建、server 切换相关 API 错误码已接入 `internal/i18n/i18n.go`

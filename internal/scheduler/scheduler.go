@@ -253,7 +253,7 @@ func (s *Scheduler) metricsLoop(ctx context.Context) {
 }
 
 func (s *Scheduler) collectMetrics(ctx context.Context, srv server.Server) error {
-	return s.collectMetricsAt(ctx, srv, time.Now().UTC().Truncate(time.Second))
+	return s.collectMetricsAt(ctx, srv, time.Now().UTC().Truncate(time.Second), "")
 }
 
 func (s *Scheduler) runDueMetricsCollection(ctx context.Context) error {
@@ -262,22 +262,40 @@ func (s *Scheduler) runDueMetricsCollection(ctx context.Context) error {
 		return err
 	}
 	collectedAt := time.Now().UTC().Truncate(time.Second)
+	operationID := id.New("op")
 	for _, srv := range servers {
 		if !srv.OS.Supported || !srv.Reachable {
 			continue
 		}
-		if err := s.collectMetricsAt(ctx, srv, collectedAt); err != nil {
+		if err := s.collectMetricsAt(ctx, srv, collectedAt, operationID); err != nil {
 			log.Printf("metrics collect server %s: %v", srv.ID, err)
 		}
 	}
 	return nil
 }
 
-func (s *Scheduler) collectMetricsAt(ctx context.Context, srv server.Server, collectedAt time.Time) error {
-	if err := s.metrics.CollectAt(ctx, srv.ID, collectedAt); err != nil {
+func (s *Scheduler) collectMetricsAt(ctx context.Context, srv server.Server, collectedAt time.Time, operationID string) error {
+	if s.tasks == nil {
+		return s.metrics.CollectAt(ctx, srv.ID, collectedAt)
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		OperationID:  operationID,
+		Type:         "metrics_collect",
+		ServerID:     srv.ID,
+		ResourceType: "server",
+		ResourceID:   srv.ID,
+		TriggerType:  "scheduler",
+		Status:       tasks.StatusRunning,
+	})
+	if err != nil {
 		return err
 	}
-	return nil
+	_ = s.tasks.Advance(ctx, task.ID, "running", "")
+	if err := s.metrics.CollectAt(ctx, srv.ID, collectedAt); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return err
+	}
+	return s.tasks.Complete(ctx, task.ID, "")
 }
 
 func (s *Scheduler) cleanupLoop(ctx context.Context) {

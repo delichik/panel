@@ -3,8 +3,11 @@ import type { TaskDto, TaskListDto, TaskLogsDto, TaskStatus, TaskStepDto } from 
 
 export interface TaskListFilters {
   status?: TaskStatus | 'all';
+  statuses?: Array<TaskStatus | 'all'> | null;
   serverId?: string | null;
   type?: string | null;
+  types?: string[] | null;
+  includeInternal?: boolean;
   operationId?: string | null;
   limit?: number;
   page?: number;
@@ -16,14 +19,25 @@ function setTrimmedParam(params: URLSearchParams, key: string, value?: string | 
   if (trimmed) params.set(key, trimmed);
 }
 
+function appendTrimmedParams(params: URLSearchParams, key: string, values?: Array<string | null | undefined> | null) {
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    const trimmed = value?.trim();
+    if (!trimmed || trimmed === 'all' || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    params.append(key, trimmed);
+  }
+}
+
 export function createTasksApi(client: ApiClient = apiClient) {
   return {
     list(filters: TaskListFilters = {}) {
       const pageSize = filters.pageSize ?? filters.limit ?? 20;
       const params = new URLSearchParams({ page: String(filters.page ?? 1), pageSize: String(pageSize) });
-      if (filters.status && filters.status !== 'all') params.set('status', filters.status);
+      appendTrimmedParams(params, 'status', filters.statuses ?? (filters.status ? [filters.status] : null));
       setTrimmedParam(params, 'serverId', filters.serverId);
-      setTrimmedParam(params, 'type', filters.type);
+      appendTrimmedParams(params, 'type', filters.types ?? (filters.type ? [filters.type] : null));
+      if (filters.includeInternal) params.set('includeInternal', 'true');
       setTrimmedParam(params, 'operation_id', filters.operationId);
       return client.get<TaskListDto>(`/tasks?${params.toString()}`);
     },
