@@ -8,8 +8,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,6 +111,43 @@ func TestIssueRejectsInvalidVariableName(t *testing.T) {
 	}
 }
 
+func TestRenewFailureRecordsLastErrorAndTask(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	result, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Get(ctx, result.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RunIssueTask(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	fake.err = errors.New("renew failed")
+
+	if err := svc.Renew(ctx, result.Certificate.ID); err == nil {
+		t.Fatal("expected renewal error")
+	}
+	cert, err := svc.Get(ctx, result.Certificate.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cert.Status != StatusIssued || !strings.Contains(cert.LastError, "renew failed") {
+		t.Fatalf("expected issued certificate with renewal error, got %#v", cert)
+	}
+	tasksResult, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeRenew, Status: tasks.StatusFailed, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasksResult.Items) != 1 || !strings.Contains(tasksResult.Items[0].Error, "renew failed") {
+		t.Fatalf("expected failed renewal task, got %#v", tasksResult.Items)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -130,9 +169,13 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 type fakeProvider struct {
 	last   Request
 	bundle Bundle
+	err    error
 }
 
 func (f *fakeProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
+	if f.err != nil {
+		return Bundle{}, f.err
+	}
 	f.last = req
 	return f.bundle, nil
 }

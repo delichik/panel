@@ -36,7 +36,7 @@
 - 应用：`web/src/features/applications/`
 - DNS 域名：`web/src/features/dns/pages/DomainsPage.vue`；不要新增或恢复 DNS 记录管理入口。
 - 证书：`web/src/features/certificates/pages/CertificatesPage.vue`
-- Nomad：`web/src/features/nomad/`
+- Nomad：`web/src/features/nomad/`；`/nomad/jobs` 展示 jobs，`/deployments` 展示 deployments/evaluations/services
 - 任务中心：`web/src/features/tasks/`
 - 设置：`web/src/features/settings/pages/SettingsPage.vue`
 - 登录与强制改密：`web/src/features/auth/pages/`

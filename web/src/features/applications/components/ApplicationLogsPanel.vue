@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { t } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
 
-const props = defineProps<{ application: ApplicationDto }>();
-const allocId = ref('');
-const task = ref(props.application.name);
+const props = defineProps<{ application: ApplicationDto; allocId?: string; taskName?: string }>();
+const allocId = ref(props.allocId || '');
+const task = ref(props.taskName || props.application.name);
 const tail = ref(200);
 const logs = ref('');
 const loading = ref(false);
@@ -26,12 +26,29 @@ async function loadLogs() {
     loading.value = false;
   }
 }
+
+watch(() => props.application.id, () => {
+  allocId.value = props.allocId || '';
+  task.value = props.taskName || props.application.name;
+  logs.value = '';
+  error.value = '';
+});
+
+watch(() => [props.allocId, props.taskName], () => {
+  if (props.allocId) allocId.value = props.allocId;
+  if (props.taskName) task.value = props.taskName;
+  logs.value = '';
+  if (canLoad.value) void loadLogs();
+});
 </script>
 
 <template>
   <v-card variant="outlined" class="logs-card">
     <div class="text-subtitle-1 font-weight-bold mb-3">{{ t('applicationLogs.logs') }}</div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
+    <v-alert v-if="allocId && task" type="info" variant="tonal" density="compact" class="mb-3">
+      {{ t('applicationLogs.selectedTarget', { alloc: allocId, task }) }}
+    </v-alert>
     <div class="logs-controls">
       <v-text-field v-model="allocId" :label="t('applicationLogs.allocationId')" density="compact" variant="outlined" hide-details />
       <v-text-field v-model="task" :label="t('applicationLogs.task')" density="compact" variant="outlined" hide-details />

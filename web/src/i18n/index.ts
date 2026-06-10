@@ -89,6 +89,8 @@ const messages = {
         runtime: "Runtime",
         applications: "Applications",
         nomadNodes: "Nomad Nodes",
+        nomadJobs: "Nomad Jobs",
+        deployments: "Deployments",
         taskCenter: "Task Center",
         settings: "Settings",
         settingsGeneral: "General",
@@ -134,6 +136,12 @@ const messages = {
       },
       nomadNodes: {
         title: "Nomad Nodes",
+      },
+      nomadJobs: {
+        title: "Nomad Jobs",
+      },
+      deployments: {
+        title: "Deployments",
       },
       tasks: {
         title: "Task Center",
@@ -354,6 +362,8 @@ const messages = {
       deleted: "Deleted {name}",
       actionAccepted: "{action} accepted",
       actionFailed: "Unable to {action} application",
+      deleteApplication: "Delete application",
+      deleteApplicationConfirm: "Delete application {name}?",
     },
     applicationDetail: {
       downloadPackage: "Download package",
@@ -371,6 +381,7 @@ const messages = {
       checked: "Checked",
       downloadFailed: "Unable to download package",
       checkFailed: "Unable to check image",
+      updateStarted: "Image update accepted",
       updateFailed: "Unable to update image",
     },
     applicationEditor: {
@@ -460,6 +471,7 @@ const messages = {
       group: "Group",
       client: "Client",
       desired: "Desired",
+      logs: "Logs",
       noAllocations: "No allocations",
       evaluationColumn: "Evaluation",
       noEvaluations: "No evaluations",
@@ -486,6 +498,7 @@ const messages = {
       tail: "Tail",
       loadFailed: "Unable to load logs",
       empty: "Select an allocation and task to load logs.",
+      selectedTarget: "Selected {alloc} / {task}",
     },
     taskCenter: {
       active: "Active",
@@ -540,6 +553,8 @@ const messages = {
     packagesPage: {
       loadFailed: "Unable to load package updates",
       selectedUpgradeStarted: "Selected package upgrade started",
+      refreshStarted: "Package refresh started",
+      refreshFailed: "Package refresh failed",
       upgradeFailed: "Upgrade failed",
       fullUpgradeStarted: "Full package upgrade started",
       fullUpgradeFailed: "Full upgrade failed",
@@ -554,6 +569,8 @@ const messages = {
       candidateVersion: "Candidate Version",
       source: "Source",
       noPackages: "No upgradeable packages",
+      confirmUpgradeAllTitle: "Upgrade all packages",
+      confirmUpgradeAllMessage: "Upgrade every available package on {name}?",
     },
     domainsPage: {
       loadFailed: "Unable to load domains",
@@ -618,6 +635,11 @@ const messages = {
       switchFailed: "Unable to switch Nomad server",
       removeFailed: "Unable to remove Nomad node",
       saveProxyFailed: "Unable to update reverse proxy settings",
+      joinStarted: "Nomad join task started",
+      redeployStarted: "Nomad redeploy task started",
+      rebuildStarted: "Nomad rebuild task started",
+      switchStarted: "Nomad server switch task started",
+      removeStarted: "Nomad remove task started",
       joinNode: "Join Node",
       redeploy: "Redeploy",
       rebuildCluster: "Rebuild cluster",
@@ -639,6 +661,8 @@ const messages = {
       proxy: "Proxy",
       join: "Join",
       remove: "Remove",
+      removeNodeTitle: "Remove Nomad node",
+      removeNodeConfirm: "Remove Nomad node {name}?",
       noProjectedNodes: "No projected Nomad nodes",
       joinNodeTitle: "Join Node",
       noJoinCandidates:
@@ -677,6 +701,26 @@ const messages = {
       kindMissing: "missing",
       kindPending: "pending",
       kindUnmanaged: "unmanaged",
+    },
+    nomadJobsPage: {
+      loadFailed: "Unable to load Nomad jobs",
+      filterPrefix: "Filter prefix",
+      jobId: "Job ID",
+      datacenters: "Datacenters",
+      noJobs: "No jobs",
+    },
+    deploymentsPage: {
+      loadFailed: "Unable to load deployments",
+      deployments: "Deployments",
+      evaluations: "Evaluations",
+      services: "Services",
+      id: "ID",
+      job: "Job",
+      description: "Description",
+      tags: "Tags",
+      noDeployments: "No deployments",
+      noEvaluations: "No evaluations",
+      noServices: "No services",
     },
     nomadSetupPage: {
       loadFailed: "Unable to load Nomad setup state",
@@ -816,6 +860,8 @@ const messages = {
         runtime: "运行时",
         applications: "应用",
         nomadNodes: "Nomad 节点",
+        nomadJobs: "Nomad 作业",
+        deployments: "部署",
         taskCenter: "任务中心",
         settings: "设置",
         settingsGeneral: "通用",
@@ -861,6 +907,12 @@ const messages = {
       },
       nomadNodes: {
         title: "Nomad 节点",
+      },
+      nomadJobs: {
+        title: "Nomad 作业",
+      },
+      deployments: {
+        title: "部署",
       },
       tasks: {
         title: "任务中心",
@@ -1079,6 +1131,8 @@ const messages = {
       deleted: "已删除 {name}",
       actionAccepted: "已接受{action}",
       actionFailed: "无法对应用执行{action}",
+      deleteApplication: "删除应用",
+      deleteApplicationConfirm: "删除应用 {name}？",
     },
     applicationDetail: {
       downloadPackage: "下载包",
@@ -1096,6 +1150,7 @@ const messages = {
       checked: "检查时间",
       downloadFailed: "无法下载包",
       checkFailed: "无法检查镜像",
+      updateStarted: "镜像更新已接受",
       updateFailed: "无法更新镜像",
     },
     applicationEditor: {
@@ -1185,6 +1240,7 @@ const messages = {
       group: "组",
       client: "客户端",
       desired: "期望",
+      logs: "日志",
       noAllocations: "暂无分配",
       evaluationColumn: "评估",
       noEvaluations: "暂无评估",
@@ -1211,6 +1267,7 @@ const messages = {
       tail: "尾部行数",
       loadFailed: "无法加载日志",
       empty: "选择一个分配和任务以加载日志。",
+      selectedTarget: "已选择 {alloc} / {task}",
     },
     taskCenter: {
       active: "活跃",
@@ -1265,6 +1322,8 @@ const messages = {
     packagesPage: {
       loadFailed: "无法加载软件包更新",
       selectedUpgradeStarted: "已开始升级选中的软件包",
+      refreshStarted: "已开始刷新软件包",
+      refreshFailed: "刷新软件包失败",
       upgradeFailed: "升级失败",
       fullUpgradeStarted: "已开始完整软件包升级",
       fullUpgradeFailed: "完整升级失败",
@@ -1279,6 +1338,8 @@ const messages = {
       candidateVersion: "候选版本",
       source: "来源",
       noPackages: "暂无可升级软件包",
+      confirmUpgradeAllTitle: "升级全部软件包",
+      confirmUpgradeAllMessage: "升级 {name} 上所有可用的软件包？",
     },
     domainsPage: {
       loadFailed: "无法加载域名",
@@ -1343,6 +1404,11 @@ const messages = {
       switchFailed: "无法切换 Nomad server",
       removeFailed: "无法移除 Nomad 节点",
       saveProxyFailed: "无法更新反向代理设置",
+      joinStarted: "Nomad 加入任务已启动",
+      redeployStarted: "Nomad 重部署任务已启动",
+      rebuildStarted: "Nomad 重建任务已启动",
+      switchStarted: "Nomad server 切换任务已启动",
+      removeStarted: "Nomad 移除任务已启动",
       joinNode: "加入节点",
       redeploy: "重部署",
       rebuildCluster: "重建集群",
@@ -1364,6 +1430,8 @@ const messages = {
       proxy: "代理",
       join: "加入",
       remove: "移除",
+      removeNodeTitle: "移除 Nomad 节点",
+      removeNodeConfirm: "移除 Nomad 节点 {name}？",
       noProjectedNodes: "暂无投影的 Nomad 节点",
       joinNodeTitle: "加入节点",
       noJoinCandidates:
@@ -1402,6 +1470,26 @@ const messages = {
       kindMissing: "缺失",
       kindPending: "待定",
       kindUnmanaged: "未托管",
+    },
+    nomadJobsPage: {
+      loadFailed: "无法加载 Nomad 作业",
+      filterPrefix: "筛选前缀",
+      jobId: "作业 ID",
+      datacenters: "数据中心",
+      noJobs: "暂无作业",
+    },
+    deploymentsPage: {
+      loadFailed: "无法加载部署",
+      deployments: "部署",
+      evaluations: "评估",
+      services: "服务",
+      id: "ID",
+      job: "作业",
+      description: "描述",
+      tags: "标签",
+      noDeployments: "暂无部署",
+      noEvaluations: "暂无评估",
+      noServices: "暂无服务",
     },
     nomadSetupPage: {
       loadFailed: "无法加载 Nomad 初始化状态",

@@ -33,6 +33,9 @@
 - `running` 状态任务超过 `tasks.StaleRunningTaskAfter`（当前 24 小时）仍未完成时，会在启动或清理循环中自动标记为失败，避免旧任务长期卡住。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - `scheduler` 负责周期性指标采集、软件包刷新和证书续签，并可作为 `run-now` 执行入口。
+- 任务中心的 `run-now` / `retry` 必须按任务类型受控；当前只允许 `server_connectivity_test`、`server_info_collect`、`package_refresh`、`certificate_issue` 这类有调度器执行器的任务。后端 handler 会按状态和类型拒绝不支持的调用，前端也只展示可闭环的操作。
+- `retry` 创建的新任务会立即交给调度器执行；如果调度器在启动前返回错误，handler 会把新任务标记为失败，避免产生永久排队任务。
+- 软件包刷新现在记录为 `package_refresh` 任务；手动刷新返回 `taskId`，自动/周期刷新失败会在任务中心可见，并对近期失败做短时间节流。
 - 远程命令原始输出可能包含第三方文本，翻译前要先评估是否应保留原样。
 
 ## 跨模块依赖

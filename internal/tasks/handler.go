@@ -7,10 +7,15 @@ import (
 	"strings"
 
 	"panel/internal/httpx"
+	"panel/internal/panelerr"
 )
 
 type RunNowRunner interface {
 	RunNow(ctx context.Context, task Task) error
+}
+
+type RunNowCapability interface {
+	CanRun(task Task) bool
 }
 
 type Handler struct {
@@ -84,27 +89,103 @@ func (h *Handler) Steps(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
-	task, err := h.service.Retry(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/retry")))
+	old, err := h.service.Get(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/retry")))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusAccepted, task)
-}
-
-func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
-	task, err := h.service.RunNow(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/run-now")))
+	if !canRetryStatus(old.Status) {
+		httpx.Error(w, panelerr.Validation("task_retry_status_invalid", "Only failed, retryable, or blocked tasks can be retried"))
+		return
+	}
+	if !h.canRun(old) {
+		httpx.Error(w, panelerr.Validation("task_retry_unsupported", "This task type cannot be retried from the task center"))
+		return
+	}
+	task, err := h.service.Retry(r.Context(), old.ID)
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
 	if h.runner != nil {
 		if err := h.runner.RunNow(r.Context(), task); err != nil {
+			h.failIfUnfinished(r.Context(), task.ID, err)
 			httpx.Error(w, err)
 			return
 		}
 	}
 	httpx.JSON(w, http.StatusAccepted, task)
+}
+
+func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
+	current, err := h.service.Get(r.Context(), taskID(strings.TrimSuffix(r.URL.Path, "/run-now")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if !canRunNowStatus(current.Status) {
+		httpx.Error(w, panelerr.Validation("task_run_now_status_invalid", "Only queued, scheduled, or retryable tasks can be run now"))
+		return
+	}
+	if !h.canRun(current) {
+		httpx.Error(w, panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center"))
+		return
+	}
+	task, err := h.service.RunNow(r.Context(), current.ID)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if h.runner != nil {
+		if err := h.runner.RunNow(r.Context(), task); err != nil {
+			h.failIfUnfinished(r.Context(), task.ID, err)
+			httpx.Error(w, err)
+			return
+		}
+	}
+	httpx.JSON(w, http.StatusAccepted, task)
+}
+
+func (h *Handler) canRun(task Task) bool {
+	if h.runner == nil {
+		return true
+	}
+	checker, ok := h.runner.(RunNowCapability)
+	if !ok {
+		return true
+	}
+	return checker.CanRun(task)
+}
+
+func canRunNowStatus(status string) bool {
+	switch status {
+	case StatusQueued, StatusScheduled, StatusFailedRetryable:
+		return true
+	default:
+		return false
+	}
+}
+
+func canRetryStatus(status string) bool {
+	switch status {
+	case StatusFailed, StatusFailedRetryable, StatusBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handler) failIfUnfinished(ctx context.Context, taskID string, cause error) {
+	latest, err := h.service.Get(ctx, taskID)
+	if err != nil {
+		return
+	}
+	switch latest.Status {
+	case StatusCompleted, StatusFailed, StatusBlocked, StatusCancelled:
+		return
+	default:
+		_ = h.service.Fail(ctx, taskID, cause)
+	}
 }
 
 func taskID(path string) string {

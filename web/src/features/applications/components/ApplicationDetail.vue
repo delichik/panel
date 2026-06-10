@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { formatDateTime, t } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
@@ -11,6 +11,9 @@ const emit = defineEmits<{ changed: [ApplicationDto] }>();
 const downloading = ref(false);
 const imageAction = ref('');
 const error = ref('');
+const message = ref('');
+const lastTaskId = ref('');
+const logTarget = ref<{ allocId: string; task: string } | null>(null);
 const imageStatusColor = computed(() => {
   if (props.application.imageLastError) return 'error';
   if (props.application.imageUpdateAvailable) return 'warning';
@@ -66,13 +69,31 @@ async function updateImage() {
   try {
     const result = await applicationsApi.updateImage(props.application.id);
     if (result.application) emit('changed', result.application);
+    lastTaskId.value = result.taskId || '';
+    message.value = t('applicationDetail.updateStarted');
     error.value = '';
   } catch (err) {
+    lastTaskId.value = '';
+    message.value = '';
     error.value = err instanceof Error ? err.message : t('applicationDetail.updateFailed');
   } finally {
     imageAction.value = '';
   }
 }
+
+function taskRoute(taskId = lastTaskId.value) {
+  return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
+}
+
+function selectLogs(target: { allocId: string; task: string }) {
+  logTarget.value = target;
+}
+
+watch(() => props.application.id, () => {
+  logTarget.value = null;
+  message.value = '';
+  lastTaskId.value = '';
+});
 </script>
 
 <template>
@@ -117,11 +138,17 @@ async function updateImage() {
         </div>
       </div>
       <v-alert v-if="application.imageLastError" type="warning" variant="tonal" class="mt-3">{{ application.imageLastError }}</v-alert>
+      <v-alert v-if="message" type="info" variant="tonal" class="mt-3" closable @click:close="message = ''">
+        <div class="task-alert">
+          <span>{{ message }}</span>
+          <v-btn v-if="lastTaskId" size="small" variant="text" :to="taskRoute()" class="text-none">{{ t('taskCenter.task') }}</v-btn>
+        </div>
+      </v-alert>
       <v-alert v-if="error" type="error" variant="tonal" class="mt-3">{{ error }}</v-alert>
       <v-alert v-if="application.lastError" type="error" variant="tonal" class="mt-3">{{ application.lastError }}</v-alert>
     </v-card>
-    <ApplicationRuntimePanel :application="application" />
-    <ApplicationLogsPanel :application="application" />
+    <ApplicationRuntimePanel :application="application" @logs="selectLogs" />
+    <ApplicationLogsPanel :application="application" :alloc-id="logTarget?.allocId" :task-name="logTarget?.task" />
   </div>
 </template>
 
@@ -133,6 +160,7 @@ async function updateImage() {
 .image-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
 .image-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .digest-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mono { font-size: 0.8rem; }
 @media (max-width: 900px) {
   .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

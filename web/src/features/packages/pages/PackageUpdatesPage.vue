@@ -14,6 +14,8 @@ const loadingServers = ref(false);
 const loadingUpdates = ref(false);
 const packageRefreshRunning = ref(false);
 const error = ref('');
+const confirmUpgradeAllDialog = ref(false);
+const lastTaskId = ref('');
 let refreshPollTimer: number | undefined;
 
 // Snackbar notification state
@@ -26,6 +28,10 @@ function showMessage(text: string, color = 'success') {
   snackbarText.value = text;
   snackbarColor.value = color;
   snackbar.value = true;
+}
+
+function taskRoute(taskId = lastTaskId.value) {
+  return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
 }
 
 const currentServer = computed(() => servers.value.find((server) => server.id === serverId.value));
@@ -104,13 +110,30 @@ async function loadUpdates(showLoading = true) {
   }
 }
 
+async function refreshPackages() {
+  if (!serverId.value) return;
+  packageRefreshRunning.value = true;
+  try {
+    const result = await packagesApi.refresh(serverId.value);
+    lastTaskId.value = result.taskId || '';
+    showMessage(t('packagesPage.refreshStarted'));
+    startRefreshPolling();
+  } catch (err) {
+    packageRefreshRunning.value = false;
+    lastTaskId.value = '';
+    showMessage(err instanceof Error ? err.message : t('packagesPage.refreshFailed'), 'error');
+  }
+}
+
 async function upgradeSelected() {
   if (!serverId.value || selectedPackages.value.length === 0) return;
   const names = selectedPackages.value.map((item) => item.name);
   try {
-    await packagesApi.upgradeSelected(serverId.value, names);
+    const result = await packagesApi.upgradeSelected(serverId.value, names);
+    lastTaskId.value = result.taskId || '';
     showMessage(t('packagesPage.selectedUpgradeStarted'));
   } catch (err) {
+    lastTaskId.value = '';
     showMessage(err instanceof Error ? err.message : t('packagesPage.upgradeFailed'), 'error');
   }
 }
@@ -118,9 +141,12 @@ async function upgradeSelected() {
 async function upgradeAll() {
   if (!serverId.value) return;
   try {
-    await packagesApi.upgradeAll(serverId.value);
+    const result = await packagesApi.upgradeAll(serverId.value);
+    lastTaskId.value = result.taskId || '';
+    confirmUpgradeAllDialog.value = false;
     showMessage(t('packagesPage.fullUpgradeStarted'));
   } catch (err) {
+    lastTaskId.value = '';
     showMessage(err instanceof Error ? err.message : t('packagesPage.fullUpgradeFailed'), 'error');
   }
 }
@@ -161,6 +187,17 @@ onBeforeUnmount(stopRefreshPolling);
                 {{ t('packagesPage.refreshing') }}
               </v-chip>
               <v-btn
+                prepend-icon="mdi-refresh"
+                size="small"
+                variant="outlined"
+                :disabled="operationBlocked || refreshInProgress"
+                :loading="refreshInProgress"
+                @click="refreshPackages"
+                class="text-none"
+              >
+                {{ t('common.refresh') }}
+              </v-btn>
+              <v-btn
                 color="primary"
                 prepend-icon="mdi-upload"
                 size="small"
@@ -177,7 +214,7 @@ onBeforeUnmount(stopRefreshPolling);
                 size="small"
                 variant="outlined"
                 :disabled="operationBlocked || !updates?.updates.length"
-                @click="upgradeAll"
+                @click="confirmUpgradeAllDialog = true"
                 class="text-none"
               >
                 {{ t('packagesPage.upgradeAll') }}
@@ -218,10 +255,29 @@ onBeforeUnmount(stopRefreshPolling);
       </v-card>
     </div>
 
+    <v-dialog v-model="confirmUpgradeAllDialog" width="460">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('packagesPage.confirmUpgradeAllTitle') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="confirmUpgradeAllDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          {{ t('packagesPage.confirmUpgradeAllMessage', { name: currentServer?.name || t('common.unknown') }) }}
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="confirmUpgradeAllDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="error" variant="flat" class="text-none" @click="upgradeAll">{{ t('packagesPage.upgradeAll') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <!-- Global Snackbar -->
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
+        <v-btn v-if="lastTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
         <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
       </template>
     </v-snackbar>

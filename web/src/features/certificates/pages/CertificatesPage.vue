@@ -17,6 +17,7 @@ const deletingCertificate = ref<CertificateDto | null>(null);
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
+const lastTaskId = ref('');
 const { t, formatDateTime } = useI18n();
 
 const form = reactive<CertificateIssueInput>({
@@ -48,6 +49,10 @@ function showMessage(text: string, color = 'success') {
   snackbar.value = true;
 }
 
+function taskRoute(taskId = lastTaskId.value) {
+  return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
+}
+
 function resetForm() {
   Object.assign(form, { name: '', domainId: domains.value[0]?.id ?? '', prefix: '@', scope: 'single', variableName: '' });
   dialog.value = true;
@@ -70,11 +75,13 @@ async function load() {
 async function issueCertificate() {
   issuing.value = true;
   try {
-    await certificatesApi.issue({ ...form });
+    const result = await certificatesApi.issue({ ...form });
+    lastTaskId.value = result.taskId || '';
     dialog.value = false;
     showMessage(t('certificatesPage.queued'));
     await load();
   } catch (err) {
+    lastTaskId.value = '';
     showMessage(err instanceof Error ? err.message : t('certificatesPage.issueFailed'), 'error');
   } finally {
     issuing.value = false;
@@ -94,6 +101,7 @@ async function deleteCertificate() {
     await certificatesApi.delete(certificate.id);
     deleteDialog.value = false;
     deletingCertificate.value = null;
+    lastTaskId.value = '';
     showMessage(t('certificatesPage.deleted'));
     await load();
   } catch (err) {
@@ -258,6 +266,7 @@ onMounted(load);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
+        <v-btn v-if="lastTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
         <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
       </template>
     </v-snackbar>

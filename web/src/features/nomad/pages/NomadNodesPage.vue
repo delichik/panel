@@ -21,9 +21,13 @@ const error = ref('');
 const joinDialog = ref(false);
 const rebuildDialog = ref(false);
 const switchDialog = ref(false);
+const removeDialog = ref(false);
 const selectedServerId = ref('');
 const selectedRebuildServerId = ref('');
 const selectedSwitchServerId = ref('');
+const removingNode = ref<ProjectedNomadNodeDto | null>(null);
+const operationTaskId = ref('');
+const operationMessage = ref('');
 const proxyDialog = ref(false);
 const editingNode = ref<ProjectedNomadNodeDto | null>(null);
 const proxyForm = ref({
@@ -66,6 +70,21 @@ const switchServerOptions = computed(() => {
   return options;
 });
 const selectedSwitchServer = computed(() => switchServerOptions.value.find((server) => server.value === selectedSwitchServerId.value) ?? null);
+const removingNodeName = computed(() => removingNode.value?.name || removingNode.value?.nodeId || removingNode.value?.serverId || t('common.unknown'));
+
+function taskRoute(taskId = operationTaskId.value) {
+  return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
+}
+
+function showTaskMessage(taskId: string | undefined, message: string) {
+  operationTaskId.value = taskId || '';
+  operationMessage.value = message;
+}
+
+function clearTaskMessage() {
+  operationTaskId.value = '';
+  operationMessage.value = '';
+}
 
 function statusColor(nodeStatus?: string) {
   if (nodeStatus === 'ready') return 'success';
@@ -131,11 +150,13 @@ async function joinSelectedServer() {
   if (!selectedServerId.value) return;
   joining.value = true;
   try {
-    await nomadApi.joinServer(selectedServerId.value);
+    const result = await nomadApi.joinServer(selectedServerId.value);
+    showTaskMessage(result.taskId, t('nomadNodesPage.joinStarted'));
     joinDialog.value = false;
     error.value = '';
     await load();
   } catch (err) {
+    clearTaskMessage();
     error.value = err instanceof Error ? err.message : t('nomadNodesPage.joinFailed');
   } finally {
     joining.value = false;
@@ -146,10 +167,12 @@ async function joinNode(node: ProjectedNomadNodeDto) {
   if (!node.serverId) return;
   actionLoading.value = `join:${node.serverId}`;
   try {
-    await nomadApi.joinServer(node.serverId);
+    const result = await nomadApi.joinServer(node.serverId);
+    showTaskMessage(result.taskId, t('nomadNodesPage.joinStarted'));
     error.value = '';
     await load();
   } catch (err) {
+    clearTaskMessage();
     error.value = err instanceof Error ? err.message : t('nomadNodesPage.joinFailed');
   } finally {
     actionLoading.value = '';
@@ -160,10 +183,12 @@ async function redeployNode(node: ProjectedNomadNodeDto) {
   if (!node.serverId) return;
   actionLoading.value = `redeploy:${node.serverId}`;
   try {
-    await nomadApi.redeployNode({ serverId: node.serverId, role: node.role });
+    const result = await nomadApi.redeployNode({ serverId: node.serverId, role: node.role });
+    showTaskMessage(result.taskId, t('nomadNodesPage.redeployStarted'));
     error.value = '';
     await load();
   } catch (err) {
+    clearTaskMessage();
     error.value = err instanceof Error ? err.message : t('nomadNodesPage.redeployFailed');
   } finally {
     actionLoading.value = '';
@@ -174,11 +199,13 @@ async function rebuildSelectedCluster() {
   if (!selectedRebuildServerId.value) return;
   actionLoading.value = 'rebuild-cluster';
   try {
-    await nomadApi.rebuildCluster({ serverId: selectedRebuildServerId.value });
+    const result = await nomadApi.rebuildCluster({ serverId: selectedRebuildServerId.value });
+    showTaskMessage(result.taskId, t('nomadNodesPage.rebuildStarted'));
     rebuildDialog.value = false;
     error.value = '';
     await load();
   } catch (err) {
+    clearTaskMessage();
     error.value = err instanceof Error ? err.message : t('nomadNodesPage.rebuildFailed');
   } finally {
     actionLoading.value = '';
@@ -189,24 +216,37 @@ async function switchSelectedServer() {
   if (!selectedSwitchServerId.value) return;
   actionLoading.value = 'switch-server';
   try {
-    await nomadApi.switchServer({ serverId: selectedSwitchServerId.value });
+    const result = await nomadApi.switchServer({ serverId: selectedSwitchServerId.value });
+    showTaskMessage(result.taskId, t('nomadNodesPage.switchStarted'));
     switchDialog.value = false;
     error.value = '';
     await load();
   } catch (err) {
+    clearTaskMessage();
     error.value = err instanceof Error ? err.message : t('nomadNodesPage.switchFailed');
   } finally {
     actionLoading.value = '';
   }
 }
 
-async function removeNode(node: ProjectedNomadNodeDto) {
+function askRemoveNode(node: ProjectedNomadNodeDto) {
+  removingNode.value = node;
+  removeDialog.value = true;
+}
+
+async function removeSelectedNode() {
+  const node = removingNode.value;
+  if (!node) return;
   actionLoading.value = `remove:${node.serverId || node.nodeId}`;
   try {
-    await nomadApi.removeNode({ serverId: node.serverId, nodeId: node.nodeId });
+    const result = await nomadApi.removeNode({ serverId: node.serverId, nodeId: node.nodeId });
+    showTaskMessage(result.taskId, t('nomadNodesPage.removeStarted'));
+    removeDialog.value = false;
+    removingNode.value = null;
     error.value = '';
     await load();
   } catch (err) {
+    clearTaskMessage();
     error.value = err instanceof Error ? err.message : t('nomadNodesPage.removeFailed');
   } finally {
     actionLoading.value = '';
@@ -264,6 +304,12 @@ onMounted(load);
 <template>
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
+    <v-alert v-else-if="operationMessage" type="info" variant="tonal" closable @click:close="operationMessage = ''">
+      <div class="task-alert">
+        <span>{{ operationMessage }}</span>
+        <v-btn v-if="operationTaskId" size="small" variant="text" :to="taskRoute()" class="text-none">{{ t('taskCenter.task') }}</v-btn>
+      </div>
+    </v-alert>
     <v-alert v-else-if="controlPlane?.status === 'bootstrapping'" type="info" variant="tonal">
       {{ t('nomadNodesPage.bootstrappingHint') }}
     </v-alert>
@@ -356,7 +402,7 @@ onMounted(load);
                   prepend-icon="mdi-delete"
                   class="text-none"
                   :loading="actionLoading === `remove:${node.serverId || node.nodeId}`"
-                  @click="removeNode(node)"
+                  @click="askRemoveNode(node)"
                 >
                   {{ t('nomadNodesPage.remove') }}
                 </v-btn>
@@ -475,6 +521,24 @@ onMounted(load);
       </v-card>
     </v-dialog>
 
+    <v-dialog v-model="removeDialog" width="480">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('nomadNodesPage.removeNodeTitle') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="removeDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          {{ t('nomadNodesPage.removeNodeConfirm', { name: removingNodeName }) }}
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="removeDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="error" variant="flat" class="text-none" :loading="actionLoading.startsWith('remove:')" @click="removeSelectedNode">{{ t('nomadNodesPage.remove') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
     <v-dialog v-model="proxyDialog" width="920">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
@@ -510,6 +574,7 @@ onMounted(load);
 .mono { font-size: 0.8rem; }
 .row-actions { display: inline-flex; justify-content: flex-end; gap: 4px; min-width: 0; flex-wrap: wrap; }
 .proxy-summary { display: flex; gap: 8px; align-items: center; min-width: 180px; }
+.task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .section-title { margin-top: 10px; }
 .repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; }
 .static-site-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) 180px 40px; }

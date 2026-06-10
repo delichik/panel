@@ -161,6 +161,7 @@ export interface PackageUpdatesDto {
 export interface PackageRefreshDto {
   serverId: string;
   refreshing: boolean;
+  taskId?: string;
 }
 
 export interface ApplicationDto {

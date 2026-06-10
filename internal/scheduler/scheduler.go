@@ -99,7 +99,7 @@ func (s *Scheduler) packageLoop(ctx context.Context) {
 				if !srv.OS.Supported || !srv.Reachable {
 					continue
 				}
-				if _, err := s.packages.Refresh(ctx, srv.ID); err != nil {
+				if _, err := s.packages.RefreshScheduled(ctx, srv.ID); err != nil {
 					log.Printf("package refresh server %s: %v", srv.ID, err)
 				}
 			}
@@ -120,8 +120,10 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 		_, err := s.servers.EnsureConnectivityTask(ctx, task.ServerID, true)
 		return err
 	case "package_refresh":
-		_, err := s.packages.Refresh(ctx, task.ServerID)
-		return err
+		if s.packages == nil {
+			return panelerr.Validation("task_run_now_unsupported", "Package refresh runner is not configured")
+		}
+		return s.packages.RunRefreshTask(ctx, task)
 	case "certificate_issue":
 		if s.certs == nil {
 			return panelerr.Validation("task_run_now_unsupported", "Certificate issuer is not configured")
@@ -130,6 +132,19 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 	}
 
 	return panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center")
+}
+
+func (s *Scheduler) CanRun(task tasks.Task) bool {
+	switch task.Type {
+	case "server_connectivity_test", "server_info_collect":
+		return s.servers != nil
+	case "package_refresh":
+		return s.packages != nil
+	case "certificate_issue":
+		return s.certs != nil
+	default:
+		return false
+	}
 }
 
 func (s *Scheduler) certificateLoop(ctx context.Context) {

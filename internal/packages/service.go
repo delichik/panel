@@ -33,6 +33,7 @@ type UpdateList struct {
 type RefreshResult struct {
 	ServerID   string `json:"serverId"`
 	Refreshing bool   `json:"refreshing"`
+	TaskID     string `json:"taskId,omitempty"`
 }
 
 type packageAdapter interface {
@@ -66,13 +67,21 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 		out.LastRefreshedAt = &t
 	}
 	if out.LastRefreshedAt == nil || time.Since(*out.LastRefreshedAt) > 10*time.Minute {
-		_, _ = s.Refresh(ctx, serverID)
+		_, _ = s.refresh(ctx, serverID, "auto", true)
 	}
 	out.Refreshing = s.isRefreshing(serverID)
 	return out, rows.Err()
 }
 
 func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, error) {
+	return s.refresh(ctx, serverID, "user", false)
+}
+
+func (s *Service) RefreshScheduled(ctx context.Context, serverID string) (RefreshResult, error) {
+	return s.refresh(ctx, serverID, "scheduler", true)
+}
+
+func (s *Service) refresh(ctx context.Context, serverID string, triggerType string, skipRecentFailure bool) (RefreshResult, error) {
 	srv, err := s.ensurePackageAllowed(ctx, serverID, false)
 	if err != nil {
 		return RefreshResult{}, err
@@ -81,11 +90,61 @@ func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, 
 	if err != nil {
 		return RefreshResult{}, err
 	}
+	if s.tasks == nil {
+		return RefreshResult{}, panelerr.Validation("package_task_service_unavailable", "Package task service is unavailable")
+	}
+	if skipRecentFailure && s.hasRecentRefreshTask(ctx, serverID, 10*time.Minute) {
+		return RefreshResult{ServerID: serverID, Refreshing: s.isRefreshing(serverID)}, nil
+	}
+	if existing, ok, err := s.tasks.ExistingActive(ctx, "package_refresh", "server", serverID); err != nil {
+		return RefreshResult{}, err
+	} else if ok {
+		if existing.Status != tasks.StatusRunning && s.markRefreshing(serverID) {
+			go s.runRefreshTask(context.Background(), existing, srv, adapter)
+		}
+		return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: existing.ID}, nil
+	}
 	if !s.markRefreshing(serverID) {
 		return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 	}
-	go s.runRefresh(context.Background(), srv, adapter)
-	return RefreshResult{ServerID: serverID, Refreshing: true}, nil
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         "package_refresh",
+		ServerID:     serverID,
+		ResourceType: "server",
+		ResourceID:   serverID,
+		TriggerType:  triggerType,
+		Summary:      "Refreshing package updates",
+		MaxRetries:   0,
+	})
+	if err != nil {
+		s.clearRefreshing(serverID)
+		return RefreshResult{}, err
+	}
+	go s.runRefreshTask(context.Background(), task, srv, adapter)
+	return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: task.ID}, nil
+}
+
+func (s *Service) RunRefreshTask(ctx context.Context, task tasks.Task) error {
+	if s.tasks == nil {
+		return panelerr.Validation("package_task_service_unavailable", "Package task service is unavailable")
+	}
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	srv, err := s.ensurePackageAllowed(ctx, serverID, false)
+	if err != nil {
+		return err
+	}
+	adapter, err := s.adapterFor(srv)
+	if err != nil {
+		return err
+	}
+	if task.Status == tasks.StatusRunning {
+		return nil
+	}
+	if !s.markRefreshing(serverID) {
+		return nil
+	}
+	go s.runRefreshTask(context.Background(), task, srv, adapter)
+	return nil
 }
 
 func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []string) (tasks.Task, error) {
@@ -100,7 +159,14 @@ func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []
 	if len(names) == 0 {
 		return tasks.Task{}, panelerr.Validation("packages_required", "At least one package is required")
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_upgrade_selected", ServerID: serverID, Summary: "Upgrading selected packages"})
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         "package_upgrade_selected",
+		ServerID:     serverID,
+		ResourceType: "server",
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      "Upgrading selected packages",
+	})
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -117,7 +183,14 @@ func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{Type: "package_upgrade_all", ServerID: serverID, Summary: "Upgrading all packages"})
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         "package_upgrade_all",
+		ServerID:     serverID,
+		ResourceType: "server",
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      "Upgrading all packages",
+	})
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -150,13 +223,20 @@ func (s *Service) adapterFor(srv server.Server) (packageAdapter, error) {
 	return adapter, nil
 }
 
-func (s *Service) runRefresh(ctx context.Context, srv server.Server, adapter packageAdapter) {
+func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv server.Server, adapter packageAdapter) {
 	defer s.clearRefreshing(srv.ID)
+	_ = s.tasks.Start(ctx, task.ID)
+	_ = s.tasks.Advance(ctx, task.ID, "running", "refreshing package updates")
 	updates, err := adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
 		return
 	}
-	_ = s.replaceUpdates(ctx, srv.ID, updates)
+	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, task.ID, "Package updates refreshed")
 }
 
 func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter, names []string) {
@@ -284,4 +364,33 @@ func (s *Service) isRefreshing(serverID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.refreshing[serverID]
+}
+
+func (s *Service) hasRecentRefreshTask(ctx context.Context, serverID string, window time.Duration) bool {
+	if s.tasks == nil {
+		return false
+	}
+	result, err := s.tasks.List(ctx, tasks.ListFilter{Type: "package_refresh", ServerID: serverID, Limit: 1})
+	if err != nil || len(result.Items) == 0 {
+		return false
+	}
+	latest := result.Items[0]
+	if time.Since(latest.CreatedAt) > window {
+		return false
+	}
+	switch latest.Status {
+	case tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusRunning, tasks.StatusFailedRetryable, tasks.StatusFailed, tasks.StatusBlocked:
+		return true
+	default:
+		return false
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }

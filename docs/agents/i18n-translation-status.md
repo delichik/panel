@@ -19,6 +19,10 @@
   - 强制改密、账号更新、JWT 密钥更新相关错误文案已接入 `internal/i18n/i18n.go`
 - `web/src/features/nomad/pages/NomadNodesPage.vue`
   - Nomad 节点重部署、集群重建、server 切换操作文案已接入 `web/src/i18n/index.ts`
+- `web/src/features/nomad/pages/NomadJobsPage.vue`
+  - Nomad jobs 清单、筛选和空状态文案已接入 `web/src/i18n/index.ts`
+- `web/src/features/deployments/pages/DeploymentsPage.vue`
+  - Nomad deployments、evaluations、services 清单文案已接入 `web/src/i18n/index.ts`
 - `internal/nomad`
   - Nomad 重部署、集群重建、server 切换相关 API 错误码已接入 `internal/i18n/i18n.go`
 
@@ -30,13 +34,6 @@
   - `deployment.StatusDescription`
   - `evaluation.StatusDescription`
   - `evaluation.Type`
-
-### 仍未纳入本轮整理的页面
-
-以下页面当前仍是占位或重定向路径，不在本轮主要翻译范围内，后续如果启用真实界面需要重新纳入：
-
-- `web/src/features/deployments/pages/DeploymentsPage.vue`
-- `web/src/features/nomad/pages/NomadJobsPage.vue`
 
 ### 后端翻译仍为部分覆盖
 

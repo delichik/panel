@@ -18,6 +18,9 @@ const loading = ref(false);
 const actionLoading = ref('');
 const error = ref('');
 const message = ref('');
+const lastTaskId = ref('');
+const deleteDialog = ref(false);
+const deletingApplication = ref<ApplicationDto | null>(null);
 
 const selectedApplication = computed(() => applications.value.find((app) => app.id === selectedId.value) ?? null);
 const totalCount = computed(() => applications.value.length);
@@ -71,8 +74,13 @@ async function handleSaved(app: ApplicationDto) {
   selectedId.value = app.id;
 }
 
-function showOperation(fallback: string) {
+function taskRoute(taskId = lastTaskId.value) {
+  return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
+}
+
+function showOperation(fallback: string, taskId?: string) {
   message.value = fallback;
+  lastTaskId.value = taskId || '';
 }
 
 function replaceApplication(app: ApplicationDto) {
@@ -80,24 +88,31 @@ function replaceApplication(app: ApplicationDto) {
   if (index >= 0) applications.value[index] = app;
 }
 
+function askDelete(app: ApplicationDto) {
+  deletingApplication.value = app;
+  deleteDialog.value = true;
+}
+
 async function runAction(action: 'deploy' | 'stop' | 'restart' | 'delete', app: ApplicationDto) {
   actionLoading.value = `${action}:${app.id}`;
   try {
     if (action === 'delete') {
       await applicationsApi.delete(app.id);
+      lastTaskId.value = '';
       message.value = t('applicationsPage.deleted', { name: app.name });
+      deleteDialog.value = false;
+      deletingApplication.value = null;
     } else {
-      if (action === 'deploy') {
-        await applicationsApi.deploy(app.id);
-      } else if (action === 'stop') {
-        await applicationsApi.stop(app.id);
-      } else {
-        await applicationsApi.restart(app.id);
-      }
-      showOperation(t('applicationsPage.actionAccepted', { action: actionLabel(action) }));
+      const result = action === 'deploy'
+        ? await applicationsApi.deploy(app.id)
+        : action === 'stop'
+          ? await applicationsApi.stop(app.id)
+          : await applicationsApi.restart(app.id);
+      showOperation(t('applicationsPage.actionAccepted', { action: actionLabel(action) }), result?.taskId);
     }
     await load();
   } catch (err) {
+    lastTaskId.value = '';
     error.value = err instanceof Error ? err.message : t('applicationsPage.actionFailed', { action: actionLabel(action) });
   } finally {
     actionLoading.value = '';
@@ -116,7 +131,12 @@ onMounted(load);
 <template>
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
-    <v-alert v-if="message" type="info" variant="tonal" closable @click:close="message = ''">{{ message }}</v-alert>
+    <v-alert v-if="message" type="info" variant="tonal" closable @click:close="message = ''">
+      <div class="task-alert">
+        <span>{{ message }}</span>
+        <v-btn v-if="lastTaskId" size="small" variant="text" :to="taskRoute()" class="text-none">{{ t('taskCenter.task') }}</v-btn>
+      </div>
+    </v-alert>
 
     <div class="summary-strip">
       <v-card variant="outlined" class="summary-card">
@@ -172,7 +192,7 @@ onMounted(load);
                   <v-btn size="small" icon="mdi-upload" variant="text" :loading="actionLoading === `deploy:${app.id}`" @click.stop="runAction('deploy', app)" />
                   <v-btn size="small" icon="mdi-stop-circle-outline" variant="text" :disabled="!app.enabled" :loading="actionLoading === `stop:${app.id}`" @click.stop="runAction('stop', app)" />
                   <v-btn size="small" icon="mdi-restart" variant="text" :disabled="!app.enabled" :loading="actionLoading === `restart:${app.id}`" @click.stop="runAction('restart', app)" />
-                  <v-btn size="small" icon="mdi-delete" color="error" variant="text" :disabled="app.enabled" :loading="actionLoading === `delete:${app.id}`" @click.stop="runAction('delete', app)" />
+                  <v-btn size="small" icon="mdi-delete" color="error" variant="text" :disabled="app.enabled" :loading="actionLoading === `delete:${app.id}`" @click.stop="askDelete(app)" />
                 </div>
               </td>
             </tr>
@@ -190,6 +210,32 @@ onMounted(load);
     </div>
 
     <ApplicationEditor :application="editingApplication" :open="editorOpen" @close="editorOpen = false" @saved="handleSaved" />
+
+    <v-dialog v-model="deleteDialog" width="460">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('applicationsPage.deleteApplication') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="deleteDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          {{ t('applicationsPage.deleteApplicationConfirm', { name: deletingApplication?.name || t('common.unknown') }) }}
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="deleteDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn
+            color="error"
+            variant="flat"
+            class="text-none"
+            :loading="deletingApplication ? actionLoading === `delete:${deletingApplication.id}` : false"
+            @click="deletingApplication && runAction('delete', deletingApplication)"
+          >
+            {{ t('common.delete') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -210,6 +256,7 @@ onMounted(load);
 .mono-cell { max-width: 190px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
 .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
 .row-actions :deep(.v-btn) { min-width: 40px; min-height: 40px; }
+.task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .status-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 999px; background: rgb(var(--v-theme-info)); box-shadow: 0 0 0 4px rgba(var(--v-theme-info), 0.12); }
 .status-dot.success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12); }
 .status-dot.warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14); }

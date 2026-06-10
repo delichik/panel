@@ -65,6 +65,8 @@ const navGroups = computed<NavGroup[]>(() => [
     items: [
       { to: '/applications', title: t('layout.nav.applications'), value: 'applications' },
       { to: '/nomad/nodes', title: t('layout.nav.nomadNodes'), value: 'nomad-nodes' },
+      { to: '/nomad/jobs', title: t('layout.nav.nomadJobs'), value: 'nomad-jobs' },
+      { to: '/deployments', title: t('layout.nav.deployments'), value: 'deployments' },
     ],
   },
   {

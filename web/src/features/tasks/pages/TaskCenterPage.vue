@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { formatDateTime, formatTime, t, translateTaskStatus, useI18n } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { tasksApi } from '@/api/tasks';
@@ -8,6 +9,7 @@ import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
 import { groupTasksByOperation } from '../taskOperations';
 
 useI18n();
+const route = useRoute();
 
 const tasks = ref<TaskDto[]>([]);
 const steps = ref<TaskStepDto[]>([]);
@@ -25,6 +27,7 @@ const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
 let timer: number | undefined;
+const runnableTaskTypes = new Set(['server_connectivity_test', 'server_info_collect', 'package_refresh', 'certificate_issue']);
 
 const operationGroups = computed(() => groupTasksByOperation(tasks.value));
 const selectedTask = computed(() => tasks.value.find((task) => task.id === selectedTaskId.value) ?? null);
@@ -150,6 +153,31 @@ function taskStatusColor(status: TaskStatus | string) {
   return 'default';
 }
 
+function routeTaskId() {
+  return typeof route.query.task === 'string' ? route.query.task : '';
+}
+
+async function loadRouteTask() {
+  const id = routeTaskId();
+  if (!id) {
+    await loadTasks();
+    return;
+  }
+  try {
+    const linkedTask = await tasksApi.get(id);
+    operationFilter.value = linkedTask.operationId || linkedTask.id;
+    statusFilter.value = 'all';
+    typeFilter.value = linkedTask.type === 'server_connectivity_test' ? linkedTask.type : '';
+    page.value = 1;
+    await loadTasks();
+    selectedOperationId.value = linkedTask.operationId || linkedTask.id;
+    selectedTaskId.value = linkedTask.id;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('taskCenter.loadFailed');
+    await loadTasks();
+  }
+}
+
 function statusLabel(status: TaskStatus | string) {
   return translateTaskStatus(status);
 }
@@ -204,11 +232,11 @@ async function runNowTask(task: TaskDto) {
 }
 
 function canRetry(task: TaskDto) {
-  return ['failed', 'failed_retryable', 'blocked'].includes(task.status);
+  return runnableTaskTypes.has(task.type) && ['failed', 'failed_retryable', 'blocked'].includes(task.status);
 }
 
 function canRunNow(task: TaskDto) {
-  return ['queued', 'scheduled', 'failed_retryable'].includes(task.status);
+  return runnableTaskTypes.has(task.type) && ['queued', 'scheduled', 'failed_retryable'].includes(task.status);
 }
 
 function clearFilters() {
@@ -225,11 +253,14 @@ function openDetailsDialog() {
 
 function startPolling() {
   if (timer) window.clearInterval(timer);
-  void loadTasks();
+  void loadRouteTask();
   timer = window.setInterval(loadTasks, 5000);
 }
 
 watch([selectedTaskId, detailsDialog], loadSteps);
+watch(() => route.query.task, () => {
+  void loadRouteTask();
+});
 onMounted(startPolling);
 onBeforeUnmount(() => {
   if (timer) window.clearInterval(timer);

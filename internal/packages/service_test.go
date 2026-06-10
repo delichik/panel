@@ -2,6 +2,7 @@ package packages
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -39,7 +40,7 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	}
 }
 
-func TestRefreshRunsWithoutCreatingTask(t *testing.T) {
+func TestRefreshRecordsTask(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -58,14 +59,15 @@ func TestRefreshRunsWithoutCreatingTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, tasks.NewService(store.AppDB())), nil, tasks.NewService(store.AppDB()))
+	taskSvc := tasks.NewService(store.AppDB())
+	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), nil, taskSvc)
 	svc.adapter = fakePackageAdapter{updates: []linux.PackageUpdate{{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2"}}}
 
 	result, err := svc.Refresh(context.Background(), "srv")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Refreshing {
+	if !result.Refreshing || result.TaskID == "" {
 		t.Fatalf("expected refresh to be marked running, got %#v", result)
 	}
 	waitForPackageRefresh(t, svc, "srv")
@@ -74,8 +76,15 @@ func TestRefreshRunsWithoutCreatingTask(t *testing.T) {
 	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 0 {
-		t.Fatalf("expected no package refresh tasks, got %d", count)
+	if count != 1 {
+		t.Fatalf("expected one package refresh task, got %d", count)
+	}
+	task, err := taskSvc.Get(context.Background(), result.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed package refresh task, got %#v", task)
 	}
 	list, err := svc.List(context.Background(), "srv")
 	if err != nil {
@@ -87,6 +96,57 @@ func TestRefreshRunsWithoutCreatingTask(t *testing.T) {
 	if len(list.Updates) != 1 {
 		t.Fatalf("expected cached update, got %#v", list.Updates)
 	}
+}
+
+func TestRefreshFailureRecordsFailedTask(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'now','now')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), nil, taskSvc)
+	svc.adapter = fakePackageAdapter{err: errors.New("apt failed")}
+
+	result, err := svc.Refresh(context.Background(), "srv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskID == "" {
+		t.Fatalf("expected refresh task id, got %#v", result)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		task, err := taskSvc.Get(context.Background(), result.TaskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status == tasks.StatusFailed {
+			if !strings.Contains(task.Error, "apt failed") {
+				t.Fatalf("expected task error to include apt failure, got %#v", task)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	task, err := taskSvc.Get(context.Background(), result.TaskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("expected failed package refresh task, got %#v", task)
 }
 
 func TestRefreshUsesUbuntuAdapter(t *testing.T) {
@@ -167,9 +227,13 @@ func TestReplaceUpdates(t *testing.T) {
 
 type fakePackageAdapter struct {
 	updates []linux.PackageUpdate
+	err     error
 }
 
 func (f fakePackageAdapter) ListUpgradeable(context.Context, sshx.RemoteExecutor, sshx.Target) ([]linux.PackageUpdate, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.updates, nil
 }
 

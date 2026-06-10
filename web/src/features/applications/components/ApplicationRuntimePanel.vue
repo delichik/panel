@@ -7,9 +7,10 @@ import {
   translateNomadRuntimeStatus,
 } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
-import type { ApplicationDto, ApplicationRuntimeDto } from '@/types/api';
+import type { ApplicationDto, ApplicationRuntimeDto, NomadAllocationDto } from '@/types/api';
 
 const props = defineProps<{ application: ApplicationDto }>();
+const emit = defineEmits<{ logs: [{ allocId: string; task: string }] }>();
 const runtime = ref<ApplicationRuntimeDto | null>(null);
 const loading = ref(false);
 const error = ref('');
@@ -45,6 +46,19 @@ function failedAllocSummary(evaluation: NonNullable<ApplicationRuntimeDto['evalu
     return `${group}: ${parts.join(', ')}`;
   }).join('\n');
 }
+
+function taskNames(alloc: NomadAllocationDto) {
+  return Object.keys(alloc.TaskStates ?? {});
+}
+
+function defaultTaskName(alloc: NomadAllocationDto) {
+  return taskNames(alloc)[0] || props.application.name;
+}
+
+function openLogs(alloc: NomadAllocationDto, task = defaultTaskName(alloc)) {
+  if (!alloc.ID || !task) return;
+  emit('logs', { allocId: alloc.ID, task });
+}
 </script>
 
 <template>
@@ -75,12 +89,23 @@ function failedAllocSummary(evaluation: NonNullable<ApplicationRuntimeDto['evalu
         <pre v-if="failedAllocSummary(evaluation)" class="failure-pre">{{ failedAllocSummary(evaluation) }}</pre>
       </v-alert>
       <v-table density="compact">
-        <thead><tr><th>{{ t('applicationRuntime.allocation') }}</th><th>{{ t('applicationRuntime.node') }}</th><th>{{ t('applicationRuntime.group') }}</th><th>{{ t('applicationRuntime.client') }}</th><th>{{ t('applicationRuntime.desired') }}</th></tr></thead>
+        <thead><tr><th>{{ t('applicationRuntime.allocation') }}</th><th>{{ t('applicationRuntime.node') }}</th><th>{{ t('applicationRuntime.group') }}</th><th>{{ t('applicationRuntime.client') }}</th><th>{{ t('applicationRuntime.desired') }}</th><th class="text-right">{{ t('applicationRuntime.logs') }}</th></tr></thead>
         <tbody>
           <tr v-for="alloc in runtime.allocations" :key="alloc.ID">
             <td class="mono">{{ alloc.ID }}</td><td class="mono">{{ alloc.NodeID }}</td><td>{{ alloc.TaskGroup }}</td><td>{{ translateNomadRuntimeStatus(alloc.ClientStatus) }}</td><td>{{ translateNomadAllocationDesiredStatus(alloc.DesiredStatus) }}</td>
+            <td class="text-right">
+              <v-menu v-if="taskNames(alloc).length > 1">
+                <template #activator="{ props: menuProps }">
+                  <v-btn v-bind="menuProps" size="small" icon="mdi-text-box-search-outline" variant="text" :title="t('applicationRuntime.logs')" />
+                </template>
+                <v-list density="compact">
+                  <v-list-item v-for="taskName in taskNames(alloc)" :key="taskName" :title="taskName" @click="openLogs(alloc, taskName)" />
+                </v-list>
+              </v-menu>
+              <v-btn v-else size="small" icon="mdi-text-box-search-outline" variant="text" :title="t('applicationRuntime.logs')" :disabled="!alloc.ID" @click="openLogs(alloc)" />
+            </td>
           </tr>
-          <tr v-if="runtime.allocations.length === 0"><td colspan="5" class="text-center text-medium-emphasis py-4">{{ t('applicationRuntime.noAllocations') }}</td></tr>
+          <tr v-if="runtime.allocations.length === 0"><td colspan="6" class="text-center text-medium-emphasis py-4">{{ t('applicationRuntime.noAllocations') }}</td></tr>
         </tbody>
       </v-table>
       <v-table density="compact">

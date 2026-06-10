@@ -244,38 +244,64 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 	if err != nil {
 		return err
 	}
+	taskID, err := s.recordTask(ctx, TaskTypeRenew, cert, tasks.StatusRunning, "Renewing certificate for "+cert.Domain)
+	if err != nil {
+		return err
+	}
+	if taskID != "" {
+		_ = s.tasks.Advance(ctx, taskID, "running", "Running ACME DNS-01 renewal")
+	}
 	resolved, err := s.resolveDomain(ctx, cert.DomainID)
 	if err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
 	provider, err := s.providerForDomain(resolved)
 	if err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
 	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains})
 	if err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
 	if err := validateBundle(bundle); err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
 	if err := os.WriteFile(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), 0600); err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
 	if err := os.WriteFile(cert.PrivateKeyPath, bundle.PrivateKeyPEM, 0600); err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
 	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
 	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
+	cert.LastError = ""
 	cert.UpdatedAt = time.Now().UTC()
 	if err := s.updateRenewal(ctx, cert); err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
 	if err := s.refreshApplications(ctx); err != nil {
+		_ = s.updateLastError(ctx, cert.ID, err.Error())
+		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
-	_, err = s.recordTask(ctx, TaskTypeRenew, cert, tasks.StatusCompleted, "Renewed certificate for "+cert.Domain)
-	return err
+	if taskID != "" {
+		return s.tasks.Complete(ctx, taskID, "Renewed certificate for "+cert.Domain)
+	}
+	return nil
 }
 
 func (s *Service) List(ctx context.Context) ([]Certificate, error) {
@@ -392,8 +418,8 @@ func (s *Service) insert(ctx context.Context, cert Certificate) error {
 }
 
 func (s *Service) updateRenewal(ctx context.Context, cert Certificate) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET not_before=?,not_after=?,next_renew_at=?,updated_at=? WHERE id=?`,
-		formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatOptionalTime(cert.NextRenewAt), formatTime(cert.UpdatedAt), cert.ID)
+	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET not_before=?,not_after=?,next_renew_at=?,last_error=?,updated_at=? WHERE id=?`,
+		formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatOptionalTime(cert.NextRenewAt), cert.LastError, formatTime(cert.UpdatedAt), cert.ID)
 	return err
 }
 
@@ -401,6 +427,19 @@ func (s *Service) updateStatus(ctx context.Context, certID, status, lastError st
 	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET status=?,last_error=?,updated_at=? WHERE id=?`,
 		status, lastError, formatTime(time.Now().UTC()), certID)
 	return err
+}
+
+func (s *Service) updateLastError(ctx context.Context, certID, lastError string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET last_error=?,updated_at=? WHERE id=?`,
+		lastError, formatTime(time.Now().UTC()), certID)
+	return err
+}
+
+func (s *Service) failRenewalTask(ctx context.Context, taskID string, err error) error {
+	if s.tasks == nil || taskID == "" {
+		return nil
+	}
+	return s.tasks.Fail(ctx, taskID, err)
 }
 
 func (s *Service) recordTask(ctx context.Context, taskType string, cert Certificate, status string, summary string) (string, error) {

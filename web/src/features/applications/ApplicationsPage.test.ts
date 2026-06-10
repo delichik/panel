@@ -5,10 +5,11 @@ const page = readFileSync(resolve(__dirname, 'pages/ApplicationsPage.vue'), 'utf
 
 describe('ApplicationsPage', () => {
   it('presents the operational Applications workspace', () => {
-    expect(page).toContain('Applications');
+    expect(page).toContain("t('applicationsPage.applications')");
     expect(page).toContain('applicationsApi.list');
     expect(page).toContain('ApplicationEditor');
     expect(page).toContain('ApplicationDetail');
     expect(page).toContain('mdi-plus');
+    expect(page).toContain("t('applicationsPage.deleteApplication')");
   });
 });
