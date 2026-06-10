@@ -495,6 +495,16 @@ onMounted(loadSettings);
   gap: 16px;
 }
 
+.settings-form :deep(.v-btn-toggle) {
+  max-width: 100%;
+  flex-wrap: wrap;
+  height: auto;
+}
+
+.settings-form :deep(.v-btn-toggle .v-btn) {
+  min-width: 0;
+}
+
 .section-title {
   color: var(--lp-text);
   font-size: 0.96rem;
@@ -535,6 +545,17 @@ onMounted(loadSettings);
 
   .system-label {
     width: 150px;
+  }
+
+  .settings-form,
+  .form-actions,
+  .form-actions .v-btn,
+  .settings-form :deep(.v-btn-toggle) {
+    width: 100%;
+  }
+
+  .settings-form :deep(.v-btn-toggle .v-btn) {
+    flex: 1 1 100%;
   }
 }
 </style>

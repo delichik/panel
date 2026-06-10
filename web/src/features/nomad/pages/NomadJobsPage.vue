@@ -48,4 +48,11 @@ onMounted(load);
 .actions { display: flex; gap: 10px; align-items: center; justify-content: flex-end; }
 .actions :deep(.v-input) { width: 220px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
+
+@media (max-width: 640px) {
+  .actions,
+  .actions :deep(.v-input) {
+    width: 100%;
+  }
+}
 </style>

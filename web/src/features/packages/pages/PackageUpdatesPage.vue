@@ -175,14 +175,14 @@ onBeforeUnmount(stopRefreshPolling);
 
       <v-card :loading="loadingUpdates" variant="outlined">
         <v-card-item class="bg-surface-variant py-3">
-          <div class="d-flex justify-space-between align-center">
-            <div>
+          <div class="package-card-header d-flex justify-space-between align-center">
+            <div class="package-card-title">
               <v-card-title class="text-subtitle-1 font-weight-bold">{{ currentServer?.name || t('common.selectServer') }}</v-card-title>
               <v-card-subtitle class="text-caption">
                 {{ t('packagesPage.lastRefreshed') }}: {{ updates?.lastRefreshedAt ? formatDateTime(updates.lastRefreshedAt) : t('common.never') }}
               </v-card-subtitle>
             </div>
-            <div class="d-flex" style="gap: 8px;">
+            <div class="package-actions">
               <v-chip v-if="refreshInProgress" size="small" color="info" variant="tonal" prepend-icon="mdi-sync">
                 {{ t('packagesPage.refreshing') }}
               </v-chip>
@@ -287,7 +287,42 @@ onBeforeUnmount(stopRefreshPolling);
 <style scoped>
 .package-grid {
   display: grid;
-  grid-template-columns: 340px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
   gap: 20px;
+  align-items: start;
+}
+
+.package-card-header {
+  gap: 12px;
+}
+
+.package-card-title {
+  min-width: 0;
+}
+
+.package-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 980px) {
+  .package-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .package-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .package-actions,
+  .package-actions .v-btn,
+  .package-actions .v-chip {
+    width: 100%;
+  }
 }
 </style>

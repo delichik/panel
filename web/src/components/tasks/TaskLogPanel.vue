@@ -157,11 +157,15 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 16px;
   align-items: center;
+  min-width: 0;
 }
 
 .task-title-row {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
 }
 
 .task-meta {
@@ -199,10 +203,15 @@ onBeforeUnmount(() => {
 
 .log-line {
   display: grid;
-  grid-template-columns: 86px 64px 1fr;
+  grid-template-columns: 86px 64px minmax(0, 1fr);
   gap: 10px;
   line-height: 1.6;
   white-space: pre-wrap;
+}
+
+.log-line > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .log-line.stderr {
@@ -213,5 +222,28 @@ onBeforeUnmount(() => {
 .log-time,
 .empty-log {
   color: var(--lp-log-muted);
+}
+
+@media (max-width: 560px) {
+  .task-meta {
+    display: grid;
+    gap: 6px;
+  }
+
+  .log-box {
+    padding: 10px;
+    font-size: 11px;
+  }
+
+  .log-line {
+    grid-template-columns: 1fr;
+    gap: 2px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  }
+
+  .log-line:last-child {
+    border-bottom: 0;
+  }
 }
 </style>

@@ -99,12 +99,12 @@ watch(() => props.application.id, () => {
 <template>
   <div class="detail-stack">
     <v-card variant="outlined" class="detail-card">
-      <div class="d-flex align-start justify-space-between ga-3">
+      <div class="detail-heading">
         <div class="min-width-0">
           <div class="text-subtitle-1 font-weight-bold text-truncate">{{ application.name }}</div>
           <div class="text-caption text-medium-emphasis text-truncate">{{ application.jobId }} / {{ application.namespace }}</div>
         </div>
-        <div class="d-flex align-center ga-2">
+        <div class="detail-heading-actions">
           <v-btn size="small" icon="mdi-package-down" variant="text" :title="t('applicationDetail.downloadPackage')" :loading="downloading" @click="downloadPackage" />
           <v-chip :color="application.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ application.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip>
         </div>
@@ -155,6 +155,8 @@ watch(() => props.application.id, () => {
 <style scoped>
 .detail-stack { display: grid; gap: 14px; }
 .detail-card { padding: 16px; }
+.detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.detail-heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .min-width-0 { min-width: 0; }
 .meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .image-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
@@ -167,5 +169,16 @@ watch(() => props.application.id, () => {
   .image-panel { grid-template-columns: 1fr; }
   .image-actions { justify-content: flex-start; }
   .digest-grid { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 600px) {
+  .detail-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .detail-heading-actions {
+    justify-content: flex-start;
+  }
 }
 </style>

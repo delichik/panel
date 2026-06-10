@@ -241,7 +241,7 @@ onMounted(load);
 
 <style scoped>
 .summary-strip { max-width: 720px; }
-.applications-workspace { display: grid; grid-template-columns: minmax(760px, 1.15fr) minmax(420px, 0.85fr); gap: 18px; align-items: start; }
+.applications-workspace { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr); gap: 18px; align-items: start; }
 .application-list, .detail-column { min-width: 0; }
 .application-list { overflow: hidden; }
 .list-header-main { display: grid; gap: 10px; justify-items: start; }

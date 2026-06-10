@@ -61,7 +61,7 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
 
 <style scoped>
 .server-selector {
-  min-width: 280px;
+  min-width: 0;
 }
 
 /* Sleek Server List Items */

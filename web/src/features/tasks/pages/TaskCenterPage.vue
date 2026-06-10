@@ -617,6 +617,7 @@ onBeforeUnmount(() => {
 .action-row {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
   padding: 0 16px 16px;
 }
 
@@ -678,7 +679,7 @@ tr.selected {
   }
 }
 
-@media (max-width: 860px) {
+@media (max-width: 980px) {
   .panel-title {
     align-items: stretch;
     flex-direction: column;
@@ -688,6 +689,25 @@ tr.selected {
   .task-workspace,
   .diagnostics-grid {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .selected-progress {
+    grid-template-columns: 1fr;
+  }
+
+  .action-row .v-btn {
+    width: 100%;
+  }
+
+  .pager {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .page-size {
+    max-width: none;
   }
 }
 </style>

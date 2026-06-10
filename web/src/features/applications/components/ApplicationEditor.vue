@@ -798,9 +798,11 @@ async function save(deploy = false) {
 </template>
 
 <style scoped>
+.editor-card { max-height: calc(100dvh - 24px); }
 .editor-main { min-width: 0; }
 .header-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: center; }
 .enabled-row { display: flex; align-items: center; min-height: 40px; }
+.tab-window { min-width: 0; }
 .tab-window :deep(.v-window-item) { padding: 22px 14px 14px; }
 .field-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .span-2 { grid-column: span 2; }
@@ -834,5 +836,17 @@ async function save(deploy = false) {
 .hash-cell { max-width: 180px; }
 @media (max-width: 1100px) {
   .header-row, .mount-row, .ports-row, .env-row, .proxy-rule-header, .proxy-path-row, .file-form, .placement-row { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 760px) {
+  .tab-window :deep(.v-window-item) {
+    padding: 16px 0 8px;
+  }
+
+  .mount-actions .v-btn,
+  .network-actions .v-btn,
+  .proxy-actions .v-btn {
+    flex: 1 1 100%;
+  }
 }
 </style>

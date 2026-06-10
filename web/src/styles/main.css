@@ -56,6 +56,13 @@
   box-sizing: border-box;
 }
 
+img,
+svg,
+canvas,
+video {
+  max-width: 100%;
+}
+
 body {
   margin: 0;
   min-width: 320px;
@@ -244,6 +251,12 @@ a {
   border: 1px solid var(--lp-border) !important;
 }
 
+.v-overlay.v-dialog .v-overlay__content {
+  max-width: calc(100vw - 24px) !important;
+  max-height: calc(100dvh - 24px) !important;
+  margin: 12px !important;
+}
+
 .app-dialog-card {
   border-radius: var(--lp-radius-md) !important;
   overflow: hidden;
@@ -293,6 +306,21 @@ a {
   color: var(--lp-text) !important;
 }
 
+.v-table {
+  max-width: 100%;
+}
+
+.v-table .v-table__wrapper {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.v-table .v-table__wrapper > table {
+  width: max-content;
+  min-width: 100%;
+}
+
 .v-table th {
   color: var(--lp-text-muted) !important;
   font-size: 0.74rem !important;
@@ -309,6 +337,7 @@ a {
 
 .v-table td {
   vertical-align: middle;
+  overflow-wrap: anywhere;
 }
 
 .bg-surface-variant {
@@ -495,5 +524,40 @@ a {
   .page-actions .v-btn,
   .page-toolbar-actions .v-btn {
     width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .panel-header,
+  .list-header,
+  .app-card-header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .list-header .v-btn,
+  .app-card-header .v-btn {
+    width: 100%;
+  }
+
+  .app-dialog-title {
+    min-height: 56px;
+    padding: var(--lp-space-2) var(--lp-space-4) !important;
+  }
+
+  .app-dialog-body {
+    max-height: min(72dvh, 640px);
+    padding: var(--lp-space-4) !important;
+  }
+
+  .app-dialog-actions {
+    align-items: stretch;
+    flex-wrap: wrap;
+    padding: var(--lp-space-2) var(--lp-space-4) !important;
+  }
+
+  .app-dialog-actions .v-btn {
+    flex: 1 1 100%;
+    min-width: 0;
   }
 }
