@@ -35,10 +35,11 @@
 - 概览：`web/src/features/overview/pages/OverviewPage.vue`
 - 服务器与凭据：`web/src/features/servers/pages/ServersPage.vue`
 - 软件包：`web/src/features/packages/pages/PackageUpdatesPage.vue`
+- 防火墙：`web/src/features/firewall/pages/FirewallPage.vue`
 - 应用：`web/src/features/applications/`
 - DNS 域名：`web/src/features/dns/pages/DomainsPage.vue`；不要新增或恢复 DNS 记录管理入口。
 - 证书：`web/src/features/certificates/pages/CertificatesPage.vue`
-- Nomad：`web/src/features/nomad/`；`/nomad/jobs` 展示 jobs，`/deployments` 展示 deployments/evaluations/services
+- Nomad：`web/src/features/nomad/`；只保留设置、加入和节点控制平面入口，不恢复 raw jobs/deployments 清单入口。
 - 任务中心：`web/src/features/tasks/`
 - 设置：`web/src/features/settings/pages/SettingsPage.vue`
 - 登录与强制改密：`web/src/features/auth/pages/`

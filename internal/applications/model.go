@@ -104,15 +104,14 @@ type ApplicationRevision struct {
 }
 
 type Runtime struct {
-	ApplicationID     string                      `json:"applicationId"`
-	JobID             string                      `json:"jobId"`
-	JobStatus         string                      `json:"jobStatus"`
-	Deployment        *nomad.Deployment           `json:"deployment,omitempty"`
-	Evaluations       []nomad.Evaluation          `json:"evaluations"`
-	EvaluationDetails []nomad.Evaluation          `json:"evaluationDetails,omitempty"`
-	Allocations       []nomad.AllocationListItem  `json:"allocations"`
-	Services          []nomad.ServiceRegistration `json:"services,omitempty"`
-	ObservedAt        time.Time                   `json:"observedAt"`
+	ApplicationID     string                     `json:"applicationId"`
+	JobID             string                     `json:"jobId"`
+	JobStatus         string                     `json:"jobStatus"`
+	Deployment        *nomad.Deployment          `json:"deployment,omitempty"`
+	Evaluations       []nomad.Evaluation         `json:"evaluations"`
+	EvaluationDetails []nomad.Evaluation         `json:"evaluationDetails,omitempty"`
+	Allocations       []nomad.AllocationListItem `json:"allocations"`
+	ObservedAt        time.Time                  `json:"observedAt"`
 }
 
 type SaveInput struct {

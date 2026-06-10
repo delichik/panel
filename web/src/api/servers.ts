@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { CredentialDto, ServerDto } from '@/types/api';
+import type { CredentialDto, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
 
 export interface ServerInput {
   name: string;
@@ -66,6 +66,15 @@ export function createServersApi(client = apiClient) {
     },
     installUFW(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/install`);
+    },
+    ufwState(serverId: string) {
+      return client.get<UfwStateDto>(`/servers/${serverId}/ufw`);
+    },
+    allowUFW(serverId: string, input: UfwAllowInput) {
+      return client.post<UfwStateDto>(`/servers/${serverId}/ufw/rules`, input);
+    },
+    deleteUFWRule(serverId: string, number: number) {
+      return client.delete<UfwStateDto>(`/servers/${serverId}/ufw/rules/${number}`);
     },
     async listCredentials() {
       return normalizeList(await client.get<CredentialDto[] | null>('/credentials'));

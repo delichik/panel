@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"panel/internal/httpx"
@@ -89,10 +90,51 @@ func (h *Handler) InstallUFW(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
+func (h *Handler) UFWState(w http.ResponseWriter, r *http.Request) {
+	state, err := h.service.UFWState(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, state)
+}
+
+func (h *Handler) AllowUFW(w http.ResponseWriter, r *http.Request) {
+	var req UFWAllowRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	state, err := h.service.AllowUFW(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw/rules")), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, state)
+}
+
+func (h *Handler) DeleteUFWRule(w http.ResponseWriter, r *http.Request) {
+	serverID, number := ufwRuleTarget(r.URL.Path)
+	state, err := h.service.DeleteUFWRule(r.Context(), serverID, number)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, state)
+}
+
 func serverID(path string) string {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	if len(parts) >= 4 {
 		return parts[3]
 	}
 	return ""
+}
+
+func ufwRuleTarget(path string) (string, int) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) < 7 {
+		return "", 0
+	}
+	number, _ := strconv.Atoi(parts[6])
+	return parts[3], number
 }

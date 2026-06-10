@@ -301,6 +301,49 @@ func (s *Service) ExpireStaleRunning(ctx context.Context, now time.Time, maxAge 
 	return int(affected), nil
 }
 
+func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge time.Duration, taskTypes []string) (int, error) {
+	if maxAge <= 0 {
+		return 0, nil
+	}
+	cleanTypes := make([]string, 0, len(taskTypes))
+	seen := map[string]struct{}{}
+	for _, taskType := range taskTypes {
+		taskType = strings.TrimSpace(taskType)
+		if taskType == "" {
+			continue
+		}
+		if _, ok := seen[taskType]; ok {
+			continue
+		}
+		seen[taskType] = struct{}{}
+		cleanTypes = append(cleanTypes, taskType)
+	}
+	if len(cleanTypes) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]string, len(cleanTypes))
+	args := make([]any, 0, 5+len(cleanTypes))
+	for i, taskType := range cleanTypes {
+		placeholders[i] = "?"
+		args = append(args, taskType)
+	}
+	finishedAt := now.UTC().Format(time.RFC3339Nano)
+	cutoff := now.UTC().Add(-maxAge).Format(time.RFC3339Nano)
+	message := "Task stayed queued past the worker startup timeout and was marked failed; retry the operation if it is still needed"
+	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status=? AND created_at<=? AND type IN (` + strings.Join(placeholders, ",") + `)`
+	updateArgs := []any{StatusFailed, message, finishedAt, StatusQueued, cutoff}
+	updateArgs = append(updateArgs, args...)
+	res, err := s.db.ExecContext(ctx, query, updateArgs...)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil
+	}
+	return int(affected), nil
+}
+
 func (s *Service) Logs(ctx context.Context, taskID string, after int64) ([]Log, int64, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,time,stream,line FROM task_logs WHERE task_id=? AND id>? ORDER BY id ASC LIMIT 200`, taskID, after)
 	if err != nil {

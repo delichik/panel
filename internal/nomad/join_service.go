@@ -16,6 +16,7 @@ import (
 	"panel/internal/config"
 	"panel/internal/linux"
 	"panel/internal/panelerr"
+	"panel/internal/remoteops"
 	"panel/internal/server"
 	"panel/internal/sshx"
 	"panel/internal/tasks"
@@ -87,6 +88,16 @@ func (s *JoinService) currentConfig() config.NomadConfig {
 		cfg = s.configProvider(cfg)
 	}
 	return cfg
+}
+
+func (s *JoinService) startWorkerTask(ctx context.Context, task tasks.Task) (tasks.Task, error) {
+	if s.tasks == nil {
+		return task, nil
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return tasks.Task{}, err
+	}
+	return s.tasks.Get(ctx, task.ID)
 }
 
 type applicationProxySource interface {
@@ -220,6 +231,10 @@ func (s *JoinService) JoinClient(ctx context.Context, serverID string) (tasks.Ta
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	task, err = s.startWorkerTask(ctx, task)
+	if err != nil {
+		return tasks.Task{}, err
+	}
 	go s.runJoinClient(context.Background(), task.ID, srv, adapter)
 	return task, nil
 }
@@ -245,6 +260,10 @@ func (s *JoinService) BootstrapServer(ctx context.Context, serverID string) (tas
 		Summary:      "Bootstrapping Nomad server",
 		MaxRetries:   0,
 	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, err = s.startWorkerTask(ctx, task)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -293,6 +312,10 @@ func (s *JoinService) RedeployNode(ctx context.Context, in RedeployNodeInput) (t
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	task, err = s.startWorkerTask(ctx, task)
+	if err != nil {
+		return tasks.Task{}, err
+	}
 	if role == ProjectedNodeRoleServer {
 		go s.runBootstrapServer(context.Background(), task.ID, srv, adapter)
 		return task, nil
@@ -329,6 +352,10 @@ func (s *JoinService) RebuildCluster(ctx context.Context, in RebuildClusterInput
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	task, err = s.startWorkerTask(ctx, task)
+	if err != nil {
+		return tasks.Task{}, err
+	}
 	go s.runRebuildCluster(context.Background(), task.ID, srv, adapter)
 	return task, nil
 }
@@ -358,6 +385,10 @@ func (s *JoinService) SwitchServer(ctx context.Context, in SwitchServerInput) (t
 		Summary:      "Switching Nomad server",
 		MaxRetries:   0,
 	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, err = s.startWorkerTask(ctx, task)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -476,7 +507,7 @@ func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInp
 				if err := s.execSudoLogged(ctx, taskID, srv.Target(), reverseProxyUFWAllowScript(), nomadFirewallTimeout); err != nil {
 					return fail(err)
 				}
-			} else if _, err := s.exec.ExecSudo(ctx, srv.Target(), sshx.CommandSpec{Command: reverseProxyUFWAllowScript(), Timeout: nomadFirewallTimeout}); err != nil {
+			} else if _, err := (remoteops.Runner{Exec: s.exec, Target: srv.Target()}).RunSudoLogged(ctx, reverseProxyUFWAllowScript(), nomadFirewallTimeout); err != nil {
 				return fail(err)
 			}
 		}
@@ -536,6 +567,10 @@ func (s *JoinService) RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks
 		Summary:      "Removing Nomad node",
 		MaxRetries:   0,
 	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, err = s.startWorkerTask(ctx, task)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -871,35 +906,17 @@ func (s *JoinService) waitForPanelNomadReachability(ctx context.Context, taskID 
 }
 
 func (s *JoinService) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string, timeout time.Duration) error {
-	stdoutStreamed := false
-	stderrStreamed := false
-	res, err := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{
-		Command: command,
-		Timeout: timeout,
-		OnStdout: func(line string) {
-			stdoutStreamed = true
-			_ = s.tasks.AppendLog(ctx, taskID, "stdout", line)
-		},
-		OnStderr: func(line string) {
-			stderrStreamed = true
-			_ = s.tasks.AppendLog(ctx, taskID, "stderr", line)
-		},
-	})
-	if !stdoutStreamed {
-		s.appendCommandOutput(ctx, taskID, "stdout", res.Stdout)
-	}
-	if !stderrStreamed {
-		s.appendCommandOutput(ctx, taskID, "stderr", res.Stderr)
-	}
+	_, err := remoteops.Runner{Exec: s.exec, Target: target, Log: nomadTaskLogSink{s.tasks, taskID}}.RunSudoLogged(ctx, command, timeout)
 	return err
 }
 
-func (s *JoinService) appendCommandOutput(ctx context.Context, taskID, stream, out string) {
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(line) != "" {
-			_ = s.tasks.AppendLog(ctx, taskID, stream, line)
-		}
-	}
+type nomadTaskLogSink struct {
+	tasks  *tasks.Service
+	taskID string
+}
+
+func (s nomadTaskLogSink) AppendLog(ctx context.Context, stream, line string) error {
+	return s.tasks.AppendLog(ctx, s.taskID, stream, line)
 }
 
 func (s *JoinService) joinConfigScript(srv server.Server, rpc string) string {
@@ -1036,34 +1053,26 @@ find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' -o -nam
 }
 
 func nomadUFWAllowScript(reverseProxy bool) string {
-	rules := []string{
-		"  ufw allow 4646/tcp",
-		"  ufw allow 4647/tcp",
-		"  ufw allow 4648/tcp",
-		"  ufw allow 4648/udp",
+	rules := []remoteops.UFWRule{
+		{Port: 4646, Protocol: "tcp"},
+		{Port: 4647, Protocol: "tcp"},
+		{Port: 4648, Protocol: "tcp"},
+		{Port: 4648, Protocol: "udp"},
 	}
 	if reverseProxy {
 		for _, port := range reverseProxyTCPPorts {
-			rules = append(rules, "  ufw allow "+strconv.Itoa(port)+"/tcp")
+			rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
 		}
 	}
-	return `if command -v ufw >/dev/null 2>&1; then
-  echo "[panel] allowing Nomad ports in UFW"
-` + strings.Join(rules, "\n") + `
-else
-  echo "[panel] UFW is not installed; skipping local UFW rules"
-fi`
+	return remoteops.MustUFWAllowScript(rules...)
 }
 
 func reverseProxyUFWAllowScript() string {
-	rules := make([]string, 0, len(reverseProxyTCPPorts))
+	rules := make([]remoteops.UFWRule, 0, len(reverseProxyTCPPorts))
 	for _, port := range reverseProxyTCPPorts {
-		rules = append(rules, "  ufw allow "+strconv.Itoa(port)+"/tcp")
+		rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
 	}
-	return `set -eu
-if command -v ufw >/dev/null 2>&1; then
-` + strings.Join(rules, "\n") + `
-fi`
+	return remoteops.MustUFWAllowScript(rules...)
 }
 
 func nomadLocalHealthScript() string {

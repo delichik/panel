@@ -18,10 +18,15 @@ describe('AppLayout navigation', () => {
     expect(appLayout).not.toContain("value: 'dns-records'");
   });
 
-  it('exposes Nomad inventory pages', () => {
-    expect(appLayout).toContain("layout.nav.nomadJobs");
-    expect(appLayout).toContain("layout.nav.deployments");
-    expect(appLayout).toContain("to: '/nomad/jobs'");
-    expect(appLayout).toContain("to: '/deployments'");
+  it('does not expose raw Nomad inventory pages', () => {
+    expect(appLayout).not.toContain("layout.nav.nomadJobs");
+    expect(appLayout).not.toContain("layout.nav.deployments");
+    expect(appLayout).not.toContain("to: '/nomad/jobs'");
+    expect(appLayout).not.toContain("to: '/deployments'");
+  });
+
+  it('exposes the UFW firewall page in the server group', () => {
+    expect(appLayout).toContain("to: '/servers/firewall'");
+    expect(appLayout).toContain("t('layout.nav.firewall')");
   });
 });

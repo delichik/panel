@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"panel/internal/remoteops"
 	"panel/internal/sshx"
 )
 
@@ -35,8 +36,12 @@ func TestParseOSReleaseSupportsRegisteredDistros(t *testing.T) {
 		!strings.Contains(selected.NomadRuntimePrereqsScript(), "docker.io") ||
 		!strings.Contains(selected.NomadServiceRestartScript(), "systemctl restart nomad") ||
 		!selected.SupportsUFW() ||
-		!strings.Contains(selected.UFWInstallScript(), "apt-get install -y ufw") {
+		!strings.Contains(selected.UFWInstallScript(), "apt_get install -y ufw") {
 		t.Fatalf("Ubuntu adapter should expose apt-based Nomad and UFW support")
+	}
+	runtimeScript := strings.ToLower(selected.NomadRuntimePrereqsScript())
+	if strings.Contains(runtimeScript, "restart docker") || strings.Contains(runtimeScript, "docker restart") {
+		t.Fatalf("Nomad runtime prereqs must not restart Docker:\n%s", selected.NomadRuntimePrereqsScript())
 	}
 }
 
@@ -94,7 +99,7 @@ func TestCollectMetricsSamplesNetworkCounters(t *testing.T) {
 	}
 }
 
-func TestRunLoggedStreamsOutputBeforeCommandReturns(t *testing.T) {
+func TestRemoteopsRunnerStreamsOutputBeforeCommandReturns(t *testing.T) {
 	sink := &recordingLogSink{}
 	exec := &streamingFakeExecutor{duringRun: func() {
 		if len(sink.lines) != 1 || sink.lines[0] != "stdout:first" {
@@ -102,7 +107,7 @@ func TestRunLoggedStreamsOutputBeforeCommandReturns(t *testing.T) {
 		}
 	}}
 
-	if err := runLogged(context.Background(), exec, sshx.Target{}, "apt-get upgrade", 10*time.Minute, sink); err != nil {
+	if _, err := (remoteops.Runner{Exec: exec, Target: sshx.Target{}, Log: sink}).RunSudoLogged(context.Background(), "apt-get upgrade", 10*time.Minute); err != nil {
 		t.Fatal(err)
 	}
 

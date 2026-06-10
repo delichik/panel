@@ -295,6 +295,102 @@ func TestRunDuePackageRefreshTasksStartsQueuedTask(t *testing.T) {
 	waitForTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
 }
 
+func TestRunScheduledPackageRefreshesSharesOperation(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"srv_1", "srv_2"} {
+		if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES(?,?,?,22,'du','cred','debian','12',1,1,1,'now','now')`, id, id, "h-"+id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	packageSvc := packages.NewService(store.AppDB(), serverSvc, fakePackageExecutor{}, taskSvc)
+	sched := New(settingsSvc, serverSvc, nil, packageSvc, taskSvc)
+
+	if err := sched.runScheduledPackageRefreshes(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := taskSvc.List(ctx, tasks.ListFilter{Type: "package_refresh", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("expected two package refresh tasks, got %#v", result.Items)
+	}
+	operationID := result.Items[0].OperationID
+	if operationID == "" || result.Items[1].OperationID != operationID {
+		t.Fatalf("expected scheduled package refresh tasks to share operation, got %#v", result.Items)
+	}
+	for _, task := range result.Items {
+		waitForTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+	}
+}
+
+func TestExpireStaleQueuedWorkerTasksOnlyMarksOneShotWorkerTypes(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	taskSvc := tasks.NewService(store.AppDB())
+	workerTask, err := taskSvc.Create(ctx, tasks.CreateInput{Type: "nomad_client_join", Summary: "Joining server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduledTask, err := taskSvc.Create(ctx, tasks.CreateInput{Type: "package_refresh", Summary: "Refreshing packages"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	for _, taskID := range []string{workerTask.ID, scheduledTask.ID} {
+		if _, err := store.AppDB().Exec(`UPDATE tasks SET created_at=? WHERE id=?`, old, taskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sched := &Scheduler{tasks: taskSvc}
+
+	sched.expireStaleQueuedWorkerTasks(ctx)
+
+	gotWorker, err := taskSvc.Get(ctx, workerTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotWorker.Status != tasks.StatusFailed || !strings.Contains(gotWorker.Error, "worker startup timeout") {
+		t.Fatalf("expected stale worker task to fail, got %#v", gotWorker)
+	}
+	gotScheduled, err := taskSvc.Get(ctx, scheduledTask.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotScheduled.Status != tasks.StatusQueued {
+		t.Fatalf("scheduler-owned task should remain queued, got %#v", gotScheduled)
+	}
+}
+
 type fakeMetricsExecutor struct{}
 
 func (fakeMetricsExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {

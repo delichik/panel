@@ -21,11 +21,10 @@
   - Nomad 节点重部署、集群重建、server 切换操作文案已接入 `web/src/i18n/index.ts`
   - 首个 server 引导任务入口、反向代理同步任务提示文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/servers/pages/ServersPage.vue`
-  - 服务器凭据必选提示、UFW 安装任务入口文案已接入 `web/src/i18n/index.ts`
-- `web/src/features/nomad/pages/NomadJobsPage.vue`
-  - Nomad jobs 清单、筛选和空状态文案已接入 `web/src/i18n/index.ts`
-- `web/src/features/deployments/pages/DeploymentsPage.vue`
-  - Nomad deployments、evaluations、services 清单文案已接入 `web/src/i18n/index.ts`
+  - 服务器凭据必选提示、UFW 安装任务入口、系统架构/CPU/网卡详情文案已接入 `web/src/i18n/index.ts`
+- `web/src/features/firewall/pages/FirewallPage.vue`
+  - UFW 防火墙状态、规则表单、规则列表、删除确认和任务入口文案已接入 `web/src/i18n/index.ts`
+- raw Nomad jobs/deployments 清单入口已移除，对应页面文案和路由词条不再保留。
 - `internal/nomad`
   - Nomad 重部署、集群重建、server 切换相关 API 错误码已接入 `internal/i18n/i18n.go`
 
@@ -46,7 +45,7 @@
 - SSH / 远程执行 / 超时相关错误码
 - 模板渲染、选择器解析等底层错误码
 - 第三方系统直接返回的原始错误文本
-- 任务摘要、任务 system 日志与远程命令诊断文本仍以原始执行文本展示，包括 Nomad 引导/加入流程日志
+- 任务摘要、任务 system 日志、任务过期清理写入的错误原因与远程命令诊断文本仍以原始执行文本展示，包括 Nomad 引导/加入流程日志
 
 ## 更新规则
 

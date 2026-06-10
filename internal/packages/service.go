@@ -67,21 +67,21 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 		out.LastRefreshedAt = &t
 	}
 	if out.LastRefreshedAt == nil || time.Since(*out.LastRefreshedAt) > 10*time.Minute {
-		_, _ = s.refresh(ctx, serverID, "auto", true)
+		_, _ = s.refresh(ctx, serverID, "auto", true, "")
 	}
 	out.Refreshing = s.isRefreshing(serverID)
 	return out, rows.Err()
 }
 
 func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, error) {
-	return s.refresh(ctx, serverID, "user", false)
+	return s.refresh(ctx, serverID, "user", false, "")
 }
 
-func (s *Service) RefreshScheduled(ctx context.Context, serverID string) (RefreshResult, error) {
-	return s.refresh(ctx, serverID, "scheduler", true)
+func (s *Service) RefreshScheduled(ctx context.Context, serverID string, operationID string) (RefreshResult, error) {
+	return s.refresh(ctx, serverID, "scheduler", true, operationID)
 }
 
-func (s *Service) refresh(ctx context.Context, serverID string, triggerType string, skipRecentFailure bool) (RefreshResult, error) {
+func (s *Service) refresh(ctx context.Context, serverID string, triggerType string, skipRecentFailure bool, operationID string) (RefreshResult, error) {
 	srv, err := s.ensurePackageAllowed(ctx, serverID, false)
 	if err != nil {
 		return RefreshResult{}, err
@@ -110,6 +110,7 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 		return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 	}
 	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		OperationID:  operationID,
 		Type:         "package_refresh",
 		ServerID:     serverID,
 		ResourceType: "server",

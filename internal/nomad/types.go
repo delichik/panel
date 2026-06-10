@@ -105,15 +105,6 @@ type RestartPolicy struct {
 	Mode     string `json:"Mode,omitempty"`
 }
 
-type JobListItem struct {
-	ID          string   `json:"ID,omitempty"`
-	Name        string   `json:"Name,omitempty"`
-	Type        string   `json:"Type,omitempty"`
-	Status      string   `json:"Status,omitempty"`
-	Namespace   string   `json:"Namespace,omitempty"`
-	Datacenters []string `json:"Datacenters,omitempty"`
-}
-
 type StatusResponse struct {
 	Connected bool   `json:"connected"`
 	Leader    string `json:"leader,omitempty"`
@@ -197,16 +188,4 @@ type NodeListItem struct {
 	Status      string            `json:"Status,omitempty"`
 	Eligibility string            `json:"SchedulingEligibility,omitempty"`
 	Meta        map[string]string `json:"Meta,omitempty"`
-}
-
-type ServiceRegistration struct {
-	ID          string   `json:"ID,omitempty"`
-	ServiceName string   `json:"ServiceName,omitempty"`
-	Namespace   string   `json:"Namespace,omitempty"`
-	NodeID      string   `json:"NodeID,omitempty"`
-	Datacenter  string   `json:"Datacenter,omitempty"`
-	JobID       string   `json:"JobID,omitempty"`
-	AllocID     string   `json:"AllocID,omitempty"`
-	Tags        []string `json:"Tags,omitempty"`
-	Port        int      `json:"Port,omitempty"`
 }

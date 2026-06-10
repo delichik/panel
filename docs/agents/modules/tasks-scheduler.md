@@ -31,18 +31,19 @@
 - 任务中心的筛选控件清空时可能产生 `null`；前端任务 API 应统一归一化空值和空白字符串，不发送空筛选参数。
 - 任务中心默认隐藏内部 `server_connectivity_test` 刷新任务，列表按最新创建时间优先展示，避免后台健康检查挤掉用户操作任务。
 - `running` 状态任务超过 `tasks.StaleRunningTaskAfter`（当前 24 小时）仍未完成时，会在启动或清理循环中自动标记为失败，避免旧任务长期卡住。
+- 由内存 goroutine 直接执行、无法跨进程恢复的一次性任务（Nomad 加入/引导/重建/切换/移除、UFW 安装）必须在 API 返回前先标记为 `running`；遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter`（当前 10 分钟）会在清理循环中标记为失败并提示用户重试，避免永久排队。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - `nomad_reverse_proxy_sync` 用于追踪反向代理配置保存、远程防火墙放行和 Nomad 反向代理 job reconcile；该任务当前由保存接口同步完成或失败，不提供 `run-now` / `retry`。
-- `scheduler` 负责周期性指标采集、软件包刷新、证书续签和 due 的包刷新任务补扫，并可作为 `run-now` 执行入口。
+- `scheduler` 负责周期性指标采集、软件包刷新、证书续签和 due 的包刷新任务补扫，并可作为 `run-now` 执行入口；同一轮调度为多台服务器创建任务时，应共享一个 `operationId`，由任务中心展示为一个 operation 下的多个 task。
 - 任务中心的 `run-now` / `retry` 必须按任务类型受控；当前只允许 `server_connectivity_test`、`server_info_collect`、`package_refresh`、`certificate_issue` 这类有调度器执行器的任务。后端 handler 会按状态和类型拒绝不支持的调用，前端也只展示可闭环的操作。
 - `retry` 创建的新任务会立即交给调度器执行；如果调度器在启动前返回错误，handler 会把新任务标记为失败，避免产生永久排队任务。`package_refresh` 的已排队任务还会被调度器持续补扫，避免被周期刷新节流或已有刷新状态长期挡住。
-- 软件包刷新现在记录为 `package_refresh` 任务；手动刷新返回 `taskId`，自动/周期刷新失败会在任务中心可见，并对近期失败做短时间节流。
+- 软件包刷新现在记录为 `package_refresh` 任务；手动刷新返回 `taskId`，自动/周期刷新失败会在任务中心可见，并对近期失败做短时间节流；周期刷新同一轮创建的多台服务器任务必须共享一个 operation。
 - 远程命令原始输出可能包含第三方文本，翻译前要先评估是否应保留原样。
 
 ## 跨模块依赖
 
 - 服务器测试、UFW、软件包维护依赖本模块记录任务。
-- Nomad 引导、加入、移除节点、server 切换、集群重建和反向代理同步依赖本模块记录任务。
+- Nomad 引导、加入、移除节点、server 切换、集群重建和反向代理同步依赖本模块记录任务；其中直接起 worker 的操作不能只保持 `queued` 等待 goroutine 内部再启动。
 - 应用部署、停止、重启、镜像更新依赖本模块记录任务。
 - 证书签发和续签依赖本模块记录任务。
 

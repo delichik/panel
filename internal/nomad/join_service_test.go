@@ -135,6 +135,33 @@ func TestJoinClientRejectsUnsupportedServer(t *testing.T) {
 	}
 }
 
+func TestJoinClientMarksTaskRunningBeforeWorkerExecutes(t *testing.T) {
+	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.12")
+	blockSudo := make(chan struct{})
+	fake.blockSudo = blockSudo
+
+	task, err := svc.JoinClient(ctx, srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != tasks.StatusRunning || task.StartedAt == nil {
+		t.Fatalf("expected returned task to be running before worker executes, got %#v", task)
+	}
+	stored, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != tasks.StatusRunning || stored.StartedAt == nil {
+		t.Fatalf("expected stored task to be running before worker executes, got %#v", stored)
+	}
+
+	close(blockSudo)
+	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
+}
+
 func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
 	defer cleanup()
@@ -1015,6 +1042,7 @@ type joinFakeExecutor struct {
 	stderrLines  []string
 	duringRun    func()
 	sudoCalled   chan struct{}
+	blockSudo    <-chan struct{}
 }
 
 func (f *joinFakeExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
@@ -1029,6 +1057,9 @@ func (f *joinFakeExecutor) ExecSudo(_ context.Context, _ sshx.Target, command ss
 		case f.sudoCalled <- struct{}{}:
 		default:
 		}
+	}
+	if f.blockSudo != nil {
+		<-f.blockSudo
 	}
 	var stdout, stderr []string
 	if len(f.stdoutLines) > 0 {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"panel/internal/panelerr"
+	"panel/internal/remoteops"
 	"panel/internal/sshx"
 )
 
@@ -71,11 +72,13 @@ func (aptAdapter) UpgradeSelected(ctx context.Context, exec sshx.RemoteExecutor,
 		}
 	}
 	cmd := "DEBIAN_FRONTEND=noninteractive apt-get install -y --only-upgrade " + strings.Join(packages, " ")
-	return runLogged(ctx, exec, target, cmd, packageUpgradeTimeout, log)
+	_, err := remoteops.Runner{Exec: exec, Target: target, Log: log}.RunSudoLogged(ctx, cmd, packageUpgradeTimeout)
+	return err
 }
 
 func (aptAdapter) UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, log LogSink) error {
-	return runLogged(ctx, exec, target, "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y", packageUpgradeTimeout, log)
+	_, err := remoteops.Runner{Exec: exec, Target: target, Log: log}.RunSudoLogged(ctx, "DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y", packageUpgradeTimeout)
+	return err
 }
 
 func (aptAdapter) NomadInstallScript() string {
@@ -85,15 +88,13 @@ if command -v nomad >/dev/null 2>&1 && command -v systemctl >/dev/null 2>&1 && s
   panel_step "Nomad binary and systemd unit are already installed"
 else
   panel_step "installing Nomad from the HashiCorp apt repository"
-  apt_get update
-  apt_get install -y ca-certificates gpg wget lsb-release
+  ` + remoteops.MustAPTInstallCommands("ca-certificates", "gpg", "wget", "lsb-release") + `
   rm -f /tmp/panel-hashicorp-key.gpg /usr/share/keyrings/hashicorp-archive-keyring.gpg
   panel_timeout 120 wget -qO /tmp/panel-hashicorp-key.gpg https://apt.releases.hashicorp.com/gpg
   gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg /tmp/panel-hashicorp-key.gpg
   rm -f /tmp/panel-hashicorp-key.gpg
   echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" > /etc/apt/sources.list.d/hashicorp.list
-  apt_get update
-  apt_get install -y nomad
+  ` + remoteops.MustAPTInstallCommands("nomad") + `
 fi
 if ! command -v nomad >/dev/null 2>&1; then
   echo "[panel] Nomad binary is still missing after installation" >&2
@@ -111,36 +112,41 @@ func (aptAdapter) NomadRuntimePrereqsScript() string {
 panel_step "checking Docker runtime"
 if ! command -v docker >/dev/null 2>&1; then
   panel_step "installing Docker"
-  apt_get update
-  apt_get install -y docker.io
+  ` + remoteops.MustAPTInstallCommands("docker.io") + `
 fi
 if command -v systemctl >/dev/null 2>&1 && ! systemctl cat docker >/dev/null 2>&1; then
   panel_step "installing docker.io because docker.service is missing"
-  apt_get update
-  apt_get install -y docker.io
+  ` + remoteops.MustAPTInstallCommands("docker.io") + `
 fi
 if command -v systemctl >/dev/null 2>&1; then
   panel_step "enabling Docker service"
   panel_timeout 60 systemctl enable docker
-  panel_step "restarting Docker service"
-  panel_timeout 120 systemctl restart docker
+  if systemctl is-active --quiet docker; then
+    panel_step "Docker service is already active"
+  else
+    panel_step "starting Docker service"
+    panel_timeout 120 systemctl start docker
+  fi
   if ! systemctl is-active --quiet docker; then
-    echo "[panel] docker.service is not active after restart" >&2
+    echo "[panel] docker.service is not active after start" >&2
     systemctl status docker --no-pager -l >&2 || true
     journalctl -u docker -n 80 --no-pager >&2 || true
     exit 1
   fi
 else
-  panel_step "restarting Docker service"
-  service docker restart
+  if panel_timeout 30 docker info >/dev/null 2>&1; then
+    panel_step "Docker daemon is already responding"
+  else
+    panel_step "starting Docker service"
+    service docker start
+  fi
 fi
 panel_step "checking Docker daemon"
 panel_timeout 30 docker info >/dev/null
 
 panel_step "checking Nomad CNI plugins"
 if [ ! -x /opt/cni/bin/bridge ]; then
-  apt_get update
-  apt_get install -y containernetworking-plugins
+  ` + remoteops.MustAPTInstallCommands("containernetworking-plugins") + `
   install -d -m 0755 /opt/cni/bin
   for plugin in bridge firewall host-local loopback portmap; do
     for dir in /usr/lib/cni /usr/libexec/cni /opt/cni/bin; do
@@ -213,45 +219,7 @@ func (aptAdapter) SupportsUFW() bool {
 }
 
 func (aptAdapter) UFWInstallScript() string {
-	return `set -eu
-export DEBIAN_FRONTEND=noninteractive
-if ! command -v ufw >/dev/null 2>&1; then
-  apt-get update
-  apt-get install -y ufw
-fi
-ufw --version`
-}
-
-func runLogged(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, cmd string, timeout time.Duration, log LogSink) error {
-	stdoutStreamed := false
-	stderrStreamed := false
-	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
-		Command: cmd,
-		Timeout: timeout,
-		OnStdout: func(line string) {
-			stdoutStreamed = true
-			_ = log.AppendLog(ctx, "stdout", line)
-		},
-		OnStderr: func(line string) {
-			stderrStreamed = true
-			_ = log.AppendLog(ctx, "stderr", line)
-		},
-	})
-	if !stdoutStreamed {
-		appendBufferedLog(ctx, log, "stdout", res.Stdout)
-	}
-	if !stderrStreamed {
-		appendBufferedLog(ctx, log, "stderr", res.Stderr)
-	}
-	return err
-}
-
-func appendBufferedLog(ctx context.Context, log LogSink, stream, out string) {
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(line) != "" {
-			_ = log.AppendLog(ctx, stream, line)
-		}
-	}
+	return remoteops.MustAPTInstallScript("ufw") + "ufw --version\n"
 }
 
 func ParseAptListUpgradable(out string) []PackageUpdate {

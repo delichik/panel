@@ -17,7 +17,7 @@ func TestClientAddsTokenAndNamespace(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotToken = r.Header.Get("X-Nomad-Token")
 		gotNamespace = r.URL.Query().Get("namespace")
-		_ = json.NewEncoder(w).Encode([]JobListItem{})
+		_ = json.NewEncoder(w).Encode("127.0.0.1:4647")
 	}))
 	defer server.Close()
 
@@ -27,7 +27,7 @@ func TestClientAddsTokenAndNamespace(t *testing.T) {
 		Namespace: "apps",
 	}, server.Client())
 
-	if _, err := client.ListJobs(context.Background(), ""); err != nil {
+	if _, err := client.Status(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if gotToken != "secret-token" {
@@ -35,27 +35,6 @@ func TestClientAddsTokenAndNamespace(t *testing.T) {
 	}
 	if gotNamespace != "apps" {
 		t.Fatalf("namespace query = %q", gotNamespace)
-	}
-}
-
-func TestClientBuildsListJobsPathAndPrefix(t *testing.T) {
-	var gotPath, gotPrefix string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotPath = r.URL.Path
-		gotPrefix = r.URL.Query().Get("prefix")
-		_ = json.NewEncoder(w).Encode([]JobListItem{})
-	}))
-	defer server.Close()
-
-	client := NewClient(Config{Address: server.URL}, server.Client())
-	if _, err := client.ListJobs(context.Background(), "panel-"); err != nil {
-		t.Fatal(err)
-	}
-	if gotPath != "/v1/jobs" {
-		t.Fatalf("path = %q", gotPath)
-	}
-	if gotPrefix != "panel-" {
-		t.Fatalf("prefix = %q", gotPrefix)
 	}
 }
 
@@ -155,12 +134,6 @@ func TestClientInventoryEndpointPaths(t *testing.T) {
 			_ = json.NewEncoder(w).Encode("127.0.0.1:4647")
 		case "/v1/nodes":
 			_ = json.NewEncoder(w).Encode([]NodeListItem{})
-		case "/v1/deployments":
-			_ = json.NewEncoder(w).Encode([]Deployment{})
-		case "/v1/evaluations":
-			_ = json.NewEncoder(w).Encode([]Evaluation{})
-		case "/v1/services":
-			_ = json.NewEncoder(w).Encode([]ServiceRegistration{})
 		default:
 			http.NotFound(w, r)
 		}
@@ -174,22 +147,10 @@ func TestClientInventoryEndpointPaths(t *testing.T) {
 	if _, err := client.Nodes(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Deployments(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Evaluations(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.Services(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 
 	want := []string{
 		"GET /v1/status/leader",
 		"GET /v1/nodes",
-		"GET /v1/deployments",
-		"GET /v1/evaluations",
-		"GET /v1/services",
 	}
 	if !equalStringSlices(requests, want) {
 		t.Fatalf("requests = %#v, want %#v", requests, want)

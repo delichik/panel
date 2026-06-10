@@ -466,6 +466,10 @@ onMounted(load);
                 <v-icon color="warning">mdi-harddisk</v-icon>
                 <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.disk') }}</div><div class="font-weight-bold">{{ diskLabel(selectedServer) }}</div></div>
               </div>
+              <div class="metric-tile">
+                <v-icon color="info">mdi-chip</v-icon>
+                <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.architecture') }}</div><div class="font-weight-bold">{{ traitValue(selectedServer, 'sys.architecture') }}</div></div>
+              </div>
             </div>
 
             <div class="detail-sections">
@@ -494,6 +498,8 @@ onMounted(load);
                   </div>
                   <div><span>{{ t('serversPage.kernelHost') }}</span><strong>{{ traitValue(selectedServer, 'sys.hostname') }}</strong></div>
                   <div><span>{{ t('serversPage.loadAverage') }}</span><strong>{{ selectedServer.loadAverage || t('common.notAvailable') }}</strong></div>
+                  <div><span>{{ t('serversPage.cpuModel') }}</span><strong>{{ traitValue(selectedServer, 'sys.cpu_model') }}</strong></div>
+                  <div><span>{{ t('serversPage.networkInterfaces') }}</span><strong>{{ traitValue(selectedServer, 'sys.network_interfaces') }}</strong></div>
                 </div>
               </section>
 
@@ -637,9 +643,12 @@ onMounted(load);
               <div><span>{{ t('serversPage.privilege') }}</span><v-chip :color="probeResult.privileged ? 'success' : 'warning'" size="small" variant="tonal" label>{{ probeResult.root ? t('serversPage.root') : probeResult.passwordlessSudo ? t('serversPage.passwordlessSudo') : t('serversPage.limited') }}</v-chip></div>
               <div><span>{{ t('serversPage.distro') }}</span><strong>{{ probeResult.os.prettyName || t('common.unknown') }}</strong></div>
               <div><span>{{ t('serversPage.ufw') }}</span><v-chip :color="ufwStatusFromTraits(probeResult.traits).color" size="small" variant="tonal" label>{{ ufwStatusFromTraits(probeResult.traits).label }}</v-chip></div>
-              <div><span>CPU</span><strong>{{ probeResult.traits['sys.cpu_cores'] || t('common.notAvailable') }}</strong></div>
+              <div><span>{{ t('serversPage.cpuCores') }}</span><strong>{{ probeResult.traits['sys.cpu_cores'] || t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.memory') }}</span><strong>{{ probeResult.traits['sys.memory_total_mb'] ? `${(Number(probeResult.traits['sys.memory_total_mb']) / 1024).toFixed(1)} GB` : t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.disk') }}</span><strong>{{ probeResult.traits['sys.disk_total_gb'] ? `${probeResult.traits['sys.disk_total_gb']} GB` : t('common.notAvailable') }}</strong></div>
+              <div><span>{{ t('serversPage.architecture') }}</span><strong>{{ probeResult.traits['sys.architecture'] || t('common.notAvailable') }}</strong></div>
+              <div><span>{{ t('serversPage.cpuModel') }}</span><strong>{{ probeResult.traits['sys.cpu_model'] || t('common.notAvailable') }}</strong></div>
+              <div><span>{{ t('serversPage.networkInterfaces') }}</span><strong>{{ probeResult.traits['sys.network_interfaces'] || t('common.notAvailable') }}</strong></div>
             </div>
           </v-form>
         </v-card-text>
@@ -737,7 +746,7 @@ onMounted(load);
 .detail-card { padding: 16px; }
 .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .detail-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.metric-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .metric-tile { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
 .detail-sections { display: grid; gap: 18px; }
 .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }

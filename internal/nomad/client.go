@@ -89,15 +89,6 @@ func (c *Client) SetAddress(address string) {
 	c.mu.Unlock()
 }
 
-func (c *Client) ListJobs(ctx context.Context, prefix string) ([]JobListItem, error) {
-	var out []JobListItem
-	query := url.Values{}
-	if prefix != "" {
-		query.Set("prefix", prefix)
-	}
-	return out, c.do(ctx, http.MethodGet, "/v1/jobs", query, nil, &out)
-}
-
 func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
 	var leader string
 	if err := c.do(ctx, http.MethodGet, "/v1/status/leader", nil, nil, &leader); err != nil {
@@ -175,21 +166,6 @@ func (c *Client) Nodes(ctx context.Context) ([]NodeListItem, error) {
 
 func (c *Client) PurgeNode(ctx context.Context, id string) error {
 	return c.do(ctx, http.MethodPost, "/v1/node/"+url.PathEscape(id)+"/purge", nil, nil, nil)
-}
-
-func (c *Client) Deployments(ctx context.Context) ([]Deployment, error) {
-	var out []Deployment
-	return out, c.do(ctx, http.MethodGet, "/v1/deployments", nil, nil, &out)
-}
-
-func (c *Client) Evaluations(ctx context.Context) ([]Evaluation, error) {
-	var out []Evaluation
-	return out, c.do(ctx, http.MethodGet, "/v1/evaluations", nil, nil, &out)
-}
-
-func (c *Client) Services(ctx context.Context) ([]ServiceRegistration, error) {
-	var out []ServiceRegistration
-	return out, c.do(ctx, http.MethodGet, "/v1/services", nil, nil, &out)
 }
 
 func (c *Client) RestartAllocation(ctx context.Context, allocID, task string) error {

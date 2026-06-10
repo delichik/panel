@@ -46,6 +46,7 @@ const navGroups = computed<NavGroup[]>(() => [
     items: [
       { to: '/servers', title: t('layout.nav.node'), value: 'node' },
       { to: '/credentials', title: t('layout.nav.credentials'), value: 'credentials' },
+      { to: '/servers/firewall', title: t('layout.nav.firewall'), value: 'server-firewall' },
       { to: '/servers/packages', title: t('layout.nav.systemPackages'), value: 'system-packages' },
     ],
   },
@@ -65,8 +66,6 @@ const navGroups = computed<NavGroup[]>(() => [
     items: [
       { to: '/applications', title: t('layout.nav.applications'), value: 'applications' },
       { to: '/nomad/nodes', title: t('layout.nav.nomadNodes'), value: 'nomad-nodes' },
-      { to: '/nomad/jobs', title: t('layout.nav.nomadJobs'), value: 'nomad-jobs' },
-      { to: '/deployments', title: t('layout.nav.deployments'), value: 'deployments' },
     ],
   },
   {

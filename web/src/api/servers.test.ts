@@ -27,4 +27,22 @@ describe('serversApi', () => {
     await expect(api.installUFW('srv_1')).resolves.toEqual({ taskId: 'task_1' });
     expect(fetcher).toHaveBeenCalledWith('/api/v1/servers/srv_1/ufw/install', expect.objectContaining({ method: 'POST' }));
   });
+
+  it('manages UFW state and rules', async () => {
+    const state = { serverId: 'srv_1', supported: true, installed: true, active: true, status: 'active', defaultPolicy: '', rules: [] };
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ data: state, error: null }))
+      .mockResolvedValueOnce(jsonResponse({ data: state, error: null }))
+      .mockResolvedValueOnce(jsonResponse({ data: state, error: null }));
+    const api = createServersApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await expect(api.ufwState('srv_1')).resolves.toEqual(state);
+    await expect(api.allowUFW('srv_1', { port: 443, protocol: 'tcp', from: '10.0.0.0/8' })).resolves.toEqual(state);
+    await expect(api.deleteUFWRule('srv_1', 2)).resolves.toEqual(state);
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/api/v1/servers/srv_1/ufw', expect.objectContaining({ method: 'GET' }));
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/servers/srv_1/ufw/rules', expect.objectContaining({ method: 'POST', body: JSON.stringify({ port: 443, protocol: 'tcp', from: '10.0.0.0/8' }) }));
+    expect(fetcher).toHaveBeenNthCalledWith(3, '/api/v1/servers/srv_1/ufw/rules/2', expect.objectContaining({ method: 'DELETE' }));
+  });
 });

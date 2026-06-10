@@ -11,6 +11,7 @@ import (
 	"panel/internal/id"
 	"panel/internal/linux"
 	"panel/internal/panelerr"
+	"panel/internal/remoteops"
 	"panel/internal/sshx"
 	"panel/internal/tasks"
 )
@@ -23,18 +24,24 @@ const connectivityMaxRetries = 8
 const connectivityStaleAfter = 10 * time.Minute
 const ufwInstallTaskType = "server_ufw_install"
 const ufwInstallTimeout = 5 * time.Minute
+const ufwManageTimeout = time.Minute
 const reverseProxyEnabledTrait = "nomad.reverse_proxy.enabled"
 
 var reverseProxyTCPPorts = []int{80, 443}
 
 type Service struct {
-	db    *sql.DB
-	exec  sshx.RemoteExecutor
-	tasks *tasks.Service
+	db        *sql.DB
+	metricsDB *sql.DB
+	exec      sshx.RemoteExecutor
+	tasks     *tasks.Service
 }
 
 func NewService(db *sql.DB, exec sshx.RemoteExecutor, taskSvc *tasks.Service) *Service {
 	return &Service{db: db, exec: exec, tasks: taskSvc}
+}
+
+func (s *Service) SetMetricsDB(db *sql.DB) {
+	s.metricsDB = db
 }
 
 func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
@@ -123,6 +130,7 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 	}
 	defer rows.Close()
 	var out []Server
+	operationID := ""
 	for rows.Next() {
 		srv, err := scanServer(rows)
 		if err != nil {
@@ -130,13 +138,12 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 		}
 		applyDistroSystemTraits(srv.OS, srv.Traits)
 		if s.exec != nil && (srv.LastCheckedAt == nil || time.Since(*srv.LastCheckedAt) > connectivityStaleAfter) {
-			_, _ = s.EnsureConnectivityTask(ctx, srv.ID, false)
+			if operationID == "" {
+				operationID = id.New("op")
+			}
+			_, _ = s.ensureConnectivityTask(ctx, srv.ID, false, connectivityTaskType, "Testing SSH connectivity", operationID)
 		}
-		var load sql.NullString
-		_ = s.db.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, srv.ID).Scan(&load)
-		if load.Valid {
-			srv.LoadAverage = load.String
-		}
+		srv.LoadAverage = s.latestLoadAverage(ctx, srv.ID)
 		out = append(out, srv)
 	}
 	return out, rows.Err()
@@ -149,17 +156,81 @@ func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
 	}
 	if err == nil {
 		applyDistroSystemTraits(srv.OS, srv.Traits)
-		var load sql.NullString
-		_ = s.db.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, srv.ID).Scan(&load)
-		if load.Valid {
-			srv.LoadAverage = load.String
-		}
+		srv.LoadAverage = s.latestLoadAverage(ctx, srv.ID)
 	}
 	return srv, err
 }
 
+func (s *Service) latestLoadAverage(ctx context.Context, serverID string) string {
+	if s.metricsDB == nil {
+		return ""
+	}
+	var load sql.NullString
+	err := s.metricsDB.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, serverID).Scan(&load)
+	if err != nil || !load.Valid {
+		return ""
+	}
+	return load.String
+}
+
 func (s *Service) TestConnectivity(ctx context.Context, serverID string) (tasks.Task, error) {
 	return s.EnsureConnectivityTask(ctx, serverID, true)
+}
+
+func (s *Service) UFWState(ctx context.Context, serverID string) (UFWState, error) {
+	srv, err := s.ensureUFWManageable(ctx, serverID)
+	if err != nil {
+		return UFWState{}, err
+	}
+	status, err := s.fetchUFWStatus(ctx, srv)
+	if err != nil {
+		return UFWState{}, err
+	}
+	return ufwStateFromStatus(srv.ID, true, status), nil
+}
+
+func (s *Service) AllowUFW(ctx context.Context, serverID string, req UFWAllowRequest) (UFWState, error) {
+	srv, err := s.ensureUFWManageable(ctx, serverID)
+	if err != nil {
+		return UFWState{}, err
+	}
+	if err := s.ensureUFWInstalled(ctx, srv); err != nil {
+		return UFWState{}, err
+	}
+	script, err := remoteops.UFWAllowScript([]remoteops.UFWRule{{Port: req.Port, Protocol: req.Protocol, From: req.From}})
+	if err != nil {
+		return UFWState{}, err
+	}
+	if _, err := (remoteops.Runner{Exec: s.exec, Target: srv.Target()}).RunSudoLogged(ctx, script, ufwManageTimeout); err != nil {
+		return UFWState{}, err
+	}
+	status, err := s.fetchUFWStatus(ctx, srv)
+	if err != nil {
+		return UFWState{}, err
+	}
+	return ufwStateFromStatus(srv.ID, true, status), nil
+}
+
+func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int) (UFWState, error) {
+	srv, err := s.ensureUFWManageable(ctx, serverID)
+	if err != nil {
+		return UFWState{}, err
+	}
+	if err := s.ensureUFWInstalled(ctx, srv); err != nil {
+		return UFWState{}, err
+	}
+	script, err := remoteops.UFWDeleteRuleScript(number)
+	if err != nil {
+		return UFWState{}, err
+	}
+	if _, err := (remoteops.Runner{Exec: s.exec, Target: srv.Target()}).RunSudoLogged(ctx, script, ufwManageTimeout); err != nil {
+		return UFWState{}, err
+	}
+	status, err := s.fetchUFWStatus(ctx, srv)
+	if err != nil {
+		return UFWState{}, err
+	}
+	return ufwStateFromStatus(srv.ID, true, status), nil
 }
 
 func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, error) {
@@ -203,8 +274,80 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return tasks.Task{}, err
+	}
+	task, err = s.tasks.Get(ctx, task.ID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return tasks.Task{}, err
+	}
 	go s.runInstallUFW(context.Background(), task.ID, srv, adapter)
 	return task, nil
+}
+
+func (s *Service) ensureUFWManageable(ctx context.Context, serverID string) (Server, error) {
+	if s.exec == nil {
+		return Server{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return Server{}, err
+	}
+	if !srv.OS.Supported {
+		return Server{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	if !srv.Reachable {
+		return Server{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
+	}
+	if !srv.Sudo.Passwordless {
+		return Server{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	}
+	adapter, ok := linux.AdapterFor(srv.OS)
+	if !ok {
+		return Server{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
+	}
+	if !adapter.SupportsUFW() {
+		return Server{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
+	}
+	return srv, nil
+}
+
+func (s *Service) fetchUFWStatus(ctx context.Context, srv Server) (remoteops.UFWStatus, error) {
+	res, err := s.exec.ExecSudo(ctx, srv.Target(), sshx.CommandSpec{Command: remoteops.UFWStatusScript(), Timeout: ufwManageTimeout})
+	if err != nil {
+		return remoteops.UFWStatus{}, err
+	}
+	return remoteops.ParseUFWStatus(res.Stdout), nil
+}
+
+func (s *Service) ensureUFWInstalled(ctx context.Context, srv Server) error {
+	status, err := s.fetchUFWStatus(ctx, srv)
+	if err != nil {
+		return err
+	}
+	if !status.Installed {
+		return panelerr.Validation("ufw_not_installed", "UFW is not installed on this server")
+	}
+	return nil
+}
+
+func ufwStateFromStatus(serverID string, supported bool, status remoteops.UFWStatus) UFWState {
+	rules := make([]UFWRule, 0, len(status.Rules))
+	for _, rule := range status.Rules {
+		rules = append(rules, UFWRule{Number: rule.Number, To: rule.To, Action: rule.Action, From: rule.From})
+	}
+	return UFWState{
+		ServerID:  serverID,
+		Supported: supported,
+		Installed: status.Installed,
+		Active:    status.Active,
+		Status:    status.Status,
+		Default:   status.Default,
+		Rules:     rules,
+	}
 }
 
 func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (ProbeResult, error) {
@@ -261,11 +404,11 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 }
 
 func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
-	return s.ensureConnectivityTask(ctx, serverID, runNow, connectivityTaskType, "Testing SSH connectivity")
+	return s.ensureConnectivityTask(ctx, serverID, runNow, connectivityTaskType, "Testing SSH connectivity", "")
 }
 
 func (s *Service) EnsureInitialInfoTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
-	return s.ensureConnectivityTask(ctx, serverID, runNow, serverInfoTaskType, "Collecting server information")
+	return s.ensureConnectivityTask(ctx, serverID, runNow, serverInfoTaskType, "Collecting server information", "")
 }
 
 func (s *Service) RunConnectivityTask(ctx context.Context, task tasks.Task) error {
@@ -284,7 +427,7 @@ func (s *Service) RunConnectivityTask(ctx context.Context, task tasks.Task) erro
 	return nil
 }
 
-func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, runNow bool, taskType string, summary string) (tasks.Task, error) {
+func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, runNow bool, taskType string, summary string, operationID string) (tasks.Task, error) {
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
 	}
@@ -305,6 +448,7 @@ func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, r
 		return existing, nil
 	}
 	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		OperationID:  operationID,
 		Type:         taskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
@@ -416,7 +560,7 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
-	if err := s.execSudoLogged(ctx, taskID, target, ufwInstallScript(adapter, srv), ufwInstallTimeout); err != nil {
+	if _, err := (remoteops.Runner{Exec: s.exec, Target: target, Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, ufwInstallScript(adapter, srv), ufwInstallTimeout); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
@@ -451,11 +595,36 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 }
 
 func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (map[string]string, error) {
-	cmd := `sh -lc 'echo "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"; ` +
-		`echo "mem=$(grep MemTotal /proc/meminfo 2>/dev/null | awk "{print \$2}" | awk "{print int(\$1/1024)}" || echo 0)"; ` +
-		`echo "disk=$(df -m / 2>/dev/null | awk "NR==2{print \$2}" | awk "{print int(\$1/1024)}" || echo 0)"; ` +
-		`echo "hostname=$(hostname 2>/dev/null || echo unknown)"; ` +
-		`if command -v ufw >/dev/null 2>&1; then echo "ufw_installed=true"; if systemctl is-active --quiet ufw 2>/dev/null || ufw status 2>/dev/null | grep -qi "^Status: active"; then echo "ufw_active=true"; else echo "ufw_active=false"; fi; else echo "ufw_installed=false"; echo "ufw_active=false"; fi'`
+	script := `echo "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"
+echo "mem=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' | awk '{print int($1/1024)}' || echo 0)"
+echo "disk=$(df -m / 2>/dev/null | awk 'NR==2{print $2}' | awk '{print int($1/1024)}' || echo 0)"
+echo "hostname=$(hostname 2>/dev/null || echo unknown)"
+echo "arch=$(uname -m 2>/dev/null || echo unknown)"
+cpu_model=""
+if command -v lscpu >/dev/null 2>&1; then
+  cpu_model="$(lscpu | awk -F: '/Model name/{sub(/^[ \t]+/, "", $2); print $2; exit}')"
+fi
+if [ -z "$cpu_model" ] && [ -r /proc/cpuinfo ]; then
+  cpu_model="$(awk -F: '/model name|Hardware|Processor/{sub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo)"
+fi
+echo "cpu_model=${cpu_model:-unknown}"
+if command -v ip >/dev/null 2>&1; then
+  ip -o addr show scope global | awk '{iface=$2; sub(/@.*/, "", iface); print "nic=" iface "|" $3 "|" $4}'
+elif [ -r /proc/net/dev ]; then
+  awk -F: 'NR>2{gsub(/^[ \t]+|[ \t]+$/, "", $1); if($1!="lo") print "nic="$1"|link|"}' /proc/net/dev
+fi
+if command -v ufw >/dev/null 2>&1; then
+  echo "ufw_installed=true"
+  if systemctl is-active --quiet ufw 2>/dev/null || ufw status 2>/dev/null | grep -qi "^Status: active"; then
+    echo "ufw_active=true"
+  else
+    echo "ufw_active=false"
+  fi
+else
+  echo "ufw_installed=false"
+  echo "ufw_active=false"
+fi`
+	cmd := "sh -lc " + remoteops.ShellQuote(script)
 
 	res, err := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: cmd, Timeout: 12 * time.Second})
 	if err != nil {
@@ -463,6 +632,7 @@ func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (m
 	}
 
 	traits := map[string]string{}
+	nics := []string{}
 	for _, line := range strings.Split(res.Stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -472,6 +642,7 @@ func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (m
 		if !ok {
 			continue
 		}
+		value = strings.TrimSpace(value)
 		switch key {
 		case "cores":
 			traits["sys.cpu_cores"] = value
@@ -481,62 +652,58 @@ func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (m
 			traits["sys.disk_total_gb"] = value
 		case "hostname":
 			traits["sys.hostname"] = value
+		case "arch":
+			traits["sys.architecture"] = value
+		case "cpu_model":
+			traits["sys.cpu_model"] = value
+		case "nic":
+			if value != "" {
+				nics = append(nics, value)
+			}
 		case "ufw_installed":
 			traits["sys.ufw_installed"] = value
 		case "ufw_active":
 			traits["sys.ufw_active"] = value
 		}
 	}
+	if len(nics) > 0 {
+		traits["sys.network_interfaces"] = strings.Join(nics, ", ")
+	}
 	return traits, nil
 }
 
-func (s *Service) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string, timeout time.Duration) error {
-	stdoutStreamed := false
-	stderrStreamed := false
-	res, err := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{
-		Command: command,
-		Timeout: timeout,
-		OnStdout: func(line string) {
-			stdoutStreamed = true
-			_ = s.tasks.AppendLog(ctx, taskID, "stdout", line)
-		},
-		OnStderr: func(line string) {
-			stderrStreamed = true
-			_ = s.tasks.AppendLog(ctx, taskID, "stderr", line)
-		},
-	})
-	if !stdoutStreamed {
-		s.appendCommandOutput(ctx, taskID, "stdout", res.Stdout)
-	}
-	if !stderrStreamed {
-		s.appendCommandOutput(ctx, taskID, "stderr", res.Stderr)
-	}
-	return err
+type serverTaskLogSink struct {
+	tasks  *tasks.Service
+	taskID string
 }
 
-func (s *Service) appendCommandOutput(ctx context.Context, taskID, stream, out string) {
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
-		if strings.TrimSpace(line) != "" {
-			_ = s.tasks.AppendLog(ctx, taskID, stream, line)
-		}
-	}
+func (s serverTaskLogSink) AppendLog(ctx context.Context, stream, line string) error {
+	return s.tasks.AppendLog(ctx, s.taskID, stream, line)
 }
 
 func ufwInstallScript(adapter linux.DistroAdapter, srv Server) string {
 	command := strings.TrimSpace(adapter.UFWInstallScript())
-	ports := []int{normalizedTCPPort(srv.Port)}
+	rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}}
 	if traitEnabled(srv.Traits[reverseProxyEnabledTrait]) {
-		ports = append(ports, reverseProxyTCPPorts...)
+		for _, port := range reverseProxyTCPPorts {
+			rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
+		}
 	}
-	seen := map[int]struct{}{}
-	for _, port := range ports {
-		if _, ok := seen[port]; ok {
+	return command + "\n" + remoteops.MustUFWAllowScript(uniqueUFWRules(rules)...)
+}
+
+func uniqueUFWRules(rules []remoteops.UFWRule) []remoteops.UFWRule {
+	out := make([]remoteops.UFWRule, 0, len(rules))
+	seen := map[string]struct{}{}
+	for _, rule := range rules {
+		key := strconv.Itoa(rule.Port) + "/" + strings.ToLower(rule.Protocol) + "/" + strings.ToLower(rule.From)
+		if _, ok := seen[key]; ok {
 			continue
 		}
-		seen[port] = struct{}{}
-		command += "\nufw allow " + strconv.Itoa(port) + "/tcp"
+		seen[key] = struct{}{}
+		out = append(out, rule)
 	}
-	return command
+	return out
 }
 
 func normalizedTCPPort(port int) int {

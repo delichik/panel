@@ -226,6 +226,59 @@ func TestExpireStaleRunningMarksOldRunningTasksFailed(t *testing.T) {
 	}
 }
 
+func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	oldWorker, err := svc.Create(ctx, CreateInput{Type: "nomad_client_join", Summary: "joining"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldScheduled, err := svc.Create(ctx, CreateInput{Type: "certificate_issue", Summary: "issue cert"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recentWorker, err := svc.Create(ctx, CreateInput{Type: "nomad_server_bootstrap", Summary: "bootstrap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	for _, taskID := range []string{oldWorker.ID, oldScheduled.ID} {
+		if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, old, taskID); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"nomad_client_join", "nomad_server_bootstrap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected one stale queued task to expire, got %d", expired)
+	}
+	gotOldWorker, err := svc.Get(ctx, oldWorker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOldWorker.Status != StatusFailed || gotOldWorker.FinishedAt == nil || !strings.Contains(gotOldWorker.Error, "worker startup timeout") {
+		t.Fatalf("expected old worker task to fail, got %#v", gotOldWorker)
+	}
+	gotOldScheduled, err := svc.Get(ctx, oldScheduled.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOldScheduled.Status != StatusQueued {
+		t.Fatalf("scheduled task type should stay queued, got %#v", gotOldScheduled)
+	}
+	gotRecentWorker, err := svc.Get(ctx, recentWorker.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotRecentWorker.Status != StatusQueued {
+		t.Fatalf("recent worker task should stay queued, got %#v", gotRecentWorker)
+	}
+}
+
 func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

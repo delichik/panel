@@ -1,13 +1,9 @@
 import { apiClient, type ApiClient } from './client';
 import type {
   NomadControlPlaneDto,
-  NomadDeploymentDto,
-  NomadEvaluationDto,
-  NomadJobDto,
   NomadNodeDto,
   NomadReverseProxyStaticSiteDto,
   NomadReverseProxyUpdateDto,
-  NomadServiceRegistrationDto,
   NomadStatusDto,
   ServerDto,
 } from '@/types/api';
@@ -57,18 +53,6 @@ export function createNomadApi(client: ApiClient = apiClient) {
     },
     nodes() {
       return client.get<NomadNodeDto[]>('/nomad/nodes');
-    },
-    jobs() {
-      return client.get<NomadJobDto[]>('/nomad/jobs');
-    },
-    deployments() {
-      return client.get<NomadDeploymentDto[]>('/nomad/deployments');
-    },
-    evaluations() {
-      return client.get<NomadEvaluationDto[]>('/nomad/evaluations');
-    },
-    services() {
-      return client.get<NomadServiceRegistrationDto[]>('/nomad/services');
     },
     async controlPlane() {
       return normalizeControlPlane(await client.get<NomadControlPlaneDto>('/nomad/control-plane'));

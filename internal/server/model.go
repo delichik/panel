@@ -50,3 +50,26 @@ type ProbeResult struct {
 	Error                string            `json:"error,omitempty"`
 	PasswordlessSudoText string            `json:"passwordlessSudoText,omitempty"`
 }
+
+type UFWState struct {
+	ServerID  string    `json:"serverId"`
+	Supported bool      `json:"supported"`
+	Installed bool      `json:"installed"`
+	Active    bool      `json:"active"`
+	Status    string    `json:"status"`
+	Default   string    `json:"defaultPolicy"`
+	Rules     []UFWRule `json:"rules"`
+}
+
+type UFWRule struct {
+	Number int    `json:"number"`
+	To     string `json:"to"`
+	Action string `json:"action"`
+	From   string `json:"from"`
+}
+
+type UFWAllowRequest struct {
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	From     string `json:"from"`
+}

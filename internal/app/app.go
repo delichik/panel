@@ -66,6 +66,7 @@ func New(cfg config.Config) (*App, error) {
 	credSvc := credential.NewService(store.AppDB(), cfg)
 	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
+	serverSvc.SetMetricsDB(store.MetricsDB())
 	runtimeNomad := settingsSvc.NomadConfig(cfg.Nomad)
 	nomadClientCfg := nomad.Config{
 		Address:    runtimeNomad.Address,
@@ -188,6 +189,12 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.Test(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/install"):
 			serverH.InstallUFW(w, r)
+		case r.Method == http.MethodGet && strings.HasSuffix(path, "/ufw"):
+			serverH.UFWState(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/rules"):
+			serverH.AllowUFW(w, r)
+		case r.Method == http.MethodDelete && serverUFWRulePath(path):
+			serverH.DeleteUFWRule(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/overview":
 			overviewH.Get(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/metrics"):
@@ -248,14 +255,6 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			nomadH.Status(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/nomad/nodes":
 			nomadH.Nodes(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/jobs":
-			nomadH.Jobs(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/deployments":
-			nomadH.Deployments(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/evaluations":
-			nomadH.Evaluations(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/services":
-			nomadH.Services(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/nomad/control-plane":
 			nomadH.ControlPlane(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/nomad/join-candidates":
@@ -301,6 +300,11 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 func serverResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != ""
+}
+
+func serverUFWRulePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 7 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == "ufw" && parts[5] == "rules" && parts[6] != ""
 }
 
 func applicationResourcePath(path string) bool {

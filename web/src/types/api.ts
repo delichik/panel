@@ -32,6 +32,31 @@ export interface ServerDto {
   updatedAt: string;
 }
 
+export type FirewallProtocol = 'tcp' | 'udp' | 'any';
+
+export interface UfwRuleDto {
+  number: number;
+  to: string;
+  action: string;
+  from: string;
+}
+
+export interface UfwStateDto {
+  serverId: string;
+  supported: boolean;
+  installed: boolean;
+  active: boolean;
+  status: string;
+  defaultPolicy: string;
+  rules: UfwRuleDto[];
+}
+
+export interface UfwAllowInput {
+  port: number;
+  protocol: FirewallProtocol;
+  from?: string;
+}
+
 export interface CredentialDto {
   id: string;
   name: string;
@@ -437,18 +462,6 @@ export interface NomadAllocationDto {
   CreateIndex?: number;
 }
 
-export interface NomadServiceRegistrationDto {
-  ID?: string;
-  ServiceName?: string;
-  Namespace?: string;
-  NodeID?: string;
-  Datacenter?: string;
-  JobID?: string;
-  AllocID?: string;
-  Tags?: string[];
-  Port?: number;
-}
-
 export interface ApplicationPlanDto {
   application: ApplicationDto;
   job: NomadJobDto;
@@ -471,7 +484,6 @@ export interface ApplicationRuntimeDto {
   evaluations: NomadEvaluationDto[];
   evaluationDetails?: NomadEvaluationDto[];
   allocations: NomadAllocationDto[];
-  services?: NomadServiceRegistrationDto[];
   observedAt: string;
 }
 

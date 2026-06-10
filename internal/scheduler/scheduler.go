@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"panel/internal/id"
 	"panel/internal/metrics"
 	"panel/internal/packages"
 	"panel/internal/panelerr"
@@ -23,6 +24,17 @@ type Scheduler struct {
 	certs    certificateRenewer
 	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+}
+
+const StaleQueuedWorkerTaskAfter = 10 * time.Minute
+
+var staleQueuedWorkerTaskTypes = []string{
+	"nomad_client_join",
+	"nomad_server_bootstrap",
+	"nomad_node_remove",
+	"nomad_cluster_rebuild",
+	"nomad_server_switch",
+	"server_ufw_install",
 }
 
 type certificateRenewer interface {
@@ -93,21 +105,28 @@ func (s *Scheduler) packageLoop(ctx context.Context) {
 				continue
 			}
 			lastRun = time.Now()
-			servers, err := s.servers.List(ctx)
-			if err != nil {
+			if err := s.runScheduledPackageRefreshes(ctx); err != nil {
 				log.Printf("scheduler list servers for packages: %v", err)
-				continue
-			}
-			for _, srv := range servers {
-				if !srv.OS.Supported || !srv.Reachable {
-					continue
-				}
-				if _, err := s.packages.RefreshScheduled(ctx, srv.ID); err != nil {
-					log.Printf("package refresh server %s: %v", srv.ID, err)
-				}
 			}
 		}
 	}
+}
+
+func (s *Scheduler) runScheduledPackageRefreshes(ctx context.Context) error {
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return err
+	}
+	operationID := id.New("op")
+	for _, srv := range servers {
+		if !srv.OS.Supported || !srv.Reachable {
+			continue
+		}
+		if _, err := s.packages.RefreshScheduled(ctx, srv.ID, operationID); err != nil {
+			log.Printf("package refresh server %s: %v", srv.ID, err)
+		}
+	}
+	return nil
 }
 
 func (s *Scheduler) Stop() {
@@ -265,6 +284,7 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 	defer s.wg.Done()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
+	s.expireStaleQueuedWorkerTasks(ctx)
 	s.expireStaleRunningTasks(ctx)
 	lastRun := time.Now()
 	for {
@@ -278,6 +298,7 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 				continue
 			}
 			lastRun = time.Now()
+			s.expireStaleQueuedWorkerTasks(ctx)
 			s.expireStaleRunningTasks(ctx)
 			deleted, err := s.metrics.Cleanup(ctx, runtime.MetricsRetentionDays)
 			if err != nil {
@@ -286,6 +307,20 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 			}
 			log.Printf("metrics cleanup deleted %d rows", deleted)
 		}
+	}
+}
+
+func (s *Scheduler) expireStaleQueuedWorkerTasks(ctx context.Context) {
+	if s.tasks == nil {
+		return
+	}
+	expired, err := s.tasks.ExpireStaleQueued(ctx, time.Now().UTC(), StaleQueuedWorkerTaskAfter, staleQueuedWorkerTaskTypes)
+	if err != nil {
+		log.Printf("task stale-queued cleanup: %v", err)
+		return
+	}
+	if expired > 0 {
+		log.Printf("task stale-queued cleanup marked %d task(s) failed", expired)
 	}
 }
 
