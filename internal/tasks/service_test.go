@@ -209,6 +209,34 @@ func TestListHidesInternalConnectivityTasksUnlessFiltered(t *testing.T) {
 	}
 }
 
+func TestListCommonTasksExcludesSchedulerTriggeredTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, CreateInput{Type: "package_refresh", TriggerType: "scheduler", Summary: "scheduled refresh"}); err != nil {
+		t.Fatal(err)
+	}
+	visible, err := svc.Create(ctx, CreateInput{Type: "package_refresh", TriggerType: "user", Summary: "manual refresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	common, err := svc.List(ctx, ListFilter{ExcludeScheduled: true, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if common.Total != 1 || len(common.Items) != 1 || common.Items[0].ID != visible.ID {
+		t.Fatalf("expected only user-triggered task, got %#v", common)
+	}
+
+	explicit, err := svc.List(ctx, ListFilter{Types: []string{"package_refresh"}, ExcludeScheduled: true, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explicit.Total != 2 {
+		t.Fatalf("explicit type filter should include scheduled tasks, got %#v", explicit)
+	}
+}
+
 func TestListOrdersNewestTasksFirst(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

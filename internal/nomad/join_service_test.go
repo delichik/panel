@@ -201,7 +201,7 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 		"systemctl restart nomad",
 		"systemctl is-active --quiet nomad",
 		"NOMAD_ADDR=\"https://127.0.0.1:4646\"",
-		"nomad status",
+		"timeout 3s nomad agent-info",
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("join script missing %q:\n%s", want, command)
@@ -416,7 +416,7 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 		"systemctl restart nomad",
 		"systemctl is-active --quiet nomad",
 		"NOMAD_ADDR=\"https://127.0.0.1:4646\"",
-		"nomad status",
+		"timeout 3s nomad agent-info",
 	} {
 		if !strings.Contains(command, want) {
 			t.Fatalf("bootstrap script missing %q:\n%s", want, command)

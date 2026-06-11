@@ -8,6 +8,7 @@ export interface TaskListFilters {
   type?: string | null;
   types?: string[] | null;
   includeInternal?: boolean;
+  commonOnly?: boolean;
   operationId?: string | null;
   limit?: number;
   page?: number;
@@ -38,6 +39,7 @@ export function createTasksApi(client: ApiClient = apiClient) {
       setTrimmedParam(params, 'serverId', filters.serverId);
       appendTrimmedParams(params, 'type', filters.types ?? (filters.type ? [filters.type] : null));
       if (filters.includeInternal) params.set('includeInternal', 'true');
+      if (filters.commonOnly) params.set('commonOnly', 'true');
       setTrimmedParam(params, 'operation_id', filters.operationId);
       return client.get<TaskListDto>(`/tasks?${params.toString()}`);
     },

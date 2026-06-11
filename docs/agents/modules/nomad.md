@@ -37,6 +37,7 @@
 - Nomad 地址、namespace、region、datacenter 等运行时设置来自 `internal/settings/`。
 - 本地或回环 Nomad 地址会使用项目托管的 TLS 资产；相关判断在 `internal/app/app.go`。
 - 引导/加入流程通过 SSH 在目标服务器执行远程命令，需要考虑支持系统、sudo、幂等性和失败恢复。
+- 引导/加入后的本地健康检查使用带单次硬超时的 `nomad agent-info` 检查本地 agent API，不使用可能等待集群响应的 `nomad status`；整体检查必须在任务阶段超时内结束并输出 systemd/journal 诊断。
 - Nomad 运行时准备可以安装 Docker/CNI，但不得无条件重启 Docker；Docker 已运行时只做健康检查，未运行时才启动，避免 Panel 自身部署在目标节点 Docker 中时被中断。
 - server 引导、server 重部署和集群重建会临时切换 Panel 的 Nomad API 地址；只有 Panel 验证 TCP 4646/API 可达后才保留地址，失败必须回滚到旧地址。
 - 集群重建必须先引导并验证新的单 server 集群，再重置其他 Panel 托管节点，避免新 server 端口未开放时提前停止旧节点。

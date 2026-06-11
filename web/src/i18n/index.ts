@@ -106,6 +106,8 @@ const messages = {
         toLight: "Switch to light mode",
         toDark: "Switch to dark mode",
       },
+      updateAvailable: "Update {version} available",
+      updateAvailableDetail: "Current {current}; latest {latest}. This notice does not download or install updates.",
       logout: "Logout",
     },
     routes: {
@@ -217,6 +219,8 @@ const messages = {
       certificateEmail: "Certificate email",
       dnsPropagationDelay: "DNS propagation delay",
       systemProperties: "System Properties",
+      version: "Version",
+      latestVersion: "Latest {version}",
       listenAddress: "Listen address",
       applicationDatabase: "Application database",
       metricsDatabase: "Metrics database",
@@ -797,6 +801,18 @@ const messages = {
       blocked: "Blocked",
       cancelled: "Cancelled",
     },
+    taskStage: {
+      completed: "Completed",
+      expired: "Expired",
+      installing_nomad: "Installing Nomad",
+      preparing_runtime: "Preparing runtime",
+      configuring: "Writing configuration",
+      opening_firewall: "Opening firewall",
+      starting: "Starting service",
+      verifying_local: "Checking local API",
+      schedule: "Scheduling",
+      running: "Running",
+    },
     taskType: {
       application_deploy: "Application deploy",
       application_stop: "Application stop",
@@ -921,6 +937,8 @@ const messages = {
         toLight: "切换到浅色模式",
         toDark: "切换到深色模式",
       },
+      updateAvailable: "发现新版本 {version}",
+      updateAvailableDetail: "当前版本 {current}，最新版本 {latest}。此提示不会下载或安装更新。",
       logout: "退出登录",
     },
     routes: {
@@ -1032,6 +1050,8 @@ const messages = {
       certificateEmail: "证书邮箱",
       dnsPropagationDelay: "DNS 生效等待时间",
       systemProperties: "系统属性",
+      version: "版本",
+      latestVersion: "最新 {version}",
       listenAddress: "监听地址",
       applicationDatabase: "应用数据库",
       metricsDatabase: "指标数据库",
@@ -1610,6 +1630,18 @@ const messages = {
       blocked: "已阻塞",
       cancelled: "已取消",
     },
+    taskStage: {
+      completed: "已完成",
+      expired: "已过期",
+      installing_nomad: "安装 Nomad",
+      preparing_runtime: "准备运行环境",
+      configuring: "写入配置",
+      opening_firewall: "开放防火墙",
+      starting: "启动服务",
+      verifying_local: "检查本地 API",
+      schedule: "调度",
+      running: "运行中",
+    },
     taskType: {
       application_deploy: "应用部署",
       application_stop: "应用停止",
@@ -1713,6 +1745,7 @@ export function useI18n() {
     setLocale,
     translateTaskStatus,
     translateTaskType,
+    translateTaskStage,
     translateCleanupSchedule,
     translateApplicationRestartPolicy,
     translateApplicationFileKind,
@@ -1752,6 +1785,15 @@ export function translateTaskType(value?: string | null) {
   const translated =
     lookup(`taskType.${value}`, messages[locale.value]) ??
     lookup(`taskType.${value}`, messages.en);
+  if (translated) return translated;
+  return humanizeEnum(value);
+}
+
+export function translateTaskStage(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const translated =
+    lookup(`taskStage.${value}`, messages[locale.value]) ??
+    lookup(`taskStage.${value}`, messages.en);
   if (translated) return translated;
   return humanizeEnum(value);
 }

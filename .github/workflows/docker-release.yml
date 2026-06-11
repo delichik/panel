@@ -73,6 +73,10 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE_NAME }},name-canonical=true,push-by-digest=true,push=true
           cache-from: type=gha,scope=linux-amd64
           cache-to: type=gha,mode=max,scope=linux-amd64
+          build-args: |
+            PANEL_VERSION=${{ github.ref_name }}
+            PANEL_REPOSITORY=${{ github.repository }}
+            PANEL_COMMIT=${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Export image digest
@@ -128,6 +132,10 @@ jobs:
           outputs: type=image,name=${{ env.IMAGE_NAME }},name-canonical=true,push-by-digest=true,push=true
           cache-from: type=gha,scope=linux-arm64
           cache-to: type=gha,mode=max,scope=linux-arm64
+          build-args: |
+            PANEL_VERSION=${{ github.ref_name }}
+            PANEL_REPOSITORY=${{ github.repository }}
+            PANEL_COMMIT=${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Export image digest

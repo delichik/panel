@@ -15,15 +15,16 @@ type Service struct {
 }
 
 type ListFilter struct {
-	Status          string
-	Statuses        []string
-	ServerID        string
-	Type            string
-	Types           []string
-	IncludeInternal bool
-	OperationID     string
-	Limit           int
-	Offset          int
+	Status           string
+	Statuses         []string
+	ServerID         string
+	Type             string
+	Types            []string
+	IncludeInternal  bool
+	ExcludeScheduled bool
+	OperationID      string
+	Limit            int
+	Offset           int
 }
 
 var defaultHiddenTaskTypes = []string{"server_connectivity_test", "metrics_collect"}
@@ -251,6 +252,10 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 		for _, taskType := range defaultHiddenTaskTypes {
 			args = append(args, taskType)
 		}
+	}
+	if filter.ExcludeScheduled && len(types) == 0 {
+		conditions = append(conditions, `trigger_type<>?`)
+		args = append(args, "scheduler")
 	}
 	if filter.OperationID != "" {
 		conditions = append(conditions, `operation_id=?`)

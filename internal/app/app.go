@@ -27,15 +27,17 @@ import (
 	"panel/internal/settings"
 	"panel/internal/sshx"
 	"panel/internal/storage"
+	"panel/internal/systeminfo"
 	"panel/internal/tasks"
 )
 
 type App struct {
-	cfg   config.Config
-	store *storage.Store
-	mux   *http.ServeMux
-	auth  *auth.Service
-	sched *scheduler.Scheduler
+	cfg    config.Config
+	store  *storage.Store
+	mux    *http.ServeMux
+	auth   *auth.Service
+	sched  *scheduler.Scheduler
+	system *systeminfo.Service
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -118,8 +120,10 @@ func New(cfg config.Config) (*App, error) {
 	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
 	sched.SetCertificateRenewer(certSvc)
 	sched.Start(context.Background())
+	systemSvc := systeminfo.NewService(nil)
+	systemSvc.Start(context.Background())
 
-	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched}
+	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched, system: systemSvc}
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
 	applicationSvc.SetReverseProxyReconciler(nomadJoinSvc)
 	nomadJoinSvc.SetApplicationProxySource(applicationSvc)
@@ -131,7 +135,7 @@ func New(cfg config.Config) (*App, error) {
 		defer cancel()
 		_ = nomadJoinSvc.ReconcileReverseProxy(ctx)
 	}()
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
 	return a, nil
 }
 
@@ -139,11 +143,14 @@ func (a *App) Close() error {
 	if a.sched != nil {
 		a.sched.Stop()
 	}
+	if a.system != nil {
+		a.system.Close()
+	}
 	return a.store.Close()
 }
 func (a *App) Handler() http.Handler { return a.mux }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -289,6 +296,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			settingsH.Runtime(w, r)
 		case r.Method == http.MethodPut && path == "/api/v1/settings/runtime":
 			settingsH.UpdateRuntime(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/system/version":
+			systemH.Version(w, r)
 		default:
 			httpx.Error(w, panelerr.NotFound("route"))
 		}

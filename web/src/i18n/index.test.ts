@@ -7,6 +7,8 @@ import {
   translateNomadNodeRole,
   translateNomadNodeStatus,
   translateNomadRuntimeStatus,
+  translateTaskStage,
+  translateTaskType,
 } from './index';
 
 describe('i18n translation helpers', () => {
@@ -37,6 +39,8 @@ describe('i18n translation helpers', () => {
     expect(translateNomadNodeKind('managed')).toBe('已托管');
     expect(translateNomadRuntimeStatus('running')).toBe('运行中');
     expect(translateNomadAllocationDesiredStatus('evict')).toBe('驱逐');
+    expect(translateTaskType('nomad_client_join')).toBe('Nomad client 加入');
+    expect(translateTaskStage('verifying_local')).toBe('检查本地 API');
   });
 
   it('falls back to humanized English for unknown enum values', () => {

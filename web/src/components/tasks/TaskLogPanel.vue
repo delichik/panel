@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { tasksApi } from '@/api/tasks';
-import { formatDateTime, t, translateTaskStatus } from '@/i18n';
+import { formatDateTime, t, translateTaskStage, translateTaskStatus, translateTaskType } from '@/i18n';
 import type { TaskDto, TaskLogDto } from '@/types/api';
 
 const props = defineProps<{
@@ -40,10 +40,6 @@ const statusType = computed(() => {
 const isActive = computed(() => task.value?.status === 'queued' || task.value?.status === 'running');
 const progressValue = computed(() => task.value?.percentage ?? (isActive.value ? 100 : 0));
 const serverLabel = computed(() => props.serverName || task.value?.serverId || t('shared.taskLogPanel.noServer'));
-
-function formatTaskType(value?: string) {
-  return value ? value.replace(/_/g, ' ') : '-';
-}
 
 function shouldPoll(current: TaskDto | null) {
   return !current || current.status === 'queued' || current.status === 'running';
@@ -100,13 +96,13 @@ onBeforeUnmount(() => {
     <div class="task-summary">
       <div>
         <div class="task-title-row">
-          <strong>{{ task?.summary || t('shared.taskLogPanel.defaultTitle') }}</strong>
+          <strong>{{ task ? translateTaskType(task.type) : t('shared.taskLogPanel.defaultTitle') }}</strong>
           <v-chip v-if="task" :color="statusType" size="small" label class="ml-2">{{ translateTaskStatus(task.status) }}</v-chip>
         </div>
         <div class="task-meta">
           <span>{{ t('shared.taskLogPanel.server') }}: {{ serverLabel }}</span>
-          <span>{{ t('shared.taskLogPanel.type') }}: {{ formatTaskType(task?.type) }}</span>
-          <span>{{ t('shared.taskLogPanel.stage') }}: {{ task?.stage || t('shared.taskLogPanel.pending') }}</span>
+          <span>{{ t('shared.taskLogPanel.type') }}: {{ translateTaskType(task?.type) }}</span>
+          <span>{{ t('shared.taskLogPanel.stage') }}: {{ task?.stage ? translateTaskStage(task.stage) : t('shared.taskLogPanel.pending') }}</span>
           <span>{{ t('shared.taskLogPanel.started') }}: {{ formatDateTime(task?.startedAt) }}</span>
           <span v-if="task?.finishedAt">{{ t('shared.taskLogPanel.finished') }}: {{ formatDateTime(task.finishedAt) }}</span>
         </div>

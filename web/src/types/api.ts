@@ -567,6 +567,15 @@ export interface RuntimeSettingsDto {
   jwtSecretConfigured: boolean;
 }
 
+export interface SystemVersionDto {
+  version: string;
+  commit?: string;
+  repository?: string;
+  latestVersion?: string;
+  updateAvailable: boolean;
+  checkedAt?: string;
+}
+
 export type TokenExpiration = '10m' | '1h' | '1d' | '5d' | '30d' | 'never';
 
 export interface RuntimeNomadSettingsDto {

@@ -13,14 +13,14 @@
 
 | 任务范围 | 优先阅读 |
 | --- | --- |
-| 启动装配、API 路由、配置、存储、认证、运行时设置 | [backend-core.md](backend-core.md) |
+| 启动装配、API 路由、配置、存储、认证、运行时设置、系统版本与更新检查 | [backend-core.md](backend-core.md) |
 | Vue 页面、API client、Pinia store、路由、样式和前端测试 | [frontend.md](frontend.md) |
 | 服务器、SSH 凭据、系统探测、UFW、概览指标、APT 软件包 | [servers.md](servers.md) |
 | 后台任务、任务步骤、任务日志、重试、手动运行、周期调度 | [tasks-scheduler.md](tasks-scheduler.md) |
 | Nomad 状态、节点引导/加入、控制平面、反向代理 | [nomad.md](nomad.md) |
 | 应用定义、appspec、文件、修订、部署、运行时、日志、镜像更新 | [applications.md](applications.md) |
 | DNS 域名、Cloudflare、ACME 证书、证书续签 | [dns-certificates.md](dns-certificates.md) |
-| GitHub Actions、tag 发布、容器镜像和 GitHub Release 创建 | [release-workflow.md](release-workflow.md) |
+| GitHub Actions、tag 发布、版本注入、容器镜像和 GitHub Release 创建 | [release-workflow.md](release-workflow.md) |
 | 用户可见文案、翻译 key、语言设置、后端错误翻译 | [../i18n-guide.md](../i18n-guide.md)，[../i18n-translation-status.md](../i18n-translation-status.md) |
 
 ## 常见跨模块关系
