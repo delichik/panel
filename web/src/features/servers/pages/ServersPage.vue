@@ -62,6 +62,16 @@ const managedCount = computed(() => servers.value.filter((server) => nomadProjec
 const credentialRows = computed(() => credentials.value ?? []);
 const serverCredentialMissing = computed(() => !serverForm.credentialId);
 
+interface NetworkAddress {
+  family: string;
+  address: string;
+}
+
+interface NetworkInterface {
+  name: string;
+  addresses: NetworkAddress[];
+}
+
 const credentialOptions = computed(() =>
   credentialRows.value.map((credential) => ({
     label: `${credential.name} (${credential.username}, ${credential.type})`,
@@ -337,6 +347,24 @@ function traitValue(server: ServerDto | null, key: string) {
   return server?.traits?.[key] || t('common.notAvailable');
 }
 
+function networkInterfaces(traits?: Record<string, string> | null): NetworkInterface[] {
+  const grouped = new Map<string, NetworkAddress[]>();
+  for (const raw of (traits?.['sys.network_interfaces'] || '').split(', ')) {
+    const [name, family = '', address = ''] = raw.split('|');
+    if (!name?.trim()) continue;
+    const addresses = grouped.get(name) ?? [];
+    if (family || address) addresses.push({ family, address });
+    grouped.set(name, addresses);
+  }
+  return Array.from(grouped, ([name, addresses]) => ({ name, addresses }));
+}
+
+function networkFamilyLabel(family: string) {
+  if (family === 'inet') return 'IPv4';
+  if (family === 'inet6') return 'IPv6';
+  return family || t('serversPage.linkOnly');
+}
+
 function ufwStatusFromTraits(traits?: Record<string, string> | null) {
   const supported = traits?.['sys.ufw_supported'] === 'true';
   if (traits?.['sys.ufw_supported'] === 'false') {
@@ -533,8 +561,27 @@ onMounted(load);
                   <div><span>{{ t('serversPage.kernelHost') }}</span><strong>{{ traitValue(selectedServer, 'sys.hostname') }}</strong></div>
                   <div><span>{{ t('serversPage.loadAverage') }}</span><strong>{{ selectedServer.loadAverage || t('common.notAvailable') }}</strong></div>
                   <div><span>{{ t('serversPage.cpuModel') }}</span><strong>{{ traitValue(selectedServer, 'sys.cpu_model') }}</strong></div>
-                  <div><span>{{ t('serversPage.networkInterfaces') }}</span><strong>{{ traitValue(selectedServer, 'sys.network_interfaces') }}</strong></div>
                 </div>
+              </section>
+
+              <section>
+                <div class="section-title">{{ t('serversPage.networkInterfaces') }}</div>
+                <div v-if="networkInterfaces(selectedServer.traits).length" class="network-grid">
+                  <div v-for="network in networkInterfaces(selectedServer.traits)" :key="network.name" class="network-card">
+                    <div class="network-card-title">
+                      <v-icon size="18" color="primary">mdi-ethernet</v-icon>
+                      <strong>{{ network.name }}</strong>
+                    </div>
+                    <div v-if="network.addresses.length" class="network-addresses">
+                      <div v-for="item in network.addresses" :key="`${item.family}:${item.address}`" class="network-address">
+                        <v-chip size="x-small" variant="tonal" color="primary" label>{{ networkFamilyLabel(item.family) }}</v-chip>
+                        <code>{{ item.address || t('common.notAvailable') }}</code>
+                      </div>
+                    </div>
+                    <div v-else class="text-caption text-medium-emphasis">{{ t('serversPage.linkOnly') }}</div>
+                  </div>
+                </div>
+                <div v-else class="text-body-2 text-medium-emphasis">{{ t('common.notAvailable') }}</div>
               </section>
 
               <section>
@@ -682,7 +729,15 @@ onMounted(load);
               <div><span>{{ t('serversPage.disk') }}</span><strong>{{ probeResult.traits['sys.disk_total_gb'] ? `${probeResult.traits['sys.disk_total_gb']} GB` : t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.architecture') }}</span><strong>{{ probeResult.traits['sys.architecture'] || t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.cpuModel') }}</span><strong>{{ probeResult.traits['sys.cpu_model'] || t('common.notAvailable') }}</strong></div>
-              <div><span>{{ t('serversPage.networkInterfaces') }}</span><strong>{{ probeResult.traits['sys.network_interfaces'] || t('common.notAvailable') }}</strong></div>
+              <div class="probe-networks">
+                <span>{{ t('serversPage.networkInterfaces') }}</span>
+                <div v-if="networkInterfaces(probeResult.traits).length" class="probe-network-list">
+                  <v-chip v-for="network in networkInterfaces(probeResult.traits)" :key="network.name" size="small" variant="tonal" color="primary" label>
+                    {{ network.name }} · {{ network.addresses.map(item => item.address).filter(Boolean).join(', ') || t('serversPage.linkOnly') }}
+                  </v-chip>
+                </div>
+                <strong v-else>{{ t('common.notAvailable') }}</strong>
+              </div>
             </div>
           </v-form>
         </v-card-text>
@@ -788,6 +843,14 @@ onMounted(load);
 .property-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
 .property-grid strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-size: 0.86rem; }
 .ufw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.network-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.network-card { min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
+.network-card-title { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.network-addresses { display: grid; gap: 7px; }
+.network-address { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.network-address code { min-width: 0; overflow-wrap: anywhere; font-size: 0.78rem; color: var(--lp-text-muted); }
+.probe-networks { grid-column: 1 / -1; align-items: flex-start !important; }
+.probe-network-list { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .trait-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .notes { margin: 0; color: var(--lp-text-muted); white-space: pre-wrap; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -803,7 +866,7 @@ onMounted(load);
 .min-width-0 { min-width: 0; }
 @media (max-width: 1280px) { .servers-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .summary-strip, .metric-grid, .property-grid, .form-grid, .probe-result { grid-template-columns: 1fr; max-width: none; }
+  .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid, .probe-result { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .probe-panel { flex-direction: column; align-items: stretch; }
 }
 </style>

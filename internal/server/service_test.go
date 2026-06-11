@@ -151,7 +151,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.architecture"] != "x86_64" || srv.Traits["sys.cpu_model"] != "AMD EPYC" || srv.Traits["sys.network_interfaces"] != "eth0|inet|10.0.0.10/24" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_supported"] != "true" || srv.Traits["sys.ufw_installed"] != "false" {
+	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.architecture"] != "x86_64" || srv.Traits["sys.cpu_model"] != "AMD EPYC" || srv.Traits["sys.network_interfaces"] != "eth0|inet|10.0.0.10/24, eth0|inet6|2001:db8::10/64" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_supported"] != "true" || srv.Traits["sys.ufw_installed"] != "false" {
 		t.Fatalf("unexpected system traits detected: %#v", srv.Traits)
 	}
 
@@ -466,7 +466,7 @@ func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, com
 		return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
 	}
 	if strings.Contains(command.Command, "cores=") {
-		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nufw_installed=false\nufw_active=false\n", ExitCode: 0}, nil
+		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nnic=eth0|inet6|2001:db8::10/64\nnic=docker0|inet|172.17.0.1/16\nnic=veth123|inet6|fe80::1/64\nufw_installed=false\nufw_active=false\n", ExitCode: 0}, nil
 	}
 	if strings.Contains(command.Command, "id -u") {
 		if f.root {
@@ -488,6 +488,19 @@ func (f *connectivityFakeExec) Upload(ctx context.Context, target sshx.Target, t
 
 func (f *connectivityFakeExec) Download(ctx context.Context, target sshx.Target, transfer sshx.DownloadSpec) error {
 	return nil
+}
+
+func TestVirtualNetworkInterfaceDetection(t *testing.T) {
+	for _, name := range []string{"lo", "docker0", "veth123", "br-abcd", "virbr0", "cni0", "flannel.1", "cali123", "tun0", "tap0", "wg0", "tailscale0", "ztabc"} {
+		if !isVirtualNetworkInterface(name) {
+			t.Fatalf("expected %q to be treated as virtual", name)
+		}
+	}
+	for _, name := range []string{"eth0", "ens3", "enp5s0", "bond0"} {
+		if isVirtualNetworkInterface(name) {
+			t.Fatalf("expected %q to be retained", name)
+		}
+	}
 }
 
 type ufwInstallFakeExec struct {

@@ -60,4 +60,11 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).toContain('serversApi.restartServer(server.id)');
     expect(serversPage).toContain(':disabled="!canRestart(selectedServer)"');
   });
+
+  it('renders network interfaces as separate cards', () => {
+    expect(serversPage).toContain('class="network-grid"');
+    expect(serversPage).toContain('v-for="network in networkInterfaces(selectedServer.traits)"');
+    expect(serversPage).toContain('networkFamilyLabel(item.family)');
+    expect(serversPage).not.toContain("traitValue(selectedServer, 'sys.network_interfaces')");
+  });
 });

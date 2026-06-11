@@ -42,7 +42,7 @@
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
 - 系统探测通过 SSH 执行远程命令，并交给 `internal/linux/` 解析支持的 Debian/Ubuntu 版本。
-- 系统探测写入 `sys.*` traits，当前包括 CPU 核数、内存、磁盘、主机名、架构、CPU 型号、网卡地址摘要、发行版和 UFW 支持/安装/启用状态。
+- 系统探测写入 `sys.*` traits，当前包括 CPU 核数、内存、磁盘、主机名、架构、CPU 型号、物理/直通网卡地址摘要、发行版和 UFW 支持/安装/启用状态。网卡采集要求 `/sys/class/net/{name}/device` 存在，并过滤 Docker、veth、bridge、CNI、隧道和 overlay 等常见虚拟接口。
 - 安装软件、日志化 sudo 命令、sudo 写文件和 UFW allow/delete/status 这类基础远程操作应优先复用 `internal/remoteops/`，避免在业务模块里散落长脚本。
 - 前端登记或测试服务器前必须选择已有 SSH 凭据；没有凭据时应引导先创建凭据，不能提交空 `credentialId`。
 - 维护操作通常要求 root 或免密 sudo；相关检查结果写回服务器记录。
@@ -55,6 +55,7 @@
 - 新增服务器时只创建一个可见的 `server_info_collect` 首连信息采集任务；后续编辑、手动测试和陈旧刷新复用内部 `server_connectivity_test` 连通性任务，默认不在任务中心展示；一次服务器列表触发的多台陈旧服务器刷新应共享一个 `operationId`。
 - 长耗时操作应记录为任务，日志和步骤交给 `internal/tasks/`。
 - 概览指标卡片在窄尺寸下会自动隐藏重叠的时间轴标签；单项指标拉取失败时不在卡片内展示错误文案，图表浮窗挂载到页面层以避免被卡片边界裁剪。
+- 服务器详情按网卡分组展示接口名及 IPv4/IPv6 地址，不把所有接口地址拼在同一个属性值中；连接测试结果使用紧凑的分项网卡标签。
 
 ## 验证
 

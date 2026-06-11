@@ -662,9 +662,23 @@ if [ -z "$cpu_model" ] && [ -r /proc/cpuinfo ]; then
 fi
 echo "cpu_model=${cpu_model:-unknown}"
 if command -v ip >/dev/null 2>&1; then
-  ip -o addr show scope global | awk '{iface=$2; sub(/@.*/, "", iface); print "nic=" iface "|" $3 "|" $4}'
+  ip -o addr show scope global | awk '{iface=$2; sub(/@.*/, "", iface); print iface "|" $3 "|" $4}' |
+  while IFS='|' read -r iface family address; do
+    [ -e "/sys/class/net/$iface/device" ] || continue
+    case "$iface" in
+      lo|docker*|veth*|br-*|virbr*|cni*|flannel*|cali*|tun*|tap*|wg*|tailscale*|zt*) continue ;;
+    esac
+    echo "nic=$iface|$family|$address"
+  done
 elif [ -r /proc/net/dev ]; then
-  awk -F: 'NR>2{gsub(/^[ \t]+|[ \t]+$/, "", $1); if($1!="lo") print "nic="$1"|link|"}' /proc/net/dev
+  for iface_path in /sys/class/net/*; do
+    [ -e "$iface_path/device" ] || continue
+    iface="${iface_path##*/}"
+    case "$iface" in
+      lo|docker*|veth*|br-*|virbr*|cni*|flannel*|cali*|tun*|tap*|wg*|tailscale*|zt*) continue ;;
+    esac
+    echo "nic=$iface|link|"
+  done
 fi
 if command -v ufw >/dev/null 2>&1; then
   echo "ufw_installed=true"
@@ -710,7 +724,8 @@ fi`
 		case "cpu_model":
 			traits["sys.cpu_model"] = value
 		case "nic":
-			if value != "" {
+			name, _, _ := strings.Cut(value, "|")
+			if value != "" && !isVirtualNetworkInterface(name) {
 				nics = append(nics, value)
 			}
 		case "ufw_installed":
@@ -723,6 +738,22 @@ fi`
 		traits["sys.network_interfaces"] = strings.Join(nics, ", ")
 	}
 	return traits, nil
+}
+
+func isVirtualNetworkInterface(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" || name == "lo" {
+		return true
+	}
+	for _, prefix := range []string{
+		"docker", "veth", "br-", "virbr", "cni", "flannel", "cali",
+		"tun", "tap", "wg", "tailscale", "zt",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type serverTaskLogSink struct {
