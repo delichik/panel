@@ -20,7 +20,7 @@
 | Nomad 状态、节点引导/加入、控制平面、反向代理 | [nomad.md](nomad.md) |
 | 应用定义、appspec、文件、修订、部署、运行时、日志、镜像更新 | [applications.md](applications.md) |
 | DNS 域名、Cloudflare、ACME 证书、证书续签 | [dns-certificates.md](dns-certificates.md) |
-| GitHub Actions、tag 发布、版本注入、容器镜像和 GitHub Release 创建 | [release-workflow.md](release-workflow.md) |
+| GitHub Actions、main 自动版本发布、版本注入、容器镜像和 GitHub Release 创建 | [release-workflow.md](release-workflow.md) |
 | 用户可见文案、翻译 key、语言设置、后端错误翻译 | [../i18n-guide.md](../i18n-guide.md)，[../i18n-translation-status.md](../i18n-translation-status.md) |
 
 ## 常见跨模块关系
