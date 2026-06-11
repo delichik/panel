@@ -185,6 +185,27 @@ func TestControlPlaneProjectsManagedAndUnmanagedNodes(t *testing.T) {
 	}
 }
 
+func TestControlPlanePrefersReadyDuplicateForManagedServer(t *testing.T) {
+	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	managed := createControlPlaneServer(t, svc.servers, credSvc, ctx, "managed", "10.0.0.32")
+	fake.status = StatusResponse{Connected: true, Leader: "10.0.0.1:4647"}
+	fake.nodes = []NodeListItem{
+		{ID: "node-ready", Name: "current-node", Status: "ready", Meta: map[string]string{"panel_server_id": managed.ID}},
+		{ID: "node-old", Name: "old-node", Status: "down", Meta: map[string]string{"panel_server_id": managed.ID}},
+	}
+
+	got, err := svc.ControlPlane(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	node := findProjectedNode(got.Nodes, ProjectedNodeManaged, managed.ID)
+	if node == nil || node.NodeID != "node-ready" || node.Status != "ready" {
+		t.Fatalf("expected ready duplicate to win, got %#v", got.Nodes)
+	}
+}
+
 func TestControlPlaneHidesServerAfterCompletedRemove(t *testing.T) {
 	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
 	defer cleanup()

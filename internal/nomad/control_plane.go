@@ -2,6 +2,7 @@ package nomad
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"panel/internal/server"
@@ -109,7 +110,9 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 			if taskCompletedRemove(latestTasks[serverID]) {
 				continue
 			}
-			nodesByServer[serverID] = node
+			if existing, ok := nodesByServer[serverID]; !ok || preferProjectedNomadNode(node, existing) {
+				nodesByServer[serverID] = node
+			}
 			managedServers[serverID] = struct{}{}
 		}
 	}
@@ -303,6 +306,23 @@ func serverIDForNode(node NodeListItem) string {
 		return ""
 	}
 	return node.Meta["panel_server_id"]
+}
+
+func preferProjectedNomadNode(candidate, existing NodeListItem) bool {
+	return nomadNodeStatusPriority(candidate.Status) > nomadNodeStatusPriority(existing.Status)
+}
+
+func nomadNodeStatusPriority(status string) int {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case "ready":
+		return 3
+	case "initializing":
+		return 2
+	case "down", "disconnected":
+		return 0
+	default:
+		return 1
+	}
 }
 
 func taskCompletedRemove(task tasks.Task) bool {

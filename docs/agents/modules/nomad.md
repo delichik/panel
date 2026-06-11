@@ -38,6 +38,9 @@
 - 本地或回环 Nomad 地址会使用项目托管的 TLS 资产；相关判断在 `internal/app/app.go`。
 - 引导/加入流程通过 SSH 在目标服务器执行远程命令，需要考虑支持系统、sudo、幂等性和失败恢复。
 - 引导/加入后的本地健康检查使用带单次硬超时的 `nomad agent-info` 检查本地 agent API，不使用可能等待集群响应的 `nomad status`；整体检查必须在任务阶段超时内结束并输出 systemd/journal 诊断。
+- client 加入或重部署不能只以本地 agent API 可用作为成功条件；还必须通过 Panel 使用的 Nomad API 确认匹配 `panel_server_id` 的节点已经注册且状态为 `ready`，超时则任务失败并记录最后的节点状态或 API 错误。
+- 生成的 server/client 配置必须显式写入运行时 `region` 和 `datacenter`；client 通过 `server_join.retry_join` 持续重试控制平面 RPC 地址，避免 server 短暂不可达时只留下本地存活但未注册的 agent。
+- 同一 `panel_server_id` 存在旧 `down` 节点和新 `ready` 节点时，控制平面投影必须优先展示 `ready` 节点，避免重部署后被旧节点记录覆盖为离线。
 - Nomad 运行时准备可以安装 Docker/CNI，但不得无条件重启 Docker；Docker 已运行时只做健康检查，未运行时才启动，避免 Panel 自身部署在目标节点 Docker 中时被中断。
 - server 引导、server 重部署和集群重建会临时切换 Panel 的 Nomad API 地址；只有 Panel 验证 TCP 4646/API 可达后才保留地址，失败必须回滚到旧地址。
 - 集群重建必须先引导并验证新的单 server 集群，再重置其他 Panel 托管节点，避免新 server 端口未开放时提前停止旧节点。
