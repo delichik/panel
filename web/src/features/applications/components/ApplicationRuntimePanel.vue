@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import {
   formatDateTime,
   t,
@@ -8,12 +8,28 @@ import {
 } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto, ApplicationRuntimeDto, NomadAllocationDto } from '@/types/api';
+import AppPagination from '@/components/AppPagination.vue';
+import { usePagination } from '@/composables/usePagination';
 
 const props = defineProps<{ application: ApplicationDto }>();
 const emit = defineEmits<{ logs: [{ allocId: string; task: string }] }>();
 const runtime = ref<ApplicationRuntimeDto | null>(null);
 const loading = ref(false);
 const error = ref('');
+const allocations = computed(() => runtime.value?.allocations ?? []);
+const evaluations = computed(() => runtime.value?.evaluations ?? []);
+const {
+  page: allocationPage,
+  pageSize: allocationPageSize,
+  total: allocationTotal,
+  pageItems: pagedAllocations,
+} = usePagination(allocations);
+const {
+  page: evaluationPage,
+  pageSize: evaluationPageSize,
+  total: evaluationTotal,
+  pageItems: pagedEvaluations,
+} = usePagination(evaluations);
 
 async function loadRuntime() {
   loading.value = true;
@@ -91,7 +107,7 @@ function openLogs(alloc: NomadAllocationDto, task = defaultTaskName(alloc)) {
       <v-table density="compact">
         <thead><tr><th>{{ t('applicationRuntime.allocation') }}</th><th>{{ t('applicationRuntime.node') }}</th><th>{{ t('applicationRuntime.group') }}</th><th>{{ t('applicationRuntime.client') }}</th><th>{{ t('applicationRuntime.desired') }}</th><th class="text-right">{{ t('applicationRuntime.logs') }}</th></tr></thead>
         <tbody>
-          <tr v-for="alloc in runtime.allocations" :key="alloc.ID">
+          <tr v-for="alloc in pagedAllocations" :key="alloc.ID">
             <td class="mono">{{ alloc.ID }}</td><td class="mono">{{ alloc.NodeID }}</td><td>{{ alloc.TaskGroup }}</td><td>{{ translateNomadRuntimeStatus(alloc.ClientStatus) }}</td><td>{{ translateNomadAllocationDesiredStatus(alloc.DesiredStatus) }}</td>
             <td class="text-right">
               <v-menu v-if="taskNames(alloc).length > 1">
@@ -108,15 +124,17 @@ function openLogs(alloc: NomadAllocationDto, task = defaultTaskName(alloc)) {
           <tr v-if="runtime.allocations.length === 0"><td colspan="6" class="text-center text-medium-emphasis py-4">{{ t('applicationRuntime.noAllocations') }}</td></tr>
         </tbody>
       </v-table>
+      <AppPagination v-model:page="allocationPage" v-model:page-size="allocationPageSize" :total="allocationTotal" />
       <v-table density="compact">
         <thead><tr><th>{{ t('applicationRuntime.evaluationColumn') }}</th><th>{{ t('taskCenter.type') }}</th><th>{{ t('taskCenter.status') }}</th></tr></thead>
         <tbody>
-          <tr v-for="evaluation in runtime.evaluations" :key="evaluation.ID">
+          <tr v-for="evaluation in pagedEvaluations" :key="evaluation.ID">
             <td class="mono">{{ evaluation.ID }}</td><td>{{ evaluation.Type }}</td><td>{{ translateNomadRuntimeStatus(evaluation.Status) }}</td>
           </tr>
           <tr v-if="runtime.evaluations.length === 0"><td colspan="3" class="text-center text-medium-emphasis py-4">{{ t('applicationRuntime.noEvaluations') }}</td></tr>
         </tbody>
       </v-table>
+      <AppPagination v-model:page="evaluationPage" v-model:page-size="evaluationPageSize" :total="evaluationTotal" />
     </div>
   </v-card>
 </template>

@@ -39,6 +39,8 @@ type cloudflareRecord struct {
 	Name    string `json:"name"`
 	Type    string `json:"type"`
 	Content string `json:"content"`
+	TTL     int    `json:"ttl"`
+	Proxied bool   `json:"proxied"`
 }
 
 func NewCloudflareProviderWithToken(apiToken string, httpClient *http.Client) *CloudflareProvider {
@@ -63,7 +65,7 @@ func (p *CloudflareProvider) ListRecords(ctx context.Context, zone string) ([]Re
 	}
 	out := make([]Record, 0, len(envelope.Result))
 	for _, record := range envelope.Result {
-		out = append(out, Record{ID: record.ID, Name: record.Name, Type: record.Type, Value: record.Content})
+		out = append(out, Record{ID: record.ID, Name: record.Name, Type: record.Type, Value: record.Content, TTL: record.TTL, Proxied: record.Proxied})
 	}
 	return out, nil
 }
@@ -73,12 +75,12 @@ func (p *CloudflareProvider) CreateRecord(ctx context.Context, zone string, reco
 	if err != nil {
 		return Record{}, err
 	}
-	body := map[string]any{"type": record.Type, "name": record.Name, "content": record.Value, "ttl": 120}
+	body := cloudflareRecordBody(record)
 	var envelope cloudflareEnvelope[cloudflareRecord]
 	if err := p.do(ctx, http.MethodPost, "/zones/"+zoneID+"/dns_records", body, &envelope); err != nil {
 		return Record{}, err
 	}
-	return Record{ID: envelope.Result.ID, Name: envelope.Result.Name, Type: envelope.Result.Type, Value: envelope.Result.Content}, nil
+	return cloudflareRecordToRecord(envelope.Result), nil
 }
 
 func (p *CloudflareProvider) UpdateRecord(ctx context.Context, zone string, id string, record RecordInput) (Record, error) {
@@ -86,12 +88,12 @@ func (p *CloudflareProvider) UpdateRecord(ctx context.Context, zone string, id s
 	if err != nil {
 		return Record{}, err
 	}
-	body := map[string]any{"type": record.Type, "name": record.Name, "content": record.Value, "ttl": 120}
+	body := cloudflareRecordBody(record)
 	var envelope cloudflareEnvelope[cloudflareRecord]
 	if err := p.do(ctx, http.MethodPut, "/zones/"+zoneID+"/dns_records/"+url.PathEscape(id), body, &envelope); err != nil {
 		return Record{}, err
 	}
-	return Record{ID: envelope.Result.ID, Name: envelope.Result.Name, Type: envelope.Result.Type, Value: envelope.Result.Content}, nil
+	return cloudflareRecordToRecord(envelope.Result), nil
 }
 
 func (p *CloudflareProvider) DeleteRecord(ctx context.Context, zone string, id string) error {
@@ -221,6 +223,22 @@ func (p *CloudflareProvider) do(ctx context.Context, method, endpoint string, bo
 		return panelerr.BadGateway("cloudflare_api_error", failed)
 	}
 	return nil
+}
+
+func cloudflareRecordToRecord(record cloudflareRecord) Record {
+	return Record{ID: record.ID, Name: record.Name, Type: record.Type, Value: record.Content, TTL: record.TTL, Proxied: record.Proxied}
+}
+
+func cloudflareRecordBody(record RecordInput) map[string]any {
+	ttl := record.TTL
+	if ttl <= 0 {
+		ttl = 120
+	}
+	body := map[string]any{"type": record.Type, "name": record.Name, "content": record.Value, "ttl": ttl}
+	if record.Proxied != nil {
+		body["proxied"] = *record.Proxied
+	}
+	return body
 }
 
 func cloudflareError(out any) string {

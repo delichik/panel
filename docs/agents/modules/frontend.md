@@ -29,6 +29,8 @@
 - 新增或修改用户可见文案必须走 `useI18n()` 和 `web/src/i18n/index.ts`，并更新多语言状态文档。
 - 持久化 UI 配置只保存稳定值，不保存已翻译的标题或说明。
 - 宽表格依赖全局 `.v-table__wrapper` 横向滚动；页面卡片可以隐藏外溢，但不要用固定宽度让整页在窄屏被撑开。
+- 用户可见的数据列表应使用共享分页组件 `web/src/components/AppPagination.vue`；数组型接口优先通过 `web/src/composables/usePagination.ts` 做前端分页，已有服务端分页接口保留服务端分页请求。
+- 页面或列表的初次网络加载应使用共享 `web/src/components/PageLoadingState.vue`；已有内容后的刷新可保留卡片 `:loading` 或按钮 loading，避免遮挡当前内容。
 - 页面级多栏布局优先使用 `minmax(0, 1fr)` 和移动端断点；工具栏、弹窗操作区、表单重复行在 760px 左右必须能换行或纵向堆叠。
 
 ## 常见页面对应关系
@@ -38,7 +40,7 @@
 - 软件包：`web/src/features/packages/pages/PackageUpdatesPage.vue`
 - 防火墙：`web/src/features/firewall/pages/FirewallPage.vue`
 - 应用：`web/src/features/applications/`
-- DNS 域名：`web/src/features/dns/pages/DomainsPage.vue`；不要新增或恢复 DNS 记录管理入口。
+- DNS 域名与记录：`web/src/features/dns/pages/DomainsPage.vue`；页面左侧选择域名，右侧展示域名详情和 Cloudflare DNS 记录表。
 - 证书：`web/src/features/certificates/pages/CertificatesPage.vue`
 - Nomad：`web/src/features/nomad/`；只保留设置、加入和节点控制平面入口，不恢复 raw jobs/deployments 清单入口。
 - 任务中心：`web/src/features/tasks/`

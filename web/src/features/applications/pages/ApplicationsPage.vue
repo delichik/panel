@@ -4,6 +4,9 @@ import { useRoute, useRouter } from 'vue-router';
 import { t } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
+import { usePagination } from '@/composables/usePagination';
 import ApplicationDetail from '../components/ApplicationDetail.vue';
 import ApplicationEditor from '../components/ApplicationEditor.vue';
 
@@ -25,6 +28,12 @@ const selectedApplication = computed(() => applications.value.find((app) => app.
 const totalCount = computed(() => applications.value.length);
 const enabledCount = computed(() => applications.value.filter((app) => app.enabled).length);
 const attentionCount = computed(() => applications.value.filter((app) => ['failed', 'pending', 'unknown'].includes(app.runtimeStatus || '') || app.lastError).length);
+const {
+  page,
+  pageSize,
+  total,
+  pageItems: pagedApplications,
+} = usePagination(applications);
 
 function actionLabel(action: 'deploy' | 'stop' | 'restart' | 'delete') {
   if (action === 'deploy') return t('common.deploy');
@@ -138,6 +147,9 @@ onMounted(load);
       </div>
     </v-alert>
 
+    <PageLoadingState v-if="loading && applications.length === 0" min-height="340px" />
+
+    <template v-else>
     <div class="summary-strip">
       <v-card variant="outlined" class="summary-card">
         <div class="summary-icon surface-primary"><v-icon size="18">mdi-apps</v-icon></div>
@@ -170,7 +182,7 @@ onMounted(load);
           </thead>
           <tbody>
             <tr v-if="applications.length === 0"><td colspan="8" class="text-center py-8 text-medium-emphasis">{{ t('applicationsPage.noApplications') }}</td></tr>
-            <tr v-for="app in applications" :key="app.id" class="application-row cursor-pointer" :class="{ selected: selectedId === app.id }" @click="selectedId = app.id">
+            <tr v-for="app in pagedApplications" :key="app.id" class="application-row cursor-pointer" :class="{ selected: selectedId === app.id }" @click="selectedId = app.id">
               <td>
                 <div class="name-line">
                   <span class="status-dot" :class="statusColor(app.runtimeStatus)" />
@@ -198,6 +210,7 @@ onMounted(load);
             </tr>
           </tbody>
         </v-table>
+        <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
       </v-card>
 
       <div class="detail-column">
@@ -208,6 +221,7 @@ onMounted(load);
         </v-card>
       </div>
     </div>
+    </template>
 
     <ApplicationEditor :application="editingApplication" :open="editorOpen" @close="editorOpen = false" @saved="handleSaved" />
 

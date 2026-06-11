@@ -5,6 +5,9 @@ import { formatDateTime, t } from '@/i18n';
 import { serversApi, type CredentialInput, type ServerInput, type ServerProbeDto } from '@/api/servers';
 import { nomadApi } from '@/api/nomad';
 import type { CredentialDto, NomadControlPlaneDto, ProjectedNomadNodeDto, ServerDto } from '@/types/api';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
+import { usePagination } from '@/composables/usePagination';
 
 const route = useRoute();
 const servers = ref<ServerDto[]>([]);
@@ -61,6 +64,18 @@ const reachableCount = computed(() => servers.value.filter((server) => server.re
 const managedCount = computed(() => servers.value.filter((server) => nomadProjectionForServer(server.id)?.kind === 'managed').length);
 const credentialRows = computed(() => credentials.value ?? []);
 const serverCredentialMissing = computed(() => !serverForm.credentialId);
+const {
+  page: serverPage,
+  pageSize: serverPageSize,
+  total: serverTotal,
+  pageItems: pagedServers,
+} = usePagination(servers);
+const {
+  page: credentialPage,
+  pageSize: credentialPageSize,
+  total: credentialTotal,
+  pageItems: pagedCredentialRows,
+} = usePagination(credentialRows);
 
 interface NetworkAddress {
   family: string;
@@ -428,6 +443,9 @@ onMounted(load);
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
     <template v-if="activeTab === 'servers'">
+      <PageLoadingState v-if="loading && servers.length === 0" min-height="340px" />
+
+      <template v-else>
       <div class="summary-strip">
         <v-card variant="outlined" class="summary-card">
           <div class="summary-icon surface-primary"><v-icon size="18">mdi-server</v-icon></div>
@@ -463,7 +481,7 @@ onMounted(load);
 
           <div class="server-list-body">
             <button
-              v-for="server in servers"
+              v-for="server in pagedServers"
               :key="server.id"
               class="server-row"
               :class="{ selected: selectedServerId === server.id }"
@@ -483,6 +501,7 @@ onMounted(load);
               <div class="text-body-2 text-medium-emphasis">{{ t('serversPage.noServers') }}</div>
             </div>
           </div>
+          <AppPagination v-model:page="serverPage" v-model:page-size="serverPageSize" :total="serverTotal" />
         </v-card>
 
         <div class="detail-column">
@@ -616,7 +635,10 @@ onMounted(load);
           </v-card>
         </div>
       </div>
+      </template>
     </template>
+
+    <PageLoadingState v-else-if="loading && credentialRows.length === 0" min-height="320px" />
 
     <v-card v-else variant="outlined" class="credential-table-card">
       <div class="app-card-header">
@@ -643,7 +665,7 @@ onMounted(load);
           <tr v-if="credentialRows.length === 0">
             <td colspan="4" class="text-center py-6 text-medium-emphasis">{{ t('serversPage.noCredentials') }}</td>
           </tr>
-          <tr v-for="row in credentialRows" :key="row.id">
+          <tr v-for="row in pagedCredentialRows" :key="row.id">
             <td class="font-weight-bold">{{ row.name }}</td>
             <td>{{ row.username }}</td>
             <td><v-chip size="small" label color="secondary" variant="tonal">{{ row.type }}</v-chip></td>
@@ -656,6 +678,7 @@ onMounted(load);
           </tr>
         </tbody>
       </v-table>
+      <AppPagination v-model:page="credentialPage" v-model:page-size="credentialPageSize" :total="credentialTotal" />
     </v-card>
 
     <v-dialog v-model="serverDialog" width="640">

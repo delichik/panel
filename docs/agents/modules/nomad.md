@@ -53,6 +53,7 @@
 - 直接由 goroutine 执行的 Nomad 节点操作创建任务后必须先落 `running` 再返回 `taskId`，避免 Panel 进程中断后任务永久停在 `queued`。
 - 前端 Nomad 节点页提交加入、重部署、重建、切换或移除后必须保留 `taskId`，并给出跳转任务中心的入口。
 - 首个 server 引导从设置页跳回节点页时必须保留 `taskId`，节点页应展示任务中心入口。
+- Nomad 节点页不展示“已连接到 leader”的成功横幅；connected 状态只通过节点列表和统计卡片体现，避免正常状态提示占用页面注意力。
 - 移除 Nomad 节点属于高风险操作，前端必须先显示确认对话框。
 - 不恢复 raw Nomad jobs/deployments/evaluations/services 导航、页面或公开 API；应用运行态只通过应用模块读取单个 job 的 deployment、evaluation 和 allocation 信息。
 - Nomad 控制平面投影依赖最新 `nomad_*` 任务，任务查询需要保持最新优先，避免旧任务分页遮挡新近的引导、加入、重建、移除和 server 切换操作。

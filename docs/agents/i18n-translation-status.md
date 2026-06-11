@@ -9,6 +9,8 @@
 - `web/src/layouts/AppLayout.vue`
   - 移动端导航入口文案已接入 `web/src/i18n/index.ts`
   - 未启用的 DNS 记录导航入口已移除，对应 `layout.nav.records` 词条不再保留。
+- `web/src/features/dns/pages/DomainsPage.vue`
+  - DNS 域名详情、Cloudflare 记录列表、记录创建/编辑/删除和 TTL/代理状态文案已接入 `web/src/i18n/index.ts`。
 - `web/src/features/settings/pages/SettingsPage.vue`
   - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
   - 设置分类子菜单、通用设置、安全设置、Nomad 设置、证书设置、系统信息文案已接入 `web/src/i18n/index.ts`
@@ -29,6 +31,10 @@
 - `web/src/features/tasks/pages/TaskCenterPage.vue`
   - 任务类型名称、类型筛选特殊选项、搜索按钮和多选筛选占位文案已接入 `web/src/i18n/index.ts`
   - 操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。
+- `web/src/components/AppPagination.vue`
+  - 共享分页组件的每页条数与总数文案已接入 `web/src/i18n/index.ts`。
+- `web/src/components/PageLoadingState.vue`
+  - 共享加载组件文案 `common.loading` 已接入 `web/src/i18n/index.ts`，英文和简体中文均已补齐。
 - `web/src/layouts/AppLayout.vue`、`web/src/features/settings/pages/SettingsPage.vue`
   - 当前版本、最新版本弱提示和系统版本字段已接入 `web/src/i18n/index.ts`。
 - raw Nomad jobs/deployments 清单入口已移除，对应页面文案和路由词条不再保留。

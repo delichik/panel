@@ -6,6 +6,7 @@ import { useAuthStore } from '@/stores/auth';
 import { useSettingsStore } from '@/stores/settings';
 import { systemApi } from '@/api/system';
 import type { RuntimeSettingsDto, RuntimeSettingsUpdate, SystemVersionDto, TokenExpiration } from '@/types/api';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 
 type SettingsCategory = 'general' | 'security' | 'nomad' | 'certificates' | 'system';
 
@@ -206,7 +207,9 @@ onMounted(loadSettings);
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
     <v-card :loading="loading" variant="outlined" class="settings-surface pa-6">
-      <template v-if="settings">
+      <PageLoadingState v-if="loading && !settings" min-height="320px" />
+
+      <template v-else-if="settings">
         <div class="settings-header">
           <div>
             <div class="text-overline text-medium-emphasis">{{ t('layout.nav.settings') }}</div>

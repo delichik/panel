@@ -36,6 +36,76 @@ func TestDomainListRedactsAPITokenAndResolveKeepsSecret(t *testing.T) {
 	}
 }
 
+func TestRecordOperationsUseResolvedCloudflareProvider(t *testing.T) {
+	svc, closeStore := newDomainTestService(t)
+	defer closeStore()
+
+	domain, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "secret", AccountID: "acct_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeDNSProvider{records: []Record{{ID: "rec_1", Name: "www.example.com", Type: "A", Value: "192.0.2.1", TTL: 120}}}
+	svc.providerFactory = func(resolved ResolvedDomain) Provider {
+		if resolved.APIToken != "secret" || resolved.AccountID != "acct_1" {
+			t.Fatalf("resolved provider credentials = %#v", resolved)
+		}
+		return fake
+	}
+
+	records, err := svc.ListRecords(context.Background(), domain.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 1 || records[0].ID != "rec_1" {
+		t.Fatalf("records = %#v", records)
+	}
+	proxied := true
+	created, err := svc.CreateRecord(context.Background(), domain.ID, RecordInput{Name: "app", Type: "a", Value: "192.0.2.2", TTL: 1, Proxied: &proxied})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Name != "app" || created.Type != "A" || !created.Proxied {
+		t.Fatalf("created = %#v", created)
+	}
+	updated, err := svc.UpdateRecord(context.Background(), domain.ID, "rec_1", RecordInput{Name: "www", Type: "CNAME", Value: "target.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != "rec_1" || updated.Type != "CNAME" {
+		t.Fatalf("updated = %#v", updated)
+	}
+	if err := svc.DeleteRecord(context.Background(), domain.ID, "rec_1"); err != nil {
+		t.Fatal(err)
+	}
+	if fake.deletedID != "rec_1" {
+		t.Fatalf("deletedID = %q", fake.deletedID)
+	}
+}
+
+func TestRecordInputValidation(t *testing.T) {
+	tests := []struct {
+		name string
+		in   RecordInput
+	}{
+		{name: "bad name", in: RecordInput{Name: "-bad", Type: "A", Value: "192.0.2.1"}},
+		{name: "bad type", in: RecordInput{Name: "www", Type: "SOA", Value: "ns.example.com"}},
+		{name: "empty value", in: RecordInput{Name: "www", Type: "A", Value: ""}},
+		{name: "negative ttl", in: RecordInput{Name: "www", Type: "A", Value: "192.0.2.1", TTL: -1}},
+		{name: "proxied unsupported", in: RecordInput{Name: "txt", Type: "TXT", Value: "hello", Proxied: boolPtr(true)}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := validateRecordInput(tt.in); err == nil {
+				t.Fatalf("expected validation error")
+			}
+		})
+	}
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
 func newDomainTestService(t *testing.T) (*Service, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -48,4 +118,26 @@ func newDomainTestService(t *testing.T) (*Service, func()) {
 		t.Fatal(err)
 	}
 	return NewService(store.AppDB()), func() { _ = store.Close() }
+}
+
+type fakeDNSProvider struct {
+	records   []Record
+	deletedID string
+}
+
+func (p *fakeDNSProvider) ListRecords(ctx context.Context, zone string) ([]Record, error) {
+	return p.records, nil
+}
+
+func (p *fakeDNSProvider) CreateRecord(ctx context.Context, zone string, record RecordInput) (Record, error) {
+	return Record{ID: "rec_new", Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Proxied: record.Proxied != nil && *record.Proxied}, nil
+}
+
+func (p *fakeDNSProvider) UpdateRecord(ctx context.Context, zone string, id string, record RecordInput) (Record, error) {
+	return Record{ID: id, Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Proxied: record.Proxied != nil && *record.Proxied}, nil
+}
+
+func (p *fakeDNSProvider) DeleteRecord(ctx context.Context, zone string, id string) error {
+	p.deletedID = id
+	return nil
 }

@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import type { ServerDto } from '@/types/api';
 import { useI18n } from '@/i18n';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
+import { usePagination } from '@/composables/usePagination';
 
-defineProps<{
+const props = defineProps<{
   modelValue: string;
   servers: ServerDto[];
   loading?: boolean;
@@ -12,6 +15,12 @@ const emit = defineEmits<{
   'update:modelValue': [value: string];
 }>();
 const { t } = useI18n();
+const {
+  page,
+  pageSize,
+  total,
+  pageItems: pagedServers,
+} = usePagination(() => props.servers);
 
 // Extract 1-min load average from raw loadAverage string (e.g. "0.15 0.08 0.02")
 function getOneMinLoad(loadAverage: string | null | undefined): string {
@@ -31,9 +40,10 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
     </v-card-item>
 
     <v-card-text class="flex-grow-1 overflow-y-auto pa-3">
-      <div v-if="servers.length" class="server-cards d-flex flex-column" style="gap: 10px;">
+      <PageLoadingState v-if="loading && servers.length === 0" min-height="220px" />
+      <div v-else-if="servers.length" class="server-cards d-flex flex-column" style="gap: 10px;">
         <div
-          v-for="server in servers"
+          v-for="server in pagedServers"
           :key="server.id"
           class="server-item"
           :class="{ 'selected': server.id === modelValue }"
@@ -56,6 +66,7 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
         <div class="text-caption">{{ t('shared.serverSelector.empty') }}</div>
       </div>
     </v-card-text>
+    <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
   </v-card>
 </template>
 

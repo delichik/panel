@@ -8,6 +8,8 @@ import {
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ServerDto } from '@/types/api';
+import AppPagination from '@/components/AppPagination.vue';
+import { usePagination } from '@/composables/usePagination';
 
 const props = defineProps<{ application: ApplicationDto | null; open: boolean }>();
 const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
@@ -59,6 +61,12 @@ const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name} (${server.host})`,
   value: server.id,
 })));
+const {
+  page: filePage,
+  pageSize: filePageSize,
+  total: fileTotal,
+  pageItems: pagedFiles,
+} = usePagination(files);
 
 watch(() => props.open, (open) => {
   if (!open) return;
@@ -266,8 +274,9 @@ async function addFile() {
   fileForm.file = null;
 }
 
-function removeFile(index: number) {
-  files.value.splice(index, 1);
+function removeFile(file: EditorFile) {
+  const index = files.value.findIndex((item) => item.id === file.id && item.path === file.path);
+  if (index >= 0) files.value.splice(index, 1);
 }
 
 function sizeLabel(size: number) {
@@ -731,16 +740,17 @@ async function save(deploy = false) {
                 <v-table density="compact" class="mt-3">
                   <thead><tr><th>{{ t('common.path') }}</th><th>{{ t('applicationEditor.kind') }}</th><th>{{ t('common.size') }}</th><th>{{ t('common.sha256') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
                   <tbody>
-                    <tr v-for="(file, index) in files" :key="`${file.id}:${file.path}`">
+                    <tr v-for="file in pagedFiles" :key="`${file.id}:${file.path}`">
                       <td class="mono text-truncate">{{ file.path }}</td>
                       <td><v-chip size="small" variant="tonal" label>{{ translateApplicationFileKind(file.kind) }}</v-chip></td>
                       <td>{{ sizeLabel(file.size) }}</td>
                       <td class="mono text-truncate hash-cell">{{ file.sha256 }}</td>
-                      <td class="text-right"><v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeFile(index)" /></td>
+                      <td class="text-right"><v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeFile(file)" /></td>
                     </tr>
                     <tr v-if="files.length === 0"><td colspan="5" class="text-center text-medium-emphasis py-4">{{ t('applicationEditor.noFiles') }}</td></tr>
                   </tbody>
                 </v-table>
+                <AppPagination v-model:page="filePage" v-model:page-size="filePageSize" :total="fileTotal" />
 
                 <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
                 <div v-for="(mount, index) in specForm.mounts" :key="index" class="repeat-row mount-row">

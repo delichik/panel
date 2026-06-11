@@ -2,8 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import ServerSelector from '@/components/ServerSelector.vue';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 import { packagesApi } from '@/api/packages';
 import { serversApi } from '@/api/servers';
+import { usePagination } from '@/composables/usePagination';
 import type { PackageUpdatesDto, ServerDto } from '@/types/api';
 
 const servers = ref<ServerDto[]>([]);
@@ -41,6 +44,13 @@ const operationBlocked = computed(() => {
 });
 
 const selectedPackages = computed(() => (updates.value?.updates ?? []).filter(item => selectedPackageNames.value.includes(item.name)));
+const updateRows = computed(() => updates.value?.updates ?? []);
+const {
+  page,
+  pageSize,
+  total,
+  pageItems: pagedUpdates,
+} = usePagination(updateRows);
 const refreshInProgress = computed(() => packageRefreshRunning.value || updates.value?.refreshing === true);
 const selectAll = computed({
   get() {
@@ -224,7 +234,8 @@ onBeforeUnmount(stopRefreshPolling);
         </v-card-item>
 
         <v-card-text class="pa-4">
-          <v-table class="text-left" style="background: transparent;">
+          <PageLoadingState v-if="loadingUpdates && !updates" min-height="280px" />
+          <v-table v-else class="text-left" style="background: transparent;">
             <thead>
               <tr>
                 <th style="width: 48px;">
@@ -240,7 +251,7 @@ onBeforeUnmount(stopRefreshPolling);
               <tr v-if="!updates || updates.updates.length === 0">
                 <td colspan="5" class="text-center py-6 text-medium-emphasis">{{ t('packagesPage.noPackages') }}</td>
               </tr>
-              <tr v-for="row in updates?.updates ?? []" :key="row.name">
+              <tr v-for="row in pagedUpdates" :key="row.name">
                 <td>
                   <v-checkbox-btn v-model="selectedPackageNames" :value="row.name" color="primary" :disabled="operationBlocked" />
                 </td>
@@ -251,6 +262,7 @@ onBeforeUnmount(stopRefreshPolling);
               </tr>
             </tbody>
           </v-table>
+          <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
         </v-card-text>
       </v-card>
     </div>
