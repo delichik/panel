@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"panel/internal/config"
 	"panel/internal/i18n"
@@ -25,6 +26,11 @@ type RuntimeCertificateSettings struct {
 	DNSPropagationDelaySeconds int    `json:"dnsPropagationDelaySeconds"`
 }
 
+type RuntimeBrandingSettings struct {
+	LoginTitle    string `json:"loginTitle"`
+	LoginSubtitle string `json:"loginSubtitle"`
+}
+
 type RuntimeUpdate struct {
 	MetricsRetentionDays             int                         `json:"metricsRetentionDays"`
 	MetricsCollectionIntervalSeconds int                         `json:"metricsCollectionIntervalSeconds"`
@@ -32,6 +38,7 @@ type RuntimeUpdate struct {
 	TokenExpiration                  string                      `json:"tokenExpiration"`
 	Language                         string                      `json:"language"`
 	RemoteCommandTimeoutSeconds      int                         `json:"remoteCommandTimeoutSeconds"`
+	Branding                         *RuntimeBrandingSettings    `json:"branding"`
 	Nomad                            *RuntimeNomadSettings       `json:"nomad"`
 	Certificates                     *RuntimeCertificateSettings `json:"certificates"`
 }
@@ -47,6 +54,7 @@ type RuntimeSettings struct {
 	TokenExpiration                  string                     `json:"tokenExpiration"`
 	Language                         string                     `json:"language"`
 	RemoteCommandTimeoutSeconds      int                        `json:"remoteCommandTimeoutSeconds"`
+	Branding                         RuntimeBrandingSettings    `json:"branding"`
 	Nomad                            RuntimeNomadSettings       `json:"nomad"`
 	Certificates                     RuntimeCertificateSettings `json:"certificates"`
 	JWTSecret                        string                     `json:"-"`
@@ -57,6 +65,8 @@ const (
 	RuntimeSettingTokenExpiration                      = "tokenExpiration"
 	RuntimeSettingJWTSecret                            = "jwtSecret"
 	RuntimeSettingRemoteCommandTimeoutSeconds          = "remoteCommandTimeoutSeconds"
+	RuntimeSettingBrandingLoginTitle                   = "branding.loginTitle"
+	RuntimeSettingBrandingLoginSubtitle                = "branding.loginSubtitle"
 	RuntimeSettingNomadNamespace                       = "nomad.namespace"
 	RuntimeSettingNomadRegion                          = "nomad.region"
 	RuntimeSettingNomadDatacenter                      = "nomad.datacenter"
@@ -159,6 +169,13 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	if input.Certificates != nil {
 		certSettings = *input.Certificates
 	}
+	brandingSettings := current.Branding
+	if input.Branding != nil {
+		brandingSettings = RuntimeBrandingSettings{
+			LoginTitle:    strings.TrimSpace(input.Branding.LoginTitle),
+			LoginSubtitle: strings.TrimSpace(input.Branding.LoginSubtitle),
+		}
+	}
 	next := RuntimeSettings{
 		ListenAddress:                    current.ListenAddress,
 		AppDatabase:                      current.AppDatabase,
@@ -170,6 +187,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		TokenExpiration:                  NormalizeTokenExpiration(input.TokenExpiration),
 		Language:                         i18n.NormalizeLocale(input.Language),
 		RemoteCommandTimeoutSeconds:      input.RemoteCommandTimeoutSeconds,
+		Branding:                         brandingSettings,
 		Nomad:                            nomadSettings,
 		Certificates:                     certSettings,
 		JWTSecret:                        current.JWTSecret,
@@ -188,6 +206,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.TokenExpiration = next.TokenExpiration
 	s.rt.Language = next.Language
 	s.rt.RemoteCommandTimeoutSeconds = next.RemoteCommandTimeoutSeconds
+	s.rt.Branding = next.Branding
 	s.rt.Nomad = next.Nomad
 	s.rt.Certificates = next.Certificates
 	out := s.rt
@@ -287,6 +306,10 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.RemoteCommandTimeoutSeconds = n
 			}
+		case RuntimeSettingBrandingLoginTitle:
+			next.Branding.LoginTitle = value
+		case RuntimeSettingBrandingLoginSubtitle:
+			next.Branding.LoginSubtitle = value
 		case RuntimeSettingNomadNamespace:
 			next.Nomad.Namespace = value
 		case RuntimeSettingNomadRegion:
@@ -335,6 +358,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         i18n.DefaultLocale(),
 		RemoteCommandTimeoutSeconds:      remoteTimeout,
+		Branding:                         RuntimeBrandingSettings{},
 		Nomad: RuntimeNomadSettings{
 			Namespace:  firstNonEmpty(strings.TrimSpace(cfg.Nomad.Namespace), "default"),
 			Region:     firstNonEmpty(strings.TrimSpace(cfg.Nomad.Region), "global"),
@@ -357,6 +381,8 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		RuntimeSettingTokenExpiration:                      settings.TokenExpiration,
 		"language":                                         settings.Language,
 		RuntimeSettingRemoteCommandTimeoutSeconds:          strconv.Itoa(settings.RemoteCommandTimeoutSeconds),
+		RuntimeSettingBrandingLoginTitle:                   settings.Branding.LoginTitle,
+		RuntimeSettingBrandingLoginSubtitle:                settings.Branding.LoginSubtitle,
 		RuntimeSettingNomadNamespace:                       settings.Nomad.Namespace,
 		RuntimeSettingNomadRegion:                          settings.Nomad.Region,
 		RuntimeSettingNomadDatacenter:                      settings.Nomad.Datacenter,
@@ -389,6 +415,12 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	}
 	if settings.RemoteCommandTimeoutSeconds < 1 {
 		return panelerr.Validation("invalid_remote_command_timeout", "Remote command timeout must be at least 1 second")
+	}
+	if utf8.RuneCountInString(settings.Branding.LoginTitle) > 80 {
+		return panelerr.Validation("invalid_branding_login_title", "Login title must be 80 characters or fewer")
+	}
+	if utf8.RuneCountInString(settings.Branding.LoginSubtitle) > 240 {
+		return panelerr.Validation("invalid_branding_login_subtitle", "Login subtitle must be 240 characters or fewer")
 	}
 	if strings.TrimSpace(settings.Nomad.Namespace) == "" {
 		return panelerr.Validation("invalid_nomad_namespace", "Nomad namespace is required")

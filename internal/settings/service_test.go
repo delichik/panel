@@ -3,6 +3,7 @@ package settings
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"panel/internal/config"
@@ -37,17 +38,25 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 		TokenExpiration:                  TokenExpiration5Days,
 		Language:                         "zh-CN",
 		RemoteCommandTimeoutSeconds:      45,
+		Branding:                         &RuntimeBrandingSettings{LoginTitle: "Operations", LoginSubtitle: "Manage infrastructure"},
 		Nomad:                            &RuntimeNomadSettings{Namespace: "apps", Region: "eu", Datacenter: "dc2"},
 		Certificates:                     &RuntimeCertificateSettings{Email: "admin@example.com", DNSPropagationDelaySeconds: 10},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.RemoteCommandTimeoutSeconds != 45 || got.Nomad.Namespace != "apps" || got.Nomad.Region != "eu" || got.Nomad.Datacenter != "dc2" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
+	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Nomad.Namespace != "apps" || got.Nomad.Region != "eu" || got.Nomad.Datacenter != "dc2" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
 	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {
 		t.Fatalf("runtime cache did not update: %#v", got)
+	}
+	reloaded, err := NewService(svc.db, svc.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.Runtime().Branding != got.Branding {
+		t.Fatalf("branding settings were not persisted: %#v", reloaded.Runtime().Branding)
 	}
 }
 
@@ -105,6 +114,21 @@ func TestRuntimeSettingsRejectInvalidTokenExpiration(t *testing.T) {
 		CleanupSchedule:                  "daily",
 		TokenExpiration:                  "2h",
 		Language:                         "en",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestRuntimeSettingsRejectLongBranding(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.Update(context.Background(), RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		CleanupSchedule:                  "daily",
+		TokenExpiration:                  DefaultTokenExpiration,
+		Language:                         "en",
+		Branding:                         &RuntimeBrandingSettings{LoginTitle: strings.Repeat("a", 81)},
 	})
 	if err == nil {
 		t.Fatal("expected validation error")

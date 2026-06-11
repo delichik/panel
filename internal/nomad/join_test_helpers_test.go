@@ -2,6 +2,8 @@ package nomad
 
 import (
 	"database/sql"
+	"encoding/json"
+	"net"
 	"sync"
 	"testing"
 
@@ -41,6 +43,26 @@ func setJoinTestServerState(t *testing.T, svc *server.Service, serverID, osID, o
 		serverID,
 	)
 	if err != nil {
+		t.Fatal(err)
+	}
+	var host, rawTraits string
+	if err := db.QueryRow(`SELECT host,traits FROM servers WHERE id=?`, serverID).Scan(&host, &rawTraits); err != nil {
+		t.Fatal(err)
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	if ip := net.ParseIP(host); ip != nil {
+		suffix := "/24"
+		family := "inet"
+		if ip.To4() == nil {
+			suffix = "/64"
+			family = "inet6"
+		}
+		traits["sys.network_interfaces"] = "eth0|" + family + "|" + ip.String() + suffix
+		traits[TraitServerAdvertiseAddress] = ip.String()
+	}
+	traitsJSON, _ := json.Marshal(traits)
+	if _, err := db.Exec(`UPDATE servers SET traits=? WHERE id=?`, string(traitsJSON), serverID); err != nil {
 		t.Fatal(err)
 	}
 }

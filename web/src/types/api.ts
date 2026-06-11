@@ -354,7 +354,7 @@ export interface NomadStatusDto {
   leader?: string;
 }
 
-export type NomadControlPlaneStatus = 'unconfigured' | 'bootstrapping' | 'connected' | 'degraded';
+export type NomadControlPlaneStatus = 'unconfigured' | 'bootstrapping' | 'connected' | 'degraded' | 'migration_required';
 export type ProjectedNomadNodeKind = 'managed' | 'missing' | 'pending' | 'unmanaged';
 export type ProjectedNomadNodeRole = 'server' | 'client' | 'unknown';
 export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'registering' | 'rebuilding' | 'removing' | 'ready' | 'down' | 'failed' | 'missing' | 'nomad_unreachable' | 'unmanaged' | string;
@@ -562,6 +562,7 @@ export interface RuntimeSettingsDto {
   tokenExpiration: TokenExpiration;
   language: string;
   remoteCommandTimeoutSeconds: number;
+  branding: RuntimeBrandingSettingsDto;
   nomad: RuntimeNomadSettingsDto;
   certificates: RuntimeCertificateSettingsDto;
   jwtSecretConfigured: boolean;
@@ -589,6 +590,11 @@ export interface RuntimeCertificateSettingsDto {
   dnsPropagationDelaySeconds: number;
 }
 
+export interface RuntimeBrandingSettingsDto {
+  loginTitle: string;
+  loginSubtitle: string;
+}
+
 export interface RuntimeSettingsUpdate {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
@@ -596,6 +602,7 @@ export interface RuntimeSettingsUpdate {
   tokenExpiration: TokenExpiration;
   language: string;
   remoteCommandTimeoutSeconds: number;
+  branding: RuntimeBrandingSettingsDto;
   nomad: RuntimeNomadSettingsDto;
   certificates: RuntimeCertificateSettingsDto;
 }

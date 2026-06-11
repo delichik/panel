@@ -24,6 +24,7 @@ export interface RedeployNomadNodeInput {
 
 export interface NomadServerInput {
   serverId: string;
+  advertiseAddress: string;
 }
 
 export interface ReverseProxyInput {
@@ -63,8 +64,8 @@ export function createNomadApi(client: ApiClient = apiClient) {
     joinServer(serverId: string) {
       return client.post<TaskCreatedDto>('/nomad/join', { serverId });
     },
-    bootstrapServer(serverId: string) {
-      return client.post<TaskCreatedDto>('/nomad/bootstrap-server', { serverId });
+    bootstrapServer(input: NomadServerInput) {
+      return client.post<TaskCreatedDto>('/nomad/bootstrap-server', input);
     },
     redeployNode(input: RedeployNomadNodeInput) {
       return client.post<TaskCreatedDto>('/nomad/redeploy-node', input);

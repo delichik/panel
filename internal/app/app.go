@@ -127,6 +127,7 @@ func New(cfg config.Config) (*App, error) {
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
 	applicationSvc.SetReverseProxyReconciler(nomadJoinSvc)
 	nomadJoinSvc.SetApplicationProxySource(applicationSvc)
+	nomadJoinSvc.SetEnabledApplicationRestorer(applicationSvc)
 	nomadJoinSvc.SetReverseProxyCertificateSource(certSvc)
 	certSvc.SetApplicationRefresher(applicationSvc)
 	nomadJoinSvc.RestoreNomadAddressFromBootstrap(context.Background())
@@ -156,6 +157,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
 	a.mux.Handle("POST /api/v1/auth/jwt-secret", a.auth.RequireAuth(http.HandlerFunc(authH.UpdateJWTSecret)))
 	a.mux.HandleFunc("GET /api/v1/auth/session", authH.Session)
+	a.mux.HandleFunc("GET /api/v1/settings/public-branding", settingsH.PublicBranding)
 
 	api := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path

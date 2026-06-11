@@ -39,6 +39,10 @@ const form = reactive<RuntimeSettingsUpdate>({
   tokenExpiration: '1d',
   language: 'en',
   remoteCommandTimeoutSeconds: 30,
+  branding: {
+    loginTitle: '',
+    loginSubtitle: '',
+  },
   nomad: {
     namespace: 'default',
     region: 'global',
@@ -74,6 +78,7 @@ function syncForm(next: RuntimeSettingsDto) {
   form.tokenExpiration = next.tokenExpiration || '1d';
   form.language = next.language;
   form.remoteCommandTimeoutSeconds = next.remoteCommandTimeoutSeconds;
+  form.branding = { ...next.branding };
   form.nomad = { ...next.nomad };
   form.certificates = { ...next.certificates };
   accountForm.username = auth.username;
@@ -104,6 +109,7 @@ async function saveRuntimeSettings() {
   try {
     const next = await settingsStore.updateRuntime({
       ...form,
+      branding: { ...form.branding },
       nomad: { ...form.nomad },
       certificates: { ...form.certificates },
     });
@@ -220,6 +226,38 @@ onMounted(loadSettings);
         </div>
 
         <v-form v-if="category === 'general'" class="settings-form">
+          <div class="section-title">{{ t('settingsPage.loginBranding') }}</div>
+
+          <v-text-field
+            v-model="form.branding.loginTitle"
+            :label="t('settingsPage.loginTitle')"
+            :placeholder="t('login.title')"
+            :hint="t('settingsPage.loginTitleHint')"
+            maxlength="80"
+            counter
+            variant="outlined"
+            density="comfortable"
+            persistent-hint
+          />
+
+          <v-textarea
+            v-model="form.branding.loginSubtitle"
+            :label="t('settingsPage.loginSubtitle')"
+            :placeholder="t('login.subtitle')"
+            :hint="t('settingsPage.loginSubtitleHint')"
+            maxlength="240"
+            counter
+            rows="2"
+            auto-grow
+            variant="outlined"
+            density="comfortable"
+            persistent-hint
+          />
+
+          <v-divider class="my-2" />
+
+          <div class="section-title">{{ t('settingsPage.runtime') }}</div>
+
           <v-text-field
             v-model.number="form.metricsRetentionDays"
             type="number"

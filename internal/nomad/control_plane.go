@@ -14,6 +14,7 @@ const (
 	ControlPlaneBootstrapping = "bootstrapping"
 	ControlPlaneConnected     = "connected"
 	ControlPlaneDegraded      = "degraded"
+	ControlPlaneMigration     = "migration_required"
 
 	ProjectedNodeManaged   = "managed"
 	ProjectedNodeMissing   = "missing"
@@ -231,15 +232,24 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 		}
 	}
 
-	cpStatus := ControlPlaneConnected
-	if !connected {
-		if hasActiveBootstrap(latestTasks) {
-			cpStatus = ControlPlaneBootstrapping
-		} else if len(latestTasks) > 0 {
-			cpStatus = ControlPlaneDegraded
-		} else {
-			cpStatus = ControlPlaneUnconfigured
+	migrationRequired := false
+	if latest := s.latestCompletedBootstrapTask(ctx); latest.ServerID != "" {
+		if srv, ok := serverByID[latest.ServerID]; !ok || serverAdvertiseAddress(srv) == "" {
+			migrationRequired = true
 		}
+	}
+	cpStatus := ControlPlaneConnected
+	switch {
+	case hasActiveBootstrap(latestTasks):
+		cpStatus = ControlPlaneBootstrapping
+	case migrationRequired:
+		cpStatus = ControlPlaneMigration
+	case connected:
+		cpStatus = ControlPlaneConnected
+	case len(latestTasks) > 0:
+		cpStatus = ControlPlaneDegraded
+	default:
+		cpStatus = ControlPlaneUnconfigured
 	}
 
 	return ControlPlane{
@@ -331,7 +341,8 @@ func taskCompletedRemove(task tasks.Task) bool {
 
 func hasActiveBootstrap(taskByServer map[string]tasks.Task) bool {
 	for _, task := range taskByServer {
-		if (task.Type == TaskTypeServerBootstrap || task.Type == TaskTypeClusterRebuild) && taskProjectsAsPending(task) && task.Status != tasks.StatusFailed && task.Status != tasks.StatusBlocked {
+		if (task.Type == TaskTypeServerBootstrap || task.Type == TaskTypeClusterRebuild) &&
+			(task.Status == tasks.StatusQueued || task.Status == tasks.StatusRunning || task.Status == tasks.StatusScheduled) {
 			return true
 		}
 	}

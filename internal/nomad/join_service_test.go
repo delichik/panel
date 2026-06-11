@@ -377,7 +377,7 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "control one", "10.0.0.20")
 	execFake.sudoCalled = make(chan struct{}, 1)
 
-	task, err := svc.BootstrapServer(ctx, srv.ID)
+	task, err := svc.BootstrapServer(ctx, BootstrapServerInput{ServerID: srv.ID, AdvertiseAddress: srv.Host})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,6 +405,8 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 	for _, want := range []string{
 		"server {",
 		"bootstrap_expect = 1",
+		"advertise {",
+		`rpc = "10.0.0.20"`,
 		"client {",
 		`region = "global"`,
 		"apt_get install -y docker.io",
@@ -514,6 +516,31 @@ func TestRedeployClientBypassesManagedCandidateFilter(t *testing.T) {
 	}
 }
 
+func TestRedeployLegacyServerRequiresClusterRebuild(t *testing.T) {
+	svc, credSvc, _, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "legacy control", "10.0.0.23")
+	traits := make(map[string]string, len(srv.Traits))
+	for key, value := range srv.Traits {
+		if key != TraitServerAdvertiseAddress {
+			traits[key] = value
+		}
+	}
+	if _, err := svc.servers.Update(ctx, srv.ID, server.SaveRequest{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, SSHUsername: srv.SSHUsername,
+		CredentialID: srv.CredentialID, Traits: traits, Notes: srv.Notes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := svc.RedeployNode(ctx, RedeployNodeInput{ServerID: srv.ID, Role: ProjectedNodeRoleServer})
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "nomad_advertise_address_migration_required" {
+		t.Fatalf("expected migration-required validation, got %v", err)
+	}
+}
+
 func TestRunJoinClientFailsWhenClientDoesNotBecomeReady(t *testing.T) {
 	svc, credSvc, nomadFake, _, cleanup := newJoinTestService(t)
 	defer cleanup()
@@ -555,7 +582,7 @@ func TestRunJoinClientFailsWhenClientDoesNotBecomeReady(t *testing.T) {
 }
 
 func TestRebuildClusterResetsManagedServersAndBootstrapsSelectedServer(t *testing.T) {
-	svc, credSvc, _, execFake, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, execFake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "new control", "10.0.0.23")
@@ -571,8 +598,11 @@ func TestRebuildClusterResetsManagedServersAndBootstrapsSelectedServer(t *testin
 		t.Fatal(err)
 	}
 	execFake.sudoCalled = make(chan struct{}, 1)
+	execFake.duringRun = func() { markNomadClientReady(nomadFake, worker) }
+	restorer := &fakeEnabledApplicationRestorer{count: 2}
+	svc.SetEnabledApplicationRestorer(restorer)
 
-	task, err := svc.RebuildCluster(ctx, RebuildClusterInput{ServerID: control.ID})
+	task, err := svc.RebuildCluster(ctx, RebuildClusterInput{ServerID: control.ID, AdvertiseAddress: control.Host})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,6 +624,9 @@ func TestRebuildClusterResetsManagedServersAndBootstrapsSelectedServer(t *testin
 	}
 	if !strings.Contains(commands, "bootstrap_expect = 1") || !strings.Contains(commands, "panel_server_id = \""+control.ID+"\"") {
 		t.Fatalf("expected rebuild to bootstrap selected server:\n%s", commands)
+	}
+	if restorer.calls != 1 {
+		t.Fatalf("expected enabled applications to be restored once, calls=%d", restorer.calls)
 	}
 }
 
@@ -669,7 +702,7 @@ func TestSwitchServerRestoresPreviousAddressWhenPanelCannotReachNomad(t *testing
 	svc.nomad = statusFake
 	previous := svc.cfg.Address
 
-	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: srv.ID})
+	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: srv.ID, AdvertiseAddress: srv.Host})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -698,7 +731,7 @@ func TestSwitchServerSynchronizesManagedClientConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: control.ID})
+	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: control.ID, AdvertiseAddress: control.Host})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -999,6 +1032,17 @@ func (s staticApplicationProxySource) ApplicationReverseProxyConfigs(context.Con
 
 type staticReverseProxyCertificateSource struct {
 	certs []ReverseProxyCertificate
+}
+
+type fakeEnabledApplicationRestorer struct {
+	count int
+	calls int
+	err   error
+}
+
+func (f *fakeEnabledApplicationRestorer) RedeployEnabledApplications(context.Context) (int, error) {
+	f.calls++
+	return f.count, f.err
 }
 
 func (s staticReverseProxyCertificateSource) ReverseProxyCertificates(context.Context) ([]ReverseProxyCertificate, error) {

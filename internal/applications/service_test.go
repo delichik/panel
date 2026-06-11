@@ -61,6 +61,30 @@ func TestCreateEnabledAppValidatesPlansAndRegisters(t *testing.T) {
 	}
 }
 
+func TestRedeployEnabledApplicationsRegistersAllEnabledApps(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	if _, err := svc.Create(ctx, SaveInput{Name: "enabled", Enabled: true, SpecYAML: "name: enabled\nimage: nginx\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(ctx, SaveInput{Name: "disabled", Enabled: false, SpecYAML: "name: disabled\nimage: nginx\n"}); err != nil {
+		t.Fatal(err)
+	}
+	fake.calls = nil
+
+	count, err := svc.RedeployEnabledApplications(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("redeployed = %d, want 1", count)
+	}
+	if len(fake.calls) < 3 || !equalStrings(fake.calls[:3], []string{"validate:panel-enabled", "plan:panel-enabled", "register:panel-enabled"}) {
+		t.Fatalf("calls = %#v", fake.calls)
+	}
+}
+
 func TestUpdateDisabledAppIncrementsGenerationOnlyWhenSpecHashChanges(t *testing.T) {
 	svc, _, closeStore := newTestService(t)
 	defer closeStore()

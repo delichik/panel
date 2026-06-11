@@ -116,7 +116,7 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/bootstrap-server", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/bootstrap-server", bytes.NewBufferString(`{"serverId":"srv_1","advertiseAddress":"10.0.0.10"}`))
 	handler.BootstrapServer(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("bootstrap status = %d body=%s", rec.Code, rec.Body.String())
@@ -127,8 +127,8 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &bootstrapEnv); err != nil {
 		t.Fatal(err)
 	}
-	if fake.bootstrappedServerID != "srv_1" || bootstrapEnv.Data["taskId"] != "task_bootstrap" {
-		t.Fatalf("unexpected bootstrap result server=%q body=%#v", fake.bootstrappedServerID, bootstrapEnv.Data)
+	if fake.bootstrapInput.ServerID != "srv_1" || fake.bootstrapInput.AdvertiseAddress != "10.0.0.10" || bootstrapEnv.Data["taskId"] != "task_bootstrap" {
+		t.Fatalf("unexpected bootstrap result input=%#v body=%#v", fake.bootstrapInput, bootstrapEnv.Data)
 	}
 
 	rec = httptest.NewRecorder()
@@ -142,22 +142,22 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/rebuild-cluster", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/rebuild-cluster", bytes.NewBufferString(`{"serverId":"srv_1","advertiseAddress":"10.0.0.10"}`))
 	handler.RebuildCluster(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("rebuild status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if fake.rebuild.ServerID != "srv_1" {
+	if fake.rebuild.ServerID != "srv_1" || fake.rebuild.AdvertiseAddress != "10.0.0.10" {
 		t.Fatalf("unexpected rebuild input=%#v", fake.rebuild)
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/switch-server", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/switch-server", bytes.NewBufferString(`{"serverId":"srv_1","advertiseAddress":"10.0.0.10"}`))
 	handler.SwitchServer(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("switch status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if fake.switched.ServerID != "srv_1" {
+	if fake.switched.ServerID != "srv_1" || fake.switched.AdvertiseAddress != "10.0.0.10" {
 		t.Fatalf("unexpected switch input=%#v", fake.switched)
 	}
 
@@ -203,18 +203,18 @@ type fakeInventoryClient struct {
 }
 
 type fakeJoinService struct {
-	candidates           []server.Server
-	controlPlane         ControlPlane
-	task                 tasks.Task
-	bootstrap            tasks.Task
-	remove               tasks.Task
-	redeploy             RedeployNodeInput
-	rebuild              RebuildClusterInput
-	switched             SwitchServerInput
-	removed              RemoveNodeInput
-	reverseProxy         ReverseProxyInput
-	joinedServerID       string
-	bootstrappedServerID string
+	candidates     []server.Server
+	controlPlane   ControlPlane
+	task           tasks.Task
+	bootstrap      tasks.Task
+	remove         tasks.Task
+	redeploy       RedeployNodeInput
+	rebuild        RebuildClusterInput
+	switched       SwitchServerInput
+	removed        RemoveNodeInput
+	reverseProxy   ReverseProxyInput
+	joinedServerID string
+	bootstrapInput BootstrapServerInput
 }
 
 func (f *fakeJoinService) Candidates(context.Context) ([]server.Server, error) {
@@ -230,8 +230,8 @@ func (f *fakeJoinService) JoinClient(_ context.Context, serverID string) (tasks.
 	return f.task, nil
 }
 
-func (f *fakeJoinService) BootstrapServer(_ context.Context, serverID string) (tasks.Task, error) {
-	f.bootstrappedServerID = serverID
+func (f *fakeJoinService) BootstrapServer(_ context.Context, in BootstrapServerInput) (tasks.Task, error) {
+	f.bootstrapInput = in
 	return f.bootstrap, nil
 }
 

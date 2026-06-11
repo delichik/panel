@@ -48,6 +48,7 @@
 - 应用删除必须先禁用应用，并在前端二次确认后执行。
 - 应用日志面板仍允许手动输入 allocation/task，但运行时 allocation 表必须提供日志入口，将 allocation ID 和 task 名称带入日志面板。
 - 证书模块提供内置变量解析，Nomad 模块负责反向代理同步。
+- Nomad 集群重建完成后会调用 `RedeployEnabledApplications`，无条件重新渲染并注册所有 `enabled` 应用；该恢复行为不能只依赖规格哈希变化，否则新集群中不存在的 job 不会被恢复。
 
 ## 验证
 
