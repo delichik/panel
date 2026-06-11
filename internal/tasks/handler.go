@@ -46,13 +46,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	offset := (page - 1) * limit
 	tasks, err := h.service.List(r.Context(), ListFilter{
-		Statuses:        queryList(r, "status"),
-		ServerID:        r.URL.Query().Get("serverId"),
-		Types:           queryList(r, "type"),
-		IncludeInternal: truthyQuery(r, "includeInternal") || truthyQuery(r, "include_internal"),
-		OperationID:     r.URL.Query().Get("operation_id"),
-		Limit:           limit,
-		Offset:          offset,
+		Statuses:         queryList(r, "status"),
+		ServerID:         r.URL.Query().Get("serverId"),
+		Types:            queryList(r, "type"),
+		IncludeInternal:  truthyQuery(r, "includeInternal") || truthyQuery(r, "include_internal"),
+		ExcludeScheduled: truthyQuery(r, "commonOnly") || truthyQuery(r, "common_only"),
+		OperationID:      r.URL.Query().Get("operation_id"),
+		Limit:            limit,
+		Offset:           offset,
 	})
 	if err != nil {
 		httpx.Error(w, err)

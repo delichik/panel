@@ -4,7 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { useDisplay, useTheme } from 'vuetify';
 import { useAuthStore } from '@/stores/auth';
 import { tasksApi } from '@/api/tasks';
-import type { TaskDto } from '@/types/api';
+import { systemApi } from '@/api/system';
+import type { SystemVersionDto, TaskDto } from '@/types/api';
 import { useI18n } from '@/i18n';
 import { markThemeChanging } from '@/theme';
 
@@ -28,7 +29,7 @@ const route = useRoute();
 const auth = useAuthStore();
 const theme = useTheme();
 const display = useDisplay();
-const { t, translateTaskStatus } = useI18n();
+const { t, translateTaskStage, translateTaskStatus, translateTaskType } = useI18n();
 
 const isDark = computed(() => theme.global.current.value.dark);
 const isCompactLayout = computed(() => display.mdAndDown.value);
@@ -101,9 +102,11 @@ watch(() => route.fullPath, () => {
 });
 
 const activeTasks = ref<TaskDto[]>([]);
+const versionInfo = ref<SystemVersionDto | null>(null);
 const taskIndex = ref(0);
 let taskTimer: number | undefined;
 let rotateTimer: number | undefined;
+let versionTimer: number | undefined;
 
 const currentTask = computed(() => activeTasks.value[taskIndex.value % Math.max(activeTasks.value.length, 1)]);
 
@@ -120,6 +123,14 @@ async function loadActiveTasks() {
   }
 }
 
+async function loadVersionInfo() {
+  try {
+    versionInfo.value = await systemApi.version();
+  } catch {
+    versionInfo.value = null;
+  }
+}
+
 async function logout() {
   await auth.logout();
   await router.push('/login');
@@ -127,7 +138,9 @@ async function logout() {
 
 onMounted(() => {
   void loadActiveTasks();
+  void loadVersionInfo();
   taskTimer = window.setInterval(loadActiveTasks, 8000);
+  versionTimer = window.setInterval(loadVersionInfo, 30 * 60 * 1000);
   rotateTimer = window.setInterval(() => {
     if (activeTasks.value.length > 1) taskIndex.value = (taskIndex.value + 1) % activeTasks.value.length;
   }, 3500);
@@ -136,6 +149,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (taskTimer) window.clearInterval(taskTimer);
   if (rotateTimer) window.clearInterval(rotateTimer);
+  if (versionTimer) window.clearInterval(versionTimer);
 });
 </script>
 
@@ -197,12 +211,22 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="app-header-actions">
+            <v-chip
+              v-if="versionInfo?.updateAvailable"
+              color="warning"
+              variant="tonal"
+              size="small"
+              prepend-icon="mdi-update"
+              :title="t('layout.updateAvailableDetail', { current: versionInfo.version, latest: versionInfo.latestVersion })"
+            >
+              {{ t('layout.updateAvailable', { version: versionInfo.latestVersion }) }}
+            </v-chip>
             <Transition name="task-slide" mode="out-in">
               <div v-if="currentTask" :key="currentTask.id" class="task-ticker">
                 <v-icon size="16" color="primary">mdi-progress-clock</v-icon>
                 <span class="task-line">
-                  {{ currentTask.summary || currentTask.type }}
-                  <span class="task-stage">{{ translateTaskStatus(currentTask.status) }} - {{ currentTask.stage || t('layout.taskTicker.queuedStage') }}</span>
+                  {{ translateTaskType(currentTask.type) }}
+                  <span class="task-stage">{{ translateTaskStatus(currentTask.status) }} - {{ currentTask.stage ? translateTaskStage(currentTask.stage) : t('layout.taskTicker.queuedStage') }}</span>
                 </span>
               </div>
             </Transition>

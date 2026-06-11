@@ -15,12 +15,15 @@
 - 统一 HTTP 响应：`internal/httpx/`
 - 统一错误：`internal/panelerr/`
 - 后端错误翻译：`internal/i18n/`
+- 构建版本信息：`internal/buildinfo/`
+- 系统版本与更新检查：`internal/systeminfo/`
 
 ## 结构约定
 
 - `app.New` 负责打开数据库、创建 service、装配 scheduler、连接跨模块依赖并注册路由。
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login` 和 `/api/v1/auth/session` 是开放入口，其余 API 经认证中间件保护。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
+- `GET /api/v1/system/version` 返回构建时注入的版本、commit、仓库和缓存的最新版本状态。`internal/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；开发版本或未注入仓库时不发起检查，且不提供下载或安装能力。
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。
 - 后端对外错误响应需要走 `panelerr`、`httpx` 和 `internal/i18n`，不要在 handler 中散落用户可见错误文案。
 
@@ -46,4 +49,4 @@
 
 ## 文档更新触发
 
-修改启动装配、配置项、运行时设置、认证流程、API 路由、数据库表/字段、错误响应结构时，必须更新本文档或模块索引。
+修改启动装配、配置项、运行时设置、认证流程、API 路由、构建版本信息、数据库表/字段、错误响应结构时，必须更新本文档或模块索引。

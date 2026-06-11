@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { formatDateTime, formatTime, t, translateTaskStatus, translateTaskType } from '@/i18n';
+import { useDisplay } from 'vuetify';
+import { formatDateTime, formatTime, t, translateTaskStage, translateTaskStatus, translateTaskType } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
@@ -9,6 +10,7 @@ import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
 import { groupTasksByOperation } from '../taskOperations';
 
 const route = useRoute();
+const display = useDisplay();
 const TYPE_FILTER_COMMON = '__common';
 const TYPE_FILTER_ALL = '__all';
 const hiddenByCommonTaskTypes = new Set(['server_connectivity_test', 'metrics_collect']);
@@ -68,6 +70,7 @@ const taskTypeFilterItems = computed(() => [
     .map((value) => ({ title: translateTaskType(value), value })),
 ]);
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
+const paginationVisible = computed(() => display.smAndDown.value ? 5 : 10);
 const statusFilterItems = computed(() => [
   { title: translateTaskStatus('queued'), value: 'queued' },
   { title: translateTaskStatus('scheduled'), value: 'scheduled' },
@@ -108,9 +111,10 @@ function onTypeFilterChange(values: string[] | string | null) {
 
 function taskTypeApiFilter(values: string[]) {
   const normalized = normalizeTypeFilter(values, values);
-  if (normalized.includes(TYPE_FILTER_ALL)) return { includeInternal: true, types: [] };
+  if (normalized.includes(TYPE_FILTER_ALL)) return { includeInternal: true, commonOnly: false, types: [] };
   return {
     includeInternal: false,
+    commonOnly: normalized.includes(TYPE_FILTER_COMMON),
     types: normalized.filter((value) => !isSpecialTypeFilter(value)),
   };
 }
@@ -135,6 +139,7 @@ async function loadTasks() {
         statuses: appliedStatusFilter.value,
         types: typeApiFilter.types,
         includeInternal: typeApiFilter.includeInternal,
+        commonOnly: typeApiFilter.commonOnly,
         operationId: appliedOperationFilter.value,
         page: page.value,
         pageSize: pageSize.value,
@@ -189,7 +194,7 @@ function formatTaskType(value?: string) {
 
 function taskDisplayTitle(task?: TaskDto | null) {
   if (!task) return t('taskCenter.selectTask');
-  return task.summary || formatTaskType(task.type);
+  return formatTaskType(task.type);
 }
 
 function shortId(value?: string | null) {
@@ -276,7 +281,7 @@ function queueReason(task: TaskDto) {
     if (task.triggerTaskId) return t('taskCenter.queuedBy', { id: shortId(task.triggerTaskId) });
     return t('taskCenter.waitingWorker');
   }
-  if (task.status === 'running') return task.stage ? t('taskCenter.runningStage', { stage: task.stage }) : t('taskCenter.runningPlain');
+  if (task.status === 'running') return task.stage ? t('taskCenter.runningStage', { stage: translateTaskStage(task.stage) }) : t('taskCenter.runningPlain');
   if (task.status === 'completed') return t('taskCenter.finishedSuccessfully');
   if (task.status === 'blocked') return task.error || t('taskCenter.manualAttention');
   if (task.status === 'failed') return task.error || t('taskCenter.finishedWithError');
@@ -369,7 +374,7 @@ onBeforeUnmount(() => {
     <v-card variant="outlined" class="filter-bar">
       <v-text-field v-model="operationFilter" :label="t('taskCenter.operationId')" variant="outlined" density="compact" hide-details clearable @keydown.enter="searchTasks" />
       <v-select
-        v-model="typeFilter"
+        :model-value="typeFilter"
         :items="taskTypeFilterItems"
         item-title="title"
         item-value="value"
@@ -423,7 +428,7 @@ onBeforeUnmount(() => {
               <v-icon :color="taskStatusColor(group.status)" :icon="group.status === 'completed' ? 'mdi-check-circle' : group.failedCount ? 'mdi-alert-circle' : 'mdi-progress-clock'" />
             </template>
             <v-list-item-title class="operation-title">
-              <span>{{ group.summary || formatTaskType(group.tasks[0]?.type) }}</span>
+              <span>{{ formatTaskType(group.tasks[0]?.type) }}</span>
               <v-chip :color="taskStatusColor(group.status)" size="x-small" label>{{ statusLabel(group.status) }}</v-chip>
             </v-list-item-title>
             <v-list-item-subtitle>
@@ -440,7 +445,7 @@ onBeforeUnmount(() => {
         <v-divider />
         <div class="pager">
           <v-select v-model="pageSize" :items="[10, 20, 50, 100]" density="compact" hide-details variant="outlined" class="page-size" @update:model-value="reloadFirstPage" />
-          <v-pagination v-model="page" :length="totalPages" density="compact" total-visible="4" @update:model-value="loadTasks" />
+          <v-pagination v-model="page" :length="totalPages" density="compact" :total-visible="paginationVisible" @update:model-value="loadTasks" />
         </div>
       </v-card>
 
@@ -589,7 +594,7 @@ onBeforeUnmount(() => {
           <v-timeline v-if="steps.length" side="end" density="compact" class="mb-4">
             <v-timeline-item v-for="step in steps" :key="step.id" :dot-color="taskStatusColor(step.status)" size="small">
               <div class="step-row">
-                <strong>{{ step.step }}</strong>
+                <strong>{{ translateTaskStage(step.step) }}</strong>
                 <span class="font-tabular">{{ Math.round(step.percentage ?? 0) }}%</span>
               </div>
               <div class="text-caption text-medium-emphasis">
@@ -679,6 +684,10 @@ onBeforeUnmount(() => {
 
 .page-size {
   max-width: 90px;
+}
+
+.pager :deep(.v-pagination__item--is-active .v-btn) {
+  color: rgb(var(--v-theme-on-primary)) !important;
 }
 
 .selected-progress {

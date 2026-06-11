@@ -26,6 +26,9 @@
   - UFW 防火墙状态、规则表单、规则列表、删除确认和任务入口文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/tasks/pages/TaskCenterPage.vue`
   - 任务类型名称、类型筛选特殊选项、搜索按钮和多选筛选占位文案已接入 `web/src/i18n/index.ts`
+  - 操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。
+- `web/src/layouts/AppLayout.vue`、`web/src/features/settings/pages/SettingsPage.vue`
+  - 当前版本、最新版本弱提示和系统版本字段已接入 `web/src/i18n/index.ts`。
 - raw Nomad jobs/deployments 清单入口已移除，对应页面文案和路由词条不再保留。
 - `internal/nomad`
   - Nomad 重部署、集群重建、server 切换相关 API 错误码已接入 `internal/i18n/i18n.go`

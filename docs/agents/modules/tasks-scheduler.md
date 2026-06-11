@@ -29,8 +29,10 @@
 - 任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。
 - 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移和前端同步。
 - 任务中心的筛选控件清空时可能产生 `null`；前端任务 API 应统一归一化空值和空白字符串，不发送空筛选参数。
-- 任务中心类型筛选默认使用“常用类型”，隐藏内部/高频的 `server_connectivity_test` 和 `metrics_collect`；切到“所有类型”或精确选择对应类型时可显示这些任务。列表按最新创建时间优先展示，避免后台健康检查和指标采集挤掉用户操作任务。
-- 任务中心筛选支持多选 `status` / `type`，前端通过搜索按钮提交；API 使用重复的 `status` / `type` 查询参数，`includeInternal=true` 表示“所有类型”。
+- 任务中心类型筛选默认使用“常用类型”，排除所有 `trigger_type=scheduler` 的定时任务，并隐藏内部/高频的 `server_connectivity_test` 和 `metrics_collect`；切到“所有类型”或精确选择对应类型时可显示这些任务。列表按最新创建时间优先展示。
+- 任务中心筛选支持多选 `status` / `type`，前端通过搜索按钮提交；API 使用重复的 `status` / `type` 查询参数，`commonOnly=true` 表示常用类型，`includeInternal=true` 表示“所有类型”。
+- 操作标题、任务类型、步骤名称和阶段应在前端按稳定的 `type` / `stage` 标识翻译，不直接展示持久化的英文 summary 作为标题。
+- 任务中心每页默认 20 条；分页在手机显示 5 个页码，在桌面显示 10 个页码，并确保当前页数字与选中背景有足够对比度。
 - `running` 状态任务超过 `tasks.StaleRunningTaskAfter`（当前 24 小时）仍未完成时，会在启动或清理循环中自动标记为失败，避免旧任务长期卡住。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性任务（Nomad 加入/引导/重建/切换/移除、UFW 安装）必须在 API 返回前先标记为 `running`；遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter`（当前 10 分钟）会在清理循环中标记为失败并提示用户重试，避免永久排队。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。

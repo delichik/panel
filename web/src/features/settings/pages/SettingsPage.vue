@@ -4,7 +4,8 @@ import { useRoute } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { useAuthStore } from '@/stores/auth';
 import { useSettingsStore } from '@/stores/settings';
-import type { RuntimeSettingsDto, RuntimeSettingsUpdate, TokenExpiration } from '@/types/api';
+import { systemApi } from '@/api/system';
+import type { RuntimeSettingsDto, RuntimeSettingsUpdate, SystemVersionDto, TokenExpiration } from '@/types/api';
 
 type SettingsCategory = 'general' | 'security' | 'nomad' | 'certificates' | 'system';
 
@@ -14,6 +15,7 @@ const settingsStore = useSettingsStore();
 const { t, translateCleanupSchedule } = useI18n();
 
 const settings = ref<RuntimeSettingsDto | null>(null);
+const versionInfo = ref<SystemVersionDto | null>(null);
 const loading = ref(false);
 const saving = ref(false);
 const accountSaving = ref(false);
@@ -80,7 +82,11 @@ function syncForm(next: RuntimeSettingsDto) {
 async function loadSettings() {
   loading.value = true;
   try {
-    const next = await settingsStore.loadRuntime(true);
+    const [next, version] = await Promise.all([
+      settingsStore.loadRuntime(true),
+      systemApi.version().catch(() => null),
+    ]);
+    versionInfo.value = version;
     if (next) {
       settings.value = next;
       syncForm(next);
@@ -430,6 +436,15 @@ onMounted(loadSettings);
         <div v-else class="system-table">
           <v-table density="compact" style="background: transparent;" class="text-left">
             <tbody>
+              <tr>
+                <td class="system-label">{{ t('settingsPage.version') }}</td>
+                <td>
+                  {{ versionInfo?.version || t('common.notAvailable') }}
+                  <v-chip v-if="versionInfo?.updateAvailable" color="warning" variant="tonal" size="x-small" class="ml-2">
+                    {{ t('settingsPage.latestVersion', { version: versionInfo.latestVersion }) }}
+                  </v-chip>
+                </td>
+              </tr>
               <tr>
                 <td class="system-label">{{ t('settingsPage.listenAddress') }}</td>
                 <td>{{ settings.listenAddress }}</td>

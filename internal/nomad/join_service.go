@@ -1082,9 +1082,9 @@ export NOMAD_CLIENT_CERT="/etc/nomad.d/tls/agent.pem"
 export NOMAD_CLIENT_KEY="/etc/nomad.d/tls/agent-key.pem"
 echo "[panel] waiting for Nomad HTTP API on 127.0.0.1:4646"
 attempts=0
-while ! nomad status >/dev/null 2>&1; do
+while ! timeout 3s nomad agent-info >/dev/null 2>&1; do
   attempts=$((attempts + 1))
-  if [ "$attempts" -ge 30 ]; then
+  if [ "$attempts" -ge 20 ]; then
     echo "[panel] Nomad HTTP API did not become ready on 127.0.0.1:4646" >&2
     systemctl status nomad --no-pager -l >&2 || true
     journalctl -u nomad -n 80 --no-pager >&2 || true
