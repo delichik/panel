@@ -281,32 +281,94 @@ func TestListPaginatesTasks(t *testing.T) {
 	}
 }
 
-func TestExpireStaleRunningMarksOldRunningTasksFailed(t *testing.T) {
+func TestFailRunningWithoutExecutionMarksOnlyUntrackedTasksFailed(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	task, err := svc.Create(ctx, CreateInput{Type: "nomad_client_join", Summary: "joining", Status: StatusRunning})
+	tracked, err := svc.Create(ctx, CreateInput{Type: "nomad_client_join", Summary: "joining", Status: StatusRunning})
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := now.Add(-48 * time.Hour).Format(time.RFC3339Nano)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=?, started_at=? WHERE id=?`, old, old, task.ID); err != nil {
+	untracked, err := svc.Create(ctx, CreateInput{Type: "server_restart", Summary: "restarting"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET status=?,started_at=? WHERE id=?`, StatusRunning, now.Format(time.RFC3339Nano), untracked.ID); err != nil {
 		t.Fatal(err)
 	}
 
-	expired, err := svc.ExpireStaleRunning(ctx, now, StaleRunningTaskAfter)
+	failed, err := svc.FailRunningWithoutExecution(ctx, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if expired != 1 {
-		t.Fatalf("expected one expired task, got %d", expired)
+	if failed != 1 {
+		t.Fatalf("expected one untracked task to fail, got %d", failed)
+	}
+	gotTracked, err := svc.Get(ctx, tracked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotTracked.Status != StatusRunning || !svc.HasRunningExecution(tracked.ID) {
+		t.Fatalf("expected tracked task to remain running, got %#v", gotTracked)
+	}
+	gotUntracked, err := svc.Get(ctx, untracked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotUntracked.Status != StatusFailed || gotUntracked.FinishedAt == nil || !strings.Contains(gotUntracked.Error, "no active execution") {
+		t.Fatalf("expected untracked task to fail, got %#v", gotUntracked)
+	}
+}
+
+func TestRunningExecutionLifecycleFollowsTaskStatus(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if svc.HasRunningExecution(task.ID) {
+		t.Fatal("queued task should not have a running execution")
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !svc.HasRunningExecution(task.ID) {
+		t.Fatal("started task should have a running execution")
+	}
+	if err := svc.Complete(ctx, task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if svc.HasRunningExecution(task.ID) {
+		t.Fatal("completed task should not have a running execution")
+	}
+}
+
+func TestFinishedExecutionIsFailedIfDatabaseStillSaysRunning(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.FinishExecution(task.ID)
+	failed, err := svc.FailRunningWithoutExecution(ctx, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed != 1 {
+		t.Fatalf("expected ended execution to be detected, got %d failed tasks", failed)
 	}
 	got, err := svc.Get(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusFailed || got.FinishedAt == nil || !strings.Contains(got.Error, "stale task timeout") {
-		t.Fatalf("expected failed stale task, got %#v", got)
+	if got.Status != StatusFailed || !strings.Contains(got.Error, "no active execution") {
+		t.Fatalf("expected task without live execution to fail, got %#v", got)
 	}
 }
 

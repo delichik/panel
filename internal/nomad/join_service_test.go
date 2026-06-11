@@ -106,10 +106,11 @@ func TestJoinCandidatesTimesOutNomadNodesAndReturnsEligibleServers(t *testing.T)
 }
 
 func TestJoinClientCreatesTask(t *testing.T) {
-	svc, credSvc, _, _, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, execFake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.12")
+	execFake.duringRun = func() { markNomadClientReady(nomadFake, srv) }
 
 	task, err := svc.JoinClient(ctx, srv.ID)
 	if err != nil {
@@ -136,10 +137,11 @@ func TestJoinClientRejectsUnsupportedServer(t *testing.T) {
 }
 
 func TestJoinClientMarksTaskRunningBeforeWorkerExecutes(t *testing.T) {
-	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, fake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.12")
+	fake.duringRun = func() { markNomadClientReady(nomadFake, srv) }
 	blockSudo := make(chan struct{})
 	fake.blockSudo = blockSudo
 
@@ -163,10 +165,11 @@ func TestJoinClientMarksTaskRunningBeforeWorkerExecutes(t *testing.T) {
 }
 
 func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
-	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, fake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.12")
+	markNomadClientReady(nomadFake, srv)
 	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeClientJoin, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Summary: "Joining server to Nomad"})
 	if err != nil {
 		t.Fatal(err)
@@ -191,8 +194,12 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 		"-name '*.json'",
 		"server {",
 		"enabled = false",
+		`region = "global"`,
 		"panel_server_id = \"" + srv.ID + "\"",
-		`servers = ["10.0.0.1:4647"]`,
+		"server_join {",
+		`retry_join = ["10.0.0.1:4647"]`,
+		`retry_interval = "5s"`,
+		"retry_max = 0",
 		"command -v ufw",
 		"ufw allow 4646/tcp",
 		"ufw allow 4647/tcp",
@@ -207,9 +214,6 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 			t.Fatalf("join script missing %q:\n%s", want, command)
 		}
 	}
-	if strings.Contains(command, "\nserver_join {") {
-		t.Fatalf("join script should not write a top-level server_join block:\n%s", command)
-	}
 	if fake.sudoTimeouts[0] != nomadInstallTimeout || fake.sudoTimeouts[1] != nomadInstallTimeout || fake.sudoTimeouts[2] != nomadMaintenanceTimeout || fake.sudoTimeouts[3] != nomadFirewallTimeout || fake.sudoTimeouts[4] != nomadServiceTimeout || fake.sudoTimeouts[5] != nomadLocalHealthTimeout {
 		t.Fatalf("unexpected join timeouts: %#v", fake.sudoTimeouts)
 	}
@@ -217,12 +221,13 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 }
 
 func TestRunJoinClientInfersBootstrappedServerWhenConfigIsLocal(t *testing.T) {
-	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, fake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	svc.cfg.Address = "http://127.0.0.1:4646"
 	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "control one", "10.0.0.20")
 	worker := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.12")
+	markNomadClientReady(nomadFake, worker)
 	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
 		Type:         TaskTypeServerBootstrap,
 		ServerID:     control.ID,
@@ -243,16 +248,17 @@ func TestRunJoinClientInfersBootstrappedServerWhenConfigIsLocal(t *testing.T) {
 	if len(fake.sudoCommands) != 6 {
 		t.Fatalf("expected staged sudo commands, got %#v", fake.sudoCommands)
 	}
-	if command := joinedSudoCommands(fake.sudoCommands); !strings.Contains(command, `servers = ["10.0.0.20:4647"]`) {
+	if command := joinedSudoCommands(fake.sudoCommands); !strings.Contains(command, `retry_join = ["10.0.0.20:4647"]`) {
 		t.Fatalf("expected join script to use bootstrapped server host:\n%s", command)
 	}
 }
 
 func TestRunJoinClientAllowsReverseProxyPortWhenEnabled(t *testing.T) {
-	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, fake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.42")
+	markNomadClientReady(nomadFake, srv)
 	traits := map[string]string{}
 	for key, value := range srv.Traits {
 		traits[key] = value
@@ -314,10 +320,11 @@ func TestControlPlaneRestoresNomadAddressFromCompletedBootstrap(t *testing.T) {
 }
 
 func TestRunJoinClientStreamsScriptOutputBeforeCommandReturns(t *testing.T) {
-	svc, credSvc, _, fake, cleanup := newJoinTestService(t)
+	svc, credSvc, nomadFake, fake, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.12")
+	markNomadClientReady(nomadFake, srv)
 	task, err := svc.tasks.Create(ctx, tasks.CreateInput{Type: TaskTypeClientJoin, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Summary: "Joining server to Nomad"})
 	if err != nil {
 		t.Fatal(err)
@@ -399,6 +406,7 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 		"server {",
 		"bootstrap_expect = 1",
 		"client {",
+		`region = "global"`,
 		"apt_get install -y docker.io",
 		"apt_get install -y containernetworking-plugins",
 		"cat >/etc/nomad.d/tls/agent.pem <<'EOF'",
@@ -484,7 +492,7 @@ func TestRedeployClientBypassesManagedCandidateFilter(t *testing.T) {
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker redeploy", "10.0.0.22")
-	nomadFake.nodes = []NodeListItem{{ID: "node-worker", Meta: map[string]string{"panel_server_id": srv.ID}}}
+	markNomadClientReady(nomadFake, srv)
 	execFake.sudoCalled = make(chan struct{}, 1)
 
 	task, err := svc.RedeployNode(ctx, RedeployNodeInput{ServerID: srv.ID, Role: ProjectedNodeRoleClient})
@@ -503,6 +511,46 @@ func TestRedeployClientBypassesManagedCandidateFilter(t *testing.T) {
 	}
 	if !strings.Contains(joinedSudoCommands(execFake.sudoCommands), "enabled = false") {
 		t.Fatalf("expected client configuration in redeploy script: %#v", execFake.sudoCommands)
+	}
+}
+
+func TestRunJoinClientFailsWhenClientDoesNotBecomeReady(t *testing.T) {
+	svc, credSvc, nomadFake, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "offline worker", "10.0.0.25")
+	nomadFake.nodes = []NodeListItem{{
+		ID:     "node-offline",
+		Status: "down",
+		Meta:   map[string]string{"panel_server_id": srv.ID},
+	}}
+	oldTimeout := nomadClientRegistrationTimeout
+	oldInterval := nomadClientRegistrationRetryInterval
+	nomadClientRegistrationTimeout = 20 * time.Millisecond
+	nomadClientRegistrationRetryInterval = time.Millisecond
+	defer func() {
+		nomadClientRegistrationTimeout = oldTimeout
+		nomadClientRegistrationRetryInterval = oldInterval
+	}()
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeClientJoin,
+		ServerID:     srv.ID,
+		ResourceType: "server",
+		ResourceID:   srv.ID,
+		Summary:      "Joining server to Nomad",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.runJoinClient(ctx, task.ID, srv, mustNomadAdapter(t, svc, srv))
+
+	stored, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != tasks.StatusFailed || !strings.Contains(stored.Error, "last node status: down") {
+		t.Fatalf("expected cluster registration failure, got %#v", stored)
 	}
 }
 
@@ -629,6 +677,52 @@ func TestSwitchServerRestoresPreviousAddressWhenPanelCannotReachNomad(t *testing
 
 	if svc.cfg.Address != previous || statusFake.address != previous {
 		t.Fatalf("expected switch failure to restore %q, got cfg=%q fake=%q", previous, svc.cfg.Address, statusFake.address)
+	}
+}
+
+func TestSwitchServerSynchronizesManagedClientConfiguration(t *testing.T) {
+	svc, credSvc, nomadFake, execFake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "new control", "10.0.0.40")
+	worker := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.41")
+	markNomadClientReady(nomadFake, worker)
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeClientJoin,
+		ServerID:     worker.ID,
+		ResourceType: "server",
+		ResourceID:   worker.ID,
+		Status:       tasks.StatusCompleted,
+		Summary:      "Nomad client joined",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: control.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
+
+	command := joinedSudoCommands(execFake.sudoCommands)
+	if !strings.Contains(command, `retry_join = ["10.0.0.40:4647"]`) {
+		t.Fatalf("expected switch to rewrite client retry_join:\n%s", command)
+	}
+	if !strings.Contains(command, "systemctl restart nomad") {
+		t.Fatalf("expected switch to restart synchronized client:\n%s", command)
+	}
+	for _, want := range []string{
+		"ufw allow 4646/tcp",
+		"ufw allow 4647/tcp",
+		"ufw allow 4648/tcp",
+		"ufw allow 4648/udp",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("expected switch to repair Nomad firewall rule %q:\n%s", want, command)
+		}
+	}
+	if svc.cfg.Address != "https://10.0.0.40:4646" || nomadFake.address != svc.cfg.Address {
+		t.Fatalf("expected switched address, got cfg=%q fake=%q", svc.cfg.Address, nomadFake.address)
 	}
 }
 
@@ -976,6 +1070,16 @@ func createJoinTestServer(t *testing.T, svc *server.Service, credSvc *credential
 		t.Fatal(err)
 	}
 	return stored
+}
+
+func markNomadClientReady(fake *joinFakeNomadClient, srv server.Server) {
+	fake.nodes = []NodeListItem{{
+		ID:      "node-" + srv.ID,
+		Name:    srv.Name,
+		Address: srv.Host,
+		Status:  "ready",
+		Meta:    map[string]string{"panel_server_id": srv.ID},
+	}}
 }
 
 type joinFakeNomadClient struct {

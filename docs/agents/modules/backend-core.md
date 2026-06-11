@@ -21,6 +21,7 @@
 ## 结构约定
 
 - `app.New` 负责打开数据库、创建 service、装配 scheduler、连接跨模块依赖并注册路由。
+- `app.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login` 和 `/api/v1/auth/session` 是开放入口，其余 API 经认证中间件保护。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
 - `GET /api/v1/system/version` 返回构建时注入的版本、commit、仓库和缓存的最新版本状态。`internal/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；开发版本或未注入仓库时不发起检查，且不提供下载或安装能力。

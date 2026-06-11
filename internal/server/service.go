@@ -596,6 +596,7 @@ func (s *Service) startConnectivityTask(task tasks.Task, srv Server) {
 }
 
 func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Server) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
 	_ = s.tasks.Advance(ctx, taskID, "connecting", "connecting to server")
@@ -639,6 +640,7 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 }
 
 func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
@@ -677,6 +679,7 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 }
 
 func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	target := srv.Target()
 	status, err := s.fetchUFWStatus(ctx, srv)
 	if err != nil {
@@ -709,6 +712,7 @@ func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, a
 }
 
 func (s *Service) runRestart(ctx context.Context, taskID string, srv Server) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Advance(ctx, taskID, "restarting", "scheduling server restart")
 	if _, err := (remoteops.Runner{Exec: s.exec, Target: srv.Target(), Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, remoteops.RestartScript(), restartTimeout); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)

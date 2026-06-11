@@ -27,6 +27,7 @@ type Scheduler struct {
 }
 
 const StaleQueuedWorkerTaskAfter = 10 * time.Minute
+const RunningTaskCheckInterval = 5 * time.Second
 
 var staleQueuedWorkerTaskTypes = []string{
 	"nomad_client_join",
@@ -54,12 +55,13 @@ func (s *Scheduler) SetCertificateRenewer(renewer certificateRenewer) {
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.wg.Add(5)
+	s.wg.Add(6)
 	go s.connectivityLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.packageLoop(ctx)
 	go s.cleanupLoop(ctx)
 	go s.certificateLoop(ctx)
+	go s.runningTaskLoop(ctx)
 }
 
 func (s *Scheduler) connectivityLoop(ctx context.Context) {
@@ -290,6 +292,7 @@ func (s *Scheduler) collectMetricsAt(ctx context.Context, srv server.Server, col
 	if err != nil {
 		return err
 	}
+	defer s.tasks.FinishExecution(task.ID)
 	_ = s.tasks.Advance(ctx, task.ID, "running", "")
 	if err := s.metrics.CollectAt(ctx, srv.ID, collectedAt); err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
@@ -303,7 +306,6 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	s.expireStaleQueuedWorkerTasks(ctx)
-	s.expireStaleRunningTasks(ctx)
 	lastRun := time.Now()
 	for {
 		select {
@@ -317,7 +319,6 @@ func (s *Scheduler) cleanupLoop(ctx context.Context) {
 			}
 			lastRun = time.Now()
 			s.expireStaleQueuedWorkerTasks(ctx)
-			s.expireStaleRunningTasks(ctx)
 			deleted, err := s.metrics.Cleanup(ctx, runtime.MetricsRetentionDays)
 			if err != nil {
 				log.Printf("metrics cleanup: %v", err)
@@ -342,14 +343,32 @@ func (s *Scheduler) expireStaleQueuedWorkerTasks(ctx context.Context) {
 	}
 }
 
-func (s *Scheduler) expireStaleRunningTasks(ctx context.Context) {
-	expired, err := s.tasks.ExpireStaleRunning(ctx, time.Now().UTC(), tasks.StaleRunningTaskAfter)
+func (s *Scheduler) runningTaskLoop(ctx context.Context) {
+	defer s.wg.Done()
+	s.failRunningTasksWithoutExecution(ctx)
+	ticker := time.NewTicker(RunningTaskCheckInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			s.failRunningTasksWithoutExecution(ctx)
+		}
+	}
+}
+
+func (s *Scheduler) failRunningTasksWithoutExecution(ctx context.Context) {
+	if s.tasks == nil {
+		return
+	}
+	expired, err := s.tasks.FailRunningWithoutExecution(ctx, time.Now().UTC())
 	if err != nil {
-		log.Printf("task stale-running cleanup: %v", err)
+		log.Printf("task running execution check: %v", err)
 		return
 	}
 	if expired > 0 {
-		log.Printf("task stale-running cleanup marked %d task(s) failed", expired)
+		log.Printf("task running execution check marked %d orphaned task(s) failed", expired)
 	}
 }
 

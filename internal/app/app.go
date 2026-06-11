@@ -61,7 +61,7 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	taskSvc := tasks.NewService(store.AppDB())
-	if _, err := taskSvc.ExpireStaleRunning(context.Background(), time.Now().UTC(), tasks.StaleRunningTaskAfter); err != nil {
+	if _, err := taskSvc.FailRunningWithoutExecution(context.Background(), time.Now().UTC()); err != nil {
 		_ = store.Close()
 		return nil, err
 	}

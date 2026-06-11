@@ -39,8 +39,10 @@ const (
 )
 
 var (
-	nomadPanelReachabilityTimeout       = 30 * time.Second
-	nomadPanelReachabilityRetryInterval = 2 * time.Second
+	nomadPanelReachabilityTimeout        = 30 * time.Second
+	nomadPanelReachabilityRetryInterval  = 2 * time.Second
+	nomadClientRegistrationTimeout       = 60 * time.Second
+	nomadClientRegistrationRetryInterval = 2 * time.Second
 )
 
 type nodeClient interface {
@@ -365,6 +367,9 @@ func (s *JoinService) SwitchServer(ctx context.Context, in SwitchServerInput) (t
 	if !ok {
 		return tasks.Task{}, panelerr.Validation("nomad_switch_api_unavailable", "Nomad server switch API is unavailable")
 	}
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("nomad_switch_executor_unavailable", "Nomad server switch executor is unavailable")
+	}
 	serverID := strings.TrimSpace(in.ServerID)
 	if serverID == "" {
 		return tasks.Task{}, panelerr.Validation("nomad_switch_server_required", "Server ID is required")
@@ -471,6 +476,7 @@ func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInp
 			return ReverseProxyUpdateResult{}, err
 		}
 		taskID = task.ID
+		defer s.tasks.FinishExecution(taskID)
 	}
 	fail := func(err error) (ReverseProxyUpdateResult, error) {
 		if s.tasks != nil && taskID != "" {
@@ -631,6 +637,7 @@ func (s *JoinService) restoreNomadAddressAfterFailure(ctx context.Context, taskI
 }
 
 func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
 	if err := s.runNomadCommandSteps(ctx, taskID, target, []nomadCommandStep{
@@ -644,11 +651,17 @@ func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv serv
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
+	if err := s.waitForNomadClientRegistration(ctx, taskID, srv); err != nil {
+		_ = s.execSudoLogged(ctx, taskID, target, nomadClusterDiagnosticsScript(), nomadMaintenanceTimeout)
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	s.reconcileReverseProxyJobLogged(ctx, taskID)
-	_ = s.tasks.Complete(ctx, taskID, "Nomad client join requested")
+	_ = s.tasks.Complete(ctx, taskID, "Nomad client joined")
 }
 
 func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	addressChange := s.beginNomadServerAddressChange(srv)
 	keepAddress := false
@@ -682,6 +695,7 @@ func (s *JoinService) runBootstrapServerSteps(ctx context.Context, taskID string
 }
 
 func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, bootstrap server.Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	managed, err := s.panelManagedServers(ctx, bootstrap)
 	if err != nil {
@@ -724,6 +738,7 @@ func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, boot
 }
 
 func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv server.Server, setter addressSetter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	previous := s.currentConfig().Address
 	next := nomadHTTPAddressForServer(srv)
@@ -736,7 +751,40 @@ func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv se
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
+	if err := s.syncManagedClientsToServer(ctx, taskID, srv); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	s.reconcileReverseProxyJobLogged(ctx, taskID)
 	_ = s.tasks.Complete(ctx, taskID, "Nomad server switched")
+}
+
+func (s *JoinService) syncManagedClientsToServer(ctx context.Context, taskID string, control server.Server) error {
+	clients, err := s.panelManagedClientServers(ctx, control.ID)
+	if err != nil {
+		return err
+	}
+	rpc := net.JoinHostPort(control.Host, "4647")
+	for _, srv := range clients {
+		adapter, err := s.ensureNomadEligible(srv)
+		if err != nil {
+			return fmt.Errorf("cannot synchronize Nomad client %s: %w", firstNonEmpty(srv.Name, srv.ID), err)
+		}
+		name := firstNonEmpty(srv.Name, srv.ID, srv.Host)
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "synchronizing Nomad client "+name+" to "+rpc)
+		if err := s.runNomadCommandSteps(ctx, taskID, srv.Target(), []nomadCommandStep{
+			{Stage: "configuring_clients", Message: "writing Nomad client configuration on " + name, Command: s.joinConfigScript(srv, rpc), Timeout: nomadMaintenanceTimeout},
+			{Stage: "opening_firewall", Message: "opening Nomad firewall ports on " + name, Command: nomadUFWAllowScript(traitBool(srv.Traits, TraitReverseProxyEnabled)), Timeout: nomadFirewallTimeout},
+			{Stage: "restarting_clients", Message: "restarting Nomad client on " + name, Command: adapter.NomadServiceRestartScript(), Timeout: nomadServiceTimeout},
+			{Stage: "verifying_clients", Message: "checking Nomad client on " + name, Command: nomadLocalHealthScript(), Timeout: nomadLocalHealthTimeout},
+		}); err != nil {
+			return fmt.Errorf("cannot synchronize Nomad client %s: %w", name, err)
+		}
+		if err := s.waitForNomadClientRegistration(ctx, taskID, srv); err != nil {
+			return fmt.Errorf("cannot synchronize Nomad client %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func (s *JoinService) reconcileReverseProxyJobLogged(ctx context.Context, taskID string) {
@@ -746,6 +794,7 @@ func (s *JoinService) reconcileReverseProxyJobLogged(ctx context.Context, taskID
 }
 
 func (s *JoinService) runRemoveNode(ctx context.Context, taskID string, srv server.Server, nodeID string) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	if srv.ID != "" {
 		if s.exec == nil {
@@ -851,6 +900,60 @@ func (s *JoinService) panelManagedServers(ctx context.Context, bootstrap server.
 	return out, nil
 }
 
+func (s *JoinService) panelManagedClientServers(ctx context.Context, excludeServerID string) ([]server.Server, error) {
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serverByID := make(map[string]server.Server, len(servers))
+	for _, srv := range servers {
+		serverByID[srv.ID] = srv
+	}
+
+	clientIDs := map[string]struct{}{}
+	serverIDs := map[string]struct{}{}
+	latestTasks, err := s.latestNomadTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for serverID, task := range latestTasks {
+		if serverID == "" || taskCompletedRemove(task) {
+			continue
+		}
+		switch roleForTask(task) {
+		case ProjectedNodeRoleClient:
+			clientIDs[serverID] = struct{}{}
+		case ProjectedNodeRoleServer:
+			serverIDs[serverID] = struct{}{}
+		}
+	}
+
+	nodesCtx, cancelNodes := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
+	defer cancelNodes()
+	if nodes, err := s.nomad.Nodes(nodesCtx); err == nil {
+		for _, node := range nodes {
+			if serverID := serverIDForNode(node); serverID != "" {
+				clientIDs[serverID] = struct{}{}
+			}
+		}
+	}
+
+	out := make([]server.Server, 0, len(clientIDs))
+	for id := range clientIDs {
+		if id == excludeServerID {
+			continue
+		}
+		if _, isServer := serverIDs[id]; isServer {
+			continue
+		}
+		if srv, ok := serverByID[id]; ok {
+			out = append(out, srv)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (s *JoinService) nomadRoleForServer(ctx context.Context, srv server.Server) string {
 	latestTasks, err := s.latestNomadTasks(ctx)
 	if err == nil {
@@ -905,6 +1008,52 @@ func (s *JoinService) waitForPanelNomadReachability(ctx context.Context, taskID 
 	}
 }
 
+func (s *JoinService) waitForNomadClientRegistration(ctx context.Context, taskID string, srv server.Server) error {
+	if err := s.tasks.Advance(ctx, taskID, "verifying_cluster", "waiting for Nomad client registration"); err != nil {
+		return err
+	}
+	deadline := time.Now().Add(nomadClientRegistrationTimeout)
+	lastStatus := ""
+	var lastErr error
+	for {
+		queryCtx, cancel := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
+		nodes, err := s.nomad.Nodes(queryCtx)
+		cancel()
+		if err != nil {
+			lastErr = err
+		} else {
+			lastErr = nil
+			lastStatus = ""
+			for _, node := range nodes {
+				if strings.TrimSpace(serverIDForNode(node)) != srv.ID {
+					continue
+				}
+				lastStatus = strings.TrimSpace(node.Status)
+				if strings.EqualFold(lastStatus, "ready") {
+					_ = s.tasks.AppendLog(ctx, taskID, "system", "Nomad client registered as ready")
+					return nil
+				}
+			}
+		}
+		if time.Now().After(deadline) {
+			target := firstNonEmpty(srv.Name, srv.ID, srv.Host)
+			switch {
+			case lastErr != nil:
+				return fmt.Errorf("Nomad client %s did not register before timeout; last Nomad API error: %w", target, lastErr)
+			case lastStatus != "":
+				return fmt.Errorf("Nomad client %s did not become ready before timeout; last node status: %s", target, lastStatus)
+			default:
+				return fmt.Errorf("Nomad client %s did not appear in the Nomad node list before timeout", target)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(nomadClientRegistrationRetryInterval):
+		}
+	}
+}
+
 func (s *JoinService) execSudoLogged(ctx context.Context, taskID string, target sshx.Target, command string, timeout time.Duration) error {
 	_, err := remoteops.Runner{Exec: s.exec, Target: target, Log: nomadTaskLogSink{s.tasks, taskID}}.RunSudoLogged(ctx, command, timeout)
 	return err
@@ -923,10 +1072,12 @@ func (s *JoinService) joinConfigScript(srv server.Server, rpc string) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
 	cfg := s.currentConfig()
 	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
+	region := firstNonEmpty(strings.TrimSpace(cfg.Region), "global")
 	return fmt.Sprintf(`%s
 %s
 cat >/etc/nomad.d/panel-client.hcl <<'EOF'
 name = "%s"
+region = "%s"
 datacenter = "%s"
 data_dir = "/opt/nomad/data"
 bind_addr = "0.0.0.0"
@@ -948,7 +1099,11 @@ server {
 
 client {
   enabled = true
-  servers = ["%s"]
+  server_join {
+    retry_join = ["%s"]
+    retry_interval = "5s"
+    retry_max = 0
+  }
   meta {
     panel_server_id = "%s"
     panel_server_name = "%s"
@@ -957,17 +1112,19 @@ client {
   }
 }
 EOF
-`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) bootstrapConfigScript(srv server.Server) string {
 	nodeName := safeNodeName("panel-" + srv.ID)
 	cfg := s.currentConfig()
 	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
+	region := firstNonEmpty(strings.TrimSpace(cfg.Region), "global")
 	return fmt.Sprintf(`%s
 %s
 cat >/etc/nomad.d/panel-server.hcl <<'EOF'
 name = "%s"
+region = "%s"
 datacenter = "%s"
 data_dir = "/opt/nomad/data"
 bind_addr = "0.0.0.0"
@@ -998,7 +1155,7 @@ client {
   }
 }
 EOF
-`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
@@ -1053,6 +1210,9 @@ find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' -o -nam
 }
 
 func nomadUFWAllowScript(reverseProxy bool) string {
+	// Nomad uses HTTP for the API, RPC for client/server traffic, and Serf
+	// gossip over both TCP and UDP. Keep all four rules together so repair
+	// paths cannot leave an agent locally healthy but isolated from its peers.
 	rules := []remoteops.UFWRule{
 		{Port: 4646, Protocol: "tcp"},
 		{Port: 4647, Protocol: "tcp"},
@@ -1093,6 +1253,19 @@ while ! timeout 3s nomad agent-info >/dev/null 2>&1; do
   sleep 2
 done
 echo "[panel] Nomad HTTP API is responding locally"`
+}
+
+func nomadClusterDiagnosticsScript() string {
+	return `set +e
+echo "[panel] Nomad client did not register; collecting diagnostics"
+export NOMAD_ADDR="https://127.0.0.1:4646"
+export NOMAD_CACERT="/etc/nomad.d/tls/ca.pem"
+export NOMAD_CLIENT_CERT="/etc/nomad.d/tls/agent.pem"
+export NOMAD_CLIENT_KEY="/etc/nomad.d/tls/agent-key.pem"
+timeout 10s nomad agent-info
+systemctl status nomad --no-pager -l
+journalctl -u nomad -n 120 --no-pager
+exit 0`
 }
 
 func shellScript(parts ...string) string {

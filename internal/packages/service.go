@@ -237,6 +237,7 @@ func (s *Service) adapterFor(srv server.Server) (packageAdapter, error) {
 }
 
 func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv server.Server, adapter packageAdapter) {
+	defer s.tasks.FinishExecution(task.ID)
 	defer s.clearRefreshing(srv.ID)
 	_ = s.tasks.Advance(ctx, task.ID, "running", "refreshing package updates")
 	updates, err := adapter.ListUpgradeable(ctx, s.exec, srv.Target())
@@ -252,6 +253,7 @@ func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv serve
 }
 
 func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter, names []string) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading selected packages")
 	err := adapter.UpgradeSelected(ctx, s.exec, srv.Target(), names, taskLogSink{s.tasks, taskID})
@@ -273,6 +275,7 @@ func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv ser
 }
 
 func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading all packages")
 	err := adapter.UpgradeAll(ctx, s.exec, srv.Target(), taskLogSink{s.tasks, taskID})

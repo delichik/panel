@@ -727,7 +727,7 @@ const messages = {
         "All SSH servers are already managed, pending, or unavailable as join candidates.",
       switchServerTitle: "Switch Nomad server",
       switchServerHint:
-        "Panel will point Nomad API traffic at the selected server and verify TCP 4646 before keeping the change.",
+        "Panel will verify the selected server, switch Nomad API traffic, then rewrite and restart every managed client with the new server RPC address.",
       noSwitchCandidates: "No server is available for switching.",
       rebuildClusterTitle: "Rebuild Nomad cluster",
       rebuildClusterHint:
@@ -1573,7 +1573,7 @@ const messages = {
         "所有 SSH 服务器都已被托管、处于待定状态，或不可作为加入候选。",
       switchServerTitle: "切换 Nomad server",
       switchServerHint:
-        "Panel 会把 Nomad API 流量指向所选 server，并在确认 TCP 4646 可达后保留该切换。",
+        "Panel 会先验证所选 server，再切换 Nomad API 地址，并把新 server RPC 地址同步到所有托管 client 后逐台重启。",
       noSwitchCandidates: "当前没有可切换的 server。",
       rebuildClusterTitle: "重建 Nomad 集群",
       rebuildClusterHint:
