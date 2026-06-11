@@ -119,6 +119,25 @@ export interface DnsDomainInput {
   accountId?: string;
 }
 
+export type DnsRecordType = 'A' | 'AAAA' | 'CNAME' | 'TXT' | 'MX' | 'SRV' | 'CAA' | 'NS';
+
+export interface DnsRecordDto {
+  id: string;
+  name: string;
+  type: DnsRecordType | string;
+  value: string;
+  ttl?: number;
+  proxied?: boolean;
+}
+
+export interface DnsRecordInput {
+  name: string;
+  type: DnsRecordType;
+  value: string;
+  ttl?: number;
+  proxied?: boolean;
+}
+
 export interface OverviewServerDto {
   id: string;
   name: string;

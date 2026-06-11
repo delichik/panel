@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { nomadApi } from '@/api/nomad';
 import type { NomadControlPlaneDto } from '@/types/api';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 
 const router = useRouter();
 const controlPlane = ref<NomadControlPlaneDto | null>(null);
@@ -83,7 +84,9 @@ onMounted(load);
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <v-card variant="outlined" class="setup-panel">
+    <PageLoadingState v-if="loading && !controlPlane" min-height="320px" />
+
+    <v-card v-else variant="outlined" class="setup-panel">
       <div class="setup-icon"><v-icon size="30">mdi-server-plus</v-icon></div>
       <div class="setup-copy">
         <div class="text-h6 font-weight-bold">{{ migrationRequired ? t('nomadSetupPage.migrationTitle') : t('nomadSetupPage.selectServerTitle') }}</div>

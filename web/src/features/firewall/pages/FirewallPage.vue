@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 import ServerSelector from '@/components/ServerSelector.vue';
 import { serversApi } from '@/api/servers';
 import { t } from '@/i18n';
+import { usePagination } from '@/composables/usePagination';
 import type { FirewallProtocol, ServerDto, UfwRuleDto, UfwStateDto } from '@/types/api';
 
 const servers = ref<ServerDto[]>([]);
@@ -34,6 +37,13 @@ const selectedUfwSupported = computed(() => selectedServer.value?.traits?.['sys.
 const canUseSudo = computed(() => selectedServer.value?.sudo?.passwordless === true);
 const canManageRules = computed(() => Boolean(selectedServer.value?.reachable && canUseSudo.value && state.value?.supported && state.value?.installed));
 const canAddRule = computed(() => canManageRules.value && Number(ruleForm.port) > 0 && Number(ruleForm.port) <= 65535);
+const rules = computed(() => state.value?.rules ?? []);
+const {
+  page,
+  pageSize,
+  total,
+  pageItems: pagedRules,
+} = usePagination(rules);
 
 const protocolOptions = computed(() => [
   { title: t('firewallPage.tcp'), value: 'tcp' },
@@ -186,6 +196,9 @@ onMounted(async () => {
           </div>
         </div>
 
+        <PageLoadingState v-if="loadingState && !state" min-height="280px" />
+
+        <template v-else>
         <div class="status-grid">
           <div>
             <span>{{ t('firewallPage.status') }}</span>
@@ -245,7 +258,7 @@ onMounted(async () => {
             <tr v-if="!state?.rules.length">
               <td colspan="5" class="text-center py-6 text-medium-emphasis">{{ t('firewallPage.noRules') }}</td>
             </tr>
-            <tr v-for="rule in state?.rules ?? []" :key="rule.number">
+            <tr v-for="rule in pagedRules" :key="rule.number">
               <td class="font-weight-bold">#{{ rule.number }}</td>
               <td>{{ rule.to }}</td>
               <td><v-chip size="small" color="primary" variant="tonal" label>{{ rule.action }}</v-chip></td>
@@ -256,6 +269,8 @@ onMounted(async () => {
             </tr>
           </tbody>
         </v-table>
+        <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
+        </template>
       </v-card>
 
       <v-card v-else variant="outlined" class="empty-panel">

@@ -1,16 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import { useDisplay } from 'vuetify';
 import { formatDateTime, formatTime, t, translateTaskStage, translateTaskStatus, translateTaskType } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
 import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
 import { groupTasksByOperation } from '../taskOperations';
 
 const route = useRoute();
-const display = useDisplay();
 const TYPE_FILTER_COMMON = '__common';
 const TYPE_FILTER_ALL = '__all';
 const hiddenByCommonTaskTypes = new Set(['server_connectivity_test', 'metrics_collect']);
@@ -71,8 +71,6 @@ const taskTypeFilterItems = computed(() => [
     .sort((a, b) => translateTaskType(a).localeCompare(translateTaskType(b)))
     .map((value) => ({ title: translateTaskType(value), value })),
 ]);
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
-const paginationVisible = computed(() => display.smAndDown.value ? 5 : 10);
 const statusFilterItems = computed(() => [
   { title: translateTaskStatus('queued'), value: 'queued' },
   { title: translateTaskStatus('scheduled'), value: 'scheduled' },
@@ -181,6 +179,19 @@ async function loadSteps() {
 }
 
 function reloadFirstPage() {
+  page.value = 1;
+  void loadTasks();
+}
+
+function updateTaskPage(nextPage: number) {
+  if (page.value === nextPage) return;
+  page.value = nextPage;
+  void loadTasks();
+}
+
+function updateTaskPageSize(nextPageSize: number) {
+  if (pageSize.value === nextPageSize && page.value === 1) return;
+  pageSize.value = nextPageSize;
   page.value = 1;
   void loadTasks();
 }
@@ -418,7 +429,8 @@ onBeforeUnmount(() => {
           <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.operations') }}</div>
         </div>
         <v-divider />
-        <v-list lines="three" density="compact" class="operation-list">
+        <PageLoadingState v-if="loading && tasks.length === 0" min-height="280px" />
+        <v-list v-else lines="three" density="compact" class="operation-list">
           <v-list-item
             v-for="group in operationGroups"
             :key="group.operationId"
@@ -445,10 +457,7 @@ onBeforeUnmount(() => {
           <v-list-item v-if="operationGroups.length === 0" :title="t('taskCenter.noTaskOperations')" />
         </v-list>
         <v-divider />
-        <div class="pager">
-          <v-select v-model="pageSize" :items="[10, 20, 50, 100]" density="compact" hide-details variant="outlined" class="page-size" @update:model-value="reloadFirstPage" />
-          <v-pagination v-model="page" :length="totalPages" density="compact" :total-visible="paginationVisible" @update:model-value="loadTasks" />
-        </div>
+        <AppPagination :page="page" :page-size="pageSize" :total="total" @update:page="updateTaskPage" @update:page-size="updateTaskPageSize" />
       </v-card>
 
       <section class="main-panel">
@@ -676,22 +685,6 @@ onBeforeUnmount(() => {
   gap: 6px 12px;
 }
 
-.pager {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 12px;
-  padding: 12px;
-}
-
-.page-size {
-  max-width: 90px;
-}
-
-.pager :deep(.v-pagination__item--is-active .v-btn) {
-  color: rgb(var(--v-theme-on-primary)) !important;
-}
-
 .selected-progress {
   display: grid;
   grid-template-columns: 1fr auto;
@@ -818,13 +811,5 @@ tr.selected {
     width: 100%;
   }
 
-  .pager {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .page-size {
-    max-width: none;
-  }
 }
 </style>

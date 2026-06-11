@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"database/sql"
+	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -12,13 +13,17 @@ import (
 )
 
 var domainNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
+var recordNamePattern = regexp.MustCompile(`^(@|[a-z0-9_*]([a-z0-9_*.-]{0,251}[a-z0-9_*])?)$`)
 
 type Service struct {
-	db *sql.DB
+	db              *sql.DB
+	providerFactory func(domain ResolvedDomain) Provider
 }
 
 func NewService(db *sql.DB) *Service {
-	return &Service{db: db}
+	return &Service{db: db, providerFactory: func(domain ResolvedDomain) Provider {
+		return NewCloudflareProvider(domain.APIToken, domain.AccountID, http.DefaultClient)
+	}}
 }
 
 func (s *Service) ListDomains(ctx context.Context) ([]Domain, error) {
@@ -98,6 +103,52 @@ func (s *Service) DeleteDomain(ctx context.Context, domainID string) error {
 	return nil
 }
 
+func (s *Service) ListRecords(ctx context.Context, domainID string) ([]Record, error) {
+	domain, provider, err := s.resolveProvider(ctx, domainID)
+	if err != nil {
+		return nil, err
+	}
+	return provider.ListRecords(ctx, domain.Name)
+}
+
+func (s *Service) CreateRecord(ctx context.Context, domainID string, in RecordInput) (Record, error) {
+	domain, provider, err := s.resolveProvider(ctx, domainID)
+	if err != nil {
+		return Record{}, err
+	}
+	record, err := validateRecordInput(in)
+	if err != nil {
+		return Record{}, err
+	}
+	return provider.CreateRecord(ctx, domain.Name, record)
+}
+
+func (s *Service) UpdateRecord(ctx context.Context, domainID, recordID string, in RecordInput) (Record, error) {
+	domain, provider, err := s.resolveProvider(ctx, domainID)
+	if err != nil {
+		return Record{}, err
+	}
+	if strings.TrimSpace(recordID) == "" {
+		return Record{}, panelerr.Validation("dns_record_id_required", "DNS record ID is required")
+	}
+	record, err := validateRecordInput(in)
+	if err != nil {
+		return Record{}, err
+	}
+	return provider.UpdateRecord(ctx, domain.Name, recordID, record)
+}
+
+func (s *Service) DeleteRecord(ctx context.Context, domainID, recordID string) error {
+	domain, provider, err := s.resolveProvider(ctx, domainID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(recordID) == "" {
+		return panelerr.Validation("dns_record_id_required", "DNS record ID is required")
+	}
+	return provider.DeleteRecord(ctx, domain.Name, recordID)
+}
+
 func (s *Service) GetDomain(ctx context.Context, domainID string) (Domain, error) {
 	domain, err := scanDomain(s.db.QueryRowContext(ctx, `SELECT id,name,provider,account_id,created_at,updated_at FROM dns_domains WHERE id=?`, domainID))
 	if err == sql.ErrNoRows {
@@ -146,6 +197,61 @@ func validateSaveDomain(in SaveDomainRequest, requireToken bool) (preparedDomain
 		return preparedDomain{}, panelerr.Validation("dns_api_token_required", "DNS provider API token is required")
 	}
 	return preparedDomain{Name: name, Provider: provider, APIToken: token, AccountID: strings.TrimSpace(in.AccountID)}, nil
+}
+
+func (s *Service) resolveProvider(ctx context.Context, domainID string) (ResolvedDomain, Provider, error) {
+	domain, err := s.ResolveDomain(ctx, domainID)
+	if err != nil {
+		return ResolvedDomain{}, nil, err
+	}
+	if domain.Provider != ProviderCloudflare {
+		return ResolvedDomain{}, nil, panelerr.Validation("dns_provider_invalid", "DNS provider must be cloudflare")
+	}
+	return domain, s.providerFactory(domain), nil
+}
+
+func validateRecordInput(in RecordInput) (RecordInput, error) {
+	name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(in.Name), "."))
+	if !recordNamePattern.MatchString(name) {
+		return RecordInput{}, panelerr.Validation("dns_record_name_invalid", "DNS record name is invalid")
+	}
+	recordType := strings.ToUpper(strings.TrimSpace(in.Type))
+	if !supportedRecordType(recordType) {
+		return RecordInput{}, panelerr.Validation("dns_record_type_invalid", "DNS record type is invalid")
+	}
+	value := strings.TrimSpace(in.Value)
+	if value == "" {
+		return RecordInput{}, panelerr.Validation("dns_record_value_required", "DNS record value is required")
+	}
+	if in.TTL < 0 {
+		return RecordInput{}, panelerr.Validation("dns_record_ttl_invalid", "DNS record TTL cannot be negative")
+	}
+	proxied := in.Proxied
+	if !supportsProxy(recordType) {
+		if proxied != nil && *proxied {
+			return RecordInput{}, panelerr.Validation("dns_record_proxy_invalid", "DNS record proxy is only supported for A, AAAA, and CNAME records")
+		}
+		proxied = nil
+	}
+	return RecordInput{Name: name, Type: recordType, Value: value, TTL: in.TTL, Proxied: proxied}, nil
+}
+
+func supportsProxy(value string) bool {
+	switch value {
+	case "A", "AAAA", "CNAME":
+		return true
+	default:
+		return false
+	}
+}
+
+func supportedRecordType(value string) bool {
+	switch value {
+	case "A", "AAAA", "CNAME", "TXT", "MX", "SRV", "CAA", "NS":
+		return true
+	default:
+		return false
+	}
 }
 
 type domainScanner interface{ Scan(dest ...any) error }

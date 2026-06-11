@@ -11,6 +11,7 @@ import { useI18n } from '@/i18n';
 import { overviewApi } from '@/api/overview';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto, MetricsRange, MetricsSeriesDto, OverviewDto, OverviewServerDto } from '@/types/api';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent]);
 
@@ -580,7 +581,9 @@ onBeforeUnmount(() => {
 
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <div v-if="!loading && overview.servers.length === 0" class="empty-state">
+    <PageLoadingState v-if="loading && overview.servers.length === 0" min-height="360px" />
+
+    <div v-else-if="overview.servers.length === 0" class="empty-state">
       <v-icon size="44" color="primary">mdi-server-network-off</v-icon>
       <div>
         <div class="text-subtitle-1 font-weight-bold">{{ t('overviewPage.noServersConnected') }}</div>

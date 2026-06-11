@@ -174,6 +174,14 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			dnsH.ListDomains(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/dns/domains":
 			dnsH.CreateDomain(w, r)
+		case r.Method == http.MethodGet && dnsRecordCollectionPath(path):
+			dnsH.ListRecords(w, r)
+		case r.Method == http.MethodPost && dnsRecordCollectionPath(path):
+			dnsH.CreateRecord(w, r)
+		case r.Method == http.MethodPut && dnsRecordResourcePath(path):
+			dnsH.UpdateRecord(w, r)
+		case r.Method == http.MethodDelete && dnsRecordResourcePath(path):
+			dnsH.DeleteRecord(w, r)
 		case r.Method == http.MethodPut && strings.HasPrefix(path, "/api/v1/dns/domains/"):
 			dnsH.UpdateDomain(w, r)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/dns/domains/"):
@@ -315,6 +323,16 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 func serverResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != ""
+}
+
+func dnsRecordCollectionPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "dns" && parts[3] == "domains" && parts[4] != "" && parts[5] == "records"
+}
+
+func dnsRecordResourcePath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 7 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "dns" && parts[3] == "domains" && parts[4] != "" && parts[5] == "records" && parts[6] != ""
 }
 
 func serverActionPath(path string, action string) bool {

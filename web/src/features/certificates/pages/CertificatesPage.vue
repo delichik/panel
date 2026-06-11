@@ -4,6 +4,9 @@ import { useI18n } from '@/i18n';
 import { certificatesApi } from '@/api/certificates';
 import { dnsApi } from '@/api/dns';
 import type { CertificateDto, CertificateIssueInput, CertificateScope, DnsDomainDto } from '@/types/api';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
+import { usePagination } from '@/composables/usePagination';
 
 const certificates = ref<CertificateDto[]>([]);
 const domains = ref<DnsDomainDto[]>([]);
@@ -34,6 +37,12 @@ const scopeItems = computed<Array<{ label: string; value: CertificateScope }>>((
 ]);
 
 const domainOptions = computed(() => domains.value.map((domain) => ({ label: domain.name, value: domain.id })));
+const {
+  page,
+  pageSize,
+  total,
+  pageItems: pagedCertificates,
+} = usePagination(certificates);
 
 const previewDomains = computed(() => {
   const base = domains.value.find((domain) => domain.id === form.domainId)?.name;
@@ -143,7 +152,8 @@ onMounted(load);
           {{ t('certificatesPage.issueCertificate') }}
         </v-btn>
       </div>
-      <v-table class="text-left" style="background: transparent;">
+      <PageLoadingState v-if="loading && certificates.length === 0" min-height="300px" />
+      <v-table v-else class="text-left" style="background: transparent;">
         <thead>
           <tr>
             <th class="font-weight-bold">{{ t('common.name') }}</th>
@@ -158,7 +168,7 @@ onMounted(load);
           <tr v-if="certificates.length === 0">
             <td colspan="6" class="text-center py-6 text-medium-emphasis">{{ t('certificatesPage.noCertificates') }}</td>
           </tr>
-          <tr v-for="row in certificates" :key="row.id">
+          <tr v-for="row in pagedCertificates" :key="row.id">
             <td class="font-weight-bold">
               <div>{{ row.name }}</div>
               <div class="text-caption text-medium-emphasis">{{ row.prefix }} / {{ row.issuer || 'acme' }}</div>
@@ -185,6 +195,7 @@ onMounted(load);
           </tr>
         </tbody>
       </v-table>
+      <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </v-card>
 
     <v-dialog v-model="dialog" width="620">

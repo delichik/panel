@@ -3,16 +3,20 @@ package dns
 import "context"
 
 type Record struct {
-	ID    string
-	Name  string
-	Type  string
-	Value string
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Value   string `json:"value"`
+	TTL     int    `json:"ttl,omitempty"`
+	Proxied bool   `json:"proxied,omitempty"`
 }
 
 type RecordInput struct {
-	Name  string
-	Type  string
-	Value string
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Value   string `json:"value"`
+	TTL     int    `json:"ttl,omitempty"`
+	Proxied *bool  `json:"proxied,omitempty"`
 }
 
 type Provider interface {

@@ -9,6 +9,9 @@ import {
 } from '@/i18n';
 import { nomadApi } from '@/api/nomad';
 import type { NomadControlPlaneDto, NomadReverseProxyStaticSiteDto, ProjectedNomadNodeDto } from '@/types/api';
+import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
+import { usePagination } from '@/composables/usePagination';
 
 const router = useRouter();
 const route = useRoute();
@@ -42,6 +45,12 @@ const bootstrapServers = computed(() => controlPlane.value?.bootstrapCandidates 
 const readyCount = computed(() => nodes.value.filter((node) => node.status === 'ready').length);
 const managedCount = computed(() => nodes.value.filter((node) => node.kind === 'managed').length);
 const pendingCount = computed(() => nodes.value.filter((node) => node.kind === 'pending').length);
+const {
+  page,
+  pageSize,
+  total,
+  pageItems: pagedNodes,
+} = usePagination(nodes);
 const selectedServer = computed(() => candidateServers.value.find((server) => server.id === selectedServerId.value) ?? null);
 const selectedRebuildServer = computed(() => bootstrapServers.value.find((server) => server.id === selectedRebuildServerId.value) ?? null);
 const candidateOptions = computed(() =>
@@ -358,10 +367,9 @@ onMounted(load);
     <v-alert v-else-if="controlPlane?.status === 'degraded'" type="warning" variant="tonal">
       {{ t('nomadNodesPage.degradedHint') }}
     </v-alert>
-    <v-alert v-else-if="controlPlane?.status === 'connected'" type="success" variant="tonal">
-      {{ t('nomadNodesPage.connectedLeader', { leader: controlPlane.leader || t('common.unknown') }) }}
-    </v-alert>
+    <PageLoadingState v-if="loading && nodes.length === 0" min-height="340px" />
 
+    <template v-else>
     <div class="summary-strip">
       <v-card variant="outlined" class="summary-card"><div class="text-caption text-medium-emphasis">{{ t('nomadNodesPage.nodes') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ nodes.length }}</div></v-card>
       <v-card variant="outlined" class="summary-card"><div class="text-caption text-medium-emphasis">{{ t('nomadNodesPage.ready') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ readyCount }}</div></v-card>
@@ -378,7 +386,7 @@ onMounted(load);
       <v-table>
         <thead><tr><th>{{ t('common.name') }}</th><th>{{ t('nomadNodesPage.nodeId') }}</th><th>{{ t('serversPage.host') }}</th><th>{{ t('nomadNodesPage.role') }}</th><th>{{ t('common.status') }}</th><th>{{ t('nomadNodesPage.reverseProxy') }}</th><th>{{ t('packagesPage.source') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
         <tbody>
-          <tr v-for="node in nodes" :key="node.nodeId || node.serverId || node.name">
+          <tr v-for="node in pagedNodes" :key="node.nodeId || node.serverId || node.name">
             <td class="font-weight-bold">{{ node.name || '-' }}</td>
             <td class="mono">{{ node.nodeId || '-' }}</td>
             <td>{{ node.host || '-' }}</td>
@@ -454,7 +462,9 @@ onMounted(load);
           <tr v-if="nodes.length === 0"><td colspan="8" class="text-center py-8 text-medium-emphasis">{{ t('nomadNodesPage.noProjectedNodes') }}</td></tr>
         </tbody>
       </v-table>
+      <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
     </v-card>
+    </template>
 
     <v-dialog v-model="joinDialog" width="520">
       <v-card class="app-dialog-card">

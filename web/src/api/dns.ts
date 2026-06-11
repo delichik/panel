@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { DnsDomainDto, DnsDomainInput } from '@/types/api';
+import type { DnsDomainDto, DnsDomainInput, DnsRecordDto, DnsRecordInput } from '@/types/api';
 
 export const dnsApi = {
   listDomains() {
@@ -13,5 +13,17 @@ export const dnsApi = {
   },
   deleteDomain(domainId: string) {
     return apiClient.delete(`/dns/domains/${domainId}`);
+  },
+  listRecords(domainId: string) {
+    return apiClient.get<DnsRecordDto[]>(`/dns/domains/${domainId}/records`);
+  },
+  createRecord(domainId: string, input: DnsRecordInput) {
+    return apiClient.post<DnsRecordDto>(`/dns/domains/${domainId}/records`, input);
+  },
+  updateRecord(domainId: string, recordId: string, input: DnsRecordInput) {
+    return apiClient.put<DnsRecordDto>(`/dns/domains/${domainId}/records/${recordId}`, input);
+  },
+  deleteRecord(domainId: string, recordId: string) {
+    return apiClient.delete(`/dns/domains/${domainId}/records/${recordId}`);
   },
 };
