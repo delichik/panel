@@ -680,6 +680,52 @@ func TestSwitchServerRestoresPreviousAddressWhenPanelCannotReachNomad(t *testing
 	}
 }
 
+func TestSwitchServerSynchronizesManagedClientConfiguration(t *testing.T) {
+	svc, credSvc, nomadFake, execFake, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "new control", "10.0.0.40")
+	worker := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.41")
+	markNomadClientReady(nomadFake, worker)
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeClientJoin,
+		ServerID:     worker.ID,
+		ResourceType: "server",
+		ResourceID:   worker.ID,
+		Status:       tasks.StatusCompleted,
+		Summary:      "Nomad client joined",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: control.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, svc.tasks, ctx, task.ID, tasks.StatusCompleted)
+
+	command := joinedSudoCommands(execFake.sudoCommands)
+	if !strings.Contains(command, `retry_join = ["10.0.0.40:4647"]`) {
+		t.Fatalf("expected switch to rewrite client retry_join:\n%s", command)
+	}
+	if !strings.Contains(command, "systemctl restart nomad") {
+		t.Fatalf("expected switch to restart synchronized client:\n%s", command)
+	}
+	for _, want := range []string{
+		"ufw allow 4646/tcp",
+		"ufw allow 4647/tcp",
+		"ufw allow 4648/tcp",
+		"ufw allow 4648/udp",
+	} {
+		if !strings.Contains(command, want) {
+			t.Fatalf("expected switch to repair Nomad firewall rule %q:\n%s", want, command)
+		}
+	}
+	if svc.cfg.Address != "https://10.0.0.40:4646" || nomadFake.address != svc.cfg.Address {
+		t.Fatalf("expected switched address, got cfg=%q fake=%q", svc.cfg.Address, nomadFake.address)
+	}
+}
+
 func TestRemoveManagedNodeStopsServiceAndPurgesNomadNode(t *testing.T) {
 	svc, credSvc, nomadFake, execFake, cleanup := newJoinTestService(t)
 	defer cleanup()

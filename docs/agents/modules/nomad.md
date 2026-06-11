@@ -37,12 +37,15 @@
 - Nomad 地址、namespace、region、datacenter 等运行时设置来自 `internal/settings/`。
 - 本地或回环 Nomad 地址会使用项目托管的 TLS 资产；相关判断在 `internal/app/app.go`。
 - 引导/加入流程通过 SSH 在目标服务器执行远程命令，需要考虑支持系统、sudo、幂等性和失败恢复。
+- Panel 管理的 Nomad agent 必须在本机 UFW 放行 `4646/tcp`（HTTP API）、`4647/tcp`（RPC）以及 `4648/tcp`、`4648/udp`（Serf gossip）；引导、加入、重部署和 server 切换后的 client 同步都必须幂等修复这些规则。云厂商安全组或外部防火墙不由 Panel 管理，仍需允许节点间对应流量。
 - 引导/加入后的本地健康检查使用带单次硬超时的 `nomad agent-info` 检查本地 agent API，不使用可能等待集群响应的 `nomad status`；整体检查必须在任务阶段超时内结束并输出 systemd/journal 诊断。
 - client 加入或重部署不能只以本地 agent API 可用作为成功条件；还必须通过 Panel 使用的 Nomad API 确认匹配 `panel_server_id` 的节点已经注册且状态为 `ready`，超时则任务失败并记录最后的节点状态或 API 错误。
 - 生成的 server/client 配置必须显式写入运行时 `region` 和 `datacenter`；client 通过 `server_join.retry_join` 持续重试控制平面 RPC 地址，避免 server 短暂不可达时只留下本地存活但未注册的 agent。
 - 同一 `panel_server_id` 存在旧 `down` 节点和新 `ready` 节点时，控制平面投影必须优先展示 `ready` 节点，避免重部署后被旧节点记录覆盖为离线。
 - Nomad 运行时准备可以安装 Docker/CNI，但不得无条件重启 Docker；Docker 已运行时只做健康检查，未运行时才启动，避免 Panel 自身部署在目标节点 Docker 中时被中断。
 - server 引导、server 重部署和集群重建会临时切换 Panel 的 Nomad API 地址；只有 Panel 验证 TCP 4646/API 可达后才保留地址，失败必须回滚到旧地址。
+- server 切换在验证新 API 地址后，必须同步所有 Panel 托管 client 的完整配置，把 `server_join.retry_join` 更新为新 server RPC 地址，补齐 Nomad UFW 规则，逐台重启并确认重新注册；同步阶段失败时保留已验证的新 Panel API 地址并将任务标记失败，避免已同步节点与 Panel 再次指向不同控制面。
+- 节点重部署会删除 Panel 托管的旧 Nomad 配置和 TLS 文件，并根据当前运行时设置重新生成完整 server/client 配置；client 重部署使用 Panel 当前选择的 server RPC 地址。
 - 集群重建必须先引导并验证新的单 server 集群，再重置其他 Panel 托管节点，避免新 server 端口未开放时提前停止旧节点。
 - 长耗时流程必须写入任务、步骤和日志。
 - 直接由 goroutine 执行的 Nomad 节点操作创建任务后必须先落 `running` 再返回 `taskId`，避免 Panel 进程中断后任务永久停在 `queued`。

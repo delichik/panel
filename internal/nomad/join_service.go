@@ -367,6 +367,9 @@ func (s *JoinService) SwitchServer(ctx context.Context, in SwitchServerInput) (t
 	if !ok {
 		return tasks.Task{}, panelerr.Validation("nomad_switch_api_unavailable", "Nomad server switch API is unavailable")
 	}
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("nomad_switch_executor_unavailable", "Nomad server switch executor is unavailable")
+	}
 	serverID := strings.TrimSpace(in.ServerID)
 	if serverID == "" {
 		return tasks.Task{}, panelerr.Validation("nomad_switch_server_required", "Server ID is required")
@@ -748,7 +751,40 @@ func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv se
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
+	if err := s.syncManagedClientsToServer(ctx, taskID, srv); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	s.reconcileReverseProxyJobLogged(ctx, taskID)
 	_ = s.tasks.Complete(ctx, taskID, "Nomad server switched")
+}
+
+func (s *JoinService) syncManagedClientsToServer(ctx context.Context, taskID string, control server.Server) error {
+	clients, err := s.panelManagedClientServers(ctx, control.ID)
+	if err != nil {
+		return err
+	}
+	rpc := net.JoinHostPort(control.Host, "4647")
+	for _, srv := range clients {
+		adapter, err := s.ensureNomadEligible(srv)
+		if err != nil {
+			return fmt.Errorf("cannot synchronize Nomad client %s: %w", firstNonEmpty(srv.Name, srv.ID), err)
+		}
+		name := firstNonEmpty(srv.Name, srv.ID, srv.Host)
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "synchronizing Nomad client "+name+" to "+rpc)
+		if err := s.runNomadCommandSteps(ctx, taskID, srv.Target(), []nomadCommandStep{
+			{Stage: "configuring_clients", Message: "writing Nomad client configuration on " + name, Command: s.joinConfigScript(srv, rpc), Timeout: nomadMaintenanceTimeout},
+			{Stage: "opening_firewall", Message: "opening Nomad firewall ports on " + name, Command: nomadUFWAllowScript(traitBool(srv.Traits, TraitReverseProxyEnabled)), Timeout: nomadFirewallTimeout},
+			{Stage: "restarting_clients", Message: "restarting Nomad client on " + name, Command: adapter.NomadServiceRestartScript(), Timeout: nomadServiceTimeout},
+			{Stage: "verifying_clients", Message: "checking Nomad client on " + name, Command: nomadLocalHealthScript(), Timeout: nomadLocalHealthTimeout},
+		}); err != nil {
+			return fmt.Errorf("cannot synchronize Nomad client %s: %w", name, err)
+		}
+		if err := s.waitForNomadClientRegistration(ctx, taskID, srv); err != nil {
+			return fmt.Errorf("cannot synchronize Nomad client %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func (s *JoinService) reconcileReverseProxyJobLogged(ctx context.Context, taskID string) {
@@ -861,6 +897,60 @@ func (s *JoinService) panelManagedServers(ctx context.Context, bootstrap server.
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out, nil
+}
+
+func (s *JoinService) panelManagedClientServers(ctx context.Context, excludeServerID string) ([]server.Server, error) {
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	serverByID := make(map[string]server.Server, len(servers))
+	for _, srv := range servers {
+		serverByID[srv.ID] = srv
+	}
+
+	clientIDs := map[string]struct{}{}
+	serverIDs := map[string]struct{}{}
+	latestTasks, err := s.latestNomadTasks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for serverID, task := range latestTasks {
+		if serverID == "" || taskCompletedRemove(task) {
+			continue
+		}
+		switch roleForTask(task) {
+		case ProjectedNodeRoleClient:
+			clientIDs[serverID] = struct{}{}
+		case ProjectedNodeRoleServer:
+			serverIDs[serverID] = struct{}{}
+		}
+	}
+
+	nodesCtx, cancelNodes := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
+	defer cancelNodes()
+	if nodes, err := s.nomad.Nodes(nodesCtx); err == nil {
+		for _, node := range nodes {
+			if serverID := serverIDForNode(node); serverID != "" {
+				clientIDs[serverID] = struct{}{}
+			}
+		}
+	}
+
+	out := make([]server.Server, 0, len(clientIDs))
+	for id := range clientIDs {
+		if id == excludeServerID {
+			continue
+		}
+		if _, isServer := serverIDs[id]; isServer {
+			continue
+		}
+		if srv, ok := serverByID[id]; ok {
+			out = append(out, srv)
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 
@@ -1120,6 +1210,9 @@ find /etc/nomad.d -maxdepth 1 -type f \( -name '*.hcl' -o -name '*.json' -o -nam
 }
 
 func nomadUFWAllowScript(reverseProxy bool) string {
+	// Nomad uses HTTP for the API, RPC for client/server traffic, and Serf
+	// gossip over both TCP and UDP. Keep all four rules together so repair
+	// paths cannot leave an agent locally healthy but isolated from its peers.
 	rules := []remoteops.UFWRule{
 		{Port: 4646, Protocol: "tcp"},
 		{Port: 4647, Protocol: "tcp"},

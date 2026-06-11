@@ -18,7 +18,7 @@
   - 登录失败的通用错误文案 `Authentication failed` 已接入 `internal/i18n/i18n.go`
   - 强制改密、账号更新、JWT 密钥更新相关错误文案已接入 `internal/i18n/i18n.go`
 - `web/src/features/nomad/pages/NomadNodesPage.vue`
-  - Nomad 节点重部署、集群重建、server 切换操作文案已接入 `web/src/i18n/index.ts`
+  - Nomad 节点重部署、集群重建、server 切换及切换后 client 配置同步文案已接入 `web/src/i18n/index.ts`
   - 首个 server 引导任务入口、反向代理同步任务提示文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/servers/pages/ServersPage.vue`
   - 服务器凭据必选提示、重启确认与任务入口、UFW 安装任务入口、系统架构/CPU/分项网卡详情文案已接入 `web/src/i18n/index.ts`

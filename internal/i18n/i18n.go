@@ -83,6 +83,7 @@ var (
 			"nomad_rebuild_executor_unavailable":            "Nomad 集群重建执行器不可用",
 			"nomad_rebuild_server_required":                 "必须提供服务器 ID",
 			"nomad_switch_api_unavailable":                  "Nomad server 切换 API 不可用",
+			"nomad_switch_executor_unavailable":             "Nomad server 切换执行器不可用",
 			"nomad_switch_server_required":                  "必须提供服务器 ID",
 			"nomad_switch_server_host_required":             "服务器主机不能为空",
 			"nomad_remove_target_required":                  "必须提供服务器 ID 或 Nomad 节点 ID",
