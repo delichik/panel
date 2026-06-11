@@ -28,6 +28,14 @@ describe('serversApi', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/v1/servers/srv_1/ufw/install', expect.objectContaining({ method: 'POST' }));
   });
 
+  it('starts restart tasks for a server', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { taskId: 'task_restart' }, error: null }, 202));
+    const api = createServersApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await expect(api.restartServer('srv_1')).resolves.toEqual({ taskId: 'task_restart' });
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/servers/srv_1/restart', expect.objectContaining({ method: 'POST' }));
+  });
+
   it('manages UFW state and rules', async () => {
     const state = { serverId: 'srv_1', supported: true, installed: true, active: true, status: 'active', defaultPolicy: '', rules: [] };
     const fetcher = vi

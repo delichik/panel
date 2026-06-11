@@ -279,6 +279,39 @@ func TestInstallUFWAllowsConfiguredSSHAndReverseProxyPorts(t *testing.T) {
 	assertNoDestructiveUFWCommands(t, exec.installCommand)
 }
 
+func TestRestartCreatesRunningTaskAndSchedulesReboot(t *testing.T) {
+	blockRestart := make(chan struct{})
+	exec := &restartFakeExec{blockRestart: blockRestart}
+	svc, taskSvc, store := testServerService(t, exec)
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_restart','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := svc.Restart(context.Background(), "srv_restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Type != restartTaskType || task.Status != tasks.StatusRunning || task.StartedAt == nil {
+		t.Fatalf("expected running restart task, got %#v", task)
+	}
+	stored, err := taskSvc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != tasks.StatusRunning {
+		t.Fatalf("expected stored restart task to be running, got %#v", stored)
+	}
+
+	close(blockRestart)
+	waitTaskFinished(t, taskSvc, task.ID)
+	if exec.timeout != restartTimeout {
+		t.Fatalf("expected restart timeout %s, got %s", restartTimeout, exec.timeout)
+	}
+	if !strings.Contains(exec.command, "sleep 1; systemctl reboot") || !strings.Contains(exec.command, "shutdown -r now") {
+		t.Fatalf("unexpected restart command:\n%s", exec.command)
+	}
+}
+
 func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -532,6 +565,36 @@ func (f *ufwManageFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec
 }
 
 func (f *ufwManageFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
+}
+
+type restartFakeExec struct {
+	command      string
+	timeout      time.Duration
+	blockRestart <-chan struct{}
+}
+
+func (f *restartFakeExec) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *restartFakeExec) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if f.blockRestart != nil {
+		<-f.blockRestart
+	}
+	f.command = command.Command
+	f.timeout = command.Timeout
+	if command.OnStdout != nil {
+		command.OnStdout("[panel] scheduling server restart")
+	}
+	return sshx.CommandResult{Stdout: "[panel] scheduling server restart\n", ExitCode: 0}, nil
+}
+
+func (f *restartFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *restartFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
 }
 

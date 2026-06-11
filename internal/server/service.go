@@ -25,6 +25,8 @@ const connectivityStaleAfter = 10 * time.Minute
 const ufwInstallTaskType = "server_ufw_install"
 const ufwInstallTimeout = 5 * time.Minute
 const ufwManageTimeout = time.Minute
+const restartTaskType = "server_restart"
+const restartTimeout = 15 * time.Second
 const reverseProxyEnabledTrait = "nomad.reverse_proxy.enabled"
 
 var reverseProxyTCPPorts = []int{80, 443}
@@ -285,6 +287,48 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 		return tasks.Task{}, err
 	}
 	go s.runInstallUFW(context.Background(), task.ID, srv, adapter)
+	return task, nil
+}
+
+func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, error) {
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server executor is unavailable")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if !srv.Reachable {
+		return tasks.Task{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
+	}
+	if !srv.Sudo.Passwordless {
+		return tasks.Task{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	}
+	if existing, ok, err := s.tasks.ExistingActive(ctx, restartTaskType, connectivityResourceType, serverID); err != nil {
+		return tasks.Task{}, err
+	} else if ok {
+		return existing, nil
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         restartTaskType,
+		ServerID:     serverID,
+		ResourceType: connectivityResourceType,
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      "Restarting server",
+		MaxRetries:   0,
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return tasks.Task{}, err
+	}
+	task, err = s.tasks.Get(ctx, task.ID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runRestart(context.Background(), task.ID, srv)
 	return task, nil
 }
 
@@ -592,6 +636,15 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 		return
 	}
 	_ = s.tasks.Complete(ctx, taskID, "UFW installed")
+}
+
+func (s *Service) runRestart(ctx context.Context, taskID string, srv Server) {
+	_ = s.tasks.Advance(ctx, taskID, "restarting", "scheduling server restart")
+	if _, err := (remoteops.Runner{Exec: s.exec, Target: srv.Target(), Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, remoteops.RestartScript(), restartTimeout); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "Server restart scheduled")
 }
 
 func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (map[string]string, error) {

@@ -64,6 +64,9 @@ export function createServersApi(client = apiClient) {
     testConnection(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/test`);
     },
+    restartServer(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/restart`);
+    },
     installUFW(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/install`);
     },

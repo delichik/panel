@@ -21,6 +21,7 @@ const probeLoading = ref(false);
 const probeResult = ref<ServerProbeDto | null>(null);
 const probeError = ref('');
 const ufwInstalling = ref<Record<string, boolean>>({});
+const restarting = ref<Record<string, boolean>>({});
 let controlPlaneLoadSeq = 0;
 
 const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' : 'servers'));
@@ -34,6 +35,7 @@ const confirmDialog = ref(false);
 const confirmTitle = ref(t('common.confirm'));
 const confirmMessage = ref('');
 const confirmAction = ref<(() => Promise<void>) | null>(null);
+const confirmLoading = ref(false);
 
 const serverForm = reactive({
   name: '',
@@ -92,14 +94,16 @@ function confirm(title: string, message: string, action: () => Promise<void>) {
 }
 
 async function executeConfirm() {
-  if (confirmAction.value) {
-    try {
+  if (!confirmAction.value || confirmLoading.value) return;
+  confirmLoading.value = true;
+  try {
       await confirmAction.value();
-    } catch (err) {
-      showMessage(err instanceof Error ? err.message : t('serversPage.actionFailed'), 'error');
-    }
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : t('serversPage.actionFailed'), 'error');
+  } finally {
+    confirmLoading.value = false;
+    confirmDialog.value = false;
   }
-  confirmDialog.value = false;
 }
 
 function credentialById(id?: string | null) {
@@ -307,6 +311,24 @@ async function deleteCredential(credential: CredentialDto) {
   });
 }
 
+function canRestart(server: ServerDto | null) {
+  return Boolean(server?.reachable && server.sudo?.passwordless);
+}
+
+function restartServer(server: ServerDto) {
+  confirm(t('serversPage.confirmRestart'), t('serversPage.restartServerConfirm', { name: server.name }), async () => {
+    restarting.value = { ...restarting.value, [server.id]: true };
+    try {
+      const result = await serversApi.restartServer(server.id);
+      showMessage(t('serversPage.restartStarted'), 'success', result.taskId);
+    } finally {
+      const next = { ...restarting.value };
+      delete next[server.id];
+      restarting.value = next;
+    }
+  });
+}
+
 function formatDate(value?: string | null) {
   return value ? formatDateTime(value) : t('common.never');
 }
@@ -446,6 +468,18 @@ onMounted(load);
                 <div class="text-body-2 text-medium-emphasis">{{ selectedServer.host }}:{{ selectedServer.port }}</div>
               </div>
               <div class="detail-actions">
+                <v-btn
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  prepend-icon="mdi-restart"
+                  class="text-none"
+                  :loading="restarting[selectedServer.id]"
+                  :disabled="!canRestart(selectedServer)"
+                  @click="restartServer(selectedServer)"
+                >
+                  {{ t('serversPage.restart') }}
+                </v-btn>
                 <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" class="text-none" @click="resetServerForm(selectedServer)">{{ t('common.edit') }}</v-btn>
                 <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" class="text-none" @click="deleteServer(selectedServer)">{{ t('common.delete') }}</v-btn>
               </div>
@@ -711,7 +745,7 @@ onMounted(load);
         <v-divider />
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="confirmDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" class="text-none" @click="executeConfirm">{{ t('common.confirm') }}</v-btn>
+          <v-btn color="error" variant="flat" class="text-none" :loading="confirmLoading" @click="executeConfirm">{{ t('common.confirm') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

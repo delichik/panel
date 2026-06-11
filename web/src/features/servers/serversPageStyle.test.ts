@@ -53,4 +53,11 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).toContain('void loadControlPlane();');
     expect(serversPage).not.toContain('nomadApi.controlPlane().catch(() => null),');
   });
+
+  it('requires confirmation before restarting a server', () => {
+    expect(serversPage).toContain('@click="restartServer(selectedServer)"');
+    expect(serversPage).toContain("confirm(t('serversPage.confirmRestart')");
+    expect(serversPage).toContain('serversApi.restartServer(server.id)');
+    expect(serversPage).toContain(':disabled="!canRestart(selectedServer)"');
+  });
 });

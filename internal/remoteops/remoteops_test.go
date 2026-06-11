@@ -33,6 +33,19 @@ func TestUFWAllowScriptBuildsPortRules(t *testing.T) {
 	}
 }
 
+func TestRestartScriptSchedulesDetachedRestart(t *testing.T) {
+	script := RestartScript()
+	for _, want := range []string{
+		"sleep 1; systemctl reboot",
+		"sleep 1; shutdown -r now",
+		">/dev/null 2>&1 &",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("restart script missing %q:\n%s", want, script)
+		}
+	}
+}
+
 func TestParseUFWStatus(t *testing.T) {
 	status := ParseUFWStatus(`panel_ufw_installed=true
 Status: active
