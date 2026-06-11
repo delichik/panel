@@ -21,6 +21,7 @@ const probeLoading = ref(false);
 const probeResult = ref<ServerProbeDto | null>(null);
 const probeError = ref('');
 const ufwInstalling = ref<Record<string, boolean>>({});
+const restarting = ref<Record<string, boolean>>({});
 let controlPlaneLoadSeq = 0;
 
 const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' : 'servers'));
@@ -34,6 +35,7 @@ const confirmDialog = ref(false);
 const confirmTitle = ref(t('common.confirm'));
 const confirmMessage = ref('');
 const confirmAction = ref<(() => Promise<void>) | null>(null);
+const confirmLoading = ref(false);
 
 const serverForm = reactive({
   name: '',
@@ -59,6 +61,16 @@ const reachableCount = computed(() => servers.value.filter((server) => server.re
 const managedCount = computed(() => servers.value.filter((server) => nomadProjectionForServer(server.id)?.kind === 'managed').length);
 const credentialRows = computed(() => credentials.value ?? []);
 const serverCredentialMissing = computed(() => !serverForm.credentialId);
+
+interface NetworkAddress {
+  family: string;
+  address: string;
+}
+
+interface NetworkInterface {
+  name: string;
+  addresses: NetworkAddress[];
+}
 
 const credentialOptions = computed(() =>
   credentialRows.value.map((credential) => ({
@@ -92,14 +104,16 @@ function confirm(title: string, message: string, action: () => Promise<void>) {
 }
 
 async function executeConfirm() {
-  if (confirmAction.value) {
-    try {
+  if (!confirmAction.value || confirmLoading.value) return;
+  confirmLoading.value = true;
+  try {
       await confirmAction.value();
-    } catch (err) {
-      showMessage(err instanceof Error ? err.message : t('serversPage.actionFailed'), 'error');
-    }
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : t('serversPage.actionFailed'), 'error');
+  } finally {
+    confirmLoading.value = false;
+    confirmDialog.value = false;
   }
-  confirmDialog.value = false;
 }
 
 function credentialById(id?: string | null) {
@@ -307,12 +321,48 @@ async function deleteCredential(credential: CredentialDto) {
   });
 }
 
+function canRestart(server: ServerDto | null) {
+  return Boolean(server?.reachable && server.sudo?.passwordless);
+}
+
+function restartServer(server: ServerDto) {
+  confirm(t('serversPage.confirmRestart'), t('serversPage.restartServerConfirm', { name: server.name }), async () => {
+    restarting.value = { ...restarting.value, [server.id]: true };
+    try {
+      const result = await serversApi.restartServer(server.id);
+      showMessage(t('serversPage.restartStarted'), 'success', result.taskId);
+    } finally {
+      const next = { ...restarting.value };
+      delete next[server.id];
+      restarting.value = next;
+    }
+  });
+}
+
 function formatDate(value?: string | null) {
   return value ? formatDateTime(value) : t('common.never');
 }
 
 function traitValue(server: ServerDto | null, key: string) {
   return server?.traits?.[key] || t('common.notAvailable');
+}
+
+function networkInterfaces(traits?: Record<string, string> | null): NetworkInterface[] {
+  const grouped = new Map<string, NetworkAddress[]>();
+  for (const raw of (traits?.['sys.network_interfaces'] || '').split(', ')) {
+    const [name, family = '', address = ''] = raw.split('|');
+    if (!name?.trim()) continue;
+    const addresses = grouped.get(name) ?? [];
+    if (family || address) addresses.push({ family, address });
+    grouped.set(name, addresses);
+  }
+  return Array.from(grouped, ([name, addresses]) => ({ name, addresses }));
+}
+
+function networkFamilyLabel(family: string) {
+  if (family === 'inet') return 'IPv4';
+  if (family === 'inet6') return 'IPv6';
+  return family || t('serversPage.linkOnly');
 }
 
 function ufwStatusFromTraits(traits?: Record<string, string> | null) {
@@ -446,6 +496,18 @@ onMounted(load);
                 <div class="text-body-2 text-medium-emphasis">{{ selectedServer.host }}:{{ selectedServer.port }}</div>
               </div>
               <div class="detail-actions">
+                <v-btn
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  prepend-icon="mdi-restart"
+                  class="text-none"
+                  :loading="restarting[selectedServer.id]"
+                  :disabled="!canRestart(selectedServer)"
+                  @click="restartServer(selectedServer)"
+                >
+                  {{ t('serversPage.restart') }}
+                </v-btn>
                 <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" class="text-none" @click="resetServerForm(selectedServer)">{{ t('common.edit') }}</v-btn>
                 <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" class="text-none" @click="deleteServer(selectedServer)">{{ t('common.delete') }}</v-btn>
               </div>
@@ -499,8 +561,27 @@ onMounted(load);
                   <div><span>{{ t('serversPage.kernelHost') }}</span><strong>{{ traitValue(selectedServer, 'sys.hostname') }}</strong></div>
                   <div><span>{{ t('serversPage.loadAverage') }}</span><strong>{{ selectedServer.loadAverage || t('common.notAvailable') }}</strong></div>
                   <div><span>{{ t('serversPage.cpuModel') }}</span><strong>{{ traitValue(selectedServer, 'sys.cpu_model') }}</strong></div>
-                  <div><span>{{ t('serversPage.networkInterfaces') }}</span><strong>{{ traitValue(selectedServer, 'sys.network_interfaces') }}</strong></div>
                 </div>
+              </section>
+
+              <section>
+                <div class="section-title">{{ t('serversPage.networkInterfaces') }}</div>
+                <div v-if="networkInterfaces(selectedServer.traits).length" class="network-grid">
+                  <div v-for="network in networkInterfaces(selectedServer.traits)" :key="network.name" class="network-card">
+                    <div class="network-card-title">
+                      <v-icon size="18" color="primary">mdi-ethernet</v-icon>
+                      <strong>{{ network.name }}</strong>
+                    </div>
+                    <div v-if="network.addresses.length" class="network-addresses">
+                      <div v-for="item in network.addresses" :key="`${item.family}:${item.address}`" class="network-address">
+                        <v-chip size="x-small" variant="tonal" color="primary" label>{{ networkFamilyLabel(item.family) }}</v-chip>
+                        <code>{{ item.address || t('common.notAvailable') }}</code>
+                      </div>
+                    </div>
+                    <div v-else class="text-caption text-medium-emphasis">{{ t('serversPage.linkOnly') }}</div>
+                  </div>
+                </div>
+                <div v-else class="text-body-2 text-medium-emphasis">{{ t('common.notAvailable') }}</div>
               </section>
 
               <section>
@@ -648,7 +729,15 @@ onMounted(load);
               <div><span>{{ t('serversPage.disk') }}</span><strong>{{ probeResult.traits['sys.disk_total_gb'] ? `${probeResult.traits['sys.disk_total_gb']} GB` : t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.architecture') }}</span><strong>{{ probeResult.traits['sys.architecture'] || t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('serversPage.cpuModel') }}</span><strong>{{ probeResult.traits['sys.cpu_model'] || t('common.notAvailable') }}</strong></div>
-              <div><span>{{ t('serversPage.networkInterfaces') }}</span><strong>{{ probeResult.traits['sys.network_interfaces'] || t('common.notAvailable') }}</strong></div>
+              <div class="probe-networks">
+                <span>{{ t('serversPage.networkInterfaces') }}</span>
+                <div v-if="networkInterfaces(probeResult.traits).length" class="probe-network-list">
+                  <v-chip v-for="network in networkInterfaces(probeResult.traits)" :key="network.name" size="small" variant="tonal" color="primary" label>
+                    {{ network.name }} · {{ network.addresses.map(item => item.address).filter(Boolean).join(', ') || t('serversPage.linkOnly') }}
+                  </v-chip>
+                </div>
+                <strong v-else>{{ t('common.notAvailable') }}</strong>
+              </div>
             </div>
           </v-form>
         </v-card-text>
@@ -711,7 +800,7 @@ onMounted(load);
         <v-divider />
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="confirmDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" class="text-none" @click="executeConfirm">{{ t('common.confirm') }}</v-btn>
+          <v-btn color="error" variant="flat" class="text-none" :loading="confirmLoading" @click="executeConfirm">{{ t('common.confirm') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -754,6 +843,14 @@ onMounted(load);
 .property-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
 .property-grid strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-size: 0.86rem; }
 .ufw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.network-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.network-card { min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
+.network-card-title { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+.network-addresses { display: grid; gap: 7px; }
+.network-address { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.network-address code { min-width: 0; overflow-wrap: anywhere; font-size: 0.78rem; color: var(--lp-text-muted); }
+.probe-networks { grid-column: 1 / -1; align-items: flex-start !important; }
+.probe-network-list { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .trait-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .notes { margin: 0; color: var(--lp-text-muted); white-space: pre-wrap; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -769,7 +866,7 @@ onMounted(load);
 .min-width-0 { min-width: 0; }
 @media (max-width: 1280px) { .servers-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .summary-strip, .metric-grid, .property-grid, .form-grid, .probe-result { grid-template-columns: 1fr; max-width: none; }
+  .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid, .probe-result { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .probe-panel { flex-direction: column; align-items: stretch; }
 }
 </style>

@@ -173,6 +173,19 @@ echo "panel_ufw_numbered_begin"
 ufw status numbered || true`
 }
 
+func RestartScript() string {
+	return `set -eu
+echo "[panel] scheduling server restart"
+if command -v systemctl >/dev/null 2>&1; then
+  nohup sh -c 'sleep 1; systemctl reboot' >/dev/null 2>&1 &
+elif command -v shutdown >/dev/null 2>&1; then
+  nohup sh -c 'sleep 1; shutdown -r now' >/dev/null 2>&1 &
+else
+  echo "[panel] no supported restart command found" >&2
+  exit 1
+fi`
+}
+
 func UFWAllowScript(rules []UFWRule) (string, error) {
 	if len(rules) == 0 {
 		return "", panelerr.Validation("ufw_rule_required", "At least one UFW rule is required")
@@ -194,6 +207,24 @@ func UFWAllowScript(rules []UFWRule) (string, error) {
 		`fi`,
 	)
 	return strings.Join(commands, "\n"), nil
+}
+
+func UFWEnableScript(sshPort int) (string, error) {
+	allowSSH, err := ufwAllowCommand(UFWRule{Port: sshPort, Protocol: "tcp"})
+	if err != nil {
+		return "", err
+	}
+	return strings.Join([]string{
+		"set -eu",
+		`if ! command -v ufw >/dev/null 2>&1; then`,
+		`  echo "[panel] UFW is not installed" >&2`,
+		`  exit 1`,
+		`fi`,
+		`echo "[panel] ensuring SSH access before enabling UFW"`,
+		allowSSH,
+		`echo "[panel] enabling UFW"`,
+		`ufw --force enable`,
+	}, "\n"), nil
 }
 
 func MustUFWAllowScript(rules ...UFWRule) string {

@@ -33,6 +33,31 @@ func TestUFWAllowScriptBuildsPortRules(t *testing.T) {
 	}
 }
 
+func TestUFWEnableScriptAllowsSSHBeforeEnable(t *testing.T) {
+	script, err := UFWEnableScript(22022)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowIndex := strings.Index(script, "ufw allow 22022/tcp")
+	enableIndex := strings.Index(script, "ufw --force enable")
+	if allowIndex < 0 || enableIndex < 0 || allowIndex >= enableIndex {
+		t.Fatalf("expected SSH allow before UFW enable:\n%s", script)
+	}
+}
+
+func TestRestartScriptSchedulesDetachedRestart(t *testing.T) {
+	script := RestartScript()
+	for _, want := range []string{
+		"sleep 1; systemctl reboot",
+		"sleep 1; shutdown -r now",
+		">/dev/null 2>&1 &",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("restart script missing %q:\n%s", want, script)
+		}
+	}
+}
+
 func TestParseUFWStatus(t *testing.T) {
 	status := ParseUFWStatus(`panel_ufw_installed=true
 Status: active

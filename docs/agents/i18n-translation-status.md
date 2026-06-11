@@ -21,9 +21,9 @@
   - Nomad 节点重部署、集群重建、server 切换操作文案已接入 `web/src/i18n/index.ts`
   - 首个 server 引导任务入口、反向代理同步任务提示文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/servers/pages/ServersPage.vue`
-  - 服务器凭据必选提示、UFW 安装任务入口、系统架构/CPU/网卡详情文案已接入 `web/src/i18n/index.ts`
+  - 服务器凭据必选提示、重启确认与任务入口、UFW 安装任务入口、系统架构/CPU/分项网卡详情文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/firewall/pages/FirewallPage.vue`
-  - UFW 防火墙状态、规则表单、规则列表、删除确认和任务入口文案已接入 `web/src/i18n/index.ts`
+  - UFW 防火墙状态、启用确认、规则表单、规则列表、删除确认和任务入口文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/tasks/pages/TaskCenterPage.vue`
   - 任务类型名称、类型筛选特殊选项、搜索按钮和多选筛选占位文案已接入 `web/src/i18n/index.ts`
   - 操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。

@@ -71,7 +71,6 @@ const overview = ref<OverviewDto>({ servers: [] });
 const applications = ref<ApplicationDto[]>([]);
 const cards = ref<OverviewCardConfig[]>(loadCards());
 const metricsByKey = ref<Record<string, MetricsSeriesDto | null>>({});
-const metricsErrors = ref<Record<string, string>>({});
 const loading = ref(false);
 const error = ref('');
 const dialog = ref(false);
@@ -267,10 +266,8 @@ async function loadCardMetrics() {
   await Promise.all([...pairs.entries()].map(async ([key, pair]) => {
     try {
       metricsByKey.value[key] = await overviewApi.getMetrics(pair.serverId, pair.range);
-      delete metricsErrors.value[key];
-    } catch (err) {
+    } catch {
       metricsByKey.value[key] = null;
-      metricsErrors.value[key] = err instanceof Error ? err.message : t('overviewPage.loadFailed');
     }
   }));
 }
@@ -282,6 +279,7 @@ function chartOption(card: OverviewCardConfig) {
     color: palette.value.series,
     tooltip: {
       trigger: 'axis',
+      appendToBody: true,
       backgroundColor: palette.value.tooltipBackground,
       borderColor: palette.value.tooltipBorder,
       textStyle: { color: palette.value.tooltipText },
@@ -295,7 +293,13 @@ function chartOption(card: OverviewCardConfig) {
     grid: { left: 46, right: 20, top: 36, bottom: 28 },
     xAxis: {
       type: 'time',
-      axisLabel: { color: palette.value.text, fontSize: 11 },
+      axisLabel: {
+        color: palette.value.text,
+        fontSize: 11,
+        hideOverlap: true,
+        showMinLabel: false,
+        showMaxLabel: false,
+      },
       axisLine: { lineStyle: { color: palette.value.grid } },
     },
     yAxis: {
@@ -407,10 +411,6 @@ function metricCardLabel(card: OverviewCardConfig) {
   if (card.kind !== 'network') return card.range;
   const direction = networkDirectionItems.value.find((item) => item.value === card.networkDirection)?.title ?? t('overviewPage.rxTx');
   return `${card.range} / ${direction}`;
-}
-
-function hasMetricErrors(card: OverviewCardConfig) {
-  return resolveCardServerIds(card).some((serverId) => metricsErrors.value[metricKey(serverId, card.range)]);
 }
 
 function openAddDialog(kind?: CardKind) {
@@ -661,10 +661,7 @@ onBeforeUnmount(() => {
             </v-menu>
           </div>
 
-          <div v-if="isMetricCard(card)" class="card-body chart-body">
-          <v-alert v-if="hasMetricErrors(card)" type="warning" variant="tonal" density="compact" class="mb-2">
-            {{ t('overviewPage.metricLoadPartial') }}
-          </v-alert>
+        <div v-if="isMetricCard(card)" class="card-body chart-body">
           <VChart class="chart" :option="chartOption(card)" autoresize />
         </div>
 

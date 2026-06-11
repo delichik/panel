@@ -90,6 +90,15 @@ func (h *Handler) InstallUFW(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
+func (h *Handler) Restart(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.Restart(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/restart")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
 func (h *Handler) UFWState(w http.ResponseWriter, r *http.Request) {
 	state, err := h.service.UFWState(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw")))
 	if err != nil {
@@ -110,6 +119,15 @@ func (h *Handler) AllowUFW(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, state)
+}
+
+func (h *Handler) EnableUFW(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.EnableUFW(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw/enable")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
 func (h *Handler) DeleteUFWRule(w http.ResponseWriter, r *http.Request) {

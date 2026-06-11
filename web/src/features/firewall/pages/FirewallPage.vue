@@ -11,7 +11,7 @@ const state = ref<UfwStateDto | null>(null);
 const loadingServers = ref(false);
 const loadingState = ref(false);
 const savingRule = ref(false);
-const installing = ref(false);
+const enabling = ref(false);
 const deletingRule = ref<number | null>(null);
 const error = ref('');
 
@@ -21,6 +21,7 @@ const snackbarColor = ref('success');
 const snackbarTaskId = ref('');
 const confirmDialog = ref(false);
 const ruleToDelete = ref<UfwRuleDto | null>(null);
+const enableDialog = ref(false);
 
 const ruleForm = reactive({
   port: 22,
@@ -102,21 +103,6 @@ async function loadState() {
   }
 }
 
-async function installUFW() {
-  if (!serverId.value) return;
-  installing.value = true;
-  try {
-    const result = await serversApi.installUFW(serverId.value);
-    showMessage(t('firewallPage.installStarted'), 'success', result.taskId);
-    await loadServers();
-    await loadState();
-  } catch (err) {
-    showMessage(err instanceof Error ? err.message : t('firewallPage.installFailed'), 'error');
-  } finally {
-    installing.value = false;
-  }
-}
-
 async function addRule() {
   if (!serverId.value || !canAddRule.value) return;
   savingRule.value = true;
@@ -132,6 +118,20 @@ async function addRule() {
     showMessage(err instanceof Error ? err.message : t('firewallPage.ruleAddFailed'), 'error');
   } finally {
     savingRule.value = false;
+  }
+}
+
+async function enableUFW() {
+  if (!serverId.value) return;
+  enabling.value = true;
+  try {
+    const result = await serversApi.enableUFW(serverId.value);
+    enableDialog.value = false;
+    showMessage(t('firewallPage.enableStarted'), 'success', result.taskId);
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : t('firewallPage.enableFailed'), 'error');
+  } finally {
+    enabling.value = false;
   }
 }
 
@@ -205,20 +205,19 @@ onMounted(async () => {
           </div>
         </div>
 
-        <v-alert v-if="state && !state.installed" type="info" variant="tonal" density="compact" class="my-4">
+        <v-alert v-if="state && !state.active" :type="state.installed ? 'warning' : 'info'" variant="tonal" density="compact" class="my-4">
           <div class="install-row">
-            <span>{{ t('firewallPage.ufwMissing') }}</span>
+            <span>{{ state.installed ? t('firewallPage.ufwInactiveHint') : t('firewallPage.ufwMissingEnableHint') }}</span>
             <v-btn
-              color="primary"
+              color="warning"
               variant="flat"
               size="small"
-              prepend-icon="mdi-shield-plus"
+              prepend-icon="mdi-shield-check"
               class="text-none"
-              :loading="installing"
               :disabled="!selectedServer.reachable || !canUseSudo || !selectedUfwSupported"
-              @click="installUFW"
+              @click="enableDialog = true"
             >
-              {{ t('firewallPage.installUfw') }}
+              {{ t('firewallPage.enableUfw') }}
             </v-btn>
           </div>
         </v-alert>
@@ -279,6 +278,24 @@ onMounted(async () => {
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="confirmDialog = false">{{ t('common.cancel') }}</v-btn>
           <v-btn color="error" variant="flat" class="text-none" :loading="deletingRule !== null" @click="deleteRule">{{ t('common.delete') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="enableDialog" width="460">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('firewallPage.enableTitle') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="enableDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body text-body-1">
+          {{ state?.installed ? t('firewallPage.enableConfirm', { port: selectedServer?.port ?? 22 }) : t('firewallPage.installEnableConfirm', { port: selectedServer?.port ?? 22 }) }}
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="enableDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="warning" variant="flat" class="text-none" :loading="enabling" @click="enableUFW">{{ t('firewallPage.enableUfw') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

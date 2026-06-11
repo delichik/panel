@@ -151,7 +151,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.architecture"] != "x86_64" || srv.Traits["sys.cpu_model"] != "AMD EPYC" || srv.Traits["sys.network_interfaces"] != "eth0|inet|10.0.0.10/24" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_supported"] != "true" || srv.Traits["sys.ufw_installed"] != "false" {
+	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.architecture"] != "x86_64" || srv.Traits["sys.cpu_model"] != "AMD EPYC" || srv.Traits["sys.network_interfaces"] != "eth0|inet|10.0.0.10/24, eth0|inet6|2001:db8::10/64" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_supported"] != "true" || srv.Traits["sys.ufw_installed"] != "false" {
 		t.Fatalf("unexpected system traits detected: %#v", srv.Traits)
 	}
 
@@ -277,6 +277,73 @@ func TestInstallUFWAllowsConfiguredSSHAndReverseProxyPorts(t *testing.T) {
 		}
 	}
 	assertNoDestructiveUFWCommands(t, exec.installCommand)
+}
+
+func TestEnableUFWInstallsWhenMissingAndAllowsSSHBeforeEnable(t *testing.T) {
+	blockEnable := make(chan struct{})
+	exec := &ufwEnableFakeExec{blockEnable: blockEnable}
+	svc, taskSvc, store := testServerService(t, exec)
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_enable','s','127.0.0.1',22022,'du','cred_1','debian','13','Debian GNU/Linux 13',1,1,1,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := svc.EnableUFW(context.Background(), "srv_enable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Type != ufwEnableTaskType || task.Status != tasks.StatusRunning || task.StartedAt == nil {
+		t.Fatalf("expected running UFW enable task, got %#v", task)
+	}
+	close(blockEnable)
+	waitTaskFinished(t, taskSvc, task.ID)
+
+	commands := strings.Join(exec.commands, "\n---\n")
+	installIndex := strings.Index(commands, "apt_get install -y ufw")
+	allowIndex := strings.Index(commands, "ufw allow 22022/tcp")
+	enableIndex := strings.Index(commands, "ufw --force enable")
+	if installIndex < 0 || allowIndex < 0 || enableIndex < 0 || installIndex >= allowIndex || allowIndex >= enableIndex {
+		t.Fatalf("expected install, SSH allow, then enable:\n%s", commands)
+	}
+	stored, err := svc.Get(context.Background(), "srv_enable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "true" {
+		t.Fatalf("expected enabled UFW traits, got %#v", stored.Traits)
+	}
+}
+
+func TestRestartCreatesRunningTaskAndSchedulesReboot(t *testing.T) {
+	blockRestart := make(chan struct{})
+	exec := &restartFakeExec{blockRestart: blockRestart}
+	svc, taskSvc, store := testServerService(t, exec)
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_restart','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := svc.Restart(context.Background(), "srv_restart")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Type != restartTaskType || task.Status != tasks.StatusRunning || task.StartedAt == nil {
+		t.Fatalf("expected running restart task, got %#v", task)
+	}
+	stored, err := taskSvc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != tasks.StatusRunning {
+		t.Fatalf("expected stored restart task to be running, got %#v", stored)
+	}
+
+	close(blockRestart)
+	waitTaskFinished(t, taskSvc, task.ID)
+	if exec.timeout != restartTimeout {
+		t.Fatalf("expected restart timeout %s, got %s", restartTimeout, exec.timeout)
+	}
+	if !strings.Contains(exec.command, "sleep 1; systemctl reboot") || !strings.Contains(exec.command, "shutdown -r now") {
+		t.Fatalf("unexpected restart command:\n%s", exec.command)
+	}
 }
 
 func TestUFWStateAllowAndDeleteRule(t *testing.T) {
@@ -433,7 +500,7 @@ func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, com
 		return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
 	}
 	if strings.Contains(command.Command, "cores=") {
-		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nufw_installed=false\nufw_active=false\n", ExitCode: 0}, nil
+		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nnic=eth0|inet6|2001:db8::10/64\nnic=docker0|inet|172.17.0.1/16\nnic=veth123|inet6|fe80::1/64\nufw_installed=false\nufw_active=false\n", ExitCode: 0}, nil
 	}
 	if strings.Contains(command.Command, "id -u") {
 		if f.root {
@@ -455,6 +522,19 @@ func (f *connectivityFakeExec) Upload(ctx context.Context, target sshx.Target, t
 
 func (f *connectivityFakeExec) Download(ctx context.Context, target sshx.Target, transfer sshx.DownloadSpec) error {
 	return nil
+}
+
+func TestVirtualNetworkInterfaceDetection(t *testing.T) {
+	for _, name := range []string{"lo", "docker0", "veth123", "br-abcd", "virbr0", "cni0", "flannel.1", "cali123", "tun0", "tap0", "wg0", "tailscale0", "ztabc"} {
+		if !isVirtualNetworkInterface(name) {
+			t.Fatalf("expected %q to be treated as virtual", name)
+		}
+	}
+	for _, name := range []string{"eth0", "ens3", "enp5s0", "bond0"} {
+		if isVirtualNetworkInterface(name) {
+			t.Fatalf("expected %q to be retained", name)
+		}
+	}
 }
 
 type ufwInstallFakeExec struct {
@@ -532,6 +612,91 @@ func (f *ufwManageFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec
 }
 
 func (f *ufwManageFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
+}
+
+type ufwEnableFakeExec struct {
+	installed   bool
+	active      bool
+	commands    []string
+	blockEnable <-chan struct{}
+}
+
+func (f *ufwEnableFakeExec) Exec(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if strings.Contains(command.Command, "cat /etc/os-release") {
+		return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "cores=") {
+		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nufw_installed=" + boolString(f.installed) + "\nufw_active=" + boolString(f.active) + "\n", ExitCode: 0}, nil
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *ufwEnableFakeExec) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if strings.TrimSpace(command.Command) == "true" {
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "panel_ufw_installed") {
+		if !f.installed {
+			return sshx.CommandResult{Stdout: "panel_ufw_installed=false\n", ExitCode: 0}, nil
+		}
+		status := "inactive"
+		if f.active {
+			status = "active"
+		}
+		return sshx.CommandResult{Stdout: "panel_ufw_installed=true\nStatus: " + status + "\npanel_ufw_numbered_begin\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "apt_get install -y ufw") {
+		f.installed = true
+		f.commands = append(f.commands, command.Command)
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "ufw --force enable") {
+		if f.blockEnable != nil {
+			<-f.blockEnable
+		}
+		f.active = true
+		f.commands = append(f.commands, command.Command)
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *ufwEnableFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *ufwEnableFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
+}
+
+type restartFakeExec struct {
+	command      string
+	timeout      time.Duration
+	blockRestart <-chan struct{}
+}
+
+func (f *restartFakeExec) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *restartFakeExec) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if f.blockRestart != nil {
+		<-f.blockRestart
+	}
+	f.command = command.Command
+	f.timeout = command.Timeout
+	if command.OnStdout != nil {
+		command.OnStdout("[panel] scheduling server restart")
+	}
+	return sshx.CommandResult{Stdout: "[panel] scheduling server restart\n", ExitCode: 0}, nil
+}
+
+func (f *restartFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *restartFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
 }
 

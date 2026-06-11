@@ -194,12 +194,16 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.Delete(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/test"):
 			serverH.Test(w, r)
+		case r.Method == http.MethodPost && serverActionPath(path, "restart"):
+			serverH.Restart(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/install"):
 			serverH.InstallUFW(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/ufw"):
 			serverH.UFWState(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/rules"):
 			serverH.AllowUFW(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/servers/") && strings.HasSuffix(path, "/ufw/enable"):
+			serverH.EnableUFW(w, r)
 		case r.Method == http.MethodDelete && serverUFWRulePath(path):
 			serverH.DeleteUFWRule(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/overview":
@@ -309,6 +313,11 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 func serverResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != ""
+}
+
+func serverActionPath(path string, action string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == action
 }
 
 func serverUFWRulePath(path string) bool {

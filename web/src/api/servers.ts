@@ -64,6 +64,9 @@ export function createServersApi(client = apiClient) {
     testConnection(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/test`);
     },
+    restartServer(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/restart`);
+    },
     installUFW(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/install`);
     },
@@ -72,6 +75,9 @@ export function createServersApi(client = apiClient) {
     },
     allowUFW(serverId: string, input: UfwAllowInput) {
       return client.post<UfwStateDto>(`/servers/${serverId}/ufw/rules`, input);
+    },
+    enableUFW(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/enable`);
     },
     deleteUFWRule(serverId: string, number: number) {
       return client.delete<UfwStateDto>(`/servers/${serverId}/ufw/rules/${number}`);
