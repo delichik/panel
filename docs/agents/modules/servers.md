@@ -33,7 +33,7 @@
 - 凭据：`GET/POST /api/v1/credentials`，`PUT/DELETE /api/v1/credentials/{id}`
 - 服务器：`GET/POST /api/v1/servers`，`POST /api/v1/servers/probe`，`PUT/DELETE /api/v1/servers/{id}`
 - 服务器操作：`POST /api/v1/servers/{id}/test`，`POST /api/v1/servers/{id}/restart`，`POST /api/v1/servers/{id}/ufw/install`
-- UFW 防火墙：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`
+- UFW 防火墙：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/enable`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`
 - 指标：`GET /api/v1/servers/{id}/metrics`
 - 软件包：`GET /api/v1/servers/{id}/packages/updates`，`POST /api/v1/servers/{id}/packages/refresh`，`POST /api/v1/servers/{id}/packages/upgrade-selected`，`POST /api/v1/servers/{id}/packages/upgrade-all`
 - 概览：`GET /api/v1/overview`
@@ -51,7 +51,7 @@
 - 周期性指标采集会创建 `metrics_collect` 任务记录；同一轮多台服务器采集共享一个 `operationId`。任务中心默认“常用类型”会隐藏该高频类型，切到“所有类型”或精确选择 `metrics_collect` 时可查看。
 - `POST /api/v1/servers/{id}/ufw/install` 返回 `taskId`；前端启动后必须保留任务中心入口，避免用户无法追踪远程安装进度。UFW 安装任务由内存 goroutine 执行，创建后必须先标记为 `running` 再返回，遗留旧 `queued` 由任务清理兜底标记失败。
 - `POST /api/v1/servers/{id}/restart` 要求服务器可达且已确认免密 sudo，返回 `server_restart` 任务的 `taskId`；前端必须二次确认并保留任务中心入口。远程命令先后台延迟再调用 `systemctl reboot` 或 `shutdown -r now`，避免 SSH 主动断开被误判为重启失败。
-- UFW 管理页面只支持 UFW：状态查询、添加 allow 规则和按编号删除规则通过远程 sudo 同步执行；启用/禁用 UFW 暂不由页面自动执行，避免意外切断 SSH。
+- UFW 管理页面只支持 UFW：状态查询、添加 allow 规则和按编号删除规则通过远程 sudo 同步执行。启用操作返回 `server_ufw_enable` 任务；未安装时先安装，随后放行服务器当前 SSH 端口并执行 `ufw --force enable`，页面需要二次确认并保留任务中心入口；禁用 UFW 暂不由页面提供。
 - 新增服务器时只创建一个可见的 `server_info_collect` 首连信息采集任务；后续编辑、手动测试和陈旧刷新复用内部 `server_connectivity_test` 连通性任务，默认不在任务中心展示；一次服务器列表触发的多台陈旧服务器刷新应共享一个 `operationId`。
 - 长耗时操作应记录为任务，日志和步骤交给 `internal/tasks/`。
 - 概览指标卡片在窄尺寸下会自动隐藏重叠的时间轴标签；单项指标拉取失败时不在卡片内展示错误文案，图表浮窗挂载到页面层以避免被卡片边界裁剪。

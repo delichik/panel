@@ -202,6 +202,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.UFWState(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/rules"):
 			serverH.AllowUFW(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/servers/") && strings.HasSuffix(path, "/ufw/enable"):
+			serverH.EnableUFW(w, r)
 		case r.Method == http.MethodDelete && serverUFWRulePath(path):
 			serverH.DeleteUFWRule(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/overview":

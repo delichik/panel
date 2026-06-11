@@ -279,6 +279,40 @@ func TestInstallUFWAllowsConfiguredSSHAndReverseProxyPorts(t *testing.T) {
 	assertNoDestructiveUFWCommands(t, exec.installCommand)
 }
 
+func TestEnableUFWInstallsWhenMissingAndAllowsSSHBeforeEnable(t *testing.T) {
+	blockEnable := make(chan struct{})
+	exec := &ufwEnableFakeExec{blockEnable: blockEnable}
+	svc, taskSvc, store := testServerService(t, exec)
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_enable','s','127.0.0.1',22022,'du','cred_1','debian','13','Debian GNU/Linux 13',1,1,1,'now','now')`); err != nil {
+		t.Fatal(err)
+	}
+
+	task, err := svc.EnableUFW(context.Background(), "srv_enable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Type != ufwEnableTaskType || task.Status != tasks.StatusRunning || task.StartedAt == nil {
+		t.Fatalf("expected running UFW enable task, got %#v", task)
+	}
+	close(blockEnable)
+	waitTaskFinished(t, taskSvc, task.ID)
+
+	commands := strings.Join(exec.commands, "\n---\n")
+	installIndex := strings.Index(commands, "apt_get install -y ufw")
+	allowIndex := strings.Index(commands, "ufw allow 22022/tcp")
+	enableIndex := strings.Index(commands, "ufw --force enable")
+	if installIndex < 0 || allowIndex < 0 || enableIndex < 0 || installIndex >= allowIndex || allowIndex >= enableIndex {
+		t.Fatalf("expected install, SSH allow, then enable:\n%s", commands)
+	}
+	stored, err := svc.Get(context.Background(), "srv_enable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Traits["sys.ufw_installed"] != "true" || stored.Traits["sys.ufw_active"] != "true" {
+		t.Fatalf("expected enabled UFW traits, got %#v", stored.Traits)
+	}
+}
+
 func TestRestartCreatesRunningTaskAndSchedulesReboot(t *testing.T) {
 	blockRestart := make(chan struct{})
 	exec := &restartFakeExec{blockRestart: blockRestart}
@@ -578,6 +612,61 @@ func (f *ufwManageFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec
 }
 
 func (f *ufwManageFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
+}
+
+type ufwEnableFakeExec struct {
+	installed   bool
+	active      bool
+	commands    []string
+	blockEnable <-chan struct{}
+}
+
+func (f *ufwEnableFakeExec) Exec(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if strings.Contains(command.Command, "cat /etc/os-release") {
+		return sshx.CommandResult{Stdout: "ID=debian\nVERSION_ID=\"13\"\nPRETTY_NAME=\"Debian GNU/Linux 13\"\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "cores=") {
+		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nufw_installed=" + boolString(f.installed) + "\nufw_active=" + boolString(f.active) + "\n", ExitCode: 0}, nil
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *ufwEnableFakeExec) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if strings.TrimSpace(command.Command) == "true" {
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "panel_ufw_installed") {
+		if !f.installed {
+			return sshx.CommandResult{Stdout: "panel_ufw_installed=false\n", ExitCode: 0}, nil
+		}
+		status := "inactive"
+		if f.active {
+			status = "active"
+		}
+		return sshx.CommandResult{Stdout: "panel_ufw_installed=true\nStatus: " + status + "\npanel_ufw_numbered_begin\n", ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "apt_get install -y ufw") {
+		f.installed = true
+		f.commands = append(f.commands, command.Command)
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "ufw --force enable") {
+		if f.blockEnable != nil {
+			<-f.blockEnable
+		}
+		f.active = true
+		f.commands = append(f.commands, command.Command)
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *ufwEnableFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *ufwEnableFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
 }
 

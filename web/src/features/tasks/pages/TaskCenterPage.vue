@@ -30,6 +30,7 @@ const supportedTaskTypes = [
   'server_connectivity_test',
   'server_info_collect',
   'server_restart',
+  'server_ufw_enable',
   'server_ufw_install',
   'metrics_collect',
   'package_refresh',

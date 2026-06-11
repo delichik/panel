@@ -209,6 +209,24 @@ func UFWAllowScript(rules []UFWRule) (string, error) {
 	return strings.Join(commands, "\n"), nil
 }
 
+func UFWEnableScript(sshPort int) (string, error) {
+	allowSSH, err := ufwAllowCommand(UFWRule{Port: sshPort, Protocol: "tcp"})
+	if err != nil {
+		return "", err
+	}
+	return strings.Join([]string{
+		"set -eu",
+		`if ! command -v ufw >/dev/null 2>&1; then`,
+		`  echo "[panel] UFW is not installed" >&2`,
+		`  exit 1`,
+		`fi`,
+		`echo "[panel] ensuring SSH access before enabling UFW"`,
+		allowSSH,
+		`echo "[panel] enabling UFW"`,
+		`ufw --force enable`,
+	}, "\n"), nil
+}
+
 func MustUFWAllowScript(rules ...UFWRule) string {
 	script, err := UFWAllowScript(rules)
 	if err != nil {

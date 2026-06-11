@@ -121,6 +121,15 @@ func (h *Handler) AllowUFW(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, state)
 }
 
+func (h *Handler) EnableUFW(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.EnableUFW(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw/enable")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
 func (h *Handler) DeleteUFWRule(w http.ResponseWriter, r *http.Request) {
 	serverID, number := ufwRuleTarget(r.URL.Path)
 	state, err := h.service.DeleteUFWRule(r.Context(), serverID, number)

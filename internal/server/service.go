@@ -23,6 +23,7 @@ const connectivityResourceType = "server"
 const connectivityMaxRetries = 8
 const connectivityStaleAfter = 10 * time.Minute
 const ufwInstallTaskType = "server_ufw_install"
+const ufwEnableTaskType = "server_ufw_enable"
 const ufwInstallTimeout = 5 * time.Minute
 const ufwManageTimeout = time.Minute
 const restartTaskType = "server_restart"
@@ -211,6 +212,43 @@ func (s *Service) AllowUFW(ctx context.Context, serverID string, req UFWAllowReq
 		return UFWState{}, err
 	}
 	return ufwStateFromStatus(srv.ID, true, status), nil
+}
+
+func (s *Service) EnableUFW(ctx context.Context, serverID string) (tasks.Task, error) {
+	srv, err := s.ensureUFWManageable(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	adapter, ok := linux.AdapterFor(srv.OS)
+	if !ok || !adapter.SupportsUFW() {
+		return tasks.Task{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
+	}
+	if existing, ok, err := s.tasks.ExistingActive(ctx, ufwEnableTaskType, connectivityResourceType, serverID); err != nil {
+		return tasks.Task{}, err
+	} else if ok {
+		return existing, nil
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         ufwEnableTaskType,
+		ServerID:     serverID,
+		ResourceType: connectivityResourceType,
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      "Enabling UFW",
+		MaxRetries:   0,
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return tasks.Task{}, err
+	}
+	task, err = s.tasks.Get(ctx, task.ID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runEnableUFW(context.Background(), task.ID, srv, adapter)
+	return task, nil
 }
 
 func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int) (UFWState, error) {
@@ -638,6 +676,38 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 	_ = s.tasks.Complete(ctx, taskID, "UFW installed")
 }
 
+func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
+	target := srv.Target()
+	status, err := s.fetchUFWStatus(ctx, srv)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if !status.Installed {
+		_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
+		if _, err := (remoteops.Runner{Exec: s.exec, Target: target, Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, strings.TrimSpace(adapter.UFWInstallScript()), ufwInstallTimeout); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+	}
+	_ = s.tasks.Advance(ctx, taskID, "enabling", "enabling UFW")
+	enableScript, err := remoteops.UFWEnableScript(normalizedTCPPort(srv.Port))
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if _, err := (remoteops.Runner{Exec: s.exec, Target: target, Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, enableScript, ufwManageTimeout); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing server system traits")
+	if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "UFW enabled")
+}
+
 func (s *Service) runRestart(ctx context.Context, taskID string, srv Server) {
 	_ = s.tasks.Advance(ctx, taskID, "restarting", "scheduling server restart")
 	if _, err := (remoteops.Runner{Exec: s.exec, Target: srv.Target(), Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, remoteops.RestartScript(), restartTimeout); err != nil {
@@ -774,6 +844,31 @@ func ufwInstallScript(adapter linux.DistroAdapter, srv Server) string {
 		}
 	}
 	return command + "\n" + remoteops.MustUFWAllowScript(uniqueUFWRules(rules)...)
+}
+
+func (s *Service) refreshServerTraits(ctx context.Context, taskID string, srv Server) error {
+	target := srv.Target()
+	osInfo, err := linux.Detect(ctx, s.exec, target)
+	if err != nil {
+		return err
+	}
+	sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
+	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
+	sysTraits := map[string]string{}
+	if osInfo.Supported {
+		detected, traitsErr := s.detectSystemTraits(ctx, target)
+		if traitsErr == nil {
+			sysTraits = detected
+		} else {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
+		}
+	}
+	applyDistroSystemTraits(osInfo, sysTraits)
+	msg := ""
+	if !osInfo.Supported {
+		msg = "unsupported distribution"
+	}
+	return s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, msg)
 }
 
 func uniqueUFWRules(rules []remoteops.UFWRule) []remoteops.UFWRule {
