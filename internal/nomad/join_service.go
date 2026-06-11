@@ -473,6 +473,7 @@ func (s *JoinService) UpdateReverseProxy(ctx context.Context, in ReverseProxyInp
 			return ReverseProxyUpdateResult{}, err
 		}
 		taskID = task.ID
+		defer s.tasks.FinishExecution(taskID)
 	}
 	fail := func(err error) (ReverseProxyUpdateResult, error) {
 		if s.tasks != nil && taskID != "" {
@@ -633,6 +634,7 @@ func (s *JoinService) restoreNomadAddressAfterFailure(ctx context.Context, taskI
 }
 
 func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
 	if err := s.runNomadCommandSteps(ctx, taskID, target, []nomadCommandStep{
@@ -656,6 +658,7 @@ func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv serv
 }
 
 func (s *JoinService) runBootstrapServer(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	addressChange := s.beginNomadServerAddressChange(srv)
 	keepAddress := false
@@ -689,6 +692,7 @@ func (s *JoinService) runBootstrapServerSteps(ctx context.Context, taskID string
 }
 
 func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, bootstrap server.Server, adapter linux.DistroAdapter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	managed, err := s.panelManagedServers(ctx, bootstrap)
 	if err != nil {
@@ -731,6 +735,7 @@ func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, boot
 }
 
 func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv server.Server, setter addressSetter) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	previous := s.currentConfig().Address
 	next := nomadHTTPAddressForServer(srv)
@@ -753,6 +758,7 @@ func (s *JoinService) reconcileReverseProxyJobLogged(ctx context.Context, taskID
 }
 
 func (s *JoinService) runRemoveNode(ctx context.Context, taskID string, srv server.Server, nodeID string) {
+	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	if srv.ID != "" {
 		if s.exec == nil {

@@ -3,7 +3,9 @@ package tasks
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
+	"sync"
 	"time"
 
 	"panel/internal/id"
@@ -11,7 +13,9 @@ import (
 )
 
 type Service struct {
-	db *sql.DB
+	db                *sql.DB
+	runningMu         sync.Mutex
+	runningExecutions map[string]*RunningExecution
 }
 
 type ListFilter struct {
@@ -37,22 +41,40 @@ type ListResult struct {
 }
 
 func NewService(db *sql.DB) *Service {
-	return &Service{db: db}
+	return &Service{db: db, runningExecutions: map[string]*RunningExecution{}}
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
-	return createTask(ctx, s.db, in)
+	if in.Status == StatusRunning {
+		s.runningMu.Lock()
+		defer s.runningMu.Unlock()
+	}
+	var registeredTaskID string
+	beforeInsert := func(task Task) {
+		if task.Status == StatusRunning {
+			registeredTaskID = task.ID
+			s.registerRunningExecutionLocked(task.ID)
+		}
+	}
+	task, err := createTask(ctx, s.db, in, beforeInsert)
+	if err != nil && registeredTaskID != "" {
+		s.unregisterRunningExecutionLocked(registeredTaskID)
+	}
+	return task, err
 }
 
 func (s *Service) CreateTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Task, error) {
-	return createTask(ctx, tx, in)
+	if in.Status == StatusRunning {
+		return Task{}, errors.New("running tasks cannot be created inside a transaction")
+	}
+	return createTask(ctx, tx, in, nil)
 }
 
 type taskExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-func createTask(ctx context.Context, exec taskExecer, in CreateInput) (Task, error) {
+func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInsert func(Task)) (Task, error) {
 	if strings.TrimSpace(in.Type) == "" {
 		return Task{}, panelerr.Validation("task_type_required", "Task type is required")
 	}
@@ -102,14 +124,23 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput) (Task, err
 	if in.NextRunAt != nil {
 		nextRunAt = in.NextRunAt.UTC().Format(time.RFC3339Nano)
 	}
+	if beforeInsert != nil {
+		beforeInsert(t)
+	}
 	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,percentage,summary,retry_count,max_retries,next_run_at,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.Status, t.Stage, percentage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano), startedAt, finishedAt)
 	return t, err
 }
 
 func (s *Service) Start(ctx context.Context, taskID string) error {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	s.registerRunningExecutionLocked(taskID)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=?`, StatusRunning, now, taskID)
+	if err != nil {
+		s.unregisterRunningExecutionLocked(taskID)
+	}
 	return err
 }
 
@@ -131,8 +162,13 @@ func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) er
 }
 
 func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=?`, StatusCompleted, "completed", summary, now, taskID)
+	if err == nil {
+		s.unregisterRunningExecutionLocked(taskID)
+	}
 	return err
 }
 
@@ -142,7 +178,12 @@ func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
 	if logErr := s.AppendLog(ctx, taskID, "stderr", msg); logErr != nil {
 		return logErr
 	}
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
 	_, updateErr := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=?`, StatusFailed, msg, now, taskID)
+	if updateErr == nil {
+		s.unregisterRunningExecutionLocked(taskID)
+	}
 	return updateErr
 }
 
@@ -160,8 +201,13 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 	if logErr := s.AppendLog(ctx, taskID, "stderr", msg); logErr != nil {
 		return logErr
 	}
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
 	_, err = s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, retry_count=?, next_run_at=?, finished_at=NULL WHERE id=?`,
 		StatusFailedRetryable, msg, nextRetry, nextRun.Format(time.RFC3339Nano), taskID)
+	if err == nil {
+		s.unregisterRunningExecutionLocked(taskID)
+	}
 	return err
 }
 
@@ -171,7 +217,12 @@ func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
 	if logErr := s.AppendLog(ctx, taskID, "stderr", msg); logErr != nil {
 		return logErr
 	}
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
 	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, next_run_at=NULL, finished_at=? WHERE id=?`, StatusBlocked, msg, now, taskID)
+	if err == nil {
+		s.unregisterRunningExecutionLocked(taskID)
+	}
 	return err
 }
 
@@ -334,22 +385,73 @@ func placeholders(count int) string {
 	return strings.Join(items, ",")
 }
 
-func (s *Service) ExpireStaleRunning(ctx context.Context, now time.Time, maxAge time.Duration) (int, error) {
-	if maxAge <= 0 {
-		return 0, nil
-	}
-	finishedAt := now.UTC().Format(time.RFC3339Nano)
-	cutoff := now.UTC().Add(-maxAge).Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status=? AND COALESCE(NULLIF(started_at,''), created_at)<=?`,
-		StatusFailed, "Task did not report completion before the stale task timeout and was marked failed", finishedAt, StatusRunning, cutoff)
+func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time) (int, error) {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tasks WHERE status=?`, StatusRunning)
 	if err != nil {
 		return 0, err
 	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return 0, nil
+	defer rows.Close()
+	taskIDs := []string{}
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			return 0, err
+		}
+		taskIDs = append(taskIDs, taskID)
 	}
-	return int(affected), nil
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+
+	failed := 0
+	finishedAt := now.UTC().Format(time.RFC3339Nano)
+	const message = "Task was marked running but no active execution exists in this Panel process"
+	for _, taskID := range taskIDs {
+		if _, ok := s.runningExecutions[taskID]; ok {
+			continue
+		}
+		res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'orphaned' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE id=? AND status=?`,
+			StatusFailed, message, finishedAt, taskID, StatusRunning)
+		if err != nil {
+			return failed, err
+		}
+		affected, err := res.RowsAffected()
+		if err == nil {
+			failed += int(affected)
+		}
+	}
+	return failed, nil
+}
+
+func (s *Service) HasRunningExecution(taskID string) bool {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	_, ok := s.runningExecutions[taskID]
+	return ok
+}
+
+func (s *Service) FinishExecution(taskID string) {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	s.unregisterRunningExecutionLocked(taskID)
+}
+
+func (s *Service) registerRunningExecutionLocked(taskID string) *RunningExecution {
+	execution := &RunningExecution{TaskID: taskID, StartedAt: time.Now().UTC()}
+	if existing, ok := s.runningExecutions[taskID]; ok {
+		return existing
+	}
+	s.runningExecutions[taskID] = execution
+	return execution
+}
+
+func (s *Service) unregisterRunningExecutionLocked(taskID string) {
+	delete(s.runningExecutions, taskID)
 }
 
 func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge time.Duration, taskTypes []string) (int, error) {

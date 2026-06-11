@@ -150,6 +150,7 @@ func (s *Service) RunIssueTask(ctx context.Context, task tasks.Task) error {
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return err
 	}
+	defer s.tasks.FinishExecution(task.ID)
 	if err := s.tasks.Advance(ctx, task.ID, "preparing", "Preparing certificate request"); err != nil {
 		return err
 	}
@@ -249,6 +250,7 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 		return err
 	}
 	if taskID != "" {
+		defer s.tasks.FinishExecution(taskID)
 		_ = s.tasks.Advance(ctx, taskID, "running", "Running ACME DNS-01 renewal")
 	}
 	resolved, err := s.resolveDomain(ctx, cert.DomainID)

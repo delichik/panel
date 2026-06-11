@@ -413,6 +413,39 @@ func TestExpireStaleQueuedWorkerTasksOnlyMarksOneShotWorkerTypes(t *testing.T) {
 	}
 }
 
+func TestFailRunningTasksWithoutExecution(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	taskSvc := tasks.NewService(store.AppDB())
+	task, err := taskSvc.Create(ctx, tasks.CreateInput{Type: "server_restart", Summary: "Restarting server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`UPDATE tasks SET status='running' WHERE id=?`, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	sched := &Scheduler{tasks: taskSvc}
+
+	sched.failRunningTasksWithoutExecution(ctx)
+
+	got, err := taskSvc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != tasks.StatusFailed || !strings.Contains(got.Error, "no active execution") {
+		t.Fatalf("expected orphaned running task to fail, got %#v", got)
+	}
+}
+
 type fakeMetricsExecutor struct{}
 
 func (fakeMetricsExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {

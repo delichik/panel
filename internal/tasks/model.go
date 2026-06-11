@@ -3,8 +3,6 @@ package tasks
 import "time"
 
 const (
-	StaleRunningTaskAfter = 24 * time.Hour
-
 	StatusQueued          = "queued"
 	StatusScheduled       = "scheduled"
 	StatusRunning         = "running"
@@ -14,6 +12,11 @@ const (
 	StatusBlocked         = "blocked"
 	StatusCancelled       = "cancelled"
 )
+
+type RunningExecution struct {
+	TaskID    string
+	StartedAt time.Time
+}
 
 type Task struct {
 	ID                  string     `json:"id"`
