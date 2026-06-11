@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   t,
@@ -23,7 +23,9 @@ const switchDialog = ref(false);
 const removeDialog = ref(false);
 const selectedServerId = ref('');
 const selectedRebuildServerId = ref('');
+const selectedRebuildAddress = ref('');
 const selectedSwitchServerId = ref('');
+const selectedSwitchAddress = ref('');
 const removingNode = ref<ProjectedNomadNodeDto | null>(null);
 const operationTaskId = ref('');
 const operationMessage = ref('');
@@ -69,7 +71,20 @@ const switchServerOptions = computed(() => {
   return options;
 });
 const selectedSwitchServer = computed(() => switchServerOptions.value.find((server) => server.value === selectedSwitchServerId.value) ?? null);
+const rebuildAddressOptions = computed(() => networkAddressOptions(selectedRebuildServer.value?.traits));
+const switchAddressOptions = computed(() => {
+  const server = bootstrapServers.value.find((item) => item.id === selectedSwitchServerId.value);
+  return networkAddressOptions(server?.traits);
+});
 const removingNodeName = computed(() => removingNode.value?.name || removingNode.value?.nodeId || removingNode.value?.serverId || t('common.unknown'));
+
+watch(selectedSwitchServerId, () => {
+  selectedSwitchAddress.value = switchAddressOptions.value[0]?.value ?? '';
+});
+
+watch(selectedRebuildServerId, () => {
+  selectedRebuildAddress.value = rebuildAddressOptions.value[0]?.value ?? '';
+});
 
 function taskRoute(taskId = operationTaskId.value) {
   return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
@@ -113,12 +128,25 @@ function openJoinDialog() {
 
 function openRebuildDialog() {
   selectedRebuildServerId.value = rebuildServerOptions.value[0]?.value ?? '';
+  selectedRebuildAddress.value = rebuildAddressOptions.value[0]?.value ?? '';
   rebuildDialog.value = true;
 }
 
 function openSwitchDialog() {
   selectedSwitchServerId.value = switchServerOptions.value[0]?.value ?? '';
+  selectedSwitchAddress.value = switchAddressOptions.value[0]?.value ?? '';
   switchDialog.value = true;
+}
+
+function networkAddressOptions(traits?: Record<string, string> | null) {
+  const options: Array<{ label: string; value: string }> = [];
+  for (const raw of (traits?.['sys.network_interfaces'] || '').split(', ')) {
+    const [name, family, cidr] = raw.split('|');
+    const address = (cidr || '').split('/')[0].trim();
+    if (!name || !address || !['inet', 'inet6'].includes(family)) continue;
+    options.push({ label: `${name} · ${address}`, value: address });
+  }
+  return options;
 }
 
 function canJoinNode(node: ProjectedNomadNodeDto) {
@@ -143,7 +171,7 @@ async function load() {
     if (linkedTaskId && !operationTaskId.value) {
       showTaskMessage(linkedTaskId, t('nomadNodesPage.bootstrapStarted'));
     }
-    if (result.status === 'unconfigured') {
+    if (result.status === 'unconfigured' || result.status === 'migration_required') {
       await router.replace('/nomad/setup');
     }
   } catch (err) {
@@ -203,10 +231,13 @@ async function redeployNode(node: ProjectedNomadNodeDto) {
 }
 
 async function rebuildSelectedCluster() {
-  if (!selectedRebuildServerId.value) return;
+  if (!selectedRebuildServerId.value || !selectedRebuildAddress.value) return;
   actionLoading.value = 'rebuild-cluster';
   try {
-    const result = await nomadApi.rebuildCluster({ serverId: selectedRebuildServerId.value });
+    const result = await nomadApi.rebuildCluster({
+      serverId: selectedRebuildServerId.value,
+      advertiseAddress: selectedRebuildAddress.value,
+    });
     showTaskMessage(result.taskId, t('nomadNodesPage.rebuildStarted'));
     rebuildDialog.value = false;
     error.value = '';
@@ -223,7 +254,10 @@ async function switchSelectedServer() {
   if (!selectedSwitchServerId.value) return;
   actionLoading.value = 'switch-server';
   try {
-    const result = await nomadApi.switchServer({ serverId: selectedSwitchServerId.value });
+    const result = await nomadApi.switchServer({
+      serverId: selectedSwitchServerId.value,
+      advertiseAddress: selectedSwitchAddress.value,
+    });
     showTaskMessage(result.taskId, t('nomadNodesPage.switchStarted'));
     switchDialog.value = false;
     error.value = '';
@@ -477,6 +511,16 @@ onMounted(load);
             density="comfortable"
             class="mb-4"
           />
+          <v-select
+            v-model="selectedSwitchAddress"
+            :items="switchAddressOptions"
+            item-title="label"
+            item-value="value"
+            :label="t('nomadSetupPage.nomadAddress')"
+            variant="outlined"
+            density="comfortable"
+            class="mb-4"
+          />
           <v-alert type="info" variant="tonal" density="compact">
             {{ t('nomadNodesPage.switchServerHint') }}
           </v-alert>
@@ -487,7 +531,7 @@ onMounted(load);
         <v-divider />
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="switchDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" :loading="actionLoading === 'switch-server'" :disabled="!selectedSwitchServerId" @click="switchSelectedServer">{{ t('nomadNodesPage.switchServer') }}</v-btn>
+          <v-btn color="primary" variant="flat" class="text-none" :loading="actionLoading === 'switch-server'" :disabled="!selectedSwitchServerId || !selectedSwitchAddress" @click="switchSelectedServer">{{ t('nomadNodesPage.switchServer') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -516,6 +560,21 @@ onMounted(load);
             density="comfortable"
             class="mb-4"
           />
+          <v-select
+            v-model="selectedRebuildAddress"
+            :items="rebuildAddressOptions"
+            item-title="label"
+            item-value="value"
+            :label="t('nomadSetupPage.nomadAddress')"
+            :hint="t('nomadSetupPage.nomadAddressHint')"
+            persistent-hint
+            variant="outlined"
+            density="comfortable"
+            class="mb-4"
+          />
+          <v-alert v-if="selectedRebuildServer && rebuildAddressOptions.length === 0" type="error" variant="tonal" density="compact" class="mb-4">
+            {{ t('nomadSetupPage.noNetworkAddresses') }}
+          </v-alert>
           <div v-if="selectedRebuildServer" class="server-preview">
             <div class="font-weight-bold">{{ selectedRebuildServer.name }}</div>
             <div class="text-caption text-medium-emphasis">{{ selectedRebuildServer.host }}:{{ selectedRebuildServer.port }}</div>
@@ -524,7 +583,7 @@ onMounted(load);
         <v-divider />
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="rebuildDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="warning" variant="flat" class="text-none" :loading="actionLoading === 'rebuild-cluster'" :disabled="!selectedRebuildServerId" @click="rebuildSelectedCluster">{{ t('nomadNodesPage.rebuildCluster') }}</v-btn>
+          <v-btn color="warning" variant="flat" class="text-none" :loading="actionLoading === 'rebuild-cluster'" :disabled="!selectedRebuildServerId || !selectedRebuildAddress" @click="rebuildSelectedCluster">{{ t('nomadNodesPage.rebuildCluster') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

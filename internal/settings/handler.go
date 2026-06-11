@@ -14,6 +14,10 @@ func (h *Handler) Runtime(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, h.service.Runtime())
 }
 
+func (h *Handler) PublicBranding(w http.ResponseWriter, r *http.Request) {
+	httpx.JSON(w, http.StatusOK, h.service.Runtime().Branding)
+}
+
 func (h *Handler) UpdateRuntime(w http.ResponseWriter, r *http.Request) {
 	var input RuntimeUpdate
 	if !httpx.Decode(w, r, &input) {

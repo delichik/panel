@@ -35,6 +35,8 @@
 ## 行为约定
 
 - Nomad 地址、namespace、region、datacenter 等运行时设置来自 `internal/settings/`。
+- SSH 管理地址与 Nomad server advertise 地址是两个独立网络平面。引导、重建或切换 server 时，前端必须从目标服务器探测到的物理网卡地址中显式选择 `advertiseAddress`；后端将其保存为服务器 trait `nomad.server_advertise_address`，用于 server 的 `advertise.http/rpc/serf`、Panel 的 Nomad HTTP 地址和 client 的 `server_join.retry_join`。禁止从 SSH `host` 自动推导。
+- 已存在 Nomad 任务但当前 server 没有 `nomad.server_advertise_address` 时，控制平面返回 `migration_required`，前端进入类似首次初始化的重建引导，不继续展示可误操作的旧控制平面。
 - 本地或回环 Nomad 地址会使用项目托管的 TLS 资产；相关判断在 `internal/app/app.go`。
 - 引导/加入流程通过 SSH 在目标服务器执行远程命令，需要考虑支持系统、sudo、幂等性和失败恢复。
 - Panel 管理的 Nomad agent 必须在本机 UFW 放行 `4646/tcp`（HTTP API）、`4647/tcp`（RPC）以及 `4648/tcp`、`4648/udp`（Serf gossip）；引导、加入、重部署和 server 切换后的 client 同步都必须幂等修复这些规则。云厂商安全组或外部防火墙不由 Panel 管理，仍需允许节点间对应流量。
@@ -44,9 +46,9 @@
 - 同一 `panel_server_id` 存在旧 `down` 节点和新 `ready` 节点时，控制平面投影必须优先展示 `ready` 节点，避免重部署后被旧节点记录覆盖为离线。
 - Nomad 运行时准备可以安装 Docker/CNI，但不得无条件重启 Docker；Docker 已运行时只做健康检查，未运行时才启动，避免 Panel 自身部署在目标节点 Docker 中时被中断。
 - server 引导、server 重部署和集群重建会临时切换 Panel 的 Nomad API 地址；只有 Panel 验证 TCP 4646/API 可达后才保留地址，失败必须回滚到旧地址。
-- server 切换在验证新 API 地址后，必须同步所有 Panel 托管 client 的完整配置，把 `server_join.retry_join` 更新为新 server RPC 地址，补齐 Nomad UFW 规则，逐台重启并确认重新注册；同步阶段失败时保留已验证的新 Panel API 地址并将任务标记失败，避免已同步节点与 Panel 再次指向不同控制面。
+- server 切换先使用用户选择的 advertise 地址重写并重启目标 server，再验证新 API 地址；验证成功后同步所有 Panel 托管 client 的完整配置，把 `server_join.retry_join` 更新为新 server RPC 地址，补齐 Nomad UFW 规则，逐台重启并确认重新注册。
 - 节点重部署会删除 Panel 托管的旧 Nomad 配置和 TLS 文件，并根据当前运行时设置重新生成完整 server/client 配置；client 重部署使用 Panel 当前选择的 server RPC 地址。
-- 集群重建必须先引导并验证新的单 server 集群，再重置其他 Panel 托管节点，避免新 server 端口未开放时提前停止旧节点。
+- 集群重建必须先引导并验证新的单 server 集群，再重置并重新加入其他 Panel 托管节点，最后无条件重新注册数据库中所有 `enabled` 应用并同步反向代理。应用定义、文件、变量和启用状态保存在 Panel 数据库，不能因 Nomad 集群重建丢失。
 - 长耗时流程必须写入任务、步骤和日志。
 - 直接由 goroutine 执行的 Nomad 节点操作创建任务后必须先落 `running` 再返回 `taskId`，避免 Panel 进程中断后任务永久停在 `queued`。
 - 前端 Nomad 节点页提交加入、重部署、重建、切换或移除后必须保留 `taskId`，并给出跳转任务中心的入口。

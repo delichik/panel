@@ -12,6 +12,7 @@
 - `web/src/features/settings/pages/SettingsPage.vue`
   - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
   - 设置分类子菜单、通用设置、安全设置、Nomad 设置、证书设置、系统信息文案已接入 `web/src/i18n/index.ts`
+  - 登录页标题和说明自定义字段、留空回退提示已接入 `web/src/i18n/index.ts`
 - `web/src/features/auth/pages/ChangePasswordPage.vue`
   - 首次强制改密页面文案已接入 `web/src/i18n/index.ts`
 - `internal/auth`
@@ -19,6 +20,7 @@
   - 强制改密、账号更新、JWT 密钥更新相关错误文案已接入 `internal/i18n/i18n.go`
 - `web/src/features/nomad/pages/NomadNodesPage.vue`
   - Nomad 节点重部署、集群重建、server 切换及切换后 client 配置同步文案已接入 `web/src/i18n/index.ts`
+  - 旧集群网络地址迁移、SSH 地址与 Nomad 网卡地址选择、重建后应用恢复提示已接入 `web/src/i18n/index.ts`
   - 首个 server 引导任务入口、反向代理同步任务提示文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/servers/pages/ServersPage.vue`
   - 服务器凭据必选提示、重启确认与任务入口、UFW 安装任务入口、系统架构/CPU/分项网卡详情文案已接入 `web/src/i18n/index.ts`

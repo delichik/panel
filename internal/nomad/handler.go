@@ -23,7 +23,7 @@ type joinService interface {
 	ControlPlane(ctx context.Context) (ControlPlane, error)
 	Candidates(ctx context.Context) ([]server.Server, error)
 	JoinClient(ctx context.Context, serverID string) (tasks.Task, error)
-	BootstrapServer(ctx context.Context, serverID string) (tasks.Task, error)
+	BootstrapServer(ctx context.Context, in BootstrapServerInput) (tasks.Task, error)
 	RedeployNode(ctx context.Context, in RedeployNodeInput) (tasks.Task, error)
 	RebuildCluster(ctx context.Context, in RebuildClusterInput) (tasks.Task, error)
 	SwitchServer(ctx context.Context, in SwitchServerInput) (tasks.Task, error)
@@ -91,13 +91,11 @@ func (h *Handler) JoinClient(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) BootstrapServer(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ServerID string `json:"serverId"`
-	}
+	var req BootstrapServerInput
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	task, err := h.join.BootstrapServer(r.Context(), req.ServerID)
+	task, err := h.join.BootstrapServer(r.Context(), req)
 	if err != nil {
 		httpx.Error(w, err)
 		return

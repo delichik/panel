@@ -3,6 +3,7 @@ package nomad
 import "strings"
 
 const (
+	TraitServerAdvertiseAddress  = "nomad.server_advertise_address"
 	TraitReverseProxyEnabled     = "nomad.reverse_proxy.enabled"
 	TraitReverseProxyStaticFiles = "nomad.reverse_proxy.static_files"
 	TraitReverseProxyStaticSites = "nomad.reverse_proxy.static_sites"

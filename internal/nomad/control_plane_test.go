@@ -36,6 +36,40 @@ func TestControlPlaneIsUnconfiguredWhenNomadUnavailableAndNoTasks(t *testing.T) 
 	}
 }
 
+func TestControlPlaneRequiresMigrationWhenLegacyServerHasNoAdvertiseAddress(t *testing.T) {
+	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createControlPlaneServer(t, svc.servers, credSvc, ctx, "legacy", "10.0.0.30")
+	traits := map[string]string{}
+	for key, value := range srv.Traits {
+		if key != TraitServerAdvertiseAddress {
+			traits[key] = value
+		}
+	}
+	if _, err := svc.servers.Update(ctx, srv.ID, server.SaveRequest{
+		Name: srv.Name, Host: srv.Host, Port: srv.Port, SSHUsername: srv.SSHUsername,
+		CredentialID: srv.CredentialID, Traits: traits, Notes: srv.Notes,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type: TaskTypeServerBootstrap, ServerID: srv.ID, ResourceType: "server",
+		ResourceID: srv.ID, Summary: "Nomad server bootstrap requested", Status: tasks.StatusCompleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	fake.status = StatusResponse{Connected: true, Leader: "10.1.0.51:4647"}
+
+	got, err := svc.ControlPlane(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != ControlPlaneMigration {
+		t.Fatalf("status = %q, want %q", got.Status, ControlPlaneMigration)
+	}
+}
+
 func TestControlPlaneShowsBootstrappingServerAsPendingNode(t *testing.T) {
 	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
 	defer cleanup()

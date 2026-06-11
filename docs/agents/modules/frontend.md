@@ -43,7 +43,8 @@
 - Nomad：`web/src/features/nomad/`；只保留设置、加入和节点控制平面入口，不恢复 raw jobs/deployments 清单入口。
 - 任务中心：`web/src/features/tasks/`
 - 设置：`web/src/features/settings/pages/SettingsPage.vue`
-- 登录与强制改密：`web/src/features/auth/pages/`
+- 登录与强制改密：`web/src/features/auth/pages/`；登录页使用居中的单卡片布局、纯 CSS 背景装饰，并在窄屏下收紧间距，不依赖外部图片资源。登录页通过公开的 `GET /api/v1/settings/public-branding` 读取自定义标题和说明，空值或读取失败时回退到当前语言的 `login.*` 默认文案。
+- 通用设置可编辑登录页标题和说明；标题最多 80 字符，说明最多 240 字符，留空表示使用多语言默认文案。
 
 ## 验证
 

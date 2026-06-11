@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { nomadApi } from '@/api/nomad';
@@ -11,6 +11,7 @@ const loading = ref(false);
 const bootstrapping = ref(false);
 const error = ref('');
 const selectedServerId = ref('');
+const selectedAdvertiseAddress = ref('');
 const { t } = useI18n();
 
 const bootstrapCandidates = computed(() => controlPlane.value?.bootstrapCandidates ?? []);
@@ -20,6 +21,22 @@ const candidateOptions = computed(() =>
     value: server.id,
   })),
 );
+const selectedServer = computed(() => bootstrapCandidates.value.find((server) => server.id === selectedServerId.value) ?? null);
+const addressOptions = computed(() => {
+  const options: Array<{ label: string; value: string }> = [];
+  for (const raw of (selectedServer.value?.traits?.['sys.network_interfaces'] || '').split(', ')) {
+    const [name, family, cidr] = raw.split('|');
+    const address = (cidr || '').split('/')[0].trim();
+    if (!name || !address || !['inet', 'inet6'].includes(family)) continue;
+    options.push({ label: `${name} · ${address}`, value: address });
+  }
+  return options;
+});
+const migrationRequired = computed(() => controlPlane.value?.status === 'migration_required');
+
+watch(selectedServerId, () => {
+  selectedAdvertiseAddress.value = addressOptions.value[0]?.value ?? '';
+});
 
 async function load() {
   loading.value = true;
@@ -28,8 +45,9 @@ async function load() {
     const bootstrapCandidates = result.bootstrapCandidates ?? [];
     controlPlane.value = result;
     selectedServerId.value ||= bootstrapCandidates[0]?.id ?? '';
+    selectedAdvertiseAddress.value ||= addressOptions.value[0]?.value ?? '';
     error.value = '';
-    if (result.status !== 'unconfigured') {
+    if (!['unconfigured', 'migration_required'].includes(result.status)) {
       await router.replace('/nomad/nodes');
     }
   } catch (err) {
@@ -43,11 +61,16 @@ async function bootstrapSelectedServer() {
   if (!selectedServerId.value) return;
   bootstrapping.value = true;
   try {
-    const result = await nomadApi.bootstrapServer(selectedServerId.value);
+    const input = { serverId: selectedServerId.value, advertiseAddress: selectedAdvertiseAddress.value };
+    const result = migrationRequired.value
+      ? await nomadApi.rebuildCluster(input)
+      : await nomadApi.bootstrapServer(input);
     error.value = '';
     await router.replace({ path: '/nomad/nodes', query: { task: result.taskId } });
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('nomadSetupPage.bootstrapFailed');
+    error.value = err instanceof Error
+      ? err.message
+      : (migrationRequired.value ? t('nomadSetupPage.rebuildFailed') : t('nomadSetupPage.bootstrapFailed'));
   } finally {
     bootstrapping.value = false;
   }
@@ -63,9 +86,9 @@ onMounted(load);
     <v-card variant="outlined" class="setup-panel">
       <div class="setup-icon"><v-icon size="30">mdi-server-plus</v-icon></div>
       <div class="setup-copy">
-        <div class="text-h6 font-weight-bold">{{ t('nomadSetupPage.selectServerTitle') }}</div>
+        <div class="text-h6 font-weight-bold">{{ migrationRequired ? t('nomadSetupPage.migrationTitle') : t('nomadSetupPage.selectServerTitle') }}</div>
         <div class="text-body-2 text-medium-emphasis">
-          {{ t('nomadSetupPage.selectServerHint') }}
+          {{ migrationRequired ? t('nomadSetupPage.migrationHint') : t('nomadSetupPage.selectServerHint') }}
         </div>
       </div>
 
@@ -82,8 +105,29 @@ onMounted(load);
           variant="outlined"
           density="comfortable"
         />
-        <v-btn color="primary" variant="flat" prepend-icon="mdi-server-plus" class="text-none" :loading="bootstrapping" :disabled="!selectedServerId" @click="bootstrapSelectedServer">
-          {{ t('nomadSetupPage.bootstrapFirstServer') }}
+        <v-text-field
+          :model-value="selectedServer?.host || ''"
+          :label="t('nomadSetupPage.sshAddress')"
+          variant="outlined"
+          density="comfortable"
+          readonly
+        />
+        <v-select
+          v-model="selectedAdvertiseAddress"
+          :items="addressOptions"
+          item-title="label"
+          item-value="value"
+          :label="t('nomadSetupPage.nomadAddress')"
+          :hint="t('nomadSetupPage.nomadAddressHint')"
+          persistent-hint
+          variant="outlined"
+          density="comfortable"
+        />
+        <v-alert v-if="selectedServer && addressOptions.length === 0" type="warning" variant="tonal">
+          {{ t('nomadSetupPage.noNetworkAddresses') }}
+        </v-alert>
+        <v-btn color="primary" variant="flat" prepend-icon="mdi-server-plus" class="text-none" :loading="bootstrapping" :disabled="!selectedServerId || !selectedAdvertiseAddress" @click="bootstrapSelectedServer">
+          {{ migrationRequired ? t('nomadSetupPage.rebuildCluster') : t('nomadSetupPage.bootstrapFirstServer') }}
         </v-btn>
       </div>
 

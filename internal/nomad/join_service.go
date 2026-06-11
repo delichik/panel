@@ -74,6 +74,7 @@ type JoinService struct {
 	tlsAssets      *TLSAssets
 	appProxySource applicationProxySource
 	certSource     reverseProxyCertificateSource
+	appRestorer    enabledApplicationRestorer
 }
 
 func NewJoinService(servers *server.Service, nomadClient nodeClient, exec sshx.RemoteExecutor, taskSvc *tasks.Service, cfg config.NomadConfig, tlsAssets *TLSAssets) *JoinService {
@@ -122,6 +123,10 @@ type reverseProxyCertificateSource interface {
 	ReverseProxyCertificates(ctx context.Context) ([]ReverseProxyCertificate, error)
 }
 
+type enabledApplicationRestorer interface {
+	RedeployEnabledApplications(ctx context.Context) (int, error)
+}
+
 type ReverseProxyCertificate struct {
 	ID             string
 	Domains        []string
@@ -131,6 +136,10 @@ type ReverseProxyCertificate struct {
 
 func (s *JoinService) SetReverseProxyCertificateSource(source reverseProxyCertificateSource) {
 	s.certSource = source
+}
+
+func (s *JoinService) SetEnabledApplicationRestorer(restorer enabledApplicationRestorer) {
+	s.appRestorer = restorer
 }
 
 func (s *JoinService) ensureNomadEligible(srv server.Server) (linux.DistroAdapter, error) {
@@ -145,6 +154,60 @@ func (s *JoinService) ensureNomadEligible(srv server.Server) (linux.DistroAdapte
 		return nil, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
 	}
 	return adapter, nil
+}
+
+func serverAdvertiseAddress(srv server.Server) string {
+	return strings.TrimSpace(srv.Traits[TraitServerAdvertiseAddress])
+}
+
+func serverNetworkAddresses(srv server.Server) []string {
+	var out []string
+	for _, raw := range strings.Split(srv.Traits["sys.network_interfaces"], ", ") {
+		parts := strings.Split(raw, "|")
+		if len(parts) < 3 {
+			continue
+		}
+		address := strings.TrimSpace(parts[2])
+		if host, _, err := net.ParseCIDR(address); err == nil {
+			address = host.String()
+		}
+		if ip := net.ParseIP(strings.Trim(address, "[]")); ip != nil && !ip.IsLoopback() && !ip.IsUnspecified() {
+			out = append(out, ip.String())
+		}
+	}
+	return out
+}
+
+func (s *JoinService) saveServerAdvertiseAddress(ctx context.Context, srv server.Server, raw string) (server.Server, error) {
+	ip := net.ParseIP(strings.Trim(strings.TrimSpace(raw), "[]"))
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		return server.Server{}, panelerr.Validation("nomad_advertise_address_invalid", "Select a valid Nomad address from the server network interfaces")
+	}
+	address := ip.String()
+	found := false
+	for _, candidate := range serverNetworkAddresses(srv) {
+		if sameHost(candidate, address) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return server.Server{}, panelerr.Validation("nomad_advertise_address_not_detected", "The selected Nomad address was not detected on the server")
+	}
+	traits := make(map[string]string, len(srv.Traits)+1)
+	for key, value := range srv.Traits {
+		traits[key] = value
+	}
+	traits[TraitServerAdvertiseAddress] = address
+	return s.servers.Update(ctx, srv.ID, server.SaveRequest{
+		Name:         srv.Name,
+		Host:         srv.Host,
+		Port:         srv.Port,
+		SSHUsername:  srv.SSHUsername,
+		CredentialID: srv.CredentialID,
+		Traits:       traits,
+		Notes:        srv.Notes,
+	})
 }
 
 func nomadJoinEligible(srv server.Server) bool {
@@ -241,11 +304,16 @@ func (s *JoinService) JoinClient(ctx context.Context, serverID string) (tasks.Ta
 	return task, nil
 }
 
-func (s *JoinService) BootstrapServer(ctx context.Context, serverID string) (tasks.Task, error) {
+func (s *JoinService) BootstrapServer(ctx context.Context, in BootstrapServerInput) (tasks.Task, error) {
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("nomad_bootstrap_executor_unavailable", "Nomad server bootstrap executor is unavailable")
 	}
+	serverID := strings.TrimSpace(in.ServerID)
 	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	srv, err = s.saveServerAdvertiseAddress(ctx, srv, in.AdvertiseAddress)
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -296,6 +364,9 @@ func (s *JoinService) RedeployNode(ctx context.Context, in RedeployNodeInput) (t
 	if role != ProjectedNodeRoleServer && role != ProjectedNodeRoleClient {
 		return tasks.Task{}, panelerr.Validation("nomad_redeploy_role_required", "Nomad node role is required for redeploy")
 	}
+	if role == ProjectedNodeRoleServer && serverAdvertiseAddress(srv) == "" {
+		return tasks.Task{}, panelerr.Validation("nomad_advertise_address_migration_required", "Rebuild the Nomad cluster with an explicit network address before redeploying the server")
+	}
 	taskType := TaskTypeClientJoin
 	summary := "Redeploying Nomad client"
 	if role == ProjectedNodeRoleServer {
@@ -342,6 +413,10 @@ func (s *JoinService) RebuildCluster(ctx context.Context, in RebuildClusterInput
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	srv, err = s.saveServerAdvertiseAddress(ctx, srv, in.AdvertiseAddress)
+	if err != nil {
+		return tasks.Task{}, err
+	}
 	task, err := s.tasks.Create(ctx, tasks.CreateInput{
 		Type:         TaskTypeClusterRebuild,
 		ServerID:     serverID,
@@ -381,6 +456,14 @@ func (s *JoinService) SwitchServer(ctx context.Context, in SwitchServerInput) (t
 	if strings.TrimSpace(srv.Host) == "" {
 		return tasks.Task{}, panelerr.Validation("nomad_switch_server_host_required", "Server host is required")
 	}
+	srv, err = s.saveServerAdvertiseAddress(ctx, srv, in.AdvertiseAddress)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	adapter, err := s.ensureNomadEligible(srv)
+	if err != nil {
+		return tasks.Task{}, err
+	}
 	task, err := s.tasks.Create(ctx, tasks.CreateInput{
 		Type:         TaskTypeServerSwitch,
 		ServerID:     serverID,
@@ -397,7 +480,7 @@ func (s *JoinService) SwitchServer(ctx context.Context, in SwitchServerInput) (t
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runSwitchServer(context.Background(), task.ID, srv, setter)
+	go s.runSwitchServer(context.Background(), task.ID, srv, adapter, setter)
 	return task, nil
 }
 
@@ -411,12 +494,19 @@ type RedeployNodeInput struct {
 	Role     string `json:"role"`
 }
 
+type BootstrapServerInput struct {
+	ServerID         string `json:"serverId"`
+	AdvertiseAddress string `json:"advertiseAddress"`
+}
+
 type RebuildClusterInput struct {
-	ServerID string `json:"serverId"`
+	ServerID         string `json:"serverId"`
+	AdvertiseAddress string `json:"advertiseAddress"`
 }
 
 type SwitchServerInput struct {
-	ServerID string `json:"serverId"`
+	ServerID         string `json:"serverId"`
+	AdvertiseAddress string `json:"advertiseAddress"`
 }
 
 type ReverseProxyInput struct {
@@ -595,10 +685,10 @@ func (s *JoinService) restoreNomadAddressFromBootstrap(ctx context.Context) {
 		return
 	}
 	srv, err := s.servers.Get(ctx, task.ServerID)
-	if err != nil || strings.TrimSpace(srv.Host) == "" {
+	if err != nil || serverAdvertiseAddress(srv) == "" {
 		return
 	}
-	s.setNomadAddress(setter, "https://"+net.JoinHostPort(srv.Host, "4646"))
+	s.setNomadAddress(setter, nomadHTTPAddressForServer(srv))
 }
 
 func (s *JoinService) RestoreNomadAddressFromBootstrap(ctx context.Context) {
@@ -640,10 +730,15 @@ func (s *JoinService) runJoinClient(ctx context.Context, taskID string, srv serv
 	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
+	rpc, err := s.serverJoinRPCAddress(ctx)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	if err := s.runNomadCommandSteps(ctx, taskID, target, []nomadCommandStep{
 		{Stage: "installing_nomad", Message: "checking or installing Nomad", Command: adapter.NomadInstallScript(), Timeout: nomadInstallTimeout},
 		{Stage: "preparing_runtime", Message: "checking Docker and Nomad CNI runtime", Command: adapter.NomadRuntimePrereqsScript(), Timeout: nomadInstallTimeout},
-		{Stage: "configuring", Message: "writing Nomad client configuration", Command: s.joinConfigScript(srv, s.serverJoinRPCAddress(ctx)), Timeout: nomadMaintenanceTimeout},
+		{Stage: "configuring", Message: "writing Nomad client configuration", Command: s.joinConfigScript(srv, rpc), Timeout: nomadMaintenanceTimeout},
 		{Stage: "opening_firewall", Message: "opening local Nomad firewall ports", Command: nomadUFWAllowScript(traitBool(srv.Traits, TraitReverseProxyEnabled)), Timeout: nomadFirewallTimeout},
 		{Stage: "starting", Message: "starting Nomad client service", Command: adapter.NomadServiceRestartScript(), Timeout: nomadServiceTimeout},
 		{Stage: "verifying_local", Message: "checking local Nomad client API", Command: nomadLocalHealthScript(), Timeout: nomadLocalHealthTimeout},
@@ -733,15 +828,50 @@ func (s *JoinService) runRebuildCluster(ctx context.Context, taskID string, boot
 			return
 		}
 	}
+	if err := s.tasks.Advance(ctx, taskID, "rejoining_nodes", "rejoining existing Panel-managed Nomad clients"); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	rpc := net.JoinHostPort(serverAdvertiseAddress(bootstrap), "4647")
+	for _, srv := range managed {
+		if srv.ID == bootstrap.ID {
+			continue
+		}
+		adapter, err := s.ensureNomadEligible(srv)
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, fmt.Errorf("cannot rejoin Nomad client %s: %w", firstNonEmpty(srv.Name, srv.ID), err))
+			return
+		}
+		if err := s.configureManagedClient(ctx, taskID, srv, adapter, rpc); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+	}
+	if s.appRestorer != nil {
+		if err := s.tasks.Advance(ctx, taskID, "restoring_applications", "restoring enabled applications"); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		restored, err := s.appRestorer.RedeployEnabledApplications(ctx)
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, fmt.Errorf("cannot restore enabled applications: %w", err))
+			return
+		}
+		_ = s.tasks.AppendLog(ctx, taskID, "system", fmt.Sprintf("restored %d enabled applications", restored))
+	}
 	s.reconcileReverseProxyJobLogged(ctx, taskID)
 	_ = s.tasks.Complete(ctx, taskID, "Nomad cluster rebuild requested")
 }
 
-func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv server.Server, setter addressSetter) {
+func (s *JoinService) runSwitchServer(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter, setter addressSetter) {
 	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	previous := s.currentConfig().Address
 	next := nomadHTTPAddressForServer(srv)
+	if err := s.runBootstrapServerSteps(ctx, taskID, srv, adapter); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	_ = s.tasks.Advance(ctx, taskID, "switching", "switching Nomad server address")
 	s.setNomadAddress(setter, next)
 	if err := s.waitForPanelNomadReachability(ctx, taskID); err != nil {
@@ -764,25 +894,32 @@ func (s *JoinService) syncManagedClientsToServer(ctx context.Context, taskID str
 	if err != nil {
 		return err
 	}
-	rpc := net.JoinHostPort(control.Host, "4647")
+	rpc := net.JoinHostPort(serverAdvertiseAddress(control), "4647")
 	for _, srv := range clients {
 		adapter, err := s.ensureNomadEligible(srv)
 		if err != nil {
 			return fmt.Errorf("cannot synchronize Nomad client %s: %w", firstNonEmpty(srv.Name, srv.ID), err)
 		}
-		name := firstNonEmpty(srv.Name, srv.ID, srv.Host)
-		_ = s.tasks.AppendLog(ctx, taskID, "system", "synchronizing Nomad client "+name+" to "+rpc)
-		if err := s.runNomadCommandSteps(ctx, taskID, srv.Target(), []nomadCommandStep{
-			{Stage: "configuring_clients", Message: "writing Nomad client configuration on " + name, Command: s.joinConfigScript(srv, rpc), Timeout: nomadMaintenanceTimeout},
-			{Stage: "opening_firewall", Message: "opening Nomad firewall ports on " + name, Command: nomadUFWAllowScript(traitBool(srv.Traits, TraitReverseProxyEnabled)), Timeout: nomadFirewallTimeout},
-			{Stage: "restarting_clients", Message: "restarting Nomad client on " + name, Command: adapter.NomadServiceRestartScript(), Timeout: nomadServiceTimeout},
-			{Stage: "verifying_clients", Message: "checking Nomad client on " + name, Command: nomadLocalHealthScript(), Timeout: nomadLocalHealthTimeout},
-		}); err != nil {
-			return fmt.Errorf("cannot synchronize Nomad client %s: %w", name, err)
+		if err := s.configureManagedClient(ctx, taskID, srv, adapter, rpc); err != nil {
+			return err
 		}
-		if err := s.waitForNomadClientRegistration(ctx, taskID, srv); err != nil {
-			return fmt.Errorf("cannot synchronize Nomad client %s: %w", name, err)
-		}
+	}
+	return nil
+}
+
+func (s *JoinService) configureManagedClient(ctx context.Context, taskID string, srv server.Server, adapter linux.DistroAdapter, rpc string) error {
+	name := firstNonEmpty(srv.Name, srv.ID, srv.Host)
+	_ = s.tasks.AppendLog(ctx, taskID, "system", "configuring Nomad client "+name+" for "+rpc)
+	if err := s.runNomadCommandSteps(ctx, taskID, srv.Target(), []nomadCommandStep{
+		{Stage: "configuring_clients", Message: "writing Nomad client configuration on " + name, Command: s.joinConfigScript(srv, rpc), Timeout: nomadMaintenanceTimeout},
+		{Stage: "opening_firewall", Message: "opening Nomad firewall ports on " + name, Command: nomadUFWAllowScript(traitBool(srv.Traits, TraitReverseProxyEnabled)), Timeout: nomadFirewallTimeout},
+		{Stage: "restarting_clients", Message: "restarting Nomad client on " + name, Command: adapter.NomadServiceRestartScript(), Timeout: nomadServiceTimeout},
+		{Stage: "verifying_clients", Message: "checking Nomad client on " + name, Command: nomadLocalHealthScript(), Timeout: nomadLocalHealthTimeout},
+	}); err != nil {
+		return fmt.Errorf("cannot configure Nomad client %s: %w", name, err)
+	}
+	if err := s.waitForNomadClientRegistration(ctx, taskID, srv); err != nil {
+		return fmt.Errorf("cannot configure Nomad client %s: %w", name, err)
 	}
 	return nil
 }
@@ -1120,6 +1257,7 @@ func (s *JoinService) bootstrapConfigScript(srv server.Server) string {
 	cfg := s.currentConfig()
 	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
 	region := firstNonEmpty(strings.TrimSpace(cfg.Region), "global")
+	advertiseAddress := serverAdvertiseAddress(srv)
 	return fmt.Sprintf(`%s
 %s
 cat >/etc/nomad.d/panel-server.hcl <<'EOF'
@@ -1128,6 +1266,12 @@ region = "%s"
 datacenter = "%s"
 data_dir = "/opt/nomad/data"
 bind_addr = "0.0.0.0"
+
+advertise {
+  http = "%s"
+  rpc = "%s"
+  serf = "%s"
+}
 
 tls {
   http = true
@@ -1155,32 +1299,22 @@ client {
   }
 }
 EOF
-`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
-func (s *JoinService) serverJoinRPCAddress(ctx context.Context) string {
-	cfg := s.currentConfig()
-	configured := nomadRPCAddress(cfg.Address)
-	if !isLocalRPCAddress(configured) {
-		return configured
-	}
-	if client, ok := s.nomad.(statusClient); ok {
-		statusCtx, cancel := context.WithTimeout(ctx, controlPlaneNomadQueryTimeout)
-		defer cancel()
-		status, err := client.Status(statusCtx)
-		if err == nil && status.Connected {
-			if rpc := normalizeNomadRPCAddress(status.Leader); rpc != "" && !isLocalRPCAddress(rpc) {
-				return rpc
-			}
-		}
-	}
+func (s *JoinService) serverJoinRPCAddress(ctx context.Context) (string, error) {
 	latest := s.latestCompletedBootstrapTask(ctx)
 	if latest.ServerID != "" {
-		if srv, err := s.servers.Get(ctx, latest.ServerID); err == nil && strings.TrimSpace(srv.Host) != "" {
-			return net.JoinHostPort(srv.Host, "4647")
+		if srv, err := s.servers.Get(ctx, latest.ServerID); err == nil && serverAdvertiseAddress(srv) != "" {
+			return net.JoinHostPort(serverAdvertiseAddress(srv), "4647"), nil
 		}
+		return "", panelerr.Validation("nomad_advertise_address_migration_required", "Rebuild the Nomad cluster with an explicit network address before joining clients")
 	}
-	return configured
+	configured := nomadRPCAddress(s.currentConfig().Address)
+	if !isLocalRPCAddress(configured) {
+		return configured, nil
+	}
+	return "", panelerr.Validation("nomad_advertise_address_migration_required", "Rebuild the Nomad cluster with an explicit network address before joining clients")
 }
 
 func (s *JoinService) latestCompletedBootstrapTask(ctx context.Context) tasks.Task {
@@ -1893,11 +2027,11 @@ func nomadHTTPAddressMatchesServer(address string, srv server.Server) bool {
 	if err != nil || parsed.Host == "" {
 		return false
 	}
-	return sameHost(parsed.Hostname(), srv.Host)
+	return sameHost(parsed.Hostname(), srv.Host) || sameHost(parsed.Hostname(), serverAdvertiseAddress(srv))
 }
 
 func nomadHTTPAddressForServer(srv server.Server) string {
-	return "https://" + net.JoinHostPort(srv.Host, "4646")
+	return "https://" + net.JoinHostPort(serverAdvertiseAddress(srv), "4646")
 }
 
 func sameHost(left, right string) bool {

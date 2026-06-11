@@ -799,6 +799,24 @@ func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) 
 	return redeployed, nil
 }
 
+func (s *Service) RedeployEnabledApplications(ctx context.Context) (int, error) {
+	apps, err := s.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	redeployed := 0
+	for _, app := range apps {
+		if !app.Enabled {
+			continue
+		}
+		if _, err := s.Deploy(ctx, app.ID); err != nil {
+			return redeployed, err
+		}
+		redeployed++
+	}
+	return redeployed, nil
+}
+
 func (s *Service) Stop(ctx context.Context, appID string, purge bool) (OperationResult, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
