@@ -750,4 +750,8 @@ onMounted(load);
   .summary-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .static-site-row { grid-template-columns: 1fr; }
 }
+@media (max-width: 760px) {
+  .nodes-card { flex: none; overflow: visible; }
+  .node-table-wrap { overflow-x: auto; overflow-y: visible; }
+}
 </style>

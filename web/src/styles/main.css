@@ -369,8 +369,17 @@ a {
   min-width: 0;
 }
 
+.page-shell > .v-alert,
+.page-shell > .page-toolbar,
+.page-shell > .page-actions,
+.page-shell > .summary-strip,
+.page-shell > .page-summary-grid {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 760px) {
   .page-shell {
+    gap: var(--lp-space-4);
     height: auto;
     min-height: auto;
     overflow: visible;
@@ -533,12 +542,7 @@ a {
   .page-actions,
   .page-toolbar,
   .page-toolbar-actions {
-    align-items: stretch;
-  }
-
-  .page-actions .v-btn,
-  .page-toolbar-actions .v-btn {
-    width: 100%;
+    align-items: center;
   }
 }
 
@@ -546,13 +550,7 @@ a {
   .panel-header,
   .list-header,
   .app-card-header {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .list-header .v-btn,
-  .app-card-header .v-btn {
-    width: 100%;
+    flex-wrap: wrap;
   }
 
   .app-dialog-title {

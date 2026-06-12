@@ -827,6 +827,34 @@ tr.selected {
   }
 }
 
+@media (max-width: 760px) {
+  .task-center,
+  .task-workspace,
+  .operation-list,
+  .task-table-wrap {
+    flex: none;
+  }
+
+  .task-workspace,
+  .main-panel {
+    min-height: auto;
+  }
+
+  .operation-panel,
+  .task-table-panel {
+    overflow: visible;
+  }
+
+  .operation-list {
+    overflow: visible;
+  }
+
+  .task-table-wrap {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+}
+
 @media (max-width: 560px) {
   .selected-progress {
     grid-template-columns: 1fr;

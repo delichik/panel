@@ -1287,6 +1287,21 @@ onMounted(load);
 }
 
 @media (max-width: 720px) {
+  .table-card,
+  .table-window {
+    flex: none;
+    min-height: auto;
+  }
+
+  .table-card {
+    overflow: visible;
+  }
+
+  .table-pane {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
   .toolbar-actions,
   .selection-bar {
     align-items: stretch;

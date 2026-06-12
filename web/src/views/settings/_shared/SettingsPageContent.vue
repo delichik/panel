@@ -595,6 +595,11 @@ onMounted(loadSettings);
 }
 
 @media (max-width: 720px) {
+  .settings-surface {
+    flex: none;
+    overflow: visible;
+  }
+
   .settings-header {
     align-items: flex-start;
     flex-direction: column;

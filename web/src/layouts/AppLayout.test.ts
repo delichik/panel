@@ -13,6 +13,13 @@ describe('AppLayout navigation', () => {
     expect(appLayout).toContain('overflow-y: auto;');
   });
 
+  it('keeps compact header utilities on one row and gives active tasks their own row', () => {
+    expect(appLayout).toContain('grid-template-columns: minmax(0, 1fr) auto;');
+    expect(appLayout).toContain('grid-column: 1 / -1;');
+    expect(appLayout).toContain('.logout-btn :deep(.v-btn__content)');
+    expect(appLayout).toContain('.user-name {\n    display: none;');
+  });
+
   it('does not expose DNS record management in the navigation', () => {
     expect(appLayout).not.toContain("layout.nav.records");
     expect(appLayout).not.toContain("value: 'dns-records'");

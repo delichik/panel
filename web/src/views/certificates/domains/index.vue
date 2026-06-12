@@ -328,6 +328,16 @@ onMounted(load);
 }
 
 @media (max-width: 720px) {
+  .table-card {
+    flex: none;
+    overflow: visible;
+  }
+
+  .table-scroll {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
   .cert-domain-grid {
     grid-template-columns: 1fr;
   }

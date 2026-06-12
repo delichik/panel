@@ -888,5 +888,9 @@ onMounted(load);
 @media (max-width: 760px) {
   .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .server-task-alert { flex-direction: column; align-items: stretch; }
+  .servers-workspace, .detail-card { flex: none; min-height: auto; }
+  .server-list, .detail-card { overflow: visible; }
+  .server-list-body, .detail-sections { overflow: visible; }
+  .detail-column { display: block; }
 }
 </style>

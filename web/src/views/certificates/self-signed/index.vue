@@ -256,7 +256,12 @@ onMounted(load);
 
 @media (max-width: 760px) {
   .self-signed-content {
+    flex: none;
     grid-template-rows: none;
+    min-height: auto;
   }
+
+  .self-signed-card { overflow: visible; }
+  .table-scroll { overflow-x: auto; overflow-y: visible; }
 }
 </style>

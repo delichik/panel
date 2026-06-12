@@ -610,6 +610,33 @@ onMounted(async () => {
   }
 }
 
+@media (max-width: 760px) {
+  .dns-workspace,
+  .dns-grid,
+  .domain-list {
+    flex: none;
+  }
+
+  .dns-main {
+    grid-template-rows: none;
+  }
+
+  .domain-list-card,
+  .detail-card,
+  .records-card {
+    overflow: visible;
+  }
+
+  .domain-list {
+    overflow: visible;
+  }
+
+  .records-table-wrap {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+}
+
 @media (max-width: 640px) {
   .domain-detail-grid,
   .record-form-grid {

@@ -360,5 +360,9 @@ onMounted(async () => {
 @media (max-width: 760px) {
   .panel-header, .install-row { flex-direction: column; align-items: stretch; }
   .status-grid, .rule-form { grid-template-columns: 1fr; }
+  .firewall-workspace { flex: none; min-height: auto; }
+  .firewall-panel { overflow: visible; }
+  .firewall-panel-body { overflow: visible; }
+  .rule-table-wrap { overflow-x: auto; overflow-y: visible; }
 }
 </style>

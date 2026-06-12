@@ -280,7 +280,13 @@ onMounted(load);
 .status-dot.warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14); }
 .status-dot.error { background: rgb(var(--v-theme-error)); box-shadow: 0 0 0 4px rgba(var(--v-theme-error), 0.12); }
 .status-dot.grey { background: rgb(var(--v-theme-on-surface-variant)); box-shadow: 0 0 0 4px rgba(var(--v-theme-on-surface), 0.04); }
-@media (max-width: 1360px) { .applications-workspace { grid-template-columns: 1fr; } }
+@media (max-width: 1080px) { .applications-workspace { grid-template-columns: 1fr; overflow: auto; } }
 @media (min-width: 761px) { .detail-column { overflow: auto; } }
-@media (max-width: 760px) { .summary-strip { max-width: none; } }
+@media (max-width: 760px) {
+  .summary-strip { max-width: none; }
+  .applications-workspace { flex: none; min-height: auto; overflow: visible; }
+  .application-list { overflow: visible; }
+  .application-table-wrap { overflow-x: auto; overflow-y: visible; }
+  .detail-column { overflow: visible; }
+}
 </style>

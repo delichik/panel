@@ -92,4 +92,8 @@ onMounted(load);
 .builtin-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; }
 .table-scroll { min-height: 0; overflow: auto; }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; max-width: 360px; }
+@media (max-width: 760px) {
+  .builtin-card { flex: none; overflow: visible; }
+  .table-scroll { overflow-x: auto; overflow-y: visible; }
+}
 </style>

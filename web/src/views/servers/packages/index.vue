@@ -366,14 +366,27 @@ onBeforeUnmount(stopRefreshPolling);
 }
 
 @media (max-width: 760px) {
+  .package-grid,
+  .package-panel-body {
+    flex: none;
+    min-height: auto;
+  }
+
+  .package-panel {
+    overflow: visible;
+  }
+
+  .package-table-wrap {
+    overflow-x: auto;
+    overflow-y: visible;
+  }
+
   .package-card-header {
     align-items: stretch;
     flex-direction: column;
   }
 
-  .package-actions,
-  .package-actions .v-btn,
-  .package-actions .v-chip {
+  .package-actions {
     width: 100%;
   }
 }

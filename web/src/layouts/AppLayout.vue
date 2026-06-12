@@ -220,6 +220,16 @@ onBeforeUnmount(() => {
             <h1 class="app-title text-truncate">{{ pageTitle }}</h1>
           </div>
 
+          <Transition name="task-slide" mode="out-in">
+            <div v-if="currentTask" :key="currentTask.id" class="task-ticker">
+              <v-icon size="16" color="primary">mdi-progress-clock</v-icon>
+              <span class="task-line">
+                {{ translateTaskType(currentTask.type) }}
+                <span class="task-stage">{{ translateTaskStatus(currentTask.status) }} - {{ currentTask.stage ? translateTaskStage(currentTask.stage) : t('layout.taskTicker.queuedStage') }}</span>
+              </span>
+            </div>
+          </Transition>
+
           <div class="app-header-actions">
             <v-chip
               v-if="versionInfo?.updateAvailable"
@@ -231,15 +241,6 @@ onBeforeUnmount(() => {
             >
               {{ t('layout.updateAvailable', { version: versionInfo.latestVersion }) }}
             </v-chip>
-            <Transition name="task-slide" mode="out-in">
-              <div v-if="currentTask" :key="currentTask.id" class="task-ticker">
-                <v-icon size="16" color="primary">mdi-progress-clock</v-icon>
-                <span class="task-line">
-                  {{ translateTaskType(currentTask.type) }}
-                  <span class="task-stage">{{ translateTaskStatus(currentTask.status) }} - {{ currentTask.stage ? translateTaskStage(currentTask.stage) : t('layout.taskTicker.queuedStage') }}</span>
-                </span>
-              </div>
-            </Transition>
 
             <div class="header-utility-strip">
               <v-btn icon size="small" variant="text" class="utility-btn" :aria-label="isDark ? t('layout.theme.toLight') : t('layout.theme.toDark')" @click="toggleTheme">
@@ -297,6 +298,7 @@ onBeforeUnmount(() => {
 
 .app-header-title {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -422,10 +424,11 @@ onBeforeUnmount(() => {
 
 .task-ticker {
   display: inline-flex;
+  flex: 0 1 380px;
   align-items: center;
   gap: 8px;
-  min-width: 180px;
-  max-width: min(380px, 28vw);
+  min-width: 0;
+  max-width: 380px;
   overflow: hidden;
   padding: 8px 10px;
   border: 1px solid var(--lp-border);
@@ -517,28 +520,34 @@ onBeforeUnmount(() => {
   }
 
   .app-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 10px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 10px;
+    min-height: 56px;
+    padding: 8px 10px;
   }
 
   .app-header-actions {
-    justify-content: flex-start;
-    width: 100%;
-    flex-wrap: wrap;
+    grid-column: 2;
+    grid-row: 1;
+    flex: 0 0 auto;
+    gap: 6px;
   }
 
   .task-ticker {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    width: 100%;
     max-width: 100%;
+    padding: 7px 9px;
   }
 
   .header-utility-strip {
-    justify-content: space-between;
-    max-width: 100%;
+    gap: 4px;
+    min-height: 36px;
   }
 
   .main-content {
-    grid-template-rows: auto auto;
     padding: 16px;
   }
 }
@@ -549,7 +558,8 @@ onBeforeUnmount(() => {
   }
 
   .main-content {
-    min-height: auto;
+    height: auto;
+    min-height: 100%;
   }
 }
 
@@ -558,18 +568,33 @@ onBeforeUnmount(() => {
     font-size: 1.18rem;
   }
 
-  .header-utility-strip {
-    width: 100%;
-    flex-wrap: wrap;
+  .app-header-actions > .v-chip {
+    max-width: 36px;
+    padding-inline: 8px;
+    overflow: hidden;
   }
 
   .user-pill {
-    flex: 1 1 140px;
-    justify-content: center;
+    min-height: 36px;
+    padding: 0;
+  }
+
+  .user-name {
+    display: none;
   }
 
   .logout-btn {
-    flex: 1 1 100%;
+    min-width: 36px;
+    width: 36px;
+    padding-inline: 0;
+  }
+
+  .logout-btn :deep(.v-btn__content) {
+    display: none;
+  }
+
+  .logout-btn :deep(.v-btn__prepend) {
+    margin: 0;
   }
 }
 </style>

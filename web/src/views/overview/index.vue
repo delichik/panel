@@ -1057,6 +1057,12 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 760px) {
+  .overview-workspace,
+  .dashboard-grid {
+    flex: none;
+    min-height: auto;
+  }
+
   .overview-signals {
     grid-template-columns: 1fr;
   }
@@ -1069,6 +1075,8 @@ onBeforeUnmount(() => {
   .dashboard-grid {
     grid-template-columns: 1fr;
     grid-auto-rows: 150px;
+    overflow: visible;
+    padding-right: 0;
   }
 
   .dashboard-card {
