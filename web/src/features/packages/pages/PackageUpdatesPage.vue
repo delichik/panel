@@ -20,6 +20,7 @@ const error = ref('');
 const confirmUpgradeAllDialog = ref(false);
 const lastTaskId = ref('');
 let refreshPollTimer: number | undefined;
+let updatesRequestId = 0;
 
 // Snackbar notification state
 const snackbar = ref(false);
@@ -97,26 +98,41 @@ function startRefreshPolling() {
 }
 
 async function loadUpdates(showLoading = true) {
-  if (!serverId.value) {
+  const requestedServerId = serverId.value;
+  const requestId = ++updatesRequestId;
+  if (!requestedServerId) {
     updates.value = null;
     packageRefreshRunning.value = false;
+    loadingUpdates.value = false;
+    error.value = '';
     stopRefreshPolling();
     return;
   }
-  if (showLoading) loadingUpdates.value = true;
+  if (showLoading) {
+    updates.value = null;
+    selectedPackageNames.value = [];
+    packageRefreshRunning.value = false;
+    stopRefreshPolling();
+    loadingUpdates.value = true;
+  }
   try {
-    updates.value = await packagesApi.listUpdates(serverId.value);
-    packageRefreshRunning.value = updates.value.refreshing;
+    const result = await packagesApi.listUpdates(requestedServerId);
+    if (requestId !== updatesRequestId || serverId.value !== requestedServerId) return;
+    updates.value = result;
+    packageRefreshRunning.value = result.refreshing;
     selectedPackageNames.value = [];
     error.value = '';
-    if (updates.value.refreshing) {
+    if (result.refreshing) {
       startRefreshPolling();
     }
   } catch (err) {
+    if (requestId !== updatesRequestId || serverId.value !== requestedServerId) return;
     updates.value = null;
     error.value = err instanceof Error ? err.message : t('packagesPage.loadFailed');
   } finally {
-    if (showLoading) loadingUpdates.value = false;
+    if (showLoading && requestId === updatesRequestId && serverId.value === requestedServerId) {
+      loadingUpdates.value = false;
+    }
   }
 }
 
@@ -161,10 +177,11 @@ async function upgradeAll() {
   }
 }
 
-watch(serverId, () => loadUpdates());
+watch(serverId, () => {
+  void loadUpdates();
+});
 onMounted(async () => {
   await loadServers();
-  await loadUpdates();
 });
 onBeforeUnmount(stopRefreshPolling);
 </script>
@@ -299,8 +316,8 @@ onBeforeUnmount(stopRefreshPolling);
 <style scoped>
 .package-grid {
   display: grid;
-  grid-template-columns: minmax(0, 340px) minmax(0, 1fr);
-  gap: 20px;
+  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
 }
 
@@ -319,7 +336,7 @@ onBeforeUnmount(stopRefreshPolling);
   flex-wrap: wrap;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1080px) {
   .package-grid {
     grid-template-columns: 1fr;
   }

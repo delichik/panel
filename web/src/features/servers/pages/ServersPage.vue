@@ -840,7 +840,7 @@ onMounted(load);
 
 <style scoped>
 .summary-strip { max-width: 780px; }
-.servers-workspace { display: grid; grid-template-columns: minmax(360px, 0.45fr) minmax(520px, 0.55fr); gap: 18px; align-items: start; }
+.servers-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; align-items: start; }
 .server-list, .detail-column { min-width: 0; }
 .server-list { overflow: hidden; }
 .list-header-main { display: grid; gap: 10px; justify-items: start; }
@@ -881,7 +881,7 @@ onMounted(load);
 .credential-table-card { overflow: hidden; }
 .font-tabular { font-variant-numeric: tabular-nums; }
 .min-width-0 { min-width: 0; }
-@media (max-width: 1280px) { .servers-workspace { grid-template-columns: 1fr; } }
+@media (max-width: 1080px) { .servers-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
   .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .server-task-alert { flex-direction: column; align-items: stretch; }

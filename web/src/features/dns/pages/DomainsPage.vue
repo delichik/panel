@@ -30,6 +30,7 @@ const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
 const { t, formatDateTime } = useI18n();
+let recordsRequestId = 0;
 
 const recordTypes: DnsRecordType[] = ['A', 'AAAA', 'CNAME', 'TXT', 'MX', 'SRV', 'CAA', 'NS'];
 const selectedDomain = computed(() => domains.value.find((item) => item.id === selectedDomainId.value) ?? null);
@@ -109,20 +110,26 @@ async function load() {
 
 async function loadRecords() {
   const domain = selectedDomain.value;
+  const requestId = ++recordsRequestId;
+  records.value = [];
+  recordsError.value = '';
   if (!domain) {
-    records.value = [];
-    recordsError.value = '';
+    recordsLoading.value = false;
     return;
   }
   recordsLoading.value = true;
   try {
-    records.value = await dnsApi.listRecords(domain.id);
+    const result = await dnsApi.listRecords(domain.id);
+    if (requestId !== recordsRequestId || selectedDomainId.value !== domain.id) return;
+    records.value = result;
     recordsError.value = '';
   } catch (err) {
-    records.value = [];
+    if (requestId !== recordsRequestId || selectedDomainId.value !== domain.id) return;
     recordsError.value = err instanceof Error ? err.message : t('domainsPage.recordsLoadFailed');
   } finally {
-    recordsLoading.value = false;
+    if (requestId === recordsRequestId && selectedDomainId.value === domain.id) {
+      recordsLoading.value = false;
+    }
   }
 }
 
@@ -222,7 +229,6 @@ watch(selectedDomainId, () => {
 
 onMounted(async () => {
   await load();
-  await loadRecords();
 });
 </script>
 
@@ -249,6 +255,7 @@ onMounted(async () => {
           <v-list-item
             v-for="domain in pagedDomains"
             :key="domain.id"
+            class="domain-list-item"
             :active="domain.id === selectedDomainId"
             :title="domain.name"
             :subtitle="domain.provider"
@@ -483,8 +490,8 @@ onMounted(async () => {
 
 .dns-grid {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
-  gap: 16px;
+  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
 }
 
@@ -505,8 +512,26 @@ onMounted(async () => {
 }
 
 .domain-list {
+  display: grid;
+  gap: 8px;
   max-height: calc(100dvh - 220px);
+  padding: 10px;
   overflow-y: auto;
+}
+
+.domain-list-item {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  transition: background-color 0.16s ease, border-color 0.16s ease;
+}
+
+.domain-list-item:hover {
+  background: rgba(var(--v-theme-on-surface), 0.025);
+}
+
+.domain-list-item.v-list-item--active {
+  border-color: rgba(var(--v-theme-primary), 0.26);
+  background: rgba(var(--v-theme-primary), 0.06);
 }
 
 .dns-main {
@@ -560,7 +585,7 @@ onMounted(async () => {
   min-width: 0;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1080px) {
   .dns-grid {
     grid-template-columns: 1fr;
   }

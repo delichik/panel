@@ -25,6 +25,7 @@ const snackbarTaskId = ref('');
 const confirmDialog = ref(false);
 const ruleToDelete = ref<UfwRuleDto | null>(null);
 const enableDialog = ref(false);
+let stateRequestId = 0;
 
 const ruleForm = reactive({
   port: 22,
@@ -95,21 +96,27 @@ async function loadServers() {
 }
 
 async function loadState() {
-  if (!serverId.value) {
+  const requestedServerId = serverId.value;
+  const requestId = ++stateRequestId;
+  state.value = null;
+  if (!requestedServerId) {
     state.value = null;
+    loadingState.value = false;
     return;
   }
   loadingState.value = true;
   error.value = '';
   try {
-    state.value = await serversApi.ufwState(serverId.value);
+    const result = await serversApi.ufwState(requestedServerId);
+    if (requestId !== stateRequestId || serverId.value !== requestedServerId) return;
+    state.value = result;
   } catch (err) {
-    state.value = selectedServer.value
-      ? { serverId: selectedServer.value.id, supported: selectedUfwSupported.value, installed: false, active: false, status: 'unknown', defaultPolicy: '', rules: [] }
-      : null;
+    if (requestId !== stateRequestId || serverId.value !== requestedServerId) return;
     error.value = err instanceof Error ? err.message : t('firewallPage.loadFailed');
   } finally {
-    loadingState.value = false;
+    if (requestId === stateRequestId && serverId.value === requestedServerId) {
+      loadingState.value = false;
+    }
   }
 }
 
@@ -326,7 +333,7 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.firewall-workspace { display: grid; grid-template-columns: minmax(320px, 0.34fr) minmax(0, 0.66fr); gap: 18px; align-items: start; }
+.firewall-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; align-items: start; }
 .firewall-panel { min-width: 0; padding: 16px; overflow: hidden; }
 .panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
@@ -339,7 +346,7 @@ onMounted(async () => {
 .rule-table { border: 1px solid var(--lp-border); border-radius: 8px; overflow: hidden; }
 .empty-panel { min-height: 340px; display: grid; place-items: center; align-content: center; gap: 10px; padding: 32px; text-align: center; }
 .min-width-0 { min-width: 0; }
-@media (max-width: 1180px) {
+@media (max-width: 1080px) {
   .firewall-workspace { grid-template-columns: 1fr; }
   .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

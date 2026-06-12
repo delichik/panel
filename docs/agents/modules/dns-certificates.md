@@ -40,6 +40,7 @@
 - DNS 域名存储在 `dns_domains`，证书记录存储在 `certificates`。
 - 当前 DNS provider 以 Cloudflare 为主，API token 和 account ID 属于敏感配置。
 - DNS 记录管理复用域名保存的 Cloudflare API token 和 account ID；前端在域名页使用左侧域名列表、右侧上方详情、右侧下方记录表的布局。
+- 域名左侧列表与其他选择器详情页使用统一宽度和紧凑选中态；切换域名时立即清空上一域名的记录并显示加载状态，只接收当前域名对应的请求结果。
 - Cloudflare provider 使用官方 REST API v4 和 Bearer API Token；记录列表必须按 `result_info.total_pages` 读取全部分页，不能假设单页包含 zone 的全部记录。
 - 面板 API 可以接收 `@`、相对记录名或 zone 内完整记录名；发送到 Cloudflare 前统一规范化为 zone 内完整名称。Cloudflare 错误响应优先解析官方 envelope 中的错误码和消息。
 - 新增或编辑 Cloudflare 域名时，后端必须先使用最终生效的 token、account ID 和域名访问 Cloudflare 记录接口验证权限与 zone 可见性；验证失败不得写入本地域名记录。

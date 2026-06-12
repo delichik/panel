@@ -41,25 +41,23 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
 
     <v-card-text class="flex-grow-1 overflow-y-auto pa-3">
       <PageLoadingState v-if="loading && servers.length === 0" min-height="220px" />
-      <div v-else-if="servers.length" class="server-cards d-flex flex-column" style="gap: 10px;">
-        <div
+      <div v-else-if="servers.length" class="server-cards">
+        <button
           v-for="server in pagedServers"
           :key="server.id"
           class="server-item"
           :class="{ 'selected': server.id === modelValue }"
+          type="button"
           @click="emit('update:modelValue', server.id)"
         >
-          <div class="d-flex justify-space-between align-center mb-1">
-            <div class="d-flex align-center overflow-hidden">
-              <span class="status-pulse" :class="server.reachable ? 'online' : 'offline'"></span>
-              <span class="text-subtitle-2 font-weight-bold text-high-emphasis text-truncate">{{ server.name }}</span>
-            </div>
-
-            <div class="text-caption font-weight-bold text-medium-emphasis flex-shrink-0 ml-2">
-              {{ t('shared.serverSelector.load') }}: {{ getOneMinLoad(server.loadAverage) }}
-            </div>
-          </div>
-        </div>
+          <span class="server-item__main">
+            <span class="status-dot" :class="server.reachable ? 'success' : 'warning'" />
+            <span class="server-item__name text-truncate">{{ server.name }}</span>
+          </span>
+          <span class="server-item__meta">
+            {{ t('shared.serverSelector.load') }}: {{ getOneMinLoad(server.loadAverage) }}
+          </span>
+        </button>
       </div>
       <div v-else class="text-center py-6 text-medium-emphasis h-100 d-flex flex-column align-center justify-center">
         <v-icon size="40" color="medium-emphasis" class="mb-2">mdi-server-off</v-icon>
@@ -75,71 +73,71 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
   min-width: 0;
 }
 
-/* Sleek Server List Items */
+.server-cards {
+  display: grid;
+  gap: 8px;
+}
+
 .server-item {
-  position: relative;
-  border: 1px solid var(--lp-border);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 11px 12px;
+  border: 1px solid transparent;
   border-radius: 8px;
-  transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
-  padding: 12px 14px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
   cursor: pointer;
-  background: color-mix(in srgb, var(--lp-surface), transparent 18%);
+  transition: background-color 0.16s ease, border-color 0.16s ease;
 }
 
 .server-item:hover {
-  transform: translateY(-1px);
-  border-color: rgba(var(--v-theme-primary), 0.4);
-  box-shadow: 0 4px 12px rgba(var(--v-theme-primary), 0.08);
+  background: rgba(var(--v-theme-on-surface), 0.025);
 }
 
 .server-item.selected {
-  border-color: rgb(var(--v-theme-primary));
-  background-color: rgba(var(--v-theme-primary), 0.04);
-  box-shadow: 0 4px 16px rgba(var(--v-theme-primary), 0.12);
+  border-color: rgba(var(--v-theme-primary), 0.26);
+  background: rgba(var(--v-theme-primary), 0.06);
 }
 
-.server-item.selected::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 12px;
-  bottom: 12px;
-  width: 4px;
-  background-color: rgb(var(--v-theme-primary));
-  border-top-right-radius: 4px;
-  border-bottom-right-radius: 4px;
+.server-item__main {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
 }
 
-.server-item .status-pulse {
-  width: 8px;
-  height: 8px;
-  margin-right: 8px;
-  display: inline-block;
-  border-radius: 50%;
+.server-item__name {
+  display: block;
+  min-width: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 
-.server-item .status-pulse.online {
+.server-item__meta {
+  color: var(--lp-text-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.status-dot {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.status-dot.success {
   background-color: rgb(var(--v-theme-success));
-  box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.4);
-  animation: pulse-green 2s infinite;
+  box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12);
 }
 
-.server-item .status-pulse.offline {
-  background-color: rgb(var(--v-theme-error));
-}
-
-@keyframes pulse-green {
-  0% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
-  }
-  70% {
-    transform: scale(1);
-    box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
-  }
-  100% {
-    transform: scale(0.95);
-    box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
-  }
+.status-dot.warning {
+  background-color: rgb(var(--v-theme-warning));
+  box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14);
 }
 </style>
