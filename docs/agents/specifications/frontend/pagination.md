@@ -1,0 +1,77 @@
+# 分页
+
+## 共享组件
+
+所有用户可见数据列表优先使用 `AppPagination.vue`。
+
+### Props
+
+| 属性 | 类型 | 默认值 |
+| --- | --- | --- |
+| `page` | `number` | 必填 |
+| `pageSize` | `number` | 必填 |
+| `total` | `number` | 必填 |
+| `pageSizes` | `number[]` | `[10, 20, 50, 100]` |
+
+### Events
+
+- `update:page`
+- `update:pageSize`
+
+修改 page size 时组件会自动把 page 重置为 `1`。
+
+## 显示规则
+
+- `total <= 0` 时不渲染。
+- 左侧显示本地化总数。
+- 中间为页大小选择器，宽度约 `118px`。
+- 右侧为 Vuetify `v-pagination`。
+- 小屏最多显示 `5` 个分页项，其他屏幕最多 `10` 个。
+- 当前页按钮使用主色实底。
+
+## 布局
+
+- 分页放在列表或表格卡片底部。
+- 顶部有 `--lp-border` 分隔线。
+- 背景使用弱化的 `--lp-surface-container`。
+- 桌面横向靠右，总数通过 `margin-right: auto` 靠左。
+- `760px` 以下改为纵向，页大小选择器填满宽度。
+
+## 前端分页
+
+数组型接口使用 `usePagination.ts`：
+
+- 输入数据变化时保持页码合法。
+- 页面只消费 `pageItems`。
+- 总数来自原始数组长度。
+- 搜索或筛选变化后应回到第一页。
+
+## 服务端分页
+
+- 保留接口返回的 `total`。
+- `update:page` 和 `update:pageSize` 触发重新请求。
+- page size 变化后从第一页请求。
+- 请求期间保留现有内容并使用局部 loading。
+
+## 嵌套区域
+
+对话框或详情子表可继续使用 `AppPagination`，但必须确保：
+
+- 容器宽度足够。
+- 移动端纵向布局不会遮挡表单操作。
+- 分页归属清楚，不与页面主列表分页混淆。
+
+## 禁忌
+
+- 不直接在页面中拼装另一套总数、页大小和分页按钮。
+- 不在 `total = 0` 时保留空分页条。
+- 不让页大小变化后停留在越界页码。
+- 不把前端数组分页伪装成服务端请求分页。
+
+## 源码依据
+
+- `web/src/components/AppPagination.vue`
+- `web/src/composables/usePagination.ts`
+- `web/src/features/applications/pages/ApplicationsPage.vue`
+- `web/src/features/tasks/pages/TaskCenterPage.vue`
+

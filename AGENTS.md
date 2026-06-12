@@ -5,6 +5,7 @@
 ## 必读规则
 
 - 开始任务时先读本文件，再按模块索引只加载任务相关文档。
+- 修改或新增前端页面、组件、样式时，必须先查阅 [前端组件设计规范](docs/agents/specifications/frontend/INDEX.md)，复用已有组件和设计模式；新增或调整可复用规范时同步更新对应文档及索引。
 - 开发前先收集必要信息；信息较多时，用 explorer subagent 搜索并总结关键要点。
 - 修改功能时，必须同步更新相关模块指引；新增功能模块时，必须新增指引并更新模块索引。
 - 新增或修改用户可见文案时，必须遵守 [docs/agents/i18n-guide.md](docs/agents/i18n-guide.md)，并按需更新 [docs/agents/i18n-translation-status.md](docs/agents/i18n-translation-status.md)。

@@ -17,10 +17,12 @@
 - 功能页面：`web/src/features/`
 - 多语言：`web/src/i18n/index.ts`
 - 样式：`web/src/styles/main.css`、`web/src/theme.ts`
+- 可复用组件设计规范：`docs/agents/specifications/frontend/INDEX.md`
 
 ## 技术约定
 
 - 前端使用 Vue 3、Vue Router、Pinia、Vuetify、ECharts 和 Vitest。
+- 新增页面或共享组件前先查阅 `docs/agents/specifications/frontend/INDEX.md`，沿用已有基础组件、组合模式和响应式规则。
 - 页面按 `web/src/features/<feature>/` 分组，共享组件放在 `web/src/components/`。
 - 全局布局在 `web/src/layouts/AppLayout.vue`；侧边导航列表必须在抽屉内部独立滚动，避免菜单项超出视口后不可访问。
 - 侧边导航二级菜单支持 `NavItem.icon`；DNS 域名入口应显示域名图标，避免分组展开后入口缺少视觉锚点。
