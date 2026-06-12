@@ -29,4 +29,10 @@ describe('AppLayout navigation', () => {
     expect(appLayout).toContain("to: '/servers/firewall'");
     expect(appLayout).toContain("t('layout.nav.firewall')");
   });
+
+  it('renames the third certificates menu entry to key assets', () => {
+    expect(appLayout).toContain("to: '/certificates/key-assets'");
+    expect(appLayout).toContain("t('layout.nav.keyAssets')");
+    expect(appLayout).not.toContain("to: '/certificates/self-signed'");
+  });
 });

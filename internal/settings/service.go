@@ -3,7 +3,9 @@ package settings
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/mail"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,6 +16,8 @@ import (
 	"panel/internal/i18n"
 	"panel/internal/panelerr"
 )
+
+var serverVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type RuntimeNomadSettings struct {
 	Namespace  string `json:"namespace"`
@@ -29,6 +33,16 @@ type RuntimeCertificateSettings struct {
 type RuntimeBrandingSettings struct {
 	LoginTitle    string `json:"loginTitle"`
 	LoginSubtitle string `json:"loginSubtitle"`
+}
+
+type ServerVariableDefinition struct {
+	Name     string `json:"name"`
+	Key      string `json:"key"`
+	Required bool   `json:"required"`
+}
+
+type ServerVariableDefinitionsUpdate struct {
+	Definitions []ServerVariableDefinition `json:"definitions"`
 }
 
 type RuntimeUpdate struct {
@@ -72,6 +86,7 @@ const (
 	RuntimeSettingNomadDatacenter                      = "nomad.datacenter"
 	RuntimeSettingCertificateEmail                     = "certificates.email"
 	RuntimeSettingCertificateDNSPropagationDelaySecond = "certificates.dnsPropagationDelaySeconds"
+	RuntimeSettingServerVariableDefinitions            = "serverVariables.definitions"
 
 	TokenExpiration10Minutes = "10m"
 	TokenExpiration1Hour     = "1h"
@@ -229,6 +244,37 @@ func (s *Service) SetJWTSecret(ctx context.Context, secret string) (RuntimeSetti
 	out := s.rt
 	s.mu.Unlock()
 	return out, nil
+}
+
+func (s *Service) ServerVariableDefinitions(ctx context.Context) ([]ServerVariableDefinition, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT value FROM runtime_settings WHERE key=?`, RuntimeSettingServerVariableDefinitions).Scan(&raw)
+	if err == sql.ErrNoRows || strings.TrimSpace(raw) == "" {
+		return []ServerVariableDefinition{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var defs []ServerVariableDefinition
+	if err := json.Unmarshal([]byte(raw), &defs); err != nil {
+		return nil, err
+	}
+	return normalizeServerVariableDefinitions(defs)
+}
+
+func (s *Service) UpdateServerVariableDefinitions(ctx context.Context, input ServerVariableDefinitionsUpdate) ([]ServerVariableDefinition, error) {
+	defs, err := normalizeServerVariableDefinitions(input.Definitions)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := json.Marshal(defs)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.saveValues(ctx, map[string]string{RuntimeSettingServerVariableDefinitions: string(raw)}); err != nil {
+		return nil, err
+	}
+	return defs, nil
 }
 
 func (s *Service) ensureDefaultRuntimeSettings(ctx context.Context) error {
@@ -440,6 +486,27 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 		}
 	}
 	return ValidateJWTSecret(settings.JWTSecret)
+}
+
+func normalizeServerVariableDefinitions(in []ServerVariableDefinition) ([]ServerVariableDefinition, error) {
+	out := make([]ServerVariableDefinition, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, item := range in {
+		name := strings.TrimSpace(item.Name)
+		key := strings.TrimSpace(item.Key)
+		if name == "" {
+			return nil, panelerr.Validation("invalid_server_variable_name", "Server variable display name is required")
+		}
+		if !serverVariableKeyPattern.MatchString(key) {
+			return nil, panelerr.Validation("invalid_server_variable_key", "Server variable key must start with a letter or underscore and contain only letters, digits, or underscores")
+		}
+		if _, ok := seen[key]; ok {
+			return nil, panelerr.Validation("duplicate_server_variable_key", "Server variable key must be unique")
+		}
+		seen[key] = struct{}{}
+		out = append(out, ServerVariableDefinition{Name: name, Key: key, Required: item.Required})
+	}
+	return out, nil
 }
 
 func ValidateJWTSecret(secret string) error {

@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"panel/internal/config"
+	"panel/internal/keyassets"
+	"panel/internal/secretstore"
 	"panel/internal/storage"
 	"panel/internal/tasks"
 )
@@ -63,6 +65,93 @@ func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *te
 	certVar := certsMap["example_com"].(map[string]any)
 	if certVar["certificatePem"] == "" || certVar["privateKeyPem"] == "" {
 		t.Fatalf("certificate variable missing PEM values: %#v", certVar)
+	}
+	if certVar["certificate_pem"] == "" || certVar["private_key_pem"] == "" {
+		t.Fatalf("snake_case certificate variables missing PEM values: %#v", certVar)
+	}
+}
+
+func TestSelfSignedCAIsReusableAndProtectedWhileChildrenExist(t *testing.T) {
+	svc, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	ca, err := svc.CreateSelfSignedCA(ctx, SelfSignedCARequest{Name: "Internal CA", CommonName: "panel.internal", Years: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := svc.CreateSelfSignedLeaf(ctx, SelfSignedLeafRequest{
+		Name: "API", CAID: ca.ID, CommonName: "api.internal",
+		DNSNames: []string{"api.internal"}, IPAddresses: []string{"10.0.0.10"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.CreateSelfSignedLeaf(ctx, SelfSignedLeafRequest{
+		Name: "Web", CAID: ca.ID, CommonName: "web.internal", DNSNames: []string{"web.internal"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.ParentCAID != ca.ID || second.ParentCAID != ca.ID || first.Fingerprint == "" {
+		t.Fatalf("unexpected reusable CA result ca=%#v first=%#v second=%#v", ca, first, second)
+	}
+	renewed, err := svc.RenewSelfSignedLeaf(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.Fingerprint == first.Fingerprint {
+		t.Fatal("expected reissued certificate to have a new fingerprint")
+	}
+	renewTasks, err := svc.tasks.List(ctx, tasks.ListFilter{Type: keyassets.TaskTypeTLSReissue, Status: tasks.StatusCompleted, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(renewTasks.Items) != 1 || renewTasks.Items[0].ResourceID != first.ID {
+		t.Fatalf("expected completed self-signed renewal task, got %#v", renewTasks.Items)
+	}
+	if err := svc.DeleteSelfSigned(ctx, ca.ID); err == nil {
+		t.Fatal("expected CA deletion to be blocked while child certificates exist")
+	}
+	if err := svc.DeleteSelfSigned(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteSelfSigned(ctx, second.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteSelfSigned(ctx, ca.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPanelFileCatalogReturnsReferencesWithoutPrivateKeyContent(t *testing.T) {
+	svc, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	ca, err := svc.CreateSelfSignedCA(ctx, SelfSignedCARequest{Name: "Internal CA", CommonName: "panel.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := svc.CreateSelfSignedLeaf(ctx, SelfSignedLeafRequest{Name: "Web", CAID: ca.ID, CommonName: "web.internal", DNSNames: []string{"web.internal"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := svc.PanelFileCatalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, item := range catalog {
+		if item.ResourceID == leaf.ID && item.Kind == "private_key" {
+			found = !strings.Contains(item.Source, "BEGIN")
+		}
+	}
+	if !found {
+		t.Fatalf("private key reference missing from catalog: %#v", catalog)
+	}
+	content, err := svc.ReadPanelFile(ctx, "certificate:"+leaf.ID+":private_key")
+	if err != nil || !strings.Contains(string(content), "PRIVATE KEY") {
+		t.Fatalf("private key read failed: err=%v content=%q", err, content)
 	}
 }
 
@@ -162,8 +251,17 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,api_token_secret,account_id,created_at,updated_at) VALUES('dnsdom_1','example.com','cloudflare','token','acct_1','now','now')`); err != nil {
 		t.Fatal(err)
 	}
+	taskSvc := tasks.NewService(store.AppDB())
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyAssetSvc := keyassets.NewService(store.AppDB(), cfg, secrets, taskSvc)
 	fake := &fakeProvider{bundle: testBundle(t)}
-	return NewServiceWithProvider(store.AppDB(), cfg, fake, tasks.NewService(store.AppDB())), fake, func() { _ = store.Close() }
+	svc := NewServiceWithProvider(store.AppDB(), cfg, fake, taskSvc)
+	svc.SetKeyAssetProvider(keyAssetSvc)
+	keyAssetSvc.SetApplicationRefresher(nil)
+	return svc, fake, func() { _ = store.Close() }
 }
 
 type fakeProvider struct {

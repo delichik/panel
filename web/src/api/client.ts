@@ -50,6 +50,14 @@ export class ApiClient {
     return this.request<T>(path, this.withJson(init, 'POST', body));
   }
 
+  postForm<T>(path: string, body: FormData, init?: RequestInit) {
+    return this.request<T>(path, {
+      ...init,
+      method: 'POST',
+      body,
+    });
+  }
+
   put<T>(path: string, body?: unknown, init?: RequestInit) {
     return this.request<T>(path, this.withJson(init, 'PUT', body));
   }

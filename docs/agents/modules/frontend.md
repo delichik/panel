@@ -41,7 +41,7 @@
 - 防火墙：`web/src/features/firewall/pages/FirewallPage.vue`
 - 应用：`web/src/features/applications/`
 - DNS 域名与记录：`web/src/features/dns/pages/DomainsPage.vue`；页面左侧选择域名，右侧展示域名详情和 Cloudflare DNS 记录表。
-- 证书：`web/src/features/certificates/pages/CertificatesPage.vue`
+- 证书为一级菜单，包含内置证书、域名证书和自签证书三个二级页面；旧 `/dns/certificates` 重定向到 `/certificates/domains`。
 - Nomad：`web/src/features/nomad/`；只保留设置、加入和节点控制平面入口，不恢复 raw jobs/deployments 清单入口。
 - 任务中心：`web/src/features/tasks/`
 - 设置：`web/src/features/settings/pages/SettingsPage.vue`
@@ -58,3 +58,10 @@
 ## 文档更新触发
 
 新增页面、路由、API 模块、store、共享组件约定、用户可见工作流或前端持久化结构时，必须更新本文档或对应功能模块文档。
+
+## 密钥与证书页面
+
+- 证书一级菜单的第三个二级入口为“密钥与证书”，路由 `/certificates/key-assets`；旧自签路由重定向到该页面。
+- 页面按 CA 证书、TLS 证书、SSH 密钥对分栏，支持生成、导入、下载、删除、重新签发或重新生成。
+- 批量导出要求输入至少 12 位密码；批量导入使用 multipart 上传，先展示预检摘要、冲突和受影响引用，再提交处理策略。
+- 前端 API 位于 `web/src/api/keyAssets.ts`，共享 client 的 `postForm` 负责 multipart 请求。

@@ -164,6 +164,10 @@ func (f *fakeApplicationService) List(ctx context.Context) ([]Application, error
 	return f.apps, nil
 }
 
+func (f *fakeApplicationService) TemplateCatalog(context.Context) (TemplateCatalog, error) {
+	return TemplateCatalog{}, nil
+}
+
 func (f *fakeApplicationService) Get(ctx context.Context, id string) (Application, error) {
 	return f.app, nil
 }

@@ -14,6 +14,7 @@ type Server struct {
 	SSHUsername   string            `json:"sshUsername"`
 	CredentialID  string            `json:"credentialId"`
 	Traits        map[string]string `json:"traits"`
+	Variables     map[string]string `json:"variables"`
 	Notes         string            `json:"notes"`
 	OS            linux.OSRelease   `json:"os"`
 	Sudo          SudoState         `json:"sudo"`
@@ -37,6 +38,7 @@ type SaveRequest struct {
 	SSHUsername  string            `json:"sshUsername"`
 	CredentialID string            `json:"credentialId"`
 	Traits       map[string]string `json:"traits"`
+	Variables    map[string]string `json:"variables"`
 	Notes        string            `json:"notes"`
 }
 
@@ -47,6 +49,7 @@ type ProbeResult struct {
 	Privileged           bool              `json:"privileged"`
 	OS                   linux.OSRelease   `json:"os"`
 	Traits               map[string]string `json:"traits"`
+	Variables            map[string]string `json:"variables"`
 	Error                string            `json:"error,omitempty"`
 	PasswordlessSudoText string            `json:"passwordlessSudoText,omitempty"`
 }

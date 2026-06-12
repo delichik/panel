@@ -103,6 +103,226 @@ export interface CertificateIssueDto {
   taskId?: string;
 }
 
+export interface NomadBuiltinCertificateDto {
+  id: string;
+  name: string;
+  kind: string;
+  fingerprint: string;
+  notBefore: string;
+  notAfter: string;
+}
+
+export interface SelfSignedCertificateDto {
+  id: string;
+  parentCaId?: string;
+  kind: 'ca' | 'leaf';
+  name: string;
+  commonName: string;
+  dnsNames: string[];
+  ipAddresses: string[];
+  fingerprint: string;
+  notBefore: string;
+  notAfter: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SelfSignedCAInput {
+  name: string;
+  commonName: string;
+  years: number;
+}
+
+export interface SelfSignedLeafInput {
+  name: string;
+  caId: string;
+  commonName: string;
+  dnsNames: string[];
+  ipAddresses: string[];
+  days: number;
+}
+
+export type KeyAssetType = 'ca_certificate' | 'tls_certificate' | 'ssh_key_pair';
+export type KeyAssetAlgorithm = 'ed25519' | 'rsa' | string;
+export type KeyAssetFileKind = 'certificate' | 'private_key' | 'public_key' | 'ssh_public_key';
+export type KeyAssetImportConflictStrategy = 'skip_existing' | 'generate_new_id' | 'overwrite_existing';
+export type KeyAssetImportConflictAction = 'skip_existing' | 'generate_new_id' | 'overwrite_existing';
+export type KeyAssetImportConflictType = 'id_conflict' | 'name_conflict' | 'missing_parent_ca' | 'overwrite_in_use';
+
+export interface KeyAssetReferenceDto {
+  resourceType: string;
+  resourceId: string;
+  resourceName: string;
+  relation: string;
+}
+
+export interface KeyAssetSummaryDto {
+  id: string;
+  type: KeyAssetType;
+  name: string;
+  parentAssetId?: string | null;
+  algorithm?: KeyAssetAlgorithm | null;
+  keySize?: number | null;
+  commonName?: string | null;
+  dnsNames: string[];
+  ipAddresses: string[];
+  fingerprint: string;
+  notBefore?: string | null;
+  notAfter?: string | null;
+  hasCertificate: boolean;
+  hasPrivateKey: boolean;
+  hasPublicKey: boolean;
+  downloadKinds: KeyAssetFileKind[];
+  childCount: number;
+  referenceCount: number;
+  references: KeyAssetReferenceDto[];
+  canReissue: boolean;
+  canRegenerate: boolean;
+  canDelete: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KeyAssetDetailDto extends KeyAssetSummaryDto {
+  metadata?: Record<string, unknown>;
+}
+
+export interface KeyAssetCaGenerateInput {
+  name: string;
+  commonName: string;
+  validityDays: number;
+  algorithm?: KeyAssetAlgorithm | null;
+  keySize?: number | null;
+}
+
+export interface KeyAssetTlsGenerateInput {
+  name: string;
+  caId: string;
+  commonName: string;
+  dnsNames: string[];
+  ipAddresses: string[];
+  validityDays: number;
+  algorithm?: KeyAssetAlgorithm | null;
+  keySize?: number | null;
+}
+
+export interface KeyAssetSshGenerateInput {
+  name: string;
+  algorithm: 'ed25519' | 'rsa';
+  keySize?: number | null;
+}
+
+export interface KeyAssetCaImportInput {
+  type: 'ca_certificate';
+  name: string;
+  certificatePem: string;
+  privateKeyPem: string;
+  publicKeyPem?: string;
+}
+
+export interface KeyAssetTlsImportInput {
+  type: 'tls_certificate';
+  name: string;
+  parentAssetId?: string | null;
+  certificatePem: string;
+  privateKeyPem: string;
+  publicKeyPem?: string;
+}
+
+export interface KeyAssetSshImportInput {
+  type: 'ssh_key_pair';
+  name: string;
+  privateKeyPem: string;
+  publicKey?: string;
+}
+
+export type KeyAssetImportInput =
+  | KeyAssetCaImportInput
+  | KeyAssetTlsImportInput
+  | KeyAssetSshImportInput;
+
+export interface KeyAssetMutationDto {
+  asset?: KeyAssetSummaryDto;
+  taskId?: string;
+  operationId?: string;
+}
+
+export interface KeyAssetExportInput {
+  assetIds: string[];
+  password: string;
+}
+
+export interface KeyAssetExportDto {
+  taskId: string;
+  operationId?: string;
+}
+
+export interface KeyAssetImportPlanAssetDto {
+  assetId: string;
+  type: KeyAssetType;
+  name: string;
+  parentAssetId?: string | null;
+  algorithm?: KeyAssetAlgorithm | null;
+  keySize?: number | null;
+  commonName?: string | null;
+  fingerprint?: string | null;
+  standalone: boolean;
+  conflictTypes: KeyAssetImportConflictType[];
+}
+
+export interface KeyAssetImportConflictCandidateDto {
+  assetId: string;
+  name: string;
+  type: KeyAssetType;
+}
+
+export interface KeyAssetImportConflictDto {
+  assetId: string;
+  assetName: string;
+  assetType: KeyAssetType;
+  conflictType: KeyAssetImportConflictType;
+  existingAssetId?: string;
+  existingAssetName?: string;
+  missingParentAssetId?: string;
+  overwriteCandidates?: KeyAssetImportConflictCandidateDto[];
+  affectedReferences?: KeyAssetReferenceDto[];
+}
+
+export interface KeyAssetImportPlanSummaryDto {
+  totalAssets: number;
+  caCount: number;
+  tlsCount: number;
+  sshCount: number;
+  standaloneTlsCount: number;
+  conflictCount: number;
+}
+
+export interface KeyAssetImportPreflightDto {
+  planId: string;
+  expiresAt: string;
+  summary: KeyAssetImportPlanSummaryDto;
+  assets: KeyAssetImportPlanAssetDto[];
+  conflicts: KeyAssetImportConflictDto[];
+  requiresDangerConfirm: boolean;
+}
+
+export interface KeyAssetImportConflictResolutionDto {
+  assetId: string;
+  action: KeyAssetImportConflictAction;
+  targetAssetId?: string;
+}
+
+export interface KeyAssetImportExecuteInput {
+  strategy: KeyAssetImportConflictStrategy;
+  confirmDangerousOverwrite: boolean;
+  resolutions: KeyAssetImportConflictResolutionDto[];
+}
+
+export interface KeyAssetImportExecuteDto {
+  taskId: string;
+  operationId?: string;
+}
+
 export interface DnsDomainDto {
   id: string;
   name: string;
@@ -283,6 +503,27 @@ export interface ApplicationFileSaveDto {
 
 export interface ApplicationFileDeleteDto {
   path: string;
+}
+
+export interface ApplicationTemplateVariableDto {
+  key: string;
+  category: string;
+  specExpression: string;
+  templateExpression: string;
+}
+
+export interface ApplicationPanelFileDto {
+  id: string;
+  resourceId: string;
+  resourceType: string;
+  name: string;
+  kind: string;
+  source: string;
+}
+
+export interface ApplicationTemplateCatalogDto {
+  variables: ApplicationTemplateVariableDto[];
+  panelFiles: ApplicationPanelFileDto[];
 }
 
 export interface ApplicationSaveSessionBeginDto {

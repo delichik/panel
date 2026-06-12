@@ -38,6 +38,7 @@
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性任务（Nomad 加入/引导/重建/切换/移除、服务器重启、UFW 安装/启用）必须在 API 返回前先标记为 `running`；遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter`（当前 10 分钟）会在清理循环中标记为失败并提示用户重试，避免永久排队。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - `nomad_reverse_proxy_sync` 用于追踪反向代理配置保存、远程防火墙放行和 Nomad 反向代理 job reconcile；该任务当前由保存接口同步完成或失败，不提供 `run-now` / `retry`。
+- `nomad_tls_rotate` 用于追踪 Nomad CA/证书重新生成、全部节点重部署、应用恢复和反向代理同步。
 - `scheduler` 负责周期性指标采集、软件包刷新、证书续签和 due 的包刷新任务补扫，并可作为 `run-now` 执行入口；同一轮调度为多台服务器创建任务时，应共享一个 `operationId`，由任务中心展示为一个 operation 下的多个 task。周期性指标采集记录为 `metrics_collect` 任务，默认由“常用类型”筛选隐藏。
 - 任务中心的 `run-now` / `retry` 必须按任务类型受控；当前只允许 `server_connectivity_test`、`server_info_collect`、`package_refresh`、`certificate_issue` 这类有调度器执行器的任务。后端 handler 会按状态和类型拒绝不支持的调用，前端也只展示可闭环的操作。
 - `retry` 创建的新任务会立即交给调度器执行；如果调度器在启动前返回错误，handler 会把新任务标记为失败，避免产生永久排队任务。`package_refresh` 的已排队任务还会被调度器持续补扫，避免被周期刷新节流或已有刷新状态长期挡住。
@@ -60,3 +61,9 @@
 ## 文档更新触发
 
 新增任务类型、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。
+
+## 密钥资产任务
+
+- 新增 `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import`、`key_asset_sync`。
+- 重新签发、重新生成和导入任务包含资产更新、已启用应用重部署和反向代理同步；任务终态必须注销 execution。
+- 导出任务完成后通过 `/api/v1/key-assets/exports/{taskId}/download` 下载短期加密归档。

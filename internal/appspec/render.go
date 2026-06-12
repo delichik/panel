@@ -163,7 +163,7 @@ func renderDockerMounts(appID string, volumes []Volume, mounts []Mount) []map[st
 	}
 	for _, mount := range mounts {
 		mountType := strings.TrimSpace(mount.Type)
-		if mountType == "file" {
+		if mountType == "file" || mountType == "panel_file" {
 			continue
 		}
 		source := strings.TrimSpace(mount.Source)

@@ -35,6 +35,10 @@
   - 共享分页组件的每页条数与总数文案已接入 `web/src/i18n/index.ts`。
 - `web/src/components/PageLoadingState.vue`
   - 共享加载组件文案 `common.loading` 已接入 `web/src/i18n/index.ts`，英文和简体中文均已补齐。
+- `web/src/features/applications/components/ApplicationEditor.vue`
+  - 自定义变量表单、变量插入和 Panel 托管文件挂载文案已接入英文和简体中文。
+- `web/src/features/certificates/`
+  - Nomad 内置证书、域名立即续签、自签 CA/证书管理和危险确认文案已接入英文和简体中文。
 - `web/src/layouts/AppLayout.vue`、`web/src/features/settings/pages/SettingsPage.vue`
   - 当前版本、最新版本弱提示和系统版本字段已接入 `web/src/i18n/index.ts`。
 - raw Nomad jobs/deployments 清单入口已移除，对应页面文案和路由词条不再保留。
@@ -68,3 +72,9 @@
 - 某个页面仍未翻译但继续被修改
 - 新增了后端错误码或用户可见错误文本
 - 新增了用户可见文案但暂未完成翻译
+
+## 密钥与证书
+
+- `web/src/features/certificates/pages/KeyAssetsPage.vue` 的 CA、TLS、SSH、批量导入导出、冲突确认和引用提示已接入英文与简体中文词条。
+- `key_asset_*` 主密钥、归档、类型、父 CA、使用中和导入冲突错误码已接入 `internal/i18n/i18n.go`。
+- 任务中心已补充密钥资产任务类型、阶段和操作标题翻译。

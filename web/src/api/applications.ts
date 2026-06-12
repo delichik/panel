@@ -11,6 +11,7 @@ import type {
   ApplicationSaveDto,
   ApplicationSaveSessionBeginDto,
   ApplicationSaveSessionDto,
+  ApplicationTemplateCatalogDto,
   ApplicationValidationDto,
 } from '@/types/api';
 
@@ -38,6 +39,9 @@ export function createApplicationsApi(client: ApiClient = apiClient) {
   return {
     list() {
       return client.get<ApplicationDto[]>('/applications');
+    },
+    templateCatalog() {
+      return client.get<ApplicationTemplateCatalogDto>('/application-template-catalog');
     },
     create(input: ApplicationSaveDto) {
       return client.post<ApplicationDto>('/applications', input);

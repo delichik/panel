@@ -51,3 +51,11 @@
 ## 文档更新触发
 
 修改启动装配、配置项、运行时设置、认证流程、API 路由、构建版本信息、数据库表/字段、错误响应结构时，必须更新本文档或模块索引。
+
+## 密钥资产启动与存储
+
+- `app.New` 必须在证书、应用和 scheduler 启动前初始化 `internal/secretstore`、`internal/keyassets` 并完成旧自签证书迁移。
+- `key_assets` 保存统一密钥与证书元数据和密文私钥；`key_asset_export_artifacts` 保存短期批量导出下载信息。
+- 主密钥优先读取 `PANEL_KEY_ASSETS_MASTER_KEY`，否则读取 `<dataRoot>/secrets/key-assets-master.key`；首次无资产时自动生成文件并使用 `0600` 权限。
+- 数据库存在加密资产但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。
+- 新增路由集中在 `/api/v1/key-assets`；私钥下载响应必须禁用缓存。

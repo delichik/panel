@@ -142,3 +142,24 @@ type ValidationResult struct {
 	Valid  bool              `json:"valid"`
 	Issues []ValidationIssue `json:"issues"`
 }
+
+type TemplateVariableDefinition struct {
+	Key                string `json:"key"`
+	Category           string `json:"category"`
+	SpecExpression     string `json:"specExpression"`
+	TemplateExpression string `json:"templateExpression"`
+}
+
+type PanelFileDefinition struct {
+	ID           string `json:"id"`
+	ResourceID   string `json:"resourceId"`
+	ResourceType string `json:"resourceType"`
+	Name         string `json:"name"`
+	Kind         string `json:"kind"`
+	Source       string `json:"source"`
+}
+
+type TemplateCatalog struct {
+	Variables  []TemplateVariableDefinition `json:"variables"`
+	PanelFiles []PanelFileDefinition        `json:"panelFiles"`
+}

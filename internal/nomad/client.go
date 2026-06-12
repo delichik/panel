@@ -89,6 +89,22 @@ func (c *Client) SetAddress(address string) {
 	c.mu.Unlock()
 }
 
+func (c *Client) ReloadTLS() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cfg.TLS == nil {
+		return nil
+	}
+	tlsConfig, err := newClientTLSConfig(*c.cfg.TLS)
+	if err != nil {
+		return err
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = tlsConfig
+	c.httpClient = &http.Client{Transport: transport}
+	return nil
+}
+
 func (c *Client) Status(ctx context.Context) (StatusResponse, error) {
 	var leader string
 	if err := c.do(ctx, http.MethodGet, "/v1/status/leader", nil, nil, &leader); err != nil {

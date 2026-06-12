@@ -4,15 +4,18 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -43,6 +46,57 @@ func EnsureTLSAssets(dataRoot string) (*TLSAssets, error) {
 		return nil, err
 	}
 	return loadTLSAssets(assets)
+}
+
+func RegenerateTLSAssets(dataRoot string) (*TLSAssets, error) {
+	assets := tlsAssetsPaths(dataRoot)
+	if err := os.MkdirAll(assets.Dir, 0o700); err != nil {
+		return nil, err
+	}
+	if err := generateTLSAssets(assets); err != nil {
+		return nil, err
+	}
+	return loadTLSAssets(assets)
+}
+
+type BuiltinCertificateInfo struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Kind        string    `json:"kind"`
+	Fingerprint string    `json:"fingerprint"`
+	NotBefore   time.Time `json:"notBefore"`
+	NotAfter    time.Time `json:"notAfter"`
+}
+
+func (a *TLSAssets) CertificateInfo() ([]BuiltinCertificateInfo, error) {
+	items := []struct {
+		id   string
+		name string
+		kind string
+		pem  []byte
+	}{
+		{"nomad_ca", "Nomad CA", "ca", a.CAPEM},
+		{"nomad_agent", "Nomad agent", "agent", a.AgentCertPEM},
+		{"nomad_panel_client", "Panel Nomad client", "client", a.ClientCertPEM},
+	}
+	out := make([]BuiltinCertificateInfo, 0, len(items))
+	for _, item := range items {
+		block, _ := pem.Decode(item.pem)
+		if block == nil {
+			return nil, errors.New("invalid builtin Nomad certificate PEM")
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(cert.Raw)
+		out = append(out, BuiltinCertificateInfo{
+			ID: item.id, Name: item.name, Kind: item.kind,
+			Fingerprint: strings.ToUpper(hex.EncodeToString(sum[:])),
+			NotBefore:   cert.NotBefore, NotAfter: cert.NotAfter,
+		})
+	}
+	return out, nil
 }
 
 func tlsAssetsPaths(dataRoot string) *TLSAssets {

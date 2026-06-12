@@ -34,6 +34,7 @@
 - 镜像：`POST /api/v1/applications/{id}/image/check`，`/image/update`
 - 运行时和日志：`GET /api/v1/applications/{id}/runtime`，`GET /api/v1/applications/{id}/logs`
 - 打包：`GET /api/v1/applications/{id}/package`
+- 模板目录：`GET /api/v1/application-template-catalog`
 
 ## 数据与行为约定
 
@@ -48,6 +49,10 @@
 - 应用删除必须先禁用应用，并在前端二次确认后执行。
 - 应用日志面板仍允许手动输入 allocation/task，但运行时 allocation 表必须提供日志入口，将 allocation ID 和 task 名称带入日志面板。
 - 证书模块提供内置变量解析，Nomad 模块负责反向代理同步。
+- 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等蛇形节点变量；节点值来自实际 allocation 所在 Nomad 节点的 `panel_*` meta，其中 SSH 地址取服务器配置的 `host`。
+- 应用文件模板通过 Nomad template 在 allocation 启动时读取 `PANEL_SERVER_*` 环境变量，因此同一应用在不同节点得到不同服务器值。
+- 挂载类型 `panel_file` 使用 `certificate:<resource-id>:<kind>` 稳定引用 Panel 托管证书文件。私钥内容不通过目录 API 返回，部署时由后端读取并以只读 Nomad template 挂载。
+- 自定义变量在前端使用键值表单维护，持久化仍使用现有 `variables_json`。
 - Nomad 集群重建完成后会调用 `RedeployEnabledApplications`，无条件重新渲染并注册所有 `enabled` 应用；该恢复行为不能只依赖规格哈希变化，否则新集群中不存在的 job 不会被恢复。
 
 ## 验证
@@ -59,3 +64,11 @@
 ## 文档更新触发
 
 新增 appspec 字段、应用持久化字段、API、应用文件行为、部署流程、镜像更新逻辑、反向代理字段或运行时展示字段时，必须更新本文档。
+
+## Panel 托管密钥文件
+
+- `panel_file` 的新规范来源为 `key_asset:<asset-id>:<kind>`，支持 `certificate`、`private_key`、`public_key` 和 SSH 的 `ssh_public_key`。
+- appspec 校验同时接受旧 `certificate:` 来源以兼容已有应用；新页面和目录只生成 `key_asset:`。
+- 私钥不会出现在目录 API 响应中，只在部署渲染时由后端解密并作为只读 Nomad template 提供。
+- 密钥资产服务扫描应用 spec 和反向代理域名，返回精确的应用 ID、名称及 `panel_file` / `reverse_proxy` 引用，用于删除保护和导入覆盖确认。
+- TLS 重新签发、SSH 重新生成和批量导入会调用 `RedeployEnabledApplications`，确保每台服务器重新按自身内置变量渲染。

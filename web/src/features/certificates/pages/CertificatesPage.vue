@@ -17,6 +17,7 @@ const dialog = ref(false);
 const deleteDialog = ref(false);
 const deleting = ref(false);
 const deletingCertificate = ref<CertificateDto | null>(null);
+const renewingId = ref('');
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
@@ -120,6 +121,19 @@ async function deleteCertificate() {
   }
 }
 
+async function renewCertificate(certificate: CertificateDto) {
+  renewingId.value = certificate.id;
+  try {
+    await certificatesApi.renew(certificate.id);
+    showMessage(t('certificatesPage.renewed'));
+    await load();
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : t('certificatesPage.renewFailed'), 'error');
+  } finally {
+    renewingId.value = '';
+  }
+}
+
 function formatDate(value?: string) {
   if (!value) return t('certificatesPage.unknownDate');
   return formatDateTime(value);
@@ -190,6 +204,7 @@ onMounted(load);
               <div class="text-caption text-medium-emphasis">{{ t('certificatesPage.nextRenewal', { value: formatDate(row.nextRenewAt) }) }}</div>
             </td>
             <td class="text-right">
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-autorenew" class="mr-2" :loading="renewingId === row.id" :disabled="row.status !== 'issued'" @click="renewCertificate(row)">{{ t('certificatesPage.renewNow') }}</v-btn>
               <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteCertificate(row)">{{ t('common.delete') }}</v-btn>
             </td>
           </tr>

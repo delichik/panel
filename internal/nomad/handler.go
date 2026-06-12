@@ -29,6 +29,26 @@ type joinService interface {
 	SwitchServer(ctx context.Context, in SwitchServerInput) (tasks.Task, error)
 	RemoveNode(ctx context.Context, in RemoveNodeInput) (tasks.Task, error)
 	UpdateReverseProxy(ctx context.Context, in ReverseProxyInput) (ReverseProxyUpdateResult, error)
+	BuiltinCertificates() ([]BuiltinCertificateInfo, error)
+	RotateTLS(ctx context.Context) (tasks.Task, error)
+}
+
+func (h *Handler) BuiltinCertificates(w http.ResponseWriter, r *http.Request) {
+	result, err := h.join.BuiltinCertificates()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) RotateTLS(w http.ResponseWriter, r *http.Request) {
+	task, err := h.join.RotateTLS(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
 func NewHandler(client inventoryClient, join ...joinService) *Handler {

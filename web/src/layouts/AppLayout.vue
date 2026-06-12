@@ -57,7 +57,16 @@ const navGroups = computed<NavGroup[]>(() => [
     title: t('layout.nav.dns'),
     items: [
       { to: '/dns/domains', title: t('layout.nav.domains'), value: 'dns-domains' },
-      { to: '/dns/certificates', title: t('layout.nav.certificates'), value: 'dns-certificates' },
+    ],
+  },
+  {
+    key: 'certificates',
+    icon: 'mdi-certificate-outline',
+    title: t('layout.nav.certificates'),
+    items: [
+      { to: '/certificates/builtin', title: t('layout.nav.builtinCertificates'), value: 'certificates-builtin' },
+      { to: '/certificates/domains', title: t('layout.nav.domainCertificates'), value: 'certificates-domains' },
+      { to: '/certificates/key-assets', title: t('layout.nav.keyAssets'), value: 'certificates-key-assets' },
     ],
   },
   {

@@ -60,6 +60,7 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		SSHUsername:  req.SSHUsername,
 		CredentialID: req.CredentialID,
 		Traits:       req.Traits,
+		Variables:    normalizeServerVariables(req.Variables, req.Traits),
 		Notes:        req.Notes,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -68,8 +69,9 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		srv.Traits = map[string]string{}
 	}
 	traits, _ := json.Marshal(srv.Traits)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, string(traits), srv.Notes, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	variables, _ := json.Marshal(srv.Variables)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,variables_json,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, string(traits), string(variables), srv.Notes, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return Server{}, err
 	}
@@ -87,9 +89,10 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 		req.Traits = map[string]string{}
 	}
 	traits, _ := json.Marshal(req.Traits)
+	variables, _ := json.Marshal(normalizeServerVariables(req.Variables, req.Traits))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,traits=?,notes=?,updated_at=? WHERE id=?`,
-		req.Name, req.Host, req.Port, req.SSHUsername, req.CredentialID, string(traits), req.Notes, now, serverID)
+	res, err := s.db.ExecContext(ctx, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+		req.Name, req.Host, req.Port, req.SSHUsername, req.CredentialID, string(traits), string(variables), req.Notes, now, serverID)
 	if err != nil {
 		return Server{}, err
 	}
@@ -127,7 +130,7 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 }
 
 func (s *Service) List(ctx context.Context) ([]Server, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -153,7 +156,7 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
-	srv, err := scanServer(s.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
+	srv, err := scanServer(s.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
 	if err == sql.ErrNoRows {
 		return Server{}, panelerr.NotFound("server")
 	}
@@ -978,15 +981,17 @@ type serverScanner interface{ Scan(dest ...any) error }
 
 func scanServer(row serverScanner) (Server, error) {
 	var srv Server
-	var traits, created, updated string
+	var traits, variables, created, updated string
 	var osSupported, reachable, sudo int
 	var sudoAt, checkedAt sql.NullString
-	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &traits, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &reachable, &sudo, &sudoAt, &checkedAt, &srv.LastError, &created, &updated)
+	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &traits, &variables, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &reachable, &sudo, &sudoAt, &checkedAt, &srv.LastError, &created, &updated)
 	if err != nil {
 		return Server{}, err
 	}
 	srv.Traits = map[string]string{}
 	_ = json.Unmarshal([]byte(traits), &srv.Traits)
+	srv.Variables = map[string]string{}
+	_ = json.Unmarshal([]byte(variables), &srv.Variables)
 	srv.OS.Supported = osSupported == 1
 	srv.Reachable = reachable == 1
 	srv.Sudo.Passwordless = sudo == 1
@@ -1001,6 +1006,24 @@ func scanServer(row serverScanner) (Server, error) {
 	srv.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	srv.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	return srv, nil
+}
+
+func normalizeServerVariables(variables, traits map[string]string) map[string]string {
+	out := map[string]string{}
+	for key, value := range variables {
+		key = strings.TrimSpace(key)
+		if key != "" {
+			out[key] = value
+		}
+	}
+	for key, value := range traits {
+		if strings.HasPrefix(key, "custom.") {
+			if _, exists := out[strings.TrimPrefix(key, "custom.")]; !exists {
+				out[strings.TrimPrefix(key, "custom.")] = value
+			}
+		}
+	}
+	return out
 }
 
 func boolInt(v bool) int {
