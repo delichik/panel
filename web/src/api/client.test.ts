@@ -46,6 +46,25 @@ describe('ApiClient', () => {
     });
   });
 
+  it('throws readable errors for non-JSON responses', async () => {
+    const fetcher = vi.fn().mockResolvedValue(
+      new Response('<!DOCTYPE html><title>Panel</title>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      }),
+    );
+    const client = new ApiClient({ fetcher });
+
+    await expect(client.get('/dns/domains')).rejects.toMatchObject({
+      status: 200,
+      code: 'invalid_response',
+      message: expect.stringContaining('non-JSON response'),
+      details: expect.objectContaining({
+        contentType: 'text/html',
+      }),
+    });
+  });
+
   it('keeps FormData bodies intact for multipart requests', async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true }, error: null }));
     const client = new ApiClient({ fetcher });

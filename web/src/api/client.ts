@@ -1,4 +1,4 @@
-import { getLocaleHeader } from '@/i18n';
+import { getLocaleHeader, t } from '@/i18n';
 
 export interface ApiEnvelope<T> {
   data: T | null;
@@ -79,7 +79,7 @@ export class ApiClient {
       headers,
     });
     if (!response.ok) {
-      const envelope = (await response.json().catch(() => ({ error: null }))) as ApiEnvelope<unknown>;
+      const envelope = await readEnvelope<unknown>(response);
       throw new ApiError(
         response.status,
         envelope.error ?? {
@@ -123,7 +123,7 @@ export class ApiClient {
       return undefined as T;
     }
 
-    const envelope = (await response.json()) as ApiEnvelope<T>;
+    const envelope = await readEnvelope<T>(response);
     if (!response.ok || envelope.error) {
       throw new ApiError(
         response.status,
@@ -138,6 +138,25 @@ export class ApiClient {
 }
 
 export const apiClient = new ApiClient();
+
+async function readEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
+  const raw = await response.text();
+  if (!raw.trim()) {
+    return { data: null, error: null };
+  }
+  try {
+    return JSON.parse(raw) as ApiEnvelope<T>;
+  } catch {
+    throw new ApiError(response.status, {
+      code: 'invalid_response',
+      message: t('apiClient.invalidJsonResponse', { status: response.status }),
+      details: {
+        contentType: response.headers.get('Content-Type') || '',
+        preview: raw.trim().slice(0, 120),
+      },
+    });
+  }
+}
 
 export function readAuthToken() {
   const storage = globalThis.localStorage;

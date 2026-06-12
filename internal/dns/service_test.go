@@ -2,6 +2,7 @@ package dns
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -33,6 +34,29 @@ func TestDomainListRedactsAPITokenAndResolveKeepsSecret(t *testing.T) {
 	}
 	if resolved.AccountID != "acct_1" {
 		t.Fatalf("resolved account id = %q", resolved.AccountID)
+	}
+}
+
+func TestCreateDomainValidatesProviderBeforePersisting(t *testing.T) {
+	svc, closeStore := newDomainTestService(t)
+	defer closeStore()
+	svc.providerFactory = func(resolved ResolvedDomain) Provider {
+		if resolved.Name != "example.com" || resolved.APIToken != "bad-token" || resolved.AccountID != "acct_1" {
+			t.Fatalf("unexpected validation domain = %#v", resolved)
+		}
+		return &fakeDNSProvider{listErr: errors.New("cloudflare token rejected")}
+	}
+
+	_, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "bad-token", AccountID: "acct_1"})
+	if err == nil {
+		t.Fatal("expected provider validation error")
+	}
+	rows, err := svc.ListDomains(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("domain should not be persisted when provider validation fails: %#v", rows)
 	}
 }
 
@@ -117,15 +141,21 @@ func newDomainTestService(t *testing.T) (*Service, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return NewService(store.AppDB()), func() { _ = store.Close() }
+	svc := NewService(store.AppDB())
+	svc.providerFactory = func(ResolvedDomain) Provider { return &fakeDNSProvider{} }
+	return svc, func() { _ = store.Close() }
 }
 
 type fakeDNSProvider struct {
 	records   []Record
 	deletedID string
+	listErr   error
 }
 
 func (p *fakeDNSProvider) ListRecords(ctx context.Context, zone string) ([]Record, error) {
+	if p.listErr != nil {
+		return nil, p.listErr
+	}
 	return p.records, nil
 }
 

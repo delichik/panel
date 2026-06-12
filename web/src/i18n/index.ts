@@ -88,6 +88,9 @@ const messages = {
       yes: "yes",
       no: "no",
     },
+    apiClient: {
+      invalidJsonResponse: "The server returned a non-JSON response (HTTP {status}). Check that the API service is running and the request path is correct.",
+    },
     languages: {
       en: "English",
       "zh-CN": "简体中文",
@@ -1154,6 +1157,9 @@ const messages = {
       update: "更新",
       yes: "是",
       no: "否",
+    },
+    apiClient: {
+      invalidJsonResponse: "服务返回了非 JSON 响应（HTTP {status}）。请检查 API 服务是否正常运行，以及请求路径是否正确。",
     },
     languages: {
       en: "English",

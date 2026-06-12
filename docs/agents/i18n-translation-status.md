@@ -11,6 +11,10 @@
   - 未启用的 DNS 记录导航入口已移除，对应 `layout.nav.records` 词条不再保留。
 - `web/src/features/dns/pages/DomainsPage.vue`
   - DNS 域名详情、Cloudflare 记录列表、记录创建/编辑/删除和 TTL/代理状态文案已接入 `web/src/i18n/index.ts`。
+- `web/src/api/client.ts`
+  - 非 JSON API 响应的可读错误文案已接入 `web/src/i18n/index.ts`。
+- `internal/dns`
+  - Cloudflare 非 JSON 响应错误码已接入 `internal/i18n/i18n.go`。
 - `web/src/features/settings/pages/SettingsPage.vue`
   - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
   - 设置分类子菜单、通用设置、安全设置、Nomad 设置、证书设置、系统信息文案已接入 `web/src/i18n/index.ts`

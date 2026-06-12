@@ -48,6 +48,9 @@ func (s *Service) CreateDomain(ctx context.Context, in SaveDomainRequest) (Domai
 	if err != nil {
 		return Domain{}, err
 	}
+	if err := s.validateProviderAccess(ctx, resolvedDomainForSave(prepared)); err != nil {
+		return Domain{}, err
+	}
 	now := time.Now().UTC()
 	domain := Domain{ID: id.New("dnsdom"), Name: prepared.Name, Provider: prepared.Provider, AccountID: prepared.AccountID, CreatedAt: now, UpdatedAt: now}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO dns_domains(id,name,provider,api_token_secret,account_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
@@ -70,6 +73,19 @@ func (s *Service) UpdateDomain(ctx context.Context, domainID string, in SaveDoma
 	token := current.APIToken
 	if prepared.APIToken != "" {
 		token = prepared.APIToken
+	}
+	if err := s.validateProviderAccess(ctx, ResolvedDomain{
+		Domain: Domain{
+			ID:        current.ID,
+			Name:      prepared.Name,
+			Provider:  prepared.Provider,
+			AccountID: prepared.AccountID,
+			CreatedAt: current.CreatedAt,
+			UpdatedAt: current.UpdatedAt,
+		},
+		APIToken: token,
+	}); err != nil {
+		return Domain{}, err
 	}
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(ctx, `UPDATE dns_domains SET name=?,provider=?,api_token_secret=?,account_id=?,updated_at=? WHERE id=?`,
@@ -197,6 +213,25 @@ func validateSaveDomain(in SaveDomainRequest, requireToken bool) (preparedDomain
 		return preparedDomain{}, panelerr.Validation("dns_api_token_required", "DNS provider API token is required")
 	}
 	return preparedDomain{Name: name, Provider: provider, APIToken: token, AccountID: strings.TrimSpace(in.AccountID)}, nil
+}
+
+func resolvedDomainForSave(prepared preparedDomain) ResolvedDomain {
+	return ResolvedDomain{
+		Domain: Domain{
+			Name:      prepared.Name,
+			Provider:  prepared.Provider,
+			AccountID: prepared.AccountID,
+		},
+		APIToken: prepared.APIToken,
+	}
+}
+
+func (s *Service) validateProviderAccess(ctx context.Context, domain ResolvedDomain) error {
+	if domain.Provider != ProviderCloudflare {
+		return panelerr.Validation("dns_provider_invalid", "DNS provider must be cloudflare")
+	}
+	_, err := s.providerFactory(domain).ListRecords(ctx, domain.Name)
+	return err
 }
 
 func (s *Service) resolveProvider(ctx context.Context, domainID string) (ResolvedDomain, Provider, error) {
