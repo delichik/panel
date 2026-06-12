@@ -18,7 +18,7 @@
 - 单元格垂直居中。
 - 行分隔线使用弱化后的 `--lp-border`。
 - 表格宽度至少填满容器；内容宽时允许自然扩展。
-- `.v-table__wrapper` 统一提供横向滚动。
+- `.v-table__wrapper` 统一提供横向滚动；中大屏的满高表格还应在该包装器内提供纵向滚动。
 
 ## 密度
 
@@ -63,14 +63,17 @@
 ## 响应式
 
 - 不通过固定表格宽度撑开整页。
-- 横向滚动只发生在 `.v-table__wrapper`。
+- 中大屏下表格卡片填满父级剩余高度，卡片本身隐藏溢出，表头和分页之外的数据区在 `.v-table__wrapper` 内滚动。
+- 横向和纵向表格滚动只发生在 `.v-table__wrapper`。
 - 操作列和状态列可保持 `white-space: nowrap`。
 - 长文本列允许 `overflow-wrap: anywhere`。
 - 在移动端不把结构复杂的数据表强行改成无规范的卡片列表；需要转换时应建立新的共享模式。
+- 窄屏单列布局可取消固定高度，让表格随页面自然排列，但横向溢出仍由 `.v-table__wrapper` 承担。
 
 ## 禁忌
 
 - 不在页面根节点使用横向滚动修复表格溢出。
+- 中大屏不让数据行撑高页面并触发整页纵向滚动。
 - 不为每张表重新实现边框和表头颜色。
 - 不在单元格中放默认尺寸的大按钮组。
 - 不让加载、空状态和已有数据同时竞争显示。
@@ -82,4 +85,3 @@
 - `web/src/features/dns/pages/DomainsPage.vue`
 - `web/src/features/tasks/pages/TaskCenterPage.vue`
 - `web/src/features/certificates/pages/KeyAssetsPage.vue`
-

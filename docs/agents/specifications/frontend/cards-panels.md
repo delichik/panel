@@ -26,6 +26,7 @@
 - `.panel-header`：左右分布，`20px 24px` 左右内边距。
 - `.panel-body`：`24px` 内边距，可滚动，`min-height: 0`。
 - 面板内部出现滚动时，外层必须限制可用高度。
+- 中大屏下作为页面主区域的卡片或面板应填满父级剩余高度，外层 `overflow: hidden`；标题和分页固定，只有 `.panel-body`、`v-card-text` 或专用内容区滚动。
 
 ## 标题区
 
@@ -86,6 +87,7 @@
 - 不用大面积主题色填充普通内容卡片。
 - 不把页面级错误塞进无关卡片标题。
 - 不复制标题区样式创建仅命名不同的新类。
+- 不让页面主卡片按内容无限增高并推动整个页面滚动。
 
 ## 源码依据
 
@@ -93,4 +95,3 @@
 - `web/src/features/servers/pages/ServersPage.vue`
 - `web/src/features/applications/pages/ApplicationsPage.vue`
 - `web/src/features/dns/pages/DomainsPage.vue`
-

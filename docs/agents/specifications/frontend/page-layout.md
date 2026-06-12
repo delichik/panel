@@ -12,6 +12,40 @@
 
 `.page-shell` 使用网格布局、`--lp-space-5` 间距、`min-width: 0`，防止表格和长文本撑破主内容区。
 
+## 视口占满与滚动边界
+
+中大尺寸屏幕维持桌面或多栏布局时：
+
+- 页面最外围容器必须填满全局页头以下的全部剩余视口。
+- 页面壳、主工作区及其直接网格子项必须设置 `min-height: 0`。
+- 页面最外围容器使用 `overflow: hidden`，禁止 `v-main` 或整个页面产生纵向滚动。
+- 可增长的主内容轨道使用 `minmax(0, 1fr)`；固定工具栏、摘要区和分页不参与滚动。
+- 纵向滚动只能发生在列表体、表格包装器、详情正文、卡片正文、日志框等明确的内部内容区。
+- 内部滚动区必须有来自父级的有效高度约束，并显式设置 `overflow: auto` 或 `overflow-y: auto`。
+
+推荐结构：
+
+```css
+.page-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.page-workspace,
+.page-workspace > * {
+  min-height: 0;
+}
+
+.scroll-region {
+  min-height: 0;
+  overflow: auto;
+}
+```
+
+进入窄屏单列或移动布局后，可以按页面内容恢复自然高度和页面级纵向滚动，避免多个狭窄嵌套滚动区。
+
 ## 内容顺序
 
 推荐顺序：
@@ -69,7 +103,9 @@ gap: 18px;
 - 主内容最大宽度为 `1640px`，水平居中。
 - 页面内边距使用 `clamp(16px, 2vw, 28px)`。
 - `980px` 以下收紧为 `16px`。
-- 页面纵向滚动发生在 `v-main`，`body` 本身不滚动。
+- `body` 始终不滚动。
+- 中大屏的 `v-main` 和页面最外围容器不滚动，页面内容在内部区域独立滚动。
+- 窄屏单列布局可让 `v-main` 恢复纵向滚动。
 
 ## 断点约定
 
@@ -88,7 +124,9 @@ gap: 18px;
 - 不给主内容区设置固定像素宽度。
 - 不使用 `1fr` 代替可能包含宽内容的 `minmax(0, 1fr)`。
 - 不让页面级按钮在窄屏继续强制单行。
-- 不在页面内部创建第二个不必要的全页纵向滚动容器。
+- 中大屏不允许 `v-main`、`.main-content` 或 `.page-shell` 成为整页纵向滚动容器。
+- 不创建没有明确高度来源的内部滚动区。
+- 不让固定标题、工具栏或分页随内部内容一起滚走。
 
 ## 源码依据
 
@@ -98,4 +136,3 @@ gap: 18px;
 - `web/src/features/dns/pages/DomainsPage.vue`
 - `web/src/features/firewall/pages/FirewallPage.vue`
 - `web/src/features/packages/pages/PackageUpdatesPage.vue`
-

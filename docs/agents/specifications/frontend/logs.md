@@ -43,6 +43,7 @@
 - 等宽字体，字号 `12px`。
 - 默认高度 `180px` 至 `360px`；compact 最大 `240px`。
 - 只在日志框内部纵向滚动。
+- 日志作为页面主内容时，中大屏应填满父级剩余高度，并由日志框吸收全部增量内容滚动，不能推动页面整体增长。
 
 ## 日志行
 
@@ -76,6 +77,7 @@ grid-template-columns: 86px 64px minmax(0, 1fr);
 
 - 不使用普通白色卡片背景展示终端日志。
 - 不让日志框撑高整个页面而失去内部滚动。
+- 不让日志摘要、控制区和日志正文共同触发整页滚动；固定区与可滚动日志区必须分轨布局。
 - 不在多个页面复制轮询与游标逻辑。
 - 不在任务结束后继续无意义轮询。
 
@@ -84,4 +86,3 @@ grid-template-columns: 86px 64px minmax(0, 1fr);
 - `web/src/components/tasks/TaskLogPanel.vue`
 - `web/src/features/tasks/pages/TaskCenterPage.vue`
 - `web/src/features/applications/components/ApplicationLogsPanel.vue`
-
