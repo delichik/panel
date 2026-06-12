@@ -2,21 +2,26 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useSettingsStore } from '@/stores/settings';
 import AppLayout from '@/layouts/AppLayout.vue';
-import ChangePasswordPage from '@/features/auth/pages/ChangePasswordPage.vue';
-import LoginPage from '@/features/auth/pages/LoginPage.vue';
-import OverviewPage from '@/features/overview/pages/OverviewPage.vue';
-import ServersPage from '@/features/servers/pages/ServersPage.vue';
-import PackageUpdatesPage from '@/features/packages/pages/PackageUpdatesPage.vue';
-import FirewallPage from '@/features/firewall/pages/FirewallPage.vue';
-import ApplicationsPage from '@/features/applications/pages/ApplicationsPage.vue';
-import CertificatesPage from '@/features/certificates/pages/CertificatesPage.vue';
-import BuiltinCertificatesPage from '@/features/certificates/pages/BuiltinCertificatesPage.vue';
-import KeyAssetsPage from '@/features/certificates/pages/KeyAssetsPage.vue';
-import DomainsPage from '@/features/dns/pages/DomainsPage.vue';
-import NomadNodesPage from '@/features/nomad/pages/NomadNodesPage.vue';
-import NomadSetupPage from '@/features/nomad/pages/NomadSetupPage.vue';
-import TaskCenterPage from '@/features/tasks/pages/TaskCenterPage.vue';
-import SettingsPage from '@/features/settings/pages/SettingsPage.vue';
+import ChangePasswordPage from '@/views/auth/change-password/index.vue';
+import LoginPage from '@/views/auth/login/index.vue';
+import OverviewPage from '@/views/overview/index.vue';
+import ServerNodePage from '@/views/servers/node/index.vue';
+import ServerCredentialsPage from '@/views/servers/credentials/index.vue';
+import PackageUpdatesPage from '@/views/servers/packages/index.vue';
+import FirewallPage from '@/views/servers/firewall/index.vue';
+import ApplicationsPage from '@/views/runtime/applications/index.vue';
+import CertificatesPage from '@/views/certificates/domains/index.vue';
+import BuiltinCertificatesPage from '@/views/certificates/builtin/index.vue';
+import KeyAssetsPage from '@/views/certificates/key-assets/index.vue';
+import DomainsPage from '@/views/dns/domains/index.vue';
+import NomadNodesPage from '@/views/runtime/nomad/nodes/index.vue';
+import NomadSetupPage from '@/views/runtime/nomad/setup/index.vue';
+import TaskCenterPage from '@/views/tasks/index.vue';
+import SettingsGeneralPage from '@/views/settings/general/index.vue';
+import SettingsSecurityPage from '@/views/settings/security/index.vue';
+import SettingsNomadPage from '@/views/settings/nomad/index.vue';
+import SettingsCertificatesPage from '@/views/settings/certificates/index.vue';
+import SettingsSystemPage from '@/views/settings/system/index.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -30,8 +35,8 @@ export const router = createRouter({
       children: [
         { path: '', redirect: '/overview' },
         { path: 'overview', name: 'overview', component: OverviewPage, meta: { titleKey: 'routes.overview.title' } },
-        { path: 'servers', name: 'servers', component: ServersPage, meta: { titleKey: 'routes.servers.title' } },
-        { path: 'credentials', name: 'credentials', component: ServersPage, meta: { titleKey: 'routes.credentials.title' } },
+        { path: 'servers', name: 'servers', component: ServerNodePage, meta: { titleKey: 'routes.servers.title' } },
+        { path: 'credentials', name: 'credentials', component: ServerCredentialsPage, meta: { titleKey: 'routes.credentials.title' } },
         { path: 'servers/firewall', name: 'server-firewall', component: FirewallPage, meta: { titleKey: 'routes.firewall.title' } },
         { path: 'servers/packages', name: 'system-packages', component: PackageUpdatesPage, meta: { titleKey: 'routes.systemPackages.title' } },
         { path: 'packages', redirect: '/servers/packages' },
@@ -47,11 +52,11 @@ export const router = createRouter({
         { path: 'nomad/nodes', name: 'nomad-nodes', component: NomadNodesPage, meta: { titleKey: 'routes.nomadNodes.title' } },
         { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { titleKey: 'routes.tasks.title' } },
         { path: 'settings', redirect: '/settings/general' },
-        { path: 'settings/general', name: 'settings-general', component: SettingsPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },
-        { path: 'settings/security', name: 'settings-security', component: SettingsPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
-        { path: 'settings/nomad', name: 'settings-nomad', component: SettingsPage, meta: { titleKey: 'routes.settingsNomad.title', settingsCategory: 'nomad' } },
-        { path: 'settings/certificates', name: 'settings-certificates', component: SettingsPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
-        { path: 'settings/system', name: 'settings-system', component: SettingsPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
+        { path: 'settings/general', name: 'settings-general', component: SettingsGeneralPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },
+        { path: 'settings/security', name: 'settings-security', component: SettingsSecurityPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
+        { path: 'settings/nomad', name: 'settings-nomad', component: SettingsNomadPage, meta: { titleKey: 'routes.settingsNomad.title', settingsCategory: 'nomad' } },
+        { path: 'settings/certificates', name: 'settings-certificates', component: SettingsCertificatesPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
+        { path: 'settings/system', name: 'settings-system', component: SettingsSystemPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
       ],
     },
   ],

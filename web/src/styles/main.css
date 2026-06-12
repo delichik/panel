@@ -356,10 +356,25 @@ a {
 }
 
 .page-shell {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--lp-space-5);
+  height: 100%;
+  min-height: 0;
   min-width: 0;
-  align-content: start;
+  overflow: hidden;
+}
+
+.page-shell > * {
+  min-width: 0;
+}
+
+@media (max-width: 760px) {
+  .page-shell {
+    height: auto;
+    min-height: auto;
+    overflow: visible;
+  }
 }
 
 .page-actions,

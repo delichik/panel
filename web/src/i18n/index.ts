@@ -769,6 +769,7 @@ const messages = {
       casHint: "Reusable CAs for signing multiple certificates.",
       certificates: "Certificates",
       certificatesHint: "Certificates signed by a reusable Panel CA.",
+      subjectAltNames: "SAN",
       createCA: "Create CA",
       createCertificate: "Create certificate",
       commonName: "Common name",
@@ -782,6 +783,7 @@ const messages = {
       createFailed: "Unable to create self-signed certificate",
       renewFailed: "Unable to reissue certificate",
       deleteFailed: "Unable to delete certificate",
+      deleteTitle: "Delete certificate",
       deleteConfirm: "Delete certificate {name}? Certificates or CAs that are in use cannot be deleted.",
     },
     keyAssetsPage: {
@@ -1848,6 +1850,7 @@ const messages = {
       casHint: "CA 可以重复用于签发多张证书。",
       certificates: "证书",
       certificatesHint: "由 Panel 自签 CA 签发的证书。",
+      subjectAltNames: "SAN",
       createCA: "创建 CA",
       createCertificate: "创建证书",
       commonName: "通用名称",
@@ -1861,6 +1864,7 @@ const messages = {
       createFailed: "无法创建自签证书",
       renewFailed: "无法重新签发证书",
       deleteFailed: "无法删除证书",
+      deleteTitle: "删除证书",
       deleteConfirm: "删除证书 {name}？正在使用的证书或 CA 不能删除。",
     },
     keyAssetsPage: {
