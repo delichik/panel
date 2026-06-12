@@ -12,6 +12,11 @@ import type { NomadControlPlaneDto, NomadReverseProxyStaticSiteDto, ProjectedNom
 import AppPagination from '@/components/AppPagination.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
+import {
+  buildNomadAddressOptions,
+  type NomadAddressOption,
+  type NomadAddressTarget,
+} from '@/features/nomad/addressOptions';
 
 const router = useRouter();
 const route = useRoute();
@@ -21,14 +26,18 @@ const joining = ref(false);
 const actionLoading = ref('');
 const error = ref('');
 const joinDialog = ref(false);
+const redeployDialog = ref(false);
 const rebuildDialog = ref(false);
 const switchDialog = ref(false);
 const removeDialog = ref(false);
 const selectedServerId = ref('');
+const selectedJoinAddress = ref('');
 const selectedRebuildServerId = ref('');
 const selectedRebuildAddress = ref('');
 const selectedSwitchServerId = ref('');
 const selectedSwitchAddress = ref('');
+const redeployingNode = ref<ProjectedNomadNodeDto | null>(null);
+const selectedRedeployAddress = ref('');
 const removingNode = ref<ProjectedNomadNodeDto | null>(null);
 const operationTaskId = ref('');
 const operationMessage = ref('');
@@ -65,27 +74,42 @@ const rebuildServerOptions = computed(() =>
     value: server.id,
   })),
 );
-const switchServerOptions = computed(() => {
+const switchServerTargets = computed(() => {
   const seen = new Set<string>();
-  const options: Array<{ label: string; value: string }> = [];
+  const targets: Array<NomadAddressTarget & { id: string; name: string; port?: number }> = [];
   for (const server of bootstrapServers.value) {
     seen.add(server.id);
-    options.push({ label: `${server.name} (${server.host}:${server.port})`, value: server.id });
+    targets.push(server);
   }
   for (const node of nodes.value) {
     if (!node.serverId || seen.has(node.serverId)) continue;
     seen.add(node.serverId);
-    options.push({ label: `${node.name || node.serverId} (${node.host || node.serverId})`, value: node.serverId });
+    targets.push({
+      id: node.serverId,
+      name: node.name || node.serverId,
+      host: node.host,
+      traits: node.traits,
+    });
   }
-  return options;
+  return targets;
 });
-const selectedSwitchServer = computed(() => switchServerOptions.value.find((server) => server.value === selectedSwitchServerId.value) ?? null);
-const rebuildAddressOptions = computed(() => networkAddressOptions(selectedRebuildServer.value?.traits));
-const switchAddressOptions = computed(() => {
-  const server = bootstrapServers.value.find((item) => item.id === selectedSwitchServerId.value);
-  return networkAddressOptions(server?.traits);
-});
+const switchServerOptions = computed(() =>
+  switchServerTargets.value.map((server) => ({
+    label: `${server.name} (${server.host || server.id}${server.port ? `:${server.port}` : ''})`,
+    value: server.id,
+  })),
+);
+const selectedSwitchServer = computed(() => switchServerTargets.value.find((server) => server.id === selectedSwitchServerId.value) ?? null);
+const joinAddressOptions = computed(() => labeledAddressOptions(selectedServer.value));
+const redeployAddressOptions = computed(() => labeledAddressOptions(redeployingNode.value));
+const rebuildAddressOptions = computed(() => labeledAddressOptions(selectedRebuildServer.value));
+const switchAddressOptions = computed(() => labeledAddressOptions(selectedSwitchServer.value));
 const removingNodeName = computed(() => removingNode.value?.name || removingNode.value?.nodeId || removingNode.value?.serverId || t('common.unknown'));
+const redeployingNodeName = computed(() => redeployingNode.value?.name || redeployingNode.value?.serverId || t('common.unknown'));
+
+watch(selectedServerId, () => {
+  selectedJoinAddress.value = joinAddressOptions.value[0]?.value ?? '';
+});
 
 watch(selectedSwitchServerId, () => {
   selectedSwitchAddress.value = switchAddressOptions.value[0]?.value ?? '';
@@ -130,9 +154,17 @@ function kindColor(kind?: string) {
   return 'grey';
 }
 
-function openJoinDialog() {
-  selectedServerId.value = candidateServers.value[0]?.id ?? '';
+function openJoinDialog(serverId = '') {
+  selectedServerId.value = serverId || (candidateServers.value[0]?.id ?? '');
+  selectedJoinAddress.value = joinAddressOptions.value[0]?.value ?? '';
   joinDialog.value = true;
+}
+
+function openRedeployDialog(node: ProjectedNomadNodeDto) {
+  if (!node.serverId) return;
+  redeployingNode.value = node;
+  selectedRedeployAddress.value = redeployAddressOptions.value[0]?.value ?? '';
+  redeployDialog.value = true;
 }
 
 function openRebuildDialog() {
@@ -147,15 +179,21 @@ function openSwitchDialog() {
   switchDialog.value = true;
 }
 
-function networkAddressOptions(traits?: Record<string, string> | null) {
-  const options: Array<{ label: string; value: string }> = [];
-  for (const raw of (traits?.['sys.network_interfaces'] || '').split(', ')) {
-    const [name, family, cidr] = raw.split('|');
-    const address = (cidr || '').split('/')[0].trim();
-    if (!name || !address || !['inet', 'inet6'].includes(family)) continue;
-    options.push({ label: `${name} · ${address}`, value: address });
+function labeledAddressOptions(target?: NomadAddressTarget | null) {
+  return buildNomadAddressOptions(target).map((option) => ({
+    ...option,
+    label: nomadAddressOptionLabel(option),
+  }));
+}
+
+function nomadAddressOptionLabel(option: NomadAddressOption) {
+  if (option.source === 'current') {
+    return t('nomadSetupPage.nomadAddressSourceCurrent', { address: option.value });
   }
-  return options;
+  if (option.source === 'ssh') {
+    return t('nomadSetupPage.nomadAddressSourceSsh', { address: option.value });
+  }
+  return t('nomadSetupPage.nomadAddressSourceInterface', { name: option.name || '-', address: option.value });
 }
 
 function canJoinNode(node: ProjectedNomadNodeDto) {
@@ -191,10 +229,13 @@ async function load() {
 }
 
 async function joinSelectedServer() {
-  if (!selectedServerId.value) return;
+  if (!selectedServerId.value || !selectedJoinAddress.value) return;
   joining.value = true;
   try {
-    const result = await nomadApi.joinServer(selectedServerId.value);
+    const result = await nomadApi.joinServer({
+      serverId: selectedServerId.value,
+      advertiseAddress: selectedJoinAddress.value,
+    });
     showTaskMessage(result.taskId, t('nomadNodesPage.joinStarted'));
     joinDialog.value = false;
     error.value = '';
@@ -207,28 +248,19 @@ async function joinSelectedServer() {
   }
 }
 
-async function joinNode(node: ProjectedNomadNodeDto) {
-  if (!node.serverId) return;
-  actionLoading.value = `join:${node.serverId}`;
-  try {
-    const result = await nomadApi.joinServer(node.serverId);
-    showTaskMessage(result.taskId, t('nomadNodesPage.joinStarted'));
-    error.value = '';
-    await load();
-  } catch (err) {
-    clearTaskMessage();
-    error.value = err instanceof Error ? err.message : t('nomadNodesPage.joinFailed');
-  } finally {
-    actionLoading.value = '';
-  }
-}
-
-async function redeployNode(node: ProjectedNomadNodeDto) {
-  if (!node.serverId) return;
+async function redeploySelectedNode() {
+  const node = redeployingNode.value;
+  if (!node?.serverId || !selectedRedeployAddress.value) return;
   actionLoading.value = `redeploy:${node.serverId}`;
   try {
-    const result = await nomadApi.redeployNode({ serverId: node.serverId, role: node.role });
+    const result = await nomadApi.redeployNode({
+      serverId: node.serverId,
+      role: node.role,
+      advertiseAddress: selectedRedeployAddress.value,
+    });
     showTaskMessage(result.taskId, t('nomadNodesPage.redeployStarted'));
+    redeployDialog.value = false;
+    redeployingNode.value = null;
     error.value = '';
     await load();
   } catch (err) {
@@ -428,7 +460,7 @@ onMounted(load);
                   prepend-icon="mdi-account-network"
                   class="text-none"
                   :loading="actionLoading === `join:${node.serverId}`"
-                  @click="joinNode(node)"
+                  @click="openJoinDialog(node.serverId)"
                 >
                   {{ t('nomadNodesPage.join') }}
                 </v-btn>
@@ -440,7 +472,7 @@ onMounted(load);
                   prepend-icon="mdi-refresh"
                   class="text-none"
                   :loading="actionLoading === `redeploy:${node.serverId}`"
-                  @click="redeployNode(node)"
+                  @click="openRedeployDialog(node)"
                 >
                   {{ t('nomadNodesPage.redeploy') }}
                 </v-btn>
@@ -487,6 +519,21 @@ onMounted(load);
             density="comfortable"
             class="mb-4"
           />
+          <v-select
+            v-model="selectedJoinAddress"
+            :items="joinAddressOptions"
+            item-title="label"
+            item-value="value"
+            :label="t('nomadSetupPage.nomadAddress')"
+            :hint="t('nomadSetupPage.nomadAddressHint')"
+            persistent-hint
+            variant="outlined"
+            density="comfortable"
+            class="mb-4"
+          />
+          <v-alert v-if="selectedServer && joinAddressOptions.length === 0" type="warning" variant="tonal" density="compact" class="mb-4">
+            {{ t('nomadSetupPage.noNetworkAddresses') }}
+          </v-alert>
           <div v-if="selectedServer" class="server-preview">
             <div class="font-weight-bold">{{ selectedServer.name }}</div>
             <div class="text-caption text-medium-emphasis">{{ selectedServer.host }}:{{ selectedServer.port }}</div>
@@ -495,7 +542,7 @@ onMounted(load);
         <v-divider />
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="joinDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" :loading="joining" :disabled="!selectedServerId" @click="joinSelectedServer">{{ t('nomadNodesPage.joinNode') }}</v-btn>
+          <v-btn color="primary" variant="flat" class="text-none" :loading="joining" :disabled="!selectedServerId || !selectedJoinAddress" @click="joinSelectedServer">{{ t('nomadNodesPage.joinNode') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -531,11 +578,15 @@ onMounted(load);
             density="comfortable"
             class="mb-4"
           />
+          <v-alert v-if="selectedSwitchServer && switchAddressOptions.length === 0" type="warning" variant="tonal" density="compact" class="mb-4">
+            {{ t('nomadSetupPage.noNetworkAddresses') }}
+          </v-alert>
           <v-alert type="info" variant="tonal" density="compact">
             {{ t('nomadNodesPage.switchServerHint') }}
           </v-alert>
           <div v-if="selectedSwitchServer" class="server-preview mt-4">
-            <div class="font-weight-bold">{{ selectedSwitchServer.label }}</div>
+            <div class="font-weight-bold">{{ selectedSwitchServer.name }}</div>
+            <div class="text-caption text-medium-emphasis">{{ selectedSwitchServer.host || selectedSwitchServer.id }}</div>
           </div>
         </v-card-text>
         <v-divider />
@@ -594,6 +645,45 @@ onMounted(load);
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" @click="rebuildDialog = false">{{ t('common.cancel') }}</v-btn>
           <v-btn color="warning" variant="flat" class="text-none" :loading="actionLoading === 'rebuild-cluster'" :disabled="!selectedRebuildServerId || !selectedRebuildAddress" @click="rebuildSelectedCluster">{{ t('nomadNodesPage.rebuildCluster') }}</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="redeployDialog" width="560">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('nomadNodesPage.redeployNodeTitle') }}</span>
+          <v-btn icon="mdi-close" variant="text" @click="redeployDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          <v-alert type="info" variant="tonal" density="compact" class="mb-4">
+            {{ t('nomadNodesPage.redeployNodeHint') }}
+          </v-alert>
+          <div v-if="redeployingNode" class="server-preview mb-4">
+            <div class="font-weight-bold">{{ redeployingNodeName }}</div>
+            <div class="text-caption text-medium-emphasis">{{ redeployingNode.host || redeployingNode.serverId }}</div>
+          </div>
+          <v-select
+            v-model="selectedRedeployAddress"
+            :items="redeployAddressOptions"
+            item-title="label"
+            item-value="value"
+            :label="t('nomadSetupPage.nomadAddress')"
+            :hint="t('nomadSetupPage.nomadAddressHint')"
+            persistent-hint
+            variant="outlined"
+            density="comfortable"
+            class="mb-4"
+          />
+          <v-alert v-if="redeployingNode && redeployAddressOptions.length === 0" type="warning" variant="tonal" density="compact">
+            {{ t('nomadSetupPage.noNetworkAddresses') }}
+          </v-alert>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" @click="redeployDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="primary" variant="flat" class="text-none" :loading="actionLoading === `redeploy:${redeployingNode?.serverId}`" :disabled="!redeployingNode?.serverId || !selectedRedeployAddress" @click="redeploySelectedNode">{{ t('nomadNodesPage.redeploy') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

@@ -48,6 +48,7 @@ type ProjectedNode struct {
 	NodeID                  string                   `json:"nodeId,omitempty"`
 	Name                    string                   `json:"name"`
 	Host                    string                   `json:"host,omitempty"`
+	Traits                  map[string]string        `json:"traits,omitempty"`
 	Role                    string                   `json:"role"`
 	Status                  string                   `json:"status"`
 	ReverseProxy            bool                     `json:"reverseProxy"`
@@ -132,6 +133,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 				NodeID:                  node.ID,
 				Name:                    firstNonEmpty(node.Name, srv.Name, node.ID),
 				Host:                    firstNonEmpty(node.Address, srv.Host),
+				Traits:                  srv.Traits,
 				Role:                    roleForTask(task),
 				Status:                  firstNonEmpty(node.Status, "unknown"),
 				ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
@@ -147,6 +149,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 				ServerID:                srv.ID,
 				Name:                    firstNonEmpty(srv.Name, srv.ID),
 				Host:                    srv.Host,
+				Traits:                  srv.Traits,
 				Role:                    roleForTask(task),
 				Status:                  projectionStatus(task),
 				ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
@@ -167,6 +170,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 			ServerID:                srv.ID,
 			Name:                    firstNonEmpty(srv.Name, srv.ID),
 			Host:                    srv.Host,
+			Traits:                  srv.Traits,
 			Role:                    roleForTask(task),
 			Status:                  status,
 			ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),

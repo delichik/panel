@@ -192,8 +192,11 @@ func TestRunJoinClientRunsNomadClientScript(t *testing.T) {
 		"find /etc/nomad.d -maxdepth 1 -type f",
 		"-name '*.hcl'",
 		"-name '*.json'",
+		`bind_addr = "0.0.0.0"`,
 		"server {",
 		"enabled = false",
+		"advertise {",
+		`rpc = "10.0.0.12"`,
 		`region = "global"`,
 		"panel_server_id = \"" + srv.ID + "\"",
 		"server_join {",
@@ -405,6 +408,7 @@ func TestBootstrapServerCreatesTaskAndRunsNomadServerScript(t *testing.T) {
 	for _, want := range []string{
 		"server {",
 		"bootstrap_expect = 1",
+		`bind_addr = "0.0.0.0"`,
 		"advertise {",
 		`rpc = "10.0.0.20"`,
 		"client {",
@@ -516,14 +520,51 @@ func TestRedeployClientBypassesManagedCandidateFilter(t *testing.T) {
 	}
 }
 
-func TestRedeployLegacyServerRequiresClusterRebuild(t *testing.T) {
+func TestSaveAdvertiseAddressAllowsSSHHostAddress(t *testing.T) {
+	svc, credSvc, _, _, cleanup := newJoinTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "public worker", "203.0.113.42")
+	traits := map[string]string{}
+	for key, value := range srv.Traits {
+		traits[key] = value
+	}
+	traits["sys.network_interfaces"] = "eth0|inet|10.0.0.42/24"
+	delete(traits, TraitAdvertiseAddress)
+	delete(traits, TraitServerAdvertiseAddress)
+	srv, err := svc.servers.Update(ctx, srv.ID, server.SaveRequest{
+		Name:         srv.Name,
+		Host:         srv.Host,
+		Port:         srv.Port,
+		SSHUsername:  srv.SSHUsername,
+		CredentialID: srv.CredentialID,
+		Traits:       traits,
+		Notes:        srv.Notes,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	saved, err := svc.saveServerAdvertiseAddress(ctx, srv, srv.Host)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if serverAdvertiseAddress(saved) != "203.0.113.42" ||
+		saved.Traits[TraitAdvertiseAddress] != "203.0.113.42" ||
+		saved.Traits[TraitServerAdvertiseAddress] != "203.0.113.42" {
+		t.Fatalf("unexpected saved advertise traits: %#v", saved.Traits)
+	}
+}
+
+func TestRedeployServerRequiresAdvertiseAddressWhenMissing(t *testing.T) {
 	svc, credSvc, _, _, cleanup := newJoinTestService(t)
 	defer cleanup()
 	ctx := context.Background()
 	srv := createJoinTestServer(t, svc.servers, credSvc, ctx, "legacy control", "10.0.0.23")
 	traits := make(map[string]string, len(srv.Traits))
 	for key, value := range srv.Traits {
-		if key != TraitServerAdvertiseAddress {
+		if key != TraitAdvertiseAddress && key != TraitServerAdvertiseAddress {
 			traits[key] = value
 		}
 	}
@@ -536,8 +577,8 @@ func TestRedeployLegacyServerRequiresClusterRebuild(t *testing.T) {
 
 	_, err := svc.RedeployNode(ctx, RedeployNodeInput{ServerID: srv.ID, Role: ProjectedNodeRoleServer})
 	var appErr *panelerr.Error
-	if !errors.As(err, &appErr) || appErr.Code != "nomad_advertise_address_migration_required" {
-		t.Fatalf("expected migration-required validation, got %v", err)
+	if !errors.As(err, &appErr) || appErr.Code != "nomad_advertise_address_invalid" {
+		t.Fatalf("expected invalid advertise validation, got %v", err)
 	}
 }
 

@@ -17,9 +17,9 @@ describe('nomadApi', () => {
     await api.nodes();
     await api.controlPlane();
     await api.joinCandidates();
-    await api.joinServer('srv_1');
+    await api.joinServer({ serverId: 'srv_1', advertiseAddress: '10.0.0.12' });
     await api.bootstrapServer({ serverId: 'srv_1', advertiseAddress: '10.0.0.10' });
-    await api.redeployNode({ serverId: 'srv_1', role: 'server' });
+    await api.redeployNode({ serverId: 'srv_1', role: 'server', advertiseAddress: '10.0.0.10' });
     await api.rebuildCluster({ serverId: 'srv_1', advertiseAddress: '10.0.0.10' });
     await api.switchServer({ serverId: 'srv_1', advertiseAddress: '10.0.0.10' });
     await api.removeNode({ serverId: 'srv_1', nodeId: 'node_1' });
@@ -29,9 +29,9 @@ describe('nomadApi', () => {
     expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/nomad/nodes', expect.objectContaining({ method: 'GET' }));
     expect(fetcher).toHaveBeenNthCalledWith(3, '/api/v1/nomad/control-plane', expect.objectContaining({ method: 'GET' }));
     expect(fetcher).toHaveBeenNthCalledWith(4, '/api/v1/nomad/join-candidates', expect.objectContaining({ method: 'GET' }));
-    expect(fetcher).toHaveBeenNthCalledWith(5, '/api/v1/nomad/join', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1' }) }));
+    expect(fetcher).toHaveBeenNthCalledWith(5, '/api/v1/nomad/join', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', advertiseAddress: '10.0.0.12' }) }));
     expect(fetcher).toHaveBeenNthCalledWith(6, '/api/v1/nomad/bootstrap-server', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', advertiseAddress: '10.0.0.10' }) }));
-    expect(fetcher).toHaveBeenNthCalledWith(7, '/api/v1/nomad/redeploy-node', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', role: 'server' }) }));
+    expect(fetcher).toHaveBeenNthCalledWith(7, '/api/v1/nomad/redeploy-node', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', role: 'server', advertiseAddress: '10.0.0.10' }) }));
     expect(fetcher).toHaveBeenNthCalledWith(8, '/api/v1/nomad/rebuild-cluster', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', advertiseAddress: '10.0.0.10' }) }));
     expect(fetcher).toHaveBeenNthCalledWith(9, '/api/v1/nomad/switch-server', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', advertiseAddress: '10.0.0.10' }) }));
     expect(fetcher).toHaveBeenNthCalledWith(10, '/api/v1/nomad/remove-node', expect.objectContaining({ method: 'POST', body: JSON.stringify({ serverId: 'srv_1', nodeId: 'node_1' }) }));

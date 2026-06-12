@@ -930,6 +930,9 @@ const messages = {
       proxy: "Proxy",
       join: "Join",
       remove: "Remove",
+      redeployNodeTitle: "Redeploy Nomad node",
+      redeployNodeHint:
+        "Choose the Nomad advertise address for this node. Panel will keep bind_addr on 0.0.0.0 and rewrite the agent configuration.",
       removeNodeTitle: "Remove Nomad node",
       removeNodeConfirm: "Remove Nomad node {name}?",
       noProjectedNodes: "No projected Nomad nodes",
@@ -979,9 +982,12 @@ const messages = {
       migrationHint:
         "This cluster was created before explicit Nomad addresses were supported. Select the server and address again. Panel will rebuild managed nodes and restore every enabled application.",
       sshAddress: "SSH management address",
-      nomadAddress: "Nomad network address",
-      nomadAddressHint: "Choose an interface address reachable by every Nomad node.",
-      noNetworkAddresses: "No usable physical interface address was detected. Test the SSH server again before rebuilding.",
+      nomadAddress: "Nomad advertise address",
+      nomadAddressHint: "Choose the SSH host IP or an interface IP that every Nomad node can reach.",
+      nomadAddressSourceCurrent: "Current · {address}",
+      nomadAddressSourceSsh: "SSH · {address}",
+      nomadAddressSourceInterface: "{name} · {address}",
+      noNetworkAddresses: "No usable SSH host IP or physical interface address was detected. Test the SSH server again before continuing.",
       rebuildCluster: "Rebuild and restore applications",
       selectServerTitle: "Select one SSH Server",
       selectServerHint:
@@ -2003,6 +2009,9 @@ const messages = {
       proxy: "代理",
       join: "加入",
       remove: "移除",
+      redeployNodeTitle: "重部署 Nomad 节点",
+      redeployNodeHint:
+        "请选择该节点的 Nomad advertise 地址。Panel 会保持 bind_addr 为 0.0.0.0，并重写 agent 配置。",
       removeNodeTitle: "移除 Nomad 节点",
       removeNodeConfirm: "移除 Nomad 节点 {name}？",
       noProjectedNodes: "暂无投影的 Nomad 节点",
@@ -2015,7 +2024,7 @@ const messages = {
       noSwitchCandidates: "当前没有可切换的 server。",
       rebuildClusterTitle: "重建 Nomad 集群",
       rebuildClusterHint:
-        "Panel 会重置已托管的 Nomad 节点，在所选网卡地址上重新引导单 server 集群，并恢复所有已启用应用。",
+        "Panel 会重置已托管的 Nomad 节点，在所选 advertise 地址上重新引导单 server 集群，并恢复所有已启用应用。",
       noRebuildCandidates: "当前没有可用于重建的 SSH 服务器。",
       sshServer: "SSH 服务器",
       reverseProxyTitle: "反向代理 - {name}",
@@ -2050,11 +2059,14 @@ const messages = {
       rebuildFailed: "无法重建 Nomad 集群",
       migrationTitle: "重建 Nomad 网络配置",
       migrationHint:
-        "该集群创建于显式 Nomad 地址功能之前。请重新选择 server 和网卡地址，Panel 将重建托管节点并恢复所有已启用应用。",
+        "该集群创建于显式 Nomad advertise 地址功能之前。请重新选择 server 和 advertise 地址，Panel 将重建托管节点并恢复所有已启用应用。",
       sshAddress: "SSH 管理地址",
-      nomadAddress: "Nomad 网络地址",
-      nomadAddressHint: "请选择所有 Nomad 节点都能访问的网卡地址。",
-      noNetworkAddresses: "未探测到可用的物理网卡地址。请先重新测试该 SSH 服务器，再执行重建。",
+      nomadAddress: "Nomad advertise 地址",
+      nomadAddressHint: "请选择所有 Nomad 节点都能访问的 SSH host IP 或网卡 IP。",
+      nomadAddressSourceCurrent: "当前 · {address}",
+      nomadAddressSourceSsh: "SSH · {address}",
+      nomadAddressSourceInterface: "{name} · {address}",
+      noNetworkAddresses: "未探测到可用的 SSH host IP 或物理网卡地址。请先重新测试该 SSH 服务器，再继续。",
       rebuildCluster: "重建并恢复应用",
       selectServerTitle: "选择一台 SSH 服务器",
       selectServerHint:

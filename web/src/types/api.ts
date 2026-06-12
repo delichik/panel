@@ -626,6 +626,7 @@ export interface ProjectedNomadNodeDto {
   nodeId?: string;
   name: string;
   host?: string;
+  traits?: Record<string, string>;
   role: ProjectedNomadNodeRole;
   status: ProjectedNomadNodeStatus;
   reverseProxy: boolean;

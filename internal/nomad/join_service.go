@@ -220,6 +220,9 @@ func (s *JoinService) ensureNomadEligible(srv server.Server) (linux.DistroAdapte
 }
 
 func serverAdvertiseAddress(srv server.Server) string {
+	if address := strings.TrimSpace(srv.Traits[TraitAdvertiseAddress]); address != "" {
+		return address
+	}
 	return strings.TrimSpace(srv.Traits[TraitServerAdvertiseAddress])
 }
 
@@ -241,26 +244,66 @@ func serverNetworkAddresses(srv server.Server) []string {
 	return out
 }
 
+func serverHostAddress(srv server.Server) string {
+	host := strings.TrimSpace(srv.Host)
+	if splitHost, _, err := net.SplitHostPort(host); err == nil {
+		host = splitHost
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		return ""
+	}
+	return ip.String()
+}
+
+func serverAdvertiseAddressCandidates(srv server.Server) []string {
+	out := []string{}
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		ip := net.ParseIP(strings.Trim(strings.TrimSpace(value), "[]"))
+		if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+			return
+		}
+		address := ip.String()
+		if _, ok := seen[address]; ok {
+			return
+		}
+		seen[address] = struct{}{}
+		out = append(out, address)
+	}
+	if existing := serverAdvertiseAddress(srv); existing != "" {
+		add(existing)
+	}
+	if host := serverHostAddress(srv); host != "" {
+		add(host)
+	}
+	for _, address := range serverNetworkAddresses(srv) {
+		add(address)
+	}
+	return out
+}
+
 func (s *JoinService) saveServerAdvertiseAddress(ctx context.Context, srv server.Server, raw string) (server.Server, error) {
 	ip := net.ParseIP(strings.Trim(strings.TrimSpace(raw), "[]"))
 	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
-		return server.Server{}, panelerr.Validation("nomad_advertise_address_invalid", "Select a valid Nomad address from the server network interfaces")
+		return server.Server{}, panelerr.Validation("nomad_advertise_address_invalid", "Select a valid Nomad advertise address")
 	}
 	address := ip.String()
 	found := false
-	for _, candidate := range serverNetworkAddresses(srv) {
+	for _, candidate := range serverAdvertiseAddressCandidates(srv) {
 		if sameHost(candidate, address) {
 			found = true
 			break
 		}
 	}
 	if !found {
-		return server.Server{}, panelerr.Validation("nomad_advertise_address_not_detected", "The selected Nomad address was not detected on the server")
+		return server.Server{}, panelerr.Validation("nomad_advertise_address_not_detected", "The selected Nomad address must match a detected server interface or the SSH host address")
 	}
-	traits := make(map[string]string, len(srv.Traits)+1)
+	traits := make(map[string]string, len(srv.Traits)+2)
 	for key, value := range srv.Traits {
 		traits[key] = value
 	}
+	traits[TraitAdvertiseAddress] = address
 	traits[TraitServerAdvertiseAddress] = address
 	return s.servers.Update(ctx, srv.ID, server.SaveRequest{
 		Name:         srv.Name,
@@ -321,13 +364,24 @@ func (s *JoinService) Candidates(ctx context.Context) ([]server.Server, error) {
 	return out, nil
 }
 
-func (s *JoinService) JoinClient(ctx context.Context, serverID string) (tasks.Task, error) {
+func (s *JoinService) JoinClient(ctx context.Context, serverID string, advertiseAddress ...string) (tasks.Task, error) {
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("nomad_join_executor_unavailable", "Nomad client join executor is unavailable")
 	}
+	serverID = strings.TrimSpace(serverID)
 	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
+	}
+	rawAdvertiseAddress := ""
+	if len(advertiseAddress) > 0 {
+		rawAdvertiseAddress = advertiseAddress[0]
+	}
+	if strings.TrimSpace(rawAdvertiseAddress) != "" || serverAdvertiseAddress(srv) == "" {
+		srv, err = s.saveServerAdvertiseAddress(ctx, srv, rawAdvertiseAddress)
+		if err != nil {
+			return tasks.Task{}, err
+		}
 	}
 	adapter, err := s.ensureNomadEligible(srv)
 	if err != nil {
@@ -427,8 +481,11 @@ func (s *JoinService) RedeployNode(ctx context.Context, in RedeployNodeInput) (t
 	if role != ProjectedNodeRoleServer && role != ProjectedNodeRoleClient {
 		return tasks.Task{}, panelerr.Validation("nomad_redeploy_role_required", "Nomad node role is required for redeploy")
 	}
-	if role == ProjectedNodeRoleServer && serverAdvertiseAddress(srv) == "" {
-		return tasks.Task{}, panelerr.Validation("nomad_advertise_address_migration_required", "Rebuild the Nomad cluster with an explicit network address before redeploying the server")
+	if strings.TrimSpace(in.AdvertiseAddress) != "" || serverAdvertiseAddress(srv) == "" {
+		srv, err = s.saveServerAdvertiseAddress(ctx, srv, in.AdvertiseAddress)
+		if err != nil {
+			return tasks.Task{}, err
+		}
 	}
 	taskType := TaskTypeClientJoin
 	summary := "Redeploying Nomad client"
@@ -552,9 +609,15 @@ type RemoveNodeInput struct {
 	NodeID   string `json:"nodeId"`
 }
 
+type JoinClientInput struct {
+	ServerID         string `json:"serverId"`
+	AdvertiseAddress string `json:"advertiseAddress"`
+}
+
 type RedeployNodeInput struct {
-	ServerID string `json:"serverId"`
-	Role     string `json:"role"`
+	ServerID         string `json:"serverId"`
+	Role             string `json:"role"`
+	AdvertiseAddress string `json:"advertiseAddress"`
 }
 
 type BootstrapServerInput struct {
@@ -1273,6 +1336,7 @@ func (s *JoinService) joinConfigScript(srv server.Server, rpc string) string {
 	cfg := s.currentConfig()
 	datacenter := firstNonEmpty(strings.TrimSpace(cfg.Datacenter), "dc1")
 	region := firstNonEmpty(strings.TrimSpace(cfg.Region), "global")
+	advertiseAddress := serverAdvertiseAddress(srv)
 	return fmt.Sprintf(`%s
 %s
 cat >/etc/nomad.d/panel-client.hcl <<'EOF'
@@ -1281,6 +1345,12 @@ region = "%s"
 datacenter = "%s"
 data_dir = "/opt/nomad/data"
 bind_addr = "0.0.0.0"
+
+advertise {
+  http = "%s"
+  rpc = "%s"
+  serf = "%s"
+}
 
 tls {
   http = true
@@ -1315,7 +1385,7 @@ client {
   }
 }
 EOF
-`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), shellEscapeHCL(srv.Host), srv.Port, shellEscapeHCL(srv.SSHUsername), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), shellEscapeHCL(srv.Host), srv.Port, shellEscapeHCL(srv.SSHUsername), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) bootstrapConfigScript(srv server.Server) string {
