@@ -221,6 +221,14 @@ func (f *fakeJoinService) Candidates(context.Context) ([]server.Server, error) {
 	return f.candidates, nil
 }
 
+func (f *fakeJoinService) BuiltinCertificates() ([]BuiltinCertificateInfo, error) {
+	return nil, nil
+}
+
+func (f *fakeJoinService) RotateTLS(context.Context) (tasks.Task, error) {
+	return tasks.Task{ID: "task_rotate"}, nil
+}
+
 func (f *fakeJoinService) ControlPlane(context.Context) (ControlPlane, error) {
 	return f.controlPlane, nil
 }

@@ -18,7 +18,11 @@ type GoRenderer struct{}
 func NewGoRenderer() GoRenderer { return GoRenderer{} }
 
 func (GoRenderer) Render(ctx context.Context, source string, data map[string]any) (string, error) {
-	tpl, err := template.New("resource").Option("missingkey=error").Parse(source)
+	tpl, err := template.New("resource").Funcs(template.FuncMap{
+		"env": func(name string) string {
+			return `{{ env "` + strings.ReplaceAll(name, `"`, `\"`) + `" }}`
+		},
+	}).Option("missingkey=error").Parse(source)
 	if err != nil {
 		return "", panelerr.Validation("template_parse_failed", err.Error())
 	}

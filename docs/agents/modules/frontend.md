@@ -41,7 +41,7 @@
 - 防火墙：`web/src/features/firewall/pages/FirewallPage.vue`
 - 应用：`web/src/features/applications/`
 - DNS 域名与记录：`web/src/features/dns/pages/DomainsPage.vue`；页面左侧选择域名，右侧展示域名详情和 Cloudflare DNS 记录表。
-- 证书：`web/src/features/certificates/pages/CertificatesPage.vue`
+- 证书为一级菜单，包含内置证书、域名证书和自签证书三个二级页面；旧 `/dns/certificates` 重定向到 `/certificates/domains`。
 - Nomad：`web/src/features/nomad/`；只保留设置、加入和节点控制平面入口，不恢复 raw jobs/deployments 清单入口。
 - 任务中心：`web/src/features/tasks/`
 - 设置：`web/src/features/settings/pages/SettingsPage.vue`

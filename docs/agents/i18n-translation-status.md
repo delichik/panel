@@ -35,6 +35,10 @@
   - 共享分页组件的每页条数与总数文案已接入 `web/src/i18n/index.ts`。
 - `web/src/components/PageLoadingState.vue`
   - 共享加载组件文案 `common.loading` 已接入 `web/src/i18n/index.ts`，英文和简体中文均已补齐。
+- `web/src/features/applications/components/ApplicationEditor.vue`
+  - 自定义变量表单、变量插入和 Panel 托管文件挂载文案已接入英文和简体中文。
+- `web/src/features/certificates/`
+  - Nomad 内置证书、域名立即续签、自签 CA/证书管理和危险确认文案已接入英文和简体中文。
 - `web/src/layouts/AppLayout.vue`、`web/src/features/settings/pages/SettingsPage.vue`
   - 当前版本、最新版本弱提示和系统版本字段已接入 `web/src/i18n/index.ts`。
 - raw Nomad jobs/deployments 清单入口已移除，对应页面文案和路由词条不再保留。

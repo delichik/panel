@@ -31,6 +31,7 @@
 - 加入流程：`GET /api/v1/nomad/join-candidates`，`POST /api/v1/nomad/join`
 - 引导、重部署、重建、切换与移除：`POST /api/v1/nomad/bootstrap-server`，`/redeploy-node`，`/rebuild-cluster`，`/switch-server`，`/remove-node`，这些接口返回 `taskId`
 - 反向代理：`PUT /api/v1/nomad/reverse-proxy`，返回更新后的 `server` 和 `taskId`
+- 内置 TLS 证书由证书中心读取和轮换：`GET /api/v1/certificates/builtin`、`POST /api/v1/certificates/builtin/rotate`
 
 ## 行为约定
 
@@ -48,6 +49,8 @@
 - server 引导、server 重部署和集群重建会临时切换 Panel 的 Nomad API 地址；只有 Panel 验证 TCP 4646/API 可达后才保留地址，失败必须回滚到旧地址。
 - server 切换先使用用户选择的 advertise 地址重写并重启目标 server，再验证新 API 地址；验证成功后同步所有 Panel 托管 client 的完整配置，把 `server_join.retry_join` 更新为新 server RPC 地址，补齐 Nomad UFW 规则，逐台重启并确认重新注册。
 - 节点重部署会删除 Panel 托管的旧 Nomad 配置和 TLS 文件，并根据当前运行时设置重新生成完整 server/client 配置；client 重部署使用 Panel 当前选择的 server RPC 地址。
+- Nomad 节点配置的 client meta 同步 Panel 服务器的 ID、名称、SSH host、SSH port 和 SSH username，供应用 allocation 运行时变量解析。
+- 内置证书轮换任务 `nomad_tls_rotate` 会重新生成 CA、agent 和 Panel client 证书，并复用集群重建流程重部署全部托管节点、恢复应用和反向代理。前端必须在执行前明确提示短暂中断风险。
 - 集群重建必须先引导并验证新的单 server 集群，再重置并重新加入其他 Panel 托管节点，最后无条件重新注册数据库中所有 `enabled` 应用并同步反向代理。应用定义、文件、变量和启用状态保存在 Panel 数据库，不能因 Nomad 集群重建丢失。
 - 长耗时流程必须写入任务、步骤和日志。
 - 直接由 goroutine 执行的 Nomad 节点操作创建任务后必须先落 `running` 再返回 `taskId`，避免 Panel 进程中断后任务永久停在 `queued`。

@@ -103,6 +103,45 @@ export interface CertificateIssueDto {
   taskId?: string;
 }
 
+export interface NomadBuiltinCertificateDto {
+  id: string;
+  name: string;
+  kind: string;
+  fingerprint: string;
+  notBefore: string;
+  notAfter: string;
+}
+
+export interface SelfSignedCertificateDto {
+  id: string;
+  parentCaId?: string;
+  kind: 'ca' | 'leaf';
+  name: string;
+  commonName: string;
+  dnsNames: string[];
+  ipAddresses: string[];
+  fingerprint: string;
+  notBefore: string;
+  notAfter: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SelfSignedCAInput {
+  name: string;
+  commonName: string;
+  years: number;
+}
+
+export interface SelfSignedLeafInput {
+  name: string;
+  caId: string;
+  commonName: string;
+  dnsNames: string[];
+  ipAddresses: string[];
+  days: number;
+}
+
 export interface DnsDomainDto {
   id: string;
   name: string;
@@ -283,6 +322,27 @@ export interface ApplicationFileSaveDto {
 
 export interface ApplicationFileDeleteDto {
   path: string;
+}
+
+export interface ApplicationTemplateVariableDto {
+  key: string;
+  category: string;
+  specExpression: string;
+  templateExpression: string;
+}
+
+export interface ApplicationPanelFileDto {
+  id: string;
+  resourceId: string;
+  resourceType: string;
+  name: string;
+  kind: string;
+  source: string;
+}
+
+export interface ApplicationTemplateCatalogDto {
+  variables: ApplicationTemplateVariableDto[];
+  panelFiles: ApplicationPanelFileDto[];
 }
 
 export interface ApplicationSaveSessionBeginDto {

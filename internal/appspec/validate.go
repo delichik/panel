@@ -138,15 +138,18 @@ func Validate(spec Spec) []Issue {
 	for i, mount := range spec.Mounts {
 		mountType := strings.TrimSpace(mount.Type)
 		switch mountType {
-		case "volume", "host", "global", "file", "persistent":
+		case "volume", "host", "global", "file", "panel_file", "persistent":
 		default:
-			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].type", i), Message: "mount type must be volume, host, global, file, or persistent"})
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].type", i), Message: "mount type must be volume, host, global, file, panel_file, or persistent"})
 		}
 		if strings.TrimSpace(mount.Source) == "" && mountType != "persistent" {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "mount source is required"})
 		}
 		if (mountType == "file" || mountType == "persistent") && !validWorkspacePath(mount.Source) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "workspace mount source must be a relative path inside the application workspace"})
+		}
+		if mountType == "panel_file" && !validPanelFileSource(mount.Source) {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "Panel file source is invalid"})
 		}
 		if (mountType == "host" || mountType == "global") && !strings.HasPrefix(mount.Source, "/") {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "host path mount source must be an absolute Linux path"})
@@ -156,6 +159,19 @@ func Validate(spec Spec) []Issue {
 		}
 	}
 	return issues
+}
+
+func validPanelFileSource(value string) bool {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 3 || parts[0] != "certificate" || strings.TrimSpace(parts[1]) == "" {
+		return false
+	}
+	switch parts[2] {
+	case "certificate", "private_key", "public_key", "ca_certificate", "ca_private_key":
+		return true
+	default:
+		return false
+	}
 }
 
 func DecodeYAML(raw string) (Spec, []Issue) {

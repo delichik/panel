@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/applications"
 	"panel/internal/config"
 	"panel/internal/dns"
 	"panel/internal/id"
@@ -35,6 +36,7 @@ type Service struct {
 	tasks            *tasks.Service
 	issuer           string
 	applications     applicationRefresher
+	nomadTLS         *nomad.TLSAssets
 }
 
 type domainResolver interface {
@@ -56,6 +58,10 @@ func NewServiceWithProvider(db *sql.DB, cfg config.Config, provider Provider, ta
 
 func (s *Service) SetApplicationRefresher(refresher applicationRefresher) {
 	s.applications = refresher
+}
+
+func (s *Service) SetNomadTLSAssets(assets *nomad.TLSAssets) {
+	s.nomadTLS = assets
 }
 
 func (s *Service) SetConfigProvider(provider func(config.Config) config.Config) {
@@ -276,12 +282,12 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
-	if err := os.WriteFile(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), 0600); err != nil {
-		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
-		return err
-	}
-	if err := os.WriteFile(cert.PrivateKeyPath, bundle.PrivateKeyPEM, 0600); err != nil {
+	if err := replaceCertificateFiles(
+		cert.CertificatePath,
+		append(bundle.CertificatePEM, bundle.CAChainPEM...),
+		cert.PrivateKeyPath,
+		bundle.PrivateKeyPEM,
+	); err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
 		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
@@ -304,6 +310,82 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 		return s.tasks.Complete(ctx, taskID, "Renewed certificate for "+cert.Domain)
 	}
 	return nil
+}
+
+func replaceCertificateFiles(certificatePath string, certificatePEM []byte, privateKeyPath string, privateKeyPEM []byte) error {
+	certTemp, err := writeCertificateTemp(certificatePath, certificatePEM)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(certTemp)
+	keyTemp, err := writeCertificateTemp(privateKeyPath, privateKeyPEM)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(keyTemp)
+
+	certBackup := certificatePath + ".previous"
+	keyBackup := privateKeyPath + ".previous"
+	_ = os.Remove(certBackup)
+	_ = os.Remove(keyBackup)
+	if err := os.Rename(certificatePath, certBackup); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	certBackedUp := true
+	defer func() {
+		if certBackedUp {
+			_ = os.Rename(certBackup, certificatePath)
+		}
+	}()
+	if err := os.Rename(privateKeyPath, keyBackup); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	keyBackedUp := true
+	defer func() {
+		if keyBackedUp {
+			_ = os.Rename(keyBackup, privateKeyPath)
+		}
+	}()
+	if err := os.Rename(certTemp, certificatePath); err != nil {
+		return err
+	}
+	if err := os.Rename(keyTemp, privateKeyPath); err != nil {
+		_ = os.Remove(certificatePath)
+		return err
+	}
+	certBackedUp = false
+	keyBackedUp = false
+	_ = os.Remove(certBackup)
+	_ = os.Remove(keyBackup)
+	return nil
+}
+
+func writeCertificateTemp(target string, content []byte) (string, error) {
+	file, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".tmp-*")
+	if err != nil {
+		return "", err
+	}
+	tempPath := file.Name()
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if _, err := file.Write(content); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	return tempPath, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]Certificate, error) {
@@ -335,6 +417,11 @@ func (s *Service) Delete(ctx context.Context, certID string) error {
 	cert, err := s.Get(ctx, certID)
 	if err != nil {
 		return err
+	}
+	if used, err := s.certificateInUse(ctx, cert.ID, cert.Domains, cert.VariableName); err != nil {
+		return err
+	} else if used {
+		return panelerr.Conflict("certificate_in_use", "Certificate is still used by an application or reverse proxy")
 	}
 	res, err := s.db.ExecContext(ctx, `DELETE FROM certificates WHERE id=?`, certID)
 	if err != nil {
@@ -373,12 +460,150 @@ func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) 
 			return nil, err
 		}
 		certVars[cert.VariableName] = map[string]any{
-			"certificatePem": string(certPEM),
-			"privateKeyPem":  string(keyPEM),
-			"domains":        append([]string(nil), cert.Domains...),
+			"certificatePem":  string(certPEM),
+			"privateKeyPem":   string(keyPEM),
+			"certificate_pem": string(certPEM),
+			"private_key_pem": string(keyPEM),
+			"domains":         append([]string(nil), cert.Domains...),
 		}
 	}
 	return map[string]any{"certs": certVars}, nil
+}
+
+func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error) {
+	out := []applications.PanelFileDefinition{}
+	certs, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, cert := range certs {
+		if cert.Status != StatusIssued {
+			continue
+		}
+		out = append(out,
+			applications.PanelFileDefinition{ID: cert.ID + ":certificate", ResourceID: cert.ID, ResourceType: "acme", Name: cert.Name, Kind: "certificate", Source: "certificate:" + cert.ID + ":certificate"},
+			applications.PanelFileDefinition{ID: cert.ID + ":private_key", ResourceID: cert.ID, ResourceType: "acme", Name: cert.Name, Kind: "private_key", Source: "certificate:" + cert.ID + ":private_key"},
+		)
+	}
+	selfSigned, err := s.ListSelfSigned(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, cert := range selfSigned {
+		out = append(out,
+			applications.PanelFileDefinition{ID: cert.ID + ":certificate", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "certificate", Source: "certificate:" + cert.ID + ":certificate"},
+			applications.PanelFileDefinition{ID: cert.ID + ":private_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "private_key", Source: "certificate:" + cert.ID + ":private_key"},
+			applications.PanelFileDefinition{ID: cert.ID + ":public_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "public_key", Source: "certificate:" + cert.ID + ":public_key"},
+		)
+	}
+	if s.nomadTLS != nil {
+		out = append(out,
+			applications.PanelFileDefinition{ID: "nomad_ca:certificate", ResourceID: "nomad_ca", ResourceType: "nomad_builtin", Name: "Nomad CA", Kind: "certificate", Source: "certificate:nomad_ca:certificate"},
+			applications.PanelFileDefinition{ID: "nomad_agent:certificate", ResourceID: "nomad_agent", ResourceType: "nomad_builtin", Name: "Nomad agent", Kind: "certificate", Source: "certificate:nomad_agent:certificate"},
+			applications.PanelFileDefinition{ID: "nomad_panel_client:certificate", ResourceID: "nomad_panel_client", ResourceType: "nomad_builtin", Name: "Panel Nomad client", Kind: "certificate", Source: "certificate:nomad_panel_client:certificate"},
+		)
+	}
+	return out, nil
+}
+
+func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
+	parts := strings.Split(strings.TrimSpace(source), ":")
+	if len(parts) != 3 || parts[0] != "certificate" {
+		return nil, panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
+	}
+	if data, ok := s.readNomadPanelFile(parts[1], parts[2]); ok {
+		return data, nil
+	}
+	if cert, err := s.Get(ctx, parts[1]); err == nil {
+		switch parts[2] {
+		case "certificate":
+			return os.ReadFile(cert.CertificatePath)
+		case "private_key":
+			return os.ReadFile(cert.PrivateKeyPath)
+		}
+	}
+	cert, err := s.GetSelfSigned(ctx, parts[1])
+	if err != nil {
+		return nil, panelerr.NotFound("Panel certificate file")
+	}
+	certPath, keyPath, publicPath := s.selfSignedPaths(cert.ID)
+	switch parts[2] {
+	case "certificate":
+		return os.ReadFile(certPath)
+	case "private_key":
+		return os.ReadFile(keyPath)
+	case "public_key":
+		return os.ReadFile(publicPath)
+	default:
+		return nil, panelerr.Validation("panel_file_kind_invalid", "Panel certificate file kind is invalid")
+	}
+}
+
+func (s *Service) readNomadPanelFile(resourceID, kind string) ([]byte, bool) {
+	if s.nomadTLS == nil || kind != "certificate" {
+		return nil, false
+	}
+	switch resourceID {
+	case "nomad_ca":
+		return append([]byte(nil), s.nomadTLS.CAPEM...), true
+	case "nomad_agent":
+		return append([]byte(nil), s.nomadTLS.AgentCertPEM...), true
+	case "nomad_panel_client":
+		return append([]byte(nil), s.nomadTLS.ClientCertPEM...), true
+	default:
+		return nil, false
+	}
+}
+
+func (s *Service) certificateInUse(ctx context.Context, certID string, domains []string, variableName string) (bool, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT spec_yaml,reverse_proxy_json FROM applications`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	sourcePrefix := "certificate:" + certID + ":"
+	for rows.Next() {
+		var spec, proxy string
+		if err := rows.Scan(&spec, &proxy); err != nil {
+			return false, err
+		}
+		if strings.Contains(spec, sourcePrefix) {
+			return true, nil
+		}
+		if variableName != "" && strings.Contains(spec, ".certs."+variableName) {
+			return true, nil
+		}
+		var rules []struct {
+			Domain string `json:"domain"`
+		}
+		_ = json.Unmarshal([]byte(proxy), &rules)
+		for _, rule := range rules {
+			for _, domain := range domains {
+				if certificateDomainMatches(domain, rule.Domain) {
+					return true, nil
+				}
+			}
+		}
+	}
+	return false, rows.Err()
+}
+
+func certificateDomainMatches(pattern, domain string) bool {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	if pattern == "" || domain == "" {
+		return false
+	}
+	if pattern == domain {
+		return true
+	}
+	if strings.HasPrefix(pattern, "*.") {
+		suffix := strings.TrimPrefix(pattern, "*")
+		if strings.HasSuffix(domain, suffix) && domain != strings.TrimPrefix(suffix, ".") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.ReverseProxyCertificate, error) {
@@ -404,6 +629,29 @@ func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.Reverse
 			Domains:        append([]string(nil), cert.Domains...),
 			CertificatePEM: string(certPEM),
 			PrivateKeyPEM:  string(keyPEM),
+		})
+	}
+	selfSigned, err := s.ListSelfSigned(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, cert := range selfSigned {
+		if cert.Kind != "leaf" {
+			continue
+		}
+		certPath, keyPath, _ := s.selfSignedPaths(cert.ID)
+		certPEM, err := os.ReadFile(certPath)
+		if err != nil {
+			return nil, err
+		}
+		keyPEM, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, err
+		}
+		domains := append(append([]string(nil), cert.DNSNames...), cert.IPAddresses...)
+		out = append(out, nomad.ReverseProxyCertificate{
+			ID: cert.ID, Domains: domains,
+			CertificatePEM: string(certPEM), PrivateKeyPEM: string(keyPEM),
 		})
 	}
 	return out, nil

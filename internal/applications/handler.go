@@ -32,6 +32,16 @@ type applicationService interface {
 	Restart(ctx context.Context, id string) (OperationResult, error)
 	Runtime(ctx context.Context, id string) (ApplicationRuntime, error)
 	Logs(ctx context.Context, id string, in LogInput) (LogResult, error)
+	TemplateCatalog(ctx context.Context) (TemplateCatalog, error)
+}
+
+func (h *Handler) TemplateCatalog(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.TemplateCatalog(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
 }
 
 type Handler struct {

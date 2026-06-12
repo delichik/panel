@@ -415,6 +415,27 @@ func TestPersistentMountAddsFixedApplicationBindMount(t *testing.T) {
 	}
 }
 
+func TestPanelFileMountCreatesReadOnlyNomadTemplate(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+	svc.SetPanelFileProvider(fakePanelFileProvider{content: []byte("CERTIFICATE")})
+
+	if _, err := svc.Create(context.Background(), SaveInput{
+		Name: "tls", Enabled: true,
+		SpecYAML: "name: tls\nimage: nginx\nmounts:\n  - type: panel_file\n    source: certificate:cert_1:certificate\n    target: /etc/tls/cert.pem\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	task := fake.registeredJob.TaskGroups[0].Tasks[0]
+	if len(task.Templates) != 1 || task.Templates[0].EmbeddedTmpl != "CERTIFICATE" || task.Templates[0].ChangeMode != "restart" {
+		t.Fatalf("templates = %#v", task.Templates)
+	}
+	mounts := existingMounts(task.Config["mounts"])
+	if len(mounts) != 1 || mounts[0]["target"] != "/etc/tls/cert.pem" || mounts[0]["readonly"] != true {
+		t.Fatalf("mounts = %#v", mounts)
+	}
+}
+
 func TestDefaultDeploymentTargetsAllNomadClients(t *testing.T) {
 	svc, fake, closeStore := newTestService(t)
 	defer closeStore()
@@ -827,4 +848,16 @@ type fakeBuiltinResolver map[string]any
 
 func (f fakeBuiltinResolver) BuiltinVariables(ctx context.Context) (map[string]any, error) {
 	return map[string]any(f), nil
+}
+
+type fakePanelFileProvider struct {
+	content []byte
+}
+
+func (f fakePanelFileProvider) PanelFileCatalog(context.Context) ([]PanelFileDefinition, error) {
+	return []PanelFileDefinition{{ID: "cert_1:certificate", ResourceID: "cert_1", ResourceType: "test", Name: "test", Kind: "certificate", Source: "certificate:cert_1:certificate"}}, nil
+}
+
+func (f fakePanelFileProvider) ReadPanelFile(context.Context, string) ([]byte, error) {
+	return append([]byte(nil), f.content...), nil
 }

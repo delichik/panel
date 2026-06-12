@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, nextTick, reactive, ref, watch } from 'vue';
 import {
   t,
   translateApplicationFileKind,
@@ -7,7 +7,7 @@ import {
 } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
-import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ServerDto } from '@/types/api';
+import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationPanelFileDto, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ApplicationTemplateVariableDto, ServerDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
 
@@ -16,8 +16,9 @@ const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
 
 interface PortForm { label: string; to: number; static: number | null }
 interface EnvForm { key: string; value: string }
-type MountType = 'volume' | 'host' | 'file' | 'persistent';
+type MountType = 'volume' | 'host' | 'file' | 'panel_file' | 'persistent';
 interface MountForm { type: MountType; source: string; target: string; readOnly: boolean }
+interface VariableForm { key: string; value: string }
 interface EditorFile {
   id: string;
   path: string;
@@ -44,11 +45,15 @@ const specForm = reactive({
   mounts: [] as MountForm[],
 });
 const activeTab = ref('container');
-const variablesText = ref('{}');
+const variableRows = ref<VariableForm[]>([]);
 const loading = ref('');
 const error = ref('');
 const servers = ref<ServerDto[]>([]);
 const files = ref<EditorFile[]>([]);
+const templateVariables = ref<ApplicationTemplateVariableDto[]>([]);
+const panelFiles = ref<ApplicationPanelFileDto[]>([]);
+const templateTextarea = ref();
+const yamlTextarea = ref();
 const fileForm = reactive({
   path: 'config/app.conf',
   kind: 'template' as ApplicationFileKind,
@@ -80,11 +85,12 @@ watch(() => props.open, (open) => {
   form.deploymentServers = [...(app?.deploymentServers ?? [])];
   form.reverseProxy = cloneReverseProxy(app?.reverseProxy ?? []);
   loadSpecForm(form.specYaml, app?.name);
-  variablesText.value = JSON.stringify(form.variables, null, 2);
+  variableRows.value = Object.entries(form.variables).map(([key, value]) => ({ key, value }));
   error.value = '';
   activeTab.value = 'container';
   files.value = [];
   void loadServers();
+  void loadTemplateCatalog();
   if (app) void loadFiles(app.id);
 }, { immediate: true });
 
@@ -148,7 +154,7 @@ function loadSpecForm(raw: string, appName?: string) {
     const mount = objectValue(item);
     const type = stringValue(mount?.type) as MountType;
     return {
-      type: ['volume', 'host', 'file', 'persistent'].includes(type) ? type : 'volume',
+      type: ['volume', 'host', 'file', 'panel_file', 'persistent'].includes(type) ? type : 'volume',
       source: stringValue(mount?.source),
       target: stringValue(mount?.target) || '/data',
       readOnly: Boolean(mount?.readOnly),
@@ -164,6 +170,10 @@ function addEnv() {
   specForm.env.push({ key: '', value: '' });
 }
 
+function addVariable() {
+  variableRows.value.push({ key: '', value: '' });
+}
+
 function addMount(type: MountType = 'volume') {
   specForm.mounts.push({ type, source: defaultMountSource(type), target: '/data', readOnly: false });
 }
@@ -171,6 +181,7 @@ function addMount(type: MountType = 'volume') {
 function defaultMountSource(type: MountType) {
   if (type === 'host') return '/srv/app';
   if (type === 'file') return files.value[0]?.path ?? 'config/app.conf';
+  if (type === 'panel_file') return panelFiles.value[0]?.source ?? '';
   if (type === 'persistent') return '';
   return `${specForm.name || 'app'}-data`;
 }
@@ -217,6 +228,43 @@ async function loadServers() {
   } catch {
     servers.value = [];
   }
+}
+
+async function loadTemplateCatalog() {
+  try {
+    const catalog = await applicationsApi.templateCatalog();
+    templateVariables.value = catalog.variables ?? [];
+    panelFiles.value = catalog.panelFiles ?? [];
+  } catch {
+    templateVariables.value = [];
+    panelFiles.value = [];
+  }
+}
+
+function variableItems(target: 'spec' | 'template') {
+  const builtins = templateVariables.value.map((item) => ({
+    title: item.key,
+    value: target === 'spec' ? item.specExpression : item.templateExpression,
+  }));
+  const custom = variableRows.value
+    .filter((item) => item.key.trim())
+    .map((item) => ({ title: `vars.${item.key.trim()}`, value: `{{ .vars.${item.key.trim()} }}` }));
+  return [...builtins, ...custom];
+}
+
+async function insertVariable(target: 'spec' | 'template', expression: string) {
+  const component = target === 'spec' ? yamlTextarea.value : templateTextarea.value;
+  const textarea = component?.$el?.querySelector?.('textarea') as HTMLTextAreaElement | undefined;
+  const current = target === 'spec' ? form.specYaml : fileForm.template;
+  const start = textarea?.selectionStart ?? current.length;
+  const end = textarea?.selectionEnd ?? start;
+  const next = current.slice(0, start) + expression + current.slice(end);
+  if (target === 'spec') form.specYaml = next;
+  else fileForm.template = next;
+  await nextTick();
+  const nextTextarea = component?.$el?.querySelector?.('textarea') as HTMLTextAreaElement | undefined;
+  nextTextarea?.focus();
+  nextTextarea?.setSelectionRange(start + expression.length, start + expression.length);
 }
 
 function toEditorFile(file: ApplicationFileDto): EditorFile {
@@ -495,7 +543,9 @@ function readInput(): ApplicationSaveDto {
     name: form.name,
     enabled: form.enabled,
     specYaml: form.specYaml,
-    variables: variablesText.value.trim() ? JSON.parse(variablesText.value) : {},
+    variables: Object.fromEntries(variableRows.value
+      .filter((item) => item.key.trim())
+      .map((item) => [item.key.trim(), item.value])),
     persistentPath: '',
     deploymentMode: form.deploymentMode || 'all',
     deploymentServers: form.deploymentMode === 'selected' ? [...(form.deploymentServers ?? [])] : [],
@@ -699,7 +749,13 @@ async function save(deploy = false) {
               </v-window-item>
 
               <v-window-item value="files">
-                <v-textarea v-model="variablesText" :label="t('applicationEditor.variablesJson')" variant="outlined" rows="4" spellcheck="false" class="mono-input mb-4" />
+                <div class="section-title">{{ t('applicationEditor.variables') }}</div>
+                <div v-for="(item, index) in variableRows" :key="index" class="repeat-row variable-row">
+                  <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
+                  <v-text-field v-model="item.value" :label="t('common.value')" density="compact" variant="outlined" hide-details />
+                  <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(variableRows, index)" />
+                </div>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none mb-4" @click="addVariable">{{ t('common.addVariable') }}</v-btn>
 
                 <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
                 <div class="file-form">
@@ -719,6 +775,7 @@ async function save(deploy = false) {
                   />
                   <v-textarea
                     v-if="fileForm.kind === 'template'"
+                    ref="templateTextarea"
                     v-model="fileForm.template"
                     :label="t('applicationEditor.template')"
                     rows="7"
@@ -726,6 +783,14 @@ async function save(deploy = false) {
                     spellcheck="false"
                     class="mono-input span-all"
                   />
+                  <v-menu v-if="fileForm.kind === 'template'">
+                    <template #activator="{ props: menuProps }">
+                      <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none span-all">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                    </template>
+                    <v-list density="compact">
+                      <v-list-item v-for="item in variableItems('template')" :key="item.title" :title="item.title" @click="insertVariable('template', item.value)" />
+                    </v-list>
+                  </v-menu>
                   <v-file-input
                     v-else
                     v-model="fileForm.file"
@@ -758,6 +823,7 @@ async function save(deploy = false) {
                     { title: t('applicationEditor.dockerVolume'), value: 'volume' },
                     { title: t('applicationEditor.hostPath'), value: 'host' },
                     { title: t('applicationEditor.appFile'), value: 'file' },
+                    { title: t('applicationEditor.panelFile'), value: 'panel_file' },
                     { title: t('applicationEditor.persistent'), value: 'persistent' },
                   ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
                   <v-combobox
@@ -765,6 +831,17 @@ async function save(deploy = false) {
                     v-model="mount.source"
                     :items="files.map(file => file.path)"
                     :label="t('applicationEditor.workspaceFile')"
+                    density="compact"
+                    variant="outlined"
+                    hide-details
+                  />
+                  <v-select
+                    v-else-if="mount.type === 'panel_file'"
+                    v-model="mount.source"
+                    :items="panelFiles"
+                    item-value="source"
+                    :item-title="item => `${item.name} / ${item.kind}`"
+                    :label="t('applicationEditor.panelFile')"
                     density="compact"
                     variant="outlined"
                     hide-details
@@ -786,12 +863,21 @@ async function save(deploy = false) {
                   <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
                   <v-btn size="small" variant="outlined" prepend-icon="mdi-folder" class="text-none" @click="addMount('host')">{{ t('applicationEditor.hostPath') }}</v-btn>
                   <v-btn size="small" variant="outlined" prepend-icon="mdi-file" class="text-none" @click="addMount('file')">{{ t('applicationEditor.appFile') }}</v-btn>
+                  <v-btn size="small" variant="outlined" prepend-icon="mdi-shield-key" class="text-none" @click="addMount('panel_file')">{{ t('applicationEditor.panelFile') }}</v-btn>
                   <v-btn size="small" variant="outlined" prepend-icon="mdi-database" class="text-none" @click="addMount('persistent')">{{ t('applicationEditor.persistent') }}</v-btn>
                 </div>
               </v-window-item>
 
               <v-window-item value="yaml">
-                <v-textarea v-model="form.specYaml" :label="t('applicationEditor.yamlSpec')" variant="outlined" rows="22" spellcheck="false" class="mono-input" />
+                <v-textarea ref="yamlTextarea" v-model="form.specYaml" :label="t('applicationEditor.yamlSpec')" variant="outlined" rows="22" spellcheck="false" class="mono-input" />
+                <v-menu>
+                  <template #activator="{ props: menuProps }">
+                    <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none mt-2">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                  </template>
+                  <v-list density="compact">
+                    <v-list-item v-for="item in variableItems('spec')" :key="item.title" :title="item.title" @click="insertVariable('spec', item.value)" />
+                  </v-list>
+                </v-menu>
               </v-window-item>
             </v-window>
         </div>
@@ -824,6 +910,7 @@ async function save(deploy = false) {
 .env-row { grid-template-columns: minmax(0, 1fr); }
 .mount-row { grid-template-columns: minmax(0, 1fr); }
 .mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
+.variable-row { grid-template-columns: minmax(180px, 0.4fr) minmax(0, 1fr) 40px; }
 .proxy-rule { border: 1px solid var(--lp-border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
 .network-actions,
 .proxy-actions { display: flex; justify-content: flex-start; margin-bottom: 10px; }
@@ -859,4 +946,5 @@ async function save(deploy = false) {
     flex: 1 1 100%;
   }
 }
+
 </style>

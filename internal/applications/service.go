@@ -55,6 +55,7 @@ type Service struct {
 	configProvider  func() Config
 	renderer        templatex.Renderer
 	builtinResolver BuiltinVariableResolver
+	panelFiles      PanelFileProvider
 	proxyReconciler ReverseProxyReconciler
 	imageResolver   ImageDigestResolver
 	sessionMu       sync.Mutex
@@ -91,6 +92,11 @@ type PackageResult struct {
 
 type BuiltinVariableResolver interface {
 	BuiltinVariables(ctx context.Context) (map[string]any, error)
+}
+
+type PanelFileProvider interface {
+	PanelFileCatalog(ctx context.Context) ([]PanelFileDefinition, error)
+	ReadPanelFile(ctx context.Context, source string) ([]byte, error)
 }
 
 type ReverseProxyReconciler interface {
@@ -174,6 +180,28 @@ func (s *Service) currentConfig() Config {
 
 func (s *Service) SetBuiltinVariableResolver(resolver BuiltinVariableResolver) {
 	s.builtinResolver = resolver
+}
+
+func (s *Service) SetPanelFileProvider(provider PanelFileProvider) {
+	s.panelFiles = provider
+}
+
+func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) {
+	catalog := TemplateCatalog{Variables: []TemplateVariableDefinition{
+		{Key: "server.id", Category: "server", SpecExpression: "${node.meta.panel_server_id}", TemplateExpression: `{{ env "PANEL_SERVER_ID" }}`},
+		{Key: "server.name", Category: "server", SpecExpression: "${node.meta.panel_server_name}", TemplateExpression: `{{ env "PANEL_SERVER_NAME" }}`},
+		{Key: "server.ssh_host", Category: "server", SpecExpression: "${node.meta.panel_ssh_host}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_HOST" }}`},
+		{Key: "server.ssh_port", Category: "server", SpecExpression: "${node.meta.panel_ssh_port}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_PORT" }}`},
+		{Key: "server.ssh_username", Category: "server", SpecExpression: "${node.meta.panel_ssh_username}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_USERNAME" }}`},
+	}}
+	if s.panelFiles != nil {
+		files, err := s.panelFiles.PanelFileCatalog(ctx)
+		if err != nil {
+			return TemplateCatalog{}, err
+		}
+		catalog.PanelFiles = files
+	}
+	return catalog, nil
 }
 
 func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
@@ -1047,6 +1075,7 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 		issues = append(issues, ValidationIssue{Field: issue.Field, Message: issue.Message})
 	}
 	if len(issues) == 0 {
+		injectNodeVariableEnv(&job)
 		job, err = s.attachFiles(ctx, job, spec, files, data)
 		if err != nil {
 			return nomad.Job{}, nil, err
@@ -1402,6 +1431,29 @@ func (s *Service) attachFiles(ctx context.Context, job nomad.Job, spec appspec.S
 	var decodeScript strings.Builder
 	initTemplates := []nomad.Template{}
 	for _, mount := range fileMounts {
+		if strings.TrimSpace(mount.Type) == "panel_file" {
+			if s.panelFiles == nil {
+				return nomad.Job{}, panelerr.Validation("panel_file_provider_unavailable", "Panel managed file provider is unavailable")
+			}
+			content, err := s.panelFiles.ReadPanelFile(ctx, mount.Source)
+			if err != nil {
+				return nomad.Job{}, err
+			}
+			rel := panelFileAllocationName(mount.Source)
+			mainTask.Templates = append(mainTask.Templates, nomad.Template{
+				EmbeddedTmpl: string(content),
+				DestPath:     "${NOMAD_ALLOC_DIR}/panel-files/" + rel,
+				Perms:        panelFilePerms(mount.Source),
+				ChangeMode:   "restart",
+			})
+			mounts = append(mounts, map[string]any{
+				"type":     "bind",
+				"source":   applicationFileAllocMountSource(rel),
+				"target":   mount.Target,
+				"readonly": true,
+			})
+			continue
+		}
 		rel, err := normalizeApplicationWorkspacePath(mount.Source)
 		if err != nil {
 			return nomad.Job{}, err
@@ -1975,11 +2027,46 @@ func specUsesPersistentMount(spec appspec.Spec) bool {
 func applicationFileMounts(mounts []appspec.Mount) []appspec.Mount {
 	out := make([]appspec.Mount, 0, len(mounts))
 	for _, mount := range mounts {
-		if strings.TrimSpace(mount.Type) == "file" {
+		if mountType := strings.TrimSpace(mount.Type); mountType == "file" || mountType == "panel_file" {
 			out = append(out, mount)
 		}
 	}
 	return out
+}
+
+func injectNodeVariableEnv(job *nomad.Job) {
+	values := map[string]string{
+		"PANEL_SERVER_ID":           "${node.meta.panel_server_id}",
+		"PANEL_SERVER_NAME":         "${node.meta.panel_server_name}",
+		"PANEL_SERVER_SSH_HOST":     "${node.meta.panel_ssh_host}",
+		"PANEL_SERVER_SSH_PORT":     "${node.meta.panel_ssh_port}",
+		"PANEL_SERVER_SSH_USERNAME": "${node.meta.panel_ssh_username}",
+	}
+	for groupIndex := range job.TaskGroups {
+		for taskIndex := range job.TaskGroups[groupIndex].Tasks {
+			task := &job.TaskGroups[groupIndex].Tasks[taskIndex]
+			if task.Env == nil {
+				task.Env = map[string]string{}
+			}
+			for key, value := range values {
+				if _, exists := task.Env[key]; !exists {
+					task.Env[key] = value
+				}
+			}
+		}
+	}
+}
+
+func panelFileAllocationName(source string) string {
+	sum := sha256.Sum256([]byte(source))
+	return "managed/" + hex.EncodeToString(sum[:8]) + ".pem"
+}
+
+func panelFilePerms(source string) string {
+	if strings.HasSuffix(source, ":private_key") || strings.HasSuffix(source, ":ca_private_key") {
+		return "0600"
+	}
+	return "0644"
 }
 
 func applicationFileAllocMountSource(rel string) string {

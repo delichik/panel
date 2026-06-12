@@ -18,7 +18,9 @@
 ## 前端入口
 
 - DNS 域名与记录页面：`web/src/features/dns/pages/DomainsPage.vue`
-- 证书页面：`web/src/features/certificates/pages/CertificatesPage.vue`
+- 域名证书页面：`web/src/features/certificates/pages/CertificatesPage.vue`
+- Nomad 内置证书：`web/src/features/certificates/pages/BuiltinCertificatesPage.vue`
+- 自签证书：`web/src/features/certificates/pages/SelfSignedCertificatesPage.vue`
 - 证书设置：`web/src/features/settings/pages/SettingsPage.vue`
 - API：`web/src/api/dns.ts`、`web/src/api/certificates.ts`
 - 类型：`web/src/types/api.ts`
@@ -28,6 +30,9 @@
 - DNS 域名：`GET/POST /api/v1/dns/domains`，`PUT/DELETE /api/v1/dns/domains/{id}`
 - DNS 记录：`GET/POST /api/v1/dns/domains/{id}/records`，`PUT/DELETE /api/v1/dns/domains/{id}/records/{recordId}`；当前只支持 Cloudflare，记录不落本地库，实时读写 Cloudflare。
 - 证书：`GET/POST /api/v1/certificates`，`DELETE /api/v1/certificates/{id}`
+- 域名证书立即续签：`POST /api/v1/certificates/{id}/renew`
+- Nomad 内置证书：`GET /api/v1/certificates/builtin`，`POST /api/v1/certificates/builtin/rotate`
+- 自签证书：`GET/POST /api/v1/self-signed-certificates`，`POST /api/v1/self-signed-cas`，`POST /api/v1/self-signed-certificates/{id}/renew`，`DELETE /api/v1/self-signed-certificates/{id}`
 - 证书默认值和 ACME 目录通过运行时设置读写：`GET/PUT /api/v1/settings/runtime`
 
 ## 数据与行为约定
@@ -38,6 +43,11 @@
 - ACME 签发会创建 DNS-01 challenge，等待 DNS 传播后完成签发；一旦 challenge 记录已创建，后续等待、授权或签发失败也必须尝试清理 DNS 记录。
 - 通配符证书会展开需要的域名集合；签发成功后写入证书路径、私钥路径、有效期和续签时间。
 - 证书可注册为应用内置变量，并被应用模块和 Nomad 反向代理读取。
+- 新变量字段使用 `certificate_pem`、`private_key_pem` 蛇形名称；alpha 兼容期继续解析旧驼峰字段。
+- 自签 CA 可以重复签发叶子证书；叶子证书支持 DNS/IP SAN，并保存证书、私钥和公钥。
+- CA 有子证书时禁止删除；域名证书或自签证书被应用 `panel_file` 或反向代理使用时禁止删除。
+- Nomad 内置证书不能删除，只能高风险重新生成。重新生成会轮换 CA/agent/Panel client 证书并自动重建托管 Nomad 集群。
+- 域名续签和自签叶子重新签发成功后会重新部署受影响应用并同步反向代理；失败时保留上一份可用文件。
 - 签发、失败和续签应记录任务日志；第三方错误文本是否翻译需要按 i18n 指南评估。
 - 证书签发接口返回 `taskId`，前端签发成功后必须提供任务中心入口。
 - 自动续期失败必须写入证书 `lastError`，并记录失败的 `certificate_renew` 任务；续期失败不应清除仍然可用的既有证书文件。

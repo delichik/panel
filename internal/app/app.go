@@ -110,12 +110,14 @@ func New(cfg config.Config) (*App, error) {
 		return applications.Config{Namespace: runtime.Namespace, Region: runtime.Region, Datacenter: runtime.Datacenter}
 	})
 	nomadJoinSvc := nomad.NewJoinService(serverSvc, nomadClient, executor, taskSvc, runtimeNomad, nomadTLS)
+	nomadJoinSvc.SetDataRoot(cfg.DataRoot)
 	nomadJoinSvc.SetConfigProvider(settingsSvc.NomadConfig)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
 	dnsSvc := dns.NewService(store.AppDB())
 	certSvc := certs.NewService(store.AppDB(), cfg, dnsSvc, taskSvc)
+	certSvc.SetNomadTLSAssets(nomadTLS)
 	certSvc.SetConfigProvider(settingsSvc.ApplyToConfig)
 	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
 	sched.SetCertificateRenewer(certSvc)
@@ -125,6 +127,7 @@ func New(cfg config.Config) (*App, error) {
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched, system: systemSvc}
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
+	applicationSvc.SetPanelFileProvider(certSvc)
 	applicationSvc.SetReverseProxyReconciler(nomadJoinSvc)
 	nomadJoinSvc.SetApplicationProxySource(applicationSvc)
 	nomadJoinSvc.SetEnabledApplicationRestorer(applicationSvc)
@@ -190,8 +193,20 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			certH.List(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/certificates":
 			certH.Issue(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/certificates/") && strings.HasSuffix(path, "/renew"):
+			certH.Renew(w, r)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/certificates/"):
 			certH.Delete(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/self-signed-certificates":
+			certH.ListSelfSigned(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/self-signed-cas":
+			certH.CreateSelfSignedCA(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/self-signed-certificates":
+			certH.CreateSelfSignedLeaf(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/self-signed-certificates/") && strings.HasSuffix(path, "/renew"):
+			certH.RenewSelfSignedLeaf(w, r)
+		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/self-signed-certificates/"):
+			certH.DeleteSelfSigned(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/servers":
 			serverH.List(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/servers/probe":
@@ -238,6 +253,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			applicationH.CommitSaveSession(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/applications":
 			applicationH.List(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/application-template-catalog":
+			applicationH.TemplateCatalog(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/applications":
 			applicationH.Create(w, r)
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/files") && applicationFilesPath(path):
@@ -274,6 +291,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			applicationH.Delete(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/nomad/status":
 			nomadH.Status(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/certificates/builtin":
+			nomadH.BuiltinCertificates(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/certificates/builtin/rotate":
+			nomadH.RotateTLS(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/nomad/nodes":
 			nomadH.Nodes(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/nomad/control-plane":
@@ -310,6 +331,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			settingsH.Runtime(w, r)
 		case r.Method == http.MethodPut && path == "/api/v1/settings/runtime":
 			settingsH.UpdateRuntime(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/settings/server-variables":
+			settingsH.ServerVariableDefinitions(w, r)
+		case r.Method == http.MethodPut && path == "/api/v1/settings/server-variables":
+			settingsH.UpdateServerVariableDefinitions(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/system/version":
 			systemH.Version(w, r)
 		default:

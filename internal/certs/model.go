@@ -11,8 +11,9 @@ const (
 	StatusIssued  = "issued"
 	StatusFailed  = "failed"
 
-	TaskTypeIssue = "certificate_issue"
-	TaskTypeRenew = "certificate_renew"
+	TaskTypeIssue           = "certificate_issue"
+	TaskTypeRenew           = "certificate_renew"
+	TaskTypeSelfSignedRenew = "certificate_self_signed_renew"
 )
 
 type Certificate struct {
@@ -35,6 +36,36 @@ type Certificate struct {
 	NotAfter        time.Time `json:"notAfter,omitempty"`
 	CreatedAt       time.Time `json:"createdAt"`
 	UpdatedAt       time.Time `json:"updatedAt"`
+}
+
+type SelfSignedCertificate struct {
+	ID          string    `json:"id"`
+	ParentCAID  string    `json:"parentCaId,omitempty"`
+	Kind        string    `json:"kind"`
+	Name        string    `json:"name"`
+	CommonName  string    `json:"commonName"`
+	DNSNames    []string  `json:"dnsNames"`
+	IPAddresses []string  `json:"ipAddresses"`
+	Fingerprint string    `json:"fingerprint"`
+	NotBefore   time.Time `json:"notBefore"`
+	NotAfter    time.Time `json:"notAfter"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type SelfSignedCARequest struct {
+	Name       string `json:"name"`
+	CommonName string `json:"commonName"`
+	Years      int    `json:"years"`
+}
+
+type SelfSignedLeafRequest struct {
+	Name        string   `json:"name"`
+	CAID        string   `json:"caId"`
+	CommonName  string   `json:"commonName"`
+	DNSNames    []string `json:"dnsNames"`
+	IPAddresses []string `json:"ipAddresses"`
+	Days        int      `json:"days"`
 }
 
 type IssueRequest struct {

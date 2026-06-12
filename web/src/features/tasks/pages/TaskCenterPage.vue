@@ -25,6 +25,7 @@ const supportedTaskTypes = [
   'nomad_server_bootstrap',
   'nomad_node_remove',
   'nomad_cluster_rebuild',
+  'nomad_tls_rotate',
   'nomad_server_switch',
   'nomad_reverse_proxy_sync',
   'server_connectivity_test',
@@ -38,6 +39,7 @@ const supportedTaskTypes = [
   'package_upgrade_all',
   'certificate_issue',
   'certificate_renew',
+  'certificate_self_signed_renew',
 ];
 
 const tasks = ref<TaskDto[]>([]);

@@ -28,6 +28,7 @@ const TaskTypeNodeRemove = "nomad_node_remove"
 const TaskTypeClusterRebuild = "nomad_cluster_rebuild"
 const TaskTypeServerSwitch = "nomad_server_switch"
 const TaskTypeReverseProxySync = "nomad_reverse_proxy_sync"
+const TaskTypeTLSRotate = "nomad_tls_rotate"
 
 const (
 	nomadInstallTimeout                = 20 * time.Minute
@@ -72,6 +73,7 @@ type JoinService struct {
 	cfg            config.NomadConfig
 	configProvider func(config.NomadConfig) config.NomadConfig
 	tlsAssets      *TLSAssets
+	dataRoot       string
 	appProxySource applicationProxySource
 	certSource     reverseProxyCertificateSource
 	appRestorer    enabledApplicationRestorer
@@ -79,6 +81,67 @@ type JoinService struct {
 
 func NewJoinService(servers *server.Service, nomadClient nodeClient, exec sshx.RemoteExecutor, taskSvc *tasks.Service, cfg config.NomadConfig, tlsAssets *TLSAssets) *JoinService {
 	return &JoinService{servers: servers, nomad: nomadClient, exec: exec, tasks: taskSvc, cfg: cfg, tlsAssets: tlsAssets}
+}
+
+func (s *JoinService) SetDataRoot(dataRoot string) {
+	s.dataRoot = dataRoot
+}
+
+func (s *JoinService) BuiltinCertificates() ([]BuiltinCertificateInfo, error) {
+	if s.tlsAssets == nil {
+		return nil, panelerr.Validation("nomad_tls_unavailable", "Nomad TLS assets are unavailable")
+	}
+	return s.tlsAssets.CertificateInfo()
+}
+
+func (s *JoinService) RotateTLS(ctx context.Context) (tasks.Task, error) {
+	if strings.TrimSpace(s.dataRoot) == "" {
+		return tasks.Task{}, panelerr.Validation("nomad_tls_data_root_unavailable", "Nomad TLS data root is unavailable")
+	}
+	latest := s.latestCompletedBootstrapTask(ctx)
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type: TaskTypeTLSRotate, ServerID: latest.ServerID,
+		ResourceType: "nomad_tls", ResourceID: "builtin",
+		TriggerType: "user", Status: tasks.StatusRunning,
+		Summary: "Rotating Nomad TLS certificates",
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runRotateTLS(context.Background(), task.ID, latest.ServerID)
+	return task, nil
+}
+
+func (s *JoinService) runRotateTLS(ctx context.Context, taskID, serverID string) {
+	defer s.tasks.FinishExecution(taskID)
+	_ = s.tasks.Advance(ctx, taskID, "generating", "generating new Nomad CA and certificates")
+	assets, err := RegenerateTLSAssets(s.dataRoot)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	*s.tlsAssets = *assets
+	if reloader, ok := s.nomad.(interface{ ReloadTLS() error }); ok {
+		if err := reloader.ReloadTLS(); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+	}
+	if strings.TrimSpace(serverID) == "" {
+		_ = s.tasks.Complete(ctx, taskID, "Nomad TLS certificates regenerated")
+		return
+	}
+	srv, err := s.servers.Get(ctx, serverID)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	adapter, err := s.ensureNomadEligible(srv)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	s.runRebuildCluster(ctx, taskID, srv, adapter)
 }
 
 func (s *JoinService) SetConfigProvider(provider func(config.NomadConfig) config.NomadConfig) {
@@ -1244,12 +1307,15 @@ client {
   meta {
     panel_server_id = "%s"
     panel_server_name = "%s"
+    panel_ssh_host = "%s"
+    panel_ssh_port = "%d"
+    panel_ssh_username = "%s"
     panel_reverse_proxy_enabled = "%s"
     panel_reverse_proxy_static_files = "%s"
   }
 }
 EOF
-`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(rpc), srv.ID, shellEscapeHCL(srv.Name), shellEscapeHCL(srv.Host), srv.Port, shellEscapeHCL(srv.SSHUsername), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) bootstrapConfigScript(srv server.Server) string {
@@ -1294,12 +1360,15 @@ client {
   meta {
     panel_server_id = "%s"
     panel_server_name = "%s"
+    panel_ssh_host = "%s"
+    panel_ssh_port = "%d"
+    panel_ssh_username = "%s"
     panel_reverse_proxy_enabled = "%s"
     panel_reverse_proxy_static_files = "%s"
   }
 }
 EOF
-`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), srv.ID, shellEscapeHCL(srv.Name), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
+`, resetNomadConfigScript(), s.nomadTLSWriteScript(), nodeName, shellEscapeHCL(region), shellEscapeHCL(datacenter), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), shellEscapeHCL(advertiseAddress), srv.ID, shellEscapeHCL(srv.Name), shellEscapeHCL(srv.Host), srv.Port, shellEscapeHCL(srv.SSHUsername), boolTrait(traitBool(srv.Traits, TraitReverseProxyEnabled)), boolTrait(traitBool(srv.Traits, TraitReverseProxyStaticFiles)))
 }
 
 func (s *JoinService) serverJoinRPCAddress(ctx context.Context) (string, error) {

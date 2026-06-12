@@ -10,6 +10,8 @@ import PackageUpdatesPage from '@/features/packages/pages/PackageUpdatesPage.vue
 import FirewallPage from '@/features/firewall/pages/FirewallPage.vue';
 import ApplicationsPage from '@/features/applications/pages/ApplicationsPage.vue';
 import CertificatesPage from '@/features/certificates/pages/CertificatesPage.vue';
+import BuiltinCertificatesPage from '@/features/certificates/pages/BuiltinCertificatesPage.vue';
+import SelfSignedCertificatesPage from '@/features/certificates/pages/SelfSignedCertificatesPage.vue';
 import DomainsPage from '@/features/dns/pages/DomainsPage.vue';
 import NomadNodesPage from '@/features/nomad/pages/NomadNodesPage.vue';
 import NomadSetupPage from '@/features/nomad/pages/NomadSetupPage.vue';
@@ -35,8 +37,11 @@ export const router = createRouter({
         { path: 'packages', redirect: '/servers/packages' },
         { path: 'applications', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
         { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
-        { path: 'dns/certificates', name: 'dns-certificates', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
-        { path: 'certificates', redirect: '/dns/certificates' },
+        { path: 'dns/certificates', redirect: '/certificates/domains' },
+        { path: 'certificates', redirect: '/certificates/domains' },
+        { path: 'certificates/builtin', name: 'certificates-builtin', component: BuiltinCertificatesPage, meta: { titleKey: 'routes.builtinCertificates.title' } },
+        { path: 'certificates/domains', name: 'certificates-domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'certificates/self-signed', name: 'certificates-self-signed', component: SelfSignedCertificatesPage, meta: { titleKey: 'routes.selfSignedCertificates.title' } },
         { path: 'nomad/setup', name: 'nomad-setup', component: NomadSetupPage, meta: { titleKey: 'routes.nomadSetup.title' } },
         { path: 'nomad/nodes', name: 'nomad-nodes', component: NomadNodesPage, meta: { titleKey: 'routes.nomadNodes.title' } },
         { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { titleKey: 'routes.tasks.title' } },
