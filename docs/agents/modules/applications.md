@@ -64,3 +64,11 @@
 ## 文档更新触发
 
 新增 appspec 字段、应用持久化字段、API、应用文件行为、部署流程、镜像更新逻辑、反向代理字段或运行时展示字段时，必须更新本文档。
+
+## Panel 托管密钥文件
+
+- `panel_file` 的新规范来源为 `key_asset:<asset-id>:<kind>`，支持 `certificate`、`private_key`、`public_key` 和 SSH 的 `ssh_public_key`。
+- appspec 校验同时接受旧 `certificate:` 来源以兼容已有应用；新页面和目录只生成 `key_asset:`。
+- 私钥不会出现在目录 API 响应中，只在部署渲染时由后端解密并作为只读 Nomad template 提供。
+- 密钥资产服务扫描应用 spec 和反向代理域名，返回精确的应用 ID、名称及 `panel_file` / `reverse_proxy` 引用，用于删除保护和导入覆盖确认。
+- TLS 重新签发、SSH 重新生成和批量导入会调用 `RedeployEnabledApplications`，确保每台服务器重新按自身内置变量渲染。

@@ -180,6 +180,38 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS key_assets (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL CHECK(type IN ('ca_certificate','tls_certificate','ssh_key_pair')),
+			name TEXT NOT NULL,
+			parent_asset_id TEXT NOT NULL DEFAULT '',
+			algorithm TEXT NOT NULL DEFAULT '',
+			key_size INTEGER NOT NULL DEFAULT 0,
+			common_name TEXT NOT NULL DEFAULT '',
+			dns_names_json TEXT NOT NULL DEFAULT '[]',
+			ip_addresses_json TEXT NOT NULL DEFAULT '[]',
+			fingerprint TEXT NOT NULL DEFAULT '',
+			certificate_ciphertext TEXT NOT NULL DEFAULT '',
+			private_key_ciphertext TEXT NOT NULL DEFAULT '',
+			public_key TEXT NOT NULL DEFAULT '',
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			not_before TEXT NOT NULL DEFAULT '',
+			not_after TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_key_assets_name ON key_assets(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_key_assets_type ON key_assets(type)`,
+		`CREATE INDEX IF NOT EXISTS idx_key_assets_parent_asset_id ON key_assets(parent_asset_id)`,
+		`CREATE TABLE IF NOT EXISTS key_asset_exports (
+			task_id TEXT PRIMARY KEY,
+			filename TEXT NOT NULL,
+			file_path TEXT NOT NULL,
+			expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_key_asset_exports_expires_at ON key_asset_exports(expires_at)`,
 		`CREATE TABLE IF NOT EXISTS task_steps (
 			id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,

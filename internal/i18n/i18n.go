@@ -110,6 +110,22 @@ var (
 			"application_reverse_proxy_target_port_invalid": "反向代理目标端口必须在 1 到 65535 之间",
 			"application_reverse_proxy_path_invalid":        "反向代理路径必须以 / 开头",
 			"application_reverse_proxy_domain_invalid":      "反向代理域名无效",
+			"key_asset_master_key_missing":                  "存在已加密的密钥资产，但主密钥缺失",
+			"key_asset_master_key_invalid":                  "密钥资产主密钥无效",
+			"key_asset_type_invalid":                        "密钥资产内容无效",
+			"key_asset_encrypted_private_key_unsupported":   "暂不支持导入带密码的私钥",
+			"key_asset_key_pair_mismatch":                   "公钥与私钥不匹配",
+			"key_asset_ca_required":                         "该 TLS 证书缺少可用于重签发的 CA",
+			"key_asset_ca_invalid":                          "所选 CA 无效",
+			"key_asset_in_use":                              "该密钥资产仍被应用或反向代理使用",
+			"key_asset_ca_has_children":                     "该 CA 仍有子证书，无法删除",
+			"key_asset_archive_password_invalid":            "导出归档密码无效",
+			"key_asset_archive_tampered":                    "密钥资产归档已损坏、密码错误或内容被篡改",
+			"key_asset_archive_version_unsupported":         "不支持该密钥资产归档版本",
+			"key_asset_archive_kdf_invalid":                 "密钥资产归档的密钥派生参数无效",
+			"key_asset_import_conflict":                     "导入资产存在冲突",
+			"key_asset_import_plan_expired":                 "导入预检计划已过期",
+			"key_asset_import_confirmation_required":        "覆盖使用中的密钥资产前需要危险确认",
 		},
 	}
 
@@ -200,6 +216,10 @@ var (
 			"reverse proxy target port must be between 1 and 65535":     "反向代理目标端口必须在 1 到 65535 之间",
 			"reverse proxy path must start with /":                      "反向代理路径必须以 / 开头",
 			"reverse proxy domain is invalid":                           "反向代理域名无效",
+			"Encrypted private keys are not supported":                  "暂不支持导入带密码的私钥",
+			"Public key does not match the private key":                 "公钥与私钥不匹配",
+			"Certificate authority still has child certificates":        "该 CA 仍有子证书，无法删除",
+			"Key asset is still used by an application or reverse proxy": "该密钥资产仍被应用或反向代理使用",
 		},
 	}
 )

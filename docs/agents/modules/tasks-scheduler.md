@@ -61,3 +61,9 @@
 ## 文档更新触发
 
 新增任务类型、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。
+
+## 密钥资产任务
+
+- 新增 `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import`、`key_asset_sync`。
+- 重新签发、重新生成和导入任务包含资产更新、已启用应用重部署和反向代理同步；任务终态必须注销 execution。
+- 导出任务完成后通过 `/api/v1/key-assets/exports/{taskId}/download` 下载短期加密归档。

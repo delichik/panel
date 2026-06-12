@@ -20,7 +20,7 @@
 - DNS 域名与记录页面：`web/src/features/dns/pages/DomainsPage.vue`
 - 域名证书页面：`web/src/features/certificates/pages/CertificatesPage.vue`
 - Nomad 内置证书：`web/src/features/certificates/pages/BuiltinCertificatesPage.vue`
-- 自签证书：`web/src/features/certificates/pages/SelfSignedCertificatesPage.vue`
+- 密钥与证书：`web/src/features/certificates/pages/KeyAssetsPage.vue`
 - 证书设置：`web/src/features/settings/pages/SettingsPage.vue`
 - API：`web/src/api/dns.ts`、`web/src/api/certificates.ts`
 - 类型：`web/src/types/api.ts`
@@ -32,7 +32,7 @@
 - 证书：`GET/POST /api/v1/certificates`，`DELETE /api/v1/certificates/{id}`
 - 域名证书立即续签：`POST /api/v1/certificates/{id}/renew`
 - Nomad 内置证书：`GET /api/v1/certificates/builtin`，`POST /api/v1/certificates/builtin/rotate`
-- 自签证书：`GET/POST /api/v1/self-signed-certificates`，`POST /api/v1/self-signed-cas`，`POST /api/v1/self-signed-certificates/{id}/renew`，`DELETE /api/v1/self-signed-certificates/{id}`
+- 统一密钥资产：`/api/v1/key-assets`；旧 `/api/v1/self-signed-certificates` 和 `/api/v1/self-signed-cas` 仅保留兼容入口
 - 证书默认值和 ACME 目录通过运行时设置读写：`GET/PUT /api/v1/settings/runtime`
 
 ## 数据与行为约定
@@ -61,3 +61,13 @@
 ## 文档更新触发
 
 新增 DNS provider、DNS 记录字段、证书字段、ACME 行为、续签规则、证书变量、反向代理证书联动或相关 API 时，必须更新本文档。
+
+## 密钥与证书统一资产
+
+- 统一资产后端位于 `internal/keyassets/`，支持 `ca_certificate`、`tls_certificate`、`ssh_key_pair`；私钥由 `internal/secretstore/` 加密后写入 `key_assets`。
+- 密钥与证书页面位于 `web/src/features/certificates/pages/KeyAssetsPage.vue`，证书一级菜单下包含内置证书、域名证书、密钥与证书三个二级菜单。
+- API 使用 `/api/v1/key-assets`，包含 CA/TLS/SSH 生成或导入、TLS 重新签发、SSH 重新生成、文件下载、删除、加密批量导出和预检后批量导入。
+- CA 可重复签发多个 TLS 子证书；有子证书的 CA、被应用 `panel_file` 或反向代理引用的资产禁止删除，API 返回准确的应用引用信息。
+- TLS 重新签发、SSH 重新生成和批量导入成功后会重新部署已启用应用并同步反向代理；失败时保留上一份可用数据。
+- 旧 `self_signed_certificates` 在启动时完整校验后事务迁移到 `key_assets`，提交成功才清理旧文件；旧自签 API 和 `certificate:` 挂载仅保留兼容读取。
+- 批量导出文件使用用户密码加密，短期存放在 `tmp`；导入先执行冲突、父 CA 和使用中覆盖检查，再按用户策略执行。

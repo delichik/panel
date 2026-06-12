@@ -163,11 +163,16 @@ func Validate(spec Spec) []Issue {
 
 func validPanelFileSource(value string) bool {
 	parts := strings.Split(strings.TrimSpace(value), ":")
-	if len(parts) != 3 || parts[0] != "certificate" || strings.TrimSpace(parts[1]) == "" {
+	if len(parts) != 3 || strings.TrimSpace(parts[1]) == "" {
+		return false
+	}
+	switch parts[0] {
+	case "certificate", "key_asset":
+	default:
 		return false
 	}
 	switch parts[2] {
-	case "certificate", "private_key", "public_key", "ca_certificate", "ca_private_key":
+	case "certificate", "private_key", "public_key", "ssh_public_key", "ca_certificate", "ca_private_key":
 		return true
 	default:
 		return false

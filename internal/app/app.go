@@ -17,12 +17,14 @@ import (
 	"panel/internal/credential"
 	"panel/internal/dns"
 	"panel/internal/httpx"
+	"panel/internal/keyassets"
 	"panel/internal/metrics"
 	"panel/internal/nomad"
 	"panel/internal/overview"
 	"panel/internal/packages"
 	"panel/internal/panelerr"
 	"panel/internal/scheduler"
+	"panel/internal/secretstore"
 	"panel/internal/server"
 	"panel/internal/settings"
 	"panel/internal/sshx"
@@ -50,6 +52,17 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	secretStore, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	keyAssetSvc := keyassets.NewService(store.AppDB(), cfg, secretStore, taskSvc)
+	if err := keyAssetSvc.EnsureLegacySelfSignedMigrated(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
 	if err != nil {
 		_ = store.Close()
@@ -60,7 +73,6 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	taskSvc := tasks.NewService(store.AppDB())
 	if _, err := taskSvc.FailRunningWithoutExecution(context.Background(), time.Now().UTC()); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -119,27 +131,30 @@ func New(cfg config.Config) (*App, error) {
 	certSvc := certs.NewService(store.AppDB(), cfg, dnsSvc, taskSvc)
 	certSvc.SetNomadTLSAssets(nomadTLS)
 	certSvc.SetConfigProvider(settingsSvc.ApplyToConfig)
-	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
-	sched.SetCertificateRenewer(certSvc)
-	sched.Start(context.Background())
+	certSvc.SetKeyAssetProvider(keyAssetSvc)
 	systemSvc := systeminfo.NewService(nil)
 	systemSvc.Start(context.Background())
 
-	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, sched: sched, system: systemSvc}
+	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, system: systemSvc}
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
 	applicationSvc.SetPanelFileProvider(certSvc)
 	applicationSvc.SetReverseProxyReconciler(nomadJoinSvc)
+	keyAssetSvc.SetApplicationRefresher(applicationSvc)
 	nomadJoinSvc.SetApplicationProxySource(applicationSvc)
 	nomadJoinSvc.SetEnabledApplicationRestorer(applicationSvc)
 	nomadJoinSvc.SetReverseProxyCertificateSource(certSvc)
 	certSvc.SetApplicationRefresher(applicationSvc)
+	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
+	sched.SetCertificateRenewer(certSvc)
+	a.sched = sched
 	nomadJoinSvc.RestoreNomadAddressFromBootstrap(context.Background())
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = nomadJoinSvc.ReconcileReverseProxy(ctx)
 	}()
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
+	sched.Start(context.Background())
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
 	return a, nil
 }
 
@@ -154,7 +169,7 @@ func (a *App) Close() error {
 }
 func (a *App) Handler() http.Handler { return a.mux }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -207,6 +222,34 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			certH.RenewSelfSignedLeaf(w, r)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/self-signed-certificates/"):
 			certH.DeleteSelfSigned(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/key-assets":
+			keyAssetH.List(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/key-assets/ca":
+			keyAssetH.CreateCA(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/key-assets/tls":
+			keyAssetH.CreateTLS(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/key-assets/ssh/generate":
+			keyAssetH.GenerateSSH(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/key-assets/import":
+			keyAssetH.Import(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/key-assets/exports":
+			keyAssetH.CreateExport(w, r)
+		case r.Method == http.MethodGet && keyAssetExportDownloadPath(path):
+			keyAssetH.DownloadExport(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/key-assets/imports/preflight":
+			keyAssetH.PreflightImport(w, r)
+		case r.Method == http.MethodPost && keyAssetImportExecutePath(path):
+			keyAssetH.ExecuteImport(w, r)
+		case r.Method == http.MethodGet && keyAssetFilePath(path):
+			keyAssetH.DownloadFile(w, r)
+		case r.Method == http.MethodPost && keyAssetActionPath(path, "reissue"):
+			keyAssetH.Reissue(w, r)
+		case r.Method == http.MethodPost && keyAssetActionPath(path, "regenerate"):
+			keyAssetH.Regenerate(w, r)
+		case r.Method == http.MethodGet && keyAssetResourcePath(path):
+			keyAssetH.Get(w, r)
+		case r.Method == http.MethodDelete && keyAssetResourcePath(path):
+			keyAssetH.Delete(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/servers":
 			serverH.List(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/servers/probe":
@@ -345,6 +388,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	a.mux.HandleFunc("/", a.static)
 }
 
+func routeParts(path string) []string {
+	return strings.Split(strings.Trim(path, "/"), "/")
+}
+
 func serverResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != ""
@@ -401,8 +448,33 @@ func applicationSaveSessionFileDeletePath(path string) bool {
 }
 
 func applicationSaveSessionCommitPath(path string) bool {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
+	parts := routeParts(path)
 	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "application-save-sessions" && parts[3] != "" && parts[4] == "commit"
+}
+
+func keyAssetResourcePath(path string) bool {
+	parts := routeParts(path)
+	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "key-assets" && parts[3] != ""
+}
+
+func keyAssetActionPath(path, action string) bool {
+	parts := routeParts(path)
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "key-assets" && parts[3] != "" && parts[4] == action
+}
+
+func keyAssetFilePath(path string) bool {
+	parts := routeParts(path)
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "key-assets" && parts[3] != "" && parts[4] == "files" && parts[5] != ""
+}
+
+func keyAssetExportDownloadPath(path string) bool {
+	parts := routeParts(path)
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "key-assets" && parts[3] == "exports" && parts[4] != "" && parts[5] == "download"
+}
+
+func keyAssetImportExecutePath(path string) bool {
+	parts := routeParts(path)
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "key-assets" && parts[3] == "imports" && parts[4] != "" && parts[5] == "execute"
 }
 
 func usesManagedNomadTLS(address string) bool {

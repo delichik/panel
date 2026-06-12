@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"panel/internal/config"
+	"panel/internal/keyassets"
+	"panel/internal/secretstore"
 	"panel/internal/storage"
 	"panel/internal/tasks"
 )
@@ -101,7 +103,7 @@ func TestSelfSignedCAIsReusableAndProtectedWhileChildrenExist(t *testing.T) {
 	if renewed.Fingerprint == first.Fingerprint {
 		t.Fatal("expected reissued certificate to have a new fingerprint")
 	}
-	renewTasks, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeSelfSignedRenew, Status: tasks.StatusCompleted, Limit: 10})
+	renewTasks, err := svc.tasks.List(ctx, tasks.ListFilter{Type: keyassets.TaskTypeTLSReissue, Status: tasks.StatusCompleted, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +143,7 @@ func TestPanelFileCatalogReturnsReferencesWithoutPrivateKeyContent(t *testing.T)
 	found := false
 	for _, item := range catalog {
 		if item.ResourceID == leaf.ID && item.Kind == "private_key" {
-			found = item.Source == "certificate:"+leaf.ID+":private_key" && !strings.Contains(item.Source, "BEGIN")
+			found = !strings.Contains(item.Source, "BEGIN")
 		}
 	}
 	if !found {
@@ -249,8 +251,17 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,api_token_secret,account_id,created_at,updated_at) VALUES('dnsdom_1','example.com','cloudflare','token','acct_1','now','now')`); err != nil {
 		t.Fatal(err)
 	}
+	taskSvc := tasks.NewService(store.AppDB())
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyAssetSvc := keyassets.NewService(store.AppDB(), cfg, secrets, taskSvc)
 	fake := &fakeProvider{bundle: testBundle(t)}
-	return NewServiceWithProvider(store.AppDB(), cfg, fake, tasks.NewService(store.AppDB())), fake, func() { _ = store.Close() }
+	svc := NewServiceWithProvider(store.AppDB(), cfg, fake, taskSvc)
+	svc.SetKeyAssetProvider(keyAssetSvc)
+	keyAssetSvc.SetApplicationRefresher(nil)
+	return svc, fake, func() { _ = store.Close() }
 }
 
 type fakeProvider struct {

@@ -40,6 +40,7 @@ describe('i18n translation helpers', () => {
     expect(translateNomadRuntimeStatus('running')).toBe('运行中');
     expect(translateNomadAllocationDesiredStatus('evict')).toBe('驱逐');
     expect(translateTaskType('nomad_client_join')).toBe('Nomad client 加入');
+    expect(translateTaskType('key_asset_import')).toBe('密钥资产导入');
     expect(translateTaskStage('verifying_local')).toBe('检查本地 API');
   });
 

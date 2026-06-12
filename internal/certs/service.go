@@ -16,6 +16,7 @@ import (
 	"panel/internal/config"
 	"panel/internal/dns"
 	"panel/internal/id"
+	"panel/internal/keyassets"
 	"panel/internal/nomad"
 	"panel/internal/panelerr"
 	"panel/internal/tasks"
@@ -37,6 +38,7 @@ type Service struct {
 	issuer           string
 	applications     applicationRefresher
 	nomadTLS         *nomad.TLSAssets
+	keyAssets        keyAssetProvider
 }
 
 type domainResolver interface {
@@ -45,7 +47,19 @@ type domainResolver interface {
 
 type applicationRefresher interface {
 	RedeployChangedApplications(ctx context.Context) (int, error)
+	RedeployEnabledApplications(ctx context.Context) (int, error)
 	ReconcileReverseProxy(ctx context.Context) error
+}
+
+type keyAssetProvider interface {
+	List(ctx context.Context) ([]keyassets.Asset, error)
+	CreateCA(ctx context.Context, in keyassets.CreateCARequest) (keyassets.Asset, error)
+	CreateTLS(ctx context.Context, in keyassets.CreateTLSRequest) (keyassets.Asset, error)
+	ReissueTLS(ctx context.Context, assetID string) (keyassets.ReissueResult, error)
+	Delete(ctx context.Context, assetID string) error
+	PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error)
+	ReadPanelFile(ctx context.Context, source string) ([]byte, error)
+	ReverseProxyCertificates(ctx context.Context) ([]nomad.ReverseProxyCertificate, error)
 }
 
 func NewService(db *sql.DB, cfg config.Config, domains domainResolver, taskSvc *tasks.Service) *Service {
@@ -62,6 +76,10 @@ func (s *Service) SetApplicationRefresher(refresher applicationRefresher) {
 
 func (s *Service) SetNomadTLSAssets(assets *nomad.TLSAssets) {
 	s.nomadTLS = assets
+}
+
+func (s *Service) SetKeyAssetProvider(provider keyAssetProvider) {
+	s.keyAssets = provider
 }
 
 func (s *Service) SetConfigProvider(provider func(config.Config) config.Config) {
@@ -485,16 +503,24 @@ func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFil
 			applications.PanelFileDefinition{ID: cert.ID + ":private_key", ResourceID: cert.ID, ResourceType: "acme", Name: cert.Name, Kind: "private_key", Source: "certificate:" + cert.ID + ":private_key"},
 		)
 	}
-	selfSigned, err := s.ListSelfSigned(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, cert := range selfSigned {
-		out = append(out,
-			applications.PanelFileDefinition{ID: cert.ID + ":certificate", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "certificate", Source: "certificate:" + cert.ID + ":certificate"},
-			applications.PanelFileDefinition{ID: cert.ID + ":private_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "private_key", Source: "certificate:" + cert.ID + ":private_key"},
-			applications.PanelFileDefinition{ID: cert.ID + ":public_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "public_key", Source: "certificate:" + cert.ID + ":public_key"},
-		)
+	if s.keyAssets != nil {
+		files, err := s.keyAssets.PanelFileCatalog(ctx)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, files...)
+	} else {
+		selfSigned, err := s.ListSelfSigned(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, cert := range selfSigned {
+			out = append(out,
+				applications.PanelFileDefinition{ID: cert.ID + ":certificate", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "certificate", Source: "certificate:" + cert.ID + ":certificate"},
+				applications.PanelFileDefinition{ID: cert.ID + ":private_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "private_key", Source: "certificate:" + cert.ID + ":private_key"},
+				applications.PanelFileDefinition{ID: cert.ID + ":public_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "public_key", Source: "certificate:" + cert.ID + ":public_key"},
+			)
+		}
 	}
 	if s.nomadTLS != nil {
 		out = append(out,
@@ -508,8 +534,14 @@ func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFil
 
 func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
 	parts := strings.Split(strings.TrimSpace(source), ":")
-	if len(parts) != 3 || parts[0] != "certificate" {
+	if len(parts) != 3 || (parts[0] != "certificate" && parts[0] != "key_asset") {
 		return nil, panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
+	}
+	if parts[0] == "key_asset" {
+		if s.keyAssets == nil {
+			return nil, panelerr.NotFound("Panel key asset file")
+		}
+		return s.keyAssets.ReadPanelFile(ctx, source)
 	}
 	if data, ok := s.readNomadPanelFile(parts[1], parts[2]); ok {
 		return data, nil
@@ -522,21 +554,26 @@ func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, err
 			return os.ReadFile(cert.PrivateKeyPath)
 		}
 	}
+	if s.keyAssets != nil {
+		if data, err := s.keyAssets.ReadPanelFile(ctx, source); err == nil {
+			return data, nil
+		}
+	}
 	cert, err := s.GetSelfSigned(ctx, parts[1])
 	if err != nil {
 		return nil, panelerr.NotFound("Panel certificate file")
 	}
-	certPath, keyPath, publicPath := s.selfSignedPaths(cert.ID)
 	switch parts[2] {
 	case "certificate":
-		return os.ReadFile(certPath)
 	case "private_key":
-		return os.ReadFile(keyPath)
 	case "public_key":
-		return os.ReadFile(publicPath)
+		if s.keyAssets != nil {
+			return s.keyAssets.ReadPanelFile(ctx, "key_asset:"+cert.ID+":"+parts[2])
+		}
 	default:
 		return nil, panelerr.Validation("panel_file_kind_invalid", "Panel certificate file kind is invalid")
 	}
+	return nil, panelerr.NotFound("Panel certificate file")
 }
 
 func (s *Service) readNomadPanelFile(resourceID, kind string) ([]byte, bool) {
@@ -631,28 +668,12 @@ func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.Reverse
 			PrivateKeyPEM:  string(keyPEM),
 		})
 	}
-	selfSigned, err := s.ListSelfSigned(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, cert := range selfSigned {
-		if cert.Kind != "leaf" {
-			continue
-		}
-		certPath, keyPath, _ := s.selfSignedPaths(cert.ID)
-		certPEM, err := os.ReadFile(certPath)
+	if s.keyAssets != nil {
+		managed, err := s.keyAssets.ReverseProxyCertificates(ctx)
 		if err != nil {
 			return nil, err
 		}
-		keyPEM, err := os.ReadFile(keyPath)
-		if err != nil {
-			return nil, err
-		}
-		domains := append(append([]string(nil), cert.DNSNames...), cert.IPAddresses...)
-		out = append(out, nomad.ReverseProxyCertificate{
-			ID: cert.ID, Domains: domains,
-			CertificatePEM: string(certPEM), PrivateKeyPEM: string(keyPEM),
-		})
+		out = append(out, managed...)
 	}
 	return out, nil
 }

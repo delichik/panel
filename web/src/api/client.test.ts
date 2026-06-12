@@ -45,4 +45,18 @@ describe('ApiClient', () => {
       details: { field: 'password' },
     });
   });
+
+  it('keeps FormData bodies intact for multipart requests', async () => {
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { ok: true }, error: null }));
+    const client = new ApiClient({ fetcher });
+    const formData = new FormData();
+    formData.set('password', 'secret');
+
+    await client.postForm('/key-assets/imports/preflight', formData);
+
+    const init = fetcher.mock.calls[0][1] as RequestInit;
+    expect(init.method).toBe('POST');
+    expect(init.body).toBe(formData);
+    expect(new Headers(init.headers).get('Content-Type')).toBeNull();
+  });
 });

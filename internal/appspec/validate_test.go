@@ -72,6 +72,21 @@ func TestDecodeYAMLReturnsIssueForMalformedYAML(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsKeyAssetPanelFileSource(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Mounts: []Mount{{
+			Type:   "panel_file",
+			Source: "key_asset:key_1:ssh_public_key",
+			Target: "/etc/ssh/key.pub",
+		}},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
 func hasIssue(issues []Issue, field string) bool {
 	for _, issue := range issues {
 		if issue.Field == field {
