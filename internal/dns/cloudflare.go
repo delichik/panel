@@ -21,12 +21,20 @@ type CloudflareProvider struct {
 }
 
 type cloudflareEnvelope[T any] struct {
-	Success bool `json:"success"`
-	Result  T    `json:"result"`
-	Errors  []struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"errors"`
+	Success    bool                  `json:"success"`
+	Result     T                     `json:"result"`
+	Errors     []cloudflareAPIError  `json:"errors"`
+	ResultInfo *cloudflareResultInfo `json:"result_info,omitempty"`
+}
+
+type cloudflareAPIError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
+type cloudflareResultInfo struct {
+	Page       int `json:"page"`
+	TotalPages int `json:"total_pages"`
 }
 
 type cloudflareZone struct {
@@ -59,13 +67,22 @@ func (p *CloudflareProvider) ListRecords(ctx context.Context, zone string) ([]Re
 	if err != nil {
 		return nil, err
 	}
-	var envelope cloudflareEnvelope[[]cloudflareRecord]
-	if err := p.do(ctx, http.MethodGet, "/zones/"+zoneID+"/dns_records", nil, &envelope); err != nil {
-		return nil, err
-	}
-	out := make([]Record, 0, len(envelope.Result))
-	for _, record := range envelope.Result {
-		out = append(out, Record{ID: record.ID, Name: record.Name, Type: record.Type, Value: record.Content, TTL: record.TTL, Proxied: record.Proxied})
+	out := []Record{}
+	for page := 1; ; page++ {
+		query := url.Values{}
+		query.Set("page", fmt.Sprintf("%d", page))
+		query.Set("per_page", "5000")
+		var envelope cloudflareEnvelope[[]cloudflareRecord]
+		endpoint := "/zones/" + zoneID + "/dns_records?" + query.Encode()
+		if err := p.do(ctx, http.MethodGet, endpoint, nil, &envelope); err != nil {
+			return nil, err
+		}
+		for _, record := range envelope.Result {
+			out = append(out, cloudflareRecordToRecord(record))
+		}
+		if envelope.ResultInfo == nil || envelope.ResultInfo.TotalPages <= page {
+			break
+		}
 	}
 	return out, nil
 }
@@ -75,7 +92,7 @@ func (p *CloudflareProvider) CreateRecord(ctx context.Context, zone string, reco
 	if err != nil {
 		return Record{}, err
 	}
-	body := cloudflareRecordBody(record)
+	body := cloudflareRecordBody(zone, record)
 	var envelope cloudflareEnvelope[cloudflareRecord]
 	if err := p.do(ctx, http.MethodPost, "/zones/"+zoneID+"/dns_records", body, &envelope); err != nil {
 		return Record{}, err
@@ -88,7 +105,7 @@ func (p *CloudflareProvider) UpdateRecord(ctx context.Context, zone string, id s
 	if err != nil {
 		return Record{}, err
 	}
-	body := cloudflareRecordBody(record)
+	body := cloudflareRecordBody(zone, record)
 	var envelope cloudflareEnvelope[cloudflareRecord]
 	if err := p.do(ctx, http.MethodPut, "/zones/"+zoneID+"/dns_records/"+url.PathEscape(id), body, &envelope); err != nil {
 		return Record{}, err
@@ -211,7 +228,11 @@ func (p *CloudflareProvider) do(ctx context.Context, method, endpoint string, bo
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return panelerr.BadGateway("cloudflare_api_error", fmt.Sprintf("Cloudflare API error %d: %s", resp.StatusCode, strings.TrimSpace(string(raw))))
+		message := cloudflareErrorMessage(raw)
+		if message == "" {
+			message = strings.TrimSpace(string(raw))
+		}
+		return panelerr.BadGateway("cloudflare_api_error", fmt.Sprintf("Cloudflare API error %d: %s", resp.StatusCode, message))
 	}
 	if out == nil {
 		return nil
@@ -229,16 +250,28 @@ func cloudflareRecordToRecord(record cloudflareRecord) Record {
 	return Record{ID: record.ID, Name: record.Name, Type: record.Type, Value: record.Content, TTL: record.TTL, Proxied: record.Proxied}
 }
 
-func cloudflareRecordBody(record RecordInput) map[string]any {
+func cloudflareRecordBody(zone string, record RecordInput) map[string]any {
 	ttl := record.TTL
 	if ttl <= 0 {
 		ttl = 120
 	}
-	body := map[string]any{"type": record.Type, "name": record.Name, "content": record.Value, "ttl": ttl}
+	body := map[string]any{"type": record.Type, "name": cloudflareRecordName(zone, record.Name), "content": record.Value, "ttl": ttl}
 	if record.Proxied != nil {
 		body["proxied"] = *record.Proxied
 	}
 	return body
+}
+
+func cloudflareRecordName(zone, name string) string {
+	zone = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(zone), "."))
+	name = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(name), "."))
+	if name == "@" || name == zone {
+		return zone
+	}
+	if strings.HasSuffix(name, "."+zone) {
+		return name
+	}
+	return name + "." + zone
 }
 
 func cloudflareError(out any) string {
@@ -246,11 +279,13 @@ func cloudflareError(out any) string {
 	if err != nil {
 		return ""
 	}
+	return cloudflareErrorMessage(raw)
+}
+
+func cloudflareErrorMessage(raw []byte) string {
 	var envelope struct {
-		Success bool `json:"success"`
-		Errors  []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
+		Success bool                 `json:"success"`
+		Errors  []cloudflareAPIError `json:"errors"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.Success {
 		return ""
@@ -260,7 +295,11 @@ func cloudflareError(out any) string {
 	}
 	messages := make([]string, 0, len(envelope.Errors))
 	for _, item := range envelope.Errors {
-		messages = append(messages, item.Message)
+		message := strings.TrimSpace(item.Message)
+		if item.Code != 0 {
+			message = fmt.Sprintf("%d: %s", item.Code, message)
+		}
+		messages = append(messages, message)
 	}
 	return strings.Join(messages, "; ")
 }

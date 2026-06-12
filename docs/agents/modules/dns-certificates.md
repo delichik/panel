@@ -40,6 +40,8 @@
 - DNS 域名存储在 `dns_domains`，证书记录存储在 `certificates`。
 - 当前 DNS provider 以 Cloudflare 为主，API token 和 account ID 属于敏感配置。
 - DNS 记录管理复用域名保存的 Cloudflare API token 和 account ID；前端在域名页使用左侧域名列表、右侧上方详情、右侧下方记录表的布局。
+- Cloudflare provider 使用官方 REST API v4 和 Bearer API Token；记录列表必须按 `result_info.total_pages` 读取全部分页，不能假设单页包含 zone 的全部记录。
+- 面板 API 可以接收 `@`、相对记录名或 zone 内完整记录名；发送到 Cloudflare 前统一规范化为 zone 内完整名称。Cloudflare 错误响应优先解析官方 envelope 中的错误码和消息。
 - 新增或编辑 Cloudflare 域名时，后端必须先使用最终生效的 token、account ID 和域名访问 Cloudflare 记录接口验证权限与 zone 可见性；验证失败不得写入本地域名记录。
 - ACME 签发会创建 DNS-01 challenge，等待 DNS 传播后完成签发；一旦 challenge 记录已创建，后续等待、授权或签发失败也必须尝试清理 DNS 记录。
 - 通配符证书会展开需要的域名集合；签发成功后写入证书路径、私钥路径、有效期和续签时间。
