@@ -30,6 +30,7 @@
   - 首个 server 引导任务入口、反向代理同步任务提示文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/servers/pages/ServersPage.vue`
   - 服务器凭据必选提示、重启确认与任务入口、UFW 安装任务入口、系统架构/CPU/分项网卡详情文案已接入 `web/src/i18n/index.ts`
+  - 新增服务器后的首连信息采集任务提示、失败回退提示和超时提示已接入 `web/src/i18n/index.ts`
 - `web/src/features/firewall/pages/FirewallPage.vue`
   - UFW 防火墙状态、启用确认、规则表单、规则列表、删除确认和任务入口文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/tasks/pages/TaskCenterPage.vue`

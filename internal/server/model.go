@@ -22,6 +22,7 @@ type Server struct {
 	LoadAverage   string            `json:"loadAverage"`
 	LastCheckedAt *time.Time        `json:"lastCheckedAt"`
 	LastError     string            `json:"lastError,omitempty"`
+	InitialTaskID string            `json:"initialTaskId,omitempty"`
 	CreatedAt     time.Time         `json:"createdAt"`
 	UpdatedAt     time.Time         `json:"updatedAt"`
 }

@@ -28,6 +28,7 @@ export interface ServerDto {
   loadAverage: string | null;
   lastCheckedAt: string | null;
   lastError?: string;
+  initialTaskId?: string;
   createdAt: string;
   updatedAt: string;
 }
