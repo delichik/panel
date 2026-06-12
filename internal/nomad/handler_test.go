@@ -100,7 +100,7 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/join", bytes.NewBufferString(`{"serverId":"srv_1"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/join", bytes.NewBufferString(`{"serverId":"srv_1","advertiseAddress":"10.0.0.12"}`))
 	handler.JoinClient(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("join status = %d body=%s", rec.Code, rec.Body.String())
@@ -111,8 +111,8 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &joinEnv); err != nil {
 		t.Fatal(err)
 	}
-	if fake.joinedServerID != "srv_1" || joinEnv.Data["taskId"] != "task_1" {
-		t.Fatalf("unexpected join result joined=%q body=%#v", fake.joinedServerID, joinEnv.Data)
+	if fake.joined.ServerID != "srv_1" || fake.joined.AdvertiseAddress != "10.0.0.12" || joinEnv.Data["taskId"] != "task_1" {
+		t.Fatalf("unexpected join result joined=%#v body=%#v", fake.joined, joinEnv.Data)
 	}
 
 	rec = httptest.NewRecorder()
@@ -132,12 +132,12 @@ func TestHandlerJoinCandidatesAndJoin(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/redeploy-node", bytes.NewBufferString(`{"serverId":"srv_1","role":"server"}`))
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/nomad/redeploy-node", bytes.NewBufferString(`{"serverId":"srv_1","role":"server","advertiseAddress":"10.0.0.10"}`))
 	handler.RedeployNode(rec, req)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("redeploy status = %d body=%s", rec.Code, rec.Body.String())
 	}
-	if fake.redeploy.ServerID != "srv_1" || fake.redeploy.Role != "server" {
+	if fake.redeploy.ServerID != "srv_1" || fake.redeploy.Role != "server" || fake.redeploy.AdvertiseAddress != "10.0.0.10" {
 		t.Fatalf("unexpected redeploy input=%#v", fake.redeploy)
 	}
 
@@ -213,7 +213,7 @@ type fakeJoinService struct {
 	switched       SwitchServerInput
 	removed        RemoveNodeInput
 	reverseProxy   ReverseProxyInput
-	joinedServerID string
+	joined         JoinClientInput
 	bootstrapInput BootstrapServerInput
 }
 
@@ -233,8 +233,11 @@ func (f *fakeJoinService) ControlPlane(context.Context) (ControlPlane, error) {
 	return f.controlPlane, nil
 }
 
-func (f *fakeJoinService) JoinClient(_ context.Context, serverID string) (tasks.Task, error) {
-	f.joinedServerID = serverID
+func (f *fakeJoinService) JoinClient(_ context.Context, serverID string, advertiseAddress ...string) (tasks.Task, error) {
+	f.joined = JoinClientInput{ServerID: serverID}
+	if len(advertiseAddress) > 0 {
+		f.joined.AdvertiseAddress = advertiseAddress[0]
+	}
 	return f.task, nil
 }
 

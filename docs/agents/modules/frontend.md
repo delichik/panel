@@ -23,8 +23,10 @@
 - 前端使用 Vue 3、Vue Router、Pinia、Vuetify、ECharts 和 Vitest。
 - 页面按 `web/src/features/<feature>/` 分组，共享组件放在 `web/src/components/`。
 - 全局布局在 `web/src/layouts/AppLayout.vue`；侧边导航列表必须在抽屉内部独立滚动，避免菜单项超出视口后不可访问。
+- 侧边导航二级菜单支持 `NavItem.icon`；DNS 域名入口应显示域名图标，避免分组展开后入口缺少视觉锚点。
 - 全局布局会读取 `/api/v1/system/version`，只用弱提示展示可用新版本，不提供下载或安装入口；系统设置页展示当前版本。
 - API 调用经 `ApiClient`，默认 base URL 是 `/api/v1`；后端 API 变更时同步更新 `web/src/api/`、`web/src/types/api.ts` 和相关测试。
+- `ApiClient` 期望后端返回统一 JSON envelope；如果服务返回 HTML 或其他非 JSON 内容，前端必须转换为本地化的可读错误，而不是暴露底层 `Unexpected token` 解析异常。
 - 路由标题使用 `meta.titleKey`，不要在路由元信息里写用户可见文案。
 - 新增或修改用户可见文案必须走 `useI18n()` 和 `web/src/i18n/index.ts`，并更新多语言状态文档。
 - 持久化 UI 配置只保存稳定值，不保存已翻译的标题或说明。

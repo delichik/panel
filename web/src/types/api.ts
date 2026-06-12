@@ -28,6 +28,7 @@ export interface ServerDto {
   loadAverage: string | null;
   lastCheckedAt: string | null;
   lastError?: string;
+  initialTaskId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -625,6 +626,7 @@ export interface ProjectedNomadNodeDto {
   nodeId?: string;
   name: string;
   host?: string;
+  traits?: Record<string, string>;
   role: ProjectedNomadNodeRole;
   status: ProjectedNomadNodeStatus;
   reverseProxy: boolean;

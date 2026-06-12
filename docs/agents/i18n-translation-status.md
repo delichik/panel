@@ -11,6 +11,10 @@
   - 未启用的 DNS 记录导航入口已移除，对应 `layout.nav.records` 词条不再保留。
 - `web/src/features/dns/pages/DomainsPage.vue`
   - DNS 域名详情、Cloudflare 记录列表、记录创建/编辑/删除和 TTL/代理状态文案已接入 `web/src/i18n/index.ts`。
+- `web/src/api/client.ts`
+  - 非 JSON API 响应的可读错误文案已接入 `web/src/i18n/index.ts`。
+- `internal/dns`
+  - Cloudflare 非 JSON 响应错误码已接入 `internal/i18n/i18n.go`。
 - `web/src/features/settings/pages/SettingsPage.vue`
   - Token 过期时间设置及选项文案已接入 `web/src/i18n/index.ts`
   - 设置分类子菜单、通用设置、安全设置、Nomad 设置、证书设置、系统信息文案已接入 `web/src/i18n/index.ts`
@@ -22,10 +26,12 @@
   - 强制改密、账号更新、JWT 密钥更新相关错误文案已接入 `internal/i18n/i18n.go`
 - `web/src/features/nomad/pages/NomadNodesPage.vue`
   - Nomad 节点重部署、集群重建、server 切换及切换后 client 配置同步文案已接入 `web/src/i18n/index.ts`
-  - 旧集群网络地址迁移、SSH 地址与 Nomad 网卡地址选择、重建后应用恢复提示已接入 `web/src/i18n/index.ts`
+  - 旧集群网络地址迁移、SSH host IP 与 Nomad 网卡 IP 的 advertise 地址选择、重建后应用恢复提示已接入 `web/src/i18n/index.ts`
+  - 加入、重部署、重建和切换操作的 advertise 地址选择标签与空状态提示已接入 `web/src/i18n/index.ts`
   - 首个 server 引导任务入口、反向代理同步任务提示文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/servers/pages/ServersPage.vue`
   - 服务器凭据必选提示、重启确认与任务入口、UFW 安装任务入口、系统架构/CPU/分项网卡详情文案已接入 `web/src/i18n/index.ts`
+  - 新增服务器后的首连信息采集任务提示、失败回退提示和超时提示已接入 `web/src/i18n/index.ts`
 - `web/src/features/firewall/pages/FirewallPage.vue`
   - UFW 防火墙状态、启用确认、规则表单、规则列表、删除确认和任务入口文案已接入 `web/src/i18n/index.ts`
 - `web/src/features/tasks/pages/TaskCenterPage.vue`
@@ -44,6 +50,7 @@
 - raw Nomad jobs/deployments 清单入口已移除，对应页面文案和路由词条不再保留。
 - `internal/nomad`
   - Nomad 重部署、集群重建、server 切换相关 API 错误码已接入 `internal/i18n/i18n.go`
+  - Nomad advertise 地址校验错误码已更新为支持网卡 IP 或 SSH host IP 的文案。
 
 ### 前端仍有少量第三方原始文本
 

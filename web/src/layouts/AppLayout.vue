@@ -56,7 +56,7 @@ const navGroups = computed<NavGroup[]>(() => [
     icon: 'mdi-dns-outline',
     title: t('layout.nav.dns'),
     items: [
-      { to: '/dns/domains', title: t('layout.nav.domains'), value: 'dns-domains' },
+      { to: '/dns/domains', icon: 'mdi-web', title: t('layout.nav.domains'), value: 'dns-domains' },
     ],
   },
   {
@@ -190,6 +190,7 @@ onBeforeUnmount(() => {
               v-for="item in group.items"
               :key="item.value"
               :to="item.to"
+              :prepend-icon="item.icon"
               :title="item.title"
               :value="item.value"
               :disabled="item.disabled"

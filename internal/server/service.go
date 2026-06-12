@@ -76,7 +76,12 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		return Server{}, err
 	}
 	if s.exec != nil {
-		_, _ = s.EnsureInitialInfoTask(ctx, srv.ID, true)
+		task, err := s.EnsureInitialInfoTask(ctx, srv.ID, true)
+		if err != nil {
+			_, _ = s.db.ExecContext(ctx, `DELETE FROM servers WHERE id=?`, srv.ID)
+			return Server{}, err
+		}
+		srv.InitialTaskID = task.ID
 	}
 	return srv, nil
 }
@@ -594,11 +599,12 @@ func (s *Service) startConnectivityTask(task tasks.Task, srv Server) {
 	go func() {
 		taskCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 		defer cancel()
-		s.runConnectivityTest(taskCtx, task.ID, srv)
+		s.runConnectivityTest(taskCtx, task, srv)
 	}()
 }
 
-func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Server) {
+func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv Server) {
+	taskID := task.ID
 	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
 	target := srv.Target()
@@ -606,7 +612,7 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	osInfo, err := linux.Detect(ctx, s.exec, target)
 	if err != nil {
 		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, nil, err.Error())
-		_ = s.tasks.FailRetryable(ctx, taskID, err)
+		s.failConnectivityTask(ctx, task, srv, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking passwordless sudo")
@@ -640,6 +646,23 @@ func (s *Service) runConnectivityTest(ctx context.Context, taskID string, srv Se
 	} else {
 		_ = s.tasks.Complete(ctx, taskID, "Connected, passwordless sudo unavailable")
 	}
+}
+
+func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv Server, err error) {
+	if task.Type != serverInfoTaskType {
+		_ = s.tasks.FailRetryable(ctx, task.ID, err)
+		return
+	}
+	_ = s.tasks.AppendLog(ctx, task.ID, "system", "server creation rolled back because initial information collection failed")
+	_ = s.tasks.Fail(ctx, task.ID, err)
+	if rollbackErr := s.rollbackInitialServer(ctx, srv.ID); rollbackErr != nil {
+		_ = s.tasks.AppendLog(ctx, task.ID, "stderr", "failed to roll back server creation: "+rollbackErr.Error())
+	}
+}
+
+func (s *Service) rollbackInitialServer(ctx context.Context, serverID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM servers WHERE id=?`, serverID)
+	return err
 }
 
 func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {

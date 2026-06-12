@@ -407,6 +407,9 @@ func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if srv.InitialTaskID == "" {
+		t.Fatal("expected create response to include initial task id")
+	}
 
 	var task tasks.Task
 	deadline := time.Now().Add(2 * time.Second)
@@ -424,10 +427,32 @@ func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 	if task.ID == "" {
 		t.Fatal("expected auto server info task")
 	}
+	if task.ID != srv.InitialTaskID {
+		t.Fatalf("initial task id mismatch response=%q stored=%q", srv.InitialTaskID, task.ID)
+	}
 	if task.Type != serverInfoTaskType || task.Summary != "Collecting server information" {
 		t.Fatalf("unexpected initial task: %#v", task)
 	}
 	waitTaskFinished(t, taskSvc, task.ID)
+}
+
+func TestCreateServerInitialInfoFailureRollsBackServer(t *testing.T) {
+	svc, taskSvc, _ := testServerService(t, failingConnectivityExec{})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.InitialTaskID == "" {
+		t.Fatal("expected create response to include initial task id")
+	}
+
+	task := waitTaskTerminal(t, taskSvc, srv.InitialTaskID)
+	if task.Status != tasks.StatusFailed {
+		t.Fatalf("expected initial task to fail without retry, got %#v", task)
+	}
+	if _, err := svc.Get(context.Background(), srv.ID); err == nil {
+		t.Fatal("expected created server to be rolled back")
+	}
 }
 
 func TestListStaleServersSharesConnectivityOperation(t *testing.T) {
@@ -457,16 +482,20 @@ func TestListStaleServersSharesConnectivityOperation(t *testing.T) {
 }
 
 func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
-	svc, taskSvc, _ := testServerService(t, failingConnectivityExec{})
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	createSvc, taskSvc, store := testServerService(t, nil)
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), failingConnectivityExec{}, taskSvc)
+	if _, err := svc.EnsureConnectivityTask(context.Background(), srv.ID, true); err != nil {
 		t.Fatal(err)
 	}
 
 	var task tasks.Task
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: serverInfoTaskType, ServerID: srv.ID})
+		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: connectivityTaskType, ServerID: srv.ID})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -743,6 +772,11 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 
 func waitTaskFinished(t *testing.T, taskSvc *tasks.Service, taskID string) {
 	t.Helper()
+	_ = waitTaskTerminal(t, taskSvc, taskID)
+}
+
+func waitTaskTerminal(t *testing.T, taskSvc *tasks.Service, taskID string) tasks.Task {
+	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		task, err := taskSvc.Get(context.Background(), taskID)
@@ -750,11 +784,12 @@ func waitTaskFinished(t *testing.T, taskSvc *tasks.Service, taskID string) {
 			t.Fatal(err)
 		}
 		if task.Status == tasks.StatusCompleted || task.Status == tasks.StatusFailed || task.Status == tasks.StatusFailedRetryable || task.Status == tasks.StatusBlocked {
-			return
+			return task
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("task did not finish")
+	return tasks.Task{}
 }
 
 func waitServerReady(t *testing.T, svc *Service, serverID string) Server {

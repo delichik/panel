@@ -2,9 +2,10 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { formatDateTime, t } from '@/i18n';
-import { serversApi, type CredentialInput, type ServerInput, type ServerProbeDto } from '@/api/servers';
+import { serversApi, type CredentialInput, type ServerInput } from '@/api/servers';
 import { nomadApi } from '@/api/nomad';
-import type { CredentialDto, NomadControlPlaneDto, ProjectedNomadNodeDto, ServerDto } from '@/types/api';
+import { tasksApi } from '@/api/tasks';
+import type { CredentialDto, NomadControlPlaneDto, ProjectedNomadNodeDto, ServerDto, TaskDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
@@ -20,9 +21,8 @@ const serverDialog = ref(false);
 const credentialDialog = ref(false);
 const editing = ref<ServerDto | null>(null);
 const editingCredential = ref<CredentialDto | null>(null);
-const probeLoading = ref(false);
-const probeResult = ref<ServerProbeDto | null>(null);
-const probeError = ref('');
+const serverSaving = ref(false);
+const creatingServerTaskId = ref('');
 const ufwInstalling = ref<Record<string, boolean>>({});
 const restarting = ref<Record<string, boolean>>({});
 let controlPlaneLoadSeq = 0;
@@ -157,8 +157,7 @@ function nomadMembershipForServer(serverId: string) {
 
 function resetServerForm(server?: ServerDto) {
   editing.value = server ?? null;
-  probeResult.value = null;
-  probeError.value = '';
+  creatingServerTaskId.value = '';
 
   const traitsRaw: string[] = [];
   if (server?.traits) {
@@ -238,6 +237,23 @@ async function loadControlPlane() {
   }
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function taskTerminal(task: TaskDto) {
+  return ['completed', 'failed', 'failed_retryable', 'blocked', 'cancelled'].includes(task.status);
+}
+
+async function waitForInitialServerTask(taskId: string) {
+  for (let attempt = 0; attempt < 90; attempt++) {
+    const task = await tasksApi.get(taskId);
+    if (taskTerminal(task)) return task;
+    await sleep(1500);
+  }
+  throw new Error(t('serversPage.serverInfoTaskTimeout'));
+}
+
 function buildServerPayload(): ServerInput {
   const traits: Record<string, string> = {};
   for (const raw of serverForm.traitsRaw) {
@@ -263,39 +279,47 @@ function buildServerPayload(): ServerInput {
   };
 }
 
-async function probeServerForm() {
-  if (serverCredentialMissing.value) {
-    showMessage(t('serversPage.credentialRequired'), 'error');
-    return;
-  }
-  probeLoading.value = true;
-  probeError.value = '';
-  probeResult.value = null;
-  try {
-    probeResult.value = await serversApi.probeServer(buildServerPayload());
-  } catch (err) {
-    probeError.value = err instanceof Error ? err.message : t('serversPage.connectionTestFailed');
-  } finally {
-    probeLoading.value = false;
-  }
-}
-
 async function saveServer() {
   if (serverCredentialMissing.value) {
     showMessage(t('serversPage.credentialRequired'), 'error');
     return;
   }
+  serverSaving.value = true;
   try {
     const payload = buildServerPayload();
-    const saved = editing.value
-      ? await serversApi.updateServer(editing.value.id, payload)
-      : await serversApi.createServer(payload);
+    if (editing.value) {
+      const saved = await serversApi.updateServer(editing.value.id, payload);
+      selectedServerId.value = saved.id;
+      showMessage(t('serversPage.serverUpdated'));
+      serverDialog.value = false;
+      await load();
+      return;
+    }
+
+    const saved = await serversApi.createServer(payload);
     selectedServerId.value = saved.id;
-    showMessage(editing.value ? t('serversPage.serverUpdated') : t('serversPage.serverCreated'));
-    serverDialog.value = false;
+    if (!saved.initialTaskId) {
+      showMessage(t('serversPage.serverCreated'));
+      serverDialog.value = false;
+      await load();
+      return;
+    }
+
+    creatingServerTaskId.value = saved.initialTaskId;
+    showMessage(t('serversPage.serverInfoTaskStarted'), 'success', saved.initialTaskId);
+    const task = await waitForInitialServerTask(saved.initialTaskId);
     await load();
+    if (task.status === 'completed') {
+      showMessage(t('serversPage.serverCreated'), 'success', saved.initialTaskId);
+      serverDialog.value = false;
+    } else {
+      showMessage(task.error ? t('serversPage.serverInfoTaskFailedWithError', { error: task.error }) : t('serversPage.serverInfoTaskFailed'), 'error', saved.initialTaskId);
+    }
   } catch (err) {
     showMessage(err instanceof Error ? err.message : t('serversPage.saveServerFailed'), 'error');
+  } finally {
+    serverSaving.value = false;
+    creatingServerTaskId.value = '';
   }
 }
 
@@ -685,11 +709,11 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ editing ? t('serversPage.editServer') : t('serversPage.createServer') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="serverDialog = false" />
+          <v-btn icon="mdi-close" variant="text" :disabled="serverSaving" @click="serverDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
-          <v-form @submit.prevent="saveServer">
+          <v-form :disabled="serverSaving" @submit.prevent="saveServer">
             <v-alert v-if="credentialRows.length === 0" type="info" variant="tonal" density="compact" class="credential-required-alert mb-3">
               <span>{{ t('serversPage.credentialRequired') }}</span>
               <v-btn size="small" variant="text" class="text-none" @click="resetCredentialForm">{{ t('serversPage.addCredential') }}</v-btn>
@@ -732,42 +756,18 @@ onMounted(load);
               <v-textarea v-model="serverForm.notes" :label="t('serversPage.notesLabel')" variant="outlined" density="comfortable" rows="3" class="span-all" />
             </div>
 
-            <div class="probe-panel mt-2">
-              <div class="probe-copy">
-                <div class="text-subtitle-2 font-weight-bold">{{ t('serversPage.connectionTest') }}</div>
-                <div class="text-caption text-medium-emphasis">{{ t('serversPage.connectionTestHint') }}</div>
+            <v-alert v-if="creatingServerTaskId" type="info" variant="tonal" density="compact" class="mt-3">
+              <div class="server-task-alert">
+                <span>{{ t('serversPage.serverInfoTaskRunning') }}</span>
+                <v-btn size="small" variant="text" class="text-none" :to="taskRoute(creatingServerTaskId)">{{ t('taskCenter.task') }}</v-btn>
               </div>
-              <v-btn prepend-icon="mdi-lan-check" variant="outlined" class="text-none" :loading="probeLoading" :disabled="serverCredentialMissing" @click="probeServerForm">{{ t('serversPage.testConnection') }}</v-btn>
-            </div>
-
-            <v-alert v-if="probeError" type="error" variant="tonal" density="compact" class="mt-3">{{ probeError }}</v-alert>
-            <v-alert v-if="probeResult?.error" type="warning" variant="tonal" density="compact" class="mt-3">{{ probeResult.error }}</v-alert>
-            <div v-if="probeResult" class="probe-result mt-3">
-              <div><span>{{ t('serversPage.reachableLabel') }}</span><v-chip :color="probeResult.reachable ? 'success' : 'error'" size="small" variant="tonal" label>{{ probeResult.reachable ? t('common.yes') : t('common.no') }}</v-chip></div>
-              <div><span>{{ t('serversPage.privilege') }}</span><v-chip :color="probeResult.privileged ? 'success' : 'warning'" size="small" variant="tonal" label>{{ probeResult.root ? t('serversPage.root') : probeResult.passwordlessSudo ? t('serversPage.passwordlessSudo') : t('serversPage.limited') }}</v-chip></div>
-              <div><span>{{ t('serversPage.distro') }}</span><strong>{{ probeResult.os.prettyName || t('common.unknown') }}</strong></div>
-              <div><span>{{ t('serversPage.ufw') }}</span><v-chip :color="ufwStatusFromTraits(probeResult.traits).color" size="small" variant="tonal" label>{{ ufwStatusFromTraits(probeResult.traits).label }}</v-chip></div>
-              <div><span>{{ t('serversPage.cpuCores') }}</span><strong>{{ probeResult.traits['sys.cpu_cores'] || t('common.notAvailable') }}</strong></div>
-              <div><span>{{ t('serversPage.memory') }}</span><strong>{{ probeResult.traits['sys.memory_total_mb'] ? `${(Number(probeResult.traits['sys.memory_total_mb']) / 1024).toFixed(1)} GB` : t('common.notAvailable') }}</strong></div>
-              <div><span>{{ t('serversPage.disk') }}</span><strong>{{ probeResult.traits['sys.disk_total_gb'] ? `${probeResult.traits['sys.disk_total_gb']} GB` : t('common.notAvailable') }}</strong></div>
-              <div><span>{{ t('serversPage.architecture') }}</span><strong>{{ probeResult.traits['sys.architecture'] || t('common.notAvailable') }}</strong></div>
-              <div><span>{{ t('serversPage.cpuModel') }}</span><strong>{{ probeResult.traits['sys.cpu_model'] || t('common.notAvailable') }}</strong></div>
-              <div class="probe-networks">
-                <span>{{ t('serversPage.networkInterfaces') }}</span>
-                <div v-if="networkInterfaces(probeResult.traits).length" class="probe-network-list">
-                  <v-chip v-for="network in networkInterfaces(probeResult.traits)" :key="network.name" size="small" variant="tonal" color="primary" label>
-                    {{ network.name }} · {{ network.addresses.map(item => item.address).filter(Boolean).join(', ') || t('serversPage.linkOnly') }}
-                  </v-chip>
-                </div>
-                <strong v-else>{{ t('common.notAvailable') }}</strong>
-              </div>
-            </div>
+            </v-alert>
           </v-form>
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="serverDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" :disabled="serverCredentialMissing" @click="saveServer">{{ t('common.save') }}</v-btn>
+          <v-btn variant="text" class="text-none" :disabled="serverSaving" @click="serverDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="primary" variant="flat" class="text-none" :loading="serverSaving" :disabled="serverCredentialMissing" @click="saveServer">{{ editing ? t('common.save') : t('common.create') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -872,24 +872,18 @@ onMounted(load);
 .network-addresses { display: grid; gap: 7px; }
 .network-address { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .network-address code { min-width: 0; overflow-wrap: anywhere; font-size: 0.78rem; color: var(--lp-text-muted); }
-.probe-networks { grid-column: 1 / -1; align-items: flex-start !important; }
-.probe-network-list { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .trait-list { display: flex; flex-wrap: wrap; gap: 6px; }
 .notes { margin: 0; color: var(--lp-text-muted); white-space: pre-wrap; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .span-all { grid-column: 1 / -1; }
-.probe-panel { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 26%); }
-.probe-copy { min-width: 0; }
+.server-task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .credential-required-alert :deep(.v-alert__content) { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.probe-result { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
-.probe-result > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 10px; border: 1px solid var(--lp-border); border-radius: 8px; }
-.probe-result span { color: var(--lp-text-muted); font-size: 0.76rem; }
 .credential-table-card { overflow: hidden; }
 .font-tabular { font-variant-numeric: tabular-nums; }
 .min-width-0 { min-width: 0; }
 @media (max-width: 1280px) { .servers-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid, .probe-result { grid-template-columns: 1fr; max-width: none; }
-  .detail-header, .probe-panel { flex-direction: column; align-items: stretch; }
+  .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
+  .detail-header, .server-task-alert { flex-direction: column; align-items: stretch; }
 }
 </style>

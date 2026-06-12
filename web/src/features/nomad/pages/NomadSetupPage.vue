@@ -5,6 +5,7 @@ import { useI18n } from '@/i18n';
 import { nomadApi } from '@/api/nomad';
 import type { NomadControlPlaneDto } from '@/types/api';
 import PageLoadingState from '@/components/PageLoadingState.vue';
+import { buildNomadAddressOptions, type NomadAddressOption } from '@/features/nomad/addressOptions';
 
 const router = useRouter();
 const controlPlane = ref<NomadControlPlaneDto | null>(null);
@@ -24,20 +25,26 @@ const candidateOptions = computed(() =>
 );
 const selectedServer = computed(() => bootstrapCandidates.value.find((server) => server.id === selectedServerId.value) ?? null);
 const addressOptions = computed(() => {
-  const options: Array<{ label: string; value: string }> = [];
-  for (const raw of (selectedServer.value?.traits?.['sys.network_interfaces'] || '').split(', ')) {
-    const [name, family, cidr] = raw.split('|');
-    const address = (cidr || '').split('/')[0].trim();
-    if (!name || !address || !['inet', 'inet6'].includes(family)) continue;
-    options.push({ label: `${name} · ${address}`, value: address });
-  }
-  return options;
+  return buildNomadAddressOptions(selectedServer.value).map((option) => ({
+    ...option,
+    label: nomadAddressOptionLabel(option),
+  }));
 });
 const migrationRequired = computed(() => controlPlane.value?.status === 'migration_required');
 
 watch(selectedServerId, () => {
   selectedAdvertiseAddress.value = addressOptions.value[0]?.value ?? '';
 });
+
+function nomadAddressOptionLabel(option: NomadAddressOption) {
+  if (option.source === 'current') {
+    return t('nomadSetupPage.nomadAddressSourceCurrent', { address: option.value });
+  }
+  if (option.source === 'ssh') {
+    return t('nomadSetupPage.nomadAddressSourceSsh', { address: option.value });
+  }
+  return t('nomadSetupPage.nomadAddressSourceInterface', { name: option.name || '-', address: option.value });
+}
 
 async function load() {
   loading.value = true;

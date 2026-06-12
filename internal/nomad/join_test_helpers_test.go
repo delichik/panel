@@ -59,6 +59,7 @@ func setJoinTestServerState(t *testing.T, svc *server.Service, serverID, osID, o
 			family = "inet6"
 		}
 		traits["sys.network_interfaces"] = "eth0|" + family + "|" + ip.String() + suffix
+		traits[TraitAdvertiseAddress] = ip.String()
 		traits[TraitServerAdvertiseAddress] = ip.String()
 	}
 	traitsJSON, _ := json.Marshal(traits)

@@ -217,7 +217,7 @@ func (p *CloudflareProvider) do(ctx context.Context, method, endpoint string, bo
 		return nil
 	}
 	if err := json.Unmarshal(raw, out); err != nil {
-		return err
+		return panelerr.BadGateway("cloudflare_invalid_response", "Cloudflare API returned a non-JSON response")
 	}
 	if failed := cloudflareError(out); failed != "" {
 		return panelerr.BadGateway("cloudflare_api_error", failed)

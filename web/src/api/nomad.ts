@@ -20,9 +20,15 @@ export interface RemoveNomadNodeInput {
 export interface RedeployNomadNodeInput {
   serverId: string;
   role: string;
+  advertiseAddress: string;
 }
 
 export interface NomadServerInput {
+  serverId: string;
+  advertiseAddress: string;
+}
+
+export interface JoinNomadServerInput {
   serverId: string;
   advertiseAddress: string;
 }
@@ -61,8 +67,8 @@ export function createNomadApi(client: ApiClient = apiClient) {
     async joinCandidates() {
       return normalizeList(await client.get<ServerDto[] | null>('/nomad/join-candidates'));
     },
-    joinServer(serverId: string) {
-      return client.post<TaskCreatedDto>('/nomad/join', { serverId });
+    joinServer(input: JoinNomadServerInput) {
+      return client.post<TaskCreatedDto>('/nomad/join', input);
     },
     bootstrapServer(input: NomadServerInput) {
       return client.post<TaskCreatedDto>('/nomad/bootstrap-server', input);

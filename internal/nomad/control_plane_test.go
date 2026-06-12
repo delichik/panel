@@ -43,7 +43,7 @@ func TestControlPlaneRequiresMigrationWhenLegacyServerHasNoAdvertiseAddress(t *t
 	srv := createControlPlaneServer(t, svc.servers, credSvc, ctx, "legacy", "10.0.0.30")
 	traits := map[string]string{}
 	for key, value := range srv.Traits {
-		if key != TraitServerAdvertiseAddress {
+		if key != TraitAdvertiseAddress && key != TraitServerAdvertiseAddress {
 			traits[key] = value
 		}
 	}
