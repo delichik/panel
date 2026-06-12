@@ -1,74 +1,48 @@
-# 应用模块
+﻿# 搴旂敤妯″潡
 
-## 适用场景
+## 閫傜敤鍦烘櫙
 
-修改应用创建、编辑、appspec、变量解析、应用文件、保存会话、修订、Nomad job 渲染、部署、停止、重启、日志、运行时状态、镜像更新或应用反向代理时，先读本文档。
+淇敼搴旂敤鍒涘缓銆佺紪杈戙€乤ppspec銆佸彉閲忚В鏋愩€佸簲鐢ㄦ枃浠躲€佷繚瀛樹細璇濄€佷慨璁€丯omad job 娓叉煋銆侀儴缃层€佸仠姝€侀噸鍚€佹棩蹇椼€佽繍琛屾椂鐘舵€併€侀暅鍍忔洿鏂版垨搴旂敤鍙嶅悜浠ｇ悊鏃讹紝鍏堣鏈枃妗ｃ€?
+## 鍚庣鍏ュ彛
 
-## 后端入口
+- 搴旂敤鏈嶅姟涓?handler锛歚internal/applications/`
+- 搴旂敤瑙勬牸妯″瀷銆佹牎楠屽拰娓叉煋锛歚internal/appspec/`
+- 璋冨害浣嶇疆閫夋嫨锛歚internal/orchestrator/`
+- 妯℃澘娓叉煋鎺ュ彛锛歚internal/templatex/`
+- Nomad client锛歚internal/nomad/`
+- 浠诲姟璁板綍锛歚internal/tasks/`
+- 璺敱瑁呴厤鍜岃法妯″潡杩炴帴锛歚internal/app/app.go`
 
-- 应用服务与 handler：`internal/applications/`
-- 应用规格模型、校验和渲染：`internal/appspec/`
-- 调度位置选择：`internal/orchestrator/`
-- 模板渲染接口：`internal/templatex/`
-- Nomad client：`internal/nomad/`
-- 任务记录：`internal/tasks/`
-- 路由装配和跨模块连接：`internal/app/app.go`
+## 鍓嶇鍏ュ彛
 
-## 前端入口
+- 搴旂敤椤甸潰锛歚web/src/views/runtime/applications/index.vue`
+- 缂栬緫鍣細`web/src/views/runtime/applications/ApplicationEditor.vue`
+- 璇︽儏锛歚web/src/views/runtime/applications/ApplicationDetail.vue`
+- 杩愯鏃讹細`web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
+- 鏃ュ織锛歚web/src/views/runtime/applications/ApplicationLogsPanel.vue`
+- API锛歚web/src/api/applications.ts`
+- 绫诲瀷锛歚web/src/types/api.ts`
 
-- 应用页面：`web/src/features/applications/pages/ApplicationsPage.vue`
-- 编辑器：`web/src/features/applications/components/ApplicationEditor.vue`
-- 详情：`web/src/features/applications/components/ApplicationDetail.vue`
-- 运行时：`web/src/features/applications/components/ApplicationRuntimePanel.vue`
-- 日志：`web/src/features/applications/components/ApplicationLogsPanel.vue`
-- API：`web/src/api/applications.ts`
-- 类型：`web/src/types/api.ts`
+## API 鑼冨洿
 
-## API 范围
+- 搴旂敤 CRUD锛歚GET/POST /api/v1/applications`锛宍GET/PUT/DELETE /api/v1/applications/{id}`
+- 搴旂敤鏂囦欢锛歚GET/POST /api/v1/applications/{id}/files`锛宍DELETE /api/v1/applications/{id}/files/{fileId}`
+- 淇濆瓨浼氳瘽锛歚POST /api/v1/application-save-sessions`锛宍POST /api/v1/application-save-sessions/{id}/files`锛宍POST /api/v1/application-save-sessions/{id}/files/delete`锛宍POST /api/v1/application-save-sessions/{id}/commit`
+- 鏍￠獙鍜岃鍒掞細`POST /api/v1/applications/{id}/validate`锛宍POST /api/v1/applications/{id}/plan`
+- 杩愯鎿嶄綔锛歚POST /api/v1/applications/{id}/deploy`锛宍/stop`锛宍/restart`
+- 闀滃儚锛歚POST /api/v1/applications/{id}/image/check`锛宍/image/update`
+- 杩愯鏃跺拰鏃ュ織锛歚GET /api/v1/applications/{id}/runtime`锛宍GET /api/v1/applications/{id}/logs`
+- 鎵撳寘锛歚GET /api/v1/applications/{id}/package`
+- 妯℃澘鐩綍锛歚GET /api/v1/application-template-catalog`
 
-- 应用 CRUD：`GET/POST /api/v1/applications`，`GET/PUT/DELETE /api/v1/applications/{id}`
-- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`DELETE /api/v1/applications/{id}/files/{fileId}`
-- 保存会话：`POST /api/v1/application-save-sessions`，`POST /api/v1/application-save-sessions/{id}/files`，`POST /api/v1/application-save-sessions/{id}/files/delete`，`POST /api/v1/application-save-sessions/{id}/commit`
-- 校验和计划：`POST /api/v1/applications/{id}/validate`，`POST /api/v1/applications/{id}/plan`
-- 运行操作：`POST /api/v1/applications/{id}/deploy`，`/stop`，`/restart`
-- 镜像：`POST /api/v1/applications/{id}/image/check`，`/image/update`
-- 运行时和日志：`GET /api/v1/applications/{id}/runtime`，`GET /api/v1/applications/{id}/logs`
-- 打包：`GET /api/v1/applications/{id}/package`
-- 模板目录：`GET /api/v1/application-template-catalog`
+## 鏁版嵁涓庤涓虹害瀹?
+- 涓昏琛ㄥ寘鎷?`applications`銆乣application_files`銆乣application_revisions`銆?- 搴旂敤瑙勬牸浠?YAML 杈撳叆锛岀粡杩?`internal/appspec/` 鏍￠獙鍜屾覆鏌撲负 Nomad job銆?- 搴旂敤鍙橀噺銆侀儴缃叉ā寮忋€佸弽鍚戜唬鐞嗛厤缃瓑鎸佷箙鍖栧瓧娈靛繀椤讳繚瀛樼ǔ瀹氱粨鏋勶紝涓嶄繚瀛樺凡缈昏瘧灞曠ず鏂囨銆?- 鏂囦欢鍐呭閫氳繃 API 浠?base64 鎵胯浇锛屼繚瀛樹細璇濈敤浜庢壒閲忎笂浼犮€佸垹闄ゅ拰鎻愪氦銆?- 鍚敤搴旂敤銆侀儴缃层€侀暅鍍忔洿鏂扮瓑娴佺▼闇€瑕佸厛鏍￠獙鍜岃鍒掞紝鍐嶆敞鍐?Nomad job銆?- 杩愯鏃剁姸鎬併€侀儴缃层€佽瘎浼板拰鏃ュ織閮ㄥ垎鏉ヨ嚜 Nomad锛岀涓夋柟鍘熷鎻忚堪閫氬父淇濈暀鍘熸牱銆?- 搴旂敤閮ㄧ讲銆佸仠姝€侀噸鍚拰闀滃儚鏇存柊鎺ュ彛杩斿洖 `taskId` 鏃讹紝鍓嶇蹇呴』淇濈暀浠诲姟涓績鍏ュ彛锛涚紪杈戝櫒閲岀殑鈥滀繚瀛樺苟閮ㄧ讲鈥濅篃蹇呴』鎶婇儴缃?`taskId` 浼犲洖椤甸潰鎻愮ず銆?- `application_deploy` 浠诲姟琛ㄧず Nomad 宸叉帴鍙楅儴缃茶姹傦紝涓嶇瓑浠蜂簬搴旂敤宸茬粡鍋ュ悍杩愯锛涘疄闄?allocation/deployment 鍋ュ悍鐘舵€佸繀椤婚€氳繃杩愯鏃堕潰鏉垮睍绀恒€?- 搴旂敤鍒犻櫎蹇呴』鍏堢鐢ㄥ簲鐢紝骞跺湪鍓嶇浜屾纭鍚庢墽琛屻€?- 搴旂敤鏃ュ織闈㈡澘浠嶅厑璁告墜鍔ㄨ緭鍏?allocation/task锛屼絾杩愯鏃?allocation 琛ㄥ繀椤绘彁渚涙棩蹇楀叆鍙ｏ紝灏?allocation ID 鍜?task 鍚嶇О甯﹀叆鏃ュ織闈㈡澘銆?- 璇佷功妯″潡鎻愪緵鍐呯疆鍙橀噺瑙ｆ瀽锛孨omad 妯″潡璐熻矗鍙嶅悜浠ｇ悊鍚屾銆?- 妯℃澘鐩綍鎻愪緵 `server.id`銆乣server.name`銆乣server.ssh_host`銆乣server.ssh_port`銆乣server.ssh_username` 绛夎泧褰㈣妭鐐瑰彉閲忥紱鑺傜偣鍊兼潵鑷疄闄?allocation 鎵€鍦?Nomad 鑺傜偣鐨?`panel_*` meta锛屽叾涓?SSH 鍦板潃鍙栨湇鍔″櫒閰嶇疆鐨?`host`銆?- 搴旂敤鏂囦欢妯℃澘閫氳繃 Nomad template 鍦?allocation 鍚姩鏃惰鍙?`PANEL_SERVER_*` 鐜鍙橀噺锛屽洜姝ゅ悓涓€搴旂敤鍦ㄤ笉鍚岃妭鐐瑰緱鍒颁笉鍚屾湇鍔″櫒鍊笺€?- 鎸傝浇绫诲瀷 `panel_file` 浣跨敤 `certificate:<resource-id>:<kind>` 绋冲畾寮曠敤 Panel 鎵樼璇佷功鏂囦欢銆傜閽ュ唴瀹逛笉閫氳繃鐩綍 API 杩斿洖锛岄儴缃叉椂鐢卞悗绔鍙栧苟浠ュ彧璇?Nomad template 鎸傝浇銆?- 鑷畾涔夊彉閲忓湪鍓嶇浣跨敤閿€艰〃鍗曠淮鎶わ紝鎸佷箙鍖栦粛浣跨敤鐜版湁 `variables_json`銆?- Nomad 闆嗙兢閲嶅缓瀹屾垚鍚庝細璋冪敤 `RedeployEnabledApplications`锛屾棤鏉′欢閲嶆柊娓叉煋骞舵敞鍐屾墍鏈?`enabled` 搴旂敤锛涜鎭㈠琛屼负涓嶈兘鍙緷璧栬鏍煎搱甯屽彉鍖栵紝鍚﹀垯鏂伴泦缇や腑涓嶅瓨鍦ㄧ殑 job 涓嶄細琚仮澶嶃€?
+## 楠岃瘉
 
-## 数据与行为约定
+- 鍏堟寜妯″潡绱㈠紩鐨勨€滄鏌ュ拰娴嬭瘯鑼冨洿鈥濆垽鏂槸鍚﹂渶瑕侀獙璇併€?- 闇€瑕侀獙璇佸悗绔敼鍔ㄦ椂锛岃繍琛?`task test:backend`锛岄噸鐐瑰叧娉?`internal/applications`銆乣internal/appspec`銆乣internal/orchestrator`銆?- 鍓嶇搴旂敤椤甸潰鎴?API 绫诲瀷鏀瑰姩鍙寜闇€瑕佽繍琛?`task test:web` 鎴?`task build:web`銆?
+## 鏂囨。鏇存柊瑙﹀彂
 
-- 主要表包括 `applications`、`application_files`、`application_revisions`。
-- 应用规格以 YAML 输入，经过 `internal/appspec/` 校验和渲染为 Nomad job。
-- 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
-- 文件内容通过 API 以 base64 承载，保存会话用于批量上传、删除和提交。
-- 启用应用、部署、镜像更新等流程需要先校验和计划，再注册 Nomad job。
-- 运行时状态、部署、评估和日志部分来自 Nomad，第三方原始描述通常保留原样。
-- 应用部署、停止、重启和镜像更新接口返回 `taskId` 时，前端必须保留任务中心入口；编辑器里的“保存并部署”也必须把部署 `taskId` 传回页面提示。
-- `application_deploy` 任务表示 Nomad 已接受部署请求，不等价于应用已经健康运行；实际 allocation/deployment 健康状态必须通过运行时面板展示。
-- 应用删除必须先禁用应用，并在前端二次确认后执行。
-- 应用日志面板仍允许手动输入 allocation/task，但运行时 allocation 表必须提供日志入口，将 allocation ID 和 task 名称带入日志面板。
-- 证书模块提供内置变量解析，Nomad 模块负责反向代理同步。
-- 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等蛇形节点变量；节点值来自实际 allocation 所在 Nomad 节点的 `panel_*` meta，其中 SSH 地址取服务器配置的 `host`。
-- 应用文件模板通过 Nomad template 在 allocation 启动时读取 `PANEL_SERVER_*` 环境变量，因此同一应用在不同节点得到不同服务器值。
-- 挂载类型 `panel_file` 使用 `certificate:<resource-id>:<kind>` 稳定引用 Panel 托管证书文件。私钥内容不通过目录 API 返回，部署时由后端读取并以只读 Nomad template 挂载。
-- 自定义变量在前端使用键值表单维护，持久化仍使用现有 `variables_json`。
-- Nomad 集群重建完成后会调用 `RedeployEnabledApplications`，无条件重新渲染并注册所有 `enabled` 应用；该恢复行为不能只依赖规格哈希变化，否则新集群中不存在的 job 不会被恢复。
+鏂板 appspec 瀛楁銆佸簲鐢ㄦ寔涔呭寲瀛楁銆丄PI銆佸簲鐢ㄦ枃浠惰涓恒€侀儴缃叉祦绋嬨€侀暅鍍忔洿鏂伴€昏緫銆佸弽鍚戜唬鐞嗗瓧娈垫垨杩愯鏃跺睍绀哄瓧娈垫椂锛屽繀椤绘洿鏂版湰鏂囨。銆?
+## Panel 鎵樼瀵嗛挜鏂囦欢
 
-## 验证
-
-- 先按模块索引的“检查和测试范围”判断是否需要验证。
-- 需要验证后端改动时，运行 `task test:backend`，重点关注 `internal/applications`、`internal/appspec`、`internal/orchestrator`。
-- 前端应用页面或 API 类型改动只按需要运行 `task test:web` 或 `task build:web`。
-
-## 文档更新触发
-
-新增 appspec 字段、应用持久化字段、API、应用文件行为、部署流程、镜像更新逻辑、反向代理字段或运行时展示字段时，必须更新本文档。
-
-## Panel 托管密钥文件
-
-- `panel_file` 的新规范来源为 `key_asset:<asset-id>:<kind>`，支持 `certificate`、`private_key`、`public_key` 和 SSH 的 `ssh_public_key`。
-- appspec 校验同时接受旧 `certificate:` 来源以兼容已有应用；新页面和目录只生成 `key_asset:`。
-- 私钥不会出现在目录 API 响应中，只在部署渲染时由后端解密并作为只读 Nomad template 提供。
-- 密钥资产服务扫描应用 spec 和反向代理域名，返回精确的应用 ID、名称及 `panel_file` / `reverse_proxy` 引用，用于删除保护和导入覆盖确认。
-- TLS 重新签发、SSH 重新生成和批量导入会调用 `RedeployEnabledApplications`，确保每台服务器重新按自身内置变量渲染。
+- `panel_file` 鐨勬柊瑙勮寖鏉ユ簮涓?`key_asset:<asset-id>:<kind>`锛屾敮鎸?`certificate`銆乣private_key`銆乣public_key` 鍜?SSH 鐨?`ssh_public_key`銆?- appspec 鏍￠獙鍚屾椂鎺ュ彈鏃?`certificate:` 鏉ユ簮浠ュ吋瀹瑰凡鏈夊簲鐢紱鏂伴〉闈㈠拰鐩綍鍙敓鎴?`key_asset:`銆?- 绉侀挜涓嶄細鍑虹幇鍦ㄧ洰褰?API 鍝嶅簲涓紝鍙湪閮ㄧ讲娓叉煋鏃剁敱鍚庣瑙ｅ瘑骞朵綔涓哄彧璇?Nomad template 鎻愪緵銆?- 瀵嗛挜璧勪骇鏈嶅姟鎵弿搴旂敤 spec 鍜屽弽鍚戜唬鐞嗗煙鍚嶏紝杩斿洖绮剧‘鐨勫簲鐢?ID銆佸悕绉板強 `panel_file` / `reverse_proxy` 寮曠敤锛岀敤浜庡垹闄や繚鎶ゅ拰瀵煎叆瑕嗙洊纭銆?- TLS 閲嶆柊绛惧彂銆丼SH 閲嶆柊鐢熸垚鍜屾壒閲忓鍏ヤ細璋冪敤 `RedeployEnabledApplications`锛岀‘淇濇瘡鍙版湇鍔″櫒閲嶆柊鎸夎嚜韬唴缃彉閲忔覆鏌撱€?

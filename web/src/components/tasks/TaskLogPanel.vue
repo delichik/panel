@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { tasksApi } from '@/api/tasks';
-import { formatDateTime, t, translateTaskStage, translateTaskStatus, translateTaskType } from '@/i18n';
+import { useI18n } from '@/i18n';
 import type { TaskDto, TaskLogDto } from '@/types/api';
 
 const props = defineProps<{
@@ -21,6 +21,7 @@ const loading = ref(false);
 const error = ref('');
 const finishedEmitted = ref(false);
 let timer: number | undefined;
+const { formatDateTime, t, translateTaskStage, translateTaskStatus, translateTaskType } = useI18n();
 
 const statusType = computed(() => {
   switch (task.value?.status) {

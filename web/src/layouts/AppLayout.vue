@@ -202,7 +202,7 @@ onBeforeUnmount(() => {
       </v-list>
     </v-navigation-drawer>
 
-    <v-main class="fill-height overflow-y-auto">
+    <v-main class="app-main">
       <div class="main-content">
         <header class="app-header panel">
           <div class="app-header-title min-width-0">
@@ -351,8 +351,32 @@ onBeforeUnmount(() => {
 }
 
 :deep(.v-main) {
-  height: 100dvh;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
+  transition: background-color 0.25s ease;
+}
+
+:deep(.v-main__wrap) {
+  display: flex;
+  min-height: 0;
+}
+
+.app-main {
+  min-height: 0;
+}
+
+.app-main :deep(.v-main__wrap) {
+  flex: 1 1 auto;
+}
+
+.main-content {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, 1640px);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+  padding: clamp(16px, 2vw, 28px);
   transition: background-color 0.25s ease;
 }
 
@@ -434,10 +458,8 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 
-.main-content {
-  width: min(100%, 1640px);
-  margin: 0 auto;
-  padding: clamp(16px, 2vw, 28px);
+.main-content > :last-child {
+  min-height: 0;
 }
 
 .task-slide-enter-active,
@@ -516,7 +538,18 @@ onBeforeUnmount(() => {
   }
 
   .main-content {
+    grid-template-rows: auto auto;
     padding: 16px;
+  }
+}
+
+@media (max-width: 760px) {
+  :deep(.v-main) {
+    overflow-y: auto;
+  }
+
+  .main-content {
+    min-height: auto;
   }
 }
 

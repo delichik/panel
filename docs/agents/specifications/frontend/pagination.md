@@ -1,16 +1,15 @@
-# 分页
+﻿# 鍒嗛〉
 
-## 共享组件
+## 鍏变韩缁勪欢
 
-所有用户可见数据列表优先使用 `AppPagination.vue`。
-
+鎵€鏈夌敤鎴峰彲瑙佹暟鎹垪琛ㄤ紭鍏堜娇鐢?`AppPagination.vue`銆?
 ### Props
 
-| 属性 | 类型 | 默认值 |
+| 灞炴€?| 绫诲瀷 | 榛樿鍊?|
 | --- | --- | --- |
-| `page` | `number` | 必填 |
-| `pageSize` | `number` | 必填 |
-| `total` | `number` | 必填 |
+| `page` | `number` | 蹇呭～ |
+| `pageSize` | `number` | 蹇呭～ |
+| `total` | `number` | 蹇呭～ |
 | `pageSizes` | `number[]` | `[10, 20, 50, 100]` |
 
 ### Events
@@ -18,60 +17,31 @@
 - `update:page`
 - `update:pageSize`
 
-修改 page size 时组件会自动把 page 重置为 `1`。
+淇敼 page size 鏃剁粍浠朵細鑷姩鎶?page 閲嶇疆涓?`1`銆?
+## 鏄剧ず瑙勫垯
 
-## 显示规则
+- `total <= 0` 鏃朵笉娓叉煋銆?- 宸︿晶鏄剧ず鏈湴鍖栨€绘暟銆?- 涓棿涓洪〉澶у皬閫夋嫨鍣紝瀹藉害绾?`118px`銆?- 鍙充晶涓?Vuetify `v-pagination`銆?- 灏忓睆鏈€澶氭樉绀?`5` 涓垎椤甸」锛屽叾浠栧睆骞曟渶澶?`10` 涓€?- 褰撳墠椤垫寜閽娇鐢ㄤ富鑹插疄搴曘€?
+## 甯冨眬
 
-- `total <= 0` 时不渲染。
-- 左侧显示本地化总数。
-- 中间为页大小选择器，宽度约 `118px`。
-- 右侧为 Vuetify `v-pagination`。
-- 小屏最多显示 `5` 个分页项，其他屏幕最多 `10` 个。
-- 当前页按钮使用主色实底。
+- 鍒嗛〉鏀惧湪鍒楄〃鎴栬〃鏍煎崱鐗囧簳閮ㄣ€?- 椤堕儴鏈?`--lp-border` 鍒嗛殧绾裤€?- 鑳屾櫙浣跨敤寮卞寲鐨?`--lp-surface-container`銆?- 妗岄潰妯悜闈犲彸锛屾€绘暟閫氳繃 `margin-right: auto` 闈犲乏銆?- `760px` 浠ヤ笅鏀逛负绾靛悜锛岄〉澶у皬閫夋嫨鍣ㄥ～婊″搴︺€?
+## 鍓嶇鍒嗛〉
 
-## 布局
+鏁扮粍鍨嬫帴鍙ｄ娇鐢?`usePagination.ts`锛?
+- 杈撳叆鏁版嵁鍙樺寲鏃朵繚鎸侀〉鐮佸悎娉曘€?- 椤甸潰鍙秷璐?`pageItems`銆?- 鎬绘暟鏉ヨ嚜鍘熷鏁扮粍闀垮害銆?- 鎼滅储鎴栫瓫閫夊彉鍖栧悗搴斿洖鍒扮涓€椤点€?
+## 鏈嶅姟绔垎椤?
+- 淇濈暀鎺ュ彛杩斿洖鐨?`total`銆?- `update:page` 鍜?`update:pageSize` 瑙﹀彂閲嶆柊璇锋眰銆?- page size 鍙樺寲鍚庝粠绗竴椤佃姹傘€?- 璇锋眰鏈熼棿淇濈暀鐜版湁鍐呭骞朵娇鐢ㄥ眬閮?loading銆?
+## 宓屽鍖哄煙
 
-- 分页放在列表或表格卡片底部。
-- 顶部有 `--lp-border` 分隔线。
-- 背景使用弱化的 `--lp-surface-container`。
-- 桌面横向靠右，总数通过 `margin-right: auto` 靠左。
-- `760px` 以下改为纵向，页大小选择器填满宽度。
+瀵硅瘽妗嗘垨璇︽儏瀛愯〃鍙户缁娇鐢?`AppPagination`锛屼絾蹇呴』纭繚锛?
+- 瀹瑰櫒瀹藉害瓒冲銆?- 绉诲姩绔旱鍚戝竷灞€涓嶄細閬尅琛ㄥ崟鎿嶄綔銆?- 鍒嗛〉褰掑睘娓呮锛屼笉涓庨〉闈富鍒楄〃鍒嗛〉娣锋穯銆?
+## 绂佸繉
 
-## 前端分页
-
-数组型接口使用 `usePagination.ts`：
-
-- 输入数据变化时保持页码合法。
-- 页面只消费 `pageItems`。
-- 总数来自原始数组长度。
-- 搜索或筛选变化后应回到第一页。
-
-## 服务端分页
-
-- 保留接口返回的 `total`。
-- `update:page` 和 `update:pageSize` 触发重新请求。
-- page size 变化后从第一页请求。
-- 请求期间保留现有内容并使用局部 loading。
-
-## 嵌套区域
-
-对话框或详情子表可继续使用 `AppPagination`，但必须确保：
-
-- 容器宽度足够。
-- 移动端纵向布局不会遮挡表单操作。
-- 分页归属清楚，不与页面主列表分页混淆。
-
-## 禁忌
-
-- 不直接在页面中拼装另一套总数、页大小和分页按钮。
-- 不在 `total = 0` 时保留空分页条。
-- 不让页大小变化后停留在越界页码。
-- 不把前端数组分页伪装成服务端请求分页。
-
-## 源码依据
+- 涓嶇洿鎺ュ湪椤甸潰涓嫾瑁呭彟涓€濂楁€绘暟銆侀〉澶у皬鍜屽垎椤垫寜閽€?- 涓嶅湪 `total = 0` 鏃朵繚鐣欑┖鍒嗛〉鏉°€?- 涓嶈椤靛ぇ灏忓彉鍖栧悗鍋滅暀鍦ㄨ秺鐣岄〉鐮併€?- 涓嶆妸鍓嶇鏁扮粍鍒嗛〉浼鎴愭湇鍔＄璇锋眰鍒嗛〉銆?
+## 婧愮爜渚濇嵁
 
 - `web/src/components/AppPagination.vue`
 - `web/src/composables/usePagination.ts`
-- `web/src/features/applications/pages/ApplicationsPage.vue`
-- `web/src/features/tasks/pages/TaskCenterPage.vue`
+- `web/src/views/runtime/applications/index.vue`
+- `web/src/views/tasks/index.vue`
+
 

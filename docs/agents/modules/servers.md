@@ -1,69 +1,45 @@
-# 服务器、凭据、指标与软件包
+﻿# 鏈嶅姟鍣ㄣ€佸嚟鎹€佹寚鏍囦笌杞欢鍖?
+## 閫傜敤鍦烘櫙
 
-## 适用场景
+淇敼 SSH 鍑嵁銆佹湇鍔″櫒鐧昏銆佽繛閫氭€ф祴璇曘€佺郴缁熸帰娴嬨€乻udo 妫€鏌ャ€乁FW 瀹夎銆佹瑙堟寚鏍囬噰闆嗐€丄PT 杞欢鍖呭埛鏂版垨鍗囩骇鏃讹紝鍏堣鏈枃妗ｃ€?
+## 鍚庣鍏ュ彛
 
-修改 SSH 凭据、服务器登记、连通性测试、系统探测、sudo 检查、UFW 安装、概览指标采集、APT 软件包刷新或升级时，先读本文档。
+- SSH 鍑嵁锛歚internal/credential/`
+- 鏈嶅姟鍣細`internal/server/`
+- SSH 鎵ц鍣細`internal/sshx/`
+- Linux 鍙戣鐗堥€傞厤锛歚internal/linux/`
+- 閫氱敤杩滅▼杩愮淮鎿嶄綔锛歚internal/remoteops/`
+- 鎸囨爣閲囬泦锛歚internal/metrics/`
+- 姒傝鑱氬悎锛歚internal/overview/`
+- 杞欢鍖呯淮鎶わ細`internal/packages/`
+- 璋冨害瑙﹀彂锛歚internal/scheduler/`
+- 浠诲姟璁板綍锛歚internal/tasks/`
+- 璺敱瑁呴厤锛歚internal/app/app.go`
 
-## 后端入口
+## 鍓嶇鍏ュ彛
 
-- SSH 凭据：`internal/credential/`
-- 服务器：`internal/server/`
-- SSH 执行器：`internal/sshx/`
-- Linux 发行版适配：`internal/linux/`
-- 通用远程运维操作：`internal/remoteops/`
-- 指标采集：`internal/metrics/`
-- 概览聚合：`internal/overview/`
-- 软件包维护：`internal/packages/`
-- 调度触发：`internal/scheduler/`
-- 任务记录：`internal/tasks/`
-- 路由装配：`internal/app/app.go`
+- 鏈嶅姟鍣ㄤ笌鍑嵁椤甸潰锛歚web/src/views/servers/_shared/ServersPageContent.vue`
+- 鏈嶅姟鍣ㄩ€夋嫨鍣細`web/src/components/ServerSelector.vue`
+- 杞欢鍖呴〉闈細`web/src/views/servers/packages/index.vue`
+- 闃茬伀澧欓〉闈細`web/src/views/servers/firewall/index.vue`
+- 姒傝椤甸潰锛歚web/src/views/overview/index.vue`
+- API锛歚web/src/api/servers.ts`銆乣web/src/api/packages.ts`銆乣web/src/api/overview.ts`
+- 绫诲瀷锛歚web/src/types/api.ts`
 
-## 前端入口
+## API 鑼冨洿
 
-- 服务器与凭据页面：`web/src/features/servers/pages/ServersPage.vue`
-- 服务器选择器：`web/src/components/ServerSelector.vue`
-- 软件包页面：`web/src/features/packages/pages/PackageUpdatesPage.vue`
-- 防火墙页面：`web/src/features/firewall/pages/FirewallPage.vue`
-- 概览页面：`web/src/features/overview/pages/OverviewPage.vue`
-- API：`web/src/api/servers.ts`、`web/src/api/packages.ts`、`web/src/api/overview.ts`
-- 类型：`web/src/types/api.ts`
+- 鍑嵁锛歚GET/POST /api/v1/credentials`锛宍PUT/DELETE /api/v1/credentials/{id}`
+- 鏈嶅姟鍣細`GET/POST /api/v1/servers`锛宍POST /api/v1/servers/probe`锛宍PUT/DELETE /api/v1/servers/{id}`锛涙柊澧炴湇鍔″櫒鍝嶅簲鍙惡甯?`initialTaskId` 鎸囧悜棣栬繛淇℃伅閲囬泦浠诲姟銆?- 鏈嶅姟鍣ㄦ搷浣滐細`POST /api/v1/servers/{id}/test`锛宍POST /api/v1/servers/{id}/restart`锛宍POST /api/v1/servers/{id}/ufw/install`
+- UFW 闃茬伀澧欙細`GET /api/v1/servers/{id}/ufw`锛宍POST /api/v1/servers/{id}/ufw/enable`锛宍POST /api/v1/servers/{id}/ufw/rules`锛宍DELETE /api/v1/servers/{id}/ufw/rules/{number}`
+- 鎸囨爣锛歚GET /api/v1/servers/{id}/metrics`
+- 杞欢鍖咃細`GET /api/v1/servers/{id}/packages/updates`锛宍POST /api/v1/servers/{id}/packages/refresh`锛宍POST /api/v1/servers/{id}/packages/upgrade-selected`锛宍POST /api/v1/servers/{id}/packages/upgrade-all`
+- 姒傝锛歚GET /api/v1/overview`
 
-## API 范围
+## 鏁版嵁涓庤涓虹害瀹?
+- `servers` 鍜?`credentials` 鍦ㄥ簲鐢ㄦ暟鎹簱锛屾寚鏍囧揩鐓у湪鎸囨爣鏁版嵁搴撱€?- 绯荤粺鎺㈡祴閫氳繃 SSH 鎵ц杩滅▼鍛戒护锛屽苟浜ょ粰 `internal/linux/` 瑙ｆ瀽鏀寔鐨?Debian/Ubuntu 鐗堟湰銆?- 绯荤粺鎺㈡祴鍐欏叆 `sys.*` traits锛屽綋鍓嶅寘鎷?CPU 鏍告暟銆佸唴瀛樸€佺鐩樸€佷富鏈哄悕銆佹灦鏋勩€丆PU 鍨嬪彿銆佺墿鐞?鐩撮€氱綉鍗″湴鍧€鎽樿銆佸彂琛岀増鍜?UFW 鏀寔/瀹夎/鍚敤鐘舵€併€傜綉鍗￠噰闆嗚姹?`/sys/class/net/{name}/device` 瀛樺湪锛屽苟杩囨护 Docker銆乿eth銆乥ridge銆丆NI銆侀毀閬撳拰 overlay 绛夊父瑙佽櫄鎷熸帴鍙ｃ€?- 瀹夎杞欢銆佹棩蹇楀寲 sudo 鍛戒护銆乻udo 鍐欐枃浠跺拰 UFW allow/delete/status 杩欑被鍩虹杩滅▼鎿嶄綔搴斾紭鍏堝鐢?`internal/remoteops/`锛岄伩鍏嶅湪涓氬姟妯″潡閲屾暎钀介暱鑴氭湰銆?- 鍓嶇鐧昏鎴栨祴璇曟湇鍔″櫒鍓嶅繀椤婚€夋嫨宸叉湁 SSH 鍑嵁锛涙病鏈夊嚟鎹椂搴斿紩瀵煎厛鍒涘缓鍑嵁锛屼笉鑳芥彁浜ょ┖ `credentialId`銆?- 缁存姢鎿嶄綔閫氬父瑕佹眰 root 鎴栧厤瀵?sudo锛涚浉鍏虫鏌ョ粨鏋滃啓鍥炴湇鍔″櫒璁板綍銆?- 杞欢鍖呯淮鎶ゅ熀浜?APT锛屽彧瀵规敮鎸佺殑绯荤粺鎵ц锛涘埛鏂板拰鍗囩骇閮戒緷璧栬繙绋?sudo锛屽墠绔細鍦ㄥ彂琛岀増鎴栧厤瀵?sudo 鏈‘璁ゆ椂闃绘柇鎵嬪姩缁存姢鎿嶄綔銆?- `POST /api/v1/servers/{id}/packages/refresh` 浼氬垱寤烘垨澶嶇敤 `package_refresh` 浠诲姟骞惰繑鍥?`taskId`锛涜皟搴﹀櫒鎸変竴杞墍鏈夋湇鍔″櫒鍒锋柊鏃讹紝鍚屼竴杞垱寤虹殑澶氫釜 `package_refresh` 浠诲姟蹇呴』鍏变韩涓€涓?`operationId`锛涘埛鏂板け璐ュ繀椤昏惤鍒颁换鍔￠敊璇拰鏃ュ織閲岋紝涓嶈兘鍙啓鍚庡彴鏃ュ織銆?- 鍛ㄦ湡鎬ф寚鏍囬噰闆嗕細鍒涘缓 `metrics_collect` 浠诲姟璁板綍锛涘悓涓€杞鍙版湇鍔″櫒閲囬泦鍏变韩涓€涓?`operationId`銆備换鍔′腑蹇冮粯璁も€滃父鐢ㄧ被鍨嬧€濅細闅愯棌璇ラ珮棰戠被鍨嬶紝鍒囧埌鈥滄墍鏈夌被鍨嬧€濇垨绮剧‘閫夋嫨 `metrics_collect` 鏃跺彲鏌ョ湅銆?- `POST /api/v1/servers/{id}/ufw/install` 杩斿洖 `taskId`锛涘墠绔惎鍔ㄥ悗蹇呴』淇濈暀浠诲姟涓績鍏ュ彛锛岄伩鍏嶇敤鎴锋棤娉曡拷韪繙绋嬪畨瑁呰繘搴︺€俇FW 瀹夎浠诲姟鐢卞唴瀛?goroutine 鎵ц锛屽垱寤哄悗蹇呴』鍏堟爣璁颁负 `running` 鍐嶈繑鍥烇紝閬楃暀鏃?`queued` 鐢变换鍔℃竻鐞嗗厹搴曟爣璁板け璐ャ€?- `POST /api/v1/servers/{id}/restart` 瑕佹眰鏈嶅姟鍣ㄥ彲杈句笖宸茬‘璁ゅ厤瀵?sudo锛岃繑鍥?`server_restart` 浠诲姟鐨?`taskId`锛涘墠绔繀椤讳簩娆＄‘璁ゅ苟淇濈暀浠诲姟涓績鍏ュ彛銆傝繙绋嬪懡浠ゅ厛鍚庡彴寤惰繜鍐嶈皟鐢?`systemctl reboot` 鎴?`shutdown -r now`锛岄伩鍏?SSH 涓诲姩鏂紑琚鍒や负閲嶅惎澶辫触銆?- UFW 绠＄悊椤甸潰鍙敮鎸?UFW锛氱姸鎬佹煡璇€佹坊鍔?allow 瑙勫垯鍜屾寜缂栧彿鍒犻櫎瑙勫垯閫氳繃杩滅▼ sudo 鍚屾鎵ц銆傚惎鐢ㄦ搷浣滆繑鍥?`server_ufw_enable` 浠诲姟锛涙湭瀹夎鏃跺厛瀹夎锛岄殢鍚庢斁琛屾湇鍔″櫒褰撳墠 SSH 绔彛骞舵墽琛?`ufw --force enable`锛岄〉闈㈤渶瑕佷簩娆＄‘璁ゅ苟淇濈暀浠诲姟涓績鍏ュ彛锛涚鐢?UFW 鏆備笉鐢遍〉闈㈡彁渚涖€?- 鏂板鏈嶅姟鍣ㄦ椂鍙垱寤轰竴涓彲瑙佺殑 `server_info_collect` 棣栬繛淇℃伅閲囬泦浠诲姟锛屽苟鍦ㄥ垱寤哄搷搴旇繑鍥?`initialTaskId` 渚涘墠绔睍绀轰换鍔″叆鍙ｏ紱璇ヤ换鍔￠杩炲け璐ユ椂蹇呴』鏍囪澶辫触骞跺垹闄ゅ垰鍒涘缓鐨勬湇鍔″櫒璁板綍锛岃鐢ㄦ埛鍥炲埌鍒涘缓琛ㄥ崟閲嶆柊璋冩暣 SSH 淇℃伅銆傚悗缁紪杈戙€佹墜鍔ㄦ祴璇曞拰闄堟棫鍒锋柊澶嶇敤鍐呴儴 `server_connectivity_test` 杩為€氭€т换鍔★紝榛樿涓嶅湪浠诲姟涓績灞曠ず锛涗竴娆℃湇鍔″櫒鍒楄〃瑙﹀彂鐨勫鍙伴檲鏃ф湇鍔″櫒鍒锋柊搴斿叡浜竴涓?`operationId`銆?- 闀胯€楁椂鎿嶄綔搴旇褰曚负浠诲姟锛屾棩蹇楀拰姝ラ浜ょ粰 `internal/tasks/`銆?- 姒傝鎸囨爣鍗＄墖鍦ㄧ獎灏哄涓嬩細鑷姩闅愯棌閲嶅彔鐨勬椂闂磋酱鏍囩锛涘崟椤规寚鏍囨媺鍙栧け璐ユ椂涓嶅湪鍗＄墖鍐呭睍绀洪敊璇枃妗堬紝鍥捐〃娴獥鎸傝浇鍒伴〉闈㈠眰浠ラ伩鍏嶈鍗＄墖杈圭晫瑁佸壀銆?- 鏈嶅姟鍣ㄨ鎯呮寜缃戝崱鍒嗙粍灞曠ず鎺ュ彛鍚嶅強 IPv4/IPv6 鍦板潃锛屼笉鎶婃墍鏈夋帴鍙ｅ湴鍧€鎷煎湪鍚屼竴涓睘鎬у€间腑锛涜繛鎺ユ祴璇曠粨鏋滀娇鐢ㄧ揣鍑戠殑鍒嗛」缃戝崱鏍囩銆?- 鏈嶅姟鍣ㄣ€佽蒋浠跺寘鍜岄槻鐏椤甸潰鐨勫乏渚ф湇鍔″櫒閫夋嫨鍣ㄤ娇鐢ㄧ粺涓€鐨勭揣鍑戝钩闈㈠垪琛ㄩ鏍硷紝妗岄潰瀹藉害涓?`clamp(300px, 26vw, 340px)`锛涜蒋浠跺寘鍜岄槻鐏鍒囨崲鏈嶅姟鍣ㄦ椂娓呯┖涓婁竴鍙版湇鍔″櫒鐨勫紓姝ヨ鎯呭苟鏄剧ず鍔犺浇鐘舵€侊紝涓斿拷鐣ヨ繜鍒板搷搴斻€?
+## 楠岃瘉
 
-- 凭据：`GET/POST /api/v1/credentials`，`PUT/DELETE /api/v1/credentials/{id}`
-- 服务器：`GET/POST /api/v1/servers`，`POST /api/v1/servers/probe`，`PUT/DELETE /api/v1/servers/{id}`；新增服务器响应可携带 `initialTaskId` 指向首连信息采集任务。
-- 服务器操作：`POST /api/v1/servers/{id}/test`，`POST /api/v1/servers/{id}/restart`，`POST /api/v1/servers/{id}/ufw/install`
-- UFW 防火墙：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/enable`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`
-- 指标：`GET /api/v1/servers/{id}/metrics`
-- 软件包：`GET /api/v1/servers/{id}/packages/updates`，`POST /api/v1/servers/{id}/packages/refresh`，`POST /api/v1/servers/{id}/packages/upgrade-selected`，`POST /api/v1/servers/{id}/packages/upgrade-all`
-- 概览：`GET /api/v1/overview`
+- 鍏堟寜妯″潡绱㈠紩鐨勨€滄鏌ュ拰娴嬭瘯鑼冨洿鈥濆垽鏂槸鍚﹂渶瑕侀獙璇併€?- 闇€瑕侀獙璇佸悗绔敼鍔ㄦ椂锛岃繍琛?`task test:backend`锛岄噸鐐瑰叧娉?`server`銆乣credential`銆乣linux`銆乣metrics`銆乣packages` 鐩稿叧娴嬭瘯銆?- 鍓嶇椤甸潰鎴?API 绫诲瀷鏀瑰姩鍙寜闇€瑕佽繍琛?`task test:web` 鎴?`task build:web`銆?
+## 鏂囨。鏇存柊瑙﹀彂
 
-## 数据与行为约定
-
-- `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
-- 系统探测通过 SSH 执行远程命令，并交给 `internal/linux/` 解析支持的 Debian/Ubuntu 版本。
-- 系统探测写入 `sys.*` traits，当前包括 CPU 核数、内存、磁盘、主机名、架构、CPU 型号、物理/直通网卡地址摘要、发行版和 UFW 支持/安装/启用状态。网卡采集要求 `/sys/class/net/{name}/device` 存在，并过滤 Docker、veth、bridge、CNI、隧道和 overlay 等常见虚拟接口。
-- 安装软件、日志化 sudo 命令、sudo 写文件和 UFW allow/delete/status 这类基础远程操作应优先复用 `internal/remoteops/`，避免在业务模块里散落长脚本。
-- 前端登记或测试服务器前必须选择已有 SSH 凭据；没有凭据时应引导先创建凭据，不能提交空 `credentialId`。
-- 维护操作通常要求 root 或免密 sudo；相关检查结果写回服务器记录。
-- 软件包维护基于 APT，只对支持的系统执行；刷新和升级都依赖远程 sudo，前端会在发行版或免密 sudo 未确认时阻断手动维护操作。
-- `POST /api/v1/servers/{id}/packages/refresh` 会创建或复用 `package_refresh` 任务并返回 `taskId`；调度器按一轮所有服务器刷新时，同一轮创建的多个 `package_refresh` 任务必须共享一个 `operationId`；刷新失败必须落到任务错误和日志里，不能只写后台日志。
-- 周期性指标采集会创建 `metrics_collect` 任务记录；同一轮多台服务器采集共享一个 `operationId`。任务中心默认“常用类型”会隐藏该高频类型，切到“所有类型”或精确选择 `metrics_collect` 时可查看。
-- `POST /api/v1/servers/{id}/ufw/install` 返回 `taskId`；前端启动后必须保留任务中心入口，避免用户无法追踪远程安装进度。UFW 安装任务由内存 goroutine 执行，创建后必须先标记为 `running` 再返回，遗留旧 `queued` 由任务清理兜底标记失败。
-- `POST /api/v1/servers/{id}/restart` 要求服务器可达且已确认免密 sudo，返回 `server_restart` 任务的 `taskId`；前端必须二次确认并保留任务中心入口。远程命令先后台延迟再调用 `systemctl reboot` 或 `shutdown -r now`，避免 SSH 主动断开被误判为重启失败。
-- UFW 管理页面只支持 UFW：状态查询、添加 allow 规则和按编号删除规则通过远程 sudo 同步执行。启用操作返回 `server_ufw_enable` 任务；未安装时先安装，随后放行服务器当前 SSH 端口并执行 `ufw --force enable`，页面需要二次确认并保留任务中心入口；禁用 UFW 暂不由页面提供。
-- 新增服务器时只创建一个可见的 `server_info_collect` 首连信息采集任务，并在创建响应返回 `initialTaskId` 供前端展示任务入口；该任务首连失败时必须标记失败并删除刚创建的服务器记录，让用户回到创建表单重新调整 SSH 信息。后续编辑、手动测试和陈旧刷新复用内部 `server_connectivity_test` 连通性任务，默认不在任务中心展示；一次服务器列表触发的多台陈旧服务器刷新应共享一个 `operationId`。
-- 长耗时操作应记录为任务，日志和步骤交给 `internal/tasks/`。
-- 概览指标卡片在窄尺寸下会自动隐藏重叠的时间轴标签；单项指标拉取失败时不在卡片内展示错误文案，图表浮窗挂载到页面层以避免被卡片边界裁剪。
-- 服务器详情按网卡分组展示接口名及 IPv4/IPv6 地址，不把所有接口地址拼在同一个属性值中；连接测试结果使用紧凑的分项网卡标签。
-- 服务器、软件包和防火墙页面的左侧服务器选择器使用统一的紧凑平面列表风格，桌面宽度为 `clamp(300px, 26vw, 340px)`；软件包和防火墙切换服务器时清空上一台服务器的异步详情并显示加载状态，且忽略迟到响应。
-
-## 验证
-
-- 先按模块索引的“检查和测试范围”判断是否需要验证。
-- 需要验证后端改动时，运行 `task test:backend`，重点关注 `server`、`credential`、`linux`、`metrics`、`packages` 相关测试。
-- 前端页面或 API 类型改动只按需要运行 `task test:web` 或 `task build:web`。
-
-## 文档更新触发
-
-新增支持系统、远程命令、服务器字段、凭据字段、指标字段、软件包行为或相关 API 时，必须更新本文档。
+鏂板鏀寔绯荤粺銆佽繙绋嬪懡浠ゃ€佹湇鍔″櫒瀛楁銆佸嚟鎹瓧娈点€佹寚鏍囧瓧娈点€佽蒋浠跺寘琛屼负鎴栫浉鍏?API 鏃讹紝蹇呴』鏇存柊鏈枃妗ｃ€?

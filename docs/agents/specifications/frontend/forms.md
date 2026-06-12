@@ -1,101 +1,61 @@
-# 表单
+﻿# 琛ㄥ崟
 
-## 基础组件
+## 鍩虹缁勪欢
 
-使用 Vuetify：
+浣跨敤 Vuetify锛?
+- 鍗曡杈撳叆锛歚v-text-field`
+- 閫夋嫨锛歚v-select`
+- 鍙緭鍏ラ€夋嫨锛歚v-combobox`
+- 澶氳杈撳叆锛歚v-textarea`
+- 甯冨皵璁剧疆锛歚v-switch`
+- 澶氶€夛細`v-checkbox` 鎴栬〃鏍间腑鐨?`v-checkbox-btn`
+- 鏂囦欢锛歚v-file-input`
 
-- 单行输入：`v-text-field`
-- 选择：`v-select`
-- 可输入选择：`v-combobox`
-- 多行输入：`v-textarea`
-- 布尔设置：`v-switch`
-- 多选：`v-checkbox` 或表格中的 `v-checkbox-btn`
-- 文件：`v-file-input`
+杈撳叆妗嗗叏灞€鍦嗚涓?`8px`锛岃仛鐒︽椂浣跨敤涓婚鑹茬劍鐐圭幆銆?
+## 鍙樹綋涓庡瘑搴?
+- 瀵硅瘽妗嗗拰鏅€氱紪杈戣〃鍗曪細`variant="outlined" density="comfortable"`銆?- 绛涢€夋爮銆侀噸澶嶈鍜岀揣鍑戝伐鍏峰尯锛歚variant="outlined" density="compact" hide-details`銆?- 鍚屼竴涓〃鍗曞垎鍖哄唴淇濇寔缁熶竴瀵嗗害銆?- 鍙湁鏃犻渶灞曠ず鏍￠獙銆佹彁绀烘垨閿欒鏂囨湰鐨勭揣鍑戞帶浠舵墠浣跨敤 `hide-details`銆?
+## 鏍囩涓庢彁绀?
+- 鎵€鏈夊彲缂栬緫瀛楁蹇呴』鏈夋湰鍦板寲 `label`銆?- 鏍煎紡瑕佹眰浣跨敤 `hint`锛涙寔缁噸瑕佺殑瑕佹眰浣跨敤 `persistent-hint`銆?- 绀轰緥鍊煎彲浣跨敤 `placeholder`锛屼絾涓嶈兘鏇夸唬鏍囩銆?- 瀵嗙爜瀛楁浣跨敤 `type="password"`銆?- 璺緞銆佸瘑閽ャ€乊AML銆佸搱甯岀瓑鍐呭浣跨敤绛夊瀛椾綋銆?
+## 琛ㄥ崟甯冨眬
 
-输入框全局圆角为 `8px`，聚焦时使用主题色焦点环。
+### 鍗曞垪琛ㄥ崟
 
-## 变体与密度
-
-- 对话框和普通编辑表单：`variant="outlined" density="comfortable"`。
-- 筛选栏、重复行和紧凑工具区：`variant="outlined" density="compact" hide-details`。
-- 同一个表单分区内保持统一密度。
-- 只有无需展示校验、提示或错误文本的紧凑控件才使用 `hide-details`。
-
-## 标签与提示
-
-- 所有可编辑字段必须有本地化 `label`。
-- 格式要求使用 `hint`；持续重要的要求使用 `persistent-hint`。
-- 示例值可使用 `placeholder`，但不能替代标签。
-- 密码字段使用 `type="password"`。
-- 路径、密钥、YAML、哈希等内容使用等宽字体。
-
-## 表单布局
-
-### 单列表单
-
-设置页等连续配置使用：
-
+璁剧疆椤电瓑杩炵画閰嶇疆浣跨敤锛?
 ```css
 display: grid;
 max-width: 560px;
 gap: 16px;
 ```
 
-### 双列表单
+### 鍙屽垪琛ㄥ崟
 
-短字段可使用：
-
+鐭瓧娈靛彲浣跨敤锛?
 ```css
 grid-template-columns: repeat(2, minmax(0, 1fr));
 gap: 12px;
 ```
 
-- 长文本域使用 `.span-all` 跨越整行。
-- `760px` 以下转为单列。
+- 闀挎枃鏈煙浣跨敤 `.span-all` 璺ㄨ秺鏁磋銆?- `760px` 浠ヤ笅杞负鍗曞垪銆?
+### 閲嶅琛?
+- 浣跨敤 grid锛岄棿璺?`8px` 鑷?`10px`銆?- 鍒犻櫎鎸夐挳浣嶄簬琛屽熬锛屼娇鐢?text/error 鍥炬爣鎸夐挳銆?- `760px` 浠ヤ笅蹇呴』绾靛悜鍫嗗彔銆?- 鏂板鎸夐挳浣嶄簬鍒楄〃涔嬪悗锛屼娇鐢?outlined銆?
+## 鍒嗗尯
 
-### 重复行
+闀胯〃鍗曚娇鐢?`.section-title` 鍜?`v-divider` 鍒嗙粍銆傚垎鍖烘爣棰樻弿杩伴鍩燂紝濡傗€滆繍琛屾椂鈥濃€滅綉缁溾€濃€滃嚟鎹€濓紝涓嶈兘鍙啓妯＄硦鐨勨€滃叾浠栤€濄€?
+## 甯冨皵鎺т欢
 
-- 使用 grid，间距 `8px` 至 `10px`。
-- 删除按钮位于行尾，使用 text/error 图标按钮。
-- `760px` 以下必须纵向堆叠。
-- 新增按钮位于列表之后，使用 outlined。
+- `v-switch` 鐢ㄤ簬绔嬪嵆琛ㄨ揪鍚敤/绂佺敤鎴栨ā寮忓垏鎹€?- `v-checkbox` 鐢ㄤ簬纭銆佹壒閲忛€夋嫨鎴栭檮鍔犻€夐」銆?- 鍗遍櫓纭澶嶉€夋蹇呴』閰嶅悎璇存槑鏂囨湰锛屼笉鑳藉彧鏄剧ず鎺т欢銆?
+## 鏍￠獙涓庢彁浜?
+- 瀛楁閿欒鐢?Vuetify 杈撳叆缁勪欢鏄剧ず銆?- 琛ㄥ崟绾ч敊璇娇鐢?`v-alert type="error" variant="tonal"`锛岀疆浜庤〃鍗曢《閮ㄦ垨鐩稿叧鍒嗗尯涓婃柟銆?- 鎻愪氦鎸夐挳浣跨敤 `:loading`銆?- 鎻愪氦鏈熼棿鎸変笟鍔￠渶瑕佺鐢ㄧ浉鍏冲瓧娈垫垨鍏朵粬鍐茬獊鍔ㄤ綔銆?- 淇濆瓨鎴愬姛浣跨敤 Snackbar锛屼笉鍦ㄨ〃鍗曚腑姘镐箙鍫嗙Н鎴愬姛 Alert銆?
+## 鏃犻殰纰?
+- 涓嶇Щ闄ら粯璁ゆ爣绛惧叧鑱斿拰閿洏鎿嶄綔銆?- 鍥炬爣灏鹃儴鎿嶄綔蹇呴』鏈夊彲璁块棶鍚嶇О銆?- 閿欒淇℃伅涓嶈兘鍙€氳繃绾㈣壊杈规琛ㄨ揪銆?- 琛ㄥ崟鎻愪氦搴旀敮鎸佸師鐢?`submit` 鏃朵紭鍏堜娇鐢?`v-form @submit.prevent`銆?
+## 绂佸繉
 
-## 分区
-
-长表单使用 `.section-title` 和 `v-divider` 分组。分区标题描述领域，如“运行时”“网络”“凭据”，不能只写模糊的“其他”。
-
-## 布尔控件
-
-- `v-switch` 用于立即表达启用/禁用或模式切换。
-- `v-checkbox` 用于确认、批量选择或附加选项。
-- 危险确认复选框必须配合说明文本，不能只显示控件。
-
-## 校验与提交
-
-- 字段错误由 Vuetify 输入组件显示。
-- 表单级错误使用 `v-alert type="error" variant="tonal"`，置于表单顶部或相关分区上方。
-- 提交按钮使用 `:loading`。
-- 提交期间按业务需要禁用相关字段或其他冲突动作。
-- 保存成功使用 Snackbar，不在表单中永久堆积成功 Alert。
-
-## 无障碍
-
-- 不移除默认标签关联和键盘操作。
-- 图标尾部操作必须有可访问名称。
-- 错误信息不能只通过红色边框表达。
-- 表单提交应支持原生 `submit` 时优先使用 `v-form @submit.prevent`。
-
-## 禁忌
-
-- 不在同一区域混用 filled、solo 和 outlined。
-- 不用 placeholder 作为唯一字段说明。
-- 不为紧凑而隐藏仍需要展示的校验信息。
-- 不让双列表单在窄屏保持固定两列。
-
-## 源码依据
+- 涓嶅湪鍚屼竴鍖哄煙娣风敤 filled銆乻olo 鍜?outlined銆?- 涓嶇敤 placeholder 浣滀负鍞竴瀛楁璇存槑銆?- 涓嶄负绱у噾鑰岄殣钘忎粛闇€瑕佸睍绀虹殑鏍￠獙淇℃伅銆?- 涓嶈鍙屽垪琛ㄥ崟鍦ㄧ獎灞忎繚鎸佸浐瀹氫袱鍒椼€?
+## 婧愮爜渚濇嵁
 
 - `web/src/styles/main.css`
-- `web/src/features/settings/pages/SettingsPage.vue`
-- `web/src/features/servers/pages/ServersPage.vue`
-- `web/src/features/dns/pages/DomainsPage.vue`
+- `web/src/views/settings/_shared/SettingsPageContent.vue`
+- `web/src/views/servers/_shared/ServersPageContent.vue`
+- `web/src/views/dns/domains/index.vue`
+
 

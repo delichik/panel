@@ -1,89 +1,49 @@
-# 状态与反馈
+﻿# 鐘舵€佷笌鍙嶉
 
-## 语义映射
+## 璇箟鏄犲皠
 
-| 语义 | 颜色 |
+| 璇箟 | 棰滆壊 |
 | --- | --- |
-| 正常、完成、在线 | `success` |
-| 进行中、主要活动 | `primary` |
-| 排队、中性进度、信息 | `info` 或 `warning`，按业务含义选择 |
-| 风险、降级、待处理 | `warning` |
-| 失败、错误、危险 | `error` |
-| 中性分类 | `secondary` 或无显式颜色 |
+| 姝ｅ父銆佸畬鎴愩€佸湪绾?| `success` |
+| 杩涜涓€佷富瑕佹椿鍔?| `primary` |
+| 鎺掗槦銆佷腑鎬ц繘搴︺€佷俊鎭?| `info` 鎴?`warning`锛屾寜涓氬姟鍚箟閫夋嫨 |
+| 椋庨櫓銆侀檷绾с€佸緟澶勭悊 | `warning` |
+| 澶辫触銆侀敊璇€佸嵄闄?| `error` |
+| 涓€у垎绫?| `secondary` 鎴栨棤鏄惧紡棰滆壊 |
 
-同一业务状态在列表、详情、对话框和日志中必须保持同一颜色映射。
-
+鍚屼竴涓氬姟鐘舵€佸湪鍒楄〃銆佽鎯呫€佸璇濇鍜屾棩蹇椾腑蹇呴』淇濇寔鍚屼竴棰滆壊鏄犲皠銆?
 ## Chip
 
-状态和短分类使用 `v-chip`：
+鐘舵€佸拰鐭垎绫讳娇鐢?`v-chip`锛?
+- 甯哥敤 `size="small"` 鎴栬〃鏍间腑鐨?`x-small`銆?- 鐘舵€佹爣绛句紭鍏?`variant="tonal" label`銆?- 鏁伴噺鍙娇鐢?`primary tonal`銆?- Chip 鏂囨搴旂煭锛屼笉鏀惧畬鏁撮敊璇俊鎭€?- 澶氫釜 Chip 鍏佽鎹㈣骞朵繚鎸?`6px` 宸﹀彸闂磋窛銆?
+## 鐘舵€佺偣
 
-- 常用 `size="small"` 或表格中的 `x-small`。
-- 状态标签优先 `variant="tonal" label`。
-- 数量可使用 `primary tonal`。
-- Chip 文案应短，不放完整错误信息。
-- 多个 Chip 允许换行并保持 `6px` 左右间距。
-
-## 状态点
-
-紧凑选择列表可使用 `.status-dot`：
-
-- 直径 `8px` 至 `9px`。
-- 圆形。
-- `success/warning/error` 取主题色。
-- 可用淡色外环增强识别。
-- 状态点必须配合文本或上下文，不能作为唯一信息载体。
-
+绱у噾閫夋嫨鍒楄〃鍙娇鐢?`.status-dot`锛?
+- 鐩村緞 `8px` 鑷?`9px`銆?- 鍦嗗舰銆?- `success/warning/error` 鍙栦富棰樿壊銆?- 鍙敤娣¤壊澶栫幆澧炲己璇嗗埆銆?- 鐘舵€佺偣蹇呴』閰嶅悎鏂囨湰鎴栦笂涓嬫枃锛屼笉鑳戒綔涓哄敮涓€淇℃伅杞戒綋銆?
 ## Alert
 
-使用 `v-alert variant="tonal"`：
-
-- 页面加载或操作失败：`type="error"`。
-- 可继续但需注意：`type="warning"`。
-- 流程说明、任务已创建：`type="info"`。
-- 成功状态通常使用 Snackbar；只有需要持续可见时才使用 success Alert。
-- 局部 Alert 放在相关卡片或表单内部，页面级 Alert 放在 `.page-shell` 顶部。
-- 紧凑区域使用 `density="compact"`。
-
+浣跨敤 `v-alert variant="tonal"`锛?
+- 椤甸潰鍔犺浇鎴栨搷浣滃け璐ワ細`type="error"`銆?- 鍙户缁絾闇€娉ㄦ剰锛歚type="warning"`銆?- 娴佺▼璇存槑銆佷换鍔″凡鍒涘缓锛歚type="info"`銆?- 鎴愬姛鐘舵€侀€氬父浣跨敤 Snackbar锛涘彧鏈夐渶瑕佹寔缁彲瑙佹椂鎵嶄娇鐢?success Alert銆?- 灞€閮?Alert 鏀惧湪鐩稿叧鍗＄墖鎴栬〃鍗曞唴閮紝椤甸潰绾?Alert 鏀惧湪 `.page-shell` 椤堕儴銆?- 绱у噾鍖哄煙浣跨敤 `density="compact"`銆?
 ## Snackbar
 
-用于操作完成后的短暂反馈：
+鐢ㄤ簬鎿嶄綔瀹屾垚鍚庣殑鐭殏鍙嶉锛?
+- 榛樿 timeout `3000ms`锛岄渶瑕侀槄璇绘洿澶氬唴瀹规椂鍙负 `5000ms`銆?- 棰滆壊璺熼殢缁撴灉璇箟銆?- 鍙彁渚涒€滄煡鐪嬩换鍔♀€濇垨鈥滃叧闂€濆姩浣溿€?- 涓嶆壙杞介渶瑕佺‘璁ゃ€佸～鍐欐垨闀挎湡淇濈暀鐨勪俊鎭€?
+## 杩涘害
 
-- 默认 timeout `3000ms`，需要阅读更多内容时可为 `5000ms`。
-- 颜色跟随结果语义。
-- 可提供“查看任务”或“关闭”动作。
-- 不承载需要确认、填写或长期保留的信息。
+- 宸茬煡鐧惧垎姣斾娇鐢?`v-progress-linear :model-value`銆?- 鏈煡鏃堕暱浣跨敤 `indeterminate`銆?- 浠诲姟瀹屾垚涓?success锛屽け璐ヤ负 error锛岃繍琛屼腑涓?primary銆?- 琛ㄦ牸涓殑杩涘害鏉￠珮搴︾害 `6px` 鑷?`8px`銆?- 璇︽儏涓殑涓昏繘搴﹀彲杈惧埌 `18px` 骞舵樉绀虹櫨鍒嗘瘮銆?
+## 鍔犺浇涓庡弽棣堣竟鐣?
+- 鍒濇鍔犺浇浣跨敤 `PageLoadingState`銆?- 宸叉湁鍐呭鍒锋柊浣跨敤鍗＄墖 `:loading`銆佹寜閽?`:loading` 鎴栧眬閮ㄨ繘搴︺€?- 涓嶅湪宸叉湁鍐呭涓婅鐩栧叏椤靛姞杞界姸鎬併€?
+## 鏂囨
 
-## 进度
+- 鎵€鏈夌姸鎬佸拰鍙嶉鏂囨蹇呴』鏈湴鍖栥€?- 閿欒浼樺厛缁欏嚭鐢ㄦ埛鍙鍔ㄧ殑淇℃伅銆?- 涓嶇洿鎺ユ毚闇?JSON 瑙ｆ瀽閿欒銆佸爢鏍堟垨搴曞眰寮傚父鏍煎紡銆?
+## 绂佸繉
 
-- 已知百分比使用 `v-progress-linear :model-value`。
-- 未知时长使用 `indeterminate`。
-- 任务完成为 success，失败为 error，运行中为 primary。
-- 表格中的进度条高度约 `6px` 至 `8px`。
-- 详情中的主进度可达到 `18px` 并显示百分比。
-
-## 加载与反馈边界
-
-- 初次加载使用 `PageLoadingState`。
-- 已有内容刷新使用卡片 `:loading`、按钮 `:loading` 或局部进度。
-- 不在已有内容上覆盖全页加载状态。
-
-## 文案
-
-- 所有状态和反馈文案必须本地化。
-- 错误优先给出用户可行动的信息。
-- 不直接暴露 JSON 解析错误、堆栈或底层异常格式。
-
-## 禁忌
-
-- 不仅依靠颜色区分状态。
-- 不把 warning 用作所有非成功状态的默认色。
-- 不用 Snackbar 展示不可消失的系统故障。
-- 不同时显示同一结果的 Alert 和 Snackbar。
-
-## 源码依据
+- 涓嶄粎渚濋潬棰滆壊鍖哄垎鐘舵€併€?- 涓嶆妸 warning 鐢ㄤ綔鎵€鏈夐潪鎴愬姛鐘舵€佺殑榛樿鑹层€?- 涓嶇敤 Snackbar 灞曠ず涓嶅彲娑堝け鐨勭郴缁熸晠闅溿€?- 涓嶅悓鏃舵樉绀哄悓涓€缁撴灉鐨?Alert 鍜?Snackbar銆?
+## 婧愮爜渚濇嵁
 
 - `web/src/styles/main.css`
 - `web/src/components/tasks/TaskLogPanel.vue`
-- `web/src/features/tasks/pages/TaskCenterPage.vue`
-- `web/src/features/nomad/pages/NomadNodesPage.vue`
+- `web/src/views/tasks/index.vue`
+- `web/src/views/runtime/nomad/nodes/index.vue`
+
 
