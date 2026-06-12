@@ -66,3 +66,8 @@
 
 ## 瀵嗛挜涓庤瘉涔?
 - `web/src/views/certificates/key-assets/index.vue` 鐨?CA銆乀LS銆丼SH銆佹壒閲忓鍏ュ鍑恒€佸啿绐佺‘璁ゅ拰寮曠敤鎻愮ず宸叉帴鍏ヨ嫳鏂囦笌绠€浣撲腑鏂囪瘝鏉°€?- `key_asset_*` 涓诲瘑閽ャ€佸綊妗ｃ€佺被鍨嬨€佺埗 CA銆佷娇鐢ㄤ腑鍜屽鍏ュ啿绐侀敊璇爜宸叉帴鍏?`internal/i18n/i18n.go`銆?- 浠诲姟涓績宸茶ˉ鍏呭瘑閽ヨ祫浜т换鍔＄被鍨嬨€侀樁娈靛拰鎿嶄綔鏍囬缈昏瘧銆?
+
+## DNS provider 凭据
+
+- Cloudflare 域名配置已移除 Account ID 文案，只保留 API Token。
+- DNS provider 凭据缺失或格式无效的后端错误码已补充简体中文翻译。

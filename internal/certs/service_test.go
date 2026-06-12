@@ -248,7 +248,7 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,api_token_secret,account_id,created_at,updated_at) VALUES('dnsdom_1','example.com','cloudflare','token','acct_1','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at) VALUES('dnsdom_1','example.com','cloudflare','{}','','now','now')`); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.AppDB())

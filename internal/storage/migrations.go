@@ -136,8 +136,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
 			provider TEXT NOT NULL CHECK(provider IN ('cloudflare')),
-			api_token_secret TEXT NOT NULL DEFAULT '',
-			account_id TEXT NOT NULL DEFAULT '',
+			provider_config_json TEXT NOT NULL DEFAULT '{}',
+			provider_secret_ciphertext TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
@@ -337,7 +337,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "dns_domains", map[string]string{
-		"account_id": "TEXT NOT NULL DEFAULT ''",
+		"provider_config_json":       "TEXT NOT NULL DEFAULT '{}'",
+		"provider_secret_ciphertext": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}

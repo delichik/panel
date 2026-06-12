@@ -127,7 +127,11 @@ func New(cfg config.Config) (*App, error) {
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
-	dnsSvc := dns.NewService(store.AppDB())
+	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	dnsSvc := dns.NewService(store.AppDB(), secretStore)
 	certSvc := certs.NewService(store.AppDB(), cfg, dnsSvc, taskSvc)
 	certSvc.SetNomadTLSAssets(nomadTLS)
 	certSvc.SetConfigProvider(settingsSvc.ApplyToConfig)

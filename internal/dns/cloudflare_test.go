@@ -18,7 +18,7 @@ func TestCloudflareListRecordsReadsEveryPage(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/zones":
-			if r.URL.Query().Get("name") != "example.com" || r.URL.Query().Get("account.id") != "acct_1" {
+			if r.URL.Query().Get("name") != "example.com" || r.URL.Query().Has("account.id") {
 				t.Fatalf("zone query = %q", r.URL.RawQuery)
 			}
 			writeCloudflareJSON(t, w, map[string]any{"success": true, "result": []map[string]any{{"id": "zone_1", "name": "example.com"}}})
@@ -40,7 +40,7 @@ func TestCloudflareListRecordsReadsEveryPage(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewCloudflareProvider("secret", "acct_1", server.Client())
+	provider := NewCloudflareProvider("secret", server.Client())
 	provider.baseURL = server.URL
 	records, err := provider.ListRecords(context.Background(), "example.com")
 	if err != nil {
@@ -58,7 +58,7 @@ func TestCloudflareCreateRecordNormalizesRelativeName(t *testing.T) {
 	server := newCloudflareRecordServer(t, http.MethodPost, "www.example.com")
 	defer server.Close()
 
-	provider := NewCloudflareProviderWithToken("secret", server.Client())
+	provider := NewCloudflareProvider("secret", server.Client())
 	provider.baseURL = server.URL
 	if _, err := provider.CreateRecord(context.Background(), "example.com", RecordInput{Name: "www", Type: "A", Value: "192.0.2.1"}); err != nil {
 		t.Fatal(err)
@@ -69,7 +69,7 @@ func TestCloudflareUpdateRecordNormalizesApexName(t *testing.T) {
 	server := newCloudflareRecordServer(t, http.MethodPut, "example.com")
 	defer server.Close()
 
-	provider := NewCloudflareProviderWithToken("secret", server.Client())
+	provider := NewCloudflareProvider("secret", server.Client())
 	provider.baseURL = server.URL
 	if _, err := provider.UpdateRecord(context.Background(), "example.com", "record_1", RecordInput{Name: "@", Type: "A", Value: "192.0.2.1"}); err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestCloudflareErrorUsesOfficialEnvelope(t *testing.T) {
 	}))
 	defer server.Close()
 
-	provider := NewCloudflareProviderWithToken("secret", server.Client())
+	provider := NewCloudflareProvider("secret", server.Client())
 	provider.baseURL = server.URL
 	_, err := provider.ListRecords(context.Background(), "example.com")
 	if err == nil || !strings.Contains(err.Error(), "10000: Authentication error") {

@@ -57,7 +57,7 @@ func Open(cfg config.Config, db *sql.DB) (*Store, error) {
 		return nil, err
 	}
 	if hasEncrypted {
-		return nil, panelerr.Validation("key_asset_master_key_missing", "Encrypted key assets exist but the master key is missing")
+		return nil, panelerr.Validation("key_asset_master_key_missing", "Encrypted secrets exist but the master key is missing")
 	}
 	generated, err := generateKey()
 	if err != nil {
@@ -181,15 +181,27 @@ func hasEncryptedAssets(db *sql.DB) (bool, error) {
 	if db == nil {
 		return false, nil
 	}
-	var tableCount int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='key_assets'`).Scan(&tableCount); err != nil {
+	keyAssetsEncrypted, err := encryptedValuesExist(db, "key_assets", "private_key_ciphertext")
+	if err != nil {
 		return false, err
 	}
-	if tableCount == 0 {
+	if keyAssetsEncrypted {
+		return true, nil
+	}
+	return encryptedValuesExist(db, "dns_domains", "provider_secret_ciphertext")
+}
+
+func encryptedValuesExist(db *sql.DB, table, column string) (bool, error) {
+	var columnCount int
+	query := `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name=?`
+	if err := db.QueryRow(query, table, column).Scan(&columnCount); err != nil {
+		return false, err
+	}
+	if columnCount == 0 {
 		return false, nil
 	}
 	var count int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM key_assets WHERE TRIM(COALESCE(private_key_ciphertext, '')) <> ''`).Scan(&count); err != nil {
+	if err := db.QueryRow(`SELECT COUNT(*) FROM ` + table + ` WHERE TRIM(COALESCE(` + column + `, '')) <> ''`).Scan(&count); err != nil {
 		return false, err
 	}
 	return count > 0, nil

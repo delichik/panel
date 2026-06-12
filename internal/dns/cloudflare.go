@@ -15,7 +15,6 @@ import (
 
 type CloudflareProvider struct {
 	apiToken   string
-	accountID  string
 	httpClient *http.Client
 	baseURL    string
 }
@@ -51,15 +50,11 @@ type cloudflareRecord struct {
 	Proxied bool   `json:"proxied"`
 }
 
-func NewCloudflareProviderWithToken(apiToken string, httpClient *http.Client) *CloudflareProvider {
-	return NewCloudflareProvider(apiToken, "", httpClient)
-}
-
-func NewCloudflareProvider(apiToken, accountID string, httpClient *http.Client) *CloudflareProvider {
+func NewCloudflareProvider(apiToken string, httpClient *http.Client) *CloudflareProvider {
 	if httpClient == nil {
 		httpClient = http.DefaultClient
 	}
-	return &CloudflareProvider{apiToken: apiToken, accountID: strings.TrimSpace(accountID), httpClient: httpClient, baseURL: "https://api.cloudflare.com/client/v4"}
+	return &CloudflareProvider{apiToken: apiToken, httpClient: httpClient, baseURL: "https://api.cloudflare.com/client/v4"}
 }
 
 func (p *CloudflareProvider) ListRecords(ctx context.Context, zone string) ([]Record, error) {
@@ -187,9 +182,6 @@ func (p *CloudflareProvider) zones(ctx context.Context, name string) ([]cloudfla
 	var envelope cloudflareEnvelope[[]cloudflareZone]
 	query := url.Values{}
 	query.Set("name", name)
-	if p.accountID != "" {
-		query.Set("account.id", p.accountID)
-	}
 	endpoint := "/zones?" + query.Encode()
 	if err := p.do(ctx, http.MethodGet, endpoint, nil, &envelope); err != nil {
 		return nil, err

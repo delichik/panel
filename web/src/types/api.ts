@@ -328,7 +328,6 @@ export interface DnsDomainDto {
   id: string;
   name: string;
   provider: 'cloudflare';
-  accountId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -337,7 +336,6 @@ export interface DnsDomainInput {
   name: string;
   provider: 'cloudflare';
   apiToken?: string;
-  accountId?: string;
 }
 
 export type DnsRecordType = 'A' | 'AAAA' | 'CNAME' | 'TXT' | 'MX' | 'SRV' | 'CAA' | 'NS';

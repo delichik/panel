@@ -858,7 +858,7 @@ func (s *Service) resolveDomain(ctx context.Context, domainID string) (dns.Resol
 		if domainID == "" {
 			domainID = "test-domain"
 		}
-		return dns.ResolvedDomain{Domain: dns.Domain{ID: domainID, Name: "example.com", Provider: dns.ProviderCloudflare, AccountID: "acct_test"}, APIToken: "test"}, nil
+		return dns.ResolvedDomain{Domain: dns.Domain{ID: domainID, Name: "example.com", Provider: dns.ProviderCloudflare}, APIToken: "test"}, nil
 	}
 	if s.domains == nil {
 		return dns.ResolvedDomain{}, panelerr.BadGateway("certificate_provider_not_configured", "DNS domain service is not configured")
@@ -872,7 +872,7 @@ func (s *Service) providerForDomain(domain dns.ResolvedDomain) (Provider, error)
 	}
 	switch domain.Provider {
 	case dns.ProviderCloudflare:
-		return NewACMEProvider(s.currentConfig(), dns.NewCloudflareProvider(domain.APIToken, domain.AccountID, nil), nil)
+		return NewACMEProvider(s.currentConfig(), dns.NewCloudflareProvider(domain.APIToken, nil), nil)
 	default:
 		return nil, panelerr.Validation("dns_provider_invalid", "Unsupported DNS provider")
 	}

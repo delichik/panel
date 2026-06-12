@@ -51,7 +51,6 @@ const form = reactive<DnsDomainInput>({
   name: '',
   provider: 'cloudflare',
   apiToken: '',
-  accountId: '',
 });
 
 const recordForm = reactive<DnsRecordInput>({
@@ -74,7 +73,6 @@ function resetForm(domain?: DnsDomainDto) {
     name: domain?.name ?? '',
     provider: domain?.provider ?? 'cloudflare',
     apiToken: '',
-    accountId: domain?.accountId ?? '',
   });
   dialog.value = true;
 }
@@ -291,10 +289,6 @@ onMounted(async () => {
             <v-divider />
             <v-card-text class="domain-detail-grid">
               <div>
-                <div class="detail-label">{{ t('domainsPage.account') }}</div>
-                <div class="font-mono">{{ selectedDomain.accountId || '-' }}</div>
-              </div>
-              <div>
                 <div class="detail-label">{{ t('domainsPage.createdAt') }}</div>
                 <div>{{ formatDateTime(selectedDomain.createdAt) }}</div>
               </div>
@@ -379,14 +373,6 @@ onMounted(async () => {
               item-title="label"
               item-value="value"
               :label="t('domainsPage.provider')"
-              variant="outlined"
-              density="comfortable"
-              class="mb-3"
-            />
-            <v-text-field
-              v-model="form.accountId"
-              :label="t('domainsPage.accountId')"
-              :placeholder="t('domainsPage.accountIdHint')"
               variant="outlined"
               density="comfortable"
               class="mb-3"

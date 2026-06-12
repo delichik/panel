@@ -65,6 +65,17 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 			t.Fatalf("expected table %q to exist", table)
 		}
 	}
+	dnsColumns := tableColumns(t, store.AppDB(), "dns_domains")
+	for _, required := range []string{"provider_config_json", "provider_secret_ciphertext"} {
+		if !dnsColumns[required] {
+			t.Fatalf("fresh DNS schema is missing %q", required)
+		}
+	}
+	for _, legacy := range []string{"api_token_secret", "account_id"} {
+		if dnsColumns[legacy] {
+			t.Fatalf("fresh DNS schema must not contain legacy column %q", legacy)
+		}
+	}
 	for _, table := range []string{
 		"docker_capabilities",
 		"docker_runtime_cache",
@@ -176,4 +187,28 @@ func tableExists(t *testing.T, db *sql.DB, table string) bool {
 		t.Fatalf("query table %q: %v", table, err)
 	}
 	return true
+}
+
+func tableColumns(t *testing.T, db *sql.DB, table string) map[string]bool {
+	t.Helper()
+	rows, err := db.Query(`PRAGMA table_info(` + table + `)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			t.Fatal(err)
+		}
+		columns[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return columns
 }

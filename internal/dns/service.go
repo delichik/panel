@@ -3,6 +3,7 @@ package dns
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"regexp"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"panel/internal/id"
 	"panel/internal/panelerr"
+	"panel/internal/secretstore"
 )
 
 var domainNamePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
@@ -17,17 +19,18 @@ var recordNamePattern = regexp.MustCompile(`^(@|[a-z0-9_*]([a-z0-9_*.-]{0,251}[a
 
 type Service struct {
 	db              *sql.DB
+	secrets         *secretstore.Store
 	providerFactory func(domain ResolvedDomain) Provider
 }
 
-func NewService(db *sql.DB) *Service {
-	return &Service{db: db, providerFactory: func(domain ResolvedDomain) Provider {
-		return NewCloudflareProvider(domain.APIToken, domain.AccountID, http.DefaultClient)
+func NewService(db *sql.DB, secrets *secretstore.Store) *Service {
+	return &Service{db: db, secrets: secrets, providerFactory: func(domain ResolvedDomain) Provider {
+		return NewCloudflareProvider(domain.APIToken, http.DefaultClient)
 	}}
 }
 
 func (s *Service) ListDomains(ctx context.Context) ([]Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,provider,account_id,created_at,updated_at FROM dns_domains ORDER BY name ASC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,provider,created_at,updated_at FROM dns_domains ORDER BY name ASC`)
 	if err != nil {
 		return nil, err
 	}
@@ -52,9 +55,13 @@ func (s *Service) CreateDomain(ctx context.Context, in SaveDomainRequest) (Domai
 		return Domain{}, err
 	}
 	now := time.Now().UTC()
-	domain := Domain{ID: id.New("dnsdom"), Name: prepared.Name, Provider: prepared.Provider, AccountID: prepared.AccountID, CreatedAt: now, UpdatedAt: now}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO dns_domains(id,name,provider,api_token_secret,account_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
-		domain.ID, domain.Name, domain.Provider, prepared.APIToken, domain.AccountID, formatTime(now), formatTime(now))
+	domain := Domain{ID: id.New("dnsdom"), Name: prepared.Name, Provider: prepared.Provider, CreatedAt: now, UpdatedAt: now}
+	ciphertext, err := encryptProviderCredentials(s.secrets, domain.ID, domain.Provider, prepared.APIToken)
+	if err != nil {
+		return Domain{}, err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO dns_domains(id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
+		domain.ID, domain.Name, domain.Provider, "{}", ciphertext, formatTime(now), formatTime(now))
 	if err != nil {
 		return Domain{}, err
 	}
@@ -79,7 +86,6 @@ func (s *Service) UpdateDomain(ctx context.Context, domainID string, in SaveDoma
 			ID:        current.ID,
 			Name:      prepared.Name,
 			Provider:  prepared.Provider,
-			AccountID: prepared.AccountID,
 			CreatedAt: current.CreatedAt,
 			UpdatedAt: current.UpdatedAt,
 		},
@@ -88,8 +94,12 @@ func (s *Service) UpdateDomain(ctx context.Context, domainID string, in SaveDoma
 		return Domain{}, err
 	}
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE dns_domains SET name=?,provider=?,api_token_secret=?,account_id=?,updated_at=? WHERE id=?`,
-		prepared.Name, prepared.Provider, token, prepared.AccountID, formatTime(now), domainID)
+	ciphertext, err := encryptProviderCredentials(s.secrets, domainID, prepared.Provider, token)
+	if err != nil {
+		return Domain{}, err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE dns_domains SET name=?,provider=?,provider_config_json=?,provider_secret_ciphertext=?,updated_at=? WHERE id=?`,
+		prepared.Name, prepared.Provider, "{}", ciphertext, formatTime(now), domainID)
 	if err != nil {
 		return Domain{}, err
 	}
@@ -166,7 +176,7 @@ func (s *Service) DeleteRecord(ctx context.Context, domainID, recordID string) e
 }
 
 func (s *Service) GetDomain(ctx context.Context, domainID string) (Domain, error) {
-	domain, err := scanDomain(s.db.QueryRowContext(ctx, `SELECT id,name,provider,account_id,created_at,updated_at FROM dns_domains WHERE id=?`, domainID))
+	domain, err := scanDomain(s.db.QueryRowContext(ctx, `SELECT id,name,provider,created_at,updated_at FROM dns_domains WHERE id=?`, domainID))
 	if err == sql.ErrNoRows {
 		return Domain{}, panelerr.NotFound("dns_domain")
 	}
@@ -175,25 +185,30 @@ func (s *Service) GetDomain(ctx context.Context, domainID string) (Domain, error
 
 func (s *Service) ResolveDomain(ctx context.Context, domainID string) (ResolvedDomain, error) {
 	var out ResolvedDomain
+	var providerConfigJSON, providerSecretCiphertext string
 	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,provider,api_token_secret,account_id,created_at,updated_at FROM dns_domains WHERE id=?`, domainID).
-		Scan(&out.ID, &out.Name, &out.Provider, &out.APIToken, &out.AccountID, &created, &updated)
+	err := s.db.QueryRowContext(ctx, `SELECT id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at FROM dns_domains WHERE id=?`, domainID).
+		Scan(&out.ID, &out.Name, &out.Provider, &providerConfigJSON, &providerSecretCiphertext, &created, &updated)
 	if err == sql.ErrNoRows {
 		return ResolvedDomain{}, panelerr.NotFound("dns_domain")
 	}
 	if err != nil {
 		return ResolvedDomain{}, err
 	}
+	token, err := decryptProviderCredentials(s.secrets, out.ID, out.Provider, providerSecretCiphertext)
+	if err != nil {
+		return ResolvedDomain{}, err
+	}
+	out.APIToken = token
 	out.CreatedAt = parseTime(created)
 	out.UpdatedAt = parseTime(updated)
 	return out, nil
 }
 
 type preparedDomain struct {
-	Name      string
-	Provider  string
-	APIToken  string
-	AccountID string
+	Name     string
+	Provider string
+	APIToken string
 }
 
 func validateSaveDomain(in SaveDomainRequest, requireToken bool) (preparedDomain, error) {
@@ -212,15 +227,14 @@ func validateSaveDomain(in SaveDomainRequest, requireToken bool) (preparedDomain
 	if requireToken && token == "" {
 		return preparedDomain{}, panelerr.Validation("dns_api_token_required", "DNS provider API token is required")
 	}
-	return preparedDomain{Name: name, Provider: provider, APIToken: token, AccountID: strings.TrimSpace(in.AccountID)}, nil
+	return preparedDomain{Name: name, Provider: provider, APIToken: token}, nil
 }
 
 func resolvedDomainForSave(prepared preparedDomain) ResolvedDomain {
 	return ResolvedDomain{
 		Domain: Domain{
-			Name:      prepared.Name,
-			Provider:  prepared.Provider,
-			AccountID: prepared.AccountID,
+			Name:     prepared.Name,
+			Provider: prepared.Provider,
 		},
 		APIToken: prepared.APIToken,
 	}
@@ -294,7 +308,7 @@ type domainScanner interface{ Scan(dest ...any) error }
 func scanDomain(row domainScanner) (Domain, error) {
 	var domain Domain
 	var created, updated string
-	if err := row.Scan(&domain.ID, &domain.Name, &domain.Provider, &domain.AccountID, &created, &updated); err != nil {
+	if err := row.Scan(&domain.ID, &domain.Name, &domain.Provider, &created, &updated); err != nil {
 		return Domain{}, err
 	}
 	domain.CreatedAt = parseTime(created)
@@ -309,4 +323,54 @@ func formatTime(value time.Time) string {
 func parseTime(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, value)
 	return parsed
+}
+
+type cloudflareCredentials struct {
+	APIToken string `json:"apiToken"`
+}
+
+const providerCredentialsField = "provider_credentials"
+
+func encryptProviderCredentials(secrets *secretstore.Store, domainID, provider, apiToken string) (string, error) {
+	if secrets == nil {
+		return "", panelerr.Validation("dns_provider_credentials_unavailable", "DNS provider credential store is unavailable")
+	}
+	var credentials any
+	switch provider {
+	case ProviderCloudflare:
+		if strings.TrimSpace(apiToken) == "" {
+			return "", panelerr.Validation("cloudflare_api_token_required", "Cloudflare API token is required")
+		}
+		credentials = cloudflareCredentials{APIToken: apiToken}
+	default:
+		return "", panelerr.Validation("dns_provider_invalid", "Unsupported DNS provider")
+	}
+	raw, err := json.Marshal(credentials)
+	if err != nil {
+		return "", err
+	}
+	return secrets.Encrypt(domainID, provider, providerCredentialsField, raw)
+}
+
+func decryptProviderCredentials(secrets *secretstore.Store, domainID, provider, ciphertext string) (string, error) {
+	if secrets == nil {
+		return "", panelerr.Validation("dns_provider_credentials_unavailable", "DNS provider credential store is unavailable")
+	}
+	raw, err := secrets.Decrypt(domainID, provider, providerCredentialsField, ciphertext)
+	if err != nil {
+		return "", err
+	}
+	switch provider {
+	case ProviderCloudflare:
+		var credentials cloudflareCredentials
+		if err := json.Unmarshal(raw, &credentials); err != nil {
+			return "", panelerr.Validation("dns_provider_credentials_invalid", "DNS provider credentials are invalid")
+		}
+		if strings.TrimSpace(credentials.APIToken) == "" {
+			return "", panelerr.Validation("cloudflare_api_token_required", "Cloudflare API token is required")
+		}
+		return credentials.APIToken, nil
+	default:
+		return "", panelerr.Validation("dns_provider_invalid", "Unsupported DNS provider")
+	}
 }

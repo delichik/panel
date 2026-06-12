@@ -4,17 +4,19 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"panel/internal/config"
+	"panel/internal/secretstore"
 	"panel/internal/storage"
 )
 
-func TestDomainListRedactsAPITokenAndResolveKeepsSecret(t *testing.T) {
+func TestDomainListRedactsCredentialsAndResolveKeepsToken(t *testing.T) {
 	svc, closeStore := newDomainTestService(t)
 	defer closeStore()
 
-	domain, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "secret", AccountID: "acct_1"})
+	domain, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -22,7 +24,7 @@ func TestDomainListRedactsAPITokenAndResolveKeepsSecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rows) != 1 || rows[0].Name != "example.com" || rows[0].AccountID != "acct_1" {
+	if len(rows) != 1 || rows[0].Name != "example.com" {
 		t.Fatalf("domains = %#v", rows)
 	}
 	resolved, err := svc.ResolveDomain(context.Background(), domain.ID)
@@ -32,8 +34,12 @@ func TestDomainListRedactsAPITokenAndResolveKeepsSecret(t *testing.T) {
 	if resolved.APIToken != "secret" {
 		t.Fatalf("resolved API token was not preserved")
 	}
-	if resolved.AccountID != "acct_1" {
-		t.Fatalf("resolved account id = %q", resolved.AccountID)
+	var ciphertext string
+	if err := svc.db.QueryRow(`SELECT provider_secret_ciphertext FROM dns_domains WHERE id=?`, domain.ID).Scan(&ciphertext); err != nil {
+		t.Fatal(err)
+	}
+	if ciphertext == "" || strings.Contains(ciphertext, "secret") {
+		t.Fatalf("provider credentials were not encrypted: %q", ciphertext)
 	}
 }
 
@@ -41,13 +47,13 @@ func TestCreateDomainValidatesProviderBeforePersisting(t *testing.T) {
 	svc, closeStore := newDomainTestService(t)
 	defer closeStore()
 	svc.providerFactory = func(resolved ResolvedDomain) Provider {
-		if resolved.Name != "example.com" || resolved.APIToken != "bad-token" || resolved.AccountID != "acct_1" {
+		if resolved.Name != "example.com" || resolved.APIToken != "bad-token" {
 			t.Fatalf("unexpected validation domain = %#v", resolved)
 		}
 		return &fakeDNSProvider{listErr: errors.New("cloudflare token rejected")}
 	}
 
-	_, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "bad-token", AccountID: "acct_1"})
+	_, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "bad-token"})
 	if err == nil {
 		t.Fatal("expected provider validation error")
 	}
@@ -64,13 +70,13 @@ func TestRecordOperationsUseResolvedCloudflareProvider(t *testing.T) {
 	svc, closeStore := newDomainTestService(t)
 	defer closeStore()
 
-	domain, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "secret", AccountID: "acct_1"})
+	domain, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeDNSProvider{records: []Record{{ID: "rec_1", Name: "www.example.com", Type: "A", Value: "192.0.2.1", TTL: 120}}}
 	svc.providerFactory = func(resolved ResolvedDomain) Provider {
-		if resolved.APIToken != "secret" || resolved.AccountID != "acct_1" {
+		if resolved.APIToken != "secret" {
 			t.Fatalf("resolved provider credentials = %#v", resolved)
 		}
 		return fake
@@ -141,7 +147,12 @@ func newDomainTestService(t *testing.T) (*Service, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB())
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		_ = store.Close()
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), secrets)
 	svc.providerFactory = func(ResolvedDomain) Provider { return &fakeDNSProvider{} }
 	return svc, func() { _ = store.Close() }
 }

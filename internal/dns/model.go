@@ -8,7 +8,6 @@ type Domain struct {
 	ID        string    `json:"id"`
 	Name      string    `json:"name"`
 	Provider  string    `json:"provider"`
-	AccountID string    `json:"accountId,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
@@ -19,8 +18,7 @@ type ResolvedDomain struct {
 }
 
 type SaveDomainRequest struct {
-	Name      string `json:"name"`
-	Provider  string `json:"provider"`
-	APIToken  string `json:"apiToken"`
-	AccountID string `json:"accountId"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	APIToken string `json:"apiToken"`
 }
