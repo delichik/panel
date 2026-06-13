@@ -11,6 +11,7 @@ import (
 	"panel/internal/config"
 	"panel/internal/credential"
 	"panel/internal/linux"
+	"panel/internal/secretstore"
 	"panel/internal/server"
 	"panel/internal/sshx"
 	"panel/internal/storage"
@@ -29,7 +30,11 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credSvc := credential.NewService(store.AppDB(), secrets)
 	cred, _ := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	taskSvc := tasks.NewService(store.AppDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)

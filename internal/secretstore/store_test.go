@@ -91,3 +91,25 @@ func TestOpenRejectsMissingKeyWhenDNSCredentialsAreEncrypted(t *testing.T) {
 		t.Fatal("expected missing master key to reject encrypted DNS credentials")
 	}
 }
+
+func TestOpenRejectsMissingKeyWhenSSHCredentialsAreEncrypted(t *testing.T) {
+	t.Setenv(MasterKeyEnvVar, "")
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,secret_ciphertext,created_at,updated_at)
+		VALUES('cred_1','credential','password','root','encrypted-value','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(cfg, store.AppDB()); err == nil {
+		t.Fatal("expected missing master key to reject encrypted SSH credentials")
+	}
+}

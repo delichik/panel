@@ -10,6 +10,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			name TEXT NOT NULL,
 			type TEXT NOT NULL CHECK(type IN ('password','private_key')),
 			username TEXT NOT NULL,
+			secret_ciphertext TEXT NOT NULL DEFAULT '',
 			password_secret TEXT NOT NULL DEFAULT '',
 			private_key_path TEXT NOT NULL DEFAULT '',
 			passphrase_secret TEXT NOT NULL DEFAULT '',
@@ -233,6 +234,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 			line TEXT NOT NULL,
 			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS overview_card_configurations (
+			id TEXT PRIMARY KEY CHECK(id = 'default'),
+			cards_json TEXT NOT NULL DEFAULT '[]',
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS runtime_settings (
 			key TEXT PRIMARY KEY,
 			value TEXT NOT NULL,
@@ -277,6 +283,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"name":              "TEXT NOT NULL DEFAULT ''",
 		"type":              "TEXT NOT NULL DEFAULT 'password'",
 		"username":          "TEXT NOT NULL DEFAULT ''",
+		"secret_ciphertext": "TEXT NOT NULL DEFAULT ''",
 		"password_secret":   "TEXT NOT NULL DEFAULT ''",
 		"private_key_path":  "TEXT NOT NULL DEFAULT ''",
 		"passphrase_secret": "TEXT NOT NULL DEFAULT ''",
@@ -377,6 +384,7 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 			name=COALESCE(name, ''),
 			type=CASE WHEN type IN ('password','private_key') THEN type ELSE 'password' END,
 			username=COALESCE(username, ''),
+			secret_ciphertext=COALESCE(secret_ciphertext, ''),
 			password_secret=COALESCE(password_secret, ''),
 			private_key_path=COALESCE(private_key_path, ''),
 			passphrase_secret=COALESCE(passphrase_secret, ''),

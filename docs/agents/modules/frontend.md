@@ -46,6 +46,8 @@
 ## 常见页面对应关系
 
 - 概览：`web/src/views/overview/index.vue`
+  - 卡片布局通过 `web/src/api/overview.ts` 的 `GET/PUT /api/v1/overview/cards` 从数据库读取和保存，不使用 localStorage。
+  - 新增、编辑、删除和重置后保存完整布局；拖拽时只更新本地顺序，在拖拽结束时保存一次。
 - 服务器菜单组：`web/src/views/servers/`
   - 节点：`node/index.vue`
   - 凭据：`credentials/index.vue`

@@ -11,12 +11,22 @@ import (
 	"panel/internal/credential"
 	"panel/internal/metrics"
 	"panel/internal/packages"
+	"panel/internal/secretstore"
 	"panel/internal/server"
 	"panel/internal/settings"
 	"panel/internal/sshx"
 	"panel/internal/storage"
 	"panel/internal/tasks"
 )
+
+func newSchedulerTestCredentialService(t *testing.T, store *storage.Store, cfg config.Config) *credential.Service {
+	t.Helper()
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential.NewService(store.AppDB(), secrets)
+}
 
 func TestCollectMetricsCreatesTaskRecord(t *testing.T) {
 	dir := t.TempDir()
@@ -30,7 +40,7 @@ func TestCollectMetricsCreatesTaskRecord(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	credSvc := newSchedulerTestCredentialService(t, store, cfg)
 	cred, err := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +96,7 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	credSvc := newSchedulerTestCredentialService(t, store, cfg)
 	cred, err := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +185,7 @@ func TestRunDueConnectivityTestsStartsQueuedTask(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	credSvc := newSchedulerTestCredentialService(t, store, cfg)
 	cred, err := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	if err != nil {
 		t.Fatal(err)
@@ -237,7 +247,7 @@ func TestRunNowConnectivityTaskStartsProvidedTask(t *testing.T) {
 	}
 	defer store.Close()
 	ctx := context.Background()
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	credSvc := newSchedulerTestCredentialService(t, store, cfg)
 	cred, err := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	if err != nil {
 		t.Fatal(err)

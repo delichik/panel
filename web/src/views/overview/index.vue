@@ -10,23 +10,23 @@ import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/compon
 import { useI18n } from '@/i18n';
 import { overviewApi } from '@/api/overview';
 import { applicationsApi } from '@/api/applications';
-import type { ApplicationDto, MetricsRange, MetricsSeriesDto, OverviewDto, OverviewServerDto } from '@/types/api';
+import type {
+  ApplicationDto,
+  MetricsRange,
+  MetricsSeriesDto,
+  OverviewCardDto,
+  OverviewCardKind,
+  OverviewCardNetworkDirection,
+  OverviewDto,
+  OverviewServerDto,
+} from '@/types/api';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent]);
 
-type CardKind = 'cpu' | 'memory' | 'disk' | 'network' | 'packageUpdates' | 'containerUpdates' | 'placeholder';
-type NetworkDirection = 'rx' | 'tx' | 'both';
-
-interface OverviewCardConfig {
-  id: string;
-  kind: CardKind;
-  width: number;
-  height: number;
-  range: MetricsRange;
-  networkDirection: NetworkDirection;
-  serverIds: string[];
-}
+type CardKind = OverviewCardKind;
+type NetworkDirection = OverviewCardNetworkDirection;
+type OverviewCardConfig = OverviewCardDto;
 
 interface CardPreset {
   kind: CardKind;
@@ -37,11 +37,6 @@ interface CardPreset {
   height: number;
 }
 
-type StoredOverviewCard = Partial<OverviewCardConfig> & {
-  title?: string;
-};
-
-const STORAGE_KEY = 'linux-panel-overview-cards';
 const router = useRouter();
 const theme = useTheme();
 const { t, formatDateTime } = useI18n();
@@ -72,16 +67,19 @@ const networkDirectionItems = computed<Array<{ title: string; value: NetworkDire
 
 const overview = ref<OverviewDto>({ servers: [] });
 const applications = ref<ApplicationDto[]>([]);
-const cards = ref<OverviewCardConfig[]>(loadCards());
+const cards = ref<OverviewCardConfig[]>([]);
 const metricsByKey = ref<Record<string, MetricsSeriesDto | null>>({});
 const loading = ref(false);
 const error = ref('');
+const saveError = ref('');
 const dialog = ref(false);
 const editingCardId = ref('');
 const editMode = ref(false);
 const draggingCardId = ref('');
 const dragOverCardId = ref('');
 let refreshTimer: number | undefined;
+let saveQueue = Promise.resolve();
+let cardsLoaded = false;
 
 const form = reactive({
   kind: 'cpu' as CardKind,
@@ -140,26 +138,8 @@ const presetItems = computed(() => cardPresets.map((preset) => ({
 })));
 
 watch(cards, () => {
-  saveCards();
   void loadCardMetrics();
 }, { deep: true });
-
-function loadCards(): OverviewCardConfig[] {
-  if (typeof window === 'undefined') return defaultCards();
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return defaultCards();
-    const parsed = JSON.parse(raw) as StoredOverviewCard[];
-    return Array.isArray(parsed) && parsed.length ? parsed.map(normalizeCard).filter(Boolean) as OverviewCardConfig[] : defaultCards();
-  } catch {
-    return defaultCards();
-  }
-}
-
-function saveCards() {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(cards.value));
-}
 
 function defaultCards(): OverviewCardConfig[] {
   return [
@@ -170,22 +150,6 @@ function defaultCards(): OverviewCardConfig[] {
     createCard('packageUpdates', 3, 2, '1d'),
     createCard('containerUpdates', 3, 2, '1d'),
   ];
-}
-
-function normalizeCard(card: StoredOverviewCard): OverviewCardConfig | null {
-  if (!card.kind) return null;
-  const preset = presetFor(card.kind);
-  const range: MetricsRange = rangeItems.value.some((item) => item.value === card.range) ? card.range as MetricsRange : '1h';
-  const networkDirection = normalizeNetworkDirection(card.networkDirection);
-  return {
-    id: card.id || newId(),
-    kind: preset.kind,
-    width: clamp(Number(card.width) || preset.width, 1, 6),
-    height: clamp(Number(card.height) || preset.height, 1, 4),
-    range,
-    networkDirection,
-    serverIds: Array.isArray(card.serverIds) ? card.serverIds : [],
-  };
 }
 
 function createCard(kind: CardKind, width?: number, height?: number, range: MetricsRange = '1h'): OverviewCardConfig {
@@ -241,12 +205,18 @@ function metricKey(serverId: string, range: MetricsRange) {
 async function loadData() {
   loading.value = true;
   try {
-    const [nextOverview, nextApplications] = await Promise.all([
+    const cardRequest = cardsLoaded ? Promise.resolve(null) : overviewApi.getCards();
+    const [nextOverview, nextApplications, cardConfiguration] = await Promise.all([
       overviewApi.getOverview(),
       applicationsApi.list(),
+      cardRequest,
     ]);
     overview.value = nextOverview;
     applications.value = nextApplications;
+    if (cardConfiguration) {
+      cards.value = cardConfiguration.cards;
+      cardsLoaded = true;
+    }
     error.value = '';
     await loadCardMetrics();
   } catch (err) {
@@ -271,6 +241,19 @@ async function loadCardMetrics() {
       metricsByKey.value[key] = null;
     }
   }));
+}
+
+function persistCards() {
+  const snapshot = cards.value.map((card) => ({ ...card, serverIds: [...card.serverIds] }));
+  saveQueue = saveQueue.then(async () => {
+    try {
+      await overviewApi.updateCards({ cards: snapshot });
+      saveError.value = '';
+    } catch (err) {
+      saveError.value = err instanceof Error ? err.message : t('overviewPage.saveFailed');
+    }
+  });
+  return saveQueue;
 }
 
 function chartOption(card: OverviewCardConfig) {
@@ -457,14 +440,17 @@ function saveCard() {
     cards.value = [...cards.value, next];
   }
   dialog.value = false;
+  void persistCards();
 }
 
 function removeCard(cardId: string) {
   cards.value = cards.value.filter((card) => card.id !== cardId);
+  void persistCards();
 }
 
 function resetCards() {
   cards.value = defaultCards();
+  void persistCards();
 }
 
 function toggleEditMode() {
@@ -501,8 +487,10 @@ function dropCard(cardId: string, event: DragEvent) {
 }
 
 function endCardDrag() {
+  const shouldPersist = Boolean(draggingCardId.value);
   draggingCardId.value = '';
   dragOverCardId.value = '';
+  if (shouldPersist) void persistCards();
 }
 
 function shouldInsertAfter(event: DragEvent) {
@@ -577,7 +565,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
+    <v-alert v-if="error || saveError" type="error" variant="tonal">{{ error || saveError }}</v-alert>
 
     <PageLoadingState v-if="loading && overview.servers.length === 0" min-height="360px" />
 

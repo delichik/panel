@@ -60,7 +60,7 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 	defer store.Close()
 
-	for _, table := range []string{"applications", "application_files", "application_revisions", "auth_state"} {
+	for _, table := range []string{"applications", "application_files", "application_revisions", "auth_state", "overview_card_configurations"} {
 		if !tableExists(t, store.AppDB(), table) {
 			t.Fatalf("expected table %q to exist", table)
 		}
@@ -75,6 +75,10 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 		if dnsColumns[legacy] {
 			t.Fatalf("fresh DNS schema must not contain legacy column %q", legacy)
 		}
+	}
+	credentialColumns := tableColumns(t, store.AppDB(), "credentials")
+	if !credentialColumns["secret_ciphertext"] {
+		t.Fatal("fresh credentials schema is missing secret_ciphertext")
 	}
 	for _, table := range []string{
 		"docker_capabilities",

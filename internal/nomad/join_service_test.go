@@ -11,6 +11,7 @@ import (
 	"panel/internal/config"
 	"panel/internal/credential"
 	"panel/internal/panelerr"
+	"panel/internal/secretstore"
 	"panel/internal/server"
 	"panel/internal/sshx"
 	"panel/internal/storage"
@@ -1129,7 +1130,11 @@ func newJoinTestService(t *testing.T) (*JoinService, *credential.Service, *joinF
 	}
 	taskSvc := tasks.NewService(store.AppDB())
 	exec := &joinFakeExecutor{}
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credSvc := credential.NewService(store.AppDB(), secrets)
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	unregister := registerJoinTestDB(serverSvc, store.AppDB())
 	nomadClient := &joinFakeNomadClient{}

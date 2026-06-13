@@ -3,23 +3,31 @@ package credential
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	"panel/internal/config"
 	"panel/internal/id"
 	"panel/internal/panelerr"
+	"panel/internal/secretstore"
 )
 
 type Service struct {
-	db       *sql.DB
-	dataRoot string
+	db      *sql.DB
+	secrets *secretstore.Store
 }
 
-func NewService(db *sql.DB, cfg config.Config) *Service {
-	return &Service{db: db, dataRoot: cfg.DataRoot}
+const credentialSecretField = "ssh_credential"
+
+type storedSecret struct {
+	Password   string `json:"password,omitempty"`
+	PrivateKey string `json:"privateKey,omitempty"`
+	Passphrase string `json:"passphrase,omitempty"`
+}
+
+func NewService(db *sql.DB, secrets *secretstore.Store) *Service {
+	return &Service{db: db, secrets: secrets}
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Credential, error) {
@@ -28,19 +36,14 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Credential, er
 	}
 	now := time.Now().UTC()
 	cred := Credential{ID: id.New("cred"), Name: req.Name, Type: req.Type, Username: req.Username, CreatedAt: now, UpdatedAt: now}
-	privateKeyPath := ""
-	if req.Type == TypePrivateKey {
-		keysDir := filepath.Join(s.dataRoot, "keys")
-		if err := os.MkdirAll(keysDir, 0700); err != nil {
-			return Credential{}, err
-		}
-		privateKeyPath = filepath.Join(keysDir, cred.ID+".key")
-		if err := os.WriteFile(privateKeyPath, []byte(req.PrivateKey), 0600); err != nil {
-			return Credential{}, err
-		}
+	ciphertext, err := s.encrypt(cred.ID, cred.Type, storedSecret{
+		Password: req.Password, PrivateKey: req.PrivateKey, Passphrase: req.Passphrase,
+	})
+	if err != nil {
+		return Credential{}, err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO credentials(id,name,type,username,password_secret,private_key_path,passphrase_secret,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-		cred.ID, cred.Name, cred.Type, cred.Username, req.Password, privateKeyPath, req.Passphrase, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO credentials(id,name,type,username,secret_ciphertext,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
+		cred.ID, cred.Name, cred.Type, cred.Username, ciphertext, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	return cred, err
 }
 
@@ -80,37 +83,28 @@ func (s *Service) Update(ctx context.Context, credentialID string, req UpdateReq
 	now := time.Now().UTC()
 	password := old.Password
 	passphrase := old.Passphrase
-	privateKeyPath := ""
-	if old.Type == TypePrivateKey {
-		_ = s.db.QueryRowContext(ctx, `SELECT private_key_path FROM credentials WHERE id=?`, credentialID).Scan(&privateKeyPath)
-	}
+	privateKey := string(old.PrivateKey)
 	if req.Type == TypePassword {
 		if req.Password != "" {
 			password = req.Password
 		}
 		passphrase = ""
-		if privateKeyPath != "" {
-			_ = os.Remove(privateKeyPath)
-			privateKeyPath = ""
-		}
+		privateKey = ""
 	} else {
 		password = ""
 		passphrase = req.Passphrase
-		keysDir := filepath.Join(s.dataRoot, "keys")
-		if err := os.MkdirAll(keysDir, 0700); err != nil {
-			return Credential{}, err
-		}
-		if privateKeyPath == "" {
-			privateKeyPath = filepath.Join(keysDir, credentialID+".key")
-		}
 		if req.PrivateKey != "" {
-			if err := os.WriteFile(privateKeyPath, []byte(req.PrivateKey), 0600); err != nil {
-				return Credential{}, err
-			}
+			privateKey = req.PrivateKey
 		}
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE credentials SET name=?,type=?,username=?,password_secret=?,private_key_path=?,passphrase_secret=?,updated_at=? WHERE id=?`,
-		req.Name, req.Type, req.Username, password, privateKeyPath, passphrase, now.Format(time.RFC3339Nano), credentialID)
+	ciphertext, err := s.encrypt(credentialID, req.Type, storedSecret{
+		Password: password, PrivateKey: privateKey, Passphrase: passphrase,
+	})
+	if err != nil {
+		return Credential{}, err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE credentials SET name=?,type=?,username=?,secret_ciphertext=?,password_secret='',private_key_path='',passphrase_secret='',updated_at=? WHERE id=?`,
+		req.Name, req.Type, req.Username, ciphertext, now.Format(time.RFC3339Nano), credentialID)
 	if err != nil {
 		return Credential{}, err
 	}
@@ -131,22 +125,22 @@ func (s *Service) Get(ctx context.Context, credentialID string) (Credential, err
 
 func (s *Service) Resolve(ctx context.Context, credentialID string) (ResolvedCredential, error) {
 	var r ResolvedCredential
-	var keyPath string
-	err := s.db.QueryRowContext(ctx, `SELECT id,type,username,password_secret,private_key_path,passphrase_secret FROM credentials WHERE id=?`, credentialID).
-		Scan(&r.ID, &r.Type, &r.Username, &r.Password, &keyPath, &r.Passphrase)
+	var ciphertext string
+	err := s.db.QueryRowContext(ctx, `SELECT id,type,username,secret_ciphertext FROM credentials WHERE id=?`, credentialID).
+		Scan(&r.ID, &r.Type, &r.Username, &ciphertext)
 	if err == sql.ErrNoRows {
 		return ResolvedCredential{}, panelerr.NotFound("credential")
 	}
 	if err != nil {
 		return ResolvedCredential{}, err
 	}
-	if r.Type == TypePrivateKey {
-		b, err := os.ReadFile(keyPath)
-		if err != nil {
-			return ResolvedCredential{}, err
-		}
-		r.PrivateKey = b
+	secret, err := s.decrypt(r.ID, r.Type, ciphertext)
+	if err != nil {
+		return ResolvedCredential{}, err
 	}
+	r.Password = secret.Password
+	r.PrivateKey = []byte(secret.PrivateKey)
+	r.Passphrase = secret.Passphrase
 	return r, nil
 }
 
@@ -158,8 +152,6 @@ func (s *Service) Delete(ctx context.Context, credentialID string) error {
 	if count > 0 {
 		return panelerr.Conflict("credential_in_use", "Credential is still used by one or more servers")
 	}
-	var keyPath string
-	_ = s.db.QueryRowContext(ctx, `SELECT private_key_path FROM credentials WHERE id=?`, credentialID).Scan(&keyPath)
 	res, err := s.db.ExecContext(ctx, `DELETE FROM credentials WHERE id=?`, credentialID)
 	if err != nil {
 		return err
@@ -168,10 +160,103 @@ func (s *Service) Delete(ctx context.Context, credentialID string) error {
 	if affected == 0 {
 		return panelerr.NotFound("credential")
 	}
-	if keyPath != "" {
-		_ = os.Remove(keyPath)
+	return nil
+}
+
+func (s *Service) EnsureLegacySecretsMigrated(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,type,secret_ciphertext,password_secret,private_key_path,passphrase_secret FROM credentials`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type legacyCredential struct {
+		id, typ, ciphertext, password, keyPath, passphrase string
+	}
+	var credentials []legacyCredential
+	for rows.Next() {
+		var item legacyCredential
+		if err := rows.Scan(&item.id, &item.typ, &item.ciphertext, &item.password, &item.keyPath, &item.passphrase); err != nil {
+			return err
+		}
+		credentials = append(credentials, item)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range credentials {
+		if err := s.migrateLegacySecret(ctx, item.id, item.typ, item.ciphertext, item.password, item.keyPath, item.passphrase); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func (s *Service) migrateLegacySecret(ctx context.Context, credentialID, typ, ciphertext, password, keyPath, passphrase string) error {
+	hasLegacy := password != "" || keyPath != "" || passphrase != ""
+	if ciphertext == "" {
+		if !hasLegacy {
+			return panelerr.Validation("credential_secret_missing", "Credential secret is missing")
+		}
+		var privateKey string
+		if keyPath != "" {
+			raw, err := os.ReadFile(keyPath)
+			if err != nil {
+				return err
+			}
+			privateKey = string(raw)
+		}
+		var err error
+		ciphertext, err = s.encrypt(credentialID, typ, storedSecret{
+			Password: password, PrivateKey: privateKey, Passphrase: passphrase,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := s.db.ExecContext(ctx, `UPDATE credentials SET secret_ciphertext=?,updated_at=? WHERE id=?`,
+			ciphertext, time.Now().UTC().Format(time.RFC3339Nano), credentialID); err != nil {
+			return err
+		}
+	}
+	if _, err := s.decrypt(credentialID, typ, ciphertext); err != nil {
+		return err
+	}
+	if keyPath != "" {
+		if err := os.Remove(keyPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	if hasLegacy {
+		_, err := s.db.ExecContext(ctx, `UPDATE credentials SET password_secret='',private_key_path='',passphrase_secret='',updated_at=? WHERE id=?`,
+			time.Now().UTC().Format(time.RFC3339Nano), credentialID)
+		return err
+	}
+	return nil
+}
+
+func (s *Service) encrypt(credentialID, typ string, secret storedSecret) (string, error) {
+	if s.secrets == nil {
+		return "", panelerr.Validation("credential_secret_store_missing", "Credential secret store is unavailable")
+	}
+	raw, err := json.Marshal(secret)
+	if err != nil {
+		return "", err
+	}
+	return s.secrets.Encrypt(credentialID, typ, credentialSecretField, raw)
+}
+
+func (s *Service) decrypt(credentialID, typ, ciphertext string) (storedSecret, error) {
+	if s.secrets == nil {
+		return storedSecret{}, panelerr.Validation("credential_secret_store_missing", "Credential secret store is unavailable")
+	}
+	raw, err := s.secrets.Decrypt(credentialID, typ, credentialSecretField, ciphertext)
+	if err != nil {
+		return storedSecret{}, err
+	}
+	var secret storedSecret
+	if err := json.Unmarshal(raw, &secret); err != nil {
+		return storedSecret{}, panelerr.Validation("credential_secret_invalid", "Credential secret is invalid")
+	}
+	return secret, nil
 }
 
 func validateSave(name, typ, username, password, privateKey string, requireSecret bool) error {

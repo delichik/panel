@@ -9,10 +9,20 @@ import (
 
 	"panel/internal/config"
 	"panel/internal/credential"
+	"panel/internal/secretstore"
 	"panel/internal/sshx"
 	"panel/internal/storage"
 	"panel/internal/tasks"
 )
+
+func newServerTestCredentialService(t *testing.T, store *storage.Store, cfg config.Config) *credential.Service {
+	t.Helper()
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential.NewService(store.AppDB(), secrets)
+}
 
 func TestServerValidation(t *testing.T) {
 	if err := validateSave(SaveRequest{Port: 22}); err == nil {
@@ -37,7 +47,7 @@ func TestCreateListServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	credSvc := newServerTestCredentialService(t, store, cfg)
 	cred, err := credSvc.Create(context.Background(), credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +120,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	}
 	defer store.Close()
 
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	credSvc := newServerTestCredentialService(t, store, cfg)
 	cred, err := credSvc.Create(context.Background(), credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	if err != nil {
 		t.Fatal(err)

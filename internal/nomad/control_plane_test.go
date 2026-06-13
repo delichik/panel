@@ -9,6 +9,7 @@ import (
 
 	"panel/internal/config"
 	"panel/internal/credential"
+	"panel/internal/secretstore"
 	"panel/internal/server"
 	"panel/internal/storage"
 	"panel/internal/tasks"
@@ -296,7 +297,11 @@ func newControlPlaneTestService(t *testing.T) (*JoinService, *credential.Service
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.AppDB())
-	credSvc := credential.NewService(store.AppDB(), cfg)
+	secrets, err := secretstore.Open(cfg, store.AppDB())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credSvc := credential.NewService(store.AppDB(), secrets)
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	unregister := registerJoinTestDB(serverSvc, store.AppDB())
 	fake := &controlPlaneFakeNomad{}

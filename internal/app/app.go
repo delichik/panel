@@ -58,6 +58,11 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	taskSvc := tasks.NewService(store.AppDB())
+	credSvc := credential.NewService(store.AppDB(), secretStore)
+	if err := credSvc.EnsureLegacySecretsMigrated(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	keyAssetSvc := keyassets.NewService(store.AppDB(), cfg, secretStore, taskSvc)
 	if err := keyAssetSvc.EnsureLegacySelfSignedMigrated(context.Background()); err != nil {
 		_ = store.Close()
@@ -77,7 +82,6 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	credSvc := credential.NewService(store.AppDB(), cfg)
 	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
 	serverSvc.SetMetricsDB(store.MetricsDB())
@@ -126,7 +130,7 @@ func New(cfg config.Config) (*App, error) {
 	nomadJoinSvc.SetConfigProvider(settingsSvc.NomadConfig)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
-	overviewSvc := overview.NewService(serverSvc, metricsSvc, packageSvc)
+	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
 	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
 		_ = store.Close()
 		return nil, err
@@ -280,6 +284,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.DeleteUFWRule(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/overview":
 			overviewH.Get(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/overview/cards":
+			overviewH.GetCards(w, r)
+		case r.Method == http.MethodPut && path == "/api/v1/overview/cards":
+			overviewH.UpdateCards(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/metrics"):
 			metricsH.Query(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/packages/updates"):

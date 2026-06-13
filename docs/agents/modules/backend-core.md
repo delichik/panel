@@ -26,6 +26,7 @@
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；旧数据库启动时由默认设置写入流程自动补齐空值。
+- 概览仪表盘卡片布局通过 `overview_card_configurations` 保存在应用数据库；当前单管理员模型使用固定 `default` 记录，整套有序卡片配置以稳定值 JSON 原子替换。
 - 后端对外错误响应需要走 `panelerr`、`httpx` 和 `internal/i18n`，不要在 handler 中散落用户可见错误文案。
 
 ## 数据库约定
@@ -56,6 +57,8 @@
 
 - `app.New` 必须在证书、应用和 scheduler 启动前初始化 `internal/secretstore`、迁移 DNS provider 凭据、初始化 `internal/keyassets` 并完成旧自签证书迁移。
 - `key_assets` 保存统一密钥与证书元数据和密文私钥；`key_asset_export_artifacts` 保存短期批量导出下载信息。
+- `credentials.secret_ciphertext` 使用同一 `secretstore` 保存 SSH 密码、私钥和私钥口令的加密 JSON；新凭据不得把秘密写入独立文件或旧明文字段。
 - 主密钥优先读取 `PANEL_KEY_ASSETS_MASTER_KEY`，否则读取 `<dataRoot>/secrets/key-assets-master.key`；首次无资产时自动生成文件并使用 `0600` 权限。
-- 数据库存在加密资产但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。
+- 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。
+- 启动时必须迁移旧 SSH 明文密码、口令和私钥文件：先写入并验证密文，再删除私钥文件，最后清空旧字段；删除或验证失败时拒绝启动，迁移必须可重复执行。
 - 新增路由集中在 `/api/v1/key-assets`；私钥下载响应必须禁用缓存。

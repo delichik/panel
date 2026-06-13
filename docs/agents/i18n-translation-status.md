@@ -6,6 +6,9 @@
 
 ### 鏈€杩戝凡琛ラ綈
 
+- `internal/overview`、`web/src/views/overview/index.vue`
+  - 概览卡片数据库保存失败文案及卡片配置校验错误码已接入英文、简体中文词条。
+
 - `web/src/layouts/AppLayout.vue`
   - Header 的 DEV 构建通道标识和完整版本提示已接入英文、简体中文词条。
 

@@ -20,7 +20,7 @@ type Store struct {
 }
 
 func Open(cfg config.Config) (*Store, error) {
-	for _, p := range []string{cfg.AppDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "keys"), filepath.Join(cfg.DataRoot, "tmp")} {
+	for _, p := range []string{cfg.AppDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
 		dir := p
 		if filepath.Ext(p) != "" {
 			dir = filepath.Dir(p)

@@ -188,7 +188,11 @@ func hasEncryptedAssets(db *sql.DB) (bool, error) {
 	if keyAssetsEncrypted {
 		return true, nil
 	}
-	return encryptedValuesExist(db, "dns_domains", "provider_secret_ciphertext")
+	dnsEncrypted, err := encryptedValuesExist(db, "dns_domains", "provider_secret_ciphertext")
+	if err != nil || dnsEncrypted {
+		return dnsEncrypted, err
+	}
+	return encryptedValuesExist(db, "credentials", "secret_ciphertext")
 }
 
 func encryptedValuesExist(db *sql.DB, table, column string) (bool, error) {

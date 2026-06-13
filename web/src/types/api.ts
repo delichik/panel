@@ -375,6 +375,22 @@ export interface OverviewDto {
 }
 
 export type MetricsRange = '1h' | '6h' | '1d' | '7d';
+export type OverviewCardKind = 'cpu' | 'memory' | 'disk' | 'network' | 'packageUpdates' | 'containerUpdates' | 'placeholder';
+export type OverviewCardNetworkDirection = 'rx' | 'tx' | 'both';
+
+export interface OverviewCardDto {
+  id: string;
+  kind: OverviewCardKind;
+  width: number;
+  height: number;
+  range: MetricsRange;
+  networkDirection: OverviewCardNetworkDirection;
+  serverIds: string[];
+}
+
+export interface OverviewCardConfigurationDto {
+  cards: OverviewCardDto[];
+}
 
 export interface CpuPointDto {
   time: string;

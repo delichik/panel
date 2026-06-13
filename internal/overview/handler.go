@@ -18,3 +18,25 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.JSON(w, http.StatusOK, out)
 }
+
+func (h *Handler) GetCards(w http.ResponseWriter, r *http.Request) {
+	out, err := h.service.GetCards(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) UpdateCards(w http.ResponseWriter, r *http.Request) {
+	var input CardConfigurationSet
+	if !httpx.Decode(w, r, &input) {
+		return
+	}
+	out, err := h.service.UpdateCards(r.Context(), input)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
