@@ -761,7 +761,9 @@ func TestSwitchServerSynchronizesManagedClientConfiguration(t *testing.T) {
 	ctx := context.Background()
 	control := createJoinTestServer(t, svc.servers, credSvc, ctx, "new control", "10.0.0.40")
 	worker := createJoinTestServer(t, svc.servers, credSvc, ctx, "worker one", "10.0.0.41")
+	previousControl := createJoinTestServer(t, svc.servers, credSvc, ctx, "previous control", "10.0.0.39")
 	markNomadClientReady(nomadFake, worker)
+	markNomadClientReady(nomadFake, previousControl)
 	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
 		Type:         TaskTypeClientJoin,
 		ServerID:     worker.ID,
@@ -772,6 +774,17 @@ func TestSwitchServerSynchronizesManagedClientConfiguration(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeServerBootstrap,
+		ServerID:     previousControl.ID,
+		ResourceType: "server",
+		ResourceID:   previousControl.ID,
+		Status:       tasks.StatusCompleted,
+		Summary:      "Previous Nomad server bootstrapped",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc.cfg.Address = "https://10.0.0.39:4646"
 
 	task, err := svc.SwitchServer(ctx, SwitchServerInput{ServerID: control.ID, AdvertiseAddress: control.Host})
 	if err != nil {
@@ -785,6 +798,9 @@ func TestSwitchServerSynchronizesManagedClientConfiguration(t *testing.T) {
 	}
 	if !strings.Contains(command, "systemctl restart nomad") {
 		t.Fatalf("expected switch to restart synchronized client:\n%s", command)
+	}
+	if strings.Count(command, `retry_join = ["10.0.0.40:4647"]`) < 2 {
+		t.Fatalf("expected switch to rewrite both worker and previous server clients:\n%s", command)
 	}
 	for _, want := range []string{
 		"ufw allow 4646/tcp",
@@ -1163,13 +1179,20 @@ func createJoinTestServer(t *testing.T, svc *server.Service, credSvc *credential
 }
 
 func markNomadClientReady(fake *joinFakeNomadClient, srv server.Server) {
-	fake.nodes = []NodeListItem{{
+	node := NodeListItem{
 		ID:      "node-" + srv.ID,
 		Name:    srv.Name,
 		Address: srv.Host,
 		Status:  "ready",
 		Meta:    map[string]string{"panel_server_id": srv.ID},
-	}}
+	}
+	for i := range fake.nodes {
+		if serverIDForNode(fake.nodes[i]) == srv.ID {
+			fake.nodes[i] = node
+			return
+		}
+	}
+	fake.nodes = append(fake.nodes, node)
 }
 
 type joinFakeNomadClient struct {

@@ -1174,7 +1174,6 @@ func (s *JoinService) panelManagedClientServers(ctx context.Context, excludeServ
 	}
 
 	clientIDs := map[string]struct{}{}
-	serverIDs := map[string]struct{}{}
 	latestTasks, err := s.latestNomadTasks(ctx)
 	if err != nil {
 		return nil, err
@@ -1183,11 +1182,8 @@ func (s *JoinService) panelManagedClientServers(ctx context.Context, excludeServ
 		if serverID == "" || taskCompletedRemove(task) {
 			continue
 		}
-		switch roleForTask(task) {
-		case ProjectedNodeRoleClient:
+		if task.Type == TaskTypeClientJoin || task.Status != tasks.StatusCompleted {
 			clientIDs[serverID] = struct{}{}
-		case ProjectedNodeRoleServer:
-			serverIDs[serverID] = struct{}{}
 		}
 	}
 
@@ -1206,12 +1202,14 @@ func (s *JoinService) panelManagedClientServers(ctx context.Context, excludeServ
 		if id == excludeServerID {
 			continue
 		}
-		if _, isServer := serverIDs[id]; isServer {
+		srv, ok := serverByID[id]
+		if !ok {
 			continue
 		}
-		if srv, ok := serverByID[id]; ok {
-			out = append(out, srv)
+		if nomadHTTPAddressMatchesServer(s.currentConfig().Address, srv) {
+			continue
 		}
+		out = append(out, srv)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil

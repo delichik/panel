@@ -134,7 +134,7 @@ func (s *JoinService) ControlPlane(ctx context.Context) (ControlPlane, error) {
 				Name:                    firstNonEmpty(node.Name, srv.Name, node.ID),
 				Host:                    firstNonEmpty(node.Address, srv.Host),
 				Traits:                  srv.Traits,
-				Role:                    roleForTask(task),
+				Role:                    s.roleForManagedServer(srv, task),
 				Status:                  firstNonEmpty(node.Status, "unknown"),
 				ReverseProxy:            traitBool(srv.Traits, TraitReverseProxyEnabled),
 				ReverseProxyStatic:      traitBool(srv.Traits, TraitReverseProxyStaticFiles),
@@ -359,11 +359,28 @@ func roleForTask(task tasks.Task) string {
 		return ProjectedNodeRoleServer
 	case TaskTypeClusterRebuild:
 		return ProjectedNodeRoleServer
+	case TaskTypeServerSwitch:
+		return ProjectedNodeRoleServer
 	case TaskTypeClientJoin:
 		return ProjectedNodeRoleClient
 	default:
 		return ProjectedNodeRoleUnknown
 	}
+}
+
+func (s *JoinService) roleForManagedServer(srv server.Server, task tasks.Task) string {
+	if nomadHTTPAddressMatchesServer(s.currentConfig().Address, srv) {
+		return ProjectedNodeRoleServer
+	}
+	if task.Type == TaskTypeServerSwitch && !taskCompletedRemove(task) {
+		return ProjectedNodeRoleServer
+	}
+	if task.ID != "" && task.Status != tasks.StatusCompleted {
+		if role := roleForTask(task); role == ProjectedNodeRoleServer || role == ProjectedNodeRoleClient {
+			return role
+		}
+	}
+	return ProjectedNodeRoleClient
 }
 
 func projectionStatus(task tasks.Task) string {

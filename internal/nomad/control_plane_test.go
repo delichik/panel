@@ -220,6 +220,45 @@ func TestControlPlaneProjectsManagedAndUnmanagedNodes(t *testing.T) {
 	}
 }
 
+func TestControlPlaneResolvesManagedRolesFromCurrentServer(t *testing.T) {
+	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
+	defer cleanup()
+	ctx := context.Background()
+	current := createControlPlaneServer(t, svc.servers, credSvc, ctx, "current", "10.0.0.42")
+	previous := createControlPlaneServer(t, svc.servers, credSvc, ctx, "previous", "10.0.0.43")
+	svc.cfg.Address = "https://10.0.0.42:4646"
+	fake.status = StatusResponse{Connected: true, Leader: "10.0.0.42:4647"}
+	fake.nodes = []NodeListItem{
+		{ID: "node-current", Name: "current-node", Status: "ready", Meta: map[string]string{"panel_server_id": current.ID}},
+		{ID: "node-previous", Name: "previous-node", Status: "ready", Meta: map[string]string{"panel_server_id": previous.ID}},
+	}
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type: TaskTypeServerSwitch, ServerID: current.ID, ResourceType: "nomad_server",
+		ResourceID: current.ID, Summary: "Nomad server switched", Status: tasks.StatusCompleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type: TaskTypeServerBootstrap, ServerID: previous.ID, ResourceType: "server",
+		ResourceID: previous.ID, Summary: "Previous Nomad server bootstrap", Status: tasks.StatusCompleted,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.ControlPlane(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentNode := findProjectedNode(got.Nodes, ProjectedNodeManaged, current.ID)
+	if currentNode == nil || currentNode.Role != ProjectedNodeRoleServer || currentNode.Status != "ready" {
+		t.Fatalf("current server node = %#v; all nodes=%#v", currentNode, got.Nodes)
+	}
+	previousNode := findProjectedNode(got.Nodes, ProjectedNodeManaged, previous.ID)
+	if previousNode == nil || previousNode.Role != ProjectedNodeRoleClient || previousNode.Status != "ready" {
+		t.Fatalf("previous server should project as client after switch, got %#v; all nodes=%#v", previousNode, got.Nodes)
+	}
+}
+
 func TestControlPlanePrefersReadyDuplicateForManagedServer(t *testing.T) {
 	svc, credSvc, fake, cleanup := newControlPlaneTestService(t)
 	defer cleanup()
