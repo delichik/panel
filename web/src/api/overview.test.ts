@@ -1,6 +1,6 @@
 import { ApiClient } from './client';
 import { createOverviewApi } from './overview';
-import type { OverviewCardConfigurationDto } from '@/types/api';
+import type { OverviewCardConfigurationDto, OverviewCardDataDto } from '@/types/api';
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -36,5 +36,34 @@ describe('overviewApi', () => {
       method: 'PUT',
       body: JSON.stringify(configuration),
     }));
+  });
+
+  it('loads all data for one overview card by card id', async () => {
+    const data: OverviewCardDataDto = {
+      card: {
+        id: 'card-1',
+        kind: 'cpu',
+        width: 3,
+        height: 2,
+        range: '1h',
+        networkDirection: 'both',
+        serverIds: [],
+      },
+      metricsByServer: {
+        'srv-1': {
+          range: '1h',
+          cpu: [{ time: '2026-06-13T00:00:00Z', usagePercent: 42 }],
+          memory: [],
+          disk: [],
+          network: [],
+        },
+      },
+    };
+    const fetcher = vi.fn().mockResolvedValueOnce(jsonResponse({ data, error: null }));
+    const api = createOverviewApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await expect(api.getCardData('card 1')).resolves.toEqual(data);
+
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/overview/cards/card%201/data', expect.objectContaining({ method: 'GET' }));
   });
 });

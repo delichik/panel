@@ -288,6 +288,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			overviewH.GetCards(w, r)
 		case r.Method == http.MethodPut && path == "/api/v1/overview/cards":
 			overviewH.UpdateCards(w, r)
+		case r.Method == http.MethodGet && overviewCardDataPath(path):
+			overviewH.GetCardData(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/metrics"):
 			metricsH.Query(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/packages/updates"):
@@ -407,6 +409,11 @@ func routeParts(path string) []string {
 func serverResourcePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 4 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != ""
+}
+
+func overviewCardDataPath(path string) bool {
+	parts := routeParts(path)
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "overview" && parts[3] == "cards" && parts[4] != "" && parts[5] == "data"
 }
 
 func dnsRecordCollectionPath(path string) bool {

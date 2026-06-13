@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { useTheme } from 'vuetify';
 import VChart from 'vue-echarts';
@@ -14,6 +14,7 @@ import type {
   ApplicationDto,
   MetricsRange,
   MetricsSeriesDto,
+  OverviewCardDataDto,
   OverviewCardDto,
   OverviewCardKind,
   OverviewCardNetworkDirection,
@@ -68,7 +69,7 @@ const networkDirectionItems = computed<Array<{ title: string; value: NetworkDire
 const overview = ref<OverviewDto>({ servers: [] });
 const applications = ref<ApplicationDto[]>([]);
 const cards = ref<OverviewCardConfig[]>([]);
-const metricsByKey = ref<Record<string, MetricsSeriesDto | null>>({});
+const cardDataById = ref<Record<string, OverviewCardDataDto | null>>({});
 const loading = ref(false);
 const error = ref('');
 const saveError = ref('');
@@ -137,10 +138,6 @@ const presetItems = computed(() => cardPresets.map((preset) => ({
   title: cardTitle(preset.kind),
 })));
 
-watch(cards, () => {
-  void loadCardMetrics();
-}, { deep: true });
-
 function defaultCards(): OverviewCardConfig[] {
   return [
     createCard('cpu', 3, 2, '1h'),
@@ -198,10 +195,6 @@ function resolveCardServerIds(card: OverviewCardConfig) {
   return resolveCardServers(card).map((server) => server.id);
 }
 
-function metricKey(serverId: string, range: MetricsRange) {
-  return `${serverId}:${range}`;
-}
-
 async function loadData() {
   loading.value = true;
   try {
@@ -227,18 +220,14 @@ async function loadData() {
 }
 
 async function loadCardMetrics() {
-  const pairs = new Map<string, { serverId: string; range: MetricsRange }>();
-  for (const card of cards.value) {
-    if (!isMetricCard(card)) continue;
-    for (const serverId of resolveCardServerIds(card)) {
-      pairs.set(metricKey(serverId, card.range), { serverId, range: card.range });
-    }
-  }
-  await Promise.all([...pairs.entries()].map(async ([key, pair]) => {
+  const metricCards = cards.value.filter(isMetricCard);
+  const activeCardIds = new Set(metricCards.map((card) => card.id));
+  cardDataById.value = Object.fromEntries(Object.entries(cardDataById.value).filter(([cardId]) => activeCardIds.has(cardId)));
+  await Promise.all(metricCards.map(async (card) => {
     try {
-      metricsByKey.value[key] = await overviewApi.getMetrics(pair.serverId, pair.range);
+      cardDataById.value[card.id] = await overviewApi.getCardData(card.id);
     } catch {
-      metricsByKey.value[key] = null;
+      cardDataById.value[card.id] = null;
     }
   }));
 }
@@ -300,7 +289,7 @@ function chartOption(card: OverviewCardConfig) {
 }
 
 function metricSeriesForCard(card: OverviewCardConfig, server: OverviewServerDto, index: number) {
-  const series = metricsByKey.value[metricKey(server.id, card.range)];
+  const series = cardDataById.value[card.id]?.metricsByServer[server.id] as MetricsSeriesDto | undefined;
   const color = palette.value.series[index % palette.value.series.length];
   if (!series) return [];
   if (card.kind === 'cpu') return [lineSeries(server.name, color, series.cpu.map((point) => [point.time, point.usagePercent]))];
@@ -440,16 +429,19 @@ function saveCard() {
     cards.value = [...cards.value, next];
   }
   dialog.value = false;
+  void loadCardMetrics();
   void persistCards();
 }
 
 function removeCard(cardId: string) {
   cards.value = cards.value.filter((card) => card.id !== cardId);
+  void loadCardMetrics();
   void persistCards();
 }
 
 function resetCards() {
   cards.value = defaultCards();
+  void loadCardMetrics();
   void persistCards();
 }
 
@@ -510,9 +502,12 @@ function reorderCard(sourceId: string, targetId: string, insertAfter = false) {
   const sourceIndex = next.findIndex((card) => card.id === sourceId);
   const targetIndex = next.findIndex((card) => card.id === targetId);
   if (sourceIndex < 0 || targetIndex < 0) return;
+  const currentInsertAfter = sourceIndex > targetIndex;
+  if (Math.abs(sourceIndex - targetIndex) === 1 && currentInsertAfter === insertAfter) return;
   const [movingCard] = next.splice(sourceIndex, 1);
   const nextTargetIndex = next.findIndex((card) => card.id === targetId);
   const insertIndex = nextTargetIndex + (insertAfter ? 1 : 0);
+  if (sourceIndex === insertIndex || sourceIndex + 1 === insertIndex) return;
   next.splice(insertIndex, 0, movingCard);
   cards.value = next;
 }

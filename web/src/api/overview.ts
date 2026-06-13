@@ -1,5 +1,5 @@
 import { ApiClient, apiClient } from './client';
-import type { MetricsRange, MetricsSeriesDto, OverviewCardConfigurationDto, OverviewDto } from '@/types/api';
+import type { OverviewCardConfigurationDto, OverviewCardDataDto, OverviewDto } from '@/types/api';
 
 export function createOverviewApi(client: ApiClient) {
   return {
@@ -12,8 +12,8 @@ export function createOverviewApi(client: ApiClient) {
     updateCards(configuration: OverviewCardConfigurationDto) {
       return client.put<OverviewCardConfigurationDto>('/overview/cards', configuration);
     },
-    getMetrics(serverId: string, range: MetricsRange) {
-      return client.get<MetricsSeriesDto>(`/servers/${serverId}/metrics?range=${range}`);
+    getCardData(cardId: string) {
+      return client.get<OverviewCardDataDto>(`/overview/cards/${encodeURIComponent(cardId)}/data`);
     },
   };
 }

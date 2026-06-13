@@ -4,8 +4,12 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"panel/internal/config"
+	"panel/internal/linux"
+	metricspkg "panel/internal/metrics"
+	serverpkg "panel/internal/server"
 	"panel/internal/storage"
 )
 
@@ -87,6 +91,82 @@ func TestUpdateCardsRejectsInvalidInput(t *testing.T) {
 	}
 }
 
+func TestGetCardDataReturnsMetricsForConfiguredServers(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+
+	input := CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-cpu",
+		Kind:             CardKindCPU,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{serverIDs[0]},
+	}}}
+	if _, err := svc.UpdateCards(context.Background(), input); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	got, err := svc.GetCardData(context.Background(), "card-cpu")
+	if err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if got.Card.ID != "card-cpu" {
+		t.Fatalf("card id = %q, want card-cpu", got.Card.ID)
+	}
+	if len(got.MetricsByServer) != 1 {
+		t.Fatalf("metrics server count = %d, want 1: %#v", len(got.MetricsByServer), got.MetricsByServer)
+	}
+	series := got.MetricsByServer[serverIDs[0]]
+	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 42 {
+		t.Fatalf("unexpected cpu series: %#v", series.CPU)
+	}
+	if _, ok := got.MetricsByServer[serverIDs[1]]; ok {
+		t.Fatalf("unselected server should not be included")
+	}
+}
+
+func TestGetCardDataExpandsEmptyServerSelection(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+
+	input := CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-memory",
+		Kind:             CardKindMemory,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{},
+	}}}
+	if _, err := svc.UpdateCards(context.Background(), input); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	got, err := svc.GetCardData(context.Background(), "card-memory")
+	if err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if len(got.MetricsByServer) != len(serverIDs) {
+		t.Fatalf("metrics server count = %d, want %d", len(got.MetricsByServer), len(serverIDs))
+	}
+	for _, serverID := range serverIDs {
+		if _, ok := got.MetricsByServer[serverID]; !ok {
+			t.Fatalf("server %s missing from card data", serverID)
+		}
+	}
+}
+
+func TestGetCardDataRejectsUnknownCard(t *testing.T) {
+	svc, _, closeStore := newCardDataTestService(t)
+	defer closeStore()
+
+	if _, err := svc.GetCardData(context.Background(), "missing"); err == nil {
+		t.Fatalf("expected missing card error")
+	}
+}
+
 func newCardTestService(t *testing.T) (*Service, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -99,6 +179,57 @@ func newCardTestService(t *testing.T) (*Service, func()) {
 		t.Fatalf("open store: %v", err)
 	}
 	return NewService(store.AppDB(), nil, nil, nil), func() {
+		if err := store.Close(); err != nil {
+			t.Errorf("close store: %v", err)
+		}
+	}
+}
+
+func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	now := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	if _, err := store.AppDB().ExecContext(context.Background(), `
+		INSERT INTO credentials(id, name, type, username, created_at, updated_at)
+		VALUES('cred-test', 'Test', 'password', 'root', ?, ?)
+	`, now, now); err != nil {
+		t.Fatalf("insert credential: %v", err)
+	}
+	serverSvc := serverpkg.NewService(store.AppDB(), nil, nil)
+	serverSvc.SetMetricsDB(store.MetricsDB())
+	first, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Alpha", Host: "10.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
+	if err != nil {
+		t.Fatalf("create first server: %v", err)
+	}
+	second, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Beta", Host: "10.0.0.2", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
+	if err != nil {
+		t.Fatalf("create second server: %v", err)
+	}
+	metricsSvc := metricspkg.NewService(store.MetricsDB(), serverSvc, nil)
+	for i, serverID := range []string{first.ID, second.ID} {
+		if err := metricsSvc.Save(context.Background(), linux.MetricsSnapshot{
+			ServerID:           serverID,
+			Time:               time.Now().UTC().Add(-time.Duration(i) * time.Minute),
+			CPUUsagePercent:    42 + float64(i),
+			MemoryUsedBytes:    10,
+			MemoryTotalBytes:   20,
+			DiskUsedBytes:      30,
+			DiskTotalBytes:     40,
+			NetworkRxBytesRate: 50,
+			NetworkTxBytesRate: 60,
+		}); err != nil {
+			t.Fatalf("save metrics: %v", err)
+		}
+	}
+	return NewService(store.AppDB(), serverSvc, metricsSvc, nil), []string{first.ID, second.ID}, func() {
 		if err := store.Close(); err != nil {
 			t.Errorf("close store: %v", err)
 		}

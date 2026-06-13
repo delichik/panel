@@ -35,6 +35,7 @@
 - 杞欢鍖咃細`GET /api/v1/servers/{id}/packages/updates`锛宍POST /api/v1/servers/{id}/packages/refresh`锛宍POST /api/v1/servers/{id}/packages/upgrade-selected`锛宍POST /api/v1/servers/{id}/packages/upgrade-all`
 - 姒傝锛歚GET /api/v1/overview`
 - 概览卡片布局：`GET/PUT /api/v1/overview/cards`
+- 概览卡片数据：`GET /api/v1/overview/cards/{cardId}/data`，后端按卡片配置展开服务器范围并返回该卡片所有服务器的指标序列。
 
 ## 鏁版嵁涓庤涓虹害瀹?
 - 概览卡片布局以系统级有序 JSON 保存在应用数据库的 `overview_card_configurations` 表；数据库没有记录时首次读取会写入默认六张卡片。空卡片数组是有效布局，浏览器 localStorage 中的旧布局不会迁移。

@@ -392,6 +392,11 @@ export interface OverviewCardConfigurationDto {
   cards: OverviewCardDto[];
 }
 
+export interface OverviewCardDataDto {
+  card: OverviewCardDto;
+  metricsByServer: Record<string, MetricsSeriesDto>;
+}
+
 export interface CpuPointDto {
   time: string;
   usagePercent: number;

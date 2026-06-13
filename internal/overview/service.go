@@ -65,6 +65,11 @@ type CardConfigurationSet struct {
 	Cards []CardConfiguration `json:"cards"`
 }
 
+type CardData struct {
+	Card            CardConfiguration         `json:"card"`
+	MetricsByServer map[string]metrics.Series `json:"metricsByServer"`
+}
+
 func NewService(db *sql.DB, servers *server.Service, metrics *metrics.Service, packages *packages.Service) *Service {
 	return &Service{db: db, servers: servers, metrics: metrics, packages: packages}
 }
@@ -149,6 +154,54 @@ func (s *Service) UpdateCards(ctx context.Context, input CardConfigurationSet) (
 	return input, nil
 }
 
+func (s *Service) GetCardData(ctx context.Context, cardID string) (CardData, error) {
+	cardID = strings.TrimSpace(cardID)
+	if cardID == "" {
+		return CardData{}, panelerr.NotFound("overview_card")
+	}
+	cards, err := s.GetCards(ctx)
+	if err != nil {
+		return CardData{}, err
+	}
+	var target CardConfiguration
+	found := false
+	for _, card := range cards.Cards {
+		if card.ID == cardID {
+			target = card
+			found = true
+			break
+		}
+	}
+	if !found {
+		return CardData{}, panelerr.NotFound("overview_card")
+	}
+	out := CardData{Card: target, MetricsByServer: map[string]metrics.Series{}}
+	if !isMetricCard(target.Kind) {
+		return out, nil
+	}
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return CardData{}, err
+	}
+	selected := map[string]struct{}{}
+	for _, serverID := range target.ServerIDs {
+		selected[serverID] = struct{}{}
+	}
+	for _, srv := range servers {
+		if len(selected) > 0 {
+			if _, ok := selected[srv.ID]; !ok {
+				continue
+			}
+		}
+		series, err := s.metrics.Query(ctx, srv.ID, target.Range)
+		if err != nil {
+			return CardData{}, err
+		}
+		out.MetricsByServer[srv.ID] = series
+	}
+	return out, nil
+}
+
 func validateCards(cards []CardConfiguration) error {
 	if len(cards) > 100 {
 		return panelerr.Validation("overview_cards_too_many", "Overview dashboard cannot contain more than 100 cards")
@@ -186,6 +239,15 @@ func validateCards(cards []CardConfiguration) error {
 		}
 	}
 	return nil
+}
+
+func isMetricCard(kind CardKind) bool {
+	switch kind {
+	case CardKindCPU, CardKindMemory, CardKindDisk, CardKindNetwork:
+		return true
+	default:
+		return false
+	}
 }
 
 func validCardKind(kind CardKind) bool {

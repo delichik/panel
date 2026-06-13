@@ -47,3 +47,34 @@ func TestUpdateCardsHandlerRejectsInvalidCard(t *testing.T) {
 		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
+
+func TestGetCardDataHandler(t *testing.T) {
+	svc, _, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	if _, err := svc.UpdateCards(httptest.NewRequest(http.MethodGet, "/", nil).Context(), CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-cpu",
+		Kind:             CardKindCPU,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	NewHandler(svc).GetCardData(recorder, httptest.NewRequest(http.MethodGet, "/api/v1/overview/cards/card-cpu/data", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Data CardData `json:"data"`
+	}
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Data.Card.ID != "card-cpu" || len(response.Data.MetricsByServer) == 0 {
+		t.Fatalf("unexpected response: %#v", response.Data)
+	}
+}
