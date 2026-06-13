@@ -64,6 +64,7 @@
 ## 动效
 
 - 常规颜色、边框、阴影和位移过渡为 `160ms` 至 `250ms`。
+- 全局 `main.css` 统一覆盖 Vuetify 常用显示/隐藏动效，包括 dialog、menu/tooltip 的 scale/fade、snackbar、message、slide 和 expand transition；新增业务页面优先复用这些默认过渡，不要为同类浮层另写独立时长曲线。
 - 主要按钮悬浮上移 `1px`，按下下移 `1px`。
 - 主题切换由 `.theme-changing` 统一添加短过渡。
 - 必须尊重 `prefers-reduced-motion: reduce`，关闭非必要动画。
@@ -81,4 +82,3 @@
 - `web/src/main.ts`
 - `web/src/theme.ts`
 - `web/src/styles/main.css`
-

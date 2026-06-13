@@ -99,6 +99,112 @@ body {
   transition-timing-function: ease !important;
 }
 
+.dialog-transition-enter-active,
+.dialog-bottom-transition-enter-active,
+.dialog-top-transition-enter-active,
+.scale-transition-enter-active,
+.fade-transition-enter-active,
+.v-snackbar-transition-enter-active,
+.message-transition-enter-active,
+.slide-y-transition-enter-active,
+.slide-y-reverse-transition-enter-active {
+  transition-duration: 200ms !important;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1) !important;
+}
+
+.dialog-transition-leave-active,
+.dialog-bottom-transition-leave-active,
+.dialog-top-transition-leave-active,
+.scale-transition-leave-active,
+.fade-transition-leave-active,
+.v-snackbar-transition-leave-active,
+.message-transition-leave-active,
+.slide-y-transition-leave-active,
+.slide-y-reverse-transition-leave-active {
+  transition-duration: 160ms !important;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.dialog-transition-enter-active,
+.dialog-transition-leave-active,
+.dialog-bottom-transition-enter-active,
+.dialog-bottom-transition-leave-active,
+.dialog-top-transition-enter-active,
+.dialog-top-transition-leave-active,
+.scale-transition-enter-active,
+.scale-transition-leave-active,
+.fade-transition-enter-active,
+.fade-transition-leave-active,
+.v-snackbar-transition-enter-active,
+.v-snackbar-transition-leave-active,
+.message-transition-enter-active,
+.message-transition-leave-active,
+.slide-y-transition-enter-active,
+.slide-y-transition-leave-active,
+.slide-y-reverse-transition-enter-active,
+.slide-y-reverse-transition-leave-active {
+  transition-property: opacity, transform !important;
+  will-change: opacity, transform;
+}
+
+.dialog-transition-enter-from,
+.dialog-transition-leave-to {
+  opacity: 0 !important;
+  transform: translateY(6px) scale(0.98) !important;
+}
+
+.scale-transition-enter-from,
+.scale-transition-leave-to,
+.fade-transition-enter-from,
+.fade-transition-leave-to {
+  opacity: 0 !important;
+  transform: translateY(4px) scale(0.98) !important;
+}
+
+.message-transition-enter-from,
+.message-transition-leave-to,
+.slide-y-transition-enter-from,
+.slide-y-transition-leave-to {
+  opacity: 0 !important;
+  transform: translateY(-8px) !important;
+}
+
+.slide-y-reverse-transition-enter-from,
+.slide-y-reverse-transition-leave-to,
+.v-snackbar-transition-enter-from,
+.v-snackbar-transition-leave-to {
+  opacity: 0 !important;
+  transform: translateY(10px) !important;
+}
+
+.dialog-transition-enter-to,
+.dialog-transition-leave-from,
+.scale-transition-enter-to,
+.scale-transition-leave-from,
+.fade-transition-enter-to,
+.fade-transition-leave-from,
+.message-transition-enter-to,
+.message-transition-leave-from,
+.slide-y-transition-enter-to,
+.slide-y-transition-leave-from,
+.slide-y-reverse-transition-enter-to,
+.slide-y-reverse-transition-leave-from,
+.v-snackbar-transition-enter-to,
+.v-snackbar-transition-leave-from {
+  opacity: 1 !important;
+  transform: translateY(0) scale(1) !important;
+}
+
+.expand-transition-enter-active,
+.expand-transition-leave-active,
+.expand-x-transition-enter-active,
+.expand-x-transition-leave-active,
+.expand-both-transition-enter-active,
+.expand-both-transition-leave-active {
+  transition-duration: 200ms !important;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1) !important;
+}
+
 a {
   color: inherit;
   text-decoration: none;
