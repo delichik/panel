@@ -130,6 +130,8 @@ const messages = {
       },
       updateAvailable: "Update {version} available",
       updateAvailableDetail: "Current {current}; latest {latest}. This notice does not download or install updates.",
+      developmentChannel: "DEV",
+      developmentChannelDetail: "Development build {version}",
       logout: "Logout",
     },
     routes: {
@@ -1210,6 +1212,8 @@ const messages = {
       },
       updateAvailable: "发现新版本 {version}",
       updateAvailableDetail: "当前版本 {current}，最新版本 {latest}。此提示不会下载或安装更新。",
+      developmentChannel: "DEV",
+      developmentChannelDetail: "开发通道版本 {version}",
       logout: "退出登录",
     },
     routes: {

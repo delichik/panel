@@ -4,14 +4,15 @@ on:
   push:
     branches:
       - main
+      - dev
 
 permissions:
   contents: write
   packages: write
 
 concurrency:
-  group: docker-release-main
-  cancel-in-progress: false
+  group: docker-release-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name == 'dev' }}
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository }}
@@ -21,6 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      channel: ${{ steps.version.outputs.channel }}
 
     steps:
       - name: Check out source
@@ -28,7 +30,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate next version
+      - name: Generate version
         id: version
         shell: bash
         run: |
@@ -50,18 +52,29 @@ jobs:
             fi
           done < <(git tag --list "v${major}.${minor}.*" | grep -E "^v${major}\.${minor}\.[0-9]+$" || true)
 
-          patch=$((max_patch + 1))
-          version="v${major}.${minor}.${patch}"
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            patch=$((max_patch + 1))
+            version="v${major}.${minor}.${patch}"
+            channel="release"
 
-          if git rev-parse --verify --quiet "refs/tags/${version}" >/dev/null; then
-            echo "Version ${version} already exists."
-            exit 1
+            if git rev-parse --verify --quiet "refs/tags/${version}" >/dev/null; then
+              echo "Version ${version} already exists."
+              exit 1
+            fi
+
+            git tag "$version" "$GITHUB_SHA"
+            git push origin "refs/tags/${version}"
+          else
+            patch="$max_patch"
+            if [ "$patch" -lt 0 ]; then
+              patch=0
+            fi
+            version="v${major}.${minor}.${patch}.$(date -u +%Y%m%d%H%M%S)"
+            channel="dev"
           fi
 
-          git tag "$version" "$GITHUB_SHA"
-          git push origin "refs/tags/${version}"
-
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
           echo "Generated version ${version}."
 
   build-amd64:
@@ -88,9 +101,10 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.generate-version.outputs.version }}
-            type=raw,value=latest
-            type=sha
+            type=raw,value=${{ needs.generate-version.outputs.version }},enable=${{ github.ref_name == 'main' }}
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=sha,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=dev,enable=${{ github.ref_name == 'dev' }}
 
       - name: Build and push amd64 image by digest
         id: build
@@ -104,6 +118,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=linux-amd64
           build-args: |
             PANEL_VERSION=${{ needs.generate-version.outputs.version }}
+            PANEL_CHANNEL=${{ needs.generate-version.outputs.channel }}
             PANEL_REPOSITORY=${{ github.repository }}
             PANEL_COMMIT=${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -147,9 +162,10 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.generate-version.outputs.version }}
-            type=raw,value=latest
-            type=sha
+            type=raw,value=${{ needs.generate-version.outputs.version }},enable=${{ github.ref_name == 'main' }}
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=sha,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=dev,enable=${{ github.ref_name == 'dev' }}
 
       - name: Build and push arm64 image by digest
         id: build
@@ -163,6 +179,7 @@ jobs:
           cache-to: type=gha,mode=max,scope=linux-arm64
           build-args: |
             PANEL_VERSION=${{ needs.generate-version.outputs.version }}
+            PANEL_CHANNEL=${{ needs.generate-version.outputs.channel }}
             PANEL_REPOSITORY=${{ github.repository }}
             PANEL_COMMIT=${{ github.sha }}
           labels: ${{ steps.meta.outputs.labels }}
@@ -216,9 +233,10 @@ jobs:
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=${{ needs.generate-version.outputs.version }}
-            type=raw,value=latest
-            type=sha
+            type=raw,value=${{ needs.generate-version.outputs.version }},enable=${{ github.ref_name == 'main' }}
+            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
+            type=sha,enable=${{ github.ref_name == 'main' }}
+            type=raw,value=dev,enable=${{ github.ref_name == 'dev' }}
 
       - name: Create multi-arch manifest
         working-directory: /tmp/digests
@@ -228,15 +246,23 @@ jobs:
             $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
             $(printf '${{ env.IMAGE_NAME }}@sha256:%s ' *)
 
-      - name: Inspect published image
+      - name: Inspect published release image
+        if: github.ref_name == 'main'
         shell: bash
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:${{ needs.generate-version.outputs.version }}
 
       - name: Inspect published latest image
+        if: github.ref_name == 'main'
         shell: bash
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:latest
 
+      - name: Inspect published dev image
+        if: github.ref_name == 'dev'
+        shell: bash
+        run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:dev
+
       - name: Create GitHub release
+        if: github.ref_name == 'main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.generate-version.outputs.version }}

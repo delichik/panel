@@ -118,6 +118,7 @@ let rotateTimer: number | undefined;
 let versionTimer: number | undefined;
 
 const currentTask = computed(() => activeTasks.value[taskIndex.value % Math.max(activeTasks.value.length, 1)]);
+const isDevChannel = computed(() => versionInfo.value?.channel === 'dev');
 
 async function loadActiveTasks() {
   try {
@@ -218,6 +219,16 @@ onBeforeUnmount(() => {
               <v-icon>mdi-menu</v-icon>
             </v-btn>
             <h1 class="app-title text-truncate">{{ pageTitle }}</h1>
+            <v-chip
+              v-if="isDevChannel"
+              color="info"
+              variant="tonal"
+              size="x-small"
+              class="dev-channel-chip"
+              :title="t('layout.developmentChannelDetail', { version: versionInfo?.version })"
+            >
+              {{ t('layout.developmentChannel') }}
+            </v-chip>
           </div>
 
           <Transition name="task-slide" mode="out-in">
@@ -312,6 +323,12 @@ onBeforeUnmount(() => {
   line-height: 1.15;
   letter-spacing: 0;
   text-wrap: balance;
+}
+
+.dev-channel-chip {
+  flex: 0 0 auto;
+  font-weight: 700;
+  letter-spacing: 0.04em;
 }
 
 .app-header-actions {

@@ -830,6 +830,7 @@ export interface RuntimeSettingsDto {
 
 export interface SystemVersionDto {
   version: string;
+  channel: 'release' | 'dev';
   commit?: string;
   repository?: string;
   latestVersion?: string;

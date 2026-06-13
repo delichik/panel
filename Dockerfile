@@ -29,6 +29,7 @@ ARG TARGETPLATFORM
 ARG TARGETOS
 ARG TARGETARCH
 ARG PANEL_VERSION=dev
+ARG PANEL_CHANNEL=dev
 ARG PANEL_REPOSITORY
 ARG PANEL_COMMIT
 RUN set -eux; \
@@ -40,7 +41,7 @@ RUN set -eux; \
     *) echo "TARGETPLATFORM=${TARGETPLATFORM} does not match ${TARGETOS}/${TARGETARCH}"; exit 1 ;; \
   esac; \
   CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath \
-    -ldflags="-s -w -X panel/internal/buildinfo.Version=${PANEL_VERSION} -X panel/internal/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/buildinfo.Commit=${PANEL_COMMIT}" \
+    -ldflags="-s -w -X panel/internal/buildinfo.Version=${PANEL_VERSION} -X panel/internal/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/buildinfo.Commit=${PANEL_COMMIT}" \
     -o /out/panel ./cmd/panel; \
   machine="$(od -An -tx1 -j18 -N2 /out/panel | tr -d ' \n')"; \
   case "${TARGETARCH}/${machine}" in \

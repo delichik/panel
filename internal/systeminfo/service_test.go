@@ -26,9 +26,27 @@ func TestReleaseVersionValidation(t *testing.T) {
 			t.Fatalf("expected %q to be a release version", version)
 		}
 	}
-	for _, version := range []string{"", "dev", "main", "v1"} {
+	for _, version := range []string{"", "dev", "main", "v1", "v0.1.7.20260613153045"} {
 		if isReleaseVersion(version) {
 			t.Fatalf("expected %q not to be a release version", version)
+		}
+	}
+}
+
+func TestUpdateCheckRequiresReleaseChannel(t *testing.T) {
+	tests := []struct {
+		channel string
+		version string
+		want    bool
+	}{
+		{channel: "release", version: "v0.1.7", want: true},
+		{channel: "dev", version: "v0.1.7.20260613153045", want: false},
+		{channel: "dev", version: "v0.1.7", want: false},
+		{channel: "release", version: "v0.1.7.20260613153045", want: false},
+	}
+	for _, test := range tests {
+		if got := shouldCheckForUpdates(test.channel, test.version); got != test.want {
+			t.Fatalf("shouldCheckForUpdates(%q, %q) = %t, want %t", test.channel, test.version, got, test.want)
 		}
 	}
 }

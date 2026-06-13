@@ -20,6 +20,13 @@ describe('AppLayout navigation', () => {
     expect(appLayout).toContain('.user-name {\n    display: none;');
   });
 
+  it('shows the build channel marker from version metadata', () => {
+    expect(appLayout).toContain("versionInfo.value?.channel === 'dev'");
+    expect(appLayout).toContain('v-if="isDevChannel"');
+    expect(appLayout).toContain("t('layout.developmentChannel')");
+    expect(appLayout).toContain("t('layout.developmentChannelDetail'");
+  });
+
   it('does not expose DNS record management in the navigation', () => {
     expect(appLayout).not.toContain("layout.nav.records");
     expect(appLayout).not.toContain("value: 'dns-records'");

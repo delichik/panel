@@ -7,6 +7,9 @@
 ### 鏈€杩戝凡琛ラ綈
 
 - `web/src/layouts/AppLayout.vue`
+  - Header 的 DEV 构建通道标识和完整版本提示已接入英文、简体中文词条。
+
+- `web/src/layouts/AppLayout.vue`
   - 绉诲姩绔鑸叆鍙ｆ枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`
   - 鏈惎鐢ㄧ殑 DNS 璁板綍瀵艰埅鍏ュ彛宸茬Щ闄わ紝瀵瑰簲 `layout.nav.records` 璇嶆潯涓嶅啀淇濈暀銆?- `web/src/views/dns/domains/index.vue`
   - DNS 鍩熷悕璇︽儏銆丆loudflare 璁板綍鍒楄〃銆佽褰曞垱寤?缂栬緫/鍒犻櫎鍜?TTL/浠ｇ悊鐘舵€佹枃妗堝凡鎺ュ叆 `web/src/i18n/index.ts`銆?- `web/src/api/client.ts`

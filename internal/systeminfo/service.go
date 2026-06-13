@@ -15,6 +15,7 @@ const defaultCheckInterval = 6 * time.Hour
 
 type VersionInfo struct {
 	Version         string     `json:"version"`
+	Channel         string     `json:"channel"`
 	Commit          string     `json:"commit,omitempty"`
 	Repository      string     `json:"repository,omitempty"`
 	LatestVersion   string     `json:"latestVersion,omitempty"`
@@ -46,6 +47,7 @@ func NewService(client *http.Client) *Service {
 		repository: strings.TrimSpace(buildinfo.Repository),
 		info: VersionInfo{
 			Version:    buildinfo.NormalizedVersion(),
+			Channel:    buildinfo.NormalizedChannel(),
 			Commit:     strings.TrimSpace(buildinfo.Commit),
 			Repository: strings.TrimSpace(buildinfo.Repository),
 		},
@@ -53,7 +55,7 @@ func NewService(client *http.Client) *Service {
 }
 
 func (s *Service) Start(parent context.Context) {
-	if s.repository == "" || !isReleaseVersion(s.info.Version) {
+	if s.repository == "" || !shouldCheckForUpdates(s.info.Channel, s.info.Version) {
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -112,6 +114,10 @@ func (s *Service) check(ctx context.Context) {
 	s.mu.Unlock()
 }
 
+func shouldCheckForUpdates(channel, version string) bool {
+	return channel == "release" && isReleaseVersion(version)
+}
+
 func isReleaseVersion(version string) bool {
 	version = strings.TrimPrefix(strings.TrimSpace(version), "v")
 	if version == "" || version == "dev" {
@@ -119,7 +125,7 @@ func isReleaseVersion(version string) bool {
 	}
 	parts := strings.SplitN(version, "-", 2)
 	core := strings.Split(parts[0], ".")
-	if len(core) < 2 {
+	if len(core) != 3 {
 		return false
 	}
 	for _, part := range core {
