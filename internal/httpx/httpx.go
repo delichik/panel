@@ -6,7 +6,10 @@ import (
 	"net/http"
 
 	"panel/internal/i18n"
+	"panel/internal/logging"
 	"panel/internal/panelerr"
+
+	"go.uber.org/zap"
 )
 
 type Envelope struct {
@@ -41,6 +44,12 @@ func Error(w http.ResponseWriter, err error) {
 		message = i18n.Translate(domain.Code, domain.Message)
 	} else {
 		message = i18n.Translate(code, message)
+	}
+	logFields := []zap.Field{zap.Int("status", status), zap.String("code", code), zap.Error(err)}
+	if status >= http.StatusInternalServerError {
+		logging.L().Error("api error response", logFields...)
+	} else {
+		logging.L().Debug("api error response", logFields...)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

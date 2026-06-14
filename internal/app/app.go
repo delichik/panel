@@ -18,6 +18,7 @@ import (
 	"panel/internal/dns"
 	"panel/internal/httpx"
 	"panel/internal/keyassets"
+	"panel/internal/logging"
 	"panel/internal/metrics"
 	"panel/internal/nomad"
 	"panel/internal/overview"
@@ -31,6 +32,8 @@ import (
 	"panel/internal/storage"
 	"panel/internal/systeminfo"
 	"panel/internal/tasks"
+
+	"go.uber.org/zap"
 )
 
 type App struct {
@@ -73,6 +76,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	logging.L().Info("runtime settings loaded", zap.String("log_level", settingsSvc.Runtime().LogLevel))
 	authSvc, err := auth.NewService(store.AppDB(), cfg, settingsSvc)
 	if err != nil {
 		_ = store.Close()
@@ -159,10 +163,14 @@ func New(cfg config.Config) (*App, error) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		_ = nomadJoinSvc.ReconcileReverseProxy(ctx)
+		if err := nomadJoinSvc.ReconcileReverseProxy(ctx); err != nil {
+			logging.L().Warn("reverse proxy reconciliation failed", zap.Error(err))
+		}
 	}()
 	sched.Start(context.Background())
+	logging.L().Info("background services started")
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
+	logging.L().Info("application initialized")
 	return a, nil
 }
 
@@ -175,7 +183,7 @@ func (a *App) Close() error {
 	}
 	return a.store.Close()
 }
-func (a *App) Handler() http.Handler { return a.mux }
+func (a *App) Handler() http.Handler { return logging.HTTPMiddleware(a.mux) }
 
 func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)

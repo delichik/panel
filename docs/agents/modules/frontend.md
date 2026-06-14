@@ -69,6 +69,7 @@
 - 任务中心：`web/src/views/tasks/index.vue`
 - 设置菜单组：`web/src/views/settings/`
   - 通用：`general/index.vue`
+    - 运行时表单包含指标保留、采集间隔、远程命令超时、清理计划、Token 过期时间、语言和后端日志等级；日志等级保存为稳定值 `debug`、`info`、`warn` 或 `error`。
   - 安全：`security/index.vue`
   - Nomad：`nomad/index.vue`
   - 证书：`certificates/index.vue`

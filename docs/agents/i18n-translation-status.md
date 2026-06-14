@@ -6,6 +6,9 @@
 
 ### 鏈€杩戝凡琛ラ綈
 
+- `web/src/views/settings/_shared/SettingsPageContent.vue`、`internal/settings`
+  - Runtime 日志等级设置的前端标签、选项文案和 `invalid_log_level` 后端错误码已接入英文、简体中文词条；进程日志内容保持英文，不纳入翻译。
+
 - `internal/overview`、`web/src/views/overview/index.vue`
   - 概览卡片数据库保存失败文案及卡片配置校验错误码已接入英文、简体中文词条。
 

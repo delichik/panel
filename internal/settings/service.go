@@ -14,6 +14,7 @@ import (
 
 	"panel/internal/config"
 	"panel/internal/i18n"
+	"panel/internal/logging"
 	"panel/internal/panelerr"
 )
 
@@ -51,6 +52,7 @@ type RuntimeUpdate struct {
 	CleanupSchedule                  string                      `json:"cleanupSchedule"`
 	TokenExpiration                  string                      `json:"tokenExpiration"`
 	Language                         string                      `json:"language"`
+	LogLevel                         string                      `json:"logLevel"`
 	RemoteCommandTimeoutSeconds      int                         `json:"remoteCommandTimeoutSeconds"`
 	Branding                         *RuntimeBrandingSettings    `json:"branding"`
 	Nomad                            *RuntimeNomadSettings       `json:"nomad"`
@@ -67,6 +69,7 @@ type RuntimeSettings struct {
 	CleanupSchedule                  string                     `json:"cleanupSchedule"`
 	TokenExpiration                  string                     `json:"tokenExpiration"`
 	Language                         string                     `json:"language"`
+	LogLevel                         string                     `json:"logLevel"`
 	RemoteCommandTimeoutSeconds      int                        `json:"remoteCommandTimeoutSeconds"`
 	Branding                         RuntimeBrandingSettings    `json:"branding"`
 	Nomad                            RuntimeNomadSettings       `json:"nomad"`
@@ -77,6 +80,7 @@ type RuntimeSettings struct {
 
 const (
 	RuntimeSettingTokenExpiration                      = "tokenExpiration"
+	RuntimeSettingLogLevel                             = "log.level"
 	RuntimeSettingJWTSecret                            = "jwtSecret"
 	RuntimeSettingRemoteCommandTimeoutSeconds          = "remoteCommandTimeoutSeconds"
 	RuntimeSettingBrandingLoginTitle                   = "branding.loginTitle"
@@ -173,6 +177,9 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	if input.Language == "" {
 		input.Language = current.Language
 	}
+	if input.LogLevel == "" {
+		input.LogLevel = current.LogLevel
+	}
 	if input.RemoteCommandTimeoutSeconds == 0 {
 		input.RemoteCommandTimeoutSeconds = current.RemoteCommandTimeoutSeconds
 	}
@@ -201,6 +208,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		CleanupSchedule:                  input.CleanupSchedule,
 		TokenExpiration:                  NormalizeTokenExpiration(input.TokenExpiration),
 		Language:                         i18n.NormalizeLocale(input.Language),
+		LogLevel:                         logging.NormalizeLevel(input.LogLevel),
 		RemoteCommandTimeoutSeconds:      input.RemoteCommandTimeoutSeconds,
 		Branding:                         brandingSettings,
 		Nomad:                            nomadSettings,
@@ -220,6 +228,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.CleanupSchedule = next.CleanupSchedule
 	s.rt.TokenExpiration = next.TokenExpiration
 	s.rt.Language = next.Language
+	s.rt.LogLevel = next.LogLevel
 	s.rt.RemoteCommandTimeoutSeconds = next.RemoteCommandTimeoutSeconds
 	s.rt.Branding = next.Branding
 	s.rt.Nomad = next.Nomad
@@ -227,6 +236,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	out := s.rt
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(out.Language)
+	_ = logging.SetLevel(out.LogLevel)
 	return out, nil
 }
 
@@ -345,6 +355,10 @@ func (s *Service) load(ctx context.Context) error {
 			if locale := i18n.NormalizeLocale(value); locale != "" {
 				next.Language = locale
 			}
+		case RuntimeSettingLogLevel:
+			if level := logging.NormalizeLevel(value); level != "" {
+				next.LogLevel = level
+			}
 		case RuntimeSettingJWTSecret:
 			next.JWTSecret = value
 			next.JWTSecretConfigured = strings.TrimSpace(value) != ""
@@ -380,6 +394,7 @@ func (s *Service) load(ctx context.Context) error {
 	s.rt = next
 	s.mu.Unlock()
 	i18n.SetDefaultLocale(next.Language)
+	_ = logging.SetLevel(next.LogLevel)
 	return nil
 }
 
@@ -403,6 +418,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		CleanupSchedule:                  "daily",
 		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         i18n.DefaultLocale(),
+		LogLevel:                         logging.DefaultLevel,
 		RemoteCommandTimeoutSeconds:      remoteTimeout,
 		Branding:                         RuntimeBrandingSettings{},
 		Nomad: RuntimeNomadSettings{
@@ -426,6 +442,7 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		"cleanupSchedule":                                  settings.CleanupSchedule,
 		RuntimeSettingTokenExpiration:                      settings.TokenExpiration,
 		"language":                                         settings.Language,
+		RuntimeSettingLogLevel:                             settings.LogLevel,
 		RuntimeSettingRemoteCommandTimeoutSeconds:          strconv.Itoa(settings.RemoteCommandTimeoutSeconds),
 		RuntimeSettingBrandingLoginTitle:                   settings.Branding.LoginTitle,
 		RuntimeSettingBrandingLoginSubtitle:                settings.Branding.LoginSubtitle,
@@ -458,6 +475,9 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	}
 	if strings.TrimSpace(settings.Language) == "" || i18n.NormalizeLocale(settings.Language) == "" {
 		return panelerr.Validation("invalid_language", "Language must be English or Simplified Chinese")
+	}
+	if strings.TrimSpace(settings.LogLevel) == "" || logging.NormalizeLevel(settings.LogLevel) == "" {
+		return panelerr.Validation("invalid_log_level", "Log level must be debug, info, warn, or error")
 	}
 	if settings.RemoteCommandTimeoutSeconds < 1 {
 		return panelerr.Validation("invalid_remote_command_timeout", "Remote command timeout must be at least 1 second")
