@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/agent"
 	"panel/internal/applications"
 	"panel/internal/auth"
 	"panel/internal/certs"
@@ -52,6 +53,11 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	agentTLS, err := agent.EnsureTLSAssets(cfg.DataRoot)
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	secretStore, err := secretstore.Open(cfg, store.AppDB())
 	if err != nil {
 		_ = store.Close()
@@ -83,7 +89,14 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
+	agentClient, err := agent.NewHTTPClient(agentTLS, cfg.RemoteTimeout())
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
+	serverSvc.SetAgentClient(agentClient)
+	serverSvc.SetAgentTLSAssets(agentTLS)
 	serverSvc.SetMetricsDB(store.MetricsDB())
 	runtimeNomad := settingsSvc.NomadConfig(cfg.Nomad)
 	nomadClientCfg := nomad.Config{
@@ -129,6 +142,7 @@ func New(cfg config.Config) (*App, error) {
 	nomadJoinSvc.SetDataRoot(cfg.DataRoot)
 	nomadJoinSvc.SetConfigProvider(settingsSvc.NomadConfig)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
+	metricsSvc.SetAgentClient(agentClient)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
 	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
@@ -160,6 +174,11 @@ func New(cfg config.Config) (*App, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		_ = nomadJoinSvc.ReconcileReverseProxy(ctx)
+	}()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		serverSvc.CheckConfiguredAgents(ctx)
 	}()
 	sched.Start(context.Background())
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
@@ -272,6 +291,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.Test(w, r)
 		case r.Method == http.MethodPost && serverActionPath(path, "restart"):
 			serverH.Restart(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/servers/") && strings.HasSuffix(path, "/agent/certificate"):
+			serverH.IssueAgentCertificate(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/install"):
 			serverH.InstallUFW(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/ufw"):

@@ -33,6 +33,14 @@ export interface ServerDto {
   updatedAt: string;
 }
 
+export interface AgentCertificateBundleDto {
+  ca: string;
+  certificate: string;
+  privateKey: string;
+  listenAddress: string;
+  agentUrl: string;
+}
+
 export type FirewallProtocol = 'tcp' | 'udp' | 'any';
 
 export interface UfwRuleDto {

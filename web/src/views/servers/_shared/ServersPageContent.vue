@@ -25,6 +25,7 @@ const serverSaving = ref(false);
 const creatingServerTaskId = ref('');
 const ufwInstalling = ref<Record<string, boolean>>({});
 const restarting = ref<Record<string, boolean>>({});
+const agentDeploying = ref<Record<string, boolean>>({});
 let controlPlaneLoadSeq = 0;
 
 const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' : 'servers'));
@@ -263,7 +264,7 @@ function buildServerPayload(): ServerInput {
       let key = parts[0].trim();
       const value = parts.slice(1).join('=').trim();
       if (key) {
-        if (!key.startsWith('custom.') && !key.startsWith('sys.')) key = 'custom.' + key;
+        if (!key.startsWith('custom.') && !key.startsWith('sys.') && !key.startsWith('agent.')) key = 'custom.' + key;
         traits[key] = value;
       }
     }
@@ -385,6 +386,64 @@ function formatDate(value?: string | null) {
 
 function traitValue(server: ServerDto | null, key: string) {
   return server?.traits?.[key] || t('common.notAvailable');
+}
+
+function agentStatusForServer(server: ServerDto | null) {
+  const traits = server?.traits;
+  if (traits?.['agent.enabled'] !== 'true' || !traits?.['agent.url']) {
+    return { label: t('serversPage.agentNotDeployed'), color: 'secondary' };
+  }
+  if (traits['agent.status'] === 'compatible') {
+    return { label: t('serversPage.agentCompatible'), color: 'success' };
+  }
+  if (traits['agent.status'] === 'unavailable') {
+    return { label: t('serversPage.agentUnavailable'), color: 'error' };
+  }
+  return { label: t('serversPage.agentIncompatible'), color: 'warning' };
+}
+
+function shouldDeployAgent(server: ServerDto | null) {
+  return agentStatusForServer(server).color !== 'success';
+}
+
+async function downloadAgentBundle(server: ServerDto) {
+  agentDeploying.value = { ...agentDeploying.value, [server.id]: true };
+  try {
+    const bundle = await serversApi.issueAgentCertificate(server.id);
+    const deploymentBundle = {
+      serverId: server.id,
+      requiredAgentVersion: '1.0.0',
+      files: {
+        'ca.pem': bundle.ca,
+        'server.pem': bundle.certificate,
+        'server-key.pem': bundle.privateKey,
+      },
+      environment: {
+        PANEL_AGENT_LISTEN: bundle.listenAddress,
+        PANEL_AGENT_CA_FILE: '/etc/panel-agent/ca.pem',
+        PANEL_AGENT_CERT_FILE: '/etc/panel-agent/server.pem',
+        PANEL_AGENT_KEY_FILE: '/etc/panel-agent/server-key.pem',
+      },
+      serverTraits: {
+        'agent.enabled': 'true',
+        'agent.url': bundle.agentUrl,
+      },
+    };
+    const blob = new Blob([JSON.stringify(deploymentBundle, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `panel-agent-${server.id}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showMessage(t('serversPage.agentBundleDownloaded'));
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : t('serversPage.agentDeployFailed'), 'error');
+  } finally {
+    const next = { ...agentDeploying.value };
+    delete next[server.id];
+    agentDeploying.value = next;
+  }
 }
 
 function networkInterfaces(traits?: Record<string, string> | null): NetworkInterface[] {
@@ -583,6 +642,24 @@ onMounted(load);
                 <div class="section-title">{{ t('serversPage.runtime') }}</div>
                 <div class="property-grid">
                   <div><span>{{ t('serversPage.nomad') }}</span><v-chip :color="nomadStatusForServer(selectedServer.id).color" size="small" variant="tonal" label>{{ nomadStatusForServer(selectedServer.id).label }}</v-chip></div>
+                  <div>
+                    <span>{{ t('serversPage.agent') }}</span>
+                    <div class="ufw-actions">
+                      <v-chip :color="agentStatusForServer(selectedServer).color" size="small" variant="tonal" label>{{ agentStatusForServer(selectedServer).label }}</v-chip>
+                      <v-btn
+                        v-if="shouldDeployAgent(selectedServer)"
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                        prepend-icon="mdi-download"
+                        class="text-none"
+                        :loading="agentDeploying[selectedServer.id]"
+                        @click="downloadAgentBundle(selectedServer)"
+                      >
+                        {{ t('serversPage.deployAgent') }}
+                      </v-btn>
+                    </div>
+                  </div>
                   <div><span>{{ t('serversPage.distro') }}</span><v-chip :color="selectedServer.os?.supported ? 'success' : 'warning'" size="small" variant="tonal" label>{{ selectedServer.os?.prettyName || t('common.unknown') }}</v-chip></div>
                   <div>
                     <span>{{ t('serversPage.ufw') }}</span>
@@ -635,7 +712,18 @@ onMounted(load);
                   <div><span>{{ t('serversPage.credential') }}</span><strong>{{ credentialById(selectedServer.credentialId)?.name || t('common.notAvailable') }}</strong></div>
                   <div><span>{{ t('serversPage.lastChecked') }}</span><strong>{{ formatDate(selectedServer.lastCheckedAt) }}</strong></div>
                   <div><span>{{ t('serversPage.updated') }}</span><strong>{{ formatDate(selectedServer.updatedAt) }}</strong></div>
+                  <div v-if="selectedServer.traits?.['agent.version']"><span>{{ t('serversPage.agentVersion') }}</span><strong>{{ selectedServer.traits['agent.version'] }}</strong></div>
+                  <div v-if="selectedServer.traits?.['agent.last_checked_at']"><span>{{ t('serversPage.agentLastChecked') }}</span><strong>{{ formatDate(selectedServer.traits['agent.last_checked_at']) }}</strong></div>
                 </div>
+                <v-alert
+                  v-if="selectedServer.traits?.['agent.last_error']"
+                  :type="selectedServer.traits?.['agent.status'] === 'unavailable' ? 'error' : 'warning'"
+                  variant="tonal"
+                  density="compact"
+                  class="mt-3"
+                >
+                  {{ selectedServer.traits['agent.last_error'] }}
+                </v-alert>
               </section>
 
               <section v-if="customTraits(selectedServer).length">

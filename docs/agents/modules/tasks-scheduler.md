@@ -35,3 +35,8 @@
 ## 瀵嗛挜璧勪骇浠诲姟
 
 - 鏂板 `key_asset_tls_reissue`銆乣key_asset_ssh_regenerate`銆乣key_asset_export`銆乣key_asset_import`銆乣key_asset_sync`銆?- 閲嶆柊绛惧彂銆侀噸鏂扮敓鎴愬拰瀵煎叆浠诲姟鍖呭惈璧勪骇鏇存柊銆佸凡鍚敤搴旂敤閲嶉儴缃插拰鍙嶅悜浠ｇ悊鍚屾锛涗换鍔＄粓鎬佸繀椤绘敞閿€ execution銆?- 瀵煎嚭浠诲姟瀹屾垚鍚庨€氳繃 `/api/v1/key-assets/exports/{taskId}/download` 涓嬭浇鐭湡鍔犲瘑褰掓。銆?
+
+## Panel Agent 与任务
+
+- 启用服务器 traits `agent.enabled=true` 和 `agent.url` 后，`metrics_collect` 与 `server_info_collect` 中的 metrics、OS 信息和系统 traits 读取会走目标机 `panel-agent` mTLS 通道；agent 失败、不可达或版本能力不兼容时不回退 SSH，任务按当前错误失败，并由服务器 traits 记录 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error`。
+- 软件包刷新/升级、UFW 写操作、Nomad 和应用部署仍走 SSH；不要把这些写入型或长流程任务路由到 agent。

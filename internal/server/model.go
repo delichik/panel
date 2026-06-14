@@ -77,3 +77,11 @@ type UFWAllowRequest struct {
 	Protocol string `json:"protocol"`
 	From     string `json:"from"`
 }
+
+type AgentCertificateBundle struct {
+	CA            string `json:"ca"`
+	Certificate   string `json:"certificate"`
+	PrivateKey    string `json:"privateKey"`
+	ListenAddress string `json:"listenAddress"`
+	AgentURL      string `json:"agentUrl"`
+}

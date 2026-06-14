@@ -34,6 +34,7 @@
 - `web/src/views/servers/_shared/ServersPageContent.vue`
   - 鏈嶅姟鍣ㄥ嚟鎹繀閫夋彁绀恒€侀噸鍚‘璁や笌浠诲姟鍏ュ彛銆乁FW 瀹夎浠诲姟鍏ュ彛銆佺郴缁熸灦鏋?CPU/鍒嗛」缃戝崱璇︽儏鏂囨宸叉帴鍏?`web/src/i18n/index.ts`
   - 鏂板鏈嶅姟鍣ㄥ悗鐨勯杩炰俊鎭噰闆嗕换鍔℃彁绀恒€佸け璐ュ洖閫€鎻愮ず鍜岃秴鏃舵彁绀哄凡鎺ュ叆 `web/src/i18n/index.ts`
+  - Agent 兼容状态、版本检查时间、不兼容/不可用提示和部署包下载入口文案已接入 `web/src/i18n/index.ts`
 - `web/src/views/servers/firewall/index.vue`
   - UFW 闃茬伀澧欑姸鎬併€佸惎鐢ㄧ‘璁ゃ€佽鍒欒〃鍗曘€佽鍒欏垪琛ㄣ€佸垹闄ょ‘璁ゅ拰浠诲姟鍏ュ彛鏂囨宸叉帴鍏?`web/src/i18n/index.ts`
 - `web/src/views/tasks/index.vue`

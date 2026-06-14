@@ -53,3 +53,12 @@
 - 新建和更新凭据不得写入 `password_secret`、`passphrase_secret` 或 `dataRoot/keys` 私钥文件。
 - 启动迁移会加密旧字段及旧私钥文件内容；密文验证成功后删除原私钥文件并清空旧字段。
 - 凭据解析只从密文恢复秘密，并且仍不得通过 API 响应或任务日志返回秘密内容。
+
+## Panel Agent 只读远程通道
+
+- `cmd/panel-agent` 是部署在目标服务器上的被动 HTTPS agent，使用 Panel 专用 agent CA 做 mTLS 双向认证；Panel 启动时在 `dataRoot/agent/tls` 生成或复用 agent CA 与 Panel client 证书。
+- 服务器通过 traits 启用 agent：`agent.enabled=true` 且 `agent.url=https://host:9443` 时，Panel 对已支持的读取路径必须调用 agent；agent 不可达、版本不兼容或调用失败时不回退 SSH，而是记录 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits，并让本次读取失败。
+- Panel 启动后会检查已配置 agent 的服务器，要求 agent 至少为当前协议版本并具备健康检查、`/etc/os-release`、系统 traits、metrics snapshot 和 UFW status 能力；不满足时页面显示不兼容，并提示用户部署 agent。
+- Agent 第一版只覆盖低风险读取类能力：健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status。metrics 采集、服务器信息刷新和 UFW 状态读取在启用 agent 后走 agent。
+- 安装软件、软件包刷新/升级、UFW allow/delete/enable/install、服务器重启、Nomad 部署/重建/切换、应用部署等写入型或高风险操作继续走 SSH。
+- `POST /api/v1/servers/{id}/agent/certificate` 会签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址和 agent URL，只用于安装配置，不落库。服务器详情页的“部署 Agent”会下载节点专属部署包，调用方不得把返回私钥写入任务日志或普通服务器字段。

@@ -99,6 +99,15 @@ func (h *Handler) Restart(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
+func (h *Handler) IssueAgentCertificate(w http.ResponseWriter, r *http.Request) {
+	bundle, err := h.service.IssueAgentCertificate(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/agent/certificate")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, bundle)
+}
+
 func (h *Handler) UFWState(w http.ResponseWriter, r *http.Request) {
 	state, err := h.service.UFWState(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw")))
 	if err != nil {

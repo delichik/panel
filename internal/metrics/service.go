@@ -3,8 +3,10 @@ package metrics
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
+	"panel/internal/agent"
 	"panel/internal/linux"
 	"panel/internal/panelerr"
 	"panel/internal/server"
@@ -15,6 +17,7 @@ type Service struct {
 	db      *sql.DB
 	servers *server.Service
 	exec    sshx.RemoteExecutor
+	agent   agent.Client
 	adapter linux.DistroAdapter
 }
 
@@ -46,6 +49,10 @@ func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor) *
 	return &Service{db: db, servers: servers, exec: exec}
 }
 
+func (s *Service) SetAgentClient(client agent.Client) {
+	s.agent = client
+}
+
 func (s *Service) Collect(ctx context.Context, serverID string) error {
 	return s.CollectAt(ctx, serverID, time.Now().UTC())
 }
@@ -62,13 +69,40 @@ func (s *Service) CollectAt(ctx context.Context, serverID string, collectedAt ti
 	if err != nil {
 		return err
 	}
-	snap, err := adapter.CollectMetrics(ctx, s.exec, srv.Target())
+	snap, err := s.collectSnapshot(ctx, srv, adapter)
 	if err != nil {
 		return err
 	}
 	snap.ServerID = serverID
 	snap.Time = collectedAt
 	return s.Save(ctx, snap)
+}
+
+func (s *Service) collectSnapshot(ctx context.Context, srv server.Server, adapter linux.DistroAdapter) (linux.MetricsSnapshot, error) {
+	if baseURL, ok := metricAgentURL(srv); ok && s.agent != nil {
+		return s.agent.MetricsSnapshot(ctx, baseURL, srv.ID)
+	}
+	return adapter.CollectMetrics(ctx, s.exec, srv.Target())
+}
+
+func metricAgentURL(srv server.Server) (string, bool) {
+	if !agentTraitEnabled(srv.Traits[agent.TraitEnabled]) {
+		return "", false
+	}
+	url := strings.TrimSpace(srv.Traits[agent.TraitURL])
+	if url == "" {
+		return "", false
+	}
+	return url, true
+}
+
+func agentTraitEnabled(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) adapterFor(srv server.Server) (linux.DistroAdapter, error) {
