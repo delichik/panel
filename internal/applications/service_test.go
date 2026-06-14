@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,7 @@ import (
 
 	"panel/internal/config"
 	"panel/internal/nomad"
+	"panel/internal/panelerr"
 	"panel/internal/storage"
 	"panel/internal/tasks"
 )
@@ -58,6 +60,79 @@ func TestCreateEnabledAppValidatesPlansAndRegisters(t *testing.T) {
 	want := []string{"validate:panel-web", "plan:panel-web", "register:panel-web"}
 	if !equalStrings(fake.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", fake.calls, want)
+	}
+}
+
+func TestCreateDuplicateAppNameReturnsValidation(t *testing.T) {
+	svc, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	if _, err := svc.Create(ctx, SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.Create(ctx, SaveInput{Name: "web", SpecYAML: "name: web-copy\nimage: nginx\n"})
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "application_name_duplicate" {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestCreateDisabledSelectedApplicationWithArgsStoresTargets(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:    "anytls",
+		Enabled: false,
+		SpecYAML: `name: anytls
+image: jiasongji/anytls
+networkMode: host
+command:
+  - /app/anytls-server
+args:
+  - -l
+  - :9443
+  - -p
+  - "this is password"
+env:
+  TZ: Asia/Shanghai
+restart:
+  policy: unless-stopped
+`,
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-b", "srv-a", "srv-c"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.DeploymentMode != DeploymentModeSelected || !equalStrings(app.DeploymentServers, []string{"srv-a", "srv-b", "srv-c"}) {
+		t.Fatalf("deployment targets = %q %#v", app.DeploymentMode, app.DeploymentServers)
+	}
+	if len(fake.calls) != 0 {
+		t.Fatalf("disabled create should not call Nomad, calls = %#v", fake.calls)
+	}
+}
+
+func TestCreateRejectsArgumentsInCommandArray(t *testing.T) {
+	svc, _, closeStore := newTestService(t)
+	defer closeStore()
+
+	_, err := svc.Create(context.Background(), SaveInput{
+		Name: "anytls",
+		SpecYAML: `name: anytls
+image: jiasongji/anytls
+networkMode: host
+command:
+  - /app/anytls-server
+  - -l
+  - :9443
+`,
+	})
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "application_command_invalid" {
+		t.Fatalf("err = %#v", err)
 	}
 }
 

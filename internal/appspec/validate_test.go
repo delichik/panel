@@ -16,6 +16,13 @@ func TestValidateRejectsMissingImage(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsCommandWithMultipleItems(t *testing.T) {
+	issues := Validate(Spec{Name: "web", Image: "nginx", Command: []string{"nginx", "-g", "daemon off;"}})
+	if !hasIssue(issues, "command") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
 func TestValidateRejectsInvalidPortRange(t *testing.T) {
 	issues := Validate(Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 70000}}})
 	if !hasIssue(issues, "ports[0].to") {

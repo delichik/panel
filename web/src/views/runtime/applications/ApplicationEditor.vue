@@ -12,6 +12,7 @@ const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
 const { t, translateApplicationFileKind, translateApplicationRestartPolicy } = useI18n();
 
 interface PortForm { label: string; to: number; static: number | null }
+interface StringListItem { value: string }
 interface EnvForm { key: string; value: string }
 type MountType = 'volume' | 'host' | 'file' | 'panel_file' | 'persistent';
 interface MountForm { type: MountType; source: string; target: string; readOnly: boolean }
@@ -31,8 +32,8 @@ const specForm = reactive({
   name: 'web',
   image: '',
   networkMode: 'bridge' as 'bridge' | 'host',
-  command: '',
-  args: '',
+  command: [] as StringListItem[],
+  args: [] as StringListItem[],
   cpu: null as number | null,
   memoryMb: null as number | null,
   restartPolicy: 'unless-stopped' as 'no' | 'on-failure' | 'always' | 'unless-stopped',
@@ -109,8 +110,8 @@ function loadDefaultSpecForm(appName?: string) {
   specForm.name = appName || 'web';
   specForm.image = '';
   specForm.networkMode = 'bridge';
-  specForm.command = '';
-  specForm.args = '';
+  specForm.command = [{ value: '' }];
+  specForm.args = [];
   specForm.cpu = null;
   specForm.memoryMb = null;
   specForm.restartPolicy = 'unless-stopped';
@@ -128,8 +129,8 @@ function loadSpecForm(raw: string, appName?: string) {
   specForm.image = stringValue(parsed.image);
   const networkMode = stringValue(parsed.networkMode);
   specForm.networkMode = networkMode === 'host' ? 'host' : 'bridge';
-  specForm.command = arrayText(parsed.command);
-  specForm.args = arrayText(parsed.args);
+  specForm.command = arrayItems(parsed.command, true);
+  specForm.args = arrayItems(parsed.args, false);
   specForm.cpu = numericLimit(objectValue(parsed.resources)?.cpu);
   specForm.memoryMb = numericLimit(objectValue(parsed.resources)?.memoryMb);
   const restartPolicy = stringValue(objectValue(parsed.restart)?.policy);
@@ -165,6 +166,10 @@ function addPort() {
 
 function addEnv() {
   specForm.env.push({ key: '', value: '' });
+}
+
+function addStringItem(items: StringListItem[]) {
+  items.push({ value: '' });
 }
 
 function addVariable() {
@@ -341,8 +346,8 @@ function buildSpecYaml() {
     image: specForm.image,
     networkMode: specForm.networkMode,
   };
-  const command = splitWords(specForm.command);
-  const args = splitWords(specForm.args);
+  const command = stringListValues(specForm.command);
+  const args = stringListValues(specForm.args);
   const env = Object.fromEntries(specForm.env.filter((item) => item.key.trim()).map((item) => [item.key.trim(), item.value]));
   const ports = specForm.networkMode === 'bridge' ? specForm.ports
     .filter((port) => port.label.trim() && port.to)
@@ -364,10 +369,6 @@ function buildSpecYaml() {
   if (specForm.privileged) spec.privileged = true;
   if (mounts.length) spec.mounts = mounts;
   return toYaml(spec);
-}
-
-function splitWords(value: string) {
-  return value.split(/\s+/).map((part) => part.trim()).filter(Boolean);
 }
 
 function numericLimit(value: unknown) {
@@ -485,8 +486,13 @@ function numberValue(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function arrayText(value: unknown) {
-  return Array.isArray(value) ? value.map(stringValue).join(' ') : '';
+function arrayItems(value: unknown, keepBlank: boolean) {
+  const items = Array.isArray(value) ? value.map((item) => ({ value: stringValue(item) })) : [];
+  return items.length || !keepBlank ? items : [{ value: '' }];
+}
+
+function stringListValues(items: StringListItem[]) {
+  return items.map((item) => item.value.trim()).filter(Boolean);
 }
 
 function toYaml(value: unknown, indent = 0): string {
@@ -625,9 +631,35 @@ async function save(deploy = false) {
                 <div class="field-grid">
                   <v-text-field v-model="specForm.name" :label="t('applicationEditor.specName')" density="compact" variant="outlined" />
                   <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
-                  <v-text-field v-model="specForm.command" :label="t('applicationEditor.command')" density="compact" variant="outlined" />
-                  <v-text-field v-model="specForm.args" :label="t('applicationEditor.arguments')" density="compact" variant="outlined" />
                 </div>
+
+                <div class="section-title">{{ t('applicationEditor.command') }}</div>
+                <div v-for="(item, index) in specForm.command" :key="`command-${index}`" class="repeat-row command-row">
+                  <v-text-field
+                    v-model="item.value"
+                    :label="t('applicationEditor.commandItem', { index: index + 1 })"
+                    :hint="index === 0 ? t('applicationEditor.commandHint') : ''"
+                    density="compact"
+                    variant="outlined"
+                    hide-details="auto"
+                  />
+                  <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.command.length === 1" @click="removeAt(specForm.command, index)" />
+                </div>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none mb-4" @click="addStringItem(specForm.command)">{{ t('applicationEditor.addCommandItem') }}</v-btn>
+
+                <div class="section-title">{{ t('applicationEditor.arguments') }}</div>
+                <div v-for="(item, index) in specForm.args" :key="`args-${index}`" class="repeat-row command-row">
+                  <v-text-field
+                    v-model="item.value"
+                    :label="t('applicationEditor.argumentItem', { index: index + 1 })"
+                    :hint="index === 0 ? t('applicationEditor.argumentsHint') : ''"
+                    density="compact"
+                    variant="outlined"
+                    hide-details="auto"
+                  />
+                  <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.args.length === 0" @click="removeAt(specForm.args, index)" />
+                </div>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none mb-4" @click="addStringItem(specForm.args)">{{ t('applicationEditor.addArgumentItem') }}</v-btn>
 
                 <div class="section-title">{{ t('applicationEditor.restart') }}</div>
                 <div class="field-grid">
@@ -904,7 +936,8 @@ async function save(deploy = false) {
 .repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; }
 .placement-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
 .ports-row { grid-template-columns: minmax(160px, 1fr) auto 140px auto auto 140px 40px; }
-.env-row { grid-template-columns: minmax(0, 1fr); }
+.command-row { grid-template-columns: minmax(0, 1fr) 40px; }
+.env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
 .mount-row { grid-template-columns: minmax(0, 1fr); }
 .mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .variable-row { grid-template-columns: minmax(180px, 0.4fr) minmax(0, 1fr) 40px; }
@@ -929,7 +962,7 @@ async function save(deploy = false) {
 .mono, .mono-input :deep(textarea) { font-size: 0.82rem; }
 .hash-cell { max-width: 180px; }
 @media (max-width: 1100px) {
-  .header-row, .mount-row, .ports-row, .env-row, .proxy-rule-header, .proxy-path-row, .file-form, .placement-row { grid-template-columns: 1fr; }
+  .header-row, .mount-row, .ports-row, .command-row, .env-row, .proxy-rule-header, .proxy-path-row, .file-form, .placement-row { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 760px) {

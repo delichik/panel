@@ -292,7 +292,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 	}
 	if files == nil {
 		if err := s.insertApplication(ctx, app); err != nil {
-			return Application{}, err
+			return Application{}, applicationSaveError(err)
 		}
 		if err := s.insertRevision(ctx, app, prepared.job); err != nil {
 			return Application{}, err
@@ -303,7 +303,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 		return s.Get(ctx, app.ID)
 	}
 	if err := s.commitApplicationState(ctx, app, files, prepared.job, true, true); err != nil {
-		return Application{}, err
+		return Application{}, applicationSaveError(err)
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return Application{}, err
@@ -394,7 +394,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 	}
 	if files == nil {
 		if err := s.updateApplication(ctx, app); err != nil {
-			return Application{}, err
+			return Application{}, applicationSaveError(err)
 		}
 		if prepared.hash != current.SpecHash {
 			if err := s.insertRevision(ctx, app, prepared.job); err != nil {
@@ -407,7 +407,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 		return s.Get(ctx, app.ID)
 	}
 	if err := s.commitApplicationState(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash); err != nil {
-		return Application{}, err
+		return Application{}, applicationSaveError(err)
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return Application{}, err
@@ -996,7 +996,7 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	}
 	spec, specIssues := appspec.DecodeYAML(renderedYAML)
 	if len(specIssues) > 0 {
-		return preparedApplication{}, panelerr.Validation("application_invalid", specIssues[0].Message)
+		return preparedApplication{}, applicationSpecIssueError(specIssues[0])
 	}
 	if persistentPath == "" && specUsesPersistentMount(spec) {
 		persistentPath = applicationPersistentDir(appID)
@@ -1306,6 +1306,32 @@ func replaceApplicationFiles(ctx context.Context, exec sqlExec, appID string, fi
 		}
 	}
 	return nil
+}
+
+func applicationSaveError(err error) error {
+	if isApplicationNameConflict(err) {
+		return panelerr.Validation("application_name_duplicate", "application name must be unique")
+	}
+	return err
+}
+
+func applicationSpecIssueError(issue appspec.Issue) error {
+	switch issue.Field {
+	case "command":
+		return panelerr.Validation("application_command_invalid", issue.Message)
+	case "specYaml":
+		return panelerr.Validation("application_spec_yaml_invalid", issue.Message)
+	default:
+		return panelerr.Validation("application_invalid", issue.Message)
+	}
+}
+
+func isApplicationNameConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint failed: applications.name") || strings.Contains(msg, "constraint failed: applications.name")
 }
 
 func (s *Service) recordTask(ctx context.Context, taskType, appID, summary string) (string, error) {

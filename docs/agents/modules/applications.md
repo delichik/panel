@@ -46,3 +46,8 @@
 ## Panel 鎵樼瀵嗛挜鏂囦欢
 
 - `panel_file` 鐨勬柊瑙勮寖鏉ユ簮涓?`key_asset:<asset-id>:<kind>`锛屾敮鎸?`certificate`銆乣private_key`銆乣public_key` 鍜?SSH 鐨?`ssh_public_key`銆?- appspec 鏍￠獙鍚屾椂鎺ュ彈鏃?`certificate:` 鏉ユ簮浠ュ吋瀹瑰凡鏈夊簲鐢紱鏂伴〉闈㈠拰鐩綍鍙敓鎴?`key_asset:`銆?- 绉侀挜涓嶄細鍑虹幇鍦ㄧ洰褰?API 鍝嶅簲涓紝鍙湪閮ㄧ讲娓叉煋鏃剁敱鍚庣瑙ｅ瘑骞朵綔涓哄彧璇?Nomad template 鎻愪緵銆?- 瀵嗛挜璧勪骇鏈嶅姟鎵弿搴旂敤 spec 鍜屽弽鍚戜唬鐞嗗煙鍚嶏紝杩斿洖绮剧‘鐨勫簲鐢?ID銆佸悕绉板強 `panel_file` / `reverse_proxy` 寮曠敤锛岀敤浜庡垹闄や繚鎶ゅ拰瀵煎叆瑕嗙洊纭銆?- TLS 閲嶆柊绛惧彂銆丼SH 閲嶆柊鐢熸垚鍜屾壒閲忓鍏ヤ細璋冪敤 `RedeployEnabledApplications`锛岀‘淇濇瘡鍙版湇鍔″櫒閲嶆柊鎸夎嚜韬唴缃彉閲忔覆鏌撱€?
+
+## Application editor command fields
+
+- In `ApplicationEditor.vue`, visual editing keeps both appspec `command` and `args` as ordered arrays. Each row is one argv item; the editor must not split user input on whitespace. Use `command` for the executable/entrypoint and `args` for flags and argument values.
+- Backend appspec validation rejects more than one `command` item because Nomad Docker config uses only one executable command; all flags and values must be represented in `args`.

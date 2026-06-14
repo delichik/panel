@@ -54,6 +54,15 @@
   - `evaluation.StatusDescription`
   - `evaluation.Type`
 
+### Application editor updates
+
+- `web/src/views/runtime/applications/ApplicationEditor.vue`
+  - Command and argument array row labels and hints are covered in `web/src/i18n/index.ts` for English and Simplified Chinese.
+- `internal/applications/service.go`
+  - Application name duplicate save errors are translated through `internal/i18n/i18n.go`.
+- `internal/appspec/validate.go`
+  - Invalid `command` array usage now returns a translated application validation error.
+
 ### 鍚庣缈昏瘧浠嶄负閮ㄥ垎瑕嗙洊
 
 褰撳墠鍚庣宸茶鐩栫粺涓€ API 閿欒缈昏瘧鍏ュ彛锛屼絾浠ヤ笅绫诲埆浠嶉渶缁х画琛ラ綈锛?
