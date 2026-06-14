@@ -42,7 +42,7 @@ const specForm = reactive({
   env: [] as EnvForm[],
   mounts: [] as MountForm[],
 });
-const specEditMode = ref<'visual' | 'yaml'>('visual');
+const activeEditorTab = ref<'visual' | 'yaml'>('visual');
 const variableRows = ref<VariableForm[]>([]);
 const loading = ref('');
 const error = ref('');
@@ -83,22 +83,25 @@ watch(() => props.open, (open) => {
   form.deploymentServers = [...(app?.deploymentServers ?? [])];
   form.reverseProxy = cloneReverseProxy(app?.reverseProxy ?? []);
   loadSpecForm(form.specYaml, app?.name);
+  const syncedName = app?.name ?? (specForm.name || 'web');
+  form.name = syncedName;
+  specForm.name = syncedName;
   variableRows.value = Object.entries(form.variables).map(([key, value]) => ({ key, value }));
   error.value = '';
-  specEditMode.value = 'visual';
+  activeEditorTab.value = 'visual';
   files.value = [];
   void loadServers();
   void loadTemplateCatalog();
   if (app) void loadFiles(app.id);
 }, { immediate: true });
 
-watch(() => specForm.name, (name) => {
-  if (!props.application) form.name = name;
+watch(() => form.name, (name) => {
+  if (specForm.name !== name) specForm.name = name;
 });
 
-watch(specForm, () => {
-  specEditMode.value = 'visual';
-}, { deep: true });
+watch(activeEditorTab, (tab, previous) => {
+  if (tab === 'yaml' && previous === 'visual') applyVisualSpec();
+});
 
 function defaultSpec() {
   return 'name: web\nnetworkMode: bridge\nrestart:\n  policy: unless-stopped\n';
@@ -261,7 +264,6 @@ async function insertVariable(target: 'spec' | 'template', expression: string) {
   const next = current.slice(0, start) + expression + current.slice(end);
   if (target === 'spec') form.specYaml = next;
   else fileForm.template = next;
-  if (target === 'spec') specEditMode.value = 'yaml';
   await nextTick();
   const nextTextarea = component?.$el?.querySelector?.('textarea') as HTMLTextAreaElement | undefined;
   nextTextarea?.focus();
@@ -337,10 +339,6 @@ function sizeLabel(size: number) {
 function applyVisualSpec() {
   form.specYaml = buildSpecYaml();
   error.value = '';
-}
-
-function markYamlEdited() {
-  specEditMode.value = 'yaml';
 }
 
 function buildSpecYaml() {
@@ -544,7 +542,7 @@ function shouldEmit(value: unknown) {
 }
 
 function readInput(): ApplicationSaveDto {
-  if (specEditMode.value !== 'yaml') applyVisualSpec();
+  if (activeEditorTab.value !== 'yaml') applyVisualSpec();
   return {
     name: form.name,
     enabled: form.enabled,
@@ -616,13 +614,19 @@ async function save(deploy = false) {
       <v-card-text class="app-dialog-body">
         <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
         <div class="editor-main">
+          <v-tabs v-model="activeEditorTab" density="comfortable" class="editor-tabs mb-4">
+            <v-tab value="visual">{{ t('applicationEditor.general') }}</v-tab>
+            <v-tab value="yaml">{{ t('applicationEditor.yaml') }}</v-tab>
+          </v-tabs>
+
+          <v-window v-model="activeEditorTab" class="editor-window">
+            <v-window-item value="visual">
           <section class="editor-section">
             <div class="section-title">{{ t('applicationEditor.general') }}</div>
             <div class="field-grid">
               <v-text-field v-model="form.name" :label="t('applicationEditor.applicationName')" density="compact" variant="outlined" :readonly="Boolean(application)" hide-details />
-              <v-switch v-model="form.enabled" :label="t('common.enabled')" color="primary" density="compact" hide-details class="switch-field" />
-              <v-text-field v-model="specForm.name" :label="t('applicationEditor.specName')" density="compact" variant="outlined" />
               <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
+              <v-switch v-model="form.enabled" :label="t('common.enabled')" color="primary" density="compact" hide-details class="switch-field" />
             </div>
           </section>
 
@@ -914,8 +918,9 @@ async function save(deploy = false) {
             </div>
           </section>
 
-          <v-divider class="section-divider" />
+            </v-window-item>
 
+            <v-window-item value="yaml" class="editor-yaml-pane">
           <section class="editor-section">
             <div class="section-title">{{ t('applicationEditor.yaml') }}</div>
             <v-textarea
@@ -926,7 +931,6 @@ async function save(deploy = false) {
               rows="18"
               spellcheck="false"
               class="mono-input"
-              @update:model-value="markYamlEdited"
             />
             <v-menu>
               <template #activator="{ props: menuProps }">
@@ -937,6 +941,8 @@ async function save(deploy = false) {
               </v-list>
             </v-menu>
           </section>
+            </v-window-item>
+          </v-window>
         </div>
       </v-card-text>
       <v-divider />

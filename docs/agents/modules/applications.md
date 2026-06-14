@@ -51,4 +51,4 @@
 
 - In `ApplicationEditor.vue`, visual editing keeps both appspec `command` and `args` as ordered arrays. Each row is one argv item; the editor must not split user input on whitespace. Use `command` for the executable/entrypoint and `args` for flags and argument values.
 - Backend appspec validation rejects more than one `command` item because Nomad Docker config uses only one executable command; all flags and values must be represented in `args`.
-- The application editor dialog is a single-page sectioned form rather than a tabbed editor. Standard short fields use two-column grids; port mappings, reverse proxy rules, and mount rows remain full-width repeated rows so dense network and storage settings stay readable.
+- The application editor dialog has separate visual and YAML tabs. The visual tab is a single-page sectioned form: standard short fields use two-column grids; port mappings, reverse proxy rules, and mount rows remain full-width repeated rows so dense network and storage settings stay readable. The visual form exposes one application name field and uses it as the appspec `name`.
