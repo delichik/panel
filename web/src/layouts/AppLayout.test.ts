@@ -37,9 +37,11 @@ describe('AppLayout navigation', () => {
     expect(appLayout).toContain("t('layout.nav.firewall')");
   });
 
-  it('renames the third certificates menu entry to key assets', () => {
-    expect(appLayout).toContain("to: '/certificates/key-assets'");
-    expect(appLayout).toContain("t('layout.nav.keyAssets')");
-    expect(appLayout).not.toContain("to: '/certificates/self-signed'");
+  it('splits self-signed certificates and keys into separate menu entries', () => {
+    expect(appLayout).toContain("to: '/certificates/self-signed'");
+    expect(appLayout).toContain("t('layout.nav.selfSignedCertificates')");
+    expect(appLayout).toContain("to: '/certificates/keys'");
+    expect(appLayout).toContain("t('layout.nav.keys')");
+    expect(appLayout).not.toContain("to: '/certificates/key-assets'");
   });
 });

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"panel/internal/linux"
@@ -15,23 +16,53 @@ import (
 )
 
 type HTTPClient struct {
-	client *http.Client
+	mu      sync.RWMutex
+	client  *http.Client
+	timeout time.Duration
 }
 
 func NewHTTPClient(tlsAssets *TLSAssets, timeout time.Duration) (*HTTPClient, error) {
-	tlsConfig, err := tlsAssets.ClientTLSConfig()
-	if err != nil {
-		return nil, err
-	}
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	return &HTTPClient{client: &http.Client{
-		Timeout: timeout,
+	client := &HTTPClient{timeout: timeout}
+	if err := client.ReloadTLSAssets(tlsAssets); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
+
+func (c *HTTPClient) ReloadTLSAssets(tlsAssets *TLSAssets) error {
+	tlsConfig, err := tlsAssets.ClientTLSConfig()
+	if err != nil {
+		return err
+	}
+	next := &http.Client{
+		Timeout: c.timeout,
 		Transport: &http.Transport{
 			TLSClientConfig: tlsConfig,
 		},
-	}}, nil
+	}
+	c.mu.Lock()
+	previous := c.client
+	c.client = next
+	c.mu.Unlock()
+	if previous != nil {
+		if transport, ok := previous.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
+	}
+	return nil
+}
+
+func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
+	c.mu.RLock()
+	client := c.client
+	c.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("agent http client is not configured")
+	}
+	return client.Do(req)
 }
 
 func (c *HTTPClient) Health(ctx context.Context, baseURL string) (HealthResponse, error) {
@@ -167,7 +198,7 @@ func (c *HTTPClient) get(ctx context.Context, baseURL, path string, query url.Va
 	if err != nil {
 		return err
 	}
-	res, err := c.client.Do(req)
+	res, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -199,7 +230,7 @@ func (c *HTTPClient) post(ctx context.Context, baseURL, path string, in, out any
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := c.client.Do(req)
+	res, err := c.do(req)
 	if err != nil {
 		return err
 	}
@@ -227,7 +258,7 @@ func (c *HTTPClient) delete(ctx context.Context, baseURL, path string) error {
 	if err != nil {
 		return err
 	}
-	res, err := c.client.Do(req)
+	res, err := c.do(req)
 	if err != nil {
 		return err
 	}

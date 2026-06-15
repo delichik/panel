@@ -4,20 +4,24 @@ import (
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
 type TLSAssets struct {
+	mu             sync.RWMutex
 	Dir            string
 	CAPath         string
 	CAKeyPath      string
@@ -31,6 +35,18 @@ type TLSAssets struct {
 type ServerCertificate struct {
 	CertPEM []byte
 	KeyPEM  []byte
+}
+
+type CertificateInfo struct {
+	Fingerprint string
+	CommonName  string
+	NotBefore   time.Time
+	NotAfter    time.Time
+}
+
+type tlsFile struct {
+	path string
+	data []byte
 }
 
 func EnsureTLSAssets(dataRoot string) (*TLSAssets, error) {
@@ -93,15 +109,16 @@ func generateTLSAssets(assets *TLSAssets) error {
 	if err != nil {
 		return err
 	}
-	for _, file := range []struct {
-		path string
-		data []byte
-	}{
+	return writeTLSFiles([]tlsFile{
 		{assets.CAPath, caPEM},
 		{assets.CAKeyPath, caKeyPEM},
 		{assets.ClientCertPath, clientCertPEM},
 		{assets.ClientKeyPath, clientKeyPEM},
-	} {
+	})
+}
+
+func writeTLSFiles(files []tlsFile) error {
+	for _, file := range files {
 		if err := os.WriteFile(file.path, file.data, 0o600); err != nil {
 			return err
 		}
@@ -110,6 +127,8 @@ func generateTLSAssets(assets *TLSAssets) error {
 }
 
 func (a *TLSAssets) ClientTLSConfig() (*tls.Config, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	cert, err := tls.LoadX509KeyPair(a.ClientCertPath, a.ClientKeyPath)
 	if err != nil {
 		return nil, err
@@ -125,7 +144,80 @@ func (a *TLSAssets) ClientTLSConfig() (*tls.Config, error) {
 	}, nil
 }
 
+func (a *TLSAssets) CAInfo() (CertificateInfo, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return ParseCertificateInfo(a.CAPEM)
+}
+
+func (a *TLSAssets) ClientInfo() (CertificateInfo, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return ParseCertificateInfo(a.ClientCertPEM)
+}
+
+func (a *TLSAssets) CACertificatePEM() []byte {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return append([]byte(nil), a.CAPEM...)
+}
+
+func (a *TLSAssets) ResetAll() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	caKey, caCert, caPEM, caKeyPEM, err := generateCA()
+	if err != nil {
+		return err
+	}
+	clientCertPEM, clientKeyPEM, err := generateLeaf(caCert, caKey, leafRequest{
+		CommonName: "panel-agent-client",
+		Usages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeTLSFiles([]tlsFile{
+		{a.CAPath, caPEM},
+		{a.CAKeyPath, caKeyPEM},
+		{a.ClientCertPath, clientCertPEM},
+		{a.ClientKeyPath, clientKeyPEM},
+	}); err != nil {
+		return err
+	}
+	a.CAPEM = caPEM
+	a.ClientCertPEM = clientCertPEM
+	a.ClientKeyPEM = clientKeyPEM
+	return nil
+}
+
+func (a *TLSAssets) ResetClientCertificate() error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	caCert, caKey, err := loadCA(a.CAPEM, a.CAKeyPath)
+	if err != nil {
+		return err
+	}
+	clientCertPEM, clientKeyPEM, err := generateLeaf(caCert, caKey, leafRequest{
+		CommonName: "panel-agent-client",
+		Usages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	if err != nil {
+		return err
+	}
+	if err := writeTLSFiles([]tlsFile{
+		{a.ClientCertPath, clientCertPEM},
+		{a.ClientKeyPath, clientKeyPEM},
+	}); err != nil {
+		return err
+	}
+	a.ClientCertPEM = clientCertPEM
+	a.ClientKeyPEM = clientKeyPEM
+	return nil
+}
+
 func (a *TLSAssets) IssueServerCertificate(commonName string, hosts []string) (ServerCertificate, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	caCert, caKey, err := loadCA(a.CAPEM, a.CAKeyPath)
 	if err != nil {
 		return ServerCertificate{}, err
@@ -253,4 +345,22 @@ func serialNumber() *big.Int {
 		return big.NewInt(time.Now().UnixNano())
 	}
 	return n
+}
+
+func ParseCertificateInfo(certificatePEM []byte) (CertificateInfo, error) {
+	block, _ := pem.Decode(certificatePEM)
+	if block == nil {
+		return CertificateInfo{}, errors.New("invalid certificate pem")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return CertificateInfo{}, err
+	}
+	sum := sha256.Sum256(cert.Raw)
+	return CertificateInfo{
+		Fingerprint: fmt.Sprintf("%X", sum[:]),
+		CommonName:  cert.Subject.CommonName,
+		NotBefore:   cert.NotBefore,
+		NotAfter:    cert.NotAfter,
+	}, nil
 }

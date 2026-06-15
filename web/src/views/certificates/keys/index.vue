@@ -3,5 +3,5 @@ import KeyAssetsPage from '@/views/certificates/key-assets/index.vue';
 </script>
 
 <template>
-  <KeyAssetsPage mode="certificates" />
+  <KeyAssetsPage mode="keys" />
 </template>

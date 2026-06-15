@@ -22,6 +22,7 @@
 - DNS 记录：`GET/POST /api/v1/dns/domains/{id}/records`，`PUT/DELETE /api/v1/dns/domains/{id}/records/{recordId}`
 - 域名证书：`GET/POST /api/v1/certificates`，`DELETE /api/v1/certificates/{id}`
 - 立即续签：`POST /api/v1/certificates/{id}/renew`
+- Agent 系统内置证书由服务器模块提供：`GET /api/v1/key-assets/system`，重置使用 `POST /api/v1/key-assets/system/{id}/reset`
 - 统一密钥资产：`/api/v1/key-assets`
 
 ## Cloudflare 认证

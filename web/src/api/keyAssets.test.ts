@@ -37,6 +37,17 @@ describe('keyAssetsApi', () => {
     expect(fetcher).toHaveBeenNthCalledWith(7, '/api/v1/key-assets/asset_1', expect.objectContaining({ method: 'DELETE' }));
   });
 
+  it('lists and resets system-built-in certificates', async () => {
+    const fetcher = vi.fn().mockImplementation(() => jsonResponse({ data: [], error: null }));
+    const api = createKeyAssetsApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await api.listSystemCertificates();
+    await api.resetSystemCertificate('agent-server:srv_1');
+
+    expect(fetcher).toHaveBeenNthCalledWith(1, '/api/v1/key-assets/system', expect.objectContaining({ method: 'GET' }));
+    expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/key-assets/system/agent-server%3Asrv_1/reset', expect.objectContaining({ method: 'POST' }));
+  });
+
   it('uploads archive preflight as multipart form data and executes import plans', async () => {
     const fetcher = vi.fn()
       .mockResolvedValueOnce(jsonResponse({ data: { planId: 'plan_1', expiresAt: '2026-06-12T00:00:00Z', summary: {}, assets: [], conflicts: [], requiresDangerConfirm: false }, error: null }))

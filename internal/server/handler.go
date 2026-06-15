@@ -117,6 +117,25 @@ func (h *Handler) DeployAgent(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
 }
 
+func (h *Handler) SystemCertificates(w http.ResponseWriter, r *http.Request) {
+	items, err := h.service.SystemCertificates(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, items)
+}
+
+func (h *Handler) ResetSystemCertificate(w http.ResponseWriter, r *http.Request) {
+	certificateID := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/v1/key-assets/system/"), "/reset")
+	task, err := h.service.ResetSystemCertificate(r.Context(), certificateID)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
 func (h *Handler) UFWState(w http.ResponseWriter, r *http.Request) {
 	state, err := h.service.UFWState(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw")))
 	if err != nil {

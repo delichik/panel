@@ -66,7 +66,9 @@
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`
 - 证书菜单组：`web/src/views/certificates/`
   - 域名证书：`domains/index.vue`
-  - 密钥与证书：`key-assets/index.vue`
+  - 自签证书：`self-signed/index.vue`
+  - 密钥：`keys/index.vue`
+  - 两个页面复用 `key-assets/index.vue` 的资产工作区
   - 旧 `/dns/certificates` 重定向到 `/certificates/domains`
 - 任务中心：`web/src/views/tasks/index.vue`
 - 设置菜单组：`web/src/views/settings/`
@@ -89,9 +91,11 @@
 
 新增页面、路由、API 模块、store、共享组件约定、用户可见工作流或前端持久化结构时，必须更新本文档或对应功能模块文档。
 
-## 密钥与证书页面
+## 自签证书与密钥页面
 
-- 证书一级菜单的第三个二级入口为“密钥与证书”，路由 `/certificates/key-assets`；旧自签路径重定向到该页面。
-- 页面按 CA 证书、TLS 证书、SSH 密钥对分栏，支持生成、导入、下载、删除、重新签发或重新生成。
+- 证书一级菜单包含“自签证书”与“密钥”两个二级入口，路由分别为 `/certificates/self-signed` 和 `/certificates/keys`；旧 `/certificates/key-assets` 重定向到自签证书页面。
+- 自签证书页面展示用户域 CA/TLS 证书，并单独展示带“系统内置”标签的 Agent 系统证书。系统证书只能重置，不能删除、导入、导出或参与批量选择。
+- 密钥页面只展示用户域 SSH 密钥对；用户生成或导入的 CA、TLS 和 SSH 资产统一标记为“用户域”。
+- 用户域资产支持生成、导入、下载、删除、重新签发或重新生成。
 - 批量导出要求输入至少 12 位密码；批量导入使用 multipart 上传，先展示预检摘要、冲突和受影响引用，再提交处理策略。
 - 前端 API 位于 `web/src/api/keyAssets.ts`，共享 client 的 `postForm` 负责 multipart 请求。

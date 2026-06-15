@@ -13,12 +13,19 @@ import type {
   KeyAssetSshGenerateInput,
   KeyAssetSummaryDto,
   KeyAssetTlsGenerateInput,
+  SystemCertificateDto,
 } from '@/types/api';
 
 export function createKeyAssetsApi(client: ApiClient = apiClient) {
   return {
     list() {
       return client.get<KeyAssetSummaryDto[]>('/key-assets');
+    },
+    listSystemCertificates() {
+      return client.get<SystemCertificateDto[]>('/key-assets/system');
+    },
+    resetSystemCertificate(certificateId: string) {
+      return client.post<{ taskId: string }>(`/key-assets/system/${encodeURIComponent(certificateId)}/reset`);
     },
     get(assetId: string) {
       return client.get<KeyAssetDetailDto>(`/key-assets/${assetId}`);

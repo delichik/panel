@@ -43,6 +43,21 @@ export interface AgentCertificateBundleDto {
   dockerHost: string;
 }
 
+export interface SystemCertificateDto {
+  id: string;
+  type: 'ca_certificate' | 'tls_certificate' | string;
+  name: string;
+  commonName?: string;
+  fingerprint?: string;
+  notBefore?: string | null;
+  notAfter?: string | null;
+  serverId?: string;
+  serverName?: string;
+  status?: string;
+  builtIn: boolean;
+  canReset: boolean;
+}
+
 export type FirewallProtocol = 'tcp' | 'udp' | 'any';
 
 export interface UfwRuleDto {

@@ -202,6 +202,10 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			certH.DeleteSelfSigned(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/key-assets":
 			keyAssetH.List(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/key-assets/system":
+			serverH.SystemCertificates(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/key-assets/system/") && strings.HasSuffix(path, "/reset"):
+			serverH.ResetSystemCertificate(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/key-assets/ca":
 			keyAssetH.CreateCA(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/key-assets/tls":

@@ -35,6 +35,8 @@ const ufwManageTimeout = time.Minute
 const restartTaskType = "server_restart"
 const restartTimeout = 15 * time.Second
 const agentDeployTaskType = "server_agent_deploy"
+const agentCertificateResetTaskType = "agent_certificate_reset"
+const agentCertificateResourceType = "agent_certificate"
 const agentDeployTimeout = 2 * time.Minute
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 const defaultAgentListenAddress = "0.0.0.0:9443"
@@ -89,7 +91,7 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 		agentURL = "https://" + srv.Host + ":" + defaultAgentPort
 	}
 	return AgentCertificateBundle{
-		CA:            string(s.agentTLS.CAPEM),
+		CA:            string(s.agentTLS.CACertificatePEM()),
 		Certificate:   string(cert.CertPEM),
 		PrivateKey:    string(cert.KeyPEM),
 		ListenAddress: defaultAgentListenAddress,
@@ -100,6 +102,124 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 
 func (s *Service) DeployAgent(ctx context.Context, serverID string) (tasks.Task, error) {
 	return s.ensureAgentDeployTask(ctx, serverID, "user", true)
+}
+
+func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, error) {
+	if s.agentTLS == nil {
+		return nil, panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
+	}
+	caInfo, err := s.agentTLS.CAInfo()
+	if err != nil {
+		return nil, err
+	}
+	clientInfo, err := s.agentTLS.ClientInfo()
+	if err != nil {
+		return nil, err
+	}
+	result := []SystemCertificate{
+		systemCertificateFromInfo("agent-ca", "ca_certificate", "Panel Agent CA", caInfo),
+		systemCertificateFromInfo("agent-panel-client", "tls_certificate", "Panel Agent client", clientInfo),
+	}
+	servers, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, srv := range servers {
+		if srv.Traits[agent.TraitEnabled] != "true" && strings.TrimSpace(srv.Traits[agent.TraitURL]) == "" {
+			continue
+		}
+		result = append(result, SystemCertificate{
+			ID:          "agent-server:" + srv.ID,
+			Type:        "tls_certificate",
+			Name:        "Panel Agent server - " + srv.Name,
+			CommonName:  "panel-agent-" + srv.ID,
+			Fingerprint: srv.Traits[agent.TraitCertificateFingerprint],
+			NotBefore:   parseOptionalRFC3339(srv.Traits[agent.TraitCertificateNotBefore]),
+			NotAfter:    parseOptionalRFC3339(srv.Traits[agent.TraitCertificateNotAfter]),
+			ServerID:    srv.ID,
+			ServerName:  srv.Name,
+			Status:      srv.Traits[agent.TraitStatus],
+			BuiltIn:     true,
+			CanReset:    true,
+		})
+	}
+	return result, nil
+}
+
+func (s *Service) ResetSystemCertificate(ctx context.Context, certificateID string) (tasks.Task, error) {
+	switch certificateID {
+	case "agent-ca", "agent-panel-client":
+		if existing, ok, err := s.tasks.ExistingActive(ctx, agentCertificateResetTaskType, agentCertificateResourceType, certificateID); err != nil {
+			return tasks.Task{}, err
+		} else if ok {
+			return existing, nil
+		}
+		task, err := s.tasks.Create(ctx, tasks.CreateInput{
+			Type:         agentCertificateResetTaskType,
+			ResourceType: agentCertificateResourceType,
+			ResourceID:   certificateID,
+			TriggeredBy:  "user",
+			Summary:      "Resetting system-managed agent certificate",
+			Status:       tasks.StatusRunning,
+		})
+		if err != nil {
+			return tasks.Task{}, err
+		}
+		go s.runSystemCertificateReset(context.Background(), task.ID, certificateID)
+		return task, nil
+	default:
+		const prefix = "agent-server:"
+		if !strings.HasPrefix(certificateID, prefix) || strings.TrimSpace(strings.TrimPrefix(certificateID, prefix)) == "" {
+			return tasks.Task{}, panelerr.NotFound("system certificate")
+		}
+		return s.ensureAgentDeployTask(ctx, strings.TrimPrefix(certificateID, prefix), "user", true)
+	}
+}
+
+func (s *Service) runSystemCertificateReset(ctx context.Context, taskID, certificateID string) {
+	defer s.tasks.FinishExecution(taskID)
+	_ = s.tasks.Advance(ctx, taskID, "regenerating", "regenerating system-managed certificate")
+	var err error
+	switch certificateID {
+	case "agent-ca":
+		err = s.agentTLS.ResetAll()
+	case "agent-panel-client":
+		err = s.agentTLS.ResetClientCertificate()
+	}
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	reloader, ok := s.agent.(interface {
+		ReloadTLSAssets(*agent.TLSAssets) error
+	})
+	if !ok {
+		_ = s.tasks.Fail(ctx, taskID, errors.New("agent client does not support TLS reload"))
+		return
+	}
+	if err := reloader.ReloadTLSAssets(s.agentTLS); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if certificateID == "agent-ca" {
+		_ = s.tasks.Advance(ctx, taskID, "redeploying", "queueing agent redeployment for all configured servers")
+		servers, listErr := s.List(ctx)
+		if listErr != nil {
+			_ = s.tasks.Fail(ctx, taskID, listErr)
+			return
+		}
+		for _, srv := range servers {
+			if srv.Traits[agent.TraitEnabled] != "true" && strings.TrimSpace(srv.Traits[agent.TraitURL]) == "" {
+				continue
+			}
+			_ = s.clearAgentCertificate(ctx, srv.ID)
+			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", "agent CA was reset; redeployment required")
+			if _, deployErr := s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true); deployErr != nil {
+				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "failed to queue agent redeployment for "+srv.Name+": "+deployErr.Error())
+			}
+		}
+	}
+	_ = s.tasks.Complete(ctx, taskID, "System-managed agent certificate reset")
 }
 
 func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
@@ -859,6 +979,9 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
+	if info, infoErr := agent.ParseCertificateInfo([]byte(bundle.Certificate)); infoErr == nil {
+		_ = s.markAgentCertificate(ctx, srv.ID, info)
+	}
 	_ = s.tasks.Complete(ctx, taskID, "Panel agent deployed")
 }
 
@@ -1097,6 +1220,7 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 	}
 	health, err := s.agent.Health(ctx, baseURL)
 	if err != nil {
+		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
 		return err
 	}
 	if !agentVersionCompatible(health.Version, agent.Version) {
@@ -1121,6 +1245,44 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 		return nil
 	}
 	return s.markAgentStatus(ctx, srv.ID, agent.StatusCompatible, health.Version, "")
+}
+
+func systemCertificateFromInfo(id, certificateType, name string, info agent.CertificateInfo) SystemCertificate {
+	notBefore := info.NotBefore
+	notAfter := info.NotAfter
+	return SystemCertificate{
+		ID:          id,
+		Type:        certificateType,
+		Name:        name,
+		CommonName:  info.CommonName,
+		Fingerprint: info.Fingerprint,
+		NotBefore:   &notBefore,
+		NotAfter:    &notAfter,
+		Status:      certificateTimeStatus(info, time.Now()),
+		BuiltIn:     true,
+		CanReset:    true,
+	}
+}
+
+func certificateTimeStatus(info agent.CertificateInfo, now time.Time) string {
+	if now.Before(info.NotBefore) {
+		return "not_yet_valid"
+	}
+	if now.After(info.NotAfter) {
+		return "expired"
+	}
+	return "valid"
+}
+
+func parseOptionalRFC3339(value string) *time.Time {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Server, cause error) bool {
@@ -1173,6 +1335,36 @@ func (s *Service) markAgentStatus(ctx context.Context, serverID, status, version
 	traitsJSON, _ := json.Marshal(traits)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)
+	return err
+}
+
+func (s *Service) markAgentCertificate(ctx context.Context, serverID string, info agent.CertificateInfo) error {
+	var rawTraits string
+	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+		return err
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	traits[agent.TraitCertificateFingerprint] = info.Fingerprint
+	traits[agent.TraitCertificateNotBefore] = info.NotBefore.UTC().Format(time.RFC3339Nano)
+	traits[agent.TraitCertificateNotAfter] = info.NotAfter.UTC().Format(time.RFC3339Nano)
+	traitsJSON, _ := json.Marshal(traits)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
+	return err
+}
+
+func (s *Service) clearAgentCertificate(ctx context.Context, serverID string) error {
+	var rawTraits string
+	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+		return err
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	delete(traits, agent.TraitCertificateFingerprint)
+	delete(traits, agent.TraitCertificateNotBefore)
+	delete(traits, agent.TraitCertificateNotAfter)
+	traitsJSON, _ := json.Marshal(traits)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
 	return err
 }
 

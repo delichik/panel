@@ -15,7 +15,8 @@ import ImagesPage from '@/views/containerization/images/index.vue';
 import NetworksPage from '@/views/containerization/networks/index.vue';
 import VolumesPage from '@/views/containerization/volumes/index.vue';
 import CertificatesPage from '@/views/certificates/domains/index.vue';
-import KeyAssetsPage from '@/views/certificates/key-assets/index.vue';
+import SelfSignedCertificatesPage from '@/views/certificates/self-signed/index.vue';
+import KeysPage from '@/views/certificates/keys/index.vue';
 import DomainsPage from '@/views/dns/domains/index.vue';
 import TaskCenterPage from '@/views/tasks/index.vue';
 import SettingsGeneralPage from '@/views/settings/general/index.vue';
@@ -50,8 +51,9 @@ export const router = createRouter({
         { path: 'dns/certificates', redirect: '/certificates/domains' },
         { path: 'certificates', redirect: '/certificates/domains' },
         { path: 'certificates/domains', name: 'certificates-domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
-        { path: 'certificates/key-assets', name: 'certificates-key-assets', component: KeyAssetsPage, meta: { titleKey: 'routes.keyAssets.title' } },
-        { path: 'certificates/self-signed', redirect: '/certificates/key-assets' },
+        { path: 'certificates/self-signed', name: 'certificates-self-signed', component: SelfSignedCertificatesPage, meta: { titleKey: 'routes.selfSignedCertificates.title' } },
+        { path: 'certificates/keys', name: 'certificates-keys', component: KeysPage, meta: { titleKey: 'routes.keys.title' } },
+        { path: 'certificates/key-assets', redirect: '/certificates/self-signed' },
         { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { titleKey: 'routes.tasks.title' } },
         { path: 'settings', redirect: '/settings/general' },
         { path: 'settings/general', name: 'settings-general', component: SettingsGeneralPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },

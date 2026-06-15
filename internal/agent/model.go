@@ -19,6 +19,10 @@ const (
 	TraitLastChecked = "agent.last_checked_at"
 	TraitLastError   = "agent.last_error"
 
+	TraitCertificateFingerprint = "agent.certificate.fingerprint"
+	TraitCertificateNotBefore   = "agent.certificate.not_before"
+	TraitCertificateNotAfter    = "agent.certificate.not_after"
+
 	StatusCompatible   = "compatible"
 	StatusIncompatible = "incompatible"
 	StatusUnavailable  = "unavailable"

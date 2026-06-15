@@ -15,6 +15,10 @@ describe('KeyAssetsPage', () => {
     expect(page).toContain("keyAssetsApi.exportSelected");
     expect(page).toContain("keyAssetsApi.reissue");
     expect(page).toContain("keyAssetsApi.regenerate");
+    expect(page).toContain("keyAssetsApi.listSystemCertificates");
+    expect(page).toContain("keyAssetsApi.resetSystemCertificate");
+    expect(page).toContain("t('keyAssetsPage.systemBuiltIn')");
+    expect(page).toContain("t('keyAssetsPage.userDomain')");
     expect(page).not.toContain('privateKeyCiphertext');
   });
 

@@ -533,6 +533,61 @@ func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T
 	}
 }
 
+func TestSystemCertificatesIncludeBuiltInsAndConfiguredAgent(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentTLSAssets(assets)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","agent.certificate.fingerprint":"ABC","agent.certificate.not_after":"2027-01-01T00:00:00Z"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := svc.SystemCertificates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected CA, client, and server certificates, got %#v", items)
+	}
+	if items[0].ID != "agent-ca" || !items[0].BuiltIn || !items[0].CanReset {
+		t.Fatalf("unexpected agent CA item: %#v", items[0])
+	}
+	if items[2].ID != "agent-server:srv_agent" || items[2].Fingerprint != "ABC" {
+		t.Fatalf("unexpected server certificate item: %#v", items[2])
+	}
+}
+
+func TestResetPanelAgentClientCertificateReloadsHTTPClient(t *testing.T) {
+	svc, taskSvc, _ := testServerService(t, nil)
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := agent.NewHTTPClient(assets, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(client)
+	before, _ := assets.ClientInfo()
+
+	task, err := svc.ResetSystemCertificate(context.Background(), "agent-panel-client")
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusCompleted {
+		t.Fatalf("reset task failed: %#v", finished)
+	}
+	after, _ := assets.ClientInfo()
+	if after.Fingerprint == before.Fingerprint {
+		t.Fatal("expected client certificate to change")
+	}
+}
+
 func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

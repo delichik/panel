@@ -26,7 +26,7 @@
 - `web/src/views/tasks/index.vue`
   - 任务类型名称、类型筛选选项、搜索按钮、多选筛选占位、操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。
 - `web/src/views/certificates/key-assets/index.vue`
-  - CA、TLS、SSH、批量导入导出、冲突确认和引用提示已接入英文与简体中文词条。
+  - 自签证书/密钥拆分导航、系统内置与用户域标签、Agent 系统证书状态和重置确认，以及 CA、TLS、SSH、批量导入导出、冲突确认和引用提示已接入英文与简体中文词条。
 - `internal/i18n`
   - 统一 API 错误翻译入口覆盖认证、设置、服务器、UFW、DNS、证书、应用、任务和密钥资产的主要错误码。
   - 应用名称重复保存错误和 appspec `command` 数组用法错误已接入翻译。

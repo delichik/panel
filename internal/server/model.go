@@ -88,3 +88,18 @@ type AgentCertificateBundle struct {
 	AgentURL      string `json:"agentUrl"`
 	DockerHost    string `json:"dockerHost"`
 }
+
+type SystemCertificate struct {
+	ID          string     `json:"id"`
+	Type        string     `json:"type"`
+	Name        string     `json:"name"`
+	CommonName  string     `json:"commonName,omitempty"`
+	Fingerprint string     `json:"fingerprint,omitempty"`
+	NotBefore   *time.Time `json:"notBefore,omitempty"`
+	NotAfter    *time.Time `json:"notAfter,omitempty"`
+	ServerID    string     `json:"serverId,omitempty"`
+	ServerName  string     `json:"serverName,omitempty"`
+	Status      string     `json:"status,omitempty"`
+	BuiltIn     bool       `json:"builtIn"`
+	CanReset    bool       `json:"canReset"`
+}

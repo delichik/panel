@@ -65,7 +65,8 @@ const navGroups = computed<NavGroup[]>(() => [
     title: t('layout.nav.certificates'),
     items: [
       { to: '/certificates/domains', title: t('layout.nav.domainCertificates'), value: 'certificates-domains' },
-      { to: '/certificates/key-assets', title: t('layout.nav.keyAssets'), value: 'certificates-key-assets' },
+      { to: '/certificates/self-signed', title: t('layout.nav.selfSignedCertificates'), value: 'certificates-self-signed' },
+      { to: '/certificates/keys', title: t('layout.nav.keys'), value: 'certificates-keys' },
     ],
   },
   {

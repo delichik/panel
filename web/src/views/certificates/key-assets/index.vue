@@ -8,10 +8,16 @@ import type {
   KeyAssetImportConflictDto,
   KeyAssetImportConflictStrategy,
   KeyAssetSummaryDto,
+  SystemCertificateDto,
 } from '@/types/api';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
 type AssetTab = 'ca' | 'tls' | 'ssh';
+type PageMode = 'certificates' | 'keys';
+
+const props = withDefaults(defineProps<{ mode?: PageMode }>(), {
+  mode: 'certificates',
+});
 
 interface ConfirmDialogState {
   title: string;
@@ -25,9 +31,10 @@ interface ConfirmDialogState {
 const { t, formatDateTime } = useI18n();
 
 const items = ref<KeyAssetSummaryDto[]>([]);
+const systemCertificates = ref<SystemCertificateDto[]>([]);
 const loading = ref(false);
 const error = ref('');
-const activeTab = ref<AssetTab>('ca');
+const activeTab = ref<AssetTab>(props.mode === 'keys' ? 'ssh' : 'ca');
 const busy = ref('');
 const snackbar = ref(false);
 const snackbarText = ref('');
@@ -124,6 +131,8 @@ let confirmAction: (() => Promise<void>) | null = null;
 const caAssets = computed(() => items.value.filter((item) => item.type === 'ca_certificate'));
 const tlsAssets = computed(() => items.value.filter((item) => item.type === 'tls_certificate'));
 const sshAssets = computed(() => items.value.filter((item) => item.type === 'ssh_key_pair'));
+const pageTitle = computed(() => props.mode === 'keys' ? t('routes.keys.title') : t('routes.selfSignedCertificates.title'));
+const pageSubtitle = computed(() => props.mode === 'keys' ? t('keyAssetsPage.keysSubtitle') : t('keyAssetsPage.certificatesSubtitle'));
 const visibleAssets = computed(() => {
   if (activeTab.value === 'ca') return caAssets.value;
   if (activeTab.value === 'tls') return tlsAssets.value;
@@ -292,13 +301,54 @@ function openEditor(kind: AssetTab, importMode = false) {
 async function load() {
   loading.value = true;
   try {
-    items.value = await keyAssetsApi.list();
+    const [userAssets, builtInCertificates] = await Promise.all([
+      keyAssetsApi.list(),
+      props.mode === 'certificates' ? keyAssetsApi.listSystemCertificates() : Promise.resolve([]),
+    ]);
+    items.value = userAssets;
+    systemCertificates.value = builtInCertificates;
     error.value = '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('keyAssetsPage.loadFailed');
   } finally {
     loading.value = false;
   }
+}
+
+function systemCertificateStatus(item: SystemCertificateDto) {
+  if (item.status === 'valid' || item.status === 'compatible') return t('keyAssetsPage.systemStatusValid');
+  if (item.status === 'expired') return t('keyAssetsPage.systemStatusExpired');
+  if (item.status === 'not_yet_valid') return t('keyAssetsPage.systemStatusNotYetValid');
+  if (item.status === 'incompatible') return t('keyAssetsPage.systemStatusIncompatible');
+  if (item.status === 'unavailable') return t('keyAssetsPage.systemStatusUnavailable');
+  return t('common.unknown');
+}
+
+function systemCertificateName(item: SystemCertificateDto) {
+  if (item.id === 'agent-ca') return t('keyAssetsPage.agentCaName');
+  if (item.id === 'agent-panel-client') return t('keyAssetsPage.agentClientName');
+  if (item.serverName) return t('keyAssetsPage.agentServerName', { name: item.serverName });
+  return item.name;
+}
+
+function triggerSystemReset(item: SystemCertificateDto) {
+  openConfirm(
+    {
+      title: t('keyAssetsPage.systemResetTitle'),
+      message: item.id === 'agent-ca'
+        ? t('keyAssetsPage.systemResetCaMessage')
+        : t('keyAssetsPage.systemResetMessage', { name: systemCertificateName(item) }),
+      confirmLabel: t('keyAssetsPage.systemReset'),
+      color: 'error',
+      acknowledgeRequired: true,
+    },
+    async () => {
+      const result = await keyAssetsApi.resetSystemCertificate(item.id);
+      lastTaskId.value = result.taskId;
+      await load();
+      showMessage(t('keyAssetsPage.systemResetQueued'), 'info');
+    },
+  );
 }
 
 async function afterMutation(taskId?: string, successText = t('keyAssetsPage.operationQueued'), preserveExportTask = false) {
@@ -617,8 +667,8 @@ onMounted(load);
     <v-card variant="outlined" class="mb-4">
       <div class="app-card-header">
         <div class="min-width-0">
-          <div class="text-h6">{{ t('routes.keyAssets.title') }}</div>
-          <div class="text-body-2 text-medium-emphasis">{{ t('keyAssetsPage.subtitle') }}</div>
+          <div class="text-h6">{{ pageTitle }}</div>
+          <div class="text-body-2 text-medium-emphasis">{{ pageSubtitle }}</div>
         </div>
         <div class="toolbar-actions">
           <v-btn
@@ -656,10 +706,65 @@ onMounted(load);
         {{ t('keyAssetsPage.privateKeysHiddenHint') }}
       </v-alert>
       <v-tabs v-model="activeTab" density="comfortable" class="px-4">
-        <v-tab value="ca">{{ t('keyAssetsPage.tabs.ca') }}</v-tab>
-        <v-tab value="tls">{{ t('keyAssetsPage.tabs.tls') }}</v-tab>
-        <v-tab value="ssh">{{ t('keyAssetsPage.tabs.ssh') }}</v-tab>
+        <v-tab v-if="props.mode === 'certificates'" value="ca">{{ t('keyAssetsPage.tabs.ca') }}</v-tab>
+        <v-tab v-if="props.mode === 'certificates'" value="tls">{{ t('keyAssetsPage.tabs.tls') }}</v-tab>
+        <v-tab v-if="props.mode === 'keys'" value="ssh">{{ t('keyAssetsPage.tabs.ssh') }}</v-tab>
       </v-tabs>
+    </v-card>
+
+    <v-card v-if="props.mode === 'certificates'" variant="outlined" class="system-certificates-card">
+      <div class="app-card-header">
+        <div>
+          <div class="text-h6">{{ t('keyAssetsPage.systemCertificates') }}</div>
+          <div class="text-body-2 text-medium-emphasis">{{ t('keyAssetsPage.systemCertificatesHint') }}</div>
+        </div>
+      </div>
+      <div class="table-pane system-certificates-table">
+        <v-table density="comfortable">
+          <thead>
+            <tr>
+              <th>{{ t('common.name') }}</th>
+              <th>{{ t('common.type') }}</th>
+              <th>{{ t('keyAssetsPage.commonName') }}</th>
+              <th>{{ t('common.fingerprint') }}</th>
+              <th>{{ t('common.status') }}</th>
+              <th>{{ t('common.validUntil') }}</th>
+              <th class="text-right">{{ t('common.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="systemCertificates.length === 0">
+              <td colspan="7" class="text-center py-8 text-medium-emphasis">{{ t('keyAssetsPage.noSystemCertificates') }}</td>
+            </tr>
+            <tr v-for="certificate in systemCertificates" :key="certificate.id">
+              <td>
+                <div class="d-flex align-center ga-2">
+                  <span class="font-weight-medium">{{ systemCertificateName(certificate) }}</span>
+                  <v-chip size="x-small" color="info" variant="tonal">{{ t('keyAssetsPage.systemBuiltIn') }}</v-chip>
+                </div>
+                <div v-if="certificate.serverName" class="text-caption text-medium-emphasis">{{ certificate.serverName }}</div>
+              </td>
+              <td>{{ assetTypeLabel(certificate.type) }}</td>
+              <td>{{ certificate.commonName || t('common.notAvailable') }}</td>
+              <td class="mono">{{ certificate.fingerprint || t('common.notAvailable') }}</td>
+              <td>{{ systemCertificateStatus(certificate) }}</td>
+              <td>{{ formatOptionalDate(certificate.notAfter) }}</td>
+              <td class="text-right">
+                <v-btn
+                  size="small"
+                  color="warning"
+                  variant="outlined"
+                  class="text-none"
+                  :disabled="!certificate.canReset"
+                  @click="triggerSystemReset(certificate)"
+                >
+                  {{ t('keyAssetsPage.systemReset') }}
+                </v-btn>
+              </td>
+            </tr>
+          </tbody>
+        </v-table>
+      </div>
     </v-card>
 
     <v-card variant="outlined" class="table-card">
@@ -681,7 +786,7 @@ onMounted(load);
       </div>
       <PageLoadingState v-if="loading && items.length === 0" min-height="360px" />
       <v-window v-else v-model="activeTab" class="table-window">
-        <v-window-item value="ca" class="table-pane">
+        <v-window-item v-if="props.mode === 'certificates'" value="ca" class="table-pane">
           <v-table density="comfortable">
             <thead>
               <tr>
@@ -707,7 +812,10 @@ onMounted(load);
                   <v-checkbox-btn :model-value="selectedIds.includes(asset.id)" @update:model-value="toggleSelection(asset.id, $event)" />
                 </td>
                 <td>
-                  <div class="font-weight-medium">{{ asset.name }}</div>
+                  <div class="d-flex align-center ga-2">
+                    <span class="font-weight-medium">{{ asset.name }}</span>
+                    <v-chip size="x-small" variant="tonal">{{ t('keyAssetsPage.userDomain') }}</v-chip>
+                  </div>
                   <div class="text-caption text-medium-emphasis mono">{{ asset.id }}</div>
                 </td>
                 <td>{{ asset.commonName || t('common.notAvailable') }}</td>
@@ -743,7 +851,7 @@ onMounted(load);
           </v-table>
         </v-window-item>
 
-        <v-window-item value="tls" class="table-pane">
+        <v-window-item v-if="props.mode === 'certificates'" value="tls" class="table-pane">
           <v-table density="comfortable">
             <thead>
               <tr>
@@ -769,7 +877,10 @@ onMounted(load);
                   <v-checkbox-btn :model-value="selectedIds.includes(asset.id)" @update:model-value="toggleSelection(asset.id, $event)" />
                 </td>
                 <td>
-                  <div class="font-weight-medium">{{ asset.name }}</div>
+                  <div class="d-flex align-center ga-2">
+                    <span class="font-weight-medium">{{ asset.name }}</span>
+                    <v-chip size="x-small" variant="tonal">{{ t('keyAssetsPage.userDomain') }}</v-chip>
+                  </div>
                   <div v-if="!asset.parentAssetId" class="text-caption text-warning">{{ t('keyAssetsPage.standaloneTls') }}</div>
                 </td>
                 <td class="mono">{{ asset.parentAssetId || t('common.notAvailable') }}</td>
@@ -814,7 +925,7 @@ onMounted(load);
           </v-table>
         </v-window-item>
 
-        <v-window-item value="ssh" class="table-pane">
+        <v-window-item v-if="props.mode === 'keys'" value="ssh" class="table-pane">
           <v-table density="comfortable">
             <thead>
               <tr>
@@ -838,7 +949,12 @@ onMounted(load);
                 <td class="checkbox-col">
                   <v-checkbox-btn :model-value="selectedIds.includes(asset.id)" @update:model-value="toggleSelection(asset.id, $event)" />
                 </td>
-                <td>{{ asset.name }}</td>
+                <td>
+                  <div class="d-flex align-center ga-2">
+                    <span>{{ asset.name }}</span>
+                    <v-chip size="x-small" variant="tonal">{{ t('keyAssetsPage.userDomain') }}</v-chip>
+                  </div>
+                </td>
                 <td>{{ asset.algorithm || t('common.notAvailable') }}</td>
                 <td>{{ asset.keySize || t('common.notAvailable') }}</td>
                 <td class="mono">{{ asset.fingerprint }}</td>
@@ -1186,6 +1302,18 @@ onMounted(load);
   overflow: hidden;
 }
 
+.system-certificates-card {
+  display: flex;
+  flex: 0 1 360px;
+  flex-direction: column;
+  min-height: 180px;
+  overflow: hidden;
+}
+
+.system-certificates-table {
+  flex: 1 1 auto;
+}
+
 .table-window {
   flex: 1 1 auto;
   min-height: 0;
@@ -1288,12 +1416,17 @@ onMounted(load);
 
 @media (max-width: 720px) {
   .table-card,
+  .system-certificates-card,
   .table-window {
     flex: none;
     min-height: auto;
   }
 
   .table-card {
+    overflow: visible;
+  }
+
+  .system-certificates-card {
     overflow: visible;
   }
 
