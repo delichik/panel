@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"panel/internal/appruntime"
+	"panel/internal/buildinfo"
 	"panel/internal/linux"
 	"panel/internal/remoteops"
 )
@@ -22,12 +23,13 @@ const (
 	StatusIncompatible = "incompatible"
 	StatusUnavailable  = "unavailable"
 
-	Version = "1.0.0"
-
 	DefaultDockerHost = "unix:///var/run/docker.sock"
 )
 
-var RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart"}
+var (
+	Version              = buildinfo.NormalizedVersion()
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart"}
+)
 
 type Client interface {
 	Health(ctx context.Context, url string) (HealthResponse, error)

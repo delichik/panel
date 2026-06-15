@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -30,9 +32,16 @@ const ufwInstallTimeout = 5 * time.Minute
 const ufwManageTimeout = time.Minute
 const restartTaskType = "server_restart"
 const restartTimeout = 15 * time.Second
+const agentDeployTaskType = "server_agent_deploy"
+const agentDeployTimeout = 2 * time.Minute
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 const defaultAgentListenAddress = "0.0.0.0:9443"
 const defaultAgentPort = "9443"
+const agentRemoteBinaryPath = "/usr/local/bin/panel-agent"
+const agentRemoteConfigDir = "/etc/panel-agent"
+const agentRemoteServicePath = "/etc/systemd/system/panel-agent.service"
+const agentBundleRoot = "/app/panel-agents"
+const agentBundleBinaryName = "panel-agent"
 
 var reverseProxyTCPPorts = []int{80, 443}
 
@@ -85,6 +94,10 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 		AgentURL:      agentURL,
 		DockerHost:    normalizeDockerHost(srv.DockerHost),
 	}, nil
+}
+
+func (s *Service) DeployAgent(ctx context.Context, serverID string) (tasks.Task, error) {
+	return s.ensureAgentDeployTask(ctx, serverID, "user", true)
 }
 
 func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
@@ -241,6 +254,14 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 		}
 		if err := s.checkAgent(ctx, srv); err != nil {
 			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
+			continue
+		}
+		updated, err := s.Get(ctx, srv.ID)
+		if err != nil {
+			continue
+		}
+		if updated.Traits[agent.TraitStatus] == agent.StatusIncompatible {
+			_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
 		}
 	}
 }
@@ -723,9 +744,116 @@ func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv 
 	_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, "")
 	if passwordless {
 		_ = s.tasks.Complete(ctx, taskID, "Connectivity test passed")
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 	} else {
 		_ = s.tasks.Complete(ctx, taskID, "Connected, passwordless sudo unavailable")
 	}
+}
+
+func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggeredBy string, run bool) (tasks.Task, error) {
+	if s.exec == nil {
+		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server executor is unavailable")
+	}
+	if s.agentTLS == nil {
+		return tasks.Task{}, panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
+	}
+	if existing, ok, err := s.tasks.ExistingActive(ctx, agentDeployTaskType, connectivityResourceType, serverID); err != nil {
+		return tasks.Task{}, err
+	} else if ok {
+		return existing, nil
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         agentDeployTaskType,
+		ServerID:     srv.ID,
+		ResourceType: connectivityResourceType,
+		ResourceID:   srv.ID,
+		TriggeredBy:  triggeredBy,
+		Summary:      "Deploying panel agent for " + srv.Name,
+		Status:       tasks.StatusRunning,
+	})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if run {
+		go s.runDeployAgent(context.Background(), task.ID, srv)
+	}
+	return task, nil
+}
+
+func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server) {
+	defer s.tasks.FinishExecution(taskID)
+	runner := remoteops.Runner{Exec: s.exec, Target: srv.Target(), Log: serverTaskLogSink{s.tasks, taskID}}
+	_ = s.tasks.Advance(ctx, taskID, "preparing", "preparing panel agent deployment")
+	bundle, err := s.IssueAgentCertificate(ctx, srv.ID)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	executable, err := s.agentBinaryPath(ctx, srv)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	remoteTmp := "/tmp/panel-agent-" + taskID
+	_ = s.tasks.Advance(ctx, taskID, "uploading", "uploading panel agent binary")
+	if err := s.exec.Upload(ctx, srv.Target(), sshx.UploadSpec{LocalPath: executable, RemotePath: remoteTmp}); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, "configuring", "installing panel agent configuration")
+	files := []struct {
+		path    string
+		content []byte
+		mode    string
+	}{
+		{agentRemoteConfigDir + "/ca.pem", []byte(bundle.CA), "0644"},
+		{agentRemoteConfigDir + "/server.pem", []byte(bundle.Certificate), "0644"},
+		{agentRemoteConfigDir + "/server-key.pem", []byte(bundle.PrivateKey), "0600"},
+		{agentRemoteConfigDir + "/panel-agent.env", []byte(agentEnvFile(bundle)), "0600"},
+		{agentRemoteServicePath, []byte(agentSystemdUnit()), "0644"},
+	}
+	for _, file := range files {
+		if err := runner.WriteFileSudo(ctx, file.path, file.content, file.mode, agentDeployTimeout); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+	}
+	_ = s.tasks.Advance(ctx, taskID, "starting", "starting panel agent service")
+	if _, err := runner.RunSudoLogged(ctx, agentInstallScript(remoteTmp), agentDeployTimeout); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.markAgentConfigured(ctx, srv.ID, bundle.AgentURL); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	time.Sleep(2 * time.Second)
+	_ = s.tasks.Advance(ctx, taskID, "checking", "checking panel agent compatibility")
+	refreshed, err := s.Get(ctx, srv.ID)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := s.checkAgent(ctx, refreshed); err != nil {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	checked, err := s.Get(ctx, srv.ID)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if checked.Traits[agent.TraitStatus] != agent.StatusCompatible {
+		err := panelerr.Validation("agent_incompatible", firstNonEmpty(checked.Traits[agent.TraitLastError], "Agent is not compatible after deployment"))
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "Panel agent deployed")
 }
 
 func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv Server, err error) {
@@ -952,8 +1080,8 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 	if err != nil {
 		return err
 	}
-	if !versionAtLeast(health.Version, agent.Version) {
-		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, fmt.Sprintf("agent version %s is older than required %s", health.Version, agent.Version))
+	if !agentVersionCompatible(health.Version, agent.Version) {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, fmt.Sprintf("agent version %s does not match required %s", health.Version, agent.Version))
 		return nil
 	}
 	missing := missingAgentCapabilities(health.Capabilities)
@@ -999,6 +1127,22 @@ func (s *Service) markAgentStatus(ctx context.Context, serverID, status, version
 	return err
 }
 
+func (s *Service) markAgentConfigured(ctx context.Context, serverID, url string) error {
+	var rawTraits string
+	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+		return err
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	traits[agent.TraitEnabled] = "true"
+	traits[agent.TraitURL] = strings.TrimSpace(url)
+	delete(traits, agent.TraitLastError)
+	traitsJSON, _ := json.Marshal(traits)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)
+	return err
+}
+
 func missingAgentCapabilities(values []string) []string {
 	have := map[string]struct{}{}
 	for _, value := range values {
@@ -1013,30 +1157,119 @@ func missingAgentCapabilities(values []string) []string {
 	return missing
 }
 
-func versionAtLeast(actual, required string) bool {
-	actualParts := versionParts(actual)
-	requiredParts := versionParts(required)
-	for i := 0; i < 3; i++ {
-		if actualParts[i] > requiredParts[i] {
-			return true
-		}
-		if actualParts[i] < requiredParts[i] {
-			return false
-		}
-	}
-	return true
+func agentVersionCompatible(actual, required string) bool {
+	actual = normalizeAgentVersion(actual)
+	required = normalizeAgentVersion(required)
+	return actual != "" && required != "" && actual == required
 }
 
-func versionParts(value string) [3]int {
+func normalizeAgentVersion(value string) string {
 	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
-	value = strings.SplitN(value, "-", 2)[0]
-	raw := strings.Split(value, ".")
-	var out [3]int
-	for i := 0; i < len(raw) && i < 3; i++ {
-		n, _ := strconv.Atoi(raw[i])
-		out[i] = n
+	return strings.TrimPrefix(value, "V")
+}
+
+func agentEnvFile(bundle AgentCertificateBundle) string {
+	return strings.Join([]string{
+		"PANEL_AGENT_LISTEN_ADDRESS=" + systemdQuote(bundle.ListenAddress),
+		"PANEL_AGENT_CA_FILE=" + systemdQuote(agentRemoteConfigDir+"/ca.pem"),
+		"PANEL_AGENT_CERT_FILE=" + systemdQuote(agentRemoteConfigDir+"/server.pem"),
+		"PANEL_AGENT_KEY_FILE=" + systemdQuote(agentRemoteConfigDir+"/server-key.pem"),
+		"PANEL_AGENT_DOCKER_HOST=" + systemdQuote(bundle.DockerHost),
+	}, "\n") + "\n"
+}
+
+func agentSystemdUnit() string {
+	return `[Unit]
+Description=Panel Agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/panel-agent/panel-agent.env
+ExecStart=/usr/local/bin/panel-agent
+Restart=always
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+`
+}
+
+func agentInstallScript(remoteTmp string) string {
+	return strings.Join([]string{
+		"set -eu",
+		`if ! command -v systemctl >/dev/null 2>&1; then`,
+		`  echo "[panel] systemd is required to manage panel-agent" >&2`,
+		`  exit 1`,
+		`fi`,
+		"install -m 0755 " + remoteops.ShellQuote(remoteTmp) + " " + remoteops.ShellQuote(agentRemoteBinaryPath),
+		"rm -f " + remoteops.ShellQuote(remoteTmp),
+		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: 9443, Protocol: "tcp"}),
+		"systemctl daemon-reload",
+		"systemctl enable --now panel-agent.service",
+		"systemctl restart panel-agent.service",
+		`echo "[panel] panel-agent service started"`,
+	}, "\n")
+}
+
+func systemdQuote(value string) string {
+	return `"` + strings.ReplaceAll(strings.ReplaceAll(value, `\`, `\\`), `"`, `\"`) + `"`
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
 	}
-	return out
+	return ""
+}
+
+func (s *Service) agentBinaryPath(ctx context.Context, srv Server) (string, error) {
+	platform, err := s.agentTargetPlatform(ctx, srv)
+	if err != nil {
+		return "", err
+	}
+	binaryPath := agentBinaryPathForPlatform(platform)
+	info, statErr := os.Stat(binaryPath)
+	if statErr == nil && !info.IsDir() {
+		return binaryPath, nil
+	}
+	return "", panelerr.Validation("agent_binary_unavailable", "panel-agent binary is unavailable for "+platform)
+}
+
+func (s *Service) agentTargetPlatform(ctx context.Context, srv Server) (string, error) {
+	arch := normalizeAgentArch(srv.Traits["sys.architecture"])
+	if arch == "" && s.exec != nil {
+		res, err := s.exec.Exec(ctx, srv.Target(), sshx.CommandSpec{Command: "uname -m", Timeout: connectivitySudoTimeout})
+		if err == nil {
+			arch = normalizeAgentArch(res.Stdout)
+		}
+	}
+	if arch == "" {
+		return "", panelerr.Validation("agent_binary_unavailable", "panel-agent binary is unavailable for target architecture")
+	}
+	return "linux-" + arch, nil
+}
+
+func normalizeAgentArch(value string) string {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(value)))
+	if len(fields) == 0 {
+		return ""
+	}
+	switch fields[0] {
+	case "amd64", "x86_64":
+		return "amd64"
+	case "arm64", "aarch64":
+		return "arm64"
+	default:
+		return ""
+	}
+}
+
+func agentBinaryPathForPlatform(platform string) string {
+	return path.Join(agentBundleRoot, strings.TrimSpace(platform), agentBundleBinaryName)
 }
 
 func agentURL(srv Server) (string, bool) {

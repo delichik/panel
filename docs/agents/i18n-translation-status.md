@@ -15,7 +15,7 @@
   - Token 过期时间、语言、登录页标题/说明、安全设置、证书设置和系统信息文案已接入 `web/src/i18n/index.ts`。
   - 旧运行时设置分类和字段已移除。
 - `web/src/views/servers/_shared/ServersPageContent.vue`
-  - 服务器凭据必选提示、Docker host 表单、Agent 兼容状态、版本检查时间、不兼容/不可用提示和部署包下载入口文案已接入 `web/src/i18n/index.ts`。
+  - 服务器凭据必选提示、Docker host 表单、Agent 兼容状态、版本检查时间、不兼容/不可用提示、安装/重装入口和 agent 部署任务文案已接入 `web/src/i18n/index.ts`。
 - `web/src/views/runtime/applications/`
   - 应用运行时实例状态、期望状态、日志入口、容器名和实例 ID 文案已接入 `web/src/i18n/index.ts`。
 - `web/src/views/runtime/applications/ApplicationEditor.vue`
@@ -27,6 +27,7 @@
 - `internal/i18n`
   - 统一 API 错误翻译入口覆盖认证、设置、服务器、UFW、DNS、证书、应用、任务和密钥资产的主要错误码。
   - 应用名称重复保存错误和 appspec `command` 数组用法错误已接入翻译。
+  - Agent 自动部署的 TLS 不可用、版本不兼容和本地 `panel-agent` 二进制缺失错误码已接入翻译。
 
 ## 前端仍有少量第三方原始文本
 

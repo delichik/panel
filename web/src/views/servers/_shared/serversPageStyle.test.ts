@@ -30,12 +30,13 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).not.toContain('<v-navigation-drawer v-model="credentialDialog"');
   });
 
-  it('shows agent runtime status and deployment bundle actions', () => {
+  it('shows agent runtime status and deployment task actions', () => {
     expect(serversPage).toContain('agentStatusForServer');
-    expect(serversPage).toContain('serversApi.issueAgentCertificate');
-    expect(serversPage).toContain('PANEL_AGENT_DOCKER_HOST');
+    expect(serversPage).toContain('serversApi.deployAgent');
+    expect(serversPage).toContain('agentDeployActionLabel');
     expect(serversPage).toContain("t('serversPage.agentReady')");
-    expect(serversPage).toContain("t('serversPage.deployAgent')");
+    expect(serversPage).toContain("t('serversPage.installAgent')");
+    expect(serversPage).toContain("t('serversPage.reinstallAgent')");
     expect(serversPage).toContain("t('serversPage.dockerHost')");
   });
 

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path"
 	"strings"
 	"time"
 
@@ -40,7 +42,35 @@ func (e *SSHExecutor) ExecSudo(ctx context.Context, target Target, command Comma
 }
 
 func (e *SSHExecutor) Upload(ctx context.Context, target Target, transfer UploadSpec) error {
-	return panelerr.Validation("upload_not_implemented", "SFTP upload is reserved for later phases")
+	if strings.TrimSpace(transfer.LocalPath) == "" || strings.TrimSpace(transfer.RemotePath) == "" {
+		return panelerr.Validation("upload_path_required", "Upload localPath and remotePath are required")
+	}
+	file, err := os.Open(transfer.LocalPath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	timeout := e.timeout()
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	client, err := e.dial(ctx, target)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	session, err := client.NewSession()
+	if err != nil {
+		return panelerr.BadGateway("remote_session_failed", "Failed to open SSH session")
+	}
+	defer session.Close()
+	session.Stdin = file
+	remotePath := strings.TrimSpace(transfer.RemotePath)
+	command := "mkdir -p " + shellQuote(path.Dir(remotePath)) + " && cat > " + shellQuote(remotePath)
+	if err := session.Run(command); err != nil {
+		return panelerr.BadGateway("remote_upload_failed", "Remote upload failed")
+	}
+	return nil
 }
 
 func (e *SSHExecutor) Download(ctx context.Context, target Target, transfer DownloadSpec) error {

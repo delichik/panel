@@ -55,6 +55,7 @@
   - 防火墙：`firewall/index.vue`
   - 软件包：`packages/index.vue`
   - 组内共享：`_shared/`
+  - 服务器详情的 Agent 操作通过 `POST /api/v1/servers/{id}/agent/deploy` 创建部署任务；未安装时显示安装，已安装但异常时显示重装，并通过任务中心跟踪结果。
 - Runtime 菜单组：`web/src/views/runtime/`
   - 应用：`applications/index.vue`
   - 应用运行时面板和日志面板位于 `applications/` 目录内，展示 agent runtime 实例。

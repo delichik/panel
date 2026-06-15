@@ -239,6 +239,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.Restart(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/servers/") && strings.HasSuffix(path, "/agent/certificate"):
 			serverH.IssueAgentCertificate(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/servers/") && strings.HasSuffix(path, "/agent/deploy"):
+			serverH.DeployAgent(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/install"):
 			serverH.InstallUFW(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/ufw"):

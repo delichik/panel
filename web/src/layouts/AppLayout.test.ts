@@ -17,7 +17,7 @@ describe('AppLayout navigation', () => {
     expect(appLayout).toContain('grid-template-columns: minmax(0, 1fr) auto;');
     expect(appLayout).toContain('grid-column: 1 / -1;');
     expect(appLayout).toContain('.logout-btn :deep(.v-btn__content)');
-    expect(appLayout).toContain('.user-name {\n    display: none;');
+    expect(appLayout).toMatch(/\.user-name\s*\{\s*display:\s*none;/);
   });
 
   it('shows the build channel marker from version metadata', () => {

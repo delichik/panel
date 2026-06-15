@@ -108,6 +108,15 @@ func (h *Handler) IssueAgentCertificate(w http.ResponseWriter, r *http.Request) 
 	httpx.JSON(w, http.StatusOK, bundle)
 }
 
+func (h *Handler) DeployAgent(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.DeployAgent(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/agent/deploy")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
 func (h *Handler) UFWState(w http.ResponseWriter, r *http.Request) {
 	state, err := h.service.UFWState(r.Context(), serverID(strings.TrimSuffix(r.URL.Path, "/ufw")))
 	if err != nil {

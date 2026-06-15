@@ -52,6 +52,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		status, err := h.collector.UFWStatus(r.Context())
 		writeResult(w, UFWStatusResponseFromStatus(status), err)
 	case r.Method == http.MethodPost && path == "/v1/runtime/applications/deploy":
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
 		var req RuntimeDeployRequest
 		if !decodeJSON(w, r, &req) {
 			return
@@ -59,6 +63,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result, err := h.runtime.Deploy(r.Context(), req)
 		writeResult(w, result, err)
 	case r.Method == http.MethodPost && path == "/v1/runtime/applications/stop":
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
 		var req RuntimeStopRequest
 		if !decodeJSON(w, r, &req) {
 			return
@@ -66,6 +74,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result, err := h.runtime.Stop(r.Context(), req)
 		writeResult(w, result, err)
 	case r.Method == http.MethodPost && path == "/v1/runtime/applications/restart":
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
 		var req RuntimeRestartRequest
 		if !decodeJSON(w, r, &req) {
 			return
@@ -73,10 +85,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result, err := h.runtime.Restart(r.Context(), req)
 		writeResult(w, result, err)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/runtime/applications/") && strings.HasSuffix(path, "/status"):
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
 		instanceID := runtimePathInstanceID(path, "/status")
 		status, err := h.runtime.Status(r.Context(), instanceID, "", "")
 		writeResult(w, RuntimeStatusResponse{InstanceStatus: status}, err)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/runtime/applications/") && strings.HasSuffix(path, "/logs"):
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
 		instanceID := runtimePathInstanceID(path, "/logs")
 		tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
 		logs, err := h.runtime.Logs(r.Context(), instanceID, tail)

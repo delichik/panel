@@ -71,6 +71,9 @@ export function createServersApi(client = apiClient) {
     issueAgentCertificate(serverId: string) {
       return client.post<AgentCertificateBundleDto>(`/servers/${serverId}/agent/certificate`);
     },
+    deployAgent(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/agent/deploy`);
+    },
     installUFW(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/install`);
     },

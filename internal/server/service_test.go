@@ -510,6 +510,29 @@ func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	}
 }
 
+func TestAgentBinaryPathForPlatformIsFixed(t *testing.T) {
+	cases := map[string]string{
+		"linux-amd64": "/app/panel-agents/linux-amd64/panel-agent",
+		"linux-arm64": "/app/panel-agents/linux-arm64/panel-agent",
+	}
+	for platform, want := range cases {
+		if got := agentBinaryPathForPlatform(platform); got != want {
+			t.Fatalf("expected %s path %q, got %q", platform, want, got)
+		}
+	}
+}
+
+func TestAgentTargetPlatformFallsBackToRemoteUname(t *testing.T) {
+	svc := &Service{exec: agentArchFakeExec{arch: "x86_64"}}
+	platform, err := svc.agentTargetPlatform(context.Background(), Server{Host: "127.0.0.1", Port: 22, CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if platform != "linux-amd64" {
+		t.Fatalf("expected linux-amd64, got %q", platform)
+	}
+}
+
 func assertNoDestructiveUFWCommands(t *testing.T, command string) {
 	t.Helper()
 	lower := strings.ToLower(command)
@@ -671,6 +694,29 @@ func (f *connectivityFakeExec) Upload(ctx context.Context, target sshx.Target, t
 }
 
 func (f *connectivityFakeExec) Download(ctx context.Context, target sshx.Target, transfer sshx.DownloadSpec) error {
+	return nil
+}
+
+type agentArchFakeExec struct {
+	arch string
+}
+
+func (f agentArchFakeExec) Exec(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	if strings.TrimSpace(command.Command) == "uname -m" {
+		return sshx.CommandResult{Stdout: f.arch + "\n", ExitCode: 0}, nil
+	}
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f agentArchFakeExec) ExecSudo(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f agentArchFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f agentArchFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
 }
 

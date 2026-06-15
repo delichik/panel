@@ -40,14 +40,31 @@ RUN set -eux; \
     "${TARGETOS}/${TARGETARCH}"|"${TARGETOS}/${TARGETARCH}/"*) ;; \
     *) echo "TARGETPLATFORM=${TARGETPLATFORM} does not match ${TARGETOS}/${TARGETARCH}"; exit 1 ;; \
   esac; \
+  verify_machine() { \
+    binary="$1"; \
+    arch="$2"; \
+    machine="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n')"; \
+    case "${arch}/${machine}" in \
+      amd64/3e00|arm64/b700) ;; \
+      *) echo "compiled ${binary} ELF machine ${machine} does not match GOARCH=${arch}"; exit 1 ;; \
+    esac; \
+  }; \
+  ldflags="-s -w -X panel/internal/buildinfo.Version=${PANEL_VERSION} -X panel/internal/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/buildinfo.Commit=${PANEL_COMMIT}"; \
+  mkdir -p /out/panel-agents; \
+  for platform in linux/amd64 linux/arm64; do \
+    agent_os="${platform%/*}"; \
+    agent_arch="${platform#*/}"; \
+    agent_dir="/out/panel-agents/${agent_os}-${agent_arch}"; \
+    mkdir -p "${agent_dir}"; \
+    CGO_ENABLED=0 GOOS="${agent_os}" GOARCH="${agent_arch}" go build -trimpath \
+      -ldflags="${ldflags}" \
+      -o "${agent_dir}/panel-agent" ./cmd/panel-agent; \
+    verify_machine "${agent_dir}/panel-agent" "${agent_arch}"; \
+  done; \
   CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath \
-    -ldflags="-s -w -X panel/internal/buildinfo.Version=${PANEL_VERSION} -X panel/internal/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/buildinfo.Commit=${PANEL_COMMIT}" \
+    -ldflags="${ldflags}" \
     -o /out/panel ./cmd/panel; \
-  machine="$(od -An -tx1 -j18 -N2 /out/panel | tr -d ' \n')"; \
-  case "${TARGETARCH}/${machine}" in \
-    amd64/3e00|arm64/b700|arm/2800|386/0300) ;; \
-    *) echo "compiled /out/panel ELF machine ${machine} does not match TARGETARCH=${TARGETARCH}"; exit 1 ;; \
-  esac
+  verify_machine /out/panel "${TARGETARCH}"
 
 FROM --platform=$TARGETPLATFORM alpine:3.22 AS runtime
 WORKDIR /app
@@ -59,6 +76,7 @@ RUN apk add --no-cache ca-certificates tzdata \
   && chown -R panel:panel /app
 
 COPY --from=backend-build /out/panel /app/panel
+COPY --from=backend-build /out/panel-agents /app/panel-agents
 COPY --from=web-build /src/web/dist /app/web/dist
 COPY config.example.json /app/config.example.json
 

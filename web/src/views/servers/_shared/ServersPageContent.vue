@@ -381,38 +381,18 @@ function shouldDeployAgent(server: ServerDto | null) {
   return agentStatusForServer(server).color !== 'success';
 }
 
-async function downloadAgentBundle(server: ServerDto) {
+function agentDeployActionLabel(server: ServerDto | null) {
+  const traits = server?.traits;
+  if (traits?.['agent.enabled'] !== 'true' || !traits?.['agent.url']) return t('serversPage.installAgent');
+  return t('serversPage.reinstallAgent');
+}
+
+async function deployAgent(server: ServerDto) {
   agentDeploying.value = { ...agentDeploying.value, [server.id]: true };
   try {
-    const bundle = await serversApi.issueAgentCertificate(server.id);
-    const deploymentBundle = {
-      serverId: server.id,
-      requiredAgentVersion: '1.0.0',
-      files: {
-        'ca.pem': bundle.ca,
-        'server.pem': bundle.certificate,
-        'server-key.pem': bundle.privateKey,
-      },
-      environment: {
-        PANEL_AGENT_LISTEN: bundle.listenAddress,
-        PANEL_AGENT_CA_FILE: '/etc/panel-agent/ca.pem',
-        PANEL_AGENT_CERT_FILE: '/etc/panel-agent/server.pem',
-        PANEL_AGENT_KEY_FILE: '/etc/panel-agent/server-key.pem',
-        PANEL_AGENT_DOCKER_HOST: bundle.dockerHost || server.dockerHost || defaultDockerHost,
-      },
-      serverTraits: {
-        'agent.enabled': 'true',
-        'agent.url': bundle.agentUrl,
-      },
-    };
-    const blob = new Blob([JSON.stringify(deploymentBundle, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `panel-agent-${server.id}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    showMessage(t('serversPage.agentBundleDownloaded'));
+    const result = await serversApi.deployAgent(server.id);
+    showMessage(t('serversPage.agentDeployStarted'), 'success', result.taskId);
+    await load();
   } catch (err) {
     showMessage(err instanceof Error ? err.message : t('serversPage.agentDeployFailed'), 'error');
   } finally {
@@ -626,12 +606,12 @@ onMounted(load);
                         size="small"
                         color="primary"
                         variant="outlined"
-                        prepend-icon="mdi-download"
+                        prepend-icon="mdi-server-network"
                         class="text-none"
                         :loading="agentDeploying[selectedServer.id]"
-                        @click="downloadAgentBundle(selectedServer)"
+                        @click="deployAgent(selectedServer)"
                       >
-                        {{ t('serversPage.deployAgent') }}
+                        {{ agentDeployActionLabel(selectedServer) }}
                       </v-btn>
                     </div>
                   </div>
