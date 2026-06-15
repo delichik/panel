@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"panel/internal/containerization"
 	"panel/internal/id"
 	"panel/internal/metrics"
 	"panel/internal/packages"
@@ -16,14 +17,15 @@ import (
 )
 
 type Scheduler struct {
-	settings *settings.Service
-	servers  *server.Service
-	metrics  *metrics.Service
-	packages *packages.Service
-	tasks    *tasks.Service
-	certs    certificateRenewer
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	settings   *settings.Service
+	servers    *server.Service
+	metrics    *metrics.Service
+	packages   *packages.Service
+	tasks      *tasks.Service
+	certs      certificateRenewer
+	containers *containerization.Service
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
 }
 
 const StaleQueuedWorkerTaskAfter = 10 * time.Minute
@@ -47,16 +49,49 @@ func (s *Scheduler) SetCertificateRenewer(renewer certificateRenewer) {
 	s.certs = renewer
 }
 
+func (s *Scheduler) SetContainerization(service *containerization.Service) {
+	s.containers = service
+}
+
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.wg.Add(6)
+	s.wg.Add(7)
 	go s.connectivityLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.packageLoop(ctx)
 	go s.cleanupLoop(ctx)
 	go s.certificateLoop(ctx)
 	go s.runningTaskLoop(ctx)
+	go s.containerizationLoop(ctx)
+}
+
+func (s *Scheduler) containerizationLoop(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	lastImageRefresh := time.Now()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if s.containers == nil {
+				continue
+			}
+			if err := s.containers.MonitorApplications(ctx); err != nil {
+				log.Printf("application container monitor: %v", err)
+			}
+			interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
+			if time.Since(lastImageRefresh) < interval {
+				continue
+			}
+			lastImageRefresh = time.Now()
+			if err := s.containers.RefreshAllScheduled(ctx); err != nil {
+				log.Printf("image refresh: %v", err)
+			}
+		}
+	}
 }
 
 func (s *Scheduler) connectivityLoop(ctx context.Context) {

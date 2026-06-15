@@ -37,7 +37,7 @@
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用、agent 部署，必须在 API 返回前先标记为 `running`。
 - 遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter` 的选定 worker 类型会在清理循环中标记为失败并提示用户重试。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
-- `scheduler` 负责周期性指标采集、软件包刷新、证书续签和 due 的包刷新任务补扫，并作为 `run-now` 执行入口。
+- `scheduler` 负责周期性指标采集、软件包刷新、镜像更新检查、Application 容器监控、证书续签和 due 的包刷新任务补扫，并作为 `run-now` 执行入口。
 - 任务中心的 `run-now` / `retry` 必须按任务类型受控；当前只允许 `server_connectivity_test`、`server_info_collect`、`package_refresh`、`certificate_issue` 这类有调度器执行器的任务。
 - `retry` 创建的新任务会立即交给调度器执行；如果调度器启动前返回错误，handler 会把新任务标记为失败，避免永久排队。
 
@@ -45,6 +45,7 @@
 
 - 服务器测试、重启、UFW、agent 部署和软件包维护依赖本模块记录任务。
 - 应用部署、停止、重启、镜像检查和镜像更新依赖本模块记录任务；实际容器操作由应用服务调用 agent runtime API。
+- 容器启动、停止、重启、删除、镜像拉取/删除/刷新、卷删除和 Application 协调恢复依赖本模块记录任务；同服务器容器变更由容器化模块串行执行。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务。
 - 启用服务器 agent 后，`metrics_collect` 与 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。普通 agent 失败、不可达或版本能力不兼容时任务按当前错误失败。`server_info_collect` 遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、自动排队 `server_agent_deploy`，并按当前 agent 错误失败。
 - 软件包刷新/升级、UFW 写操作和服务器重启仍走 SSH，不要把这些写入型或长流程任务路由到 agent。

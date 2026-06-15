@@ -45,6 +45,9 @@
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 文件内容通过 API 以 base64 承载；保存会话用于批量上传、删除和提交。
 - 启用应用、部署、镜像更新等流程需要先校验和计划，再写入应用修订和实例记录，并调用 agent runtime API。
+- Application 容器使用 `panel.application.*` Label 标识；旧下划线 Label 不兼容且不自动迁移。
+- Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
+- scheduler 容器监控只协调已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；`purge` 参数会传给 agent 清理容器。
 - 应用日志按 `instanceId` 和可选 `containerName` 读取。日志面板必须从 runtime 实例提供入口，不再使用 allocation/task 语义。

@@ -69,11 +69,15 @@ const navGroups = computed<NavGroup[]>(() => [
     ],
   },
   {
-    key: 'runtime',
-    icon: 'mdi-cloud-braces',
-    title: t('layout.nav.runtime'),
+    key: 'containerization',
+    icon: 'mdi-docker',
+    title: t('layout.nav.containerization'),
     items: [
-      { to: '/applications', title: t('layout.nav.applications'), value: 'applications' },
+      { to: '/containerization/applications', title: t('layout.nav.applications'), value: 'applications' },
+      { to: '/containerization/containers', title: t('layout.nav.containers'), value: 'containers' },
+      { to: '/containerization/images', title: t('layout.nav.images'), value: 'images' },
+      { to: '/containerization/networks', title: t('layout.nav.networks'), value: 'networks' },
+      { to: '/containerization/volumes', title: t('layout.nav.volumes'), value: 'volumes' },
     ],
   },
   {

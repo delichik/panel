@@ -111,6 +111,50 @@ func (c *HTTPClient) RuntimeLogs(ctx context.Context, baseURL, instanceID string
 	return out, err
 }
 
+func (c *HTTPClient) DockerContainers(ctx context.Context, baseURL string) ([]DockerContainer, error) {
+	var out DockerContainersResponse
+	err := c.get(ctx, baseURL, "/v1/docker/containers", nil, &out)
+	return out.Items, err
+}
+
+func (c *HTTPClient) DockerContainerAction(ctx context.Context, baseURL, id, action string) error {
+	return c.post(ctx, baseURL, "/v1/docker/containers/"+url.PathEscape(id)+"/"+url.PathEscape(action), nil, nil)
+}
+
+func (c *HTTPClient) DockerContainerDelete(ctx context.Context, baseURL, id string) error {
+	return c.delete(ctx, baseURL, "/v1/docker/containers/"+url.PathEscape(id))
+}
+
+func (c *HTTPClient) DockerImages(ctx context.Context, baseURL string) ([]DockerImage, error) {
+	var out DockerImagesResponse
+	err := c.get(ctx, baseURL, "/v1/docker/images", nil, &out)
+	return out.Items, err
+}
+
+func (c *HTTPClient) DockerImagePull(ctx context.Context, baseURL, reference string) error {
+	return c.post(ctx, baseURL, "/v1/docker/images/pull", DockerImagePullRequest{Reference: reference}, nil)
+}
+
+func (c *HTTPClient) DockerImageDelete(ctx context.Context, baseURL, id string) error {
+	return c.delete(ctx, baseURL, "/v1/docker/images/"+url.PathEscape(id))
+}
+
+func (c *HTTPClient) DockerNetworks(ctx context.Context, baseURL string) ([]DockerNetwork, error) {
+	var out DockerNetworksResponse
+	err := c.get(ctx, baseURL, "/v1/docker/networks", nil, &out)
+	return out.Items, err
+}
+
+func (c *HTTPClient) DockerVolumes(ctx context.Context, baseURL string) ([]DockerVolume, error) {
+	var out DockerVolumesResponse
+	err := c.get(ctx, baseURL, "/v1/docker/volumes", nil, &out)
+	return out.Items, err
+}
+
+func (c *HTTPClient) DockerVolumeDelete(ctx context.Context, baseURL, name string) error {
+	return c.delete(ctx, baseURL, "/v1/docker/volumes/"+url.PathEscape(name))
+}
+
 func (c *HTTPClient) get(ctx context.Context, baseURL, path string, query url.Values, out any) error {
 	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
 	if err != nil {
@@ -145,8 +189,10 @@ func (c *HTTPClient) post(ctx context.Context, baseURL, path string, in, out any
 		return err
 	}
 	var body bytes.Buffer
-	if err := json.NewEncoder(&body).Encode(in); err != nil {
-		return err
+	if in != nil {
+		if err := json.NewEncoder(&body).Encode(in); err != nil {
+			return err
+		}
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), &body)
 	if err != nil {
@@ -170,4 +216,29 @@ func (c *HTTPClient) post(ctx context.Context, baseURL, path string, in, out any
 		return nil
 	}
 	return json.NewDecoder(res.Body).Decode(out)
+}
+
+func (c *HTTPClient) delete(ctx context.Context, baseURL, path string) error {
+	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		var er ErrorResponse
+		_ = json.NewDecoder(res.Body).Decode(&er)
+		if er.Error == "" {
+			er.Error = res.Status
+		}
+		return fmt.Errorf("agent request failed: %s", er.Error)
+	}
+	return nil
 }

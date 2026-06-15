@@ -28,7 +28,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart", "docker-containers", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -124,6 +124,93 @@ type RuntimeStatusResponse struct {
 type RuntimeLogsResponse struct {
 	InstanceID string `json:"instanceId"`
 	Logs       string `json:"logs"`
+}
+
+type DockerContainer struct {
+	ID      string            `json:"id"`
+	Names   []string          `json:"names"`
+	Image   string            `json:"image"`
+	ImageID string            `json:"imageId"`
+	Command string            `json:"command"`
+	Created int64             `json:"created"`
+	State   string            `json:"state"`
+	Status  string            `json:"status"`
+	Ports   []DockerPort      `json:"ports"`
+	Labels  map[string]string `json:"labels"`
+	Mounts  []DockerMount     `json:"mounts"`
+}
+
+type DockerPort struct {
+	IP          string `json:"ip,omitempty"`
+	PrivatePort int    `json:"privatePort"`
+	PublicPort  int    `json:"publicPort,omitempty"`
+	Type        string `json:"type"`
+}
+
+type DockerMount struct {
+	Type        string `json:"type"`
+	Name        string `json:"name,omitempty"`
+	Source      string `json:"source"`
+	Destination string `json:"destination"`
+	Driver      string `json:"driver,omitempty"`
+	Mode        string `json:"mode,omitempty"`
+	RW          bool   `json:"rw"`
+}
+
+type DockerImage struct {
+	ID          string   `json:"id"`
+	ParentID    string   `json:"parentId,omitempty"`
+	RepoTags    []string `json:"repoTags"`
+	RepoDigests []string `json:"repoDigests"`
+	Created     int64    `json:"created"`
+	Size        int64    `json:"size"`
+	Containers  int      `json:"containers"`
+}
+
+type DockerNetwork struct {
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	Driver   string            `json:"driver"`
+	Scope    string            `json:"scope"`
+	Created  string            `json:"created,omitempty"`
+	Internal bool              `json:"internal"`
+	Labels   map[string]string `json:"labels"`
+}
+
+type DockerVolume struct {
+	Name           string             `json:"name"`
+	Driver         string             `json:"driver"`
+	Mountpoint     string             `json:"mountpoint"`
+	CreatedAt      string             `json:"createdAt,omitempty"`
+	Labels         map[string]string  `json:"labels"`
+	UsageData      *DockerVolumeUsage `json:"usageData,omitempty"`
+	InUse          bool               `json:"inUse"`
+	ContainerCount int                `json:"containerCount"`
+}
+
+type DockerVolumeUsage struct {
+	Size     int64 `json:"size"`
+	RefCount int64 `json:"refCount"`
+}
+
+type DockerContainersResponse struct {
+	Items []DockerContainer `json:"items"`
+}
+
+type DockerImagesResponse struct {
+	Items []DockerImage `json:"items"`
+}
+
+type DockerNetworksResponse struct {
+	Items []DockerNetwork `json:"items"`
+}
+
+type DockerVolumesResponse struct {
+	Items []DockerVolume `json:"items"`
+}
+
+type DockerImagePullRequest struct {
+	Reference string `json:"reference"`
 }
 
 func SnapshotResponse(s linux.MetricsSnapshot) MetricsSnapshotResponse {

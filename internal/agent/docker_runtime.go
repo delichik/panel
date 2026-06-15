@@ -176,6 +176,61 @@ func (r *LocalRuntime) Logs(ctx context.Context, instanceID string, tail int) (s
 	return r.client.containerLogs(ctx, containerNameForInstance(instanceID), tail)
 }
 
+func (r *LocalRuntime) Containers(ctx context.Context) ([]DockerContainer, error) {
+	if r == nil || r.client == nil {
+		return nil, errors.New("runtime is not configured")
+	}
+	return r.client.listContainers(ctx)
+}
+
+func (r *LocalRuntime) ContainerStart(ctx context.Context, id string) error {
+	return r.client.startContainer(ctx, id)
+}
+
+func (r *LocalRuntime) ContainerStop(ctx context.Context, id string) error {
+	err := r.client.stopContainer(ctx, id, 10)
+	if isDockerNotModified(err) || isDockerNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (r *LocalRuntime) ContainerRestart(ctx context.Context, id string) error {
+	return r.client.restartContainer(ctx, id, 10)
+}
+
+func (r *LocalRuntime) ContainerDelete(ctx context.Context, id string) error {
+	err := r.client.removeContainer(ctx, id, true)
+	if isDockerNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (r *LocalRuntime) Images(ctx context.Context) ([]DockerImage, error) {
+	return r.client.listImages(ctx)
+}
+
+func (r *LocalRuntime) PullImage(ctx context.Context, reference string) error {
+	return r.client.pullImage(ctx, reference)
+}
+
+func (r *LocalRuntime) DeleteImage(ctx context.Context, id string) error {
+	return r.client.removeImage(ctx, id)
+}
+
+func (r *LocalRuntime) Networks(ctx context.Context) ([]DockerNetwork, error) {
+	return r.client.listNetworks(ctx)
+}
+
+func (r *LocalRuntime) Volumes(ctx context.Context) ([]DockerVolume, error) {
+	return r.client.listVolumes(ctx)
+}
+
+func (r *LocalRuntime) DeleteVolume(ctx context.Context, name string) error {
+	return r.client.removeVolume(ctx, name)
+}
+
 func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 	for _, file := range spec.Files {
 		target, err := safeRuntimePath(r.root, spec.ApplicationID, spec.InstanceID, "files", file.Path)
@@ -307,10 +362,11 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 		Entrypoint:   append([]string(nil), spec.Command...),
 		ExposedPorts: dockerExposedPorts(spec.Ports),
 		Labels: map[string]string{
-			"panel.application_id": spec.ApplicationID,
-			"panel.instance_id":    spec.InstanceID,
-			"panel.generation":     strconv.Itoa(spec.Generation),
-			"panel.spec_hash":      spec.SpecHash,
+			"panel.application.managed":     "true",
+			"panel.application.id":          spec.ApplicationID,
+			"panel.application.instance.id": spec.InstanceID,
+			"panel.application.generation":  strconv.Itoa(spec.Generation),
+			"panel.application.spec.hash":   spec.SpecHash,
 		},
 		HostConfig: dockerHostConfig{
 			Binds:        dockerBinds(defaultRuntimeRoot, spec),
@@ -354,7 +410,11 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 }
 
 func (c *dockerAPIClient) startContainer(ctx context.Context, id string) error {
-	return c.emptyPost(ctx, "/containers/"+url.PathEscape(id)+"/start", "start container")
+	err := c.emptyPost(ctx, "/containers/"+url.PathEscape(id)+"/start", "start container")
+	if isDockerNotModified(err) {
+		return nil
+	}
+	return err
 }
 
 func (c *dockerAPIClient) stopContainer(ctx context.Context, name string, timeout int) error {
@@ -453,10 +513,131 @@ func (c *dockerAPIClient) emptyPost(ctx context.Context, endpoint, action string
 	if res.StatusCode == http.StatusNotFound {
 		return dockerNotFound{endpoint}
 	}
+	if res.StatusCode == http.StatusNotModified {
+		return dockerNotModified{endpoint}
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return dockerError(res, action)
 	}
 	return nil
+}
+
+func (c *dockerAPIClient) listContainers(ctx context.Context) ([]DockerContainer, error) {
+	var out []DockerContainer
+	if err := c.getJSON(ctx, "/containers/json?all=true", "list containers", &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []DockerContainer{}
+	}
+	return out, nil
+}
+
+func (c *dockerAPIClient) listImages(ctx context.Context) ([]DockerImage, error) {
+	var out []DockerImage
+	if err := c.getJSON(ctx, "/images/json?all=true", "list images", &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []DockerImage{}
+	}
+	return out, nil
+}
+
+func (c *dockerAPIClient) removeImage(ctx context.Context, id string) error {
+	query := url.Values{}
+	query.Set("force", "false")
+	req, err := c.newRequest(ctx, http.MethodDelete, "/images/"+url.PathEscape(id)+"?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerError(res, "remove image")
+	}
+	return nil
+}
+
+func (c *dockerAPIClient) listNetworks(ctx context.Context) ([]DockerNetwork, error) {
+	var out []DockerNetwork
+	if err := c.getJSON(ctx, "/networks", "list networks", &out); err != nil {
+		return nil, err
+	}
+	if out == nil {
+		out = []DockerNetwork{}
+	}
+	return out, nil
+}
+
+func (c *dockerAPIClient) listVolumes(ctx context.Context) ([]DockerVolume, error) {
+	var raw struct {
+		Volumes []DockerVolume `json:"Volumes"`
+	}
+	if err := c.getJSON(ctx, "/volumes", "list volumes", &raw); err != nil {
+		return nil, err
+	}
+	containers, err := c.listContainers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	counts := map[string]int{}
+	for _, container := range containers {
+		for _, mount := range container.Mounts {
+			if mount.Type == "volume" && mount.Name != "" {
+				counts[mount.Name]++
+			}
+		}
+	}
+	for i := range raw.Volumes {
+		raw.Volumes[i].ContainerCount = counts[raw.Volumes[i].Name]
+		raw.Volumes[i].InUse = raw.Volumes[i].ContainerCount > 0
+	}
+	if raw.Volumes == nil {
+		raw.Volumes = []DockerVolume{}
+	}
+	return raw.Volumes, nil
+}
+
+func (c *dockerAPIClient) removeVolume(ctx context.Context, name string) error {
+	req, err := c.newRequest(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		return nil
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerError(res, "remove volume")
+	}
+	return nil
+}
+
+func (c *dockerAPIClient) getJSON(ctx context.Context, endpoint, action string, out any) error {
+	req, err := c.newRequest(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerError(res, action)
+	}
+	return json.NewDecoder(res.Body).Decode(out)
 }
 
 func (c *dockerAPIClient) newRequest(ctx context.Context, method, endpoint string, body io.Reader) (*http.Request, error) {
@@ -628,6 +809,17 @@ func (e dockerNotFound) Error() string { return "docker container not found: " +
 func isDockerNotFound(err error) bool {
 	var nf dockerNotFound
 	return errors.As(err, &nf)
+}
+
+type dockerNotModified struct{ name string }
+
+func (e dockerNotModified) Error() string {
+	return "docker resource already has requested state: " + e.name
+}
+
+func isDockerNotModified(err error) bool {
+	var target dockerNotModified
+	return errors.As(err, &target)
 }
 
 func decodeDockerLogs(raw []byte) string {

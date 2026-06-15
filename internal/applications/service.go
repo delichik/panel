@@ -61,6 +61,7 @@ type Service struct {
 	panelFiles      PanelFileProvider
 	proxyReconciler ReverseProxyReconciler
 	imageResolver   ImageDigestResolver
+	operationQueue  ContainerOperationQueue
 	sessionMu       sync.Mutex
 	saveSessions    map[string]*saveSession
 	cleanupOnce     sync.Once
@@ -108,6 +109,10 @@ type ReverseProxyReconciler interface {
 
 type ImageDigestResolver interface {
 	Resolve(ctx context.Context, image string) (ImageDigestResult, error)
+}
+
+type ContainerOperationQueue interface {
+	Execute(ctx context.Context, serverID string, run func(context.Context) error) error
 }
 
 type saveSession struct {
@@ -221,6 +226,10 @@ func (s *Service) SetConfigProvider(provider func() Config) {
 
 func (s *Service) SetImageDigestResolver(resolver ImageDigestResolver) {
 	s.imageResolver = resolver
+}
+
+func (s *Service) SetContainerOperationQueue(queue ContainerOperationQueue) {
+	s.operationQueue = queue
 }
 
 func (s *Service) List(ctx context.Context) ([]Application, error) {
@@ -1197,7 +1206,12 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 		if s.tasks != nil && taskID != "" {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+firstNonEmpty(target.Name, target.ID, target.Host))
 		}
-		result, err := s.runtimeClient.RuntimeDeploy(ctx, baseURL, agent.RuntimeDeployRequest{ServerID: target.ID, Spec: instanceSpec})
+		var result agent.RuntimeInstanceResponse
+		err := s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
+			var runErr error
+			result, runErr = s.runtimeClient.RuntimeDeploy(runCtx, baseURL, agent.RuntimeDeployRequest{ServerID: target.ID, Spec: instanceSpec})
+			return runErr
+		})
 		if err != nil {
 			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
 			return err
@@ -1229,7 +1243,12 @@ func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string
 		if s.tasks != nil && taskID != "" {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "stopping "+instance.ContainerName+" on "+firstNonEmpty(srv.Name, srv.ID, srv.Host))
 		}
-		result, err := s.runtimeClient.RuntimeStop(ctx, baseURL, agent.RuntimeStopRequest{InstanceID: instance.ID, Purge: purge})
+		var result agent.RuntimeInstanceResponse
+		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
+			var runErr error
+			result, runErr = s.runtimeClient.RuntimeStop(runCtx, baseURL, agent.RuntimeStopRequest{InstanceID: instance.ID, Purge: purge})
+			return runErr
+		})
 		if err != nil {
 			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, appruntime.StatusFailed, "", err.Error())
 			return err
@@ -1262,7 +1281,12 @@ func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID str
 		if !ok {
 			return panelerr.Validation("agent_required", "Agent is required for application restart")
 		}
-		result, err := s.runtimeClient.RuntimeRestart(ctx, baseURL, agent.RuntimeRestartRequest{InstanceID: instance.ID})
+		var result agent.RuntimeInstanceResponse
+		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
+			var runErr error
+			result, runErr = s.runtimeClient.RuntimeRestart(runCtx, baseURL, agent.RuntimeRestartRequest{InstanceID: instance.ID})
+			return runErr
+		})
 		if err != nil {
 			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
 			return err
@@ -1275,6 +1299,13 @@ func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID str
 		_ = s.tasks.Complete(ctx, taskID, "Application restarted")
 	}
 	return nil
+}
+
+func (s *Service) executeContainerOperation(ctx context.Context, serverID string, run func(context.Context) error) error {
+	if s.operationQueue == nil {
+		return run(ctx)
+	}
+	return s.operationQueue.Execute(ctx, serverID, run)
 }
 
 func (s *Service) insertApplication(ctx context.Context, app Application) error {

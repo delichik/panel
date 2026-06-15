@@ -10,6 +10,10 @@ import ServerCredentialsPage from '@/views/servers/credentials/index.vue';
 import PackageUpdatesPage from '@/views/servers/packages/index.vue';
 import FirewallPage from '@/views/servers/firewall/index.vue';
 import ApplicationsPage from '@/views/runtime/applications/index.vue';
+import ContainersPage from '@/views/containerization/containers/index.vue';
+import ImagesPage from '@/views/containerization/images/index.vue';
+import NetworksPage from '@/views/containerization/networks/index.vue';
+import VolumesPage from '@/views/containerization/volumes/index.vue';
 import CertificatesPage from '@/views/certificates/domains/index.vue';
 import KeyAssetsPage from '@/views/certificates/key-assets/index.vue';
 import DomainsPage from '@/views/dns/domains/index.vue';
@@ -36,7 +40,12 @@ export const router = createRouter({
         { path: 'servers/firewall', name: 'server-firewall', component: FirewallPage, meta: { titleKey: 'routes.firewall.title' } },
         { path: 'servers/packages', name: 'system-packages', component: PackageUpdatesPage, meta: { titleKey: 'routes.systemPackages.title' } },
         { path: 'packages', redirect: '/servers/packages' },
-        { path: 'applications', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications', redirect: '/containerization/applications' },
+        { path: 'containerization/applications', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'containerization/containers', name: 'containers', component: ContainersPage, meta: { titleKey: 'routes.containers.title' } },
+        { path: 'containerization/images', name: 'images', component: ImagesPage, meta: { titleKey: 'routes.images.title' } },
+        { path: 'containerization/networks', name: 'networks', component: NetworksPage, meta: { titleKey: 'routes.networks.title' } },
+        { path: 'containerization/volumes', name: 'volumes', component: VolumesPage, meta: { titleKey: 'routes.volumes.title' } },
         { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
         { path: 'dns/certificates', redirect: '/certificates/domains' },
         { path: 'certificates', redirect: '/certificates/domains' },

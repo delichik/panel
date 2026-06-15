@@ -56,6 +56,30 @@ func (s *Store) Migrate(ctx context.Context) error {
 			refreshed_at TEXT NOT NULL,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS image_updates (
+			server_id TEXT NOT NULL,
+			reference TEXT NOT NULL,
+			local_digest TEXT NOT NULL DEFAULT '',
+			latest_digest TEXT NOT NULL DEFAULT '',
+			update_available INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT '',
+			checked_at TEXT NOT NULL,
+			PRIMARY KEY(server_id, reference),
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS image_refreshes (
+			server_id TEXT PRIMARY KEY,
+			refreshed_at TEXT NOT NULL,
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS application_reconcile_states (
+			instance_id TEXT PRIMARY KEY,
+			application_id TEXT NOT NULL,
+			server_id TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
 			operation_id TEXT NOT NULL DEFAULT '',

@@ -31,6 +31,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if path == "" {
 		path = "/"
 	}
+	if strings.HasPrefix(path, "/v1/docker/") && h.runtime == nil {
+		writeError(w, http.StatusBadGateway, "runtime is not configured")
+		return
+	}
 	switch {
 	case r.Method == http.MethodGet && path == "/v1/health":
 		docker := DockerHealth{Host: DefaultDockerHost, Status: StatusUnavailable, Error: "runtime is not configured"}
@@ -51,6 +55,49 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/v1/ufw/status":
 		status, err := h.collector.UFWStatus(r.Context())
 		writeResult(w, UFWStatusResponseFromStatus(status), err)
+	case r.Method == http.MethodGet && path == "/v1/docker/containers":
+		items, err := h.runtime.Containers(r.Context())
+		writeResult(w, DockerContainersResponse{Items: items}, err)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/docker/containers/"):
+		id, action := dockerContainerAction(path)
+		var err error
+		switch action {
+		case "start":
+			err = h.runtime.ContainerStart(r.Context(), id)
+		case "stop":
+			err = h.runtime.ContainerStop(r.Context(), id)
+		case "restart":
+			err = h.runtime.ContainerRestart(r.Context(), id)
+		default:
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeResult(w, map[string]bool{"ok": err == nil}, err)
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/v1/docker/containers/"):
+		err := h.runtime.ContainerDelete(r.Context(), strings.TrimPrefix(path, "/v1/docker/containers/"))
+		writeResult(w, map[string]bool{"ok": err == nil}, err)
+	case r.Method == http.MethodGet && path == "/v1/docker/images":
+		items, err := h.runtime.Images(r.Context())
+		writeResult(w, DockerImagesResponse{Items: items}, err)
+	case r.Method == http.MethodPost && path == "/v1/docker/images/pull":
+		var req DockerImagePullRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		err := h.runtime.PullImage(r.Context(), req.Reference)
+		writeResult(w, map[string]bool{"ok": err == nil}, err)
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/v1/docker/images/"):
+		err := h.runtime.DeleteImage(r.Context(), strings.TrimPrefix(path, "/v1/docker/images/"))
+		writeResult(w, map[string]bool{"ok": err == nil}, err)
+	case r.Method == http.MethodGet && path == "/v1/docker/networks":
+		items, err := h.runtime.Networks(r.Context())
+		writeResult(w, DockerNetworksResponse{Items: items}, err)
+	case r.Method == http.MethodGet && path == "/v1/docker/volumes":
+		items, err := h.runtime.Volumes(r.Context())
+		writeResult(w, DockerVolumesResponse{Items: items}, err)
+	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/v1/docker/volumes/"):
+		err := h.runtime.DeleteVolume(r.Context(), strings.TrimPrefix(path, "/v1/docker/volumes/"))
+		writeResult(w, map[string]bool{"ok": err == nil}, err)
 	case r.Method == http.MethodPost && path == "/v1/runtime/applications/deploy":
 		if h.runtime == nil {
 			writeError(w, http.StatusBadGateway, "runtime is not configured")
@@ -106,6 +153,14 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		writeError(w, http.StatusNotFound, "not found")
 	}
+}
+
+func dockerContainerAction(path string) (string, string) {
+	parts := strings.Split(strings.TrimPrefix(path, "/v1/docker/containers/"), "/")
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }
 
 func (h *Handler) oldServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -13,6 +13,7 @@ import (
 	"panel/internal/auth"
 	"panel/internal/certs"
 	"panel/internal/config"
+	"panel/internal/containerization"
 	"panel/internal/credential"
 	"panel/internal/dns"
 	"panel/internal/httpx"
@@ -96,6 +97,9 @@ func New(cfg config.Config) (*App, error) {
 	serverSvc.SetMetricsDB(store.MetricsDB())
 	applicationSvc := applications.NewService(store.AppDB(), agentClient, taskSvc, applications.Config{})
 	applicationSvc.SetServerProvider(serverSvc)
+	containerSvc := containerization.NewService(store.AppDB(), serverSvc, agentClient, taskSvc)
+	containerSvc.SetApplicationUpdater(applicationSvc)
+	applicationSvc.SetContainerOperationQueue(containerSvc)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
 	metricsSvc.SetAgentClient(agentClient)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
@@ -118,6 +122,7 @@ func New(cfg config.Config) (*App, error) {
 	certSvc.SetApplicationRefresher(applicationSvc)
 	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
 	sched.SetCertificateRenewer(certSvc)
+	sched.SetContainerization(containerSvc)
 	a.sched = sched
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -126,7 +131,7 @@ func New(cfg config.Config) (*App, error) {
 	}()
 	sched.Start(context.Background())
 	logging.L().Info("background services started")
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -142,7 +147,7 @@ func (a *App) Close() error {
 }
 func (a *App) Handler() http.Handler { return logging.HTTPMiddleware(a.mux) }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -269,6 +274,30 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			packageH.UpgradeSelected(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/packages/upgrade-all"):
 			packageH.UpgradeAll(w, r)
+		case r.Method == http.MethodGet && serverDockerCollectionPath(path, "containers"):
+			containerH.Containers(w, r)
+		case r.Method == http.MethodPost && serverDockerActionPath(path, "containers"):
+			containerH.ContainerAction(w, r)
+		case r.Method == http.MethodDelete && serverDockerResourcePath(path, "containers"):
+			containerH.DeleteContainer(w, r)
+		case r.Method == http.MethodGet && serverDockerCollectionPath(path, "images"):
+			containerH.Images(w, r)
+		case r.Method == http.MethodPost && serverDockerActionNamedPath(path, "images", "pull"):
+			containerH.PullImage(w, r)
+		case r.Method == http.MethodPost && serverDockerActionNamedPath(path, "images", "refresh"):
+			containerH.RefreshImages(w, r)
+		case r.Method == http.MethodDelete && serverDockerResourcePath(path, "images"):
+			containerH.DeleteImage(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/images/upgrade-selected":
+			containerH.UpgradeSelected(w, r)
+		case r.Method == http.MethodPost && path == "/api/v1/images/upgrade-all":
+			containerH.UpgradeAll(w, r)
+		case r.Method == http.MethodGet && serverDockerCollectionPath(path, "networks"):
+			containerH.Networks(w, r)
+		case r.Method == http.MethodGet && serverDockerCollectionPath(path, "volumes"):
+			containerH.Volumes(w, r)
+		case r.Method == http.MethodDelete && serverDockerResourcePath(path, "volumes"):
+			containerH.DeleteVolume(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/application-save-sessions":
 			applicationH.BeginSaveSession(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/application-save-sessions/") && strings.HasSuffix(path, "/files") && applicationSaveSessionFilesPath(path):
@@ -377,6 +406,27 @@ func serverActionPath(path string, action string) bool {
 func serverUFWRulePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 7 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == "ufw" && parts[5] == "rules" && parts[6] != ""
+}
+
+func serverDockerCollectionPath(path, kind string) bool {
+	parts := routeParts(path)
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == kind
+}
+
+func serverDockerResourcePath(path, kind string) bool {
+	parts := routeParts(path)
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == kind && parts[5] != ""
+}
+
+func serverDockerActionPath(path, kind string) bool {
+	parts := routeParts(path)
+	return len(parts) == 7 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == kind && parts[5] != "" &&
+		(parts[6] == "start" || parts[6] == "stop" || parts[6] == "restart")
+}
+
+func serverDockerActionNamedPath(path, kind, action string) bool {
+	parts := routeParts(path)
+	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == kind && parts[5] == action
 }
 
 func applicationResourcePath(path string) bool {

@@ -56,8 +56,12 @@
   - 软件包：`packages/index.vue`
   - 组内共享：`_shared/`
   - 服务器详情的 Agent 操作通过 `POST /api/v1/servers/{id}/agent/deploy` 创建部署任务；未安装时显示安装，已安装但异常时显示重装，并通过任务中心跟踪结果。
-- Runtime 菜单组：`web/src/views/runtime/`
-  - 应用：`applications/index.vue`
+- 容器化菜单组：
+  - 应用：`web/src/views/runtime/applications/index.vue`
+  - 容器、镜像、网络、卷：`web/src/views/containerization/`
+  - API：`web/src/api/containerization.ts`
+  - 旧 `/applications` 重定向到 `/containerization/applications`
+- Runtime 应用实现：
   - 应用运行时面板和日志面板位于 `applications/` 目录内，展示 agent runtime 实例。
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`
 - 证书菜单组：`web/src/views/certificates/`

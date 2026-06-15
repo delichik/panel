@@ -29,6 +29,7 @@
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；进程日志等级使用 `log.level` 键持久化，默认 `info`，更新 `/api/v1/settings/runtime` 后立即调整 zap `AtomicLevel`；旧数据库启动时由默认设置写入流程自动补齐空值。
 - 后端进程日志统一使用 `internal/logging` 的 zap JSON logger，输出路径固定为 `stdout`。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译。
 - 概览仪表盘卡片布局通过 `overview_card_configurations` 保存在应用数据库；当前单管理员模型使用固定 `default` 记录，整套有序卡片配置以稳定值 JSON 原子替换。
+- Docker 镜像更新缓存使用 `image_updates`、`image_refreshes`，Application 容器协调观察状态使用 `application_reconcile_states`；Docker 实时资源清单不复制到数据库。
 - 后端对外错误响应需要走 `panelerr`、`httpx` 和 `internal/i18n`，不要在 handler 中散落用户可见错误文案。
 
 ## 数据库约定
@@ -64,5 +65,6 @@
 - 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。
 - 启动时必须迁移旧 SSH 明文密码、口令和私钥文件：先写入并验证密文，再删除私钥文件，最后清空旧字段；删除或验证失败时拒绝启动，迁移必须可重复执行。
 - 新增路由集中在 `/api/v1/key-assets`；私钥下载响应必须禁用缓存。
+- 容器化资源 API 集中在 `/api/v1/servers/{id}/containers|images|networks|volumes`，批量 Application 镜像更新位于 `/api/v1/images/upgrade-selected|upgrade-all`。
 - `app.New` 还会初始化 `internal/agent` 的专用 mTLS 资产，路径为 `<dataRoot>/agent/tls`；该 CA 只用于 Panel 与目标机 agent 的双向认证，不与用户密钥资产混用。服务启动后会后台扫描服务器：未配置 agent 的服务器会自动创建部署任务安装 agent；已配置 agent 的服务器会检查版本、Docker host 和能力，并把结果写入服务器 traits；发现 `agent.status=incompatible`，或健康检查因 agent mTLS server 证书过期/尚未生效失败时，会自动创建 agent 部署任务重装目标机 agent。
 - Panel 主进程和 `cmd/panel-agent` 保持独立二进制；Docker 镜像固定同时携带 `/app/panel` 与 `/app/panel-agents/linux-amd64|linux-arm64/panel-agent`，所有 agent 二进制注入同一个 `internal/buildinfo.Version`。自动部署只能从该固定 bundle 位置读取 agent，并按目标服务器 `sys.architecture` 选择文件；缺失时通过 SSH `uname -m` 探测。
