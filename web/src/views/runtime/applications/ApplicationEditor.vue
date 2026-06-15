@@ -12,6 +12,7 @@ const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
 const { t, translateApplicationFileKind, translateApplicationRestartPolicy } = useI18n();
 
 interface PortForm { label: string; to: number; static: number | null }
+interface StringListItem { value: string }
 interface EnvForm { key: string; value: string }
 type MountType = 'volume' | 'host' | 'file' | 'panel_file' | 'persistent';
 interface MountForm { type: MountType; source: string; target: string; readOnly: boolean }
@@ -31,8 +32,8 @@ const specForm = reactive({
   name: 'web',
   image: '',
   networkMode: 'bridge' as 'bridge' | 'host',
-  command: '',
-  args: '',
+  command: [] as StringListItem[],
+  args: [] as StringListItem[],
   cpu: null as number | null,
   memoryMb: null as number | null,
   restartPolicy: 'unless-stopped' as 'no' | 'on-failure' | 'always' | 'unless-stopped',
@@ -41,7 +42,7 @@ const specForm = reactive({
   env: [] as EnvForm[],
   mounts: [] as MountForm[],
 });
-const activeTab = ref('container');
+const activeEditorTab = ref<'visual' | 'yaml'>('visual');
 const variableRows = ref<VariableForm[]>([]);
 const loading = ref('');
 const error = ref('');
@@ -82,23 +83,24 @@ watch(() => props.open, (open) => {
   form.deploymentServers = [...(app?.deploymentServers ?? [])];
   form.reverseProxy = cloneReverseProxy(app?.reverseProxy ?? []);
   loadSpecForm(form.specYaml, app?.name);
+  const syncedName = app?.name ?? (specForm.name || 'web');
+  form.name = syncedName;
+  specForm.name = syncedName;
   variableRows.value = Object.entries(form.variables).map(([key, value]) => ({ key, value }));
   error.value = '';
-  activeTab.value = 'container';
+  activeEditorTab.value = 'visual';
   files.value = [];
   void loadServers();
   void loadTemplateCatalog();
   if (app) void loadFiles(app.id);
 }, { immediate: true });
 
-watch(() => specForm.name, (name) => {
-  if (!props.application) form.name = name;
+watch(() => form.name, (name) => {
+  if (specForm.name !== name) specForm.name = name;
 });
 
-watch(activeTab, (tab, previous) => {
-  if (tab === 'files' && (previous === 'container' || previous === 'runtime' || previous === 'proxy')) {
-    applyVisualSpec();
-  }
+watch(activeEditorTab, (tab, previous) => {
+  if (tab === 'yaml' && previous === 'visual') applyVisualSpec();
 });
 
 function defaultSpec() {
@@ -109,8 +111,8 @@ function loadDefaultSpecForm(appName?: string) {
   specForm.name = appName || 'web';
   specForm.image = '';
   specForm.networkMode = 'bridge';
-  specForm.command = '';
-  specForm.args = '';
+  specForm.command = [{ value: '' }];
+  specForm.args = [];
   specForm.cpu = null;
   specForm.memoryMb = null;
   specForm.restartPolicy = 'unless-stopped';
@@ -128,8 +130,8 @@ function loadSpecForm(raw: string, appName?: string) {
   specForm.image = stringValue(parsed.image);
   const networkMode = stringValue(parsed.networkMode);
   specForm.networkMode = networkMode === 'host' ? 'host' : 'bridge';
-  specForm.command = arrayText(parsed.command);
-  specForm.args = arrayText(parsed.args);
+  specForm.command = arrayItems(parsed.command, true);
+  specForm.args = arrayItems(parsed.args, false);
   specForm.cpu = numericLimit(objectValue(parsed.resources)?.cpu);
   specForm.memoryMb = numericLimit(objectValue(parsed.resources)?.memoryMb);
   const restartPolicy = stringValue(objectValue(parsed.restart)?.policy);
@@ -165,6 +167,10 @@ function addPort() {
 
 function addEnv() {
   specForm.env.push({ key: '', value: '' });
+}
+
+function addStringItem(items: StringListItem[]) {
+  items.push({ value: '' });
 }
 
 function addVariable() {
@@ -341,8 +347,8 @@ function buildSpecYaml() {
     image: specForm.image,
     networkMode: specForm.networkMode,
   };
-  const command = splitWords(specForm.command);
-  const args = splitWords(specForm.args);
+  const command = stringListValues(specForm.command);
+  const args = stringListValues(specForm.args);
   const env = Object.fromEntries(specForm.env.filter((item) => item.key.trim()).map((item) => [item.key.trim(), item.value]));
   const ports = specForm.networkMode === 'bridge' ? specForm.ports
     .filter((port) => port.label.trim() && port.to)
@@ -364,10 +370,6 @@ function buildSpecYaml() {
   if (specForm.privileged) spec.privileged = true;
   if (mounts.length) spec.mounts = mounts;
   return toYaml(spec);
-}
-
-function splitWords(value: string) {
-  return value.split(/\s+/).map((part) => part.trim()).filter(Boolean);
 }
 
 function numericLimit(value: unknown) {
@@ -485,8 +487,13 @@ function numberValue(value: unknown) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
-function arrayText(value: unknown) {
-  return Array.isArray(value) ? value.map(stringValue).join(' ') : '';
+function arrayItems(value: unknown, keepBlank: boolean) {
+  const items = Array.isArray(value) ? value.map((item) => ({ value: stringValue(item) })) : [];
+  return items.length || !keepBlank ? items : [{ value: '' }];
+}
+
+function stringListValues(items: StringListItem[]) {
+  return items.map((item) => item.value.trim()).filter(Boolean);
 }
 
 function toYaml(value: unknown, indent = 0): string {
@@ -535,7 +542,7 @@ function shouldEmit(value: unknown) {
 }
 
 function readInput(): ApplicationSaveDto {
-  if (activeTab.value !== 'yaml') applyVisualSpec();
+  if (activeEditorTab.value !== 'yaml') applyVisualSpec();
   return {
     name: form.name,
     enabled: form.enabled,
@@ -597,7 +604,7 @@ async function save(deploy = false) {
 </script>
 
 <template>
-  <v-dialog :model-value="open" width="1180" @update:model-value="emit('close')">
+  <v-dialog :model-value="open" width="920" @update:model-value="emit('close')">
     <v-card class="app-dialog-card editor-card">
       <v-card-title class="app-dialog-title">
         <span class="app-dialog-title-text">{{ title }}</span>
@@ -607,276 +614,335 @@ async function save(deploy = false) {
       <v-card-text class="app-dialog-body">
         <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
         <div class="editor-main">
-          <div class="header-row mb-3">
-            <v-text-field v-model="form.name" :label="t('applicationEditor.applicationName')" density="compact" variant="outlined" :readonly="Boolean(application)" hide-details />
-          </div>
-          <div class="enabled-row mb-3">
-            <v-switch v-model="form.enabled" :label="t('common.enabled')" color="primary" density="compact" hide-details />
-          </div>
-          <v-tabs v-model="activeTab" density="comfortable" class="mb-2">
-            <v-tab value="container">{{ t('applicationEditor.general') }}</v-tab>
-            <v-tab value="runtime">{{ t('applicationEditor.runtime') }}</v-tab>
-            <v-tab value="proxy">{{ t('applicationEditor.network') }}</v-tab>
-            <v-tab value="files">{{ t('applicationEditor.files') }}</v-tab>
+          <v-tabs v-model="activeEditorTab" density="comfortable" class="editor-tabs mb-4">
+            <v-tab value="visual">{{ t('applicationEditor.general') }}</v-tab>
             <v-tab value="yaml">{{ t('applicationEditor.yaml') }}</v-tab>
           </v-tabs>
-          <v-window v-model="activeTab" class="tab-window">
-              <v-window-item value="container">
-                <div class="field-grid">
-                  <v-text-field v-model="specForm.name" :label="t('applicationEditor.specName')" density="compact" variant="outlined" />
-                  <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
-                  <v-text-field v-model="specForm.command" :label="t('applicationEditor.command')" density="compact" variant="outlined" />
-                  <v-text-field v-model="specForm.args" :label="t('applicationEditor.arguments')" density="compact" variant="outlined" />
-                </div>
 
-                <div class="section-title">{{ t('applicationEditor.restart') }}</div>
-                <div class="field-grid">
-                  <v-select
-                    v-model="specForm.restartPolicy"
-                    :items="[
-                      { title: translateApplicationRestartPolicy('unless-stopped'), value: 'unless-stopped' },
-                      { title: translateApplicationRestartPolicy('always'), value: 'always' },
-                      { title: translateApplicationRestartPolicy('on-failure'), value: 'on-failure' },
-                      { title: translateApplicationRestartPolicy('no'), value: 'no' },
-                    ]"
-                    :label="t('applicationEditor.policy')"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </div>
+          <v-window v-model="activeEditorTab" class="editor-window">
+            <v-window-item value="visual">
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.general') }}</div>
+            <div class="field-grid">
+              <v-text-field v-model="form.name" :label="t('applicationEditor.applicationName')" density="compact" variant="outlined" :readonly="Boolean(application)" hide-details />
+              <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
+              <v-switch v-model="form.enabled" :label="t('common.enabled')" color="primary" density="compact" hide-details class="switch-field" />
+            </div>
+          </section>
 
-                <div class="section-title">{{ t('applicationEditor.deploymentTargets') }}</div>
-                <div class="placement-row mb-4">
-                  <v-select
-                    v-model="form.deploymentMode"
-                    :items="[
-                      { title: t('applicationEditor.allServers'), value: 'all' },
-                      { title: t('applicationEditor.selectedServers'), value: 'selected' },
-                    ]"
-                    :label="t('applicationEditor.mode')"
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                  />
-                  <v-select
-                    v-if="form.deploymentMode === 'selected'"
-                    v-model="form.deploymentServers"
-                    :items="serverOptions"
-                    :label="t('applicationEditor.servers')"
-                    density="compact"
-                    variant="outlined"
-                    multiple
-                    chips
-                    closable-chips
-                    hide-details
-                  />
-                </div>
+          <v-divider class="section-divider" />
 
-                <div class="section-title">{{ t('applicationEditor.environment') }}</div>
-                <div v-for="(item, index) in specForm.env" :key="index" class="repeat-row env-row">
-                  <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
-                  <v-text-field v-model="item.value" :label="t('common.value')" density="compact" variant="outlined" hide-details />
-                  <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.env, index)" />
-                </div>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addEnv">{{ t('common.addVariable') }}</v-btn>
-              </v-window-item>
-
-              <v-window-item value="runtime">
-                <div class="field-grid">
-                  <v-text-field v-model.number="specForm.cpu" type="number" min="0" :label="t('applicationEditor.cpuMhz')" density="compact" variant="outlined" />
-                  <v-text-field v-model.number="specForm.memoryMb" type="number" min="0" :label="t('applicationEditor.memoryMb')" density="compact" variant="outlined" />
-                  <v-switch v-model="specForm.privileged" :label="t('applicationEditor.privilegedContainer')" color="primary" density="compact" hide-details />
-                </div>
-              </v-window-item>
-
-              <v-window-item value="proxy">
-                <div class="section-title">{{ t('applicationEditor.mode') }}</div>
-                <div class="field-grid">
-                  <v-select
-                    v-model="specForm.networkMode"
-                    :items="[
-                      { title: t('applicationEditor.bridge'), value: 'bridge' },
-                      { title: t('applicationEditor.host'), value: 'host' },
-                    ]"
-                    item-title="title"
-                    item-value="value"
-                    :label="t('applicationEditor.networkMode')"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </div>
-
-                <template v-if="specForm.networkMode === 'bridge'">
-                  <div class="section-title mt-2">{{ t('applicationEditor.ports') }}</div>
-                  <div class="network-actions">
-                    <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addPort">{{ t('common.addPort') }}</v-btn>
-                  </div>
-                  <div v-for="(port, index) in specForm.ports" :key="index" class="repeat-row ports-row">
-                    <v-text-field v-model="port.label" :label="t('applicationEditor.label')" density="compact" variant="outlined" hide-details />
-                    <span class="network-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
-                    <v-text-field v-model.number="port.to" type="number" :label="t('applicationEditor.containerPort')" density="compact" variant="outlined" hide-details />
-                    <v-icon icon="mdi-arrow-right" size="20" class="network-arrow" />
-                    <span class="network-target-name">{{ t('applicationEditor.nodeTarget') }}:</span>
-                    <v-text-field v-model.number="port.static" type="number" :label="t('applicationEditor.hostPort')" density="compact" variant="outlined" hide-details />
-                    <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.ports, index)" />
-                  </div>
-                </template>
-
-                <div class="section-title">{{ t('applicationEditor.reverseProxy') }}</div>
-                <div class="proxy-actions">
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyRule">{{ t('common.addProxyRule') }}</v-btn>
-                </div>
-                  <div v-for="(rule, ruleIndex) in form.reverseProxy" :key="ruleIndex" class="proxy-rule">
-                  <div class="proxy-rule-header">
-                    <v-text-field v-model="rule.domain" :label="t('applicationEditor.domain')" density="compact" variant="outlined" hide-details />
-                    <v-icon icon="mdi-arrow-right" size="20" class="proxy-arrow" />
-                    <span class="proxy-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
-                    <v-text-field v-model.number="rule.targetPort" type="number" min="1" max="65535" :label="t('applicationEditor.target')" density="compact" variant="outlined" hide-details />
-                    <v-btn icon="mdi-delete" variant="text" color="error" @click="removeProxyRule(ruleIndex)" />
-                  </div>
-                  <div class="proxy-actions">
-                    <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyPath(rule)">{{ t('common.addPath') }}</v-btn>
-                  </div>
-                  <div v-for="(path, pathIndex) in rule.paths" :key="pathIndex" class="repeat-row proxy-path-row">
-                    <v-text-field v-model="path.path" :label="t('applicationEditor.path')" density="compact" variant="outlined" hide-details />
-                    <v-checkbox v-model="path.webSocket" :label="t('applicationEditor.websocket')" density="compact" hide-details />
-                    <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(rule.paths, pathIndex)" />
-                  </div>
-                </div>
-              </v-window-item>
-
-              <v-window-item value="files">
-                <div class="section-title">{{ t('applicationEditor.variables') }}</div>
-                <div v-for="(item, index) in variableRows" :key="index" class="repeat-row variable-row">
-                  <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
-                  <v-text-field v-model="item.value" :label="t('common.value')" density="compact" variant="outlined" hide-details />
-                  <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(variableRows, index)" />
-                </div>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none mb-4" @click="addVariable">{{ t('common.addVariable') }}</v-btn>
-
-                <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
-                <div class="file-form">
-                  <v-text-field v-model="fileForm.path" :label="t('applicationEditor.workspacePath')" density="compact" variant="outlined" hide-details />
-                  <v-select
-                    v-model="fileForm.kind"
-                    :items="[
-                      { title: t('applicationEditor.template'), value: 'template' },
-                      { title: t('applicationEditor.binary'), value: 'binary' },
-                    ]"
-                    item-title="title"
-                    item-value="value"
-                    :label="t('applicationEditor.kind')"
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                  />
-                  <v-textarea
-                    v-if="fileForm.kind === 'template'"
-                    ref="templateTextarea"
-                    v-model="fileForm.template"
-                    :label="t('applicationEditor.template')"
-                    rows="7"
-                    variant="outlined"
-                    spellcheck="false"
-                    class="mono-input span-all"
-                  />
-                  <v-menu v-if="fileForm.kind === 'template'">
-                    <template #activator="{ props: menuProps }">
-                      <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none span-all">{{ t('applicationEditor.insertVariable') }}</v-btn>
-                    </template>
-                    <v-list density="compact">
-                      <v-list-item v-for="item in variableItems('template')" :key="item.title" :title="item.title" @click="insertVariable('template', item.value)" />
-                    </v-list>
-                  </v-menu>
-                  <v-file-input
-                    v-else
-                    v-model="fileForm.file"
-                    :label="t('applicationEditor.binaryFile')"
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                    class="span-all"
-                  />
-                  <v-btn color="primary" variant="flat" class="text-none" :disabled="!fileForm.path || (fileForm.kind === 'binary' && !selectedFile())" @click="addFile">{{ t('common.addFile') }}</v-btn>
-                </div>
-                <v-table density="compact" class="mt-3">
-                  <thead><tr><th>{{ t('common.path') }}</th><th>{{ t('applicationEditor.kind') }}</th><th>{{ t('common.size') }}</th><th>{{ t('common.sha256') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
-                  <tbody>
-                    <tr v-for="file in pagedFiles" :key="`${file.id}:${file.path}`">
-                      <td class="mono text-truncate">{{ file.path }}</td>
-                      <td><v-chip size="small" variant="tonal" label>{{ translateApplicationFileKind(file.kind) }}</v-chip></td>
-                      <td>{{ sizeLabel(file.size) }}</td>
-                      <td class="mono text-truncate hash-cell">{{ file.sha256 }}</td>
-                      <td class="text-right"><v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeFile(file)" /></td>
-                    </tr>
-                    <tr v-if="files.length === 0"><td colspan="5" class="text-center text-medium-emphasis py-4">{{ t('applicationEditor.noFiles') }}</td></tr>
-                  </tbody>
-                </v-table>
-                <AppPagination v-model:page="filePage" v-model:page-size="filePageSize" :total="fileTotal" />
-
-                <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
-                <div v-for="(mount, index) in specForm.mounts" :key="index" class="repeat-row mount-row">
-                  <v-select v-model="mount.type" :items="[
-                    { title: t('applicationEditor.dockerVolume'), value: 'volume' },
-                    { title: t('applicationEditor.hostPath'), value: 'host' },
-                    { title: t('applicationEditor.appFile'), value: 'file' },
-                    { title: t('applicationEditor.panelFile'), value: 'panel_file' },
-                    { title: t('applicationEditor.persistent'), value: 'persistent' },
-                  ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
-                  <v-combobox
-                    v-if="mount.type === 'file'"
-                    v-model="mount.source"
-                    :items="files.map(file => file.path)"
-                    :label="t('applicationEditor.workspaceFile')"
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                  />
-                  <v-select
-                    v-else-if="mount.type === 'panel_file'"
-                    v-model="mount.source"
-                    :items="panelFiles"
-                    item-value="source"
-                    :item-title="item => `${item.name} / ${item.kind}`"
-                    :label="t('applicationEditor.panelFile')"
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                  />
+          <section class="editor-section">
+            <div class="command-grid">
+              <div>
+                <div class="section-title">{{ t('applicationEditor.command') }}</div>
+                <div v-for="(item, index) in specForm.command" :key="`command-${index}`" class="repeat-row command-row">
                   <v-text-field
-                    v-else-if="mount.type === 'persistent'"
-                    v-model="mount.source"
-                    :label="t('applicationEditor.persistentSubpath')"
+                    v-model="item.value"
+                    :label="t('applicationEditor.commandItem', { index: index + 1 })"
+                    :hint="index === 0 ? t('applicationEditor.commandHint') : ''"
                     density="compact"
                     variant="outlined"
-                    hide-details
+                    hide-details="auto"
                   />
-                  <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
-                  <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
-                  <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" density="compact" hide-details />
-                  <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.mounts, index)" />
+                  <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.command.length === 1" @click="removeAt(specForm.command, index)" />
                 </div>
-                <div class="mount-actions">
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-folder" class="text-none" @click="addMount('host')">{{ t('applicationEditor.hostPath') }}</v-btn>
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-file" class="text-none" @click="addMount('file')">{{ t('applicationEditor.appFile') }}</v-btn>
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-shield-key" class="text-none" @click="addMount('panel_file')">{{ t('applicationEditor.panelFile') }}</v-btn>
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-database" class="text-none" @click="addMount('persistent')">{{ t('applicationEditor.persistent') }}</v-btn>
-                </div>
-              </v-window-item>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.command)">{{ t('applicationEditor.addCommandItem') }}</v-btn>
+              </div>
 
-              <v-window-item value="yaml">
-                <v-textarea ref="yamlTextarea" v-model="form.specYaml" :label="t('applicationEditor.yamlSpec')" variant="outlined" rows="22" spellcheck="false" class="mono-input" />
-                <v-menu>
-                  <template #activator="{ props: menuProps }">
-                    <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none mt-2">{{ t('applicationEditor.insertVariable') }}</v-btn>
-                  </template>
-                  <v-list density="compact">
-                    <v-list-item v-for="item in variableItems('spec')" :key="item.title" :title="item.title" @click="insertVariable('spec', item.value)" />
-                  </v-list>
-                </v-menu>
-              </v-window-item>
-            </v-window>
+              <div>
+                <div class="section-title">{{ t('applicationEditor.arguments') }}</div>
+                <div v-for="(item, index) in specForm.args" :key="`args-${index}`" class="repeat-row command-row">
+                  <v-text-field
+                    v-model="item.value"
+                    :label="t('applicationEditor.argumentItem', { index: index + 1 })"
+                    :hint="index === 0 ? t('applicationEditor.argumentsHint') : ''"
+                    density="compact"
+                    variant="outlined"
+                    hide-details="auto"
+                  />
+                  <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.args.length === 0" @click="removeAt(specForm.args, index)" />
+                </div>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.args)">{{ t('applicationEditor.addArgumentItem') }}</v-btn>
+              </div>
+            </div>
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.runtime') }}</div>
+            <div class="field-grid">
+              <v-select
+                v-model="specForm.restartPolicy"
+                :items="[
+                  { title: translateApplicationRestartPolicy('unless-stopped'), value: 'unless-stopped' },
+                  { title: translateApplicationRestartPolicy('always'), value: 'always' },
+                  { title: translateApplicationRestartPolicy('on-failure'), value: 'on-failure' },
+                  { title: translateApplicationRestartPolicy('no'), value: 'no' },
+                ]"
+                :label="t('applicationEditor.policy')"
+                density="compact"
+                variant="outlined"
+              />
+              <v-text-field v-model.number="specForm.cpu" type="number" min="0" :label="t('applicationEditor.cpuMhz')" density="compact" variant="outlined" />
+              <v-text-field v-model.number="specForm.memoryMb" type="number" min="0" :label="t('applicationEditor.memoryMb')" density="compact" variant="outlined" />
+              <v-switch v-model="specForm.privileged" :label="t('applicationEditor.privilegedContainer')" color="primary" density="compact" hide-details class="switch-field" />
+            </div>
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.deploymentTargets') }}</div>
+            <div class="placement-row">
+              <v-select
+                v-model="form.deploymentMode"
+                :items="[
+                  { title: t('applicationEditor.allServers'), value: 'all' },
+                  { title: t('applicationEditor.selectedServers'), value: 'selected' },
+                ]"
+                :label="t('applicationEditor.mode')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-select
+                v-if="form.deploymentMode === 'selected'"
+                v-model="form.deploymentServers"
+                :items="serverOptions"
+                :label="t('applicationEditor.servers')"
+                density="compact"
+                variant="outlined"
+                multiple
+                chips
+                closable-chips
+                hide-details
+              />
+            </div>
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.environment') }}</div>
+            <div v-for="(item, index) in specForm.env" :key="index" class="repeat-row env-row">
+              <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="item.value" :label="t('common.value')" density="compact" variant="outlined" hide-details />
+              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.env, index)" />
+            </div>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addEnv">{{ t('common.addVariable') }}</v-btn>
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.network') }}</div>
+            <div class="field-grid">
+              <v-select
+                v-model="specForm.networkMode"
+                :items="[
+                  { title: t('applicationEditor.bridge'), value: 'bridge' },
+                  { title: t('applicationEditor.host'), value: 'host' },
+                ]"
+                item-title="title"
+                item-value="value"
+                :label="t('applicationEditor.networkMode')"
+                density="compact"
+                variant="outlined"
+              />
+            </div>
+
+            <template v-if="specForm.networkMode === 'bridge'">
+              <div class="section-title mt-2">{{ t('applicationEditor.ports') }}</div>
+              <div class="network-actions">
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addPort">{{ t('common.addPort') }}</v-btn>
+              </div>
+              <div v-for="(port, index) in specForm.ports" :key="index" class="repeat-row ports-row">
+                <v-text-field v-model="port.label" :label="t('applicationEditor.label')" density="compact" variant="outlined" hide-details />
+                <span class="network-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
+                <v-text-field v-model.number="port.to" type="number" :label="t('applicationEditor.containerPort')" density="compact" variant="outlined" hide-details />
+                <v-icon icon="mdi-arrow-right" size="20" class="network-arrow" />
+                <span class="network-target-name">{{ t('applicationEditor.nodeTarget') }}:</span>
+                <v-text-field v-model.number="port.static" type="number" :label="t('applicationEditor.hostPort')" density="compact" variant="outlined" hide-details />
+                <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.ports, index)" />
+              </div>
+            </template>
+
+            <div class="section-title">{{ t('applicationEditor.reverseProxy') }}</div>
+            <div class="proxy-actions">
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyRule">{{ t('common.addProxyRule') }}</v-btn>
+            </div>
+            <div v-for="(rule, ruleIndex) in form.reverseProxy" :key="ruleIndex" class="proxy-rule">
+              <div class="proxy-rule-header">
+                <v-text-field v-model="rule.domain" :label="t('applicationEditor.domain')" density="compact" variant="outlined" hide-details />
+                <v-icon icon="mdi-arrow-right" size="20" class="proxy-arrow" />
+                <span class="proxy-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
+                <v-text-field v-model.number="rule.targetPort" type="number" min="1" max="65535" :label="t('applicationEditor.target')" density="compact" variant="outlined" hide-details />
+                <v-btn icon="mdi-delete" variant="text" color="error" @click="removeProxyRule(ruleIndex)" />
+              </div>
+              <div class="proxy-actions">
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyPath(rule)">{{ t('common.addPath') }}</v-btn>
+              </div>
+              <div v-for="(path, pathIndex) in rule.paths" :key="pathIndex" class="repeat-row proxy-path-row">
+                <v-text-field v-model="path.path" :label="t('applicationEditor.path')" density="compact" variant="outlined" hide-details />
+                <v-checkbox v-model="path.webSocket" :label="t('applicationEditor.websocket')" density="compact" hide-details />
+                <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(rule.paths, pathIndex)" />
+              </div>
+            </div>
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.variables') }}</div>
+            <div v-for="(item, index) in variableRows" :key="index" class="repeat-row variable-row">
+              <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="item.value" :label="t('common.value')" density="compact" variant="outlined" hide-details />
+              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(variableRows, index)" />
+            </div>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none mb-4" @click="addVariable">{{ t('common.addVariable') }}</v-btn>
+
+            <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
+            <div class="file-form">
+              <v-text-field v-model="fileForm.path" :label="t('applicationEditor.workspacePath')" density="compact" variant="outlined" hide-details />
+              <v-select
+                v-model="fileForm.kind"
+                :items="[
+                  { title: t('applicationEditor.template'), value: 'template' },
+                  { title: t('applicationEditor.binary'), value: 'binary' },
+                ]"
+                item-title="title"
+                item-value="value"
+                :label="t('applicationEditor.kind')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-textarea
+                v-if="fileForm.kind === 'template'"
+                ref="templateTextarea"
+                v-model="fileForm.template"
+                :label="t('applicationEditor.template')"
+                rows="7"
+                variant="outlined"
+                spellcheck="false"
+                class="mono-input span-all"
+              />
+              <v-menu v-if="fileForm.kind === 'template'">
+                <template #activator="{ props: menuProps }">
+                  <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none span-all">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                </template>
+                <v-list density="compact">
+                  <v-list-item v-for="item in variableItems('template')" :key="item.title" :title="item.title" @click="insertVariable('template', item.value)" />
+                </v-list>
+              </v-menu>
+              <v-file-input
+                v-else
+                v-model="fileForm.file"
+                :label="t('applicationEditor.binaryFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+                class="span-all"
+              />
+              <v-btn color="primary" variant="flat" class="text-none" :disabled="!fileForm.path || (fileForm.kind === 'binary' && !selectedFile())" @click="addFile">{{ t('common.addFile') }}</v-btn>
+            </div>
+            <v-table density="compact" class="mt-3">
+              <thead><tr><th>{{ t('common.path') }}</th><th>{{ t('applicationEditor.kind') }}</th><th>{{ t('common.size') }}</th><th>{{ t('common.sha256') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
+              <tbody>
+                <tr v-for="file in pagedFiles" :key="`${file.id}:${file.path}`">
+                  <td class="mono text-truncate">{{ file.path }}</td>
+                  <td><v-chip size="small" variant="tonal" label>{{ translateApplicationFileKind(file.kind) }}</v-chip></td>
+                  <td>{{ sizeLabel(file.size) }}</td>
+                  <td class="mono text-truncate hash-cell">{{ file.sha256 }}</td>
+                  <td class="text-right"><v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeFile(file)" /></td>
+                </tr>
+                <tr v-if="files.length === 0"><td colspan="5" class="text-center text-medium-emphasis py-4">{{ t('applicationEditor.noFiles') }}</td></tr>
+              </tbody>
+            </v-table>
+            <AppPagination v-model:page="filePage" v-model:page-size="filePageSize" :total="fileTotal" />
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
+            <div v-for="(mount, index) in specForm.mounts" :key="index" class="repeat-row mount-row">
+              <v-select v-model="mount.type" :items="[
+                { title: t('applicationEditor.dockerVolume'), value: 'volume' },
+                { title: t('applicationEditor.hostPath'), value: 'host' },
+                { title: t('applicationEditor.appFile'), value: 'file' },
+                { title: t('applicationEditor.panelFile'), value: 'panel_file' },
+                { title: t('applicationEditor.persistent'), value: 'persistent' },
+              ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
+              <v-combobox
+                v-if="mount.type === 'file'"
+                v-model="mount.source"
+                :items="files.map(file => file.path)"
+                :label="t('applicationEditor.workspaceFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-select
+                v-else-if="mount.type === 'panel_file'"
+                v-model="mount.source"
+                :items="panelFiles"
+                item-value="source"
+                :item-title="item => `${item.name} / ${item.kind}`"
+                :label="t('applicationEditor.panelFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-text-field
+                v-else-if="mount.type === 'persistent'"
+                v-model="mount.source"
+                :label="t('applicationEditor.persistentSubpath')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
+              <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" density="compact" hide-details />
+              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.mounts, index)" />
+            </div>
+            <div class="mount-actions">
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-folder" class="text-none" @click="addMount('host')">{{ t('applicationEditor.hostPath') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-file" class="text-none" @click="addMount('file')">{{ t('applicationEditor.appFile') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-shield-key" class="text-none" @click="addMount('panel_file')">{{ t('applicationEditor.panelFile') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-database" class="text-none" @click="addMount('persistent')">{{ t('applicationEditor.persistent') }}</v-btn>
+            </div>
+          </section>
+
+            </v-window-item>
+
+            <v-window-item value="yaml" class="editor-yaml-pane">
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.yaml') }}</div>
+            <v-textarea
+              ref="yamlTextarea"
+              v-model="form.specYaml"
+              :label="t('applicationEditor.yamlSpec')"
+              variant="outlined"
+              rows="18"
+              spellcheck="false"
+              class="mono-input"
+            />
+            <v-menu>
+              <template #activator="{ props: menuProps }">
+                <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none mt-2">{{ t('applicationEditor.insertVariable') }}</v-btn>
+              </template>
+              <v-list density="compact">
+                <v-list-item v-for="item in variableItems('spec')" :key="item.title" :title="item.title" @click="insertVariable('spec', item.value)" />
+              </v-list>
+            </v-menu>
+          </section>
+            </v-window-item>
+          </v-window>
         </div>
       </v-card-text>
       <v-divider />
@@ -893,21 +959,23 @@ async function save(deploy = false) {
 <style scoped>
 .editor-card { max-height: calc(100dvh - 24px); }
 .editor-main { min-width: 0; }
-.header-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: center; }
-.enabled-row { display: flex; align-items: center; min-height: 40px; }
-.tab-window { min-width: 0; }
-.tab-window :deep(.v-window-item) { padding: 22px 14px 14px; }
-.field-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.editor-section { min-width: 0; }
+.section-divider { margin: 18px 0; }
+.field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.command-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.switch-field { min-height: 40px; }
 .span-2 { grid-column: span 2; }
 .span-all { grid-column: 1 / -1; }
 .section-title { margin: 14px 0 8px; }
+.editor-section > .section-title:first-child { margin-top: 0; }
 .repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; }
-.placement-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
-.ports-row { grid-template-columns: minmax(160px, 1fr) auto 140px auto auto 140px 40px; }
-.env-row { grid-template-columns: minmax(0, 1fr); }
-.mount-row { grid-template-columns: minmax(0, 1fr); }
+.placement-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.ports-row { grid-template-columns: minmax(120px, 1fr) auto minmax(96px, 0.6fr) auto auto minmax(96px, 0.6fr) 40px; }
+.command-row { grid-template-columns: minmax(0, 1fr) 40px; }
+.env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
+.mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) auto 40px; }
 .mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.variable-row { grid-template-columns: minmax(180px, 0.4fr) minmax(0, 1fr) 40px; }
+.variable-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
 .proxy-rule { border: 1px solid var(--lp-border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
 .network-actions,
 .proxy-actions { display: flex; justify-content: flex-start; margin-bottom: 10px; }
@@ -921,22 +989,30 @@ async function save(deploy = false) {
 .proxy-arrow { justify-self: center; }
 .proxy-target-name { font-size: 0.82rem; }
 .proxy-path-row { grid-template-columns: minmax(0, 1fr) 130px 40px; }
-.file-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
+.file-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
 .repeat-row > .v-btn,
 .proxy-rule-header > .v-btn {
   justify-self: end;
 }
 .mono, .mono-input :deep(textarea) { font-size: 0.82rem; }
 .hash-cell { max-width: 180px; }
-@media (max-width: 1100px) {
-  .header-row, .mount-row, .ports-row, .env-row, .proxy-rule-header, .proxy-path-row, .file-form, .placement-row { grid-template-columns: 1fr; }
+@media (max-width: 900px) {
+  .field-grid,
+  .command-grid,
+  .mount-row,
+  .ports-row,
+  .command-row,
+  .env-row,
+  .variable-row,
+  .proxy-rule-header,
+  .proxy-path-row,
+  .file-form,
+  .placement-row {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 760px) {
-  .tab-window :deep(.v-window-item) {
-    padding: 16px 0 8px;
-  }
-
   .mount-actions .v-btn,
   .network-actions .v-btn,
   .proxy-actions .v-btn {

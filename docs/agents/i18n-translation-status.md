@@ -4,6 +4,10 @@
 
 ## 最近已补齐
 
+- `web/src/views/settings/_shared/SettingsPageContent.vue`、`internal/settings`
+  - Runtime 日志等级设置的前端标签、选项文案和 `invalid_log_level` 后端错误码已接入英文、简体中文词条；进程日志内容保持英文，不纳入翻译。
+- `internal/overview`、`web/src/views/overview/index.vue`
+  - 概览卡片数据库保存失败文案及卡片配置校验错误码已接入英文、简体中文词条。
 - `web/src/layouts/AppLayout.vue`
   - Header 的 DEV 构建通道标识、完整版本提示和移动端导航入口已接入英文、简体中文词条。
   - 已移除旧运行时节点导航入口，对应词条不再保留。
@@ -14,12 +18,15 @@
   - 服务器凭据必选提示、Docker host 表单、Agent 兼容状态、版本检查时间、不兼容/不可用提示和部署包下载入口文案已接入 `web/src/i18n/index.ts`。
 - `web/src/views/runtime/applications/`
   - 应用运行时实例状态、期望状态、日志入口、容器名和实例 ID 文案已接入 `web/src/i18n/index.ts`。
+- `web/src/views/runtime/applications/ApplicationEditor.vue`
+  - Command 和 args 数组行标签、提示已接入英文、简体中文词条。
 - `web/src/views/tasks/index.vue`
   - 任务类型名称、类型筛选选项、搜索按钮、多选筛选占位、操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。
 - `web/src/views/certificates/key-assets/index.vue`
   - CA、TLS、SSH、批量导入导出、冲突确认和引用提示已接入英文与简体中文词条。
 - `internal/i18n`
   - 统一 API 错误翻译入口覆盖认证、设置、服务器、UFW、DNS、证书、应用、任务和密钥资产的主要错误码。
+  - 应用名称重复保存错误和 appspec `command` 数组用法错误已接入翻译。
 
 ## 前端仍有少量第三方原始文本
 

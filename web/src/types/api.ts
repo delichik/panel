@@ -760,6 +760,7 @@ export interface RuntimeSettingsDto {
   cleanupSchedule: string;
   tokenExpiration: TokenExpiration;
   language: string;
+  logLevel: LogLevel;
   remoteCommandTimeoutSeconds: number;
   branding: RuntimeBrandingSettingsDto;
   certificates: RuntimeCertificateSettingsDto;
@@ -777,6 +778,7 @@ export interface SystemVersionDto {
 }
 
 export type TokenExpiration = '10m' | '1h' | '1d' | '5d' | '30d' | 'never';
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
 export interface RuntimeCertificateSettingsDto {
   email: string;
@@ -794,6 +796,7 @@ export interface RuntimeSettingsUpdate {
   cleanupSchedule: string;
   tokenExpiration: TokenExpiration;
   language: string;
+  logLevel: LogLevel;
   remoteCommandTimeoutSeconds: number;
   branding: RuntimeBrandingSettingsDto;
   certificates: RuntimeCertificateSettingsDto;

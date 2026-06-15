@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -12,19 +11,29 @@ import (
 
 	"panel/internal/app"
 	"panel/internal/config"
+	"panel/internal/logging"
+
+	"go.uber.org/zap"
 )
 
 func main() {
+	logger := logging.L()
+	defer logging.Sync()
+
 	cfg, err := config.Load(os.Getenv("PANEL_CONFIG"))
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		logger.Fatal("load config failed", zap.Error(err))
 	}
 
 	application, err := app.New(cfg)
 	if err != nil {
-		log.Fatalf("initialize app: %v", err)
+		logger.Fatal("initialize app failed", zap.Error(err))
 	}
-	defer application.Close()
+	defer func() {
+		if err := application.Close(); err != nil {
+			logger.Error("close application failed", zap.Error(err))
+		}
+	}()
 
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,
@@ -34,7 +43,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("panel listening on http://%s", cfg.ListenAddress)
+		logger.Info("panel listening", zap.String("address", cfg.ListenAddress), zap.String("url", "http://"+cfg.ListenAddress))
 		errCh <- server.ListenAndServe()
 	}()
 
@@ -43,16 +52,17 @@ func main() {
 
 	select {
 	case sig := <-stop:
-		log.Printf("received %s, shutting down", sig)
+		logger.Info("shutdown signal received", zap.String("signal", sig.String()))
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("server error: %v", err)
+			logger.Fatal("server failed", zap.Error(err))
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("shutdown error: %v", err)
+		logger.Error("server shutdown failed", zap.Error(err))
 	}
+	logger.Info("panel shutdown complete")
 }

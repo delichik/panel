@@ -37,6 +37,7 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 		CleanupSchedule:                  "weekly",
 		TokenExpiration:                  TokenExpiration5Days,
 		Language:                         "zh-CN",
+		LogLevel:                         "debug",
 		RemoteCommandTimeoutSeconds:      45,
 		Branding:                         &RuntimeBrandingSettings{LoginTitle: "Operations", LoginSubtitle: "Manage infrastructure"},
 		Certificates:                     &RuntimeCertificateSettings{Email: "admin@example.com", DNSPropagationDelaySeconds: 10},
@@ -44,7 +45,7 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
+	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.LogLevel != "debug" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
 	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {
@@ -56,6 +57,9 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 	}
 	if reloaded.Runtime().Branding != got.Branding {
 		t.Fatalf("branding settings were not persisted: %#v", reloaded.Runtime().Branding)
+	}
+	if reloaded.Runtime().LogLevel != "debug" {
+		t.Fatalf("log level was not persisted: %q", reloaded.Runtime().LogLevel)
 	}
 }
 
@@ -99,6 +103,21 @@ func TestRuntimeSettingsRejectInvalidLanguage(t *testing.T) {
 		CleanupSchedule:                  "daily",
 		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         "fr",
+	})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+}
+
+func TestRuntimeSettingsRejectInvalidLogLevel(t *testing.T) {
+	svc := newTestService(t)
+	_, err := svc.Update(context.Background(), RuntimeUpdate{
+		MetricsRetentionDays:             7,
+		MetricsCollectionIntervalSeconds: 60,
+		CleanupSchedule:                  "daily",
+		TokenExpiration:                  DefaultTokenExpiration,
+		Language:                         "en",
+		LogLevel:                         "verbose",
 	})
 	if err == nil {
 		t.Fatal("expected validation error")

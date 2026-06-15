@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"panel/internal/agent"
 	"panel/internal/appruntime"
 	"panel/internal/config"
+	"panel/internal/panelerr"
 	"panel/internal/server"
 	"panel/internal/storage"
 	"panel/internal/tasks"
@@ -64,6 +67,79 @@ func TestCreateEnabledAppDeploysToAgentRuntime(t *testing.T) {
 	}
 	if deploy.Spec.ContainerName == "" || deploy.Spec.Env["PANEL_SERVER_ID"] != "srv-a" {
 		t.Fatalf("runtime spec = %#v", deploy.Spec)
+	}
+}
+
+func TestCreateDuplicateAppNameReturnsValidation(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	if _, err := svc.Create(ctx, SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.Create(ctx, SaveInput{Name: "web", SpecYAML: "name: web-copy\nimage: nginx\n"})
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "application_name_duplicate" {
+		t.Fatalf("err = %#v", err)
+	}
+}
+
+func TestCreateDisabledSelectedApplicationWithArgsStoresTargets(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:    "anytls",
+		Enabled: false,
+		SpecYAML: `name: anytls
+image: jiasongji/anytls
+networkMode: host
+command:
+  - /app/anytls-server
+args:
+  - -l
+  - :9443
+  - -p
+  - "this is password"
+env:
+  TZ: Asia/Shanghai
+restart:
+  policy: unless-stopped
+`,
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-b", "srv-a", "srv-c"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.DeploymentMode != DeploymentModeSelected || !reflect.DeepEqual(app.DeploymentServers, []string{"srv-a", "srv-b", "srv-c"}) {
+		t.Fatalf("deployment targets = %q %#v", app.DeploymentMode, app.DeploymentServers)
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("disabled create should not call agent runtime, deploys = %#v", runtime.deploys)
+	}
+}
+
+func TestCreateRejectsArgumentsInCommandArray(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+
+	_, err := svc.Create(context.Background(), SaveInput{
+		Name: "anytls",
+		SpecYAML: `name: anytls
+image: jiasongji/anytls
+networkMode: host
+command:
+  - /app/anytls-server
+  - -l
+  - :9443
+`,
+	})
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "application_command_invalid" {
+		t.Fatalf("err = %#v", err)
 	}
 }
 

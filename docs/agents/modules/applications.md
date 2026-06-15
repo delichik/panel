@@ -9,7 +9,7 @@
 - 应用服务与 handler：`internal/applications/`
 - 应用规格模型、校验和渲染：`internal/appspec/`
 - 运行时规格类型：`internal/appruntime/`
-- Agent 客户端：`internal/agent/`
+- Agent 客户端与运行时接口：`internal/agent/`
 - 模板渲染接口：`internal/templatex/`
 - 任务记录：`internal/tasks/`
 - 路由装配和跨模块连接：`internal/app/app.go`
@@ -46,14 +46,21 @@
 - 文件内容通过 API 以 base64 承载；保存会话用于批量上传、删除和提交。
 - 启用应用、部署、镜像更新等流程需要先校验和计划，再写入应用修订和实例记录，并调用 agent runtime API。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
-- 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；purge 参数会传给 agent 清理容器。
+- 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；`purge` 参数会传给 agent 清理容器。
 - 应用日志按 `instanceId` 和可选 `containerName` 读取。日志面板必须从 runtime 实例提供入口，不再使用 allocation/task 语义。
 - 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等节点变量；值来自实际部署目标服务器。
-- 应用文件模板在后端部署渲染阶段读取 `PANEL_SERVER_*` 变量，因此同一应用在不同服务器会得到不同的服务器值。
-- 挂载类型 `panel_file` 使用 `key_asset:<asset-id>:<kind>` 稳定引用 Panel 托管密钥或证书文件；旧 `certificate:<resource-id>:<kind>` 来源仍可被后端读取以服务已有应用规格，但新目录和页面只生成 `key_asset:`。
+- 应用文件模板在后端部署渲染阶段可读 `PANEL_SERVER_*` 变量，因此同一应用在不同服务器会得到不同的服务器值。
+- `panel_file` 挂载使用 `key_asset:<asset-id>:<kind>` 稳定引用 Panel 托管密钥或证书文件；旧 `certificate:<resource-id>:<kind>` 来源仍可被后端读取以服务已有应用规格，但新目录和页面只生成 `key_asset:`。
 - 私钥内容不通过目录 API 返回，只在部署渲染时由后端解密并作为只读 managed file 下发给 agent。
-- 自定义变量在前端使用键值表单维护，持久化仍使用 `variables_json`。
+- 密钥资产服务扫描应用 spec 和反向代理域名，返回精确的应用 ID、名称及 `panel_file` / `reverse_proxy` 引用，用于删除保护和导入覆盖确认。
 - 证书续签、密钥资产重新签发、SSH 密钥重新生成和批量导入会调用 `RedeployEnabledApplications`，确保每台服务器重新按自身变量渲染。
+
+## Application Editor Command Fields
+
+- `ApplicationEditor.vue` 的可视化编辑同时维护 appspec `command` 和 `args` 有序数组。每一行是一个 argv 项，编辑器不得按空格拆分用户输入。
+- `command` 只表示可执行文件或 entrypoint；所有 flag 和参数值必须写入 `args`。
+- 后端 appspec 校验拒绝超过一个 `command` 项，避免把可执行文件和参数混在一起。
+- 应用编辑器包含可视化和 YAML 两个标签页。可视化页是单页分区表单：标准短字段使用双列网格，端口映射、反向代理规则和挂载行保持全宽重复行，便于阅读密集网络和存储设置。
 
 ## 验证
 

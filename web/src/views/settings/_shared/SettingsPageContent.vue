@@ -5,7 +5,7 @@ import { useI18n } from '@/i18n';
 import { useAuthStore } from '@/stores/auth';
 import { useSettingsStore } from '@/stores/settings';
 import { systemApi } from '@/api/system';
-import type { RuntimeSettingsDto, RuntimeSettingsUpdate, SystemVersionDto, TokenExpiration } from '@/types/api';
+import type { LogLevel, RuntimeSettingsDto, RuntimeSettingsUpdate, SystemVersionDto, TokenExpiration } from '@/types/api';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
 type SettingsCategory = 'general' | 'security' | 'certificates' | 'system';
@@ -39,6 +39,7 @@ const form = reactive<RuntimeSettingsUpdate>({
   cleanupSchedule: 'daily',
   tokenExpiration: '1d',
   language: 'en',
+  logLevel: 'info',
   remoteCommandTimeoutSeconds: 30,
   branding: {
     loginTitle: '',
@@ -73,6 +74,7 @@ function syncForm(next: RuntimeSettingsDto) {
   form.cleanupSchedule = next.cleanupSchedule;
   form.tokenExpiration = next.tokenExpiration || '1d';
   form.language = next.language;
+  form.logLevel = next.logLevel || 'info';
   form.remoteCommandTimeoutSeconds = next.remoteCommandTimeoutSeconds;
   form.branding = { ...next.branding };
   form.certificates = { ...next.certificates };
@@ -185,6 +187,15 @@ function tokenExpirationItems(): Array<{ title: string; value: TokenExpiration }
     { title: t('tokenExpiration.5d'), value: '5d' },
     { title: t('tokenExpiration.30d'), value: '30d' },
     { title: t('tokenExpiration.never'), value: 'never' },
+  ];
+}
+
+function logLevelItems(): Array<{ title: string; value: LogLevel }> {
+  return [
+    { title: t('settingsPage.logLevels.debug'), value: 'debug' },
+    { title: t('settingsPage.logLevels.info'), value: 'info' },
+    { title: t('settingsPage.logLevels.warn'), value: 'warn' },
+    { title: t('settingsPage.logLevels.error'), value: 'error' },
   ];
 }
 
@@ -315,6 +326,15 @@ onMounted(loadSettings);
               { title: t('languages.zh-CN'), value: 'zh-CN' },
             ]"
             :label="t('settingsPage.language')"
+            variant="outlined"
+            density="comfortable"
+            hide-details="auto"
+          />
+
+          <v-select
+            v-model="form.logLevel"
+            :items="logLevelItems()"
+            :label="t('settingsPage.logLevel')"
             variant="outlined"
             density="comfortable"
             hide-details="auto"
