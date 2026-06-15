@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/x509"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -250,9 +252,13 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 			continue
 		}
 		if _, ok := agentURL(srv); !ok {
+			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
 		if err := s.checkAgent(ctx, srv); err != nil {
+			if s.handleAgentCertificateTimeError(ctx, srv, err) {
+				continue
+			}
 			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
 			continue
 		}
@@ -1050,14 +1056,24 @@ fi`
 
 func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) (linux.OSRelease, error) {
 	if baseURL, ok := agentURL(srv); ok && s.agent != nil {
-		return s.agent.OSRelease(ctx, baseURL)
+		info, err := s.agent.OSRelease(ctx, baseURL)
+		if err == nil {
+			return info, nil
+		}
+		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
+		return linux.OSRelease{}, err
 	}
 	return linux.Detect(ctx, s.exec, target)
 }
 
 func (s *Service) detectSystemTraitsForServer(ctx context.Context, srv Server, target sshx.Target) (map[string]string, error) {
 	if baseURL, ok := agentURL(srv); ok && s.agent != nil {
-		return s.agent.SystemTraits(ctx, baseURL)
+		traits, err := s.agent.SystemTraits(ctx, baseURL)
+		if err == nil {
+			return traits, nil
+		}
+		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
+		return nil, err
 	}
 	return s.detectSystemTraits(ctx, target)
 }
@@ -1068,6 +1084,9 @@ func (s *Service) agentUFWStatus(ctx context.Context, srv Server) (remoteops.UFW
 		return remoteops.UFWStatus{}, false, nil
 	}
 	status, err := s.agent.UFWStatus(ctx, baseURL)
+	if s.handleAgentCertificateTimeError(ctx, srv, err) {
+		return remoteops.UFWStatus{}, true, err
+	}
 	return status, true, err
 }
 
@@ -1102,6 +1121,36 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 		return nil
 	}
 	return s.markAgentStatus(ctx, srv.ID, agent.StatusCompatible, health.Version, "")
+}
+
+func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Server, cause error) bool {
+	if !isAgentCertificateTimeError(cause) {
+		return false
+	}
+	msg := "agent certificate expired or is not yet valid"
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		msg = cause.Error()
+	}
+	_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
+	if s.exec == nil || s.agentTLS == nil || s.tasks == nil {
+		return true
+	}
+	_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+	return true
+}
+
+func isAgentCertificateTimeError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &invalid) && invalid.Reason == x509.Expired {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "certificate has expired or is not yet valid") ||
+		strings.Contains(msg, "certificate has expired") ||
+		strings.Contains(msg, "certificate is not yet valid")
 }
 
 func (s *Service) markAgentStatus(ctx context.Context, serverID, status, version, msg string) error {

@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/x509"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -507,6 +508,76 @@ func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	}
 	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible || srv.Traits[agent.TraitVersion] != agent.Version {
 		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
+	}
+}
+
+func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	certErr := x509.CertificateInvalidError{Reason: x509.Expired}
+	svc.SetAgentClient(&serverFakeAgentClient{err: certErr})
+
+	svc.CheckConfiguredAgents(context.Background())
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+		t.Fatalf("expected certificate time error to mark agent incompatible, got %#v", srv.Traits)
+	}
+	if !strings.Contains(strings.ToLower(srv.Traits[agent.TraitLastError]), "certificate") {
+		t.Fatalf("expected certificate error to be recorded, got %#v", srv.Traits)
+	}
+}
+
+func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	exec := &ufwManageFakeExec{}
+	svc := NewService(store.AppDB(), exec, tasks.NewService(store.AppDB()))
+	certErr := x509.CertificateInvalidError{Reason: x509.Expired}
+	svc.SetAgentClient(&serverFakeAgentClient{err: certErr})
+
+	if _, err := svc.UFWState(context.Background(), "srv_1"); err == nil {
+		t.Fatal("expected agent certificate error")
+	}
+	if len(exec.commands) != 0 {
+		t.Fatalf("expected no SSH fallback, got commands %#v", exec.commands)
+	}
+	srv, err := svc.Get(context.Background(), "srv_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+		t.Fatalf("expected certificate time error to mark agent incompatible, got %#v", srv.Traits)
+	}
+}
+
+func TestAgentCertificateTimeErrorDetectedFromMessage(t *testing.T) {
+	err := errString(`Get "https://127.0.0.1:9443/v1/system/os-release": tls: failed to verify certificate: x509: certificate has expired or is not yet valid`)
+	if !isAgentCertificateTimeError(err) {
+		t.Fatal("expected Go TLS certificate time message to be detected")
+	}
+	if isAgentCertificateTimeError(errString("agent down")) {
+		t.Fatal("unexpected non-certificate error detection")
 	}
 }
 

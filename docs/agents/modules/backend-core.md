@@ -64,5 +64,5 @@
 - 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。
 - 启动时必须迁移旧 SSH 明文密码、口令和私钥文件：先写入并验证密文，再删除私钥文件，最后清空旧字段；删除或验证失败时拒绝启动，迁移必须可重复执行。
 - 新增路由集中在 `/api/v1/key-assets`；私钥下载响应必须禁用缓存。
-- `app.New` 还会初始化 `internal/agent` 的专用 mTLS 资产，路径为 `<dataRoot>/agent/tls`；该 CA 只用于 Panel 与目标机 agent 的双向认证，不与用户密钥资产混用。服务启动后会后台检查已配置 agent 的服务器版本、Docker host 和能力，检查结果写入服务器 traits；发现 `agent.status=incompatible` 时会自动创建 agent 部署任务重装目标机 agent。
+- `app.New` 还会初始化 `internal/agent` 的专用 mTLS 资产，路径为 `<dataRoot>/agent/tls`；该 CA 只用于 Panel 与目标机 agent 的双向认证，不与用户密钥资产混用。服务启动后会后台扫描服务器：未配置 agent 的服务器会自动创建部署任务安装 agent；已配置 agent 的服务器会检查版本、Docker host 和能力，并把结果写入服务器 traits；发现 `agent.status=incompatible`，或健康检查因 agent mTLS server 证书过期/尚未生效失败时，会自动创建 agent 部署任务重装目标机 agent。
 - Panel 主进程和 `cmd/panel-agent` 保持独立二进制；Docker 镜像固定同时携带 `/app/panel` 与 `/app/panel-agents/linux-amd64|linux-arm64/panel-agent`，所有 agent 二进制注入同一个 `internal/buildinfo.Version`。自动部署只能从该固定 bundle 位置读取 agent，并按目标服务器 `sys.architecture` 选择文件；缺失时通过 SSH `uname -m` 探测。
