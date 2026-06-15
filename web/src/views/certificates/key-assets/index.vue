@@ -41,6 +41,14 @@ const snackbarText = ref('');
 const snackbarColor = ref('success');
 const lastTaskId = ref('');
 const lastExportTaskId = ref('');
+const dialogFieldDefaults = {
+  VTextField: { variant: 'outlined', density: 'comfortable' },
+  VTextarea: { variant: 'outlined', density: 'comfortable' },
+  VSelect: { variant: 'outlined', density: 'comfortable' },
+  VFileInput: { variant: 'outlined', density: 'comfortable' },
+  VSwitch: { density: 'comfortable' },
+  VCheckbox: { density: 'comfortable' },
+} as const;
 
 const selectedByTab = reactive<Record<AssetTab, string[]>>({
   ca: [],
@@ -705,11 +713,6 @@ onMounted(load);
       <v-alert type="info" variant="tonal" class="mx-4 mb-4">
         {{ t('keyAssetsPage.privateKeysHiddenHint') }}
       </v-alert>
-      <v-tabs v-model="activeTab" density="comfortable" class="px-4">
-        <v-tab v-if="props.mode === 'certificates'" value="ca">{{ t('keyAssetsPage.tabs.ca') }}</v-tab>
-        <v-tab v-if="props.mode === 'certificates'" value="tls">{{ t('keyAssetsPage.tabs.tls') }}</v-tab>
-        <v-tab v-if="props.mode === 'keys'" value="ssh">{{ t('keyAssetsPage.tabs.ssh') }}</v-tab>
-      </v-tabs>
     </v-card>
 
     <v-card v-if="props.mode === 'certificates'" variant="outlined" class="system-certificates-card">
@@ -768,6 +771,11 @@ onMounted(load);
     </v-card>
 
     <v-card variant="outlined" class="table-card">
+      <v-tabs v-model="activeTab" density="comfortable" class="px-4">
+        <v-tab v-if="props.mode === 'certificates'" value="ca">{{ t('keyAssetsPage.tabs.ca') }}</v-tab>
+        <v-tab v-if="props.mode === 'certificates'" value="tls">{{ t('keyAssetsPage.tabs.tls') }}</v-tab>
+        <v-tab v-if="props.mode === 'keys'" value="ssh">{{ t('keyAssetsPage.tabs.ssh') }}</v-tab>
+      </v-tabs>
       <div class="selection-bar">
         <div class="text-body-2 text-medium-emphasis">
           {{ t('keyAssetsPage.selectionSummary', { count: selectedAssets.length }) }}
@@ -1006,6 +1014,7 @@ onMounted(load);
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
+          <v-defaults-provider :defaults="dialogFieldDefaults">
           <v-switch v-model="editorImportMode" color="primary" :label="editorImportMode ? t('keyAssetsPage.importMode') : t('keyAssetsPage.generateMode')" />
 
           <template v-if="editorKind === 'ca'">
@@ -1031,7 +1040,7 @@ onMounted(load);
               <v-text-field v-model.number="tlsForm.validityDays" type="number" min="1" :label="t('keyAssetsPage.validityDays')" />
             </template>
             <template v-else>
-              <v-alert type="info" variant="tonal" class="mb-3">{{ t('keyAssetsPage.standaloneTlsHint') }}</v-alert>
+              <v-alert type="info" variant="tonal" density="compact" class="mb-3">{{ t('keyAssetsPage.standaloneTlsHint') }}</v-alert>
               <v-textarea v-model="tlsForm.certificatePem" :label="t('keyAssetsPage.certificatePem')" rows="5" />
               <v-textarea v-model="tlsForm.privateKeyPem" :label="t('keyAssetsPage.privateKeyPem')" rows="5" />
               <v-textarea v-model="tlsForm.publicKeyPem" :label="t('keyAssetsPage.publicKeyPem')" rows="3" />
@@ -1059,11 +1068,12 @@ onMounted(load);
               />
             </template>
             <template v-else>
-              <v-alert type="warning" variant="tonal" class="mb-3">{{ t('keyAssetsPage.sshImportHint') }}</v-alert>
+              <v-alert type="warning" variant="tonal" density="compact" class="mb-3">{{ t('keyAssetsPage.sshImportHint') }}</v-alert>
               <v-textarea v-model="sshForm.privateKeyPem" :label="t('keyAssetsPage.privateKeyPem')" rows="6" />
               <v-textarea v-model="sshForm.publicKey" :label="t('keyAssetsPage.publicKeyPem')" :hint="t('keyAssetsPage.publicKeyOptionalHint')" persistent-hint rows="3" />
             </template>
           </template>
+          </v-defaults-provider>
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
@@ -1083,13 +1093,15 @@ onMounted(load);
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
-          <v-alert type="info" variant="tonal" class="mb-4">{{ t('keyAssetsPage.exportHint') }}</v-alert>
+          <v-defaults-provider :defaults="dialogFieldDefaults">
+          <v-alert type="info" variant="tonal" density="compact" class="mb-4">{{ t('keyAssetsPage.exportHint') }}</v-alert>
           <div class="text-subtitle-2 mb-2">{{ t('keyAssetsPage.exportIncludes') }}</div>
           <v-list density="compact" lines="two" class="export-list">
             <v-list-item v-for="asset in exportAssets" :key="asset.id" :title="asset.name" :subtitle="assetTypeLabel(asset.type)" />
           </v-list>
           <v-text-field v-model="exportForm.password" type="password" :label="t('common.password')" class="mt-3" />
           <v-text-field v-model="exportForm.confirmPassword" type="password" :label="t('common.confirmPassword')" />
+          </v-defaults-provider>
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
@@ -1109,6 +1121,7 @@ onMounted(load);
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body archive-dialog">
+          <v-defaults-provider :defaults="dialogFieldDefaults">
           <div class="archive-inputs">
             <v-file-input
               v-model="archiveFile"
@@ -1207,6 +1220,7 @@ onMounted(load);
               class="mt-4"
             />
           </template>
+          </v-defaults-provider>
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
@@ -1233,7 +1247,8 @@ onMounted(load);
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
-          <v-alert :type="confirmState.color === 'error' ? 'error' : 'warning'" variant="tonal">{{ confirmState.message }}</v-alert>
+          <v-defaults-provider :defaults="dialogFieldDefaults">
+          <p class="confirm-message">{{ confirmState.message }}</p>
           <v-checkbox
             v-if="confirmState.acknowledgeRequired"
             v-model="confirmState.acknowledged"
@@ -1241,6 +1256,7 @@ onMounted(load);
             :label="t('keyAssetsPage.dangerAcknowledge')"
             class="mt-4"
           />
+          </v-defaults-provider>
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
@@ -1405,6 +1421,13 @@ onMounted(load);
 
 .conflict-subtitle {
   white-space: normal;
+}
+
+.confirm-message {
+  margin: 0;
+  color: var(--lp-text);
+  line-height: 1.55;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 960px) {

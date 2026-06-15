@@ -104,6 +104,30 @@ func (s *Service) DeployAgent(ctx context.Context, serverID string) (tasks.Task,
 	return s.ensureAgentDeployTask(ctx, serverID, "user", true)
 }
 
+func (s *Service) RunAgentDeployTask(ctx context.Context, task tasks.Task) error {
+	if s.exec == nil {
+		return panelerr.Validation("server_executor_unavailable", "Server executor is unavailable")
+	}
+	if s.agentTLS == nil {
+		return panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
+	}
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	if serverID == "" {
+		return panelerr.Validation("server_id_required", "Server ID is required")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	if task.Status != tasks.StatusRunning {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
+	}
+	go s.runDeployAgent(context.Background(), task.ID, srv)
+	return nil
+}
+
 func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, error) {
 	if s.agentTLS == nil {
 		return nil, panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
@@ -886,6 +910,16 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 	if existing, ok, err := s.tasks.ExistingActive(ctx, agentDeployTaskType, connectivityResourceType, serverID); err != nil {
 		return tasks.Task{}, err
 	} else if ok {
+		if run && existing.Status != tasks.StatusRunning {
+			existing, err = s.tasks.RunNow(ctx, existing.ID)
+			if err != nil {
+				return tasks.Task{}, err
+			}
+			if err := s.RunAgentDeployTask(ctx, existing); err != nil {
+				return tasks.Task{}, err
+			}
+			existing, _ = s.tasks.Get(ctx, existing.ID)
+		}
 		return existing, nil
 	}
 	srv, err := s.Get(ctx, serverID)
@@ -899,13 +933,15 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		ResourceID:   srv.ID,
 		TriggeredBy:  triggeredBy,
 		Summary:      "Deploying panel agent for " + srv.Name,
-		Status:       tasks.StatusRunning,
 	})
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	if run {
-		go s.runDeployAgent(context.Background(), task.ID, srv)
+		if err := s.RunAgentDeployTask(ctx, task); err != nil {
+			return tasks.Task{}, err
+		}
+		task, _ = s.tasks.Get(ctx, task.ID)
 	}
 	return task, nil
 }

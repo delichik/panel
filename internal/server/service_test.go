@@ -533,6 +533,44 @@ func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T
 	}
 }
 
+func TestDeployAgentStartsExistingQueuedTask(t *testing.T) {
+	createSvc, taskSvc, store := testServerService(t, nil)
+	traits := map[string]string{"sys.architecture": "x86_64"}
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+	queued, err := taskSvc.Create(context.Background(), tasks.CreateInput{
+		Type:         agentDeployTaskType,
+		ServerID:     srv.ID,
+		ResourceType: connectivityResourceType,
+		ResourceID:   srv.ID,
+		Summary:      "Queued agent deploy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.DeployAgent(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != queued.ID {
+		t.Fatalf("expected existing deploy task to be reused, got %q want %q", got.ID, queued.ID)
+	}
+	finished := waitTaskTerminal(t, taskSvc, queued.ID)
+	if finished.Status == tasks.StatusQueued {
+		t.Fatalf("existing agent deploy task was not started: %#v", finished)
+	}
+}
+
 func TestSystemCertificatesIncludeBuiltInsAndConfiguredAgent(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))

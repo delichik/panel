@@ -56,7 +56,7 @@ func (s *Scheduler) SetContainerization(service *containerization.Service) {
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.wg.Add(7)
+	s.wg.Add(8)
 	go s.connectivityLoop(ctx)
 	go s.metricsLoop(ctx)
 	go s.packageLoop(ctx)
@@ -64,6 +64,7 @@ func (s *Scheduler) Start(parent context.Context) {
 	go s.certificateLoop(ctx)
 	go s.runningTaskLoop(ctx)
 	go s.containerizationLoop(ctx)
+	go s.agentCheckLoop(ctx)
 }
 
 func (s *Scheduler) containerizationLoop(ctx context.Context) {
@@ -172,6 +173,8 @@ func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
 	switch task.Type {
 	case "server_connectivity_test", "server_info_collect":
 		return s.servers.RunConnectivityTask(ctx, task)
+	case "server_agent_deploy":
+		return s.servers.RunAgentDeployTask(ctx, task)
 	case "package_refresh":
 		if s.packages == nil {
 			return panelerr.Validation("task_run_now_unsupported", "Package refresh runner is not configured")
@@ -220,7 +223,7 @@ func (s *Scheduler) runDuePackageRefreshTasks(ctx context.Context) error {
 
 func (s *Scheduler) CanRun(task tasks.Task) bool {
 	switch task.Type {
-	case "server_connectivity_test", "server_info_collect":
+	case "server_connectivity_test", "server_info_collect", "server_agent_deploy":
 		return s.servers != nil
 	case "package_refresh":
 		return s.packages != nil
@@ -228,6 +231,22 @@ func (s *Scheduler) CanRun(task tasks.Task) bool {
 		return s.certs != nil
 	default:
 		return false
+	}
+}
+
+func (s *Scheduler) agentCheckLoop(ctx context.Context) {
+	defer s.wg.Done()
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			s.servers.CheckConfiguredAgents(checkCtx)
+			cancel()
+		}
 	}
 }
 

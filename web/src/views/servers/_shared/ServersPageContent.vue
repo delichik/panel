@@ -671,15 +671,14 @@ onMounted(load);
                   <div v-if="selectedServer.traits?.['agent.version']"><span>{{ t('serversPage.agentVersion') }}</span><strong>{{ selectedServer.traits['agent.version'] }}</strong></div>
                   <div v-if="selectedServer.traits?.['agent.last_checked_at']"><span>{{ t('serversPage.agentLastChecked') }}</span><strong>{{ formatDate(selectedServer.traits['agent.last_checked_at']) }}</strong></div>
                 </div>
-                <v-alert
+                <div
                   v-if="selectedServer.traits?.['agent.last_error']"
-                  :type="selectedServer.traits?.['agent.status'] === 'unavailable' ? 'error' : 'warning'"
-                  variant="tonal"
-                  density="compact"
-                  class="mt-3"
+                  class="agent-error-tip mt-3"
+                  :class="{ error: selectedServer.traits?.['agent.status'] === 'unavailable' }"
                 >
-                  {{ selectedServer.traits['agent.last_error'] }}
-                </v-alert>
+                  <v-icon size="16" :color="selectedServer.traits?.['agent.status'] === 'unavailable' ? 'error' : 'warning'">mdi-alert-circle-outline</v-icon>
+                  <span>{{ selectedServer.traits['agent.last_error'] }}</span>
+                </div>
               </section>
 
               <section v-if="customTraits(selectedServer).length">
@@ -929,6 +928,9 @@ onMounted(load);
 .network-address { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .network-address code { min-width: 0; overflow-wrap: anywhere; font-size: 0.78rem; color: var(--lp-text-muted); }
 .trait-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.agent-error-tip { display: flex; align-items: flex-start; gap: 8px; max-width: 100%; padding: 8px 10px; border: 1px solid rgba(var(--v-theme-warning), 0.28); border-radius: 8px; background: rgba(var(--v-theme-warning), 0.07); color: rgb(var(--v-theme-warning)); font-size: 0.78rem; line-height: 1.35; overflow-wrap: anywhere; }
+.agent-error-tip.error { border-color: rgba(var(--v-theme-error), 0.28); background: rgba(var(--v-theme-error), 0.07); color: rgb(var(--v-theme-error)); }
+.agent-error-tip span { min-width: 0; }
 .notes { margin: 0; color: var(--lp-text-muted); white-space: pre-wrap; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .span-all { grid-column: 1 / -1; }
