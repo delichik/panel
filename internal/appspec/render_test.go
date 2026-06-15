@@ -44,13 +44,13 @@ restart:
   policy: unless-stopped
 `
 
-func TestRenderApplicationSpecAsNomadJob(t *testing.T) {
+func TestRenderApplicationSpecAsRuntimeSpec(t *testing.T) {
 	spec, issues := DecodeYAML(sampleSpecYAML)
 	if len(issues) > 0 {
 		t.Fatalf("decode issues = %#v", issues)
 	}
 
-	job, issues := Render(RenderInput{
+	runtimeSpec, issues := Render(RenderInput{
 		AppID:      "app-1",
 		Generation: 3,
 		SpecHash:   "hash-1",
@@ -63,68 +63,42 @@ func TestRenderApplicationSpecAsNomadJob(t *testing.T) {
 		t.Fatalf("render issues = %#v", issues)
 	}
 
-	if job.ID != "panel-web" || job.Name != "web" || job.Type != "service" {
-		t.Fatalf("job identity = %#v", job)
+	if runtimeSpec.ID != "panel-web" || runtimeSpec.ApplicationID != "app-1" || runtimeSpec.Name != "web" {
+		t.Fatalf("runtime identity = %#v", runtimeSpec)
 	}
-	if job.Namespace != "apps" || job.Region != "global" {
-		t.Fatalf("job scope namespace=%q region=%q", job.Namespace, job.Region)
+	if runtimeSpec.Image != "nginx:1.27" || runtimeSpec.Env["MODE"] != "prod" {
+		t.Fatalf("runtime image/env = %#v", runtimeSpec)
 	}
-	if len(job.Datacenters) != 1 || job.Datacenters[0] != "dc1" {
-		t.Fatalf("datacenters = %#v", job.Datacenters)
+	if runtimeSpec.Generation != 3 || runtimeSpec.SpecHash != "hash-1" {
+		t.Fatalf("runtime revision = %#v", runtimeSpec)
 	}
-	if job.Meta["panel.app.id"] != "app-1" || job.Meta["panel.app.name"] != "web" || job.Meta["panel.generation"] != "3" || job.Meta["panel.spec_hash"] != "hash-1" {
-		t.Fatalf("meta = %#v", job.Meta)
+	if runtimeSpec.NetworkMode != "bridge" {
+		t.Fatalf("network mode = %q", runtimeSpec.NetworkMode)
 	}
-	if len(job.TaskGroups) != 1 {
-		t.Fatalf("task groups = %#v", job.TaskGroups)
+	if got := runtimeSpec.Ports; len(got) != 1 || got[0].Label != "http" || got[0].ContainerPort != 80 || got[0].HostPort != 8080 || got[0].Protocol != "tcp" {
+		t.Fatalf("ports = %#v", got)
 	}
-	group := job.TaskGroups[0]
-	if group.Name != "web" || group.Count != 1 {
-		t.Fatalf("group = %#v", group)
+	if runtimeSpec.Resources.CPU != 200 || runtimeSpec.Resources.MemoryMB != 128 {
+		t.Fatalf("resources = %#v", runtimeSpec.Resources)
 	}
-	if len(group.Networks) != 1 || group.Networks[0].Mode != "bridge" {
-		t.Fatalf("networks = %#v", group.Networks)
+	if len(runtimeSpec.Services) != 1 || runtimeSpec.Services[0].Name != "web" || runtimeSpec.Services[0].Port != "http" {
+		t.Fatalf("services = %#v", runtimeSpec.Services)
 	}
-	if got := group.Networks[0].ReservedPorts; len(got) != 1 || got[0].Label != "http" || got[0].Value != 8080 || got[0].To != 80 {
-		t.Fatalf("reserved ports = %#v", got)
+	if checks := runtimeSpec.Checks; len(checks) != 1 || checks[0].Name != "http" || checks[0].Type != "http" || checks[0].Port != "http" || checks[0].Path != "/" || checks[0].IntervalSeconds != 10 || checks[0].TimeoutSeconds != 2 {
+		t.Fatalf("checks = %#v", runtimeSpec.Checks)
 	}
-	if len(group.Tasks) != 1 {
-		t.Fatalf("tasks = %#v", group.Tasks)
+	if runtimeSpec.Restart.Policy != "unless-stopped" || runtimeSpec.Restart.Attempts != 2 || runtimeSpec.Restart.IntervalSeconds != 1800 || runtimeSpec.Restart.DelaySeconds != 15 || runtimeSpec.Restart.Mode != "delay" {
+		t.Fatalf("restart = %#v", runtimeSpec.Restart)
 	}
-	task := group.Tasks[0]
-	if task.Name != "web" || task.Driver != "docker" {
-		t.Fatalf("task = %#v", task)
-	}
-	if task.Config["image"] != "nginx:1.27" {
-		t.Fatalf("task config = %#v", task.Config)
-	}
-	if ports, ok := task.Config["ports"].([]string); !ok || len(ports) != 1 || ports[0] != "http" {
-		t.Fatalf("task ports = %#v", task.Config["ports"])
-	}
-	if task.Env["MODE"] != "prod" {
-		t.Fatalf("env = %#v", task.Env)
-	}
-	if task.Resources == nil || task.Resources.CPU != 200 || task.Resources.MemoryMB != 128 {
-		t.Fatalf("resources = %#v", task.Resources)
-	}
-	if len(group.Services) != 1 || group.Services[0].Name != "web" || group.Services[0].Port != "http" {
-		t.Fatalf("services = %#v", group.Services)
-	}
-	if checks := group.Services[0].Checks; len(checks) != 1 || checks[0].Name != "http" || checks[0].Type != "http" || checks[0].Port != "http" || checks[0].Path != "/" {
-		t.Fatalf("checks = %#v", group.Services[0].Checks)
-	}
-	if group.RestartPolicy == nil || group.RestartPolicy.Attempts != 2 || group.RestartPolicy.Interval != 1800000000000 || group.RestartPolicy.Delay != 15000000000 || group.RestartPolicy.Mode != "delay" {
-		t.Fatalf("restart = %#v", group.RestartPolicy)
-	}
-	mounts, ok := task.Config["mounts"].([]map[string]any)
-	if !ok || len(mounts) != 2 {
-		t.Fatalf("docker mounts = %#v", task.Config["mounts"])
-	}
-	if mounts[0]["type"] != "volume" || mounts[0]["source"] != "web-data" || mounts[0]["target"] != "/usr/share/nginx/html" || mounts[0]["readonly"] != false {
-		t.Fatalf("volume mount = %#v", mounts[0])
-	}
-	if mounts[1]["type"] != "bind" || mounts[1]["source"] != "/srv/web-extra" || mounts[1]["target"] != "/srv/extra" || mounts[1]["readonly"] != true {
-		t.Fatalf("host mount = %#v", mounts[1])
+	if got := runtimeSpec.Mounts; len(got) != 2 {
+		t.Fatalf("mounts = %#v", got)
+	} else {
+		if got[0].Type != "volume" || got[0].Source != "web-data" || got[0].Target != "/usr/share/nginx/html" || got[0].ReadOnly {
+			t.Fatalf("volume mount = %#v", got[0])
+		}
+		if got[1].Type != "bind" || got[1].Source != "/srv/web-extra" || got[1].Target != "/srv/extra" || !got[1].ReadOnly {
+			t.Fatalf("host mount = %#v", got[1])
+		}
 	}
 }
 
@@ -148,7 +122,7 @@ func TestHashIsStableAcrossVariableMapOrder(t *testing.T) {
 }
 
 func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
-	job, issues := Render(RenderInput{
+	runtimeSpec, issues := Render(RenderInput{
 		AppID:      "app-1",
 		Generation: 1,
 		SpecHash:   "hash-1",
@@ -165,15 +139,13 @@ func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
 	if len(issues) > 0 {
 		t.Fatalf("issues = %#v", issues)
 	}
-	group := job.TaskGroups[0]
-	if group.Networks[0].Mode != "host" {
-		t.Fatalf("network = %#v", group.Networks)
+	if runtimeSpec.NetworkMode != "host" {
+		t.Fatalf("network = %q", runtimeSpec.NetworkMode)
 	}
-	task := group.Tasks[0]
-	if task.Config["privileged"] != true {
-		t.Fatalf("task config = %#v", task.Config)
+	if !runtimeSpec.Privileged {
+		t.Fatalf("privileged = false")
 	}
-	if _, ok := task.Config["ports"]; ok {
-		t.Fatalf("host mode should not render ports: %#v", task.Config)
+	if len(runtimeSpec.Ports) != 0 {
+		t.Fatalf("host mode should not render ports: %#v", runtimeSpec.Ports)
 	}
 }

@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { CredentialDto, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
+import type { AgentCertificateBundleDto, CredentialDto, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
 
 export interface ServerInput {
   name: string;
@@ -7,6 +7,7 @@ export interface ServerInput {
   port: number;
   sshUsername: string;
   credentialId: string;
+  dockerHost: string;
   traits: Record<string, string>;
   notes: string;
 }
@@ -66,6 +67,9 @@ export function createServersApi(client = apiClient) {
     },
     restartServer(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/restart`);
+    },
+    issueAgentCertificate(serverId: string) {
+      return client.post<AgentCertificateBundleDto>(`/servers/${serverId}/agent/certificate`);
     },
     installUFW(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/ufw/install`);

@@ -22,7 +22,6 @@
 - DNS 记录：`GET/POST /api/v1/dns/domains/{id}/records`，`PUT/DELETE /api/v1/dns/domains/{id}/records/{recordId}`
 - 域名证书：`GET/POST /api/v1/certificates`，`DELETE /api/v1/certificates/{id}`
 - 立即续签：`POST /api/v1/certificates/{id}/renew`
-- Nomad 内置证书：`GET /api/v1/certificates/builtin`，`POST /api/v1/certificates/builtin/rotate`
 - 统一密钥资产：`/api/v1/key-assets`
 
 ## Cloudflare 认证

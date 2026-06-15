@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-Panel 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规模自有服务器。它可以通过 SSH 接入 Debian 和 Ubuntu 服务器，查看基础健康状态，执行软件包维护，引导或加入 Nomad 节点，部署容器应用，并在同一个 Web 界面里管理 DNS 和 ACME 证书。
+Panel 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规模自有服务器。它可以通过 SSH 接入 Debian 和 Ubuntu 服务器，查看基础健康状态，执行软件包维护，通过 panel-agent 和 Docker Engine API 部署容器应用，并在同一个 Web 界面里管理 DNS 和 ACME 证书。
 
 这个项目面向两类人：想把服务器管得更省心的普通用户，以及愿意一起读代码、改代码、分享代码的人类协作者。它的技术结构尽量保持直接：Go 后端、Vue 前端、本地 SQLite 数据，以及一组容易运行的 Task 命令。
 
@@ -13,9 +13,9 @@ Panel 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规
 - 采集 CPU、内存、磁盘、网络、运行时间、内核和负载等概览指标。
 - 刷新 APT 可升级软件包，并执行选择性升级或整机升级。
 - 在支持的系统上安装 UFW。
-- 引导 Nomad server，或把服务器加入为 Nomad client。
-- 查看 Nomad 节点、任务、部署、评估和服务。
-- 通过 Nomad 部署 Docker 应用。
+- 使用 mTLS 为服务器部署 panel-agent，并配置 Docker host。
+- 检查 agent 兼容性、Docker 健康状态和应用运行时状态。
+- 通过 panel-agent 调用 Docker Engine API 部署 Docker 应用。
 - 配置应用文件、变量、挂载、端口、调度位置、运行时操作、日志和反向代理路由。
 - 管理 Cloudflare 域名并签发 ACME 证书。
 - 查看后台任务和任务日志。
@@ -47,7 +47,7 @@ Panel 的系统支持范围是显式列出的，后续会逐步扩展。
 - 支持密码和私钥两种 SSH 凭据。
 - 很多维护操作需要 root 或免密 sudo。
 - 软件包维护基于 APT。
-- Nomad 设置流程会在需要时为受支持系统安装 Nomad、Docker 和 CNI 插件。
+- 应用运行时要求目标服务器部署 panel-agent，并能访问 Docker Engine 端点。默认 Docker host 为 `unix:///var/run/docker.sock`。
 
 ## 快速开始
 
@@ -133,11 +133,9 @@ Panel 按以下顺序加载配置：
 | `dataRoot` | Panel 数据根目录 | `data` |
 | `appDatabase` | 主 SQLite 数据库 | `data/db/app.db` |
 | `metricsDatabase` | 指标 SQLite 数据库 | `data/db/metrics.db` |
-| `nomad.address` | Nomad HTTP API 地址 | `http://127.0.0.1:4646` |
-| `nomad.token` | Nomad ACL token，如启用 ACL 时使用 | 空 |
 | `certificates.acmeDirectoryUrl` | ACME 目录地址 | Let's Encrypt 正式环境 |
 
-管理员用户名和密码、JWT 密钥、远程命令超时、Nomad namespace/region/datacenter、证书邮箱和证书 DNS 生效等待时间，会保存在应用数据库中，并在界面的 **设置** 中配置。
+管理员用户名和密码、JWT 密钥、远程命令超时、证书邮箱和证书 DNS 生效等待时间，会保存在应用数据库中，并在界面的 **设置** 中配置。
 
 支持的环境变量：
 
@@ -148,7 +146,7 @@ Panel 按以下顺序加载配置：
 - `PANEL_METRICS_DATABASE`
 - `PANEL_CERT_ACME_DIRECTORY_URL`
 
-语言、登录令牌有效期、指标保留时间、Nomad 作用域、安全设置和证书默认值等运行时设置，可以在界面中调整。
+语言、登录令牌有效期、指标保留时间、安全设置和证书默认值等运行时设置，可以在界面中调整。
 
 仅开发前端代理使用的环境变量：
 
@@ -210,7 +208,7 @@ Dockerfile             生产容器构建
 - 路由装配与静态页面托管：`internal/app/app.go`
 - 数据库迁移：`internal/storage/migrations.go`
 - 目标系统适配：`internal/linux/`
-- Nomad 控制面逻辑：`internal/nomad/`
+- Agent runtime 与 Docker API 逻辑：`internal/agent/`、`internal/appruntime/`
 - 应用部署逻辑：`internal/applications/`
 - 前端路由：`web/src/router/index.ts`
 - 前端 i18n 初始化：`web/src/i18n/index.ts`

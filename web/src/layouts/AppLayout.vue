@@ -64,7 +64,6 @@ const navGroups = computed<NavGroup[]>(() => [
     icon: 'mdi-certificate-outline',
     title: t('layout.nav.certificates'),
     items: [
-      { to: '/certificates/builtin', title: t('layout.nav.builtinCertificates'), value: 'certificates-builtin' },
       { to: '/certificates/domains', title: t('layout.nav.domainCertificates'), value: 'certificates-domains' },
       { to: '/certificates/key-assets', title: t('layout.nav.keyAssets'), value: 'certificates-key-assets' },
     ],
@@ -75,7 +74,6 @@ const navGroups = computed<NavGroup[]>(() => [
     title: t('layout.nav.runtime'),
     items: [
       { to: '/applications', title: t('layout.nav.applications'), value: 'applications' },
-      { to: '/nomad/nodes', title: t('layout.nav.nomadNodes'), value: 'nomad-nodes' },
     ],
   },
   {
@@ -89,7 +87,6 @@ const navGroups = computed<NavGroup[]>(() => [
     items: [
       { to: '/settings/general', title: t('layout.nav.settingsGeneral'), value: 'settings-general' },
       { to: '/settings/security', title: t('layout.nav.settingsSecurity'), value: 'settings-security' },
-      { to: '/settings/nomad', title: t('layout.nav.settingsNomad'), value: 'settings-nomad' },
       { to: '/settings/certificates', title: t('layout.nav.settingsCertificates'), value: 'settings-certificates' },
       { to: '/settings/system', title: t('layout.nav.settingsSystem'), value: 'settings-system' },
     ],

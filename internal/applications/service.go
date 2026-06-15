@@ -19,10 +19,12 @@ import (
 	"sync"
 	"time"
 
+	"panel/internal/agent"
+	"panel/internal/appruntime"
 	"panel/internal/appspec"
 	"panel/internal/id"
-	"panel/internal/nomad"
 	"panel/internal/panelerr"
+	"panel/internal/server"
 	"panel/internal/tasks"
 	"panel/internal/templatex"
 )
@@ -34,22 +36,23 @@ type Config struct {
 	SaveSessionDir string
 }
 
-type NomadClient interface {
-	ValidateJob(ctx context.Context, job nomad.Job) (nomad.ValidateResponse, error)
-	PlanJob(ctx context.Context, id string, job nomad.Job) (nomad.PlanResponse, error)
-	RegisterJob(ctx context.Context, id string, job nomad.Job) (nomad.RegisterResponse, error)
-	StopJob(ctx context.Context, id string, purge bool) (nomad.StopResponse, error)
-	JobAllocations(ctx context.Context, id string) ([]nomad.AllocationListItem, error)
-	JobDeployment(ctx context.Context, id string) (nomad.Deployment, error)
-	JobEvaluations(ctx context.Context, id string) ([]nomad.Evaluation, error)
-	Evaluation(ctx context.Context, id string) (nomad.Evaluation, error)
-	RestartAllocation(ctx context.Context, allocID, task string) error
-	AllocationLogs(ctx context.Context, allocID, task, logType string, tail int) (string, error)
+type AgentRuntimeClient interface {
+	RuntimeDeploy(ctx context.Context, baseURL string, req agent.RuntimeDeployRequest) (agent.RuntimeInstanceResponse, error)
+	RuntimeStop(ctx context.Context, baseURL string, req agent.RuntimeStopRequest) (agent.RuntimeInstanceResponse, error)
+	RuntimeRestart(ctx context.Context, baseURL string, req agent.RuntimeRestartRequest) (agent.RuntimeInstanceResponse, error)
+	RuntimeStatus(ctx context.Context, baseURL, instanceID string) (agent.RuntimeStatusResponse, error)
+	RuntimeLogs(ctx context.Context, baseURL, instanceID string, tail int) (agent.RuntimeLogsResponse, error)
+}
+
+type ServerProvider interface {
+	List(ctx context.Context) ([]server.Server, error)
+	Get(ctx context.Context, id string) (server.Server, error)
 }
 
 type Service struct {
 	db              *sql.DB
-	nomad           NomadClient
+	runtimeClient   AgentRuntimeClient
+	servers         ServerProvider
 	tasks           *tasks.Service
 	config          Config
 	configProvider  func() Config
@@ -66,23 +69,23 @@ type Service struct {
 type ApplicationRuntime = Runtime
 
 type PlanResult struct {
-	Application Application        `json:"application"`
-	Job         nomad.Job          `json:"job"`
-	Plan        nomad.PlanResponse `json:"plan"`
+	Application Application             `json:"application"`
+	Spec        appruntime.Spec         `json:"spec"`
+	Plan        appruntime.PlanResponse `json:"plan"`
 }
 
 type LogInput struct {
-	AllocID string `json:"allocId"`
-	Task    string `json:"task"`
-	Type    string `json:"type"`
-	Tail    int    `json:"tail"`
+	InstanceID    string `json:"instanceId"`
+	ContainerName string `json:"containerName"`
+	Type          string `json:"type"`
+	Tail          int    `json:"tail"`
 }
 
 type LogResult struct {
-	AllocID string `json:"allocId"`
-	Task    string `json:"task"`
-	Type    string `json:"type"`
-	Logs    string `json:"logs"`
+	InstanceID    string `json:"instanceId"`
+	ContainerName string `json:"containerName"`
+	Type          string `json:"type"`
+	Logs          string `json:"logs"`
 }
 
 type PackageResult struct {
@@ -131,7 +134,7 @@ type stagedFile struct {
 	UpdatedAt     time.Time
 }
 
-func NewService(db *sql.DB, nomadClient NomadClient, taskSvc *tasks.Service, cfg Config) *Service {
+func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Service, cfg Config) *Service {
 	if cfg.Namespace == "" {
 		cfg.Namespace = "default"
 	}
@@ -144,7 +147,7 @@ func NewService(db *sql.DB, nomadClient NomadClient, taskSvc *tasks.Service, cfg
 	if cfg.SaveSessionDir == "" {
 		cfg.SaveSessionDir = filepath.Join("tmp", "application-save-sessions")
 	}
-	s := &Service{db: db, nomad: nomadClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), imageResolver: NewRegistryImageResolver(), saveSessions: map[string]*saveSession{}}
+	s := &Service{db: db, runtimeClient: runtimeClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), imageResolver: NewRegistryImageResolver(), saveSessions: map[string]*saveSession{}}
 	s.startSaveSessionCleanup()
 	return s
 }
@@ -184,6 +187,10 @@ func (s *Service) SetBuiltinVariableResolver(resolver BuiltinVariableResolver) {
 
 func (s *Service) SetPanelFileProvider(provider PanelFileProvider) {
 	s.panelFiles = provider
+}
+
+func (s *Service) SetServerProvider(provider ServerProvider) {
+	s.servers = provider
 }
 
 func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) {
@@ -286,9 +293,6 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 		if err != nil {
 			return Application{}, err
 		}
-		if err := s.validatePlanRegister(ctx, prepared.job, &app); err != nil {
-			return Application{}, err
-		}
 	}
 	if files == nil {
 		if err := s.insertApplication(ctx, app); err != nil {
@@ -297,6 +301,15 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 		if err := s.insertRevision(ctx, app, prepared.job); err != nil {
 			return Application{}, err
 		}
+		if app.Enabled {
+			taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
+			if err != nil {
+				return Application{}, err
+			}
+			if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
+				return Application{}, err
+			}
+		}
 		if err := s.reconcileReverseProxy(ctx); err != nil {
 			return Application{}, err
 		}
@@ -304,6 +317,15 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 	}
 	if err := s.commitApplicationState(ctx, app, files, prepared.job, true, true); err != nil {
 		return Application{}, applicationSaveError(err)
+	}
+	if app.Enabled {
+		taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
+		if err != nil {
+			return Application{}, err
+		}
+		if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
+			return Application{}, err
+		}
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return Application{}, err
@@ -365,7 +387,9 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 	app.JobID = prepared.job.ID
 	app.Namespace = s.currentConfig().Namespace
 	app.UpdatedAt = time.Now().UTC()
-	if app.Enabled && (!current.Enabled || prepared.hash != current.SpecHash) {
+	shouldDeploy := app.Enabled && (!current.Enabled || prepared.hash != current.SpecHash)
+	shouldStop := current.Enabled && !app.Enabled
+	if shouldDeploy {
 		job, issues, err := s.renderApplicationWithFiles(ctx, app, files)
 		if err != nil {
 			return Application{}, err
@@ -374,23 +398,6 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 			return Application{}, panelerr.Validation("application_invalid", issues[0].Message)
 		}
 		prepared.job = job
-		if err := s.validatePlanRegister(ctx, job, &app); err != nil {
-			return Application{}, err
-		}
-	}
-	if current.Enabled && !app.Enabled {
-		resp, err := s.nomad.StopJob(ctx, current.JobID, false)
-		if err != nil {
-			return Application{}, err
-		}
-		app.LastEvalID = resp.EvalID
-		taskID, err := s.recordTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
-		if err != nil {
-			return Application{}, err
-		}
-		if err := s.recordNomadOperationLog(ctx, taskID, "stop", current.JobID, app.LastEvalID, "false"); err != nil {
-			return Application{}, err
-		}
 	}
 	if files == nil {
 		if err := s.updateApplication(ctx, app); err != nil {
@@ -401,6 +408,24 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 				return Application{}, err
 			}
 		}
+		if shouldDeploy {
+			taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
+			if err != nil {
+				return Application{}, err
+			}
+			if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
+				return Application{}, err
+			}
+		}
+		if shouldStop {
+			taskID, err := s.recordRunningTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
+			if err != nil {
+				return Application{}, err
+			}
+			if err := s.stopRuntimeInstances(ctx, taskID, app.ID, false); err != nil {
+				return Application{}, err
+			}
+		}
 		if err := s.reconcileReverseProxy(ctx); err != nil {
 			return Application{}, err
 		}
@@ -408,6 +433,24 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 	}
 	if err := s.commitApplicationState(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash); err != nil {
 		return Application{}, applicationSaveError(err)
+	}
+	if shouldDeploy {
+		taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
+		if err != nil {
+			return Application{}, err
+		}
+		if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
+			return Application{}, err
+		}
+	}
+	if shouldStop {
+		taskID, err := s.recordRunningTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
+		if err != nil {
+			return Application{}, err
+		}
+		if err := s.stopRuntimeInstances(ctx, taskID, app.ID, false); err != nil {
+			return Application{}, err
+		}
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return Application{}, err
@@ -606,16 +649,9 @@ func (s *Service) Validate(ctx context.Context, appID string) (ValidationResult,
 	if err != nil {
 		return ValidationResult{}, err
 	}
-	job, issues, err := s.renderApplication(ctx, app)
+	_, issues, err := s.renderApplication(ctx, app)
 	if err != nil || len(issues) > 0 {
 		return validationResult(issues), err
-	}
-	resp, err := s.nomad.ValidateJob(ctx, job)
-	if err != nil {
-		return ValidationResult{}, err
-	}
-	for _, msg := range resp.ValidationErrors {
-		issues = append(issues, ValidationIssue{Field: "nomad", Message: msg})
 	}
 	return validationResult(issues), nil
 }
@@ -625,18 +661,22 @@ func (s *Service) Plan(ctx context.Context, appID string) (PlanResult, error) {
 	if err != nil {
 		return PlanResult{}, err
 	}
-	job, issues, err := s.renderApplication(ctx, app)
+	spec, issues, err := s.renderApplication(ctx, app)
 	if err != nil {
 		return PlanResult{}, err
 	}
 	if len(issues) > 0 {
 		return PlanResult{}, panelerr.Validation("application_invalid", issues[0].Message)
 	}
-	plan, err := s.nomad.PlanJob(ctx, job.ID, job)
+	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
 		return PlanResult{}, err
 	}
-	return PlanResult{Application: app, Job: job, Plan: plan}, nil
+	serverIDs := make([]string, 0, len(targets))
+	for _, target := range targets {
+		serverIDs = append(serverIDs, target.ID)
+	}
+	return PlanResult{Application: app, Spec: spec, Plan: appruntime.PlanResponse{InstanceCount: len(serverIDs), TargetServers: serverIDs}}, nil
 }
 
 func (s *Service) CheckImageUpdate(ctx context.Context, appID string) (Application, error) {
@@ -716,17 +756,17 @@ func (s *Service) UpdateImage(ctx context.Context, appID string) (OperationResul
 	if len(issues) > 0 {
 		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
 	}
-	if err := s.validatePlanRegister(ctx, job, &app); err != nil {
-		return OperationResult{}, err
-	}
 	if err := s.updateApplication(ctx, app); err != nil {
 		return OperationResult{}, err
 	}
 	if err := s.insertRevision(ctx, app, job); err != nil {
 		return OperationResult{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeImageUpdate, app.ID, "Updating image for "+app.Name)
+	taskID, err := s.recordRunningTask(ctx, TaskTypeImageUpdate, app.ID, "Updating image for "+app.Name)
 	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := s.deployRuntimeSpec(ctx, taskID, app, job); err != nil {
 		return OperationResult{}, err
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
@@ -751,32 +791,27 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if len(issues) > 0 {
 		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
 	}
-	if err := s.validatePlanRegister(ctx, job, &app); err != nil {
-		return OperationResult{}, err
-	}
 	app.Enabled = true
 	app.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplication(ctx, app); err != nil {
 		return OperationResult{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeDeploy, app.ID, "Submitted deployment for "+app.Name)
+	taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.recordNomadOperationLog(ctx, taskID, "deploy", app.JobID, app.LastEvalID, ""); err != nil {
-		return OperationResult{}, err
-	}
-	if err := s.recordNomadFileMountLog(ctx, taskID, job); err != nil {
+	if err := s.deployRuntimeSpec(ctx, taskID, app, job); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
 		return OperationResult{}, err
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return OperationResult{}, err
 	}
-	result := OperationResult{TaskID: taskID, EvalID: app.LastEvalID, Application: app}
+	result := OperationResult{TaskID: taskID, Application: app}
 	if runtime, err := s.Runtime(ctx, app.ID); err == nil {
 		result.ApplicationRuntime = &runtime
 		if s.tasks != nil && taskID != "" {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "Current application runtime status: "+runtime.JobStatus)
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "Current application runtime status: "+runtime.Status)
 		}
 	}
 	return result, nil
@@ -800,21 +835,22 @@ func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) 
 		if refreshed.SpecHash == beforeHash {
 			continue
 		}
-		job, issues, err := s.renderApplication(ctx, refreshed)
+		spec, issues, err := s.renderApplication(ctx, refreshed)
 		if err != nil {
 			return redeployed, err
 		}
 		if len(issues) > 0 {
 			return redeployed, panelerr.Validation("application_invalid", issues[0].Message)
 		}
-		if err := s.validatePlanRegister(ctx, job, &refreshed); err != nil {
-			return redeployed, err
-		}
 		refreshed.UpdatedAt = time.Now().UTC()
 		if err := s.updateApplication(ctx, refreshed); err != nil {
 			return redeployed, err
 		}
-		if _, err := s.recordTask(ctx, TaskTypeRefresh, refreshed.ID, "Refreshing application "+refreshed.Name); err != nil {
+		taskID, err := s.recordRunningTask(ctx, TaskTypeRefresh, refreshed.ID, "Refreshing application "+refreshed.Name)
+		if err != nil {
+			return redeployed, err
+		}
+		if err := s.deployRuntimeSpec(ctx, taskID, refreshed, spec); err != nil {
 			return redeployed, err
 		}
 		redeployed++
@@ -850,40 +886,39 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 	if err != nil {
 		return OperationResult{}, err
 	}
-	resp, err := s.nomad.StopJob(ctx, app.JobID, purge)
-	if err != nil {
-		return OperationResult{}, err
-	}
 	app.Enabled = false
-	app.LastEvalID = resp.EvalID
 	app.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplication(ctx, app); err != nil {
 		return OperationResult{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
+	taskID, err := s.recordRunningTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.recordNomadOperationLog(ctx, taskID, "stop", app.JobID, app.LastEvalID, strconv.FormatBool(purge)); err != nil {
+	if err := s.stopRuntimeInstances(ctx, taskID, app.ID, purge); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
 		return OperationResult{}, err
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{TaskID: taskID, EvalID: app.LastEvalID, Application: app}, nil
+	return OperationResult{TaskID: taskID, Application: app}, nil
 }
 
 func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, error) {
-	runtime, err := s.Runtime(ctx, appID)
+	app, err := s.Get(ctx, appID)
 	if err != nil {
 		return OperationResult{}, err
 	}
-	for _, alloc := range runtime.Allocations {
-		if err := s.nomad.RestartAllocation(ctx, alloc.ID, ""); err != nil {
-			return OperationResult{}, err
-		}
+	taskID, err := s.recordRunningTask(ctx, TaskTypeRestart, appID, "Restarting application")
+	if err != nil {
+		return OperationResult{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeRestart, appID, "Restarting application")
+	if err := s.restartRuntimeInstances(ctx, taskID, app.ID); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return OperationResult{}, err
+	}
+	runtime, err := s.Runtime(ctx, appID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -897,41 +932,16 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 	}
 	out := ApplicationRuntime{
 		ApplicationID: app.ID,
-		JobID:         app.JobID,
-		JobStatus:     "stopped",
+		RuntimeID:     app.JobID,
+		Status:        appruntime.StatusStopped,
 		ObservedAt:    time.Now().UTC(),
 	}
-	if !app.Enabled {
-		return out, nil
-	}
-	deployment, err := s.nomad.JobDeployment(ctx, app.JobID)
+	instances, err := s.runtimeInstances(ctx, app.ID)
 	if err != nil {
-		out.JobStatus = "unknown"
-		return out, nil
+		return ApplicationRuntime{}, err
 	}
-	allocations, err := s.nomad.JobAllocations(ctx, app.JobID)
-	if err != nil {
-		out.JobStatus = "unknown"
-		return out, nil
-	}
-	evaluations, err := s.nomad.JobEvaluations(ctx, app.JobID)
-	if err != nil {
-		out.JobStatus = "unknown"
-		return out, nil
-	}
-	out.Deployment = &deployment
-	out.Allocations = allocations
-	out.Evaluations = evaluations
-	for _, evaluation := range evaluations {
-		if evaluation.ID == "" {
-			continue
-		}
-		detail, err := s.nomad.Evaluation(ctx, evaluation.ID)
-		if err == nil {
-			out.EvaluationDetails = append(out.EvaluationDetails, detail)
-		}
-	}
-	out.JobStatus = runtimeStatus(app.Enabled, deployment, allocations)
+	out.Instances = s.refreshInstanceStatuses(ctx, instances)
+	out.Status = aggregateRuntimeStatus(app.Enabled, out.Instances)
 	return out, nil
 }
 
@@ -939,18 +949,26 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 	if _, err := s.Get(ctx, appID); err != nil {
 		return LogResult{}, err
 	}
-	logType := in.Type
-	if logType == "" {
-		logType = "stdout"
-	}
 	if in.Tail == 0 {
 		in.Tail = 200
 	}
-	logs, err := s.nomad.AllocationLogs(ctx, in.AllocID, in.Task, logType, in.Tail)
+	instance, err := s.runtimeInstance(ctx, appID, in.InstanceID)
 	if err != nil {
 		return LogResult{}, err
 	}
-	return LogResult{AllocID: in.AllocID, Task: in.Task, Type: logType, Logs: logs}, nil
+	srv, err := s.servers.Get(ctx, instance.ServerID)
+	if err != nil {
+		return LogResult{}, err
+	}
+	baseURL, ok := agentURLFromServer(srv)
+	if !ok {
+		return LogResult{}, panelerr.Validation("agent_required", "Agent is required for application logs")
+	}
+	logs, err := s.runtimeClient.RuntimeLogs(ctx, baseURL, instance.ID, in.Tail)
+	if err != nil {
+		return LogResult{}, err
+	}
+	return LogResult{InstanceID: instance.ID, ContainerName: instance.ContainerName, Type: "combined", Logs: logs.Logs}, nil
 }
 
 type preparedApplication struct {
@@ -962,7 +980,7 @@ type preparedApplication struct {
 	deploymentServers []string
 	reverseProxy      []ReverseProxyRule
 	hash              string
-	job               nomad.Job
+	job               appruntime.Spec
 }
 
 func (s *Service) prepare(ctx context.Context, in SaveInput, generation int, appID string) (preparedApplication, error) {
@@ -1033,25 +1051,25 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	return preparedApplication{spec: spec, variables: variables, resolvedVariables: data, persistentPath: persistentPath, deploymentMode: deploymentMode, deploymentServers: deploymentServers, reverseProxy: reverseProxy, hash: hash, job: job}, nil
 }
 
-func (s *Service) renderApplication(ctx context.Context, app Application) (nomad.Job, []ValidationIssue, error) {
+func (s *Service) renderApplication(ctx context.Context, app Application) (appruntime.Spec, []ValidationIssue, error) {
 	return s.renderApplicationWithFiles(ctx, app, nil)
 }
 
-func (s *Service) renderApplicationWithFiles(ctx context.Context, app Application, files []ApplicationFile) (nomad.Job, []ValidationIssue, error) {
+func (s *Service) renderApplicationWithFiles(ctx context.Context, app Application, files []ApplicationFile) (appruntime.Spec, []ValidationIssue, error) {
 	var err error
 	if files == nil {
 		files, err = s.listFiles(ctx, app.ID, true)
 		if err != nil {
-			return nomad.Job{}, nil, err
+			return appruntime.Spec{}, nil, err
 		}
 	}
 	data, err := s.templateData(ctx, app.Variables, files)
 	if err != nil {
-		return nomad.Job{}, nil, err
+		return appruntime.Spec{}, nil, err
 	}
 	renderedYAML, err := s.renderTemplate(ctx, app.SpecYAML, data)
 	if err != nil {
-		return nomad.Job{}, nil, err
+		return appruntime.Spec{}, nil, err
 	}
 	spec, specIssues := appspec.DecodeYAML(renderedYAML)
 	issues := make([]ValidationIssue, 0, len(specIssues))
@@ -1059,7 +1077,7 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 		issues = append(issues, ValidationIssue{Field: issue.Field, Message: issue.Message})
 	}
 	if len(issues) > 0 {
-		return nomad.Job{}, issues, nil
+		return appruntime.Spec{}, issues, nil
 	}
 	cfg := s.currentConfig()
 	job, renderIssues := appspec.Render(appspec.RenderInput{
@@ -1075,16 +1093,15 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 		issues = append(issues, ValidationIssue{Field: issue.Field, Message: issue.Message})
 	}
 	if len(issues) == 0 {
-		injectNodeVariableEnv(&job)
 		job, err = s.attachFiles(ctx, job, spec, files, data)
 		if err != nil {
-			return nomad.Job{}, nil, err
+			return appruntime.Spec{}, nil, err
 		}
 	}
 	if len(issues) == 0 {
 		job, err = applyDeploymentTargets(job, app)
 		if err != nil {
-			return nomad.Job{}, []ValidationIssue{{Field: "deploymentServers", Message: err.Error()}}, nil
+			return appruntime.Spec{}, []ValidationIssue{{Field: "deploymentServers", Message: err.Error()}}, nil
 		}
 	}
 	return job, issues, nil
@@ -1154,18 +1171,109 @@ func (s *Service) templateData(ctx context.Context, variables map[string]string,
 	return data, nil
 }
 
-func (s *Service) validatePlanRegister(ctx context.Context, job nomad.Job, app *Application) error {
-	if _, err := s.nomad.ValidateJob(ctx, job); err != nil {
-		return err
+func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Application, spec appruntime.Spec) error {
+	if s.runtimeClient == nil {
+		return panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
 	}
-	if _, err := s.nomad.PlanJob(ctx, job.ID, job); err != nil {
-		return err
-	}
-	resp, err := s.nomad.RegisterJob(ctx, job.ID, job)
+	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
 		return err
 	}
-	app.LastEvalID = resp.EvalID
+	if len(targets) == 0 {
+		return panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.Advance(ctx, taskID, "deploying", "deploying application instances")
+	}
+	for _, target := range targets {
+		baseURL, ok := agentURLFromServer(target)
+		if !ok {
+			return panelerr.Validation("agent_required", "Agent is required for application deployment")
+		}
+		instanceSpec := runtimeSpecForServer(app, spec, target)
+		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
+			return err
+		}
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+firstNonEmpty(target.Name, target.ID, target.Host))
+		}
+		result, err := s.runtimeClient.RuntimeDeploy(ctx, baseURL, agent.RuntimeDeployRequest{ServerID: target.ID, Spec: instanceSpec})
+		if err != nil {
+			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
+			return err
+		}
+		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
+			return err
+		}
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.Complete(ctx, taskID, "Application deployed")
+	}
+	return nil
+}
+
+func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string, purge bool) error {
+	instances, err := s.runtimeInstances(ctx, appID)
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		srv, err := s.servers.Get(ctx, instance.ServerID)
+		if err != nil {
+			return err
+		}
+		baseURL, ok := agentURLFromServer(srv)
+		if !ok {
+			return panelerr.Validation("agent_required", "Agent is required for application stop")
+		}
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "stopping "+instance.ContainerName+" on "+firstNonEmpty(srv.Name, srv.ID, srv.Host))
+		}
+		result, err := s.runtimeClient.RuntimeStop(ctx, baseURL, agent.RuntimeStopRequest{InstanceID: instance.ID, Purge: purge})
+		if err != nil {
+			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, appruntime.StatusFailed, "", err.Error())
+			return err
+		}
+		status := result.Status
+		if status == "purged" {
+			status = appruntime.StatusStopped
+		}
+		if err := s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, status, result.ContainerID, ""); err != nil {
+			return err
+		}
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.Complete(ctx, taskID, "Application stopped")
+	}
+	return nil
+}
+
+func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID string) error {
+	instances, err := s.runtimeInstances(ctx, appID)
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		srv, err := s.servers.Get(ctx, instance.ServerID)
+		if err != nil {
+			return err
+		}
+		baseURL, ok := agentURLFromServer(srv)
+		if !ok {
+			return panelerr.Validation("agent_required", "Agent is required for application restart")
+		}
+		result, err := s.runtimeClient.RuntimeRestart(ctx, baseURL, agent.RuntimeRestartRequest{InstanceID: instance.ID})
+		if err != nil {
+			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
+			return err
+		}
+		if err := s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
+			return err
+		}
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.Complete(ctx, taskID, "Application restarted")
+	}
 	return nil
 }
 
@@ -1213,7 +1321,7 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 	return err
 }
 
-func (s *Service) commitApplicationState(ctx context.Context, app Application, files []ApplicationFile, job nomad.Job, insertApp bool, insertRevision bool) error {
+func (s *Service) commitApplicationState(ctx context.Context, app Application, files []ApplicationFile, job appruntime.Spec, insertApp bool, insertRevision bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -1281,11 +1389,11 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec sqlExec, a
 	return err
 }
 
-func (s *Service) insertRevision(ctx context.Context, app Application, job nomad.Job) error {
+func (s *Service) insertRevision(ctx context.Context, app Application, job appruntime.Spec) error {
 	return insertRevisionWithExec(ctx, s.db, app, job)
 }
 
-func insertRevisionWithExec(ctx context.Context, exec sqlExec, app Application, job nomad.Job) error {
+func insertRevisionWithExec(ctx context.Context, exec sqlExec, app Application, job appruntime.Spec) error {
 	raw, err := json.Marshal(job)
 	if err != nil {
 		return err
@@ -1351,38 +1459,21 @@ func (s *Service) recordTask(ctx context.Context, taskType, appID, summary strin
 	return task.ID, nil
 }
 
-func (s *Service) recordNomadOperationLog(ctx context.Context, taskID, action, jobID, evalID, purge string) error {
-	if s.tasks == nil || taskID == "" {
-		return nil
+func (s *Service) recordRunningTask(ctx context.Context, taskType, appID, summary string) (string, error) {
+	if s.tasks == nil {
+		return "", nil
 	}
-	lines := []string{"Nomad " + action + " requested for job " + jobID}
-	if evalID != "" {
-		lines = append(lines, "Nomad evaluation: "+evalID)
+	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		Type:         taskType,
+		ResourceType: "application",
+		ResourceID:   appID,
+		Status:       tasks.StatusRunning,
+		Summary:      summary,
+	})
+	if err != nil {
+		return "", err
 	}
-	if purge != "" {
-		lines = append(lines, "Purge job: "+purge)
-	}
-	if action == "deploy" {
-		lines = append(lines, "Nomad accepted the deployment request; application runtime shows allocation health after scheduling")
-	}
-	for _, line := range lines {
-		if err := s.tasks.AppendLog(ctx, taskID, "system", line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) recordNomadFileMountLog(ctx context.Context, taskID string, job nomad.Job) error {
-	if s.tasks == nil || taskID == "" {
-		return nil
-	}
-	for _, line := range applicationFileMountLogLines(job) {
-		if err := s.tasks.AppendLog(ctx, taskID, "system", line); err != nil {
-			return err
-		}
-	}
-	return nil
+	return task.ID, nil
 }
 
 func (s *Service) listFiles(ctx context.Context, appID string, includeContent bool) ([]ApplicationFile, error) {
@@ -1436,10 +1527,7 @@ func scanApplicationFile(row appScanner, includeContent bool) (ApplicationFile, 
 	return file, nil
 }
 
-func (s *Service) attachFiles(ctx context.Context, job nomad.Job, spec appspec.Spec, files []ApplicationFile, data map[string]any) (nomad.Job, error) {
-	if len(job.TaskGroups) == 0 || len(job.TaskGroups[0].Tasks) == 0 {
-		return job, nil
-	}
+func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec appspec.Spec, files []ApplicationFile, data map[string]any) (appruntime.Spec, error) {
 	fileMounts := applicationFileMounts(spec.Mounts)
 	if len(fileMounts) == 0 {
 		return job, nil
@@ -1448,45 +1536,34 @@ func (s *Service) attachFiles(ctx context.Context, job nomad.Job, spec appspec.S
 	for _, file := range files {
 		filesByPath[file.Path] = file
 	}
-	group := &job.TaskGroups[0]
-	mainTask := &group.Tasks[0]
-	if mainTask.Config == nil {
-		mainTask.Config = map[string]any{}
+	mounts := make([]appruntime.Mount, 0, len(job.Mounts)+len(fileMounts))
+	for _, mount := range job.Mounts {
+		if mount.Type != "managed_file" {
+			mounts = append(mounts, mount)
+		}
 	}
-	mounts := existingMounts(mainTask.Config["mounts"])
-	var decodeScript strings.Builder
-	initTemplates := []nomad.Template{}
+	managed := append([]appruntime.ManagedFile(nil), job.Files...)
 	for _, mount := range fileMounts {
 		if strings.TrimSpace(mount.Type) == "panel_file" {
 			if s.panelFiles == nil {
-				return nomad.Job{}, panelerr.Validation("panel_file_provider_unavailable", "Panel managed file provider is unavailable")
+				return appruntime.Spec{}, panelerr.Validation("panel_file_provider_unavailable", "Panel managed file provider is unavailable")
 			}
 			content, err := s.panelFiles.ReadPanelFile(ctx, mount.Source)
 			if err != nil {
-				return nomad.Job{}, err
+				return appruntime.Spec{}, err
 			}
 			rel := panelFileAllocationName(mount.Source)
-			mainTask.Templates = append(mainTask.Templates, nomad.Template{
-				EmbeddedTmpl: string(content),
-				DestPath:     "${NOMAD_ALLOC_DIR}/panel-files/" + rel,
-				Perms:        panelFilePerms(mount.Source),
-				ChangeMode:   "restart",
-			})
-			mounts = append(mounts, map[string]any{
-				"type":     "bind",
-				"source":   applicationFileAllocMountSource(rel),
-				"target":   mount.Target,
-				"readonly": true,
-			})
+			managed = append(managed, appruntime.ManagedFile{Path: rel, Content: content, Mode: panelFilePerms(mount.Source)})
+			mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: true})
 			continue
 		}
 		rel, err := normalizeApplicationWorkspacePath(mount.Source)
 		if err != nil {
-			return nomad.Job{}, err
+			return appruntime.Spec{}, err
 		}
 		file, ok := filesByPath[rel]
 		if !ok {
-			return nomad.Job{}, panelerr.Validation("application_file_mount_missing", "mounted application file "+rel+" does not exist")
+			return appruntime.Spec{}, panelerr.Validation("application_file_mount_missing", "mounted application file "+rel+" does not exist")
 		}
 		rendered := file.Content
 		if file.Kind == "template" {
@@ -1494,90 +1571,272 @@ func (s *Service) attachFiles(ctx context.Context, job nomad.Job, spec appspec.S
 			if s.renderer != nil {
 				text, err = s.renderer.Render(ctx, text, data)
 				if err != nil {
-					return nomad.Job{}, err
+					return appruntime.Spec{}, err
 				}
 			}
 			rendered = []byte(text)
-			mainTask.Templates = append(mainTask.Templates, nomad.Template{
-				EmbeddedTmpl: string(rendered),
-				DestPath:     "${NOMAD_ALLOC_DIR}/panel-files/" + rel,
-				Perms:        "0644",
-				ChangeMode:   "restart",
-			})
-		} else {
-			src := "${NOMAD_ALLOC_DIR}/panel-file-src/" + rel + ".b64"
-			dst := "${NOMAD_ALLOC_DIR}/panel-files/" + rel
-			initTemplates = append(initTemplates, nomad.Template{
-				EmbeddedTmpl: base64.StdEncoding.EncodeToString(rendered),
-				DestPath:     src,
-				Perms:        "0644",
-				ChangeMode:   "noop",
-			})
-			decodeScript.WriteString("mkdir -p ")
-			decodeScript.WriteString(shellQuote(path.Dir(dst)))
-			decodeScript.WriteString("\nbase64 -d ")
-			decodeScript.WriteString(shellQuote(src))
-			decodeScript.WriteString(" > ")
-			decodeScript.WriteString(shellQuote(dst))
-			decodeScript.WriteString("\n")
 		}
-		mounts = append(mounts, map[string]any{
-			"type":     "bind",
-			"source":   applicationFileAllocMountSource(rel),
-			"target":   mount.Target,
-			"readonly": mount.ReadOnly,
-		})
+		managed = append(managed, appruntime.ManagedFile{Path: rel, Content: rendered, Mode: "0644"})
+		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: mount.ReadOnly})
 	}
-	mainTask.Config["mounts"] = mounts
-	if decodeScript.Len() > 0 {
-		group.Tasks = append([]nomad.Task{{
-			Name:   "panel-file-init",
-			Driver: "docker",
-			Config: map[string]any{
-				"image":   "busybox:1.36",
-				"command": "sh",
-				"args":    []string{"-ec", decodeScript.String()},
-			},
-			Templates: initTemplates,
-			Lifecycle: &nomad.Lifecycle{Hook: "prestart"},
-		}}, group.Tasks...)
+	job.Mounts = mounts
+	job.Files = managed
+	return job, nil
+}
+
+func applyDeploymentTargets(job appruntime.Spec, app Application) (appruntime.Spec, error) {
+	_, _, err := normalizeDeploymentTargets(app.DeploymentMode, app.DeploymentServers, app.PersistentPath)
+	if err != nil {
+		return appruntime.Spec{}, err
 	}
 	return job, nil
 }
 
-func applyDeploymentTargets(job nomad.Job, app Application) (nomad.Job, error) {
-	mode, servers, err := normalizeDeploymentTargets(app.DeploymentMode, app.DeploymentServers, app.PersistentPath)
+func (s *Service) deploymentTargets(ctx context.Context, app Application) ([]server.Server, error) {
+	if s.servers == nil {
+		return nil, panelerr.Validation("server_provider_unavailable", "Server provider is unavailable")
+	}
+	mode, selected, err := normalizeDeploymentTargets(app.DeploymentMode, app.DeploymentServers, app.PersistentPath)
 	if err != nil {
-		return nomad.Job{}, err
+		return nil, err
 	}
-	if mode == DeploymentModeAll {
-		job.Type = "system"
-		for i := range job.TaskGroups {
-			job.TaskGroups[i].Count = 0
+	if mode == DeploymentModeSelected {
+		out := make([]server.Server, 0, len(selected))
+		for _, serverID := range selected {
+			srv, err := s.servers.Get(ctx, serverID)
+			if err != nil {
+				return nil, err
+			}
+			if err := ensureAgentRuntimeReady(srv); err != nil {
+				return nil, err
+			}
+			out = append(out, srv)
 		}
-		return job, nil
+		return out, nil
 	}
-	if len(job.TaskGroups) == 0 {
-		return job, nil
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return nil, err
 	}
-	base := job.TaskGroups[0]
-	groups := make([]nomad.TaskGroup, 0, len(servers))
-	for _, serverID := range servers {
-		group, err := cloneTaskGroup(base)
+	out := make([]server.Server, 0, len(servers))
+	for _, srv := range servers {
+		if ensureAgentRuntimeReady(srv) == nil {
+			out = append(out, srv)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+func ensureAgentRuntimeReady(srv server.Server) error {
+	baseURL, ok := agentURLFromServer(srv)
+	if !ok || strings.TrimSpace(baseURL) == "" {
+		return panelerr.Validation("agent_required", "Agent is required for application runtime")
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+		return panelerr.Validation("agent_incompatible", "Agent is not compatible with application runtime")
+	}
+	return nil
+}
+
+func runtimeSpecForServer(app Application, spec appruntime.Spec, srv server.Server) appruntime.Spec {
+	out := spec
+	out.ApplicationID = app.ID
+	out.InstanceID = runtimeInstanceID(app.ID, srv.ID)
+	out.ContainerName = runtimeContainerName(app.ID, srv.ID)
+	if out.Env == nil {
+		out.Env = map[string]string{}
+	} else {
+		out.Env = cloneStringMap(out.Env)
+	}
+	for key, value := range map[string]string{
+		"PANEL_SERVER_ID":           srv.ID,
+		"PANEL_SERVER_NAME":         srv.Name,
+		"PANEL_SERVER_SSH_HOST":     srv.Host,
+		"PANEL_SERVER_SSH_PORT":     strconv.Itoa(srv.Port),
+		"PANEL_SERVER_SSH_USERNAME": srv.SSHUsername,
+	} {
+		if _, exists := out.Env[key]; !exists {
+			out.Env[key] = value
+		}
+	}
+	return out
+}
+
+func runtimeInstanceID(appID, serverID string) string {
+	return strings.TrimSpace(appID) + "-" + strings.TrimSpace(serverID)
+}
+
+func runtimeContainerName(appID, serverID string) string {
+	return "panel-" + sanitizeRuntimeName(runtimeInstanceID(appID, serverID))
+}
+
+func sanitizeRuntimeName(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	var b strings.Builder
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '_' || r == '.' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('-')
+	}
+	out := strings.Trim(b.String(), "-_.")
+	if out == "" {
+		return "runtime"
+	}
+	return out
+}
+
+func (s *Service) upsertRuntimeInstance(ctx context.Context, appID, serverID string, spec appruntime.Spec, desired, status, containerID, lastErr string) error {
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return err
+	}
+	now := formatTime(time.Now().UTC())
+	_, err = s.db.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(application_id,server_id) DO UPDATE SET
+			id=excluded.id,
+			container_name=excluded.container_name,
+			container_id=excluded.container_id,
+			desired_state=excluded.desired_state,
+			status=excluded.status,
+			runtime_spec_json=excluded.runtime_spec_json,
+			last_deployed_generation=excluded.last_deployed_generation,
+			last_error=excluded.last_error,
+			updated_at=excluded.updated_at`,
+		spec.InstanceID, appID, serverID, spec.ContainerName, containerID, desired, status, string(raw), spec.Generation, lastErr, now, now)
+	return err
+}
+
+func (s *Service) markRuntimeInstance(ctx context.Context, instanceID, desired, status, containerID, lastErr string) error {
+	now := formatTime(time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, `UPDATE application_instances SET desired_state=?,status=?,container_id=COALESCE(NULLIF(?, ''), container_id),last_error=?,updated_at=? WHERE id=?`,
+		desired, status, containerID, lastErr, now, instanceID)
+	return err
+}
+
+func (s *Service) runtimeInstances(ctx context.Context, appID string) ([]appruntime.Instance, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at FROM application_instances WHERE application_id=? ORDER BY server_id ASC`, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []appruntime.Instance{}
+	for rows.Next() {
+		instance, err := scanRuntimeInstance(rows)
 		if err != nil {
-			return nomad.Job{}, err
+			return nil, err
 		}
-		group.Name = deploymentTaskGroupName(base.Name, serverID)
-		group.Constraints = append(group.Constraints, nomad.Constraint{
-			LTarget: "${meta.panel_server_id}",
-			Operand: "=",
-			RTarget: serverID,
-		})
-		groups = append(groups, group)
+		out = append(out, instance)
 	}
-	job.Type = "service"
-	job.TaskGroups = groups
-	return job, nil
+	return out, rows.Err()
+}
+
+func (s *Service) runtimeInstance(ctx context.Context, appID, instanceID string) (appruntime.Instance, error) {
+	if strings.TrimSpace(instanceID) == "" {
+		return appruntime.Instance{}, panelerr.Validation("runtime_instance_required", "Runtime instance is required")
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at FROM application_instances WHERE application_id=? AND id=?`, appID, instanceID)
+	instance, err := scanRuntimeInstance(row)
+	if err == sql.ErrNoRows {
+		return appruntime.Instance{}, panelerr.NotFound("application_instance")
+	}
+	return instance, err
+}
+
+func scanRuntimeInstance(row appScanner) (appruntime.Instance, error) {
+	var instance appruntime.Instance
+	var rawSpec, created, updated string
+	if err := row.Scan(&instance.ID, &instance.ApplicationID, &instance.ServerID, &instance.ContainerName, &instance.ContainerID, &instance.DesiredState, &instance.Status, &rawSpec, &instance.LastDeployedGeneration, &instance.LastError, &created, &updated); err != nil {
+		return appruntime.Instance{}, err
+	}
+	_ = json.Unmarshal([]byte(rawSpec), &instance.RuntimeSpec)
+	instance.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	instance.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+	return instance, nil
+}
+
+func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appruntime.Instance) []appruntime.InstanceStatus {
+	out := make([]appruntime.InstanceStatus, 0, len(instances))
+	for _, instance := range instances {
+		status := appruntime.InstanceStatus{
+			InstanceID:    instance.ID,
+			ServerID:      instance.ServerID,
+			ContainerName: instance.ContainerName,
+			ContainerID:   instance.ContainerID,
+			Status:        instance.Status,
+			DesiredState:  instance.DesiredState,
+			LastError:     instance.LastError,
+			ObservedAt:    time.Now().UTC(),
+		}
+		if s.runtimeClient != nil && s.servers != nil {
+			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {
+				if baseURL, ok := agentURLFromServer(srv); ok {
+					if remote, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID); err == nil {
+						status = remote.InstanceStatus
+						status.ServerID = instance.ServerID
+						status.DesiredState = instance.DesiredState
+						_ = s.markRuntimeInstance(ctx, instance.ID, instance.DesiredState, status.Status, status.ContainerID, status.LastError)
+					}
+				}
+			}
+		}
+		out = append(out, status)
+	}
+	return out
+}
+
+func aggregateRuntimeStatus(enabled bool, instances []appruntime.InstanceStatus) string {
+	if !enabled {
+		return appruntime.StatusStopped
+	}
+	if len(instances) == 0 {
+		return appruntime.StatusPending
+	}
+	allRunning := true
+	for _, instance := range instances {
+		switch instance.Status {
+		case appruntime.StatusFailed:
+			return appruntime.StatusFailed
+		case appruntime.StatusRunning:
+		default:
+			allRunning = false
+		}
+	}
+	if allRunning {
+		return appruntime.StatusRunning
+	}
+	return appruntime.StatusPending
+}
+
+func agentURLFromServer(srv server.Server) (string, bool) {
+	if srv.Traits == nil || strings.TrimSpace(srv.Traits[agent.TraitEnabled]) != "true" {
+		return "", false
+	}
+	u := strings.TrimSpace(srv.Traits[agent.TraitURL])
+	return u, u != ""
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func normalizeDeploymentTargets(mode string, servers []string, persistentPath string) (string, []string, error) {
@@ -1734,12 +1993,12 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 	return reverseProxyConfigName(app), b.String(), nil
 }
 
-func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]nomad.ApplicationReverseProxyConfig, error) {
+func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]ApplicationReverseProxyConfig, error) {
 	apps, err := s.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := []nomad.ApplicationReverseProxyConfig{}
+	out := []ApplicationReverseProxyConfig{}
 	for _, app := range apps {
 		if !app.Enabled || len(app.ReverseProxy) == 0 {
 			continue
@@ -1756,15 +2015,15 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]nomad.A
 		if err != nil {
 			return nil, err
 		}
-		routes := make([]nomad.ReverseProxyRoute, 0, len(rules))
+		routes := make([]ReverseProxyRoute, 0, len(rules))
 		for _, rule := range rules {
-			paths := make([]nomad.ReverseProxyPath, 0, len(rule.Paths))
+			paths := make([]ReverseProxyPath, 0, len(rule.Paths))
 			for _, item := range rule.Paths {
-				paths = append(paths, nomad.ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket})
+				paths = append(paths, ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket})
 			}
-			routes = append(routes, nomad.ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, Paths: paths})
+			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, Paths: paths})
 		}
-		out = append(out, nomad.ApplicationReverseProxyConfig{
+		out = append(out, ApplicationReverseProxyConfig{
 			ApplicationID:     app.ID,
 			ApplicationName:   app.Name,
 			DeploymentMode:    app.DeploymentMode,
@@ -1804,61 +2063,6 @@ func validNginxPath(value string) bool {
 	return value != "" && !strings.ContainsAny(value, " \t\r\n;{}")
 }
 
-func cloneTaskGroup(group nomad.TaskGroup) (nomad.TaskGroup, error) {
-	cloned := group
-	cloned.Networks = append([]nomad.Network(nil), group.Networks...)
-	cloned.Services = append([]nomad.Service(nil), group.Services...)
-	cloned.Constraints = append([]nomad.Constraint(nil), group.Constraints...)
-	if group.Volumes != nil {
-		cloned.Volumes = map[string]nomad.VolumeRequest{}
-		for key, value := range group.Volumes {
-			cloned.Volumes[key] = value
-		}
-	}
-	cloned.Tasks = make([]nomad.Task, 0, len(group.Tasks))
-	for _, task := range group.Tasks {
-		next := task
-		if task.Config != nil {
-			next.Config = map[string]any{}
-			for key, value := range task.Config {
-				next.Config[key] = value
-			}
-		}
-		if task.Env != nil {
-			next.Env = map[string]string{}
-			for key, value := range task.Env {
-				next.Env[key] = value
-			}
-		}
-		next.Services = append([]nomad.Service(nil), task.Services...)
-		next.Templates = append([]nomad.Template(nil), task.Templates...)
-		next.VolumeMounts = append([]nomad.VolumeMount(nil), task.VolumeMounts...)
-		cloned.Tasks = append(cloned.Tasks, next)
-	}
-	return cloned, nil
-}
-
-func deploymentTaskGroupName(base, serverID string) string {
-	base = strings.TrimSpace(base)
-	if base == "" {
-		base = "app"
-	}
-	suffix := strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' {
-			return r
-		}
-		return '-'
-	}, serverID)
-	suffix = strings.Trim(suffix, "-")
-	if suffix == "" {
-		suffix = "server"
-	}
-	if len(suffix) > 24 {
-		suffix = suffix[:24]
-	}
-	return base + "-" + suffix
-}
-
 func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error {
 	current, err := s.Get(ctx, app.ID)
 	if err != nil {
@@ -1878,11 +2082,15 @@ func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error 
 	if len(issues) > 0 {
 		return panelerr.Validation("application_invalid", issues[0].Message)
 	}
-	if err := s.validatePlanRegister(ctx, job, &current); err != nil {
-		return err
-	}
 	current.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplication(ctx, current); err != nil {
+		return err
+	}
+	taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, current.ID, "Deploying application "+current.Name)
+	if err != nil {
+		return err
+	}
+	if err := s.deployRuntimeSpec(ctx, taskID, current, job); err != nil {
 		return err
 	}
 	return s.reconcileReverseProxy(ctx)
@@ -2003,13 +2211,6 @@ func applicationHash(spec appspec.Spec, variables map[string]string, persistentP
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func existingMounts(value any) []map[string]any {
-	if mounts, ok := value.([]map[string]any); ok {
-		return mounts
-	}
-	return []map[string]any{}
-}
-
 func normalizePersistentPath(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -2060,29 +2261,6 @@ func applicationFileMounts(mounts []appspec.Mount) []appspec.Mount {
 	return out
 }
 
-func injectNodeVariableEnv(job *nomad.Job) {
-	values := map[string]string{
-		"PANEL_SERVER_ID":           "${node.meta.panel_server_id}",
-		"PANEL_SERVER_NAME":         "${node.meta.panel_server_name}",
-		"PANEL_SERVER_SSH_HOST":     "${node.meta.panel_ssh_host}",
-		"PANEL_SERVER_SSH_PORT":     "${node.meta.panel_ssh_port}",
-		"PANEL_SERVER_SSH_USERNAME": "${node.meta.panel_ssh_username}",
-	}
-	for groupIndex := range job.TaskGroups {
-		for taskIndex := range job.TaskGroups[groupIndex].Tasks {
-			task := &job.TaskGroups[groupIndex].Tasks[taskIndex]
-			if task.Env == nil {
-				task.Env = map[string]string{}
-			}
-			for key, value := range values {
-				if _, exists := task.Env[key]; !exists {
-					task.Env[key] = value
-				}
-			}
-		}
-	}
-}
-
 func panelFileAllocationName(source string) string {
 	sum := sha256.Sum256([]byte(source))
 	return "managed/" + hex.EncodeToString(sum[:8]) + ".pem"
@@ -2093,35 +2271,6 @@ func panelFilePerms(source string) string {
 		return "0600"
 	}
 	return "0644"
-}
-
-func applicationFileAllocMountSource(rel string) string {
-	return "../alloc/panel-files/" + strings.TrimPrefix(path.Clean(rel), "/")
-}
-
-func applicationFileMountLogLines(job nomad.Job) []string {
-	lines := []string{}
-	for _, group := range job.TaskGroups {
-		for _, task := range group.Tasks {
-			for _, mount := range existingMounts(task.Config["mounts"]) {
-				source, _ := mount["source"].(string)
-				if !strings.HasPrefix(source, "../alloc/panel-files/") {
-					continue
-				}
-				target, _ := mount["target"].(string)
-				lines = append(lines, "Application file transferred by Nomad to "+source+" and mounted at "+target)
-			}
-		}
-	}
-	if len(lines) == 0 {
-		return nil
-	}
-	sort.Strings(lines)
-	return lines
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func (s *Service) Package(ctx context.Context, appID string) (PackageResult, error) {
@@ -2438,46 +2587,6 @@ func scanApplication(row appScanner) (Application, error) {
 	app.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	app.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 	return app, nil
-}
-
-func runtimeStatus(enabled bool, deployment nomad.Deployment, allocations []nomad.AllocationListItem) string {
-	if !enabled {
-		return "stopped"
-	}
-	if deploymentFailed(deployment.Status) && len(allocations) == 0 {
-		return "failed"
-	}
-	if len(allocations) == 0 {
-		return "pending"
-	}
-	allRunning := true
-	hasRunning := false
-	for _, alloc := range allocations {
-		switch alloc.ClientStatus {
-		case "failed", "lost":
-			return "failed"
-		case "running":
-			hasRunning = true
-		default:
-			allRunning = false
-		}
-	}
-	if allRunning {
-		return "running"
-	}
-	if deploymentFailed(deployment.Status) && !hasRunning {
-		return "failed"
-	}
-	return "pending"
-}
-
-func deploymentFailed(status string) bool {
-	switch strings.ToLower(strings.TrimSpace(status)) {
-	case "blocked", "cancelled", "failed":
-		return true
-	default:
-		return false
-	}
 }
 
 func boolInt(value bool) int {

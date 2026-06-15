@@ -7,8 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"panel/internal/agent"
 	"panel/internal/config"
 	"panel/internal/credential"
+	"panel/internal/linux"
+	"panel/internal/remoteops"
 	"panel/internal/secretstore"
 	"panel/internal/sshx"
 	"panel/internal/storage"
@@ -399,6 +402,114 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	}
 }
 
+func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	exec := &ufwManageFakeExec{}
+	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active", Rules: []remoteops.UFWRuleStatus{{Number: 7, To: "9443/tcp", Action: "ALLOW IN", From: "Anywhere"}}}}
+	svc := NewService(store.AppDB(), exec, taskSvc)
+	svc.SetAgentClient(agentClient)
+
+	state, err := svc.UFWState(context.Background(), "srv_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agentClient.ufwURL != "https://127.0.0.1:9443" || len(exec.commands) != 0 {
+		t.Fatalf("expected agent UFW status without SSH, agent=%q commands=%#v", agentClient.ufwURL, exec.commands)
+	}
+	if len(state.Rules) != 1 || state.Rules[0].Number != 7 {
+		t.Fatalf("unexpected agent UFW state: %#v", state)
+	}
+}
+
+func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	exec := &ufwManageFakeExec{}
+	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: false, Status: "not_installed"}}
+	svc := NewService(store.AppDB(), exec, taskSvc)
+	svc.SetAgentClient(agentClient)
+
+	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 443, Protocol: "tcp"}); err != nil {
+		t.Fatal(err)
+	}
+	commands := strings.Join(exec.commands, "\n")
+	if !strings.Contains(commands, "panel_ufw_installed=true") || !strings.Contains(commands, "ufw allow 443/tcp") {
+		t.Fatalf("expected SSH status and allow commands, got:\n%s", commands)
+	}
+	if agentClient.ufwURL != "" {
+		t.Fatalf("write operation should not query agent UFW status, got %q", agentClient.ufwURL)
+	}
+}
+
+func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth("0.9.0")})
+
+	svc.CheckConfiguredAgents(context.Background())
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible || srv.Traits[agent.TraitVersion] != "0.9.0" {
+		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
+	}
+}
+
+func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	svc.CheckConfiguredAgents(context.Background())
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible || srv.Traits[agent.TraitVersion] != agent.Version {
+		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
+	}
+}
+
 func assertNoDestructiveUFWCommands(t *testing.T, command string) {
 	t.Helper()
 	lower := strings.ToLower(command)
@@ -742,6 +853,42 @@ func (f *restartFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSp
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+type serverFakeAgentClient struct {
+	ufwURL string
+	ufw    remoteops.UFWStatus
+	health agent.HealthResponse
+	err    error
+}
+
+func agentHealth(version string) agent.HealthResponse {
+	return agent.HealthResponse{
+		Status:       "ok",
+		Version:      version,
+		Capabilities: agent.RequiredCapabilities,
+		Docker:       agent.DockerHealth{Host: agent.DefaultDockerHost, Status: "ok"},
+	}
+}
+
+func (f *serverFakeAgentClient) Health(context.Context, string) (agent.HealthResponse, error) {
+	if f.health.Version == "" {
+		f.health = agentHealth(agent.Version)
+	}
+	return f.health, f.err
+}
+func (f *serverFakeAgentClient) OSRelease(context.Context, string) (linux.OSRelease, error) {
+	return linux.OSRelease{}, f.err
+}
+func (f *serverFakeAgentClient) SystemTraits(context.Context, string) (map[string]string, error) {
+	return nil, f.err
+}
+func (f *serverFakeAgentClient) MetricsSnapshot(context.Context, string, string) (linux.MetricsSnapshot, error) {
+	return linux.MetricsSnapshot{}, f.err
+}
+func (f *serverFakeAgentClient) UFWStatus(_ context.Context, url string) (remoteops.UFWStatus, error) {
+	f.ufwURL = url
+	return f.ufw, f.err
+}
 
 type failingConnectivityExec struct{}
 

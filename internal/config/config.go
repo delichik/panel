@@ -13,24 +13,15 @@ import (
 )
 
 type Config struct {
-	ListenAddress               string      `json:"listenAddress"`
-	AdminUsername               string      `json:"adminUsername"`
-	AdminPasswordHash           string      `json:"adminPasswordHash"`
-	JWTSecret                   string      `json:"jwtSecret"`
-	DataRoot                    string      `json:"dataRoot"`
-	AppDatabase                 string      `json:"appDatabase"`
-	MetricsDatabase             string      `json:"metricsDatabase"`
-	RemoteCommandTimeoutSeconds int         `json:"remoteCommandTimeoutSeconds"`
-	Nomad                       NomadConfig `json:"nomad"`
-	Certificates                CertConfig  `json:"certificates"`
-}
-
-type NomadConfig struct {
-	Address    string `json:"address"`
-	Token      string `json:"token"`
-	Namespace  string `json:"namespace"`
-	Region     string `json:"region"`
-	Datacenter string `json:"datacenter"`
+	ListenAddress               string     `json:"listenAddress"`
+	AdminUsername               string     `json:"adminUsername"`
+	AdminPasswordHash           string     `json:"adminPasswordHash"`
+	JWTSecret                   string     `json:"jwtSecret"`
+	DataRoot                    string     `json:"dataRoot"`
+	AppDatabase                 string     `json:"appDatabase"`
+	MetricsDatabase             string     `json:"metricsDatabase"`
+	RemoteCommandTimeoutSeconds int        `json:"remoteCommandTimeoutSeconds"`
+	Certificates                CertConfig `json:"certificates"`
 }
 
 type CertConfig struct {
@@ -59,12 +50,6 @@ func Default() Config {
 		AppDatabase:                 filepath.Join("data", "db", "app.db"),
 		MetricsDatabase:             filepath.Join("data", "db", "metrics.db"),
 		RemoteCommandTimeoutSeconds: 30,
-		Nomad: NomadConfig{
-			Address:    "http://127.0.0.1:4646",
-			Namespace:  "default",
-			Region:     "global",
-			Datacenter: "dc1",
-		},
 		Certificates: CertConfig{
 			ACMEDirectoryURL:           "https://acme-v02.api.letsencrypt.org/directory",
 			DNSPropagationDelaySeconds: 30,
@@ -91,7 +76,6 @@ func Load(path string) (Config, error) {
 			return Config{}, err
 		}
 	}
-	applyNomadDefaults(&cfg)
 	applyCertificateDefaults(&cfg)
 	applyEnv(&cfg)
 	applyPathBase(&cfg, baseDir)
@@ -120,22 +104,6 @@ func absolutizePath(baseDir, value string) string {
 		return value
 	}
 	return filepath.Clean(filepath.Join(baseDir, value))
-}
-
-func applyNomadDefaults(cfg *Config) {
-	defaults := Default().Nomad
-	if cfg.Nomad.Address == "" {
-		cfg.Nomad.Address = defaults.Address
-	}
-	if cfg.Nomad.Namespace == "" {
-		cfg.Nomad.Namespace = defaults.Namespace
-	}
-	if cfg.Nomad.Region == "" {
-		cfg.Nomad.Region = defaults.Region
-	}
-	if cfg.Nomad.Datacenter == "" {
-		cfg.Nomad.Datacenter = defaults.Datacenter
-	}
 }
 
 func applyCertificateDefaults(cfg *Config) {

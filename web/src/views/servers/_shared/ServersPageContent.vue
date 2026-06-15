@@ -3,9 +3,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { serversApi, type CredentialInput, type ServerInput } from '@/api/servers';
-import { nomadApi } from '@/api/nomad';
 import { tasksApi } from '@/api/tasks';
-import type { CredentialDto, NomadControlPlaneDto, ProjectedNomadNodeDto, ServerDto, TaskDto } from '@/types/api';
+import type { CredentialDto, ServerDto, TaskDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
@@ -13,7 +12,6 @@ import { usePagination } from '@/composables/usePagination';
 const route = useRoute();
 const servers = ref<ServerDto[]>([]);
 const credentials = ref<CredentialDto[]>([]);
-const controlPlane = ref<NomadControlPlaneDto | null>(null);
 const selectedServerId = ref('');
 const loading = ref(false);
 const error = ref('');
@@ -25,7 +23,8 @@ const serverSaving = ref(false);
 const creatingServerTaskId = ref('');
 const ufwInstalling = ref<Record<string, boolean>>({});
 const restarting = ref<Record<string, boolean>>({});
-let controlPlaneLoadSeq = 0;
+const agentDeploying = ref<Record<string, boolean>>({});
+const defaultDockerHost = 'unix:///var/run/docker.sock';
 
 const activeTab = computed(() => (route.name === 'credentials' ? 'credentials' : 'servers'));
 
@@ -47,6 +46,7 @@ const serverForm = reactive({
   port: 22,
   sshUsername: '',
   credentialId: '',
+  dockerHost: defaultDockerHost,
   traitsRaw: [] as string[],
   notes: '',
 });
@@ -62,9 +62,10 @@ const credentialForm = reactive<CredentialInput>({
 
 const selectedServer = computed(() => servers.value.find((server) => server.id === selectedServerId.value) ?? null);
 const reachableCount = computed(() => servers.value.filter((server) => server.reachable).length);
-const managedCount = computed(() => servers.value.filter((server) => nomadProjectionForServer(server.id)?.kind === 'managed').length);
+const agentReadyCount = computed(() => servers.value.filter((server) => server.traits?.['agent.status'] === 'compatible').length);
 const credentialRows = computed(() => credentials.value ?? []);
 const serverCredentialMissing = computed(() => !serverForm.credentialId);
+const serverDockerHostMissing = computed(() => !serverForm.dockerHost.trim());
 const {
   page: serverPage,
   pageSize: serverPageSize,
@@ -136,26 +137,6 @@ function credentialById(id?: string | null) {
   return credentialRows.value.find((credential) => credential.id === id);
 }
 
-function nomadProjectionForServer(serverId: string): ProjectedNomadNodeDto | null {
-  return (controlPlane.value?.nodes ?? []).find((node) => node.serverId === serverId) ?? null;
-}
-
-function nomadStatusForServer(serverId: string) {
-  const projection = nomadProjectionForServer(serverId);
-  if (!projection) return { label: t('serversPage.notJoined'), color: 'secondary' };
-  if (projection.status === 'bootstrapping') return { label: t('serversPage.bootstrappingServer'), color: 'warning' };
-  if (projection.status === 'joining') return { label: t('serversPage.joiningClient'), color: 'warning' };
-  if (projection.status === 'failed') return { label: t('serversPage.joinFailed'), color: 'error' };
-  if (projection.kind === 'managed') return { label: t('serversPage.managedNode'), color: 'primary' };
-  return { label: projection.status || t('serversPage.notJoined'), color: 'secondary' };
-}
-
-function nomadMembershipForServer(serverId: string) {
-  const projection = nomadProjectionForServer(serverId);
-  if (projection?.kind === 'managed') return { label: t('serversPage.managedNode'), color: 'primary' };
-  return { label: t('serversPage.notJoined'), color: 'secondary' };
-}
-
 function resetServerForm(server?: ServerDto) {
   editing.value = server ?? null;
   creatingServerTaskId.value = '';
@@ -174,6 +155,7 @@ function resetServerForm(server?: ServerDto) {
     port: server?.port ?? 22,
     sshUsername: server?.sshUsername ?? '',
     credentialId: server?.credentialId || credentialRows.value[0]?.id || '',
+    dockerHost: server?.dockerHost || defaultDockerHost,
     traitsRaw,
     notes: server?.notes ?? '',
   });
@@ -220,21 +202,10 @@ async function load() {
       selectedServerId.value = serverRows[0]?.id ?? '';
     }
     error.value = '';
-    void loadControlPlane();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('serversPage.unableToLoadServers');
   } finally {
     loading.value = false;
-  }
-}
-
-async function loadControlPlane() {
-  const seq = ++controlPlaneLoadSeq;
-  try {
-    const result = await nomadApi.controlPlane();
-    if (seq === controlPlaneLoadSeq) controlPlane.value = result;
-  } catch {
-    if (seq === controlPlaneLoadSeq) controlPlane.value = null;
   }
 }
 
@@ -263,7 +234,7 @@ function buildServerPayload(): ServerInput {
       let key = parts[0].trim();
       const value = parts.slice(1).join('=').trim();
       if (key) {
-        if (!key.startsWith('custom.') && !key.startsWith('sys.')) key = 'custom.' + key;
+        if (!key.startsWith('custom.') && !key.startsWith('sys.') && !key.startsWith('agent.')) key = 'custom.' + key;
         traits[key] = value;
       }
     }
@@ -275,6 +246,7 @@ function buildServerPayload(): ServerInput {
     port: serverForm.port,
     sshUsername: serverForm.sshUsername,
     credentialId: serverForm.credentialId.trim(),
+    dockerHost: serverForm.dockerHost.trim(),
     traits,
     notes: serverForm.notes,
   };
@@ -283,6 +255,10 @@ function buildServerPayload(): ServerInput {
 async function saveServer() {
   if (serverCredentialMissing.value) {
     showMessage(t('serversPage.credentialRequired'), 'error');
+    return;
+  }
+  if (serverDockerHostMissing.value) {
+    showMessage(t('serversPage.dockerHostRequired'), 'error');
     return;
   }
   serverSaving.value = true;
@@ -387,6 +363,65 @@ function traitValue(server: ServerDto | null, key: string) {
   return server?.traits?.[key] || t('common.notAvailable');
 }
 
+function agentStatusForServer(server: ServerDto | null) {
+  const traits = server?.traits;
+  if (traits?.['agent.enabled'] !== 'true' || !traits?.['agent.url']) {
+    return { label: t('serversPage.agentNotDeployed'), color: 'secondary' };
+  }
+  if (traits['agent.status'] === 'compatible') {
+    return { label: t('serversPage.agentCompatible'), color: 'success' };
+  }
+  if (traits['agent.status'] === 'unavailable') {
+    return { label: t('serversPage.agentUnavailable'), color: 'error' };
+  }
+  return { label: t('serversPage.agentIncompatible'), color: 'warning' };
+}
+
+function shouldDeployAgent(server: ServerDto | null) {
+  return agentStatusForServer(server).color !== 'success';
+}
+
+async function downloadAgentBundle(server: ServerDto) {
+  agentDeploying.value = { ...agentDeploying.value, [server.id]: true };
+  try {
+    const bundle = await serversApi.issueAgentCertificate(server.id);
+    const deploymentBundle = {
+      serverId: server.id,
+      requiredAgentVersion: '1.0.0',
+      files: {
+        'ca.pem': bundle.ca,
+        'server.pem': bundle.certificate,
+        'server-key.pem': bundle.privateKey,
+      },
+      environment: {
+        PANEL_AGENT_LISTEN: bundle.listenAddress,
+        PANEL_AGENT_CA_FILE: '/etc/panel-agent/ca.pem',
+        PANEL_AGENT_CERT_FILE: '/etc/panel-agent/server.pem',
+        PANEL_AGENT_KEY_FILE: '/etc/panel-agent/server-key.pem',
+        PANEL_AGENT_DOCKER_HOST: bundle.dockerHost || server.dockerHost || defaultDockerHost,
+      },
+      serverTraits: {
+        'agent.enabled': 'true',
+        'agent.url': bundle.agentUrl,
+      },
+    };
+    const blob = new Blob([JSON.stringify(deploymentBundle, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `panel-agent-${server.id}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    showMessage(t('serversPage.agentBundleDownloaded'));
+  } catch (err) {
+    showMessage(err instanceof Error ? err.message : t('serversPage.agentDeployFailed'), 'error');
+  } finally {
+    const next = { ...agentDeploying.value };
+    delete next[server.id];
+    agentDeploying.value = next;
+  }
+}
+
 function networkInterfaces(traits?: Record<string, string> | null): NetworkInterface[] {
   const grouped = new Map<string, NetworkAddress[]>();
   for (const raw of (traits?.['sys.network_interfaces'] || '').split(', ')) {
@@ -481,8 +516,8 @@ onMounted(load);
           <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.reachable') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ reachableCount }}</div></div>
         </v-card>
         <v-card variant="outlined" class="summary-card">
-          <div class="summary-icon surface-warning"><v-icon size="18">mdi-cloud-braces</v-icon></div>
-          <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.nomadManaged') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ managedCount }}</div></div>
+          <div class="summary-icon surface-warning"><v-icon size="18">mdi-docker</v-icon></div>
+          <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.agentReady') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ agentReadyCount }}</div></div>
         </v-card>
       </div>
 
@@ -517,8 +552,8 @@ onMounted(load);
                 <span class="server-name text-truncate">{{ server.name }}</span>
                 <span class="server-meta text-truncate">{{ server.host }}:{{ server.port }}</span>
               </span>
-              <v-chip :color="nomadMembershipForServer(server.id).color" size="x-small" variant="tonal" label>
-                {{ nomadMembershipForServer(server.id).label }}
+              <v-chip :color="agentStatusForServer(server).color" size="x-small" variant="tonal" label>
+                {{ agentStatusForServer(server).label }}
               </v-chip>
             </button>
             <div v-if="servers.length === 0" class="empty-list">
@@ -582,7 +617,25 @@ onMounted(load);
               <section>
                 <div class="section-title">{{ t('serversPage.runtime') }}</div>
                 <div class="property-grid">
-                  <div><span>{{ t('serversPage.nomad') }}</span><v-chip :color="nomadStatusForServer(selectedServer.id).color" size="small" variant="tonal" label>{{ nomadStatusForServer(selectedServer.id).label }}</v-chip></div>
+                  <div>
+                    <span>{{ t('serversPage.agent') }}</span>
+                    <div class="ufw-actions">
+                      <v-chip :color="agentStatusForServer(selectedServer).color" size="small" variant="tonal" label>{{ agentStatusForServer(selectedServer).label }}</v-chip>
+                      <v-btn
+                        v-if="shouldDeployAgent(selectedServer)"
+                        size="small"
+                        color="primary"
+                        variant="outlined"
+                        prepend-icon="mdi-download"
+                        class="text-none"
+                        :loading="agentDeploying[selectedServer.id]"
+                        @click="downloadAgentBundle(selectedServer)"
+                      >
+                        {{ t('serversPage.deployAgent') }}
+                      </v-btn>
+                    </div>
+                  </div>
+                  <div><span>{{ t('serversPage.dockerHost') }}</span><strong>{{ selectedServer.dockerHost || defaultDockerHost }}</strong></div>
                   <div><span>{{ t('serversPage.distro') }}</span><v-chip :color="selectedServer.os?.supported ? 'success' : 'warning'" size="small" variant="tonal" label>{{ selectedServer.os?.prettyName || t('common.unknown') }}</v-chip></div>
                   <div>
                     <span>{{ t('serversPage.ufw') }}</span>
@@ -635,7 +688,18 @@ onMounted(load);
                   <div><span>{{ t('serversPage.credential') }}</span><strong>{{ credentialById(selectedServer.credentialId)?.name || t('common.notAvailable') }}</strong></div>
                   <div><span>{{ t('serversPage.lastChecked') }}</span><strong>{{ formatDate(selectedServer.lastCheckedAt) }}</strong></div>
                   <div><span>{{ t('serversPage.updated') }}</span><strong>{{ formatDate(selectedServer.updatedAt) }}</strong></div>
+                  <div v-if="selectedServer.traits?.['agent.version']"><span>{{ t('serversPage.agentVersion') }}</span><strong>{{ selectedServer.traits['agent.version'] }}</strong></div>
+                  <div v-if="selectedServer.traits?.['agent.last_checked_at']"><span>{{ t('serversPage.agentLastChecked') }}</span><strong>{{ formatDate(selectedServer.traits['agent.last_checked_at']) }}</strong></div>
                 </div>
+                <v-alert
+                  v-if="selectedServer.traits?.['agent.last_error']"
+                  :type="selectedServer.traits?.['agent.status'] === 'unavailable' ? 'error' : 'warning'"
+                  variant="tonal"
+                  density="compact"
+                  class="mt-3"
+                >
+                  {{ selectedServer.traits['agent.last_error'] }}
+                </v-alert>
               </section>
 
               <section v-if="customTraits(selectedServer).length">
@@ -743,6 +807,16 @@ onMounted(load);
                 density="comfortable"
                 class="span-all"
               />
+              <v-text-field
+                v-model="serverForm.dockerHost"
+                :label="t('serversPage.dockerHost')"
+                :hint="t('serversPage.dockerHostHint')"
+                :rules="[value => Boolean(String(value || '').trim()) || t('serversPage.dockerHostRequired')]"
+                variant="outlined"
+                density="comfortable"
+                persistent-hint
+                class="span-all"
+              />
               <v-combobox
                 v-model="serverForm.traitsRaw"
                 :label="t('serversPage.customTraitsLabel')"
@@ -768,7 +842,7 @@ onMounted(load);
         <v-divider />
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" :disabled="serverSaving" @click="serverDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" :loading="serverSaving" :disabled="serverCredentialMissing" @click="saveServer">{{ editing ? t('common.save') : t('common.create') }}</v-btn>
+          <v-btn color="primary" variant="flat" class="text-none" :loading="serverSaving" :disabled="serverCredentialMissing || serverDockerHostMissing" @click="saveServer">{{ editing ? t('common.save') : t('common.create') }}</v-btn>
         </v-card-actions>
       </v-card>
     </v-dialog>

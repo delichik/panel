@@ -389,7 +389,7 @@ func TestExpireStaleQueuedWorkerTasksOnlyMarksOneShotWorkerTypes(t *testing.T) {
 	defer store.Close()
 	ctx := context.Background()
 	taskSvc := tasks.NewService(store.AppDB())
-	workerTask, err := taskSvc.Create(ctx, tasks.CreateInput{Type: "nomad_client_join", Summary: "Joining server"})
+	workerTask, err := taskSvc.Create(ctx, tasks.CreateInput{Type: "server_ufw_install", Summary: "Installing firewall"})
 	if err != nil {
 		t.Fatal(err)
 	}

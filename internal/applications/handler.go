@@ -268,10 +268,10 @@ func (h *Handler) Runtime(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
 	result, err := h.service.Logs(r.Context(), applicationID(r.URL.Path), LogInput{
-		AllocID: r.URL.Query().Get("allocId"),
-		Task:    r.URL.Query().Get("task"),
-		Type:    r.URL.Query().Get("type"),
-		Tail:    tail,
+		InstanceID:    r.URL.Query().Get("instanceId"),
+		ContainerName: r.URL.Query().Get("containerName"),
+		Type:          r.URL.Query().Get("type"),
+		Tail:          tail,
 	})
 	if err != nil {
 		httpx.Error(w, err)

@@ -2,14 +2,13 @@ package app
 
 import (
 	"context"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"panel/internal/agent"
 	"panel/internal/applications"
 	"panel/internal/auth"
 	"panel/internal/certs"
@@ -20,7 +19,6 @@ import (
 	"panel/internal/keyassets"
 	"panel/internal/logging"
 	"panel/internal/metrics"
-	"panel/internal/nomad"
 	"panel/internal/overview"
 	"panel/internal/packages"
 	"panel/internal/panelerr"
@@ -50,7 +48,7 @@ func New(cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	nomadTLS, err := nomad.EnsureTLSAssets(cfg.DataRoot)
+	agentTLS, err := agent.EnsureTLSAssets(cfg.DataRoot)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
@@ -87,52 +85,19 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
+	agentClient, err := agent.NewHTTPClient(agentTLS, cfg.RemoteTimeout())
+	if err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc)
+	serverSvc.SetAgentClient(agentClient)
+	serverSvc.SetAgentTLSAssets(agentTLS)
 	serverSvc.SetMetricsDB(store.MetricsDB())
-	runtimeNomad := settingsSvc.NomadConfig(cfg.Nomad)
-	nomadClientCfg := nomad.Config{
-		Address:    runtimeNomad.Address,
-		Token:      runtimeNomad.Token,
-		Namespace:  runtimeNomad.Namespace,
-		Region:     runtimeNomad.Region,
-		Datacenter: runtimeNomad.Datacenter,
-	}
-	if usesManagedNomadTLS(cfg.Nomad.Address) {
-		nomadClientCfg.TLS = &nomad.TLSConfig{
-			CAFile:             nomadTLS.CAPath,
-			CertFile:           nomadTLS.ClientCertPath,
-			KeyFile:            nomadTLS.ClientKeyPath,
-			SkipVerifyHostname: true,
-		}
-	}
-	nomadClient := nomad.NewClient(nomadClientCfg, nil)
-	nomadClient.SetConfigProvider(func(base nomad.Config) nomad.Config {
-		runtime := settingsSvc.NomadConfig(config.NomadConfig{
-			Address:    base.Address,
-			Token:      base.Token,
-			Namespace:  base.Namespace,
-			Region:     base.Region,
-			Datacenter: base.Datacenter,
-		})
-		base.Namespace = runtime.Namespace
-		base.Region = runtime.Region
-		base.Datacenter = runtime.Datacenter
-		return base
-	})
-	appNomad := settingsSvc.ApplicationNomadConfig()
-	applicationSvc := applications.NewService(store.AppDB(), nomadClient, taskSvc, applications.Config{
-		Namespace:  appNomad.Namespace,
-		Region:     appNomad.Region,
-		Datacenter: appNomad.Datacenter,
-	})
-	applicationSvc.SetConfigProvider(func() applications.Config {
-		runtime := settingsSvc.ApplicationNomadConfig()
-		return applications.Config{Namespace: runtime.Namespace, Region: runtime.Region, Datacenter: runtime.Datacenter}
-	})
-	nomadJoinSvc := nomad.NewJoinService(serverSvc, nomadClient, executor, taskSvc, runtimeNomad, nomadTLS)
-	nomadJoinSvc.SetDataRoot(cfg.DataRoot)
-	nomadJoinSvc.SetConfigProvider(settingsSvc.NomadConfig)
+	applicationSvc := applications.NewService(store.AppDB(), agentClient, taskSvc, applications.Config{})
+	applicationSvc.SetServerProvider(serverSvc)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor)
+	metricsSvc.SetAgentClient(agentClient)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
 	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
@@ -141,7 +106,6 @@ func New(cfg config.Config) (*App, error) {
 	}
 	dnsSvc := dns.NewService(store.AppDB(), secretStore)
 	certSvc := certs.NewService(store.AppDB(), cfg, dnsSvc, taskSvc)
-	certSvc.SetNomadTLSAssets(nomadTLS)
 	certSvc.SetConfigProvider(settingsSvc.ApplyToConfig)
 	certSvc.SetKeyAssetProvider(keyAssetSvc)
 	systemSvc := systeminfo.NewService(nil)
@@ -150,26 +114,19 @@ func New(cfg config.Config) (*App, error) {
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, system: systemSvc}
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
 	applicationSvc.SetPanelFileProvider(certSvc)
-	applicationSvc.SetReverseProxyReconciler(nomadJoinSvc)
 	keyAssetSvc.SetApplicationRefresher(applicationSvc)
-	nomadJoinSvc.SetApplicationProxySource(applicationSvc)
-	nomadJoinSvc.SetEnabledApplicationRestorer(applicationSvc)
-	nomadJoinSvc.SetReverseProxyCertificateSource(certSvc)
 	certSvc.SetApplicationRefresher(applicationSvc)
 	sched := scheduler.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc)
 	sched.SetCertificateRenewer(certSvc)
 	a.sched = sched
-	nomadJoinSvc.RestoreNomadAddressFromBootstrap(context.Background())
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		if err := nomadJoinSvc.ReconcileReverseProxy(ctx); err != nil {
-			logging.L().Warn("reverse proxy reconciliation failed", zap.Error(err))
-		}
+		serverSvc.CheckConfiguredAgents(ctx)
 	}()
 	sched.Start(context.Background())
 	logging.L().Info("background services started")
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), nomad.NewHandler(nomadClient, nomadJoinSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -185,7 +142,7 @@ func (a *App) Close() error {
 }
 func (a *App) Handler() http.Handler { return logging.HTTPMiddleware(a.mux) }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, nomadH *nomad.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -280,6 +237,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			serverH.Test(w, r)
 		case r.Method == http.MethodPost && serverActionPath(path, "restart"):
 			serverH.Restart(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/servers/") && strings.HasSuffix(path, "/agent/certificate"):
+			serverH.IssueAgentCertificate(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/ufw/install"):
 			serverH.InstallUFW(w, r)
 		case r.Method == http.MethodGet && strings.HasSuffix(path, "/ufw"):
@@ -354,32 +313,6 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			applicationH.Update(w, r)
 		case r.Method == http.MethodDelete && strings.HasPrefix(path, "/api/v1/applications/") && applicationResourcePath(path):
 			applicationH.Delete(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/status":
-			nomadH.Status(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/certificates/builtin":
-			nomadH.BuiltinCertificates(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/certificates/builtin/rotate":
-			nomadH.RotateTLS(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/nodes":
-			nomadH.Nodes(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/control-plane":
-			nomadH.ControlPlane(w, r)
-		case r.Method == http.MethodGet && path == "/api/v1/nomad/join-candidates":
-			nomadH.JoinCandidates(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/nomad/join":
-			nomadH.JoinClient(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/nomad/bootstrap-server":
-			nomadH.BootstrapServer(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/nomad/redeploy-node":
-			nomadH.RedeployNode(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/nomad/rebuild-cluster":
-			nomadH.RebuildCluster(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/nomad/switch-server":
-			nomadH.SwitchServer(w, r)
-		case r.Method == http.MethodPost && path == "/api/v1/nomad/remove-node":
-			nomadH.RemoveNode(w, r)
-		case r.Method == http.MethodPut && path == "/api/v1/nomad/reverse-proxy":
-			nomadH.UpdateReverseProxy(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/tasks":
 			taskH.List(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(path, "/retry") && strings.HasPrefix(path, "/api/v1/tasks/"):
@@ -502,21 +435,6 @@ func keyAssetExportDownloadPath(path string) bool {
 func keyAssetImportExecutePath(path string) bool {
 	parts := routeParts(path)
 	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "key-assets" && parts[3] == "imports" && parts[4] != "" && parts[5] == "execute"
-}
-
-func usesManagedNomadTLS(address string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(address))
-	if err != nil || parsed.Host == "" {
-		return true
-	}
-	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	if host == "" || host == "localhost" {
-		return true
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
 }
 
 func (a *App) static(w http.ResponseWriter, r *http.Request) {

@@ -40,13 +40,12 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 		LogLevel:                         "debug",
 		RemoteCommandTimeoutSeconds:      45,
 		Branding:                         &RuntimeBrandingSettings{LoginTitle: "Operations", LoginSubtitle: "Manage infrastructure"},
-		Nomad:                            &RuntimeNomadSettings{Namespace: "apps", Region: "eu", Datacenter: "dc2"},
 		Certificates:                     &RuntimeCertificateSettings{Email: "admin@example.com", DNSPropagationDelaySeconds: 10},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.LogLevel != "debug" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Nomad.Namespace != "apps" || got.Nomad.Region != "eu" || got.Nomad.Datacenter != "dc2" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
+	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.LogLevel != "debug" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
 	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {

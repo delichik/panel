@@ -3,7 +3,6 @@ import type {
   CertificateDto,
   CertificateIssueDto,
   CertificateIssueInput,
-  NomadBuiltinCertificateDto,
   SelfSignedCAInput,
   SelfSignedCertificateDto,
   SelfSignedLeafInput,
@@ -21,12 +20,6 @@ export const certificatesApi = {
   },
   renew(certificateId: string) {
     return apiClient.post<{ renewed: boolean }>(`/certificates/${certificateId}/renew`);
-  },
-  builtin() {
-    return apiClient.get<NomadBuiltinCertificateDto[]>('/certificates/builtin');
-  },
-  rotateBuiltin() {
-    return apiClient.post<{ taskId: string }>('/certificates/builtin/rotate');
   },
   listSelfSigned() {
     return apiClient.get<SelfSignedCertificateDto[]>('/self-signed-certificates');

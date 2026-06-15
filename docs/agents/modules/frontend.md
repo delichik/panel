@@ -57,12 +57,9 @@
   - 组内共享：`_shared/`
 - Runtime 菜单组：`web/src/views/runtime/`
   - 应用：`applications/index.vue`
-  - Nomad 节点：`nomad/nodes/index.vue`
-  - Nomad 初始化：`nomad/setup/index.vue`
-  - 组内共享：`nomad/_shared/`
+  - 应用运行时面板和日志面板位于 `applications/` 目录内，展示 agent runtime 实例。
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`
 - 证书菜单组：`web/src/views/certificates/`
-  - 内置证书：`builtin/index.vue`
   - 域名证书：`domains/index.vue`
   - 密钥与证书：`key-assets/index.vue`
   - 旧 `/dns/certificates` 重定向到 `/certificates/domains`
@@ -71,7 +68,6 @@
   - 通用：`general/index.vue`
     - 运行时表单包含指标保留、采集间隔、远程命令超时、清理计划、Token 过期时间、语言和后端日志等级；日志等级保存为稳定值 `debug`、`info`、`warn` 或 `error`。
   - 安全：`security/index.vue`
-  - Nomad：`nomad/index.vue`
   - 证书：`certificates/index.vue`
   - 系统：`system/index.vue`
   - 组内共享：`_shared/`

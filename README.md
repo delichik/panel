@@ -2,7 +2,7 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Panel is an alpha-stage server operations panel for small Linux fleets. It helps you connect Debian and Ubuntu servers over SSH, see their health at a glance, run package maintenance, bootstrap or join Nomad nodes, deploy container applications, and manage DNS and ACME certificates from one web UI.
+Panel is an alpha-stage server operations panel for small Linux fleets. It helps you connect Debian and Ubuntu servers over SSH, see their health at a glance, run package maintenance, deploy container applications through panel-agent and Docker Engine API, and manage DNS and ACME certificates from one web UI.
 
 The project is built for people who run their own servers and for humans sharing code with each other. It aims to stay understandable: a Go backend, a Vue frontend, local SQLite data, and task commands that are easy to run.
 
@@ -13,9 +13,9 @@ The project is built for people who run their own servers and for humans sharing
 - Collect overview metrics for CPU, memory, disk, network, uptime, kernel, and load.
 - Refresh APT package updates and run selected or full upgrades.
 - Install UFW where supported.
-- Bootstrap a Nomad server or join servers as Nomad clients.
-- View Nomad nodes, jobs, deployments, evaluations, and services.
-- Deploy Docker-based applications through Nomad.
+- Deploy panel-agent to servers with mTLS and a configured Docker host.
+- Check agent compatibility, Docker health, and runtime status.
+- Deploy Docker-based applications through panel-agent using Docker Engine API.
 - Configure application files, variables, mounts, ports, placement, runtime actions, logs, and reverse proxy routes.
 - Manage Cloudflare domains and issue ACME certificates.
 - Track background tasks and task logs.
@@ -47,7 +47,7 @@ Notes:
 - Password or private-key SSH credentials are supported.
 - Many maintenance actions require root or passwordless sudo.
 - Package maintenance uses APT.
-- Nomad setup installs Nomad, Docker, and CNI plugins on supported systems when needed.
+- Application runtime requires panel-agent on target servers and a reachable Docker Engine endpoint. The default Docker host is `unix:///var/run/docker.sock`.
 
 ## Quick Start
 
@@ -129,11 +129,9 @@ Common config values:
 | `dataRoot` | Root directory for Panel data | `data` |
 | `appDatabase` | Main SQLite database | `data/db/app.db` |
 | `metricsDatabase` | Metrics SQLite database | `data/db/metrics.db` |
-| `nomad.address` | Nomad HTTP API address | `http://127.0.0.1:4646` |
-| `nomad.token` | Nomad ACL token, when required | Empty |
 | `certificates.acmeDirectoryUrl` | ACME directory URL | Let's Encrypt production |
 
-Administrator username/password, JWT secret, remote command timeout, Nomad namespace/region/datacenter, certificate email, and certificate DNS propagation delay are stored in the application database and configured from **Settings** in the UI.
+Administrator username/password, JWT secret, remote command timeout, certificate email, and certificate DNS propagation delay are stored in the application database and configured from **Settings** in the UI.
 
 Supported environment variables:
 
@@ -144,7 +142,7 @@ Supported environment variables:
 - `PANEL_METRICS_DATABASE`
 - `PANEL_CERT_ACME_DIRECTORY_URL`
 
-Runtime settings such as language, token expiration, metrics retention, Nomad scope, security settings, and certificate defaults can be adjusted from the UI.
+Runtime settings such as language, token expiration, metrics retention, security settings, and certificate defaults can be adjusted from the UI.
 
 Development-only web proxy variable:
 
@@ -206,7 +204,7 @@ Useful entry points:
 - Route wiring and static UI serving: `internal/app/app.go`
 - Database migrations: `internal/storage/migrations.go`
 - Target OS adapters: `internal/linux/`
-- Nomad control plane logic: `internal/nomad/`
+- Agent runtime and Docker API logic: `internal/agent/`, `internal/appruntime/`
 - Application deployment logic: `internal/applications/`
 - Frontend routes: `web/src/router/index.ts`
 - Frontend i18n setup: `web/src/i18n/index.ts`

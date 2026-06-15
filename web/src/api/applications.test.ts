@@ -59,13 +59,13 @@ describe('applicationsApi', () => {
     await api.restart('app/1');
     await api.updateImage('app/1');
     await api.runtime('app/1');
-    await api.logs('app/1', { allocId: 'alloc/1', task: 'web', type: 'stdout', tail: 50 });
+    await api.logs('app/1', { instanceId: 'app/1-srv/1', containerName: 'web', type: 'stdout', tail: 50 });
 
     expect(fetcher).toHaveBeenNthCalledWith(1, '/api/v1/applications/app%2F1/deploy', expect.objectContaining({ method: 'POST' }));
     expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/applications/app%2F1/stop', expect.objectContaining({ method: 'POST' }));
     expect(fetcher).toHaveBeenNthCalledWith(3, '/api/v1/applications/app%2F1/restart', expect.objectContaining({ method: 'POST' }));
     expect(fetcher).toHaveBeenNthCalledWith(4, '/api/v1/applications/app%2F1/image/update', expect.objectContaining({ method: 'POST' }));
     expect(fetcher).toHaveBeenNthCalledWith(5, '/api/v1/applications/app%2F1/runtime', expect.objectContaining({ method: 'GET' }));
-    expect(fetcher).toHaveBeenNthCalledWith(6, '/api/v1/applications/app%2F1/logs?allocId=alloc%2F1&task=web&type=stdout&tail=50', expect.objectContaining({ method: 'GET' }));
+    expect(fetcher).toHaveBeenNthCalledWith(6, '/api/v1/applications/app%2F1/logs?instanceId=app%2F1-srv%2F1&containerName=web&type=stdout&tail=50', expect.objectContaining({ method: 'GET' }));
   });
 });

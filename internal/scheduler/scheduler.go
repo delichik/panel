@@ -30,11 +30,6 @@ const StaleQueuedWorkerTaskAfter = 10 * time.Minute
 const RunningTaskCheckInterval = 5 * time.Second
 
 var staleQueuedWorkerTaskTypes = []string{
-	"nomad_client_join",
-	"nomad_server_bootstrap",
-	"nomad_node_remove",
-	"nomad_cluster_rebuild",
-	"nomad_server_switch",
 	"server_ufw_install",
 }
 

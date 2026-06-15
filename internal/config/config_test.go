@@ -25,7 +25,7 @@ func TestConfigValidationRejectsWeakJWTSecret(t *testing.T) {
 	}
 }
 
-func TestLoadNomadConfig(t *testing.T) {
+func TestLoadRejectsLegacyRuntimeConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	raw := `{
@@ -36,7 +36,7 @@ func TestLoadNomadConfig(t *testing.T) {
 		"appDatabase": "data/db/app.db",
 		"metricsDatabase": "data/db/metrics.db",
 		"nomad": {
-			"address": "https://nomad.service:4646",
+			"address": "https://runtime.service:4646",
 			"token": "root-token",
 			"namespace": "apps",
 			"region": "global",
@@ -46,22 +46,9 @@ func TestLoadNomadConfig(t *testing.T) {
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Nomad.Address != "https://nomad.service:4646" || cfg.Nomad.Token != "root-token" || cfg.Nomad.Namespace != "apps" || cfg.Nomad.Region != "global" || cfg.Nomad.Datacenter != "dc1" {
-		t.Fatalf("nomad config = %#v", cfg.Nomad)
-	}
-}
-
-func TestLoadNomadConfigDefaults(t *testing.T) {
-	cfg, err := Load("")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Nomad.Address != "http://127.0.0.1:4646" || cfg.Nomad.Token != "" || cfg.Nomad.Namespace != "default" || cfg.Nomad.Region != "global" || cfg.Nomad.Datacenter != "dc1" {
-		t.Fatalf("nomad defaults = %#v", cfg.Nomad)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("expected unknown field error, got %v", err)
 	}
 }
 

@@ -2,13 +2,16 @@ package metrics
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"panel/internal/agent"
 	"panel/internal/config"
 	"panel/internal/linux"
+	"panel/internal/remoteops"
 	"panel/internal/server"
 	"panel/internal/sshx"
 	"panel/internal/storage"
@@ -96,9 +99,111 @@ func TestCollectUsesUbuntuAdapter(t *testing.T) {
 	}
 }
 
+func TestCollectUsesAgentWhenConfigured(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &collectMetricsExecutor{stdout: "bad"}
+	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.AppDB()))
+	agentClient := &fakeAgentClient{snapshot: linux.MetricsSnapshot{CPUUsagePercent: 12, MemoryTotalBytes: 100, Status: linux.SystemStatus{Hostname: "agent-host"}}}
+	svc := NewService(store.MetricsDB(), serverSvc, exec)
+	svc.SetAgentClient(agentClient)
+
+	if err := svc.CollectAt(context.Background(), "srv", time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if agentClient.metricsURL != "https://127.0.0.1:9443" || exec.command != "" {
+		t.Fatalf("expected agent metrics without SSH fallback, agent=%q ssh=%q", agentClient.metricsURL, exec.command)
+	}
+	series, err := svc.Query(context.Background(), "srv", "1h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 12 {
+		t.Fatalf("unexpected agent-collected series: %#v", series)
+	}
+}
+
+func TestCollectFailsWhenConfiguredAgentFails(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &collectMetricsExecutor{stdout: "100 40\n8000 2000\n100000 50000\n1000000000 10 20\n2000000000 20 30\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3"}
+	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.AppDB()))
+	svc := NewService(store.MetricsDB(), serverSvc, exec)
+	svc.SetAgentClient(&fakeAgentClient{err: errors.New("agent down")})
+
+	if err := svc.CollectAt(context.Background(), "srv", time.Now().UTC()); err == nil {
+		t.Fatal("expected agent failure")
+	}
+	if exec.command != "" {
+		t.Fatalf("expected no SSH fallback, got %q", exec.command)
+	}
+}
+
 type collectMetricsExecutor struct {
 	command string
 	stdout  string
+}
+
+type fakeAgentClient struct {
+	metricsURL string
+	snapshot   linux.MetricsSnapshot
+	err        error
+}
+
+func (f *fakeAgentClient) Health(context.Context, string) (agent.HealthResponse, error) {
+	return agent.HealthResponse{}, f.err
+}
+func (f *fakeAgentClient) OSRelease(context.Context, string) (linux.OSRelease, error) {
+	return linux.OSRelease{}, f.err
+}
+func (f *fakeAgentClient) SystemTraits(context.Context, string) (map[string]string, error) {
+	return nil, f.err
+}
+func (f *fakeAgentClient) MetricsSnapshot(_ context.Context, url string, serverID string) (linux.MetricsSnapshot, error) {
+	f.metricsURL = url
+	if f.err != nil {
+		return linux.MetricsSnapshot{}, f.err
+	}
+	snap := f.snapshot
+	snap.ServerID = serverID
+	return snap, nil
+}
+func (f *fakeAgentClient) UFWStatus(context.Context, string) (remoteops.UFWStatus, error) {
+	return remoteops.UFWStatus{}, f.err
 }
 
 func (f *collectMetricsExecutor) Exec(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {

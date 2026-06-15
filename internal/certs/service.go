@@ -17,8 +17,8 @@ import (
 	"panel/internal/dns"
 	"panel/internal/id"
 	"panel/internal/keyassets"
-	"panel/internal/nomad"
 	"panel/internal/panelerr"
+	"panel/internal/proxycert"
 	"panel/internal/tasks"
 )
 
@@ -37,7 +37,6 @@ type Service struct {
 	tasks            *tasks.Service
 	issuer           string
 	applications     applicationRefresher
-	nomadTLS         *nomad.TLSAssets
 	keyAssets        keyAssetProvider
 }
 
@@ -59,7 +58,7 @@ type keyAssetProvider interface {
 	Delete(ctx context.Context, assetID string) error
 	PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error)
 	ReadPanelFile(ctx context.Context, source string) ([]byte, error)
-	ReverseProxyCertificates(ctx context.Context) ([]nomad.ReverseProxyCertificate, error)
+	ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error)
 }
 
 func NewService(db *sql.DB, cfg config.Config, domains domainResolver, taskSvc *tasks.Service) *Service {
@@ -72,10 +71,6 @@ func NewServiceWithProvider(db *sql.DB, cfg config.Config, provider Provider, ta
 
 func (s *Service) SetApplicationRefresher(refresher applicationRefresher) {
 	s.applications = refresher
-}
-
-func (s *Service) SetNomadTLSAssets(assets *nomad.TLSAssets) {
-	s.nomadTLS = assets
 }
 
 func (s *Service) SetKeyAssetProvider(provider keyAssetProvider) {
@@ -522,13 +517,6 @@ func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFil
 			)
 		}
 	}
-	if s.nomadTLS != nil {
-		out = append(out,
-			applications.PanelFileDefinition{ID: "nomad_ca:certificate", ResourceID: "nomad_ca", ResourceType: "nomad_builtin", Name: "Nomad CA", Kind: "certificate", Source: "certificate:nomad_ca:certificate"},
-			applications.PanelFileDefinition{ID: "nomad_agent:certificate", ResourceID: "nomad_agent", ResourceType: "nomad_builtin", Name: "Nomad agent", Kind: "certificate", Source: "certificate:nomad_agent:certificate"},
-			applications.PanelFileDefinition{ID: "nomad_panel_client:certificate", ResourceID: "nomad_panel_client", ResourceType: "nomad_builtin", Name: "Panel Nomad client", Kind: "certificate", Source: "certificate:nomad_panel_client:certificate"},
-		)
-	}
 	return out, nil
 }
 
@@ -542,9 +530,6 @@ func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, err
 			return nil, panelerr.NotFound("Panel key asset file")
 		}
 		return s.keyAssets.ReadPanelFile(ctx, source)
-	}
-	if data, ok := s.readNomadPanelFile(parts[1], parts[2]); ok {
-		return data, nil
 	}
 	if cert, err := s.Get(ctx, parts[1]); err == nil {
 		switch parts[2] {
@@ -574,22 +559,6 @@ func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, err
 		return nil, panelerr.Validation("panel_file_kind_invalid", "Panel certificate file kind is invalid")
 	}
 	return nil, panelerr.NotFound("Panel certificate file")
-}
-
-func (s *Service) readNomadPanelFile(resourceID, kind string) ([]byte, bool) {
-	if s.nomadTLS == nil || kind != "certificate" {
-		return nil, false
-	}
-	switch resourceID {
-	case "nomad_ca":
-		return append([]byte(nil), s.nomadTLS.CAPEM...), true
-	case "nomad_agent":
-		return append([]byte(nil), s.nomadTLS.AgentCertPEM...), true
-	case "nomad_panel_client":
-		return append([]byte(nil), s.nomadTLS.ClientCertPEM...), true
-	default:
-		return nil, false
-	}
 }
 
 func (s *Service) certificateInUse(ctx context.Context, certID string, domains []string, variableName string) (bool, error) {
@@ -643,12 +612,12 @@ func certificateDomainMatches(pattern, domain string) bool {
 	return false
 }
 
-func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.ReverseProxyCertificate, error) {
+func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error) {
 	certs, err := s.List(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := []nomad.ReverseProxyCertificate{}
+	out := []proxycert.Certificate{}
 	for _, cert := range certs {
 		if cert.Status != StatusIssued {
 			continue
@@ -661,7 +630,7 @@ func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.Reverse
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, nomad.ReverseProxyCertificate{
+		out = append(out, proxycert.Certificate{
 			ID:             cert.ID,
 			Domains:        append([]string(nil), cert.Domains...),
 			CertificatePEM: string(certPEM),

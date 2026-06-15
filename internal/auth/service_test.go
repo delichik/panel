@@ -93,7 +93,6 @@ func TestLoginUsesRuntimeTokenExpiration(t *testing.T) {
 		TokenExpiration:                  settings.TokenExpirationNever,
 		Language:                         runtime.Language,
 		RemoteCommandTimeoutSeconds:      runtime.RemoteCommandTimeoutSeconds,
-		Nomad:                            &runtime.Nomad,
 		Certificates:                     &runtime.Certificates,
 	})
 	if err != nil {

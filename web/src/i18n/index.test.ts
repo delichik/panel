@@ -2,11 +2,8 @@ import {
   setLocale,
   translateApplicationFileKind,
   translateApplicationRestartPolicy,
-  translateNomadAllocationDesiredStatus,
-  translateNomadNodeKind,
-  translateNomadNodeRole,
-  translateNomadNodeStatus,
-  translateNomadRuntimeStatus,
+  translateRuntimeDesiredState,
+  translateRuntimeStatus,
   translateTaskStage,
   translateTaskType,
 } from './index';
@@ -29,17 +26,13 @@ describe('i18n translation helpers', () => {
     vi.unstubAllGlobals();
   });
 
-  it('translates application and Nomad enums into simplified Chinese', () => {
+  it('translates application and runtime enums into simplified Chinese', () => {
     setLocale('zh-CN');
 
     expect(translateApplicationRestartPolicy('unless-stopped')).toBe('除非手动停止');
     expect(translateApplicationFileKind('binary')).toBe('二进制');
-    expect(translateNomadNodeRole('client')).toBe('客户端');
-    expect(translateNomadNodeStatus('nomad_unreachable')).toBe('Nomad 不可达');
-    expect(translateNomadNodeKind('managed')).toBe('已托管');
-    expect(translateNomadRuntimeStatus('running')).toBe('运行中');
-    expect(translateNomadAllocationDesiredStatus('evict')).toBe('驱逐');
-    expect(translateTaskType('nomad_client_join')).toBe('Nomad client 加入');
+    expect(translateRuntimeStatus('running')).toBe('运行中');
+    expect(translateRuntimeDesiredState('stopped')).toBe('停止');
     expect(translateTaskType('key_asset_import')).toBe('密钥资产导入');
     expect(translateTaskStage('verifying_local')).toBe('检查本地 API');
   });
@@ -47,7 +40,7 @@ describe('i18n translation helpers', () => {
   it('falls back to humanized English for unknown enum values', () => {
     setLocale('en');
 
-    expect(translateNomadRuntimeStatus('draining_now')).toBe('draining now');
+    expect(translateRuntimeStatus('draining_now')).toBe('draining now');
     expect(translateApplicationRestartPolicy('custom-policy')).toBe('custom policy');
   });
 });
