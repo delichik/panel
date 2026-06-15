@@ -30,28 +30,24 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).not.toContain('<v-navigation-drawer v-model="credentialDialog"');
   });
 
-  it('shows derived Nomad detail status without adding server-level Nomad actions', () => {
-    expect(serversPage).toContain('nomadApi.controlPlane');
-    expect(serversPage).toContain('nomadStatusForServer');
-    expect(serversPage).toContain('nomadMembershipForServer');
-    expect(serversPage).toContain("t('serversPage.notJoined')");
-    expect(serversPage).toContain("t('serversPage.bootstrappingServer')");
-    expect(serversPage).toContain("t('serversPage.joiningClient')");
-    expect(serversPage).toContain("t('serversPage.managedNode')");
-    expect(serversPage).toContain("t('serversPage.joinFailed')");
-    expect(serversPage).not.toContain('nomadApi.joinServer');
-    expect(serversPage).not.toContain('nomadApi.bootstrapServer');
+  it('shows agent runtime status and deployment bundle actions', () => {
+    expect(serversPage).toContain('agentStatusForServer');
+    expect(serversPage).toContain('serversApi.issueAgentCertificate');
+    expect(serversPage).toContain('PANEL_AGENT_DOCKER_HOST');
+    expect(serversPage).toContain("t('serversPage.agentReady')");
+    expect(serversPage).toContain("t('serversPage.deployAgent')");
+    expect(serversPage).toContain("t('serversPage.dockerHost')");
   });
 
-  it('keeps the server list to Nomad membership rather than runtime status', () => {
-    expect(serversPage).toContain('nomadMembershipForServer(server.id)');
-    expect(serversPage).not.toContain('nomadStatusForServer(server.id)');
+  it('keeps the server list focused on reachability and agent runtime status', () => {
+    expect(serversPage).toContain('agentStatusForServer(server)');
     expect(serversPage).not.toContain(`<span class="status-dot" :class="server.reachable ? 'success' : 'warning'" />`);
   });
 
-  it('loads Nomad control-plane projection without blocking server rows', () => {
-    expect(serversPage).toContain('void loadControlPlane();');
-    expect(serversPage).not.toContain('nomadApi.controlPlane().catch(() => null),');
+  it('loads servers and credentials without a runtime control-plane projection', () => {
+    expect(serversPage).toContain('serversApi.listServers()');
+    expect(serversPage).toContain('serversApi.listCredentials()');
+    expect(serversPage).not.toContain('loadControlPlane');
   });
 
   it('requires confirmation before restarting a server', () => {

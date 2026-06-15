@@ -19,12 +19,6 @@ import (
 
 var serverVariableKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-type RuntimeNomadSettings struct {
-	Namespace  string `json:"namespace"`
-	Region     string `json:"region"`
-	Datacenter string `json:"datacenter"`
-}
-
 type RuntimeCertificateSettings struct {
 	Email                      string `json:"email"`
 	DNSPropagationDelaySeconds int    `json:"dnsPropagationDelaySeconds"`
@@ -53,7 +47,6 @@ type RuntimeUpdate struct {
 	Language                         string                      `json:"language"`
 	RemoteCommandTimeoutSeconds      int                         `json:"remoteCommandTimeoutSeconds"`
 	Branding                         *RuntimeBrandingSettings    `json:"branding"`
-	Nomad                            *RuntimeNomadSettings       `json:"nomad"`
 	Certificates                     *RuntimeCertificateSettings `json:"certificates"`
 }
 
@@ -69,7 +62,6 @@ type RuntimeSettings struct {
 	Language                         string                     `json:"language"`
 	RemoteCommandTimeoutSeconds      int                        `json:"remoteCommandTimeoutSeconds"`
 	Branding                         RuntimeBrandingSettings    `json:"branding"`
-	Nomad                            RuntimeNomadSettings       `json:"nomad"`
 	Certificates                     RuntimeCertificateSettings `json:"certificates"`
 	JWTSecret                        string                     `json:"-"`
 	JWTSecretConfigured              bool                       `json:"jwtSecretConfigured"`
@@ -81,9 +73,6 @@ const (
 	RuntimeSettingRemoteCommandTimeoutSeconds          = "remoteCommandTimeoutSeconds"
 	RuntimeSettingBrandingLoginTitle                   = "branding.loginTitle"
 	RuntimeSettingBrandingLoginSubtitle                = "branding.loginSubtitle"
-	RuntimeSettingNomadNamespace                       = "nomad.namespace"
-	RuntimeSettingNomadRegion                          = "nomad.region"
-	RuntimeSettingNomadDatacenter                      = "nomad.datacenter"
 	RuntimeSettingCertificateEmail                     = "certificates.email"
 	RuntimeSettingCertificateDNSPropagationDelaySecond = "certificates.dnsPropagationDelaySeconds"
 	RuntimeSettingServerVariableDefinitions            = "serverVariables.definitions"
@@ -139,27 +128,9 @@ func (s *Service) RemoteTimeout() time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
-func (s *Service) NomadConfig(base config.NomadConfig) config.NomadConfig {
-	rt := s.Runtime()
-	base.Namespace = firstNonEmpty(strings.TrimSpace(rt.Nomad.Namespace), base.Namespace, "default")
-	base.Region = firstNonEmpty(strings.TrimSpace(rt.Nomad.Region), base.Region, "global")
-	base.Datacenter = firstNonEmpty(strings.TrimSpace(rt.Nomad.Datacenter), base.Datacenter, "dc1")
-	return base
-}
-
-func (s *Service) ApplicationNomadConfig() RuntimeNomadSettings {
-	rt := s.Runtime()
-	return RuntimeNomadSettings{
-		Namespace:  firstNonEmpty(strings.TrimSpace(rt.Nomad.Namespace), "default"),
-		Region:     firstNonEmpty(strings.TrimSpace(rt.Nomad.Region), "global"),
-		Datacenter: firstNonEmpty(strings.TrimSpace(rt.Nomad.Datacenter), "dc1"),
-	}
-}
-
 func (s *Service) ApplyToConfig(base config.Config) config.Config {
 	rt := s.Runtime()
 	base.RemoteCommandTimeoutSeconds = rt.RemoteCommandTimeoutSeconds
-	base.Nomad = s.NomadConfig(base.Nomad)
 	base.Certificates.Email = rt.Certificates.Email
 	base.Certificates.DNSPropagationDelaySeconds = rt.Certificates.DNSPropagationDelaySeconds
 	return base
@@ -175,10 +146,6 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	}
 	if input.RemoteCommandTimeoutSeconds == 0 {
 		input.RemoteCommandTimeoutSeconds = current.RemoteCommandTimeoutSeconds
-	}
-	nomadSettings := current.Nomad
-	if input.Nomad != nil {
-		nomadSettings = *input.Nomad
 	}
 	certSettings := current.Certificates
 	if input.Certificates != nil {
@@ -203,7 +170,6 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		Language:                         i18n.NormalizeLocale(input.Language),
 		RemoteCommandTimeoutSeconds:      input.RemoteCommandTimeoutSeconds,
 		Branding:                         brandingSettings,
-		Nomad:                            nomadSettings,
 		Certificates:                     certSettings,
 		JWTSecret:                        current.JWTSecret,
 		JWTSecretConfigured:              current.JWTSecretConfigured,
@@ -222,7 +188,6 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.rt.Language = next.Language
 	s.rt.RemoteCommandTimeoutSeconds = next.RemoteCommandTimeoutSeconds
 	s.rt.Branding = next.Branding
-	s.rt.Nomad = next.Nomad
 	s.rt.Certificates = next.Certificates
 	out := s.rt
 	s.mu.Unlock()
@@ -356,12 +321,6 @@ func (s *Service) load(ctx context.Context) error {
 			next.Branding.LoginTitle = value
 		case RuntimeSettingBrandingLoginSubtitle:
 			next.Branding.LoginSubtitle = value
-		case RuntimeSettingNomadNamespace:
-			next.Nomad.Namespace = value
-		case RuntimeSettingNomadRegion:
-			next.Nomad.Region = value
-		case RuntimeSettingNomadDatacenter:
-			next.Nomad.Datacenter = value
 		case RuntimeSettingCertificateEmail:
 			next.Certificates.Email = value
 		case RuntimeSettingCertificateDNSPropagationDelaySecond:
@@ -405,11 +364,6 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		Language:                         i18n.DefaultLocale(),
 		RemoteCommandTimeoutSeconds:      remoteTimeout,
 		Branding:                         RuntimeBrandingSettings{},
-		Nomad: RuntimeNomadSettings{
-			Namespace:  firstNonEmpty(strings.TrimSpace(cfg.Nomad.Namespace), "default"),
-			Region:     firstNonEmpty(strings.TrimSpace(cfg.Nomad.Region), "global"),
-			Datacenter: firstNonEmpty(strings.TrimSpace(cfg.Nomad.Datacenter), "dc1"),
-		},
 		Certificates: RuntimeCertificateSettings{
 			Email:                      strings.TrimSpace(cfg.Certificates.Email),
 			DNSPropagationDelaySeconds: dnsDelay,
@@ -429,9 +383,6 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 		RuntimeSettingRemoteCommandTimeoutSeconds:          strconv.Itoa(settings.RemoteCommandTimeoutSeconds),
 		RuntimeSettingBrandingLoginTitle:                   settings.Branding.LoginTitle,
 		RuntimeSettingBrandingLoginSubtitle:                settings.Branding.LoginSubtitle,
-		RuntimeSettingNomadNamespace:                       settings.Nomad.Namespace,
-		RuntimeSettingNomadRegion:                          settings.Nomad.Region,
-		RuntimeSettingNomadDatacenter:                      settings.Nomad.Datacenter,
 		RuntimeSettingCertificateEmail:                     settings.Certificates.Email,
 		RuntimeSettingCertificateDNSPropagationDelaySecond: strconv.Itoa(settings.Certificates.DNSPropagationDelaySeconds),
 	}
@@ -467,15 +418,6 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	}
 	if utf8.RuneCountInString(settings.Branding.LoginSubtitle) > 240 {
 		return panelerr.Validation("invalid_branding_login_subtitle", "Login subtitle must be 240 characters or fewer")
-	}
-	if strings.TrimSpace(settings.Nomad.Namespace) == "" {
-		return panelerr.Validation("invalid_nomad_namespace", "Nomad namespace is required")
-	}
-	if strings.TrimSpace(settings.Nomad.Region) == "" {
-		return panelerr.Validation("invalid_nomad_region", "Nomad region is required")
-	}
-	if strings.TrimSpace(settings.Nomad.Datacenter) == "" {
-		return panelerr.Validation("invalid_nomad_datacenter", "Nomad datacenter is required")
 	}
 	if settings.Certificates.DNSPropagationDelaySeconds < 0 {
 		return panelerr.Validation("invalid_certificate_dns_delay", "Certificate DNS propagation delay cannot be negative")

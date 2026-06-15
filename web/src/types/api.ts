@@ -20,6 +20,7 @@ export interface ServerDto {
   port: number;
   sshUsername: string;
   credentialId: string;
+  dockerHost: string;
   traits?: Record<string, string>;
   notes?: string;
   os?: OSInfoDto | null;
@@ -39,6 +40,7 @@ export interface AgentCertificateBundleDto {
   privateKey: string;
   listenAddress: string;
   agentUrl: string;
+  dockerHost: string;
 }
 
 export type FirewallProtocol = 'tcp' | 'udp' | 'any';
@@ -110,15 +112,6 @@ export interface CertificateIssueInput {
 export interface CertificateIssueDto {
   certificate: CertificateDto;
   taskId?: string;
-}
-
-export interface NomadBuiltinCertificateDto {
-  id: string;
-  name: string;
-  kind: string;
-  fingerprint: string;
-  notBefore: string;
-  notAfter: string;
 }
 
 export interface SelfSignedCertificateDto {
@@ -578,183 +571,88 @@ export interface ApplicationValidationDto {
   issues: ApplicationValidationIssueDto[];
 }
 
-export interface NomadPortMappingDto {
-  Label?: string;
-  Value?: number;
-  To?: number;
+export interface RuntimePortDto {
+  label?: string;
+  containerPort: number;
+  hostPort?: number;
+  protocol?: string;
 }
 
-export interface NomadNetworkDto {
-  Mode?: string;
-  ReservedPorts?: NomadPortMappingDto[];
-  DynamicPorts?: NomadPortMappingDto[];
+export interface RuntimeResourcesDto {
+  cpu?: number;
+  memoryMb?: number;
 }
 
-export interface NomadCheckDto {
-  Name?: string;
-  Type?: string;
-  Path?: string;
-  PortLabel?: string;
-  Interval?: number;
-  Timeout?: number;
+export interface RuntimeMountDto {
+  type: string;
+  source: string;
+  target: string;
+  readOnly?: boolean;
 }
 
-export interface NomadServiceDto {
-  Name?: string;
-  PortLabel?: string;
-  Tags?: string[];
-  Checks?: NomadCheckDto[];
-}
-
-export interface NomadTaskDto {
-  Name?: string;
-  Driver?: string;
-  Config?: Record<string, unknown>;
-  Env?: Record<string, string>;
-  Resources?: { CPU?: number; MemoryMB?: number };
-  Services?: NomadServiceDto[];
-  Templates?: Array<{ EmbeddedTmpl?: string; DestPath?: string; Perms?: string; ChangeMode?: string }>;
-  Lifecycle?: { Hook?: string; Sidecar?: boolean };
-}
-
-export interface NomadTaskGroupDto {
-  Name?: string;
-  Count?: number;
-  Networks?: NomadNetworkDto[];
-  Tasks?: NomadTaskDto[];
-  Services?: NomadServiceDto[];
-}
-
-export interface NomadJobDto {
-  ID?: string;
-  Name?: string;
-  Type?: string;
-  Status?: string;
-  Region?: string;
-  Namespace?: string;
-  Datacenters?: string[];
-  Meta?: Record<string, string>;
-  TaskGroups?: NomadTaskGroupDto[];
-}
-
-export interface NomadStatusDto {
-  connected: boolean;
-  leader?: string;
-}
-
-export type NomadControlPlaneStatus = 'unconfigured' | 'bootstrapping' | 'connected' | 'degraded' | 'migration_required';
-export type ProjectedNomadNodeKind = 'managed' | 'missing' | 'pending' | 'unmanaged';
-export type ProjectedNomadNodeRole = 'server' | 'client' | 'unknown';
-export type ProjectedNomadNodeStatus = 'bootstrapping' | 'joining' | 'registering' | 'rebuilding' | 'removing' | 'ready' | 'down' | 'failed' | 'missing' | 'nomad_unreachable' | 'unmanaged' | string;
-
-export interface ProjectedNomadNodeDto {
-  kind: ProjectedNomadNodeKind;
-  serverId?: string;
-  nodeId?: string;
-  name: string;
-  host?: string;
-  traits?: Record<string, string>;
-  role: ProjectedNomadNodeRole;
-  status: ProjectedNomadNodeStatus;
-  reverseProxy: boolean;
-  reverseProxyStatic: boolean;
-  reverseProxyStaticSites: NomadReverseProxyStaticSiteDto[];
-  joinEligible?: boolean;
-  taskId?: string;
-  error?: string;
-}
-
-export interface NomadReverseProxyRouteDto {
-  domain: string;
-  targetPort: number;
-  paths: NomadReverseProxyPathDto[];
-}
-
-export interface NomadReverseProxyPathDto {
+export interface RuntimeManagedFileDto {
   path: string;
-  webSocket: boolean;
+  content: string;
+  mode?: string;
 }
 
-export interface NomadReverseProxyStaticSiteDto {
-  domain: string;
-  root: string;
-  index: string;
+export interface RuntimeRestartDto {
+  policy: string;
+  attempts?: number;
+  intervalSeconds?: number;
+  delaySeconds?: number;
+  mode?: string;
 }
 
-export interface NomadReverseProxyUpdateDto {
-  server: ServerDto;
-  taskId?: string;
+export interface RuntimeServiceDto {
+  name: string;
+  port: string;
+  tags?: string[];
 }
 
-export interface NomadControlPlaneDto {
-  status: NomadControlPlaneStatus;
-  leader?: string;
-  nodes: ProjectedNomadNodeDto[];
-  joinCandidates: ServerDto[];
-  bootstrapCandidates: ServerDto[];
+export interface RuntimeCheckDto {
+  name: string;
+  type: string;
+  port?: string;
+  path?: string;
+  intervalSeconds?: number;
+  timeoutSeconds?: number;
+  command?: string;
 }
 
-export interface NomadNodeDto {
-  ID?: string;
-  Name?: string;
-  Address?: string;
-  Datacenter?: string;
-  Status?: string;
-  SchedulingEligibility?: string;
-  Eligibility?: string;
-  Meta?: Record<string, string>;
+export interface ApplicationRuntimeSpecDto {
+  id: string;
+  applicationId: string;
+  instanceId?: string;
+  containerName?: string;
+  name: string;
+  image: string;
+  command?: string[];
+  args?: string[];
+  env?: Record<string, string>;
+  ports?: RuntimePortDto[];
+  networkMode: string;
+  resources: RuntimeResourcesDto;
+  privileged?: boolean;
+  mounts?: RuntimeMountDto[];
+  files?: RuntimeManagedFileDto[];
+  restart: RuntimeRestartDto;
+  services?: RuntimeServiceDto[];
+  checks?: RuntimeCheckDto[];
+  generation: number;
+  specHash: string;
 }
 
-export interface NomadEvaluationDto {
-  ID?: string;
-  Namespace?: string;
-  JobID?: string;
-  Status?: string;
-  Type?: string;
-  TriggeredBy?: string;
-  StatusDescription?: string;
-  FailedTGAllocs?: Record<string, NomadFailedTGAllocDto>;
-}
-
-export interface NomadFailedTGAllocDto {
-  NodesEvaluated?: number;
-  NodesFiltered?: number;
-  NodesExhausted?: number;
-  ClassFiltered?: Record<string, number>;
-  ConstraintFiltered?: Record<string, number>;
-  DimensionExhausted?: Record<string, number>;
-  QuotaExhausted?: string[];
-  ResourcesExhausted?: Record<string, unknown>;
-  CoalescedFailures?: number;
-}
-
-export interface NomadDeploymentDto {
-  ID?: string;
-  JobID?: string;
-  Namespace?: string;
-  Status?: string;
-  StatusDescription?: string;
-}
-
-export interface NomadAllocationDto {
-  ID?: string;
-  EvalID?: string;
-  Name?: string;
-  NodeID?: string;
-  JobID?: string;
-  TaskGroup?: string;
-  ClientStatus?: string;
-  DesiredStatus?: string;
-  TaskStates?: Record<string, unknown>;
-  AllocatedResources?: unknown;
-  ModifyIndex?: number;
-  CreateIndex?: number;
+export interface ApplicationRuntimePlanDto {
+  instanceCount: number;
+  targetServers: string[];
+  warnings?: string[];
 }
 
 export interface ApplicationPlanDto {
   application: ApplicationDto;
-  job: NomadJobDto;
-  plan: Record<string, unknown>;
+  spec: ApplicationRuntimeSpecDto;
+  plan: ApplicationRuntimePlanDto;
 }
 
 export interface ApplicationOperationDto {
@@ -765,20 +663,32 @@ export interface ApplicationOperationDto {
   runtime?: ApplicationRuntimeDto;
 }
 
+export interface ApplicationRuntimeInstanceDto {
+  instanceId: string;
+  serverId: string;
+  containerName: string;
+  containerId?: string;
+  status: string;
+  desiredState: string;
+  image?: string;
+  startedAt?: string;
+  finishedAt?: string;
+  exitCode?: number;
+  lastError?: string;
+  observedAt: string;
+}
+
 export interface ApplicationRuntimeDto {
   applicationId: string;
-  jobId: string;
-  jobStatus: string;
-  deployment?: NomadDeploymentDto;
-  evaluations: NomadEvaluationDto[];
-  evaluationDetails?: NomadEvaluationDto[];
-  allocations: NomadAllocationDto[];
+  runtimeId: string;
+  status: string;
+  instances: ApplicationRuntimeInstanceDto[];
   observedAt: string;
 }
 
 export interface ApplicationLogsDto {
-  allocId: string;
-  task: string;
+  instanceId: string;
+  containerName: string;
   type: string;
   logs: string;
 }
@@ -852,7 +762,6 @@ export interface RuntimeSettingsDto {
   language: string;
   remoteCommandTimeoutSeconds: number;
   branding: RuntimeBrandingSettingsDto;
-  nomad: RuntimeNomadSettingsDto;
   certificates: RuntimeCertificateSettingsDto;
   jwtSecretConfigured: boolean;
 }
@@ -868,12 +777,6 @@ export interface SystemVersionDto {
 }
 
 export type TokenExpiration = '10m' | '1h' | '1d' | '5d' | '30d' | 'never';
-
-export interface RuntimeNomadSettingsDto {
-  namespace: string;
-  region: string;
-  datacenter: string;
-}
 
 export interface RuntimeCertificateSettingsDto {
   email: string;
@@ -893,6 +796,5 @@ export interface RuntimeSettingsUpdate {
   language: string;
   remoteCommandTimeoutSeconds: number;
   branding: RuntimeBrandingSettingsDto;
-  nomad: RuntimeNomadSettingsDto;
   certificates: RuntimeCertificateSettingsDto;
 }

@@ -13,6 +13,7 @@ type Server struct {
 	Port          int               `json:"port"`
 	SSHUsername   string            `json:"sshUsername"`
 	CredentialID  string            `json:"credentialId"`
+	DockerHost    string            `json:"dockerHost"`
 	Traits        map[string]string `json:"traits"`
 	Variables     map[string]string `json:"variables"`
 	Notes         string            `json:"notes"`
@@ -38,6 +39,7 @@ type SaveRequest struct {
 	Port         int               `json:"port"`
 	SSHUsername  string            `json:"sshUsername"`
 	CredentialID string            `json:"credentialId"`
+	DockerHost   string            `json:"dockerHost"`
 	Traits       map[string]string `json:"traits"`
 	Variables    map[string]string `json:"variables"`
 	Notes        string            `json:"notes"`
@@ -84,4 +86,5 @@ type AgentCertificateBundle struct {
 	PrivateKey    string `json:"privateKey"`
 	ListenAddress string `json:"listenAddress"`
 	AgentURL      string `json:"agentUrl"`
+	DockerHost    string `json:"dockerHost"`
 }

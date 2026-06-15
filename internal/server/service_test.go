@@ -480,11 +480,7 @@ func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	svc.SetAgentClient(&serverFakeAgentClient{health: agent.HealthResponse{
-		Status:       "ok",
-		Version:      "0.9.0",
-		Capabilities: agent.RequiredCapabilities,
-	}})
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth("0.9.0")})
 
 	svc.CheckConfiguredAgents(context.Background())
 	srv, err := svc.Get(context.Background(), "srv_agent")
@@ -502,11 +498,7 @@ func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	svc.SetAgentClient(&serverFakeAgentClient{health: agent.HealthResponse{
-		Status:       "ok",
-		Version:      agent.Version,
-		Capabilities: agent.RequiredCapabilities,
-	}})
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
 
 	svc.CheckConfiguredAgents(context.Background())
 	srv, err := svc.Get(context.Background(), "srv_agent")
@@ -869,9 +861,18 @@ type serverFakeAgentClient struct {
 	err    error
 }
 
+func agentHealth(version string) agent.HealthResponse {
+	return agent.HealthResponse{
+		Status:       "ok",
+		Version:      version,
+		Capabilities: agent.RequiredCapabilities,
+		Docker:       agent.DockerHealth{Host: agent.DefaultDockerHost, Status: "ok"},
+	}
+}
+
 func (f *serverFakeAgentClient) Health(context.Context, string) (agent.HealthResponse, error) {
 	if f.health.Version == "" {
-		f.health = agent.HealthResponse{Status: "ok", Version: agent.Version, Capabilities: agent.RequiredCapabilities}
+		f.health = agentHealth(agent.Version)
 	}
 	return f.health, f.err
 }

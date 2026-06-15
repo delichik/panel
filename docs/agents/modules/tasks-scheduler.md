@@ -1,19 +1,21 @@
-﻿# 浠诲姟涓庤皟搴?
-## 閫傜敤鍦烘櫙
+# 任务与调度
 
-淇敼鍚庡彴浠诲姟銆佷换鍔＄姸鎬併€佹楠ゃ€佹棩蹇椼€侀噸璇曘€佹墜鍔ㄨ繍琛屻€佸懆鏈熼噰闆嗐€佽蒋浠跺寘璋冨害鎴栬瘉涔︾画绛捐皟搴︽椂锛屽厛璇绘湰鏂囨。銆?
-## 鍏抽敭鍏ュ彛
+## 适用场景
 
-- 浠诲姟妯″瀷鍜屾湇鍔★細`internal/tasks/`
-- 鍛ㄦ湡璋冨害锛歚internal/scheduler/scheduler.go`
-- 璺敱瑁呴厤锛歚internal/app/app.go`
-- 鍓嶇浠诲姟涓績锛歚web/src/views/tasks/index.vue`
-- 鍓嶇浠诲姟鎿嶄綔锛歚web/src/views/tasks/_shared/taskOperations.ts`
-- 浠诲姟鏃ュ織缁勪欢锛歚web/src/components/tasks/TaskLogPanel.vue`
-- API锛歚web/src/api/tasks.ts`
-- 绫诲瀷锛歚web/src/types/api.ts`
+修改后台任务、任务状态、步骤、日志、重试、手动运行、周期采集、软件包调度、证书续签调度或应用运行任务时，先读本文档。
 
-## API 鑼冨洿
+## 关键入口
+
+- 任务模型和服务：`internal/tasks/`
+- 周期调度：`internal/scheduler/scheduler.go`
+- 路由装配：`internal/app/app.go`
+- 前端任务中心：`web/src/views/tasks/index.vue`
+- 前端任务操作：`web/src/views/tasks/_shared/taskOperations.ts`
+- 任务日志组件：`web/src/components/tasks/TaskLogPanel.vue`
+- API：`web/src/api/tasks.ts`
+- 类型：`web/src/types/api.ts`
+
+## API 范围
 
 - `GET /api/v1/tasks`
 - `GET /api/v1/tasks/{id}`
@@ -22,21 +24,42 @@
 - `POST /api/v1/tasks/{id}/retry`
 - `POST /api/v1/tasks/{id}/run-now`
 
-## 鏁版嵁涓庤涓虹害瀹?
-- 浠诲姟涓昏〃鏄?`tasks`锛屾楠よ〃鏄?`task_steps`锛屾棩蹇楄〃鏄?`task_logs`銆?- 浠诲姟鐘舵€併€佽Е鍙戞潵婧愩€佽祫婧愮被鍨嬪拰鎿嶄綔 ID 鏄墠鍚庣绛涢€変笌杩借釜鐨勭ǔ瀹氬瓧娈碉紝鏀瑰悕闇€瑕佽縼绉诲拰鍓嶇鍚屾銆?- 浠诲姟涓績鐨勭瓫閫夋帶浠舵竻绌烘椂鍙兘浜х敓 `null`锛涘墠绔换鍔?API 搴旂粺涓€褰掍竴鍖栫┖鍊煎拰绌虹櫧瀛楃涓诧紝涓嶅彂閫佺┖绛涢€夊弬鏁般€?- 浠诲姟涓績绫诲瀷绛涢€夐粯璁や娇鐢ㄢ€滃父鐢ㄧ被鍨嬧€濓紝鎺掗櫎鎵€鏈?`trigger_type=scheduler` 鐨勫畾鏃朵换鍔★紝骞堕殣钘忓唴閮?楂橀鐨?`server_connectivity_test` 鍜?`metrics_collect`锛涘垏鍒扳€滄墍鏈夌被鍨嬧€濇垨绮剧‘閫夋嫨瀵瑰簲绫诲瀷鏃跺彲鏄剧ず杩欎簺浠诲姟銆傚垪琛ㄦ寜鏈€鏂板垱寤烘椂闂翠紭鍏堝睍绀恒€?- 浠诲姟涓績绛涢€夋敮鎸佸閫?`status` / `type`锛屽墠绔€氳繃鎼滅储鎸夐挳鎻愪氦锛汚PI 浣跨敤閲嶅鐨?`status` / `type` 鏌ヨ鍙傛暟锛宍commonOnly=true` 琛ㄧず甯哥敤绫诲瀷锛宍includeInternal=true` 琛ㄧず鈥滄墍鏈夌被鍨嬧€濄€?- 鎿嶄綔鏍囬銆佷换鍔＄被鍨嬨€佹楠ゅ悕绉板拰闃舵搴斿湪鍓嶇鎸夌ǔ瀹氱殑 `type` / `stage` 鏍囪瘑缈昏瘧锛屼笉鐩存帴灞曠ず鎸佷箙鍖栫殑鑻辨枃 summary 浣滀负鏍囬銆?- 浠诲姟涓績姣忛〉榛樿 20 鏉★紱鍒嗛〉鍦ㄦ墜鏈烘樉绀?5 涓〉鐮侊紝鍦ㄦ闈㈡樉绀?10 涓〉鐮侊紝骞剁‘淇濆綋鍓嶉〉鏁板瓧涓庨€変腑鑳屾櫙鏈夎冻澶熷姣斿害銆?- `tasks.Service` 鍦ㄥ唴瀛樹腑缁存姢褰撳墠杩涚▼鐨?running execution registry銆備换鍔¤繘鍏?`running` 鍓嶅繀椤绘敞鍐屾墽琛屽璞★紝杩涘叆瀹屾垚銆佸け璐ャ€佸彲閲嶈瘯澶辫触鎴栭樆濉炵瓑缁堟€佸悗蹇呴』娉ㄩ攢銆?- Panel 鍚姩鏃朵互鍙?scheduler 杩愯鏈熼棿姣?5 绉掓鏌ヤ竴娆℃暟鎹簱涓殑 `running` 浠诲姟锛涘鏋滀换鍔?ID 鏃犳硶鍦ㄥ綋鍓嶈繘绋嬬殑 execution registry 涓壘鍒帮紝浼氱珛鍗虫爣璁颁负澶辫触骞惰褰曚负 orphaned銆傝妫€鏌ョ敤浜庡鐞嗚繘绋嬮噸鍚€佸紓甯搁€€鍑烘垨鐘舵€佷笌瀹為檯鎵ц鑴辫妭锛屼笉鑳戒緷璧栧浐瀹氭椂闀垮垽鏂€?- 鐢卞唴瀛?goroutine 鐩存帴鎵ц銆佹棤娉曡法杩涚▼鎭㈠鐨勪竴娆℃€т换鍔★紙Nomad 鍔犲叆/寮曞/閲嶅缓/鍒囨崲/绉婚櫎銆佹湇鍔″櫒閲嶅惎銆乁FW 瀹夎/鍚敤锛夊繀椤诲湪 API 杩斿洖鍓嶅厛鏍囪涓?`running`锛涢仐鐣?`queued` 瓒呰繃 `scheduler.StaleQueuedWorkerTaskAfter`锛堝綋鍓?10 鍒嗛挓锛変細鍦ㄦ竻鐞嗗惊鐜腑鏍囪涓哄け璐ュ苟鎻愮ず鐢ㄦ埛閲嶈瘯锛岄伩鍏嶆案涔呮帓闃熴€?- 闀胯€楁椂鍚庡彴鎿嶄綔搴斿啓鍏ヤ换鍔℃棩蹇楋紝骞跺敖閲忔媶鍑烘楠わ紝鏂逛究浠诲姟涓績灞曠ず杩涘害銆?- `nomad_reverse_proxy_sync` 鐢ㄤ簬杩借釜鍙嶅悜浠ｇ悊閰嶇疆淇濆瓨銆佽繙绋嬮槻鐏鏀捐鍜?Nomad 鍙嶅悜浠ｇ悊 job reconcile锛涜浠诲姟褰撳墠鐢变繚瀛樻帴鍙ｅ悓姝ュ畬鎴愭垨澶辫触锛屼笉鎻愪緵 `run-now` / `retry`銆?- `nomad_tls_rotate` 鐢ㄤ簬杩借釜 Nomad CA/璇佷功閲嶆柊鐢熸垚銆佸叏閮ㄨ妭鐐归噸閮ㄧ讲銆佸簲鐢ㄦ仮澶嶅拰鍙嶅悜浠ｇ悊鍚屾銆?- `scheduler` 璐熻矗鍛ㄦ湡鎬ф寚鏍囬噰闆嗐€佽蒋浠跺寘鍒锋柊銆佽瘉涔︾画绛惧拰 due 鐨勫寘鍒锋柊浠诲姟琛ユ壂锛屽苟鍙綔涓?`run-now` 鎵ц鍏ュ彛锛涘悓涓€杞皟搴︿负澶氬彴鏈嶅姟鍣ㄥ垱寤轰换鍔℃椂锛屽簲鍏变韩涓€涓?`operationId`锛岀敱浠诲姟涓績灞曠ず涓轰竴涓?operation 涓嬬殑澶氫釜 task銆傚懆鏈熸€ф寚鏍囬噰闆嗚褰曚负 `metrics_collect` 浠诲姟锛岄粯璁ょ敱鈥滃父鐢ㄧ被鍨嬧€濈瓫閫夐殣钘忋€?- 浠诲姟涓績鐨?`run-now` / `retry` 蹇呴』鎸変换鍔＄被鍨嬪彈鎺э紱褰撳墠鍙厑璁?`server_connectivity_test`銆乣server_info_collect`銆乣package_refresh`銆乣certificate_issue` 杩欑被鏈夎皟搴﹀櫒鎵ц鍣ㄧ殑浠诲姟銆傚悗绔?handler 浼氭寜鐘舵€佸拰绫诲瀷鎷掔粷涓嶆敮鎸佺殑璋冪敤锛屽墠绔篃鍙睍绀哄彲闂幆鐨勬搷浣溿€?- `retry` 鍒涘缓鐨勬柊浠诲姟浼氱珛鍗充氦缁欒皟搴﹀櫒鎵ц锛涘鏋滆皟搴﹀櫒鍦ㄥ惎鍔ㄥ墠杩斿洖閿欒锛宧andler 浼氭妸鏂颁换鍔℃爣璁颁负澶辫触锛岄伩鍏嶄骇鐢熸案涔呮帓闃熶换鍔°€俙package_refresh` 鐨勫凡鎺掗槦浠诲姟杩樹細琚皟搴﹀櫒鎸佺画琛ユ壂锛岄伩鍏嶈鍛ㄦ湡鍒锋柊鑺傛祦鎴栧凡鏈夊埛鏂扮姸鎬侀暱鏈熸尅浣忋€?- 杞欢鍖呭埛鏂扮幇鍦ㄨ褰曚负 `package_refresh` 浠诲姟锛涙墜鍔ㄥ埛鏂拌繑鍥?`taskId`锛岃嚜鍔?鍛ㄦ湡鍒锋柊澶辫触浼氬湪浠诲姟涓績鍙锛屽苟瀵硅繎鏈熷け璐ュ仛鐭椂闂磋妭娴侊紱鍛ㄦ湡鍒锋柊鍚屼竴杞垱寤虹殑澶氬彴鏈嶅姟鍣ㄤ换鍔″繀椤诲叡浜竴涓?operation銆?- 杩滅▼鍛戒护鍘熷杈撳嚭鍙兘鍖呭惈绗笁鏂规枃鏈紝缈昏瘧鍓嶈鍏堣瘎浼版槸鍚﹀簲淇濈暀鍘熸牱銆?
-## 璺ㄦā鍧椾緷璧?
-- 鏈嶅姟鍣ㄦ祴璇曘€侀噸鍚€乁FW銆佽蒋浠跺寘缁存姢渚濊禆鏈ā鍧楄褰曚换鍔°€?- Nomad 寮曞銆佸姞鍏ャ€佺Щ闄よ妭鐐广€乻erver 鍒囨崲銆侀泦缇ら噸寤哄拰鍙嶅悜浠ｇ悊鍚屾渚濊禆鏈ā鍧楄褰曚换鍔★紱鍏朵腑鐩存帴璧?worker 鐨勬搷浣滀笉鑳藉彧淇濇寔 `queued` 绛夊緟 goroutine 鍐呴儴鍐嶅惎鍔ㄣ€?- 搴旂敤閮ㄧ讲銆佸仠姝€侀噸鍚€侀暅鍍忔洿鏂颁緷璧栨湰妯″潡璁板綍浠诲姟銆?- 璇佷功绛惧彂鍜岀画绛句緷璧栨湰妯″潡璁板綍浠诲姟銆?
-## 楠岃瘉
+## 数据与行为约定
 
-- 鍏堟寜妯″潡绱㈠紩鐨勨€滄鏌ュ拰娴嬭瘯鑼冨洿鈥濆垽鏂槸鍚﹂渶瑕侀獙璇併€?- 闇€瑕侀獙璇佸悗绔换鍔℃垨璋冨害鏀瑰姩鏃讹紝杩愯 `task test:backend`锛岄噸鐐瑰叧娉?`internal/tasks` 鍜?`internal/scheduler` 娴嬭瘯銆?- 鍓嶇浠诲姟涓績鎴?API 绫诲瀷鏀瑰姩鍙寜闇€瑕佽繍琛?`task test:web`銆?
-## 鏂囨。鏇存柊瑙﹀彂
+- 任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。
+- 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移并同步前端。
+- 任务中心筛选控件清空时可能产生 `null`；前端任务 API 应统一归一化空值和空白字符串，不发送空筛选参数。
+- 任务中心类型筛选默认使用“常用类型”，排除所有 `trigger_type=scheduler` 的定时任务，并隐藏内部高频的 `server_connectivity_test` 和 `metrics_collect`。
+- 任务中心支持多选 `status` / `type`；API 使用重复的 `status` / `type` 查询参数，`commonOnly=true` 表示常用类型，`includeInternal=true` 表示所有类型。
+- 操作标题、任务类型、步骤名称和阶段应在前端按稳定的 `type` / `stage` 标识翻译，不直接展示持久化的英文 summary 作为标题。
+- `tasks.Service` 在内存中维护当前进程的 running execution registry。任务进入 `running` 前必须注册执行对象，进入完成、失败、可重试失败或阻塞等终态后必须注销。
+- Panel 启动时以及 scheduler 运行期间每 5 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
+- 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用，必须在 API 返回前先标记为 `running`。
+- 遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter` 的选定 worker 类型会在清理循环中标记为失败并提示用户重试。
+- 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
+- `scheduler` 负责周期性指标采集、软件包刷新、证书续签和 due 的包刷新任务补扫，并作为 `run-now` 执行入口。
+- 任务中心的 `run-now` / `retry` 必须按任务类型受控；当前只允许 `server_connectivity_test`、`server_info_collect`、`package_refresh`、`certificate_issue` 这类有调度器执行器的任务。
+- `retry` 创建的新任务会立即交给调度器执行；如果调度器启动前返回错误，handler 会把新任务标记为失败，避免永久排队。
 
-鏂板浠诲姟绫诲瀷銆佺姸鎬併€佹楠ょ粨鏋勩€佹棩蹇楄涔夈€佽皟搴﹂」銆佹墜鍔ㄨ繍琛岃涓烘垨浠诲姟绛涢€夊瓧娈垫椂锛屽繀椤绘洿鏂版湰鏂囨。銆?
-## 瀵嗛挜璧勪骇浠诲姟
+## 跨模块依赖
 
-- 鏂板 `key_asset_tls_reissue`銆乣key_asset_ssh_regenerate`銆乣key_asset_export`銆乣key_asset_import`銆乣key_asset_sync`銆?- 閲嶆柊绛惧彂銆侀噸鏂扮敓鎴愬拰瀵煎叆浠诲姟鍖呭惈璧勪骇鏇存柊銆佸凡鍚敤搴旂敤閲嶉儴缃插拰鍙嶅悜浠ｇ悊鍚屾锛涗换鍔＄粓鎬佸繀椤绘敞閿€ execution銆?- 瀵煎嚭浠诲姟瀹屾垚鍚庨€氳繃 `/api/v1/key-assets/exports/{taskId}/download` 涓嬭浇鐭湡鍔犲瘑褰掓。銆?
+- 服务器测试、重启、UFW 和软件包维护依赖本模块记录任务。
+- 应用部署、停止、重启、镜像检查和镜像更新依赖本模块记录任务；实际容器操作由应用服务调用 agent runtime API。
+- 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务。
+- 启用服务器 agent 后，`metrics_collect` 与 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道；agent 失败、不可达或版本能力不兼容时任务按当前错误失败。
+- 软件包刷新/升级、UFW 写操作和服务器重启仍走 SSH，不要把这些写入型或长流程任务路由到 agent。
 
-## Panel Agent 与任务
+## 密钥资产任务
 
-- 启用服务器 traits `agent.enabled=true` 和 `agent.url` 后，`metrics_collect` 与 `server_info_collect` 中的 metrics、OS 信息和系统 traits 读取会走目标机 `panel-agent` mTLS 通道；agent 失败、不可达或版本能力不兼容时不回退 SSH，任务按当前错误失败，并由服务器 traits 记录 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error`。
-- 软件包刷新/升级、UFW 写操作、Nomad 和应用部署仍走 SSH；不要把这些写入型或长流程任务路由到 agent。
+- `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import`、`key_asset_sync` 记录密钥资产操作。
+- 重新签发、重新生成和导入任务会触发已启用应用重新部署，任务终态必须注销 execution。
+- 导出任务完成后通过 `/api/v1/key-assets/exports/{taskId}/download` 下载短期加密归档。
+
+## 验证
+
+- 后端任务或调度改动运行 `task test:backend`，重点关注 `internal/tasks` 和 `internal/scheduler`。
+- 前端任务中心或 API 类型改动按影响范围运行 `task test:web` 或 `task build:web`。
+
+## 文档更新触发
+
+新增任务类型、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。

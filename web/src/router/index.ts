@@ -11,15 +11,11 @@ import PackageUpdatesPage from '@/views/servers/packages/index.vue';
 import FirewallPage from '@/views/servers/firewall/index.vue';
 import ApplicationsPage from '@/views/runtime/applications/index.vue';
 import CertificatesPage from '@/views/certificates/domains/index.vue';
-import BuiltinCertificatesPage from '@/views/certificates/builtin/index.vue';
 import KeyAssetsPage from '@/views/certificates/key-assets/index.vue';
 import DomainsPage from '@/views/dns/domains/index.vue';
-import NomadNodesPage from '@/views/runtime/nomad/nodes/index.vue';
-import NomadSetupPage from '@/views/runtime/nomad/setup/index.vue';
 import TaskCenterPage from '@/views/tasks/index.vue';
 import SettingsGeneralPage from '@/views/settings/general/index.vue';
 import SettingsSecurityPage from '@/views/settings/security/index.vue';
-import SettingsNomadPage from '@/views/settings/nomad/index.vue';
 import SettingsCertificatesPage from '@/views/settings/certificates/index.vue';
 import SettingsSystemPage from '@/views/settings/system/index.vue';
 
@@ -44,17 +40,13 @@ export const router = createRouter({
         { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
         { path: 'dns/certificates', redirect: '/certificates/domains' },
         { path: 'certificates', redirect: '/certificates/domains' },
-        { path: 'certificates/builtin', name: 'certificates-builtin', component: BuiltinCertificatesPage, meta: { titleKey: 'routes.builtinCertificates.title' } },
         { path: 'certificates/domains', name: 'certificates-domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
         { path: 'certificates/key-assets', name: 'certificates-key-assets', component: KeyAssetsPage, meta: { titleKey: 'routes.keyAssets.title' } },
         { path: 'certificates/self-signed', redirect: '/certificates/key-assets' },
-        { path: 'nomad/setup', name: 'nomad-setup', component: NomadSetupPage, meta: { titleKey: 'routes.nomadSetup.title' } },
-        { path: 'nomad/nodes', name: 'nomad-nodes', component: NomadNodesPage, meta: { titleKey: 'routes.nomadNodes.title' } },
         { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { titleKey: 'routes.tasks.title' } },
         { path: 'settings', redirect: '/settings/general' },
         { path: 'settings/general', name: 'settings-general', component: SettingsGeneralPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },
         { path: 'settings/security', name: 'settings-security', component: SettingsSecurityPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
-        { path: 'settings/nomad', name: 'settings-nomad', component: SettingsNomadPage, meta: { titleKey: 'routes.settingsNomad.title', settingsCategory: 'nomad' } },
         { path: 'settings/certificates', name: 'settings-certificates', component: SettingsCertificatesPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
         { path: 'settings/system', name: 'settings-system', component: SettingsSystemPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
       ],

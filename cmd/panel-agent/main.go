@@ -23,7 +23,7 @@ func main() {
 	}
 	server := &http.Server{
 		Addr:              cfg.listenAddress,
-		Handler:           agent.NewHandler(),
+		Handler:           agent.NewHandler(agent.HandlerConfig{DockerHost: cfg.dockerHost}),
 		TLSConfig:         tlsConfig,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
@@ -57,6 +57,7 @@ type config struct {
 	certFile      string
 	keyFile       string
 	caFile        string
+	dockerHost    string
 }
 
 func loadConfig() config {
@@ -65,6 +66,7 @@ func loadConfig() config {
 		certFile:      os.Getenv("PANEL_AGENT_CERT_FILE"),
 		keyFile:       os.Getenv("PANEL_AGENT_KEY_FILE"),
 		caFile:        os.Getenv("PANEL_AGENT_CA_FILE"),
+		dockerHost:    envDefault("PANEL_AGENT_DOCKER_HOST", agent.DefaultDockerHost),
 	}
 }
 

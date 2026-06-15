@@ -16,8 +16,8 @@ import type {
 } from '@/types/api';
 
 export interface ApplicationLogsInput {
-  allocId: string;
-  task: string;
+  instanceId: string;
+  containerName?: string;
   type?: string;
   tail?: number;
 }
@@ -28,8 +28,8 @@ function applicationPath(applicationId: string) {
 
 function logsPath(applicationId: string, input: ApplicationLogsInput) {
   const params = new URLSearchParams();
-  params.set('allocId', input.allocId);
-  params.set('task', input.task);
+  params.set('instanceId', input.instanceId);
+  if (input.containerName) params.set('containerName', input.containerName);
   if (input.type) params.set('type', input.type);
   if (input.tail) params.set('tail', String(input.tail));
   return `${applicationPath(applicationId)}/logs?${params.toString()}`;

@@ -8,7 +8,7 @@ import { systemApi } from '@/api/system';
 import type { RuntimeSettingsDto, RuntimeSettingsUpdate, SystemVersionDto, TokenExpiration } from '@/types/api';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
-type SettingsCategory = 'general' | 'security' | 'nomad' | 'certificates' | 'system';
+type SettingsCategory = 'general' | 'security' | 'certificates' | 'system';
 
 const route = useRoute();
 const auth = useAuthStore();
@@ -30,7 +30,7 @@ const showJwtSecret = ref(false);
 
 const category = computed<SettingsCategory>(() => {
   const value = String(route.meta.settingsCategory || 'general');
-  return ['general', 'security', 'nomad', 'certificates', 'system'].includes(value) ? value as SettingsCategory : 'general';
+  return ['general', 'security', 'certificates', 'system'].includes(value) ? value as SettingsCategory : 'general';
 });
 
 const form = reactive<RuntimeSettingsUpdate>({
@@ -43,11 +43,6 @@ const form = reactive<RuntimeSettingsUpdate>({
   branding: {
     loginTitle: '',
     loginSubtitle: '',
-  },
-  nomad: {
-    namespace: 'default',
-    region: 'global',
-    datacenter: 'dc1',
   },
   certificates: {
     email: '',
@@ -80,7 +75,6 @@ function syncForm(next: RuntimeSettingsDto) {
   form.language = next.language;
   form.remoteCommandTimeoutSeconds = next.remoteCommandTimeoutSeconds;
   form.branding = { ...next.branding };
-  form.nomad = { ...next.nomad };
   form.certificates = { ...next.certificates };
   accountForm.username = auth.username;
 }
@@ -111,7 +105,6 @@ async function saveRuntimeSettings() {
     const next = await settingsStore.updateRuntime({
       ...form,
       branding: { ...form.branding },
-      nomad: { ...form.nomad },
       certificates: { ...form.certificates },
     });
     settings.value = next;
@@ -423,32 +416,6 @@ onMounted(loadSettings);
               {{ t('settingsPage.saveJwtSecret') }}
             </v-btn>
           </div>
-        </v-form>
-
-        <v-form v-else-if="category === 'nomad'" class="settings-form">
-          <v-text-field
-            v-model="form.nomad.namespace"
-            :label="t('settingsPage.nomadNamespace')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
-
-          <v-text-field
-            v-model="form.nomad.region"
-            :label="t('settingsPage.nomadRegion')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
-
-          <v-text-field
-            v-model="form.nomad.datacenter"
-            :label="t('settingsPage.nomadDatacenter')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
         </v-form>
 
         <v-form v-else-if="category === 'certificates'" class="settings-form">

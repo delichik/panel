@@ -32,16 +32,9 @@ func TestParseOSReleaseSupportsRegisteredDistros(t *testing.T) {
 	if !ok || selected.ID() != "ubuntu" {
 		t.Fatalf("expected Ubuntu adapter, got %#v", selected)
 	}
-	if !strings.Contains(selected.NomadInstallScript(), "apt.releases.hashicorp.com") ||
-		!strings.Contains(selected.NomadRuntimePrereqsScript(), "docker.io") ||
-		!strings.Contains(selected.NomadServiceRestartScript(), "systemctl restart nomad") ||
-		!selected.SupportsUFW() ||
+	if !selected.SupportsUFW() ||
 		!strings.Contains(selected.UFWInstallScript(), "apt_get install -y ufw") {
-		t.Fatalf("Ubuntu adapter should expose apt-based Nomad and UFW support")
-	}
-	runtimeScript := strings.ToLower(selected.NomadRuntimePrereqsScript())
-	if strings.Contains(runtimeScript, "restart docker") || strings.Contains(runtimeScript, "docker restart") {
-		t.Fatalf("Nomad runtime prereqs must not restart Docker:\n%s", selected.NomadRuntimePrereqsScript())
+		t.Fatalf("Ubuntu adapter should expose apt-based UFW support")
 	}
 }
 

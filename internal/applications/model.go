@@ -3,14 +3,14 @@ package applications
 import (
 	"time"
 
-	"panel/internal/nomad"
+	"panel/internal/appruntime"
 )
 
 const (
 	TaskTypeDeploy      = "application_deploy"
 	TaskTypeStop        = "application_stop"
 	TaskTypeRestart     = "application_restart"
-	TaskTypeRefresh     = "nomad_refresh"
+	TaskTypeRefresh     = "application_refresh"
 	TaskTypeImageCheck  = "application_image_check"
 	TaskTypeImageUpdate = "application_image_update"
 
@@ -55,6 +55,21 @@ type ReverseProxyRule struct {
 type ReverseProxyPath struct {
 	Path      string `json:"path"`
 	WebSocket bool   `json:"webSocket"`
+}
+
+type ApplicationReverseProxyConfig struct {
+	ApplicationID     string              `json:"applicationId"`
+	ApplicationName   string              `json:"applicationName"`
+	JobID             string              `json:"jobId"`
+	DeploymentMode    string              `json:"deploymentMode"`
+	DeploymentServers []string            `json:"deploymentServers"`
+	Routes            []ReverseProxyRoute  `json:"routes"`
+}
+
+type ReverseProxyRoute struct {
+	Domain     string             `json:"domain"`
+	TargetPort int                `json:"targetPort"`
+	Paths      []ReverseProxyPath `json:"paths"`
 }
 
 type ApplicationFile struct {
@@ -104,14 +119,11 @@ type ApplicationRevision struct {
 }
 
 type Runtime struct {
-	ApplicationID     string                     `json:"applicationId"`
-	JobID             string                     `json:"jobId"`
-	JobStatus         string                     `json:"jobStatus"`
-	Deployment        *nomad.Deployment          `json:"deployment,omitempty"`
-	Evaluations       []nomad.Evaluation         `json:"evaluations"`
-	EvaluationDetails []nomad.Evaluation         `json:"evaluationDetails,omitempty"`
-	Allocations       []nomad.AllocationListItem `json:"allocations"`
-	ObservedAt        time.Time                  `json:"observedAt"`
+	ApplicationID string                       `json:"applicationId"`
+	RuntimeID     string                       `json:"runtimeId"`
+	Status        string                       `json:"status"`
+	Instances     []appruntime.InstanceStatus  `json:"instances"`
+	ObservedAt    time.Time                    `json:"observedAt"`
 }
 
 type SaveInput struct {

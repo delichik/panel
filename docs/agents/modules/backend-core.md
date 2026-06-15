@@ -62,4 +62,4 @@
 - 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。
 - 启动时必须迁移旧 SSH 明文密码、口令和私钥文件：先写入并验证密文，再删除私钥文件，最后清空旧字段；删除或验证失败时拒绝启动，迁移必须可重复执行。
 - 新增路由集中在 `/api/v1/key-assets`；私钥下载响应必须禁用缓存。
-- `app.New` 还会初始化 `internal/agent` 的专用 mTLS 资产，路径为 `<dataRoot>/agent/tls`；该 CA 只用于 Panel 与目标机 `cmd/panel-agent` 的双向认证，不与 Nomad TLS 或用户密钥资产混用。服务启动后会后台检查已配置 agent 的服务器版本和能力，检查结果写入服务器 traits，不创建 SSH 连通性任务。
+- `app.New` 还会初始化 `internal/agent` 的专用 mTLS 资产，路径为 `<dataRoot>/agent/tls`；该 CA 只用于 Panel 与目标机 `cmd/panel-agent` 的双向认证，不与用户密钥资产混用。服务启动后会后台检查已配置 agent 的服务器版本、Docker host 和能力，检查结果写入服务器 traits，不创建 SSH 连通性任务。

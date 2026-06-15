@@ -21,8 +21,8 @@ import (
 	"panel/internal/applications"
 	"panel/internal/config"
 	"panel/internal/id"
-	"panel/internal/nomad"
 	"panel/internal/panelerr"
+	"panel/internal/proxycert"
 	"panel/internal/secretstore"
 	"panel/internal/tasks"
 )
@@ -700,13 +700,13 @@ func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, err
 	return content, err
 }
 
-func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.ReverseProxyCertificate, error) {
+func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+assetColumns+` FROM key_assets WHERE type=? ORDER BY name`, TypeTLSCertificate)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := []nomad.ReverseProxyCertificate{}
+	out := []proxycert.Certificate{}
 	for rows.Next() {
 		stored, err := scanStoredAsset(rows)
 		if err != nil {
@@ -718,7 +718,7 @@ func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]nomad.Reverse
 		}
 		domains := append([]string(nil), stored.DNSNames...)
 		domains = append(domains, stored.IPAddresses...)
-		out = append(out, nomad.ReverseProxyCertificate{
+		out = append(out, proxycert.Certificate{
 			ID:             stored.ID,
 			Domains:        domains,
 			CertificatePEM: stored.certificateText,

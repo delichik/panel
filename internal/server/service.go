@@ -30,7 +30,7 @@ const ufwInstallTimeout = 5 * time.Minute
 const ufwManageTimeout = time.Minute
 const restartTaskType = "server_restart"
 const restartTimeout = 15 * time.Second
-const reverseProxyEnabledTrait = "nomad.reverse_proxy.enabled"
+const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 const defaultAgentListenAddress = "0.0.0.0:9443"
 const defaultAgentPort = "9443"
 
@@ -83,6 +83,7 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 		PrivateKey:    string(cert.KeyPEM),
 		ListenAddress: defaultAgentListenAddress,
 		AgentURL:      agentURL,
+		DockerHost:    normalizeDockerHost(srv.DockerHost),
 	}, nil
 }
 
@@ -98,6 +99,7 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		Port:         req.Port,
 		SSHUsername:  req.SSHUsername,
 		CredentialID: req.CredentialID,
+		DockerHost:   normalizeDockerHost(req.DockerHost),
 		Traits:       req.Traits,
 		Variables:    normalizeServerVariables(req.Variables, req.Traits),
 		Notes:        req.Notes,
@@ -109,8 +111,8 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 	}
 	traits, _ := json.Marshal(srv.Traits)
 	variables, _ := json.Marshal(srv.Variables)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,variables_json,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, string(traits), string(variables), srv.Notes, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, string(traits), string(variables), srv.Notes, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 	if err != nil {
 		return Server{}, err
 	}
@@ -135,8 +137,8 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	traits, _ := json.Marshal(req.Traits)
 	variables, _ := json.Marshal(normalizeServerVariables(req.Variables, req.Traits))
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
-		req.Name, req.Host, req.Port, req.SSHUsername, req.CredentialID, string(traits), string(variables), req.Notes, now, serverID)
+	res, err := s.db.ExecContext(ctx, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,docker_host=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+		req.Name, req.Host, req.Port, req.SSHUsername, req.CredentialID, normalizeDockerHost(req.DockerHost), string(traits), string(variables), req.Notes, now, serverID)
 	if err != nil {
 		return Server{}, err
 	}
@@ -174,7 +176,7 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 }
 
 func (s *Service) List(ctx context.Context) ([]Server, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +202,7 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {
-	srv, err := scanServer(s.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
+	srv, err := scanServer(s.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
 	if err == sql.ErrNoRows {
 		return Server{}, panelerr.NotFound("server")
 	}
@@ -959,6 +961,18 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, "agent missing capabilities: "+strings.Join(missing, ", "))
 		return nil
 	}
+	if strings.TrimSpace(health.Docker.Host) != "" && strings.TrimSpace(health.Docker.Host) != normalizeDockerHost(srv.DockerHost) {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, fmt.Sprintf("agent docker host %s does not match server configuration %s", health.Docker.Host, normalizeDockerHost(srv.DockerHost)))
+		return nil
+	}
+	if health.Docker.Status != "ok" {
+		msg := health.Docker.Error
+		if msg == "" {
+			msg = "docker api is unavailable"
+		}
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, health.Version, msg)
+		return nil
+	}
 	return s.markAgentStatus(ctx, srv.ID, agent.StatusCompatible, health.Version, "")
 }
 
@@ -1183,6 +1197,9 @@ func validateSave(req SaveRequest) error {
 	if req.Port <= 0 || req.Port > 65535 {
 		return panelerr.Validation("server_port_invalid", "Server port must be between 1 and 65535")
 	}
+	if strings.TrimSpace(normalizeDockerHost(req.DockerHost)) == "" {
+		return panelerr.Validation("server_docker_host_required", "Docker host is required")
+	}
 	return nil
 }
 
@@ -1196,6 +1213,14 @@ func validateProbe(req SaveRequest) error {
 	return nil
 }
 
+func normalizeDockerHost(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return agent.DefaultDockerHost
+	}
+	return value
+}
+
 type serverScanner interface{ Scan(dest ...any) error }
 
 func scanServer(row serverScanner) (Server, error) {
@@ -1203,12 +1228,13 @@ func scanServer(row serverScanner) (Server, error) {
 	var traits, variables, created, updated string
 	var osSupported, reachable, sudo int
 	var sudoAt, checkedAt sql.NullString
-	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &traits, &variables, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &reachable, &sudo, &sudoAt, &checkedAt, &srv.LastError, &created, &updated)
+	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &srv.DockerHost, &traits, &variables, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &reachable, &sudo, &sudoAt, &checkedAt, &srv.LastError, &created, &updated)
 	if err != nil {
 		return Server{}, err
 	}
 	srv.Traits = map[string]string{}
 	_ = json.Unmarshal([]byte(traits), &srv.Traits)
+	srv.DockerHost = normalizeDockerHost(srv.DockerHost)
 	srv.Variables = map[string]string{}
 	_ = json.Unmarshal([]byte(variables), &srv.Variables)
 	srv.OS.Supported = osSupported == 1

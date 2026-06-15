@@ -7,6 +7,7 @@ export interface ServerInput {
   port: number;
   sshUsername: string;
   credentialId: string;
+  dockerHost: string;
   traits: Record<string, string>;
   notes: string;
 }

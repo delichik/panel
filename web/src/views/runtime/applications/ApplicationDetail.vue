@@ -14,7 +14,7 @@ const imageAction = ref('');
 const error = ref('');
 const message = ref('');
 const lastTaskId = ref('');
-const logTarget = ref<{ allocId: string; task: string } | null>(null);
+const logTarget = ref<{ instanceId: string; containerName: string } | null>(null);
 const imageStatusColor = computed(() => {
   if (props.application.imageLastError) return 'error';
   if (props.application.imageUpdateAvailable) return 'warning';
@@ -86,7 +86,7 @@ function taskRoute(taskId = lastTaskId.value) {
   return taskId ? { path: '/tasks', query: { task: taskId } } : '/tasks';
 }
 
-function selectLogs(target: { allocId: string; task: string }) {
+function selectLogs(target: { instanceId: string; containerName: string }) {
   logTarget.value = target;
 }
 
@@ -149,7 +149,7 @@ watch(() => props.application.id, () => {
       <v-alert v-if="application.lastError" type="error" variant="tonal" class="mt-3">{{ application.lastError }}</v-alert>
     </v-card>
     <ApplicationRuntimePanel :application="application" @logs="selectLogs" />
-    <ApplicationLogsPanel :application="application" :alloc-id="logTarget?.allocId" :task-name="logTarget?.task" />
+    <ApplicationLogsPanel :application="application" :instance-id="logTarget?.instanceId" :container-name="logTarget?.containerName" />
   </div>
 </template>
 

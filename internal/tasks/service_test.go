@@ -285,7 +285,7 @@ func TestFailRunningWithoutExecutionMarksOnlyUntrackedTasksFailed(t *testing.T) 
 	svc := newTestService(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	tracked, err := svc.Create(ctx, CreateInput{Type: "nomad_client_join", Summary: "joining", Status: StatusRunning})
+	tracked, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "installing firewall", Status: StatusRunning})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,7 @@ func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
-	oldWorker, err := svc.Create(ctx, CreateInput{Type: "nomad_client_join", Summary: "joining"})
+	oldWorker, err := svc.Create(ctx, CreateInput{Type: "server_ufw_install", Summary: "installing firewall"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -384,7 +384,7 @@ func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	recentWorker, err := svc.Create(ctx, CreateInput{Type: "nomad_server_bootstrap", Summary: "bootstrap"})
+	recentWorker, err := svc.Create(ctx, CreateInput{Type: "server_restart", Summary: "restart"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +395,7 @@ func TestExpireStaleQueuedMarksOnlySelectedOldQueuedTasksFailed(t *testing.T) {
 		}
 	}
 
-	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"nomad_client_join", "nomad_server_bootstrap"})
+	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"server_ufw_install", "server_restart"})
 	if err != nil {
 		t.Fatal(err)
 	}

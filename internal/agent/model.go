@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"panel/internal/appruntime"
 	"panel/internal/linux"
 	"panel/internal/remoteops"
 )
@@ -22,9 +23,11 @@ const (
 	StatusUnavailable  = "unavailable"
 
 	Version = "1.0.0"
+
+	DefaultDockerHost = "unix:///var/run/docker.sock"
 )
 
-var RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status"}
+var RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart"}
 
 type Client interface {
 	Health(ctx context.Context, url string) (HealthResponse, error)
@@ -39,10 +42,17 @@ type ErrorResponse struct {
 }
 
 type HealthResponse struct {
-	Status       string   `json:"status"`
-	Time         string   `json:"time"`
-	Version      string   `json:"version"`
-	Capabilities []string `json:"capabilities"`
+	Status       string       `json:"status"`
+	Time         string       `json:"time"`
+	Version      string       `json:"version"`
+	Capabilities []string     `json:"capabilities"`
+	Docker       DockerHealth `json:"docker"`
+}
+
+type DockerHealth struct {
+	Host   string `json:"host"`
+	Status string `json:"status"`
+	Error  string `json:"error,omitempty"`
 }
 
 type OSReleaseResponse struct {
@@ -80,6 +90,38 @@ type UFWStatusResponse struct {
 	Default   string                    `json:"default"`
 	Rules     []remoteops.UFWRuleStatus `json:"rules"`
 	Raw       string                    `json:"raw"`
+}
+
+type RuntimeDeployRequest struct {
+	ServerID string          `json:"serverId"`
+	Spec     appruntime.Spec `json:"spec"`
+}
+
+type RuntimeStopRequest struct {
+	InstanceID string `json:"instanceId"`
+	Purge      bool   `json:"purge"`
+}
+
+type RuntimeRestartRequest struct {
+	InstanceID string `json:"instanceId"`
+}
+
+type RuntimeInstanceResponse struct {
+	InstanceID    string    `json:"instanceId"`
+	ContainerName string    `json:"containerName"`
+	ContainerID   string    `json:"containerId,omitempty"`
+	Status        string    `json:"status"`
+	Error         string    `json:"error,omitempty"`
+	ObservedAt    time.Time `json:"observedAt"`
+}
+
+type RuntimeStatusResponse struct {
+	appruntime.InstanceStatus
+}
+
+type RuntimeLogsResponse struct {
+	InstanceID string `json:"instanceId"`
+	Logs       string `json:"logs"`
 }
 
 func SnapshotResponse(s linux.MetricsSnapshot) MetricsSnapshotResponse {

@@ -55,10 +55,6 @@ type DistroAdapter interface {
 	ListUpgradeable(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) ([]PackageUpdate, error)
 	UpgradeSelected(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, packages []string, log LogSink) error
 	UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, log LogSink) error
-	NomadInstallScript() string
-	NomadRuntimePrereqsScript() string
-	NomadServiceRestartScript() string
-	NomadServiceStopScript() string
 	SupportsUFW() bool
 	UFWInstallScript() string
 }

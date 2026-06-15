@@ -4,21 +4,21 @@ import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
 
-const props = defineProps<{ application: ApplicationDto; allocId?: string; taskName?: string }>();
+const props = defineProps<{ application: ApplicationDto; instanceId?: string; containerName?: string }>();
 const { t } = useI18n();
-const allocId = ref(props.allocId || '');
-const task = ref(props.taskName || props.application.name);
+const instanceId = ref(props.instanceId || '');
+const containerName = ref(props.containerName || props.application.name);
 const tail = ref(200);
 const logs = ref('');
 const loading = ref(false);
 const error = ref('');
-const canLoad = computed(() => allocId.value.trim() && task.value.trim());
+const canLoad = computed(() => instanceId.value.trim());
 
 async function loadLogs() {
   if (!canLoad.value) return;
   loading.value = true;
   try {
-    const result = await applicationsApi.logs(props.application.id, { allocId: allocId.value, task: task.value, type: 'stdout', tail: tail.value });
+    const result = await applicationsApi.logs(props.application.id, { instanceId: instanceId.value, containerName: containerName.value, type: 'stdout', tail: tail.value });
     logs.value = result.logs;
     error.value = '';
   } catch (err) {
@@ -29,15 +29,15 @@ async function loadLogs() {
 }
 
 watch(() => props.application.id, () => {
-  allocId.value = props.allocId || '';
-  task.value = props.taskName || props.application.name;
+  instanceId.value = props.instanceId || '';
+  containerName.value = props.containerName || props.application.name;
   logs.value = '';
   error.value = '';
 });
 
-watch(() => [props.allocId, props.taskName], () => {
-  if (props.allocId) allocId.value = props.allocId;
-  if (props.taskName) task.value = props.taskName;
+watch(() => [props.instanceId, props.containerName], () => {
+  if (props.instanceId) instanceId.value = props.instanceId;
+  if (props.containerName) containerName.value = props.containerName;
   logs.value = '';
   if (canLoad.value) void loadLogs();
 });
@@ -47,12 +47,12 @@ watch(() => [props.allocId, props.taskName], () => {
   <v-card variant="outlined" class="logs-card">
     <div class="text-subtitle-1 font-weight-bold mb-3">{{ t('applicationLogs.logs') }}</div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
-    <v-alert v-if="allocId && task" type="info" variant="tonal" density="compact" class="mb-3">
-      {{ t('applicationLogs.selectedTarget', { alloc: allocId, task }) }}
+    <v-alert v-if="instanceId" type="info" variant="tonal" density="compact" class="mb-3">
+      {{ t('applicationLogs.selectedTarget', { instance: instanceId, container: containerName || '-' }) }}
     </v-alert>
     <div class="logs-controls">
-      <v-text-field v-model="allocId" :label="t('applicationLogs.allocationId')" density="compact" variant="outlined" hide-details />
-      <v-text-field v-model="task" :label="t('applicationLogs.task')" density="compact" variant="outlined" hide-details />
+      <v-text-field v-model="instanceId" :label="t('applicationLogs.instanceId')" density="compact" variant="outlined" hide-details />
+      <v-text-field v-model="containerName" :label="t('applicationLogs.container')" density="compact" variant="outlined" hide-details />
       <v-text-field v-model.number="tail" :label="t('applicationLogs.tail')" type="number" density="compact" variant="outlined" hide-details />
       <v-btn color="primary" variant="flat" class="text-none" :disabled="!canLoad" :loading="loading" @click="loadLogs">{{ t('common.load') }}</v-btn>
     </div>

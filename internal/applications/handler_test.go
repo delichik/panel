@@ -116,8 +116,8 @@ func TestHandlerDeployAndStopApplication(t *testing.T) {
 
 func TestHandlerRuntimeAndLogs(t *testing.T) {
 	fake := &fakeApplicationService{
-		runtime: ApplicationRuntime{ApplicationID: "app-1", JobID: "panel-web", JobStatus: "running", ObservedAt: time.Now().UTC()},
-		logs:    LogResult{AllocID: "alloc-1", Task: "web", Type: "stdout", Logs: "hello"},
+		runtime: ApplicationRuntime{ApplicationID: "app-1", RuntimeID: "panel-web", Status: "running", ObservedAt: time.Now().UTC()},
+		logs:    LogResult{InstanceID: "inst-1", ContainerName: "web", Type: "combined", Logs: "hello"},
 	}
 	handler := NewHandler(fake)
 
@@ -129,9 +129,9 @@ func TestHandlerRuntimeAndLogs(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/applications/app-1/logs?allocId=alloc-1&task=web&tail=20", nil)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/applications/app-1/logs?instanceId=inst-1&containerName=web&tail=20", nil)
 	handler.Logs(rec, req)
-	if rec.Code != http.StatusOK || fake.logID != "app-1" || fake.logInput.AllocID != "alloc-1" || fake.logInput.Tail != 20 {
+	if rec.Code != http.StatusOK || fake.logID != "app-1" || fake.logInput.InstanceID != "inst-1" || fake.logInput.ContainerName != "web" || fake.logInput.Tail != 20 {
 		t.Fatalf("logs status=%d id=%q input=%#v body=%s", rec.Code, fake.logID, fake.logInput, rec.Body.String())
 	}
 }
