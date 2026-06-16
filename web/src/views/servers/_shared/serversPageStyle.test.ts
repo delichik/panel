@@ -40,6 +40,16 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).toContain("t('serversPage.dockerHost')");
   });
 
+  it('keeps server detail errors compact and avoids duplicate agent error banners', () => {
+    expect(serversPage).toContain('selectedServerDetailError');
+    expect(serversPage).toContain('serverDetailError(selectedServer.value)');
+    expect(serversPage).toContain("normalizedText(server.traits?.['agent.last_error']) || normalizedText(server.lastError)");
+    expect(serversPage).toContain('density="compact"');
+    expect(serversPage).toContain('class="server-detail-alert mb-3"');
+    expect(serversPage).toContain('.server-detail-alert { flex: 0 0 auto;');
+    expect(serversPage).not.toContain('agent-error-tip');
+  });
+
   it('keeps the server list focused on reachability and agent runtime status', () => {
     expect(serversPage).toContain('agentStatusForServer(server)');
     expect(serversPage).not.toContain(`<span class="status-dot" :class="server.reachable ? 'success' : 'warning'" />`);

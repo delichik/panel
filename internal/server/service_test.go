@@ -573,7 +573,7 @@ func TestUpdateHostRefreshesAgentURLAndInvalidatesCertificate(t *testing.T) {
 	}
 }
 
-func TestCheckConfiguredAgentsQueuesDeployForIncompatibleAgent(t *testing.T) {
+func TestCheckConfiguredAgentsDoesNotDeployConfiguredIncompatibleAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"incompatible","sys.architecture":"x86_64"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
@@ -592,12 +592,12 @@ func TestCheckConfiguredAgentsQueuesDeployForIncompatibleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
-		t.Fatalf("expected system deploy task for incompatible agent, got %#v", result.Items)
+	if result.Total != 0 {
+		t.Fatalf("expected periodic check not to deploy configured incompatible agent, got %#v", result.Items)
 	}
 }
 
-func TestCheckConfiguredAgentsQueuesDeployForExpiredStoredAgentCertificate(t *testing.T) {
+func TestCheckConfiguredAgentsMarksExpiredStoredAgentCertificateWithoutDeploy(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	expiredAt := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiredAt + `"}`
@@ -617,8 +617,8 @@ func TestCheckConfiguredAgentsQueuesDeployForExpiredStoredAgentCertificate(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
-		t.Fatalf("expected system deploy task for expired agent certificate, got %#v", result.Items)
+	if result.Total != 0 {
+		t.Fatalf("expected periodic check not to deploy expired configured agent certificate, got %#v", result.Items)
 	}
 	srv, err := svc.Get(context.Background(), "srv_agent")
 	if err != nil {
@@ -629,7 +629,7 @@ func TestCheckConfiguredAgentsQueuesDeployForExpiredStoredAgentCertificate(t *te
 	}
 }
 
-func TestCheckConfiguredAgentsQueuesDeployForExpiringStoredAgentCertificate(t *testing.T) {
+func TestCheckConfiguredAgentsMarksExpiringStoredAgentCertificateWithoutDeploy(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	expiringAt := time.Now().UTC().Add(agentCertificateRenewBefore / 2).Format(time.RFC3339Nano)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiringAt + `"}`
@@ -649,8 +649,15 @@ func TestCheckConfiguredAgentsQueuesDeployForExpiringStoredAgentCertificate(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
-		t.Fatalf("expected system deploy task for expiring agent certificate, got %#v", result.Items)
+	if result.Total != 0 {
+		t.Fatalf("expected periodic check not to deploy expiring configured agent certificate, got %#v", result.Items)
+	}
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+		t.Fatalf("expected expiring certificate to mark agent incompatible, got %#v", srv.Traits)
 	}
 }
 
@@ -701,7 +708,7 @@ func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T
 	}
 }
 
-func TestAgentCertificateTimeErrorQueuesDeployWhenAlreadyIncompatible(t *testing.T) {
+func TestAgentCertificateTimeErrorDoesNotDeployWhenAlreadyIncompatible(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	traits := map[string]string{
 		agent.TraitEnabled: "true",
@@ -728,12 +735,12 @@ func TestAgentCertificateTimeErrorQueuesDeployWhenAlreadyIncompatible(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
-		t.Fatalf("expected system deploy task for expired incompatible agent, got %#v", result.Items)
+	if result.Total != 0 {
+		t.Fatalf("expected handled certificate error not to deploy configured agent, got %#v", result.Items)
 	}
 }
 
-func TestSystemDetectionQueuesDeployForIncompatibleAgent(t *testing.T) {
+func TestSystemDetectionDoesNotDeployForIncompatibleAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"incompatible","sys.architecture":"x86_64"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
@@ -758,8 +765,8 @@ func TestSystemDetectionQueuesDeployForIncompatibleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
-		t.Fatalf("expected system deploy task during system detection, got %#v", result.Items)
+	if result.Total != 0 {
+		t.Fatalf("expected system detection not to deploy configured incompatible agent, got %#v", result.Items)
 	}
 }
 
@@ -801,7 +808,7 @@ func TestDeployAgentStartsExistingQueuedTask(t *testing.T) {
 	}
 }
 
-func TestAgentCertificateTimeErrorStopsAutoDeployAfterFailures(t *testing.T) {
+func TestAgentCertificateTimeErrorMarksIncompatibleWithoutAutoDeploy(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	traits := map[string]string{
 		agent.TraitEnabled: "true",
@@ -847,8 +854,11 @@ func TestAgentCertificateTimeErrorStopsAutoDeployAfterFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(updated.Traits[agent.TraitLastError], "stopped after") {
-		t.Fatalf("expected exhausted auto deploy error, got %#v", updated.Traits)
+	if updated.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+		t.Fatalf("expected certificate error to mark agent incompatible, got %#v", updated.Traits)
+	}
+	if !strings.Contains(strings.ToLower(updated.Traits[agent.TraitLastError]), "certificate") {
+		t.Fatalf("expected certificate error to be retained, got %#v", updated.Traits)
 	}
 }
 
@@ -997,8 +1007,9 @@ func TestAgentInstallScriptStopsOldProcessesAndChecksPortOwner(t *testing.T) {
 		"systemctl stop panel-agent.service",
 		"pkill -x panel-agent",
 		"pkill -f '^/usr/local/bin/panel-agent($| )'",
+		"journalctl -u panel-agent.service -n 80 --no-pager",
 		"ss -ltnp 'sport = :9443'",
-		"tcp/9443 is not owned by panel-agent",
+		"continuing with TLS certificate verification",
 	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("expected install script to contain %q, got:\n%s", want, script)

@@ -408,11 +408,9 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 		}
 		if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
 			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
-			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
 		if agentStatusNeedsDeploy(srv) {
-			s.queueAgentRecovery(srv)
 			continue
 		}
 		if srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
@@ -430,7 +428,7 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 			continue
 		}
 		if updated.Traits[agent.TraitStatus] == agent.StatusIncompatible {
-			_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
+			continue
 		}
 	}
 }
@@ -1378,19 +1376,8 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 func (s *Service) recoverAgentForSystemDetection(ctx context.Context, srv Server) {
 	if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
-		s.queueAgentRecovery(srv)
 		return
 	}
-	if agentStatusNeedsDeploy(srv) {
-		s.queueAgentRecovery(srv)
-	}
-}
-
-func (s *Service) queueAgentRecovery(srv Server) {
-	if agentAutoDeployBlocked(srv) || s.exec == nil || s.agentTLS == nil || s.tasks == nil {
-		return
-	}
-	_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 }
 
 func systemCertificateFromInfo(id, certificateType, name string, info agent.CertificateInfo) SystemCertificate {
@@ -1470,10 +1457,6 @@ func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Serve
 		return true
 	}
 	_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
-	if s.exec == nil || s.agentTLS == nil || s.tasks == nil {
-		return true
-	}
-	_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 	return true
 }
 
@@ -1687,13 +1670,27 @@ func agentInstallScript(remoteTmp string) string {
 		"rm -f " + remoteops.ShellQuote(remoteTmp),
 		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: 9443, Protocol: "tcp"}),
 		"systemctl daemon-reload",
-		"systemctl enable panel-agent.service",
-		"systemctl restart panel-agent.service",
+		`if ! systemctl enable panel-agent.service; then`,
+		`  echo "[panel] failed to enable panel-agent.service" >&2`,
+		`  systemctl status panel-agent.service --no-pager -l >&2 || true`,
+		`  exit 1`,
+		`fi`,
+		`if ! systemctl restart panel-agent.service; then`,
+		`  echo "[panel] failed to restart panel-agent.service" >&2`,
+		`  systemctl status panel-agent.service --no-pager -l >&2 || true`,
+		`  journalctl -u panel-agent.service -n 80 --no-pager >&2 || true`,
+		`  exit 1`,
+		`fi`,
 		`for i in 1 2 3 4 5 6 7 8 9 10; do`,
 		`  systemctl is-active --quiet panel-agent.service && break`,
 		`  sleep 1`,
 		`done`,
-		`systemctl is-active --quiet panel-agent.service`,
+		`if ! systemctl is-active --quiet panel-agent.service; then`,
+		`  echo "[panel] panel-agent.service is not active after restart" >&2`,
+		`  systemctl status panel-agent.service --no-pager -l >&2 || true`,
+		`  journalctl -u panel-agent.service -n 80 --no-pager >&2 || true`,
+		`  exit 1`,
+		`fi`,
 		`if command -v ss >/dev/null 2>&1; then`,
 		`  listeners="$(ss -ltnp 'sport = :9443' 2>/dev/null || true)"`,
 		`  if ! printf '%s\n' "$listeners" | grep -q LISTEN; then`,
@@ -1701,9 +1698,8 @@ func agentInstallScript(remoteTmp string) string {
 		`    exit 1`,
 		`  fi`,
 		`  if ! printf '%s\n' "$listeners" | grep -q panel-agent; then`,
-		`    echo "[panel] tcp/9443 is not owned by panel-agent" >&2`,
+		`    echo "[panel] tcp/9443 listener did not expose a panel-agent process name; continuing with TLS certificate verification" >&2`,
 		`    printf '%s\n' "$listeners" >&2`,
-		`    exit 1`,
 		`  fi`,
 		`fi`,
 		`echo "[panel] panel-agent service started"`,

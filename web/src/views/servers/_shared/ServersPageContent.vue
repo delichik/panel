@@ -66,6 +66,14 @@ const agentReadyCount = computed(() => servers.value.filter((server) => server.t
 const credentialRows = computed(() => credentials.value ?? []);
 const serverCredentialMissing = computed(() => !serverForm.credentialId);
 const serverDockerHostMissing = computed(() => !serverForm.dockerHost.trim());
+const selectedServerDetailError = computed(() => serverDetailError(selectedServer.value));
+const visiblePageError = computed(() => {
+  const value = error.value.trim();
+  const detailError = selectedServerDetailError.value;
+  if (!value) return '';
+  if (detailError && (value === detailError || detailError.includes(value) || value.includes(detailError))) return '';
+  return value;
+});
 const {
   page: serverPage,
   pageSize: serverPageSize,
@@ -387,6 +395,19 @@ function agentDeployActionLabel(server: ServerDto | null) {
   return t('serversPage.reinstallAgent');
 }
 
+function normalizedText(value?: string | null) {
+  return value?.trim() ?? '';
+}
+
+function serverDetailError(server: ServerDto | null) {
+  if (!server) return '';
+  return normalizedText(server.traits?.['agent.last_error']) || normalizedText(server.lastError);
+}
+
+function serverDetailErrorType(server: ServerDto | null) {
+  return server?.traits?.['agent.status'] === 'unavailable' ? 'error' : 'warning';
+}
+
 async function deployAgent(server: ServerDto) {
   agentDeploying.value = { ...agentDeploying.value, [server.id]: true };
   try {
@@ -480,7 +501,7 @@ onMounted(load);
 
 <template>
   <div class="page-shell">
-    <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
+    <v-alert v-if="visiblePageError" type="error" variant="tonal" density="compact">{{ visiblePageError }}</v-alert>
 
     <template v-if="activeTab === 'servers'">
       <PageLoadingState v-if="loading && servers.length === 0" min-height="340px" />
@@ -572,7 +593,15 @@ onMounted(load);
               </div>
             </div>
 
-            <v-alert v-if="selectedServer.lastError" type="warning" variant="tonal" class="mb-4">{{ selectedServer.lastError }}</v-alert>
+            <v-alert
+              v-if="selectedServerDetailError"
+              :type="serverDetailErrorType(selectedServer)"
+              variant="tonal"
+              density="compact"
+              class="server-detail-alert mb-3"
+            >
+              {{ selectedServerDetailError }}
+            </v-alert>
 
             <div class="metric-grid mb-4">
               <div class="metric-tile">
@@ -670,14 +699,6 @@ onMounted(load);
                   <div><span>{{ t('serversPage.updated') }}</span><strong>{{ formatDate(selectedServer.updatedAt) }}</strong></div>
                   <div v-if="selectedServer.traits?.['agent.version']"><span>{{ t('serversPage.agentVersion') }}</span><strong>{{ selectedServer.traits['agent.version'] }}</strong></div>
                   <div v-if="selectedServer.traits?.['agent.last_checked_at']"><span>{{ t('serversPage.agentLastChecked') }}</span><strong>{{ formatDate(selectedServer.traits['agent.last_checked_at']) }}</strong></div>
-                </div>
-                <div
-                  v-if="selectedServer.traits?.['agent.last_error']"
-                  class="agent-error-tip mt-3"
-                  :class="{ error: selectedServer.traits?.['agent.status'] === 'unavailable' }"
-                >
-                  <v-icon size="16" :color="selectedServer.traits?.['agent.status'] === 'unavailable' ? 'error' : 'warning'">mdi-alert-circle-outline</v-icon>
-                  <span>{{ selectedServer.traits['agent.last_error'] }}</span>
                 </div>
               </section>
 
@@ -915,6 +936,8 @@ onMounted(load);
 .detail-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .metric-tile { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
+.server-detail-alert { flex: 0 0 auto; align-self: stretch; max-width: 100%; min-height: 0; }
+.server-detail-alert :deep(.v-alert__content) { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
 .detail-sections { display: grid; gap: 18px; min-height: 0; overflow: auto; }
 .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .property-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
@@ -928,9 +951,6 @@ onMounted(load);
 .network-address { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .network-address code { min-width: 0; overflow-wrap: anywhere; font-size: 0.78rem; color: var(--lp-text-muted); }
 .trait-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.agent-error-tip { display: flex; align-items: flex-start; gap: 8px; max-width: 100%; padding: 8px 10px; border: 1px solid rgba(var(--v-theme-warning), 0.28); border-radius: 8px; background: rgba(var(--v-theme-warning), 0.07); color: rgb(var(--v-theme-warning)); font-size: 0.78rem; line-height: 1.35; overflow-wrap: anywhere; }
-.agent-error-tip.error { border-color: rgba(var(--v-theme-error), 0.28); background: rgba(var(--v-theme-error), 0.07); color: rgb(var(--v-theme-error)); }
-.agent-error-tip span { min-width: 0; }
 .notes { margin: 0; color: var(--lp-text-muted); white-space: pre-wrap; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .span-all { grid-column: 1 / -1; }
