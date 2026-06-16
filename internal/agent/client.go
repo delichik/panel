@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -67,8 +68,25 @@ func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
 
 func (c *HTTPClient) Health(ctx context.Context, baseURL string) (HealthResponse, error) {
 	var out HealthResponse
-	err := c.get(ctx, baseURL, "/v1/health", nil, &out)
-	return out, err
+	res, err := c.getResponse(ctx, baseURL, "/v1/health", nil)
+	if err != nil {
+		return out, err
+	}
+	defer res.Body.Close()
+	if err := decodeAgentResponse(res, &out); err != nil {
+		return HealthResponse{}, err
+	}
+	if res.TLS != nil && len(res.TLS.PeerCertificates) > 0 {
+		cert := res.TLS.PeerCertificates[0]
+		sum := sha256.Sum256(cert.Raw)
+		out.Certificate = &CertificateInfo{
+			Fingerprint: fmt.Sprintf("%X", sum[:]),
+			CommonName:  cert.Subject.CommonName,
+			NotBefore:   cert.NotBefore,
+			NotAfter:    cert.NotAfter,
+		}
+	}
+	return out, nil
 }
 
 func (c *HTTPClient) OSRelease(ctx context.Context, baseURL string) (linux.OSRelease, error) {
@@ -187,22 +205,34 @@ func (c *HTTPClient) DockerVolumeDelete(ctx context.Context, baseURL, name strin
 }
 
 func (c *HTTPClient) get(ctx context.Context, baseURL, path string, query url.Values, out any) error {
-	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
+	res, err := c.getResponse(ctx, baseURL, path, query)
 	if err != nil {
 		return err
+	}
+	defer res.Body.Close()
+	return decodeAgentResponse(res, out)
+}
+
+func (c *HTTPClient) getResponse(ctx context.Context, baseURL, path string, query url.Values) (*http.Response, error) {
+	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
+	if err != nil {
+		return nil, err
 	}
 	if len(query) > 0 {
 		u.RawQuery = query.Encode()
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	res, err := c.do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer res.Body.Close()
+	return res, nil
+}
+
+func decodeAgentResponse(res *http.Response, out any) error {
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var er ErrorResponse
 		_ = json.NewDecoder(res.Body).Decode(&er)

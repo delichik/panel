@@ -14,10 +14,10 @@ const (
 	TraitEnabled = "agent.enabled"
 	TraitURL     = "agent.url"
 
-	TraitStatus      = "agent.status"
-	TraitVersion     = "agent.version"
-	TraitLastChecked = "agent.last_checked_at"
-	TraitLastError   = "agent.last_error"
+	TraitStatus            = "agent.status"
+	TraitVersion           = "agent.version"
+	TraitLastChecked       = "agent.last_checked_at"
+	TraitLastError         = "agent.last_error"
 	TraitAutoDeployBlocked = "agent.auto_deploy_blocked"
 
 	TraitCertificateFingerprint = "agent.certificate.fingerprint"
@@ -49,11 +49,12 @@ type ErrorResponse struct {
 }
 
 type HealthResponse struct {
-	Status       string       `json:"status"`
-	Time         string       `json:"time"`
-	Version      string       `json:"version"`
-	Capabilities []string     `json:"capabilities"`
-	Docker       DockerHealth `json:"docker"`
+	Status       string           `json:"status"`
+	Time         string           `json:"time"`
+	Version      string           `json:"version"`
+	Capabilities []string         `json:"capabilities"`
+	Docker       DockerHealth     `json:"docker"`
+	Certificate  *CertificateInfo `json:"-"`
 }
 
 type DockerHealth struct {

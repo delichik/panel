@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/x509"
+	"encoding/pem"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -510,6 +511,172 @@ func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	}
 }
 
+func TestIssueAgentCertificateUsesCurrentServerHostURL(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentTLSAssets(assets)
+	traits := `{"agent.enabled":"true","agent.url":"https://198.51.100.2:9443","agent.status":"compatible"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','203.0.113.10',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle, err := svc.IssueAgentCertificate(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bundle.AgentURL != "https://203.0.113.10:9443" {
+		t.Fatalf("expected agent URL to follow current server host, got %q", bundle.AgentURL)
+	}
+	block, _ := pem.Decode([]byte(bundle.Certificate))
+	if block == nil {
+		t.Fatal("expected certificate PEM")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cert.IPAddresses) != 1 || cert.IPAddresses[0].String() != "203.0.113.10" {
+		t.Fatalf("expected certificate SAN to contain current server host, got %#v", cert.IPAddresses)
+	}
+}
+
+func TestUpdateHostRefreshesAgentURLAndInvalidatesCertificate(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://198.51.100.2:9443","agent.status":"compatible","agent.certificate.fingerprint":"OLD","agent.certificate.not_after":"2027-01-01T00:00:00Z"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','198.51.100.2',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := svc.Update(context.Background(), "srv_agent", SaveRequest{
+		Name:         "s",
+		Host:         "203.0.113.10",
+		Port:         22,
+		SSHUsername:  "du",
+		CredentialID: "cred_1",
+		DockerHost:   agent.DefaultDockerHost,
+		Traits:       map[string]string{"agent.enabled": "true", "agent.url": "https://198.51.100.2:9443", "agent.status": "compatible"},
+		Variables:    map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Traits[agent.TraitURL] != "https://203.0.113.10:9443" || updated.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+		t.Fatalf("expected host update to refresh agent traits, got %#v", updated.Traits)
+	}
+	if updated.Traits[agent.TraitCertificateFingerprint] != "" || updated.Traits[agent.TraitCertificateNotAfter] != "" {
+		t.Fatalf("expected old certificate metadata to be cleared, got %#v", updated.Traits)
+	}
+}
+
+func TestCheckConfiguredAgentsQueuesDeployForIncompatibleAgent(t *testing.T) {
+	_, taskSvc, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"incompatible","sys.architecture":"x86_64"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	svc.CheckConfiguredAgents(context.Background())
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected system deploy task for incompatible agent, got %#v", result.Items)
+	}
+}
+
+func TestCheckConfiguredAgentsQueuesDeployForExpiredStoredAgentCertificate(t *testing.T) {
+	_, taskSvc, store := testServerService(t, nil)
+	expiredAt := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiredAt + `"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	svc.CheckConfiguredAgents(context.Background())
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected system deploy task for expired agent certificate, got %#v", result.Items)
+	}
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+		t.Fatalf("expected expired certificate to mark agent incompatible, got %#v", srv.Traits)
+	}
+}
+
+func TestCheckConfiguredAgentsQueuesDeployForExpiringStoredAgentCertificate(t *testing.T) {
+	_, taskSvc, store := testServerService(t, nil)
+	expiringAt := time.Now().UTC().Add(agentCertificateRenewBefore / 2).Format(time.RFC3339Nano)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiringAt + `"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	svc.CheckConfiguredAgents(context.Background())
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected system deploy task for expiring agent certificate, got %#v", result.Items)
+	}
+}
+
+func TestCheckConfiguredAgentsDoesNotQueueDeployForUnavailableCertificateTimeError(t *testing.T) {
+	_, taskSvc, store := testServerService(t, nil)
+	lastErr := `Get "https://127.0.0.1:9443/v1/health": tls: failed to verify certificate: x509: certificate has expired or is not yet valid`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"unavailable","agent.last_error":"` + strings.ReplaceAll(lastErr, `"`, `\"`) + `","sys.architecture":"x86_64"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	svc.CheckConfiguredAgents(context.Background())
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("expected no system deploy task for unavailable agent, got %#v", result.Items)
+	}
+}
+
 func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
@@ -529,6 +696,68 @@ func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T
 	}
 	if !strings.Contains(strings.ToLower(srv.Traits[agent.TraitLastError]), "certificate") {
 		t.Fatalf("expected certificate error to be recorded, got %#v", srv.Traits)
+	}
+}
+
+func TestAgentCertificateTimeErrorQueuesDeployWhenAlreadyIncompatible(t *testing.T) {
+	createSvc, taskSvc, store := testServerService(t, nil)
+	traits := map[string]string{
+		agent.TraitEnabled: "true",
+		agent.TraitURL:     "https://127.0.0.1:9443",
+		agent.TraitStatus:  agent.StatusIncompatible,
+		"sys.architecture": "x86_64",
+	}
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	if !svc.HandleAgentError(context.Background(), srv, x509.CertificateInvalidError{Reason: x509.Expired}) {
+		t.Fatal("expected certificate time error to be handled")
+	}
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: srv.ID, IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected system deploy task for expired incompatible agent, got %#v", result.Items)
+	}
+}
+
+func TestSystemDetectionQueuesDeployForIncompatibleAgent(t *testing.T) {
+	_, taskSvc, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"incompatible","sys.architecture":"x86_64"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.detectOS(context.Background(), srv, srv.Target()); err == nil {
+		t.Fatal("expected incompatible agent error")
+	}
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected system deploy task during system detection, got %#v", result.Items)
 	}
 }
 

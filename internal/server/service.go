@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path"
 	"strconv"
@@ -38,7 +39,8 @@ const agentDeployTaskType = "server_agent_deploy"
 const agentCertificateResetTaskType = "agent_certificate_reset"
 const agentCertificateResourceType = "agent_certificate"
 const agentDeployTimeout = 2 * time.Minute
-const agentAutoDeployMaxFailures = 3
+const agentAutoDeployMaxFailures = 2
+const agentCertificateRenewBefore = 30 * 24 * time.Hour
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 const defaultAgentListenAddress = "0.0.0.0:9443"
 const defaultAgentPort = "9443"
@@ -83,13 +85,10 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 	if err != nil {
 		return AgentCertificateBundle{}, err
 	}
+	agentURL := agentDefaultURL(srv.Host)
 	cert, err := s.agentTLS.IssueServerCertificate("panel-agent-"+srv.ID, []string{srv.Host})
 	if err != nil {
 		return AgentCertificateBundle{}, err
-	}
-	agentURL := strings.TrimSpace(srv.Traits[agent.TraitURL])
-	if agentURL == "" {
-		agentURL = "https://" + srv.Host + ":" + defaultAgentPort
 	}
 	return AgentCertificateBundle{
 		CA:            string(s.agentTLS.CACertificatePEM()),
@@ -272,8 +271,21 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	if err := validateSave(req); err != nil {
 		return Server{}, err
 	}
+	current, err := s.Get(ctx, serverID)
+	if err != nil {
+		return Server{}, err
+	}
 	if req.Traits == nil {
 		req.Traits = map[string]string{}
+	}
+	if strings.TrimSpace(current.Host) != strings.TrimSpace(req.Host) && serverHasAgentConfigured(current, req.Traits) {
+		req.Traits[agent.TraitEnabled] = "true"
+		req.Traits[agent.TraitURL] = agentDefaultURL(req.Host)
+		req.Traits[agent.TraitStatus] = agent.StatusIncompatible
+		req.Traits[agent.TraitLastError] = "server host changed; agent redeployment required"
+		delete(req.Traits, agent.TraitCertificateFingerprint)
+		delete(req.Traits, agent.TraitCertificateNotBefore)
+		delete(req.Traits, agent.TraitCertificateNotAfter)
 	}
 	traits, _ := json.Marshal(req.Traits)
 	variables, _ := json.Marshal(normalizeServerVariables(req.Variables, req.Traits))
@@ -377,11 +389,23 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if skipUnavailableAgentScheduledWork(srv) {
+		if agentAutoDeployBlocked(srv) {
 			continue
 		}
 		if _, ok := agentURL(srv); !ok {
 			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+			continue
+		}
+		if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
+			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
+			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+			continue
+		}
+		if agentStatusNeedsDeploy(srv) {
+			s.queueAgentRecovery(srv)
+			continue
+		}
+		if srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
 			continue
 		}
 		if err := s.checkAgent(ctx, srv); err != nil {
@@ -1257,6 +1281,7 @@ fi`
 func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) (linux.OSRelease, error) {
 	if baseURL, ok := agentURL(srv); ok {
 		if srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+			s.recoverAgentForSystemDetection(ctx, srv)
 			return linux.OSRelease{}, panelerr.Validation("agent_incompatible", "Agent is not compatible with system detection")
 		}
 		if s.agent == nil {
@@ -1275,6 +1300,7 @@ func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) 
 func (s *Service) detectSystemTraitsForServer(ctx context.Context, srv Server, target sshx.Target) (map[string]string, error) {
 	if baseURL, ok := agentURL(srv); ok {
 		if srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+			s.recoverAgentForSystemDetection(ctx, srv)
 			return nil, panelerr.Validation("agent_incompatible", "Agent is not compatible with system detection")
 		}
 		if s.agent == nil {
@@ -1321,7 +1347,32 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, health.Version, msg)
 		return nil
 	}
+	if health.Certificate != nil {
+		_ = s.markAgentCertificate(ctx, srv.ID, *health.Certificate)
+		if time.Now().UTC().Add(agentCertificateRenewBefore).After(health.Certificate.NotAfter) {
+			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, "agent certificate expires soon; redeployment required")
+			return nil
+		}
+	}
 	return s.markAgentStatus(ctx, srv.ID, agent.StatusCompatible, health.Version, "")
+}
+
+func (s *Service) recoverAgentForSystemDetection(ctx context.Context, srv Server) {
+	if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
+		s.queueAgentRecovery(srv)
+		return
+	}
+	if agentStatusNeedsDeploy(srv) {
+		s.queueAgentRecovery(srv)
+	}
+}
+
+func (s *Service) queueAgentRecovery(srv Server) {
+	if agentAutoDeployBlocked(srv) || s.exec == nil || s.agentTLS == nil || s.tasks == nil {
+		return
+	}
+	_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 }
 
 func systemCertificateFromInfo(id, certificateType, name string, info agent.CertificateInfo) SystemCertificate {
@@ -1359,7 +1410,11 @@ func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Serve
 	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
 		msg = cause.Error()
 	}
-	if skipUnavailableAgentScheduledWork(srv) {
+	if srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], msg))
+		return true
+	}
+	if agentAutoDeployBlocked(srv) {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], msg))
 		return true
 	}
@@ -1371,6 +1426,26 @@ func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Serve
 	return true
 }
 
+func agentCertificateRenewalProblem(srv Server, now time.Time) (bool, string) {
+	if value := strings.TrimSpace(srv.Traits[agent.TraitCertificateNotBefore]); value != "" {
+		if notBefore, err := time.Parse(time.RFC3339Nano, value); err == nil && now.Before(notBefore) {
+			return true, "agent certificate is not yet valid; redeployment required"
+		}
+	}
+	if value := strings.TrimSpace(srv.Traits[agent.TraitCertificateNotAfter]); value != "" {
+		if notAfter, err := time.Parse(time.RFC3339Nano, value); err == nil && now.After(notAfter) {
+			return true, "agent certificate has expired; redeployment required"
+		} else if err == nil && now.Add(agentCertificateRenewBefore).After(notAfter) {
+			return true, "agent certificate expires soon; redeployment required"
+		}
+	}
+	return false, ""
+}
+
+func agentStatusNeedsDeploy(srv Server) bool {
+	return srv.Traits[agent.TraitStatus] == agent.StatusIncompatible
+}
+
 func isAgentCertificateTimeError(err error) bool {
 	if err == nil {
 		return false
@@ -1379,7 +1454,11 @@ func isAgentCertificateTimeError(err error) bool {
 	if errors.As(err, &invalid) && invalid.Reason == x509.Expired {
 		return true
 	}
-	msg := strings.ToLower(err.Error())
+	return isAgentCertificateTimeErrorMessage(err.Error())
+}
+
+func isAgentCertificateTimeErrorMessage(msg string) bool {
+	msg = strings.ToLower(msg)
 	return strings.Contains(msg, "certificate has expired or is not yet valid") ||
 		strings.Contains(msg, "certificate has expired") ||
 		strings.Contains(msg, "certificate is not yet valid")
@@ -1615,6 +1694,17 @@ func normalizeAgentArch(value string) string {
 
 func agentBinaryPathForPlatform(platform string) string {
 	return path.Join(agentBundleRoot, strings.TrimSpace(platform), agentBundleBinaryName)
+}
+
+func agentDefaultURL(host string) string {
+	return "https://" + net.JoinHostPort(strings.TrimSpace(host), defaultAgentPort)
+}
+
+func serverHasAgentConfigured(current Server, nextTraits map[string]string) bool {
+	return traitEnabled(current.Traits[agent.TraitEnabled]) ||
+		strings.TrimSpace(current.Traits[agent.TraitURL]) != "" ||
+		traitEnabled(nextTraits[agent.TraitEnabled]) ||
+		strings.TrimSpace(nextTraits[agent.TraitURL]) != ""
 }
 
 func agentURL(srv Server) (string, bool) {
