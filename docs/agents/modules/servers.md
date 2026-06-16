@@ -61,16 +61,16 @@
 ## Panel Agent
 
 - `cmd/panel-agent` 是部署在目标服务器上的被动 HTTPS agent，使用 Panel 专用 agent CA 做 mTLS 双向认证；Panel 启动时在 `dataRoot/agent/tls` 生成或复用 agent CA 与 Panel client 证书。
-- Agent CA、Panel Agent 客户端证书和已配置服务器的 Agent 服务端证书作为“系统内置”资产展示，不写入用户 `key_assets`，不能删除、导入、导出或作为应用文件引用，只允许重置。
+- Agent CA 和 Panel Agent 客户端证书作为“系统内置”资产展示，不写入用户 `key_assets`，不能删除、导入、导出或作为应用文件引用，只允许重置。每台服务器的 Agent 服务端证书是安装/重装任务同步到目标机 `/etc/panel-agent` 的部署产物，不在系统证书页逐台展示；其状态通过服务器 Agent 状态、最后错误和部署任务日志排查。
 - 重置 Panel Agent 客户端证书时保留 Agent CA，并热加载所有服务共享的 Agent HTTP client；重置 Agent CA 时同时生成新的客户端证书、热加载 HTTP client，并为所有已配置服务器排队重部署 Agent；重置单台服务器证书复用该服务器的 Agent 部署任务。
-- Agent 部署成功后把服务端证书指纹和有效期写入服务器 traits，供系统证书页面展示；旧服务器缺少该元数据时仍展示系统证书行，下一次重部署后补齐。
+- Agent 部署成功后把服务端证书指纹和有效期写入服务器 traits，供服务器 Agent 状态、最后错误和部署任务排查使用；旧服务器缺少该元数据时，下一次重部署后补齐。
 - 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9443`。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits；agent 版本必须与当前 Panel 版本一致，否则视为不兼容并触发自动重装。
 - Agent 健康检查必须返回 Docker 健康状态和 Docker host；Panel 要求 Docker 正常且 agent 报告的 Docker host 与服务器配置一致。
 - Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、应用 runtime deploy/stop/restart/status/logs，以及 Docker 容器、镜像、网络和卷资源 API。
 - Docker 资源查询和操作只走 agent Docker Engine API，不回退 SSH。
 - 启用 agent 后，读取类能力和应用运行时操作必须走 agent；软件包刷新/升级、UFW 写操作、服务器重启等写入型服务器维护仍走 SSH。
 - 新增服务器完成首次信息采集且确认免密 sudo 后，会自动创建 `server_agent_deploy` 任务安装或更新 agent。
-- Panel 启动检查或周期检查发现服务器未配置 agent 时，会自动创建 `server_agent_deploy` 任务安装 agent；发现已配置 agent 的服务器处于 `agent.status=incompatible` 时，会自动创建 `server_agent_deploy` 任务重装 agent；健康检查及其他 Agent API 因 mTLS server 证书过期或尚未生效失败时，也视为不兼容并自动重装。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent` 并重启 systemd 服务；如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署和证书错误触发的自动重装必须复用并立即启动该任务，不能让旧任务挡住证书同步。不可达状态只记录错误，不自动重装。
+- Panel 启动检查或周期检查发现服务器未配置 agent 时，会自动创建 `server_agent_deploy` 任务安装 agent；发现已配置 agent 的服务器处于 `agent.status=incompatible` 时，会自动创建 `server_agent_deploy` 任务重装 agent；健康检查、应用运行时、容器化资源和指标采集等 Agent API 因 mTLS server 证书过期或尚未生效失败时，也视为不兼容并自动重装。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent` 并重启 systemd 服务；如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署和证书错误触发的自动重装必须复用并立即启动该任务，不能让旧任务挡住证书同步。同一服务器在最近一次成功部署后，系统自动触发的 agent 部署失败达到 3 次后会停止自动尝试，只保留 Agent 错误状态和手动重装入口。不可达状态只记录错误，不自动重装。
 - `POST /api/v1/servers/{id}/agent/deploy` 是手动兜底入口，返回并启动 `server_agent_deploy` 任务；任务中心重试或立即运行也支持该任务类型。未安装时前端显示安装按钮，已安装但异常时显示重装按钮。
 - agent 部署任务通过 SSH 上传独立 `panel-agent` 二进制到目标机，再以 `/usr/local/bin/panel-agent` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url` 并立即执行健康检查。
 - Panel 固定从 `/app/panel-agents/<goos>-<goarch>/panel-agent` 读取 agent bundle，并根据目标服务器 `sys.architecture` 选择 `linux-amd64` 或 `linux-arm64`；缺失架构信息时通过 SSH `uname -m` 探测。该位置不可通过配置或环境变量修改；发布镜像会把同版本 agent bundle 复制到 `/app/panel-agents`，部署任务每次直接读取对应文件并上传到目标机。

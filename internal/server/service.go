@@ -38,6 +38,7 @@ const agentDeployTaskType = "server_agent_deploy"
 const agentCertificateResetTaskType = "agent_certificate_reset"
 const agentCertificateResourceType = "agent_certificate"
 const agentDeployTimeout = 2 * time.Minute
+const agentAutoDeployMaxFailures = 3
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 const defaultAgentListenAddress = "0.0.0.0:9443"
 const defaultAgentPort = "9443"
@@ -104,6 +105,10 @@ func (s *Service) DeployAgent(ctx context.Context, serverID string) (tasks.Task,
 	return s.ensureAgentDeployTask(ctx, serverID, "user", true)
 }
 
+func (s *Service) HandleAgentError(ctx context.Context, srv Server, cause error) bool {
+	return s.handleAgentCertificateTimeError(ctx, srv, cause)
+}
+
 func (s *Service) RunAgentDeployTask(ctx context.Context, task tasks.Task) error {
 	if s.exec == nil {
 		return panelerr.Validation("server_executor_unavailable", "Server executor is unavailable")
@@ -143,29 +148,6 @@ func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, 
 	result := []SystemCertificate{
 		systemCertificateFromInfo("agent-ca", "ca_certificate", "Panel Agent CA", caInfo),
 		systemCertificateFromInfo("agent-panel-client", "tls_certificate", "Panel Agent client", clientInfo),
-	}
-	servers, err := s.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, srv := range servers {
-		if srv.Traits[agent.TraitEnabled] != "true" && strings.TrimSpace(srv.Traits[agent.TraitURL]) == "" {
-			continue
-		}
-		result = append(result, SystemCertificate{
-			ID:          "agent-server:" + srv.ID,
-			Type:        "tls_certificate",
-			Name:        "Panel Agent server - " + srv.Name,
-			CommonName:  "panel-agent-" + srv.ID,
-			Fingerprint: srv.Traits[agent.TraitCertificateFingerprint],
-			NotBefore:   parseOptionalRFC3339(srv.Traits[agent.TraitCertificateNotBefore]),
-			NotAfter:    parseOptionalRFC3339(srv.Traits[agent.TraitCertificateNotAfter]),
-			ServerID:    srv.ID,
-			ServerName:  srv.Name,
-			Status:      srv.Traits[agent.TraitStatus],
-			BuiltIn:     true,
-			CanReset:    true,
-		})
 	}
 	return result, nil
 }
@@ -907,6 +889,17 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 	if s.agentTLS == nil {
 		return tasks.Task{}, panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
 	}
+	if triggeredBy != "user" {
+		allowed, failures, err := s.agentAutoDeployAllowed(ctx, serverID)
+		if err != nil {
+			return tasks.Task{}, err
+		}
+		if !allowed {
+			msg := fmt.Sprintf("agent auto deployment stopped after %d failed attempts; use Reinstall Agent after fixing the error", failures)
+			_ = s.markAgentStatus(ctx, serverID, agent.StatusUnavailable, "", msg)
+			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_exhausted", msg)
+		}
+	}
 	if existing, ok, err := s.tasks.ExistingActive(ctx, agentDeployTaskType, connectivityResourceType, serverID); err != nil {
 		return tasks.Task{}, err
 	} else if ok {
@@ -944,6 +937,25 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		task, _ = s.tasks.Get(ctx, task.ID)
 	}
 	return task, nil
+}
+
+func (s *Service) agentAutoDeployAllowed(ctx context.Context, serverID string) (bool, int, error) {
+	var lastSuccess sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM tasks WHERE type=? AND resource_type=? AND resource_id=? AND status=?`,
+		agentDeployTaskType, connectivityResourceType, serverID, tasks.StatusCompleted).Scan(&lastSuccess); err != nil {
+		return false, 0, err
+	}
+	args := []any{agentDeployTaskType, connectivityResourceType, serverID, tasks.StatusFailed, tasks.StatusBlocked, tasks.StatusCancelled}
+	where := `type=? AND resource_type=? AND resource_id=? AND status IN (?,?,?) AND COALESCE(triggered_by,'') <> 'user'`
+	if lastSuccess.Valid && strings.TrimSpace(lastSuccess.String) != "" {
+		where += ` AND created_at > ?`
+		args = append(args, lastSuccess.String)
+	}
+	var failures int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE `+where, args...).Scan(&failures); err != nil {
+		return false, 0, err
+	}
+	return failures < agentAutoDeployMaxFailures, failures, nil
 }
 
 func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server) {
@@ -1308,17 +1320,6 @@ func certificateTimeStatus(info agent.CertificateInfo, now time.Time) string {
 		return "expired"
 	}
 	return "valid"
-}
-
-func parseOptionalRFC3339(value string) *time.Time {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return nil
-	}
-	return &parsed
 }
 
 func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Server, cause error) bool {

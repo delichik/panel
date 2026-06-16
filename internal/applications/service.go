@@ -49,10 +49,15 @@ type ServerProvider interface {
 	Get(ctx context.Context, id string) (server.Server, error)
 }
 
+type AgentErrorHandler interface {
+	HandleAgentError(ctx context.Context, srv server.Server, cause error) bool
+}
+
 type Service struct {
 	db              *sql.DB
 	runtimeClient   AgentRuntimeClient
 	servers         ServerProvider
+	agentErrors     AgentErrorHandler
 	tasks           *tasks.Service
 	config          Config
 	configProvider  func() Config
@@ -196,6 +201,9 @@ func (s *Service) SetPanelFileProvider(provider PanelFileProvider) {
 
 func (s *Service) SetServerProvider(provider ServerProvider) {
 	s.servers = provider
+	if handler, ok := provider.(AgentErrorHandler); ok {
+		s.agentErrors = handler
+	}
 }
 
 func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) {
@@ -975,6 +983,7 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 	}
 	logs, err := s.runtimeClient.RuntimeLogs(ctx, baseURL, instance.ID, in.Tail)
 	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
 		return LogResult{}, err
 	}
 	return LogResult{InstanceID: instance.ID, ContainerName: instance.ContainerName, Type: "combined", Logs: logs.Logs}, nil
@@ -1213,6 +1222,7 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			return runErr
 		})
 		if err != nil {
+			_ = s.handleAgentError(ctx, target, err)
 			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
 			return err
 		}
@@ -1250,6 +1260,7 @@ func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string
 			return runErr
 		})
 		if err != nil {
+			_ = s.handleAgentError(ctx, srv, err)
 			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, appruntime.StatusFailed, "", err.Error())
 			return err
 		}
@@ -1288,6 +1299,7 @@ func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID str
 			return runErr
 		})
 		if err != nil {
+			_ = s.handleAgentError(ctx, srv, err)
 			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
 			return err
 		}
@@ -1810,6 +1822,8 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 						status.ServerID = instance.ServerID
 						status.DesiredState = instance.DesiredState
 						_ = s.markRuntimeInstance(ctx, instance.ID, instance.DesiredState, status.Status, status.ContainerID, status.LastError)
+					} else {
+						_ = s.handleAgentError(ctx, srv, err)
 					}
 				}
 			}
@@ -1817,6 +1831,13 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 		out = append(out, status)
 	}
 	return out
+}
+
+func (s *Service) handleAgentError(ctx context.Context, srv server.Server, err error) bool {
+	if s.agentErrors == nil {
+		return false
+	}
+	return s.agentErrors.HandleAgentError(ctx, srv, err)
 }
 
 func aggregateRuntimeStatus(enabled bool, instances []appruntime.InstanceStatus) string {

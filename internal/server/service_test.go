@@ -571,7 +571,58 @@ func TestDeployAgentStartsExistingQueuedTask(t *testing.T) {
 	}
 }
 
-func TestSystemCertificatesIncludeBuiltInsAndConfiguredAgent(t *testing.T) {
+func TestAgentCertificateTimeErrorStopsAutoDeployAfterFailures(t *testing.T) {
+	createSvc, taskSvc, store := testServerService(t, nil)
+	traits := map[string]string{
+		agent.TraitEnabled: "true",
+		agent.TraitURL:     "https://127.0.0.1:9443",
+		"sys.architecture": "x86_64",
+	}
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < agentAutoDeployMaxFailures; i++ {
+		if _, err := taskSvc.Create(context.Background(), tasks.CreateInput{
+			Type:         agentDeployTaskType,
+			ServerID:     srv.ID,
+			ResourceType: connectivityResourceType,
+			ResourceID:   srv.ID,
+			TriggeredBy:  "system",
+			Status:       tasks.StatusFailed,
+			Summary:      "failed agent deploy",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	if !svc.HandleAgentError(context.Background(), srv, x509.CertificateInvalidError{Reason: x509.Expired}) {
+		t.Fatal("expected certificate time error to be handled")
+	}
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: srv.ID, Statuses: []string{tasks.StatusQueued, tasks.StatusRunning, tasks.StatusFailedRetryable}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("expected no new active auto deploy task after failures, got %#v", result.Items)
+	}
+	updated, err := svc.Get(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(updated.Traits[agent.TraitLastError], "stopped after") {
+		t.Fatalf("expected exhausted auto deploy error, got %#v", updated.Traits)
+	}
+}
+
+func TestSystemCertificatesIncludeOnlyPanelSideBuiltIns(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -587,14 +638,14 @@ func TestSystemCertificatesIncludeBuiltInsAndConfiguredAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(items) != 3 {
-		t.Fatalf("expected CA, client, and server certificates, got %#v", items)
+	if len(items) != 2 {
+		t.Fatalf("expected only Panel-side CA and client certificates, got %#v", items)
 	}
 	if items[0].ID != "agent-ca" || !items[0].BuiltIn || !items[0].CanReset {
 		t.Fatalf("unexpected agent CA item: %#v", items[0])
 	}
-	if items[2].ID != "agent-server:srv_agent" || items[2].Fingerprint != "ABC" {
-		t.Fatalf("unexpected server certificate item: %#v", items[2])
+	if items[1].ID != "agent-panel-client" || !items[1].BuiltIn || !items[1].CanReset {
+		t.Fatalf("unexpected agent client item: %#v", items[1])
 	}
 }
 

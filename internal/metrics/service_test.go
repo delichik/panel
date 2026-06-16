@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -170,6 +171,42 @@ func TestCollectFailsWhenConfiguredAgentFails(t *testing.T) {
 	}
 	if exec.command != "" {
 		t.Fatalf("expected no SSH fallback, got %q", exec.command)
+	}
+}
+
+func TestCollectMarksAgentCertificateTimeError(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.AppDB()))
+	svc := NewService(store.MetricsDB(), serverSvc, &collectMetricsExecutor{})
+	svc.SetAgentClient(&fakeAgentClient{err: x509.CertificateInvalidError{Reason: x509.Expired}})
+
+	if err := svc.CollectAt(context.Background(), "srv", time.Now().UTC()); err == nil {
+		t.Fatal("expected agent certificate failure")
+	}
+	srv, err := serverSvc.Get(context.Background(), "srv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+		t.Fatalf("expected certificate error to mark agent incompatible, got %#v", srv.Traits)
 	}
 }
 

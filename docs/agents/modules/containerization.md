@@ -41,6 +41,7 @@ Application 新部署容器只写入：
 - 每台服务器一条独立容器操作队列；同服务器串行，不同服务器并行。
 - 普通容器操作和 Application 部署、停止、重启共享该队列。
 - 相同任务类型、服务器和资源的活跃请求复用现有任务；Agent 操作按目标状态幂等。
+- 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
 - scheduler 每 5 秒运行容器监控。只有已经观察到新托管 Label 并写入 `application_reconcile_states` 的实例会持续协调，避免旧 Label 自动迁移。
 - 监控发现容器缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 

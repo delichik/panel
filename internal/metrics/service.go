@@ -80,7 +80,13 @@ func (s *Service) CollectAt(ctx context.Context, serverID string, collectedAt ti
 
 func (s *Service) collectSnapshot(ctx context.Context, srv server.Server, adapter linux.DistroAdapter) (linux.MetricsSnapshot, error) {
 	if baseURL, ok := metricAgentURL(srv); ok && s.agent != nil {
-		return s.agent.MetricsSnapshot(ctx, baseURL, srv.ID)
+		snap, err := s.agent.MetricsSnapshot(ctx, baseURL, srv.ID)
+		if err != nil {
+			if s.servers != nil {
+				_ = s.servers.HandleAgentError(ctx, srv, err)
+			}
+		}
+		return snap, err
 	}
 	return adapter.CollectMetrics(ctx, s.exec, srv.Target())
 }

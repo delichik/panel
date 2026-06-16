@@ -55,6 +55,7 @@ var (
 			"agent_tls_unavailable":                         "Agent TLS 资产不可用",
 			"agent_incompatible":                            "Agent 部署后仍不兼容",
 			"agent_binary_unavailable":                      "panel-agent 二进制不可用",
+			"agent_auto_deploy_exhausted":                   "Agent 自动部署已多次失败，请修复错误后手动重装 Agent",
 			"remote_executor_unavailable":                   "远程执行器不可用",
 			"upload_path_required":                          "上传路径不能为空",
 			"remote_upload_failed":                          "远程上传失败",

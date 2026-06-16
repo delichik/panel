@@ -49,6 +49,10 @@ type ServerProvider interface {
 	List(context.Context) ([]server.Server, error)
 }
 
+type AgentErrorHandler interface {
+	HandleAgentError(context.Context, server.Server, error) bool
+}
+
 type ApplicationUpdater interface {
 	List(context.Context) ([]applications.Application, error)
 	UpdateImage(context.Context, string) (applications.OperationResult, error)
@@ -94,24 +98,29 @@ type serverQueue struct {
 }
 
 type Service struct {
-	db         *sql.DB
-	servers    ServerProvider
-	agent      AgentClient
-	tasks      *tasks.Service
-	apps       ApplicationUpdater
-	resolver   applications.ImageDigestResolver
-	queueMu    sync.Mutex
-	queues     map[string]*serverQueue
-	refreshMu  sync.Mutex
-	refreshing map[string]bool
+	db          *sql.DB
+	servers     ServerProvider
+	agentErrors AgentErrorHandler
+	agent       AgentClient
+	tasks       *tasks.Service
+	apps        ApplicationUpdater
+	resolver    applications.ImageDigestResolver
+	queueMu     sync.Mutex
+	queues      map[string]*serverQueue
+	refreshMu   sync.Mutex
+	refreshing  map[string]bool
 }
 
 func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, taskSvc *tasks.Service) *Service {
-	return &Service{
+	s := &Service{
 		db: db, servers: servers, agent: agentClient, tasks: taskSvc,
 		resolver: applications.NewRegistryImageResolver(),
 		queues:   map[string]*serverQueue{}, refreshing: map[string]bool{},
 	}
+	if handler, ok := servers.(AgentErrorHandler); ok {
+		s.agentErrors = handler
+	}
+	return s
 }
 
 func (s *Service) SetApplicationUpdater(updater ApplicationUpdater) {
@@ -119,12 +128,13 @@ func (s *Service) SetApplicationUpdater(updater ApplicationUpdater) {
 }
 
 func (s *Service) Containers(ctx context.Context, serverID string) ([]Container, error) {
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return nil, err
 	}
 	items, err := s.agent.DockerContainers(ctx, baseURL)
 	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
 		return nil, err
 	}
 	out := make([]Container, 0, len(items))
@@ -140,36 +150,46 @@ func (s *Service) ContainerAction(ctx context.Context, serverID, containerID, ac
 	if taskType == "" {
 		return tasks.Task{}, panelerr.Validation("container_action_invalid", "Unsupported container action")
 	}
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	return s.enqueue(ctx, serverID, taskType, "container", containerID, func(runCtx context.Context) error {
-		return s.agent.DockerContainerAction(runCtx, baseURL, containerID, action)
+		err := s.agent.DockerContainerAction(runCtx, baseURL, containerID, action)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+		}
+		return err
 	})
 }
 
 func (s *Service) DeleteContainer(ctx context.Context, serverID, containerID string) (tasks.Task, error) {
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	return s.enqueue(ctx, serverID, TaskContainerDelete, "container", containerID, func(runCtx context.Context) error {
-		return s.agent.DockerContainerDelete(runCtx, baseURL, containerID)
+		err := s.agent.DockerContainerDelete(runCtx, baseURL, containerID)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+		}
+		return err
 	})
 }
 
 func (s *Service) Images(ctx context.Context, serverID string) (ImageList, error) {
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return ImageList{}, err
 	}
 	images, err := s.agent.DockerImages(ctx, baseURL)
 	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
 		return ImageList{}, err
 	}
 	containers, err := s.agent.DockerContainers(ctx, baseURL)
 	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
 		return ImageList{}, err
 	}
 	imageApps := map[string]map[string]struct{}{}
@@ -218,23 +238,28 @@ func (s *Service) PullImage(ctx context.Context, serverID, reference string) (ta
 	if reference == "" {
 		return tasks.Task{}, panelerr.Validation("image_reference_required", "Image reference is required")
 	}
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	return s.enqueue(ctx, serverID, TaskImagePull, "image", reference, func(runCtx context.Context) error {
-		return s.agent.DockerImagePull(runCtx, baseURL, reference)
+		err := s.agent.DockerImagePull(runCtx, baseURL, reference)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+		}
+		return err
 	})
 }
 
 func (s *Service) DeleteImage(ctx context.Context, serverID, imageID string) (tasks.Task, error) {
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	return s.enqueue(ctx, serverID, TaskImageDelete, "image", imageID, func(runCtx context.Context) error {
 		containers, err := s.agent.DockerContainers(runCtx, baseURL)
 		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
 			return err
 		}
 		for _, container := range containers {
@@ -242,34 +267,47 @@ func (s *Service) DeleteImage(ctx context.Context, serverID, imageID string) (ta
 				return panelerr.Conflict("image_in_use", "Image is in use")
 			}
 		}
-		return s.agent.DockerImageDelete(runCtx, baseURL, imageID)
+		err = s.agent.DockerImageDelete(runCtx, baseURL, imageID)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+		}
+		return err
 	})
 }
 
 func (s *Service) Networks(ctx context.Context, serverID string) ([]agent.DockerNetwork, error) {
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return nil, err
 	}
-	return s.agent.DockerNetworks(ctx, baseURL)
+	items, err := s.agent.DockerNetworks(ctx, baseURL)
+	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
+	}
+	return items, err
 }
 
 func (s *Service) Volumes(ctx context.Context, serverID string) ([]agent.DockerVolume, error) {
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return nil, err
 	}
-	return s.agent.DockerVolumes(ctx, baseURL)
+	items, err := s.agent.DockerVolumes(ctx, baseURL)
+	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
+	}
+	return items, err
 }
 
 func (s *Service) DeleteVolume(ctx context.Context, serverID, name string) (tasks.Task, error) {
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
 	return s.enqueue(ctx, serverID, TaskVolumeDelete, "volume", name, func(runCtx context.Context) error {
 		volumes, err := s.agent.DockerVolumes(runCtx, baseURL)
 		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
 			return err
 		}
 		for _, volume := range volumes {
@@ -277,7 +315,11 @@ func (s *Service) DeleteVolume(ctx context.Context, serverID, name string) (task
 				return panelerr.Conflict("volume_in_use", "Volume is in use")
 			}
 		}
-		return s.agent.DockerVolumeDelete(runCtx, baseURL, name)
+		err = s.agent.DockerVolumeDelete(runCtx, baseURL, name)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+		}
+		return err
 	})
 }
 
@@ -353,6 +395,7 @@ func (s *Service) MonitorApplications(ctx context.Context) error {
 		baseURL := strings.TrimSpace(srv.Traits[agent.TraitURL])
 		containers, err := s.agent.DockerContainers(ctx, baseURL)
 		if err != nil {
+			_ = s.handleAgentError(ctx, srv, err)
 			continue
 		}
 		observed := map[string]agent.DockerContainer{}
@@ -527,13 +570,14 @@ func (s *Service) runImageRefresh(task tasks.Task, serverID string) {
 	ctx := context.Background()
 	defer s.tasks.FinishExecution(task.ID)
 	defer s.clearRefreshing(serverID)
-	_, baseURL, err := s.readyServer(ctx, serverID)
+	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return
 	}
 	images, err := s.agent.DockerImages(ctx, baseURL)
 	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return
 	}
@@ -618,6 +662,13 @@ func (s *Service) readyServer(ctx context.Context, serverID string) (server.Serv
 		return server.Server{}, "", panelerr.Validation("agent_incompatible", "Agent is not compatible with Docker resources")
 	}
 	return srv, baseURL, nil
+}
+
+func (s *Service) handleAgentError(ctx context.Context, srv server.Server, err error) bool {
+	if s.agentErrors == nil {
+		return false
+	}
+	return s.agentErrors.HandleAgentError(ctx, srv, err)
 }
 
 type cachedImage struct {
