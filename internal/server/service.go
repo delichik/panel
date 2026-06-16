@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"database/sql"
 	"encoding/json"
@@ -1049,8 +1050,16 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 			return
 		}
 	}
+	if err := verifyRemoteAgentCertificateFile(ctx, runner, []byte(bundle.Certificate)); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
 	_ = s.tasks.Advance(ctx, taskID, "starting", "starting panel agent service")
 	if _, err := runner.RunSudoLogged(ctx, agentInstallScript(remoteTmp), agentDeployTimeout); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if err := verifyRemoteAgentServedCertificate(ctx, runner, bundle); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
@@ -1627,14 +1636,88 @@ func agentInstallScript(remoteTmp string) string {
 		`  echo "[panel] systemd is required to manage panel-agent" >&2`,
 		`  exit 1`,
 		`fi`,
+		"systemctl stop panel-agent.service >/dev/null 2>&1 || true",
+		`if command -v pkill >/dev/null 2>&1; then`,
+		`  pkill -x panel-agent >/dev/null 2>&1 || true`,
+		`  pkill -f '^/usr/local/bin/panel-agent($| )' >/dev/null 2>&1 || true`,
+		`fi`,
 		"install -m 0755 " + remoteops.ShellQuote(remoteTmp) + " " + remoteops.ShellQuote(agentRemoteBinaryPath),
 		"rm -f " + remoteops.ShellQuote(remoteTmp),
 		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: 9443, Protocol: "tcp"}),
 		"systemctl daemon-reload",
-		"systemctl enable --now panel-agent.service",
+		"systemctl enable panel-agent.service",
 		"systemctl restart panel-agent.service",
+		`for i in 1 2 3 4 5 6 7 8 9 10; do`,
+		`  systemctl is-active --quiet panel-agent.service && break`,
+		`  sleep 1`,
+		`done`,
+		`systemctl is-active --quiet panel-agent.service`,
+		`if command -v ss >/dev/null 2>&1; then`,
+		`  listeners="$(ss -ltnp 'sport = :9443' 2>/dev/null || true)"`,
+		`  if ! printf '%s\n' "$listeners" | grep -q LISTEN; then`,
+		`    echo "[panel] panel-agent did not open tcp/9443" >&2`,
+		`    exit 1`,
+		`  fi`,
+		`  if ! printf '%s\n' "$listeners" | grep -q panel-agent; then`,
+		`    echo "[panel] tcp/9443 is not owned by panel-agent" >&2`,
+		`    printf '%s\n' "$listeners" >&2`,
+		`    exit 1`,
+		`  fi`,
+		`fi`,
 		`echo "[panel] panel-agent service started"`,
 	}, "\n")
+}
+
+func verifyRemoteAgentCertificateFile(ctx context.Context, runner remoteops.Runner, certificatePEM []byte) error {
+	sum := sha256.Sum256(certificatePEM)
+	script := strings.Join([]string{
+		"set -eu",
+		`if ! command -v sha256sum >/dev/null 2>&1; then`,
+		`  echo "[panel] sha256sum is required to verify panel-agent certificate deployment" >&2`,
+		`  exit 1`,
+		`fi`,
+		`actual="$(sha256sum ` + remoteops.ShellQuote(agentRemoteConfigDir+"/server.pem") + ` | awk '{print $1}')"`,
+		`expected="` + fmt.Sprintf("%x", sum[:]) + `"`,
+		`if [ "$actual" != "$expected" ]; then`,
+		`  echo "[panel] deployed panel-agent certificate file does not match the newly issued certificate" >&2`,
+		`  exit 1`,
+		`fi`,
+		`echo "[panel] panel-agent certificate file verified"`,
+	}, "\n")
+	_, err := runner.RunSudoLogged(ctx, script, agentDeployTimeout)
+	return err
+}
+
+func verifyRemoteAgentServedCertificate(ctx context.Context, runner remoteops.Runner, bundle AgentCertificateBundle) error {
+	info, err := agent.ParseCertificateInfo([]byte(bundle.Certificate))
+	if err != nil {
+		return err
+	}
+	serverName := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(bundle.AgentURL), "https://"), "http://")
+	if host, _, splitErr := net.SplitHostPort(serverName); splitErr == nil {
+		serverName = host
+	}
+	script := strings.Join([]string{
+		"set -eu",
+		`if ! command -v openssl >/dev/null 2>&1; then`,
+		`  echo "[panel] openssl is required to verify the certificate served on tcp/9443" >&2`,
+		`  exit 1`,
+		`fi`,
+		`fingerprint="$(timeout 10 openssl s_client -connect 127.0.0.1:9443 -servername ` + remoteops.ShellQuote(serverName) + ` -showcerts </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | awk -F= '{print $2}' | tr -d ':' | tr '[:lower:]' '[:upper:]')"`,
+		`expected="` + info.Fingerprint + `"`,
+		`if [ -z "$fingerprint" ]; then`,
+		`  echo "[panel] tcp/9443 did not serve a readable TLS certificate" >&2`,
+		`  exit 1`,
+		`fi`,
+		`if [ "$fingerprint" != "$expected" ]; then`,
+		`  echo "[panel] tcp/9443 is serving an unexpected certificate fingerprint: $fingerprint" >&2`,
+		`  echo "[panel] expected newly issued certificate fingerprint: $expected" >&2`,
+		`  exit 1`,
+		`fi`,
+		`echo "[panel] panel-agent served certificate verified"`,
+	}, "\n")
+	_, err = runner.RunSudoLogged(ctx, script, agentDeployTimeout)
+	return err
 }
 
 func systemdQuote(value string) string {

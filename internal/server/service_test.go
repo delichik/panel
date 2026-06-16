@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/pem"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -965,6 +967,35 @@ func TestAgentBinaryPathForPlatformIsFixed(t *testing.T) {
 	}
 }
 
+func TestAgentInstallScriptStopsOldProcessesAndChecksPortOwner(t *testing.T) {
+	script := agentInstallScript("/tmp/panel-agent-task")
+	for _, want := range []string{
+		"systemctl stop panel-agent.service",
+		"pkill -x panel-agent",
+		"pkill -f '^/usr/local/bin/panel-agent($| )'",
+		"ss -ltnp 'sport = :9443'",
+		"tcp/9443 is not owned by panel-agent",
+	} {
+		if !strings.Contains(script, want) {
+			t.Fatalf("expected install script to contain %q, got:\n%s", want, script)
+		}
+	}
+}
+
+func TestVerifyRemoteAgentCertificateFileComparesNewCertificateHash(t *testing.T) {
+	certPEM := []byte("CERTIFICATE\n")
+	exec := &captureSudoExec{}
+	runner := remoteops.Runner{Exec: exec, Target: sshx.Target{}}
+
+	if err := verifyRemoteAgentCertificateFile(context.Background(), runner, certPEM); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(certPEM)
+	if !strings.Contains(exec.command, fmt.Sprintf("%x", sum[:])) || !strings.Contains(exec.command, agentRemoteConfigDir+"/server.pem") {
+		t.Fatalf("expected certificate verification command to compare new cert hash, got:\n%s", exec.command)
+	}
+}
+
 func TestAgentTargetPlatformFallsBackToRemoteUname(t *testing.T) {
 	svc := &Service{exec: agentArchFakeExec{arch: "x86_64"}}
 	platform, err := svc.agentTargetPlatform(context.Background(), Server{Host: "127.0.0.1", Port: 22, CredentialID: "cred_1"})
@@ -1336,6 +1367,27 @@ func (f *restartFakeExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) 
 }
 
 func (f *restartFakeExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
+	return nil
+}
+
+type captureSudoExec struct {
+	command string
+}
+
+func (f *captureSudoExec) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *captureSudoExec) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
+	f.command = command.Command
+	return sshx.CommandResult{ExitCode: 0}, nil
+}
+
+func (f *captureSudoExec) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
+	return nil
+}
+
+func (f *captureSudoExec) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
 }
 
