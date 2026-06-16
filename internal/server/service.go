@@ -377,6 +377,9 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 		if err != nil {
 			continue
 		}
+		if skipUnavailableAgentScheduledWork(srv) {
+			continue
+		}
 		if _, ok := agentURL(srv); !ok {
 			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
@@ -500,7 +503,7 @@ func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int
 	if _, err := (remoteops.Runner{Exec: s.exec, Target: srv.Target()}).RunSudoLogged(ctx, script, ufwManageTimeout); err != nil {
 		return UFWState{}, err
 	}
-	status, err := s.fetchUFWStatus(ctx, srv)
+	status, err := s.fetchUFWStatusSSH(ctx, srv)
 	if err != nil {
 		return UFWState{}, err
 	}
@@ -632,10 +635,21 @@ func (s *Service) ensureUFWManageable(ctx context.Context, serverID string) (Ser
 }
 
 func (s *Service) fetchUFWStatus(ctx context.Context, srv Server) (remoteops.UFWStatus, error) {
-	if status, ok, err := s.agentUFWStatus(ctx, srv); ok {
-		return status, err
+	baseURL, ok := agentURL(srv)
+	if !ok {
+		return remoteops.UFWStatus{}, panelerr.Validation("agent_required", "Agent is required for UFW status")
 	}
-	return s.fetchUFWStatusSSH(ctx, srv)
+	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+		return remoteops.UFWStatus{}, panelerr.Validation("agent_incompatible", "Agent is not compatible with UFW status")
+	}
+	if s.agent == nil {
+		return remoteops.UFWStatus{}, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
+	}
+	status, err := s.agent.UFWStatus(ctx, baseURL)
+	if err != nil {
+		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
+	}
+	return status, err
 }
 
 func (s *Service) fetchUFWStatusSSH(ctx context.Context, srv Server) (remoteops.UFWStatus, error) {
@@ -889,7 +903,17 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 	if s.agentTLS == nil {
 		return tasks.Task{}, panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
 	}
+	if triggeredBy == "user" {
+		_ = s.setAgentAutoDeployBlocked(ctx, serverID, false)
+	}
 	if triggeredBy != "user" {
+		srv, err := s.Get(ctx, serverID)
+		if err != nil {
+			return tasks.Task{}, err
+		}
+		if agentAutoDeployBlocked(srv) {
+			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_blocked", firstNonEmpty(srv.Traits[agent.TraitLastError], "Agent auto deployment is stopped; use Reinstall Agent after fixing the error"))
+		}
 		allowed, failures, err := s.agentAutoDeployAllowed(ctx, serverID)
 		if err != nil {
 			return tasks.Task{}, err
@@ -897,12 +921,17 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		if !allowed {
 			msg := fmt.Sprintf("agent auto deployment stopped after %d failed attempts; use Reinstall Agent after fixing the error", failures)
 			_ = s.markAgentStatus(ctx, serverID, agent.StatusUnavailable, "", msg)
+			_ = s.setAgentAutoDeployBlocked(ctx, serverID, true)
 			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_exhausted", msg)
 		}
 	}
 	if existing, ok, err := s.tasks.ExistingActive(ctx, agentDeployTaskType, connectivityResourceType, serverID); err != nil {
 		return tasks.Task{}, err
 	} else if ok {
+		if triggeredBy == "user" {
+			_, _ = s.db.ExecContext(ctx, `UPDATE tasks SET triggered_by=? WHERE id=?`, "user", existing.ID)
+			existing.TriggeredBy = "user"
+		}
 		if run && existing.Status != tasks.StatusRunning {
 			existing, err = s.tasks.RunNow(ctx, existing.ID)
 			if err != nil {
@@ -1226,7 +1255,13 @@ fi`
 }
 
 func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) (linux.OSRelease, error) {
-	if baseURL, ok := agentURL(srv); ok && s.agent != nil {
+	if baseURL, ok := agentURL(srv); ok {
+		if srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+			return linux.OSRelease{}, panelerr.Validation("agent_incompatible", "Agent is not compatible with system detection")
+		}
+		if s.agent == nil {
+			return linux.OSRelease{}, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
+		}
 		info, err := s.agent.OSRelease(ctx, baseURL)
 		if err == nil {
 			return info, nil
@@ -1238,7 +1273,13 @@ func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) 
 }
 
 func (s *Service) detectSystemTraitsForServer(ctx context.Context, srv Server, target sshx.Target) (map[string]string, error) {
-	if baseURL, ok := agentURL(srv); ok && s.agent != nil {
+	if baseURL, ok := agentURL(srv); ok {
+		if srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+			return nil, panelerr.Validation("agent_incompatible", "Agent is not compatible with system detection")
+		}
+		if s.agent == nil {
+			return nil, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
+		}
 		traits, err := s.agent.SystemTraits(ctx, baseURL)
 		if err == nil {
 			return traits, nil
@@ -1247,18 +1288,6 @@ func (s *Service) detectSystemTraitsForServer(ctx context.Context, srv Server, t
 		return nil, err
 	}
 	return s.detectSystemTraits(ctx, target)
-}
-
-func (s *Service) agentUFWStatus(ctx context.Context, srv Server) (remoteops.UFWStatus, bool, error) {
-	baseURL, ok := agentURL(srv)
-	if !ok || s.agent == nil {
-		return remoteops.UFWStatus{}, false, nil
-	}
-	status, err := s.agent.UFWStatus(ctx, baseURL)
-	if s.handleAgentCertificateTimeError(ctx, srv, err) {
-		return remoteops.UFWStatus{}, true, err
-	}
-	return status, true, err
 }
 
 func (s *Service) checkAgent(ctx context.Context, srv Server) error {
@@ -1330,6 +1359,10 @@ func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Serve
 	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
 		msg = cause.Error()
 	}
+	if skipUnavailableAgentScheduledWork(srv) {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], msg))
+		return true
+	}
 	_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
 	if s.exec == nil || s.agentTLS == nil || s.tasks == nil {
 		return true
@@ -1350,6 +1383,39 @@ func isAgentCertificateTimeError(err error) bool {
 	return strings.Contains(msg, "certificate has expired or is not yet valid") ||
 		strings.Contains(msg, "certificate has expired") ||
 		strings.Contains(msg, "certificate is not yet valid")
+}
+
+func agentAutoDeployBlocked(srv Server) bool {
+	return traitEnabled(srv.Traits[agent.TraitAutoDeployBlocked])
+}
+
+func skipUnavailableAgentScheduledWork(srv Server) bool {
+	if agentAutoDeployBlocked(srv) {
+		return true
+	}
+	switch srv.Traits[agent.TraitStatus] {
+	case agent.StatusUnavailable, agent.StatusIncompatible:
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Service) setAgentAutoDeployBlocked(ctx context.Context, serverID string, blocked bool) error {
+	var rawTraits string
+	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+		return err
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	if blocked {
+		traits[agent.TraitAutoDeployBlocked] = "true"
+	} else {
+		delete(traits, agent.TraitAutoDeployBlocked)
+	}
+	traitsJSON, _ := json.Marshal(traits)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
+	return err
 }
 
 func (s *Service) markAgentStatus(ctx context.Context, serverID, status, version, msg string) error {
@@ -1415,6 +1481,7 @@ func (s *Service) markAgentConfigured(ctx context.Context, serverID, url string)
 	traits[agent.TraitEnabled] = "true"
 	traits[agent.TraitURL] = strings.TrimSpace(url)
 	delete(traits, agent.TraitLastError)
+	delete(traits, agent.TraitAutoDeployBlocked)
 	traitsJSON, _ := json.Marshal(traits)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)

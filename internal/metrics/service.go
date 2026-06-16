@@ -18,7 +18,6 @@ type Service struct {
 	servers *server.Service
 	exec    sshx.RemoteExecutor
 	agent   agent.Client
-	adapter linux.DistroAdapter
 }
 
 type Series struct {
@@ -65,11 +64,7 @@ func (s *Service) CollectAt(ctx context.Context, serverID string, collectedAt ti
 	if !srv.OS.Supported {
 		return panelerr.Validation("server_not_supported", "Server distribution is not supported")
 	}
-	adapter, err := s.adapterFor(srv)
-	if err != nil {
-		return err
-	}
-	snap, err := s.collectSnapshot(ctx, srv, adapter)
+	snap, err := s.collectSnapshot(ctx, srv)
 	if err != nil {
 		return err
 	}
@@ -78,28 +73,33 @@ func (s *Service) CollectAt(ctx context.Context, serverID string, collectedAt ti
 	return s.Save(ctx, snap)
 }
 
-func (s *Service) collectSnapshot(ctx context.Context, srv server.Server, adapter linux.DistroAdapter) (linux.MetricsSnapshot, error) {
-	if baseURL, ok := metricAgentURL(srv); ok && s.agent != nil {
-		snap, err := s.agent.MetricsSnapshot(ctx, baseURL, srv.ID)
-		if err != nil {
-			if s.servers != nil {
-				_ = s.servers.HandleAgentError(ctx, srv, err)
-			}
-		}
-		return snap, err
+func (s *Service) collectSnapshot(ctx context.Context, srv server.Server) (linux.MetricsSnapshot, error) {
+	baseURL, err := metricAgentURL(srv)
+	if err != nil {
+		return linux.MetricsSnapshot{}, err
 	}
-	return adapter.CollectMetrics(ctx, s.exec, srv.Target())
+	if s.agent == nil {
+		return linux.MetricsSnapshot{}, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
+	}
+	snap, err := s.agent.MetricsSnapshot(ctx, baseURL, srv.ID)
+	if err != nil && s.servers != nil {
+		_ = s.servers.HandleAgentError(ctx, srv, err)
+	}
+	return snap, err
 }
 
-func metricAgentURL(srv server.Server) (string, bool) {
+func metricAgentURL(srv server.Server) (string, error) {
 	if !agentTraitEnabled(srv.Traits[agent.TraitEnabled]) {
-		return "", false
+		return "", panelerr.Validation("agent_required", "Agent is required for metrics collection")
 	}
 	url := strings.TrimSpace(srv.Traits[agent.TraitURL])
 	if url == "" {
-		return "", false
+		return "", panelerr.Validation("agent_required", "Agent is required for metrics collection")
 	}
-	return url, true
+	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+		return "", panelerr.Validation("agent_incompatible", "Agent is not compatible with metrics collection")
+	}
+	return url, nil
 }
 
 func agentTraitEnabled(value string) bool {
@@ -109,17 +109,6 @@ func agentTraitEnabled(value string) bool {
 	default:
 		return false
 	}
-}
-
-func (s *Service) adapterFor(srv server.Server) (linux.DistroAdapter, error) {
-	if s.adapter != nil {
-		return s.adapter, nil
-	}
-	adapter, ok := linux.AdapterFor(srv.OS)
-	if !ok {
-		return nil, panelerr.Validation("server_not_supported", "Server distribution is not supported")
-	}
-	return adapter, nil
 }
 
 func (s *Service) Save(ctx context.Context, snap linux.MetricsSnapshot) error {

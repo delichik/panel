@@ -30,7 +30,7 @@
 - `internal/i18n`
   - 统一 API 错误翻译入口覆盖认证、设置、服务器、UFW、DNS、证书、应用、任务和密钥资产的主要错误码。
   - 应用名称重复保存错误和 appspec `command` 数组用法错误已接入翻译。
-  - Agent 自动部署的 TLS 不可用、版本不兼容、本地 `panel-agent` 二进制缺失和自动部署多次失败错误码已接入翻译。
+  - Agent 自动部署的 TLS 不可用、版本不兼容、本地 `panel-agent` 二进制缺失、自动部署多次失败，以及 agent 必需、agent 不兼容、agent runtime client 不可用错误码已接入翻译。
 - `web/src/views/certificates/key-assets/index.vue`
   - 系统内置证书说明已更新为仅展示 Panel 侧 Agent CA 和客户端证书；目标服务器证书随 Agent 安装同步并通过服务器 Agent 状态展示。
 

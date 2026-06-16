@@ -381,12 +381,11 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	exec := &ufwManageFakeExec{}
 	svc := NewService(store.AppDB(), exec, taskSvc)
 
-	state, err := svc.UFWState(context.Background(), "srv_1")
-	if err != nil {
-		t.Fatal(err)
+	if _, err := svc.UFWState(context.Background(), "srv_1"); err == nil {
+		t.Fatal("expected agent-required UFW status failure")
 	}
-	if !state.Installed || !state.Active || len(state.Rules) != 1 || state.Rules[0].To != "22/tcp" {
-		t.Fatalf("unexpected UFW state: %#v", state)
+	if len(exec.commands) != 0 {
+		t.Fatalf("expected no SSH UFW status fallback, got %#v", exec.commands)
 	}
 	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 443, Protocol: "tcp", From: "10.0.0.0/8"}); err != nil {
 		t.Fatal(err)
@@ -417,7 +416,7 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -453,7 +452,7 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -477,7 +476,7 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 
 func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -495,7 +494,7 @@ func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 
 func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -691,7 +690,7 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}

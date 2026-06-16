@@ -48,7 +48,7 @@
 - 应用部署、停止、重启、镜像检查和镜像更新依赖本模块记录任务；实际容器操作由应用服务调用 agent runtime API。
 - 容器启动、停止、重启、删除、镜像拉取/删除/刷新、卷删除和 Application 协调恢复依赖本模块记录任务；同服务器容器变更由容器化模块串行执行。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务。
-- 启用服务器 agent 后，`metrics_collect` 与 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。普通 agent 失败、不可达或版本能力不兼容时任务按当前错误失败。`server_info_collect`、`metrics_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败。
+- 启用服务器 agent 后，`metrics_collect` 与 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、不可达或版本能力不兼容时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、`metrics_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
 - 软件包刷新/升级、UFW 写操作和服务器重启仍走 SSH，不要把这些写入型或长流程任务路由到 agent。
 
 ## 密钥资产任务

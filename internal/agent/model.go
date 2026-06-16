@@ -18,6 +18,7 @@ const (
 	TraitVersion     = "agent.version"
 	TraitLastChecked = "agent.last_checked_at"
 	TraitLastError   = "agent.last_error"
+	TraitAutoDeployBlocked = "agent.auto_deploy_blocked"
 
 	TraitCertificateFingerprint = "agent.certificate.fingerprint"
 	TraitCertificateNotBefore   = "agent.certificate.not_before"

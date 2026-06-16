@@ -7,10 +7,13 @@ import (
 	"testing"
 	"time"
 
+	"panel/internal/agent"
 	"panel/internal/config"
 	"panel/internal/credential"
+	"panel/internal/linux"
 	"panel/internal/metrics"
 	"panel/internal/packages"
+	"panel/internal/remoteops"
 	"panel/internal/secretstore"
 	"panel/internal/server"
 	"panel/internal/settings"
@@ -55,11 +58,19 @@ func TestCollectMetricsCreatesTaskRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.AppDB().Exec(`UPDATE servers SET traits=? WHERE id=?`, `{"agent.enabled":"true","agent.url":"https://agent.local","agent.status":"compatible"}`, srv.ID); err != nil {
+		t.Fatal(err)
+	}
+	srv, err = serverSvc.Get(ctx, srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, fakeMetricsExecutor{})
+	metricsSvc.SetAgentClient(fakeSchedulerAgentClient{})
 	sched := New(settingsSvc, serverSvc, metricsSvc, nil, taskSvc)
 
 	if err := sched.collectMetrics(ctx, srv); err != nil {
@@ -111,12 +122,16 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 		if _, err := store.AppDB().Exec(`UPDATE servers SET os_id='debian',os_version_id='12',os_supported=1,reachable=1 WHERE id=?`, srv.ID); err != nil {
 			t.Fatal(err)
 		}
+		if _, err := store.AppDB().Exec(`UPDATE servers SET traits=? WHERE id=?`, `{"agent.enabled":"true","agent.url":"https://`+name+`.agent","agent.status":"compatible"}`, srv.ID); err != nil {
+			t.Fatal(err)
+		}
 	}
 	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, fakeMetricsExecutor{})
+	metricsSvc.SetAgentClient(fakeSchedulerAgentClient{})
 	sched := New(settingsSvc, serverSvc, metricsSvc, nil, taskSvc)
 
 	if err := sched.runDueMetricsCollection(ctx); err != nil {
@@ -170,6 +185,59 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	}
 	if len(operationIDs) != 2 || operationIDs[0] == "" || operationIDs[0] != operationIDs[1] {
 		t.Fatalf("expected metrics tasks to share an operation, got %#v", operationIDs)
+	}
+}
+
+func TestRunDueMetricsCollectionSkipsServersWithoutReadyAgent(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	credSvc := newSchedulerTestCredentialService(t, store, cfg)
+	cred, err := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.AppDB())
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	srv, err := serverSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`UPDATE servers SET os_id='debian',os_version_id='12',os_supported=1,reachable=1,traits=? WHERE id=?`, `{"agent.enabled":"true","agent.url":"https://agent.local","agent.status":"unavailable"}`, srv.ID); err != nil {
+		t.Fatal(err)
+	}
+	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, fakeMetricsExecutor{})
+	metricsSvc.SetAgentClient(fakeSchedulerAgentClient{})
+	sched := New(settingsSvc, serverSvc, metricsSvc, nil, taskSvc)
+
+	if err := sched.runDueMetricsCollection(ctx); err != nil {
+		t.Fatal(err)
+	}
+	result, err := taskSvc.List(ctx, tasks.ListFilter{Type: "metrics_collect", IncludeInternal: true, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("expected no metrics task for unavailable agent, got %#v", result.Items)
+	}
+	var metricCount int
+	if err := store.MetricsDB().QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id=?`, srv.ID).Scan(&metricCount); err != nil {
+		t.Fatal(err)
+	}
+	if metricCount != 0 {
+		t.Fatalf("expected no metrics snapshot for unavailable agent, got %d", metricCount)
 	}
 }
 
@@ -472,6 +540,35 @@ func (fakeMetricsExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec)
 
 func (fakeMetricsExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
+}
+
+type fakeSchedulerAgentClient struct{}
+
+func (fakeSchedulerAgentClient) Health(context.Context, string) (agent.HealthResponse, error) {
+	return agent.HealthResponse{}, nil
+}
+
+func (fakeSchedulerAgentClient) OSRelease(context.Context, string) (linux.OSRelease, error) {
+	return linux.OSRelease{}, nil
+}
+
+func (fakeSchedulerAgentClient) SystemTraits(context.Context, string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func (fakeSchedulerAgentClient) MetricsSnapshot(context.Context, string, string) (linux.MetricsSnapshot, error) {
+	return linux.MetricsSnapshot{
+		CPUUsagePercent:  50,
+		MemoryUsedBytes:  200,
+		MemoryTotalBytes: 1000,
+		DiskUsedBytes:    500,
+		DiskTotalBytes:   2000,
+		Status:           linux.SystemStatus{Hostname: "agent-host", LoadAverage: "0.1 0.2 0.3"},
+	}, nil
+}
+
+func (fakeSchedulerAgentClient) UFWStatus(context.Context, string) (remoteops.UFWStatus, error) {
+	return remoteops.UFWStatus{}, nil
 }
 
 type fakeConnectivityExecutor struct{}

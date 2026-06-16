@@ -3,9 +3,11 @@ package scheduler
 import (
 	"context"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
+	"panel/internal/agent"
 	"panel/internal/containerization"
 	"panel/internal/id"
 	"panel/internal/metrics"
@@ -318,6 +320,9 @@ func (s *Scheduler) runDueMetricsCollection(ctx context.Context) error {
 		if !srv.OS.Supported || !srv.Reachable {
 			continue
 		}
+		if !schedulerAgentReady(srv) {
+			continue
+		}
 		if err := s.collectMetricsAt(ctx, srv, collectedAt, operationID); err != nil {
 			log.Printf("metrics collect server %s: %v", srv.ID, err)
 		}
@@ -326,6 +331,9 @@ func (s *Scheduler) runDueMetricsCollection(ctx context.Context) error {
 }
 
 func (s *Scheduler) collectMetricsAt(ctx context.Context, srv server.Server, collectedAt time.Time, operationID string) error {
+	if !schedulerAgentReady(srv) {
+		return nil
+	}
 	if s.tasks == nil {
 		return s.metrics.CollectAt(ctx, srv.ID, collectedAt)
 	}
@@ -348,6 +356,15 @@ func (s *Scheduler) collectMetricsAt(ctx context.Context, srv server.Server, col
 		return err
 	}
 	return s.tasks.Complete(ctx, task.ID, "")
+}
+
+func schedulerAgentReady(srv server.Server) bool {
+	switch strings.ToLower(strings.TrimSpace(srv.Traits[agent.TraitEnabled])) {
+	case "true", "1", "yes", "on":
+		return strings.TrimSpace(srv.Traits[agent.TraitURL]) != "" && srv.Traits[agent.TraitStatus] == agent.StatusCompatible
+	default:
+		return false
+	}
 }
 
 func (s *Scheduler) cleanupLoop(ctx context.Context) {

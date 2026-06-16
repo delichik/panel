@@ -773,6 +773,13 @@ func (s *Service) UpdateImage(ctx context.Context, appID string) (OperationResul
 	if len(issues) > 0 {
 		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
 	}
+	targets, err := s.deploymentTargets(ctx, app)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if len(targets) == 0 {
+		return OperationResult{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+	}
 	if err := s.updateApplication(ctx, app); err != nil {
 		return OperationResult{}, err
 	}
@@ -807,6 +814,13 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	}
 	if len(issues) > 0 {
 		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
+	}
+	targets, err := s.deploymentTargets(ctx, app)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if len(targets) == 0 {
+		return OperationResult{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
 	app.Enabled = true
 	app.UpdatedAt = time.Now().UTC()
@@ -859,6 +873,13 @@ func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) 
 		if len(issues) > 0 {
 			return redeployed, panelerr.Validation("application_invalid", issues[0].Message)
 		}
+		targets, err := s.deploymentTargets(ctx, refreshed)
+		if err != nil {
+			return redeployed, err
+		}
+		if len(targets) == 0 {
+			return redeployed, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+		}
 		refreshed.UpdatedAt = time.Now().UTC()
 		if err := s.updateApplication(ctx, refreshed); err != nil {
 			return redeployed, err
@@ -903,6 +924,9 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 	if err != nil {
 		return OperationResult{}, err
 	}
+	if err := s.ensureRuntimeInstancesReady(ctx, app.ID); err != nil {
+		return OperationResult{}, err
+	}
 	app.Enabled = false
 	app.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplication(ctx, app); err != nil {
@@ -925,6 +949,9 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := s.ensureRuntimeInstancesReady(ctx, app.ID); err != nil {
 		return OperationResult{}, err
 	}
 	taskID, err := s.recordRunningTask(ctx, TaskTypeRestart, appID, "Restarting application")
@@ -977,10 +1004,10 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 	if err != nil {
 		return LogResult{}, err
 	}
-	baseURL, ok := agentURLFromServer(srv)
-	if !ok {
-		return LogResult{}, panelerr.Validation("agent_required", "Agent is required for application logs")
+	if err := ensureAgentRuntimeReady(srv); err != nil {
+		return LogResult{}, err
 	}
+	baseURL, _ := agentURLFromServer(srv)
 	logs, err := s.runtimeClient.RuntimeLogs(ctx, baseURL, instance.ID, in.Tail)
 	if err != nil {
 		_ = s.handleAgentError(ctx, srv, err)
@@ -1236,6 +1263,26 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 	return nil
 }
 
+func (s *Service) ensureRuntimeInstancesReady(ctx context.Context, appID string) error {
+	if s.servers == nil {
+		return panelerr.Validation("server_provider_unavailable", "Server provider is unavailable")
+	}
+	instances, err := s.runtimeInstances(ctx, appID)
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		srv, err := s.servers.Get(ctx, instance.ServerID)
+		if err != nil {
+			return err
+		}
+		if err := ensureAgentRuntimeReady(srv); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string, purge bool) error {
 	instances, err := s.runtimeInstances(ctx, appID)
 	if err != nil {
@@ -1246,10 +1293,10 @@ func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string
 		if err != nil {
 			return err
 		}
-		baseURL, ok := agentURLFromServer(srv)
-		if !ok {
-			return panelerr.Validation("agent_required", "Agent is required for application stop")
+		if err := ensureAgentRuntimeReady(srv); err != nil {
+			return err
 		}
+		baseURL, _ := agentURLFromServer(srv)
 		if s.tasks != nil && taskID != "" {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "stopping "+instance.ContainerName+" on "+firstNonEmpty(srv.Name, srv.ID, srv.Host))
 		}
@@ -1288,10 +1335,10 @@ func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID str
 		if err != nil {
 			return err
 		}
-		baseURL, ok := agentURLFromServer(srv)
-		if !ok {
-			return panelerr.Validation("agent_required", "Agent is required for application restart")
+		if err := ensureAgentRuntimeReady(srv); err != nil {
+			return err
 		}
+		baseURL, _ := agentURLFromServer(srv)
 		var result agent.RuntimeInstanceResponse
 		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
 			var runErr error
@@ -1816,7 +1863,8 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 		}
 		if s.runtimeClient != nil && s.servers != nil {
 			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {
-				if baseURL, ok := agentURLFromServer(srv); ok {
+				if ensureAgentRuntimeReady(srv) == nil {
+					baseURL, _ := agentURLFromServer(srv)
 					if remote, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID); err == nil {
 						status = remote.InstanceStatus
 						status.ServerID = instance.ServerID
