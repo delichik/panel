@@ -43,8 +43,8 @@ const agentDeployTimeout = 2 * time.Minute
 const agentAutoDeployMaxFailures = 2
 const agentCertificateRenewBefore = 30 * 24 * time.Hour
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
-const defaultAgentListenAddress = "0.0.0.0:9443"
-const defaultAgentPort = "9443"
+const defaultAgentListenAddress = "0.0.0.0:9786"
+const defaultAgentPort = 9786
 const agentRemoteBinaryPath = "/usr/local/bin/panel-agent"
 const agentRemoteConfigDir = "/etc/panel-agent"
 const agentRemoteServicePath = "/etc/systemd/system/panel-agent.service"
@@ -399,28 +399,43 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if agentAutoDeployBlocked(srv) {
+		if agentAutoDeployBlocked(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUndeployable {
+			if srv.Traits[agent.TraitStatus] != agent.StatusUndeployable {
+				_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUndeployable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], "Agent auto deployment is stopped; use Reinstall Agent after fixing the error"))
+			}
 			continue
 		}
 		if _, ok := agentURL(srv); !ok {
 			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
+		if agentUsesLegacyDefaultPort(srv) {
+			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", "agent uses legacy port 9443; redeployment required")
+			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+			continue
+		}
 		if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
 			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
+			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
 		if agentStatusNeedsDeploy(srv) {
+			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
 		if srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
+			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
 		if err := s.checkAgent(ctx, srv); err != nil {
 			if s.handleAgentCertificateTimeError(ctx, srv, err) {
+				if updated, getErr := s.Get(ctx, srv.ID); getErr == nil && agentStatusNeedsDeploy(updated) {
+					_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
+				}
 				continue
 			}
 			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
+			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
 		updated, err := s.Get(ctx, srv.ID)
@@ -428,7 +443,7 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 			continue
 		}
 		if updated.Traits[agent.TraitStatus] == agent.StatusIncompatible {
-			continue
+			_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
 		}
 	}
 }
@@ -943,7 +958,7 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		if err != nil {
 			return tasks.Task{}, err
 		}
-		if agentAutoDeployBlocked(srv) {
+		if agentAutoDeployBlocked(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUndeployable {
 			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_blocked", firstNonEmpty(srv.Traits[agent.TraitLastError], "Agent auto deployment is stopped; use Reinstall Agent after fixing the error"))
 		}
 		allowed, failures, err := s.agentAutoDeployAllowed(ctx, serverID)
@@ -952,7 +967,7 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		}
 		if !allowed {
 			msg := fmt.Sprintf("agent auto deployment stopped after %d failed attempts; use Reinstall Agent after fixing the error", failures)
-			_ = s.markAgentStatus(ctx, serverID, agent.StatusUnavailable, "", msg)
+			_ = s.markAgentStatus(ctx, serverID, agent.StatusUndeployable, "", msg)
 			_ = s.setAgentAutoDeployBlocked(ctx, serverID, true)
 			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_exhausted", msg)
 		}
@@ -1025,18 +1040,18 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	_ = s.tasks.Advance(ctx, taskID, "preparing", "preparing panel agent deployment")
 	bundle, err := s.IssueAgentCertificate(ctx, srv.ID)
 	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	executable, err := s.agentBinaryPath(ctx, srv)
 	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	remoteTmp := "/tmp/panel-agent-" + taskID
 	_ = s.tasks.Advance(ctx, taskID, "uploading", "uploading panel agent binary")
 	if err := s.exec.Upload(ctx, srv.Target(), sshx.UploadSpec{LocalPath: executable, RemotePath: remoteTmp}); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "configuring", "installing panel agent configuration")
@@ -1053,53 +1068,74 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	}
 	for _, file := range files {
 		if err := runner.WriteFileSudo(ctx, file.path, file.content, file.mode, agentDeployTimeout); err != nil {
-			_ = s.tasks.Fail(ctx, taskID, err)
+			s.failAgentDeployTask(ctx, taskID, srv, err)
 			return
 		}
 	}
 	if err := verifyRemoteAgentCertificateFile(ctx, runner, []byte(bundle.Certificate)); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "starting", "starting panel agent service")
 	if _, err := runner.RunSudoLogged(ctx, agentInstallScript(remoteTmp), agentDeployTimeout); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	if err := verifyRemoteAgentServedCertificate(ctx, runner, bundle); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	if err := s.markAgentConfigured(ctx, srv.ID, bundle.AgentURL); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	time.Sleep(2 * time.Second)
 	_ = s.tasks.Advance(ctx, taskID, "checking", "checking panel agent compatibility")
 	refreshed, err := s.Get(ctx, srv.ID)
 	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	if err := s.checkAgent(ctx, refreshed); err != nil {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	checked, err := s.Get(ctx, srv.ID)
 	if err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	if checked.Traits[agent.TraitStatus] != agent.StatusCompatible {
 		err := panelerr.Validation("agent_incompatible", firstNonEmpty(checked.Traits[agent.TraitLastError], "Agent is not compatible after deployment"))
-		_ = s.tasks.Fail(ctx, taskID, err)
+		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
 	if info, infoErr := agent.ParseCertificateInfo([]byte(bundle.Certificate)); infoErr == nil {
 		_ = s.markAgentCertificate(ctx, srv.ID, info)
 	}
 	_ = s.tasks.Complete(ctx, taskID, "Panel agent deployed")
+}
+
+func (s *Service) failAgentDeployTask(ctx context.Context, taskID string, srv Server, cause error) {
+	_ = s.tasks.Fail(ctx, taskID, cause)
+	task, err := s.tasks.Get(ctx, taskID)
+	if err != nil || task.TriggeredBy == "user" {
+		return
+	}
+	_ = s.markAgentUndeployableIfAutoDeployExhausted(ctx, srv.ID)
+}
+
+func (s *Service) markAgentUndeployableIfAutoDeployExhausted(ctx context.Context, serverID string) error {
+	allowed, failures, err := s.agentAutoDeployAllowed(ctx, serverID)
+	if err != nil || allowed {
+		return err
+	}
+	msg := fmt.Sprintf("agent auto deployment stopped after %d failed attempts; use Reinstall Agent after fixing the error", failures)
+	if err := s.markAgentStatus(ctx, serverID, agent.StatusUndeployable, "", msg); err != nil {
+		return err
+	}
+	return s.setAgentAutoDeployBlocked(ctx, serverID, true)
 }
 
 func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv Server, err error) {
@@ -1374,9 +1410,20 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 }
 
 func (s *Service) recoverAgentForSystemDetection(ctx context.Context, srv Server) {
+	if agentAutoDeployBlocked(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUndeployable {
+		return
+	}
+	if _, ok := agentURL(srv); !ok {
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+		return
+	}
 	if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
+	}
+	if agentStatusNeedsDeploy(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 	}
 }
 
@@ -1448,15 +1495,17 @@ func (s *Service) handleAgentCertificateTimeError(ctx context.Context, srv Serve
 	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
 		msg = cause.Error()
 	}
-	if srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
-		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], msg))
+	if srv.Traits[agent.TraitStatus] == agent.StatusUndeployable || agentAutoDeployBlocked(srv) {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUndeployable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], msg))
 		return true
 	}
-	if agentAutoDeployBlocked(srv) {
+	if srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], msg))
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return true
 	}
 	_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
+	_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 	return true
 }
 
@@ -1478,6 +1527,16 @@ func agentCertificateRenewalProblem(srv Server, now time.Time) (bool, string) {
 
 func agentStatusNeedsDeploy(srv Server) bool {
 	return srv.Traits[agent.TraitStatus] == agent.StatusIncompatible
+}
+
+func agentUsesLegacyDefaultPort(srv Server) bool {
+	value, ok := agentURL(srv)
+	if !ok {
+		return false
+	}
+	endpoint := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(value), "https://"), "http://")
+	_, port, err := net.SplitHostPort(endpoint)
+	return err == nil && port == "9443"
 }
 
 func isAgentCertificateTimeError(err error) bool {
@@ -1507,7 +1566,7 @@ func skipUnavailableAgentScheduledWork(srv Server) bool {
 		return true
 	}
 	switch srv.Traits[agent.TraitStatus] {
-	case agent.StatusUnavailable, agent.StatusIncompatible:
+	case agent.StatusUnavailable, agent.StatusIncompatible, agent.StatusUndeployable:
 		return true
 	default:
 		return false
@@ -1655,6 +1714,7 @@ WantedBy=multi-user.target
 }
 
 func agentInstallScript(remoteTmp string) string {
+	port := strconv.Itoa(defaultAgentPort)
 	return strings.Join([]string{
 		"set -eu",
 		`if ! command -v systemctl >/dev/null 2>&1; then`,
@@ -1668,7 +1728,7 @@ func agentInstallScript(remoteTmp string) string {
 		`fi`,
 		"install -m 0755 " + remoteops.ShellQuote(remoteTmp) + " " + remoteops.ShellQuote(agentRemoteBinaryPath),
 		"rm -f " + remoteops.ShellQuote(remoteTmp),
-		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: 9443, Protocol: "tcp"}),
+		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: defaultAgentPort, Protocol: "tcp"}),
 		"systemctl daemon-reload",
 		`if ! systemctl enable panel-agent.service; then`,
 		`  echo "[panel] failed to enable panel-agent.service" >&2`,
@@ -1692,13 +1752,13 @@ func agentInstallScript(remoteTmp string) string {
 		`  exit 1`,
 		`fi`,
 		`if command -v ss >/dev/null 2>&1; then`,
-		`  listeners="$(ss -ltnp 'sport = :9443' 2>/dev/null || true)"`,
+		`  listeners="$(ss -ltnp 'sport = :` + port + `' 2>/dev/null || true)"`,
 		`  if ! printf '%s\n' "$listeners" | grep -q LISTEN; then`,
-		`    echo "[panel] panel-agent did not open tcp/9443" >&2`,
+		`    echo "[panel] panel-agent did not open tcp/` + port + `" >&2`,
 		`    exit 1`,
 		`  fi`,
 		`  if ! printf '%s\n' "$listeners" | grep -q panel-agent; then`,
-		`    echo "[panel] tcp/9443 listener did not expose a panel-agent process name; continuing with TLS certificate verification" >&2`,
+		`    echo "[panel] tcp/` + port + ` listener did not expose a panel-agent process name; continuing with TLS certificate verification" >&2`,
 		`    printf '%s\n' "$listeners" >&2`,
 		`  fi`,
 		`fi`,
@@ -1731,24 +1791,27 @@ func verifyRemoteAgentServedCertificate(ctx context.Context, runner remoteops.Ru
 	if err != nil {
 		return err
 	}
-	serverName := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(bundle.AgentURL), "https://"), "http://")
-	if host, _, splitErr := net.SplitHostPort(serverName); splitErr == nil {
+	endpoint := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(bundle.AgentURL), "https://"), "http://")
+	serverName := endpoint
+	port := strconv.Itoa(defaultAgentPort)
+	if host, urlPort, splitErr := net.SplitHostPort(endpoint); splitErr == nil {
 		serverName = host
+		port = urlPort
 	}
 	script := strings.Join([]string{
 		"set -eu",
 		`if ! command -v openssl >/dev/null 2>&1; then`,
-		`  echo "[panel] openssl is required to verify the certificate served on tcp/9443" >&2`,
+		`  echo "[panel] openssl is required to verify the certificate served on tcp/` + port + `" >&2`,
 		`  exit 1`,
 		`fi`,
-		`fingerprint="$(timeout 10 openssl s_client -connect 127.0.0.1:9443 -servername ` + remoteops.ShellQuote(serverName) + ` -showcerts </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | awk -F= '{print $2}' | tr -d ':' | tr '[:lower:]' '[:upper:]')"`,
+		`fingerprint="$(timeout 10 openssl s_client -connect 127.0.0.1:` + port + ` -servername ` + remoteops.ShellQuote(serverName) + ` -showcerts </dev/null 2>/dev/null | openssl x509 -noout -fingerprint -sha256 2>/dev/null | awk -F= '{print $2}' | tr -d ':' | tr '[:lower:]' '[:upper:]')"`,
 		`expected="` + info.Fingerprint + `"`,
 		`if [ -z "$fingerprint" ]; then`,
-		`  echo "[panel] tcp/9443 did not serve a readable TLS certificate" >&2`,
+		`  echo "[panel] tcp/` + port + ` did not serve a readable TLS certificate" >&2`,
 		`  exit 1`,
 		`fi`,
 		`if [ "$fingerprint" != "$expected" ]; then`,
-		`  echo "[panel] tcp/9443 is serving an unexpected certificate fingerprint: $fingerprint" >&2`,
+		`  echo "[panel] tcp/` + port + ` is serving an unexpected certificate fingerprint: $fingerprint" >&2`,
 		`  echo "[panel] expected newly issued certificate fingerprint: $expected" >&2`,
 		`  exit 1`,
 		`fi`,
@@ -1818,7 +1881,7 @@ func agentBinaryPathForPlatform(platform string) string {
 }
 
 func agentDefaultURL(host string) string {
-	return "https://" + net.JoinHostPort(strings.TrimSpace(host), defaultAgentPort)
+	return "https://" + net.JoinHostPort(strings.TrimSpace(host), strconv.Itoa(defaultAgentPort))
 }
 
 func serverHasAgentConfigured(current Server, nextTraits map[string]string) bool {

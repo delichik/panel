@@ -62,7 +62,7 @@ type config struct {
 
 func loadConfig() config {
 	return config{
-		listenAddress: envDefault("PANEL_AGENT_LISTEN_ADDRESS", "0.0.0.0:9443"),
+		listenAddress: envDefault("PANEL_AGENT_LISTEN_ADDRESS", "0.0.0.0:9786"),
 		certFile:      os.Getenv("PANEL_AGENT_CERT_FILE"),
 		keyFile:       os.Getenv("PANEL_AGENT_KEY_FILE"),
 		caFile:        os.Getenv("PANEL_AGENT_CA_FILE"),

@@ -45,7 +45,7 @@
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 文件内容通过 API 以 base64 承载；保存会话用于批量上传、删除和提交。
 - 启用应用、部署、镜像更新等流程需要先校验和计划，再确认目标服务器 agent runtime 可用，然后写入应用修订和实例记录，并调用 agent runtime API。
-- 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的操作只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、不可用或不兼容时不得创建新的运行时操作任务、不得修改应用启用状态，也不得回退 SSH。运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
+- 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的操作只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得创建新的运行时操作任务、不得修改应用启用状态，也不得回退 SSH。运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
 - 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。
 - Application 容器使用 `panel.application.*` Label 标识；旧下划线 Label 不兼容且不自动迁移。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。

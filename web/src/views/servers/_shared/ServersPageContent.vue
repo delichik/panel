@@ -374,10 +374,13 @@ function traitValue(server: ServerDto | null, key: string) {
 function agentStatusForServer(server: ServerDto | null) {
   const traits = server?.traits;
   if (traits?.['agent.enabled'] !== 'true' || !traits?.['agent.url']) {
-    return { label: t('serversPage.agentNotDeployed'), color: 'secondary' };
+    return { label: t('serversPage.agentUnavailable'), color: 'error' };
   }
   if (traits['agent.status'] === 'compatible') {
     return { label: t('serversPage.agentCompatible'), color: 'success' };
+  }
+  if (traits['agent.status'] === 'undeployable') {
+    return { label: t('serversPage.agentUndeployable'), color: 'error' };
   }
   if (traits['agent.status'] === 'unavailable') {
     return { label: t('serversPage.agentUnavailable'), color: 'error' };
@@ -405,7 +408,7 @@ function serverDetailError(server: ServerDto | null) {
 }
 
 function serverDetailErrorType(server: ServerDto | null) {
-  return server?.traits?.['agent.status'] === 'unavailable' ? 'error' : 'warning';
+  return ['unavailable', 'undeployable'].includes(server?.traits?.['agent.status'] ?? '') ? 'error' : 'warning';
 }
 
 async function deployAgent(server: ServerDto) {

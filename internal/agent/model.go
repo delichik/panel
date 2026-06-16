@@ -27,6 +27,7 @@ const (
 	StatusCompatible   = "compatible"
 	StatusIncompatible = "incompatible"
 	StatusUnavailable  = "unavailable"
+	StatusUndeployable = "undeployable"
 
 	DefaultDockerHost = "unix:///var/run/docker.sock"
 )

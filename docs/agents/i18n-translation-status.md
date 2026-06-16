@@ -18,7 +18,7 @@
   - Token 过期时间、语言、登录页标题/说明、安全设置、证书设置和系统信息文案已接入 `web/src/i18n/index.ts`。
   - 旧运行时设置分类和字段已移除。
 - `web/src/views/servers/_shared/ServersPageContent.vue`
-  - 服务器凭据必选提示、Docker host 表单、Agent 兼容状态、版本检查时间、不兼容/不可用提示、安装/重装入口和 agent 部署任务文案已接入 `web/src/i18n/index.ts`。
+  - 服务器凭据必选提示、Docker host 表单、Agent 正常/不兼容/异常/无法部署状态、版本检查时间、安装/重装入口和 agent 部署任务文案已接入 `web/src/i18n/index.ts`。
 - `web/src/views/runtime/applications/`
   - 应用运行时实例状态、期望状态、日志入口、容器名和实例 ID 文案已接入 `web/src/i18n/index.ts`。
 - `web/src/views/runtime/applications/ApplicationEditor.vue`

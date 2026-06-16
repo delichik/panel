@@ -35,6 +35,7 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).toContain('serversApi.deployAgent');
     expect(serversPage).toContain('agentDeployActionLabel');
     expect(serversPage).toContain("t('serversPage.agentReady')");
+    expect(serversPage).toContain("t('serversPage.agentUndeployable')");
     expect(serversPage).toContain("t('serversPage.installAgent')");
     expect(serversPage).toContain("t('serversPage.reinstallAgent')");
     expect(serversPage).toContain("t('serversPage.dockerHost')");

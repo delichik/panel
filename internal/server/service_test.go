@@ -479,7 +479,7 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 
 func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -497,7 +497,7 @@ func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 
 func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -510,6 +510,30 @@ func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	}
 	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible || srv.Traits[agent.TraitVersion] != agent.Version {
 		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
+	}
+}
+
+func TestCheckConfiguredAgentsDeploysLegacyDefaultPort(t *testing.T) {
+	_, taskSvc, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	svc.CheckConfiguredAgents(context.Background())
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected legacy 9443 agent to be redeployed on the default port, got %#v", result.Items)
 	}
 }
 
@@ -529,7 +553,7 @@ func TestIssueAgentCertificateUsesCurrentServerHostURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bundle.AgentURL != "https://203.0.113.10:9443" {
+	if bundle.AgentURL != "https://203.0.113.10:9786" {
 		t.Fatalf("expected agent URL to follow current server host, got %q", bundle.AgentURL)
 	}
 	block, _ := pem.Decode([]byte(bundle.Certificate))
@@ -565,7 +589,7 @@ func TestUpdateHostRefreshesAgentURLAndInvalidatesCertificate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Traits[agent.TraitURL] != "https://203.0.113.10:9443" || updated.Traits[agent.TraitStatus] != agent.StatusIncompatible {
+	if updated.Traits[agent.TraitURL] != "https://203.0.113.10:9786" || updated.Traits[agent.TraitStatus] != agent.StatusIncompatible {
 		t.Fatalf("expected host update to refresh agent traits, got %#v", updated.Traits)
 	}
 	if updated.Traits[agent.TraitCertificateFingerprint] != "" || updated.Traits[agent.TraitCertificateNotAfter] != "" {
@@ -573,9 +597,9 @@ func TestUpdateHostRefreshesAgentURLAndInvalidatesCertificate(t *testing.T) {
 	}
 }
 
-func TestCheckConfiguredAgentsDoesNotDeployConfiguredIncompatibleAgent(t *testing.T) {
+func TestCheckConfiguredAgentsDeploysConfiguredIncompatibleAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"incompatible","sys.architecture":"x86_64"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"incompatible","sys.architecture":"x86_64"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -592,15 +616,15 @@ func TestCheckConfiguredAgentsDoesNotDeployConfiguredIncompatibleAgent(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 0 {
-		t.Fatalf("expected periodic check not to deploy configured incompatible agent, got %#v", result.Items)
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected periodic check to deploy configured incompatible agent, got %#v", result.Items)
 	}
 }
 
-func TestCheckConfiguredAgentsMarksExpiredStoredAgentCertificateWithoutDeploy(t *testing.T) {
+func TestCheckConfiguredAgentsDeploysExpiredStoredAgentCertificate(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	expiredAt := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiredAt + `"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiredAt + `"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -617,22 +641,15 @@ func TestCheckConfiguredAgentsMarksExpiredStoredAgentCertificateWithoutDeploy(t 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 0 {
-		t.Fatalf("expected periodic check not to deploy expired configured agent certificate, got %#v", result.Items)
-	}
-	srv, err := svc.Get(context.Background(), "srv_agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible {
-		t.Fatalf("expected expired certificate to mark agent incompatible, got %#v", srv.Traits)
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected periodic check to deploy expired configured agent certificate, got %#v", result.Items)
 	}
 }
 
-func TestCheckConfiguredAgentsMarksExpiringStoredAgentCertificateWithoutDeploy(t *testing.T) {
+func TestCheckConfiguredAgentsDeploysExpiringStoredAgentCertificate(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	expiringAt := time.Now().UTC().Add(agentCertificateRenewBefore / 2).Format(time.RFC3339Nano)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiringAt + `"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","sys.architecture":"x86_64","agent.certificate.not_after":"` + expiringAt + `"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -649,19 +666,12 @@ func TestCheckConfiguredAgentsMarksExpiringStoredAgentCertificateWithoutDeploy(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 0 {
-		t.Fatalf("expected periodic check not to deploy expiring configured agent certificate, got %#v", result.Items)
-	}
-	srv, err := svc.Get(context.Background(), "srv_agent")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible {
-		t.Fatalf("expected expiring certificate to mark agent incompatible, got %#v", srv.Traits)
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected periodic check to deploy expiring configured agent certificate, got %#v", result.Items)
 	}
 }
 
-func TestCheckConfiguredAgentsDoesNotQueueDeployForUnavailableCertificateTimeError(t *testing.T) {
+func TestCheckConfiguredAgentsDeploysUnavailableAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	lastErr := `Get "https://127.0.0.1:9443/v1/health": tls: failed to verify certificate: x509: certificate has expired or is not yet valid`
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"unavailable","agent.last_error":"` + strings.ReplaceAll(lastErr, `"`, `\"`) + `","sys.architecture":"x86_64"}`
@@ -681,14 +691,38 @@ func TestCheckConfiguredAgentsDoesNotQueueDeployForUnavailableCertificateTimeErr
 	if err != nil {
 		t.Fatal(err)
 	}
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected periodic check to deploy unavailable agent, got %#v", result.Items)
+	}
+}
+
+func TestCheckConfiguredAgentsDoesNotDeployUndeployableAgent(t *testing.T) {
+	_, taskSvc, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"undeployable","agent.auto_deploy_blocked":"true","sys.architecture":"x86_64"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+
+	svc.CheckConfiguredAgents(context.Background())
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if result.Total != 0 {
-		t.Fatalf("expected no system deploy task for unavailable agent, got %#v", result.Items)
+		t.Fatalf("expected undeployable agent not to deploy automatically, got %#v", result.Items)
 	}
 }
 
 func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -708,7 +742,7 @@ func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T
 	}
 }
 
-func TestAgentCertificateTimeErrorDoesNotDeployWhenAlreadyIncompatible(t *testing.T) {
+func TestAgentCertificateTimeErrorDeploysWhenAlreadyIncompatible(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	traits := map[string]string{
 		agent.TraitEnabled: "true",
@@ -735,14 +769,14 @@ func TestAgentCertificateTimeErrorDoesNotDeployWhenAlreadyIncompatible(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 0 {
-		t.Fatalf("expected handled certificate error not to deploy configured agent, got %#v", result.Items)
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected handled certificate error to deploy incompatible agent, got %#v", result.Items)
 	}
 }
 
-func TestSystemDetectionDoesNotDeployForIncompatibleAgent(t *testing.T) {
+func TestSystemDetectionDeploysForIncompatibleAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"incompatible","sys.architecture":"x86_64"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"incompatible","sys.architecture":"x86_64"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -765,8 +799,8 @@ func TestSystemDetectionDoesNotDeployForIncompatibleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 0 {
-		t.Fatalf("expected system detection not to deploy configured incompatible agent, got %#v", result.Items)
+	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
+		t.Fatalf("expected system detection to deploy configured incompatible agent, got %#v", result.Items)
 	}
 }
 
@@ -808,7 +842,7 @@ func TestDeployAgentStartsExistingQueuedTask(t *testing.T) {
 	}
 }
 
-func TestAgentCertificateTimeErrorMarksIncompatibleWithoutAutoDeploy(t *testing.T) {
+func TestAgentCertificateTimeErrorMarksUndeployableAfterAutoDeployFailures(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	traits := map[string]string{
 		agent.TraitEnabled: "true",
@@ -854,11 +888,11 @@ func TestAgentCertificateTimeErrorMarksIncompatibleWithoutAutoDeploy(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Traits[agent.TraitStatus] != agent.StatusIncompatible {
-		t.Fatalf("expected certificate error to mark agent incompatible, got %#v", updated.Traits)
+	if updated.Traits[agent.TraitStatus] != agent.StatusUndeployable {
+		t.Fatalf("expected exhausted auto deploy to mark agent undeployable, got %#v", updated.Traits)
 	}
-	if !strings.Contains(strings.ToLower(updated.Traits[agent.TraitLastError]), "certificate") {
-		t.Fatalf("expected certificate error to be retained, got %#v", updated.Traits)
+	if !strings.Contains(strings.ToLower(updated.Traits[agent.TraitLastError]), "stopped after") {
+		t.Fatalf("expected exhausted auto deploy error to be retained, got %#v", updated.Traits)
 	}
 }
 
@@ -1008,7 +1042,7 @@ func TestAgentInstallScriptStopsOldProcessesAndChecksPortOwner(t *testing.T) {
 		"pkill -x panel-agent",
 		"pkill -f '^/usr/local/bin/panel-agent($| )'",
 		"journalctl -u panel-agent.service -n 80 --no-pager",
-		"ss -ltnp 'sport = :9443'",
+		"ss -ltnp 'sport = :9786'",
 		"continuing with TLS certificate verification",
 	} {
 		if !strings.Contains(script, want) {
