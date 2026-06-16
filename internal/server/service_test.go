@@ -852,14 +852,44 @@ func TestAgentCertificateTimeErrorStopsAutoDeployAfterFailures(t *testing.T) {
 	}
 }
 
-func TestSystemCertificatesIncludeOnlyPanelSideBuiltIns(t *testing.T) {
+func TestSystemCertificatesIncludeAgentServerCertificates(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc.SetAgentTLSAssets(assets)
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","agent.certificate.fingerprint":"ABC","agent.certificate.not_after":"2027-01-01T00:00:00Z"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","agent.certificate.fingerprint":"ABC","agent.certificate.not_before":"2025-01-01T00:00:00Z","agent.certificate.not_after":"2027-01-01T00:00:00Z"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := svc.SystemCertificates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected Panel-side and server Agent certificates, got %#v", items)
+	}
+	if items[0].ID != "agent-ca" || !items[0].BuiltIn || !items[0].CanReset {
+		t.Fatalf("unexpected agent CA item: %#v", items[0])
+	}
+	if items[1].ID != "agent-panel-client" || !items[1].BuiltIn || !items[1].CanReset {
+		t.Fatalf("unexpected agent client item: %#v", items[1])
+	}
+	if items[2].ID != "agent-server:srv_agent" || items[2].ServerID != "srv_agent" || items[2].ServerName != "s" || items[2].Fingerprint != "ABC" || !items[2].BuiltIn || !items[2].CanReset {
+		t.Fatalf("unexpected agent server certificate item: %#v", items[2])
+	}
+}
+
+func TestSystemCertificatesSkipAgentServerWithoutCertificateMetadata(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentTLSAssets(assets)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","agent.certificate.fingerprint":"ABC"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -869,13 +899,7 @@ func TestSystemCertificatesIncludeOnlyPanelSideBuiltIns(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(items) != 2 {
-		t.Fatalf("expected only Panel-side CA and client certificates, got %#v", items)
-	}
-	if items[0].ID != "agent-ca" || !items[0].BuiltIn || !items[0].CanReset {
-		t.Fatalf("unexpected agent CA item: %#v", items[0])
-	}
-	if items[1].ID != "agent-panel-client" || !items[1].BuiltIn || !items[1].CanReset {
-		t.Fatalf("unexpected agent client item: %#v", items[1])
+		t.Fatalf("expected incomplete server certificate metadata to be skipped, got %#v", items)
 	}
 }
 

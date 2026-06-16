@@ -61,7 +61,7 @@
 ## Panel Agent
 
 - `cmd/panel-agent` 是部署在目标服务器上的被动 HTTPS agent，使用 Panel 专用 agent CA 做 mTLS 双向认证；Panel 启动时在 `dataRoot/agent/tls` 生成或复用 agent CA 与 Panel client 证书。
-- Agent CA 和 Panel Agent 客户端证书作为“系统内置”资产展示，不写入用户 `key_assets`，不能删除、导入、导出或作为应用文件引用，只允许重置。每台服务器的 Agent 服务端证书是安装/重装任务同步到目标机 `/etc/panel-agent` 的部署产物，不在系统证书页逐台展示；其状态通过服务器 Agent 状态、最后错误和部署任务日志排查。
+- Agent CA、Panel Agent 客户端证书和每台服务器已签发的 Agent 服务端证书作为“系统内置”资产展示，不写入用户 `key_assets`，不能删除、导入、导出或作为应用文件引用，只允许重置。每台服务器的 Agent 服务端证书是安装/重装任务同步到目标机 `/etc/panel-agent` 的部署产物；只有已记录证书指纹和有效期元数据的服务器证书会进入系统证书列表，重置单台服务器证书会复用该服务器的 Agent 部署任务。
 - 重置 Panel Agent 客户端证书时保留 Agent CA，并热加载所有服务共享的 Agent HTTP client；重置 Agent CA 时同时生成新的客户端证书、热加载 HTTP client，并为所有已配置服务器排队重部署 Agent；重置单台服务器证书复用该服务器的 Agent 部署任务。
 - Agent 部署成功后把服务端证书指纹和有效期写入服务器 traits，供服务器 Agent 状态、最后错误和部署任务排查使用；健康检查成功时也会从 TLS 握手中的远端服务端证书刷新这些元数据，旧服务器缺少该元数据时不必等到下一次重部署才补齐。
 - 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9443`。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits；agent 版本必须与当前 Panel 版本一致，否则视为不兼容并触发自动重装。

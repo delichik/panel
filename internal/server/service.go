@@ -149,6 +149,15 @@ func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, 
 		systemCertificateFromInfo("agent-ca", "ca_certificate", "Panel Agent CA", caInfo),
 		systemCertificateFromInfo("agent-panel-client", "tls_certificate", "Panel Agent client", clientInfo),
 	}
+	servers, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, srv := range servers {
+		if cert, ok := agentServerCertificateFromTraits(srv); ok {
+			result = append(result, cert)
+		}
+	}
 	return result, nil
 }
 
@@ -1399,6 +1408,39 @@ func systemCertificateFromInfo(id, certificateType, name string, info agent.Cert
 		BuiltIn:     true,
 		CanReset:    true,
 	}
+}
+
+func agentServerCertificateFromTraits(srv Server) (SystemCertificate, bool) {
+	fingerprint := strings.TrimSpace(srv.Traits[agent.TraitCertificateFingerprint])
+	if fingerprint == "" {
+		return SystemCertificate{}, false
+	}
+	notBefore, err := parseAgentCertificateTraitTime(srv.Traits[agent.TraitCertificateNotBefore])
+	if err != nil {
+		return SystemCertificate{}, false
+	}
+	notAfter, err := parseAgentCertificateTraitTime(srv.Traits[agent.TraitCertificateNotAfter])
+	if err != nil {
+		return SystemCertificate{}, false
+	}
+	info := agent.CertificateInfo{
+		Fingerprint: fingerprint,
+		CommonName:  "panel-agent-" + srv.ID,
+		NotBefore:   notBefore,
+		NotAfter:    notAfter,
+	}
+	out := systemCertificateFromInfo("agent-server:"+srv.ID, "tls_certificate", "Agent server certificate - "+srv.Name, info)
+	out.ServerID = srv.ID
+	out.ServerName = srv.Name
+	return out, true
+}
+
+func parseAgentCertificateTraitTime(value string) (time.Time, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return time.Time{}, errors.New("agent certificate time is empty")
+	}
+	return time.Parse(time.RFC3339Nano, value)
 }
 
 func certificateTimeStatus(info agent.CertificateInfo, now time.Time) string {
