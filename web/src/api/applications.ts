@@ -79,6 +79,9 @@ export function createApplicationsApi(client: ApiClient = apiClient) {
     package(applicationId: string) {
       return client.download(`${applicationPath(applicationId)}/package`);
     },
+    persistentData(applicationId: string) {
+      return client.download(`${applicationPath(applicationId)}/persistent-data`);
+    },
     validate(applicationId: string) {
       return client.post<ApplicationValidationDto>(`${applicationPath(applicationId)}/validate`);
     },

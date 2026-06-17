@@ -336,6 +336,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			applicationH.DeleteFile(w, r)
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/applications/") && applicationPackagePath(path):
 			applicationH.Package(w, r)
+		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/applications/") && applicationPersistentDataPath(path):
+			applicationH.PersistentData(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/validate"):
 			applicationH.Validate(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/plan"):
@@ -463,6 +465,11 @@ func applicationFilesPath(path string) bool {
 func applicationPackagePath(path string) bool {
 	parts := strings.Split(strings.Trim(path, "/"), "/")
 	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "applications" && parts[3] != "" && parts[4] == "package"
+}
+
+func applicationPersistentDataPath(path string) bool {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	return len(parts) == 5 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "applications" && parts[3] != "" && parts[4] == "persistent-data"
 }
 
 func applicationFileResourcePath(path string) bool {

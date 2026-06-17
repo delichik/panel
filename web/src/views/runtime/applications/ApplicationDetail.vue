@@ -10,6 +10,7 @@ const props = defineProps<{ application: ApplicationDto }>();
 const emit = defineEmits<{ changed: [ApplicationDto] }>();
 const { formatDateTime, t } = useI18n();
 const downloading = ref(false);
+const downloadingPersistent = ref(false);
 const imageAction = ref('');
 const error = ref('');
 const message = ref('');
@@ -79,6 +80,25 @@ function selectLogs(target: { instanceId: string; containerName: string }) {
   logsDialog.value = true;
 }
 
+async function downloadPersistentData() {
+  if (!props.application.persistentPath) return;
+  downloadingPersistent.value = true;
+  try {
+    const result = await applicationsApi.persistentData(props.application.id);
+    const url = URL.createObjectURL(result.blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = result.filename;
+    link.click();
+    URL.revokeObjectURL(url);
+    error.value = '';
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('applicationDetail.downloadPersistentFailed');
+  } finally {
+    downloadingPersistent.value = false;
+  }
+}
+
 async function loadSelectedLogs(tail: number) {
   if (!logTarget.value) return '';
   const result = await applicationsApi.logs(props.application.id, {
@@ -108,6 +128,15 @@ watch(() => props.application.id, () => {
         </div>
         <div class="detail-heading-actions">
           <v-btn size="small" icon="mdi-package-down" variant="text" :title="t('applicationDetail.downloadPackage')" :loading="downloading" @click="downloadPackage" />
+          <v-btn
+            size="small"
+            icon="mdi-database-arrow-down-outline"
+            variant="text"
+            :title="t('applicationDetail.downloadPersistentData')"
+            :disabled="!application.persistentPath"
+            :loading="downloadingPersistent"
+            @click="downloadPersistentData"
+          />
           <v-chip :color="application.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ application.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip>
         </div>
       </div>

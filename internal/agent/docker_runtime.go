@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/binary"
@@ -190,6 +191,70 @@ func (r *LocalRuntime) ContainerLogs(ctx context.Context, id string, tail int) (
 	return r.client.containerLogs(ctx, id, normalizeLogTail(tail))
 }
 
+func (r *LocalRuntime) PersistentArchive(ctx context.Context, applicationID string) ([]byte, error) {
+	if r == nil {
+		return nil, errors.New("runtime is not configured")
+	}
+	dir, err := safeApplicationRuntimeDir(r.root, applicationID, "persistent")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	err = filepath.WalkDir(dir, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if filePath == dir {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, filePath)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(rel)
+		if entry.IsDir() {
+			_, err := zw.Create(name + "/")
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		header, err := zip.FileInfoHeader(info)
+		if err != nil {
+			return err
+		}
+		header.Name = name
+		header.Method = zip.Deflate
+		writer, err := zw.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		file, err := os.Open(filePath)
+		if err != nil {
+			return err
+		}
+		_, copyErr := io.Copy(writer, file)
+		closeErr := file.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		return closeErr
+	})
+	if closeErr := zw.Close(); err == nil {
+		err = closeErr
+	}
+	_ = ctx
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
 func (r *LocalRuntime) ContainerStart(ctx context.Context, id string) error {
 	return r.client.startContainer(ctx, id)
 }
@@ -278,6 +343,28 @@ func safeRuntimePath(root, appID, instanceID, area, rel string) (string, error) 
 	}
 	if cleanTarget != cleanBase && !strings.HasPrefix(cleanTarget, cleanBase+string(os.PathSeparator)) {
 		return "", errors.New("runtime file path escapes the application workspace")
+	}
+	return cleanTarget, nil
+}
+
+func safeApplicationRuntimeDir(root, appID, area string) (string, error) {
+	appID = strings.TrimSpace(appID)
+	area = strings.TrimSpace(area)
+	if appID == "" || strings.ContainsAny(appID, `/\`) || area == "" || strings.ContainsAny(area, `/\`) {
+		return "", errors.New("runtime application path is invalid")
+	}
+	base := filepath.Join(root, appID)
+	target := filepath.Join(base, area)
+	cleanBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	cleanTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if cleanTarget != cleanBase && !strings.HasPrefix(cleanTarget, cleanBase+string(os.PathSeparator)) {
+		return "", errors.New("runtime application path escapes the application workspace")
 	}
 	return cleanTarget, nil
 }

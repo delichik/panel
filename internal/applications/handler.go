@@ -23,6 +23,7 @@ type applicationService interface {
 	DeleteSaveSessionFile(ctx context.Context, sessionID string, in FileDeleteInput) error
 	CommitSaveSession(ctx context.Context, sessionID string) (Application, error)
 	Package(ctx context.Context, id string) (PackageResult, error)
+	PersistentData(ctx context.Context, id string) (PackageResult, error)
 	Validate(ctx context.Context, id string) (ValidationResult, error)
 	Plan(ctx context.Context, id string) (PlanResult, error)
 	CheckImageUpdate(ctx context.Context, id string) (Application, error)
@@ -148,6 +149,18 @@ func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Package(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.Package(r.Context(), applicationID(r.URL.Path))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+safeDownloadName(result.Filename)+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(result.Content)
+}
+
+func (h *Handler) PersistentData(w http.ResponseWriter, r *http.Request) {
+	result, err := h.service.PersistentData(r.Context(), applicationID(r.URL.Path))
 	if err != nil {
 		httpx.Error(w, err)
 		return

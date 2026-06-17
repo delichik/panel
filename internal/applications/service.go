@@ -42,6 +42,7 @@ type AgentRuntimeClient interface {
 	RuntimeRestart(ctx context.Context, baseURL string, req agent.RuntimeRestartRequest) (agent.RuntimeInstanceResponse, error)
 	RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agent.RuntimeStatusResponse, error)
 	RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agent.RuntimeLogsResponse, error)
+	RuntimePersistentArchive(ctx context.Context, baseURL, applicationID string) (agent.RuntimePersistentArchiveResponse, error)
 }
 
 type ServerProvider interface {
@@ -1039,6 +1040,42 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 	return LogResult{InstanceID: instance.ID, ContainerName: instance.ContainerName, Type: "combined", Logs: logs.Logs}, nil
 }
 
+func (s *Service) PersistentData(ctx context.Context, appID string) (PackageResult, error) {
+	app, err := s.Get(ctx, appID)
+	if err != nil {
+		return PackageResult{}, err
+	}
+	if strings.TrimSpace(app.PersistentPath) == "" {
+		return PackageResult{}, panelerr.Validation("application_persistent_data_unavailable", "Application does not use persistent storage")
+	}
+	instance, err := s.primaryRuntimeInstance(ctx, app.ID)
+	if err != nil {
+		return PackageResult{}, err
+	}
+	srv, err := s.servers.Get(ctx, instance.ServerID)
+	if err != nil {
+		return PackageResult{}, err
+	}
+	if err := ensureAgentRuntimeReady(srv); err != nil {
+		return PackageResult{}, err
+	}
+	baseURL, _ := agentURLFromServer(srv)
+	archive, err := s.runtimeClient.RuntimePersistentArchive(ctx, baseURL, app.ID)
+	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
+		return PackageResult{}, runtimeOperationError(err)
+	}
+	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(archive.ContentBase64))
+	if err != nil {
+		return PackageResult{}, panelerr.BadGateway("application_persistent_archive_invalid", "Persistent data archive from agent is invalid")
+	}
+	filename := strings.TrimSpace(archive.Filename)
+	if filename == "" {
+		filename = app.Name + "-persistent.zip"
+	}
+	return PackageResult{Filename: filename, Content: content}, nil
+}
+
 type preparedApplication struct {
 	spec              appspec.Spec
 	variables         map[string]string
@@ -1876,6 +1913,17 @@ func (s *Service) runtimeInstance(ctx context.Context, appID, instanceID string)
 		return appruntime.Instance{}, panelerr.NotFound("application_instance")
 	}
 	return instance, err
+}
+
+func (s *Service) primaryRuntimeInstance(ctx context.Context, appID string) (appruntime.Instance, error) {
+	instances, err := s.runtimeInstances(ctx, appID)
+	if err != nil {
+		return appruntime.Instance{}, err
+	}
+	if len(instances) == 0 {
+		return appruntime.Instance{}, panelerr.NotFound("application_instance")
+	}
+	return instances[0], nil
 }
 
 func (s *Service) runtimeInstanceForServer(ctx context.Context, appID, serverID string) (appruntime.Instance, error) {

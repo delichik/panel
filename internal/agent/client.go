@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -165,6 +166,20 @@ func (c *HTTPClient) RuntimeLogs(ctx context.Context, baseURL, instanceID, conta
 	}
 	err := c.get(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(instanceID)+"/logs", query, &out)
 	return out, err
+}
+
+func (c *HTTPClient) RuntimePersistentArchive(ctx context.Context, baseURL, applicationID string) (RuntimePersistentArchiveResponse, error) {
+	var out RuntimePersistentArchiveResponse
+	err := c.get(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(applicationID)+"/persistent/archive", nil, &out)
+	if err != nil {
+		return RuntimePersistentArchiveResponse{}, err
+	}
+	if strings.TrimSpace(out.ContentBase64) != "" {
+		if _, err := base64.StdEncoding.DecodeString(out.ContentBase64); err != nil {
+			return RuntimePersistentArchiveResponse{}, err
+		}
+	}
+	return out, nil
 }
 
 func (c *HTTPClient) DockerContainers(ctx context.Context, baseURL string) ([]DockerContainer, error) {

@@ -95,6 +95,22 @@ func TestHandlerPackageApplication(t *testing.T) {
 	}
 }
 
+func TestHandlerPersistentData(t *testing.T) {
+	fake := &fakeApplicationService{persistentData: PackageResult{Filename: "web-persistent.zip", Content: []byte("data")}}
+	handler := NewHandler(fake)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/applications/app-1/persistent-data", nil)
+	handler.PersistentData(rec, req)
+
+	if rec.Code != http.StatusOK || fake.persistentDataID != "app-1" || rec.Body.String() != "data" {
+		t.Fatalf("persistent data status=%d id=%q body=%q", rec.Code, fake.persistentDataID, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/zip" {
+		t.Fatalf("content type = %q", got)
+	}
+}
+
 func TestHandlerDeployAndStopApplication(t *testing.T) {
 	fake := &fakeApplicationService{op: OperationResult{TaskID: "task-1", EvalID: "eval-1", Application: Application{ID: "app-1"}}}
 	handler := NewHandler(fake)
@@ -137,27 +153,29 @@ func TestHandlerRuntimeAndLogs(t *testing.T) {
 }
 
 type fakeApplicationService struct {
-	apps           []Application
-	app            Application
-	files          []ApplicationFile
-	saved          SaveInput
-	fileInput      FileSaveInput
-	op             OperationResult
-	runtime        ApplicationRuntime
-	logs           LogResult
-	deployedID     string
-	stoppedID      string
-	stopPurge      bool
-	runtimeID      string
-	logID          string
-	logInput       LogInput
-	deletedFileID  string
-	pkg            PackageResult
-	packagedID     string
-	session        SaveSessionResult
-	sessionID      string
-	checkedID      string
-	updatedImageID string
+	apps             []Application
+	app              Application
+	files            []ApplicationFile
+	saved            SaveInput
+	fileInput        FileSaveInput
+	op               OperationResult
+	runtime          ApplicationRuntime
+	logs             LogResult
+	deployedID       string
+	stoppedID        string
+	stopPurge        bool
+	runtimeID        string
+	logID            string
+	logInput         LogInput
+	deletedFileID    string
+	pkg              PackageResult
+	packagedID       string
+	persistentData   PackageResult
+	persistentDataID string
+	session          SaveSessionResult
+	sessionID        string
+	checkedID        string
+	updatedImageID   string
 }
 
 func (f *fakeApplicationService) List(ctx context.Context) ([]Application, error) {
@@ -231,6 +249,11 @@ func (f *fakeApplicationService) CommitSaveSession(ctx context.Context, sessionI
 func (f *fakeApplicationService) Package(ctx context.Context, id string) (PackageResult, error) {
 	f.packagedID = id
 	return f.pkg, nil
+}
+
+func (f *fakeApplicationService) PersistentData(ctx context.Context, id string) (PackageResult, error) {
+	f.persistentDataID = id
+	return f.persistentData, nil
 }
 
 func (f *fakeApplicationService) Validate(ctx context.Context, id string) (ValidationResult, error) {

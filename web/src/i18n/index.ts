@@ -472,6 +472,7 @@ const messages = {
     },
     applicationDetail: {
       downloadPackage: "Download package",
+      downloadPersistentData: "Download persistent data",
       generation: "Generation",
       specHash: "Spec hash",
       lastEval: "Last eval",
@@ -485,6 +486,7 @@ const messages = {
       latest: "Latest",
       checked: "Checked",
       downloadFailed: "Unable to download package",
+      downloadPersistentFailed: "Unable to download persistent data",
       checkFailed: "Unable to check image",
       updateStarted: "Image update accepted",
       updateFailed: "Unable to update image",
@@ -1565,6 +1567,7 @@ const messages = {
     },
     applicationDetail: {
       downloadPackage: "下载包",
+      downloadPersistentData: "下载持久化数据",
       generation: "代数",
       specHash: "Spec 哈希",
       lastEval: "最近评估",
@@ -1578,6 +1581,7 @@ const messages = {
       latest: "最新",
       checked: "检查时间",
       downloadFailed: "无法下载包",
+      downloadPersistentFailed: "无法下载持久化数据",
       checkFailed: "无法检查镜像",
       updateStarted: "镜像更新已接受",
       updateFailed: "无法更新镜像",

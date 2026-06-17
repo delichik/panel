@@ -457,6 +457,51 @@ func TestLogsReadFromRuntimeInstance(t *testing.T) {
 	}
 }
 
+func TestPersistentDataDownloadsFromRuntimeInstance(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "db",
+		Enabled:           true,
+		SpecYAML:          "name: db\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.archiveContent = []byte("zip")
+	result, err := svc.PersistentData(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(result.Content) != "zip" {
+		t.Fatalf("content = %q", result.Content)
+	}
+	if runtime.archiveApplicationID != app.ID {
+		t.Fatalf("archive application = %q, want %q", runtime.archiveApplicationID, app.ID)
+	}
+	if runtime.archiveBaseURL != "https://srv-a.agent" {
+		t.Fatalf("archive baseURL = %q", runtime.archiveBaseURL)
+	}
+}
+
+func TestPersistentDataRejectsApplicationWithoutPersistentStorage(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PersistentData(ctx, app.ID); err == nil {
+		t.Fatal("expected persistent data download to be rejected")
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -513,13 +558,16 @@ func readyServer(id string) server.Server {
 }
 
 type fakeRuntimeClient struct {
-	deploys   []agent.RuntimeDeployRequest
-	stops     []agent.RuntimeStopRequest
-	restarts  []agent.RuntimeRestartRequest
-	statuses  map[string]appruntime.InstanceStatus
-	logs      string
-	logTail   int
-	deployErr error
+	deploys              []agent.RuntimeDeployRequest
+	stops                []agent.RuntimeStopRequest
+	restarts             []agent.RuntimeRestartRequest
+	statuses             map[string]appruntime.InstanceStatus
+	logs                 string
+	logTail              int
+	archiveBaseURL       string
+	archiveApplicationID string
+	archiveContent       []byte
+	deployErr            error
 }
 
 func (f *fakeRuntimeClient) RuntimeDeploy(ctx context.Context, baseURL string, req agent.RuntimeDeployRequest) (agent.RuntimeInstanceResponse, error) {
@@ -558,6 +606,16 @@ func (f *fakeRuntimeClient) RuntimeStatus(ctx context.Context, baseURL, instance
 func (f *fakeRuntimeClient) RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agent.RuntimeLogsResponse, error) {
 	f.logTail = tail
 	return agent.RuntimeLogsResponse{InstanceID: instanceID, Logs: f.logs}, nil
+}
+
+func (f *fakeRuntimeClient) RuntimePersistentArchive(ctx context.Context, baseURL, applicationID string) (agent.RuntimePersistentArchiveResponse, error) {
+	f.archiveBaseURL = baseURL
+	f.archiveApplicationID = applicationID
+	return agent.RuntimePersistentArchiveResponse{
+		ApplicationID: applicationID,
+		Filename:      applicationID + "-persistent.zip",
+		ContentBase64: base64.StdEncoding.EncodeToString(f.archiveContent),
+	}, nil
 }
 
 type fakeServerProvider struct {

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -153,6 +154,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
 		logs, err := h.runtime.Logs(r.Context(), instanceID, r.URL.Query().Get("containerName"), tail)
 		writeResult(w, RuntimeLogsResponse{InstanceID: instanceID, Logs: logs}, err)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/runtime/applications/") && strings.HasSuffix(path, "/persistent/archive"):
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
+		applicationID := runtimePathInstanceID(path, "/persistent/archive")
+		content, err := h.runtime.PersistentArchive(r.Context(), applicationID)
+		writeResult(w, RuntimePersistentArchiveResponse{
+			ApplicationID: applicationID,
+			Filename:      applicationID + "-persistent.zip",
+			ContentBase64: base64.StdEncoding.EncodeToString(content),
+		}, err)
 	case r.Method != http.MethodGet && r.Method != http.MethodPost:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	default:
