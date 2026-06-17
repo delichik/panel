@@ -519,6 +519,54 @@ func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
 	}
 }
 
+func TestConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
+	createSvc, taskSvc, store := testServerService(t, nil)
+	srv, err := createSvc.Create(context.Background(), SaveRequest{
+		Name:         "s",
+		Host:         "127.0.0.1",
+		Port:         22,
+		SSHUsername:  "du",
+		CredentialID: "cred_1",
+		Traits: map[string]string{
+			agent.TraitEnabled: "true",
+			agent.TraitURL:     "https://127.0.0.1:9786",
+			agent.TraitStatus:  agent.StatusCompatible,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := agent.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), &connectivityFakeExec{passwordless: true}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{
+		osRelease: linux.OSRelease{ID: "debian", VersionID: "13", PrettyName: "Debian GNU/Linux 13", Supported: true},
+		systemTraits: map[string]string{
+			"sys.architecture": "x86_64",
+		},
+		health: agentHealth(agent.Version),
+	})
+
+	task, err := svc.EnsureConnectivityTask(context.Background(), srv.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusCompleted {
+		t.Fatalf("expected connectivity task to complete, got %#v", finished)
+	}
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: srv.ID, IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("compatible agent should not be redeployed by connectivity checks, got %#v", result.Items)
+	}
+}
+
 func TestCheckConfiguredAgentsDeploysLegacyDefaultPort(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64"}`
@@ -1214,8 +1262,9 @@ func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
 }
 
 type connectivityFakeExec struct {
-	sudoTimeout time.Duration
-	root        bool
+	sudoTimeout  time.Duration
+	root         bool
+	passwordless bool
 }
 
 func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
@@ -1236,6 +1285,9 @@ func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, com
 
 func (f *connectivityFakeExec) ExecSudo(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
 	f.sudoTimeout = command.Timeout
+	if f.passwordless {
+		return sshx.CommandResult{ExitCode: 0}, nil
+	}
 	return sshx.CommandResult{ExitCode: 1}, errString("sudo denied")
 }
 
@@ -1472,10 +1524,12 @@ type errString string
 func (e errString) Error() string { return string(e) }
 
 type serverFakeAgentClient struct {
-	ufwURL string
-	ufw    remoteops.UFWStatus
-	health agent.HealthResponse
-	err    error
+	ufwURL       string
+	ufw          remoteops.UFWStatus
+	health       agent.HealthResponse
+	osRelease    linux.OSRelease
+	systemTraits map[string]string
+	err          error
 }
 
 func agentHealth(version string) agent.HealthResponse {
@@ -1494,10 +1548,10 @@ func (f *serverFakeAgentClient) Health(context.Context, string) (agent.HealthRes
 	return f.health, f.err
 }
 func (f *serverFakeAgentClient) OSRelease(context.Context, string) (linux.OSRelease, error) {
-	return linux.OSRelease{}, f.err
+	return f.osRelease, f.err
 }
 func (f *serverFakeAgentClient) SystemTraits(context.Context, string) (map[string]string, error) {
-	return nil, f.err
+	return f.systemTraits, f.err
 }
 func (f *serverFakeAgentClient) MetricsSnapshot(context.Context, string, string) (linux.MetricsSnapshot, error) {
 	return linux.MetricsSnapshot{}, f.err

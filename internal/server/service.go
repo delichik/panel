@@ -975,6 +975,13 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		if agentAutoDeployBlocked(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUndeployable {
 			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_blocked", firstNonEmpty(srv.Traits[agent.TraitLastError], "Agent auto deployment is stopped; use Reinstall Agent after fixing the error"))
 		}
+		needed, err := s.agentAutoDeployNeeded(ctx, srv, time.Now())
+		if err != nil {
+			return tasks.Task{}, err
+		}
+		if !needed {
+			return tasks.Task{}, nil
+		}
 		allowed, failures, err := s.agentAutoDeployAllowed(ctx, serverID)
 		if err != nil {
 			return tasks.Task{}, err
@@ -1027,6 +1034,28 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		task, _ = s.tasks.Get(ctx, task.ID)
 	}
 	return task, nil
+}
+
+func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now time.Time) (bool, error) {
+	if _, ok := agentURL(srv); !ok {
+		return true, nil
+	}
+	if agentUsesLegacyDefaultPort(srv) {
+		if err := s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", "agent uses legacy port 9443; redeployment required"); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if expired, msg := agentCertificateRenewalProblem(srv, now); expired {
+		if err := s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if agentStatusNeedsDeploy(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
+		return true, nil
+	}
+	return false, nil
 }
 
 func (s *Service) agentAutoDeployAllowed(ctx context.Context, serverID string) (bool, int, error) {
