@@ -290,6 +290,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			containerH.PullImage(w, r)
 		case r.Method == http.MethodPost && serverDockerActionNamedPath(path, "images", "refresh"):
 			containerH.RefreshImages(w, r)
+		case r.Method == http.MethodPost && serverDockerActionNamedPath(path, "images", "delete-unused"):
+			containerH.DeleteUnusedImages(w, r)
 		case r.Method == http.MethodDelete && serverDockerResourcePath(path, "images"):
 			containerH.DeleteImage(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/images/upgrade-selected":
@@ -300,6 +302,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			containerH.Networks(w, r)
 		case r.Method == http.MethodGet && serverDockerCollectionPath(path, "volumes"):
 			containerH.Volumes(w, r)
+		case r.Method == http.MethodPost && serverDockerActionNamedPath(path, "volumes", "delete-unused"):
+			containerH.DeleteUnusedVolumes(w, r)
 		case r.Method == http.MethodDelete && serverDockerResourcePath(path, "volumes"):
 			containerH.DeleteVolume(w, r)
 		case r.Method == http.MethodPost && path == "/api/v1/application-save-sessions":

@@ -3,6 +3,7 @@ package containerization
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -26,9 +27,11 @@ const (
 	TaskImagePull            = "image_pull"
 	TaskImageRefresh         = "image_refresh"
 	TaskImageDelete          = "image_delete"
+	TaskImageDeleteUnused    = "image_delete_unused"
 	TaskImageUpgradeMany     = "application_image_upgrade_selected"
 	TaskImageUpgradeAll      = "application_image_upgrade_all"
 	TaskVolumeDelete         = "volume_delete"
+	TaskVolumeDeleteUnused   = "volume_delete_unused"
 	TaskApplicationReconcile = "application_reconcile"
 )
 
@@ -89,7 +92,7 @@ type ImageList struct {
 
 type queueJob struct {
 	task   tasks.Task
-	run    func(context.Context) error
+	run    func(context.Context, tasks.Task) error
 	result chan error
 }
 
@@ -154,7 +157,7 @@ func (s *Service) ContainerAction(ctx context.Context, serverID, containerID, ac
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	return s.enqueue(ctx, serverID, taskType, "container", containerID, func(runCtx context.Context) error {
+	return s.enqueue(ctx, serverID, taskType, "container", containerID, func(runCtx context.Context, task tasks.Task) error {
 		err := s.agent.DockerContainerAction(runCtx, baseURL, containerID, action)
 		if err != nil {
 			_ = s.handleAgentError(runCtx, srv, err)
@@ -168,7 +171,7 @@ func (s *Service) DeleteContainer(ctx context.Context, serverID, containerID str
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	return s.enqueue(ctx, serverID, TaskContainerDelete, "container", containerID, func(runCtx context.Context) error {
+	return s.enqueue(ctx, serverID, TaskContainerDelete, "container", containerID, func(runCtx context.Context, task tasks.Task) error {
 		err := s.agent.DockerContainerDelete(runCtx, baseURL, containerID)
 		if err != nil {
 			_ = s.handleAgentError(runCtx, srv, err)
@@ -242,7 +245,7 @@ func (s *Service) PullImage(ctx context.Context, serverID, reference string) (ta
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	return s.enqueue(ctx, serverID, TaskImagePull, "image", reference, func(runCtx context.Context) error {
+	return s.enqueue(ctx, serverID, TaskImagePull, "image", reference, func(runCtx context.Context, task tasks.Task) error {
 		err := s.agent.DockerImagePull(runCtx, baseURL, reference)
 		if err != nil {
 			_ = s.handleAgentError(runCtx, srv, err)
@@ -256,7 +259,7 @@ func (s *Service) DeleteImage(ctx context.Context, serverID, imageID string) (ta
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	return s.enqueue(ctx, serverID, TaskImageDelete, "image", imageID, func(runCtx context.Context) error {
+	return s.enqueue(ctx, serverID, TaskImageDelete, "image", imageID, func(runCtx context.Context, task tasks.Task) error {
 		containers, err := s.agent.DockerContainers(runCtx, baseURL)
 		if err != nil {
 			_ = s.handleAgentError(runCtx, srv, err)
@@ -272,6 +275,67 @@ func (s *Service) DeleteImage(ctx context.Context, serverID, imageID string) (ta
 			_ = s.handleAgentError(runCtx, srv, err)
 		}
 		return err
+	})
+}
+
+func (s *Service) DeleteUnusedImages(ctx context.Context, serverID string) (tasks.Task, error) {
+	srv, baseURL, err := s.readyServer(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	return s.enqueueWithMetadata(ctx, serverID, TaskImageDeleteUnused, "server", serverID, taskMetadataJSON(map[string]any{
+		"action":   "delete_unused_images",
+		"serverId": serverID,
+	}), func(runCtx context.Context, task tasks.Task) error {
+		images, err := s.agent.DockerImages(runCtx, baseURL)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+			return err
+		}
+		containers, err := s.agent.DockerContainers(runCtx, baseURL)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+			return err
+		}
+		inUse := map[string]bool{}
+		for _, container := range containers {
+			inUse[container.ImageID] = true
+		}
+		candidates := 0
+		skippedInUse := 0
+		deleted := []string{}
+		var failures []string
+		_ = s.tasks.Advance(runCtx, task.ID, "deleting", "Deleting unused images")
+		for _, image := range images {
+			if image.ID == "" {
+				continue
+			}
+			if inUse[image.ID] {
+				skippedInUse++
+				continue
+			}
+			candidates++
+			if err := s.agent.DockerImageDelete(runCtx, baseURL, image.ID); err != nil {
+				failures = append(failures, imageReferenceLabel(image)+": "+err.Error())
+				continue
+			}
+			deleted = append(deleted, imageReferenceLabel(image))
+		}
+		metadata := taskMetadataJSON(map[string]any{
+			"scanned":      len(images),
+			"candidates":   candidates,
+			"skippedInUse": skippedInUse,
+			"deleted":      len(deleted),
+			"deletedItems": deleted,
+			"failures":     failures,
+		})
+		if len(failures) > 0 {
+			_, _ = s.tasks.UpsertStep(runCtx, task.ID, tasks.StepInput{Step: "delete_unused", Status: tasks.StatusFailed, Percentage: 100, MetadataJSON: metadata, Error: strings.Join(failures, "; ")})
+			return errors.New(strings.Join(failures, "; "))
+		}
+		_, _ = s.tasks.UpsertStep(runCtx, task.ID, tasks.StepInput{Step: "delete_unused", Status: tasks.StatusCompleted, Percentage: 100, MetadataJSON: metadata})
+		_ = s.tasks.AppendLog(runCtx, task.ID, "system", "Deleted "+strconv.Itoa(len(deleted))+" unused image(s)")
+		return nil
 	})
 }
 
@@ -304,7 +368,7 @@ func (s *Service) DeleteVolume(ctx context.Context, serverID, name string) (task
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	return s.enqueue(ctx, serverID, TaskVolumeDelete, "volume", name, func(runCtx context.Context) error {
+	return s.enqueue(ctx, serverID, TaskVolumeDelete, "volume", name, func(runCtx context.Context, task tasks.Task) error {
 		volumes, err := s.agent.DockerVolumes(runCtx, baseURL)
 		if err != nil {
 			_ = s.handleAgentError(runCtx, srv, err)
@@ -320,6 +384,55 @@ func (s *Service) DeleteVolume(ctx context.Context, serverID, name string) (task
 			_ = s.handleAgentError(runCtx, srv, err)
 		}
 		return err
+	})
+}
+
+func (s *Service) DeleteUnusedVolumes(ctx context.Context, serverID string) (tasks.Task, error) {
+	srv, baseURL, err := s.readyServer(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	return s.enqueueWithMetadata(ctx, serverID, TaskVolumeDeleteUnused, "server", serverID, taskMetadataJSON(map[string]any{
+		"action":   "delete_unused_volumes",
+		"serverId": serverID,
+	}), func(runCtx context.Context, task tasks.Task) error {
+		volumes, err := s.agent.DockerVolumes(runCtx, baseURL)
+		if err != nil {
+			_ = s.handleAgentError(runCtx, srv, err)
+			return err
+		}
+		deleted := []string{}
+		skippedInUse := 0
+		var failures []string
+		_ = s.tasks.Advance(runCtx, task.ID, "deleting", "Deleting unused volumes")
+		for _, volume := range volumes {
+			if volume.Name == "" {
+				continue
+			}
+			if volume.InUse {
+				skippedInUse++
+				continue
+			}
+			if err := s.agent.DockerVolumeDelete(runCtx, baseURL, volume.Name); err != nil {
+				failures = append(failures, volume.Name+": "+err.Error())
+				continue
+			}
+			deleted = append(deleted, volume.Name)
+		}
+		metadata := taskMetadataJSON(map[string]any{
+			"scanned":      len(volumes),
+			"skippedInUse": skippedInUse,
+			"deleted":      len(deleted),
+			"deletedItems": deleted,
+			"failures":     failures,
+		})
+		if len(failures) > 0 {
+			_, _ = s.tasks.UpsertStep(runCtx, task.ID, tasks.StepInput{Step: "delete_unused", Status: tasks.StatusFailed, Percentage: 100, MetadataJSON: metadata, Error: strings.Join(failures, "; ")})
+			return errors.New(strings.Join(failures, "; "))
+		}
+		_, _ = s.tasks.UpsertStep(runCtx, task.ID, tasks.StepInput{Step: "delete_unused", Status: tasks.StatusCompleted, Percentage: 100, MetadataJSON: metadata})
+		_ = s.tasks.AppendLog(runCtx, task.ID, "system", "Deleted "+strconv.Itoa(len(deleted))+" unused volume(s)")
+		return nil
 	})
 }
 
@@ -493,7 +606,11 @@ func (s *Service) UpgradeApplications(ctx context.Context, applicationIDs []stri
 	return task, nil
 }
 
-func (s *Service) enqueue(ctx context.Context, serverID, taskType, resourceType, resourceID string, run func(context.Context) error) (tasks.Task, error) {
+func (s *Service) enqueue(ctx context.Context, serverID, taskType, resourceType, resourceID string, run func(context.Context, tasks.Task) error) (tasks.Task, error) {
+	return s.enqueueWithMetadata(ctx, serverID, taskType, resourceType, resourceID, "{}", run)
+}
+
+func (s *Service) enqueueWithMetadata(ctx context.Context, serverID, taskType, resourceType, resourceID, metadataJSON string, run func(context.Context, tasks.Task) error) (tasks.Task, error) {
 	key := serverID + ":" + resourceID
 	if existing, ok, err := s.tasks.ExistingActive(ctx, taskType, resourceType, key); err != nil {
 		return tasks.Task{}, err
@@ -502,7 +619,7 @@ func (s *Service) enqueue(ctx context.Context, serverID, taskType, resourceType,
 	}
 	task, err := s.tasks.Create(ctx, tasks.CreateInput{
 		Type: taskType, ServerID: serverID, ResourceType: resourceType, ResourceID: key,
-		TriggerType: "user", Summary: taskType,
+		TriggerType: "user", MetadataJSON: metadataJSON, Summary: taskType,
 	})
 	if err != nil {
 		return tasks.Task{}, err
@@ -515,7 +632,9 @@ func (s *Service) enqueue(ctx context.Context, serverID, taskType, resourceType,
 func (s *Service) Execute(ctx context.Context, serverID string, run func(context.Context) error) error {
 	result := make(chan error, 1)
 	select {
-	case s.queue(serverID).jobs <- queueJob{run: run, result: result}:
+	case s.queue(serverID).jobs <- queueJob{run: func(runCtx context.Context, task tasks.Task) error {
+		return run(runCtx)
+	}, result: result}:
 	case <-ctx.Done():
 		return ctx.Err()
 	}
@@ -543,7 +662,7 @@ func (s *Service) runQueue(q *serverQueue) {
 	for job := range q.jobs {
 		ctx := context.Background()
 		if job.task.ID == "" {
-			err := job.run(ctx)
+			err := job.run(ctx, tasks.Task{})
 			if job.result != nil {
 				job.result <- err
 			}
@@ -553,7 +672,7 @@ func (s *Service) runQueue(q *serverQueue) {
 			continue
 		}
 		_ = s.tasks.Advance(ctx, job.task.ID, "running", "")
-		err := job.run(ctx)
+		err := job.run(ctx, job.task)
 		if err != nil {
 			_ = s.tasks.Fail(ctx, job.task.ID, err)
 		} else {
@@ -739,6 +858,16 @@ func firstDigest(digests []string) string {
 	return ""
 }
 
+func imageReferenceLabel(image agent.DockerImage) string {
+	if reference := firstTaggedReference(image.RepoTags); reference != "" {
+		return reference
+	}
+	if image.ID != "" {
+		return image.ID
+	}
+	return "unknown image"
+}
+
 func sortedKeys(values map[string]struct{}) []string {
 	out := make([]string, 0, len(values))
 	for value := range values {
@@ -779,6 +908,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func taskMetadataJSON(value map[string]any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func (s *Service) markRefreshing(serverID string) bool {

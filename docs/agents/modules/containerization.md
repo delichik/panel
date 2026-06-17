@@ -18,9 +18,9 @@
 “容器化”一级菜单包含应用、容器、镜像、网络和卷。容器、镜像、网络、卷使用左侧服务器选择器和右侧内部滚动列表。
 
 - 容器支持查询、启动、停止、重启、删除。
-- 镜像支持查询、拉取、删除、刷新更新状态、升级选中 Application 和全部升级。
+- 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
 - 网络只读。
-- 卷支持查询和删除未使用卷，必须展示使用状态。
+- 卷支持查询、单个删除和批量删除未使用卷，必须展示使用状态；批量删除执行时需重新查询使用状态，只删除执行瞬间仍未使用的卷。
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
@@ -42,6 +42,7 @@ Application 新部署容器只写入：
 - 普通容器操作和 Application 部署、停止、重启共享该队列。
 - 相同任务类型、服务器和资源的活跃请求复用现有任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
+- 镜像和卷的“删除未使用”是 Panel 侧批量任务，通过现有 Agent 单项删除接口逐项执行；任务 metadata 记录动作和服务器，`delete_unused` 步骤 metadata 记录扫描数量、跳过数量、删除数量、删除对象和失败对象。
 - scheduler 每 5 秒运行容器监控。只有已经观察到新托管 Label 并写入 `application_reconcile_states` 的实例会持续协调，避免旧 Label 自动迁移。
 - 监控发现容器缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 

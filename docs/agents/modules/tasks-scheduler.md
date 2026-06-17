@@ -26,7 +26,7 @@
 
 ## 数据与行为约定
 
-- 任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。
+- 任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。任务级额外数据写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
 - 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移并同步前端。
 - 任务中心筛选控件清空时可能产生 `null`；前端任务 API 应统一归一化空值和空白字符串，不发送空筛选参数。
 - 任务中心类型筛选默认使用“常用类型”，排除所有 `trigger_type=scheduler` 的定时任务，并隐藏内部高频的 `server_connectivity_test` 和 `metrics_collect`。

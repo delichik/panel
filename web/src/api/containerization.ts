@@ -92,6 +92,9 @@ export const containerizationApi = {
   deleteImage(serverId: string, imageId: string) {
     return apiClient.delete<TaskCreatedDto>(`/servers/${serverId}/images/${encodeURIComponent(imageId)}`);
   },
+  deleteUnusedImages(serverId: string) {
+    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/images/delete-unused`);
+  },
   upgradeSelected(applicationIds: string[]) {
     return apiClient.post<TaskCreatedDto>('/images/upgrade-selected', { applicationIds });
   },
@@ -106,5 +109,8 @@ export const containerizationApi = {
   },
   deleteVolume(serverId: string, name: string) {
     return apiClient.delete<TaskCreatedDto>(`/servers/${serverId}/volumes/${encodeURIComponent(name)}`);
+  },
+  deleteUnusedVolumes(serverId: string) {
+    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/volumes/delete-unused`);
   },
 };

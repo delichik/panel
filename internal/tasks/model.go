@@ -31,6 +31,7 @@ type Task struct {
 	TriggerResourceID   string     `json:"triggerResourceId,omitempty"`
 	TriggerTaskID       string     `json:"triggerTaskId,omitempty"`
 	TriggeredBy         string     `json:"triggeredBy,omitempty"`
+	MetadataJSON        string     `json:"metadataJson,omitempty"`
 	Status              string     `json:"status"`
 	Stage               string     `json:"stage"`
 	Percentage          *float64   `json:"percentage"`
@@ -63,6 +64,7 @@ type CreateInput struct {
 	TriggerResourceID   string
 	TriggerTaskID       string
 	TriggeredBy         string
+	MetadataJSON        string
 	Summary             string
 	Status              string
 	RetryCount          int

@@ -13,12 +13,16 @@ const selected = ref<string[]>([]);
 const pullDialog = ref(false);
 const pullReference = ref('');
 const deleteTarget = ref<DockerImageDto | null>(null);
+const upgradeAllDialog = ref(false);
+const deleteUnusedDialog = ref(false);
+const confirmLoading = ref(false);
 const snackbar = ref(false);
 const message = ref('');
 const { servers, serverId, loadingServers } = useDockerServers(load);
 
 const items = computed(() => data.value?.items ?? []);
 const selectableApps = computed(() => [...new Set(items.value.filter(item => item.updateAvailable && item.upgradeable).flatMap(item => item.applicationIds))]);
+const unusedImages = computed(() => items.value.filter(item => !item.inUse));
 
 async function load() {
   if (!serverId.value) return;
@@ -55,8 +59,25 @@ async function upgradeSelected() {
 }
 
 async function upgradeAll() {
-  const result = await containerizationApi.upgradeAll();
-  notify(result.taskId);
+  confirmLoading.value = true;
+  try {
+    const result = await containerizationApi.upgradeAll();
+    upgradeAllDialog.value = false;
+    notify(result.taskId);
+  } finally {
+    confirmLoading.value = false;
+  }
+}
+
+async function deleteUnusedImages() {
+  confirmLoading.value = true;
+  try {
+    const result = await containerizationApi.deleteUnusedImages(serverId.value);
+    deleteUnusedDialog.value = false;
+    notify(result.taskId);
+  } finally {
+    confirmLoading.value = false;
+  }
 }
 
 function notify(taskId: string) {
@@ -78,7 +99,19 @@ function shortDigest(value?: string) {
         <v-btn size="small" variant="outlined" prepend-icon="mdi-download" @click="pullDialog = true">{{ t('containerization.pullImage') }}</v-btn>
         <v-btn size="small" variant="outlined" prepend-icon="mdi-refresh" :loading="data?.refreshing" @click="refresh">{{ t('common.refresh') }}</v-btn>
         <v-btn size="small" color="primary" variant="flat" :disabled="!selected.length" @click="upgradeSelected">{{ t('containerization.upgradeSelected') }}</v-btn>
-        <v-btn size="small" color="warning" variant="outlined" :disabled="!selectableApps.length" @click="upgradeAll">{{ t('containerization.upgradeAll') }}</v-btn>
+        <v-menu location="bottom end">
+          <template #activator="{ props }">
+            <v-btn v-bind="props" icon="mdi-dots-vertical" variant="text" size="small" :aria-label="t('common.more')" />
+          </template>
+          <v-list density="compact">
+            <v-list-item prepend-icon="mdi-update" :disabled="!selectableApps.length" @click="upgradeAllDialog = true">
+              <v-list-item-title>{{ t('containerization.upgradeAll') }}</v-list-item-title>
+            </v-list-item>
+            <v-list-item prepend-icon="mdi-delete-sweep" :disabled="!unusedImages.length" class="text-error" @click="deleteUnusedDialog = true">
+              <v-list-item-title>{{ t('containerization.deleteUnusedImages') }}</v-list-item-title>
+            </v-list-item>
+          </v-list>
+        </v-menu>
       </div>
     </div>
     <v-table>
@@ -102,6 +135,8 @@ function shortDigest(value?: string) {
     </v-table>
     <v-dialog v-model="pullDialog" width="520"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.pullImage') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body"><v-text-field v-model="pullReference" :label="t('containerization.imageReference')" variant="outlined" /></v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" @click="pullDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" :disabled="!pullReference.trim()" @click="pull">{{ t('containerization.pull') }}</v-btn></v-card-actions></v-card></v-dialog>
     <v-dialog :model-value="!!deleteTarget" width="440" @update:model-value="!$event && (deleteTarget = null)"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.deleteImage') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.deleteImageMessage', { name: deleteTarget?.reference || deleteTarget?.id }) }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" @click="deleteTarget = null">{{ t('common.cancel') }}</v-btn><v-btn color="error" variant="flat" @click="remove">{{ t('common.delete') }}</v-btn></v-card-actions></v-card></v-dialog>
+    <v-dialog v-model="upgradeAllDialog" width="440"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.upgradeAll') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.upgradeAllMessage') }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="confirmLoading" @click="upgradeAllDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" :loading="confirmLoading" @click="upgradeAll">{{ t('common.update') }}</v-btn></v-card-actions></v-card></v-dialog>
+    <v-dialog v-model="deleteUnusedDialog" width="440"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.deleteUnusedImages') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.deleteUnusedImagesMessage') }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="confirmLoading" @click="deleteUnusedDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="error" variant="flat" :loading="confirmLoading" @click="deleteUnusedImages">{{ t('common.delete') }}</v-btn></v-card-actions></v-card></v-dialog>
     <v-snackbar v-model="snackbar">{{ message }}</v-snackbar>
   </ResourcePage>
 </template>

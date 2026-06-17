@@ -96,6 +96,7 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInse
 		TriggerResourceID:   in.TriggerResourceID,
 		TriggerTaskID:       in.TriggerTaskID,
 		TriggeredBy:         in.TriggeredBy,
+		MetadataJSON:        firstNonEmpty(strings.TrimSpace(in.MetadataJSON), "{}"),
 		Status:              status,
 		Summary:             in.Summary,
 		RetryCount:          in.RetryCount,
@@ -127,8 +128,8 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInse
 	if beforeInsert != nil {
 		beforeInsert(t)
 	}
-	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,percentage,summary,retry_count,max_retries,next_run_at,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.Status, t.Stage, percentage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano), startedAt, finishedAt)
+	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,metadata_json,status,stage,percentage,summary,retry_count,max_retries,next_run_at,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.MetadataJSON, t.Status, t.Stage, percentage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano), startedAt, finishedAt)
 	return t, err
 }
 
@@ -595,6 +596,7 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 		TriggerResourceType: old.ResourceType,
 		TriggerResourceID:   old.ResourceID,
 		TriggerTaskID:       old.ID,
+		MetadataJSON:        old.MetadataJSON,
 		Summary:             "Retrying " + old.Summary,
 		MaxRetries:          old.MaxRetries,
 	})
@@ -602,14 +604,14 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 
 type scanner interface{ Scan(dest ...any) error }
 
-const taskColumns = `id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
+const taskColumns = `id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
 
 func scanTask(row scanner) (Task, error) {
 	var t Task
 	var pct sql.NullFloat64
 	var created string
 	var startedNS, finishedNS, nextRunNS sql.NullString
-	err := row.Scan(&t.ID, &t.OperationID, &t.Type, &t.ServerID, &t.NodeID, &t.ResourceType, &t.ResourceID, &t.TriggerType, &t.TriggerResourceType, &t.TriggerResourceID, &t.TriggerTaskID, &t.TriggeredBy, &t.Status, &t.Stage, &pct, &t.Summary, &t.Error, &t.RetryCount, &t.MaxRetries, &nextRunNS, &created, &startedNS, &finishedNS)
+	err := row.Scan(&t.ID, &t.OperationID, &t.Type, &t.ServerID, &t.NodeID, &t.ResourceType, &t.ResourceID, &t.TriggerType, &t.TriggerResourceType, &t.TriggerResourceID, &t.TriggerTaskID, &t.TriggeredBy, &t.MetadataJSON, &t.Status, &t.Stage, &pct, &t.Summary, &t.Error, &t.RetryCount, &t.MaxRetries, &nextRunNS, &created, &startedNS, &finishedNS)
 	if err != nil {
 		return Task{}, err
 	}

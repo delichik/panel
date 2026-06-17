@@ -440,6 +440,7 @@ func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 		TriggerResourceID:   "app_1",
 		TriggerTaskID:       "task_parent",
 		TriggeredBy:         "alice",
+		MetadataJSON:        `{"reason":"manual"}`,
 		Summary:             "deploy api",
 	})
 	if err != nil {
@@ -449,7 +450,7 @@ func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.OperationID != "op_1" || got.NodeID != "srv_1" || got.TriggerType != "user" || got.TriggeredBy != "alice" {
+	if got.OperationID != "op_1" || got.NodeID != "srv_1" || got.TriggerType != "user" || got.TriggeredBy != "alice" || got.MetadataJSON != `{"reason":"manual"}` {
 		t.Fatalf("task metadata was not persisted: %#v", got)
 	}
 	step, err := svc.UpsertStep(ctx, task.ID, StepInput{Step: "schedule", Status: StatusRunning, Percentage: 25, MetadataJSON: `{"node":"srv_1"}`})

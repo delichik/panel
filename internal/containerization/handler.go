@@ -59,6 +59,11 @@ func (h *Handler) DeleteImage(w http.ResponseWriter, r *http.Request) {
 	writeTask(w, task.ID, err)
 }
 
+func (h *Handler) DeleteUnusedImages(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.DeleteUnusedImages(r.Context(), serverID(r.URL.Path))
+	writeTask(w, task.ID, err)
+}
+
 func (h *Handler) UpgradeSelected(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ApplicationIDs []string `json:"applicationIds"`
@@ -88,6 +93,11 @@ func (h *Handler) Volumes(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteVolume(w http.ResponseWriter, r *http.Request) {
 	serverID, name := resourcePath(r.URL.Path, "volumes")
 	task, err := h.service.DeleteVolume(r.Context(), serverID, name)
+	writeTask(w, task.ID, err)
+}
+
+func (h *Handler) DeleteUnusedVolumes(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.DeleteUnusedVolumes(r.Context(), serverID(r.URL.Path))
 	writeTask(w, task.ID, err)
 }
 

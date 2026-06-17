@@ -721,6 +721,7 @@ export interface TaskDto {
   triggerResourceId?: string;
   triggerTaskId?: string;
   triggeredBy?: string;
+  metadataJson?: string;
   status: TaskStatus;
   stage: TaskStage;
   percentage: number | null;
