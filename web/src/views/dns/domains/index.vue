@@ -507,6 +507,8 @@ onMounted(async () => {
   display: grid;
   flex: 1 1 auto;
   gap: 8px;
+  align-content: start;
+  grid-auto-rows: max-content;
   min-height: 0;
   padding: 10px;
   overflow: auto;

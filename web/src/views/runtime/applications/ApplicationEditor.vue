@@ -479,7 +479,7 @@ async function save(deploy = false) {
 </script>
 
 <template>
-  <v-dialog :model-value="open" width="920" @update:model-value="emit('close')">
+  <v-dialog :model-value="open" width="min(1120px, calc(100vw - 32px))" @update:model-value="emit('close')">
     <v-card class="app-dialog-card editor-card">
       <v-card-title class="app-dialog-title">
         <span class="app-dialog-title-text">{{ title }}</span>
@@ -884,7 +884,7 @@ async function save(deploy = false) {
 }
 .mono, .mono-input :deep(textarea) { font-size: 0.82rem; }
 .hash-cell { max-width: 180px; }
-@media (max-width: 900px) {
+@media (max-width: 1180px) {
   .field-grid,
   .command-grid,
   .mount-row,

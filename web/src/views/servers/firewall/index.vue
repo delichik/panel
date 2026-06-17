@@ -342,7 +342,7 @@ onMounted(async () => {
 .firewall-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px; overflow: hidden; }
 .panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.firewall-panel-body { display: grid; gap: 0; min-height: 0; overflow: auto; }
+.firewall-panel-body { display: grid; gap: 0; align-content: start; grid-auto-rows: max-content; min-height: 0; overflow: auto; }
 .status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .status-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .status-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }

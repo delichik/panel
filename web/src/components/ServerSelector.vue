@@ -76,6 +76,8 @@ function getOneMinLoad(loadAverage: string | null | undefined): string {
 .server-cards {
   display: grid;
   gap: 8px;
+  align-content: start;
+  grid-auto-rows: max-content;
 }
 
 .server-item {

@@ -54,6 +54,9 @@
 - 桌面 sticky 列表必须在单列断点取消 sticky。
 - 分页位于卡片底部，不随列表体滚动。
 - 滚动容器必须有明确高度来源，避免无效的 `overflow-y: auto`。
+- 列表体使用 grid 或 flex 排列行时，行必须按内容高度排列，不能被 stretch 撑满剩余高度。
+- 当列表体同时具备 `flex: 1` / `min-height: 0` / `overflow: auto` 和 `display: grid` 时，必须显式设置 `align-content: start`，必要时加 `grid-auto-rows: max-content`。
+- 单条数据、少量数据和空状态都必须看起来像正常列表；不能让一条选择行占满整块列表面板。
 - 中大屏禁止通过增加整个工作区高度容纳长列表。
 - 进入窄屏单列布局后可取消内部固定高度并恢复页面自然滚动。
 

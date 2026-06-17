@@ -435,8 +435,10 @@ onBeforeUnmount(() => {
         closable-chips
         clearable
       />
-      <v-btn color="primary" variant="flat" prepend-icon="mdi-magnify" class="text-none" @click="searchTasks">{{ t('taskCenter.search') }}</v-btn>
-      <v-btn variant="outlined" prepend-icon="mdi-filter-remove" class="text-none" @click="clearFilters">{{ t('taskCenter.clear') }}</v-btn>
+      <div class="filter-actions">
+        <v-btn color="primary" variant="flat" prepend-icon="mdi-magnify" class="text-none" @click="searchTasks">{{ t('taskCenter.search') }}</v-btn>
+        <v-btn variant="outlined" prepend-icon="mdi-filter-remove" class="text-none" @click="clearFilters">{{ t('taskCenter.clear') }}</v-btn>
+      </div>
     </v-card>
 
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
@@ -662,10 +664,21 @@ onBeforeUnmount(() => {
 
 .filter-bar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 300px) minmax(220px, 300px) auto auto;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 12px;
   align-items: center;
   padding: 14px;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.filter-actions .v-btn {
+  flex: 0 0 auto;
 }
 
 .task-workspace {
@@ -868,6 +881,15 @@ tr.selected {
 @media (max-width: 560px) {
   .selected-progress {
     grid-template-columns: 1fr;
+  }
+
+  .filter-actions {
+    justify-content: stretch;
+  }
+
+  .filter-actions .v-btn {
+    flex: 1 1 0;
+    min-width: 0;
   }
 
   .action-row .v-btn {
