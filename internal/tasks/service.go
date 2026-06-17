@@ -437,6 +437,14 @@ func (s *Service) HasRunningExecution(taskID string) bool {
 }
 
 func (s *Service) FinishExecution(taskID string) {
+	var status string
+	err := s.db.QueryRowContext(context.Background(), `SELECT status FROM tasks WHERE id=?`, taskID).Scan(&status)
+	if err != nil && err != sql.ErrNoRows {
+		return
+	}
+	if err == nil && status == StatusRunning {
+		return
+	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	s.unregisterRunningExecutionLocked(taskID)

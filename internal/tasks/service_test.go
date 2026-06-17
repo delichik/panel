@@ -344,7 +344,7 @@ func TestRunningExecutionLifecycleFollowsTaskStatus(t *testing.T) {
 	}
 }
 
-func TestFinishedExecutionIsFailedIfDatabaseStillSaysRunning(t *testing.T) {
+func TestFinishExecutionKeepsRunningDatabaseTaskTracked(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
 	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"})
@@ -356,19 +356,43 @@ func TestFinishedExecutionIsFailedIfDatabaseStillSaysRunning(t *testing.T) {
 	}
 
 	svc.FinishExecution(task.ID)
+	if !svc.HasRunningExecution(task.ID) {
+		t.Fatal("running database task should keep its live execution")
+	}
 	failed, err := svc.FailRunningWithoutExecution(ctx, time.Now().UTC())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if failed != 1 {
-		t.Fatalf("expected ended execution to be detected, got %d failed tasks", failed)
+	if failed != 0 {
+		t.Fatalf("expected tracked running task to remain active, got %d failed tasks", failed)
 	}
 	got, err := svc.Get(ctx, task.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusFailed || !strings.Contains(got.Error, "no active execution") {
-		t.Fatalf("expected task without live execution to fail, got %#v", got)
+	if got.Status != StatusRunning {
+		t.Fatalf("expected task to remain running, got %#v", got)
+	}
+}
+
+func TestFinishExecutionClearsNonRunningDatabaseTask(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET status=? WHERE id=?`, StatusFailed, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	svc.FinishExecution(task.ID)
+
+	if svc.HasRunningExecution(task.ID) {
+		t.Fatal("non-running database task should clear its live execution")
 	}
 }
 
