@@ -125,7 +125,7 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		case status >= http.StatusBadRequest:
 			L().Warn("http request completed", fields...)
 		default:
-			L().Info("http request completed", fields...)
+			L().Debug("http request completed", fields...)
 		}
 	})
 }
