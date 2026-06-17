@@ -3,9 +3,17 @@ package certs
 import "context"
 
 type Request struct {
-	Domain  string
-	Domains []string
-	Email   string
+	Domain   string
+	Domains  []string
+	Email    string
+	Progress func(context.Context, ACMEProgress)
+}
+
+type ACMEProgress struct {
+	Stage    string
+	Domain   string
+	Message  string
+	Metadata map[string]any
 }
 
 type Bundle struct {

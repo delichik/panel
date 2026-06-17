@@ -188,7 +188,7 @@ func (s *Service) RunIssueTask(ctx context.Context, task tasks.Task) error {
 	if err := s.tasks.Advance(ctx, task.ID, "running", "Running ACME DNS-01 challenge"); err != nil {
 		return err
 	}
-	if err := s.issueIntoCertificate(ctx, cert); err != nil {
+	if err := s.issueIntoCertificate(ctx, cert, task.ID); err != nil {
 		_ = s.updateStatus(ctx, cert.ID, StatusFailed, err.Error())
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return err
@@ -204,7 +204,7 @@ func (s *Service) RunIssueTask(ctx context.Context, task tasks.Task) error {
 	return s.tasks.Complete(ctx, task.ID, "Issued certificate for "+cert.Domain)
 }
 
-func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate) error {
+func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate, taskID string) error {
 	resolved, err := s.resolveDomain(ctx, cert.DomainID)
 	if err != nil {
 		return err
@@ -213,7 +213,7 @@ func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate) er
 	if err != nil {
 		return err
 	}
-	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains})
+	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains, Progress: s.acmeProgress(taskID)})
 	if err != nil {
 		return err
 	}
@@ -284,7 +284,7 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 		_ = s.failRenewalTask(ctx, taskID, err)
 		return err
 	}
-	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains})
+	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains, Progress: s.acmeProgress(taskID)})
 	if err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
 		_ = s.failRenewalTask(ctx, taskID, err)
@@ -682,6 +682,63 @@ func (s *Service) failRenewalTask(ctx context.Context, taskID string, err error)
 	return s.tasks.Fail(ctx, taskID, err)
 }
 
+func (s *Service) acmeProgress(taskID string) func(context.Context, ACMEProgress) {
+	if s.tasks == nil || taskID == "" {
+		return nil
+	}
+	return func(ctx context.Context, event ACMEProgress) {
+		if event.Stage == "" {
+			event.Stage = "running"
+		}
+		message := event.Message
+		if event.Domain != "" {
+			message = event.Domain + ": " + message
+		}
+		_ = s.tasks.Advance(ctx, taskID, event.Stage, message)
+		_, _ = s.tasks.UpsertStep(ctx, taskID, tasks.StepInput{
+			Step:         event.Stage,
+			Status:       tasks.StatusRunning,
+			Percentage:   acmeStagePercentage(event.Stage),
+			MetadataJSON: acmeProgressMetadata(event),
+		})
+	}
+}
+
+func acmeStagePercentage(stage string) float64 {
+	switch stage {
+	case "acme_account":
+		return 15
+	case "acme_order":
+		return 30
+	case "acme_authorization":
+		return 55
+	case "acme_dns_challenge":
+		return 65
+	case "acme_dns_cleanup":
+		return 75
+	case "acme_finalize":
+		return 90
+	default:
+		return 50
+	}
+}
+
+func acmeProgressMetadata(event ACMEProgress) string {
+	value := map[string]any{
+		"stage":   event.Stage,
+		"domain":  event.Domain,
+		"message": event.Message,
+	}
+	for key, item := range event.Metadata {
+		value[key] = item
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
 func (s *Service) recordTask(ctx context.Context, taskType string, cert Certificate, status string, summary string) (string, error) {
 	if s.tasks == nil {
 		return "", nil
@@ -691,12 +748,26 @@ func (s *Service) recordTask(ctx context.Context, taskType string, cert Certific
 		ResourceType: "certificate",
 		ResourceID:   cert.ID,
 		Status:       status,
+		MetadataJSON: certTaskMetadataJSON(cert),
 		Summary:      summary,
 	})
 	if err != nil {
 		return "", err
 	}
 	return task.ID, nil
+}
+
+func certTaskMetadataJSON(cert Certificate) string {
+	data, err := json.Marshal(map[string]any{
+		"certificateId": cert.ID,
+		"domain":        cert.Domain,
+		"domains":       cert.Domains,
+		"issuer":        cert.Issuer,
+	})
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
 }
 
 func (s *Service) refreshApplications(ctx context.Context) error {

@@ -67,18 +67,22 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 	if p.accountEmail != "" {
 		account.Contact = []string{"mailto:" + p.accountEmail}
 	}
+	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_account", Message: "Registering ACME account"})
 	if _, err := p.client.Register(ctx, account, acme.AcceptTOS); err != nil {
 		return Bundle{}, panelerr.BadGateway("acme_register_failed", "ACME account registration failed: "+err.Error())
 	}
+	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_account", Message: "ACME account is ready"})
 
 	identifiers := make([]acme.AuthzID, 0, len(domains))
 	for _, domain := range domains {
 		identifiers = append(identifiers, acme.AuthzID{Type: "dns", Value: domain})
 	}
+	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_order", Message: "Creating ACME order", Metadata: map[string]any{"domains": domains}})
 	order, err := p.client.AuthorizeOrder(ctx, identifiers)
 	if err != nil {
 		return Bundle{}, panelerr.BadGateway("acme_order_failed", "ACME order failed: "+err.Error())
 	}
+	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_order", Message: "ACME order created", Metadata: map[string]any{"authorizationCount": len(order.AuthzURLs)}})
 
 	cleanups := []func(){}
 	defer func() {
@@ -87,10 +91,13 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 		}
 	}()
 	for _, authzURL := range order.AuthzURLs {
+		emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_authorization", Message: "Loading ACME authorization"})
 		authz, err := p.client.GetAuthorization(ctx, authzURL)
 		if err != nil {
 			return Bundle{}, panelerr.BadGateway("acme_authorization_failed", "ACME authorization failed: "+err.Error())
 		}
+		domain := authz.Identifier.Value
+		emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_authorization", Domain: domain, Message: "ACME authorization status: " + authz.Status})
 		if authz.Status == acme.StatusValid {
 			continue
 		}
@@ -102,25 +109,33 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 		if err != nil {
 			return Bundle{}, panelerr.BadGateway("acme_dns_challenge_failed", "ACME DNS-01 challenge setup failed: "+err.Error())
 		}
-		domain := authz.Identifier.Value
+		emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_dns_challenge", Domain: domain, Message: "Creating DNS-01 challenge record"})
 		if err := p.dns.Present(ctx, domain, challenge.Token, value); err != nil {
 			return Bundle{}, err
 		}
 		cleanups = append(cleanups, func(domain, token, value string) func() {
-			return func() { _ = p.dns.CleanUp(context.Background(), domain, token, value) }
+			return func() {
+				emitACMEProgress(context.Background(), req, ACMEProgress{Stage: "acme_dns_cleanup", Domain: domain, Message: "Cleaning DNS-01 challenge record"})
+				_ = p.dns.CleanUp(context.Background(), domain, token, value)
+			}
 		}(domain, challenge.Token, value))
 		if p.propagationDelay > 0 {
+			emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_dns_challenge", Domain: domain, Message: "Waiting for DNS propagation", Metadata: map[string]any{"delaySeconds": int(p.propagationDelay.Seconds())}})
 			if err := sleepContext(ctx, p.propagationDelay); err != nil {
 				return Bundle{}, err
 			}
 		}
+		emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_authorization", Domain: domain, Message: "Submitting DNS-01 challenge"})
 		if _, err := p.client.Accept(ctx, challenge); err != nil {
 			return Bundle{}, panelerr.BadGateway("acme_challenge_failed", "ACME challenge failed: "+err.Error())
 		}
+		emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_authorization", Domain: domain, Message: "Waiting for ACME authorization"})
 		if _, err := p.client.WaitAuthorization(ctx, authz.URI); err != nil {
 			return Bundle{}, panelerr.BadGateway("acme_authorization_failed", "ACME authorization failed: "+err.Error())
 		}
+		emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_authorization", Domain: domain, Message: "ACME authorization is valid"})
 	}
+	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_finalize", Message: "Generating certificate request"})
 	certKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return Bundle{}, err
@@ -129,6 +144,7 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, err
 	}
+	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_finalize", Message: "Finalizing ACME order"})
 	certsDER, _, err := p.client.CreateOrderCert(ctx, order.FinalizeURL, csrDER, true)
 	if err != nil {
 		return Bundle{}, panelerr.BadGateway("acme_finalize_failed", "ACME certificate finalization failed: "+err.Error())
@@ -141,7 +157,14 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 	if err != nil {
 		return Bundle{}, err
 	}
+	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_finalize", Message: "ACME certificate bundle received", Metadata: map[string]any{"certificateCount": len(certsDER)}})
 	return Bundle{CertificatePEM: certPEM, CAChainPEM: chainPEM, PrivateKeyPEM: keyPEM}, nil
+}
+
+func emitACMEProgress(ctx context.Context, req Request, event ACMEProgress) {
+	if req.Progress != nil {
+		req.Progress(ctx, event)
+	}
 }
 
 func dnsChallenge(challenges []*acme.Challenge) *acme.Challenge {

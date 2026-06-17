@@ -235,6 +235,27 @@ func TestRenewFailureRecordsLastErrorAndTask(t *testing.T) {
 	if len(tasksResult.Items) != 1 || !strings.Contains(tasksResult.Items[0].Error, "renew failed") {
 		t.Fatalf("expected failed renewal task, got %#v", tasksResult.Items)
 	}
+	steps, err := svc.tasks.Steps(ctx, tasksResult.Items[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(steps) == 0 || steps[0].Step != "acme_order" {
+		t.Fatalf("expected ACME progress step, got %#v", steps)
+	}
+	logs, _, err := svc.tasks.Logs(ctx, tasksResult.Items[0].ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundLog := false
+	for _, log := range logs {
+		if strings.Contains(log.Line, "Creating fake ACME order") {
+			foundLog = true
+			break
+		}
+	}
+	if !foundLog {
+		t.Fatalf("expected ACME progress log, got %#v", logs)
+	}
 }
 
 func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
@@ -271,6 +292,9 @@ type fakeProvider struct {
 }
 
 func (f *fakeProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
+	if req.Progress != nil {
+		req.Progress(ctx, ACMEProgress{Stage: "acme_order", Message: "Creating fake ACME order", Metadata: map[string]any{"domains": req.Domains}})
+	}
 	if f.err != nil {
 		return Bundle{}, f.err
 	}
