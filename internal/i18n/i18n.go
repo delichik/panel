@@ -229,6 +229,12 @@ var (
 			"Key asset is still used by an application or reverse proxy": "该密钥资产仍被应用或反向代理使用",
 		},
 	}
+
+	prefixCodeTranslations = map[string]map[string]string{
+		LocaleSimplifiedChinese: {
+			"Application runtime operation failed: ": "应用运行时操作失败：",
+		},
+	}
 )
 
 func SupportedLocales() []string {
@@ -283,6 +289,13 @@ func TranslateLocale(locale, code, fallback string) string {
 	}
 	if exact := exactTranslations[normalized][fallback]; exact != "" {
 		return exact
+	}
+	if prefixTranslations := prefixCodeTranslations[normalized]; prefixTranslations != nil {
+		for prefix, translated := range prefixTranslations {
+			if strings.HasPrefix(fallback, prefix) {
+				return translated + strings.TrimPrefix(fallback, prefix)
+			}
+		}
 	}
 	if strings.HasSuffix(fallback, " not found") {
 		resource := strings.TrimSuffix(fallback, " not found")

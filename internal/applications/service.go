@@ -1011,7 +1011,7 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 	logs, err := s.runtimeClient.RuntimeLogs(ctx, baseURL, instance.ID, in.Tail)
 	if err != nil {
 		_ = s.handleAgentError(ctx, srv, err)
-		return LogResult{}, err
+		return LogResult{}, runtimeOperationError(err)
 	}
 	return LogResult{InstanceID: instance.ID, ContainerName: instance.ContainerName, Type: "combined", Logs: logs.Logs}, nil
 }
@@ -1251,7 +1251,7 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 		if err != nil {
 			_ = s.handleAgentError(ctx, target, err)
 			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
-			return err
+			return runtimeOperationError(err)
 		}
 		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
 			return err
@@ -1309,7 +1309,7 @@ func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string
 		if err != nil {
 			_ = s.handleAgentError(ctx, srv, err)
 			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, appruntime.StatusFailed, "", err.Error())
-			return err
+			return runtimeOperationError(err)
 		}
 		status := result.Status
 		if status == "purged" {
@@ -1348,7 +1348,7 @@ func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID str
 		if err != nil {
 			_ = s.handleAgentError(ctx, srv, err)
 			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
-			return err
+			return runtimeOperationError(err)
 		}
 		if err := s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
 			return err
@@ -1511,6 +1511,17 @@ func applicationSaveError(err error) error {
 		return panelerr.Validation("application_name_duplicate", "application name must be unique")
 	}
 	return err
+}
+
+func runtimeOperationError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var appErr *panelerr.Error
+	if errors.As(err, &appErr) {
+		return err
+	}
+	return panelerr.BadGateway("application_runtime_operation_failed", "Application runtime operation failed: "+err.Error())
 }
 
 func applicationSpecIssueError(issue appspec.Issue) error {

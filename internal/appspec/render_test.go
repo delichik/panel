@@ -149,3 +149,43 @@ func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
 		t.Fatalf("host mode should not render ports: %#v", runtimeSpec.Ports)
 	}
 }
+
+func TestRenderAnyTLSHostNetworkSpec(t *testing.T) {
+	spec, issues := DecodeYAML(`name: anytls
+image: jiasongji/anytls
+networkMode: host
+command:
+  - "/app/anytls-server"
+args:
+  - "-l"
+  - ":9443"
+  - "-p"
+  - "password"
+restart:
+  policy: "unless-stopped"
+`)
+	if len(issues) > 0 {
+		t.Fatalf("decode issues = %#v", issues)
+	}
+	runtimeSpec, issues := Render(RenderInput{
+		AppID:      "app-1",
+		Generation: 1,
+		SpecHash:   "hash-1",
+		Namespace:  "apps",
+		Region:     "global",
+		Datacenter: "dc1",
+		Spec:       spec,
+	})
+	if len(issues) > 0 {
+		t.Fatalf("render issues = %#v", issues)
+	}
+	if runtimeSpec.NetworkMode != "host" || len(runtimeSpec.Ports) != 0 {
+		t.Fatalf("host network render = mode %q ports %#v", runtimeSpec.NetworkMode, runtimeSpec.Ports)
+	}
+	if got := runtimeSpec.Command; len(got) != 1 || got[0] != "/app/anytls-server" {
+		t.Fatalf("command = %#v", got)
+	}
+	if got := runtimeSpec.Args; len(got) != 4 || got[1] != ":9443" {
+		t.Fatalf("args = %#v", got)
+	}
+}
