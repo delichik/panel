@@ -104,6 +104,7 @@ var (
 			"overview_card_server_id_duplicate":             "概览卡片服务器 ID 不能重复",
 			"task_type_required":                            "任务类型不能为空",
 			"task_step_required":                            "任务步骤不能为空",
+			"task_not_runnable":                             "任务已经结束，不能再次运行",
 			"task_run_now_unsupported":                      "该任务当前不支持立即运行",
 			"task_run_now_status_invalid":                   "只有排队、已调度或等待重试的任务可以立即运行",
 			"task_retry_unsupported":                        "该任务当前不支持从任务中心重试",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"path/filepath"
@@ -114,6 +115,89 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 	}
 	if got.LoadAverage != "0.42 0.30 0.20" {
 		t.Fatalf("expected Get to include load average, got %#v", got)
+	}
+}
+
+func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
+	svc, taskSvc, store := testServerService(t, nil)
+	svc.SetMetricsDB(store.MetricsDB())
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: connectivityTaskType, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Status: tasks.StatusRunning, Summary: "running"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queued, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: agentDeployTaskType, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Status: tasks.StatusQueued, Summary: "queued"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	retryable, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: "package_refresh", ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Status: tasks.StatusFailedRetryable, Summary: "retryable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !taskSvc.HasRunningExecution(running.ID) {
+		t.Fatal("expected running task execution to be registered")
+	}
+	if _, err := store.MetricsDB().Exec(`INSERT INTO metrics_snapshots(server_id,time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps,load_average) VALUES(?,?,?,?,?,?,?,?,?,?)`, srv.ID, time.Now().UTC().Format(time.RFC3339Nano), 0, 0, 0, 0, 0, 0, 0, "0.42"); err != nil {
+		t.Fatal(err)
+	}
+	targets, _ := json.Marshal([]string{srv.ID, "srv_other"})
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"app_1", "app", 1, "name: app\nimage: nginx\n", "{}", "{}", "selected", string(targets), "[]", 1, "job_1", "now", "now"); err != nil {
+		t.Fatal(err)
+	}
+	cards := `[{"id":"card_1","kind":"cpu","width":3,"height":2,"range":"1h","networkDirection":"both","serverIds":["` + srv.ID + `","srv_other"]}]`
+	if _, err := store.AppDB().Exec(`INSERT INTO overview_card_configurations(id,cards_json,updated_at) VALUES('default',?,'now')`, cards); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.Delete(context.Background(), srv.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Get(context.Background(), srv.ID); err == nil {
+		t.Fatal("expected server to be deleted")
+	}
+	for _, taskID := range []string{running.ID, queued.ID, retryable.ID} {
+		task, err := taskSvc.Get(context.Background(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status != tasks.StatusCancelled {
+			t.Fatalf("expected task %s to be cancelled, got %#v", taskID, task)
+		}
+		if err := taskSvc.Complete(context.Background(), taskID, "should not overwrite cancellation"); err != nil {
+			t.Fatal(err)
+		}
+		task, _ = taskSvc.Get(context.Background(), taskID)
+		if task.Status != tasks.StatusCancelled {
+			t.Fatalf("cancelled task %s was overwritten: %#v", taskID, task)
+		}
+	}
+	if taskSvc.HasRunningExecution(running.ID) {
+		t.Fatal("expected cancelled running task execution to be removed")
+	}
+	var metricCount int
+	if err := store.MetricsDB().QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id=?`, srv.ID).Scan(&metricCount); err != nil {
+		t.Fatal(err)
+	}
+	if metricCount != 0 {
+		t.Fatalf("expected metrics to be removed, got %d", metricCount)
+	}
+	var rawTargets string
+	if err := store.AppDB().QueryRow(`SELECT deployment_server_ids_json FROM applications WHERE id='app_1'`).Scan(&rawTargets); err != nil {
+		t.Fatal(err)
+	}
+	if rawTargets != `["srv_other"]` {
+		t.Fatalf("expected application target to be pruned, got %s", rawTargets)
+	}
+	var rawCards string
+	if err := store.AppDB().QueryRow(`SELECT cards_json FROM overview_card_configurations WHERE id='default'`).Scan(&rawCards); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(rawCards, srv.ID) || !strings.Contains(rawCards, "srv_other") {
+		t.Fatalf("expected overview card server IDs to be pruned, got %s", rawCards)
 	}
 }
 
@@ -725,10 +809,10 @@ func TestCheckConfiguredAgentsDeploysExpiringStoredAgentCertificate(t *testing.T
 	}
 }
 
-func TestCheckConfiguredAgentsDeploysUnavailableAgent(t *testing.T) {
+func TestCheckConfiguredAgentsDoesNotDeployUnavailableNetworkError(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
-	lastErr := `Get "https://127.0.0.1:9443/v1/health": tls: failed to verify certificate: x509: certificate has expired or is not yet valid`
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"unavailable","agent.last_error":"` + strings.ReplaceAll(lastErr, `"`, `\"`) + `","sys.architecture":"x86_64"}`
+	lastErr := `Get "https://127.0.0.1:9786/v1/health": dial tcp 127.0.0.1:9786: i/o timeout`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"unavailable","agent.last_error":"` + strings.ReplaceAll(lastErr, `"`, `\"`) + `","sys.architecture":"x86_64"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
@@ -738,15 +822,22 @@ func TestCheckConfiguredAgentsDeploysUnavailableAgent(t *testing.T) {
 	}
 	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
-	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+	svc.SetAgentClient(&serverFakeAgentClient{err: errString(lastErr)})
 
 	svc.CheckConfiguredAgents(context.Background())
 	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: "srv_agent", IncludeInternal: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
-		t.Fatalf("expected periodic check to deploy unavailable agent, got %#v", result.Items)
+	if result.Total != 0 {
+		t.Fatalf("expected unavailable network error not to deploy agent, got %#v", result.Items)
+	}
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agent.TraitStatus] != agent.StatusUnavailable || !strings.Contains(srv.Traits[agent.TraitLastError], "i/o timeout") {
+		t.Fatalf("expected unavailable network error to be recorded, got %#v", srv.Traits)
 	}
 }
 
@@ -1612,7 +1703,7 @@ func waitTaskTerminal(t *testing.T, taskSvc *tasks.Service, taskID string) tasks
 		if err != nil {
 			t.Fatal(err)
 		}
-		if task.Status == tasks.StatusCompleted || task.Status == tasks.StatusFailed || task.Status == tasks.StatusFailedRetryable || task.Status == tasks.StatusBlocked {
+		if task.Status == tasks.StatusCompleted || task.Status == tasks.StatusFailed || task.Status == tasks.StatusFailedRetryable || task.Status == tasks.StatusBlocked || task.Status == tasks.StatusCancelled {
 			return task
 		}
 		time.Sleep(20 * time.Millisecond)

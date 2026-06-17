@@ -33,6 +33,8 @@ type ListFilter struct {
 
 var defaultHiddenTaskTypes = []string{"server_connectivity_test", "metrics_collect"}
 
+var terminalStatuses = []string{StatusCompleted, StatusFailed, StatusBlocked, StatusCancelled}
+
 type ListResult struct {
 	Items    []Task `json:"items"`
 	Total    int    `json:"total"`
@@ -138,18 +140,29 @@ func (s *Service) Start(ctx context.Context, taskID string) error {
 	defer s.runningMu.Unlock()
 	s.registerRunningExecutionLocked(taskID)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=?`, StatusRunning, now, taskID)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusRunning, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		s.unregisterRunningExecutionLocked(taskID)
+		return err
 	}
-	return err
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		s.unregisterRunningExecutionLocked(taskID)
+		return panelerr.Conflict("task_not_runnable", "Task is already finished")
+	}
+	return nil
 }
 
 func (s *Service) Advance(ctx context.Context, taskID, stage, message string) error {
-	if _, err := s.db.ExecContext(ctx, `UPDATE tasks SET stage=? WHERE id=?`, stage, taskID); err != nil {
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET stage=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{stage, taskID}, stringArgs(terminalStatuses)...)...)
+	if err != nil {
 		return err
 	}
+	affected, _ := res.RowsAffected()
 	if message != "" {
+		if affected == 0 {
+			return nil
+		}
 		return s.AppendLog(ctx, taskID, "system", message)
 	}
 	return nil
@@ -166,9 +179,11 @@ func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=?`, StatusCompleted, "completed", summary, now, taskID)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusCompleted, "completed", summary, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
-		s.unregisterRunningExecutionLocked(taskID)
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			s.unregisterRunningExecutionLocked(taskID)
+		}
 	}
 	return err
 }
@@ -181,9 +196,11 @@ func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	_, updateErr := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=?`, StatusFailed, msg, now, taskID)
+	res, updateErr := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusFailed, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if updateErr == nil {
-		s.unregisterRunningExecutionLocked(taskID)
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			s.unregisterRunningExecutionLocked(taskID)
+		}
 	}
 	return updateErr
 }
@@ -192,6 +209,9 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 	task, err := s.Get(ctx, taskID)
 	if err != nil {
 		return err
+	}
+	if isTerminalStatus(task.Status) {
+		return nil
 	}
 	msg := Redact(cause.Error())
 	if task.MaxRetries > 0 && task.RetryCount >= task.MaxRetries {
@@ -204,10 +224,12 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	_, err = s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, retry_count=?, next_run_at=?, finished_at=NULL WHERE id=?`,
-		StatusFailedRetryable, msg, nextRetry, nextRun.Format(time.RFC3339Nano), taskID)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, retry_count=?, next_run_at=?, finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
+		append([]any{StatusFailedRetryable, msg, nextRetry, nextRun.Format(time.RFC3339Nano), taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
-		s.unregisterRunningExecutionLocked(taskID)
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			s.unregisterRunningExecutionLocked(taskID)
+		}
 	}
 	return err
 }
@@ -220,9 +242,11 @@ func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, next_run_at=NULL, finished_at=? WHERE id=?`, StatusBlocked, msg, now, taskID)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusBlocked, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
-		s.unregisterRunningExecutionLocked(taskID)
+		if affected, _ := res.RowsAffected(); affected > 0 {
+			s.unregisterRunningExecutionLocked(taskID)
+		}
 	}
 	return err
 }
@@ -284,6 +308,78 @@ func (s *Service) CountByServerStatuses(ctx context.Context, serverID string, st
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE server_id=? AND status IN (`+placeholders(len(statuses))+`)`, args...).Scan(&count)
 	return count, err
+}
+
+func (s *Service) CancelByServer(ctx context.Context, serverID, message string) (int, error) {
+	activeStatuses := []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}
+	args := append([]any{serverID}, stringArgs(activeStatuses)...)
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tasks WHERE server_id=? AND status IN (`+placeholders(len(activeStatuses))+`)`, args...)
+	if err != nil {
+		return 0, err
+	}
+	taskIDs := []string{}
+	for rows.Next() {
+		var taskID string
+		if err := rows.Scan(&taskID); err != nil {
+			_ = rows.Close()
+			return 0, err
+		}
+		taskIDs = append(taskIDs, taskID)
+	}
+	if err := rows.Close(); err != nil {
+		return 0, err
+	}
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	if len(taskIDs) == 0 {
+		return 0, nil
+	}
+	if strings.TrimSpace(message) == "" {
+		message = "Task cancelled because the server was removed"
+	}
+	finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	updateArgs := []any{StatusCancelled, "cancelled", Redact(message), finishedAt, serverID}
+	updateArgs = append(updateArgs, stringArgs(activeStatuses)...)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE server_id=? AND status IN (`+placeholders(len(activeStatuses))+`)`, updateArgs...)
+	if err != nil {
+		return 0, err
+	}
+	s.runningMu.Lock()
+	for _, taskID := range taskIDs {
+		if execution, ok := s.runningExecutions[taskID]; ok && execution.Cancel != nil {
+			execution.Cancel()
+		}
+		delete(s.runningExecutions, taskID)
+	}
+	s.runningMu.Unlock()
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, nil
+	}
+	return int(affected), nil
+}
+
+func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
+	if strings.TrimSpace(message) == "" {
+		message = "Task cancelled"
+	}
+	finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
+	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
+		append([]any{StatusCancelled, "cancelled", Redact(message), finishedAt, taskID}, stringArgs(terminalStatuses)...)...)
+	if err != nil {
+		return err
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return nil
+	}
+	s.runningMu.Lock()
+	if execution, ok := s.runningExecutions[taskID]; ok && execution.Cancel != nil {
+		execution.Cancel()
+	}
+	delete(s.runningExecutions, taskID)
+	s.runningMu.Unlock()
+	return nil
 }
 
 func (s *Service) SetTriggeredBy(ctx context.Context, taskID, triggeredBy string) error {
@@ -409,6 +505,23 @@ func cleanFilterValues(values ...string) []string {
 	return out
 }
 
+func stringArgs(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
+}
+
+func isTerminalStatus(status string) bool {
+	for _, terminal := range terminalStatuses {
+		if status == terminal {
+			return true
+		}
+	}
+	return false
+}
+
 func appendEqualOrIn(conditions *[]string, args *[]any, column string, values []string) {
 	if len(values) == 0 {
 		return
@@ -485,6 +598,15 @@ func (s *Service) HasRunningExecution(taskID string) bool {
 	return ok
 }
 
+func (s *Service) ExecutionContext(taskID string) context.Context {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	if execution, ok := s.runningExecutions[taskID]; ok && execution.Context != nil {
+		return execution.Context
+	}
+	return context.Background()
+}
+
 func (s *Service) FinishExecution(taskID string) {
 	var status string
 	err := s.db.QueryRowContext(context.Background(), `SELECT status FROM tasks WHERE id=?`, taskID).Scan(&status)
@@ -500,10 +622,11 @@ func (s *Service) FinishExecution(taskID string) {
 }
 
 func (s *Service) registerRunningExecutionLocked(taskID string) *RunningExecution {
-	execution := &RunningExecution{TaskID: taskID, StartedAt: time.Now().UTC()}
 	if existing, ok := s.runningExecutions[taskID]; ok {
 		return existing
 	}
+	ctx, cancel := context.WithCancel(context.Background())
+	execution := &RunningExecution{TaskID: taskID, StartedAt: time.Now().UTC(), Context: ctx, Cancel: cancel}
 	s.runningExecutions[taskID] = execution
 	return execution
 }

@@ -122,6 +122,9 @@ func (s *Service) RunAgentDeployTask(ctx context.Context, task tasks.Task) error
 	}
 	srv, err := s.Get(ctx, serverID)
 	if err != nil {
+		if isNotFoundError(err) && s.tasks != nil {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
 		return err
 	}
 	if task.Status != tasks.StatusRunning {
@@ -129,7 +132,7 @@ func (s *Service) RunAgentDeployTask(ctx context.Context, task tasks.Task) error
 			return err
 		}
 	}
-	go s.runDeployAgent(context.Background(), task.ID, srv)
+	go s.runDeployAgent(s.tasks.ExecutionContext(task.ID), task.ID, srv)
 	return nil
 }
 
@@ -320,24 +323,142 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 }
 
 func (s *Service) Delete(ctx context.Context, serverID string) error {
-	var running int
 	if s.tasks != nil {
-		count, err := s.tasks.CountByServerStatuses(ctx, serverID, tasks.StatusQueued, tasks.StatusRunning)
-		if err != nil {
+		if _, err := s.tasks.CancelByServer(ctx, serverID, "Task cancelled because the server was removed"); err != nil {
 			return err
 		}
-		running = count
 	}
-	if running > 0 {
-		return panelerr.Conflict("server_has_running_tasks", "Server has running tasks")
-	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM servers WHERE id=?`, serverID)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
+		return err
+	}
+	if err := s.removeServerFromApplicationTargets(ctx, tx, serverID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := s.removeServerFromOverviewCards(ctx, tx, serverID); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM servers WHERE id=?`, serverID)
+	if err != nil {
+		_ = tx.Rollback()
 		return err
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
+		_ = tx.Rollback()
 		return panelerr.NotFound("server")
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if s.metricsDB != nil {
+		if _, err := s.metricsDB.ExecContext(ctx, `DELETE FROM metrics_snapshots WHERE server_id=?`, serverID); err != nil {
+			return err
+		}
+	}
+	if s.tasks != nil {
+		if _, err := s.tasks.CancelByServer(ctx, serverID, "Task cancelled because the server was removed"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sql.Tx, serverID string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id,deployment_server_ids_json FROM applications WHERE deployment_server_ids_json<>''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type update struct {
+		id  string
+		raw string
+	}
+	updates := []update{}
+	for rows.Next() {
+		var appID, raw string
+		if err := rows.Scan(&appID, &raw); err != nil {
+			return err
+		}
+		var ids []string
+		if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+			continue
+		}
+		next, changed := removeString(ids, serverID)
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(next)
+		if err != nil {
+			return err
+		}
+		updates = append(updates, update{id: appID, raw: string(encoded)})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE applications SET deployment_server_ids_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) removeServerFromOverviewCards(ctx context.Context, tx *sql.Tx, serverID string) error {
+	rows, err := tx.QueryContext(ctx, `SELECT id,cards_json FROM overview_card_configurations WHERE cards_json<>''`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	type update struct {
+		id  string
+		raw string
+	}
+	updates := []update{}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			return err
+		}
+		var cards []map[string]any
+		if err := json.Unmarshal([]byte(raw), &cards); err != nil {
+			continue
+		}
+		changed := false
+		for _, card := range cards {
+			values, ok := card["serverIds"].([]any)
+			if !ok {
+				continue
+			}
+			next := make([]any, 0, len(values))
+			for _, value := range values {
+				if text, ok := value.(string); ok && text == serverID {
+					changed = true
+					continue
+				}
+				next = append(next, value)
+			}
+			card["serverIds"] = next
+		}
+		if !changed {
+			continue
+		}
+		encoded, err := json.Marshal(cards)
+		if err != nil {
+			return err
+		}
+		updates = append(updates, update{id: id, raw: string(encoded)})
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, item := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE overview_card_configurations SET cards_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339), item.id); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -437,10 +558,6 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
-		if srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
-			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
-			continue
-		}
 		if err := s.checkAgent(ctx, srv); err != nil {
 			if s.handleAgentCertificateTimeError(ctx, srv, err) {
 				if updated, getErr := s.Get(ctx, srv.ID); getErr == nil && agentStatusNeedsDeploy(updated) {
@@ -449,7 +566,6 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 				continue
 			}
 			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
-			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 			continue
 		}
 		updated, err := s.Get(ctx, srv.ID)
@@ -545,7 +661,7 @@ func (s *Service) EnableUFW(ctx context.Context, serverID string) (tasks.Task, e
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runEnableUFW(context.Background(), task.ID, srv, adapter)
+	go s.runEnableUFW(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -622,7 +738,7 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runInstallUFW(context.Background(), task.ID, srv, adapter)
+	go s.runInstallUFW(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -664,7 +780,7 @@ func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, err
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runRestart(context.Background(), task.ID, srv)
+	go s.runRestart(s.tasks.ExecutionContext(task.ID), task.ID, srv)
 	return task, nil
 }
 
@@ -819,6 +935,9 @@ func (s *Service) RunConnectivityTask(ctx context.Context, task tasks.Task) erro
 	}
 	srv, err := s.Get(ctx, serverID)
 	if err != nil {
+		if isNotFoundError(err) && s.tasks != nil {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
 		return err
 	}
 	s.startConnectivityTask(task, srv)
@@ -903,9 +1022,11 @@ func (s *Service) RunDueConnectivityTests(ctx context.Context) error {
 }
 
 func (s *Service) startConnectivityTask(task tasks.Task, srv Server) {
-	_ = s.tasks.Start(context.Background(), task.ID)
+	if err := s.tasks.Start(context.Background(), task.ID); err != nil {
+		return
+	}
 	go func() {
-		taskCtx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		taskCtx, cancel := context.WithTimeout(s.tasks.ExecutionContext(task.ID), 45*time.Second)
 		defer cancel()
 		s.runConnectivityTest(taskCtx, task, srv)
 	}()
@@ -914,7 +1035,12 @@ func (s *Service) startConnectivityTask(task tasks.Task, srv Server) {
 func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv Server) {
 	taskID := task.ID
 	defer s.tasks.FinishExecution(taskID)
-	_ = s.tasks.Start(ctx, taskID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	if err := s.tasks.Start(ctx, taskID); err != nil {
+		return
+	}
 	target := srv.Target()
 	_ = s.tasks.Advance(ctx, taskID, "connecting", "connecting to server")
 	osInfo, err := s.detectOS(ctx, srv, target)
@@ -1052,7 +1178,7 @@ func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now tim
 		}
 		return true, nil
 	}
-	if agentStatusNeedsDeploy(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
+	if agentStatusNeedsDeploy(srv) {
 		return true, nil
 	}
 	return false, nil
@@ -1457,7 +1583,7 @@ func (s *Service) recoverAgentForSystemDetection(ctx context.Context, srv Server
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
 	}
-	if agentStatusNeedsDeploy(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUnavailable {
+	if agentStatusNeedsDeploy(srv) {
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 	}
 }
@@ -1867,6 +1993,24 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func removeString(values []string, target string) ([]string, bool) {
+	out := make([]string, 0, len(values))
+	changed := false
+	for _, value := range values {
+		if value == target {
+			changed = true
+			continue
+		}
+		out = append(out, value)
+	}
+	return out, changed
+}
+
+func isNotFoundError(err error) bool {
+	var pe *panelerr.Error
+	return errors.As(err, &pe) && pe.Code == "not_found"
 }
 
 func (s *Service) agentBinaryPath(ctx context.Context, srv Server) (string, error) {

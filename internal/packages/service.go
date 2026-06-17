@@ -3,6 +3,7 @@ package packages
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"sync"
 	"time"
 
@@ -143,6 +144,9 @@ func (s *Service) RunRefreshTask(ctx context.Context, task tasks.Task) error {
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
 	srv, err := s.ensurePackageAllowed(ctx, serverID, false)
 	if err != nil {
+		if isNotFoundError(err) {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
 		return err
 	}
 	adapter, err := s.adapterFor(srv)
@@ -163,7 +167,7 @@ func (s *Service) startRefreshTask(ctx context.Context, task tasks.Task, srv ser
 		s.clearRefreshing(srv.ID)
 		return err
 	}
-	go s.runRefreshTask(context.Background(), task, srv, adapter)
+	go s.runRefreshTask(s.tasks.ExecutionContext(task.ID), task, srv, adapter)
 	return nil
 }
 
@@ -190,7 +194,7 @@ func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runUpgradeSelected(context.Background(), task.ID, srv, adapter, names)
+	go s.runUpgradeSelected(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter, names)
 	return task, nil
 }
 
@@ -214,7 +218,7 @@ func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runUpgradeAll(context.Background(), task.ID, srv, adapter)
+	go s.runUpgradeAll(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -246,6 +250,9 @@ func (s *Service) adapterFor(srv server.Server) (packageAdapter, error) {
 func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv server.Server, adapter packageAdapter) {
 	defer s.tasks.FinishExecution(task.ID)
 	defer s.clearRefreshing(srv.ID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	_ = s.tasks.Advance(ctx, task.ID, "running", "refreshing package updates")
 	updates, err := adapter.ListUpgradeable(ctx, s.exec, srv.Target())
 	if err != nil {
@@ -261,7 +268,12 @@ func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv serve
 
 func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter, names []string) {
 	defer s.tasks.FinishExecution(taskID)
-	_ = s.tasks.Start(ctx, taskID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	if err := s.tasks.Start(ctx, taskID); err != nil {
+		return
+	}
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading selected packages")
 	err := adapter.UpgradeSelected(ctx, s.exec, srv.Target(), names, taskLogSink{s.tasks, taskID})
 	if err != nil {
@@ -283,7 +295,12 @@ func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv ser
 
 func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter) {
 	defer s.tasks.FinishExecution(taskID)
-	_ = s.tasks.Start(ctx, taskID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	if err := s.tasks.Start(ctx, taskID); err != nil {
+		return
+	}
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading all packages")
 	err := adapter.UpgradeAll(ctx, s.exec, srv.Target(), taskLogSink{s.tasks, taskID})
 	if err != nil {
@@ -401,6 +418,11 @@ func (s *Service) hasRecentRefreshTask(ctx context.Context, serverID string, win
 		return false
 	}
 	return true
+}
+
+func isNotFoundError(err error) bool {
+	var pe *panelerr.Error
+	return errors.As(err, &pe) && pe.Code == "not_found"
 }
 
 func firstNonEmpty(values ...string) string {

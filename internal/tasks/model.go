@@ -1,6 +1,9 @@
 package tasks
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 const (
 	StatusQueued          = "queued"
@@ -16,6 +19,8 @@ const (
 type RunningExecution struct {
 	TaskID    string
 	StartedAt time.Time
+	Context   context.Context
+	Cancel    context.CancelFunc
 }
 
 type Task struct {

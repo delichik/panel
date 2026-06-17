@@ -479,7 +479,7 @@ func (s *Service) RefreshImages(ctx context.Context, serverID, triggerType, oper
 		s.clearRefreshing(serverID)
 		return tasks.Task{}, err
 	}
-	go s.runImageRefresh(task, serverID)
+	go s.runImageRefresh(s.tasks.ExecutionContext(task.ID), task, serverID)
 	return task, nil
 }
 
@@ -582,7 +582,7 @@ func (s *Service) MonitorApplications(ctx context.Context) error {
 			if err := s.tasks.Start(ctx, task.ID); err != nil {
 				continue
 			}
-			go s.runApplicationReconcile(task, app.ID)
+			go s.runApplicationReconcile(s.tasks.ExecutionContext(task.ID), task, app.ID)
 		}
 	}
 	return nil
@@ -705,13 +705,15 @@ func (s *Service) startSimpleResourceRefresh(ctx context.Context, serverID, task
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runSimpleResourceRefresh(task, serverID, completedSummary, refresh)
+	go s.runSimpleResourceRefresh(s.tasks.ExecutionContext(task.ID), task, serverID, completedSummary, refresh)
 	return task, nil
 }
 
-func (s *Service) runSimpleResourceRefresh(task tasks.Task, serverID, completedSummary string, refresh func(context.Context, string) error) {
-	ctx := context.Background()
+func (s *Service) runSimpleResourceRefresh(ctx context.Context, task tasks.Task, serverID, completedSummary string, refresh func(context.Context, string) error) {
 	defer s.tasks.FinishExecution(task.ID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
@@ -725,10 +727,12 @@ func (s *Service) runSimpleResourceRefresh(task tasks.Task, serverID, completedS
 	_ = s.tasks.Complete(ctx, task.ID, completedSummary)
 }
 
-func (s *Service) runImageRefresh(task tasks.Task, serverID string) {
-	ctx := context.Background()
+func (s *Service) runImageRefresh(ctx context.Context, task tasks.Task, serverID string) {
 	defer s.tasks.FinishExecution(task.ID)
 	defer s.clearRefreshing(serverID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	srv, baseURL, err := s.readyServer(ctx, serverID)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
@@ -798,9 +802,11 @@ func (s *Service) runApplicationUpdates(task tasks.Task, applicationIDs []string
 	_ = s.tasks.Complete(ctx, task.ID, "Application images updated")
 }
 
-func (s *Service) runApplicationReconcile(task tasks.Task, appID string) {
-	ctx := context.Background()
+func (s *Service) runApplicationReconcile(ctx context.Context, task tasks.Task, appID string) {
 	defer s.tasks.FinishExecution(task.ID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
 	if _, err := s.apps.Deploy(ctx, appID); err != nil {
 		_ = s.tasks.FailRetryable(ctx, task.ID, err)
 		return

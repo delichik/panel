@@ -46,9 +46,10 @@
 ## 数据与行为约定
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
+- 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
 - 新增服务器响应可携带 `initialTaskId` 指向首次信息采集任务；首次采集失败时必须标记任务失败并删除刚创建的服务器记录，让用户回到表单修正 SSH 信息。
-- 系统探测通过 SSH 或已启用的 agent 读取远端信息，并交给 `internal/linux/` 解析支持的 Debian/Ubuntu 版本；如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。agent 不兼容、异常或 mTLS server 证书过期/尚未生效时，Panel 会按受限自动部署策略排队修复，并返回当前 agent 错误；只有 `agent.status=undeployable` 才停止自动部署。
+- 系统探测通过 SSH 或已启用的 agent 读取远端信息，并交给 `internal/linux/` 解析支持的 Debian/Ubuntu 版本；如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。agent 不兼容或 mTLS server 证书过期/尚未生效时，Panel 会按受限自动部署策略排队修复，并返回当前 agent 错误；普通网络超时、连接拒绝、服务器失联或 Docker 不可用只记录为 unavailable，不得直接当成 agent 可重装问题；只有 `agent.status=undeployable` 才停止自动部署。
 - 系统探测写入 `sys.*` traits；网卡采集要求 `/sys/class/net/{name}/device` 存在，并过滤 Docker、veth、bridge、CNI、隧道和 overlay 等常见虚拟接口。
 - SSH 密码、私钥和私钥口令统一封装到 `credentials.secret_ciphertext`，并通过 `internal/secretstore` 加密；不得通过 API 响应或任务日志返回秘密内容。
 - 安装软件、日志化 sudo 命令、sudo 写文件和 UFW allow/delete/status 优先复用 `internal/remoteops/`。
@@ -61,19 +62,19 @@
 ## Panel Agent
 
 - `cmd/panel-agent` 是部署在目标服务器上的被动 HTTPS agent，使用 Panel 专用 agent CA 做 mTLS 双向认证；Panel 启动时在 `dataRoot/agent/tls` 生成或复用 agent CA 与 Panel client 证书。
-- Agent 状态机固定为四类：`compatible` 表示正常，只有该状态允许依赖 Agent 的系统探测、UFW 状态、指标、应用运行时和容器化操作；`incompatible` 表示版本、能力、Docker host、证书时间或端口等配置不兼容，系统定时检查必须自动创建或复用部署任务修复；`unavailable` 表示异常，包括连不上、健康检查失败或尚未部署，系统定时检查也必须自动创建或复用部署任务修复；`undeployable` 表示连续 2 次系统自动部署失败后的无法部署状态，系统定时检查不得继续部署，只保留手动重装入口，手动重装会清除自动部署停止标记。
+- Agent 状态机固定为四类：`compatible` 表示正常，只有该状态允许依赖 Agent 的系统探测、UFW 状态、指标、应用运行时和容器化操作；`incompatible` 表示版本、能力、Docker host、证书时间或端口等配置不兼容，系统定时检查必须自动创建或复用部署任务修复；`unavailable` 表示当前不可用，包括连不上、健康检查失败、Docker 不可用或尚未部署，其中尚未配置 agent URL 会自动部署，普通网络/远端不可达错误只记录状态并跳过依赖 agent 的工作，不得直接触发重装；`undeployable` 表示连续 2 次系统自动部署失败后的无法部署状态，系统定时检查不得继续部署，只保留手动重装入口，手动重装会清除自动部署停止标记。
 - Agent CA、Panel Agent 客户端证书和每台服务器已签发的 Agent 服务端证书作为“系统内置”资产展示，不写入用户 `key_assets`，不能删除、导入、导出或作为应用文件引用，只允许重置。每台服务器的 Agent 服务端证书是安装/重装任务同步到目标机 `/etc/panel-agent` 的部署产物；只有已记录证书指纹和有效期元数据的服务器证书会进入系统证书列表，重置单台服务器证书会复用该服务器的 Agent 部署任务。
 - 重置 Panel Agent 客户端证书时保留 Agent CA，并热加载所有服务共享的 Agent HTTP client；重置 Agent CA 时同时生成新的客户端证书、热加载 HTTP client，并为所有已配置服务器排队重部署 Agent；重置单台服务器证书复用该服务器的 Agent 部署任务。
 - Agent 部署成功后把服务端证书指纹和有效期写入服务器 traits，供服务器 Agent 状态、最后错误和部署任务排查使用；健康检查成功时也会从 TLS 握手中的远端服务端证书刷新这些元数据，旧服务器缺少该元数据时不必等到下一次重部署才补齐。
-- 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9786`。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent 的服务器视为 `unavailable` 并自动创建 `server_agent_deploy` 任务；已配置 agent 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits；agent 版本必须与当前 Panel 版本一致，否则视为不兼容并触发受限自动部署，连续系统自动部署失败达到上限后进入 `undeployable`。
+- 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9786`。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent URL 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits；agent 版本必须与当前 Panel 版本一致，否则视为不兼容并触发受限自动部署，连续系统自动部署失败达到上限后进入 `undeployable`。
 - Agent 健康检查必须返回 Docker 健康状态和 Docker host；Panel 要求 Docker 正常且 agent 报告的 Docker host 与服务器配置一致。
 - Application 运行时要求 agent 声明 `runtime-container-name` capability，确保状态、日志、停止和重启操作能使用 Panel 记录的容器名而不是按实例 ID 推导容器名。
 - Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、应用 runtime deploy/stop/restart/status/logs/持久化目录打包与恢复，以及 Docker 容器、容器日志、镜像、网络和卷资源 API。
 - 依赖 agent 的读取和运行时能力必须只在 `agent.status=compatible` 且 `agent.url` 存在时执行；agent 未部署、异常、不兼容、无法部署或客户端不可用时，当前操作或定时任务不得执行，也不得回退 SSH。例外是 agent 部署、重装、证书同步等恢复 agent 本身的任务。
 - Docker 资源查询和操作只走 agent Docker Engine API，不回退 SSH。
 - 启用 agent 后，读取类能力、UFW 状态、指标采集和应用运行时操作必须走 agent；软件包刷新/升级、UFW 写操作、服务器重启等写入型服务器维护仍走 SSH。UFW allow/delete 等 SSH 写操作完成后的状态确认仍使用 SSH，不依赖 agent 状态读取入口。
-- 新增服务器完成首次信息采集且确认免密 sudo 后，会按自动部署修复判断创建 `server_agent_deploy` 任务安装 agent；后续手动或周期连通性/信息采集任务只在 agent 未配置、不可用、不兼容、旧端口或证书需要修复时自动部署，`agent.status=compatible` 且配置正常时不得重装。
-- Panel 启动检查或周期检查发现服务器未配置 agent、`agent.status=unavailable` 或 `agent.status=incompatible` 时，必须自动创建或复用 `server_agent_deploy` 任务安装/修复 agent；仍使用旧默认端口 `9443`、版本不匹配、缺少能力、Docker host 不一致、证书过期/尚未生效/距过期不足 30 天，或健康检查因 mTLS server 证书时间错误失败时，也必须进入该修复流程。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent`，默认监听 `tcp/9786`，重启前必须停止 systemd 服务并清理残留 `panel-agent` 进程，写入后必须校验远端 `server.pem` 确实是新签发证书，启动失败必须输出 `systemctl status` 和 `journalctl -u panel-agent.service` 诊断，启动后必须校验 `tcp/9786` 实际吐出的服务端证书指纹匹配新证书；部署证书包的 `agent.url` 必须使用当前服务器 `host` 生成，不能复用历史 traits 中可能已经失效的旧地址；如果服务器 `host` 被修改，旧 Agent URL 和旧证书元数据必须失效并要求重部署。如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署、CA 重置、版本不兼容、异常恢复和服务器 host 变更触发的重装必须复用并立即启动该任务，不能让旧任务挡住证书同步。同一服务器在最近一次成功部署后，系统自动触发的 agent 部署失败达到 2 次后必须标记 `agent.status=undeployable` 并停止自动尝试；`undeployable` 状态不得由周期检查继续部署。
+- 新增服务器完成首次信息采集且确认免密 sudo 后，会按自动部署修复判断创建 `server_agent_deploy` 任务安装 agent；后续手动或周期连通性/信息采集任务只在 agent 未配置、不兼容、旧端口或证书需要修复时自动部署，`agent.status=compatible` 且配置正常时不得重装，普通 `unavailable` 网络/远端错误不得触发重装。
+- Panel 启动检查或周期检查发现服务器未配置 agent URL、`agent.status=incompatible`、旧默认端口 `9443`、版本不匹配、缺少能力、Docker host 不一致、证书过期/尚未生效/距过期不足 30 天，或健康检查因 mTLS server 证书时间错误失败时，必须自动创建或复用 `server_agent_deploy` 任务安装/修复 agent；单纯 `agent.status=unavailable`、网络超时、连接拒绝、服务器失联或 Docker 不可用不得触发自动重装。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent`，默认监听 `tcp/9786`，重启前必须停止 systemd 服务并清理残留 `panel-agent` 进程，写入后必须校验远端 `server.pem` 确实是新签发证书，启动失败必须输出 `systemctl status` 和 `journalctl -u panel-agent.service` 诊断，启动后必须校验 `tcp/9786` 实际吐出的服务端证书指纹匹配新证书；部署证书包的 `agent.url` 必须使用当前服务器 `host` 生成，不能复用历史 traits 中可能已经失效的旧地址；如果服务器 `host` 被修改，旧 Agent URL 和旧证书元数据必须失效并要求重部署。如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署、CA 重置、版本不兼容、证书修复和服务器 host 变更触发的重装必须复用并立即启动该任务，不能让旧任务挡住证书同步。同一服务器在最近一次成功部署后，系统自动触发的 agent 部署失败达到 2 次后必须标记 `agent.status=undeployable` 并停止自动尝试；`undeployable` 状态不得由周期检查继续部署。
 - `POST /api/v1/servers/{id}/agent/deploy` 是手动兜底入口，返回并启动 `server_agent_deploy` 任务；任务中心重试或立即运行也支持该任务类型。未安装时前端显示安装按钮，已安装但异常时显示重装按钮。服务器详情页只显示一条紧凑的服务器错误提示，优先展示 `agent.last_error`，不再在访问信息区重复渲染第二条 Agent 错误横幅。
 - agent 部署任务通过 SSH 上传独立 `panel-agent` 二进制到目标机，再以 `/usr/local/bin/panel-agent` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url` 并立即执行健康检查。
 - Panel 固定从 `/app/panel-agents/<goos>-<goarch>/panel-agent` 读取 agent bundle，并根据目标服务器 `sys.architecture` 选择 `linux-amd64` 或 `linux-arm64`；缺失架构信息时通过 SSH `uname -m` 探测。该位置不可通过配置或环境变量修改；发布镜像会把同版本 agent bundle 复制到 `/app/panel-agents`，部署任务每次直接读取对应文件并上传到目标机。
