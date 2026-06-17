@@ -16,11 +16,12 @@ import (
 
 type Store struct {
 	appDB     *sql.DB
+	taskDB    *sql.DB
 	metricsDB *sql.DB
 }
 
 func Open(cfg config.Config) (*Store, error) {
-	for _, p := range []string{cfg.AppDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
+	for _, p := range []string{cfg.AppDatabase, cfg.TaskDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
 		dir := p
 		if filepath.Ext(p) != "" {
 			dir = filepath.Dir(p)
@@ -33,14 +34,21 @@ func Open(cfg config.Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	metricsDB, err := sql.Open("sqlite", sqliteDSN(cfg.MetricsDatabase))
+	taskDB, err := sql.Open("sqlite", sqliteDSN(cfg.TaskDatabase))
 	if err != nil {
 		_ = appDB.Close()
 		return nil, err
 	}
+	metricsDB, err := sql.Open("sqlite", sqliteDSN(cfg.MetricsDatabase))
+	if err != nil {
+		_ = taskDB.Close()
+		_ = appDB.Close()
+		return nil, err
+	}
 	configureDB(appDB)
+	configureDB(taskDB)
 	configureDB(metricsDB)
-	s := &Store{appDB: appDB, metricsDB: metricsDB}
+	s := &Store{appDB: appDB, taskDB: taskDB, metricsDB: metricsDB}
 	if err := s.Migrate(context.Background()); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -51,24 +59,46 @@ func Open(cfg config.Config) (*Store, error) {
 func sqliteDSN(path string) string {
 	normalized := filepath.ToSlash(path)
 	if strings.HasPrefix(normalized, "file:") {
-		return normalized
+		return appendSQLitePragmas(normalized)
 	}
-	return "file:" + normalized + "?" + url.Values{
-		"_pragma": []string{
-			"busy_timeout(5000)",
-			"journal_mode(WAL)",
-			"foreign_keys(ON)",
-		},
-	}.Encode()
+	return appendSQLitePragmas("file:" + normalized)
+}
+
+func appendSQLitePragmas(dsn string) string {
+	base, rawQuery, hasQuery := strings.Cut(dsn, "?")
+	values, _ := url.ParseQuery(rawQuery)
+	ensureSQLitePragma(values, "busy_timeout", "busy_timeout(5000)")
+	ensureSQLitePragma(values, "journal_mode", "journal_mode(WAL)")
+	ensureSQLitePragma(values, "foreign_keys", "foreign_keys(ON)")
+	encoded := values.Encode()
+	if encoded == "" {
+		if hasQuery {
+			return base + "?"
+		}
+		return base
+	}
+	return base + "?" + encoded
+}
+
+func ensureSQLitePragma(values url.Values, name, value string) {
+	name = strings.ToLower(name)
+	for _, existing := range values["_pragma"] {
+		existing = strings.ToLower(strings.TrimSpace(existing))
+		if strings.HasPrefix(existing, name+"(") || strings.HasPrefix(existing, name+"=") {
+			return
+		}
+	}
+	values.Add("_pragma", value)
 }
 
 func configureDB(db *sql.DB) {
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	db.SetMaxOpenConns(4)
+	db.SetMaxIdleConns(2)
 	db.SetConnMaxLifetime(30 * time.Minute)
 }
 
 func (s *Store) AppDB() *sql.DB     { return s.appDB }
+func (s *Store) TaskDB() *sql.DB    { return s.taskDB }
 func (s *Store) MetricsDB() *sql.DB { return s.metricsDB }
 
 func (s *Store) Close() error {
@@ -78,6 +108,11 @@ func (s *Store) Close() error {
 	var err error
 	if s.appDB != nil {
 		err = s.appDB.Close()
+	}
+	if s.taskDB != nil {
+		if e := s.taskDB.Close(); err == nil {
+			err = e
+		}
 	}
 	if s.metricsDB != nil {
 		if e := s.metricsDB.Close(); err == nil {

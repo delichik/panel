@@ -19,6 +19,7 @@ type Config struct {
 	JWTSecret                   string     `json:"jwtSecret"`
 	DataRoot                    string     `json:"dataRoot"`
 	AppDatabase                 string     `json:"appDatabase"`
+	TaskDatabase                string     `json:"taskDatabase"`
 	MetricsDatabase             string     `json:"metricsDatabase"`
 	RemoteCommandTimeoutSeconds int        `json:"remoteCommandTimeoutSeconds"`
 	Certificates                CertConfig `json:"certificates"`
@@ -48,6 +49,7 @@ func Default() Config {
 		JWTSecret:                   "change-me-panel-jwt-secret",
 		DataRoot:                    "data",
 		AppDatabase:                 filepath.Join("data", "db", "app.db"),
+		TaskDatabase:                filepath.Join("data", "db", "tasks.db"),
 		MetricsDatabase:             filepath.Join("data", "db", "metrics.db"),
 		RemoteCommandTimeoutSeconds: 30,
 		Certificates: CertConfig{
@@ -93,6 +95,7 @@ func applyPathBase(cfg *Config, baseDir string) {
 	}
 	cfg.DataRoot = absolutizePath(baseDir, cfg.DataRoot)
 	cfg.AppDatabase = absolutizePath(baseDir, cfg.AppDatabase)
+	cfg.TaskDatabase = absolutizePath(baseDir, cfg.TaskDatabase)
 	cfg.MetricsDatabase = absolutizePath(baseDir, cfg.MetricsDatabase)
 }
 
@@ -125,6 +128,7 @@ func applyEnv(cfg *Config) {
 	setString("PANEL_LISTEN_ADDRESS", &cfg.ListenAddress)
 	setString("PANEL_DATA_ROOT", &cfg.DataRoot)
 	setString("PANEL_APP_DATABASE", &cfg.AppDatabase)
+	setString("PANEL_TASK_DATABASE", &cfg.TaskDatabase)
 	setString("PANEL_METRICS_DATABASE", &cfg.MetricsDatabase)
 	setString("PANEL_CERT_ACME_DIRECTORY_URL", &cfg.Certificates.ACMEDirectoryURL)
 }
@@ -142,11 +146,17 @@ func (c Config) Validate() error {
 	if len(c.JWTSecret) < 16 {
 		return errors.New("jwt secret must be at least 16 characters")
 	}
-	if c.DataRoot == "" || c.AppDatabase == "" || c.MetricsDatabase == "" {
+	if c.DataRoot == "" || c.AppDatabase == "" || c.TaskDatabase == "" || c.MetricsDatabase == "" {
 		return errors.New("data root and database paths are required")
 	}
 	if c.AppDatabase == c.MetricsDatabase {
 		return errors.New("app database and metrics database must be different")
+	}
+	if c.AppDatabase == c.TaskDatabase {
+		return errors.New("app database and task database must be different")
+	}
+	if c.TaskDatabase == c.MetricsDatabase {
+		return errors.New("task database and metrics database must be different")
 	}
 	if c.RemoteCommandTimeoutSeconds < 1 {
 		return errors.New("remote command timeout must be positive")

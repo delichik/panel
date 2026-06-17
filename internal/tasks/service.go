@@ -272,6 +272,55 @@ func (s *Service) ExistingActive(ctx context.Context, taskType, resourceType, re
 	return task, true, nil
 }
 
+func (s *Service) CountByServerStatuses(ctx context.Context, serverID string, statuses ...string) (int, error) {
+	statuses = cleanFilterValues(statuses...)
+	if len(statuses) == 0 {
+		return 0, nil
+	}
+	args := []any{serverID}
+	for _, status := range statuses {
+		args = append(args, status)
+	}
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE server_id=? AND status IN (`+placeholders(len(statuses))+`)`, args...).Scan(&count)
+	return count, err
+}
+
+func (s *Service) SetTriggeredBy(ctx context.Context, taskID, triggeredBy string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET triggered_by=? WHERE id=?`, triggeredBy, taskID)
+	return err
+}
+
+func (s *Service) CountFailuresSinceLastSuccess(ctx context.Context, taskType, resourceType, resourceID string, failureStatuses []string, excludeTriggeredBy string) (int, error) {
+	var lastSuccess sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM tasks WHERE type=? AND resource_type=? AND resource_id=? AND status=?`,
+		taskType, resourceType, resourceID, StatusCompleted).Scan(&lastSuccess); err != nil {
+		return 0, err
+	}
+	failureStatuses = cleanFilterValues(failureStatuses...)
+	if len(failureStatuses) == 0 {
+		return 0, nil
+	}
+	args := []any{taskType, resourceType, resourceID}
+	where := `type=? AND resource_type=? AND resource_id=? AND status IN (` + placeholders(len(failureStatuses)) + `)`
+	for _, status := range failureStatuses {
+		args = append(args, status)
+	}
+	if strings.TrimSpace(excludeTriggeredBy) != "" {
+		where += ` AND COALESCE(triggered_by,'') <> ?`
+		args = append(args, excludeTriggeredBy)
+	}
+	if lastSuccess.Valid && strings.TrimSpace(lastSuccess.String) != "" {
+		where += ` AND created_at > ?`
+		args = append(args, lastSuccess.String)
+	}
+	var failures int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE `+where, args...).Scan(&failures); err != nil {
+		return 0, err
+	}
+	return failures, nil
+}
+
 func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks WHERE id=?`, taskID)
 	task, err := scanTask(row)

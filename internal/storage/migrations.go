@@ -1,6 +1,9 @@
 package storage
 
-import "context"
+import (
+	"context"
+	"database/sql"
+)
 
 func (s *Store) Migrate(ctx context.Context) error {
 	app := []string{
@@ -79,32 +82,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			observed_at TEXT NOT NULL,
 			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS tasks (
-			id TEXT PRIMARY KEY,
-			operation_id TEXT NOT NULL DEFAULT '',
-			type TEXT NOT NULL,
-			server_id TEXT NOT NULL DEFAULT '',
-			node_id TEXT NOT NULL DEFAULT '',
-			resource_type TEXT NOT NULL DEFAULT '',
-			resource_id TEXT NOT NULL DEFAULT '',
-			trigger_type TEXT NOT NULL DEFAULT '',
-			trigger_resource_type TEXT NOT NULL DEFAULT '',
-			trigger_resource_id TEXT NOT NULL DEFAULT '',
-			trigger_task_id TEXT NOT NULL DEFAULT '',
-			triggered_by TEXT NOT NULL DEFAULT '',
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			status TEXT NOT NULL,
-			stage TEXT NOT NULL DEFAULT '',
-			percentage REAL,
-			summary TEXT NOT NULL DEFAULT '',
-			error TEXT NOT NULL DEFAULT '',
-			retry_count INTEGER NOT NULL DEFAULT 0,
-			max_retries INTEGER NOT NULL DEFAULT 0,
-			next_run_at TEXT,
-			created_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT
 		)`,
 		`CREATE TABLE IF NOT EXISTS applications (
 			id TEXT PRIMARY KEY,
@@ -256,27 +233,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_key_asset_exports_expires_at ON key_asset_exports(expires_at)`,
-		`CREATE TABLE IF NOT EXISTS task_steps (
-			id TEXT PRIMARY KEY,
-			task_id TEXT NOT NULL,
-			step TEXT NOT NULL,
-			status TEXT NOT NULL,
-			percentage REAL NOT NULL DEFAULT 0,
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			started_at TEXT,
-			finished_at TEXT,
-			error TEXT NOT NULL DEFAULT '',
-			UNIQUE(task_id, step),
-			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS task_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			task_id TEXT NOT NULL,
-			time TEXT NOT NULL,
-			stream TEXT NOT NULL,
-			line TEXT NOT NULL,
-			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
-		)`,
 		`CREATE TABLE IF NOT EXISTS overview_card_configurations (
 			id TEXT PRIMARY KEY CHECK(id = 'default'),
 			cards_json TEXT NOT NULL DEFAULT '[]',
@@ -306,7 +262,62 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := s.ensureAppColumns(ctx, "tasks", map[string]string{
+	task := []string{
+		`PRAGMA foreign_keys = ON`,
+		`CREATE TABLE IF NOT EXISTS tasks (
+			id TEXT PRIMARY KEY,
+			operation_id TEXT NOT NULL DEFAULT '',
+			type TEXT NOT NULL,
+			server_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
+			resource_type TEXT NOT NULL DEFAULT '',
+			resource_id TEXT NOT NULL DEFAULT '',
+			trigger_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_type TEXT NOT NULL DEFAULT '',
+			trigger_resource_id TEXT NOT NULL DEFAULT '',
+			trigger_task_id TEXT NOT NULL DEFAULT '',
+			triggered_by TEXT NOT NULL DEFAULT '',
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			status TEXT NOT NULL,
+			stage TEXT NOT NULL DEFAULT '',
+			percentage REAL,
+			summary TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			retry_count INTEGER NOT NULL DEFAULT 0,
+			max_retries INTEGER NOT NULL DEFAULT 0,
+			next_run_at TEXT,
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS task_steps (
+			id TEXT PRIMARY KEY,
+			task_id TEXT NOT NULL,
+			step TEXT NOT NULL,
+			status TEXT NOT NULL,
+			percentage REAL NOT NULL DEFAULT 0,
+			metadata_json TEXT NOT NULL DEFAULT '{}',
+			started_at TEXT,
+			finished_at TEXT,
+			error TEXT NOT NULL DEFAULT '',
+			UNIQUE(task_id, step),
+			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS task_logs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			task_id TEXT NOT NULL,
+			time TEXT NOT NULL,
+			stream TEXT NOT NULL,
+			line TEXT NOT NULL,
+			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
+		)`,
+	}
+	for _, stmt := range task {
+		if _, err := s.taskDB.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	if err := s.ensureTaskColumns(ctx, "tasks", map[string]string{
 		"operation_id":          "TEXT NOT NULL DEFAULT ''",
 		"node_id":               "TEXT NOT NULL DEFAULT ''",
 		"resource_type":         "TEXT NOT NULL DEFAULT ''",
@@ -466,7 +477,15 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 }
 
 func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[string]string) error {
-	rows, err := s.appDB.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	return ensureColumns(ctx, s.appDB, table, columns)
+}
+
+func (s *Store) ensureTaskColumns(ctx context.Context, table string, columns map[string]string) error {
+	return ensureColumns(ctx, s.taskDB, table, columns)
+}
+
+func ensureColumns(ctx context.Context, db *sql.DB, table string, columns map[string]string) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return err
 	}
@@ -489,7 +508,7 @@ func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[
 		if existing[name] {
 			continue
 		}
-		if _, err := s.appDB.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition); err != nil {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition); err != nil {
 			return err
 		}
 	}

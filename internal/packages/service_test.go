@@ -24,6 +24,7 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -36,7 +37,7 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	}
 	credSvc := credential.NewService(store.AppDB(), secrets)
 	cred, _ := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	srv, _ := serverSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
@@ -51,6 +52,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +66,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), nil, taskSvc)
 	svc.adapter = fakePackageAdapter{updates: []linux.PackageUpdate{{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2"}}}
 
@@ -78,7 +80,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	waitForPackageRefresh(t, svc, "srv")
 
 	var count int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
+	if err := store.TaskDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -109,6 +111,7 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -122,7 +125,7 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), nil, taskSvc)
 	svc.adapter = fakePackageAdapter{err: errors.New("apt failed")}
 
@@ -160,6 +163,7 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -174,7 +178,7 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &aptPackageExecutor{stdout: "Listing...\nopenssl/jammy-updates 3.0.2-0ubuntu1 amd64 [upgradable from: 3.0.1-0ubuntu1]\n"}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), exec, taskSvc)
 
 	result, err := svc.Refresh(context.Background(), "srv")
@@ -204,6 +208,7 @@ func TestReplaceUpdates(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)

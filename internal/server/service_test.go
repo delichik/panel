@@ -49,6 +49,7 @@ func TestCreateListServer(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -59,7 +60,7 @@ func TestCreateListServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	svc := NewService(store.AppDB(), nil, taskSvc)
 	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID, Traits: map[string]string{"custom.env": "prod"}})
 	if err != nil {
@@ -80,6 +81,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +90,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	svc := NewService(store.AppDB(), nil, taskSvc)
 	svc.SetMetricsDB(store.MetricsDB())
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
@@ -121,6 +123,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +135,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &connectivityFakeExec{}
 	svc := NewService(store.AppDB(), exec, taskSvc)
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
@@ -369,6 +372,7 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +384,7 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &ufwManageFakeExec{}
 	svc := NewService(store.AppDB(), exec, taskSvc)
 
@@ -411,6 +415,7 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +428,7 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active", Rules: []remoteops.UFWRuleStatus{{Number: 7, To: "9443/tcp", Action: "ALLOW IN", From: "Anywhere"}}}}
 	svc := NewService(store.AppDB(), exec, taskSvc)
@@ -447,6 +452,7 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -459,7 +465,7 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: false, Status: "not_installed"}}
 	svc := NewService(store.AppDB(), exec, taskSvc)
@@ -981,6 +987,7 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -994,7 +1001,7 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &ufwManageFakeExec{}
-	svc := NewService(store.AppDB(), exec, tasks.NewService(store.AppDB()))
+	svc := NewService(store.AppDB(), exec, tasks.NewService(store.TaskDB()))
 	certErr := x509.CertificateInvalidError{Reason: x509.Expired}
 	svc.SetAgentClient(&serverFakeAgentClient{err: certErr})
 
@@ -1525,6 +1532,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -1533,7 +1541,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	return NewService(store.AppDB(), exec, taskSvc), taskSvc, store
 }
 

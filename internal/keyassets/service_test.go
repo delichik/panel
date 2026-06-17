@@ -246,6 +246,7 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -254,7 +255,7 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	return NewService(store.AppDB(), cfg, secrets, taskSvc), store, func() { _ = store.Close() }
 }
 

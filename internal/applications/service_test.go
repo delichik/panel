@@ -441,6 +441,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -462,7 +463,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 			t.Fatal(err)
 		}
 	}
-	svc := NewService(store.AppDB(), runtime, tasks.NewService(store.AppDB()), Config{
+	svc := NewService(store.AppDB(), runtime, tasks.NewService(store.TaskDB()), Config{
 		Namespace:      "apps",
 		Region:         "global",
 		Datacenter:     "dc1",

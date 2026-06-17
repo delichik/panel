@@ -321,8 +321,12 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 
 func (s *Service) Delete(ctx context.Context, serverID string) error {
 	var running int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE server_id=? AND status IN ('queued','running')`, serverID).Scan(&running); err != nil {
-		return err
+	if s.tasks != nil {
+		count, err := s.tasks.CountByServerStatuses(ctx, serverID, tasks.StatusQueued, tasks.StatusRunning)
+		if err != nil {
+			return err
+		}
+		running = count
 	}
 	if running > 0 {
 		return panelerr.Conflict("server_has_running_tasks", "Server has running tasks")
@@ -986,7 +990,7 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		return tasks.Task{}, err
 	} else if ok {
 		if triggeredBy == "user" {
-			_, _ = s.db.ExecContext(ctx, `UPDATE tasks SET triggered_by=? WHERE id=?`, "user", existing.ID)
+			_ = s.tasks.SetTriggeredBy(ctx, existing.ID, "user")
 			existing.TriggeredBy = "user"
 		}
 		if run && existing.Status != tasks.StatusRunning {
@@ -1026,19 +1030,11 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 }
 
 func (s *Service) agentAutoDeployAllowed(ctx context.Context, serverID string) (bool, int, error) {
-	var lastSuccess sql.NullString
-	if err := s.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM tasks WHERE type=? AND resource_type=? AND resource_id=? AND status=?`,
-		agentDeployTaskType, connectivityResourceType, serverID, tasks.StatusCompleted).Scan(&lastSuccess); err != nil {
-		return false, 0, err
+	if s.tasks == nil {
+		return true, 0, nil
 	}
-	args := []any{agentDeployTaskType, connectivityResourceType, serverID, tasks.StatusFailed, tasks.StatusBlocked, tasks.StatusCancelled}
-	where := `type=? AND resource_type=? AND resource_id=? AND status IN (?,?,?) AND COALESCE(triggered_by,'') <> 'user'`
-	if lastSuccess.Valid && strings.TrimSpace(lastSuccess.String) != "" {
-		where += ` AND created_at > ?`
-		args = append(args, lastSuccess.String)
-	}
-	var failures int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE `+where, args...).Scan(&failures); err != nil {
+	failures, err := s.tasks.CountFailuresSinceLastSuccess(ctx, agentDeployTaskType, connectivityResourceType, serverID, []string{tasks.StatusFailed, tasks.StatusBlocked, tasks.StatusCancelled}, "user")
+	if err != nil {
 		return false, 0, err
 	}
 	return failures < agentAutoDeployMaxFailures, failures, nil

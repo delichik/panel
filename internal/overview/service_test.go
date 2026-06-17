@@ -174,6 +174,7 @@ func newCardTestService(t *testing.T) (*Service, func()) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -192,6 +193,7 @@ func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

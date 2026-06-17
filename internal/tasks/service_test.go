@@ -18,12 +18,13 @@ func newTestService(t *testing.T) *Service {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return NewService(store.AppDB())
+	return NewService(store.TaskDB())
 }
 
 func TestTaskLifecycleAndLogs(t *testing.T) {

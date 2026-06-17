@@ -19,6 +19,7 @@ func TestMigrateProviderCredentialsEncryptsLegacyTokenAndDropsProviderColumns(t 
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 
 	db, err := sql.Open("sqlite", cfg.AppDatabase)
 	if err != nil {

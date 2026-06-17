@@ -15,6 +15,9 @@ func TestDefaultConfigValidAndSplitDatabases(t *testing.T) {
 	if cfg.AppDatabase == cfg.MetricsDatabase {
 		t.Fatal("app and metrics databases must be separate")
 	}
+	if cfg.AppDatabase == cfg.TaskDatabase || cfg.TaskDatabase == cfg.MetricsDatabase {
+		t.Fatal("task database must be separate from app and metrics databases")
+	}
 }
 
 func TestConfigValidationRejectsWeakJWTSecret(t *testing.T) {

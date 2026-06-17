@@ -59,7 +59,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	credSvc := credential.NewService(store.AppDB(), secretStore)
 	if err := credSvc.EnsureLegacySecretsMigrated(context.Background()); err != nil {
 		_ = store.Close()

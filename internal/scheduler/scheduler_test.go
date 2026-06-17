@@ -37,6 +37,7 @@ func TestCollectMetricsCreatesTaskRecord(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -48,7 +49,7 @@ func TestCollectMetricsCreatesTaskRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	srv, err := serverSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
@@ -101,6 +102,7 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -112,7 +114,7 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	for _, name := range []string{"s1", "s2"} {
 		srv, err := serverSvc.Create(ctx, server.SaveRequest{Name: name, Host: "h-" + name, Port: 22, SSHUsername: "du", CredentialID: cred.ID})
@@ -167,7 +169,7 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	if aligned.Nanosecond() != 0 {
 		t.Fatalf("expected second-aligned timestamp, got %s", aligned)
 	}
-	taskRows, err := store.AppDB().Query(`SELECT operation_id FROM tasks WHERE type='metrics_collect' ORDER BY server_id`)
+	taskRows, err := store.TaskDB().Query(`SELECT operation_id FROM tasks WHERE type='metrics_collect' ORDER BY server_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,6 +196,7 @@ func TestRunDueMetricsCollectionSkipsServersWithoutReadyAgent(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -205,7 +208,7 @@ func TestRunDueMetricsCollectionSkipsServersWithoutReadyAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	srv, err := serverSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
@@ -247,6 +250,7 @@ func TestRunDueConnectivityTestsStartsQueuedTask(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -258,7 +262,7 @@ func TestRunDueConnectivityTestsStartsQueuedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	createServerSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	srv, err := createServerSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
@@ -309,6 +313,7 @@ func TestRunNowConnectivityTaskStartsProvidedTask(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -320,7 +325,7 @@ func TestRunNowConnectivityTaskStartsProvidedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	createServerSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	srv, err := createServerSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
@@ -356,6 +361,7 @@ func TestRunDuePackageRefreshTasksStartsQueuedTask(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -368,7 +374,7 @@ func TestRunDuePackageRefreshTasksStartsQueuedTask(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	task, err := taskSvc.Create(ctx, tasks.CreateInput{
 		Type:         "package_refresh",
 		ServerID:     "srv",
@@ -401,6 +407,7 @@ func TestRunScheduledPackageRefreshesSharesOperation(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -415,7 +422,7 @@ func TestRunScheduledPackageRefreshesSharesOperation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	settingsSvc, err := settings.NewService(store.AppDB(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -450,13 +457,14 @@ func TestExpireStaleQueuedWorkerTasksOnlyMarksOneShotWorkerTypes(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	ctx := context.Background()
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	workerTask, err := taskSvc.Create(ctx, tasks.CreateInput{Type: "server_ufw_install", Summary: "Installing firewall"})
 	if err != nil {
 		t.Fatal(err)
@@ -467,7 +475,7 @@ func TestExpireStaleQueuedWorkerTasksOnlyMarksOneShotWorkerTypes(t *testing.T) {
 	}
 	old := time.Now().UTC().Add(-30 * time.Minute).Format(time.RFC3339Nano)
 	for _, taskID := range []string{workerTask.ID, scheduledTask.ID} {
-		if _, err := store.AppDB().Exec(`UPDATE tasks SET created_at=? WHERE id=?`, old, taskID); err != nil {
+		if _, err := store.TaskDB().Exec(`UPDATE tasks SET created_at=? WHERE id=?`, old, taskID); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -497,18 +505,19 @@ func TestFailRunningTasksWithoutExecution(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
 	ctx := context.Background()
-	taskSvc := tasks.NewService(store.AppDB())
+	taskSvc := tasks.NewService(store.TaskDB())
 	task, err := taskSvc.Create(ctx, tasks.CreateInput{Type: "server_restart", Summary: "Restarting server"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`UPDATE tasks SET status='running' WHERE id=?`, task.ID); err != nil {
+	if _, err := store.TaskDB().Exec(`UPDATE tasks SET status='running' WHERE id=?`, task.ID); err != nil {
 		t.Fatal(err)
 	}
 	sched := &Scheduler{tasks: taskSvc}
