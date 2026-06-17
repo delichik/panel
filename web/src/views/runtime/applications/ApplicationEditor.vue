@@ -3,7 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
-import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ApplicationTemplateVariableDto, ServerDto } from '@/types/api';
+import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationPanelFileDto, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ApplicationTemplateVariableDto, ServerDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
 import { parseSpecYaml, toSpecYaml } from './appSpecYaml';
@@ -50,6 +50,7 @@ const error = ref('');
 const servers = ref<ServerDto[]>([]);
 const files = ref<EditorFile[]>([]);
 const templateVariables = ref<ApplicationTemplateVariableDto[]>([]);
+const panelFiles = ref<ApplicationPanelFileDto[]>([]);
 const templateTextarea = ref();
 const yamlTextarea = ref();
 const fileForm = reactive({
@@ -181,6 +182,22 @@ function addVariable() {
   variableRows.value.push({ key: '', value: '' });
 }
 
+function addMount(type: MountType = 'volume') {
+  specForm.mounts.push({ type, source: defaultMountSource(type), target: '/data', readOnly: false });
+}
+
+function defaultMountSource(type: MountType) {
+  if (type === 'host') return '/srv/app';
+  if (type === 'file') return files.value[0]?.path ?? 'config/app.conf';
+  if (type === 'panel_file') return panelFiles.value[0]?.source ?? '';
+  if (type === 'persistent') return '';
+  return `${specForm.name || 'app'}-data`;
+}
+
+function updateMountType(mount: MountForm) {
+  mount.source = defaultMountSource(mount.type);
+}
+
 function addProxyRule() {
   form.reverseProxy = [...(form.reverseProxy ?? []), { domain: '', targetPort: 80, paths: [{ path: '/', webSocket: false }] }];
 }
@@ -225,8 +242,10 @@ async function loadTemplateCatalog() {
   try {
     const catalog = await applicationsApi.templateCatalog();
     templateVariables.value = catalog.variables ?? [];
+    panelFiles.value = catalog.panelFiles ?? [];
   } catch {
     templateVariables.value = [];
+    panelFiles.value = [];
   }
 }
 
@@ -604,6 +623,60 @@ async function save(deploy = false) {
 
           </section>
 
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
+            <div v-for="(mount, index) in specForm.mounts" :key="index" class="repeat-row mount-row">
+              <v-select v-model="mount.type" :items="[
+                { title: t('applicationEditor.dockerVolume'), value: 'volume' },
+                { title: t('applicationEditor.hostPath'), value: 'host' },
+                { title: t('applicationEditor.appFile'), value: 'file' },
+                { title: t('applicationEditor.panelFile'), value: 'panel_file' },
+                { title: t('applicationEditor.persistent'), value: 'persistent' },
+              ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
+              <v-combobox
+                v-if="mount.type === 'file'"
+                v-model="mount.source"
+                :items="files.map(file => file.path)"
+                :label="t('applicationEditor.workspaceFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-select
+                v-else-if="mount.type === 'panel_file'"
+                v-model="mount.source"
+                :items="panelFiles"
+                item-value="source"
+                :item-title="item => `${item.name} / ${item.kind}`"
+                :label="t('applicationEditor.panelFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-text-field
+                v-else-if="mount.type === 'persistent'"
+                v-model="mount.source"
+                :label="t('applicationEditor.persistentSubpath')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
+              <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" density="compact" hide-details />
+              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.mounts, index)" />
+            </div>
+            <div class="mount-actions">
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-folder" class="text-none" @click="addMount('host')">{{ t('applicationEditor.hostPath') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-file" class="text-none" @click="addMount('file')">{{ t('applicationEditor.appFile') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-shield-key" class="text-none" @click="addMount('panel_file')">{{ t('applicationEditor.panelFile') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-database" class="text-none" @click="addMount('persistent')">{{ t('applicationEditor.persistent') }}</v-btn>
+            </div>
+          </section>
+
             </v-window-item>
 
             <v-window-item value="yaml" class="editor-yaml-pane">
@@ -788,6 +861,8 @@ async function save(deploy = false) {
 .ports-row { grid-template-columns: minmax(120px, 1fr) auto minmax(96px, 0.6fr) auto auto minmax(96px, 0.6fr) 40px; }
 .command-row { grid-template-columns: minmax(0, 1fr) 40px; }
 .env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
+.mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) auto 40px; }
+.mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .variable-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
 .proxy-rule { border: 1px solid var(--lp-border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
 .network-actions,
@@ -812,6 +887,7 @@ async function save(deploy = false) {
 @media (max-width: 900px) {
   .field-grid,
   .command-grid,
+  .mount-row,
   .ports-row,
   .command-row,
   .env-row,
@@ -825,6 +901,7 @@ async function save(deploy = false) {
 }
 
 @media (max-width: 760px) {
+  .mount-actions .v-btn,
   .network-actions .v-btn,
   .proxy-actions .v-btn {
     flex: 1 1 100%;
