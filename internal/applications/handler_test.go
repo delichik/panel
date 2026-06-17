@@ -148,6 +148,13 @@ func TestHandlerDeployAndStopApplication(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/applications/app-1/migrate", bytes.NewBufferString(`{"sourceServerId":"srv-a","targetServerId":"srv-b"}`))
+	handler.Migrate(rec, req)
+	if rec.Code != http.StatusOK || fake.migratedID != "app-1" || fake.migrateInput.SourceServerID != "srv-a" || fake.migrateInput.TargetServerID != "srv-b" {
+		t.Fatalf("migrate status=%d id=%q input=%#v body=%s", rec.Code, fake.migratedID, fake.migrateInput, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/applications/app-1/stop", nil)
 	handler.Stop(rec, req)
 	if rec.Code != http.StatusOK || fake.stoppedID != "app-1" || fake.stopPurge {
@@ -193,6 +200,8 @@ type fakeApplicationService struct {
 	logID                     string
 	logInput                  LogInput
 	deletedFileID             string
+	migratedID                string
+	migrateInput              MigrationInput
 	pkg                       PackageResult
 	packagedID                string
 	persistentData            PackageResult
@@ -309,6 +318,12 @@ func (f *fakeApplicationService) UpdateImage(ctx context.Context, id string) (Op
 
 func (f *fakeApplicationService) Deploy(ctx context.Context, id string) (OperationResult, error) {
 	f.deployedID = id
+	return f.op, nil
+}
+
+func (f *fakeApplicationService) Migrate(ctx context.Context, id string, in MigrationInput) (OperationResult, error) {
+	f.migratedID = id
+	f.migrateInput = in
 	return f.op, nil
 }
 

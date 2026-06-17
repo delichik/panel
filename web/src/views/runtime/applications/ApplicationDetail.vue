@@ -2,7 +2,8 @@
 import { computed, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
-import type { ApplicationDto } from '@/types/api';
+import { serversApi } from '@/api/servers';
+import type { ApplicationDto, ServerDto } from '@/types/api';
 import ApplicationRuntimePanel from './ApplicationRuntimePanel.vue';
 import RuntimeLogsDialog from '@/components/RuntimeLogsDialog.vue';
 
@@ -14,6 +15,11 @@ const downloadingPersistent = ref(false);
 const restoringPersistent = ref(false);
 const restoreDialog = ref(false);
 const restoreFile = ref<File | File[] | null>(null);
+const migrateDialog = ref(false);
+const migrating = ref(false);
+const loadingServers = ref(false);
+const servers = ref<ServerDto[]>([]);
+const migrationForm = ref({ sourceServerId: '', targetServerId: '' });
 const imageAction = ref('');
 const error = ref('');
 const message = ref('');
@@ -21,6 +27,10 @@ const lastTaskId = ref('');
 const logTarget = ref<{ instanceId: string; containerName: string } | null>(null);
 const logsDialog = ref(false);
 const selectedRestoreFile = computed(() => Array.isArray(restoreFile.value) ? restoreFile.value[0] : restoreFile.value);
+const serverOptions = computed(() => servers.value.map((server) => ({
+  title: `${server.name || server.id} (${server.id})`,
+  value: server.id,
+})));
 const imageStatusColor = computed(() => {
   if (props.application.imageLastError) return 'error';
   if (props.application.imageUpdateAvailable) return 'warning';
@@ -123,6 +133,49 @@ async function restorePersistentData() {
   }
 }
 
+async function loadServersForMigration() {
+  loadingServers.value = true;
+  try {
+    servers.value = await serversApi.listServers();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('applicationDetail.loadServersFailed');
+  } finally {
+    loadingServers.value = false;
+  }
+}
+
+async function openMigrateDialog() {
+  migrationForm.value = {
+    sourceServerId: props.application.deploymentServers?.[0] || '',
+    targetServerId: '',
+  };
+  migrateDialog.value = true;
+  if (servers.value.length === 0) {
+    await loadServersForMigration();
+  }
+}
+
+async function migrateApplication() {
+  const sourceServerId = migrationForm.value.sourceServerId.trim();
+  const targetServerId = migrationForm.value.targetServerId.trim();
+  if (!sourceServerId || !targetServerId) return;
+  migrating.value = true;
+  try {
+    const result = await applicationsApi.migrate(props.application.id, sourceServerId, targetServerId);
+    if (result.application) emit('changed', result.application);
+    lastTaskId.value = result.taskId || '';
+    message.value = t('applicationDetail.migrationStarted');
+    migrateDialog.value = false;
+    error.value = '';
+  } catch (err) {
+    lastTaskId.value = '';
+    message.value = '';
+    error.value = err instanceof Error ? err.message : t('applicationDetail.migrationFailed');
+  } finally {
+    migrating.value = false;
+  }
+}
+
 async function loadSelectedLogs(tail: number) {
   if (!logTarget.value) return '';
   const result = await applicationsApi.logs(props.application.id, {
@@ -168,6 +221,14 @@ watch(() => props.application.id, () => {
             :title="t('applicationDetail.restorePersistentData')"
             :disabled="!application.persistentPath"
             @click="restoreDialog = true"
+          />
+          <v-btn
+            size="small"
+            icon="mdi-swap-horizontal"
+            variant="text"
+            :title="t('applicationDetail.migrateApplication')"
+            :disabled="!!application.persistentPath"
+            @click="openMigrateDialog"
           />
           <v-chip :color="application.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ application.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip>
         </div>
@@ -247,6 +308,55 @@ watch(() => props.application.id, () => {
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <v-dialog v-model="migrateDialog" width="620">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('applicationDetail.migrateApplication') }}</span>
+          <v-btn icon="mdi-close" variant="text" :aria-label="t('common.close')" @click="migrateDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body migrate-dialog-body">
+          <v-alert type="info" variant="tonal" density="compact">
+            {{ t('applicationDetail.migrationHint') }}
+          </v-alert>
+          <v-select
+            v-model="migrationForm.sourceServerId"
+            :items="serverOptions"
+            :label="t('applicationDetail.sourceServer')"
+            item-title="title"
+            item-value="value"
+            variant="outlined"
+            density="comfortable"
+            :loading="loadingServers"
+          />
+          <v-select
+            v-model="migrationForm.targetServerId"
+            :items="serverOptions"
+            :label="t('applicationDetail.targetServer')"
+            item-title="title"
+            item-value="value"
+            variant="outlined"
+            density="comfortable"
+            :loading="loadingServers"
+          />
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" :disabled="migrating" @click="migrateDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn
+            color="primary"
+            variant="flat"
+            class="text-none"
+            :loading="migrating"
+            :disabled="!migrationForm.sourceServerId || !migrationForm.targetServerId || migrationForm.sourceServerId === migrationForm.targetServerId"
+            @click="migrateApplication"
+          >
+            {{ t('applicationDetail.startMigration') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 
@@ -262,6 +372,7 @@ watch(() => props.application.id, () => {
 .digest-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mono { font-size: 0.8rem; }
+.migrate-dialog-body { display: grid; gap: 14px; }
 @media (max-width: 900px) {
   .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .image-panel { grid-template-columns: 1fr; }

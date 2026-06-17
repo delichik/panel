@@ -146,6 +146,11 @@ type OperationResult struct {
 	ApplicationRuntime *Runtime    `json:"runtime,omitempty"`
 }
 
+type MigrationInput struct {
+	SourceServerID string `json:"sourceServerId"`
+	TargetServerID string `json:"targetServerId"`
+}
+
 type ValidationIssue struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`

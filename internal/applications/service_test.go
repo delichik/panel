@@ -532,6 +532,71 @@ func TestRestorePersistentDataRestoresAndRestarts(t *testing.T) {
 	}
 }
 
+func TestMigrateDeploysTargetAndDropsSourceInstance(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.Migrate(ctx, app.ID, MigrationInput{SourceServerID: "srv-a", TargetServerID: "srv-b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskID == "" {
+		t.Fatal("expected migration task id")
+	}
+	migrated, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.DeploymentMode != DeploymentModeSelected || len(migrated.DeploymentServers) != 1 || migrated.DeploymentServers[0] != "srv-b" {
+		t.Fatalf("deployment target = %q %#v", migrated.DeploymentMode, migrated.DeploymentServers)
+	}
+	instances, err := svc.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 1 || instances[0].ServerID != "srv-b" {
+		t.Fatalf("instances = %#v", instances)
+	}
+	if len(runtime.stops) != 0 {
+		t.Fatalf("source should not be stopped during lossless migration: %#v", runtime.stops)
+	}
+	lastDeploy := runtime.deploys[len(runtime.deploys)-1]
+	if lastDeploy.ServerID != "srv-b" {
+		t.Fatalf("last deploy server = %q", lastDeploy.ServerID)
+	}
+}
+
+func TestMigrateRejectsExternalMounts(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\nvolumes:\n  - source: web-data\n    target: /data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Migrate(ctx, app.ID, MigrationInput{SourceServerID: "srv-a", TargetServerID: "srv-b"}); err == nil || !strings.Contains(err.Error(), "host paths or Docker volumes") {
+		t.Fatalf("expected migration mount validation, got %v", err)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
 	t.Helper()
 	dir := t.TempDir()

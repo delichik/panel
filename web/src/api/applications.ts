@@ -102,6 +102,9 @@ export function createApplicationsApi(client: ApiClient = apiClient) {
     deploy(applicationId: string) {
       return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/deploy`);
     },
+    migrate(applicationId: string, sourceServerId: string, targetServerId: string) {
+      return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/migrate`, { sourceServerId, targetServerId });
+    },
     stop(applicationId: string) {
       return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/stop`);
     },

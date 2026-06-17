@@ -37,6 +37,7 @@ type applicationService interface {
 	CheckImageUpdate(ctx context.Context, id string) (Application, error)
 	UpdateImage(ctx context.Context, id string) (OperationResult, error)
 	Deploy(ctx context.Context, id string) (OperationResult, error)
+	Migrate(ctx context.Context, id string, in MigrationInput) (OperationResult, error)
 	Stop(ctx context.Context, id string, purge bool) (OperationResult, error)
 	Restart(ctx context.Context, id string) (OperationResult, error)
 	Runtime(ctx context.Context, id string) (ApplicationRuntime, error)
@@ -296,6 +297,19 @@ func (h *Handler) UpdateImage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Deploy(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.Deploy(r.Context(), applicationID(r.URL.Path))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) Migrate(w http.ResponseWriter, r *http.Request) {
+	var in MigrationInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := h.service.Migrate(r.Context(), applicationID(r.URL.Path), in)
 	if err != nil {
 		httpx.Error(w, err)
 		return

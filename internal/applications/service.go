@@ -865,6 +865,140 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	return result, nil
 }
 
+func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) (OperationResult, error) {
+	sourceServerID := strings.TrimSpace(in.SourceServerID)
+	targetServerID := strings.TrimSpace(in.TargetServerID)
+	if sourceServerID == "" || targetServerID == "" {
+		return OperationResult{}, panelerr.Validation("application_migration_servers_required", "Source and target servers are required")
+	}
+	if sourceServerID == targetServerID {
+		return OperationResult{}, panelerr.Validation("application_migration_servers_must_differ", "Source and target servers must differ")
+	}
+	app, err := s.Get(ctx, appID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if !app.Enabled {
+		return OperationResult{}, panelerr.Conflict("application_migration_requires_enabled", "Application must be enabled before migration")
+	}
+	if strings.TrimSpace(app.PersistentPath) != "" {
+		return OperationResult{}, panelerr.Conflict("application_migration_persistent_not_supported", "Applications with persistent storage cannot use lossless migration")
+	}
+	instances, err := s.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if len(instances) != 1 || instances[0].ServerID != sourceServerID {
+		return OperationResult{}, panelerr.Conflict("application_migration_source_not_exclusive", "Source server must be the only deployed application instance")
+	}
+	if _, err := s.runtimeInstanceForServer(ctx, app.ID, targetServerID); err == nil {
+		return OperationResult{}, panelerr.Conflict("application_migration_target_exists", "Target server already has an application deployment")
+	} else if !isNotFound(err) {
+		return OperationResult{}, err
+	}
+	sourceSrv, err := s.servers.Get(ctx, sourceServerID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := ensureAgentRuntimeReady(sourceSrv); err != nil {
+		return OperationResult{}, err
+	}
+	sourceBaseURL, _ := agentURLFromServer(sourceSrv)
+	sourceStatus, err := s.runtimeClient.RuntimeStatus(ctx, sourceBaseURL, instances[0].ID, instances[0].ContainerName)
+	if err != nil {
+		_ = s.handleAgentError(ctx, sourceSrv, err)
+		return OperationResult{}, runtimeOperationError(err)
+	}
+	if sourceStatus.Status != appruntime.StatusRunning {
+		return OperationResult{}, panelerr.Conflict("application_migration_source_not_running", "Source application instance must be running")
+	}
+	targetSrv, err := s.servers.Get(ctx, targetServerID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := ensureAgentRuntimeReady(targetSrv); err != nil {
+		return OperationResult{}, err
+	}
+	currentJob, issues, err := s.renderApplication(ctx, app)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if len(issues) > 0 {
+		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
+	}
+	if runtimeSpecUsesExternalMounts(currentJob) {
+		return OperationResult{}, panelerr.Conflict("application_migration_mounts_not_supported", "Applications with host paths or Docker volumes cannot use lossless migration")
+	}
+	input := SaveInput{
+		Name:              app.Name,
+		Enabled:           app.Enabled,
+		SpecYAML:          app.SpecYAML,
+		Variables:         app.Variables,
+		PersistentPath:    app.PersistentPath,
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{targetServerID},
+		ReverseProxy:      app.ReverseProxy,
+	}
+	generation := app.Generation
+	prepared, err := s.prepare(ctx, input, generation, app.ID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if prepared.hash != app.SpecHash {
+		generation++
+		prepared, err = s.prepare(ctx, input, generation, app.ID)
+		if err != nil {
+			return OperationResult{}, err
+		}
+	}
+	migrated := app
+	migrated.DeploymentMode = prepared.deploymentMode
+	migrated.DeploymentServers = prepared.deploymentServers
+	migrated.PersistentPath = prepared.persistentPath
+	migrated.Variables = prepared.variables
+	migrated.ResolvedVariables = prepared.resolvedVariables
+	migrated.ReverseProxy = prepared.reverseProxy
+	migrated.Generation = generation
+	migrated.SpecHash = prepared.hash
+	migrated.JobID = prepared.job.ID
+	migrated.Namespace = s.currentConfig().Namespace
+	migrated.UpdatedAt = time.Now().UTC()
+	job, issues, err := s.renderApplication(ctx, migrated)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if len(issues) > 0 {
+		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
+	}
+	if err := s.updateApplication(ctx, migrated); err != nil {
+		return OperationResult{}, applicationSaveError(err)
+	}
+	if prepared.hash != app.SpecHash {
+		if err := s.insertRevision(ctx, migrated, job); err != nil {
+			return OperationResult{}, err
+		}
+	}
+	taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Migrating application "+app.Name)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := s.deployRuntimeSpec(ctx, taskID, migrated, job); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return OperationResult{}, err
+	}
+	if err := s.deleteRuntimeInstanceForServer(ctx, app.ID, sourceServerID); err != nil {
+		return OperationResult{}, err
+	}
+	if err := s.reconcileReverseProxy(ctx); err != nil {
+		return OperationResult{}, err
+	}
+	out, err := s.Get(ctx, app.ID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	return OperationResult{TaskID: taskID, Application: out}, nil
+}
+
 func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) {
 	apps, err := s.List(ctx)
 	if err != nil {
@@ -1917,6 +2051,21 @@ func (s *Service) markRuntimeInstance(ctx context.Context, instanceID, desired, 
 	return err
 }
 
+func (s *Service) deleteRuntimeInstanceForServer(ctx context.Context, appID, serverID string) error {
+	instance, err := s.runtimeInstanceForServer(ctx, appID, serverID)
+	if err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, `DELETE FROM application_instances WHERE application_id=? AND server_id=?`, appID, serverID); err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `DELETE FROM application_reconcile_states WHERE instance_id=?`, instance.ID)
+	return err
+}
+
 func (s *Service) runtimeInstances(ctx context.Context, appID string) ([]appruntime.Instance, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at FROM application_instances WHERE application_id=? ORDER BY server_id ASC`, appID)
 	if err != nil {
@@ -2489,6 +2638,21 @@ func normalizeLogTail(tail int) int {
 		return 10000
 	}
 	return tail
+}
+
+func runtimeSpecUsesExternalMounts(spec appruntime.Spec) bool {
+	for _, mount := range spec.Mounts {
+		switch strings.TrimSpace(mount.Type) {
+		case "volume", "bind", "persistent":
+			return true
+		}
+	}
+	return false
+}
+
+func isNotFound(err error) bool {
+	var pe *panelerr.Error
+	return errors.As(err, &pe) && pe.Code == "not_found"
 }
 
 func applicationFileMounts(mounts []appspec.Mount) []appspec.Mount {
