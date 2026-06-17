@@ -16,6 +16,7 @@ const deleteTarget = ref<DockerImageDto | null>(null);
 const upgradeAllDialog = ref(false);
 const deleteUnusedDialog = ref(false);
 const confirmLoading = ref(false);
+const operationLoading = ref(false);
 const snackbar = ref(false);
 const message = ref('');
 const { servers, serverId, loadingServers } = useDockerServers(load);
@@ -39,17 +40,27 @@ async function refresh() {
 }
 
 async function pull() {
-  const result = await containerizationApi.pullImage(serverId.value, pullReference.value);
-  pullDialog.value = false;
-  pullReference.value = '';
-  notify(result.taskId);
+  operationLoading.value = true;
+  try {
+    await containerizationApi.pullImage(serverId.value, pullReference.value);
+    pullDialog.value = false;
+    pullReference.value = '';
+    await notifyOperation();
+  } finally {
+    operationLoading.value = false;
+  }
 }
 
 async function remove() {
   if (!deleteTarget.value) return;
-  const result = await containerizationApi.deleteImage(serverId.value, deleteTarget.value.id);
-  deleteTarget.value = null;
-  notify(result.taskId);
+  operationLoading.value = true;
+  try {
+    await containerizationApi.deleteImage(serverId.value, deleteTarget.value.id);
+    deleteTarget.value = null;
+    await notifyOperation();
+  } finally {
+    operationLoading.value = false;
+  }
 }
 
 async function upgradeSelected() {
@@ -70,13 +81,13 @@ async function upgradeAll() {
 }
 
 async function deleteUnusedImages() {
-  confirmLoading.value = true;
+  operationLoading.value = true;
   try {
-    const result = await containerizationApi.deleteUnusedImages(serverId.value);
+    await containerizationApi.deleteUnusedImages(serverId.value);
     deleteUnusedDialog.value = false;
-    notify(result.taskId);
+    await notifyOperation();
   } finally {
-    confirmLoading.value = false;
+    operationLoading.value = false;
   }
 }
 
@@ -84,6 +95,12 @@ function notify(taskId: string) {
   message.value = t('containerization.taskCreated', { id: taskId });
   snackbar.value = true;
   window.setTimeout(load, 1200);
+}
+
+async function notifyOperation() {
+  message.value = t('containerization.operationCompleted');
+  snackbar.value = true;
+  await load();
 }
 
 function shortDigest(value?: string) {
@@ -133,10 +150,10 @@ function shortDigest(value?: string) {
         </tr>
       </tbody>
     </v-table>
-    <v-dialog v-model="pullDialog" width="520"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.pullImage') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body"><v-text-field v-model="pullReference" :label="t('containerization.imageReference')" variant="outlined" /></v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" @click="pullDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" :disabled="!pullReference.trim()" @click="pull">{{ t('containerization.pull') }}</v-btn></v-card-actions></v-card></v-dialog>
-    <v-dialog :model-value="!!deleteTarget" width="440" @update:model-value="!$event && (deleteTarget = null)"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.deleteImage') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.deleteImageMessage', { name: deleteTarget?.reference || deleteTarget?.id }) }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" @click="deleteTarget = null">{{ t('common.cancel') }}</v-btn><v-btn color="error" variant="flat" @click="remove">{{ t('common.delete') }}</v-btn></v-card-actions></v-card></v-dialog>
+    <v-dialog v-model="pullDialog" width="520"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.pullImage') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body"><v-text-field v-model="pullReference" :label="t('containerization.imageReference')" variant="outlined" /></v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="operationLoading" @click="pullDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" :loading="operationLoading" :disabled="!pullReference.trim()" @click="pull">{{ t('containerization.pull') }}</v-btn></v-card-actions></v-card></v-dialog>
+    <v-dialog :model-value="!!deleteTarget" width="440" @update:model-value="!$event && (deleteTarget = null)"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.deleteImage') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.deleteImageMessage', { name: deleteTarget?.reference || deleteTarget?.id }) }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="operationLoading" @click="deleteTarget = null">{{ t('common.cancel') }}</v-btn><v-btn color="error" variant="flat" :loading="operationLoading" @click="remove">{{ t('common.delete') }}</v-btn></v-card-actions></v-card></v-dialog>
     <v-dialog v-model="upgradeAllDialog" width="440"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.upgradeAll') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.upgradeAllMessage') }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="confirmLoading" @click="upgradeAllDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" :loading="confirmLoading" @click="upgradeAll">{{ t('common.update') }}</v-btn></v-card-actions></v-card></v-dialog>
-    <v-dialog v-model="deleteUnusedDialog" width="440"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.deleteUnusedImages') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.deleteUnusedImagesMessage') }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="confirmLoading" @click="deleteUnusedDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="error" variant="flat" :loading="confirmLoading" @click="deleteUnusedImages">{{ t('common.delete') }}</v-btn></v-card-actions></v-card></v-dialog>
+    <v-dialog v-model="deleteUnusedDialog" width="440"><v-card class="app-dialog-card"><v-card-title class="app-dialog-title">{{ t('containerization.deleteUnusedImages') }}</v-card-title><v-divider/><v-card-text class="app-dialog-body">{{ t('containerization.deleteUnusedImagesMessage') }}</v-card-text><v-divider/><v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="operationLoading" @click="deleteUnusedDialog = false">{{ t('common.cancel') }}</v-btn><v-btn color="error" variant="flat" :loading="operationLoading" @click="deleteUnusedImages">{{ t('common.delete') }}</v-btn></v-card-actions></v-card></v-dialog>
     <v-snackbar v-model="snackbar">{{ message }}</v-snackbar>
   </ResourcePage>
 </template>

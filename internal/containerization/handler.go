@@ -22,14 +22,14 @@ func (h *Handler) Containers(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) ContainerAction(w http.ResponseWriter, r *http.Request) {
 	serverID, resourceID, action := resourceAction(r.URL.Path, "containers")
-	task, err := h.service.ContainerAction(r.Context(), serverID, resourceID, action)
-	writeTask(w, task.ID, err)
+	result, err := h.service.ContainerAction(r.Context(), serverID, resourceID, action)
+	writeOperation(w, result, err)
 }
 
 func (h *Handler) DeleteContainer(w http.ResponseWriter, r *http.Request) {
 	serverID, resourceID := resourcePath(r.URL.Path, "containers")
-	task, err := h.service.DeleteContainer(r.Context(), serverID, resourceID)
-	writeTask(w, task.ID, err)
+	result, err := h.service.DeleteContainer(r.Context(), serverID, resourceID)
+	writeOperation(w, result, err)
 }
 
 func (h *Handler) Images(w http.ResponseWriter, r *http.Request) {
@@ -44,8 +44,8 @@ func (h *Handler) PullImage(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	task, err := h.service.PullImage(r.Context(), serverID(r.URL.Path), req.Reference)
-	writeTask(w, task.ID, err)
+	result, err := h.service.PullImage(r.Context(), serverID(r.URL.Path), req.Reference)
+	writeOperation(w, result, err)
 }
 
 func (h *Handler) RefreshImages(w http.ResponseWriter, r *http.Request) {
@@ -55,13 +55,13 @@ func (h *Handler) RefreshImages(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteImage(w http.ResponseWriter, r *http.Request) {
 	serverID, resourceID := resourcePath(r.URL.Path, "images")
-	task, err := h.service.DeleteImage(r.Context(), serverID, resourceID)
-	writeTask(w, task.ID, err)
+	result, err := h.service.DeleteImage(r.Context(), serverID, resourceID)
+	writeOperation(w, result, err)
 }
 
 func (h *Handler) DeleteUnusedImages(w http.ResponseWriter, r *http.Request) {
-	task, err := h.service.DeleteUnusedImages(r.Context(), serverID(r.URL.Path))
-	writeTask(w, task.ID, err)
+	result, err := h.service.DeleteUnusedImages(r.Context(), serverID(r.URL.Path))
+	writeOperation(w, result, err)
 }
 
 func (h *Handler) UpgradeSelected(w http.ResponseWriter, r *http.Request) {
@@ -92,13 +92,17 @@ func (h *Handler) Volumes(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) DeleteVolume(w http.ResponseWriter, r *http.Request) {
 	serverID, name := resourcePath(r.URL.Path, "volumes")
-	task, err := h.service.DeleteVolume(r.Context(), serverID, name)
-	writeTask(w, task.ID, err)
+	result, err := h.service.DeleteVolume(r.Context(), serverID, name)
+	writeOperation(w, result, err)
 }
 
 func (h *Handler) DeleteUnusedVolumes(w http.ResponseWriter, r *http.Request) {
-	task, err := h.service.DeleteUnusedVolumes(r.Context(), serverID(r.URL.Path))
-	writeTask(w, task.ID, err)
+	result, err := h.service.DeleteUnusedVolumes(r.Context(), serverID(r.URL.Path))
+	writeOperation(w, result, err)
+}
+
+func writeOperation(w http.ResponseWriter, result OperationResult, err error) {
+	write(w, http.StatusOK, result, err)
 }
 
 func writeTask(w http.ResponseWriter, taskID string, err error) {

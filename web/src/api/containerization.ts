@@ -70,30 +70,34 @@ export interface TaskCreatedDto {
   taskId: string;
 }
 
+export interface ResourceOperationDto {
+  refreshTaskId?: string;
+}
+
 export const containerizationApi = {
   containers(serverId: string) {
     return apiClient.get<DockerContainerDto[]>(`/servers/${serverId}/containers`);
   },
   containerAction(serverId: string, containerId: string, action: 'start' | 'stop' | 'restart') {
-    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/containers/${encodeURIComponent(containerId)}/${action}`);
+    return apiClient.post<ResourceOperationDto>(`/servers/${serverId}/containers/${encodeURIComponent(containerId)}/${action}`);
   },
   deleteContainer(serverId: string, containerId: string) {
-    return apiClient.delete<TaskCreatedDto>(`/servers/${serverId}/containers/${encodeURIComponent(containerId)}`);
+    return apiClient.delete<ResourceOperationDto>(`/servers/${serverId}/containers/${encodeURIComponent(containerId)}`);
   },
   images(serverId: string) {
     return apiClient.get<DockerImageListDto>(`/servers/${serverId}/images`);
   },
   pullImage(serverId: string, reference: string) {
-    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/images/pull`, { reference });
+    return apiClient.post<ResourceOperationDto>(`/servers/${serverId}/images/pull`, { reference });
   },
   refreshImages(serverId: string) {
     return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/images/refresh`);
   },
   deleteImage(serverId: string, imageId: string) {
-    return apiClient.delete<TaskCreatedDto>(`/servers/${serverId}/images/${encodeURIComponent(imageId)}`);
+    return apiClient.delete<ResourceOperationDto>(`/servers/${serverId}/images/${encodeURIComponent(imageId)}`);
   },
   deleteUnusedImages(serverId: string) {
-    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/images/delete-unused`);
+    return apiClient.post<ResourceOperationDto>(`/servers/${serverId}/images/delete-unused`);
   },
   upgradeSelected(applicationIds: string[]) {
     return apiClient.post<TaskCreatedDto>('/images/upgrade-selected', { applicationIds });
@@ -108,9 +112,9 @@ export const containerizationApi = {
     return apiClient.get<DockerVolumeDto[]>(`/servers/${serverId}/volumes`);
   },
   deleteVolume(serverId: string, name: string) {
-    return apiClient.delete<TaskCreatedDto>(`/servers/${serverId}/volumes/${encodeURIComponent(name)}`);
+    return apiClient.delete<ResourceOperationDto>(`/servers/${serverId}/volumes/${encodeURIComponent(name)}`);
   },
   deleteUnusedVolumes(serverId: string) {
-    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/volumes/delete-unused`);
+    return apiClient.post<ResourceOperationDto>(`/servers/${serverId}/volumes/delete-unused`);
   },
 };

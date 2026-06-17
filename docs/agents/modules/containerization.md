@@ -21,6 +21,8 @@
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
 - 网络只读。
 - 卷支持查询、单个删除和批量删除未使用卷，必须展示使用状态；批量删除执行时需重新查询使用状态，只删除执行瞬间仍未使用的卷。
+- 容器、镜像、卷页面发起的资源写操作同步执行并返回；手动镜像刷新和 Application 镜像升级仍创建任务。
+- 同步资源写操作成功后立即创建对应刷新任务：容器使用 `container_refresh`，镜像使用 `image_refresh`，卷使用 `volume_refresh`。
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
@@ -36,13 +38,14 @@ Application 新部署容器只写入：
 
 不兼容旧下划线 Label，也不自动迁移旧容器。
 
-## 队列与协调
+## 队列、同步操作与协调
 
-- 每台服务器一条独立容器操作队列；同服务器串行，不同服务器并行。
-- 普通容器操作和 Application 部署、停止、重启共享该队列。
-- 相同任务类型、服务器和资源的活跃请求复用现有任务；Agent 操作按目标状态幂等。
+- 每台服务器一条独立 Docker 资源写操作队列；同服务器串行，不同服务器并行。
+- 普通容器、镜像、卷页面发起的写操作进入队列同步执行，不创建操作任务；API 在 Agent 操作完成或失败后返回。
+- Application 部署、停止、重启也共享同一服务器队列，但保留 Application 自身任务记录。
+- 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
-- 镜像和卷的“删除未使用”是 Panel 侧批量任务，通过现有 Agent 单项删除接口逐项执行；任务 metadata 记录动作和服务器，`delete_unused` 步骤 metadata 记录扫描数量、跳过数量、删除数量、删除对象和失败对象。
+- 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
 - scheduler 每 5 秒运行容器监控。只有已经观察到新托管 Label 并写入 `application_reconcile_states` 的实例会持续协调，避免旧 Label 自动迁移。
 - 监控发现容器缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 

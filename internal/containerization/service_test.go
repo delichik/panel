@@ -2,10 +2,17 @@ package containerization
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"panel/internal/agent"
+	"panel/internal/config"
+	"panel/internal/server"
+	"panel/internal/storage"
+	"panel/internal/tasks"
 )
 
 func TestManagedLabelsOnlyAcceptsNewApplicationLabels(t *testing.T) {
@@ -89,4 +96,128 @@ func TestExecuteAllowsDifferentServersToRunConcurrently(t *testing.T) {
 	}
 	close(release)
 	wg.Wait()
+}
+
+func TestContainerActionRunsSynchronouslyAndStartsRefreshTask(t *testing.T) {
+	svc, taskSvc, fakeAgent, store := newContainerizationTestService(t)
+	result, err := svc.ContainerAction(context.Background(), "server-1", "container-1", "restart")
+	if err != nil {
+		t.Fatalf("container action: %v", err)
+	}
+	if result.RefreshTaskID == "" {
+		t.Fatal("expected refresh task id")
+	}
+	fakeAgent.mu.Lock()
+	actions := append([]string(nil), fakeAgent.actions...)
+	fakeAgent.mu.Unlock()
+	if len(actions) != 1 || actions[0] != "container-1:restart" {
+		t.Fatalf("expected synchronous container action before return, got %#v", actions)
+	}
+	waitTaskStatus(t, taskSvc, result.RefreshTaskID, tasks.StatusCompleted)
+	var operationTasks int
+	if err := store.TaskDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type IN (?,?,?,?)`, TaskContainerStart, TaskContainerStop, TaskContainerRestart, TaskContainerDelete).Scan(&operationTasks); err != nil {
+		t.Fatal(err)
+	}
+	if operationTasks != 0 {
+		t.Fatalf("container operation task should not be created, got %d", operationTasks)
+	}
+}
+
+func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fakeContainerizationAgent, *storage.Store) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	taskSvc := tasks.NewService(store.TaskDB())
+	fakeAgent := &fakeContainerizationAgent{}
+	svc := NewService(store.AppDB(), fakeServerProvider{server.Server{
+		ID:        "server-1",
+		Reachable: true,
+		Traits: map[string]string{
+			agent.TraitURL:    "http://agent",
+			agent.TraitStatus: agent.StatusCompatible,
+		},
+	}}, fakeAgent, taskSvc)
+	return svc, taskSvc, fakeAgent, store
+}
+
+func waitTaskStatus(t *testing.T, taskSvc *tasks.Service, taskID, status string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		task, err := taskSvc.Get(context.Background(), taskID)
+		if err == nil && task.Status == status {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	task, err := taskSvc.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get task %s: %v", taskID, err)
+	}
+	t.Fatalf("task %s status = %s, want %s", taskID, task.Status, status)
+}
+
+type fakeServerProvider struct {
+	srv server.Server
+}
+
+func (p fakeServerProvider) Get(context.Context, string) (server.Server, error) {
+	return p.srv, nil
+}
+
+func (p fakeServerProvider) List(context.Context) ([]server.Server, error) {
+	return []server.Server{p.srv}, nil
+}
+
+type fakeContainerizationAgent struct {
+	mu      sync.Mutex
+	actions []string
+}
+
+func (a *fakeContainerizationAgent) DockerContainers(context.Context, string) ([]agent.DockerContainer, error) {
+	return nil, nil
+}
+
+func (a *fakeContainerizationAgent) DockerContainerAction(_ context.Context, _ string, id, action string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.actions = append(a.actions, id+":"+action)
+	return nil
+}
+
+func (a *fakeContainerizationAgent) DockerContainerDelete(context.Context, string, string) error {
+	return nil
+}
+
+func (a *fakeContainerizationAgent) DockerImages(context.Context, string) ([]agent.DockerImage, error) {
+	return nil, nil
+}
+
+func (a *fakeContainerizationAgent) DockerImagePull(context.Context, string, string) error {
+	return nil
+}
+
+func (a *fakeContainerizationAgent) DockerImageDelete(context.Context, string, string) error {
+	return nil
+}
+
+func (a *fakeContainerizationAgent) DockerNetworks(context.Context, string) ([]agent.DockerNetwork, error) {
+	return nil, nil
+}
+
+func (a *fakeContainerizationAgent) DockerVolumes(context.Context, string) ([]agent.DockerVolume, error) {
+	return nil, nil
+}
+
+func (a *fakeContainerizationAgent) DockerVolumeDelete(context.Context, string, string) error {
+	return nil
 }

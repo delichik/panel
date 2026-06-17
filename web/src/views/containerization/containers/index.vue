@@ -10,6 +10,7 @@ const items = ref<DockerContainerDto[]>([]);
 const loading = ref(false);
 const error = ref('');
 const pending = ref<{ item: DockerContainerDto; action: 'start' | 'stop' | 'restart' | 'delete' } | null>(null);
+const actionLoading = ref(false);
 const snackbar = ref(false);
 const message = ref('');
 const { servers, serverId, loadingServers } = useDockerServers(load);
@@ -34,13 +35,18 @@ function ask(item: DockerContainerDto, action: 'start' | 'stop' | 'restart' | 'd
 async function run() {
   if (!pending.value) return;
   const { item, action } = pending.value;
-  const result = action === 'delete'
-    ? await containerizationApi.deleteContainer(serverId.value, item.id)
-    : await containerizationApi.containerAction(serverId.value, item.id, action);
-  pending.value = null;
-  message.value = t('containerization.taskCreated', { id: result.taskId });
-  snackbar.value = true;
-  window.setTimeout(load, 1000);
+  actionLoading.value = true;
+  try {
+    action === 'delete'
+      ? await containerizationApi.deleteContainer(serverId.value, item.id)
+      : await containerizationApi.containerAction(serverId.value, item.id, action);
+    pending.value = null;
+    message.value = t('containerization.operationCompleted');
+    snackbar.value = true;
+    await load();
+  } finally {
+    actionLoading.value = false;
+  }
 }
 
 function nameOf(item: DockerContainerDto) {
@@ -82,7 +88,7 @@ function nameOf(item: DockerContainerDto) {
           {{ t('containerization.confirmMessage', { action: pending ? t(`containerization.${pending.action}`) : '', name: pending ? nameOf(pending.item) : '' }) }}
         </v-card-text>
         <v-divider />
-        <v-card-actions class="app-dialog-actions"><v-btn variant="text" @click="pending = null">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" @click="run">{{ t('common.confirm') }}</v-btn></v-card-actions>
+        <v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="actionLoading" @click="pending = null">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" :loading="actionLoading" @click="run">{{ t('common.confirm') }}</v-btn></v-card-actions>
       </v-card>
     </v-dialog>
     <v-snackbar v-model="snackbar">{{ message }}</v-snackbar>

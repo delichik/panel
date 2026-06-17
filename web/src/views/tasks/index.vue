@@ -47,12 +47,14 @@ const supportedTaskTypes = [
   'container_stop',
   'container_restart',
   'container_delete',
+  'container_refresh',
   'image_pull',
   'image_refresh',
   'image_delete',
   'image_delete_unused',
   'volume_delete',
   'volume_delete_unused',
+  'volume_refresh',
   'application_reconcile',
 ];
 
