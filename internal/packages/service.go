@@ -51,14 +51,21 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 	if err != nil {
 		return UpdateList{}, err
 	}
-	defer rows.Close()
 	out := UpdateList{ServerID: serverID, Updates: []linux.PackageUpdate{}}
 	for rows.Next() {
 		var u linux.PackageUpdate
 		if err := rows.Scan(&u.Name, &u.InstalledVersion, &u.CandidateVersion, &u.Source); err != nil {
+			_ = rows.Close()
 			return UpdateList{}, err
 		}
 		out.Updates = append(out.Updates, u)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return UpdateList{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return UpdateList{}, err
 	}
 	var ts sql.NullString
 	_ = s.db.QueryRowContext(ctx, `SELECT refreshed_at FROM package_refreshes WHERE server_id=?`, serverID).Scan(&ts)
@@ -70,7 +77,7 @@ func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error)
 		_, _ = s.refresh(ctx, serverID, "auto", true, "")
 	}
 	out.Refreshing = s.isRefreshing(serverID)
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, error) {
@@ -393,12 +400,7 @@ func (s *Service) hasRecentRefreshTask(ctx context.Context, serverID string, win
 	if time.Since(latest.CreatedAt) > window {
 		return false
 	}
-	switch latest.Status {
-	case tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusRunning, tasks.StatusFailedRetryable, tasks.StatusFailed, tasks.StatusBlocked:
-		return true
-	default:
-		return false
-	}
+	return true
 }
 
 func firstNonEmpty(values ...string) string {

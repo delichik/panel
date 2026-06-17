@@ -343,25 +343,35 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []Server
-	operationID := ""
 	for rows.Next() {
 		srv, err := scanServer(rows)
 		if err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
 		applyDistroSystemTraits(srv.OS, srv.Traits)
+		out = append(out, srv)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	operationID := ""
+	for i := range out {
+		srv := out[i]
 		if s.exec != nil && (srv.LastCheckedAt == nil || time.Since(*srv.LastCheckedAt) > connectivityStaleAfter) {
 			if operationID == "" {
 				operationID = id.New("op")
 			}
 			_, _ = s.ensureConnectivityTask(ctx, srv.ID, false, connectivityTaskType, "Testing SSH connectivity", operationID)
 		}
-		srv.LoadAverage = s.latestLoadAverage(ctx, srv.ID)
-		out = append(out, srv)
+		out[i].LoadAverage = s.latestLoadAverage(ctx, srv.ID)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {

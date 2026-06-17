@@ -235,7 +235,22 @@ func (s *Service) List(ctx context.Context) ([]Asset, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	storedAssets := []storedAsset{}
+	for rows.Next() {
+		stored, err := scanStoredAsset(rows)
+		if err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		storedAssets = append(storedAssets, stored)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
 	references, err := s.assetReferences(ctx)
 	if err != nil {
 		return nil, err
@@ -245,15 +260,10 @@ func (s *Service) List(ctx context.Context) ([]Asset, error) {
 		return nil, err
 	}
 	assets := []Asset{}
-	for rows.Next() {
-		stored, err := scanStoredAsset(rows)
-		if err != nil {
-			return nil, err
-		}
-		asset := decorateAsset(stored.Asset, references[stored.ID], childCounts[stored.ID])
-		assets = append(assets, asset)
+	for _, stored := range storedAssets {
+		assets = append(assets, decorateAsset(stored.Asset, references[stored.ID], childCounts[stored.ID]))
 	}
-	return assets, rows.Err()
+	return assets, nil
 }
 
 func (s *Service) Get(ctx context.Context, assetID string) (Asset, error) {

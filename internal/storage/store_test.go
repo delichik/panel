@@ -31,7 +31,7 @@ func TestOpenCreatesSeparateSchemas(t *testing.T) {
 	}
 }
 
-func TestOpenAllowsConcurrentAppConnections(t *testing.T) {
+func TestOpenUsesSingleSQLiteConnection(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -43,8 +43,11 @@ func TestOpenAllowsConcurrentAppConnections(t *testing.T) {
 	}
 	defer store.Close()
 
-	if got := store.AppDB().Stats().MaxOpenConnections; got < 2 {
-		t.Fatalf("app database should not be single-connection, got %d", got)
+	if got := store.AppDB().Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("app database max open connections = %d, want 1", got)
+	}
+	if got := store.MetricsDB().Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("metrics database max open connections = %d, want 1", got)
 	}
 }
 

@@ -35,6 +35,7 @@
 ## 数据库约定
 
 - 应用数据在 `Store.AppDB()`，指标数据在 `Store.MetricsDB()`，不要把指标表误建到应用数据库。
+- SQLite 连接由 `internal/storage` 统一配置为 WAL、5 秒 busy timeout、每个数据库句柄单打开连接；不要在模块内另开并发连接池绕过该设置。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
 - 新字段优先使用可重复执行的增量迁移，并在 `internal/storage/store_test.go` 或相关 service 测试覆盖旧库升级路径。
 - 会被展示的持久化配置只保存稳定 key、kind、value，不保存当前语言下的展示文案。

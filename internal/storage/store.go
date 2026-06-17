@@ -63,8 +63,8 @@ func sqliteDSN(path string) string {
 }
 
 func configureDB(db *sql.DB) {
-	db.SetMaxOpenConns(8)
-	db.SetMaxIdleConns(4)
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	db.SetConnMaxLifetime(30 * time.Minute)
 }
 
