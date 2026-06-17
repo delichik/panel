@@ -127,9 +127,13 @@ func (c *HTTPClient) UFWStatus(ctx context.Context, baseURL string) (remoteops.U
 	return UFWStatusFromResponse(out), nil
 }
 
-func (c *HTTPClient) RuntimeDeploy(ctx context.Context, baseURL string, req RuntimeDeployRequest) (RuntimeInstanceResponse, error) {
-	var out RuntimeInstanceResponse
-	err := c.post(ctx, baseURL, "/v1/runtime/applications/deploy", req, &out)
+func (c *HTTPClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req RuntimeWriteFilesRequest) error {
+	return c.post(ctx, baseURL, "/v1/runtime/applications/files", req, nil)
+}
+
+func (c *HTTPClient) RuntimeCreateContainer(ctx context.Context, baseURL string, req RuntimeCreateContainerRequest) (RuntimeCreateContainerResponse, error) {
+	var out RuntimeCreateContainerResponse
+	err := c.post(ctx, baseURL, "/v1/runtime/applications/containers/create", req, &out)
 	return out, err
 }
 

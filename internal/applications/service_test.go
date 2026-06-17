@@ -61,6 +61,12 @@ func TestCreateEnabledAppDeploysToAgentRuntime(t *testing.T) {
 	if len(runtime.deploys) != 2 {
 		t.Fatalf("deploys = %#v", runtime.deploys)
 	}
+	if len(runtime.writes) != 2 || len(runtime.pulls) != 2 || len(runtime.deletes) != 2 || len(runtime.actions) != 2 {
+		t.Fatalf("atomic deploy calls writes=%#v pulls=%#v deletes=%#v actions=%#v", runtime.writes, runtime.pulls, runtime.deletes, runtime.actions)
+	}
+	if runtime.pulls[0] != "nginx" || runtime.deletes[0] != "panel-web" || runtime.actions[0] != "container-srv-a:start" {
+		t.Fatalf("atomic deploy sequence pulls=%#v deletes=%#v actions=%#v", runtime.pulls, runtime.deletes, runtime.actions)
+	}
 	deploy := runtime.deploys[0]
 	if deploy.ServerID != "srv-a" || deploy.Spec.ApplicationID != app.ID || deploy.Spec.InstanceID != app.ID+"-srv-a" {
 		t.Fatalf("deploy = %#v", deploy)
@@ -125,6 +131,31 @@ func TestCreateEnabledAppWrapsRuntimeDeploymentError(t *testing.T) {
 	}
 	if !strings.Contains(appErr.Message, "invalid runtime config") {
 		t.Fatalf("message = %q", appErr.Message)
+	}
+}
+
+func TestCreateEnabledAppContinuesDeployingRemainingTargetsAfterRuntimeError(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	runtime.deployErrByServer = map[string]error{"srv-a": errors.New("agent down")}
+
+	_, err := svc.Create(context.Background(), SaveInput{
+		Name:     "web",
+		Enabled:  true,
+		SpecYAML: "name: web\nimage: nginx\n",
+	})
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "application_runtime_operation_failed" {
+		t.Fatalf("err = %#v", err)
+	}
+	if !strings.Contains(appErr.Message, "srv-a") || !strings.Contains(appErr.Message, "1 of 2") {
+		t.Fatalf("message = %q", appErr.Message)
+	}
+	if len(runtime.deploys) != 2 {
+		t.Fatalf("deploys = %#v", runtime.deploys)
+	}
+	if runtime.deploys[0].ServerID != "srv-a" || runtime.deploys[1].ServerID != "srv-b" {
+		t.Fatalf("deploy order = %#v", runtime.deploys)
 	}
 }
 
@@ -653,7 +684,11 @@ func readyServer(id string) server.Server {
 }
 
 type fakeRuntimeClient struct {
-	deploys              []agent.RuntimeDeployRequest
+	writes               []agent.RuntimeWriteFilesRequest
+	deploys              []agent.RuntimeCreateContainerRequest
+	pulls                []string
+	deletes              []string
+	actions              []string
 	stops                []agent.RuntimeStopRequest
 	restarts             []agent.RuntimeRestartRequest
 	statuses             map[string]appruntime.InstanceStatus
@@ -666,20 +701,40 @@ type fakeRuntimeClient struct {
 	restoreApplicationID string
 	restoreContent       []byte
 	deployErr            error
+	deployErrByServer    map[string]error
 }
 
-func (f *fakeRuntimeClient) RuntimeDeploy(ctx context.Context, baseURL string, req agent.RuntimeDeployRequest) (agent.RuntimeInstanceResponse, error) {
+func (f *fakeRuntimeClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req agent.RuntimeWriteFilesRequest) error {
+	f.writes = append(f.writes, req)
+	return nil
+}
+
+func (f *fakeRuntimeClient) DockerImagePull(ctx context.Context, baseURL, reference string) error {
+	f.pulls = append(f.pulls, reference)
+	return nil
+}
+
+func (f *fakeRuntimeClient) DockerContainerDelete(ctx context.Context, baseURL, id string) error {
+	f.deletes = append(f.deletes, id)
+	return nil
+}
+
+func (f *fakeRuntimeClient) RuntimeCreateContainer(ctx context.Context, baseURL string, req agent.RuntimeCreateContainerRequest) (agent.RuntimeCreateContainerResponse, error) {
 	f.deploys = append(f.deploys, req)
-	if f.deployErr != nil {
-		return agent.RuntimeInstanceResponse{}, f.deployErr
+	if f.deployErrByServer != nil {
+		if err, ok := f.deployErrByServer[req.ServerID]; ok {
+			return agent.RuntimeCreateContainerResponse{}, err
+		}
 	}
-	return agent.RuntimeInstanceResponse{
-		InstanceID:    req.Spec.InstanceID,
-		ContainerName: req.Spec.ContainerName,
-		ContainerID:   "container-" + req.ServerID,
-		Status:        appruntime.StatusRunning,
-		ObservedAt:    time.Now().UTC(),
-	}, nil
+	if f.deployErr != nil {
+		return agent.RuntimeCreateContainerResponse{}, f.deployErr
+	}
+	return agent.RuntimeCreateContainerResponse{ContainerID: "container-" + req.ServerID}, nil
+}
+
+func (f *fakeRuntimeClient) DockerContainerAction(ctx context.Context, baseURL, id, action string) error {
+	f.actions = append(f.actions, id+":"+action)
+	return nil
 }
 
 func (f *fakeRuntimeClient) RuntimeStop(ctx context.Context, baseURL string, req agent.RuntimeStopRequest) (agent.RuntimeInstanceResponse, error) {

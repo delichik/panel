@@ -233,7 +233,8 @@ var (
 
 	prefixCodeTranslations = map[string]map[string]string{
 		LocaleSimplifiedChinese: {
-			"Application runtime operation failed: ": "应用运行时操作失败：",
+			"Application runtime operation failed: deployment failed on ": "应用运行时操作失败：部署失败目标 ",
+			"Application runtime operation failed: ":                      "应用运行时操作失败：",
 		},
 	}
 )
@@ -292,10 +293,16 @@ func TranslateLocale(locale, code, fallback string) string {
 		return exact
 	}
 	if prefixTranslations := prefixCodeTranslations[normalized]; prefixTranslations != nil {
+		bestPrefix := ""
+		bestTranslation := ""
 		for prefix, translated := range prefixTranslations {
-			if strings.HasPrefix(fallback, prefix) {
-				return translated + strings.TrimPrefix(fallback, prefix)
+			if strings.HasPrefix(fallback, prefix) && len(prefix) > len(bestPrefix) {
+				bestPrefix = prefix
+				bestTranslation = translated
 			}
+		}
+		if bestPrefix != "" {
+			return bestTranslation + strings.TrimPrefix(fallback, bestPrefix)
 		}
 	}
 	if strings.HasSuffix(fallback, " not found") {

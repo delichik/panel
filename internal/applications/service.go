@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path"
 	"path/filepath"
@@ -37,13 +38,17 @@ type Config struct {
 }
 
 type AgentRuntimeClient interface {
-	RuntimeDeploy(ctx context.Context, baseURL string, req agent.RuntimeDeployRequest) (agent.RuntimeInstanceResponse, error)
+	RuntimeWriteFiles(ctx context.Context, baseURL string, req agent.RuntimeWriteFilesRequest) error
+	RuntimeCreateContainer(ctx context.Context, baseURL string, req agent.RuntimeCreateContainerRequest) (agent.RuntimeCreateContainerResponse, error)
 	RuntimeStop(ctx context.Context, baseURL string, req agent.RuntimeStopRequest) (agent.RuntimeInstanceResponse, error)
 	RuntimeRestart(ctx context.Context, baseURL string, req agent.RuntimeRestartRequest) (agent.RuntimeInstanceResponse, error)
 	RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agent.RuntimeStatusResponse, error)
 	RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agent.RuntimeLogsResponse, error)
 	RuntimePersistentArchive(ctx context.Context, baseURL, applicationID string) (agent.RuntimePersistentArchiveResponse, error)
 	RuntimePersistentRestore(ctx context.Context, baseURL, applicationID string, content []byte) (agent.RuntimePersistentRestoreResponse, error)
+	DockerImagePull(ctx context.Context, baseURL, reference string) error
+	DockerContainerDelete(ctx context.Context, baseURL, id string) error
+	DockerContainerAction(ctx context.Context, baseURL, id, action string) error
 }
 
 type ServerProvider interface {
@@ -1455,10 +1460,17 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.Advance(ctx, taskID, "deploying", "deploying application instances")
 	}
+	failures := []runtimeDeploymentFailure{}
 	for _, target := range targets {
+		targetName := firstNonEmpty(target.Name, target.ID, target.Host)
 		baseURL, ok := agentURLFromServer(target)
 		if !ok {
-			return panelerr.Validation("agent_required", "Agent is required for application deployment")
+			err := panelerr.Validation("agent_required", "Agent is required for application deployment")
+			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
+			if s.tasks != nil && taskID != "" {
+				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "deploying on "+targetName+" failed: "+err.Error())
+			}
+			continue
 		}
 		instanceSpec := runtimeSpecForServer(app, spec, target)
 		previousContainerName := ""
@@ -1469,27 +1481,115 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			return err
 		}
 		if s.tasks != nil && taskID != "" {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+firstNonEmpty(target.Name, target.ID, target.Host))
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+targetName)
 		}
 		var result agent.RuntimeInstanceResponse
 		err := s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
-			var runErr error
-			result, runErr = s.runtimeClient.RuntimeDeploy(runCtx, baseURL, agent.RuntimeDeployRequest{ServerID: target.ID, Spec: instanceSpec, PreviousContainerName: previousContainerName})
-			return runErr
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
+				return s.runtimeClient.RuntimeWriteFiles(runCtx, baseURL, agent.RuntimeWriteFilesRequest{Spec: instanceSpec})
+			}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "pull image", func(context.Context) error {
+				return s.runtimeClient.DockerImagePull(runCtx, baseURL, instanceSpec.Image)
+			}); err != nil {
+				return err
+			}
+			if previousContainerName != "" && previousContainerName != instanceSpec.ContainerName {
+				if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove previous container", func(context.Context) error {
+					return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, previousContainerName)
+				}); err != nil {
+					return err
+				}
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove target container", func(context.Context) error {
+				return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, instanceSpec.ContainerName)
+			}); err != nil {
+				return err
+			}
+			var created agent.RuntimeCreateContainerResponse
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "create container", func(context.Context) error {
+				var createErr error
+				created, createErr = s.runtimeClient.RuntimeCreateContainer(runCtx, baseURL, agent.RuntimeCreateContainerRequest{ServerID: target.ID, Spec: instanceSpec})
+				return createErr
+			}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "start container", func(context.Context) error {
+				return s.runtimeClient.DockerContainerAction(runCtx, baseURL, firstNonEmpty(created.ContainerID, instanceSpec.ContainerName), "start")
+			}); err != nil {
+				return err
+			}
+			var status agent.RuntimeStatusResponse
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "inspect container", func(context.Context) error {
+				var statusErr error
+				status, statusErr = s.runtimeClient.RuntimeStatus(runCtx, baseURL, instanceSpec.InstanceID, instanceSpec.ContainerName)
+				return statusErr
+			}); err != nil {
+				return err
+			}
+			result = agent.RuntimeInstanceResponse{
+				InstanceID:    instanceSpec.InstanceID,
+				ContainerName: instanceSpec.ContainerName,
+				ContainerID:   firstNonEmpty(status.ContainerID, created.ContainerID),
+				Status:        status.Status,
+				Error:         status.LastError,
+				ObservedAt:    status.ObservedAt,
+			}
+			return nil
 		})
 		if err != nil {
 			_ = s.handleAgentError(ctx, target, err)
 			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
-			return runtimeOperationError(err)
+			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
+			if s.tasks != nil && taskID != "" {
+				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "deploying on "+targetName+" failed: "+err.Error())
+			}
+			continue
 		}
 		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
 			return err
 		}
 	}
+	if len(failures) > 0 {
+		return runtimeDeploymentError(len(targets), failures)
+	}
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.Complete(ctx, taskID, "Application deployed")
 	}
 	return nil
+}
+
+func (s *Service) runRuntimeDeployStep(ctx context.Context, taskID, targetName, step string, run func(context.Context) error) error {
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", step+" on "+targetName)
+	}
+	if err := run(ctx); err != nil {
+		return fmt.Errorf("%s failed: %w", step, err)
+	}
+	return nil
+}
+
+type runtimeDeploymentFailure struct {
+	targetName string
+	err        error
+}
+
+func runtimeDeploymentError(targetCount int, failures []runtimeDeploymentFailure) error {
+	if len(failures) == 0 {
+		return nil
+	}
+	if targetCount == 1 && len(failures) == 1 {
+		return runtimeOperationError(failures[0].err)
+	}
+	parts := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		parts = append(parts, failure.targetName+": "+failure.err.Error())
+	}
+	return panelerr.BadGateway(
+		"application_runtime_operation_failed",
+		"Application runtime operation failed: deployment failed on "+strconv.Itoa(len(failures))+" of "+strconv.Itoa(targetCount)+" targets: "+strings.Join(parts, "; "),
+	)
 }
 
 func (s *Service) ensureRuntimeInstancesReady(ctx context.Context, appID string) error {

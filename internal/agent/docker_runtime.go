@@ -52,50 +52,6 @@ func (r *LocalRuntime) DockerHealth(ctx context.Context) DockerHealth {
 	return DockerHealth{Host: r.dockerHost, Status: "ok"}
 }
 
-func (r *LocalRuntime) Deploy(ctx context.Context, req RuntimeDeployRequest) (RuntimeInstanceResponse, error) {
-	if r == nil || r.client == nil {
-		return RuntimeInstanceResponse{}, errors.New("runtime is not configured")
-	}
-	spec := req.Spec
-	if strings.TrimSpace(spec.InstanceID) == "" {
-		return RuntimeInstanceResponse{}, errors.New("instance id is required")
-	}
-	if strings.TrimSpace(spec.ContainerName) == "" {
-		return RuntimeInstanceResponse{}, errors.New("container name is required")
-	}
-	if strings.TrimSpace(spec.Image) == "" {
-		return RuntimeInstanceResponse{}, errors.New("image is required")
-	}
-	if err := r.writeManagedFiles(spec); err != nil {
-		return RuntimeInstanceResponse{}, err
-	}
-	if err := r.client.pullImage(ctx, spec.Image); err != nil {
-		return RuntimeInstanceResponse{}, err
-	}
-	if previous := strings.TrimSpace(req.PreviousContainerName); previous != "" && previous != spec.ContainerName {
-		_ = r.client.removeContainer(ctx, previous, true)
-	}
-	_ = r.client.removeContainer(ctx, spec.ContainerName, true)
-	id, err := r.client.createContainer(ctx, spec)
-	if err != nil {
-		return RuntimeInstanceResponse{}, err
-	}
-	if err := r.client.startContainer(ctx, id); err != nil {
-		return RuntimeInstanceResponse{}, err
-	}
-	status, err := r.Status(ctx, spec.InstanceID, spec.ContainerName, req.ServerID)
-	if err != nil {
-		return RuntimeInstanceResponse{}, err
-	}
-	return RuntimeInstanceResponse{
-		InstanceID:    spec.InstanceID,
-		ContainerName: spec.ContainerName,
-		ContainerID:   firstNonEmpty(status.ContainerID, id),
-		Status:        status.Status,
-		ObservedAt:    status.ObservedAt,
-	}, nil
-}
-
 func (r *LocalRuntime) Stop(ctx context.Context, req RuntimeStopRequest) (RuntimeInstanceResponse, error) {
 	if r == nil || r.client == nil {
 		return RuntimeInstanceResponse{}, errors.New("runtime is not configured")
@@ -344,6 +300,30 @@ func (r *LocalRuntime) ContainerDelete(ctx context.Context, id string) error {
 		return nil
 	}
 	return err
+}
+
+func (r *LocalRuntime) WriteManagedFiles(ctx context.Context, spec appruntime.Spec) error {
+	if r == nil || r.client == nil {
+		return errors.New("runtime is not configured")
+	}
+	_ = ctx
+	return r.writeManagedFiles(spec)
+}
+
+func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec) (string, error) {
+	if r == nil || r.client == nil {
+		return "", errors.New("runtime is not configured")
+	}
+	if strings.TrimSpace(spec.InstanceID) == "" {
+		return "", errors.New("instance id is required")
+	}
+	if strings.TrimSpace(spec.ContainerName) == "" {
+		return "", errors.New("container name is required")
+	}
+	if strings.TrimSpace(spec.Image) == "" {
+		return "", errors.New("image is required")
+	}
+	return r.client.createContainer(ctx, spec)
 }
 
 func (r *LocalRuntime) Images(ctx context.Context) ([]DockerImage, error) {

@@ -104,17 +104,28 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(path, "/v1/docker/volumes/"):
 		err := h.runtime.DeleteVolume(r.Context(), strings.TrimPrefix(path, "/v1/docker/volumes/"))
 		writeResult(w, map[string]bool{"ok": err == nil}, err)
-	case r.Method == http.MethodPost && path == "/v1/runtime/applications/deploy":
+	case r.Method == http.MethodPost && path == "/v1/runtime/applications/files":
 		if h.runtime == nil {
 			writeError(w, http.StatusBadGateway, "runtime is not configured")
 			return
 		}
-		var req RuntimeDeployRequest
+		var req RuntimeWriteFilesRequest
 		if !decodeJSON(w, r, &req) {
 			return
 		}
-		result, err := h.runtime.Deploy(r.Context(), req)
-		writeResult(w, result, err)
+		err := h.runtime.WriteManagedFiles(r.Context(), req.Spec)
+		writeResult(w, map[string]bool{"ok": err == nil}, err)
+	case r.Method == http.MethodPost && path == "/v1/runtime/applications/containers/create":
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
+		var req RuntimeCreateContainerRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		id, err := h.runtime.CreateContainer(r.Context(), req.Spec)
+		writeResult(w, RuntimeCreateContainerResponse{ContainerID: id}, err)
 	case r.Method == http.MethodPost && path == "/v1/runtime/applications/stop":
 		if h.runtime == nil {
 			writeError(w, http.StatusBadGateway, "runtime is not configured")

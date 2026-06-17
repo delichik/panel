@@ -34,7 +34,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-write-files", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -101,10 +101,17 @@ type UFWStatusResponse struct {
 	Raw       string                    `json:"raw"`
 }
 
-type RuntimeDeployRequest struct {
-	ServerID              string          `json:"serverId"`
-	Spec                  appruntime.Spec `json:"spec"`
-	PreviousContainerName string          `json:"previousContainerName,omitempty"`
+type RuntimeWriteFilesRequest struct {
+	Spec appruntime.Spec `json:"spec"`
+}
+
+type RuntimeCreateContainerRequest struct {
+	ServerID string          `json:"serverId"`
+	Spec     appruntime.Spec `json:"spec"`
+}
+
+type RuntimeCreateContainerResponse struct {
+	ContainerID string `json:"containerId"`
 }
 
 type RuntimeStopRequest struct {
