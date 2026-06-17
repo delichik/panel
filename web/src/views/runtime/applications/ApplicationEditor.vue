@@ -6,6 +6,7 @@ import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationPanelFileDto, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ApplicationTemplateVariableDto, ServerDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
+import { parseSpecYaml, toSpecYaml } from './appSpecYaml';
 
 const props = defineProps<{ application: ApplicationDto | null; open: boolean }>();
 const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
@@ -101,6 +102,10 @@ watch(() => form.name, (name) => {
 
 watch(activeEditorTab, (tab, previous) => {
   if (tab === 'yaml' && previous === 'visual') applyVisualSpec();
+  if (tab === 'visual' && previous === 'yaml') {
+    loadSpecForm(form.specYaml, form.name);
+    if (!props.application && specForm.name) form.name = specForm.name;
+  }
 });
 
 function defaultSpec() {
@@ -369,105 +374,13 @@ function buildSpecYaml() {
   spec.restart = { policy: specForm.restartPolicy };
   if (specForm.privileged) spec.privileged = true;
   if (mounts.length) spec.mounts = mounts;
-  return toYaml(spec);
+  return toSpecYaml(spec);
 }
 
 function numericLimit(value: unknown) {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
-}
-
-function parseSpecYaml(raw: string) {
-  const lines = raw.split(/\r?\n/)
-    .map((text) => ({ indent: text.match(/^\s*/)?.[0].length ?? 0, text: text.trim() }))
-    .filter((line) => line.text && !line.text.startsWith('#'));
-  return objectValue(parseYamlObject(lines, 0, 0).value);
-}
-
-function parseYamlObject(lines: Array<{ indent: number; text: string }>, start: number, indent: number): { value: Record<string, unknown>; next: number } {
-  const out: Record<string, unknown> = {};
-  let index = start;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (line.indent < indent || line.text.startsWith('- ')) break;
-    if (line.indent > indent) {
-      index++;
-      continue;
-    }
-    const match = line.text.match(/^([^:]+):(.*)$/);
-    if (!match) {
-      index++;
-      continue;
-    }
-    const key = match[1].trim();
-    const rest = match[2].trim();
-    if (rest) {
-      out[key] = parseYamlScalar(rest);
-      index++;
-      continue;
-    }
-    const child = parseYamlBlock(lines, index + 1, indent + 2);
-    out[key] = child.value;
-    index = child.next;
-  }
-  return { value: out, next: index };
-}
-
-function parseYamlArray(lines: Array<{ indent: number; text: string }>, start: number, indent: number): { value: unknown[]; next: number } {
-  const out: unknown[] = [];
-  let index = start;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (line.indent < indent || !line.text.startsWith('- ')) break;
-    const rest = line.text.slice(2).trim();
-    if (!rest) {
-      const child = parseYamlBlock(lines, index + 1, indent + 2);
-      out.push(child.value);
-      index = child.next;
-      continue;
-    }
-    const firstPair = rest.match(/^([^:]+):(.*)$/);
-    if (firstPair) {
-      const item: Record<string, unknown> = { [firstPair[1].trim()]: parseYamlScalar(firstPair[2].trim()) };
-      index++;
-      while (index < lines.length && lines[index].indent >= indent + 2 && !lines[index].text.startsWith('- ')) {
-        const pair = lines[index].text.match(/^([^:]+):(.*)$/);
-        if (pair) item[pair[1].trim()] = pair[2].trim() ? parseYamlScalar(pair[2].trim()) : parseYamlBlock(lines, index + 1, lines[index].indent + 2).value;
-        index++;
-      }
-      out.push(item);
-      continue;
-    }
-    out.push(parseYamlScalar(rest));
-    index++;
-  }
-  return { value: out, next: index };
-}
-
-function parseYamlBlock(lines: Array<{ indent: number; text: string }>, start: number, indent: number): { value: unknown; next: number } {
-  if (start >= lines.length || lines[start].indent < indent) return { value: {}, next: start };
-  if (lines[start].text.startsWith('- ')) return parseYamlArray(lines, start, lines[start].indent);
-  return parseYamlObject(lines, start, lines[start].indent);
-}
-
-function parseYamlScalar(value: string): unknown {
-  if (value === '') return '';
-  if (value === 'true') return true;
-  if (value === 'false') return false;
-  if (/^-?\d+(\.\d+)?$/.test(value)) return Number(value);
-  if (value.startsWith('[') && value.endsWith(']')) {
-    const inner = value.slice(1, -1).trim();
-    return inner ? inner.split(',').map((item): unknown => parseYamlScalar(item.trim())) : [];
-  }
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    try {
-      return value.startsWith('"') ? JSON.parse(value) : value.slice(1, -1);
-    } catch {
-      return value.slice(1, -1);
-    }
-  }
-  return value;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | null {
@@ -496,49 +409,8 @@ function stringListValues(items: StringListItem[]) {
   return items.map((item) => item.value.trim()).filter(Boolean);
 }
 
-function toYaml(value: unknown, indent = 0): string {
-  const pad = ' '.repeat(indent);
-  if (Array.isArray(value)) {
-    if (value.length === 0) return '[]';
-    return value.map((item) => {
-      if (isPlainObject(item)) {
-        const lines = Object.entries(item).filter(([, child]) => shouldEmit(child));
-        if (lines.length === 0) return `${pad}- {}`;
-        const [first, ...rest] = lines;
-        return `${pad}- ${first[0]}: ${yamlScalar(first[1])}\n${rest.map(([key, child]) => `${pad}  ${key}: ${yamlScalar(child)}`).join('\n')}`;
-      }
-      return `${pad}- ${yamlScalar(item)}`;
-    }).join('\n');
-  }
-  if (isPlainObject(value)) {
-    return Object.entries(value)
-      .filter(([, child]) => shouldEmit(child))
-      .map(([key, child]) => {
-        if (Array.isArray(child) || isPlainObject(child)) return `${pad}${key}:\n${toYaml(child, indent + 2)}`;
-        return `${pad}${key}: ${yamlScalar(child)}`;
-      })
-      .join('\n') + '\n';
-  }
-  return yamlScalar(value);
-}
-
-function yamlScalar(value: unknown): string {
-  if (Array.isArray(value)) return value.length ? `[${value.map(yamlScalar).join(', ')}]` : '[]';
-  if (isPlainObject(value)) return `\n${toYaml(value, 2)}`;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  const text = String(value ?? '');
-  if (text === '' || /[:#\[\]{},&*?|-]|^\s|\s$|\n/.test(text)) return JSON.stringify(text);
-  return text;
-}
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function shouldEmit(value: unknown) {
-  if (Array.isArray(value)) return value.length > 0;
-  if (isPlainObject(value)) return Object.keys(value).length > 0;
-  return value !== undefined && value !== null && value !== '';
 }
 
 function readInput(): ApplicationSaveDto {
@@ -619,14 +491,22 @@ async function save(deploy = false) {
             <v-tab value="yaml">{{ t('applicationEditor.yaml') }}</v-tab>
           </v-tabs>
 
-          <v-window v-model="activeEditorTab" class="editor-window">
-            <v-window-item value="visual">
           <section class="editor-section">
             <div class="section-title">{{ t('applicationEditor.general') }}</div>
             <div class="field-grid">
               <v-text-field v-model="form.name" :label="t('applicationEditor.applicationName')" density="compact" variant="outlined" :readonly="Boolean(application)" hide-details />
-              <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
               <v-switch v-model="form.enabled" :label="t('common.enabled')" color="primary" density="compact" hide-details class="switch-field" />
+            </div>
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <v-window v-model="activeEditorTab" class="editor-window">
+            <v-window-item value="visual">
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.image') }}</div>
+            <div class="field-grid">
+              <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
             </div>
           </section>
 
@@ -694,37 +574,6 @@ async function save(deploy = false) {
           <v-divider class="section-divider" />
 
           <section class="editor-section">
-            <div class="section-title">{{ t('applicationEditor.deploymentTargets') }}</div>
-            <div class="placement-row">
-              <v-select
-                v-model="form.deploymentMode"
-                :items="[
-                  { title: t('applicationEditor.allServers'), value: 'all' },
-                  { title: t('applicationEditor.selectedServers'), value: 'selected' },
-                ]"
-                :label="t('applicationEditor.mode')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-select
-                v-if="form.deploymentMode === 'selected'"
-                v-model="form.deploymentServers"
-                :items="serverOptions"
-                :label="t('applicationEditor.servers')"
-                density="compact"
-                variant="outlined"
-                multiple
-                chips
-                closable-chips
-                hide-details
-              />
-            </div>
-          </section>
-
-          <v-divider class="section-divider" />
-
-          <section class="editor-section">
             <div class="section-title">{{ t('applicationEditor.environment') }}</div>
             <div v-for="(item, index) in specForm.env" :key="index" class="repeat-row env-row">
               <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
@@ -769,6 +618,122 @@ async function save(deploy = false) {
               </div>
             </template>
 
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
+            <div v-for="(mount, index) in specForm.mounts" :key="index" class="repeat-row mount-row">
+              <v-select v-model="mount.type" :items="[
+                { title: t('applicationEditor.dockerVolume'), value: 'volume' },
+                { title: t('applicationEditor.hostPath'), value: 'host' },
+                { title: t('applicationEditor.appFile'), value: 'file' },
+                { title: t('applicationEditor.panelFile'), value: 'panel_file' },
+                { title: t('applicationEditor.persistent'), value: 'persistent' },
+              ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
+              <v-combobox
+                v-if="mount.type === 'file'"
+                v-model="mount.source"
+                :items="files.map(file => file.path)"
+                :label="t('applicationEditor.workspaceFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-select
+                v-else-if="mount.type === 'panel_file'"
+                v-model="mount.source"
+                :items="panelFiles"
+                item-value="source"
+                :item-title="item => `${item.name} / ${item.kind}`"
+                :label="t('applicationEditor.panelFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-text-field
+                v-else-if="mount.type === 'persistent'"
+                v-model="mount.source"
+                :label="t('applicationEditor.persistentSubpath')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
+              <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" density="compact" hide-details />
+              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.mounts, index)" />
+            </div>
+            <div class="mount-actions">
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-folder" class="text-none" @click="addMount('host')">{{ t('applicationEditor.hostPath') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-file" class="text-none" @click="addMount('file')">{{ t('applicationEditor.appFile') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-shield-key" class="text-none" @click="addMount('panel_file')">{{ t('applicationEditor.panelFile') }}</v-btn>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-database" class="text-none" @click="addMount('persistent')">{{ t('applicationEditor.persistent') }}</v-btn>
+            </div>
+          </section>
+
+            </v-window-item>
+
+            <v-window-item value="yaml" class="editor-yaml-pane">
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.yaml') }}</div>
+            <v-textarea
+              ref="yamlTextarea"
+              v-model="form.specYaml"
+              :label="t('applicationEditor.yamlSpec')"
+              variant="outlined"
+              rows="18"
+              spellcheck="false"
+              class="mono-input"
+            />
+            <v-menu>
+              <template #activator="{ props: menuProps }">
+                <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none mt-2">{{ t('applicationEditor.insertVariable') }}</v-btn>
+              </template>
+              <v-list density="compact">
+                <v-list-item v-for="item in variableItems('spec')" :key="item.title" :title="item.title" @click="insertVariable('spec', item.value)" />
+              </v-list>
+            </v-menu>
+          </section>
+            </v-window-item>
+          </v-window>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.deploymentTargets') }}</div>
+            <div class="placement-row">
+              <v-select
+                v-model="form.deploymentMode"
+                :items="[
+                  { title: t('applicationEditor.allServers'), value: 'all' },
+                  { title: t('applicationEditor.selectedServers'), value: 'selected' },
+                ]"
+                :label="t('applicationEditor.mode')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-select
+                v-if="form.deploymentMode === 'selected'"
+                v-model="form.deploymentServers"
+                :items="serverOptions"
+                :label="t('applicationEditor.servers')"
+                density="compact"
+                variant="outlined"
+                multiple
+                chips
+                closable-chips
+                hide-details
+              />
+            </div>
+          </section>
+
+          <v-divider class="section-divider" />
+
+          <section class="editor-section">
             <div class="section-title">{{ t('applicationEditor.reverseProxy') }}</div>
             <div class="proxy-actions">
               <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyRule">{{ t('common.addProxyRule') }}</v-btn>
@@ -863,86 +828,6 @@ async function save(deploy = false) {
             </v-table>
             <AppPagination v-model:page="filePage" v-model:page-size="filePageSize" :total="fileTotal" />
           </section>
-
-          <v-divider class="section-divider" />
-
-          <section class="editor-section">
-            <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
-            <div v-for="(mount, index) in specForm.mounts" :key="index" class="repeat-row mount-row">
-              <v-select v-model="mount.type" :items="[
-                { title: t('applicationEditor.dockerVolume'), value: 'volume' },
-                { title: t('applicationEditor.hostPath'), value: 'host' },
-                { title: t('applicationEditor.appFile'), value: 'file' },
-                { title: t('applicationEditor.panelFile'), value: 'panel_file' },
-                { title: t('applicationEditor.persistent'), value: 'persistent' },
-              ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
-              <v-combobox
-                v-if="mount.type === 'file'"
-                v-model="mount.source"
-                :items="files.map(file => file.path)"
-                :label="t('applicationEditor.workspaceFile')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-select
-                v-else-if="mount.type === 'panel_file'"
-                v-model="mount.source"
-                :items="panelFiles"
-                item-value="source"
-                :item-title="item => `${item.name} / ${item.kind}`"
-                :label="t('applicationEditor.panelFile')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-text-field
-                v-else-if="mount.type === 'persistent'"
-                v-model="mount.source"
-                :label="t('applicationEditor.persistentSubpath')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
-              <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
-              <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" density="compact" hide-details />
-              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.mounts, index)" />
-            </div>
-            <div class="mount-actions">
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-folder" class="text-none" @click="addMount('host')">{{ t('applicationEditor.hostPath') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-file" class="text-none" @click="addMount('file')">{{ t('applicationEditor.appFile') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-shield-key" class="text-none" @click="addMount('panel_file')">{{ t('applicationEditor.panelFile') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-database" class="text-none" @click="addMount('persistent')">{{ t('applicationEditor.persistent') }}</v-btn>
-            </div>
-          </section>
-
-            </v-window-item>
-
-            <v-window-item value="yaml" class="editor-yaml-pane">
-          <section class="editor-section">
-            <div class="section-title">{{ t('applicationEditor.yaml') }}</div>
-            <v-textarea
-              ref="yamlTextarea"
-              v-model="form.specYaml"
-              :label="t('applicationEditor.yamlSpec')"
-              variant="outlined"
-              rows="18"
-              spellcheck="false"
-              class="mono-input"
-            />
-            <v-menu>
-              <template #activator="{ props: menuProps }">
-                <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none mt-2">{{ t('applicationEditor.insertVariable') }}</v-btn>
-              </template>
-              <v-list density="compact">
-                <v-list-item v-for="item in variableItems('spec')" :key="item.title" :title="item.title" @click="insertVariable('spec', item.value)" />
-              </v-list>
-            </v-menu>
-          </section>
-            </v-window-item>
-          </v-window>
         </div>
       </v-card-text>
       <v-divider />
