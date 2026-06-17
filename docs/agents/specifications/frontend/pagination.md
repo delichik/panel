@@ -32,10 +32,13 @@
 ## 布局
 
 - 分页放在列表或表格卡片底部。
+- 中大屏满高列表或表格卡片必须使用纵向 flex 或等价 grid：标题/工具栏固定高度，列表或表格体 `flex: 1 1 auto; min-height: 0; overflow: auto`，分页 `flex: 0 0 auto` 留在底部。
+- 不能让分页紧跟少量数据停在卡片中间；即使当前页只有一两条数据，分页也应贴住卡片底边，空白留在可滚动内容区内。
 - 顶部有 `--lp-border` 分隔线。
 - 背景使用弱化的 `--lp-surface-container`。
 - 桌面横向靠右，总数通过 `margin-right: auto` 靠左。
 - `760px` 以下改为纵向，页大小选择器填满宽度。
+- 窄屏恢复自然高度时，内容体可取消纵向 flex 填充，分页随内容自然排列。
 
 ## 前端分页
 
@@ -67,6 +70,7 @@
 - 不在 `total = 0` 时保留空分页条。
 - 不让页大小变化后停留在越界页码。
 - 不把前端数组分页伪装成服务端请求分页。
+- 不在满高卡片里省略列表或表格体的 `flex: 1`，否则分页会漂在内容下方而不是卡片底部。
 
 ## 源码依据
 
@@ -74,3 +78,6 @@
 - `web/src/composables/usePagination.ts`
 - `web/src/views/runtime/applications/index.vue`
 - `web/src/views/tasks/index.vue`
+- `web/src/views/dns/domains/index.vue`
+- `web/src/views/servers/packages/index.vue`
+- `web/src/views/certificates/domains/index.vue`

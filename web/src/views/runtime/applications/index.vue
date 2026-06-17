@@ -277,7 +277,7 @@ onMounted(load);
 .application-list, .detail-column { min-width: 0; min-height: 0; }
 .application-list { display: flex; flex-direction: column; overflow: hidden; }
 .list-header-main { display: grid; gap: 10px; justify-items: start; }
-.application-table-wrap { min-height: 0; overflow: auto; }
+.application-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .application-table { background: transparent; }
 .application-table :deep(td) { height: 58px; border-bottom-color: rgba(var(--v-border-color), 0.06); vertical-align: middle; }
 .cursor-pointer { cursor: pointer; }
@@ -300,7 +300,7 @@ onMounted(load);
   .summary-strip { max-width: none; }
   .applications-workspace { flex: none; min-height: auto; overflow: visible; }
   .application-list { overflow: visible; }
-  .application-table-wrap { overflow-x: auto; overflow-y: visible; }
+  .application-table-wrap { flex: none; overflow-x: auto; overflow-y: visible; }
   .detail-column { overflow: visible; }
 }
 </style>

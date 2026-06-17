@@ -744,32 +744,34 @@ onMounted(load);
           {{ t('serversPage.addCredential') }}
         </v-btn>
       </div>
-      <v-table class="text-left">
-        <thead>
-          <tr>
-            <th class="font-weight-bold">{{ t('serversPage.name') }}</th>
-            <th class="font-weight-bold">{{ t('serversPage.username') }}</th>
-            <th class="font-weight-bold">{{ t('common.type') }}</th>
-            <th class="font-weight-bold text-right" style="width: 180px;">{{ t('common.actions') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-if="credentialRows.length === 0">
-            <td colspan="4" class="text-center py-6 text-medium-emphasis">{{ t('serversPage.noCredentials') }}</td>
-          </tr>
-          <tr v-for="row in pagedCredentialRows" :key="row.id">
-            <td class="font-weight-bold">{{ row.name }}</td>
-            <td>{{ row.username }}</td>
-            <td><v-chip size="small" label color="secondary" variant="tonal">{{ row.type }}</v-chip></td>
-            <td class="text-right">
-              <div class="app-table-actions">
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="editCredential(row)">{{ t('common.edit') }}</v-btn>
-                <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="deleteCredential(row)">{{ t('common.delete') }}</v-btn>
-              </div>
-            </td>
-          </tr>
-        </tbody>
-      </v-table>
+      <div class="credential-table-wrap">
+        <v-table class="text-left">
+          <thead>
+            <tr>
+              <th class="font-weight-bold">{{ t('serversPage.name') }}</th>
+              <th class="font-weight-bold">{{ t('serversPage.username') }}</th>
+              <th class="font-weight-bold">{{ t('common.type') }}</th>
+              <th class="font-weight-bold text-right" style="width: 180px;">{{ t('common.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-if="credentialRows.length === 0">
+              <td colspan="4" class="text-center py-6 text-medium-emphasis">{{ t('serversPage.noCredentials') }}</td>
+            </tr>
+            <tr v-for="row in pagedCredentialRows" :key="row.id">
+              <td class="font-weight-bold">{{ row.name }}</td>
+              <td>{{ row.username }}</td>
+              <td><v-chip size="small" label color="secondary" variant="tonal">{{ row.type }}</v-chip></td>
+              <td class="text-right">
+                <div class="app-table-actions">
+                  <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="editCredential(row)">{{ t('common.edit') }}</v-btn>
+                  <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="deleteCredential(row)">{{ t('common.delete') }}</v-btn>
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </v-table>
+      </div>
       <AppPagination v-model:page="credentialPage" v-model:page-size="credentialPageSize" :total="credentialTotal" />
     </v-card>
 
@@ -959,7 +961,8 @@ onMounted(load);
 .span-all { grid-column: 1 / -1; }
 .server-task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .credential-required-alert :deep(.v-alert__content) { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.credential-table-card { overflow: hidden; }
+.credential-table-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; }
+.credential-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .font-tabular { font-variant-numeric: tabular-nums; }
 .min-width-0 { min-width: 0; }
 @media (min-width: 761px) { .detail-column { min-height: 0; overflow: auto; } }
@@ -968,8 +971,8 @@ onMounted(load);
   .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .server-task-alert { flex-direction: column; align-items: stretch; }
   .servers-workspace, .detail-card { flex: none; min-height: auto; }
-  .server-list, .detail-card { overflow: visible; }
-  .server-list-body, .detail-sections { overflow: visible; }
+  .server-list, .detail-card, .credential-table-card { overflow: visible; }
+  .server-list-body, .detail-sections, .credential-table-wrap { overflow: visible; }
   .detail-column { display: block; }
 }
 </style>

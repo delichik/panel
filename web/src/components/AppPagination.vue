@@ -56,6 +56,7 @@ function updatePageSize(value: number) {
 <style scoped>
 .app-pagination {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;

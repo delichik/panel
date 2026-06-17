@@ -317,6 +317,7 @@ onMounted(load);
 }
 
 .table-scroll {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
 }
@@ -334,6 +335,7 @@ onMounted(load);
   }
 
   .table-scroll {
+    flex: none;
     overflow-x: auto;
     overflow-y: visible;
   }

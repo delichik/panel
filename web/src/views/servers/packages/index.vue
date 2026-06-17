@@ -355,6 +355,7 @@ onBeforeUnmount(stopRefreshPolling);
 }
 
 .package-table-wrap {
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
 }

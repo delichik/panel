@@ -342,7 +342,7 @@ onMounted(async () => {
 .firewall-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px; overflow: hidden; }
 .panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
 .panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.firewall-panel-body { display: grid; gap: 0; align-content: start; grid-auto-rows: max-content; min-height: 0; overflow: auto; }
+.firewall-panel-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: hidden; }
 .status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .status-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .status-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
@@ -350,7 +350,7 @@ onMounted(async () => {
 .install-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .rule-form { display: grid; grid-template-columns: minmax(110px, 0.16fr) minmax(130px, 0.18fr) minmax(180px, 1fr) auto; gap: 10px; align-items: center; margin: 16px 0; }
 .rule-table { border: 1px solid var(--lp-border); border-radius: 8px; overflow: hidden; }
-.rule-table-wrap { min-height: 0; overflow: auto; }
+.rule-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
 .empty-panel { min-height: 340px; display: grid; place-items: center; align-content: center; gap: 10px; padding: 32px; text-align: center; }
 .min-width-0 { min-width: 0; }
 @media (max-width: 1080px) {
@@ -362,7 +362,7 @@ onMounted(async () => {
   .status-grid, .rule-form { grid-template-columns: 1fr; }
   .firewall-workspace { flex: none; min-height: auto; }
   .firewall-panel { overflow: visible; }
-  .firewall-panel-body { overflow: visible; }
-  .rule-table-wrap { overflow-x: auto; overflow-y: visible; }
+  .firewall-panel-body { flex: none; overflow: visible; }
+  .rule-table-wrap { flex: none; overflow-x: auto; overflow-y: visible; }
 }
 </style>

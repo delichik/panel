@@ -5,9 +5,11 @@
 使用 Vuetify `v-table`。表格背景透明，由外层卡片提供表面、边框和裁切。
 
 ```html
-<v-card variant="outlined" class="overflow-hidden">
+<v-card variant="outlined" class="table-card">
   <div class="app-card-header">...</div>
-  <v-table class="text-left">...</v-table>
+  <div class="table-body">
+    <v-table class="text-left">...</v-table>
+  </div>
   <AppPagination ... />
 </v-card>
 ```
@@ -60,6 +62,8 @@
 
 用户可见数据列表使用 `AppPagination`，放在表格之后、卡片内部。具体规则见 [pagination.md](pagination.md)。
 
+满高表格卡片必须把 `v-table` 放进专用内容体，内容体使用 `flex: 1 1 auto; min-height: 0; overflow: auto`。不要让 `v-table` 直接接在标题和分页之间，否则数据少时分页会停在卡片中间。
+
 ## 响应式
 
 - 不通过固定表格宽度撑开整页。
@@ -84,4 +88,6 @@
 - `web/src/views/servers/_shared/ServersPageContent.vue`
 - `web/src/views/dns/domains/index.vue`
 - `web/src/views/tasks/index.vue`
+- `web/src/views/runtime/applications/index.vue`
+- `web/src/views/servers/packages/index.vue`
 - `web/src/views/certificates/key-assets/index.vue`
