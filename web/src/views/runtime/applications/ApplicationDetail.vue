@@ -4,7 +4,7 @@ import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
 import ApplicationRuntimePanel from './ApplicationRuntimePanel.vue';
-import ApplicationLogsPanel from './ApplicationLogsPanel.vue';
+import RuntimeLogsDialog from '@/components/RuntimeLogsDialog.vue';
 
 const props = defineProps<{ application: ApplicationDto }>();
 const emit = defineEmits<{ changed: [ApplicationDto] }>();
@@ -15,6 +15,7 @@ const error = ref('');
 const message = ref('');
 const lastTaskId = ref('');
 const logTarget = ref<{ instanceId: string; containerName: string } | null>(null);
+const logsDialog = ref(false);
 const imageStatusColor = computed(() => {
   if (props.application.imageLastError) return 'error';
   if (props.application.imageUpdateAvailable) return 'warning';
@@ -75,10 +76,23 @@ function taskRoute(taskId = lastTaskId.value) {
 
 function selectLogs(target: { instanceId: string; containerName: string }) {
   logTarget.value = target;
+  logsDialog.value = true;
+}
+
+async function loadSelectedLogs(tail: number) {
+  if (!logTarget.value) return '';
+  const result = await applicationsApi.logs(props.application.id, {
+    instanceId: logTarget.value.instanceId,
+    containerName: logTarget.value.containerName,
+    type: 'stdout',
+    tail,
+  });
+  return result.logs;
 }
 
 watch(() => props.application.id, () => {
   logTarget.value = null;
+  logsDialog.value = false;
   message.value = '';
   lastTaskId.value = '';
 });
@@ -135,7 +149,13 @@ watch(() => props.application.id, () => {
       <v-alert v-if="application.lastError" type="error" variant="tonal" class="mt-3">{{ application.lastError }}</v-alert>
     </v-card>
     <ApplicationRuntimePanel :application="application" @logs="selectLogs" />
-    <ApplicationLogsPanel :application="application" :instance-id="logTarget?.instanceId" :container-name="logTarget?.containerName" />
+    <RuntimeLogsDialog
+      v-model:open="logsDialog"
+      :title="t('applicationLogs.logs')"
+      :subtitle="logTarget ? t('applicationLogs.selectedTarget', { instance: logTarget.instanceId, container: logTarget.containerName || '-' }) : ''"
+      :target-key="logTarget ? `${application.id}:${logTarget.instanceId}:${logTarget.containerName}` : ''"
+      :loader="loadSelectedLogs"
+    />
   </div>
 </template>
 

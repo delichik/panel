@@ -622,6 +622,7 @@ const messages = {
       tail: "Tail",
       loadFailed: "Unable to load logs",
       empty: "Select a runtime instance to load logs.",
+      emptyContent: "No logs returned.",
       selectedTarget: "Selected {instance} / {container}",
     },
     taskCenter: {
@@ -720,6 +721,8 @@ const messages = {
       start: "Start",
       stop: "Stop",
       restart: "Restart",
+      viewLogs: "View logs",
+      containerLogs: "Container logs",
       pull: "Pull",
       pullImage: "Pull image",
       imageReference: "Image reference",
@@ -1712,6 +1715,7 @@ const messages = {
       tail: "尾部行数",
       loadFailed: "无法加载日志",
       empty: "选择一个运行时实例以加载日志。",
+      emptyContent: "未返回日志。",
       selectedTarget: "已选择 {instance} / {container}",
     },
     taskCenter: {
@@ -1810,6 +1814,8 @@ const messages = {
       start: "启动",
       stop: "停止",
       restart: "重启",
+      viewLogs: "查看日志",
+      containerLogs: "容器日志",
       pull: "拉取",
       pullImage: "拉取镜像",
       imageReference: "镜像引用",

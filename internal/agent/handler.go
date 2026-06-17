@@ -58,6 +58,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && path == "/v1/docker/containers":
 		items, err := h.runtime.Containers(r.Context())
 		writeResult(w, DockerContainersResponse{Items: items}, err)
+	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/docker/containers/") && strings.HasSuffix(path, "/logs"):
+		id := dockerContainerLogsID(path)
+		tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+		logs, err := h.runtime.ContainerLogs(r.Context(), id, tail)
+		writeResult(w, DockerContainerLogsResponse{ContainerID: id, Logs: logs}, err)
 	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/docker/containers/"):
 		id, action := dockerContainerAction(path)
 		var err error
@@ -161,6 +166,12 @@ func dockerContainerAction(path string) (string, string) {
 		return "", ""
 	}
 	return parts[0], parts[1]
+}
+
+func dockerContainerLogsID(path string) string {
+	value := strings.TrimPrefix(path, "/v1/docker/containers/")
+	value = strings.TrimSuffix(value, "/logs")
+	return strings.Trim(value, "/")
 }
 
 func (h *Handler) oldServeHTTP(w http.ResponseWriter, r *http.Request) {

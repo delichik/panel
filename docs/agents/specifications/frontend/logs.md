@@ -56,13 +56,14 @@ grid-template-columns: 86px 64px minmax(0, 1fr);
 依次为时间、流、正文。正文使用 `white-space: pre-wrap` 和 `overflow-wrap: anywhere`。
 `560px` 以下改为单列，每条日志使用弱分隔线，字号降为 `11px`。
 
-## 应用日志控制区
+## 运行日志弹窗
 
-应用日志虽为业务组件，但其控制区遵循通用日志模式。
+应用和容器运行日志使用 `RuntimeLogsDialog.vue` 展示。
 
-- 日志容器上方放紧凑筛选控件。
+- 日志容器上方放紧凑控制区。
 - 控件使用 compact outlined。
-- 加载按钮使用 primary flat。
+- 刷新按钮使用 primary flat。
+- tail 行数可调整，最大为 10000。
 - `760px` 以下控制区转为单列。
 
 ## 安全与可读性
@@ -84,4 +85,4 @@ grid-template-columns: 86px 64px minmax(0, 1fr);
 
 - `web/src/components/tasks/TaskLogPanel.vue`
 - `web/src/views/tasks/index.vue`
-- `web/src/views/runtime/applications/ApplicationLogsPanel.vue`
+- `web/src/components/RuntimeLogsDialog.vue`

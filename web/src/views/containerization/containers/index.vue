@@ -2,6 +2,7 @@
 import { ref } from 'vue';
 import { containerizationApi, type DockerContainerDto } from '@/api/containerization';
 import { useI18n } from '@/i18n';
+import RuntimeLogsDialog from '@/components/RuntimeLogsDialog.vue';
 import ResourcePage from '../_shared/ResourcePage.vue';
 import { useDockerServers } from '../_shared/useDockerServers';
 
@@ -13,6 +14,8 @@ const pending = ref<{ item: DockerContainerDto; action: 'start' | 'stop' | 'rest
 const actionLoading = ref(false);
 const snackbar = ref(false);
 const message = ref('');
+const logTarget = ref<DockerContainerDto | null>(null);
+const logsDialog = ref(false);
 const { servers, serverId, loadingServers } = useDockerServers(load);
 
 async function load() {
@@ -52,6 +55,17 @@ async function run() {
 function nameOf(item: DockerContainerDto) {
   return item.names?.[0]?.replace(/^\//, '') || item.id.slice(0, 12);
 }
+
+function openLogs(item: DockerContainerDto) {
+  logTarget.value = item;
+  logsDialog.value = true;
+}
+
+async function loadSelectedLogs(tail: number) {
+  if (!logTarget.value) return '';
+  const result = await containerizationApi.containerLogs(serverId.value, logTarget.value.id, tail);
+  return result.logs;
+}
 </script>
 
 <template>
@@ -71,6 +85,7 @@ function nameOf(item: DockerContainerDto) {
           <td><v-chip v-if="item.managed" size="small" color="primary" variant="tonal">{{ t('containerization.applicationManaged') }}</v-chip><span v-else>{{ t('common.no') }}</span></td>
           <td>{{ formatDateTime(new Date(item.created * 1000).toISOString()) }}</td>
           <td class="app-table-actions">
+            <v-btn size="small" icon="mdi-text-box-search-outline" variant="text" :title="t('containerization.viewLogs')" @click="openLogs(item)" />
             <v-btn v-if="item.state !== 'running'" size="small" variant="outlined" @click="ask(item, 'start')">{{ t('containerization.start') }}</v-btn>
             <v-btn v-if="item.state === 'running'" size="small" variant="outlined" @click="ask(item, 'stop')">{{ t('containerization.stop') }}</v-btn>
             <v-btn v-if="item.state === 'running'" size="small" variant="outlined" @click="ask(item, 'restart')">{{ t('containerization.restart') }}</v-btn>
@@ -91,6 +106,13 @@ function nameOf(item: DockerContainerDto) {
         <v-card-actions class="app-dialog-actions"><v-btn variant="text" :disabled="actionLoading" @click="pending = null">{{ t('common.cancel') }}</v-btn><v-btn color="primary" variant="flat" :loading="actionLoading" @click="run">{{ t('common.confirm') }}</v-btn></v-card-actions>
       </v-card>
     </v-dialog>
+    <RuntimeLogsDialog
+      v-model:open="logsDialog"
+      :title="t('containerization.containerLogs')"
+      :subtitle="logTarget ? `${nameOf(logTarget)} / ${logTarget.id.slice(0, 12)}` : ''"
+      :target-key="logTarget ? `${serverId}:${logTarget.id}` : ''"
+      :loader="loadSelectedLogs"
+    />
     <v-snackbar v-model="snackbar">{{ message }}</v-snackbar>
   </ResourcePage>
 </template>

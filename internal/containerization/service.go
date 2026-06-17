@@ -38,6 +38,7 @@ const (
 
 type AgentClient interface {
 	DockerContainers(context.Context, string) ([]agent.DockerContainer, error)
+	DockerContainerLogs(context.Context, string, string, int) (agent.DockerContainerLogsResponse, error)
 	DockerContainerAction(context.Context, string, string, string) error
 	DockerContainerDelete(context.Context, string, string) error
 	DockerImages(context.Context, string) ([]agent.DockerImage, error)
@@ -68,6 +69,11 @@ type Container struct {
 	Managed       bool   `json:"managed"`
 	ApplicationID string `json:"applicationId,omitempty"`
 	InstanceID    string `json:"instanceId,omitempty"`
+}
+
+type ContainerLogs struct {
+	ContainerID string `json:"containerId"`
+	Logs        string `json:"logs"`
 }
 
 type Image struct {
@@ -150,6 +156,19 @@ func (s *Service) Containers(ctx context.Context, serverID string) ([]Container,
 		out = append(out, Container{DockerContainer: item, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
 	}
 	return out, nil
+}
+
+func (s *Service) ContainerLogs(ctx context.Context, serverID, containerID string, tail int) (ContainerLogs, error) {
+	srv, baseURL, err := s.readyServer(ctx, serverID)
+	if err != nil {
+		return ContainerLogs{}, err
+	}
+	logs, err := s.agent.DockerContainerLogs(ctx, baseURL, containerID, normalizeLogTail(tail))
+	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
+		return ContainerLogs{}, err
+	}
+	return ContainerLogs{ContainerID: logs.ContainerID, Logs: logs.Logs}, nil
 }
 
 func (s *Service) ContainerAction(ctx context.Context, serverID, containerID, action string) (OperationResult, error) {
@@ -929,6 +948,16 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeLogTail(tail int) int {
+	if tail <= 0 {
+		return 200
+	}
+	if tail > 10000 {
+		return 10000
+	}
+	return tail
 }
 
 func (s *Service) markRefreshing(serverID string) bool {

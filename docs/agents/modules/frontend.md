@@ -62,7 +62,7 @@
   - API：`web/src/api/containerization.ts`
   - 旧 `/applications` 重定向到 `/containerization/applications`
 - Runtime 应用实现：
-  - 应用运行时面板和日志面板位于 `applications/` 目录内，展示 agent runtime 实例。
+  - 应用运行时面板位于 `applications/` 目录内，日志查看复用 `web/src/components/RuntimeLogsDialog.vue` 弹窗展示 agent runtime 实例或 Docker 容器日志。
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`
 - 证书菜单组：`web/src/views/certificates/`
   - 域名证书：`domains/index.vue`

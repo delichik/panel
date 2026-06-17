@@ -2,6 +2,7 @@ package containerization
 
 import (
 	"net/http"
+	"strconv"
 	"strings"
 
 	"panel/internal/httpx"
@@ -18,6 +19,13 @@ func NewHandler(service *Service) *Handler {
 func (h *Handler) Containers(w http.ResponseWriter, r *http.Request) {
 	items, err := h.service.Containers(r.Context(), serverID(r.URL.Path))
 	write(w, http.StatusOK, items, err)
+}
+
+func (h *Handler) ContainerLogs(w http.ResponseWriter, r *http.Request) {
+	serverID, resourceID := resourceNamedPath(r.URL.Path, "containers", "logs")
+	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	result, err := h.service.ContainerLogs(r.Context(), serverID, resourceID, tail)
+	write(w, http.StatusOK, result, err)
 }
 
 func (h *Handler) ContainerAction(w http.ResponseWriter, r *http.Request) {
@@ -139,4 +147,12 @@ func resourceAction(path, kind string) (string, string, string) {
 		return parts[3], parts[5], parts[6]
 	}
 	return "", "", ""
+}
+
+func resourceNamedPath(path, kind, name string) (string, string) {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 7 && parts[4] == kind && parts[6] == name {
+		return parts[3], parts[5]
+	}
+	return "", ""
 }

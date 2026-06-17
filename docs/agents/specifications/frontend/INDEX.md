@@ -34,7 +34,7 @@
 | 初次加载、局部刷新和空状态 | [loading-empty.md](loading-empty.md) | `PageLoadingState.vue`、全局空状态类 |
 | 列表分页 | [pagination.md](pagination.md) | `AppPagination.vue`、`usePagination.ts` |
 | 可选择列表、主从布局和服务器选择器 | [selection-lists.md](selection-lists.md) | `ServerSelector.vue`、服务器与域名页面 |
-| 任务与运行日志 | [logs.md](logs.md) | `TaskLogPanel.vue`、应用日志面板 |
+| 任务与运行日志 | [logs.md](logs.md) | `TaskLogPanel.vue`、`RuntimeLogsDialog.vue` |
 
 ## 共享组件清单
 

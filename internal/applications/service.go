@@ -1018,9 +1018,7 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 	if _, err := s.Get(ctx, appID); err != nil {
 		return LogResult{}, err
 	}
-	if in.Tail == 0 {
-		in.Tail = 200
-	}
+	in.Tail = normalizeLogTail(in.Tail)
 	instance, err := s.runtimeInstance(ctx, appID, in.InstanceID)
 	if err != nil {
 		return LogResult{}, err
@@ -2402,6 +2400,16 @@ func specUsesPersistentMount(spec appspec.Spec) bool {
 		}
 	}
 	return false
+}
+
+func normalizeLogTail(tail int) int {
+	if tail <= 0 {
+		return 200
+	}
+	if tail > 10000 {
+		return 10000
+	}
+	return tail
 }
 
 func applicationFileMounts(mounts []appspec.Mount) []appspec.Mount {

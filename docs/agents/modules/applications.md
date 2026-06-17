@@ -20,7 +20,7 @@
 - 编辑器：`web/src/views/runtime/applications/ApplicationEditor.vue`
 - 详情：`web/src/views/runtime/applications/ApplicationDetail.vue`
 - 运行时面板：`web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
-- 日志面板：`web/src/views/runtime/applications/ApplicationLogsPanel.vue`
+- 日志弹窗：`web/src/components/RuntimeLogsDialog.vue`
 - API：`web/src/api/applications.ts`
 - 类型：`web/src/types/api.ts`
 
@@ -54,7 +54,7 @@
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用列表接口会刷新已记录实例的运行时状态并聚合为 `runtimeStatus`，列表只展示应用名称、启用状态、运行状态、镜像更新状态和更新时间；jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在详情。
 - 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；`purge` 参数会传给 agent 清理容器。
-- 应用日志按 `instanceId` 和可选 `containerName` 读取。日志面板必须从 runtime 实例提供入口，不再使用 allocation/task 语义。
+- 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。
 - 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等节点变量；值来自实际部署目标服务器。
 - 应用文件模板在后端部署渲染阶段可读 `PANEL_SERVER_*` 变量，因此同一应用在不同服务器会得到不同的服务器值。
 - `panel_file` 挂载使用 `key_asset:<asset-id>:<kind>` 稳定引用 Panel 托管密钥或证书文件；旧 `certificate:<resource-id>:<kind>` 来源仍可被后端读取以服务已有应用规格，但新目录和页面只生成 `key_asset:`。

@@ -23,6 +23,11 @@ export interface DockerContainerDto {
   instanceId?: string;
 }
 
+export interface DockerContainerLogsDto {
+  containerId: string;
+  logs: string;
+}
+
 export interface DockerImageDto {
   id: string;
   repoTags: string[];
@@ -77,6 +82,12 @@ export interface ResourceOperationDto {
 export const containerizationApi = {
   containers(serverId: string) {
     return apiClient.get<DockerContainerDto[]>(`/servers/${serverId}/containers`);
+  },
+  containerLogs(serverId: string, containerId: string, tail?: number) {
+    const params = new URLSearchParams();
+    if (tail) params.set('tail', String(tail));
+    const query = params.toString();
+    return apiClient.get<DockerContainerLogsDto>(`/servers/${serverId}/containers/${encodeURIComponent(containerId)}/logs${query ? `?${query}` : ''}`);
   },
   containerAction(serverId: string, containerId: string, action: 'start' | 'stop' | 'restart') {
     return apiClient.post<ResourceOperationDto>(`/servers/${serverId}/containers/${encodeURIComponent(containerId)}/${action}`);

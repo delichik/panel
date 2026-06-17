@@ -17,14 +17,14 @@
 
 “容器化”一级菜单包含应用、容器、镜像、网络和卷。容器、镜像、网络、卷使用左侧服务器选择器和右侧内部滚动列表。
 
-- 容器支持查询、启动、停止、重启、删除。
+- 容器支持查询、查看日志、启动、停止、重启、删除。
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
 - 网络只读。
 - 卷支持查询、单个删除和批量删除未使用卷，必须展示使用状态；批量删除执行时需重新查询使用状态，只删除执行瞬间仍未使用的卷。
 - 容器、镜像、卷页面发起的资源写操作同步执行并返回；手动镜像刷新和 Application 镜像升级仍创建任务。
 - 同步资源写操作成功后立即创建对应刷新任务：容器使用 `container_refresh`，镜像使用 `image_refresh`，卷使用 `volume_refresh`。
 
-Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
+Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
 ## 托管 Label
 

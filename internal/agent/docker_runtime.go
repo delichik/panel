@@ -173,10 +173,7 @@ func (r *LocalRuntime) Logs(ctx context.Context, instanceID, containerName strin
 	if r == nil || r.client == nil {
 		return "", errors.New("runtime is not configured")
 	}
-	if tail <= 0 {
-		tail = 200
-	}
-	return r.client.containerLogs(ctx, firstNonEmpty(containerName, containerNameForInstance(instanceID)), tail)
+	return r.client.containerLogs(ctx, firstNonEmpty(containerName, containerNameForInstance(instanceID)), normalizeLogTail(tail))
 }
 
 func (r *LocalRuntime) Containers(ctx context.Context) ([]DockerContainer, error) {
@@ -184,6 +181,13 @@ func (r *LocalRuntime) Containers(ctx context.Context) ([]DockerContainer, error
 		return nil, errors.New("runtime is not configured")
 	}
 	return r.client.listContainers(ctx)
+}
+
+func (r *LocalRuntime) ContainerLogs(ctx context.Context, id string, tail int) (string, error) {
+	if r == nil || r.client == nil {
+		return "", errors.New("runtime is not configured")
+	}
+	return r.client.containerLogs(ctx, id, normalizeLogTail(tail))
 }
 
 func (r *LocalRuntime) ContainerStart(ctx context.Context, id string) error {
@@ -868,4 +872,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizeLogTail(tail int) int {
+	if tail <= 0 {
+		return 200
+	}
+	if tail > 10000 {
+		return 10000
+	}
+	return tail
 }

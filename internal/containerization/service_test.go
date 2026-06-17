@@ -123,6 +123,20 @@ func TestContainerActionRunsSynchronouslyAndStartsRefreshTask(t *testing.T) {
 	}
 }
 
+func TestContainerLogsClampsTail(t *testing.T) {
+	svc, _, fakeAgent, _ := newContainerizationTestService(t)
+	result, err := svc.ContainerLogs(context.Background(), "server-1", "container-1", 20000)
+	if err != nil {
+		t.Fatalf("container logs: %v", err)
+	}
+	if result.Logs != "logs" {
+		t.Fatalf("logs = %q", result.Logs)
+	}
+	if fakeAgent.logTail != 10000 {
+		t.Fatalf("tail = %d, want 10000", fakeAgent.logTail)
+	}
+}
+
 func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fakeContainerizationAgent, *storage.Store) {
 	t.Helper()
 	dir := t.TempDir()
@@ -181,10 +195,16 @@ func (p fakeServerProvider) List(context.Context) ([]server.Server, error) {
 type fakeContainerizationAgent struct {
 	mu      sync.Mutex
 	actions []string
+	logTail int
 }
 
 func (a *fakeContainerizationAgent) DockerContainers(context.Context, string) ([]agent.DockerContainer, error) {
 	return nil, nil
+}
+
+func (a *fakeContainerizationAgent) DockerContainerLogs(_ context.Context, _, id string, tail int) (agent.DockerContainerLogsResponse, error) {
+	a.logTail = tail
+	return agent.DockerContainerLogsResponse{ContainerID: id, Logs: "logs"}, nil
 }
 
 func (a *fakeContainerizationAgent) DockerContainerAction(_ context.Context, _ string, id, action string) error {

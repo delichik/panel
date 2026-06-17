@@ -34,7 +34,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -205,6 +205,11 @@ type DockerVolumeUsage struct {
 
 type DockerContainersResponse struct {
 	Items []DockerContainer `json:"items"`
+}
+
+type DockerContainerLogsResponse struct {
+	ContainerID string `json:"containerId"`
+	Logs        string `json:"logs"`
 }
 
 type DockerImagesResponse struct {

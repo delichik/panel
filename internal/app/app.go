@@ -286,6 +286,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			packageH.UpgradeAll(w, r)
 		case r.Method == http.MethodGet && serverDockerCollectionPath(path, "containers"):
 			containerH.Containers(w, r)
+		case r.Method == http.MethodGet && serverDockerResourceActionPath(path, "containers", "logs"):
+			containerH.ContainerLogs(w, r)
 		case r.Method == http.MethodPost && serverDockerActionPath(path, "containers"):
 			containerH.ContainerAction(w, r)
 		case r.Method == http.MethodDelete && serverDockerResourcePath(path, "containers"):
@@ -441,6 +443,11 @@ func serverDockerActionPath(path, kind string) bool {
 func serverDockerActionNamedPath(path, kind, action string) bool {
 	parts := routeParts(path)
 	return len(parts) == 6 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == kind && parts[5] == action
+}
+
+func serverDockerResourceActionPath(path, kind, action string) bool {
+	parts := routeParts(path)
+	return len(parts) == 7 && parts[0] == "api" && parts[1] == "v1" && parts[2] == "servers" && parts[3] != "" && parts[4] == kind && parts[5] != "" && parts[6] == action
 }
 
 func applicationResourcePath(path string) bool {

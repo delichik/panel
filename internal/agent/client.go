@@ -173,6 +173,16 @@ func (c *HTTPClient) DockerContainers(ctx context.Context, baseURL string) ([]Do
 	return out.Items, err
 }
 
+func (c *HTTPClient) DockerContainerLogs(ctx context.Context, baseURL, id string, tail int) (DockerContainerLogsResponse, error) {
+	var out DockerContainerLogsResponse
+	query := url.Values{}
+	if tail > 0 {
+		query.Set("tail", fmt.Sprintf("%d", tail))
+	}
+	err := c.get(ctx, baseURL, "/v1/docker/containers/"+url.PathEscape(id)+"/logs", query, &out)
+	return out, err
+}
+
 func (c *HTTPClient) DockerContainerAction(ctx context.Context, baseURL, id, action string) error {
 	return c.post(ctx, baseURL, "/v1/docker/containers/"+url.PathEscape(id)+"/"+url.PathEscape(action), nil, nil)
 }

@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/components/RuntimeLogsDialog.vue`、`web/src/views/containerization/containers/index.vue`
+  - 应用运行时日志和容器日志弹窗、刷新按钮、tail 行数和空日志文案已接入英文与简体中文词条；日志正文保留容器原始输出。
 - `web/src/views/containerization/`、`internal/containerization`
   - 容器化导航、容器/镜像/网络/卷页面、托管警告、镜像批量升级和资源删除文案已接入英文与简体中文词条；Docker Engine 和镜像仓库原始诊断保留原文。
   - 镜像“更多”菜单、全部更新确认、删除未使用镜像确认，以及卷删除未使用确认已接入英文与简体中文词条。
