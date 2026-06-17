@@ -35,6 +35,10 @@ type applicationService interface {
 	TemplateCatalog(ctx context.Context) (TemplateCatalog, error)
 }
 
+type applicationRuntimeListService interface {
+	ListWithRuntime(ctx context.Context) ([]Application, error)
+}
+
 func (h *Handler) TemplateCatalog(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.TemplateCatalog(r.Context())
 	if err != nil {
@@ -53,7 +57,15 @@ func NewHandler(service applicationService) *Handler {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	apps, err := h.service.List(r.Context())
+	var (
+		apps []Application
+		err  error
+	)
+	if runtimeList, ok := h.service.(applicationRuntimeListService); ok {
+		apps, err = runtimeList.ListWithRuntime(r.Context())
+	} else {
+		apps, err = h.service.List(r.Context())
+	}
 	if err != nil {
 		httpx.Error(w, err)
 		return

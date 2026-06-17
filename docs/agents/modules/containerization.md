@@ -56,6 +56,7 @@ Application 新部署容器只写入：
 - scheduler 的镜像检查节奏与软件包刷新一致。
 - 所有带标签且可解析的镜像都显示更新状态；普通容器镜像不提供升级操作。
 - Application 镜像升级复用 `applications.Service.UpdateImage` 并重新部署。
+- Application 详情不提供手动镜像检查按钮；镜像检查由 scheduler/containerization 自动刷新，用户只手动触发实际更新。
 
 ## 验证
 

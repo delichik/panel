@@ -71,6 +71,9 @@ func (r *LocalRuntime) Deploy(ctx context.Context, req RuntimeDeployRequest) (Ru
 	if err := r.client.pullImage(ctx, spec.Image); err != nil {
 		return RuntimeInstanceResponse{}, err
 	}
+	if previous := strings.TrimSpace(req.PreviousContainerName); previous != "" && previous != spec.ContainerName {
+		_ = r.client.removeContainer(ctx, previous, true)
+	}
 	_ = r.client.removeContainer(ctx, spec.ContainerName, true)
 	id, err := r.client.createContainer(ctx, spec)
 	if err != nil {
@@ -96,7 +99,7 @@ func (r *LocalRuntime) Stop(ctx context.Context, req RuntimeStopRequest) (Runtim
 	if r == nil || r.client == nil {
 		return RuntimeInstanceResponse{}, errors.New("runtime is not configured")
 	}
-	name := containerNameForInstance(req.InstanceID)
+	name := firstNonEmpty(req.ContainerName, containerNameForInstance(req.InstanceID))
 	if err := r.client.stopContainer(ctx, name, 10); err != nil && !isDockerNotFound(err) {
 		return RuntimeInstanceResponse{}, err
 	}
@@ -116,7 +119,7 @@ func (r *LocalRuntime) Restart(ctx context.Context, req RuntimeRestartRequest) (
 	if r == nil || r.client == nil {
 		return RuntimeInstanceResponse{}, errors.New("runtime is not configured")
 	}
-	name := containerNameForInstance(req.InstanceID)
+	name := firstNonEmpty(req.ContainerName, containerNameForInstance(req.InstanceID))
 	if err := r.client.restartContainer(ctx, name, 10); err != nil {
 		return RuntimeInstanceResponse{}, err
 	}
@@ -166,14 +169,14 @@ func (r *LocalRuntime) Status(ctx context.Context, instanceID, containerName, se
 	}, nil
 }
 
-func (r *LocalRuntime) Logs(ctx context.Context, instanceID string, tail int) (string, error) {
+func (r *LocalRuntime) Logs(ctx context.Context, instanceID, containerName string, tail int) (string, error) {
 	if r == nil || r.client == nil {
 		return "", errors.New("runtime is not configured")
 	}
 	if tail <= 0 {
 		tail = 200
 	}
-	return r.client.containerLogs(ctx, containerNameForInstance(instanceID), tail)
+	return r.client.containerLogs(ctx, firstNonEmpty(containerName, containerNameForInstance(instanceID)), tail)
 }
 
 func (r *LocalRuntime) Containers(ctx context.Context) ([]DockerContainer, error) {

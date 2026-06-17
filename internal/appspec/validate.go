@@ -12,6 +12,8 @@ var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
 
 func Normalize(spec Spec) Spec {
 	spec.Count = 1
+	spec.Command = nonEmptyStringItems(spec.Command)
+	spec.Args = nonEmptyStringItems(spec.Args)
 	if spec.NetworkMode == "" {
 		spec.NetworkMode = "bridge"
 	}
@@ -50,6 +52,17 @@ func Normalize(spec Spec) Spec {
 		spec.Restart.Mode = "delay"
 	}
 	return spec
+}
+
+func nonEmptyStringItems(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
 }
 
 func Validate(spec Spec) []Issue {

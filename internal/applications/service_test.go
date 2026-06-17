@@ -65,7 +65,7 @@ func TestCreateEnabledAppDeploysToAgentRuntime(t *testing.T) {
 	if deploy.ServerID != "srv-a" || deploy.Spec.ApplicationID != app.ID || deploy.Spec.InstanceID != app.ID+"-srv-a" {
 		t.Fatalf("deploy = %#v", deploy)
 	}
-	if deploy.Spec.ContainerName == "" || deploy.Spec.Env["PANEL_SERVER_ID"] != "srv-a" {
+	if deploy.Spec.ContainerName != "panel-web" || deploy.Spec.Env["PANEL_SERVER_ID"] != "srv-a" {
 		t.Fatalf("runtime spec = %#v", deploy.Spec)
 	}
 }
@@ -412,6 +412,29 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	}
 }
 
+func TestListWithRuntimeRefreshesRuntimeStatus(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.statuses = map[string]appruntime.InstanceStatus{
+		app.ID + "-srv-a": {InstanceID: app.ID + "-srv-a", ContainerName: "panel-web", Status: appruntime.StatusRunning, ObservedAt: time.Now().UTC()},
+		app.ID + "-srv-b": {InstanceID: app.ID + "-srv-b", ContainerName: "panel-web", Status: appruntime.StatusRunning, ObservedAt: time.Now().UTC()},
+	}
+
+	apps, err := svc.ListWithRuntime(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(apps) != 1 || apps[0].RuntimeStatus != appruntime.StatusRunning {
+		t.Fatalf("apps = %#v", apps)
+	}
+}
+
 func TestLogsReadFromRuntimeInstance(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -523,7 +546,7 @@ func (f *fakeRuntimeClient) RuntimeRestart(ctx context.Context, baseURL string, 
 	return agent.RuntimeInstanceResponse{InstanceID: req.InstanceID, Status: appruntime.StatusRunning, ObservedAt: time.Now().UTC()}, nil
 }
 
-func (f *fakeRuntimeClient) RuntimeStatus(ctx context.Context, baseURL, instanceID string) (agent.RuntimeStatusResponse, error) {
+func (f *fakeRuntimeClient) RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agent.RuntimeStatusResponse, error) {
 	if f.statuses != nil {
 		if status, ok := f.statuses[instanceID]; ok {
 			return agent.RuntimeStatusResponse{InstanceStatus: status}, nil
@@ -532,7 +555,7 @@ func (f *fakeRuntimeClient) RuntimeStatus(ctx context.Context, baseURL, instance
 	return agent.RuntimeStatusResponse{InstanceStatus: appruntime.InstanceStatus{InstanceID: instanceID, Status: appruntime.StatusRunning, ObservedAt: time.Now().UTC()}}, nil
 }
 
-func (f *fakeRuntimeClient) RuntimeLogs(ctx context.Context, baseURL, instanceID string, tail int) (agent.RuntimeLogsResponse, error) {
+func (f *fakeRuntimeClient) RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agent.RuntimeLogsResponse, error) {
 	f.logTail = tail
 	return agent.RuntimeLogsResponse{InstanceID: instanceID, Logs: f.logs}, nil
 }

@@ -40,8 +40,8 @@ type AgentRuntimeClient interface {
 	RuntimeDeploy(ctx context.Context, baseURL string, req agent.RuntimeDeployRequest) (agent.RuntimeInstanceResponse, error)
 	RuntimeStop(ctx context.Context, baseURL string, req agent.RuntimeStopRequest) (agent.RuntimeInstanceResponse, error)
 	RuntimeRestart(ctx context.Context, baseURL string, req agent.RuntimeRestartRequest) (agent.RuntimeInstanceResponse, error)
-	RuntimeStatus(ctx context.Context, baseURL, instanceID string) (agent.RuntimeStatusResponse, error)
-	RuntimeLogs(ctx context.Context, baseURL, instanceID string, tail int) (agent.RuntimeLogsResponse, error)
+	RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agent.RuntimeStatusResponse, error)
+	RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agent.RuntimeLogsResponse, error)
 }
 
 type ServerProvider interface {
@@ -255,6 +255,21 @@ func (s *Service) List(ctx context.Context) ([]Application, error) {
 		apps = append(apps, app)
 	}
 	return apps, rows.Err()
+}
+
+func (s *Service) ListWithRuntime(ctx context.Context) ([]Application, error) {
+	apps, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range apps {
+		app, err := s.withRuntimeSummary(ctx, apps[i])
+		if err != nil {
+			return nil, err
+		}
+		apps[i] = app
+	}
+	return apps, nil
 }
 
 func (s *Service) Get(ctx context.Context, appID string) (Application, error) {
@@ -989,6 +1004,16 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 	return out, nil
 }
 
+func (s *Service) withRuntimeSummary(ctx context.Context, app Application) (Application, error) {
+	instances, err := s.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		return Application{}, err
+	}
+	statuses := s.refreshInstanceStatuses(ctx, instances)
+	app.RuntimeStatus = aggregateRuntimeStatus(app.Enabled, statuses)
+	return app, nil
+}
+
 func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResult, error) {
 	if _, err := s.Get(ctx, appID); err != nil {
 		return LogResult{}, err
@@ -1008,7 +1033,7 @@ func (s *Service) Logs(ctx context.Context, appID string, in LogInput) (LogResul
 		return LogResult{}, err
 	}
 	baseURL, _ := agentURLFromServer(srv)
-	logs, err := s.runtimeClient.RuntimeLogs(ctx, baseURL, instance.ID, in.Tail)
+	logs, err := s.runtimeClient.RuntimeLogs(ctx, baseURL, instance.ID, instance.ContainerName, in.Tail)
 	if err != nil {
 		_ = s.handleAgentError(ctx, srv, err)
 		return LogResult{}, runtimeOperationError(err)
@@ -1236,6 +1261,10 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			return panelerr.Validation("agent_required", "Agent is required for application deployment")
 		}
 		instanceSpec := runtimeSpecForServer(app, spec, target)
+		previousContainerName := ""
+		if previous, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID); err == nil {
+			previousContainerName = previous.ContainerName
+		}
 		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
 			return err
 		}
@@ -1245,7 +1274,7 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 		var result agent.RuntimeInstanceResponse
 		err := s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
 			var runErr error
-			result, runErr = s.runtimeClient.RuntimeDeploy(runCtx, baseURL, agent.RuntimeDeployRequest{ServerID: target.ID, Spec: instanceSpec})
+			result, runErr = s.runtimeClient.RuntimeDeploy(runCtx, baseURL, agent.RuntimeDeployRequest{ServerID: target.ID, Spec: instanceSpec, PreviousContainerName: previousContainerName})
 			return runErr
 		})
 		if err != nil {
@@ -1303,7 +1332,7 @@ func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string
 		var result agent.RuntimeInstanceResponse
 		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
 			var runErr error
-			result, runErr = s.runtimeClient.RuntimeStop(runCtx, baseURL, agent.RuntimeStopRequest{InstanceID: instance.ID, Purge: purge})
+			result, runErr = s.runtimeClient.RuntimeStop(runCtx, baseURL, agent.RuntimeStopRequest{InstanceID: instance.ID, ContainerName: instance.ContainerName, Purge: purge})
 			return runErr
 		})
 		if err != nil {
@@ -1342,7 +1371,7 @@ func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID str
 		var result agent.RuntimeInstanceResponse
 		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
 			var runErr error
-			result, runErr = s.runtimeClient.RuntimeRestart(runCtx, baseURL, agent.RuntimeRestartRequest{InstanceID: instance.ID})
+			result, runErr = s.runtimeClient.RuntimeRestart(runCtx, baseURL, agent.RuntimeRestartRequest{InstanceID: instance.ID, ContainerName: instance.ContainerName})
 			return runErr
 		})
 		if err != nil {
@@ -1744,7 +1773,7 @@ func runtimeSpecForServer(app Application, spec appruntime.Spec, srv server.Serv
 	out := spec
 	out.ApplicationID = app.ID
 	out.InstanceID = runtimeInstanceID(app.ID, srv.ID)
-	out.ContainerName = runtimeContainerName(app.ID, srv.ID)
+	out.ContainerName = runtimeContainerName(app)
 	if out.Env == nil {
 		out.Env = map[string]string{}
 	} else {
@@ -1768,8 +1797,12 @@ func runtimeInstanceID(appID, serverID string) string {
 	return strings.TrimSpace(appID) + "-" + strings.TrimSpace(serverID)
 }
 
-func runtimeContainerName(appID, serverID string) string {
-	return "panel-" + sanitizeRuntimeName(runtimeInstanceID(appID, serverID))
+func runtimeContainerName(app Application) string {
+	name := strings.TrimSpace(app.Name)
+	if name == "" {
+		name = app.ID
+	}
+	return "panel-" + sanitizeRuntimeName(name)
 }
 
 func sanitizeRuntimeName(value string) string {
@@ -1847,6 +1880,15 @@ func (s *Service) runtimeInstance(ctx context.Context, appID, instanceID string)
 	return instance, err
 }
 
+func (s *Service) runtimeInstanceForServer(ctx context.Context, appID, serverID string) (appruntime.Instance, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at FROM application_instances WHERE application_id=? AND server_id=?`, appID, serverID)
+	instance, err := scanRuntimeInstance(row)
+	if err == sql.ErrNoRows {
+		return appruntime.Instance{}, panelerr.NotFound("application_instance")
+	}
+	return instance, err
+}
+
 func scanRuntimeInstance(row appScanner) (appruntime.Instance, error) {
 	var instance appruntime.Instance
 	var rawSpec, created, updated string
@@ -1876,7 +1918,7 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {
 				if ensureAgentRuntimeReady(srv) == nil {
 					baseURL, _ := agentURLFromServer(srv)
-					if remote, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID); err == nil {
+					if remote, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID, instance.ContainerName); err == nil {
 						status = remote.InstanceStatus
 						status.ServerID = instance.ServerID
 						status.DesiredState = instance.DesiredState

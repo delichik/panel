@@ -23,6 +23,16 @@ func TestValidateRejectsCommandWithMultipleItems(t *testing.T) {
 	}
 }
 
+func TestNormalizeDropsBlankCommandItems(t *testing.T) {
+	spec := Normalize(Spec{Name: "web", Image: "nginx", Command: []string{" "}, Args: []string{"", " --debug "}})
+	if len(spec.Command) != 0 {
+		t.Fatalf("command = %#v", spec.Command)
+	}
+	if len(spec.Args) != 1 || spec.Args[0] != "--debug" {
+		t.Fatalf("args = %#v", spec.Args)
+	}
+}
+
 func TestValidateRejectsInvalidPortRange(t *testing.T) {
 	issues := Validate(Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 70000}}})
 	if !hasIssue(issues, "ports[0].to") {

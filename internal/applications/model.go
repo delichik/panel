@@ -42,6 +42,7 @@ type Application struct {
 	LastEvalID           string             `json:"lastEvalId,omitempty"`
 	LastDeploymentID     string             `json:"lastDeploymentId,omitempty"`
 	LastError            string             `json:"lastError,omitempty"`
+	RuntimeStatus        string             `json:"runtimeStatus,omitempty"`
 	CreatedAt            time.Time          `json:"createdAt"`
 	UpdatedAt            time.Time          `json:"updatedAt"`
 }
@@ -63,7 +64,7 @@ type ApplicationReverseProxyConfig struct {
 	JobID             string              `json:"jobId"`
 	DeploymentMode    string              `json:"deploymentMode"`
 	DeploymentServers []string            `json:"deploymentServers"`
-	Routes            []ReverseProxyRoute  `json:"routes"`
+	Routes            []ReverseProxyRoute `json:"routes"`
 }
 
 type ReverseProxyRoute struct {
@@ -119,11 +120,11 @@ type ApplicationRevision struct {
 }
 
 type Runtime struct {
-	ApplicationID string                       `json:"applicationId"`
-	RuntimeID     string                       `json:"runtimeId"`
-	Status        string                       `json:"status"`
-	Instances     []appruntime.InstanceStatus  `json:"instances"`
-	ObservedAt    time.Time                    `json:"observedAt"`
+	ApplicationID string                      `json:"applicationId"`
+	RuntimeID     string                      `json:"runtimeId"`
+	Status        string                      `json:"status"`
+	Instances     []appruntime.InstanceStatus `json:"instances"`
+	ObservedAt    time.Time                   `json:"observedAt"`
 }
 
 type SaveInput struct {

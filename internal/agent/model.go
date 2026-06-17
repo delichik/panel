@@ -34,7 +34,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart", "docker-containers", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-deploy", "runtime-status", "runtime-logs", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -102,17 +102,20 @@ type UFWStatusResponse struct {
 }
 
 type RuntimeDeployRequest struct {
-	ServerID string          `json:"serverId"`
-	Spec     appruntime.Spec `json:"spec"`
+	ServerID              string          `json:"serverId"`
+	Spec                  appruntime.Spec `json:"spec"`
+	PreviousContainerName string          `json:"previousContainerName,omitempty"`
 }
 
 type RuntimeStopRequest struct {
-	InstanceID string `json:"instanceId"`
-	Purge      bool   `json:"purge"`
+	InstanceID    string `json:"instanceId"`
+	ContainerName string `json:"containerName,omitempty"`
+	Purge         bool   `json:"purge"`
 }
 
 type RuntimeRestartRequest struct {
-	InstanceID string `json:"instanceId"`
+	InstanceID    string `json:"instanceId"`
+	ContainerName string `json:"containerName,omitempty"`
 }
 
 type RuntimeInstanceResponse struct {

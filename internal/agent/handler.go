@@ -137,7 +137,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		instanceID := runtimePathInstanceID(path, "/status")
-		status, err := h.runtime.Status(r.Context(), instanceID, "", "")
+		status, err := h.runtime.Status(r.Context(), instanceID, r.URL.Query().Get("containerName"), "")
 		writeResult(w, RuntimeStatusResponse{InstanceStatus: status}, err)
 	case r.Method == http.MethodGet && strings.HasPrefix(path, "/v1/runtime/applications/") && strings.HasSuffix(path, "/logs"):
 		if h.runtime == nil {
@@ -146,7 +146,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		instanceID := runtimePathInstanceID(path, "/logs")
 		tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
-		logs, err := h.runtime.Logs(r.Context(), instanceID, tail)
+		logs, err := h.runtime.Logs(r.Context(), instanceID, r.URL.Query().Get("containerName"), tail)
 		writeResult(w, RuntimeLogsResponse{InstanceID: instanceID, Logs: logs}, err)
 	case r.Method != http.MethodGet && r.Method != http.MethodPost:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")

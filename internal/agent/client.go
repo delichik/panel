@@ -144,15 +144,22 @@ func (c *HTTPClient) RuntimeRestart(ctx context.Context, baseURL string, req Run
 	return out, err
 }
 
-func (c *HTTPClient) RuntimeStatus(ctx context.Context, baseURL, instanceID string) (RuntimeStatusResponse, error) {
+func (c *HTTPClient) RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (RuntimeStatusResponse, error) {
 	var out RuntimeStatusResponse
-	err := c.get(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(instanceID)+"/status", nil, &out)
+	query := url.Values{}
+	if strings.TrimSpace(containerName) != "" {
+		query.Set("containerName", containerName)
+	}
+	err := c.get(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(instanceID)+"/status", query, &out)
 	return out, err
 }
 
-func (c *HTTPClient) RuntimeLogs(ctx context.Context, baseURL, instanceID string, tail int) (RuntimeLogsResponse, error) {
+func (c *HTTPClient) RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (RuntimeLogsResponse, error) {
 	var out RuntimeLogsResponse
 	query := url.Values{}
+	if strings.TrimSpace(containerName) != "" {
+		query.Set("containerName", containerName)
+	}
 	if tail > 0 {
 		query.Set("tail", fmt.Sprintf("%d", tail))
 	}

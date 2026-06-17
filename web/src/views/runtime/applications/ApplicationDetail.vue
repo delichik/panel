@@ -52,19 +52,6 @@ async function downloadPackage() {
   }
 }
 
-async function checkImage() {
-  imageAction.value = 'check';
-  try {
-    const app = await applicationsApi.checkImage(props.application.id);
-    emit('changed', app);
-    error.value = '';
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('applicationDetail.checkFailed');
-  } finally {
-    imageAction.value = '';
-  }
-}
-
 async function updateImage() {
   imageAction.value = 'update';
   try {
@@ -134,7 +121,6 @@ watch(() => props.application.id, () => {
           </div>
         </div>
         <div class="image-actions">
-          <v-btn size="small" prepend-icon="mdi-cloud-search-outline" variant="outlined" class="text-none" :loading="imageAction === 'check'" @click="checkImage">{{ t('common.check') }}</v-btn>
           <v-btn size="small" prepend-icon="mdi-package-up" color="primary" variant="flat" class="text-none" :disabled="!application.enabled" :loading="imageAction === 'update'" @click="updateImage">{{ t('common.update') }}</v-btn>
         </div>
       </div>

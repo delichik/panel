@@ -23,12 +23,12 @@ const message = ref('');
 const lastTaskId = ref('');
 const deleteDialog = ref(false);
 const deletingApplication = ref<ApplicationDto | null>(null);
-const { t } = useI18n();
+const { formatDateTime, t, translateRuntimeStatus } = useI18n();
 
 const selectedApplication = computed(() => applications.value.find((app) => app.id === selectedId.value) ?? null);
 const totalCount = computed(() => applications.value.length);
 const enabledCount = computed(() => applications.value.filter((app) => app.enabled).length);
-const attentionCount = computed(() => applications.value.filter((app) => ['failed', 'pending', 'unknown'].includes(app.runtimeStatus || '') || app.lastError).length);
+const attentionCount = computed(() => applications.value.filter((app) => ['failed', 'pending', 'unknown'].includes(runtimeStatus(app)) || app.lastError).length);
 const {
   page,
   pageSize,
@@ -49,6 +49,23 @@ function statusColor(status?: string) {
   if (status === 'failed' || status === 'unknown') return 'error';
   if (status === 'stopped') return 'grey';
   return 'info';
+}
+
+function runtimeStatus(app: ApplicationDto) {
+  return app.runtimeStatus || (app.enabled ? 'pending' : 'stopped');
+}
+
+function imageStatusColor(app: ApplicationDto) {
+  if (app.imageLastError) return 'error';
+  if (app.imageUpdateAvailable) return 'warning';
+  if (app.imageDigest) return 'success';
+  return 'grey';
+}
+
+function imageStatusLabel(app: ApplicationDto) {
+  if (app.imageUpdateAvailable) return t('applicationDetail.updateAvailable');
+  if (app.imageDigest) return t('applicationDetail.tracked');
+  return t('applicationDetail.notChecked');
 }
 
 async function load() {
@@ -179,15 +196,15 @@ onMounted(load);
           <v-table class="text-left application-table">
             <thead>
               <tr>
-                <th>{{ t('serversPage.name') }}</th><th>{{ t('common.enabled') }}</th><th>{{ t('applicationsPage.runtime') }}</th><th>{{ t('applicationsPage.jobId') }}</th><th>{{ t('applicationsPage.namespace') }}</th><th>{{ t('applicationsPage.generation') }}</th><th>{{ t('applicationsPage.lastEval') }}</th><th class="text-right">{{ t('common.actions') }}</th>
+                <th>{{ t('serversPage.name') }}</th><th>{{ t('common.enabled') }}</th><th>{{ t('applicationsPage.runtime') }}</th><th>{{ t('applicationDetail.imageUpdate') }}</th><th>{{ t('common.updatedAt') }}</th><th class="text-right">{{ t('common.actions') }}</th>
               </tr>
             </thead>
             <tbody>
-              <tr v-if="applications.length === 0"><td colspan="8" class="text-center py-8 text-medium-emphasis">{{ t('applicationsPage.noApplications') }}</td></tr>
+              <tr v-if="applications.length === 0"><td colspan="6" class="text-center py-8 text-medium-emphasis">{{ t('applicationsPage.noApplications') }}</td></tr>
               <tr v-for="app in pagedApplications" :key="app.id" class="application-row cursor-pointer" :class="{ selected: selectedId === app.id }" @click="selectedId = app.id">
                 <td>
                   <div class="name-line">
-                    <span class="status-dot" :class="statusColor(app.runtimeStatus)" />
+                    <span class="status-dot" :class="statusColor(runtimeStatus(app))" />
                     <div class="min-width-0">
                       <div class="font-weight-bold text-truncate">{{ app.name }}</div>
                       <div class="text-caption text-medium-emphasis text-truncate">{{ app.id }}</div>
@@ -195,11 +212,9 @@ onMounted(load);
                   </div>
                 </td>
                 <td><v-chip :color="app.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ app.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip></td>
-                <td><v-chip :color="statusColor(app.runtimeStatus)" size="small" variant="tonal" label>{{ app.runtimeStatus || (app.enabled ? 'pending' : 'stopped') }}</v-chip></td>
-                <td class="text-truncate mono-cell">{{ app.jobId }}</td>
-                <td>{{ app.namespace }}</td>
-                <td><v-chip size="small" variant="tonal" color="info" label class="font-tabular">{{ t('applicationsPage.generation') }} {{ app.generation }}</v-chip></td>
-                <td class="text-truncate mono-cell">{{ app.lastEvalId || t('common.notAvailable') }}</td>
+                <td><v-chip :color="statusColor(runtimeStatus(app))" size="small" variant="tonal" label>{{ translateRuntimeStatus(runtimeStatus(app)) }}</v-chip></td>
+                <td><v-chip :color="imageStatusColor(app)" size="small" variant="tonal" label>{{ imageStatusLabel(app) }}</v-chip></td>
+                <td class="text-truncate">{{ formatDateTime(app.updatedAt) }}</td>
                 <td class="text-right">
                   <div class="row-actions">
                     <v-btn size="small" icon="mdi-pencil" variant="text" @click.stop="editApplication(app)" />
@@ -271,7 +286,6 @@ onMounted(load);
 .application-row.selected { background: rgba(var(--v-theme-primary), 0.06); }
 .name-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .min-width-0 { min-width: 0; }
-.mono-cell { max-width: 190px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.8rem; }
 .row-actions { display: flex; justify-content: flex-end; gap: 2px; }
 .row-actions :deep(.v-btn) { min-width: 40px; min-height: 40px; }
 .task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

@@ -52,6 +52,7 @@
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
 - scheduler 容器监控只协调已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
+- 应用列表接口会刷新已记录实例的运行时状态并聚合为 `runtimeStatus`，列表只展示应用名称、启用状态、运行状态、镜像更新状态和更新时间；jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在详情。
 - 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；`purge` 参数会传给 agent 清理容器。
 - 应用日志按 `instanceId` 和可选 `containerName` 读取。日志面板必须从 runtime 实例提供入口，不再使用 allocation/task 语义。
 - 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等节点变量；值来自实际部署目标服务器。
@@ -65,10 +66,13 @@
 
 - `ApplicationEditor.vue` 的可视化编辑同时维护 appspec `command` 和 `args` 有序数组。每一行是一个 argv 项，编辑器不得按空格拆分用户输入。
 - `command` 只表示可执行文件或 entrypoint；所有 flag 和参数值必须写入 `args`。
-- 后端 appspec 校验拒绝超过一个 `command` 项，避免把可执行文件和参数混在一起。
-- 应用编辑器包含可视化和 YAML 两个标签页。可视化页是单页分区表单：标准短字段使用双列网格，端口映射和挂载行保持全宽重复行，便于阅读密集网络和存储设置。
+- 后端 appspec 校验拒绝超过一个非空 `command` 项，空 command/args 项会正规化为未设置，避免不填写 command 时阻塞保存。
+- 应用编辑器包含可视化和 YAML 两个标签页。可视化页是单页分区表单：标准短字段使用双列网格，端口映射保持全宽重复行，便于阅读密集网络设置。
+- `mounts` / `volumes` 挂载路径只通过 appspec YAML 编辑；可视化页保存时必须保留 YAML 中已有挂载配置，应用文件模板编辑区不得作为挂载路径编辑入口。
 - YAML 标签页只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须作为两个标签页共享的表单区展示，不能只出现在可视化页。
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`args` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
+- 镜像更新检查是 scheduler/containerization 的自动流程，应用详情只展示最近自动检查结果和手动“更新”动作，不再提供手动检查入口。
+- 新部署 Application 容器名使用 `panel-<application-name>`；停止、重启、状态和日志操作必须使用 `application_instances.container_name`，以兼容旧版本按实例 ID 生成的容器名。agent 必须声明 `runtime-container-name` capability 才能被视为兼容。
 
 ## 验证
 
