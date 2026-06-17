@@ -34,7 +34,7 @@
 - 镜像：`POST /api/v1/applications/{id}/image/check`，`POST /api/v1/applications/{id}/image/update`
 - 运行时和日志：`GET /api/v1/applications/{id}/runtime`，`GET /api/v1/applications/{id}/logs`
 - 打包：`GET /api/v1/applications/{id}/package`
-- 持久化数据：`GET /api/v1/applications/{id}/persistent-data`
+- 持久化数据：`GET /api/v1/applications/{id}/persistent-data` 下载，`POST /api/v1/applications/{id}/persistent-data` 上传 zip 覆盖并重启
 - 模板目录：`GET /api/v1/application-template-catalog`
 
 ## 数据与行为约定
@@ -42,7 +42,7 @@
 - 主要表包括 `applications`、`application_files`、`application_revisions`、`application_instances`。
 - appspec 以 YAML 输入，经 `internal/appspec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器，再通过目标机 `panel-agent` 调用 Docker Engine API 创建或更新容器。
 - `application_instances` 是 Panel 的运行时事实表，按 `application_id + server_id` 记录实例、容器名、容器 ID、期望状态、最近状态、渲染后的 runtime spec 和部署 generation。
-- 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载。
+- 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 文件内容通过 API 以 base64 承载；保存会话用于批量上传、删除和提交。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。

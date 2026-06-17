@@ -43,6 +43,7 @@ type AgentRuntimeClient interface {
 	RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agent.RuntimeStatusResponse, error)
 	RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agent.RuntimeLogsResponse, error)
 	RuntimePersistentArchive(ctx context.Context, baseURL, applicationID string) (agent.RuntimePersistentArchiveResponse, error)
+	RuntimePersistentRestore(ctx context.Context, baseURL, applicationID string, content []byte) (agent.RuntimePersistentRestoreResponse, error)
 }
 
 type ServerProvider interface {
@@ -1074,6 +1075,36 @@ func (s *Service) PersistentData(ctx context.Context, appID string) (PackageResu
 		filename = app.Name + "-persistent.zip"
 	}
 	return PackageResult{Filename: filename, Content: content}, nil
+}
+
+func (s *Service) RestorePersistentData(ctx context.Context, appID string, content []byte) (OperationResult, error) {
+	app, err := s.Get(ctx, appID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if strings.TrimSpace(app.PersistentPath) == "" {
+		return OperationResult{}, panelerr.Validation("application_persistent_data_unavailable", "Application does not use persistent storage")
+	}
+	if len(content) == 0 {
+		return OperationResult{}, panelerr.Validation("application_persistent_archive_required", "Persistent data archive is required")
+	}
+	instance, err := s.primaryRuntimeInstance(ctx, app.ID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	srv, err := s.servers.Get(ctx, instance.ServerID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	if err := ensureAgentRuntimeReady(srv); err != nil {
+		return OperationResult{}, err
+	}
+	baseURL, _ := agentURLFromServer(srv)
+	if _, err := s.runtimeClient.RuntimePersistentRestore(ctx, baseURL, app.ID, content); err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
+		return OperationResult{}, runtimeOperationError(err)
+	}
+	return s.Restart(ctx, app.ID)
 }
 
 type preparedApplication struct {

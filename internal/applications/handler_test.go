@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -111,6 +112,30 @@ func TestHandlerPersistentData(t *testing.T) {
 	}
 }
 
+func TestHandlerRestorePersistentData(t *testing.T) {
+	fake := &fakeApplicationService{op: OperationResult{TaskID: "task-1", Application: Application{ID: "app-1"}}}
+	handler := NewHandler(fake)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", "data.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("zip"))
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/applications/app-1/persistent-data", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	handler.RestorePersistentData(rec, req)
+
+	if rec.Code != http.StatusOK || fake.restoredPersistentID != "app-1" || string(fake.restoredPersistentContent) != "zip" {
+		t.Fatalf("restore status=%d id=%q content=%q body=%s", rec.Code, fake.restoredPersistentID, fake.restoredPersistentContent, rec.Body.String())
+	}
+}
+
 func TestHandlerDeployAndStopApplication(t *testing.T) {
 	fake := &fakeApplicationService{op: OperationResult{TaskID: "task-1", EvalID: "eval-1", Application: Application{ID: "app-1"}}}
 	handler := NewHandler(fake)
@@ -153,29 +178,31 @@ func TestHandlerRuntimeAndLogs(t *testing.T) {
 }
 
 type fakeApplicationService struct {
-	apps             []Application
-	app              Application
-	files            []ApplicationFile
-	saved            SaveInput
-	fileInput        FileSaveInput
-	op               OperationResult
-	runtime          ApplicationRuntime
-	logs             LogResult
-	deployedID       string
-	stoppedID        string
-	stopPurge        bool
-	runtimeID        string
-	logID            string
-	logInput         LogInput
-	deletedFileID    string
-	pkg              PackageResult
-	packagedID       string
-	persistentData   PackageResult
-	persistentDataID string
-	session          SaveSessionResult
-	sessionID        string
-	checkedID        string
-	updatedImageID   string
+	apps                      []Application
+	app                       Application
+	files                     []ApplicationFile
+	saved                     SaveInput
+	fileInput                 FileSaveInput
+	op                        OperationResult
+	runtime                   ApplicationRuntime
+	logs                      LogResult
+	deployedID                string
+	stoppedID                 string
+	stopPurge                 bool
+	runtimeID                 string
+	logID                     string
+	logInput                  LogInput
+	deletedFileID             string
+	pkg                       PackageResult
+	packagedID                string
+	persistentData            PackageResult
+	persistentDataID          string
+	restoredPersistentID      string
+	restoredPersistentContent []byte
+	session                   SaveSessionResult
+	sessionID                 string
+	checkedID                 string
+	updatedImageID            string
 }
 
 func (f *fakeApplicationService) List(ctx context.Context) ([]Application, error) {
@@ -254,6 +281,12 @@ func (f *fakeApplicationService) Package(ctx context.Context, id string) (Packag
 func (f *fakeApplicationService) PersistentData(ctx context.Context, id string) (PackageResult, error) {
 	f.persistentDataID = id
 	return f.persistentData, nil
+}
+
+func (f *fakeApplicationService) RestorePersistentData(ctx context.Context, id string, content []byte) (OperationResult, error) {
+	f.restoredPersistentID = id
+	f.restoredPersistentContent = content
+	return f.op, nil
 }
 
 func (f *fakeApplicationService) Validate(ctx context.Context, id string) (ValidationResult, error) {

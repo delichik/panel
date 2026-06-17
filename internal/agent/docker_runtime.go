@@ -255,6 +255,73 @@ func (r *LocalRuntime) PersistentArchive(ctx context.Context, applicationID stri
 	return buf.Bytes(), nil
 }
 
+func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, applicationID string, content []byte) error {
+	if r == nil {
+		return errors.New("runtime is not configured")
+	}
+	dir, err := safeApplicationRuntimeDir(r.root, applicationID, "persistent")
+	if err != nil {
+		return err
+	}
+	reader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
+	if err != nil {
+		return err
+	}
+	for _, file := range reader.File {
+		if _, err := safeArchiveTarget(dir, file.Name); err != nil {
+			return err
+		}
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	for _, file := range reader.File {
+		target, err := safeArchiveTarget(dir, file.Name)
+		if err != nil {
+			return err
+		}
+		if file.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		src, err := file.Open()
+		if err != nil {
+			return err
+		}
+		mode := file.FileInfo().Mode()
+		if mode == 0 {
+			mode = 0o600
+		}
+		dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+		if err != nil {
+			_ = src.Close()
+			return err
+		}
+		_, copyErr := io.Copy(dst, src)
+		closeSrcErr := src.Close()
+		closeDstErr := dst.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeSrcErr != nil {
+			return closeSrcErr
+		}
+		if closeDstErr != nil {
+			return closeDstErr
+		}
+	}
+	_ = ctx
+	return nil
+}
+
 func (r *LocalRuntime) ContainerStart(ctx context.Context, id string) error {
 	return r.client.startContainer(ctx, id)
 }
@@ -365,6 +432,26 @@ func safeApplicationRuntimeDir(root, appID, area string) (string, error) {
 	}
 	if cleanTarget != cleanBase && !strings.HasPrefix(cleanTarget, cleanBase+string(os.PathSeparator)) {
 		return "", errors.New("runtime application path escapes the application workspace")
+	}
+	return cleanTarget, nil
+}
+
+func safeArchiveTarget(base, name string) (string, error) {
+	name = path.Clean(strings.TrimPrefix(strings.ReplaceAll(name, "\\", "/"), "/"))
+	if name == "." || strings.HasPrefix(name, "../") || name == ".." {
+		return "", errors.New("archive path must stay inside the persistent directory")
+	}
+	target := filepath.Join(base, filepath.FromSlash(name))
+	cleanBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	cleanTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if cleanTarget != cleanBase && !strings.HasPrefix(cleanTarget, cleanBase+string(os.PathSeparator)) {
+		return "", errors.New("archive path escapes the persistent directory")
 	}
 	return cleanTarget, nil
 }

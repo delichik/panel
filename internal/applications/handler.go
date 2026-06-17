@@ -2,11 +2,18 @@ package applications
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"panel/internal/httpx"
+	"panel/internal/panelerr"
+)
+
+const (
+	persistentArchiveMaxBytes   = 64 << 20
+	persistentArchiveFormMemory = 8 << 20
 )
 
 type applicationService interface {
@@ -24,6 +31,7 @@ type applicationService interface {
 	CommitSaveSession(ctx context.Context, sessionID string) (Application, error)
 	Package(ctx context.Context, id string) (PackageResult, error)
 	PersistentData(ctx context.Context, id string) (PackageResult, error)
+	RestorePersistentData(ctx context.Context, id string, content []byte) (OperationResult, error)
 	Validate(ctx context.Context, id string) (ValidationResult, error)
 	Plan(ctx context.Context, id string) (PlanResult, error)
 	CheckImageUpdate(ctx context.Context, id string) (Application, error)
@@ -169,6 +177,38 @@ func (h *Handler) PersistentData(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", `attachment; filename="`+safeDownloadName(result.Filename)+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result.Content)
+}
+
+func (h *Handler) RestorePersistentData(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes)
+	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read archive upload"))
+		return
+	}
+	if len(content) == 0 {
+		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
+		return
+	}
+	result, err := h.service.RestorePersistentData(r.Context(), applicationID(r.URL.Path), content)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) BeginSaveSession(w http.ResponseWriter, r *http.Request) {

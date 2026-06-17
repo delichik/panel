@@ -142,6 +142,16 @@ type RuntimePersistentArchiveResponse struct {
 	ContentBase64 string `json:"contentBase64"`
 }
 
+type RuntimePersistentRestoreRequest struct {
+	ApplicationID string `json:"applicationId"`
+	ContentBase64 string `json:"contentBase64"`
+}
+
+type RuntimePersistentRestoreResponse struct {
+	ApplicationID string `json:"applicationId"`
+	Restored      bool   `json:"restored"`
+}
+
 type DockerContainer struct {
 	ID      string            `json:"id"`
 	Names   []string          `json:"names"`

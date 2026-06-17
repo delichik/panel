@@ -502,6 +502,36 @@ func TestPersistentDataRejectsApplicationWithoutPersistentStorage(t *testing.T) 
 	}
 }
 
+func TestRestorePersistentDataRestoresAndRestarts(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "db",
+		Enabled:           true,
+		SpecYAML:          "name: db\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.RestorePersistentData(ctx, app.ID, []byte("zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskID == "" {
+		t.Fatal("expected restart task id")
+	}
+	if runtime.restoreApplicationID != app.ID || string(runtime.restoreContent) != "zip" {
+		t.Fatalf("restore application=%q content=%q", runtime.restoreApplicationID, runtime.restoreContent)
+	}
+	if len(runtime.restarts) == 0 {
+		t.Fatal("expected application restart after restore")
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -567,6 +597,9 @@ type fakeRuntimeClient struct {
 	archiveBaseURL       string
 	archiveApplicationID string
 	archiveContent       []byte
+	restoreBaseURL       string
+	restoreApplicationID string
+	restoreContent       []byte
 	deployErr            error
 }
 
@@ -616,6 +649,13 @@ func (f *fakeRuntimeClient) RuntimePersistentArchive(ctx context.Context, baseUR
 		Filename:      applicationID + "-persistent.zip",
 		ContentBase64: base64.StdEncoding.EncodeToString(f.archiveContent),
 	}, nil
+}
+
+func (f *fakeRuntimeClient) RuntimePersistentRestore(ctx context.Context, baseURL, applicationID string, content []byte) (agent.RuntimePersistentRestoreResponse, error) {
+	f.restoreBaseURL = baseURL
+	f.restoreApplicationID = applicationID
+	f.restoreContent = content
+	return agent.RuntimePersistentRestoreResponse{ApplicationID: applicationID, Restored: true}, nil
 }
 
 type fakeServerProvider struct {

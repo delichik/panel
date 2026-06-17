@@ -338,6 +338,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			applicationH.Package(w, r)
 		case r.Method == http.MethodGet && strings.HasPrefix(path, "/api/v1/applications/") && applicationPersistentDataPath(path):
 			applicationH.PersistentData(w, r)
+		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && applicationPersistentDataPath(path):
+			applicationH.RestorePersistentData(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/validate"):
 			applicationH.Validate(w, r)
 		case r.Method == http.MethodPost && strings.HasPrefix(path, "/api/v1/applications/") && strings.HasSuffix(path, "/plan"):

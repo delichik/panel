@@ -11,12 +11,16 @@ const emit = defineEmits<{ changed: [ApplicationDto] }>();
 const { formatDateTime, t } = useI18n();
 const downloading = ref(false);
 const downloadingPersistent = ref(false);
+const restoringPersistent = ref(false);
+const restoreDialog = ref(false);
+const restoreFile = ref<File | File[] | null>(null);
 const imageAction = ref('');
 const error = ref('');
 const message = ref('');
 const lastTaskId = ref('');
 const logTarget = ref<{ instanceId: string; containerName: string } | null>(null);
 const logsDialog = ref(false);
+const selectedRestoreFile = computed(() => Array.isArray(restoreFile.value) ? restoreFile.value[0] : restoreFile.value);
 const imageStatusColor = computed(() => {
   if (props.application.imageLastError) return 'error';
   if (props.application.imageUpdateAvailable) return 'warning';
@@ -99,6 +103,26 @@ async function downloadPersistentData() {
   }
 }
 
+async function restorePersistentData() {
+  const file = selectedRestoreFile.value;
+  if (!file || !props.application.persistentPath) return;
+  restoringPersistent.value = true;
+  try {
+    const result = await applicationsApi.restorePersistentData(props.application.id, file);
+    lastTaskId.value = result.taskId || '';
+    message.value = t('applicationDetail.restorePersistentStarted');
+    restoreDialog.value = false;
+    restoreFile.value = null;
+    error.value = '';
+  } catch (err) {
+    lastTaskId.value = '';
+    message.value = '';
+    error.value = err instanceof Error ? err.message : t('applicationDetail.restorePersistentFailed');
+  } finally {
+    restoringPersistent.value = false;
+  }
+}
+
 async function loadSelectedLogs(tail: number) {
   if (!logTarget.value) return '';
   const result = await applicationsApi.logs(props.application.id, {
@@ -136,6 +160,14 @@ watch(() => props.application.id, () => {
             :disabled="!application.persistentPath"
             :loading="downloadingPersistent"
             @click="downloadPersistentData"
+          />
+          <v-btn
+            size="small"
+            icon="mdi-database-arrow-up-outline"
+            variant="text"
+            :title="t('applicationDetail.restorePersistentData')"
+            :disabled="!application.persistentPath"
+            @click="restoreDialog = true"
           />
           <v-chip :color="application.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ application.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip>
         </div>
@@ -185,6 +217,36 @@ watch(() => props.application.id, () => {
       :target-key="logTarget ? `${application.id}:${logTarget.instanceId}:${logTarget.containerName}` : ''"
       :loader="loadSelectedLogs"
     />
+
+    <v-dialog v-model="restoreDialog" width="560">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('applicationDetail.restorePersistentData') }}</span>
+          <v-btn icon="mdi-close" variant="text" :aria-label="t('common.close')" @click="restoreDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          <v-alert type="warning" variant="tonal" density="compact" class="mb-4">
+            {{ t('applicationDetail.restorePersistentWarning') }}
+          </v-alert>
+          <v-file-input
+            v-model="restoreFile"
+            :label="t('applicationDetail.persistentArchive')"
+            accept=".zip,application/zip"
+            variant="outlined"
+            density="comfortable"
+            prepend-icon="mdi-archive-arrow-up-outline"
+          />
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <v-btn variant="text" class="text-none" :disabled="restoringPersistent" @click="restoreDialog = false">{{ t('common.cancel') }}</v-btn>
+          <v-btn color="warning" variant="flat" class="text-none" :loading="restoringPersistent" :disabled="!selectedRestoreFile" @click="restorePersistentData">
+            {{ t('applicationDetail.restoreAndRestart') }}
+          </v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </div>
 </template>
 

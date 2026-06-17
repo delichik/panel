@@ -82,6 +82,11 @@ export function createApplicationsApi(client: ApiClient = apiClient) {
     persistentData(applicationId: string) {
       return client.download(`${applicationPath(applicationId)}/persistent-data`);
     },
+    restorePersistentData(applicationId: string, file: File) {
+      const form = new FormData();
+      form.set('file', file);
+      return client.postForm<ApplicationOperationDto>(`${applicationPath(applicationId)}/persistent-data`, form);
+    },
     validate(applicationId: string) {
       return client.post<ApplicationValidationDto>(`${applicationPath(applicationId)}/validate`);
     },

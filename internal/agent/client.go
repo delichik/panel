@@ -182,6 +182,15 @@ func (c *HTTPClient) RuntimePersistentArchive(ctx context.Context, baseURL, appl
 	return out, nil
 }
 
+func (c *HTTPClient) RuntimePersistentRestore(ctx context.Context, baseURL, applicationID string, content []byte) (RuntimePersistentRestoreResponse, error) {
+	var out RuntimePersistentRestoreResponse
+	err := c.post(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(applicationID)+"/persistent/restore", RuntimePersistentRestoreRequest{
+		ApplicationID: applicationID,
+		ContentBase64: base64.StdEncoding.EncodeToString(content),
+	}, &out)
+	return out, err
+}
+
 func (c *HTTPClient) DockerContainers(ctx context.Context, baseURL string) ([]DockerContainer, error) {
 	var out DockerContainersResponse
 	err := c.get(ctx, baseURL, "/v1/docker/containers", nil, &out)

@@ -166,6 +166,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Filename:      applicationID + "-persistent.zip",
 			ContentBase64: base64.StdEncoding.EncodeToString(content),
 		}, err)
+	case r.Method == http.MethodPost && strings.HasPrefix(path, "/v1/runtime/applications/") && strings.HasSuffix(path, "/persistent/restore"):
+		if h.runtime == nil {
+			writeError(w, http.StatusBadGateway, "runtime is not configured")
+			return
+		}
+		applicationID := runtimePathInstanceID(path, "/persistent/restore")
+		var req RuntimePersistentRestoreRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(req.ContentBase64))
+		if err == nil {
+			err = h.runtime.RestorePersistentArchive(r.Context(), applicationID, content)
+		}
+		writeResult(w, RuntimePersistentRestoreResponse{ApplicationID: applicationID, Restored: err == nil}, err)
 	case r.Method != http.MethodGet && r.Method != http.MethodPost:
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	default:
