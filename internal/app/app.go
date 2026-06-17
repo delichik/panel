@@ -95,7 +95,9 @@ func New(cfg config.Config) (*App, error) {
 	serverSvc.SetAgentClient(agentClient)
 	serverSvc.SetAgentTLSAssets(agentTLS)
 	serverSvc.SetMetricsDB(store.MetricsDB())
-	applicationSvc := applications.NewService(store.AppDB(), agentClient, taskSvc, applications.Config{})
+	applicationSvc := applications.NewService(store.AppDB(), agentClient, taskSvc, applications.Config{
+		SaveSessionDir: applicationSaveSessionDir(cfg),
+	})
 	applicationSvc.SetServerProvider(serverSvc)
 	containerSvc := containerization.NewService(store.AppDB(), serverSvc, agentClient, taskSvc)
 	containerSvc.SetApplicationUpdater(applicationSvc)
@@ -146,6 +148,10 @@ func (a *App) Close() error {
 	return a.store.Close()
 }
 func (a *App) Handler() http.Handler { return logging.HTTPMiddleware(a.mux) }
+
+func applicationSaveSessionDir(cfg config.Config) string {
+	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
+}
 
 func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)

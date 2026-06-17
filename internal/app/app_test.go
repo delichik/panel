@@ -1,6 +1,11 @@
 package app
 
-import "testing"
+import (
+	"path/filepath"
+	"testing"
+
+	"panel/internal/config"
+)
 
 func TestServerActionPath(t *testing.T) {
 	if !serverActionPath("/api/v1/servers/srv_1/restart", "restart") {
@@ -14,5 +19,16 @@ func TestServerActionPath(t *testing.T) {
 		if serverActionPath(path, "restart") {
 			t.Fatalf("unexpected server restart path match: %s", path)
 		}
+	}
+}
+
+func TestApplicationSaveSessionDirUsesDataRootTmp(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join("var", "lib", "panel")
+
+	got := applicationSaveSessionDir(cfg)
+	want := filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
+	if got != want {
+		t.Fatalf("save session dir = %q, want %q", got, want)
 	}
 }
