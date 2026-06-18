@@ -54,8 +54,30 @@ type HealthResponse struct {
 	Time         string           `json:"time"`
 	Version      string           `json:"version"`
 	Capabilities []string         `json:"capabilities"`
+	Contract     Contract         `json:"contract"`
 	Docker       DockerHealth     `json:"docker"`
 	Certificate  *CertificateInfo `json:"-"`
+}
+
+type Contract struct {
+	Endpoints []ContractEndpoint `json:"endpoints"`
+}
+
+type ContractEndpoint struct {
+	ID       string            `json:"id"`
+	Method   string            `json:"method"`
+	Path     string            `json:"path"`
+	Query    map[string]string `json:"query,omitempty"`
+	Request  *Schema           `json:"request,omitempty"`
+	Response *Schema           `json:"response,omitempty"`
+}
+
+type Schema struct {
+	Type       string            `json:"type"`
+	Optional   bool              `json:"optional,omitempty"`
+	Fields     map[string]Schema `json:"fields,omitempty"`
+	Items      *Schema           `json:"items,omitempty"`
+	Additional *Schema           `json:"additional,omitempty"`
 }
 
 type DockerHealth struct {

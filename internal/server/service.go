@@ -1515,13 +1515,14 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
 		return err
 	}
-	if !agentVersionCompatible(health.Version, agent.Version) {
-		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, fmt.Sprintf("agent version %s does not match required %s", health.Version, agent.Version))
-		return nil
-	}
 	missing := missingAgentCapabilities(health.Capabilities)
 	if len(missing) > 0 {
 		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, "agent missing capabilities: "+strings.Join(missing, ", "))
+		return nil
+	}
+	missingContract := agent.MissingContractEndpoints(health.Contract)
+	if len(missingContract) > 0 {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, health.Version, "agent contract incompatible: "+strings.Join(missingContract, ", "))
 		return nil
 	}
 	if strings.TrimSpace(health.Docker.Host) != "" && strings.TrimSpace(health.Docker.Host) != normalizeDockerHost(srv.DockerHost) {
@@ -1809,17 +1810,6 @@ func missingAgentCapabilities(values []string) []string {
 		}
 	}
 	return missing
-}
-
-func agentVersionCompatible(actual, required string) bool {
-	actual = normalizeAgentVersion(actual)
-	required = normalizeAgentVersion(required)
-	return actual != "" && required != "" && actual == required
-}
-
-func normalizeAgentVersion(value string) string {
-	value = strings.TrimPrefix(strings.TrimSpace(value), "v")
-	return strings.TrimPrefix(value, "V")
 }
 
 func agentEnvFile(bundle AgentCertificateBundle) string {

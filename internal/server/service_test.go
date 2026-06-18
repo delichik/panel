@@ -567,38 +567,40 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 	}
 }
 
-func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
+func TestCheckConfiguredAgentsMarksIncompatibleContract(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth("0.9.0")})
+	health := agentHealth("0.9.0")
+	health.Contract.Endpoints = nil
+	svc.SetAgentClient(&serverFakeAgentClient{health: health})
 
 	svc.CheckConfiguredAgents(context.Background())
 	srv, err := svc.Get(context.Background(), "srv_agent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible || srv.Traits[agent.TraitVersion] != "0.9.0" {
+	if srv.Traits[agent.TraitStatus] != agent.StatusIncompatible || srv.Traits[agent.TraitVersion] != "0.9.0" || !strings.Contains(srv.Traits[agent.TraitLastError], "agent contract incompatible") {
 		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
 	}
 }
 
-func TestCheckConfiguredAgentsMarksCompatible(t *testing.T) {
+func TestCheckConfiguredAgentsMarksCompatibleWithDifferentPanelVersion(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agent.Version)})
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth("v0.0.1")})
 
 	svc.CheckConfiguredAgents(context.Background())
 	srv, err := svc.Get(context.Background(), "srv_agent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible || srv.Traits[agent.TraitVersion] != agent.Version {
+	if srv.Traits[agent.TraitStatus] != agent.StatusCompatible || srv.Traits[agent.TraitVersion] != "v0.0.1" {
 		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
 	}
 }
@@ -1628,6 +1630,7 @@ func agentHealth(version string) agent.HealthResponse {
 		Status:       "ok",
 		Version:      version,
 		Capabilities: agent.RequiredCapabilities,
+		Contract:     agent.CurrentContract(),
 		Docker:       agent.DockerHealth{Host: agent.DefaultDockerHost, Status: "ok"},
 	}
 }

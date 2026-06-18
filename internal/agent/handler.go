@@ -42,7 +42,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.runtime != nil {
 			docker = h.runtime.DockerHealth(r.Context())
 		}
-		writeJSON(w, HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: Version, Capabilities: RequiredCapabilities, Docker: docker})
+		writeJSON(w, HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: Version, Capabilities: RequiredCapabilities, Contract: CurrentContract(), Docker: docker})
 	case r.Method == http.MethodGet && path == "/v1/system/os-release":
 		info, err := h.collector.OSRelease(r.Context())
 		writeResult(w, OSReleaseResponse{OSRelease: info}, err)
@@ -216,7 +216,7 @@ func dockerContainerLogsID(path string) string {
 func (h *Handler) oldServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch strings.TrimSuffix(r.URL.Path, "/") {
 	case "/v1/health":
-		writeJSON(w, HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: Version, Capabilities: RequiredCapabilities})
+		writeJSON(w, HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: Version, Capabilities: RequiredCapabilities, Contract: CurrentContract()})
 	case "/v1/system/os-release":
 		info, err := h.collector.OSRelease(r.Context())
 		writeResult(w, OSReleaseResponse{OSRelease: info}, err)
