@@ -216,6 +216,79 @@ func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
 	}
 }
 
+func TestMigrateDropsLegacyTaskHistory(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.TaskDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE tasks (
+		id TEXT PRIMARY KEY,
+		operation_id TEXT NOT NULL DEFAULT '',
+		type TEXT NOT NULL,
+		server_id TEXT NOT NULL DEFAULT '',
+		node_id TEXT NOT NULL DEFAULT '',
+		resource_type TEXT NOT NULL DEFAULT '',
+		resource_id TEXT NOT NULL DEFAULT '',
+		trigger_type TEXT NOT NULL DEFAULT '',
+		trigger_resource_type TEXT NOT NULL DEFAULT '',
+		trigger_resource_id TEXT NOT NULL DEFAULT '',
+		trigger_task_id TEXT NOT NULL DEFAULT '',
+		metadata_json TEXT NOT NULL DEFAULT '{}',
+		status TEXT NOT NULL,
+		stage TEXT NOT NULL DEFAULT '',
+		percentage REAL,
+		summary TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		retry_count INTEGER NOT NULL DEFAULT 0,
+		max_retries INTEGER NOT NULL DEFAULT 0,
+		next_run_at TEXT,
+		created_at TEXT NOT NULL,
+		started_at TEXT,
+		finished_at TEXT
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE task_steps (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, step TEXT NOT NULL, status TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE task_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, time TEXT NOT NULL, stream TEXT NOT NULL, line TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO tasks(id,type,status,created_at) VALUES('task_legacy','server_connectivity_test','queued','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	taskColumns := tableColumns(t, store.TaskDB(), "tasks")
+	for _, required := range []string{"params_json", "parent_task_id", "concurrency_key", "schedule_key"} {
+		if !taskColumns[required] {
+			t.Fatalf("migrated task schema is missing %q", required)
+		}
+	}
+	var count int
+	if err := store.TaskDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("legacy task history should be dropped, got %d row(s)", count)
+	}
+}
+
 func tableExists(t *testing.T, db *sql.DB, table string) bool {
 	t.Helper()
 	var name string

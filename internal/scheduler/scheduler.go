@@ -2,12 +2,15 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"log"
 	"strings"
 	"sync"
 	"time"
 
 	"panel/internal/agent"
+	"panel/internal/certs"
 	"panel/internal/containerization"
 	"panel/internal/id"
 	"panel/internal/metrics"
@@ -26,6 +29,7 @@ type Scheduler struct {
 	tasks      *tasks.Service
 	certs      certificateRenewer
 	containers *containerization.Service
+	periodic   *tasks.PeriodicRunner
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
 }
@@ -38,324 +42,598 @@ var staleQueuedWorkerTaskTypes = []string{
 }
 
 type certificateRenewer interface {
-	RenewDue(ctx context.Context, now time.Time) (int, error)
-	RunDueIssueTasks(ctx context.Context) (int, error)
 	RunIssueTask(ctx context.Context, task tasks.Task) error
+	RenewTask(ctx context.Context, task tasks.Task) error
 }
 
 func New(settings *settings.Service, servers *server.Service, metrics *metrics.Service, packages *packages.Service, tasks *tasks.Service) *Scheduler {
-	return &Scheduler{settings: settings, servers: servers, metrics: metrics, packages: packages, tasks: tasks}
+	s := &Scheduler{settings: settings, servers: servers, metrics: metrics, packages: packages, tasks: tasks}
+	s.registerTaskExecutors()
+	s.registerPeriodicTasks()
+	return s
 }
 
 func (s *Scheduler) SetCertificateRenewer(renewer certificateRenewer) {
 	s.certs = renewer
+	s.registerTaskExecutors()
+	s.registerPeriodicTasks()
 }
 
 func (s *Scheduler) SetContainerization(service *containerization.Service) {
 	s.containers = service
+	s.registerTaskExecutors()
+	s.registerPeriodicTasks()
+}
+
+func (s *Scheduler) registerTaskExecutors() {
+	if s.tasks == nil {
+		return
+	}
+	register := func(taskType string, execute func(tasks.TaskContext) error) {
+		def, ok := s.tasks.Registry().Definition(taskType)
+		if !ok {
+			return
+		}
+		def.Execute = execute
+		s.tasks.Registry().Replace(def)
+	}
+	register("server_connectivity_test", func(tc tasks.TaskContext) error {
+		return s.servers.RunConnectivityTask(tc.Context, tc.Task)
+	})
+	register("server_info_collect", func(tc tasks.TaskContext) error {
+		return s.servers.RunConnectivityTask(tc.Context, tc.Task)
+	})
+	register("server_agent_deploy", func(tc tasks.TaskContext) error {
+		return s.servers.RunAgentDeployTask(tc.Context, tc.Task)
+	})
+	register("server_agent_check", func(tc tasks.TaskContext) error {
+		return s.runAgentCheckTask(tc.Context, tc.Task)
+	})
+	register("task_queue_drain", func(tc tasks.TaskContext) error {
+		return s.runQueueDrainTask(tc.Context, tc.Task)
+	})
+	register("package_refresh", func(tc tasks.TaskContext) error {
+		return s.packages.RunRefreshTask(tc.Context, tc.Task)
+	})
+	register("metrics_collect", func(tc tasks.TaskContext) error {
+		return s.runMetricsCollectTask(tc.Context, tc.Task)
+	})
+	if s.certs != nil {
+		register("certificate_issue", func(tc tasks.TaskContext) error {
+			return s.certs.RunIssueTask(tc.Context, tc.Task)
+		})
+		register("certificate_renew", func(tc tasks.TaskContext) error {
+			return s.certs.RenewTask(tc.Context, tc.Task)
+		})
+	}
+	if s.containers != nil {
+		register("image_refresh", func(tc tasks.TaskContext) error {
+			return s.containers.RunImageRefreshTask(tc.Context, tc.Task)
+		})
+		register("application_reconcile", func(tc tasks.TaskContext) error {
+			return s.containers.RunApplicationReconcileTask(tc.Context, tc.Task)
+		})
+	}
+}
+
+func (s *Scheduler) registerPeriodicTasks() {
+	if s.tasks == nil {
+		return
+	}
+	registeredAt := time.Now()
+	var lastMetricsRun time.Time
+	var lastPackageRun time.Time
+	var lastImageRun time.Time
+	var lastRenewalRun time.Time
+	register := func(def tasks.Definition) {
+		existing, _ := s.tasks.Registry().Definition(def.Type)
+		if def.Summary == "" {
+			def.Summary = existing.Summary
+		}
+		def.Hidden = existing.Hidden || def.Hidden
+		def.AllowRunNow = existing.AllowRunNow
+		def.AllowRetry = existing.AllowRetry
+		def.DefaultMaxRetries = existing.DefaultMaxRetries
+		if def.ConcurrencyPolicy == "" {
+			def.ConcurrencyPolicy = existing.ConcurrencyPolicy
+		}
+		if def.ConcurrencyKey == nil {
+			def.ConcurrencyKey = existing.ConcurrencyKey
+		}
+		if def.Validate == nil {
+			def.Validate = existing.Validate
+		}
+		if def.BeforeStart == nil {
+			def.BeforeStart = existing.BeforeStart
+		}
+		if def.Execute == nil {
+			def.Execute = existing.Execute
+		}
+		if def.OnComplete == nil {
+			def.OnComplete = existing.OnComplete
+		}
+		if def.OnFailure == nil {
+			def.OnFailure = existing.OnFailure
+		}
+		s.tasks.Registry().Replace(def)
+	}
+	register(tasks.Definition{
+		Type:    "server_agent_check",
+		Summary: "Checking configured agents",
+		Periodic: &tasks.Periodic{
+			Interval: 5 * time.Minute,
+			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+				return s.collectAgentCheckInputs(ctx)
+			},
+		},
+	})
+	register(tasks.Definition{
+		Type:    "metrics_collect",
+		Summary: "Collecting scheduled metrics",
+		Periodic: &tasks.Periodic{
+			Interval: time.Second,
+			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+				interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
+				if lastMetricsRun.IsZero() {
+					lastMetricsRun = registeredAt
+				}
+				if time.Since(lastMetricsRun) < interval {
+					return tasks.CreateBatchInput{}, false, nil
+				}
+				batch, shouldRun, err := s.collectMetricsInputs(ctx)
+				if err == nil && shouldRun {
+					lastMetricsRun = time.Now()
+				}
+				return batch, shouldRun, err
+			},
+		},
+	})
+	register(tasks.Definition{
+		Type:    "package_refresh",
+		Summary: "Refreshing scheduled packages",
+		Periodic: &tasks.Periodic{
+			Interval: time.Second,
+			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+				interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
+				if lastPackageRun.IsZero() {
+					lastPackageRun = registeredAt
+				}
+				if time.Since(lastPackageRun) < interval {
+					return tasks.CreateBatchInput{}, false, nil
+				}
+				batch, shouldRun, err := s.collectScheduledPackageRefreshInputs(ctx)
+				if err == nil && shouldRun {
+					lastPackageRun = time.Now()
+				}
+				return batch, shouldRun, err
+			},
+		},
+	})
+	register(tasks.Definition{
+		Type:    "certificate_renew",
+		Summary: "Renewing due certificates",
+		Periodic: &tasks.Periodic{
+			Interval: 5 * time.Second,
+			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+				if lastRenewalRun.IsZero() {
+					lastRenewalRun = registeredAt
+				}
+				if time.Since(lastRenewalRun) < time.Hour {
+					return tasks.CreateBatchInput{}, false, nil
+				}
+				batch, shouldRun, err := s.collectCertificateRenewInputs(ctx, time.Now())
+				if err == nil && shouldRun {
+					lastRenewalRun = time.Now()
+				}
+				return batch, shouldRun, err
+			},
+		},
+	})
+	register(tasks.Definition{
+		Type:    "image_refresh",
+		Summary: "Refreshing scheduled image checks",
+		Periodic: &tasks.Periodic{
+			Interval: 5 * time.Second,
+			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+				interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
+				if lastImageRun.IsZero() {
+					lastImageRun = registeredAt
+				}
+				if time.Since(lastImageRun) < interval {
+					return tasks.CreateBatchInput{}, false, nil
+				}
+				batch, shouldRun, err := s.collectImageRefreshInputs(ctx)
+				if err == nil && shouldRun {
+					lastImageRun = time.Now()
+				}
+				return batch, shouldRun, err
+			},
+		},
+	})
+	register(tasks.Definition{
+		Type:    "application_reconcile",
+		Summary: "Monitoring application containers",
+		Periodic: &tasks.Periodic{
+			Interval: 5 * time.Second,
+			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+				return s.collectApplicationReconcileInputs(ctx)
+			},
+		},
+	})
+	register(tasks.Definition{
+		Type:    "task_queue_drain",
+		Summary: "Running due queued tasks",
+		Periodic: &tasks.Periodic{
+			Interval: 5 * time.Second,
+			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+				return s.collectQueueDrainInput(ctx)
+			},
+		},
+	})
 }
 
 func (s *Scheduler) Start(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.wg.Add(8)
-	go s.connectivityLoop(ctx)
-	go s.metricsLoop(ctx)
-	go s.packageLoop(ctx)
+	s.periodic = tasks.NewPeriodicRunner(s.tasks)
+	s.periodic.Start(ctx)
+	s.wg.Add(2)
 	go s.cleanupLoop(ctx)
-	go s.certificateLoop(ctx)
 	go s.runningTaskLoop(ctx)
-	go s.containerizationLoop(ctx)
-	go s.agentCheckLoop(ctx)
 }
 
-func (s *Scheduler) containerizationLoop(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	lastImageRefresh := time.Now()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if s.containers == nil {
-				continue
-			}
-			if err := s.containers.MonitorApplications(ctx); err != nil {
-				log.Printf("application container monitor: %v", err)
-			}
-			interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
-			if time.Since(lastImageRefresh) < interval {
-				continue
-			}
-			lastImageRefresh = time.Now()
-			if err := s.containers.RefreshAllScheduled(ctx); err != nil {
-				log.Printf("image refresh: %v", err)
-			}
-		}
+func (s *Scheduler) collectAgentCheckInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	if s.servers == nil {
+		return tasks.CreateBatchInput{}, false, nil
 	}
-}
-
-func (s *Scheduler) connectivityLoop(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	lastRun := time.Time{}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if time.Since(lastRun) < 5*time.Second {
-				continue
-			}
-			lastRun = time.Now()
-			if err := s.runDueConnectivityTests(ctx); err != nil {
-				log.Printf("scheduler run connectivity tests: %v", err)
-			}
-		}
-	}
-}
-
-func (s *Scheduler) runDueConnectivityTests(ctx context.Context) error {
-	return s.servers.RunDueConnectivityTests(ctx)
-}
-
-func (s *Scheduler) packageLoop(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	lastRun := time.Now()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if err := s.runDuePackageRefreshTasks(ctx); err != nil {
-				log.Printf("package refresh task: %v", err)
-			}
-			interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
-			if time.Since(lastRun) < interval {
-				continue
-			}
-			lastRun = time.Now()
-			if err := s.runScheduledPackageRefreshes(ctx); err != nil {
-				log.Printf("scheduler list servers for packages: %v", err)
-			}
-		}
-	}
-}
-
-func (s *Scheduler) runScheduledPackageRefreshes(ctx context.Context) error {
 	servers, err := s.servers.List(ctx)
 	if err != nil {
-		return err
+		return tasks.CreateBatchInput{}, false, err
 	}
+	inputs := []tasks.CreateInput{}
 	operationID := id.New("op")
 	for _, srv := range servers {
-		if !srv.OS.Supported || !srv.Reachable {
+		inputs = append(inputs, tasks.CreateInput{
+			OperationID:  operationID,
+			Type:         "server_agent_check",
+			ServerID:     srv.ID,
+			ResourceType: "server",
+			ResourceID:   srv.ID,
+			TriggerType:  "scheduler",
+			Summary:      "Checking agent for " + srv.Name,
+		})
+	}
+	if len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	return tasks.CreateBatchInput{Type: "server_agent_check", OperationID: operationID, TriggerType: "scheduler", Summary: "Checking configured agents", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+}
+
+func (s *Scheduler) collectMetricsInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	if s.metrics == nil || s.servers == nil {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	collectedAt := time.Now().UTC().Truncate(time.Second)
+	operationID := id.New("op")
+	inputs := []tasks.CreateInput{}
+	for _, srv := range servers {
+		if !srv.OS.Supported || !srv.Reachable || !schedulerAgentReady(srv) {
 			continue
 		}
-		if _, err := s.packages.RefreshScheduled(ctx, srv.ID, operationID); err != nil {
-			log.Printf("package refresh server %s: %v", srv.ID, err)
+		inputs = append(inputs, tasks.CreateInput{
+			OperationID:  operationID,
+			Type:         "metrics_collect",
+			ServerID:     srv.ID,
+			ResourceType: "server",
+			ResourceID:   srv.ID,
+			TriggerType:  "scheduler",
+			ParamsJSON:   `{"collectedAt":"` + collectedAt.Format(time.RFC3339Nano) + `"}`,
+			Summary:      "Collecting metrics for " + srv.Name,
+		})
+	}
+	if len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	return tasks.CreateBatchInput{Type: "metrics_collect", OperationID: operationID, TriggerType: "scheduler", Summary: "Collecting scheduled metrics", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+}
+
+func (s *Scheduler) collectScheduledPackageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	if s.packages == nil || s.servers == nil {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	operationID := id.New("op")
+	inputs := []tasks.CreateInput{}
+	for _, srv := range servers {
+		if !srv.OS.Supported || !srv.Reachable || s.hasRecentTask(ctx, "package_refresh", srv.ID, 10*time.Minute) {
+			continue
+		}
+		inputs = append(inputs, tasks.CreateInput{
+			OperationID:  operationID,
+			Type:         "package_refresh",
+			ServerID:     srv.ID,
+			ResourceType: "server",
+			ResourceID:   srv.ID,
+			TriggerType:  "scheduler",
+			Summary:      "Refreshing package updates",
+		})
+	}
+	if len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	return tasks.CreateBatchInput{Type: "package_refresh", OperationID: operationID, TriggerType: "scheduler", Summary: "Refreshing scheduled packages", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+}
+
+func (s *Scheduler) collectCertificateRenewInputs(ctx context.Context, now time.Time) (tasks.CreateBatchInput, bool, error) {
+	if s.certs == nil {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	lister, ok := s.certs.(interface {
+		List(context.Context) ([]certs.Certificate, error)
+	})
+	if !ok {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	certificates, err := lister.List(ctx)
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	operationID := id.New("op")
+	inputs := []tasks.CreateInput{}
+	for _, cert := range certificates {
+		if !cert.AutoRenew || cert.NextRenewAt.IsZero() || cert.NextRenewAt.After(now) {
+			continue
+		}
+		inputs = append(inputs, tasks.CreateInput{
+			OperationID:  operationID,
+			Type:         "certificate_renew",
+			ResourceType: "certificate",
+			ResourceID:   cert.ID,
+			TriggerType:  "scheduler",
+			MetadataJSON: certMetadataJSON(cert),
+			Summary:      "Renewing certificate for " + cert.Domain,
+		})
+	}
+	if len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	return tasks.CreateBatchInput{Type: "certificate_renew", OperationID: operationID, TriggerType: "scheduler", Summary: "Renewing due certificates", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+}
+
+func certMetadataJSON(cert certs.Certificate) string {
+	data, err := json.Marshal(map[string]any{
+		"certificateId": cert.ID,
+		"domain":        cert.Domain,
+		"domains":       cert.Domains,
+		"issuer":        cert.Issuer,
+	})
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func (s *Scheduler) collectImageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	if s.containers == nil || s.servers == nil {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	operationID := id.New("op")
+	inputs := []tasks.CreateInput{}
+	for _, srv := range servers {
+		if !srv.Reachable || srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+			continue
+		}
+		inputs = append(inputs, tasks.CreateInput{
+			OperationID:  operationID,
+			Type:         "image_refresh",
+			ServerID:     srv.ID,
+			ResourceType: "server",
+			ResourceID:   srv.ID,
+			TriggerType:  "scheduler",
+			Summary:      "Refreshing image updates",
+		})
+	}
+	if len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	return tasks.CreateBatchInput{Type: "image_refresh", OperationID: operationID, TriggerType: "scheduler", Summary: "Refreshing scheduled image checks", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+}
+
+func (s *Scheduler) collectApplicationReconcileInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	if s.containers == nil {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	collector, ok := any(s.containers).(interface {
+		CollectApplicationReconcileTasks(context.Context, string) ([]tasks.CreateInput, error)
+	})
+	if !ok {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	operationID := id.New("op")
+	inputs, err := collector.CollectApplicationReconcileTasks(ctx, operationID)
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	if len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	return tasks.CreateBatchInput{Type: "application_reconcile", OperationID: operationID, TriggerType: "scheduler", Summary: "Monitoring application containers", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+}
+
+type queueDrainParams struct {
+	TaskIDs []string `json:"taskIds"`
+}
+
+func (s *Scheduler) collectQueueDrainInput(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	if s.tasks == nil {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	taskIDs, err := s.dueRunnableTaskIDs(ctx, "server_info_collect", "server_connectivity_test", "certificate_issue", "package_refresh")
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	if len(taskIDs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	data, err := json.Marshal(queueDrainParams{TaskIDs: taskIDs})
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	return tasks.CreateBatchInput{
+		Type:          "task_queue_drain",
+		OperationID:   id.New("op"),
+		TriggerType:   "scheduler",
+		Summary:       "Running due queued tasks",
+		ExecutionMode: tasks.ExecutionModeSerial,
+		Inputs: []tasks.CreateInput{{
+			Type:        "task_queue_drain",
+			TriggerType: "scheduler",
+			ParamsJSON:  string(data),
+			Summary:     "Running due queued tasks",
+		}},
+	}, true, nil
+}
+
+func (s *Scheduler) dueRunnableTaskIDs(ctx context.Context, taskTypes ...string) ([]string, error) {
+	now := time.Now().UTC()
+	taskIDs := []string{}
+	seen := map[string]struct{}{}
+	for _, taskType := range taskTypes {
+		for _, status := range []string{tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusFailedRetryable} {
+			result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, Status: status, Limit: 50, IncludeInternal: true})
+			if err != nil {
+				return nil, err
+			}
+			for _, task := range result.Items {
+				if task.NextRunAt != nil && task.NextRunAt.After(now) {
+					continue
+				}
+				key := task.ID
+				if key == "" {
+					continue
+				}
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				taskIDs = append(taskIDs, task.ID)
+			}
 		}
 	}
-	return nil
+	return taskIDs, nil
+}
+
+func (s *Scheduler) hasRecentTask(ctx context.Context, taskType, serverID string, window time.Duration) bool {
+	if s.tasks == nil {
+		return false
+	}
+	result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, ServerID: serverID, Limit: 1, IncludeInternal: true})
+	if err != nil || len(result.Items) == 0 {
+		return false
+	}
+	return time.Since(result.Items[0].CreatedAt) <= window
 }
 
 func (s *Scheduler) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.periodic != nil {
+		s.periodic.Wait()
+	}
 	s.wg.Wait()
 }
 
 func (s *Scheduler) RunNow(ctx context.Context, task tasks.Task) error {
-	switch task.Type {
-	case "server_connectivity_test", "server_info_collect":
-		return s.servers.RunConnectivityTask(ctx, task)
-	case "server_agent_deploy":
-		return s.servers.RunAgentDeployTask(ctx, task)
-	case "package_refresh":
-		if s.packages == nil {
-			return panelerr.Validation("task_run_now_unsupported", "Package refresh runner is not configured")
-		}
-		return s.packages.RunRefreshTask(ctx, task)
-	case "certificate_issue":
-		if s.certs == nil {
-			return panelerr.Validation("task_run_now_unsupported", "Certificate issuer is not configured")
-		}
-		return s.certs.RunIssueTask(ctx, task)
+	def, ok := s.tasks.Registry().Definition(task.Type)
+	if !ok || def.Execute == nil {
+		return tasks.ErrExecutorUnavailable()
 	}
-
-	return panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center")
+	return def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: s.tasks})
 }
 
-func (s *Scheduler) runDuePackageRefreshTasks(ctx context.Context) error {
-	if s.packages == nil || s.tasks == nil {
+func (s *Scheduler) runAgentCheckTask(ctx context.Context, task tasks.Task) error {
+	if s.servers == nil {
 		return nil
 	}
-	now := time.Now().UTC()
-	startedByServer := map[string]struct{}{}
-	for _, status := range []string{tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusFailedRetryable} {
-		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: "package_refresh", Status: status, Limit: 50})
-		if err != nil {
-			return err
-		}
-		for _, task := range result.Items {
-			if task.NextRunAt != nil && task.NextRunAt.After(now) {
-				continue
-			}
-			serverID := firstNonEmpty(task.ServerID, task.ResourceID)
-			if serverID == "" {
-				continue
-			}
-			if _, ok := startedByServer[serverID]; ok {
-				continue
-			}
-			if err := s.packages.RunRefreshTask(ctx, task); err != nil {
-				return err
-			}
-			startedByServer[serverID] = struct{}{}
-		}
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	if serverID == "" {
+		return nil
 	}
+	checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	srv, err := s.servers.Get(checkCtx, serverID)
+	if err != nil {
+		return err
+	}
+	s.servers.CheckConfiguredAgent(checkCtx, srv)
 	return nil
 }
 
-func (s *Scheduler) CanRun(task tasks.Task) bool {
-	switch task.Type {
-	case "server_connectivity_test", "server_info_collect", "server_agent_deploy":
-		return s.servers != nil
-	case "package_refresh":
-		return s.packages != nil
-	case "certificate_issue":
-		return s.certs != nil
-	default:
-		return false
-	}
-}
-
-func (s *Scheduler) agentCheckLoop(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			checkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			s.servers.CheckConfiguredAgents(checkCtx)
-			cancel()
-		}
-	}
-}
-
-func (s *Scheduler) certificateLoop(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	lastRenewal := time.Now()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case now := <-ticker.C:
-			if s.certs == nil {
-				continue
-			}
-			if issued, err := s.certs.RunDueIssueTasks(ctx); err != nil {
-				log.Printf("certificate issue task: %v", err)
-			} else if issued > 0 {
-				log.Printf("certificate issue completed for %d certificate(s)", issued)
-			}
-			if time.Since(lastRenewal) < time.Hour {
-				continue
-			}
-			lastRenewal = now
-			if renewed, err := s.certs.RenewDue(ctx, now); err != nil {
-				log.Printf("certificate renewal: %v", err)
-			} else if renewed > 0 {
-				log.Printf("certificate renewal completed for %d certificate(s)", renewed)
-			}
-		}
-	}
-}
-
-func (s *Scheduler) metricsLoop(ctx context.Context) {
-	defer s.wg.Done()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	lastRun := time.Now()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			interval := time.Duration(s.settings.Runtime().MetricsCollectionIntervalSeconds) * time.Second
-			if time.Since(lastRun) < interval {
-				continue
-			}
-			lastRun = time.Now()
-			if err := s.runDueMetricsCollection(ctx); err != nil {
-				log.Printf("scheduler collect metrics: %v", err)
-			}
-		}
-	}
-}
-
-func (s *Scheduler) collectMetrics(ctx context.Context, srv server.Server) error {
-	return s.collectMetricsAt(ctx, srv, time.Now().UTC().Truncate(time.Second), "")
-}
-
-func (s *Scheduler) runDueMetricsCollection(ctx context.Context) error {
-	servers, err := s.servers.List(ctx)
-	if err != nil {
-		return err
+func (s *Scheduler) runMetricsCollectTask(ctx context.Context, task tasks.Task) error {
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	if serverID == "" {
+		return nil
 	}
 	collectedAt := time.Now().UTC().Truncate(time.Second)
-	operationID := id.New("op")
-	for _, srv := range servers {
-		if !srv.OS.Supported || !srv.Reachable {
-			continue
-		}
-		if !schedulerAgentReady(srv) {
-			continue
-		}
-		if err := s.collectMetricsAt(ctx, srv, collectedAt, operationID); err != nil {
-			log.Printf("metrics collect server %s: %v", srv.ID, err)
+	var params struct {
+		CollectedAt string `json:"collectedAt"`
+	}
+	if strings.TrimSpace(task.ParamsJSON) != "" {
+		if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err == nil && params.CollectedAt != "" {
+			if parsed, parseErr := time.Parse(time.RFC3339Nano, params.CollectedAt); parseErr == nil {
+				collectedAt = parsed
+			}
 		}
 	}
-	return nil
-}
-
-func (s *Scheduler) collectMetricsAt(ctx context.Context, srv server.Server, collectedAt time.Time, operationID string) error {
-	if !schedulerAgentReady(srv) {
-		return nil
-	}
-	if s.tasks == nil {
-		return s.metrics.CollectAt(ctx, srv.ID, collectedAt)
-	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
-		OperationID:  operationID,
-		Type:         "metrics_collect",
-		ServerID:     srv.ID,
-		ResourceType: "server",
-		ResourceID:   srv.ID,
-		TriggerType:  "scheduler",
-		Status:       tasks.StatusRunning,
-	})
-	if err != nil {
-		return err
-	}
-	defer s.tasks.FinishExecution(task.ID)
-	_ = s.tasks.Advance(ctx, task.ID, "running", "")
-	if err := s.metrics.CollectAt(ctx, srv.ID, collectedAt); err != nil {
+	if err := s.metrics.CollectAt(ctx, serverID, collectedAt); err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return err
 	}
 	return s.tasks.Complete(ctx, task.ID, "")
+}
+
+func (s *Scheduler) runQueueDrainTask(ctx context.Context, task tasks.Task) error {
+	if s.tasks == nil {
+		return nil
+	}
+	var params queueDrainParams
+	if strings.TrimSpace(task.ParamsJSON) != "" {
+		if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err != nil {
+			return err
+		}
+	}
+	if len(params.TaskIDs) == 0 {
+		return nil
+	}
+	for _, taskID := range params.TaskIDs {
+		dueTask, err := s.tasks.Get(ctx, taskID)
+		if err != nil {
+			var pe *panelerr.Error
+			if errors.As(err, &pe) && pe.Code == "not_found" {
+				continue
+			}
+			return err
+		}
+		if dueTask.Status == tasks.StatusRunning && s.tasks.HasRunningExecution(dueTask.ID) {
+			continue
+		}
+		if err := s.RunNow(ctx, dueTask); err != nil {
+			log.Printf("scheduler queue drain task %s: %v", dueTask.ID, err)
+		}
+	}
+	return nil
 }
 
 func schedulerAgentReady(srv server.Server) bool {

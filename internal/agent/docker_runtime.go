@@ -448,8 +448,9 @@ func containerNameForInstance(instanceID string) string {
 }
 
 type dockerAPIClient struct {
-	host   string
-	client *http.Client
+	host       string
+	client     *http.Client
+	pullClient *http.Client
 }
 
 func newDockerAPIClient(host string) (*dockerAPIClient, error) {
@@ -472,9 +473,23 @@ func newDockerAPIClient(host string) (*dockerAPIClient, error) {
 				return d.DialContext(ctx, "unix", socketPath)
 			},
 		}
-		return &dockerAPIClient{host: host, client: &http.Client{Transport: transport, Timeout: 2 * time.Minute}}, nil
+		pullTransport := &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				var d net.Dialer
+				return d.DialContext(ctx, "unix", socketPath)
+			},
+		}
+		return &dockerAPIClient{
+			host:       host,
+			client:     &http.Client{Transport: transport, Timeout: 2 * time.Minute},
+			pullClient: &http.Client{Transport: pullTransport, Timeout: dockerImagePullTimeout},
+		}, nil
 	case "http", "https":
-		return &dockerAPIClient{host: host, client: &http.Client{Timeout: 2 * time.Minute}}, nil
+		return &dockerAPIClient{
+			host:       host,
+			client:     &http.Client{Timeout: 2 * time.Minute},
+			pullClient: &http.Client{Timeout: dockerImagePullTimeout},
+		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported docker host %q", host)
 	}
@@ -503,7 +518,7 @@ func (c *dockerAPIClient) pullImage(ctx context.Context, image string) error {
 	if err != nil {
 		return err
 	}
-	res, err := c.client.Do(req)
+	res, err := c.pullClient.Do(req)
 	if err != nil {
 		return err
 	}

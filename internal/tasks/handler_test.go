@@ -21,11 +21,6 @@ func (r *recordingRunner) RunNow(ctx context.Context, task Task) error {
 
 type capabilityRunner struct {
 	recordingRunner
-	allow bool
-}
-
-func (r *capabilityRunner) CanRun(task Task) bool {
-	return r.allow
 }
 
 func TestHandlerRunNowDispatchesQueuedTask(t *testing.T) {
@@ -59,7 +54,29 @@ func TestHandlerRunNowRejectsUnsupportedTaskType(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := &capabilityRunner{allow: false}
+	runner := &capabilityRunner{}
+	handler := NewHandler(svc, runner)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/run-now", nil)
+	rec := httptest.NewRecorder()
+
+	handler.RunNow(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected unsupported task to be rejected, got %d", rec.Code)
+	}
+	if runner.task.ID != "" {
+		t.Fatalf("runner should not receive unsupported task, got %#v", runner.task)
+	}
+}
+
+func TestHandlerRunNowRejectsDefinitionWithoutCapability(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "application_deploy", Status: StatusQueued})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &capabilityRunner{}
 	handler := NewHandler(svc, runner)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/run-now", nil)
@@ -81,7 +98,7 @@ func TestHandlerRetryDispatchesRunnableFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runner := &capabilityRunner{allow: true}
+	runner := &capabilityRunner{}
 	handler := NewHandler(svc, runner)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/retry", nil)
@@ -103,7 +120,7 @@ func TestHandlerRetryRejectsNonFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(svc, &capabilityRunner{allow: true})
+	handler := NewHandler(svc, &capabilityRunner{})
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/tasks/"+task.ID+"/retry", nil)
 	rec := httptest.NewRecorder()

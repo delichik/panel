@@ -14,10 +14,6 @@ type RunNowRunner interface {
 	RunNow(ctx context.Context, task Task) error
 }
 
-type RunNowCapability interface {
-	CanRun(task Task) bool
-}
-
 type Handler struct {
 	service *Service
 	runner  RunNowRunner
@@ -100,7 +96,7 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.Validation("task_retry_status_invalid", "Only failed, retryable, or blocked tasks can be retried"))
 		return
 	}
-	if !h.canRun(old) {
+	if !h.canRetry(old) {
 		httpx.Error(w, panelerr.Validation("task_retry_unsupported", "This task type cannot be retried from the task center"))
 		return
 	}
@@ -129,7 +125,7 @@ func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.Validation("task_run_now_status_invalid", "Only queued, scheduled, or retryable tasks can be run now"))
 		return
 	}
-	if !h.canRun(current) {
+	if !h.canRunNow(current) {
 		httpx.Error(w, panelerr.Validation("task_run_now_unsupported", "This task type cannot be run from the task center"))
 		return
 	}
@@ -148,15 +144,20 @@ func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusAccepted, task)
 }
 
-func (h *Handler) canRun(task Task) bool {
-	if h.runner == nil {
-		return true
+func (h *Handler) canRunNow(task Task) bool {
+	def, ok := h.service.Registry().Definition(task.Type)
+	if !ok || !def.AllowRunNow {
+		return false
 	}
-	checker, ok := h.runner.(RunNowCapability)
-	if !ok {
-		return true
+	return h.runner != nil
+}
+
+func (h *Handler) canRetry(task Task) bool {
+	def, ok := h.service.Registry().Definition(task.Type)
+	if !ok || !def.AllowRetry {
+		return false
 	}
-	return checker.CanRun(task)
+	return h.runner != nil
 }
 
 func canRunNowStatus(status string) bool {

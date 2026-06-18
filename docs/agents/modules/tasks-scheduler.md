@@ -2,12 +2,12 @@
 
 ## 适用场景
 
-修改后台任务、任务状态、步骤、日志、重试、手动运行、周期采集、软件包调度、证书续签调度或应用运行任务时，先读本文档。
+修改后台任务、任务注册、任务状态、步骤、日志、重试、手动运行、周期任务、软件包调度、证书续签调度或应用运行任务时，先读本文档。
 
 ## 关键入口
 
-- 任务模型和服务：`internal/tasks/`
-- 周期调度：`internal/scheduler/scheduler.go`
+- 任务模型、注册表、manager 和服务：`internal/tasks/`
+- 周期任务调度：`internal/scheduler/scheduler.go`
 - 路由装配：`internal/app/app.go`
 - 前端任务中心：`web/src/views/tasks/index.vue`
 - 前端任务操作：`web/src/views/tasks/_shared/taskOperations.ts`
@@ -26,8 +26,13 @@
 
 ## 数据与行为约定
 
-- 任务数据使用独立 SQLite 数据库 `Store.TaskDB()`，默认文件是 `data/db/tasks.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。任务级额外数据写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
-- 当前不会把旧 `app.db` 里的历史任务迁移到 `tasks.db`；旧任务表可留在 app 数据库中，但新任务读写必须走 `Store.TaskDB()`。
+- 任务数据使用独立 SQLite 数据库 `Store.TaskDB()`，默认文件是 `data/db/tasks.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
+- 当前 alpha 阶段任务历史不是稳定持久化契约；注册式任务系统重构会重建 `tasks`、`task_steps` 和 `task_logs`，旧任务中心历史可直接丢弃，但业务数据库和指标数据库不得受影响。
+- 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入任务表。
+- 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略和周期配置。
+- 周期任务类型通过 `Periodic.CollectInputs` 收集本轮自动触发需要的参数，并决定是否创建任务实例。返回 `shouldRun=false` 时不创建任务、不执行、不写日志、不进入任务中心；返回 `shouldRun=true` 时交给任务 manager 创建任务。单个输入创建普通任务，多个输入创建一个父任务和多个子任务，子任务执行同一注册任务类型，父任务只负责编排和汇总。手动执行周期任务仍按普通任务语义处理，调用方必须显式传入参数，不会调用 `CollectInputs` 自动补齐。
+- 任务框架统一管理活跃任务并发准入。注册方只声明策略，例如允许并行、同资源互斥、同资源排队、同类型全局互斥或自定义并发 key；业务代码不要再手写同类型活跃任务查询。需要复用活跃任务时通过 `tasks.Manager.Create` 的 `created=false` 结果处理。
+- 多组同类型参数会创建父任务和多个子任务。父任务负责串行或并行编排与汇总，子任务执行同一注册定义。第一轮前端可平铺展示父子任务，不强制树形任务中心。
 - 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移并同步前端。
 - 任务中心筛选控件清空时可能产生 `null`；前端任务 API 应统一归一化空值和空白字符串，不发送空筛选参数。
 - 任务中心类型筛选默认使用“常用类型”，排除所有 `trigger_type=scheduler` 的定时任务，并隐藏内部高频的 `server_connectivity_test` 和 `metrics_collect`。
@@ -41,9 +46,10 @@
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。
 - 遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter` 的选定 worker 类型会在清理循环中标记为失败并提示用户重试。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
-- `scheduler` 负责周期性指标采集、软件包刷新、镜像更新检查、Application 容器监控、证书续签和 due 的包刷新任务补扫，并作为 `run-now` 执行入口。
-- 任务中心的 `run-now` / `retry` 必须按任务类型受控；当前只允许 `server_connectivity_test`、`server_info_collect`、`server_agent_deploy`、`package_refresh`、`certificate_issue` 这类有调度器执行器的任务。
-- `retry` 创建的新任务会立即交给调度器执行；如果调度器启动前返回错误，handler 会把新任务标记为失败，避免永久排队。
+- `scheduler` 负责驱动注册的周期任务，例如 agent 检查、指标采集、软件包刷新、镜像更新检查、Application 容器监控、证书签发 due task 和证书续签。业务是否需要实际执行以及本轮执行参数由对应任务定义的 `Periodic.CollectInputs` 判断和生成；任务执行函数只消费已经落到任务输入中的参数，不在执行阶段重新扫描本轮资源列表。
+- 生产代码创建任务应使用 `tasks.NewManager(taskSvc).Create` 或 manager 封装入口，不直接调用 `Service.Create`；`Service.Create` 保留给任务存储层、测试和低层兼容场景。
+- 任务中心的 `run-now` / `retry` 必须按任务定义受控，不再在 scheduler 中维护硬编码 switch。允许手动运行或重试的任务必须注册对应能力。
+- `retry` 创建的新任务会立即交给任务 manager 执行；如果执行器启动前返回错误，handler 会把新任务标记为失败，避免永久排队。
 
 ## 跨模块依赖
 
@@ -68,4 +74,4 @@
 
 ## 文档更新触发
 
-新增任务类型、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。
+新增任务类型、注册字段、并发策略、周期输入收集规则、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。

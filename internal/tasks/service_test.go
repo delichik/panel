@@ -24,7 +24,9 @@ func newTestService(t *testing.T) *Service {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	return NewService(store.TaskDB())
+	svc := NewService(store.TaskDB())
+	svc.MustRegister(Definition{Type: "test", ConcurrencyPolicy: ConcurrencyParallelAllowed})
+	return svc
 }
 
 func TestTaskLifecycleAndLogs(t *testing.T) {

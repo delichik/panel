@@ -167,21 +167,19 @@ func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, 
 func (s *Service) ResetSystemCertificate(ctx context.Context, certificateID string) (tasks.Task, error) {
 	switch certificateID {
 	case "agent-ca", "agent-panel-client":
-		if existing, ok, err := s.tasks.ExistingActive(ctx, agentCertificateResetTaskType, agentCertificateResourceType, certificateID); err != nil {
-			return tasks.Task{}, err
-		} else if ok {
-			return existing, nil
-		}
-		task, err := s.tasks.Create(ctx, tasks.CreateInput{
+		task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 			Type:         agentCertificateResetTaskType,
 			ResourceType: agentCertificateResourceType,
 			ResourceID:   certificateID,
 			TriggeredBy:  "user",
 			Summary:      "Resetting system-managed agent certificate",
 			Status:       tasks.StatusRunning,
-		})
+		}, tasks.Trigger{Type: "user", Manual: true})
 		if err != nil {
 			return tasks.Task{}, err
+		}
+		if !created {
+			return task, nil
 		}
 		go s.runSystemCertificateReset(context.Background(), task.ID, certificateID)
 		return task, nil
@@ -534,47 +532,54 @@ func (s *Service) CheckConfiguredAgents(ctx context.Context) {
 		if err != nil {
 			continue
 		}
-		if agentAutoDeployBlocked(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUndeployable {
-			if srv.Traits[agent.TraitStatus] != agent.StatusUndeployable {
-				_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUndeployable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], "Agent auto deployment is stopped; use Reinstall Agent after fixing the error"))
+		s.CheckConfiguredAgent(ctx, srv)
+	}
+}
+
+func (s *Service) CheckConfiguredAgent(ctx context.Context, srv Server) {
+	if s.agent == nil {
+		return
+	}
+	if agentAutoDeployBlocked(srv) || srv.Traits[agent.TraitStatus] == agent.StatusUndeployable {
+		if srv.Traits[agent.TraitStatus] != agent.StatusUndeployable {
+			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUndeployable, "", firstNonEmpty(srv.Traits[agent.TraitLastError], "Agent auto deployment is stopped; use Reinstall Agent after fixing the error"))
+		}
+		return
+	}
+	if _, ok := agentURL(srv); !ok {
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+		return
+	}
+	if agentUsesLegacyDefaultPort(srv) {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", "agent uses legacy port 9443; redeployment required")
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+		return
+	}
+	if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+		return
+	}
+	if agentStatusNeedsDeploy(srv) {
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+		return
+	}
+	if err := s.checkAgent(ctx, srv); err != nil {
+		if s.handleAgentCertificateTimeError(ctx, srv, err) {
+			if updated, getErr := s.Get(ctx, srv.ID); getErr == nil && agentStatusNeedsDeploy(updated) {
+				_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
 			}
-			continue
+			return
 		}
-		if _, ok := agentURL(srv); !ok {
-			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
-			continue
-		}
-		if agentUsesLegacyDefaultPort(srv) {
-			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", "agent uses legacy port 9443; redeployment required")
-			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
-			continue
-		}
-		if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
-			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusIncompatible, "", msg)
-			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
-			continue
-		}
-		if agentStatusNeedsDeploy(srv) {
-			_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
-			continue
-		}
-		if err := s.checkAgent(ctx, srv); err != nil {
-			if s.handleAgentCertificateTimeError(ctx, srv, err) {
-				if updated, getErr := s.Get(ctx, srv.ID); getErr == nil && agentStatusNeedsDeploy(updated) {
-					_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
-				}
-				continue
-			}
-			_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
-			continue
-		}
-		updated, err := s.Get(ctx, srv.ID)
-		if err != nil {
-			continue
-		}
-		if updated.Traits[agent.TraitStatus] == agent.StatusIncompatible {
-			_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
-		}
+		_ = s.markAgentStatus(ctx, srv.ID, agent.StatusUnavailable, "", err.Error())
+		return
+	}
+	updated, err := s.Get(ctx, srv.ID)
+	if err != nil {
+		return
+	}
+	if updated.Traits[agent.TraitStatus] == agent.StatusIncompatible {
+		_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
 	}
 }
 
@@ -637,12 +642,7 @@ func (s *Service) EnableUFW(ctx context.Context, serverID string) (tasks.Task, e
 	if !ok || !adapter.SupportsUFW() {
 		return tasks.Task{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, ufwEnableTaskType, connectivityResourceType, serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		return existing, nil
-	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         ufwEnableTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
@@ -650,9 +650,12 @@ func (s *Service) EnableUFW(ctx context.Context, serverID string) (tasks.Task, e
 		TriggerType:  "user",
 		Summary:      "Enabling UFW",
 		MaxRetries:   0,
-	})
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
+	}
+	if !created {
+		return task, nil
 	}
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return tasks.Task{}, err
@@ -711,12 +714,7 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 	if !adapter.SupportsUFW() {
 		return tasks.Task{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, ufwInstallTaskType, connectivityResourceType, serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		return existing, nil
-	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         ufwInstallTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
@@ -724,9 +722,12 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 		TriggerType:  "user",
 		Summary:      "Installing UFW",
 		MaxRetries:   0,
-	})
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
+	}
+	if !created {
+		return task, nil
 	}
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return tasks.Task{}, err
@@ -756,12 +757,7 @@ func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, err
 	if !srv.Sudo.Passwordless {
 		return tasks.Task{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, restartTaskType, connectivityResourceType, serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		return existing, nil
-	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         restartTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
@@ -769,9 +765,12 @@ func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, err
 		TriggerType:  "user",
 		Summary:      "Restarting server",
 		MaxRetries:   0,
-	})
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
+	}
+	if !created {
+		return task, nil
 	}
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return tasks.Task{}, err
@@ -952,19 +951,7 @@ func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, r
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	if existing, ok, err := s.existingActiveConnectivityTask(ctx, serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		if runNow && existing.Status != tasks.StatusRunning {
-			existing, err = s.tasks.RunNow(ctx, existing.ID)
-			if err != nil {
-				return tasks.Task{}, err
-			}
-			s.startConnectivityTask(existing, srv)
-		}
-		return existing, nil
-	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		OperationID:  operationID,
 		Type:         taskType,
 		ServerID:     serverID,
@@ -972,33 +959,24 @@ func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, r
 		ResourceID:   serverID,
 		Summary:      summary,
 		MaxRetries:   connectivityMaxRetries,
-	})
+	}, tasks.Trigger{Type: "scheduler", Periodic: !runNow})
 	if err != nil {
 		return tasks.Task{}, err
+	}
+	if !created {
+		if runNow && task.Status != tasks.StatusRunning {
+			task, err = s.tasks.RunNow(ctx, task.ID)
+			if err != nil {
+				return tasks.Task{}, err
+			}
+			s.startConnectivityTask(task, srv)
+		}
+		return task, nil
 	}
 	if runNow {
 		s.startConnectivityTask(task, srv)
 	}
 	return task, nil
-}
-
-func (s *Service) existingActiveConnectivityTask(ctx context.Context, serverID string) (tasks.Task, bool, error) {
-	var latest tasks.Task
-	found := false
-	for _, taskType := range []string{serverInfoTaskType, connectivityTaskType} {
-		task, ok, err := s.tasks.ExistingActive(ctx, taskType, connectivityResourceType, serverID)
-		if err != nil {
-			return tasks.Task{}, false, err
-		}
-		if !ok {
-			continue
-		}
-		if !found || task.CreatedAt.After(latest.CreatedAt) {
-			latest = task
-			found = true
-		}
-	}
-	return latest, found, nil
 }
 
 func (s *Service) RunDueConnectivityTests(ctx context.Context) error {
@@ -1119,39 +1097,37 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_exhausted", msg)
 		}
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, agentDeployTaskType, connectivityResourceType, serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		if triggeredBy == "user" {
-			_ = s.tasks.SetTriggeredBy(ctx, existing.ID, "user")
-			existing.TriggeredBy = "user"
-		}
-		if run && existing.Status != tasks.StatusRunning {
-			existing, err = s.tasks.RunNow(ctx, existing.ID)
-			if err != nil {
-				return tasks.Task{}, err
-			}
-			if err := s.RunAgentDeployTask(ctx, existing); err != nil {
-				return tasks.Task{}, err
-			}
-			existing, _ = s.tasks.Get(ctx, existing.ID)
-		}
-		return existing, nil
-	}
 	srv, err := s.Get(ctx, serverID)
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         agentDeployTaskType,
 		ServerID:     srv.ID,
 		ResourceType: connectivityResourceType,
 		ResourceID:   srv.ID,
 		TriggeredBy:  triggeredBy,
 		Summary:      "Deploying panel agent for " + srv.Name,
-	})
+	}, tasks.Trigger{Type: triggeredBy, Manual: triggeredBy == "user", Periodic: triggeredBy != "user"})
 	if err != nil {
 		return tasks.Task{}, err
+	}
+	if !created {
+		if triggeredBy == "user" {
+			_ = s.tasks.SetTriggeredBy(ctx, task.ID, "user")
+			task.TriggeredBy = "user"
+		}
+		if run && task.Status != tasks.StatusRunning {
+			task, err = s.tasks.RunNow(ctx, task.ID)
+			if err != nil {
+				return tasks.Task{}, err
+			}
+			if err := s.RunAgentDeployTask(ctx, task); err != nil {
+				return tasks.Task{}, err
+			}
+			task, _ = s.tasks.Get(ctx, task.ID)
+		}
+		return task, nil
 	}
 	if run {
 		if err := s.RunAgentDeployTask(ctx, task); err != nil {

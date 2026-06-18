@@ -458,22 +458,21 @@ func (s *Service) RefreshImages(ctx context.Context, serverID, triggerType, oper
 	if s.tasks == nil {
 		return tasks.Task{}, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, TaskImageRefresh, "server", serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		return existing, nil
-	}
 	if !s.markRefreshing(serverID) {
 		return tasks.Task{}, panelerr.Conflict("image_refresh_running", "Image refresh is already running")
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		OperationID: operationID, Type: TaskImageRefresh, ServerID: serverID,
 		ResourceType: "server", ResourceID: serverID, TriggerType: triggerType,
 		Summary: "Refreshing image updates",
-	})
+	}, tasks.Trigger{Type: triggerType, Periodic: triggerType == "scheduler"})
 	if err != nil {
 		s.clearRefreshing(serverID)
 		return tasks.Task{}, err
+	}
+	if !created {
+		s.clearRefreshing(serverID)
+		return task, nil
 	}
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		s.clearRefreshing(serverID)
@@ -500,6 +499,22 @@ func (s *Service) RefreshAllScheduled(ctx context.Context) error {
 			}
 		}
 	}
+	return nil
+}
+
+func (s *Service) RunImageRefreshTask(ctx context.Context, task tasks.Task) error {
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	if serverID == "" {
+		return panelerr.Validation("server_required", "Server is required")
+	}
+	if !s.markRefreshing(serverID) {
+		return nil
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		s.clearRefreshing(serverID)
+		return err
+	}
+	s.runImageRefresh(s.tasks.ExecutionContext(task.ID), task, serverID)
 	return nil
 }
 
@@ -568,15 +583,12 @@ func (s *Service) MonitorApplications(ctx context.Context) error {
 			if !drifted {
 				continue
 			}
-			if _, active, _ := s.tasks.ExistingActive(ctx, TaskApplicationReconcile, "application", app.ID); active {
-				continue
-			}
-			task, err := s.tasks.Create(ctx, tasks.CreateInput{
+			task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 				Type: TaskApplicationReconcile, ServerID: srv.ID, ResourceType: "application",
 				ResourceID: app.ID, TriggerType: "scheduler", Summary: "Reconciling application " + app.Name,
 				MaxRetries: 3,
-			})
-			if err != nil {
+			}, tasks.Trigger{Type: "scheduler", Periodic: true})
+			if err != nil || !created {
 				continue
 			}
 			if err := s.tasks.Start(ctx, task.ID); err != nil {
@@ -585,6 +597,99 @@ func (s *Service) MonitorApplications(ctx context.Context) error {
 			go s.runApplicationReconcile(s.tasks.ExecutionContext(task.ID), task, app.ID)
 		}
 	}
+	return nil
+}
+
+func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operationID string) ([]tasks.CreateInput, error) {
+	if s.apps == nil || s.tasks == nil {
+		return nil, nil
+	}
+	servers, err := s.servers.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	apps, err := s.apps.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	appByID := map[string]applications.Application{}
+	for _, app := range apps {
+		appByID[app.ID] = app
+	}
+	inputs := []tasks.CreateInput{}
+	for _, srv := range servers {
+		if !srv.Reachable || srv.Traits[agent.TraitStatus] != agent.StatusCompatible {
+			continue
+		}
+		baseURL := strings.TrimSpace(srv.Traits[agent.TraitURL])
+		containers, err := s.agent.DockerContainers(ctx, baseURL)
+		if err != nil {
+			_ = s.handleAgentError(ctx, srv, err)
+			continue
+		}
+		observed := map[string]agent.DockerContainer{}
+		for _, container := range containers {
+			appID, instanceID, managed := managedLabels(container.Labels)
+			if !managed {
+				continue
+			}
+			observed[instanceID] = container
+			_, _ = s.db.ExecContext(ctx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+				VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
+				instanceID, appID, srv.ID, time.Now().UTC().Format(time.RFC3339Nano))
+		}
+		rows, err := s.db.QueryContext(ctx, `SELECT instance_id,application_id FROM application_reconcile_states WHERE server_id=?`, srv.ID)
+		if err != nil {
+			continue
+		}
+		type expected struct{ instanceID, appID string }
+		var expectedItems []expected
+		for rows.Next() {
+			var item expected
+			if rows.Scan(&item.instanceID, &item.appID) == nil {
+				expectedItems = append(expectedItems, item)
+			}
+		}
+		rows.Close()
+		for _, item := range expectedItems {
+			app, ok := appByID[item.appID]
+			if !ok || !app.Enabled {
+				continue
+			}
+			container, found := observed[item.instanceID]
+			drifted := !found || container.State != "running"
+			if found {
+				drifted = drifted ||
+					container.Labels["panel.application.generation"] != strconv.Itoa(app.Generation) ||
+					container.Labels["panel.application.spec.hash"] != app.SpecHash
+			}
+			if !drifted {
+				continue
+			}
+			inputs = append(inputs, tasks.CreateInput{
+				OperationID:  operationID,
+				Type:         TaskApplicationReconcile,
+				ServerID:     srv.ID,
+				ResourceType: "application",
+				ResourceID:   app.ID,
+				TriggerType:  "scheduler",
+				Summary:      "Reconciling application " + app.Name,
+				MaxRetries:   3,
+			})
+		}
+	}
+	return inputs, nil
+}
+
+func (s *Service) RunApplicationReconcileTask(ctx context.Context, task tasks.Task) error {
+	appID := firstNonEmpty(task.ResourceID, task.TriggerResourceID)
+	if appID == "" {
+		return panelerr.Validation("application_required", "Application is required")
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return err
+	}
+	s.runApplicationReconcile(s.tasks.ExecutionContext(task.ID), task, appID)
 	return nil
 }
 
@@ -610,10 +715,10 @@ func (s *Service) UpgradeApplications(ctx context.Context, applicationIDs []stri
 	if len(applicationIDs) == 0 {
 		return tasks.Task{}, panelerr.Validation("applications_required", "At least one application is required")
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type: taskType, ResourceType: "applications", ResourceID: strings.Join(applicationIDs, ","),
 		TriggerType: "user", Summary: "Updating application images",
-	})
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -689,18 +794,16 @@ func (s *Service) startSimpleResourceRefresh(ctx context.Context, serverID, task
 	if s.tasks == nil {
 		return tasks.Task{}, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, taskType, "server", serverID); err != nil {
-		return tasks.Task{}, err
-	} else if ok {
-		return existing, nil
-	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		OperationID: operationID, Type: taskType, ServerID: serverID,
 		ResourceType: "server", ResourceID: serverID, TriggerType: triggerType,
 		Summary: summary,
-	})
+	}, tasks.Trigger{Type: triggerType, Periodic: triggerType == "scheduler"})
 	if err != nil {
 		return tasks.Task{}, err
+	}
+	if !created {
+		return task, nil
 	}
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return tasks.Task{}, err

@@ -139,29 +139,6 @@ func (s *Service) QueueIssue(ctx context.Context, in IssueRequest) (IssueResult,
 	return IssueResult{Certificate: cert, TaskID: taskID}, nil
 }
 
-func (s *Service) RunDueIssueTasks(ctx context.Context) (int, error) {
-	if s.tasks == nil {
-		return 0, nil
-	}
-	ran := 0
-	for _, status := range []string{tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusFailedRetryable} {
-		result, err := s.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeIssue, Status: status, Limit: 20})
-		if err != nil {
-			return ran, err
-		}
-		for _, task := range result.Items {
-			if task.ResourceType != "certificate" || task.ResourceID == "" {
-				continue
-			}
-			if err := s.RunIssueTask(ctx, task); err != nil {
-				return ran, err
-			}
-			ran++
-		}
-	}
-	return ran, nil
-}
-
 func (s *Service) RunIssueTask(ctx context.Context, task tasks.Task) error {
 	if s.tasks == nil {
 		return nil
@@ -232,31 +209,8 @@ func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate, ta
 	return s.updateRenewal(ctx, cert)
 }
 
-func (s *Service) RenewDue(ctx context.Context, now time.Time) (int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+certificateColumns+` FROM certificates WHERE auto_renew=1 AND next_renew_at<>'' AND next_renew_at<=? ORDER BY next_renew_at ASC`, formatTime(now.UTC()))
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
-	certs := []Certificate{}
-	for rows.Next() {
-		cert, err := scanCertificate(rows)
-		if err != nil {
-			return 0, err
-		}
-		certs = append(certs, cert)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	renewed := 0
-	for _, cert := range certs {
-		if err := s.Renew(ctx, cert.ID); err != nil {
-			return renewed, err
-		}
-		renewed++
-	}
-	return renewed, nil
+func (s *Service) RenewTask(ctx context.Context, task tasks.Task) error {
+	return s.runRenewTask(ctx, task)
 }
 
 func (s *Service) Renew(ctx context.Context, certID string) error {
@@ -268,31 +222,49 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 	if err != nil {
 		return err
 	}
-	if taskID != "" {
-		defer s.tasks.FinishExecution(taskID)
-		_ = s.tasks.Advance(ctx, taskID, "running", "Running ACME DNS-01 renewal")
+	return s.runRenewTask(ctx, tasks.Task{ID: taskID, Type: TaskTypeRenew, ResourceType: "certificate", ResourceID: cert.ID})
+}
+
+func (s *Service) runRenewTask(ctx context.Context, task tasks.Task) error {
+	certID := firstNonEmpty(task.ResourceID, task.TriggerResourceID)
+	if strings.TrimSpace(certID) == "" {
+		return panelerr.Validation("certificate_required", "Certificate is required")
+	}
+	cert, err := s.Get(ctx, certID)
+	if err != nil {
+		if task.ID != "" {
+			_ = s.failRenewalTask(ctx, task.ID, err)
+		}
+		return err
+	}
+	if task.ID != "" {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
+		defer s.tasks.FinishExecution(task.ID)
+		_ = s.tasks.Advance(ctx, task.ID, "running", "Running ACME DNS-01 renewal")
 	}
 	resolved, err := s.resolveDomain(ctx, cert.DomainID)
 	if err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
+		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
 	provider, err := s.providerForDomain(resolved)
 	if err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
+		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
-	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains, Progress: s.acmeProgress(taskID)})
+	bundle, err := provider.Issue(ctx, Request{Domain: cert.Domain, Domains: cert.Domains, Progress: s.acmeProgress(task.ID)})
 	if err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
+		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
 	if err := validateBundle(bundle); err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
+		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
 	if err := replaceCertificateFiles(
@@ -302,7 +274,7 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 		bundle.PrivateKeyPEM,
 	); err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
+		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
 	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
@@ -311,16 +283,16 @@ func (s *Service) Renew(ctx context.Context, certID string) error {
 	cert.UpdatedAt = time.Now().UTC()
 	if err := s.updateRenewal(ctx, cert); err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
+		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
 	if err := s.refreshApplications(ctx); err != nil {
 		_ = s.updateLastError(ctx, cert.ID, err.Error())
-		_ = s.failRenewalTask(ctx, taskID, err)
+		_ = s.failRenewalTask(ctx, task.ID, err)
 		return err
 	}
-	if taskID != "" {
-		return s.tasks.Complete(ctx, taskID, "Renewed certificate for "+cert.Domain)
+	if task.ID != "" {
+		return s.tasks.Complete(ctx, task.ID, "Renewed certificate for "+cert.Domain)
 	}
 	return nil
 }
@@ -743,14 +715,14 @@ func (s *Service) recordTask(ctx context.Context, taskType string, cert Certific
 	if s.tasks == nil {
 		return "", nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         taskType,
 		ResourceType: "certificate",
 		ResourceID:   cert.ID,
 		Status:       status,
 		MetadataJSON: certTaskMetadataJSON(cert),
 		Summary:      summary,
-	})
+	}, tasks.Trigger{Type: "system"})
 	if err != nil {
 		return "", err
 	}
@@ -934,6 +906,15 @@ func boolInt(value bool) int {
 		return 1
 	}
 	return 0
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func formatTime(value time.Time) string {

@@ -104,20 +104,10 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 	if skipRecentFailure && s.hasRecentRefreshTask(ctx, serverID, 10*time.Minute) {
 		return RefreshResult{ServerID: serverID, Refreshing: s.isRefreshing(serverID)}, nil
 	}
-	if existing, ok, err := s.tasks.ExistingActive(ctx, "package_refresh", "server", serverID); err != nil {
-		return RefreshResult{}, err
-	} else if ok {
-		if existing.Status != tasks.StatusRunning && s.markRefreshing(serverID) {
-			if err := s.startRefreshTask(ctx, existing, srv, adapter); err != nil {
-				return RefreshResult{}, err
-			}
-		}
-		return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: existing.ID}, nil
-	}
 	if !s.markRefreshing(serverID) {
 		return RefreshResult{ServerID: serverID, Refreshing: true}, nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		OperationID:  operationID,
 		Type:         "package_refresh",
 		ServerID:     serverID,
@@ -126,10 +116,19 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 		TriggerType:  triggerType,
 		Summary:      "Refreshing package updates",
 		MaxRetries:   0,
-	})
+	}, tasks.Trigger{Type: triggerType, Periodic: triggerType == "scheduler"})
 	if err != nil {
 		s.clearRefreshing(serverID)
 		return RefreshResult{}, err
+	}
+	if !created {
+		s.clearRefreshing(serverID)
+		if task.Status != tasks.StatusRunning && s.markRefreshing(serverID) {
+			if err := s.startRefreshTask(ctx, task, srv, adapter); err != nil {
+				return RefreshResult{}, err
+			}
+		}
+		return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: task.ID}, nil
 	}
 	if err := s.startRefreshTask(ctx, task, srv, adapter); err != nil {
 		return RefreshResult{}, err
@@ -153,13 +152,30 @@ func (s *Service) RunRefreshTask(ctx context.Context, task tasks.Task) error {
 	if err != nil {
 		return err
 	}
-	if task.Status == tasks.StatusRunning {
+	if task.Status == tasks.StatusRunning && s.tasks.HasRunningExecution(task.ID) {
 		return nil
 	}
 	if !s.markRefreshing(serverID) {
 		return nil
 	}
-	return s.startRefreshTask(ctx, task, srv, adapter)
+	if task.Status != tasks.StatusRunning {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			s.clearRefreshing(srv.ID)
+			return err
+		}
+	}
+	if !s.tasks.HasRunningExecution(task.ID) {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			s.clearRefreshing(srv.ID)
+			return err
+		}
+	}
+	if !s.tasks.HasRunningExecution(task.ID) {
+		s.clearRefreshing(srv.ID)
+		return panelerr.Conflict("task_not_running", "Task is not running")
+	}
+	s.runRefreshTask(s.tasks.ExecutionContext(task.ID), task, srv, adapter)
+	return nil
 }
 
 func (s *Service) startRefreshTask(ctx context.Context, task tasks.Task, srv server.Server, adapter packageAdapter) error {
@@ -183,14 +199,14 @@ func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []
 	if len(names) == 0 {
 		return tasks.Task{}, panelerr.Validation("packages_required", "At least one package is required")
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         "package_upgrade_selected",
 		ServerID:     serverID,
 		ResourceType: "server",
 		ResourceID:   serverID,
 		TriggerType:  "user",
 		Summary:      "Upgrading selected packages",
-	})
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
 	}
@@ -207,14 +223,14 @@ func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         "package_upgrade_all",
 		ServerID:     serverID,
 		ResourceType: "server",
 		ResourceID:   serverID,
 		TriggerType:  "user",
 		Summary:      "Upgrading all packages",
-	})
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
 	}

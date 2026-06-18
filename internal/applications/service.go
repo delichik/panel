@@ -1876,13 +1876,13 @@ func (s *Service) recordTask(ctx context.Context, taskType, appID, summary strin
 	if s.tasks == nil {
 		return "", nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         taskType,
 		ResourceType: "application",
 		ResourceID:   appID,
 		Status:       tasks.StatusCompleted,
 		Summary:      summary,
-	})
+	}, tasks.Trigger{Type: "system"})
 	if err != nil {
 		return "", err
 	}
@@ -1893,13 +1893,13 @@ func (s *Service) recordRunningTask(ctx context.Context, taskType, appID, summar
 	if s.tasks == nil {
 		return "", nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         taskType,
 		ResourceType: "application",
 		ResourceID:   appID,
 		Status:       tasks.StatusRunning,
 		Summary:      summary,
-	})
+	}, tasks.Trigger{Type: "system"})
 	if err != nil {
 		return "", err
 	}

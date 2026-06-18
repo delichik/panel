@@ -262,12 +262,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.resetLegacyTaskTables(ctx); err != nil {
+		return err
+	}
 	task := []string{
 		`PRAGMA foreign_keys = ON`,
 		`CREATE TABLE IF NOT EXISTS tasks (
 			id TEXT PRIMARY KEY,
 			operation_id TEXT NOT NULL DEFAULT '',
 			type TEXT NOT NULL,
+			parent_task_id TEXT NOT NULL DEFAULT '',
+			child_index INTEGER NOT NULL DEFAULT 0,
+			child_count INTEGER NOT NULL DEFAULT 0,
+			execution_mode TEXT NOT NULL DEFAULT '',
+			concurrency_key TEXT NOT NULL DEFAULT '',
+			schedule_key TEXT NOT NULL DEFAULT '',
 			server_id TEXT NOT NULL DEFAULT '',
 			node_id TEXT NOT NULL DEFAULT '',
 			resource_type TEXT NOT NULL DEFAULT '',
@@ -277,6 +286,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			trigger_resource_id TEXT NOT NULL DEFAULT '',
 			trigger_task_id TEXT NOT NULL DEFAULT '',
 			triggered_by TEXT NOT NULL DEFAULT '',
+			params_json TEXT NOT NULL DEFAULT '{}',
 			metadata_json TEXT NOT NULL DEFAULT '{}',
 			status TEXT NOT NULL,
 			stage TEXT NOT NULL DEFAULT '',
@@ -311,28 +321,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 			line TEXT NOT NULL,
 			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(type,status)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_status ON tasks(concurrency_key,status)`,
+		`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id,child_index)`,
 	}
 	for _, stmt := range task {
 		if _, err := s.taskDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
-	}
-	if err := s.ensureTaskColumns(ctx, "tasks", map[string]string{
-		"operation_id":          "TEXT NOT NULL DEFAULT ''",
-		"node_id":               "TEXT NOT NULL DEFAULT ''",
-		"resource_type":         "TEXT NOT NULL DEFAULT ''",
-		"resource_id":           "TEXT NOT NULL DEFAULT ''",
-		"trigger_type":          "TEXT NOT NULL DEFAULT ''",
-		"trigger_resource_type": "TEXT NOT NULL DEFAULT ''",
-		"trigger_resource_id":   "TEXT NOT NULL DEFAULT ''",
-		"trigger_task_id":       "TEXT NOT NULL DEFAULT ''",
-		"triggered_by":          "TEXT NOT NULL DEFAULT ''",
-		"metadata_json":         "TEXT NOT NULL DEFAULT '{}'",
-		"retry_count":           "INTEGER NOT NULL DEFAULT 0",
-		"max_retries":           "INTEGER NOT NULL DEFAULT 0",
-		"next_run_at":           "TEXT",
-	}); err != nil {
-		return err
 	}
 	if err := s.ensureAppColumns(ctx, "credentials", map[string]string{
 		"name":              "TEXT NOT NULL DEFAULT ''",
@@ -427,6 +423,63 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	for _, stmt := range metrics {
 		if _, err := s.metricsDB.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) resetLegacyTaskTables(ctx context.Context) error {
+	rows, err := s.taskDB.QueryContext(ctx, `PRAGMA table_info(tasks)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasTaskTable := false
+	requiredColumns := map[string]bool{
+		"parent_task_id":  false,
+		"child_index":     false,
+		"child_count":     false,
+		"execution_mode":  false,
+		"concurrency_key": false,
+		"schedule_key":    false,
+		"triggered_by":    false,
+		"params_json":     false,
+	}
+	for rows.Next() {
+		hasTaskTable = true
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if _, ok := requiredColumns[name]; ok {
+			requiredColumns[name] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !hasTaskTable {
+		return nil
+	}
+	for _, found := range requiredColumns {
+		if !found {
+			return s.dropTaskTables(ctx)
+		}
+	}
+	return nil
+}
+
+func (s *Store) dropTaskTables(ctx context.Context) error {
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS task_logs`,
+		`DROP TABLE IF EXISTS task_steps`,
+		`DROP TABLE IF EXISTS tasks`,
+	} {
+		if _, err := s.taskDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}

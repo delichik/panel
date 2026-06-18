@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -74,9 +75,17 @@ func TestCollectMetricsCreatesTaskRecord(t *testing.T) {
 	metricsSvc.SetAgentClient(fakeSchedulerAgentClient{})
 	sched := New(settingsSvc, serverSvc, metricsSvc, nil, taskSvc)
 
-	if err := sched.collectMetrics(ctx, srv); err != nil {
+	batch, shouldRun, err := sched.collectMetricsInputs(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !shouldRun {
+		t.Fatal("expected metrics collection inputs")
+	}
+	if _, _, err := tasks.NewManager(taskSvc).CreateBatchAndRun(ctx, batch, tasks.Trigger{Type: "scheduler", Periodic: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForMetricCount(t, store.MetricsDB(), srv.ID, 1)
 	result, err := taskSvc.List(ctx, tasks.ListFilter{Type: "metrics_collect", IncludeInternal: true, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
@@ -136,9 +145,17 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	metricsSvc.SetAgentClient(fakeSchedulerAgentClient{})
 	sched := New(settingsSvc, serverSvc, metricsSvc, nil, taskSvc)
 
-	if err := sched.runDueMetricsCollection(ctx); err != nil {
+	batch, shouldRun, err := sched.collectMetricsInputs(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
+	if !shouldRun {
+		t.Fatal("expected metrics collection inputs")
+	}
+	if _, _, err := tasks.NewManager(taskSvc).CreateBatchAndRun(ctx, batch, tasks.Trigger{Type: "scheduler", Periodic: true}); err != nil {
+		t.Fatal(err)
+	}
+	waitForTotalMetricCount(t, store.MetricsDB(), 2)
 
 	rows, err := store.MetricsDB().Query(`SELECT time FROM metrics_snapshots ORDER BY server_id`)
 	if err != nil {
@@ -169,7 +186,7 @@ func TestRunDueMetricsCollectionAlignsServersToSameSecond(t *testing.T) {
 	if aligned.Nanosecond() != 0 {
 		t.Fatalf("expected second-aligned timestamp, got %s", aligned)
 	}
-	taskRows, err := store.TaskDB().Query(`SELECT operation_id FROM tasks WHERE type='metrics_collect' ORDER BY server_id`)
+	taskRows, err := store.TaskDB().Query(`SELECT operation_id FROM tasks WHERE type='metrics_collect' AND resource_type='server' ORDER BY server_id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,8 +242,12 @@ func TestRunDueMetricsCollectionSkipsServersWithoutReadyAgent(t *testing.T) {
 	metricsSvc.SetAgentClient(fakeSchedulerAgentClient{})
 	sched := New(settingsSvc, serverSvc, metricsSvc, nil, taskSvc)
 
-	if err := sched.runDueMetricsCollection(ctx); err != nil {
+	batch, shouldRun, err := sched.collectMetricsInputs(ctx)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if shouldRun || len(batch.Inputs) != 0 {
+		t.Fatalf("expected no metrics inputs for unavailable agent, got %#v", batch)
 	}
 	result, err := taskSvc.List(ctx, tasks.ListFilter{Type: "metrics_collect", IncludeInternal: true, Limit: 10})
 	if err != nil {
@@ -285,7 +306,14 @@ func TestRunDueConnectivityTestsStartsQueuedTask(t *testing.T) {
 	runServerSvc := server.NewService(store.AppDB(), fakeConnectivityExecutor{}, taskSvc)
 	sched := New(settingsSvc, runServerSvc, nil, nil, taskSvc)
 
-	if err := sched.runDueConnectivityTests(ctx); err != nil {
+	batch, shouldRun, err := sched.collectQueueDrainInput(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !shouldRun {
+		t.Fatal("expected queue drain input")
+	}
+	if _, _, err := tasks.NewManager(taskSvc).CreateBatchAndRun(ctx, batch, tasks.Trigger{Type: "scheduler", Periodic: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -355,7 +383,7 @@ func TestRunNowConnectivityTaskStartsProvidedTask(t *testing.T) {
 	waitForTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
 }
 
-func TestRunDuePackageRefreshTasksStartsQueuedTask(t *testing.T) {
+func TestQueueDrainStartsDuePackageRefreshTask(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -394,7 +422,14 @@ func TestRunDuePackageRefreshTasksStartsQueuedTask(t *testing.T) {
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, fakePackageExecutor{}, taskSvc)
 	sched := New(settingsSvc, serverSvc, nil, packageSvc, taskSvc)
 
-	if err := sched.runDuePackageRefreshTasks(ctx); err != nil {
+	batch, shouldRun, err := sched.collectQueueDrainInput(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !shouldRun {
+		t.Fatal("expected queue drain input")
+	}
+	if _, _, err := tasks.NewManager(taskSvc).CreateBatchAndRun(ctx, batch, tasks.Trigger{Type: "scheduler", Periodic: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -431,7 +466,14 @@ func TestRunScheduledPackageRefreshesSharesOperation(t *testing.T) {
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, fakePackageExecutor{}, taskSvc)
 	sched := New(settingsSvc, serverSvc, nil, packageSvc, taskSvc)
 
-	if err := sched.runScheduledPackageRefreshes(ctx); err != nil {
+	batch, shouldRun, err := sched.collectScheduledPackageRefreshInputs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !shouldRun {
+		t.Fatal("expected scheduled package inputs")
+	}
+	if _, _, err := tasks.NewManager(taskSvc).CreateBatchAndRun(ctx, batch, tasks.Trigger{Type: "scheduler", Periodic: true}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -439,14 +481,20 @@ func TestRunScheduledPackageRefreshesSharesOperation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 2 {
+	serverTasks := []tasks.Task{}
+	for _, task := range result.Items {
+		if task.ResourceType == "server" {
+			serverTasks = append(serverTasks, task)
+		}
+	}
+	if len(serverTasks) != 2 {
 		t.Fatalf("expected two package refresh tasks, got %#v", result.Items)
 	}
-	operationID := result.Items[0].OperationID
-	if operationID == "" || result.Items[1].OperationID != operationID {
-		t.Fatalf("expected scheduled package refresh tasks to share operation, got %#v", result.Items)
+	operationID := serverTasks[0].OperationID
+	if operationID == "" || serverTasks[1].OperationID != operationID {
+		t.Fatalf("expected scheduled package refresh tasks to share operation, got %#v", serverTasks)
 	}
-	for _, task := range result.Items {
+	for _, task := range serverTasks {
 		waitForTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
 	}
 }
@@ -640,4 +688,44 @@ func waitForTaskStatus(t *testing.T, taskSvc *tasks.Service, taskID string, stat
 		t.Fatal(err)
 	}
 	t.Fatalf("expected task %s to reach %s, got %#v", taskID, status, task)
+}
+
+func waitForMetricCount(t *testing.T, db interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, serverID string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var got int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id=?`, serverID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var got int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots WHERE server_id=?`, serverID).Scan(&got)
+	t.Fatalf("expected %d metrics snapshots for %s, got %d", want, serverID, got)
+}
+
+func waitForTotalMetricCount(t *testing.T, db interface {
+	QueryRow(query string, args ...any) *sql.Row
+}, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var got int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots`).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got == want {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	var got int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM metrics_snapshots`).Scan(&got)
+	t.Fatalf("expected %d metrics snapshots, got %d", want, got)
 }

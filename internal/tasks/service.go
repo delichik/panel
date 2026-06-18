@@ -14,6 +14,7 @@ import (
 
 type Service struct {
 	db                *sql.DB
+	registry          *Registry
 	runningMu         sync.Mutex
 	runningExecutions map[string]*RunningExecution
 }
@@ -43,10 +44,53 @@ type ListResult struct {
 }
 
 func NewService(db *sql.DB) *Service {
-	return &Service{db: db, runningExecutions: map[string]*RunningExecution{}}
+	s := &Service{db: db, registry: NewRegistry(), runningExecutions: map[string]*RunningExecution{}}
+	RegisterKnownTaskTypes(s)
+	return s
+}
+
+func (s *Service) Registry() *Registry {
+	if s.registry == nil {
+		s.registry = NewRegistry()
+	}
+	return s.registry
+}
+
+func (s *Service) Register(def Definition) error {
+	return s.Registry().Register(def)
+}
+
+func (s *Service) MustRegister(def Definition) {
+	s.Registry().MustRegister(def)
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
+	return s.create(ctx, in, true)
+}
+
+func (s *Service) create(ctx context.Context, in CreateInput, validate bool) (Task, error) {
+	def, ok := s.Registry().Definition(in.Type)
+	if !ok {
+		return Task{}, panelerr.Validation("task_type_unregistered", "Task type is not registered")
+	}
+	if validate && def.Validate != nil {
+		if err := def.Validate(ctx, in); err != nil {
+			return Task{}, err
+		}
+	}
+	if in.MaxRetries == 0 && def.DefaultMaxRetries > 0 {
+		in.MaxRetries = def.DefaultMaxRetries
+	}
+	in.ConcurrencyKey = ConcurrencyKeyFor(def, in)
+	if in.ExecutionMode == "" {
+		in.ExecutionMode = ExecutionModeSingle
+	}
+	if strings.TrimSpace(in.ParamsJSON) == "" {
+		in.ParamsJSON = "{}"
+	}
+	if strings.TrimSpace(in.MetadataJSON) == "" {
+		in.MetadataJSON = "{}"
+	}
 	if in.Status == StatusRunning {
 		s.runningMu.Lock()
 		defer s.runningMu.Unlock()
@@ -66,6 +110,32 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
 }
 
 func (s *Service) CreateTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Task, error) {
+	return s.createTx(ctx, tx, in, true)
+}
+
+func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput, validate bool) (Task, error) {
+	def, ok := s.Registry().Definition(in.Type)
+	if !ok {
+		return Task{}, panelerr.Validation("task_type_unregistered", "Task type is not registered")
+	}
+	if validate && def.Validate != nil {
+		if err := def.Validate(ctx, in); err != nil {
+			return Task{}, err
+		}
+	}
+	if in.MaxRetries == 0 && def.DefaultMaxRetries > 0 {
+		in.MaxRetries = def.DefaultMaxRetries
+	}
+	in.ConcurrencyKey = ConcurrencyKeyFor(def, in)
+	if in.ExecutionMode == "" {
+		in.ExecutionMode = ExecutionModeSingle
+	}
+	if strings.TrimSpace(in.ParamsJSON) == "" {
+		in.ParamsJSON = "{}"
+	}
+	if strings.TrimSpace(in.MetadataJSON) == "" {
+		in.MetadataJSON = "{}"
+	}
 	if in.Status == StatusRunning {
 		return Task{}, errors.New("running tasks cannot be created inside a transaction")
 	}
@@ -89,6 +159,12 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInse
 		ID:                  id.New("task"),
 		OperationID:         firstNonEmpty(in.OperationID, id.New("op")),
 		Type:                in.Type,
+		ParentTaskID:        in.ParentTaskID,
+		ChildIndex:          in.ChildIndex,
+		ChildCount:          in.ChildCount,
+		ExecutionMode:       in.ExecutionMode,
+		ConcurrencyKey:      in.ConcurrencyKey,
+		ScheduleKey:         in.ScheduleKey,
 		ServerID:            in.ServerID,
 		NodeID:              firstNonEmpty(in.NodeID, in.ServerID),
 		ResourceType:        in.ResourceType,
@@ -98,6 +174,7 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInse
 		TriggerResourceID:   in.TriggerResourceID,
 		TriggerTaskID:       in.TriggerTaskID,
 		TriggeredBy:         in.TriggeredBy,
+		ParamsJSON:          firstNonEmpty(strings.TrimSpace(in.ParamsJSON), "{}"),
 		MetadataJSON:        firstNonEmpty(strings.TrimSpace(in.MetadataJSON), "{}"),
 		Status:              status,
 		Summary:             in.Summary,
@@ -130,8 +207,8 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInse
 	if beforeInsert != nil {
 		beforeInsert(t)
 	}
-	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,metadata_json,status,stage,percentage,summary,retry_count,max_retries,next_run_at,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.OperationID, t.Type, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.MetadataJSON, t.Status, t.Stage, percentage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano), startedAt, finishedAt)
+	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,params_json,metadata_json,status,stage,percentage,summary,retry_count,max_retries,next_run_at,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		t.ID, t.OperationID, t.Type, t.ParentTaskID, t.ChildIndex, t.ChildCount, t.ExecutionMode, t.ConcurrencyKey, t.ScheduleKey, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.ParamsJSON, t.MetadataJSON, t.Status, t.Stage, percentage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano), startedAt, finishedAt)
 	return t, err
 }
 
@@ -281,11 +358,35 @@ func (s *Service) FirstRunnable(ctx context.Context, taskType, resourceType, res
 	return task, true, nil
 }
 
-func (s *Service) ExistingActive(ctx context.Context, taskType, resourceType, resourceID string) (Task, bool, error) {
+func (s *Service) Children(ctx context.Context, parentTaskID string) ([]Task, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+`
+		FROM tasks
+		WHERE parent_task_id=?
+		ORDER BY child_index ASC, created_at ASC`, parentTaskID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	children := []Task{}
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		children = append(children, task)
+	}
+	return children, rows.Err()
+}
+
+func (s *Service) ExistingActiveByConcurrencyKey(ctx context.Context, concurrencyKey string) (Task, bool, error) {
+	concurrencyKey = strings.TrimSpace(concurrencyKey)
+	if concurrencyKey == "" {
+		return Task{}, false, nil
+	}
 	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
 		FROM tasks
-		WHERE type=? AND resource_type=? AND resource_id=? AND status IN (?,?,?,?)
-		ORDER BY created_at DESC LIMIT 1`, taskType, resourceType, resourceID, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
+		WHERE concurrency_key=? AND status IN (?,?,?,?)
+		ORDER BY created_at DESC LIMIT 1`, concurrencyKey, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
 	task, err := scanTask(row)
 	if err == sql.ErrNoRows {
 		return Task{}, false, nil
@@ -445,13 +546,16 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	if len(types) > 0 {
 		appendEqualOrIn(&conditions, &args, "type", types)
 	} else if !filter.IncludeInternal {
-		conditions = append(conditions, `type NOT IN (`+placeholders(len(defaultHiddenTaskTypes))+`)`)
-		for _, taskType := range defaultHiddenTaskTypes {
+		hidden := s.hiddenTaskTypes()
+		if len(hidden) > 0 {
+			conditions = append(conditions, `type NOT IN (`+placeholders(len(hidden))+`)`)
+		}
+		for _, taskType := range hidden {
 			args = append(args, taskType)
 		}
 	}
 	if filter.ExcludeScheduled && len(types) == 0 {
-		conditions = append(conditions, `trigger_type<>?`)
+		conditions = append(conditions, `(trigger_type='' OR trigger_type<>?)`)
 		args = append(args, "scheduler")
 	}
 	if filter.OperationID != "" {
@@ -486,6 +590,20 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 		return ListResult{}, err
 	}
 	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
+}
+
+func (s *Service) hiddenTaskTypes() []string {
+	hidden := append([]string{}, defaultHiddenTaskTypes...)
+	if s.registry == nil {
+		return hidden
+	}
+	for _, taskType := range s.registry.Types() {
+		def, ok := s.registry.Definition(taskType)
+		if ok && def.Hidden {
+			hidden = append(hidden, taskType)
+		}
+	}
+	return cleanFilterValues(hidden...)
 }
 
 func cleanFilterValues(values ...string) []string {
@@ -784,14 +902,14 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 
 type scanner interface{ Scan(dest ...any) error }
 
-const taskColumns = `id,operation_id,type,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
+const taskColumns = `id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,params_json,metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
 
 func scanTask(row scanner) (Task, error) {
 	var t Task
 	var pct sql.NullFloat64
 	var created string
 	var startedNS, finishedNS, nextRunNS sql.NullString
-	err := row.Scan(&t.ID, &t.OperationID, &t.Type, &t.ServerID, &t.NodeID, &t.ResourceType, &t.ResourceID, &t.TriggerType, &t.TriggerResourceType, &t.TriggerResourceID, &t.TriggerTaskID, &t.TriggeredBy, &t.MetadataJSON, &t.Status, &t.Stage, &pct, &t.Summary, &t.Error, &t.RetryCount, &t.MaxRetries, &nextRunNS, &created, &startedNS, &finishedNS)
+	err := row.Scan(&t.ID, &t.OperationID, &t.Type, &t.ParentTaskID, &t.ChildIndex, &t.ChildCount, &t.ExecutionMode, &t.ConcurrencyKey, &t.ScheduleKey, &t.ServerID, &t.NodeID, &t.ResourceType, &t.ResourceID, &t.TriggerType, &t.TriggerResourceType, &t.TriggerResourceID, &t.TriggerTaskID, &t.TriggeredBy, &t.ParamsJSON, &t.MetadataJSON, &t.Status, &t.Stage, &pct, &t.Summary, &t.Error, &t.RetryCount, &t.MaxRetries, &nextRunNS, &created, &startedNS, &finishedNS)
 	if err != nil {
 		return Task{}, err
 	}

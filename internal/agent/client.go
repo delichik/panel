@@ -18,10 +18,13 @@ import (
 )
 
 type HTTPClient struct {
-	mu      sync.RWMutex
-	client  *http.Client
-	timeout time.Duration
+	mu         sync.RWMutex
+	client     *http.Client
+	pullClient *http.Client
+	timeout    time.Duration
 }
+
+const dockerImagePullTimeout = 15 * time.Minute
 
 func NewHTTPClient(tlsAssets *TLSAssets, timeout time.Duration) (*HTTPClient, error) {
 	if timeout == 0 {
@@ -45,12 +48,25 @@ func (c *HTTPClient) ReloadTLSAssets(tlsAssets *TLSAssets) error {
 			TLSClientConfig: tlsConfig,
 		},
 	}
+	nextPull := &http.Client{
+		Timeout: dockerImagePullTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig.Clone(),
+		},
+	}
 	c.mu.Lock()
 	previous := c.client
+	previousPull := c.pullClient
 	c.client = next
+	c.pullClient = nextPull
 	c.mu.Unlock()
 	if previous != nil {
 		if transport, ok := previous.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
+	}
+	if previousPull != nil {
+		if transport, ok := previousPull.Transport.(*http.Transport); ok {
 			transport.CloseIdleConnections()
 		}
 	}
@@ -60,6 +76,16 @@ func (c *HTTPClient) ReloadTLSAssets(tlsAssets *TLSAssets) error {
 func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
 	c.mu.RLock()
 	client := c.client
+	c.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("agent http client is not configured")
+	}
+	return client.Do(req)
+}
+
+func (c *HTTPClient) doPull(req *http.Request) (*http.Response, error) {
+	c.mu.RLock()
+	client := c.pullClient
 	c.mu.RUnlock()
 	if client == nil {
 		return nil, fmt.Errorf("agent http client is not configured")
@@ -226,7 +252,7 @@ func (c *HTTPClient) DockerImages(ctx context.Context, baseURL string) ([]Docker
 }
 
 func (c *HTTPClient) DockerImagePull(ctx context.Context, baseURL, reference string) error {
-	return c.post(ctx, baseURL, "/v1/docker/images/pull", DockerImagePullRequest{Reference: reference}, nil)
+	return c.postWithDo(ctx, baseURL, "/v1/docker/images/pull", DockerImagePullRequest{Reference: reference}, nil, c.doPull)
 }
 
 func (c *HTTPClient) DockerImageDelete(ctx context.Context, baseURL, id string) error {
@@ -290,6 +316,10 @@ func decodeAgentResponse(res *http.Response, out any) error {
 }
 
 func (c *HTTPClient) post(ctx context.Context, baseURL, path string, in, out any) error {
+	return c.postWithDo(ctx, baseURL, path, in, out, c.do)
+}
+
+func (c *HTTPClient) postWithDo(ctx context.Context, baseURL, path string, in, out any, do func(*http.Request) (*http.Response, error)) error {
 	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
 	if err != nil {
 		return err
@@ -305,7 +335,7 @@ func (c *HTTPClient) post(ctx context.Context, baseURL, path string, in, out any
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	res, err := c.do(req)
+	res, err := do(req)
 	if err != nil {
 		return err
 	}

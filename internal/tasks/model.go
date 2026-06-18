@@ -27,6 +27,12 @@ type Task struct {
 	ID                  string     `json:"id"`
 	OperationID         string     `json:"operationId"`
 	Type                string     `json:"type"`
+	ParentTaskID        string     `json:"parentTaskId,omitempty"`
+	ChildIndex          int        `json:"childIndex,omitempty"`
+	ChildCount          int        `json:"childCount,omitempty"`
+	ExecutionMode       string     `json:"executionMode,omitempty"`
+	ConcurrencyKey      string     `json:"concurrencyKey,omitempty"`
+	ScheduleKey         string     `json:"scheduleKey,omitempty"`
 	ServerID            string     `json:"serverId"`
 	NodeID              string     `json:"nodeId"`
 	ResourceType        string     `json:"resourceType,omitempty"`
@@ -36,6 +42,7 @@ type Task struct {
 	TriggerResourceID   string     `json:"triggerResourceId,omitempty"`
 	TriggerTaskID       string     `json:"triggerTaskId,omitempty"`
 	TriggeredBy         string     `json:"triggeredBy,omitempty"`
+	ParamsJSON          string     `json:"paramsJson,omitempty"`
 	MetadataJSON        string     `json:"metadataJson,omitempty"`
 	Status              string     `json:"status"`
 	Stage               string     `json:"stage"`
@@ -60,6 +67,12 @@ type Log struct {
 type CreateInput struct {
 	OperationID         string
 	Type                string
+	ParentTaskID        string
+	ChildIndex          int
+	ChildCount          int
+	ExecutionMode       string
+	ConcurrencyKey      string
+	ScheduleKey         string
 	ServerID            string
 	NodeID              string
 	ResourceType        string
@@ -69,12 +82,23 @@ type CreateInput struct {
 	TriggerResourceID   string
 	TriggerTaskID       string
 	TriggeredBy         string
+	ParamsJSON          string
 	MetadataJSON        string
 	Summary             string
 	Status              string
 	RetryCount          int
 	MaxRetries          int
 	NextRunAt           *time.Time
+}
+
+type CreateBatchInput struct {
+	Type          string
+	Summary       string
+	OperationID   string
+	TriggerType   string
+	TriggeredBy   string
+	ExecutionMode string
+	Inputs        []CreateInput
 }
 
 type Step struct {

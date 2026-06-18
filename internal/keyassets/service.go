@@ -1043,13 +1043,13 @@ func (s *Service) beginAssetTask(ctx context.Context, taskType, resourceID, summ
 	if s.tasks == nil {
 		return "", func(error) error { return nil }, func(string) error { return nil }, nil
 	}
-	task, err := s.tasks.Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         taskType,
 		ResourceType: "key_asset",
 		ResourceID:   resourceID,
 		Status:       tasks.StatusRunning,
 		Summary:      summary,
-	})
+	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return "", nil, nil, err
 	}
