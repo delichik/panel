@@ -10,14 +10,14 @@
   - 应用运行时日志和容器日志弹窗、刷新按钮、tail 行数和空日志文案已接入英文与简体中文词条；日志正文保留容器原始输出。
 - `web/src/views/runtime/applications/ApplicationDetail.vue`
   - 持久化数据下载、上传覆盖并重启、无损迁移对话框和失败提示已接入英文与简体中文词条；下载/上传内容为 zip 文件，文件内容保留原始数据。
-- `web/src/views/containerization/`、`internal/containerization`
+- `web/src/views/containerization/`、`internal/modules/containers`
   - 容器化导航、容器/镜像/网络/卷页面、托管警告、镜像批量升级和资源删除文案已接入英文与简体中文词条；Docker Engine 和镜像仓库原始诊断保留原文。
   - 镜像“更多”菜单、全部更新确认、删除未使用镜像确认，以及卷删除未使用确认已接入英文与简体中文词条。
   - 容器、镜像和卷同步操作完成提示，以及 `container_refresh` / `volume_refresh` 刷新任务类型已接入英文与简体中文词条。
 
-- `web/src/views/settings/_shared/SettingsPageContent.vue`、`internal/settings`
+- `web/src/views/settings/_shared/SettingsPageContent.vue`、`internal/modules/settings`
   - Runtime 日志等级设置的前端标签、选项文案和 `invalid_log_level` 后端错误码已接入英文、简体中文词条；进程日志内容保持英文，不纳入翻译。
-- `internal/overview`、`web/src/views/overview/index.vue`
+- `internal/modules/observability/overview`、`web/src/views/overview/index.vue`
   - 概览卡片数据库保存失败文案及卡片配置校验错误码已接入英文、简体中文词条。
 - `web/src/layouts/AppLayout.vue`
   - Header 的 DEV 构建通道标识、完整版本提示和移动端导航入口已接入英文、简体中文词条。
@@ -37,7 +37,7 @@
   - 容器、镜像、卷、应用协调、Agent 证书重置和常见执行阶段已补齐英文与简体中文词条，避免任务中心显示原始枚举名。
 - `web/src/views/certificates/key-assets/index.vue`
   - 自签证书/密钥拆分导航、系统内置与用户域标签、Agent 系统证书状态和重置确认，以及 CA、TLS、SSH、批量导入导出、冲突确认和引用提示已接入英文与简体中文词条。
-- `internal/i18n`
+- `internal/platform/i18n`
   - 统一 API 错误翻译入口覆盖认证、设置、服务器、UFW、DNS、证书、应用、任务和密钥资产的主要错误码。
   - 任务已结束后再次运行的 `task_not_runnable` 后端错误码已接入简体中文翻译。
   - 应用名称重复保存错误和 appspec `command` 数组用法错误已接入翻译。

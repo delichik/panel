@@ -16,7 +16,7 @@
 - workflow 按分支使用独立 concurrency group。main 发布串行执行；新的 dev push 会取消同分支尚未完成的旧构建。
 - 新版本 tag 会在构建前指向触发 workflow 的 `main` commit 并推送到仓库，以占用版本号；同一主次版本的修订号只会递增，不会复用历史缺口。
 - `build-amd64` 和 `build-arm64` 分别构建对应架构镜像，并按 digest 推送到 GHCR。
-- 两个架构构建都会把自动生成的版本、发布通道（`release` 或 `dev`）、`${{ github.repository }}` 和 commit SHA 作为 Docker build args 传入，再通过 Go `ldflags` 注入 `internal/buildinfo`。
+- 两个架构构建都会把自动生成的版本、发布通道（`release` 或 `dev`）、`${{ github.repository }}` 和 commit SHA 作为 Docker build args 传入，再通过 Go `ldflags` 注入 `internal/platform/buildinfo`。
 - Docker 镜像同时包含主服务 `/app/panel` 和独立 agent bundle `/app/panel-agents/`；当前 bundle 包含 `linux-amd64/panel-agent` 与 `linux-arm64/panel-agent`。每个架构的镜像都必须携带完整 agent bundle，且 agent 二进制仍注入与 Panel 相同的版本信息用于展示和排查；Panel 自动部署 agent 时会按目标服务器架构读取对应文件并上传到目标机。Agent 是否需要重部署由健康检查返回的能力列表和自动生成的 HTTP contract 决定，不由 Panel/Agent 版本号相等性决定。
 - `publish-manifest` 汇总两个架构的 digest，发布以下镜像标签：
   - main：自动生成的版本号、`latest` 和 commit sha。

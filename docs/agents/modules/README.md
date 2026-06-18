@@ -25,8 +25,8 @@
 
 ## 常见跨模块关系
 
-- 应用部署依赖 `applications`、`appspec`、`agent`、`appruntime`、`server`、`tasks`，反向代理还会读取证书模块。
-- 服务器 agent 健康检查依赖 `server`、`agent`、`tasks`；应用 runtime 操作通过 agent 调用 Docker Engine API。
-- DNS 证书签发依赖 `dns`、`certs`、`tasks`，证书变量会被应用模块解析。
-- 软件包维护和指标采集依赖 `server`、`sshx`、`linux`、`tasks`，结果分别落在应用数据库和指标数据库。
+- 应用部署依赖 `modules/applications`、`agent`、`modules/servers`、`modules/tasks`，反向代理还会读取证书模块。
+- 服务器 agent 健康检查依赖 `modules/servers`、`agent`、`modules/tasks`；应用 runtime 操作通过 agent 调用 Docker Engine API。
+- DNS 证书签发依赖 `modules/certificates` 和 `modules/tasks`，证书变量会被应用模块解析。
+- 软件包维护和指标采集依赖 `modules/servers`、`platform/ssh`、`platform/linux`、`modules/tasks`，结果分别落在应用数据库和指标数据库。
 - 前端页面改动通常同时影响 `web/src/api/`、`web/src/types/api.ts`、`web/src/i18n/index.ts` 和对应 feature 页面。

@@ -49,7 +49,7 @@ RUN set -eux; \
       *) echo "compiled ${binary} ELF machine ${machine} does not match GOARCH=${arch}"; exit 1 ;; \
     esac; \
   }; \
-  ldflags="-s -w -X panel/internal/buildinfo.Version=${PANEL_VERSION} -X panel/internal/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/buildinfo.Commit=${PANEL_COMMIT}"; \
+  ldflags="-s -w -X panel/internal/platform/buildinfo.Version=${PANEL_VERSION} -X panel/internal/platform/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/platform/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/platform/buildinfo.Commit=${PANEL_COMMIT}"; \
   mkdir -p /out/panel-agents; \
   for platform in linux/amd64 linux/arm64; do \
     agent_os="${platform%/*}"; \

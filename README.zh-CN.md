@@ -205,11 +205,11 @@ Dockerfile             生产容器构建
 常用代码入口：
 
 - 后端启动：`cmd/panel/main.go`
-- 路由装配与静态页面托管：`internal/app/app.go`
-- 数据库迁移：`internal/storage/migrations.go`
-- 目标系统适配：`internal/linux/`
-- Agent runtime 与 Docker API 逻辑：`internal/agent/`、`internal/appruntime/`
-- 应用部署逻辑：`internal/applications/`
+- 路由装配与静态页面托管：`internal/bootstrap/panel/app.go`
+- 数据库迁移：`internal/platform/database/migrations.go`
+- 目标系统适配：`internal/platform/linux/`
+- Agent runtime 与 Docker API 逻辑：`internal/agent/`、`internal/modules/applications/runtime/`
+- 应用部署逻辑：`internal/modules/applications/`
 - 前端路由：`web/src/router/index.ts`
 - 前端 i18n 初始化：`web/src/i18n/index.ts`
 

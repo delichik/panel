@@ -6,9 +6,9 @@
 
 ## 关键入口
 
-- 任务模型、注册表、manager 和服务：`internal/tasks/`
-- 周期任务调度：`internal/scheduler/scheduler.go`
-- 路由装配：`internal/app/app.go`
+- 任务模型、注册表、manager 和服务：`internal/modules/tasks/`
+- 周期任务调度：`internal/modules/scheduling/scheduler.go`
+- 路由注册：`internal/modules/tasks/routes.go`
 - 前端任务中心：`web/src/views/tasks/index.vue`
 - 前端任务操作：`web/src/views/tasks/_shared/taskOperations.ts`
 - 任务日志组件：`web/src/components/tasks/TaskLogPanel.vue`
@@ -48,6 +48,7 @@
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - `scheduler` 负责驱动注册的周期任务，例如 agent 检查、指标采集、软件包刷新、镜像更新检查、Application 容器监控、证书签发 due task 和证书续签。业务是否需要实际执行以及本轮执行参数由对应任务定义的 `Periodic.CollectInputs` 判断和生成；任务执行函数只消费已经落到任务输入中的参数，不在执行阶段重新扫描本轮资源列表。
 - 生产代码创建任务应使用 `tasks.NewManager(taskSvc).Create` 或 manager 封装入口，不直接调用 `Service.Create`；`Service.Create` 保留给任务存储层、测试和低层兼容场景。
+- 任务 HTTP handler 依赖 `ServeMux` pattern 注入的 `PathValue` 读取任务 ID；新增任务 API 时在 `routes.go` 注册 method-pattern，不在 bootstrap 增加业务路径 switch。
 - 任务中心的 `run-now` / `retry` 必须按任务定义受控，不再在 scheduler 中维护硬编码 switch。允许手动运行或重试的任务必须注册对应能力。
 - `retry` 创建的新任务会立即交给任务 manager 执行；如果执行器启动前返回错误，handler 会把新任务标记为失败，避免永久排队。
 
@@ -69,7 +70,7 @@
 
 ## 验证
 
-- 后端任务或调度改动运行 `task test:backend`，重点关注 `internal/tasks` 和 `internal/scheduler`。
+- 后端任务或调度改动运行 `task test:backend`，重点关注 `internal/modules/tasks` 和 `internal/modules/scheduling`。
 - 前端任务中心或 API 类型改动按影响范围运行 `task test:web` 或 `task build:web`。
 
 ## 文档更新触发

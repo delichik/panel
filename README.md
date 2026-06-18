@@ -201,11 +201,11 @@ Dockerfile             production container build
 Useful entry points:
 
 - Backend startup: `cmd/panel/main.go`
-- Route wiring and static UI serving: `internal/app/app.go`
-- Database migrations: `internal/storage/migrations.go`
-- Target OS adapters: `internal/linux/`
-- Agent runtime and Docker API logic: `internal/agent/`, `internal/appruntime/`
-- Application deployment logic: `internal/applications/`
+- Route wiring and static UI serving: `internal/bootstrap/panel/app.go`
+- Database migrations: `internal/platform/database/migrations.go`
+- Target OS adapters: `internal/platform/linux/`
+- Agent runtime and Docker API logic: `internal/agent/`, `internal/modules/applications/runtime/`
+- Application deployment logic: `internal/modules/applications/`
 - Frontend routes: `web/src/router/index.ts`
 - Frontend i18n setup: `web/src/i18n/index.ts`
 

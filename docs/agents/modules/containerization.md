@@ -6,10 +6,10 @@
 
 ## 关键入口
 
-- Panel 服务与 API：`internal/containerization/`
-- Agent Docker Engine API：`internal/agent/docker_runtime.go`、`internal/agent/handler.go`
-- Application 运行时：`internal/applications/service.go`
-- 调度：`internal/scheduler/scheduler.go`
+- Panel 服务与 API：`internal/modules/containers/`；HTTP 路由在 `routes.go` 注册。
+- Agent Docker Engine API：`internal/agent/docker/`；Agent HTTP 路由：`internal/agent/server/`
+- Application 运行时：`internal/modules/applications/service.go`
+- 调度：`internal/modules/scheduling/scheduler.go`
 - 前端页面：`web/src/views/containerization/`
 - 前端 API：`web/src/api/containerization.ts`
 

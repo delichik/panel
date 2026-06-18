@@ -6,18 +6,24 @@
 
 ## 后端入口
 
-- SSH 凭据：`internal/credential/`
-- 服务器：`internal/server/`
-- Agent 客户端与 TLS：`internal/agent/`
-- SSH 执行器：`internal/sshx/`
-- Linux 发行版适配：`internal/linux/`
-- 通用远程运维操作：`internal/remoteops/`
-- 指标采集：`internal/metrics/`
-- 概览聚合：`internal/overview/`
-- 软件包维护：`internal/packages/`
-- 调度触发：`internal/scheduler/`
-- 任务记录：`internal/tasks/`
-- 路由装配：`internal/app/app.go`
+- SSH 凭据：`internal/modules/servers/credential/`
+- 服务器模块：`internal/modules/servers/`
+- 服务器领域模型与仓储端口：`internal/modules/servers/domain/`、`internal/modules/servers/ports/`
+- SQLite 服务器仓储：`internal/modules/servers/store/sqlite/`
+- 服务器登记、更新、删除和读取用例：`internal/modules/servers/registry.go`
+- Agent 部署任务、自动部署限流和安装流程：`internal/modules/servers/agent_deployment.go`
+- Agent 健康检查、兼容性判断和证书时间错误恢复：`internal/modules/servers/agent_health.go`
+- Agent 系统证书签发、展示与重置：`internal/modules/servers/agent_certificates.go`
+- Agent 协议、客户端与 TLS：`internal/agent/contract/`、`internal/agent/client/`、`internal/agent/security/`
+- SSH 执行器：`internal/platform/ssh/`
+- Linux 发行版适配：`internal/platform/linux/`
+- 通用远程运维操作：`internal/platform/linux/remoteops/`
+- 指标采集：`internal/modules/observability/metrics/`
+- 概览聚合：`internal/modules/observability/overview/`
+- 软件包维护：`internal/modules/packages/`
+- 调度触发：`internal/modules/scheduling/`
+- 任务记录：`internal/modules/tasks/`
+- 路由注册：`internal/modules/servers/routes.go`、`internal/modules/servers/credential/routes.go`
 
 ## 前端入口
 
@@ -52,13 +58,15 @@
 ## 数据与行为约定
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
+- 服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。
+- `service.go` 保留服务器运维、探测和 UFW 等流程；服务器资源 CRUD 放在 `registry.go`，Agent 部署和健康检查分别放在 `agent_deployment.go` 与 `agent_health.go`，新增代码不要重新揉回主 service 文件。
 - 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
 - 新增服务器响应可携带 `initialTaskId` 指向首次信息采集任务；首次采集失败时必须标记任务失败并删除刚创建的服务器记录，让用户回到表单修正 SSH 信息。
-- 系统探测通过 SSH 或已启用的 agent 读取远端信息，并交给 `internal/linux/` 解析支持的 Debian/Ubuntu 版本；如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。agent 不兼容或 mTLS server 证书过期/尚未生效时，Panel 会按受限自动部署策略排队修复，并返回当前 agent 错误；普通网络超时、连接拒绝、服务器失联或 Docker 不可用只记录为 unavailable，不得直接当成 agent 可重装问题；只有 `agent.status=undeployable` 才停止自动部署。
+- 系统探测通过 SSH 或已启用的 agent 读取远端信息，并交给 `internal/platform/linux/` 解析支持的 Debian/Ubuntu 版本；如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。agent 不兼容或 mTLS server 证书过期/尚未生效时，Panel 会按受限自动部署策略排队修复，并返回当前 agent 错误；普通网络超时、连接拒绝、服务器失联或 Docker 不可用只记录为 unavailable，不得直接当成 agent 可重装问题；只有 `agent.status=undeployable` 才停止自动部署。
 - 系统探测写入 `sys.*` traits；网卡采集要求 `/sys/class/net/{name}/device` 存在，并过滤 Docker、veth、bridge、CNI、隧道和 overlay 等常见虚拟接口。
-- SSH 密码、私钥和私钥口令统一封装到 `credentials.secret_ciphertext`，并通过 `internal/secretstore` 加密；不得通过 API 响应或任务日志返回秘密内容。
-- 安装软件、日志化 sudo 命令、sudo 写文件和 UFW allow/delete/status 优先复用 `internal/remoteops/`。
+- SSH 密码、私钥和私钥口令统一封装到 `credentials.secret_ciphertext`，并通过 `internal/platform/secrets` 加密；不得通过 API 响应或任务日志返回秘密内容。
+- 安装软件、日志化 sudo 命令、sudo 写文件和 UFW allow/delete/status 优先复用 `internal/platform/linux/remoteops/`。
 - 软件包维护基于 APT，只对支持的系统执行；刷新和升级依赖远程 sudo。
 - `POST /api/v1/servers/{id}/packages/refresh` 创建或复用 `package_refresh` 任务并返回 `taskId`；调度器一轮多服务器刷新必须共享同一个 `operationId`。
 - 周期性指标采集依赖 agent，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器创建 `metrics_collect` 任务；同一轮多服务器采集共享一个 `operationId`，任务中心默认常用类型会隐藏该高频类型。agent 未部署、异常、不兼容或无法部署时直接跳过，不创建任务，也不回退 SSH 采集。

@@ -8,8 +8,8 @@
 - 第二语言：`zh-CN`
 - 前端翻译入口：`web/src/i18n/index.ts`
 - 前端运行时语言同步：`web/src/stores/settings.ts`
-- 后端翻译入口：`internal/i18n/i18n.go`
-- 后端运行时语言设置：`internal/settings/service.go`
+- 后端翻译入口：`internal/platform/i18n/i18n.go`
+- 后端运行时语言设置：`internal/modules/settings/service.go`
 - 语言设置来源：`/api/v1/settings/runtime`
 
 ## 适用范围
@@ -132,9 +132,9 @@ if locale == "zh-CN" {
 
 语言切换应集中在：
 
-- `internal/settings/service.go`
-- `internal/i18n/i18n.go`
-- `internal/httpx/httpx.go`
+- `internal/modules/settings/service.go`
+- `internal/platform/i18n/i18n.go`
+- `internal/platform/http/httpx.go`
 
 ### 3. 新增影响语言体验的运行时配置时，必须评估是否进入 settings
 
@@ -149,7 +149,7 @@ if locale == "zh-CN" {
 处理新增或迁移文案时，按下面顺序执行：
 
 1. 确认文案属于哪个功能域
-2. 在 `web/src/i18n/index.ts` 或 `internal/i18n/i18n.go` 增加词条
+2. 在 `web/src/i18n/index.ts` 或 `internal/platform/i18n/i18n.go` 增加词条
 3. 将调用方改为使用 key / 翻译函数
 4. 如果涉及持久化结构，确认没有把展示文案写入存储
 5. 如果涉及系统级语言行为，确认 settings 接口与默认值是否需要同步

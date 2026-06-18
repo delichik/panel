@@ -6,11 +6,11 @@
 
 ## 关键入口
 
-- DNS 服务与 handler：`internal/dns/`
-- Cloudflare provider：`internal/dns/cloudflare.go`
-- 证书服务与 handler：`internal/certs/`
-- ACME 集成：`internal/certs/acme.go`
-- 调度续签：`internal/scheduler/`
+- DNS 服务与 handler：`internal/modules/certificates/dns/`
+- Cloudflare provider：`internal/modules/certificates/dns/cloudflare.go`
+- 证书服务与 handler：`internal/modules/certificates/certs/`
+- ACME 集成：`internal/modules/certificates/certs/acme.go`
+- 调度续签：`internal/modules/scheduling/`
 - 前端 DNS 页面：`web/src/views/dns/domains/index.vue`
 - 域名证书页面：`web/src/views/certificates/domains/index.vue`
 - API：`web/src/api/dns.ts`、`web/src/api/certificates.ts`

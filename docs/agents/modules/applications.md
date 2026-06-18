@@ -6,13 +6,16 @@
 
 ## 后端入口
 
-- 应用服务与 handler：`internal/applications/`
-- 应用规格模型、校验和渲染：`internal/appspec/`
-- 运行时规格类型：`internal/appruntime/`
-- Agent 客户端与运行时接口：`internal/agent/`
-- 模板渲染接口：`internal/templatex/`
-- 任务记录：`internal/tasks/`
-- 路由装配和跨模块连接：`internal/app/app.go`
+- 应用服务与 handler：`internal/modules/applications/`；HTTP 路由在 `routes.go` 注册。
+- 应用文件 CRUD、文件读取和运行时 managed-file 挂载：`internal/modules/applications/files.go`
+- 保存会话与临时文件生命周期：`internal/modules/applications/save_session.go`
+- 应用规格模型、校验和渲染：`internal/modules/applications/spec/`
+- 运行时规格类型：`internal/modules/applications/runtime/`
+- Agent 协议与运行时客户端接口：`internal/agent/contract/`、`internal/agent/client/`
+- 模板渲染接口：`internal/platform/templating/`
+- 任务记录：`internal/modules/tasks/`
+- 服务器能力：`internal/modules/servers/`
+- 跨模块连接：`internal/bootstrap/panel/app.go`
 
 ## 前端入口
 
@@ -40,14 +43,15 @@
 ## 数据与行为约定
 
 - 主要表包括 `applications`、`application_files`、`application_revisions`、`application_instances`。
-- appspec 以 YAML 输入，经 `internal/appspec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器并编排运行时步骤，再通过目标机 `panel-agent` 的原子接口写入托管文件、拉取镜像、删除旧容器、创建容器、启动容器和刷新状态。
+- appspec 以 YAML 输入，经 `internal/modules/applications/spec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器并编排运行时步骤，再通过目标机 `panel-agent` 的原子接口写入托管文件、拉取镜像、删除旧容器、创建容器、启动容器和刷新状态。
 - `application_instances` 是 Panel 的运行时事实表，按 `application_id + server_id` 记录实例、容器名、容器 ID、期望状态、最近状态、渲染后的 runtime spec 和部署 generation。
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID，并依赖数据库外键级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
 - 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后只移除来源 `application_instances` 记录，不停止或删除来源容器。
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
-- 文件内容通过 API 以 base64 承载；保存会话用于批量上传、删除和提交。
+- 文件内容通过 API 以 base64 承载；应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
+- 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
 - 启用应用、部署、镜像更新等流程需要先校验和计划，再确认目标服务器 agent runtime 可用，然后写入应用修订和实例记录；部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标部署中单台服务器部署失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
 - 应用部署的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；其它 agent/runtime 操作仍使用常规短超时。
 - 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的操作只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得创建新的运行时操作任务、不得修改应用启用状态，也不得回退 SSH。运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
@@ -82,7 +86,7 @@
 
 ## 验证
 
-- 后端应用或 appspec 改动运行 `task test:backend`，重点关注 `internal/applications`、`internal/appspec` 和 agent runtime 相关测试。
+- 后端应用或 appspec 改动运行 `task test:backend`，重点关注 `internal/modules/applications`、`internal/modules/applications/spec` 和 agent runtime 相关测试。
 - 前端应用页面、API 或类型改动按影响范围运行 `task test:web` 或 `task build:web`。
 
 ## 文档更新触发

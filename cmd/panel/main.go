@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"panel/internal/app"
-	"panel/internal/config"
-	"panel/internal/logging"
+	panelbootstrap "panel/internal/bootstrap/panel"
+	"panel/internal/platform/config"
+	"panel/internal/platform/logging"
 
 	"go.uber.org/zap"
 )
@@ -25,7 +25,7 @@ func main() {
 		logger.Fatal("load config failed", zap.Error(err))
 	}
 
-	application, err := app.New(cfg)
+	application, err := panelbootstrap.New(cfg)
 	if err != nil {
 		logger.Fatal("initialize app failed", zap.Error(err))
 	}
