@@ -15,3 +15,12 @@ describe('router key asset routes', () => {
     expect(routerSource).toContain("path: 'certificates/key-assets', redirect: '/certificates/self-signed'");
   });
 });
+
+describe('hidden debug route', () => {
+  it('registers the authenticated page without adding it to navigation', () => {
+    expect(routerSource).toContain("import DebugPage from '@/views/debug/index.vue'");
+    expect(routerSource).toContain("path: 'debug', name: 'debug'");
+    const layoutSource = readFileSync(resolve(__dirname, '../layouts/AppLayout.vue'), 'utf8');
+    expect(layoutSource).not.toContain("to: '/debug'");
+  });
+});

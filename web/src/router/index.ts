@@ -23,6 +23,7 @@ import SettingsGeneralPage from '@/views/settings/general/index.vue';
 import SettingsSecurityPage from '@/views/settings/security/index.vue';
 import SettingsCertificatesPage from '@/views/settings/certificates/index.vue';
 import SettingsSystemPage from '@/views/settings/system/index.vue';
+import DebugPage from '@/views/debug/index.vue';
 
 export const router = createRouter({
   history: createWebHistory(),
@@ -60,6 +61,7 @@ export const router = createRouter({
         { path: 'settings/security', name: 'settings-security', component: SettingsSecurityPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
         { path: 'settings/certificates', name: 'settings-certificates', component: SettingsCertificatesPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
         { path: 'settings/system', name: 'settings-system', component: SettingsSystemPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
+        { path: 'debug', name: 'debug', component: DebugPage, meta: { titleKey: 'routes.debug.title' } },
       ],
     },
   ],

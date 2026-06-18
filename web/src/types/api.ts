@@ -793,6 +793,77 @@ export interface SystemVersionDto {
   checkedAt?: string;
 }
 
+export interface DebugProcessStatsDto {
+  startedAt: string;
+  uptimeSeconds: number;
+  pid: number;
+  goVersion: string;
+  os: string;
+  architecture: string;
+  cpuCount: number;
+  goroutineCount: number;
+  cgoCallCount: number;
+}
+
+export interface DebugMemoryStatsDto {
+  allocBytes: number;
+  totalAllocBytes: number;
+  sysBytes: number;
+  heapAllocBytes: number;
+  heapInUseBytes: number;
+  heapIdleBytes: number;
+  heapReleasedBytes: number;
+  heapObjects: number;
+  stackInUseBytes: number;
+  stackSysBytes: number;
+  mspanInUseBytes: number;
+  mcacheInUseBytes: number;
+  nextGcBytes: number;
+  gcCycles: number;
+  forcedGcCycles: number;
+  gcPauseTotalNs: number;
+  lastGcAt: string | null;
+}
+
+export interface DebugConnectionStatsDto {
+  maxOpenConnections: number;
+  openConnections: number;
+  inUse: number;
+  idle: number;
+  waitCount: number;
+  waitDurationNs: number;
+  maxIdleClosed: number;
+  maxIdleTimeClosed: number;
+  maxLifetimeClosed: number;
+}
+
+export interface DebugTableStatsDto {
+  name: string;
+  rowCount: number;
+  errorCode?: string;
+}
+
+export interface DebugDatabaseSnapshotDto {
+  name: 'app' | 'task' | 'metrics' | string;
+  healthy: boolean;
+  errorCode?: string;
+  fileSizeBytes: number;
+  pageSizeBytes: number;
+  pageCount: number;
+  freePageCount: number;
+  usedBytes: number;
+  freeBytes: number;
+  connections: DebugConnectionStatsDto;
+  tables: DebugTableStatsDto[];
+}
+
+export interface DebugSnapshotDto {
+  collectedAt: string;
+  process: DebugProcessStatsDto;
+  memory: DebugMemoryStatsDto;
+  databases: DebugDatabaseSnapshotDto[];
+}
+
 export type TokenExpiration = '10m' | '1h' | '1d' | '5d' | '30d' | 'never';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

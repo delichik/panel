@@ -80,6 +80,10 @@
   - 系统：`system/index.vue`
   - 组内共享：`_shared/`
 - 登录与强制改密：`web/src/views/auth/`
+- 隐藏诊断页：`web/src/views/debug/index.vue`
+  - 认证路由为 `/debug`，不加入侧边菜单，只能通过直接地址访问。
+  - 页面每 5 秒读取一次 `GET /api/v1/debug/snapshot`，支持暂停、恢复和手动刷新；刷新失败时保留最近一次成功快照。
+  - 中大屏使用满高 `.page-shell` 和内部诊断内容滚动区，窄屏恢复页面级滚动。
 
 ## 验证
 

@@ -15,6 +15,7 @@ import (
 	"panel/internal/config"
 	"panel/internal/containerization"
 	"panel/internal/credential"
+	"panel/internal/diagnostics"
 	"panel/internal/dns"
 	"panel/internal/httpx"
 	"panel/internal/keyassets"
@@ -116,6 +117,11 @@ func New(cfg config.Config) (*App, error) {
 	certSvc.SetKeyAssetProvider(keyAssetSvc)
 	systemSvc := systeminfo.NewService(nil)
 	systemSvc.Start(context.Background())
+	diagnosticsSvc := diagnostics.NewService(
+		diagnostics.DatabaseSource{Name: "app", DB: store.AppDB(), Path: cfg.AppDatabase},
+		diagnostics.DatabaseSource{Name: "task", DB: store.TaskDB(), Path: cfg.TaskDatabase},
+		diagnostics.DatabaseSource{Name: "metrics", DB: store.MetricsDB(), Path: cfg.MetricsDatabase},
+	)
 
 	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, system: systemSvc}
 	applicationSvc.SetBuiltinVariableResolver(certSvc)
@@ -133,7 +139,7 @@ func New(cfg config.Config) (*App, error) {
 	}()
 	sched.Start(context.Background())
 	logging.L().Info("background services started")
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -153,7 +159,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -388,6 +394,8 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 			settingsH.UpdateServerVariableDefinitions(w, r)
 		case r.Method == http.MethodGet && path == "/api/v1/system/version":
 			systemH.Version(w, r)
+		case r.Method == http.MethodGet && path == "/api/v1/debug/snapshot":
+			diagnosticsH.Snapshot(w, r)
 		default:
 			httpx.Error(w, panelerr.NotFound("route"))
 		}

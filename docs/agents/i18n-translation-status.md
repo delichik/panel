@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/debug/index.vue`
+  - 隐藏 Debug 诊断页的刷新状态、Go runtime、内存/GC、数据库连接与表统计文案已接入英文和简体中文词条；数据库表名和稳定诊断标识不翻译。
 - `web/src/components/RuntimeLogsDialog.vue`、`web/src/views/containerization/containers/index.vue`
   - 应用运行时日志和容器日志弹窗、刷新按钮、tail 行数和空日志文案已接入英文与简体中文词条；日志正文保留容器原始输出。
 - `web/src/views/runtime/applications/ApplicationDetail.vue`
