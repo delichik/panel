@@ -29,12 +29,17 @@ type agentErrorReporter interface {
 	HandleAgentError(context.Context, server.Server, error) bool
 }
 
+type reachabilityReporter interface {
+	RecordMetricsReachability(context.Context, string, bool, string) error
+}
+
 type Series struct {
 	Range   string        `json:"range"`
 	CPU     []CPUPoint    `json:"cpu"`
 	Memory  []MemoryPoint `json:"memory"`
 	Disk    []DiskPoint   `json:"disk"`
 	Network []NetPoint    `json:"network"`
+	Load    []LoadPoint   `json:"load"`
 }
 
 type CPUPoint struct {
@@ -51,6 +56,12 @@ type NetPoint struct {
 	Time             time.Time `json:"time"`
 	RxBytesPerSecond float64   `json:"rxBytesPerSecond"`
 	TxBytesPerSecond float64   `json:"txBytesPerSecond"`
+}
+type LoadPoint struct {
+	Time   time.Time `json:"time"`
+	Load1  float64   `json:"load1"`
+	Load5  float64   `json:"load5"`
+	Load15 float64   `json:"load15"`
 }
 
 type Option func(*Service)
@@ -84,11 +95,20 @@ func (s *Service) CollectAt(ctx context.Context, serverID string, collectedAt ti
 	}
 	snap, err := s.collectSnapshot(ctx, srv)
 	if err != nil {
+		if reporter, ok := s.servers.(reachabilityReporter); ok {
+			_ = reporter.RecordMetricsReachability(ctx, serverID, false, err.Error())
+		}
 		return err
 	}
 	snap.ServerID = serverID
 	snap.Time = collectedAt
-	return s.Save(ctx, snap)
+	if err := s.Save(ctx, snap); err != nil {
+		return err
+	}
+	if reporter, ok := s.servers.(reachabilityReporter); ok {
+		_ = reporter.RecordMetricsReachability(ctx, serverID, true, "")
+	}
+	return nil
 }
 
 func (s *Service) collectSnapshot(ctx context.Context, srv server.Server) (linux.MetricsSnapshot, error) {
@@ -134,8 +154,8 @@ func (s *Service) Save(ctx context.Context, snap linux.MetricsSnapshot) error {
 		snap.Time = time.Now().UTC()
 	}
 	snap.Time = alignMetricTime(snap.Time)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO metrics_snapshots(server_id,time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps,load_average,uptime_seconds,hostname,kernel_version,os_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		snap.ServerID, snap.Time.Format(time.RFC3339Nano), snap.CPUUsagePercent, snap.MemoryUsedBytes, snap.MemoryTotalBytes, snap.DiskUsedBytes, snap.DiskTotalBytes, snap.NetworkRxBytesRate, snap.NetworkTxBytesRate, snap.Status.LoadAverage, snap.Status.UptimeSeconds, snap.Status.Hostname, snap.Status.KernelVersion, snap.Status.OSVersion)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO metrics_snapshots(server_id,time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps,load_average,load_1,load_5,load_15,uptime_seconds,hostname,kernel_version,os_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		snap.ServerID, snap.Time.Format(time.RFC3339Nano), snap.CPUUsagePercent, snap.MemoryUsedBytes, snap.MemoryTotalBytes, snap.DiskUsedBytes, snap.DiskTotalBytes, snap.NetworkRxBytesRate, snap.NetworkTxBytesRate, snap.Status.LoadAverage, snap.Status.Load1, snap.Status.Load5, snap.Status.Load15, snap.Status.UptimeSeconds, snap.Status.Hostname, snap.Status.KernelVersion, snap.Status.OSVersion)
 	return err
 }
 
@@ -145,27 +165,29 @@ func (s *Service) Query(ctx context.Context, serverID, rng string) (Series, erro
 		return Series{}, panelerr.Validation("range_invalid", "Range must be 1h, 6h, 1d, or 7d")
 	}
 	since := time.Now().UTC().Add(-duration).Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps FROM metrics_snapshots WHERE server_id=? AND time>=? ORDER BY time ASC`, serverID, since)
+	rows, err := s.db.QueryContext(ctx, `SELECT time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps,load_1,load_5,load_15 FROM metrics_snapshots WHERE server_id=? AND time>=? ORDER BY time ASC`, serverID, since)
 	if err != nil {
 		return Series{}, err
 	}
 	defer rows.Close()
-	series := Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}}
+	series := Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}}
 	for rows.Next() {
 		var ts string
 		var cpu CPUPoint
 		var mem MemoryPoint
 		var disk DiskPoint
 		var netp NetPoint
-		if err := rows.Scan(&ts, &cpu.UsagePercent, &mem.UsedBytes, &mem.TotalBytes, &disk.UsedBytes, &disk.TotalBytes, &netp.RxBytesPerSecond, &netp.TxBytesPerSecond); err != nil {
+		var load LoadPoint
+		if err := rows.Scan(&ts, &cpu.UsagePercent, &mem.UsedBytes, &mem.TotalBytes, &disk.UsedBytes, &disk.TotalBytes, &netp.RxBytesPerSecond, &netp.TxBytesPerSecond, &load.Load1, &load.Load5, &load.Load15); err != nil {
 			return Series{}, err
 		}
 		t, _ := time.Parse(time.RFC3339Nano, ts)
-		cpu.Time, mem.Time, disk.Time, netp.Time = t, t, t, t
+		cpu.Time, mem.Time, disk.Time, netp.Time, load.Time = t, t, t, t, t
 		series.CPU = append(series.CPU, cpu)
 		series.Memory = append(series.Memory, mem)
 		series.Disk = append(series.Disk, disk)
 		series.Network = append(series.Network, netp)
+		series.Load = append(series.Load, load)
 	}
 	return series, rows.Err()
 }

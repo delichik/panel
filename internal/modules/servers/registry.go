@@ -81,14 +81,12 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	if err := s.repo.Update(ctx, current); err != nil {
 		return Server{}, err
 	}
-	srv, err := s.Get(ctx, serverID)
-	if err != nil {
-		return Server{}, err
-	}
 	if s.exec != nil {
-		_, _ = s.EnsureConnectivityTask(ctx, serverID, true)
+		if _, err := s.TestConnectivity(ctx, serverID); err != nil {
+			return Server{}, err
+		}
 	}
-	return srv, nil
+	return s.Get(ctx, serverID)
 }
 
 func (s *Service) Delete(ctx context.Context, serverID string) error {
@@ -240,16 +238,8 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 	for i := range out {
 		out[i] = s.prepareServerForRead(ctx, out[i])
 	}
-	operationID := ""
 	for i := range out {
-		srv := out[i]
-		if s.exec != nil && (srv.LastCheckedAt == nil || time.Since(*srv.LastCheckedAt) > connectivityStaleAfter) {
-			if operationID == "" {
-				operationID = id.New("op")
-			}
-			_, _ = s.ensureConnectivityTask(ctx, srv.ID, false, connectivityTaskType, "Testing SSH connectivity", operationID)
-		}
-		out[i].LoadAverage = s.latestLoadAverage(ctx, srv.ID)
+		out[i].LoadAverage = s.latestLoadAverage(ctx, out[i].ID)
 	}
 	return out, nil
 }

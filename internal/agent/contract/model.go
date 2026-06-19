@@ -107,6 +107,9 @@ type MetricsSnapshotResponse struct {
 		ServerTime    time.Time `json:"serverTime"`
 		UptimeSeconds int64     `json:"uptimeSeconds"`
 		LoadAverage   string    `json:"loadAverage"`
+		Load1         float64   `json:"load1"`
+		Load5         float64   `json:"load5"`
+		Load15        float64   `json:"load15"`
 	} `json:"status"`
 }
 
@@ -316,6 +319,9 @@ func SnapshotResponse(s linux.MetricsSnapshot) MetricsSnapshotResponse {
 	out.Status.ServerTime = s.Status.ServerTime
 	out.Status.UptimeSeconds = s.Status.UptimeSeconds
 	out.Status.LoadAverage = s.Status.LoadAverage
+	out.Status.Load1 = s.Status.Load1
+	out.Status.Load5 = s.Status.Load5
+	out.Status.Load15 = s.Status.Load15
 	return out
 }
 
@@ -337,6 +343,9 @@ func SnapshotFromResponse(r MetricsSnapshotResponse) linux.MetricsSnapshot {
 			ServerTime:    r.Status.ServerTime,
 			UptimeSeconds: r.Status.UptimeSeconds,
 			LoadAverage:   r.Status.LoadAverage,
+			Load1:         r.Status.Load1,
+			Load5:         r.Status.Load5,
+			Load15:        r.Status.Load15,
 		},
 	}
 }

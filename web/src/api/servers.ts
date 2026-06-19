@@ -64,7 +64,7 @@ export function createServersApi(client = apiClient) {
       return client.delete(`/servers/${serverId}`);
     },
     testConnection(serverId: string) {
-      return client.post<TaskCreatedDto>(`/servers/${serverId}/test`);
+      return client.post<ServerDto>(`/servers/${serverId}/test`);
     },
     restartServer(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/restart`);

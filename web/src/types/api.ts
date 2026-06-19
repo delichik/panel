@@ -445,12 +445,20 @@ export interface NetworkPointDto {
   txBytesPerSecond: number;
 }
 
+export interface LoadPointDto {
+  time: string;
+  load1: number;
+  load5: number;
+  load15: number;
+}
+
 export interface MetricsSeriesDto {
   range: MetricsRange;
   cpu: CpuPointDto[];
   memory: MemoryPointDto[];
   disk: DiskPointDto[];
   network: NetworkPointDto[];
+  load: LoadPointDto[];
 }
 
 export interface PackageUpdateDto {

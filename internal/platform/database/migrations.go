@@ -424,6 +424,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 			network_rx_bps REAL NOT NULL,
 			network_tx_bps REAL NOT NULL,
 			load_average TEXT NOT NULL DEFAULT '',
+			load_1 REAL NOT NULL DEFAULT 0,
+			load_5 REAL NOT NULL DEFAULT 0,
+			load_15 REAL NOT NULL DEFAULT 0,
 			uptime_seconds INTEGER NOT NULL DEFAULT 0,
 			hostname TEXT NOT NULL DEFAULT '',
 			kernel_version TEXT NOT NULL DEFAULT '',
@@ -435,6 +438,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 		if _, err := s.metricsDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
+	}
+	if err := ensureColumns(ctx, s.metricsDB, "metrics_snapshots", map[string]string{
+		"load_1":  "REAL NOT NULL DEFAULT 0",
+		"load_5":  "REAL NOT NULL DEFAULT 0",
+		"load_15": "REAL NOT NULL DEFAULT 0",
+	}); err != nil {
+		return err
 	}
 	return nil
 }

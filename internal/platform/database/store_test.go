@@ -60,6 +60,50 @@ func TestOpenUsesSmallSQLiteConnectionPool(t *testing.T) {
 	}
 }
 
+func TestMigrateAddsLoadColumnsToLegacyMetricsSchema(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.MetricsDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE metrics_snapshots (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		server_id TEXT NOT NULL,
+		time TEXT NOT NULL,
+		cpu_usage_percent REAL NOT NULL,
+		memory_used_bytes INTEGER NOT NULL,
+		memory_total_bytes INTEGER NOT NULL,
+		disk_used_bytes INTEGER NOT NULL,
+		disk_total_bytes INTEGER NOT NULL,
+		network_rx_bps REAL NOT NULL,
+		network_tx_bps REAL NOT NULL,
+		load_average TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	columns := tableColumns(t, store.MetricsDB(), "metrics_snapshots")
+	for _, required := range []string{"load_1", "load_5", "load_15"} {
+		if !columns[required] {
+			t.Fatalf("migrated metrics schema is missing %q", required)
+		}
+	}
+}
+
 func TestSQLiteDSNAddsDefaultPragmasToFileURI(t *testing.T) {
 	dsn := sqliteDSN("file:custom.db?cache=shared")
 	if !strings.HasPrefix(dsn, "file:custom.db?") {
@@ -119,6 +163,12 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	for _, required := range []string{"privilege_mode", "privilege_last_checked_at"} {
 		if !serverColumns[required] {
 			t.Fatalf("fresh server schema is missing %q", required)
+		}
+	}
+	metricColumns := tableColumns(t, store.MetricsDB(), "metrics_snapshots")
+	for _, required := range []string{"load_1", "load_5", "load_15"} {
+		if !metricColumns[required] {
+			t.Fatalf("fresh metrics schema is missing %q", required)
 		}
 	}
 	for _, table := range []string{

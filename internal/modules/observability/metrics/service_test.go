@@ -34,7 +34,7 @@ func TestMetricsSaveQueryCleanup(t *testing.T) {
 	ctx := context.Background()
 	base := time.Now().UTC().Add(-time.Minute)
 	sampledAt := time.Date(base.Year(), base.Month(), base.Day(), base.Hour(), base.Minute(), base.Second(), 345678901, time.UTC)
-	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv", Time: sampledAt, CPUUsagePercent: 50, MemoryUsedBytes: 1, MemoryTotalBytes: 2, DiskUsedBytes: 3, DiskTotalBytes: 4}); err != nil {
+	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv", Time: sampledAt, CPUUsagePercent: 50, MemoryUsedBytes: 1, MemoryTotalBytes: 2, DiskUsedBytes: 3, DiskTotalBytes: 4, Status: linux.SystemStatus{Load1: 0.1, Load5: 0.2, Load15: 0.3}}); err != nil {
 		t.Fatal(err)
 	}
 	series, err := svc.Query(ctx, "srv", "1h")
@@ -43,6 +43,9 @@ func TestMetricsSaveQueryCleanup(t *testing.T) {
 	}
 	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 50 {
 		t.Fatalf("unexpected series: %#v", series)
+	}
+	if len(series.Load) != 1 || series.Load[0].Load1 != 0.1 || series.Load[0].Load5 != 0.2 || series.Load[0].Load15 != 0.3 {
+		t.Fatalf("unexpected load series: %#v", series.Load)
 	}
 	if want := sampledAt.UTC().Truncate(time.Second); !series.CPU[0].Time.Equal(want) {
 		t.Fatalf("expected timestamp aligned to %s, got %s", want, series.CPU[0].Time)
@@ -117,7 +120,7 @@ func TestCollectUsesAgentWhenConfigured(t *testing.T) {
 	}
 	exec := &collectMetricsExecutor{stdout: "bad"}
 	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.TaskDB()))
-	agentClient := &fakeAgentClient{snapshot: linux.MetricsSnapshot{CPUUsagePercent: 12, MemoryTotalBytes: 100, Status: linux.SystemStatus{Hostname: "agent-host"}}}
+	agentClient := &fakeAgentClient{snapshot: linux.MetricsSnapshot{CPUUsagePercent: 12, MemoryTotalBytes: 100, Status: linux.SystemStatus{Hostname: "agent-host", Load1: 1.1, Load5: 0.8, Load15: 0.5}}}
 	svc := NewService(store.MetricsDB(), serverSvc, exec)
 	svc.SetAgentClient(agentClient)
 
@@ -133,6 +136,16 @@ func TestCollectUsesAgentWhenConfigured(t *testing.T) {
 	}
 	if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 12 {
 		t.Fatalf("unexpected agent-collected series: %#v", series)
+	}
+	if len(series.Load) != 1 || series.Load[0].Load1 != 1.1 || series.Load[0].Load5 != 0.8 || series.Load[0].Load15 != 0.5 {
+		t.Fatalf("unexpected agent load series: %#v", series.Load)
+	}
+	srv, err := serverSvc.Get(context.Background(), "srv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !srv.Reachable {
+		t.Fatalf("successful metrics collection should mark server reachable: %#v", srv)
 	}
 }
 
@@ -167,6 +180,13 @@ func TestCollectFailsWhenConfiguredAgentFails(t *testing.T) {
 	}
 	if exec.command != "" {
 		t.Fatalf("expected no SSH fallback, got %q", exec.command)
+	}
+	srv, err := serverSvc.Get(context.Background(), "srv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Reachable {
+		t.Fatalf("failed metrics collection should mark server unreachable: %#v", srv)
 	}
 }
 

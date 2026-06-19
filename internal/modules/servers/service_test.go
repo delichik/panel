@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -146,7 +147,7 @@ func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	running, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: connectivityTaskType, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Status: tasks.StatusRunning, Summary: "running"})
+	running, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: serverInfoTaskType, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Status: tasks.StatusRunning, Summary: "running"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,25 +248,14 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := svc.TestConnectivity(context.Background(), srv.ID)
+	initialTaskID := srv.InitialTaskID
+	waitTaskFinished(t, taskSvc, initialTaskID)
+	checked, err := svc.TestConnectivity(context.Background(), srv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	deadline := time.Now().Add(2 * time.Second)
-	var got tasks.Task
-	for time.Now().Before(deadline) {
-		got, err = taskSvc.Get(context.Background(), task.ID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got.Status == tasks.StatusCompleted || got.Status == tasks.StatusFailed {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if got.Status != tasks.StatusCompleted {
-		t.Fatalf("expected completed task, got %#v", got)
+	if !checked.Reachable {
+		t.Fatalf("expected connected server, got %#v", checked)
 	}
 	if exec.sudoTimeout != connectivitySudoTimeout {
 		t.Fatalf("expected sudo timeout %s, got %s", connectivitySudoTimeout, exec.sudoTimeout)
@@ -281,7 +271,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 		t.Fatalf("unexpected system traits detected: %#v", srv.Traits)
 	}
 
-	logs, _, err := taskSvc.Logs(context.Background(), task.ID, 0)
+	logs, _, err := taskSvc.Logs(context.Background(), initialTaskID, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -639,7 +629,7 @@ func TestCheckConfiguredAgentsMarksCompatibleWithDifferentPanelVersion(t *testin
 	}
 }
 
-func TestConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
+func TestSynchronousConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	srv, err := createSvc.Create(context.Background(), SaveRequest{
 		Name:         "s",
@@ -670,13 +660,12 @@ func TestConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 		health: agentHealth(agentcontract.Version),
 	})
 
-	task, err := svc.EnsureConnectivityTask(context.Background(), srv.ID, true)
+	checked, err := svc.TestConnectivity(context.Background(), srv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	finished := waitTaskTerminal(t, taskSvc, task.ID)
-	if finished.Status != tasks.StatusCompleted {
-		t.Fatalf("expected connectivity task to complete, got %#v", finished)
+	if !checked.Reachable {
+		t.Fatalf("expected synchronous connectivity success, got %#v", checked)
 	}
 	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: srv.ID, IncludeInternal: true})
 	if err != nil {
@@ -1299,7 +1288,7 @@ func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 	if task.ID != srv.InitialTaskID {
 		t.Fatalf("initial task id mismatch response=%q stored=%q", srv.InitialTaskID, task.ID)
 	}
-	if task.Type != serverInfoTaskType || task.Summary != "Collecting server information" {
+	if task.Type != serverInfoTaskType || task.Summary != "Collecting initial server information" {
 		t.Fatalf("unexpected initial task: %#v", task)
 	}
 	waitTaskFinished(t, taskSvc, task.ID)
@@ -1324,7 +1313,42 @@ func TestCreateServerInitialInfoFailureRollsBackServer(t *testing.T) {
 	}
 }
 
-func TestListStaleServersSharesConnectivityOperation(t *testing.T) {
+func TestCollectServerInfoInputsIncludesOnlyCompatibleAgents(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	compatibleTraits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_ready','ready','127.0.0.1',22,'du','cred_1',?,'now','now'),('srv_plain','plain','127.0.0.2',22,'du','cred_1','{}','now','now')`, compatibleTraits); err != nil {
+		t.Fatal(err)
+	}
+	batch, shouldRun, err := svc.CollectServerInfoInputs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !shouldRun || len(batch.Inputs) != 1 || batch.Inputs[0].ServerID != "srv_ready" || batch.Inputs[0].ParamsJSON != `{"bootstrap":false}` {
+		t.Fatalf("unexpected server info batch: %#v", batch)
+	}
+}
+
+func TestScheduledServerInfoFailureDoesNotRollbackServer(t *testing.T) {
+	svc, taskSvc, store := testServerService(t, &connectivityFakeExec{})
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_refresh','refresh','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentClient(&serverFakeAgentClient{err: errors.New("agent down")})
+	task, err := svc.ensureServerInfoTask(context.Background(), "srv_refresh", true, "Collecting system information", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusFailedRetryable {
+		t.Fatalf("expected retryable refresh failure, got %#v", finished)
+	}
+	if _, err := svc.Get(context.Background(), "srv_refresh"); err != nil {
+		t.Fatalf("scheduled refresh must not delete server: %v", err)
+	}
+}
+
+func TestListServersDoesNotCreateConnectivityTasks(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	for _, name := range []string{"s1", "s2"} {
 		if _, err := createSvc.Create(context.Background(), SaveRequest{Name: name, Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"}); err != nil {
@@ -1337,54 +1361,38 @@ func TestListStaleServersSharesConnectivityOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: connectivityTaskType, Limit: 10})
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: serverInfoTaskType, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 2 {
-		t.Fatalf("expected two stale connectivity tasks, got %#v", result.Items)
-	}
-	operationID := result.Items[0].OperationID
-	if operationID == "" || result.Items[1].OperationID != operationID {
-		t.Fatalf("expected stale connectivity tasks to share operation, got %#v", result.Items)
+	if len(result.Items) != 0 {
+		t.Fatalf("server list must not create background tasks, got %#v", result.Items)
 	}
 }
 
-func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
+func TestSynchronousConnectivityFailureMarksServerUnreachable(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	svc := newServerServiceForTest(store, failingConnectivityExec{}, taskSvc)
-	if _, err := svc.EnsureConnectivityTask(context.Background(), srv.ID, true); err != nil {
-		t.Fatal(err)
+	if _, err := svc.TestConnectivity(context.Background(), srv.ID); err == nil {
+		t.Fatal("expected connectivity failure")
 	}
-
-	var task tasks.Task
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: connectivityTaskType, ServerID: srv.ID})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(result.Items) == 1 {
-			task = result.Items[0]
-			if task.Status == tasks.StatusFailedRetryable {
-				break
-			}
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	if task.Status != tasks.StatusFailedRetryable || task.NextRunAt == nil || task.RetryCount != 1 {
-		t.Fatalf("expected retryable scheduled task, got %#v", task)
-	}
-	task, err = taskSvc.RunNow(context.Background(), task.ID)
+	checked, err := svc.Get(context.Background(), srv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Status != tasks.StatusQueued || task.NextRunAt != nil {
-		t.Fatalf("run now should queue immediately, got %#v", task)
+	if checked.Reachable {
+		t.Fatalf("expected unreachable server, got %#v", checked)
+	}
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{ServerID: srv.ID, IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 0 {
+		t.Fatalf("connectivity function must not create tasks, got %#v", result.Items)
 	}
 }
 

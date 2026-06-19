@@ -13,7 +13,7 @@ import { groupTasksByOperation } from './_shared/taskOperations';
 const route = useRoute();
 const TYPE_FILTER_COMMON = '__common';
 const TYPE_FILTER_ALL = '__all';
-const hiddenByCommonTaskTypes = new Set(['server_connectivity_test', 'metrics_collect']);
+const hiddenByCommonTaskTypes = new Set(['metrics_collect']);
 const { formatDateTime, formatTime, t, translateTaskStage, translateTaskStatus, translateTaskType } = useI18n();
 const supportedTaskTypes = [
   'application_deploy',
@@ -24,7 +24,6 @@ const supportedTaskTypes = [
   'application_image_update',
   'application_image_upgrade_selected',
   'application_image_upgrade_all',
-  'server_connectivity_test',
   'server_info_collect',
   'server_restart',
   'server_agent_deploy',

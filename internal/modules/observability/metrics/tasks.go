@@ -46,7 +46,7 @@ func (s *Service) CollectTaskInputs(ctx context.Context) (tasks.CreateBatchInput
 	operationID := id.New("op")
 	inputs := []tasks.CreateInput{}
 	for _, srv := range servers {
-		if !srv.OS.Supported || !srv.Reachable || !metricsAgentReady(srv) {
+		if !srv.OS.Supported || !metricsAgentReady(srv) {
 			continue
 		}
 		inputs = append(inputs, tasks.CreateInput{

@@ -21,6 +21,9 @@ type SystemStatus struct {
 	ServerTime    time.Time
 	UptimeSeconds int64
 	LoadAverage   string
+	Load1         float64
+	Load5         float64
+	Load15        float64
 }
 
 type MetricsSnapshot struct {

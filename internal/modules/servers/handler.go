@@ -73,12 +73,12 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Test(w http.ResponseWriter, r *http.Request) {
-	task, err := h.service.TestConnectivity(r.Context(), serverIDFromRequest(r))
+	srv, err := h.service.TestConnectivity(r.Context(), serverIDFromRequest(r))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+	httpx.JSON(w, http.StatusOK, srv)
 }
 
 func (h *Handler) InstallUFW(w http.ResponseWriter, r *http.Request) {

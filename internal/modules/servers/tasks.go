@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/tasks"
 	id "panel/internal/platform/identity"
 )
@@ -24,23 +26,17 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			},
 		},
 		{
-			Type:              connectivityTaskType,
-			Hidden:            true,
-			AllowRunNow:       true,
-			AllowRetry:        true,
-			DefaultMaxRetries: connectivityMaxRetries,
-			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
-			ConcurrencyKey:    serverConnectivityConcurrencyKey,
-			Execute:           s.RunConnectivityTask,
-		},
-		{
 			Type:              serverInfoTaskType,
 			AllowRunNow:       true,
 			AllowRetry:        true,
 			DefaultMaxRetries: connectivityMaxRetries,
 			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
-			ConcurrencyKey:    serverConnectivityConcurrencyKey,
-			Execute:           s.RunConnectivityTask,
+			ConcurrencyKey:    serverInfoConcurrencyKey,
+			Execute:           s.RunServerInfoTask,
+			Periodic: &tasks.Periodic{
+				Interval:      time.Minute,
+				CollectInputs: tasks.NewIntervalCollector(time.Hour, nil, s.CollectServerInfoInputs),
+			},
 		},
 		{Type: ufwInstallTaskType, StaleQueuedAfter: 10 * time.Minute},
 		{Type: ufwEnableTaskType},
@@ -61,12 +57,43 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	}
 }
 
-func serverConnectivityConcurrencyKey(in tasks.CreateInput) string {
+func (s *Service) CollectServerInfoInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	servers, err := s.List(ctx)
+	if err != nil {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	operationID := id.New("op")
+	inputs := make([]tasks.CreateInput, 0, len(servers))
+	for _, srv := range servers {
+		if skipUnavailableAgentScheduledWork(srv) ||
+			!traitEnabled(srv.Traits[agentcontract.TraitEnabled]) ||
+			srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible ||
+			strings.TrimSpace(srv.Traits[agentcontract.TraitURL]) == "" {
+			continue
+		}
+		inputs = append(inputs, tasks.CreateInput{
+			OperationID:  operationID,
+			Type:         serverInfoTaskType,
+			ServerID:     srv.ID,
+			ResourceType: connectivityResourceType,
+			ResourceID:   srv.ID,
+			TriggerType:  "scheduler",
+			ParamsJSON:   `{"bootstrap":false}`,
+			Summary:      "Collecting system information for " + srv.Name,
+		})
+	}
+	if len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, nil
+	}
+	return tasks.CreateBatchInput{Type: serverInfoTaskType, OperationID: operationID, TriggerType: "scheduler", Summary: "Collecting scheduled system information", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
+}
+
+func serverInfoConcurrencyKey(in tasks.CreateInput) string {
 	serverID := firstNonEmpty(in.ResourceID, in.ServerID, in.NodeID)
 	if serverID == "" {
 		return ""
 	}
-	return "server_connectivity:" + serverID
+	return "server_info:" + serverID
 }
 
 func (s *Service) CollectAgentCheckInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {

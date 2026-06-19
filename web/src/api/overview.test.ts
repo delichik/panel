@@ -56,6 +56,7 @@ describe('overviewApi', () => {
           memory: [],
           disk: [],
           network: [],
+          load: [],
         },
       },
     };

@@ -26,11 +26,9 @@ import (
 )
 
 const connectivitySudoTimeout = 8 * time.Second
-const connectivityTaskType = "server_connectivity_test"
 const serverInfoTaskType = "server_info_collect"
 const connectivityResourceType = "server"
 const connectivityMaxRetries = 8
-const connectivityStaleAfter = 10 * time.Minute
 const ufwInstallTaskType = "server_ufw_install"
 const ufwEnableTaskType = "server_ufw_enable"
 const ufwInstallTimeout = 5 * time.Minute
@@ -105,8 +103,24 @@ func (s *Service) prepareServerForRead(ctx context.Context, srv Server) Server {
 	return srv
 }
 
-func (s *Service) TestConnectivity(ctx context.Context, serverID string) (tasks.Task, error) {
-	return s.EnsureConnectivityTask(ctx, serverID, true)
+func (s *Service) TestConnectivity(ctx context.Context, serverID string) (Server, error) {
+	if s.exec == nil {
+		return Server{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return Server{}, err
+	}
+	target := serverTarget(srv)
+	if _, err := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout}); err != nil {
+		_ = s.recordReachability(ctx, serverID, false, err.Error())
+		return Server{}, err
+	}
+	mode, _ := s.detectPrivilege(ctx, target)
+	if err := s.recordConnectivity(ctx, serverID, true, mode, ""); err != nil {
+		return Server{}, err
+	}
+	return s.Get(ctx, serverID)
 }
 
 func (s *Service) UFWState(ctx context.Context, serverID string) (UFWState, error) {
@@ -449,15 +463,11 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 	return result, nil
 }
 
-func (s *Service) EnsureConnectivityTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
-	return s.ensureConnectivityTask(ctx, serverID, runNow, connectivityTaskType, "Testing SSH connectivity", "")
-}
-
 func (s *Service) EnsureInitialInfoTask(ctx context.Context, serverID string, runNow bool) (tasks.Task, error) {
-	return s.ensureConnectivityTask(ctx, serverID, runNow, serverInfoTaskType, "Collecting server information", "")
+	return s.ensureServerInfoTask(ctx, serverID, runNow, "Collecting initial server information", "", true)
 }
 
-func (s *Service) RunConnectivityTask(tc tasks.TaskContext) error {
+func (s *Service) RunServerInfoTask(tc tasks.TaskContext) error {
 	ctx, task := tc.Context, tc.Task
 	if s.exec == nil {
 		return panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
@@ -473,11 +483,11 @@ func (s *Service) RunConnectivityTask(tc tasks.TaskContext) error {
 		}
 		return err
 	}
-	s.startConnectivityTask(task, srv)
+	s.startServerInfoTask(task, srv)
 	return nil
 }
 
-func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, runNow bool, taskType string, summary string, operationID string) (tasks.Task, error) {
+func (s *Service) ensureServerInfoTask(ctx context.Context, serverID string, runNow bool, summary string, operationID string, bootstrap bool) (tasks.Task, error) {
 	if s.exec == nil {
 		return tasks.Task{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
 	}
@@ -487,12 +497,13 @@ func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, r
 	}
 	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		OperationID:  operationID,
-		Type:         taskType,
+		Type:         serverInfoTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
 		ResourceID:   serverID,
 		Summary:      summary,
 		MaxRetries:   connectivityMaxRetries,
+		ParamsJSON:   `{"bootstrap":` + strconv.FormatBool(bootstrap) + `}`,
 	}, tasks.Trigger{Type: "scheduler", Periodic: !runNow})
 	if err != nil {
 		return tasks.Task{}, err
@@ -503,48 +514,28 @@ func (s *Service) ensureConnectivityTask(ctx context.Context, serverID string, r
 			if err != nil {
 				return tasks.Task{}, err
 			}
-			s.startConnectivityTask(task, srv)
+			s.startServerInfoTask(task, srv)
 		}
 		return task, nil
 	}
 	if runNow {
-		s.startConnectivityTask(task, srv)
+		s.startServerInfoTask(task, srv)
 	}
 	return task, nil
 }
 
-func (s *Service) RunDueConnectivityTests(ctx context.Context) error {
-	servers, err := s.List(ctx)
-	if err != nil {
-		return err
-	}
-	for _, srv := range servers {
-		for _, taskType := range []string{serverInfoTaskType, connectivityTaskType} {
-			task, ok, err := s.tasks.FirstRunnable(ctx, taskType, connectivityResourceType, srv.ID)
-			if err != nil {
-				return err
-			}
-			if ok {
-				s.startConnectivityTask(task, srv)
-				break
-			}
-		}
-	}
-	return nil
-}
-
-func (s *Service) startConnectivityTask(task tasks.Task, srv Server) {
+func (s *Service) startServerInfoTask(task tasks.Task, srv Server) {
 	if err := s.tasks.Start(context.Background(), task.ID); err != nil {
 		return
 	}
 	go func() {
 		taskCtx, cancel := context.WithTimeout(s.tasks.ExecutionContext(task.ID), 45*time.Second)
 		defer cancel()
-		s.runConnectivityTest(taskCtx, task, srv)
+		s.runServerInfoTask(taskCtx, task, srv)
 	}()
 }
 
-func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv Server) {
+func (s *Service) runServerInfoTask(ctx context.Context, task tasks.Task, srv Server) {
 	taskID := task.ID
 	defer s.tasks.FinishExecution(taskID)
 	if err := ctx.Err(); err != nil {
@@ -555,51 +546,16 @@ func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv 
 	}
 	target := serverTarget(srv)
 	_ = s.tasks.Advance(ctx, taskID, "connecting", "connecting to server")
-	if task.Type == serverInfoTaskType {
+	if serverInfoBootstrap(task) {
 		s.runInitialServerInfoCollection(ctx, task, srv, target)
 		return
 	}
-	osInfo, err := s.detectOS(ctx, srv, target)
-	if err != nil {
-		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, sshx.PrivilegeModeNone, nil, err.Error())
-		s.failConnectivityTask(ctx, task, srv, err)
+	_ = s.tasks.Advance(ctx, taskID, "traits", "collecting full system information")
+	if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
+		_ = s.tasks.FailRetryable(ctx, taskID, err)
 		return
 	}
-	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking privileged access")
-	mode := privilegeMode(srv)
-	if _, configured := agentURL(srv); !configured {
-		var privilegeErr error
-		mode, privilegeErr = s.detectPrivilege(ctx, target)
-		if privilegeErr != nil && mode == sshx.PrivilegeModeNone {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "privileged access unavailable: "+privilegeErr.Error())
-		}
-	}
-
-	sysTraits := map[string]string{"sys.architecture": firstNonEmpty(srv.Architecture.RawMachine, srv.Traits["sys.architecture"])}
-	if osInfo.Supported {
-		_ = s.tasks.Advance(ctx, taskID, "traits", "discovering server system traits")
-		detected, traitsErr := s.detectSystemTraitsForServer(ctx, srv, target)
-		if traitsErr == nil {
-			sysTraits = detected
-		} else if _, configured := agentURL(srv); configured {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
-		}
-	}
-	applyDistroSystemTraits(osInfo, sysTraits)
-
-	if !osInfo.Supported {
-		_ = s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, "unsupported distribution")
-		_ = s.tasks.Complete(ctx, taskID, "Connected, but distribution is unsupported")
-		return
-	}
-
-	_ = s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, "")
-	if mode != sshx.PrivilegeModeNone {
-		_ = s.tasks.Complete(ctx, taskID, "Connectivity test passed")
-		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
-	} else {
-		_ = s.tasks.Complete(ctx, taskID, "Connected, privileged access unavailable")
-	}
+	_ = s.tasks.Complete(ctx, taskID, "Server information collected")
 }
 
 func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks.Task, srv Server, target sshx.Target) {
@@ -649,7 +605,7 @@ func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks
 }
 
 func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv Server, err error) {
-	if task.Type != serverInfoTaskType {
+	if !serverInfoBootstrap(task) {
 		_ = s.tasks.FailRetryable(ctx, task.ID, err)
 		return
 	}
@@ -658,6 +614,31 @@ func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv
 	if rollbackErr := s.rollbackInitialServer(ctx, srv.ID); rollbackErr != nil {
 		_ = s.tasks.AppendLog(ctx, task.ID, "stderr", "failed to roll back server creation: "+rollbackErr.Error())
 	}
+}
+
+func serverInfoBootstrap(task tasks.Task) bool {
+	var params struct {
+		Bootstrap bool `json:"bootstrap"`
+	}
+	return json.Unmarshal([]byte(task.ParamsJSON), &params) == nil && params.Bootstrap
+}
+
+func (s *Service) RecordMetricsReachability(ctx context.Context, serverID string, reachable bool, message string) error {
+	return s.recordReachability(ctx, serverID, reachable, message)
+}
+
+func (s *Service) recordReachability(ctx context.Context, serverID string, reachable bool, message string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,last_checked_at=?,last_error=?,updated_at=? WHERE id=?`,
+		boolInt(reachable), now, message, now, serverID)
+	return err
+}
+
+func (s *Service) recordConnectivity(ctx context.Context, serverID string, reachable bool, mode string, message string) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,privilege_mode=?,privilege_last_checked_at=?,last_checked_at=?,last_error=?,updated_at=? WHERE id=?`,
+		boolInt(reachable), mode, now, now, message, now, serverID)
+	return err
 }
 
 func (s *Service) rollbackInitialServer(ctx context.Context, serverID string) error {

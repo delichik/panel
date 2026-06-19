@@ -36,6 +36,15 @@ describe('serversApi', () => {
     expect(fetcher).toHaveBeenCalledWith('/api/v1/servers/srv_1/restart', expect.objectContaining({ method: 'POST' }));
   });
 
+  it('tests connectivity synchronously', async () => {
+    const server = { id: 'srv_1', reachable: true };
+    const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: server, error: null }));
+    const api = createServersApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
+
+    await expect(api.testConnection('srv_1')).resolves.toEqual(server);
+    expect(fetcher).toHaveBeenCalledWith('/api/v1/servers/srv_1/test', expect.objectContaining({ method: 'POST' }));
+  });
+
   it('manages UFW state and rules', async () => {
     const state = { serverId: 'srv_1', supported: true, installed: true, active: true, status: 'active', defaultPolicy: '', rules: [] };
     const fetcher = vi

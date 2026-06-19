@@ -85,6 +85,8 @@ func (LocalCollector) MetricsSnapshot(ctx context.Context, serverID string) (lin
 	kernel := readKernelVersion()
 	uptime := readUptimeSeconds()
 	load := readFirstLine("/proc/loadavg")
+	load1, load5, load15 := parseLoadAverage(load)
+	load = normalizedLoadAverage(load)
 	return linux.MetricsSnapshot{
 		ServerID:           serverID,
 		Time:               time.Now().UTC(),
@@ -102,8 +104,30 @@ func (LocalCollector) MetricsSnapshot(ctx context.Context, serverID string) (lin
 			ServerTime:    time.Now().UTC(),
 			UptimeSeconds: uptime,
 			LoadAverage:   load,
+			Load1:         load1,
+			Load5:         load5,
+			Load15:        load15,
 		},
 	}, nil
+}
+
+func parseLoadAverage(raw string) (float64, float64, float64) {
+	fields := strings.Fields(raw)
+	if len(fields) < 3 {
+		return 0, 0, 0
+	}
+	load1, _ := strconv.ParseFloat(fields[0], 64)
+	load5, _ := strconv.ParseFloat(fields[1], 64)
+	load15, _ := strconv.ParseFloat(fields[2], 64)
+	return load1, load5, load15
+}
+
+func normalizedLoadAverage(raw string) string {
+	fields := strings.Fields(raw)
+	if len(fields) < 3 {
+		return ""
+	}
+	return strings.Join(fields[:3], " ")
 }
 
 func (LocalCollector) UFWStatus(ctx context.Context) (remoteops.UFWStatus, error) {
