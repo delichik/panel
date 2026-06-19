@@ -9,11 +9,69 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	"panel/internal/modules/applications"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 )
+
+func TestImageRefreshDoesNotHoldDatabaseWriteLockWhileResolvingDigests(t *testing.T) {
+	svc, taskSvc, fakeAgent, store := newContainerizationTestService(t)
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
+		VALUES('credential-1','credential','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO servers(id,name,host,port,credential_id,docker_host,traits,created_at,updated_at)
+		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	fakeAgent.images = []agentcontract.DockerImage{{
+		RepoTags:    []string{"example.com/app:latest"},
+		RepoDigests: []string{"example.com/app@sha256:local"},
+	}}
+	resolver := &blockingImageResolver{
+		entered: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	svc.resolver = resolver
+	task, err := taskSvc.Create(context.Background(), tasks.CreateInput{
+		Type:         TaskImageRefresh,
+		ServerID:     "server-1",
+		ResourceType: "server",
+		ResourceID:   "server-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := taskSvc.Start(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+	go svc.runImageRefresh(taskSvc.ExecutionContext(task.ID), task, "server-1")
+	select {
+	case <-resolver.entered:
+	case <-time.After(time.Second):
+		t.Fatal("image resolver was not called")
+	}
+	writeCtx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+	if _, err := store.AppDB().ExecContext(writeCtx, `
+		INSERT INTO runtime_settings(key,value,updated_at) VALUES('lock-test','ok','now')
+		ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at`); err != nil {
+		t.Fatalf("database write was blocked while resolving remote digest: %v", err)
+	}
+	close(resolver.release)
+	waitTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+	var latestDigest string
+	if err := store.AppDB().QueryRow(`SELECT latest_digest FROM image_updates WHERE server_id=? AND reference=?`, "server-1", "example.com/app:latest").Scan(&latestDigest); err != nil {
+		t.Fatal(err)
+	}
+	if latestDigest != "sha256:latest" {
+		t.Fatalf("latest digest = %q, want sha256:latest", latestDigest)
+	}
+}
 
 func TestManagedLabelsOnlyAcceptsNewApplicationLabels(t *testing.T) {
 	appID, instanceID, managed := managedLabels(map[string]string{
@@ -197,6 +255,7 @@ type fakeContainerizationAgent struct {
 	mu      sync.Mutex
 	actions []string
 	logTail int
+	images  []agentcontract.DockerImage
 }
 
 func (a *fakeContainerizationAgent) DockerContainers(context.Context, string) ([]agentcontract.DockerContainer, error) {
@@ -220,7 +279,7 @@ func (a *fakeContainerizationAgent) DockerContainerDelete(context.Context, strin
 }
 
 func (a *fakeContainerizationAgent) DockerImages(context.Context, string) ([]agentcontract.DockerImage, error) {
-	return nil, nil
+	return a.images, nil
 }
 
 func (a *fakeContainerizationAgent) DockerImagePull(context.Context, string, string) error {
@@ -241,4 +300,20 @@ func (a *fakeContainerizationAgent) DockerVolumes(context.Context, string) ([]ag
 
 func (a *fakeContainerizationAgent) DockerVolumeDelete(context.Context, string, string) error {
 	return nil
+}
+
+type blockingImageResolver struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *blockingImageResolver) Resolve(ctx context.Context, _ string) (applications.ImageDigestResult, error) {
+	r.once.Do(func() { close(r.entered) })
+	select {
+	case <-ctx.Done():
+		return applications.ImageDigestResult{}, ctx.Err()
+	case <-r.release:
+		return applications.ImageDigestResult{Digest: "sha256:latest"}, nil
+	}
 }

@@ -54,6 +54,7 @@ Application 新部署容器只写入：
 
 - `image_updates` 保存每服务器镜像引用、本地摘要、远端摘要、状态、错误和检查时间。
 - `image_refreshes` 保存最近刷新时间。
+- 镜像刷新必须在数据库事务外完成所有远端 registry digest 查询；结果准备完成后再用短事务原子替换 `image_updates` 并更新 `image_refreshes`，禁止在持有 SQLite 写锁时等待网络请求。
 - containers 模块注册的镜像检查周期与软件包刷新一致。
 - 所有带标签且可解析的镜像都显示更新状态；普通容器镜像不提供升级操作。
 - Application 镜像升级复用 `applications.Service.UpdateImage` 并重新部署。

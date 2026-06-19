@@ -859,16 +859,14 @@ func (s *Service) runImageRefresh(ctx context.Context, task tasks.Task, serverID
 		return
 	}
 	now := time.Now().UTC()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		_ = s.tasks.Fail(ctx, task.ID, err)
-		return
+	type imageUpdate struct {
+		reference       string
+		localDigest     string
+		latestDigest    string
+		updateAvailable bool
+		lastError       string
 	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM image_updates WHERE server_id=?`, serverID); err != nil {
-		_ = s.tasks.Fail(ctx, task.ID, err)
-		return
-	}
+	updates := make([]imageUpdate, 0, len(images))
 	for _, image := range images {
 		reference := firstTaggedReference(image.RepoTags)
 		if reference == "" {
@@ -881,9 +879,27 @@ func (s *Service) runImageRefresh(ctx context.Context, task tasks.Task, serverID
 		} else {
 			latestDigest = result.Digest
 		}
-		updateAvailable := localDigest != "" && latestDigest != "" && localDigest != latestDigest
+		updates = append(updates, imageUpdate{
+			reference:       reference,
+			localDigest:     localDigest,
+			latestDigest:    latestDigest,
+			updateAvailable: localDigest != "" && latestDigest != "" && localDigest != latestDigest,
+			lastError:       lastError,
+		})
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `DELETE FROM image_updates WHERE server_id=?`, serverID); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return
+	}
+	for _, update := range updates {
 		if _, err = tx.ExecContext(ctx, `INSERT INTO image_updates(server_id,reference,local_digest,latest_digest,update_available,last_error,checked_at) VALUES(?,?,?,?,?,?,?)`,
-			serverID, reference, localDigest, latestDigest, boolInt(updateAvailable), lastError, now.Format(time.RFC3339Nano)); err != nil {
+			serverID, update.reference, update.localDigest, update.latestDigest, boolInt(update.updateAvailable), update.lastError, now.Format(time.RFC3339Nano)); err != nil {
 			_ = s.tasks.Fail(ctx, task.ID, err)
 			return
 		}
