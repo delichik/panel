@@ -6,6 +6,27 @@ import (
 	"time"
 )
 
+func TestIntervalCollectorThrottlesAndAdvancesAfterWork(t *testing.T) {
+	runs := 0
+	collector := NewIntervalCollector(20*time.Millisecond, nil, func(context.Context) (CreateBatchInput, bool, error) {
+		runs++
+		return CreateBatchInput{Type: "periodic_test"}, true, nil
+	})
+	if _, shouldRun, err := collector(context.Background()); err != nil || shouldRun {
+		t.Fatalf("first call should be throttled, shouldRun=%v err=%v", shouldRun, err)
+	}
+	time.Sleep(25 * time.Millisecond)
+	if _, shouldRun, err := collector(context.Background()); err != nil || !shouldRun {
+		t.Fatalf("due call should run, shouldRun=%v err=%v", shouldRun, err)
+	}
+	if _, shouldRun, err := collector(context.Background()); err != nil || shouldRun {
+		t.Fatalf("immediate next call should be throttled, shouldRun=%v err=%v", shouldRun, err)
+	}
+	if runs != 1 {
+		t.Fatalf("collector ran %d times, want 1", runs)
+	}
+}
+
 func TestPeriodicRunnerCollectInputsFalseSkipsTaskRecord(t *testing.T) {
 	svc := newTestService(t)
 	def := Definition{

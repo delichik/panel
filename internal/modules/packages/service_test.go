@@ -39,8 +39,10 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	cred, _ := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
 	taskSvc := tasks.NewService(store.TaskDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	serverSvc.RegisterTasks(taskSvc)
 	srv, _ := serverSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	registerPackageTestTasks(taskSvc, svc)
 	if _, err := svc.Refresh(ctx, srv.ID); err == nil {
 		t.Fatal("expected unsupported server to be blocked")
 	}
@@ -67,7 +69,10 @@ func TestRefreshRecordsTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
-	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), nil, taskSvc)
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	serverSvc.RegisterTasks(taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	registerPackageTestTasks(taskSvc, svc)
 	svc.adapter = fakePackageAdapter{updates: []linux.PackageUpdate{{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2"}}}
 
 	result, err := svc.Refresh(context.Background(), "srv")
@@ -126,7 +131,10 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
-	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), nil, taskSvc)
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	serverSvc.RegisterTasks(taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	registerPackageTestTasks(taskSvc, svc)
 	svc.adapter = fakePackageAdapter{err: errors.New("apt failed")}
 
 	result, err := svc.Refresh(context.Background(), "srv")
@@ -179,7 +187,10 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 	}
 	exec := &aptPackageExecutor{stdout: "Listing...\nopenssl/jammy-updates 3.0.2-0ubuntu1 amd64 [upgradable from: 3.0.1-0ubuntu1]\n"}
 	taskSvc := tasks.NewService(store.TaskDB())
-	svc := NewService(store.AppDB(), server.NewService(store.AppDB(), nil, taskSvc), exec, taskSvc)
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	serverSvc.RegisterTasks(taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, exec, taskSvc)
+	registerPackageTestTasks(taskSvc, svc)
 
 	result, err := svc.Refresh(context.Background(), "srv")
 	if err != nil {
@@ -290,4 +301,8 @@ func waitForPackageRefresh(t *testing.T, svc *Service, serverID string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("package refresh did not finish")
+}
+
+func registerPackageTestTasks(taskSvc *tasks.Service, svc *Service) {
+	svc.RegisterTasks(taskSvc, func() time.Duration { return time.Second })
 }

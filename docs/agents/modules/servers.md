@@ -21,7 +21,7 @@
 - 指标采集：`internal/modules/observability/metrics/`
 - 概览聚合：`internal/modules/observability/overview/`
 - 软件包维护：`internal/modules/packages/`
-- 调度触发：`internal/modules/scheduling/`
+- 周期任务触发：各业务模块 `tasks.go` 注册周期输入，由 `internal/modules/tasks/` 内部 worker 驱动
 - 任务记录：`internal/modules/tasks/`
 - 路由注册：`internal/modules/servers/routes.go`、`internal/modules/servers/credential/routes.go`
 
@@ -70,6 +70,7 @@
 - 软件包维护基于 APT，只对支持的系统执行；刷新和升级依赖远程 sudo。
 - `POST /api/v1/servers/{id}/packages/refresh` 创建或复用 `package_refresh` 任务并返回 `taskId`；调度器一轮多服务器刷新必须共享同一个 `operationId`。
 - 周期性指标采集依赖 agent，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器创建 `metrics_collect` 任务；同一轮多服务器采集共享一个 `operationId`，任务中心默认常用类型会隐藏该高频类型。agent 未部署、异常、不兼容或无法部署时直接跳过，不创建任务，也不回退 SSH 采集。
+- 指标历史清理由 `internal/modules/observability/metrics/cleanup_worker.go` 自主管理，按运行时设置中的保留天数和清理周期执行，不属于 tasks 内部 worker。
 - `POST /api/v1/servers/{id}/ufw/install` 返回 `server_ufw_install` 任务；该任务由内存 goroutine 执行，创建后必须先标记为 `running` 再返回。
 - `POST /api/v1/servers/{id}/restart` 要求服务器可达且已确认免密 sudo，返回 `server_restart` 任务；前端必须二次确认并保留任务中心入口。
 

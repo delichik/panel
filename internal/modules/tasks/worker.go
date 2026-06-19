@@ -14,11 +14,21 @@ const (
 )
 
 type Worker struct {
-	service  *Service
-	manager  *Manager
-	periodic *PeriodicRunner
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	service     *Service
+	manager     *Manager
+	periodic    *PeriodicRunner
+	lifecycleMu sync.Mutex
+	cancel      context.CancelFunc
+	running     bool
+	wg          sync.WaitGroup
+}
+
+type RuntimeStats struct {
+	WorkerRunning     bool `json:"workerRunning"`
+	RegisteredTypes   int  `json:"registeredTypes"`
+	ExecutableTypes   int  `json:"executableTypes"`
+	PeriodicTypes     int  `json:"periodicTypes"`
+	RunningExecutions int  `json:"runningExecutions"`
 }
 
 func NewWorker(service *Service) *Worker {
@@ -30,11 +40,17 @@ func NewWorker(service *Service) *Worker {
 }
 
 func (w *Worker) Start(parent context.Context) {
-	if w == nil || w.service == nil || w.cancel != nil {
+	if w == nil || w.service == nil {
+		return
+	}
+	w.lifecycleMu.Lock()
+	defer w.lifecycleMu.Unlock()
+	if w.running {
 		return
 	}
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
+	w.running = true
 	w.periodic.Start(ctx)
 	w.wg.Add(3)
 	go w.queueLoop(ctx)
@@ -46,14 +62,47 @@ func (w *Worker) Stop() {
 	if w == nil {
 		return
 	}
-	if w.cancel != nil {
-		w.cancel()
-		w.cancel = nil
+	w.lifecycleMu.Lock()
+	if !w.running {
+		w.lifecycleMu.Unlock()
+		return
 	}
+	cancel := w.cancel
+	w.cancel = nil
+	w.running = false
+	w.lifecycleMu.Unlock()
+	cancel()
 	if w.periodic != nil {
 		w.periodic.Wait()
 	}
 	w.wg.Wait()
+}
+
+func (w *Worker) TaskRuntime() RuntimeStats {
+	if w == nil || w.service == nil {
+		return RuntimeStats{}
+	}
+	w.lifecycleMu.Lock()
+	running := w.running
+	w.lifecycleMu.Unlock()
+	stats := RuntimeStats{
+		WorkerRunning:     running,
+		RunningExecutions: w.service.RunningExecutionCount(),
+	}
+	for _, taskType := range w.service.Registry().Types() {
+		stats.RegisteredTypes++
+		def, ok := w.service.Registry().Definition(taskType)
+		if !ok {
+			continue
+		}
+		if def.Execute != nil {
+			stats.ExecutableTypes++
+		}
+		if def.Periodic != nil {
+			stats.PeriodicTypes++
+		}
+	}
+	return stats
 }
 
 func (w *Worker) RunNow(ctx context.Context, task Task) error {

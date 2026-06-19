@@ -47,7 +47,7 @@ func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.RunIssueTask(context.Background(), task); err != nil {
+	if err := svc.RunIssueTask(tasks.TaskContext{Context: context.Background(), Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
 	issued, err := svc.Get(context.Background(), result.Certificate.ID)
@@ -168,7 +168,7 @@ func TestReverseProxyCertificatesReturnsOnlyIssuedPEM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.RunIssueTask(ctx, task); err != nil {
+	if err := svc.RunIssueTask(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "api"}); err != nil {
@@ -213,7 +213,7 @@ func TestRenewFailureRecordsLastErrorAndTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.RunIssueTask(ctx, task); err != nil {
+	if err := svc.RunIssueTask(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
 	fake.err = errors.New("renew failed")
@@ -279,8 +279,10 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 		t.Fatal(err)
 	}
 	keyAssetSvc := keyassets.NewService(store.AppDB(), cfg, secrets, taskSvc)
+	keyAssetSvc.RegisterTasks(taskSvc)
 	fake := &fakeProvider{bundle: testBundle(t)}
 	svc := NewServiceWithProvider(store.AppDB(), cfg, fake, taskSvc, WithKeyAssetProvider(keyAssetSvc))
+	svc.RegisterTasks(taskSvc)
 	return svc, fake, func() { _ = store.Close() }
 }
 

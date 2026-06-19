@@ -434,7 +434,8 @@ func (s *Service) EnsureInitialInfoTask(ctx context.Context, serverID string, ru
 	return s.ensureConnectivityTask(ctx, serverID, runNow, serverInfoTaskType, "Collecting server information", "")
 }
 
-func (s *Service) RunConnectivityTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunConnectivityTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	if s.exec == nil {
 		return panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
 	}

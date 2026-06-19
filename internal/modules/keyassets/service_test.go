@@ -256,7 +256,9 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
-	return NewService(store.AppDB(), cfg, secrets, taskSvc), store, func() { _ = store.Close() }
+	svc := NewService(store.AppDB(), cfg, secrets, taskSvc)
+	svc.RegisterTasks(taskSvc)
+	return svc, store, func() { _ = store.Close() }
 }
 
 func encodeBase64(value []byte) string {

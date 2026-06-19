@@ -12,6 +12,29 @@ type PeriodicRunner struct {
 	wg      sync.WaitGroup
 }
 
+func NewIntervalCollector(defaultInterval time.Duration, intervalProvider func() time.Duration, collect func(context.Context) (CreateBatchInput, bool, error)) func(context.Context) (CreateBatchInput, bool, error) {
+	var mu sync.Mutex
+	lastRun := time.Now()
+	return func(ctx context.Context) (CreateBatchInput, bool, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		interval := defaultInterval
+		if intervalProvider != nil {
+			if configured := intervalProvider(); configured > 0 {
+				interval = configured
+			}
+		}
+		if time.Since(lastRun) < interval {
+			return CreateBatchInput{}, false, nil
+		}
+		batch, shouldRun, err := collect(ctx)
+		if err == nil && shouldRun {
+			lastRun = time.Now()
+		}
+		return batch, shouldRun, err
+	}
+}
+
 func NewPeriodicRunner(service *Service) *PeriodicRunner {
 	return &PeriodicRunner{manager: NewManager(service)}
 }

@@ -185,3 +185,31 @@ func TestWorkerFailsOrphanedRunningTasks(t *testing.T) {
 		t.Fatalf("expected orphaned task to fail, got %#v", got)
 	}
 }
+
+func TestWorkerTaskRuntimeSummarizesRegistryAndExecutions(t *testing.T) {
+	svc := newTestService(t)
+	svc.MustRegister(Definition{
+		Type:    "periodic_runtime",
+		Execute: func(TaskContext) error { return nil },
+		Periodic: &Periodic{
+			Interval:      time.Minute,
+			CollectInputs: func(context.Context) (CreateBatchInput, bool, error) { return CreateBatchInput{}, false, nil },
+		},
+	})
+	task, err := svc.Create(context.Background(), CreateInput{Type: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(context.Background(), task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	stats := NewWorker(svc).TaskRuntime()
+
+	if stats.WorkerRunning {
+		t.Fatal("new worker should not report running before Start")
+	}
+	if stats.RegisteredTypes < 2 || stats.ExecutableTypes < 1 || stats.PeriodicTypes != 1 || stats.RunningExecutions != 1 {
+		t.Fatalf("unexpected task runtime stats: %#v", stats)
+	}
+}

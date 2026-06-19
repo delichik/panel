@@ -21,7 +21,8 @@ func (s *Service) HandleAgentError(ctx context.Context, srv Server, cause error)
 	return s.handleAgentCertificateTimeError(ctx, srv, cause)
 }
 
-func (s *Service) RunAgentDeployTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunAgentDeployTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	if s.exec == nil {
 		return panelerr.Validation("server_executor_unavailable", "Server executor is unavailable")
 	}
@@ -173,7 +174,7 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 			if err != nil {
 				return tasks.Task{}, err
 			}
-			if err := s.RunAgentDeployTask(ctx, task); err != nil {
+			if err := s.RunAgentDeployTask(tasks.TaskContext{Context: ctx, Task: task, Service: s.tasks}); err != nil {
 				return tasks.Task{}, err
 			}
 			task, _ = s.tasks.Get(ctx, task.ID)
@@ -181,7 +182,7 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 		return task, nil
 	}
 	if run {
-		if err := s.RunAgentDeployTask(ctx, task); err != nil {
+		if err := s.RunAgentDeployTask(tasks.TaskContext{Context: ctx, Task: task, Service: s.tasks}); err != nil {
 			return tasks.Task{}, err
 		}
 		task, _ = s.tasks.Get(ctx, task.ID)

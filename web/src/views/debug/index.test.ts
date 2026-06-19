@@ -19,4 +19,10 @@ describe('DebugPage', () => {
     expect(page).toContain('variant="outlined"');
     expect(page).toContain('debug-scroll');
   });
+
+  it('shows task worker and registry diagnostics', () => {
+    expect(page).toContain('snapshot.tasks.workerRunning');
+    expect(page).toContain('snapshot.value.tasks.registeredTypes');
+    expect(page).toContain("t('debugPage.taskRuntime')");
+  });
 });

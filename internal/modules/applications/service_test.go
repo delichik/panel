@@ -256,6 +256,104 @@ func TestRedeployEnabledApplicationsDeploysEnabledApps(t *testing.T) {
 	}
 }
 
+func TestDeployTaskExecutorEnablesAppDeploysRuntimeAndCompletesTask(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeDeploy,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		Summary:      "Deploying application " + app.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeDeploy)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected application deploy executor")
+	}
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.deploys) != 2 {
+		t.Fatalf("deploys = %#v", runtime.deploys)
+	}
+	deployed, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deployed.Enabled {
+		t.Fatalf("expected app to be enabled after deploy task, got %#v", deployed)
+	}
+	storedTask, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedTask.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed deploy task, got %#v", storedTask)
+	}
+}
+
+func TestRefreshTaskExecutorRedeploysChangedApplicationAndCompletesTask(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	svc.SetBuiltinVariableResolver(fakeBuiltinResolver{"message": "one"})
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:     "web",
+		Enabled:  true,
+		SpecYAML: "name: web\nimage: nginx\nenv:\n  MESSAGE: '{{ .message }}'\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetBuiltinVariableResolver(fakeBuiltinResolver{"message": "two"})
+	runtime.deploys = nil
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeRefresh,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		Summary:      "Refreshing application " + app.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeRefresh)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected application refresh executor")
+	}
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.deploys) != 2 {
+		t.Fatalf("deploys = %#v", runtime.deploys)
+	}
+	if runtime.deploys[0].Spec.Env["MESSAGE"] != "two" || runtime.deploys[1].Spec.Env["MESSAGE"] != "two" {
+		t.Fatalf("runtime env = %#v", runtime.deploys)
+	}
+	storedTask, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedTask.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed refresh task, got %#v", storedTask)
+	}
+	refreshed, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Generation <= app.Generation || refreshed.SpecHash == app.SpecHash {
+		t.Fatalf("expected refreshed snapshot, before=%#v after=%#v", app, refreshed)
+	}
+}
+
 func TestTemplateVariablesRenderIntoRuntimeSpec(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -409,6 +507,57 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 	if len(runtime.stops) != 2 || runtime.stops[0].InstanceID != app.ID+"-srv-a" || runtime.stops[1].InstanceID != app.ID+"-srv-b" {
 		t.Fatalf("stops = %#v", runtime.stops)
 	}
+	result, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeStop, Limit: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].ParamsJSON != "{}" {
+		t.Fatalf("expected stop task to preserve default purge params, got %#v", result.Items)
+	}
+}
+
+func TestStopTaskExecutorUsesPurgeParamAndCompletesTask(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeStop,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		ParamsJSON:   `{"purge":true}`,
+		Summary:      "Stopping application " + app.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeStop)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected application stop executor")
+	}
+	before := len(runtime.stops)
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.stops) != before+2 {
+		t.Fatalf("expected two stop calls, got %d before=%d", len(runtime.stops), before)
+	}
+	for _, req := range runtime.stops[before:] {
+		if !req.Purge {
+			t.Fatalf("expected purge stop request, got %#v", req)
+		}
+	}
+	storedTask, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedTask.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed stop task, got %#v", storedTask)
+	}
 }
 
 func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
@@ -530,6 +679,151 @@ func TestPersistentDataRejectsApplicationWithoutPersistentStorage(t *testing.T) 
 	}
 	if _, err := svc.PersistentData(ctx, app.ID); err == nil {
 		t.Fatal("expected persistent data download to be rejected")
+	}
+}
+
+func TestImageCheckTaskExecutorUpdatesApplicationAndCompletesTask(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	svc.imageResolver = fakeImageResolver{result: ImageDigestResult{
+		Reference: "registry.example.com/team/web:latest",
+		Digest:    "sha256:latest",
+	}}
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", SpecYAML: "name: web\nimage: registry.example.com/team/web:latest\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeImageCheck,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		Summary:      "Checking image for " + app.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeImageCheck)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected application image check executor")
+	}
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageReference != "registry.example.com/team/web:latest" || got.ImageLatestDigest != "sha256:latest" || got.ImageDigest != "sha256:latest" || got.ImageLastError != "" {
+		t.Fatalf("unexpected image state: %#v", got)
+	}
+	storedTask, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedTask.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed image check task, got %#v", storedTask)
+	}
+}
+
+func TestImageUpdateTaskExecutorUpdatesImageDeploysRuntimeAndCompletesTask(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	svc.imageResolver = fakeImageResolver{result: ImageDigestResult{
+		Reference: "registry.example.com/team/web:latest",
+		Digest:    "sha256:latest",
+	}}
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:     "web",
+		Enabled:  true,
+		SpecYAML: "name: web\nimage: registry.example.com/team/web:latest\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.deploys = nil
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeImageUpdate,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		Summary:      "Updating image for " + app.Name,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeImageUpdate)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected application image update executor")
+	}
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.deploys) != 2 {
+		t.Fatalf("deploys = %#v", runtime.deploys)
+	}
+	got, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageReference != "registry.example.com/team/web:latest" || got.ImageDigest != "sha256:latest" || got.ImageLatestDigest != "sha256:latest" || got.ImageUpdateAvailable || got.ImageLastError != "" {
+		t.Fatalf("unexpected image state: %#v", got)
+	}
+	if got.Generation != app.Generation+1 {
+		t.Fatalf("generation = %d, want %d", got.Generation, app.Generation+1)
+	}
+	storedTask, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedTask.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed image update task, got %#v", storedTask)
+	}
+}
+
+func TestRestartTaskExecutorRestartsRuntimeAndCompletesTask(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeRestart,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		Summary:      "Restarting application",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeRestart)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected application restart executor")
+	}
+	before := len(runtime.restarts)
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.restarts) != before+1 {
+		t.Fatalf("expected one restart call, got %d before=%d", len(runtime.restarts), before)
+	}
+	storedTask, err := svc.tasks.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedTask.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed restart task, got %#v", storedTask)
 	}
 }
 
@@ -657,12 +951,14 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 			t.Fatal(err)
 		}
 	}
-	svc := NewService(store.AppDB(), runtime, tasks.NewService(store.TaskDB()), Config{
+	taskSvc := tasks.NewService(store.TaskDB())
+	svc := NewService(store.AppDB(), runtime, taskSvc, Config{
 		Namespace:      "apps",
 		Region:         "global",
 		Datacenter:     "dc1",
 		SaveSessionDir: filepath.Join(dir, "sessions"),
 	})
+	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
 	return svc, runtime, servers, func() { _ = store.Close() }
 }
@@ -813,6 +1109,15 @@ type fakeBuiltinResolver map[string]any
 
 func (f fakeBuiltinResolver) BuiltinVariables(ctx context.Context) (map[string]any, error) {
 	return map[string]any(f), nil
+}
+
+type fakeImageResolver struct {
+	result ImageDigestResult
+	err    error
+}
+
+func (f fakeImageResolver) Resolve(ctx context.Context, image string) (ImageDigestResult, error) {
+	return f.result, f.err
 }
 
 type fakePanelFileProvider struct {

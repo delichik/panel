@@ -17,14 +17,10 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Type:              "server_agent_check",
 			Hidden:            true,
 			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunAgentCheckTask(tc.Context, tc.Task)
-			},
+			Execute:           s.RunAgentCheckTask,
 			Periodic: &tasks.Periodic{
-				Interval: 5 * time.Minute,
-				CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
-					return s.CollectAgentCheckInputs(ctx)
-				},
+				Interval:      5 * time.Minute,
+				CollectInputs: s.CollectAgentCheckInputs,
 			},
 		},
 		{
@@ -35,9 +31,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			DefaultMaxRetries: connectivityMaxRetries,
 			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
 			ConcurrencyKey:    serverConnectivityConcurrencyKey,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunConnectivityTask(tc.Context, tc.Task)
-			},
+			Execute:           s.RunConnectivityTask,
 		},
 		{
 			Type:              serverInfoTaskType,
@@ -46,22 +40,18 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			DefaultMaxRetries: connectivityMaxRetries,
 			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
 			ConcurrencyKey:    serverConnectivityConcurrencyKey,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunConnectivityTask(tc.Context, tc.Task)
-			},
+			Execute:           s.RunConnectivityTask,
 		},
-		{Type: ufwInstallTaskType, AllowRetry: true},
-		{Type: ufwEnableTaskType, AllowRetry: true},
-		{Type: restartTaskType, AllowRetry: true},
+		{Type: ufwInstallTaskType, StaleQueuedAfter: 10 * time.Minute},
+		{Type: ufwEnableTaskType},
+		{Type: restartTaskType},
 		{
 			Type:        agentDeployTaskType,
 			AllowRunNow: true,
 			AllowRetry:  true,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunAgentDeployTask(tc.Context, tc.Task)
-			},
+			Execute:     s.RunAgentDeployTask,
 		},
-		{Type: agentCertificateResetTaskType, AllowRetry: true},
+		{Type: agentCertificateResetTaskType},
 	} {
 		if _, exists := taskSvc.Registry().Definition(def.Type); exists {
 			taskSvc.Registry().Replace(def)
@@ -110,7 +100,8 @@ func (s *Service) CollectAgentCheckInputs(ctx context.Context) (tasks.CreateBatc
 	}, true, nil
 }
 
-func (s *Service) RunAgentCheckTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunAgentCheckTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
 	if serverID == "" {
 		return nil

@@ -9,7 +9,7 @@
 - Panel 服务与 API：`internal/modules/containers/`；HTTP 路由在 `routes.go` 注册。
 - Agent Docker Engine API：`internal/agent/docker/`；Agent HTTP 路由：`internal/agent/server/`
 - Application 运行时：`internal/modules/applications/service.go`
-- 调度：`internal/modules/scheduling/scheduler.go`
+- 周期任务：`internal/modules/containers/tasks.go`，由 `internal/modules/tasks/` 内部 worker 驱动
 - 前端页面：`web/src/views/containerization/`
 - 前端 API：`web/src/api/containerization.ts`
 
@@ -47,17 +47,17 @@ Application 新部署容器只写入：
 - 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
 - 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
-- scheduler 每 5 秒运行容器监控。只有已经观察到新托管 Label 并写入 `application_reconcile_states` 的实例会持续协调，避免旧 Label 自动迁移。
+- containers 模块注册的周期任务每 5 秒收集容器协调输入，由 tasks 内部 worker 驱动。只有已经观察到新托管 Label 并写入 `application_reconcile_states` 的实例会持续协调，避免旧 Label 自动迁移。
 - 监控发现容器缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 
 ## 镜像更新
 
 - `image_updates` 保存每服务器镜像引用、本地摘要、远端摘要、状态、错误和检查时间。
 - `image_refreshes` 保存最近刷新时间。
-- scheduler 的镜像检查节奏与软件包刷新一致。
+- containers 模块注册的镜像检查周期与软件包刷新一致。
 - 所有带标签且可解析的镜像都显示更新状态；普通容器镜像不提供升级操作。
 - Application 镜像升级复用 `applications.Service.UpdateImage` 并重新部署。
-- Application 详情不提供手动镜像检查按钮；镜像检查由 scheduler/containerization 自动刷新，用户只手动触发实际更新。
+- Application 详情不提供手动镜像检查按钮；镜像检查由 containers 周期任务自动刷新，用户只手动触发实际更新。
 
 ## 验证
 

@@ -160,6 +160,7 @@ func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fa
 			agentcontract.TraitStatus: agentcontract.StatusCompatible,
 		},
 	}}, fakeAgent, taskSvc)
+	svc.RegisterTasks(taskSvc, func() time.Duration { return time.Second })
 	return svc, taskSvc, fakeAgent, store
 }
 

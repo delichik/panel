@@ -20,35 +20,15 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 	if taskSvc == nil {
 		return
 	}
-	var lastMetricsRun time.Time
-	registeredAt := time.Now()
 	taskSvc.MustRegister(tasks.Definition{
 		Type:              "metrics_collect",
 		Summary:           "Collecting scheduled metrics",
 		Hidden:            true,
 		ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
-		Execute: func(tc tasks.TaskContext) error {
-			return s.RunCollectTask(tc.Context, tc.Task, tc.Service)
-		},
+		Execute:           s.RunCollectTask,
 		Periodic: &tasks.Periodic{
-			Interval: time.Second,
-			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
-				interval := time.Minute
-				if collectionInterval != nil {
-					interval = collectionInterval()
-				}
-				if lastMetricsRun.IsZero() {
-					lastMetricsRun = registeredAt
-				}
-				if time.Since(lastMetricsRun) < interval {
-					return tasks.CreateBatchInput{}, false, nil
-				}
-				batch, shouldRun, err := s.CollectTaskInputs(ctx)
-				if err == nil && shouldRun {
-					lastMetricsRun = time.Now()
-				}
-				return batch, shouldRun, err
-			},
+			Interval:      time.Second,
+			CollectInputs: tasks.NewIntervalCollector(time.Minute, collectionInterval, s.CollectTaskInputs),
 		},
 	})
 }
@@ -86,7 +66,8 @@ func (s *Service) CollectTaskInputs(ctx context.Context) (tasks.CreateBatchInput
 	return tasks.CreateBatchInput{Type: "metrics_collect", OperationID: operationID, TriggerType: "scheduler", Summary: "Collecting scheduled metrics", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
 }
 
-func (s *Service) RunCollectTask(ctx context.Context, task tasks.Task, taskSvc *tasks.Service) error {
+func (s *Service) RunCollectTask(tc tasks.TaskContext) error {
+	ctx, task, taskSvc := tc.Context, tc.Task, tc.Service
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
 	if serverID == "" {
 		return nil

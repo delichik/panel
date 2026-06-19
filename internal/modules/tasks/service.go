@@ -32,8 +32,6 @@ type ListFilter struct {
 	Offset           int
 }
 
-var defaultHiddenTaskTypes = []string{"server_connectivity_test", "metrics_collect"}
-
 var terminalStatuses = []string{StatusCompleted, StatusFailed, StatusBlocked, StatusCancelled}
 
 type ListResult struct {
@@ -44,9 +42,7 @@ type ListResult struct {
 }
 
 func NewService(db *sql.DB) *Service {
-	s := &Service{db: db, registry: NewRegistry(), runningExecutions: map[string]*RunningExecution{}}
-	RegisterKnownTaskTypes(s)
-	return s
+	return &Service{db: db, registry: NewRegistry(), runningExecutions: map[string]*RunningExecution{}}
 }
 
 func (s *Service) Registry() *Registry {
@@ -213,21 +209,33 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInse
 }
 
 func (s *Service) Start(ctx context.Context, taskID string) error {
+	_, err := s.startExecution(ctx, taskID)
+	return err
+}
+
+func (s *Service) claimExecution(ctx context.Context, taskID string) (bool, error) {
+	return s.startExecution(ctx, taskID)
+}
+
+func (s *Service) startExecution(ctx context.Context, taskID string) (bool, error) {
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
+	if _, exists := s.runningExecutions[taskID]; exists {
+		return false, nil
+	}
 	s.registerRunningExecutionLocked(taskID)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusRunning, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		s.unregisterRunningExecutionLocked(taskID)
-		return err
+		return false, err
 	}
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
 		s.unregisterRunningExecutionLocked(taskID)
-		return panelerr.Conflict("task_not_runnable", "Task is already finished")
+		return false, panelerr.Conflict("task_not_runnable", "Task is already finished")
 	}
-	return nil
+	return true, nil
 }
 
 func (s *Service) Advance(ctx context.Context, taskID, stage, message string) error {
@@ -593,7 +601,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 }
 
 func (s *Service) hiddenTaskTypes() []string {
-	hidden := append([]string{}, defaultHiddenTaskTypes...)
+	hidden := []string{}
 	if s.registry == nil {
 		return hidden
 	}
@@ -714,6 +722,12 @@ func (s *Service) HasRunningExecution(taskID string) bool {
 	defer s.runningMu.Unlock()
 	_, ok := s.runningExecutions[taskID]
 	return ok
+}
+
+func (s *Service) RunningExecutionCount() int {
+	s.runningMu.Lock()
+	defer s.runningMu.Unlock()
+	return len(s.runningExecutions)
 }
 
 func (s *Service) ExecutionContext(taskID string) context.Context {

@@ -12,49 +12,35 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
 		return
 	}
-	var lastRenewalRun time.Time
-	registeredAt := time.Now()
 	for _, def := range []tasks.Definition{
 		{
 			Type:        TaskTypeIssue,
 			AllowRunNow: true,
 			AllowRetry:  true,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunIssueTask(tc.Context, tc.Task)
-			},
+			Execute:     s.RunIssueTask,
 		},
 		{
 			Type:              TaskTypeRenew,
 			Summary:           "Renewing due certificates",
 			AllowRetry:        true,
 			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RenewTask(tc.Context, tc.Task)
-			},
+			Execute:           s.RenewTask,
 			Periodic: &tasks.Periodic{
-				Interval: 5 * time.Second,
-				CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
-					if lastRenewalRun.IsZero() {
-						lastRenewalRun = registeredAt
-					}
-					if time.Since(lastRenewalRun) < time.Hour {
-						return tasks.CreateBatchInput{}, false, nil
-					}
-					batch, shouldRun, err := s.CollectRenewInputs(ctx, time.Now())
-					if err == nil && shouldRun {
-						lastRenewalRun = time.Now()
-					}
-					return batch, shouldRun, err
-				},
+				Interval:      5 * time.Second,
+				CollectInputs: tasks.NewIntervalCollector(time.Hour, nil, s.CollectRenewInputs),
 			},
 		},
-		{Type: TaskTypeSelfSignedRenew, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
+		{Type: TaskTypeSelfSignedRenew, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
 	} {
 		taskSvc.MustRegister(def)
 	}
 }
 
-func (s *Service) CollectRenewInputs(ctx context.Context, now time.Time) (tasks.CreateBatchInput, bool, error) {
+func (s *Service) CollectRenewInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	return s.collectRenewInputsAt(ctx, time.Now())
+}
+
+func (s *Service) collectRenewInputsAt(ctx context.Context, now time.Time) (tasks.CreateBatchInput, bool, error) {
 	certificates, err := s.List(ctx)
 	if err != nil {
 		return tasks.CreateBatchInput{}, false, err

@@ -55,6 +55,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
+	h.decorateList(&tasks)
 	httpx.JSON(w, http.StatusOK, tasks)
 }
 
@@ -64,6 +65,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
+	h.decorateTask(&task)
 	httpx.JSON(w, http.StatusOK, task)
 }
 
@@ -112,6 +114,7 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	h.decorateTask(&task)
 	httpx.JSON(w, http.StatusAccepted, task)
 }
 
@@ -141,7 +144,29 @@ func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	h.decorateTask(&task)
 	httpx.JSON(w, http.StatusAccepted, task)
+}
+
+func (h *Handler) decorateList(result *ListResult) {
+	if result == nil {
+		return
+	}
+	for idx := range result.Items {
+		h.decorateTask(&result.Items[idx])
+	}
+}
+
+func (h *Handler) decorateTask(task *Task) {
+	if task == nil || h.service == nil {
+		return
+	}
+	def, ok := h.service.Registry().Definition(task.Type)
+	if !ok || def.Execute == nil {
+		return
+	}
+	task.AllowRunNow = def.AllowRunNow
+	task.AllowRetry = def.AllowRetry
 }
 
 func (h *Handler) canRunNow(task Task) bool {

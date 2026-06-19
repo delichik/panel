@@ -527,6 +527,33 @@ func (s *Service) Plan(ctx context.Context, appID string) (PlanResult, error) {
 }
 
 func (s *Service) CheckImageUpdate(ctx context.Context, appID string) (Application, error) {
+	app, err := s.checkImageUpdate(ctx, appID)
+	if err != nil {
+		return Application{}, err
+	}
+	if _, err := s.recordTask(ctx, TaskTypeImageCheck, app.ID, "Checking image for "+app.Name); err != nil {
+		return Application{}, err
+	}
+	return s.Get(ctx, app.ID)
+}
+
+func (s *Service) RunImageCheckTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
+	if appID == "" {
+		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
+	}
+	app, err := s.checkImageUpdate(ctx, appID)
+	if err != nil {
+		return err
+	}
+	if s.tasks == nil {
+		return nil
+	}
+	return s.tasks.Complete(ctx, task.ID, "Checked image for "+app.Name)
+}
+
+func (s *Service) checkImageUpdate(ctx context.Context, appID string) (Application, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
 		return Application{}, err
@@ -549,7 +576,6 @@ func (s *Service) CheckImageUpdate(ctx context.Context, appID string) (Applicati
 		if err := s.updateApplication(ctx, app); err != nil {
 			return Application{}, err
 		}
-		_, _ = s.recordTask(ctx, TaskTypeImageCheck, app.ID, "Checking image for "+app.Name)
 		return s.Get(ctx, app.ID)
 	}
 	app.ImageLatestDigest = result.Digest
@@ -562,58 +588,12 @@ func (s *Service) CheckImageUpdate(ctx context.Context, appID string) (Applicati
 	if err := s.updateApplication(ctx, app); err != nil {
 		return Application{}, err
 	}
-	if _, err := s.recordTask(ctx, TaskTypeImageCheck, app.ID, "Checking image for "+app.Name); err != nil {
-		return Application{}, err
-	}
 	return s.Get(ctx, app.ID)
 }
 
 func (s *Service) UpdateImage(ctx context.Context, appID string) (OperationResult, error) {
-	app, err := s.Get(ctx, appID)
+	app, job, err := s.prepareImageUpdate(ctx, appID)
 	if err != nil {
-		return OperationResult{}, err
-	}
-	if !app.Enabled {
-		return OperationResult{}, panelerr.Conflict("application_disabled", "enable the application before updating its image")
-	}
-	app, err = s.refreshApplicationSnapshot(ctx, app)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	result, checkedAt, err := s.resolveApplicationImage(ctx, app)
-	if err != nil {
-		app.ImageCheckedAt = &checkedAt
-		app.ImageLastError = err.Error()
-		app.UpdatedAt = time.Now().UTC()
-		_ = s.updateApplication(ctx, app)
-		return OperationResult{}, err
-	}
-	app.Generation++
-	app.ImageReference = result.Reference
-	app.ImageDigest = result.Digest
-	app.ImageLatestDigest = result.Digest
-	app.ImageCheckedAt = &checkedAt
-	app.ImageUpdateAvailable = false
-	app.ImageLastError = ""
-	app.UpdatedAt = time.Now().UTC()
-	job, issues, err := s.renderApplication(ctx, app)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if len(issues) > 0 {
-		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
-	}
-	targets, err := s.deploymentTargets(ctx, app)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if len(targets) == 0 {
-		return OperationResult{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
-	}
-	if err := s.updateApplication(ctx, app); err != nil {
-		return OperationResult{}, err
-	}
-	if err := s.insertRevision(ctx, app, job); err != nil {
 		return OperationResult{}, err
 	}
 	taskID, err := s.recordRunningTask(ctx, TaskTypeImageUpdate, app.ID, "Updating image for "+app.Name)
@@ -629,43 +609,86 @@ func (s *Service) UpdateImage(ctx context.Context, appID string) (OperationResul
 	return OperationResult{TaskID: taskID, EvalID: app.LastEvalID, Application: app}, nil
 }
 
-func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, error) {
+func (s *Service) RunImageUpdateTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
+	if appID == "" {
+		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
+	}
+	app, job, err := s.prepareImageUpdate(ctx, appID)
+	if err != nil {
+		return err
+	}
+	if err := s.deployRuntimeSpec(ctx, task.ID, app, job); err != nil {
+		return err
+	}
+	return s.reconcileReverseProxy(ctx)
+}
+
+func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Application, appruntime.Spec, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
-		return OperationResult{}, err
+		return Application{}, appruntime.Spec{}, err
+	}
+	if !app.Enabled {
+		return Application{}, appruntime.Spec{}, panelerr.Conflict("application_disabled", "enable the application before updating its image")
 	}
 	app, err = s.refreshApplicationSnapshot(ctx, app)
 	if err != nil {
-		return OperationResult{}, err
+		return Application{}, appruntime.Spec{}, err
 	}
+	result, checkedAt, err := s.resolveApplicationImage(ctx, app)
+	if err != nil {
+		app.ImageCheckedAt = &checkedAt
+		app.ImageLastError = err.Error()
+		app.UpdatedAt = time.Now().UTC()
+		_ = s.updateApplication(ctx, app)
+		return Application{}, appruntime.Spec{}, err
+	}
+	app.Generation++
+	app.ImageReference = result.Reference
+	app.ImageDigest = result.Digest
+	app.ImageLatestDigest = result.Digest
+	app.ImageCheckedAt = &checkedAt
+	app.ImageUpdateAvailable = false
+	app.ImageLastError = ""
+	app.UpdatedAt = time.Now().UTC()
 	job, issues, err := s.renderApplication(ctx, app)
 	if err != nil {
-		return OperationResult{}, err
+		return Application{}, appruntime.Spec{}, err
 	}
 	if len(issues) > 0 {
-		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
 	}
 	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
-		return OperationResult{}, err
+		return Application{}, appruntime.Spec{}, err
 	}
 	if len(targets) == 0 {
-		return OperationResult{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+		return Application{}, appruntime.Spec{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
-	app.Enabled = true
-	app.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplication(ctx, app); err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	if err := s.insertRevision(ctx, app, job); err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	return app, job, nil
+}
+
+func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, error) {
+	app, job, err := s.prepareDeploy(ctx, appID)
+	if err != nil {
 		return OperationResult{}, err
 	}
 	taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.deployRuntimeSpec(ctx, taskID, app, job); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return OperationResult{}, err
-	}
-	if err := s.reconcileReverseProxy(ctx); err != nil {
+	if err := s.runDeployTask(ctx, taskID, app, job); err != nil {
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.Fail(ctx, taskID, err)
+		}
 		return OperationResult{}, err
 	}
 	result := OperationResult{TaskID: taskID, Application: app}
@@ -676,6 +699,57 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
+	if appID == "" {
+		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
+	}
+	app, job, err := s.prepareDeploy(ctx, appID)
+	if err != nil {
+		return err
+	}
+	return s.runDeployTask(ctx, task.ID, app, job)
+}
+
+func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application, appruntime.Spec, error) {
+	app, err := s.Get(ctx, appID)
+	if err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	app, err = s.refreshApplicationSnapshot(ctx, app)
+	if err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	job, issues, err := s.renderApplication(ctx, app)
+	if err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	if len(issues) > 0 {
+		return Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
+	}
+	targets, err := s.deploymentTargets(ctx, app)
+	if err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	if len(targets) == 0 {
+		return Application{}, appruntime.Spec{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+	}
+	app.Enabled = true
+	app.UpdatedAt = time.Now().UTC()
+	if err := s.updateApplication(ctx, app); err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	return app, job, nil
+}
+
+func (s *Service) runDeployTask(ctx context.Context, taskID string, app Application, job appruntime.Spec) error {
+	if err := s.deployRuntimeSpec(ctx, taskID, app, job); err != nil {
+		return err
+	}
+	return s.reconcileReverseProxy(ctx)
 }
 
 func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) (OperationResult, error) {
@@ -819,34 +893,12 @@ func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) 
 	}
 	redeployed := 0
 	for _, app := range apps {
-		if !app.Enabled {
+		changed, refreshed, spec, err := s.prepareChangedApplicationRefresh(ctx, app)
+		if err != nil {
+			return redeployed, err
+		}
+		if !changed {
 			continue
-		}
-		beforeHash := app.SpecHash
-		refreshed, err := s.refreshApplicationSnapshot(ctx, app)
-		if err != nil {
-			return redeployed, err
-		}
-		if refreshed.SpecHash == beforeHash {
-			continue
-		}
-		spec, issues, err := s.renderApplication(ctx, refreshed)
-		if err != nil {
-			return redeployed, err
-		}
-		if len(issues) > 0 {
-			return redeployed, panelerr.Validation("application_invalid", issues[0].Message)
-		}
-		targets, err := s.deploymentTargets(ctx, refreshed)
-		if err != nil {
-			return redeployed, err
-		}
-		if len(targets) == 0 {
-			return redeployed, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
-		}
-		refreshed.UpdatedAt = time.Now().UTC()
-		if err := s.updateApplication(ctx, refreshed); err != nil {
-			return redeployed, err
 		}
 		taskID, err := s.recordRunningTask(ctx, TaskTypeRefresh, refreshed.ID, "Refreshing application "+refreshed.Name)
 		if err != nil {
@@ -863,6 +915,65 @@ func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) 
 		}
 	}
 	return redeployed, nil
+}
+
+func (s *Service) RunRefreshTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
+	if appID == "" {
+		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
+	}
+	app, err := s.Get(ctx, appID)
+	if err != nil {
+		return err
+	}
+	changed, refreshed, spec, err := s.prepareChangedApplicationRefresh(ctx, app)
+	if err != nil {
+		return err
+	}
+	if !changed {
+		if s.tasks == nil {
+			return nil
+		}
+		return s.tasks.Complete(ctx, task.ID, "Application refresh not needed")
+	}
+	if err := s.deployRuntimeSpec(ctx, task.ID, refreshed, spec); err != nil {
+		return err
+	}
+	return s.reconcileReverseProxy(ctx)
+}
+
+func (s *Service) prepareChangedApplicationRefresh(ctx context.Context, app Application) (bool, Application, appruntime.Spec, error) {
+	if !app.Enabled {
+		return false, app, appruntime.Spec{}, nil
+	}
+	beforeHash := app.SpecHash
+	refreshed, err := s.refreshApplicationSnapshot(ctx, app)
+	if err != nil {
+		return false, Application{}, appruntime.Spec{}, err
+	}
+	if refreshed.SpecHash == beforeHash {
+		return false, refreshed, appruntime.Spec{}, nil
+	}
+	spec, issues, err := s.renderApplication(ctx, refreshed)
+	if err != nil {
+		return false, Application{}, appruntime.Spec{}, err
+	}
+	if len(issues) > 0 {
+		return false, Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
+	}
+	targets, err := s.deploymentTargets(ctx, refreshed)
+	if err != nil {
+		return false, Application{}, appruntime.Spec{}, err
+	}
+	if len(targets) == 0 {
+		return false, Application{}, appruntime.Spec{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+	}
+	refreshed.UpdatedAt = time.Now().UTC()
+	if err := s.updateApplication(ctx, refreshed); err != nil {
+		return false, Application{}, appruntime.Spec{}, err
+	}
+	return true, refreshed, spec, nil
 }
 
 func (s *Service) RedeployEnabledApplications(ctx context.Context) (int, error) {
@@ -896,7 +1007,7 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 	if err := s.updateApplication(ctx, app); err != nil {
 		return OperationResult{}, err
 	}
-	taskID, err := s.recordRunningTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
+	taskID, err := s.recordRunningTaskWithParams(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name, stopTaskParamsJSON(purge))
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -908,6 +1019,22 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 		return OperationResult{}, err
 	}
 	return OperationResult{TaskID: taskID, Application: app}, nil
+}
+
+func (s *Service) RunStopTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
+	if appID == "" {
+		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
+	}
+	if err := s.ensureRuntimeInstancesReady(ctx, appID); err != nil {
+		return err
+	}
+	purge, err := stopTaskPurge(task.ParamsJSON)
+	if err != nil {
+		return err
+	}
+	return s.stopRuntimeInstances(ctx, task.ID, appID, purge)
 }
 
 func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, error) {
@@ -931,6 +1058,18 @@ func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, e
 		return OperationResult{}, err
 	}
 	return OperationResult{TaskID: taskID, ApplicationRuntime: &runtime}, nil
+}
+
+func (s *Service) RunRestartTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
+	if appID == "" {
+		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
+	}
+	if err := s.ensureRuntimeInstancesReady(ctx, appID); err != nil {
+		return err
+	}
+	return s.restartRuntimeInstances(ctx, task.ID, appID)
 }
 
 func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime, error) {
@@ -1698,6 +1837,10 @@ func (s *Service) recordTask(ctx context.Context, taskType, appID, summary strin
 }
 
 func (s *Service) recordRunningTask(ctx context.Context, taskType, appID, summary string) (string, error) {
+	return s.recordRunningTaskWithParams(ctx, taskType, appID, summary, "")
+}
+
+func (s *Service) recordRunningTaskWithParams(ctx context.Context, taskType, appID, summary, paramsJSON string) (string, error) {
 	if s.tasks == nil {
 		return "", nil
 	}
@@ -1706,12 +1849,33 @@ func (s *Service) recordRunningTask(ctx context.Context, taskType, appID, summar
 		ResourceType: "application",
 		ResourceID:   appID,
 		Status:       tasks.StatusRunning,
+		ParamsJSON:   paramsJSON,
 		Summary:      summary,
 	}, tasks.Trigger{Type: "system"})
 	if err != nil {
 		return "", err
 	}
 	return task.ID, nil
+}
+
+func stopTaskParamsJSON(purge bool) string {
+	if !purge {
+		return "{}"
+	}
+	return `{"purge":true}`
+}
+
+func stopTaskPurge(paramsJSON string) (bool, error) {
+	if strings.TrimSpace(paramsJSON) == "" || strings.TrimSpace(paramsJSON) == "{}" {
+		return false, nil
+	}
+	var params struct {
+		Purge bool `json:"purge"`
+	}
+	if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
+		return false, err
+	}
+	return params.Purge, nil
 }
 
 func applyDeploymentTargets(job appruntime.Spec, app Application) (appruntime.Spec, error) {

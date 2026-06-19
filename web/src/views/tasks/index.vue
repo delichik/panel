@@ -77,7 +77,6 @@ const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
 let timer: number | undefined;
-const runnableTaskTypes = new Set(['server_connectivity_test', 'server_info_collect', 'package_refresh', 'certificate_issue']);
 
 const operationGroups = computed(() => groupTasksByOperation(tasks.value));
 const selectedTask = computed(() => tasks.value.find((task) => task.id === selectedTaskId.value) ?? null);
@@ -354,11 +353,11 @@ async function runNowTask(task: TaskDto) {
 }
 
 function canRetry(task: TaskDto) {
-  return runnableTaskTypes.has(task.type) && ['failed', 'failed_retryable', 'blocked'].includes(task.status);
+  return task.allowRetry && ['failed', 'failed_retryable', 'blocked'].includes(task.status);
 }
 
 function canRunNow(task: TaskDto) {
-  return runnableTaskTypes.has(task.type) && ['queued', 'scheduled', 'failed_retryable'].includes(task.status);
+  return task.allowRunNow && ['queued', 'scheduled', 'failed_retryable'].includes(task.status);
 }
 
 function clearFilters() {

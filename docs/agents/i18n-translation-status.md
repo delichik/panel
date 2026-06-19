@@ -5,7 +5,7 @@
 ## 最近已补齐
 
 - `web/src/views/debug/index.vue`
-  - 隐藏 Debug 诊断页的刷新状态、Go runtime、内存/GC、数据库连接与表统计文案已接入英文和简体中文词条；数据库表名和稳定诊断标识不翻译。
+  - 隐藏 Debug 诊断页的刷新状态、Go runtime、内存/GC、任务 worker 状态、任务注册表统计、当前执行数量、数据库连接与表统计文案已接入英文和简体中文词条；数据库表名和稳定诊断标识不翻译。
 - `web/src/components/RuntimeLogsDialog.vue`、`web/src/views/containerization/containers/index.vue`
   - 应用运行时日志和容器日志弹窗、刷新按钮、tail 行数和空日志文案已接入英文与简体中文词条；日志正文保留容器原始输出。
 - `web/src/views/runtime/applications/ApplicationDetail.vue`
@@ -33,6 +33,7 @@
   - Command 和 args 数组行标签、提示已接入英文、简体中文词条。
 - `web/src/views/tasks/index.vue`
   - 任务类型名称、类型筛选选项、搜索按钮、多选筛选占位、操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。
+  - 手动运行与重试入口由任务 API 返回的注册能力控制，不再按任务类型维护前端白名单；本次未新增需要翻译的任务操作文案。
   - ACME 账号、订单、授权、DNS 验证、DNS 清理和 finalize 任务阶段已接入英文与简体中文词条；ACME/Cloudflare 原始诊断仍保留原文。
   - 容器、镜像、卷、应用协调、Agent 证书重置和常见执行阶段已补齐英文与简体中文词条，避免任务中心显示原始枚举名。
 - `web/src/views/certificates/key-assets/index.vue`

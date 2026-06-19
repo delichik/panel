@@ -58,7 +58,7 @@
 - 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。
 - Application 容器使用 `panel.application.*` Label 标识；旧下划线 Label 不兼容且不自动迁移。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
-- scheduler 容器监控只协调已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
+- containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用列表接口会刷新已记录实例的运行时状态并聚合为 `runtimeStatus`，列表只展示应用名称、启用状态、运行状态、镜像更新状态和更新时间；jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在详情。
 - 应用列表在桌面端是满高主从工作区，左侧表格体必须独立滚动并吸收剩余高度，分页固定在列表卡片底部。
@@ -81,7 +81,12 @@
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML 编辑；可视化页也要继续提供挂载编辑入口并与 YAML 往返同步。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入 YAML 编辑。
 - YAML 标签页只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须作为两个标签页共享的表单区展示，不能只出现在可视化页。
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`args` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
-- 镜像更新检查是 scheduler/containerization 的自动流程，应用详情只展示最近自动检查结果和手动“更新”动作，不再提供手动检查入口。
+- 应用部署是可重放应用任务，`application_deploy` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 部署入口和任务 executor 共用当前应用快照刷新、部署校验、启用应用和 runtime deploy 准备逻辑。
+- 镜像更新检查是可重放应用任务，`application_image_check` 由应用模块注册 executor、`run-now` 和 `retry` 能力；应用详情只展示最近自动检查结果和手动“更新”动作，不再提供手动检查入口。
+- 应用停止是可重放应用任务，`application_stop` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 停止入口会把 `purge` 写入任务参数，executor 解析参数后复用 runtime stop 流程并完成传入任务。
+- 应用重启是可重放应用任务，`application_restart` 由应用模块注册 executor、`run-now` 和 `retry` 能力；executor 复用现有 runtime restart 流程并完成传入任务。
+- 应用刷新是可重放应用任务，`application_refresh` 由应用模块注册 executor、`run-now` 和 `retry` 能力；批量刷新和任务 executor 共用单应用刷新准备逻辑，只对启用且渲染 hash 变化的应用重新部署，任务 executor 在无变化时也会完成传入任务。
+- 应用镜像更新是可重放应用任务，`application_image_update` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 更新入口和任务 executor 共用镜像解析、digest 状态写入、revision 记录和 runtime redeploy 准备逻辑。
 - 新部署 Application 容器名使用 `panel-<application-name>`；停止、重启、状态和日志操作必须使用 `application_instances.container_name`，以兼容旧版本按实例 ID 生成的容器名。agent 必须声明 `runtime-write-files`、`runtime-create-container` 和 `runtime-container-name` capability 才能被视为兼容；旧 `runtime-deploy` 胖接口不再使用。
 
 ## 验证

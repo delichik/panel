@@ -17,6 +17,8 @@ function task(overrides: Partial<TaskDto>): TaskDto {
     createdAt: '2026-05-23T00:00:00Z',
     startedAt: null,
     finishedAt: null,
+    allowRunNow: false,
+    allowRetry: false,
     ...overrides,
   };
 }

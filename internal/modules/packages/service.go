@@ -136,7 +136,8 @@ func (s *Service) refresh(ctx context.Context, serverID string, triggerType stri
 	return RefreshResult{ServerID: serverID, Refreshing: true, TaskID: task.ID}, nil
 }
 
-func (s *Service) RunRefreshTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunRefreshTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	if s.tasks == nil {
 		return panelerr.Validation("package_task_service_unavailable", "Package task service is unavailable")
 	}

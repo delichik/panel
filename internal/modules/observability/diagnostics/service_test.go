@@ -9,7 +9,20 @@ import (
 	"testing"
 
 	_ "modernc.org/sqlite"
+	"panel/internal/modules/tasks"
 )
+
+type fakeTaskRuntimeProvider struct{}
+
+func (fakeTaskRuntimeProvider) TaskRuntime() tasks.RuntimeStats {
+	return tasks.RuntimeStats{
+		WorkerRunning:     true,
+		RegisteredTypes:   12,
+		ExecutableTypes:   8,
+		PeriodicTypes:     3,
+		RunningExecutions: 2,
+	}
+}
 
 func TestSnapshotCollectsRuntimeAndSafeDatabaseStatistics(t *testing.T) {
 	dir := t.TempDir()
@@ -27,12 +40,15 @@ func TestSnapshotCollectsRuntimeAndSafeDatabaseStatistics(t *testing.T) {
 		sources = append(sources, DatabaseSource{Name: name, DB: db, Path: path})
 	}
 
-	snapshot := NewService(sources...).Snapshot(context.Background())
+	snapshot := NewServiceWithTaskRuntime(fakeTaskRuntimeProvider{}, sources...).Snapshot(context.Background())
 	if snapshot.Process.GoVersion == "" || snapshot.Process.CPUCount < 1 || snapshot.Process.PID < 1 {
 		t.Fatalf("runtime fields not populated: %#v", snapshot.Process)
 	}
 	if len(snapshot.Databases) != 3 {
 		t.Fatalf("databases = %d, want 3", len(snapshot.Databases))
+	}
+	if !snapshot.Tasks.WorkerRunning || snapshot.Tasks.RegisteredTypes != 12 || snapshot.Tasks.RunningExecutions != 2 {
+		t.Fatalf("task runtime fields not populated: %#v", snapshot.Tasks)
 	}
 	for _, database := range snapshot.Databases {
 		if !database.Healthy {

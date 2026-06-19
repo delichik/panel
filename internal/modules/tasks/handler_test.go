@@ -128,6 +128,13 @@ func TestHandlerRetryRejectsNonFailedTask(t *testing.T) {
 
 func TestHandlerListParsesMultiValueFilters(t *testing.T) {
 	svc := newTestService(t)
+	svc.Registry().Replace(Definition{
+		Type:              "package_refresh",
+		AllowRunNow:       true,
+		AllowRetry:        true,
+		Execute:           func(TaskContext) error { return nil },
+		ConcurrencyPolicy: ConcurrencyResourceExclusive,
+	})
 	ctx := context.Background()
 	running, err := svc.Create(ctx, CreateInput{Type: "application_deploy", Status: StatusRunning})
 	if err != nil {
@@ -168,5 +175,13 @@ func TestHandlerListParsesMultiValueFilters(t *testing.T) {
 	ids := map[string]bool{result.Items[0].ID: true, result.Items[1].ID: true}
 	if !ids[running.ID] || !ids[failed.ID] {
 		t.Fatalf("unexpected filtered task ids: %#v", result.Items)
+	}
+	for _, task := range result.Items {
+		if task.Type == "package_refresh" && (!task.AllowRunNow || !task.AllowRetry) {
+			t.Fatalf("expected registered capabilities in task response: %#v", task)
+		}
+		if task.Type == "application_deploy" && (task.AllowRunNow || task.AllowRetry) {
+			t.Fatalf("unexpected capabilities for unsupported test definition: %#v", task)
+		}
 	}
 }

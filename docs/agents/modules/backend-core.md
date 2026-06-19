@@ -21,13 +21,13 @@
 
 ## 结构约定
 
-- `bootstrap/panel.New` 负责打开数据库、创建 service、装配 scheduler、连接跨模块依赖并调用各模块路由注册器。证书、密钥资产、应用和容器之间的双向协作通过 `internal/bootstrap/panel/bridges.go` 中的窄接口 bridge 注入，禁止在生产装配中用 service setter 回连形成环。
+- `bootstrap/panel.New` 负责打开数据库、创建 service、连接跨模块依赖、集中注册业务任务、启动 tasks 内部 worker 和各模块自有后台 worker，并调用各模块路由注册器。业务任务定义必须在所有相关业务 service 和 bridge 创建完成后，通过集中注册阶段调用各模块 `RegisterTasks`，不要穿插在 service 构造过程中零散注册。证书、密钥资产、应用和容器之间的双向协作通过 `internal/bootstrap/panel/bridges.go` 中的窄接口 bridge 注入，禁止在生产装配中用 service setter 回连形成环。
 - bootstrap bridge 在依赖尚未装配时必须返回明确错误，不能 nil pointer panic；相关防护由 `internal/bootstrap/panel/bridges_test.go` 覆盖。
 - `bootstrap/panel.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session` 和只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/modules/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。
-- `GET /api/v1/debug/snapshot` 是仅认证用户可访问的只读诊断接口，由 `internal/modules/observability/diagnostics` 提供同一快照时间点的进程、Go runtime 内存/GC 和 app/task/metrics 三库统计。数据库信息只包含连接池、文件/SQLite 页面大小、用户表名和准确行数，不返回数据库路径、SQL、配置值或任何业务记录与秘密。
+- `GET /api/v1/debug/snapshot` 是仅认证用户可访问的只读诊断接口，由 `internal/modules/observability/diagnostics` 提供同一快照时间点的进程、Go runtime 内存/GC、tasks worker 运行状态、已注册/可执行/周期任务类型数量、当前执行数量和 app/task/metrics 三库统计。数据库信息只包含连接池、文件/SQLite 页面大小、用户表名和准确行数，不返回数据库路径、SQL、配置值或任何业务记录与秘密。
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；进程日志等级使用 `log.level` 键持久化，默认 `info`，更新 `/api/v1/settings/runtime` 后立即调整 zap `AtomicLevel`；旧数据库启动时由默认设置写入流程自动补齐空值。
 - 后端进程日志统一使用 `internal/platform/logging` 的 zap JSON logger，输出路径固定为 `stdout`。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译；成功和重定向 HTTP 完成日志使用 debug，4xx 使用 warn，5xx 使用 error。
 - 概览仪表盘卡片布局通过 `overview_card_configurations` 保存在应用数据库；当前单管理员模型使用固定 `default` 记录，整套有序卡片配置以稳定值 JSON 原子替换。
@@ -65,7 +65,7 @@
 
 ## 密钥资产启动与存储
 
-- `bootstrap/panel.New` 必须在证书、应用和 scheduler 启动前初始化 `internal/platform/secrets`、迁移 DNS provider 凭据、初始化 `internal/modules/keyassets` 并完成旧自签证书迁移。
+- `bootstrap/panel.New` 必须在证书、应用和 tasks 内部 worker 启动前初始化 `internal/platform/secrets`、迁移 DNS provider 凭据、初始化 `internal/modules/keyassets` 并完成旧自签证书迁移。
 - `key_assets` 保存统一密钥与证书元数据和密文私钥；`key_asset_export_artifacts` 保存短期批量导出下载信息。
 - `credentials.secret_ciphertext` 使用同一 `secretstore` 保存 SSH 密码、私钥和私钥口令的加密 JSON；新凭据不得把秘密写入独立文件或旧明文字段。
 - 主密钥优先读取 `PANEL_KEY_ASSETS_MASTER_KEY`，否则读取 `<dataRoot>/secrets/key-assets-master.key`；首次无资产时自动生成文件并使用 `0600` 权限。

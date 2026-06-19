@@ -25,7 +25,20 @@ func newTestService(t *testing.T) *Service {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 	svc := NewService(store.TaskDB())
-	svc.MustRegister(Definition{Type: "test", ConcurrencyPolicy: ConcurrencyParallelAllowed})
+	for _, def := range []Definition{
+		{Type: "test", ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "application_deploy", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "application_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "package_refresh", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "metrics_collect", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "server_connectivity_test", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "server_info_collect", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "server_ufw_install", AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "server_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "certificate_issue", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+	} {
+		svc.MustRegister(def)
+	}
 	return svc
 }
 
@@ -344,6 +357,21 @@ func TestRunningExecutionLifecycleFollowsTaskStatus(t *testing.T) {
 	}
 	if svc.HasRunningExecution(task.ID) {
 		t.Fatal("completed task should not have a running execution")
+	}
+}
+
+func TestStartIsIdempotentForActiveExecution(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Start(ctx, task.ID); err != nil {
+		t.Fatalf("expected duplicate start to be idempotent, got %v", err)
 	}
 }
 

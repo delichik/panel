@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"panel/internal/modules/tasks"
 )
 
 type DatabaseSource struct {
@@ -20,15 +22,21 @@ type DatabaseSource struct {
 }
 
 type Service struct {
-	startedAt time.Time
-	databases []DatabaseSource
+	startedAt   time.Time
+	databases   []DatabaseSource
+	taskRuntime TaskRuntimeProvider
 }
 
 type Snapshot struct {
 	CollectedAt time.Time          `json:"collectedAt"`
 	Process     ProcessStats       `json:"process"`
 	Memory      MemoryStats        `json:"memory"`
+	Tasks       tasks.RuntimeStats `json:"tasks"`
 	Databases   []DatabaseSnapshot `json:"databases"`
+}
+
+type TaskRuntimeProvider interface {
+	TaskRuntime() tasks.RuntimeStats
 }
 
 type ProcessStats struct {
@@ -99,6 +107,10 @@ func NewService(databases ...DatabaseSource) *Service {
 	return &Service{startedAt: time.Now().UTC(), databases: databases}
 }
 
+func NewServiceWithTaskRuntime(taskRuntime TaskRuntimeProvider, databases ...DatabaseSource) *Service {
+	return &Service{startedAt: time.Now().UTC(), databases: databases, taskRuntime: taskRuntime}
+}
+
 func (s *Service) Snapshot(ctx context.Context) Snapshot {
 	now := time.Now().UTC()
 	var memory runtime.MemStats
@@ -143,6 +155,9 @@ func (s *Service) Snapshot(ctx context.Context) Snapshot {
 			LastGCAt:          lastGC,
 		},
 		Databases: make([]DatabaseSnapshot, 0, len(s.databases)),
+	}
+	if s.taskRuntime != nil {
+		out.Tasks = s.taskRuntime.TaskRuntime()
 	}
 	for _, source := range s.databases {
 		out.Databases = append(out.Databases, collectDatabase(ctx, source))

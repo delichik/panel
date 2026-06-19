@@ -53,6 +53,7 @@ type Definition struct {
 	AllowRunNow       bool
 	AllowRetry        bool
 	DefaultMaxRetries int
+	StaleQueuedAfter  time.Duration
 	ConcurrencyPolicy string
 	ConcurrencyKey    func(CreateInput) string
 	Validate          func(context.Context, CreateInput) error

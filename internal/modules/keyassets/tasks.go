@@ -7,11 +7,11 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		return
 	}
 	for _, def := range []tasks.Definition{
-		{Type: TaskTypeTLSReissue, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeSSHRegenerate, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeExport, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeImport, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeSync, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
+		{Type: TaskTypeTLSReissue, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
+		{Type: TaskTypeSSHRegenerate, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
+		{Type: TaskTypeExport, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
+		{Type: TaskTypeImport, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
+		{Type: TaskTypeSync, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
 	} {
 		taskSvc.MustRegister(def)
 	}

@@ -7,7 +7,7 @@
 ## 关键入口
 
 - 任务模型、注册表、manager 和服务：`internal/modules/tasks/`
-- 周期任务调度：`internal/modules/scheduling/scheduler.go`
+- 任务内部 worker 与周期驱动：`internal/modules/tasks/worker.go`、`internal/modules/tasks/periodic.go`
 - 路由注册：`internal/modules/tasks/routes.go`
 - 前端任务中心：`web/src/views/tasks/index.vue`
 - 前端任务操作：`web/src/views/tasks/_shared/taskOperations.ts`
@@ -28,8 +28,13 @@
 
 - 任务数据使用独立 SQLite 数据库 `Store.TaskDB()`，默认文件是 `data/db/tasks.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
 - 当前 alpha 阶段任务历史不是稳定持久化契约；注册式任务系统重构会重建 `tasks`、`task_steps` 和 `task_logs`，旧任务中心历史可直接丢弃，但业务数据库和指标数据库不得受影响。
-- 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入任务表。
-- 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略和周期配置。
+- `internal/modules/tasks` 只提供任务框架能力，不维护业务任务类型清单、业务 executor 或业务周期输入。业务任务类型必须由拥有该任务的业务模块在自己的 `RegisterTasks` 入口注册；生产装配由 `internal/bootstrap/panel/app.go` 的集中任务注册阶段统一调用各模块入口。
+- 所有任务类型必须提前注册后才能创建或执行。业务模块通过任务 manager 创建任务；未注册类型必须返回校验错误，不能直接写入任务表。框架测试如果需要业务形状的任务类型，必须在测试夹具中显式注册本测试所需的假定义，不允许把业务类型补回 `tasks` 包默认清单。
+- 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略、一次性 worker 排队超时清理能力和周期配置。
+- 业务模块的 `tasks.go` 必须保持声明式：`Execute` 直接绑定接受 `tasks.TaskContext` 的具名方法，`CollectInputs` 直接绑定具名 collector。禁止使用只为转调另一函数而存在的匿名 executor，也禁止在任务定义中内联节流、扫描和批量输入组装等大段逻辑。
+- 多个周期任务共用的时间节流使用 `tasks.NewIntervalCollector`；业务模块仍负责提供实际输入 collector，tasks 框架只管理调用间隔和上次成功产出时间。
+- `Hidden`、`AllowRunNow`、`AllowRetry`、`DefaultMaxRetries`、`StaleQueuedAfter`、并发策略、executor 和周期配置都属于任务定义的一部分；这些能力随业务模块注册，不由任务中心或任务内部 worker 根据 task type 字符串另行维护。没有注册 `Execute` 的记录型任务不得声明 `AllowRunNow` 或 `AllowRetry`，避免任务中心暴露无法真正执行的手动运行或重试入口。
+- 任务列表、详情、重试和手动运行 API 返回任务时，会根据当前注册定义补充 `allowRunNow` 与 `allowRetry`。前端必须使用这两个响应字段决定操作入口，不得维护 task type 白名单；即使定义误声明能力但没有 executor，API 也必须返回不可操作。
 - 周期任务类型通过 `Periodic.CollectInputs` 收集本轮自动触发需要的参数，并决定是否创建任务实例。返回 `shouldRun=false` 时不创建任务、不执行、不写日志、不进入任务中心；返回 `shouldRun=true` 时交给任务 manager 创建任务。单个输入创建普通任务，多个输入创建一个父任务和多个子任务，子任务执行同一注册任务类型，父任务只负责编排和汇总。手动执行周期任务仍按普通任务语义处理，调用方必须显式传入参数，不会调用 `CollectInputs` 自动补齐。
 - 任务框架统一管理活跃任务并发准入。注册方只声明策略，例如允许并行、同资源互斥、同资源排队、同类型全局互斥或自定义并发 key；业务代码不要再手写同类型活跃任务查询。需要复用活跃任务时通过 `tasks.Manager.Create` 的 `created=false` 结果处理。
 - 多组同类型参数会创建父任务和多个子任务。父任务负责串行或并行编排与汇总，子任务执行同一注册定义。第一轮前端可平铺展示父子任务，不强制树形任务中心。
@@ -41,20 +46,22 @@
 - `tasks.Service` 在内存中维护当前进程的 running execution registry。任务进入 `running` 前必须注册执行对象，进入完成、失败、可重试失败或阻塞等终态后必须注销；显式取消会取消 execution context 并移除 registry 项。
 - 任务进入 `completed`、`failed`、`failed_retryable`、`blocked` 或 `cancelled` 等终态后，后台 worker 后续的完成/失败/重试写入不得覆盖既有终态；服务器删除会把该服务器的 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务标记为 `cancelled`，避免卡住删除或被调度器继续捡起。
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
-- Panel 启动时以及 scheduler 运行期间每 5 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
+- Panel 启动时以及 tasks 内部 worker 运行期间每 5 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用，必须在 API 返回前先标记为 `running`。`server_agent_deploy` 虽然也由内存 goroutine 执行，但必须接入调度器 `run-now` / `retry`，用于恢复旧的排队部署任务并重新同步 agent 证书。
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。
-- 遗留 `queued` 超过 `scheduler.StaleQueuedWorkerTaskAfter` 的选定 worker 类型会在清理循环中标记为失败并提示用户重试。
+- 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
-- `scheduler` 负责驱动注册的周期任务，例如 agent 检查、指标采集、软件包刷新、镜像更新检查、Application 容器监控、证书签发 due task 和证书续签。业务是否需要实际执行以及本轮执行参数由对应任务定义的 `Periodic.CollectInputs` 判断和生成；任务执行函数只消费已经落到任务输入中的参数，不在执行阶段重新扫描本轮资源列表。
+- tasks 内部 worker 负责驱动注册的周期任务、唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。
+- 到期队列唤醒直接扫描注册表中带 executor 的定义，并统一调用 `tasks.Manager.Run`；不得注册或持久化 `task_queue_drain`，不得直接调用 `Definition.Execute` 绕过任务启动、execution registry、hook、完成和失败落库。
+- 业务是否需要周期执行以及本轮执行参数由对应任务定义的 `Periodic.CollectInputs` 判断和生成；任务执行函数只消费已经落到任务输入中的参数，不在执行阶段重新扫描本轮资源列表。
 - 生产代码创建任务应使用 `tasks.NewManager(taskSvc).Create` 或 manager 封装入口，不直接调用 `Service.Create`；`Service.Create` 保留给任务存储层、测试和低层兼容场景。
 - 任务 HTTP handler 依赖 `ServeMux` pattern 注入的 `PathValue` 读取任务 ID；新增任务 API 时在 `routes.go` 注册 method-pattern，不在 bootstrap 增加业务路径 switch。
-- 任务中心的 `run-now` / `retry` 必须按任务定义受控，不再在 scheduler 中维护硬编码 switch。允许手动运行或重试的任务必须注册对应能力。
+- 任务中心的 `run-now` / `retry` 必须按任务定义受控，不在 tasks worker 中维护硬编码 switch。允许手动运行或重试的任务必须同时注册对应能力和 `Execute`，实际执行统一经过 `tasks.Manager.Run`。
 - `retry` 创建的新任务会立即交给任务 manager 执行；如果执行器启动前返回错误，handler 会把新任务标记为失败，避免永久排队。
 
 ## 跨模块依赖
 
-- 服务器测试、重启、UFW、agent 部署和软件包维护依赖本模块记录任务。
+- 服务器测试、重启、UFW、agent 部署和软件包维护依赖本模块记录任务；其中没有 executor 的一次性 SSH worker 或记录型任务只保留任务记录，不暴露任务中心重试。
 - 应用部署、停止、重启、镜像检查和镜像更新依赖本模块记录任务；实际容器操作由应用服务调用 agent runtime API。
 - 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；成功后会立即创建 `container_refresh`、`image_refresh` 或 `volume_refresh` 刷新任务。
 - 手动镜像刷新、Application 镜像升级和 Application 协调恢复仍依赖本模块记录任务；同服务器 Docker 写操作由容器化模块串行执行。
@@ -64,15 +71,15 @@
 
 ## 密钥资产任务
 
-- `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import`、`key_asset_sync` 记录密钥资产操作。
+- `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import`、`key_asset_sync` 记录密钥资产操作；当前这些记录型任务不注册 executor，因此不暴露任务中心手动运行或重试。
 - 重新签发、重新生成和导入任务会触发已启用应用重新部署，任务终态必须注销 execution。
 - 导出任务完成后通过 `/api/v1/key-assets/exports/{taskId}/download` 下载短期加密归档。
 
 ## 验证
 
-- 后端任务或调度改动运行 `task test:backend`，重点关注 `internal/modules/tasks` 和 `internal/modules/scheduling`。
+- 后端任务或周期驱动改动运行 `task test:backend`，重点关注 `internal/modules/tasks` 及注册周期任务的业务模块。
 - 前端任务中心或 API 类型改动按影响范围运行 `task test:web` 或 `task build:web`。
 
 ## 文档更新触发
 
-新增任务类型、注册字段、并发策略、周期输入收集规则、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。
+新增任务类型、注册字段、并发策略、一次性 worker 排队超时清理能力、周期输入收集规则、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。

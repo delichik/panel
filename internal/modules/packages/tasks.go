@@ -12,39 +12,19 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 	if taskSvc == nil {
 		return
 	}
-	var lastPackageRun time.Time
-	registeredAt := time.Now()
 	taskSvc.MustRegister(tasks.Definition{
 		Type:        "package_refresh",
 		Summary:     "Refreshing scheduled packages",
 		AllowRunNow: true,
 		AllowRetry:  true,
-		Execute: func(tc tasks.TaskContext) error {
-			return s.RunRefreshTask(tc.Context, tc.Task)
-		},
+		Execute:     s.RunRefreshTask,
 		Periodic: &tasks.Periodic{
-			Interval: time.Second,
-			CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
-				interval := time.Minute
-				if collectionInterval != nil {
-					interval = collectionInterval()
-				}
-				if lastPackageRun.IsZero() {
-					lastPackageRun = registeredAt
-				}
-				if time.Since(lastPackageRun) < interval {
-					return tasks.CreateBatchInput{}, false, nil
-				}
-				batch, shouldRun, err := s.CollectScheduledPackageRefreshInputs(ctx)
-				if err == nil && shouldRun {
-					lastPackageRun = time.Now()
-				}
-				return batch, shouldRun, err
-			},
+			Interval:      time.Second,
+			CollectInputs: tasks.NewIntervalCollector(time.Minute, collectionInterval, s.CollectScheduledPackageRefreshInputs),
 		},
 	})
-	taskSvc.MustRegister(tasks.Definition{Type: "package_upgrade_selected", AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed})
-	taskSvc.MustRegister(tasks.Definition{Type: "package_upgrade_all", AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed})
+	taskSvc.MustRegister(tasks.Definition{Type: "package_upgrade_selected", ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed})
+	taskSvc.MustRegister(tasks.Definition{Type: "package_upgrade_all", ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed})
 }
 
 func (s *Service) CollectScheduledPackageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {

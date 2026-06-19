@@ -149,7 +149,8 @@ func (s *Service) QueueIssue(ctx context.Context, in IssueRequest) (IssueResult,
 	return IssueResult{Certificate: cert, TaskID: taskID}, nil
 }
 
-func (s *Service) RunIssueTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunIssueTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	if s.tasks == nil {
 		return nil
 	}
@@ -219,8 +220,8 @@ func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate, ta
 	return s.updateRenewal(ctx, cert)
 }
 
-func (s *Service) RenewTask(ctx context.Context, task tasks.Task) error {
-	return s.runRenewTask(ctx, task)
+func (s *Service) RenewTask(tc tasks.TaskContext) error {
+	return s.runRenewTask(tc.Context, tc.Task)
 }
 
 func (s *Service) Renew(ctx context.Context, certID string) error {

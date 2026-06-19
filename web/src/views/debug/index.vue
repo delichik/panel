@@ -41,6 +41,13 @@ const memoryItems = computed(() => snapshot.value ? [
   [t('debugPage.lastGc'), snapshot.value.memory.lastGcAt ? formatDateTime(snapshot.value.memory.lastGcAt) : t('common.never')],
 ] : []);
 
+const taskItems = computed(() => snapshot.value ? [
+  [t('debugPage.registeredTaskTypes'), formatNumber(snapshot.value.tasks.registeredTypes)],
+  [t('debugPage.executableTaskTypes'), formatNumber(snapshot.value.tasks.executableTypes)],
+  [t('debugPage.periodicTaskTypes'), formatNumber(snapshot.value.tasks.periodicTypes)],
+  [t('debugPage.runningExecutions'), formatNumber(snapshot.value.tasks.runningExecutions)],
+] : []);
+
 async function loadSnapshot() {
   if (refreshing.value) return;
   refreshing.value = true;
@@ -165,6 +172,10 @@ onBeforeUnmount(() => {
           <v-icon color="secondary">mdi-database-outline</v-icon>
           <div><div class="text-caption text-medium-emphasis">{{ t('debugPage.databaseSize') }}</div><strong class="font-tabular">{{ formatBytes(snapshot.databases.reduce((sum, item) => sum + item.fileSizeBytes, 0)) }}</strong></div>
         </div>
+        <div class="page-summary-card">
+          <v-icon :color="snapshot.tasks.workerRunning ? 'success' : 'error'">mdi-clipboard-check-outline</v-icon>
+          <div><div class="text-caption text-medium-emphasis">{{ t('debugPage.taskWorker') }}</div><strong>{{ snapshot.tasks.workerRunning ? t('debugPage.running') : t('debugPage.stopped') }}</strong></div>
+        </div>
       </div>
 
       <div class="debug-grid">
@@ -175,6 +186,15 @@ onBeforeUnmount(() => {
         <v-card variant="outlined" class="debug-card">
           <v-card-title>{{ t('debugPage.memoryGc') }}</v-card-title>
           <v-card-text><div class="info-grid"><div v-for="[label, value] in memoryItems" :key="String(label)"><span>{{ label }}</span><strong>{{ value }}</strong></div></div></v-card-text>
+        </v-card>
+        <v-card variant="outlined" class="debug-card">
+          <v-card-title class="database-title">
+            <span>{{ t('debugPage.taskRuntime') }}</span>
+            <v-chip :color="snapshot.tasks.workerRunning ? 'success' : 'error'" size="small" variant="tonal">
+              {{ snapshot.tasks.workerRunning ? t('debugPage.running') : t('debugPage.stopped') }}
+            </v-chip>
+          </v-card-title>
+          <v-card-text><div class="info-grid"><div v-for="[label, value] in taskItems" :key="String(label)"><span>{{ label }}</span><strong>{{ value }}</strong></div></div></v-card-text>
         </v-card>
       </div>
 

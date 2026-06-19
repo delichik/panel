@@ -733,6 +733,8 @@ export interface TaskDto {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  allowRunNow: boolean;
+  allowRetry: boolean;
 }
 
 export interface TaskStepDto {
@@ -857,10 +859,19 @@ export interface DebugDatabaseSnapshotDto {
   tables: DebugTableStatsDto[];
 }
 
+export interface DebugTaskRuntimeDto {
+  workerRunning: boolean;
+  registeredTypes: number;
+  executableTypes: number;
+  periodicTypes: number;
+  runningExecutions: number;
+}
+
 export interface DebugSnapshotDto {
   collectedAt: string;
   process: DebugProcessStatsDto;
   memory: DebugMemoryStatsDto;
+  tasks: DebugTaskRuntimeDto;
   databases: DebugDatabaseSnapshotDto[];
 }
 

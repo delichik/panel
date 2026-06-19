@@ -190,9 +190,6 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 	if m == nil || m.service == nil {
 		return panelerr.Validation("task_service_unavailable", "Task service is unavailable")
 	}
-	if task.ChildCount > 0 && task.ParentTaskID == "" {
-		return m.RunParent(ctx, task)
-	}
 	def, ok := m.service.Registry().Definition(task.Type)
 	if !ok {
 		return panelerr.Validation("task_type_unregistered", "Task type is not registered")
@@ -200,10 +197,18 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 	if def.Execute == nil {
 		return panelerr.Validation("task_executor_unregistered", "Task executor is not registered")
 	}
-	if task.Status != StatusRunning || !m.service.HasRunningExecution(task.ID) {
-		if err := m.service.Start(ctx, task.ID); err != nil {
-			return err
-		}
+	if m.service.HasRunningExecution(task.ID) {
+		return nil
+	}
+	claimed, err := m.service.claimExecution(ctx, task.ID)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		return nil
+	}
+	if task.ChildCount > 0 && task.ParentTaskID == "" {
+		return m.RunParent(ctx, task)
 	}
 	runCtx := m.service.ExecutionContext(task.ID)
 	if ctx != nil {
@@ -213,7 +218,7 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 			defer cancel()
 		}
 	}
-	err := def.Execute(TaskContext{Context: runCtx, Task: task, Service: m.service})
+	err = def.Execute(TaskContext{Context: runCtx, Task: task, Service: m.service})
 	if err != nil {
 		latest, latestErr := m.service.Get(ctx, task.ID)
 		if latestErr == nil && isTerminalStatus(latest.Status) {

@@ -7,12 +7,48 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		return
 	}
 	for _, def := range []tasks.Definition{
-		{Type: TaskTypeDeploy, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeStop, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeRestart, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeRefresh, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeImageCheck, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeImageUpdate, AllowRetry: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
+		{
+			Type:              TaskTypeDeploy,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			Execute:           s.RunDeployTask,
+		},
+		{
+			Type:              TaskTypeStop,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			Execute:           s.RunStopTask,
+		},
+		{
+			Type:              TaskTypeRestart,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			Execute:           s.RunRestartTask,
+		},
+		{
+			Type:              TaskTypeRefresh,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			Execute:           s.RunRefreshTask,
+		},
+		{
+			Type:              TaskTypeImageCheck,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			Execute:           s.RunImageCheckTask,
+		},
+		{
+			Type:              TaskTypeImageUpdate,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			Execute:           s.RunImageUpdateTask,
+		},
 	} {
 		taskSvc.MustRegister(def)
 	}

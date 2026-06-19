@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 import (
 	"context"
@@ -36,7 +36,9 @@ func newServerTestCredentialService(t *testing.T, store *storage.Store, cfg conf
 }
 
 func newServerServiceForTest(store *storage.Store, exec sshx.RemoteExecutor, taskSvc *tasks.Service, opts ...Option) *Service {
-	return NewService(store.AppDB(), exec, taskSvc, opts...)
+	svc := NewService(store.AppDB(), exec, taskSvc, opts...)
+	svc.RegisterTasks(taskSvc)
+	return svc
 }
 
 func (s *Service) SetMetricsDB(db *sql.DB) {
@@ -81,7 +83,7 @@ func TestCreateListServer(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
-	svc := NewService(store.AppDB(), nil, taskSvc)
+	svc := newServerServiceForTest(store, nil, taskSvc)
 	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID, Traits: map[string]string{"custom.env": "prod"}})
 	if err != nil {
 		t.Fatal(err)
@@ -111,7 +113,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
-	svc := NewService(store.AppDB(), nil, taskSvc)
+	svc := newServerServiceForTest(store, nil, taskSvc)
 	svc.SetMetricsDB(store.MetricsDB())
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
@@ -152,7 +154,7 @@ func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	retryable, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: "package_refresh", ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Status: tasks.StatusFailedRetryable, Summary: "retryable"})
+	retryable, err := taskSvc.Create(context.Background(), tasks.CreateInput{Type: restartTaskType, ServerID: srv.ID, ResourceType: "server", ResourceID: srv.ID, Status: tasks.StatusFailedRetryable, Summary: "retryable"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +242,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &connectivityFakeExec{}
-	svc := NewService(store.AppDB(), exec, taskSvc)
+	svc := newServerServiceForTest(store, exec, taskSvc)
 	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
 		t.Fatal(err)
@@ -489,7 +491,7 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &ufwManageFakeExec{}
-	svc := NewService(store.AppDB(), exec, taskSvc)
+	svc := newServerServiceForTest(store, exec, taskSvc)
 
 	if _, err := svc.UFWState(context.Background(), "srv_1"); err == nil {
 		t.Fatal("expected agent-required UFW status failure")
@@ -534,7 +536,7 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active", Rules: []remoteops.UFWRuleStatus{{Number: 7, To: "9443/tcp", Action: "ALLOW IN", From: "Anywhere"}}}}
-	svc := NewService(store.AppDB(), exec, taskSvc)
+	svc := newServerServiceForTest(store, exec, taskSvc)
 	svc.SetAgentClient(agentClient)
 
 	state, err := svc.UFWState(context.Background(), "srv_1")
@@ -571,7 +573,7 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &ufwManageFakeExec{}
 	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: false, Status: "not_installed"}}
-	svc := NewService(store.AppDB(), exec, taskSvc)
+	svc := newServerServiceForTest(store, exec, taskSvc)
 	svc.SetAgentClient(agentClient)
 
 	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 443, Protocol: "tcp"}); err != nil {
@@ -645,7 +647,7 @@ func TestConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), &connectivityFakeExec{passwordless: true}, taskSvc)
+	svc := newServerServiceForTest(store, &connectivityFakeExec{passwordless: true}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{
 		osRelease: linux.OSRelease{ID: "debian", VersionID: "13", PrettyName: "Debian GNU/Linux 13", Supported: true},
@@ -682,7 +684,7 @@ func TestCheckConfiguredAgentsDeploysLegacyDefaultPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
@@ -766,7 +768,7 @@ func TestCheckConfiguredAgentsDeploysConfiguredIncompatibleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
@@ -791,7 +793,7 @@ func TestCheckConfiguredAgentsDeploysExpiredStoredAgentCertificate(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
@@ -816,7 +818,7 @@ func TestCheckConfiguredAgentsDeploysExpiringStoredAgentCertificate(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
@@ -841,7 +843,7 @@ func TestCheckConfiguredAgentsDoesNotDeployUnavailableNetworkError(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{err: errString(lastErr)})
 
@@ -872,7 +874,7 @@ func TestCheckConfiguredAgentsDoesNotDeployUndeployableAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
@@ -924,7 +926,7 @@ func TestAgentCertificateTimeErrorDeploysWhenAlreadyIncompatible(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
@@ -950,7 +952,7 @@ func TestSystemDetectionDeploysForIncompatibleAgent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 	srv, err := svc.Get(context.Background(), "srv_agent")
@@ -981,7 +983,7 @@ func TestDeployAgentStartsExistingQueuedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 	queued, err := taskSvc.Create(context.Background(), tasks.CreateInput{
@@ -1036,7 +1038,7 @@ func TestAgentCertificateTimeErrorMarksUndeployableAfterAutoDeployFailures(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
 	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
@@ -1161,7 +1163,7 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &ufwManageFakeExec{}
-	svc := NewService(store.AppDB(), exec, tasks.NewService(store.TaskDB()))
+	svc := newServerServiceForTest(store, exec, tasks.NewService(store.TaskDB()))
 	certErr := x509.CertificateInvalidError{Reason: x509.Expired}
 	svc.SetAgentClient(&serverFakeAgentClient{err: certErr})
 
@@ -1316,7 +1318,7 @@ func TestListStaleServersSharesConnectivityOperation(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	svc := NewService(store.AppDB(), &connectivityFakeExec{}, taskSvc)
+	svc := newServerServiceForTest(store, &connectivityFakeExec{}, taskSvc)
 
 	if _, err := svc.List(context.Background()); err != nil {
 		t.Fatal(err)
@@ -1341,7 +1343,7 @@ func TestConnectivityFailureSchedulesRetryAndRunNow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	svc := NewService(store.AppDB(), failingConnectivityExec{}, taskSvc)
+	svc := newServerServiceForTest(store, failingConnectivityExec{}, taskSvc)
 	if _, err := svc.EnsureConnectivityTask(context.Background(), srv.ID, true); err != nil {
 		t.Fatal(err)
 	}
@@ -1709,7 +1711,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
-	return NewService(store.AppDB(), exec, taskSvc), taskSvc, store
+	return newServerServiceForTest(store, exec, taskSvc), taskSvc, store
 }
 
 func waitTaskFinished(t *testing.T, taskSvc *tasks.Service, taskID string) {

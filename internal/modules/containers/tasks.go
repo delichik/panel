@@ -15,91 +15,55 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 	if taskSvc == nil {
 		return
 	}
-	var lastImageRun time.Time
-	registeredAt := time.Now()
 	for _, def := range []tasks.Definition{
 		{
 			Type:       TaskContainerRefresh,
 			AllowRetry: true,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunContainerRefreshTask(tc.Context, tc.Task)
-			},
+			Execute:    s.RunContainerRefreshTask,
 		},
 		{
 			Type:       TaskImageRefresh,
 			AllowRetry: true,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunImageRefreshTask(tc.Context, tc.Task)
-			},
+			Execute:    s.RunImageRefreshTask,
 			Periodic: &tasks.Periodic{
-				Interval: 5 * time.Second,
-				CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
-					interval := time.Minute
-					if collectionInterval != nil {
-						interval = collectionInterval()
-					}
-					if lastImageRun.IsZero() {
-						lastImageRun = registeredAt
-					}
-					if time.Since(lastImageRun) < interval {
-						return tasks.CreateBatchInput{}, false, nil
-					}
-					batch, shouldRun, err := s.CollectImageRefreshInputs(ctx)
-					if err == nil && shouldRun {
-						lastImageRun = time.Now()
-					}
-					return batch, shouldRun, err
-				},
+				Interval:      5 * time.Second,
+				CollectInputs: tasks.NewIntervalCollector(time.Minute, collectionInterval, s.CollectImageRefreshInputs),
 			},
 		},
 		{
 			Type:       TaskVolumeRefresh,
 			AllowRetry: true,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunVolumeRefreshTask(tc.Context, tc.Task)
-			},
+			Execute:    s.RunVolumeRefreshTask,
 		},
 		{
 			Type:              TaskApplicationReconcile,
 			AllowRetry:        true,
 			DefaultMaxRetries: 3,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunApplicationReconcileTask(tc.Context, tc.Task)
-			},
+			Execute:           s.RunApplicationReconcileTask,
 			Periodic: &tasks.Periodic{
-				Interval: 5 * time.Second,
-				CollectInputs: func(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
-					operationID := id.New("op")
-					inputs, err := s.CollectApplicationReconcileTasks(ctx, operationID)
-					if err != nil || len(inputs) == 0 {
-						return tasks.CreateBatchInput{}, false, err
-					}
-					return tasks.CreateBatchInput{Type: TaskApplicationReconcile, OperationID: operationID, TriggerType: "scheduler", Summary: "Monitoring application containers", ExecutionMode: tasks.ExecutionModeParallel, Inputs: inputs}, true, nil
-				},
+				Interval:      5 * time.Second,
+				CollectInputs: s.CollectApplicationReconcileInputs,
 			},
 		},
 		{
 			Type:              TaskImageUpgradeMany,
 			AllowRetry:        true,
 			ConcurrencyPolicy: tasks.ConcurrencyGlobalExclusive,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunApplicationImageUpgradeTask(tc.Context, tc.Task)
-			},
+			Execute:           s.RunApplicationImageUpgradeTask,
 		},
 		{
 			Type:              TaskImageUpgradeAll,
 			AllowRetry:        true,
 			ConcurrencyPolicy: tasks.ConcurrencyGlobalExclusive,
-			Execute: func(tc tasks.TaskContext) error {
-				return s.RunApplicationImageUpgradeTask(tc.Context, tc.Task)
-			},
+			Execute:           s.RunApplicationImageUpgradeTask,
 		},
 	} {
 		taskSvc.MustRegister(def)
 	}
 }
 
-func (s *Service) RunContainerRefreshTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunContainerRefreshTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
 	return s.runSimpleRefreshTask(ctx, task, serverID, "Containers refreshed", func(runCtx context.Context, baseURL string) error {
 		_, err := s.agent.DockerContainers(runCtx, baseURL)
@@ -107,7 +71,8 @@ func (s *Service) RunContainerRefreshTask(ctx context.Context, task tasks.Task) 
 	})
 }
 
-func (s *Service) RunVolumeRefreshTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunVolumeRefreshTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
 	return s.runSimpleRefreshTask(ctx, task, serverID, "Volumes refreshed", func(runCtx context.Context, baseURL string) error {
 		_, err := s.agent.DockerVolumes(runCtx, baseURL)
@@ -115,13 +80,30 @@ func (s *Service) RunVolumeRefreshTask(ctx context.Context, task tasks.Task) err
 	})
 }
 
-func (s *Service) RunApplicationImageUpgradeTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunApplicationImageUpgradeTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return err
 	}
 	applicationIDs := strings.Split(task.ResourceID, ",")
 	s.runApplicationUpdates(task, applicationIDs)
 	return nil
+}
+
+func (s *Service) CollectApplicationReconcileInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+	operationID := id.New("op")
+	inputs, err := s.CollectApplicationReconcileTasks(ctx, operationID)
+	if err != nil || len(inputs) == 0 {
+		return tasks.CreateBatchInput{}, false, err
+	}
+	return tasks.CreateBatchInput{
+		Type:          TaskApplicationReconcile,
+		OperationID:   operationID,
+		TriggerType:   "scheduler",
+		Summary:       "Monitoring application containers",
+		ExecutionMode: tasks.ExecutionModeParallel,
+		Inputs:        inputs,
+	}, true, nil
 }
 
 func (s *Service) CollectImageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {

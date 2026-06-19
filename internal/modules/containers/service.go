@@ -511,7 +511,8 @@ func (s *Service) RefreshAllScheduled(ctx context.Context) error {
 	return nil
 }
 
-func (s *Service) RunImageRefreshTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
 	if serverID == "" {
 		return panelerr.Validation("server_required", "Server is required")
@@ -690,7 +691,8 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 	return inputs, nil
 }
 
-func (s *Service) RunApplicationReconcileTask(ctx context.Context, task tasks.Task) error {
+func (s *Service) RunApplicationReconcileTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
 	appID := firstNonEmpty(task.ResourceID, task.TriggerResourceID)
 	if appID == "" {
 		return panelerr.Validation("application_required", "Application is required")

@@ -20,7 +20,6 @@ import (
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/observability/overview"
 	"panel/internal/modules/packages"
-	"panel/internal/modules/scheduling"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/servers/credential"
 	"panel/internal/modules/settings"
@@ -36,12 +35,13 @@ import (
 )
 
 type App struct {
-	cfg    config.Config
-	store  *database.Store
-	mux    *http.ServeMux
-	auth   *auth.Service
-	sched  *scheduling.Scheduler
-	system *systeminfo.Service
+	cfg            config.Config
+	store          *database.Store
+	mux            *http.ServeMux
+	auth           *auth.Service
+	tasks          *tasks.Worker
+	metricsCleanup *metrics.CleanupWorker
+	system         *systeminfo.Service
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -128,35 +128,52 @@ func New(cfg config.Config) (*App, error) {
 		certs.WithApplicationRefresher(certBridge),
 	)
 	certBridge.certs = certSvc
+	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, metricsSvc, packageSvc, certSvc)
 	systemSvc := systeminfo.NewService(nil)
 	systemSvc.Start(context.Background())
-	diagnosticsSvc := diagnostics.NewService(
+	taskWorker := tasks.NewWorker(taskSvc)
+	diagnosticsSvc := diagnostics.NewServiceWithTaskRuntime(
+		taskWorker,
 		diagnostics.DatabaseSource{Name: "app", DB: store.AppDB(), Path: cfg.AppDatabase},
 		diagnostics.DatabaseSource{Name: "task", DB: store.TaskDB(), Path: cfg.TaskDatabase},
 		diagnostics.DatabaseSource{Name: "metrics", DB: store.MetricsDB(), Path: cfg.MetricsDatabase},
 	)
 
-	a := &App{cfg: cfg, store: store, mux: http.NewServeMux(), auth: authSvc, system: systemSvc}
-	sched := scheduling.New(settingsSvc, serverSvc, metricsSvc, packageSvc, taskSvc,
-		scheduling.WithCertificateRenewer(certSvc),
-		scheduling.WithContainerization(containerSvc),
-	)
-	a.sched = sched
+	metricsCleanup := metrics.NewCleanupWorker(metricsSvc, func() metrics.CleanupSettings {
+		runtime := settingsSvc.Runtime()
+		return metrics.CleanupSettings{
+			RetentionDays: runtime.MetricsRetentionDays,
+			Schedule:      runtime.CleanupSchedule,
+		}
+	})
+	a := &App{
+		cfg:            cfg,
+		store:          store,
+		mux:            http.NewServeMux(),
+		auth:           authSvc,
+		tasks:          taskWorker,
+		metricsCleanup: metricsCleanup,
+		system:         systemSvc,
+	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		serverSvc.CheckConfiguredAgents(ctx)
 	}()
-	sched.Start(context.Background())
+	taskWorker.Start(context.Background())
+	metricsCleanup.Start(context.Background())
 	logging.L().Info("background services started")
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, sched), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, taskWorker), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
 
 func (a *App) Close() error {
-	if a.sched != nil {
-		a.sched.Stop()
+	if a.tasks != nil {
+		a.tasks.Stop()
+	}
+	if a.metricsCleanup != nil {
+		a.metricsCleanup.Stop()
 	}
 	if a.system != nil {
 		a.system.Close()
@@ -164,6 +181,19 @@ func (a *App) Close() error {
 	return a.store.Close()
 }
 func (a *App) Handler() http.Handler { return logging.HTTPMiddleware(a.mux) }
+
+func registerTaskDefinitions(taskSvc *tasks.Service, settingsSvc *settings.Service, keyAssetSvc *keyassets.Service, serverSvc *server.Service, applicationSvc *applications.Service, containerSvc *containerization.Service, metricsSvc *metrics.Service, packageSvc *packages.Service, certSvc *certs.Service) {
+	collectionInterval := func() time.Duration {
+		return time.Duration(settingsSvc.Runtime().MetricsCollectionIntervalSeconds) * time.Second
+	}
+	keyAssetSvc.RegisterTasks(taskSvc)
+	serverSvc.RegisterTasks(taskSvc)
+	applicationSvc.RegisterTasks(taskSvc)
+	containerSvc.RegisterTasks(taskSvc, collectionInterval)
+	metricsSvc.RegisterTasks(taskSvc, collectionInterval)
+	packageSvc.RegisterTasks(taskSvc, collectionInterval)
+	certSvc.RegisterTasks(taskSvc)
+}
 
 func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")

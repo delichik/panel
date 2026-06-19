@@ -10,7 +10,7 @@
 - Cloudflare provider：`internal/modules/certificates/dns/cloudflare.go`
 - 证书服务与 handler：`internal/modules/certificates/certs/`
 - ACME 集成：`internal/modules/certificates/certs/acme.go`
-- 调度续签：`internal/modules/scheduling/`
+- 周期续签：`internal/modules/certificates/certs/tasks.go` 注册周期输入，由 `internal/modules/tasks/` 内部 worker 驱动
 - 前端 DNS 页面：`web/src/views/dns/domains/index.vue`
 - 域名证书页面：`web/src/views/certificates/domains/index.vue`
 - API：`web/src/api/dns.ts`、`web/src/api/certificates.ts`

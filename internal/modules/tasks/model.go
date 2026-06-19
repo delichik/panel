@@ -55,6 +55,8 @@ type Task struct {
 	CreatedAt           time.Time  `json:"createdAt"`
 	StartedAt           *time.Time `json:"startedAt"`
 	FinishedAt          *time.Time `json:"finishedAt"`
+	AllowRunNow         bool       `json:"allowRunNow"`
+	AllowRetry          bool       `json:"allowRetry"`
 }
 
 type Log struct {
