@@ -34,7 +34,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "ufw-status", "runtime-write-files", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "system-restart", "runtime-write-files", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -43,6 +43,16 @@ type Client interface {
 	SystemTraits(ctx context.Context, url string) (map[string]string, error)
 	MetricsSnapshot(ctx context.Context, url string, serverID string) (linux.MetricsSnapshot, error)
 	UFWStatus(ctx context.Context, url string) (remoteops.UFWStatus, error)
+}
+
+type MaintenanceClient interface {
+	PackageUpdates(ctx context.Context, url string) ([]linux.PackageUpdate, error)
+	UpgradePackages(ctx context.Context, url string, req PackageUpgradeRequest) (CommandResponse, error)
+	UFWInstall(ctx context.Context, url string, req UFWInstallRequest) (remoteops.UFWStatus, error)
+	UFWEnable(ctx context.Context, url string, req UFWEnableRequest) (remoteops.UFWStatus, error)
+	UFWAllow(ctx context.Context, url string, req UFWAllowRequest) (remoteops.UFWStatus, error)
+	UFWDelete(ctx context.Context, url string, req UFWDeleteRequest) (remoteops.UFWStatus, error)
+	RestartSystem(ctx context.Context, url string) error
 }
 
 type ErrorResponse struct {
@@ -107,6 +117,35 @@ type UFWStatusResponse struct {
 	Default   string                    `json:"default"`
 	Rules     []remoteops.UFWRuleStatus `json:"rules"`
 	Raw       string                    `json:"raw"`
+}
+
+type PackageUpdatesResponse struct {
+	Items []linux.PackageUpdate `json:"items"`
+}
+
+type PackageUpgradeRequest struct {
+	Names []string `json:"names,omitempty"`
+	All   bool     `json:"all"`
+}
+
+type CommandResponse struct {
+	Output string `json:"output"`
+}
+
+type UFWInstallRequest struct {
+	Rules []remoteops.UFWRule `json:"rules"`
+}
+
+type UFWEnableRequest struct {
+	SSHPort int `json:"sshPort"`
+}
+
+type UFWAllowRequest struct {
+	Rule remoteops.UFWRule `json:"rule"`
+}
+
+type UFWDeleteRequest struct {
+	Number int `json:"number"`
 }
 
 type RuntimeWriteFilesRequest struct {

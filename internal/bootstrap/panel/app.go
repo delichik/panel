@@ -115,7 +115,7 @@ func New(cfg config.Config) (*App, error) {
 	)
 	containerBridge.containers = containerSvc
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor, metrics.WithAgentClient(agentClient))
-	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc)
+	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc, agentClient)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
 	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
 		_ = store.Close()

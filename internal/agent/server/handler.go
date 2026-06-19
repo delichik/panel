@@ -56,9 +56,50 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		serverID := strings.TrimSpace(r.URL.Query().Get("serverId"))
 		snap, err := h.collector.MetricsSnapshot(r.Context(), serverID)
 		writeResult(w, agentcontract.SnapshotResponse(snap), err)
+	case r.Method == http.MethodGet && path == "/v1/system/packages/updates":
+		items, err := h.collector.PackageUpdates(r.Context())
+		writeResult(w, agentcontract.PackageUpdatesResponse{Items: items}, err)
+	case r.Method == http.MethodPost && path == "/v1/system/packages/upgrade":
+		var req agentcontract.PackageUpgradeRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		output, err := h.collector.UpgradePackages(r.Context(), req)
+		writeResult(w, agentcontract.CommandResponse{Output: output}, err)
 	case r.Method == http.MethodGet && path == "/v1/ufw/status":
 		status, err := h.collector.UFWStatus(r.Context())
 		writeResult(w, agentcontract.UFWStatusResponseFromStatus(status), err)
+	case r.Method == http.MethodPost && path == "/v1/ufw/install":
+		var req agentcontract.UFWInstallRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		status, err := h.collector.InstallUFW(r.Context(), req)
+		writeResult(w, agentcontract.UFWStatusResponseFromStatus(status), err)
+	case r.Method == http.MethodPost && path == "/v1/ufw/enable":
+		var req agentcontract.UFWEnableRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		status, err := h.collector.EnableUFW(r.Context(), req)
+		writeResult(w, agentcontract.UFWStatusResponseFromStatus(status), err)
+	case r.Method == http.MethodPost && path == "/v1/ufw/rules":
+		var req agentcontract.UFWAllowRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		status, err := h.collector.AllowUFW(r.Context(), req)
+		writeResult(w, agentcontract.UFWStatusResponseFromStatus(status), err)
+	case r.Method == http.MethodPost && path == "/v1/ufw/rules/delete":
+		var req agentcontract.UFWDeleteRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		status, err := h.collector.DeleteUFW(r.Context(), req)
+		writeResult(w, agentcontract.UFWStatusResponseFromStatus(status), err)
+	case r.Method == http.MethodPost && path == "/v1/system/restart":
+		err := h.collector.RestartSystem(r.Context())
+		writeResult(w, map[string]bool{"ok": err == nil}, err)
 	case r.Method == http.MethodGet && path == "/v1/docker/containers":
 		items, err := h.runtime.Containers(r.Context())
 		writeResult(w, agentcontract.DockerContainersResponse{Items: items}, err)

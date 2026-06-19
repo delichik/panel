@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 import (
 	"context"
@@ -271,12 +271,13 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 		t.Fatalf("expected sudo timeout %s, got %s", connectivitySudoTimeout, exec.sudoTimeout)
 	}
 
-	// 验证系统特征是否成功探测并自动入库
+	// 初始任务只探测部署 Agent 所需的架构信息。
 	srv, err = svc.Get(context.Background(), srv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits["sys.cpu_cores"] != "8" || srv.Traits["sys.memory_total_mb"] != "16384" || srv.Traits["sys.disk_total_gb"] != "256" || srv.Traits["sys.hostname"] != "test-node" || srv.Traits["sys.architecture"] != "x86_64" || srv.Traits["sys.cpu_model"] != "AMD EPYC" || srv.Traits["sys.network_interfaces"] != "eth0|inet|10.0.0.10/24, eth0|inet6|2001:db8::10/64" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_supported"] != "true" || srv.Traits["sys.ufw_installed"] != "false" {
+	if srv.Traits["sys.architecture"] != "x86_64" || srv.Traits["sys.os"] != "debian-13" || srv.Traits["sys.ufw_supported"] != "true" ||
+		srv.Architecture.OS != "linux" || srv.Architecture.Arch != "amd64" || srv.Architecture.RawMachine != "x86_64" {
 		t.Fatalf("unexpected system traits detected: %#v", srv.Traits)
 	}
 
@@ -304,7 +305,8 @@ func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
 	if !result.Reachable || !result.Root || !result.Privileged {
 		t.Fatalf("expected reachable root probe, got %#v", result)
 	}
-	if result.Traits["sys.cpu_cores"] != "8" || result.Traits["sys.ufw_supported"] != "true" || result.OS.PrettyName != "Debian GNU/Linux 13" {
+	if result.Traits["sys.architecture"] != "x86_64" || result.Traits["sys.ufw_supported"] != "true" || result.OS.PrettyName != "Debian GNU/Linux 13" ||
+		result.Architecture.OS != "linux" || result.Architecture.Arch != "amd64" {
 		t.Fatalf("unexpected probe detail: %#v", result)
 	}
 }
@@ -551,7 +553,7 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
+func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -572,19 +574,18 @@ func TestUFWWriteOperationsUseSSHWhenAgentConfigured(t *testing.T) {
 	}
 	taskSvc := tasks.NewService(store.TaskDB())
 	exec := &ufwManageFakeExec{}
-	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: false, Status: "not_installed"}}
+	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: true, Status: "active"}}
 	svc := newServerServiceForTest(store, exec, taskSvc)
 	svc.SetAgentClient(agentClient)
 
 	if _, err := svc.AllowUFW(context.Background(), "srv_1", UFWAllowRequest{Port: 443, Protocol: "tcp"}); err != nil {
 		t.Fatal(err)
 	}
-	commands := strings.Join(exec.commands, "\n")
-	if !strings.Contains(commands, "panel_ufw_installed=true") || !strings.Contains(commands, "ufw allow 443/tcp") {
-		t.Fatalf("expected SSH status and allow commands, got:\n%s", commands)
+	if len(exec.commands) != 0 {
+		t.Fatalf("expected no SSH commands, got %#v", exec.commands)
 	}
-	if agentClient.ufwURL != "" {
-		t.Fatalf("write operation should not query agent UFW status, got %q", agentClient.ufwURL)
+	if agentClient.ufwURL != "https://127.0.0.1:9443" || agentClient.allowedRule.Port != 443 {
+		t.Fatalf("expected agent UFW write, got url=%q rule=%#v", agentClient.ufwURL, agentClient.allowedRule)
 	}
 }
 
@@ -1394,6 +1395,9 @@ func (f *connectivityFakeExec) Exec(ctx context.Context, target sshx.Target, com
 		}
 		return sshx.CommandResult{Stdout: "1000\n", ExitCode: 0}, nil
 	}
+	if strings.TrimSpace(command.Command) == "uname -m" {
+		return sshx.CommandResult{Stdout: "x86_64\n", ExitCode: 0}, nil
+	}
 	return sshx.CommandResult{ExitCode: 0}, nil
 }
 
@@ -1467,12 +1471,22 @@ func (f *ufwInstallFakeExec) Exec(ctx context.Context, target sshx.Target, comma
 		}
 		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nufw_installed=" + installed + "\nufw_active=false\n", ExitCode: 0}, nil
 	}
+	if strings.TrimSpace(command.Command) == "uname -m" {
+		return sshx.CommandResult{Stdout: "x86_64\n", ExitCode: 0}, nil
+	}
 	return sshx.CommandResult{ExitCode: 0}, nil
 }
 
 func (f *ufwInstallFakeExec) ExecSudo(ctx context.Context, target sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
 	if strings.TrimSpace(command.Command) == "true" {
 		return sshx.CommandResult{ExitCode: 0}, nil
+	}
+	if strings.Contains(command.Command, "panel_ufw_installed") {
+		installed := "false"
+		if f.installed {
+			installed = "true"
+		}
+		return sshx.CommandResult{Stdout: "panel_ufw_installed=" + installed + "\nStatus: inactive\npanel_ufw_numbered_begin\n", ExitCode: 0}, nil
 	}
 	if f.blockInstall != nil {
 		<-f.blockInstall
@@ -1540,6 +1554,9 @@ func (f *ufwEnableFakeExec) Exec(_ context.Context, _ sshx.Target, command sshx.
 	}
 	if strings.Contains(command.Command, "cores=") {
 		return sshx.CommandResult{Stdout: "cores=8\nmem=16384\ndisk=256\nhostname=test-node\narch=x86_64\ncpu_model=AMD EPYC\nnic=eth0|inet|10.0.0.10/24\nufw_installed=" + boolString(f.installed) + "\nufw_active=" + boolString(f.active) + "\n", ExitCode: 0}, nil
+	}
+	if strings.TrimSpace(command.Command) == "uname -m" {
+		return sshx.CommandResult{Stdout: "x86_64\n", ExitCode: 0}, nil
 	}
 	return sshx.CommandResult{ExitCode: 0}, nil
 }
@@ -1644,6 +1661,7 @@ type serverFakeAgentClient struct {
 	osRelease    linux.OSRelease
 	systemTraits map[string]string
 	err          error
+	allowedRule  remoteops.UFWRule
 }
 
 func agentHealth(version string) agentcontract.HealthResponse {
@@ -1674,6 +1692,32 @@ func (f *serverFakeAgentClient) MetricsSnapshot(context.Context, string, string)
 func (f *serverFakeAgentClient) UFWStatus(_ context.Context, url string) (remoteops.UFWStatus, error) {
 	f.ufwURL = url
 	return f.ufw, f.err
+}
+func (f *serverFakeAgentClient) PackageUpdates(context.Context, string) ([]linux.PackageUpdate, error) {
+	return nil, f.err
+}
+func (f *serverFakeAgentClient) UpgradePackages(context.Context, string, agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
+	return agentcontract.CommandResponse{}, f.err
+}
+func (f *serverFakeAgentClient) UFWInstall(_ context.Context, url string, _ agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
+	f.ufwURL = url
+	return f.ufw, f.err
+}
+func (f *serverFakeAgentClient) UFWEnable(_ context.Context, url string, _ agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
+	f.ufwURL = url
+	return f.ufw, f.err
+}
+func (f *serverFakeAgentClient) UFWAllow(_ context.Context, url string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
+	f.ufwURL = url
+	f.allowedRule = req.Rule
+	return f.ufw, f.err
+}
+func (f *serverFakeAgentClient) UFWDelete(_ context.Context, url string, _ agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
+	f.ufwURL = url
+	return f.ufw, f.err
+}
+func (f *serverFakeAgentClient) RestartSystem(context.Context, string) error {
+	return f.err
 }
 
 type failingConnectivityExec struct{}

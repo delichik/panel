@@ -20,37 +20,6 @@ const (
 	packageUpgradeTimeout = time.Hour
 )
 
-func (aptAdapter) ReadStatus(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) (SystemStatus, error) {
-	cmd := "printf '%s\\n' \"$(hostname)\" \"$(uname -r)\" \"$(. /etc/os-release && echo \"$PRETTY_NAME\")\" \"$(date -u +%s)\" \"$(cut -d. -f1 /proc/uptime)\" \"$(cat /proc/loadavg)\""
-	res, err := exec.Exec(ctx, target, sshx.CommandSpec{Command: cmd})
-	if err != nil {
-		return SystemStatus{}, err
-	}
-	lines := strings.Split(strings.TrimSpace(res.Stdout), "\n")
-	for len(lines) < 6 {
-		lines = append(lines, "")
-	}
-	epoch, _ := strconv.ParseInt(strings.TrimSpace(lines[3]), 10, 64)
-	uptime, _ := strconv.ParseInt(strings.TrimSpace(lines[4]), 10, 64)
-	return SystemStatus{
-		Hostname:      strings.TrimSpace(lines[0]),
-		KernelVersion: strings.TrimSpace(lines[1]),
-		OSVersion:     strings.TrimSpace(lines[2]),
-		ServerTime:    time.Unix(epoch, 0).UTC(),
-		UptimeSeconds: uptime,
-		LoadAverage:   strings.TrimSpace(lines[5]),
-	}, nil
-}
-
-func (aptAdapter) CollectMetrics(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) (MetricsSnapshot, error) {
-	cmd := `net_sample() { ts=$(date +%s%N); awk -v ts="$ts" 'NR>2{iface=$1; sub(":", "", iface); if(iface=="lo") next; rx+=$2; tx+=$10} END{printf "%s %.0f %.0f\n", ts, rx, tx}' /proc/net/dev; }; awk '/^cpu /{idle=$5; total=0; for(i=2;i<=NF;i++) total+=$i; print total,idle}' /proc/stat; free -b | awk '/^Mem:/{print $2,$3}'; df -B1 / | awk 'NR==2{print $2,$3}'; net_sample; sleep 1; net_sample; hostname; uname -r; . /etc/os-release && echo "$PRETTY_NAME"; cut -d. -f1 /proc/uptime; cat /proc/loadavg`
-	res, err := exec.Exec(ctx, target, sshx.CommandSpec{Command: cmd})
-	if err != nil {
-		return MetricsSnapshot{}, err
-	}
-	return ParseMetricsOutput(target.ServerID, res.Stdout)
-}
-
 func (aptAdapter) ListUpgradeable(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) ([]PackageUpdate, error) {
 	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
 		Command: "apt-get update >/dev/null && apt list --upgradable 2>/dev/null",

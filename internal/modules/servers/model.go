@@ -6,6 +6,7 @@ import (
 )
 
 type Server = domain.Server
+type ArchitectureInfo = domain.ArchitectureInfo
 type SudoState = domain.SudoState
 type SaveRequest = domain.SaveRequest
 type ProbeResult = domain.ProbeResult

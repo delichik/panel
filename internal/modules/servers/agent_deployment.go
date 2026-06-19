@@ -303,6 +303,15 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	if info, infoErr := agentsecurity.ParseCertificateInfo([]byte(bundle.Certificate)); infoErr == nil {
 		_ = s.markAgentCertificate(ctx, srv.ID, info)
 	}
+	_ = s.tasks.Advance(ctx, taskID, "collecting", "collecting server information through panel agent")
+	checked, err = s.Get(ctx, srv.ID)
+	if err != nil {
+		s.failAgentDeployTask(ctx, taskID, srv, err)
+		return
+	}
+	if err := s.refreshServerTraits(ctx, taskID, checked); err != nil {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "panel agent deployed, but initial system information collection failed: "+err.Error())
+	}
 	_ = s.tasks.Complete(ctx, taskID, "Panel agent deployed")
 }
 

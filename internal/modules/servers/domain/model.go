@@ -18,6 +18,7 @@ type Server struct {
 	Variables     map[string]string `json:"variables"`
 	Notes         string            `json:"notes"`
 	OS            linux.OSRelease   `json:"os"`
+	Architecture  ArchitectureInfo  `json:"architecture"`
 	Sudo          SudoState         `json:"sudo"`
 	Reachable     bool              `json:"reachable"`
 	LoadAverage   string            `json:"loadAverage"`
@@ -26,6 +27,12 @@ type Server struct {
 	InitialTaskID string            `json:"initialTaskId,omitempty"`
 	CreatedAt     time.Time         `json:"createdAt"`
 	UpdatedAt     time.Time         `json:"updatedAt"`
+}
+
+type ArchitectureInfo struct {
+	OS         string `json:"os"`
+	Arch       string `json:"arch"`
+	RawMachine string `json:"rawMachine"`
 }
 
 type SudoState struct {
@@ -51,6 +58,7 @@ type ProbeResult struct {
 	Root                 bool              `json:"root"`
 	Privileged           bool              `json:"privileged"`
 	OS                   linux.OSRelease   `json:"os"`
+	Architecture         ArchitectureInfo  `json:"architecture"`
 	Traits               map[string]string `json:"traits"`
 	Variables            map[string]string `json:"variables"`
 	Error                string            `json:"error,omitempty"`

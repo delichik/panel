@@ -20,13 +20,15 @@ import (
 )
 
 type HTTPClient struct {
-	mu         sync.RWMutex
-	client     *http.Client
-	pullClient *http.Client
-	timeout    time.Duration
+	mu                sync.RWMutex
+	client            *http.Client
+	pullClient        *http.Client
+	maintenanceClient *http.Client
+	timeout           time.Duration
 }
 
 const dockerImagePullTimeout = 15 * time.Minute
+const maintenanceTimeout = 65 * time.Minute
 
 func NewHTTPClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*HTTPClient, error) {
 	if timeout == 0 {
@@ -56,11 +58,19 @@ func (c *HTTPClient) ReloadTLSAssets(tlsAssets *agentsecurity.TLSAssets) error {
 			TLSClientConfig: tlsConfig.Clone(),
 		},
 	}
+	nextMaintenance := &http.Client{
+		Timeout: maintenanceTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig.Clone(),
+		},
+	}
 	c.mu.Lock()
 	previous := c.client
 	previousPull := c.pullClient
+	previousMaintenance := c.maintenanceClient
 	c.client = next
 	c.pullClient = nextPull
+	c.maintenanceClient = nextMaintenance
 	c.mu.Unlock()
 	if previous != nil {
 		if transport, ok := previous.Transport.(*http.Transport); ok {
@@ -72,7 +82,22 @@ func (c *HTTPClient) ReloadTLSAssets(tlsAssets *agentsecurity.TLSAssets) error {
 			transport.CloseIdleConnections()
 		}
 	}
+	if previousMaintenance != nil {
+		if transport, ok := previousMaintenance.Transport.(*http.Transport); ok {
+			transport.CloseIdleConnections()
+		}
+	}
 	return nil
+}
+
+func (c *HTTPClient) doMaintenance(req *http.Request) (*http.Response, error) {
+	c.mu.RLock()
+	client := c.maintenanceClient
+	c.mu.RUnlock()
+	if client == nil {
+		return nil, fmt.Errorf("agent maintenance http client is not configured")
+	}
+	return client.Do(req)
 }
 
 func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
@@ -153,6 +178,48 @@ func (c *HTTPClient) UFWStatus(ctx context.Context, baseURL string) (remoteops.U
 		return remoteops.UFWStatus{}, err
 	}
 	return agentcontract.UFWStatusFromResponse(out), nil
+}
+
+func (c *HTTPClient) PackageUpdates(ctx context.Context, baseURL string) ([]linux.PackageUpdate, error) {
+	var out agentcontract.PackageUpdatesResponse
+	if err := c.getWithDo(ctx, baseURL, "/v1/system/packages/updates", nil, &out, c.doMaintenance); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+func (c *HTTPClient) UpgradePackages(ctx context.Context, baseURL string, req agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
+	var out agentcontract.CommandResponse
+	err := c.postWithDo(ctx, baseURL, "/v1/system/packages/upgrade", req, &out, c.doMaintenance)
+	return out, err
+}
+
+func (c *HTTPClient) UFWInstall(ctx context.Context, baseURL string, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
+	var out agentcontract.UFWStatusResponse
+	err := c.postWithDo(ctx, baseURL, "/v1/ufw/install", req, &out, c.doMaintenance)
+	return agentcontract.UFWStatusFromResponse(out), err
+}
+
+func (c *HTTPClient) UFWEnable(ctx context.Context, baseURL string, req agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
+	var out agentcontract.UFWStatusResponse
+	err := c.postWithDo(ctx, baseURL, "/v1/ufw/enable", req, &out, c.doMaintenance)
+	return agentcontract.UFWStatusFromResponse(out), err
+}
+
+func (c *HTTPClient) UFWAllow(ctx context.Context, baseURL string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
+	var out agentcontract.UFWStatusResponse
+	err := c.postWithDo(ctx, baseURL, "/v1/ufw/rules", req, &out, c.doMaintenance)
+	return agentcontract.UFWStatusFromResponse(out), err
+}
+
+func (c *HTTPClient) UFWDelete(ctx context.Context, baseURL string, req agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
+	var out agentcontract.UFWStatusResponse
+	err := c.postWithDo(ctx, baseURL, "/v1/ufw/rules/delete", req, &out, c.doMaintenance)
+	return agentcontract.UFWStatusFromResponse(out), err
+}
+
+func (c *HTTPClient) RestartSystem(ctx context.Context, baseURL string) error {
+	return c.postWithDo(ctx, baseURL, "/v1/system/restart", nil, nil, c.doMaintenance)
 }
 
 func (c *HTTPClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error {
@@ -278,7 +345,11 @@ func (c *HTTPClient) DockerVolumeDelete(ctx context.Context, baseURL, name strin
 }
 
 func (c *HTTPClient) get(ctx context.Context, baseURL, path string, query url.Values, out any) error {
-	res, err := c.getResponse(ctx, baseURL, path, query)
+	return c.getWithDo(ctx, baseURL, path, query, out, c.do)
+}
+
+func (c *HTTPClient) getWithDo(ctx context.Context, baseURL, path string, query url.Values, out any, do func(*http.Request) (*http.Response, error)) error {
+	res, err := c.getResponseWithDo(ctx, baseURL, path, query, do)
 	if err != nil {
 		return err
 	}
@@ -287,6 +358,10 @@ func (c *HTTPClient) get(ctx context.Context, baseURL, path string, query url.Va
 }
 
 func (c *HTTPClient) getResponse(ctx context.Context, baseURL, path string, query url.Values) (*http.Response, error) {
+	return c.getResponseWithDo(ctx, baseURL, path, query, c.do)
+}
+
+func (c *HTTPClient) getResponseWithDo(ctx context.Context, baseURL, path string, query url.Values, do func(*http.Request) (*http.Response, error)) (*http.Response, error) {
 	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
 	if err != nil {
 		return nil, err
@@ -298,7 +373,7 @@ func (c *HTTPClient) getResponse(ctx context.Context, baseURL, path string, quer
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.do(req)
+	res, err := do(req)
 	if err != nil {
 		return nil, err
 	}

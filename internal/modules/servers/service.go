@@ -126,6 +126,19 @@ func (s *Service) AllowUFW(ctx context.Context, serverID string, req UFWAllowReq
 	if err != nil {
 		return UFWState{}, err
 	}
+	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
+		if err != nil {
+			return UFWState{}, err
+		}
+		status, callErr := maintenance.UFWAllow(ctx, baseURL, agentcontract.UFWAllowRequest{
+			Rule: remoteops.UFWRule{Port: req.Port, Protocol: req.Protocol, From: req.From},
+		})
+		if callErr != nil {
+			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
+			return UFWState{}, callErr
+		}
+		return ufwStateFromStatus(srv.ID, true, status), nil
+	}
 	if err := s.ensureUFWInstalled(ctx, srv); err != nil {
 		return UFWState{}, err
 	}
@@ -182,6 +195,17 @@ func (s *Service) DeleteUFWRule(ctx context.Context, serverID string, number int
 	srv, err := s.ensureUFWManageable(ctx, serverID)
 	if err != nil {
 		return UFWState{}, err
+	}
+	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
+		if err != nil {
+			return UFWState{}, err
+		}
+		status, callErr := maintenance.UFWDelete(ctx, baseURL, agentcontract.UFWDeleteRequest{Number: number})
+		if callErr != nil {
+			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
+			return UFWState{}, callErr
+		}
+		return ufwStateFromStatus(srv.ID, true, status), nil
 	}
 	if err := s.ensureUFWInstalled(ctx, srv); err != nil {
 		return UFWState{}, err
@@ -401,12 +425,11 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 	sudoRes, sudoErr := s.exec.ExecSudo(probeCtx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
 	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
 
-	sysTraits := map[string]string{}
-	if osInfo.Supported {
-		if detected, traitsErr := s.detectSystemTraits(probeCtx, target); traitsErr == nil {
-			sysTraits = detected
-		}
+	architecture, architectureErr := s.detectArchitectureInfo(probeCtx, target)
+	if architectureErr != nil {
+		return ProbeResult{Reachable: false, Error: architectureErr.Error(), Traits: map[string]string{}}, nil
 	}
+	sysTraits := map[string]string{"sys.architecture": architecture.RawMachine}
 	applyDistroSystemTraits(osInfo, sysTraits)
 
 	result := ProbeResult{
@@ -415,6 +438,7 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 		Root:             root,
 		Privileged:       root || passwordless,
 		OS:               osInfo,
+		Architecture:     architecture,
 		Traits:           sysTraits,
 	}
 	if sudoErr != nil && !root {
@@ -532,6 +556,10 @@ func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv 
 	}
 	target := serverTarget(srv)
 	_ = s.tasks.Advance(ctx, taskID, "connecting", "connecting to server")
+	if task.Type == serverInfoTaskType {
+		s.runInitialServerInfoCollection(ctx, task, srv, target)
+		return
+	}
 	osInfo, err := s.detectOS(ctx, srv, target)
 	if err != nil {
 		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, nil, err.Error())
@@ -539,19 +567,22 @@ func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv 
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking passwordless sudo")
-	sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
-	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
-	if sudoErr != nil {
-		_ = s.tasks.AppendLog(ctx, taskID, "system", "passwordless sudo unavailable: "+sudoErr.Error())
+	passwordless := srv.Sudo.Passwordless
+	if _, configured := agentURL(srv); !configured {
+		sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
+		passwordless = sudoErr == nil && sudoRes.ExitCode == 0
+		if sudoErr != nil {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "passwordless sudo unavailable: "+sudoErr.Error())
+		}
 	}
 
-	sysTraits := map[string]string{}
+	sysTraits := map[string]string{"sys.architecture": firstNonEmpty(srv.Architecture.RawMachine, srv.Traits["sys.architecture"])}
 	if osInfo.Supported {
 		_ = s.tasks.Advance(ctx, taskID, "traits", "discovering server system traits")
 		detected, traitsErr := s.detectSystemTraitsForServer(ctx, srv, target)
 		if traitsErr == nil {
 			sysTraits = detected
-		} else {
+		} else if _, configured := agentURL(srv); configured {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
 		}
 	}
@@ -570,6 +601,53 @@ func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv 
 	} else {
 		_ = s.tasks.Complete(ctx, taskID, "Connected, passwordless sudo unavailable")
 	}
+}
+
+func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks.Task, srv Server, target sshx.Target) {
+	taskID := task.ID
+	osInfo, err := linux.Detect(ctx, s.exec, target)
+	if err != nil {
+		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, nil, err.Error())
+		s.failConnectivityTask(ctx, task, srv, err)
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, "architecture", "detecting server architecture")
+	architecture, err := s.detectArchitectureInfo(ctx, target)
+	if err != nil {
+		_ = s.markCheck(ctx, srv.ID, true, osInfo, false, nil, err.Error())
+		s.failConnectivityTask(ctx, task, srv, err)
+		return
+	}
+	if err := s.markArchitecture(ctx, srv.ID, architecture); err != nil {
+		s.failConnectivityTask(ctx, task, srv, err)
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking passwordless sudo")
+	sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
+	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
+	if sudoErr != nil {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "passwordless sudo unavailable: "+sudoErr.Error())
+	}
+	sysTraits := map[string]string{"sys.architecture": architecture.RawMachine}
+	applyDistroSystemTraits(osInfo, sysTraits)
+	msg := ""
+	if !osInfo.Supported {
+		msg = "unsupported distribution"
+	}
+	if err := s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, msg); err != nil {
+		s.failConnectivityTask(ctx, task, srv, err)
+		return
+	}
+	if !osInfo.Supported {
+		_ = s.tasks.Complete(ctx, taskID, "Connected, but distribution is unsupported")
+		return
+	}
+	if !passwordless {
+		_ = s.tasks.Complete(ctx, taskID, "Architecture detected, passwordless sudo unavailable")
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "Architecture detected")
+	_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 }
 
 func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv Server, err error) {
@@ -592,6 +670,30 @@ func (s *Service) rollbackInitialServer(ctx context.Context, serverID string) er
 func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
 	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Start(ctx, taskID)
+	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW through panel agent")
+		rules := []remoteops.UFWRule{{Port: normalizedTCPPort(srv.Port), Protocol: "tcp"}, {Port: defaultAgentPort, Protocol: "tcp"}}
+		if traitEnabled(srv.Traits[reverseProxyEnabledTrait]) {
+			for _, port := range reverseProxyTCPPorts {
+				rules = append(rules, remoteops.UFWRule{Port: port, Protocol: "tcp"})
+			}
+		}
+		if _, callErr := maintenance.UFWInstall(ctx, baseURL, agentcontract.UFWInstallRequest{Rules: uniqueUFWRules(rules)}); callErr != nil {
+			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
+			_ = s.tasks.Fail(ctx, taskID, callErr)
+			return
+		}
+		if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		_ = s.tasks.Complete(ctx, taskID, "UFW installed")
+		return
+	}
 	target := serverTarget(srv)
 	_ = s.tasks.Advance(ctx, taskID, "installing", "installing UFW")
 	if _, err := (remoteops.Runner{Exec: s.exec, Target: target, Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, ufwInstallScript(adapter, srv), ufwInstallTimeout); err != nil {
@@ -614,6 +716,10 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 			sysTraits = detected
 		} else {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
+			if status, statusErr := s.fetchUFWStatusSSH(ctx, srv); statusErr == nil {
+				sysTraits["sys.ufw_installed"] = boolString(status.Installed)
+				sysTraits["sys.ufw_active"] = boolString(status.Active)
+			}
 		}
 	}
 	applyDistroSystemTraits(osInfo, sysTraits)
@@ -630,6 +736,24 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 
 func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
 	defer s.tasks.FinishExecution(taskID)
+	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		_ = s.tasks.Advance(ctx, taskID, "enabling", "enabling UFW through panel agent")
+		if _, callErr := maintenance.UFWEnable(ctx, baseURL, agentcontract.UFWEnableRequest{SSHPort: normalizedTCPPort(srv.Port)}); callErr != nil {
+			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
+			_ = s.tasks.Fail(ctx, taskID, callErr)
+			return
+		}
+		if err := s.refreshServerTraits(ctx, taskID, srv); err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		_ = s.tasks.Complete(ctx, taskID, "UFW enabled")
+		return
+	}
 	target := serverTarget(srv)
 	status, err := s.fetchUFWStatusSSH(ctx, srv)
 	if err != nil {
@@ -664,6 +788,19 @@ func (s *Service) runEnableUFW(ctx context.Context, taskID string, srv Server, a
 func (s *Service) runRestart(ctx context.Context, taskID string, srv Server) {
 	defer s.tasks.FinishExecution(taskID)
 	_ = s.tasks.Advance(ctx, taskID, "restarting", "scheduling server restart")
+	if maintenance, baseURL, ok, err := s.agentMaintenance(srv); ok || err != nil {
+		if err != nil {
+			_ = s.tasks.Fail(ctx, taskID, err)
+			return
+		}
+		if callErr := maintenance.RestartSystem(ctx, baseURL); callErr != nil {
+			_ = s.handleAgentCertificateTimeError(ctx, srv, callErr)
+			_ = s.tasks.Fail(ctx, taskID, callErr)
+			return
+		}
+		_ = s.tasks.Complete(ctx, taskID, "Server restart scheduled")
+		return
+	}
 	if _, err := (remoteops.Runner{Exec: s.exec, Target: serverTarget(srv), Log: serverTaskLogSink{s.tasks, taskID}}).RunSudoLogged(ctx, remoteops.RestartScript(), restartTimeout); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -671,97 +808,44 @@ func (s *Service) runRestart(ctx context.Context, taskID string, srv Server) {
 	_ = s.tasks.Complete(ctx, taskID, "Server restart scheduled")
 }
 
-func (s *Service) detectSystemTraits(ctx context.Context, target sshx.Target) (map[string]string, error) {
-	script := `echo "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"
-echo "mem=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' | awk '{print int($1/1024)}' || echo 0)"
-echo "disk=$(df -m / 2>/dev/null | awk 'NR==2{print $2}' | awk '{print int($1/1024)}' || echo 0)"
-echo "hostname=$(hostname 2>/dev/null || echo unknown)"
-echo "arch=$(uname -m 2>/dev/null || echo unknown)"
-cpu_model=""
-if command -v lscpu >/dev/null 2>&1; then
-  cpu_model="$(lscpu | awk -F: '/Model name/{sub(/^[ \t]+/, "", $2); print $2; exit}')"
-fi
-if [ -z "$cpu_model" ] && [ -r /proc/cpuinfo ]; then
-  cpu_model="$(awk -F: '/model name|Hardware|Processor/{sub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo)"
-fi
-echo "cpu_model=${cpu_model:-unknown}"
-if command -v ip >/dev/null 2>&1; then
-  ip -o addr show scope global | awk '{iface=$2; sub(/@.*/, "", iface); print iface "|" $3 "|" $4}' |
-  while IFS='|' read -r iface family address; do
-    [ -e "/sys/class/net/$iface/device" ] || continue
-    case "$iface" in
-      lo|docker*|veth*|br-*|virbr*|cni*|flannel*|cali*|tun*|tap*|wg*|tailscale*|zt*) continue ;;
-    esac
-    echo "nic=$iface|$family|$address"
-  done
-elif [ -r /proc/net/dev ]; then
-  for iface_path in /sys/class/net/*; do
-    [ -e "$iface_path/device" ] || continue
-    iface="${iface_path##*/}"
-    case "$iface" in
-      lo|docker*|veth*|br-*|virbr*|cni*|flannel*|cali*|tun*|tap*|wg*|tailscale*|zt*) continue ;;
-    esac
-    echo "nic=$iface|link|"
-  done
-fi
-if command -v ufw >/dev/null 2>&1; then
-  echo "ufw_installed=true"
-  if systemctl is-active --quiet ufw 2>/dev/null || ufw status 2>/dev/null | grep -qi "^Status: active"; then
-    echo "ufw_active=true"
-  else
-    echo "ufw_active=false"
-  fi
-else
-  echo "ufw_installed=false"
-  echo "ufw_active=false"
-fi`
-	cmd := "sh -lc " + remoteops.ShellQuote(script)
+func (s *Service) agentMaintenance(srv Server) (agentcontract.MaintenanceClient, string, bool, error) {
+	maintenance, available := s.agent.(agentcontract.MaintenanceClient)
+	if !available {
+		return nil, "", false, nil
+	}
+	baseURL, configured := agentURL(srv)
+	if !configured {
+		return nil, "", true, panelerr.Validation("agent_required", "Agent is required for server maintenance")
+	}
+	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
+		return nil, "", true, panelerr.Validation("agent_incompatible", "Agent is not compatible with server maintenance")
+	}
+	return maintenance, baseURL, true, nil
+}
 
-	res, err := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: cmd, Timeout: 12 * time.Second})
+func (s *Service) detectArchitectureInfo(ctx context.Context, target sshx.Target) (ArchitectureInfo, error) {
+	res, err := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: "uname -m", Timeout: connectivitySudoTimeout})
 	if err != nil {
-		return nil, err
+		return ArchitectureInfo{}, err
 	}
+	rawMachine := strings.TrimSpace(res.Stdout)
+	if rawMachine == "" {
+		return ArchitectureInfo{}, panelerr.Validation("server_architecture_invalid", "Server architecture response is invalid")
+	}
+	arch := normalizeAgentArch(rawMachine)
+	if arch == "" {
+		return ArchitectureInfo{}, panelerr.Validation("agent_binary_unavailable", "panel-agent binary is unavailable for target platform")
+	}
+	return ArchitectureInfo{OS: "linux", Arch: arch, RawMachine: rawMachine}, nil
+}
 
-	traits := map[string]string{}
-	nics := []string{}
-	for _, line := range strings.Split(res.Stdout, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			continue
-		}
-		value = strings.TrimSpace(value)
-		switch key {
-		case "cores":
-			traits["sys.cpu_cores"] = value
-		case "mem":
-			traits["sys.memory_total_mb"] = value
-		case "disk":
-			traits["sys.disk_total_gb"] = value
-		case "hostname":
-			traits["sys.hostname"] = value
-		case "arch":
-			traits["sys.architecture"] = value
-		case "cpu_model":
-			traits["sys.cpu_model"] = value
-		case "nic":
-			name, _, _ := strings.Cut(value, "|")
-			if value != "" && !isVirtualNetworkInterface(name) {
-				nics = append(nics, value)
-			}
-		case "ufw_installed":
-			traits["sys.ufw_installed"] = value
-		case "ufw_active":
-			traits["sys.ufw_active"] = value
-		}
+func (s *Service) markArchitecture(ctx context.Context, serverID string, architecture ArchitectureInfo) error {
+	if s.db == nil || strings.TrimSpace(serverID) == "" {
+		return nil
 	}
-	if len(nics) > 0 {
-		traits["sys.network_interfaces"] = strings.Join(nics, ", ")
-	}
-	return traits, nil
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET architecture_os=?,architecture_arch=?,architecture_machine=?,updated_at=? WHERE id=?`,
+		architecture.OS, architecture.Arch, architecture.RawMachine, time.Now().UTC().Format(time.RFC3339Nano), serverID)
+	return err
 }
 
 func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) (linux.OSRelease, error) {
@@ -783,7 +867,7 @@ func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) 
 	return linux.Detect(ctx, s.exec, target)
 }
 
-func (s *Service) detectSystemTraitsForServer(ctx context.Context, srv Server, target sshx.Target) (map[string]string, error) {
+func (s *Service) detectSystemTraitsForServer(ctx context.Context, srv Server, _ sshx.Target) (map[string]string, error) {
 	if baseURL, ok := agentURL(srv); ok {
 		if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 			s.recoverAgentForSystemDetection(ctx, srv)
@@ -799,7 +883,7 @@ func (s *Service) detectSystemTraitsForServer(ctx context.Context, srv Server, t
 		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
 		return nil, err
 	}
-	return s.detectSystemTraits(ctx, target)
+	return nil, panelerr.Validation("agent_required", "Agent is required for full system information collection")
 }
 
 func systemCertificateFromInfo(id, certificateType, name string, info agentsecurity.CertificateInfo) SystemCertificate {
@@ -1144,17 +1228,29 @@ func (s *Service) agentBinaryPath(ctx context.Context, srv Server) (string, erro
 }
 
 func (s *Service) agentTargetPlatform(ctx context.Context, srv Server) (string, error) {
-	arch := normalizeAgentArch(srv.Traits["sys.architecture"])
-	if arch == "" && s.exec != nil {
-		res, err := s.exec.Exec(ctx, serverTarget(srv), sshx.CommandSpec{Command: "uname -m", Timeout: connectivitySudoTimeout})
-		if err == nil {
-			arch = normalizeAgentArch(res.Stdout)
-		}
+	osName := strings.ToLower(strings.TrimSpace(srv.Architecture.OS))
+	arch := normalizeAgentArch(srv.Architecture.Arch)
+	if arch == "" {
+		arch = normalizeAgentArch(srv.Architecture.RawMachine)
 	}
 	if arch == "" {
+		arch = normalizeAgentArch(srv.Traits["sys.architecture"])
+	}
+	if arch == "" && s.exec != nil {
+		architecture, err := s.detectArchitectureInfo(ctx, serverTarget(srv))
+		if err == nil {
+			osName = architecture.OS
+			arch = architecture.Arch
+			_ = s.markArchitecture(ctx, srv.ID, architecture)
+		}
+	}
+	if osName == "" {
+		osName = "linux"
+	}
+	if osName != "linux" || arch == "" {
 		return "", panelerr.Validation("agent_binary_unavailable", "panel-agent binary is unavailable for target architecture")
 	}
-	return "linux-" + arch, nil
+	return osName + "-" + arch, nil
 }
 
 func normalizeAgentArch(value string) string {
@@ -1240,8 +1336,7 @@ func (s *Service) refreshServerTraits(ctx context.Context, taskID string, srv Se
 	if err != nil {
 		return err
 	}
-	sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
-	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
+	passwordless := srv.Sudo.Passwordless
 	sysTraits := map[string]string{}
 	if osInfo.Supported {
 		detected, traitsErr := s.detectSystemTraitsForServer(ctx, srv, target)
@@ -1249,6 +1344,10 @@ func (s *Service) refreshServerTraits(ctx context.Context, taskID string, srv Se
 			sysTraits = detected
 		} else {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "failed to detect system traits: "+traitsErr.Error())
+			if status, statusErr := s.fetchUFWStatusSSH(ctx, srv); statusErr == nil {
+				sysTraits["sys.ufw_installed"] = boolString(status.Installed)
+				sysTraits["sys.ufw_active"] = boolString(status.Active)
+			}
 		}
 	}
 	applyDistroSystemTraits(osInfo, sysTraits)
@@ -1317,9 +1416,10 @@ func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool
 		_ = json.Unmarshal([]byte(rawTraits), &current)
 	}
 
-	// 剔除之前所有的 sys. 特征，用本次新探测到的 sysTraits 覆盖
+	// 剔除之前可刷新的 sys. 特征，用本次新探测到的 sysTraits 覆盖。
+	// 部署架构有独立结构化字段；保留旧 sys.architecture 供旧客户端兼容展示。
 	for k := range current {
-		if strings.HasPrefix(k, "sys.") {
+		if strings.HasPrefix(k, "sys.") && k != "sys.architecture" {
 			delete(current, k)
 		}
 	}

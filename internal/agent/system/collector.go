@@ -1,9 +1,14 @@
 package system
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -25,133 +30,299 @@ func (LocalCollector) OSRelease(_ context.Context) (linux.OSRelease, error) {
 }
 
 func (LocalCollector) SystemTraits(ctx context.Context) (map[string]string, error) {
-	out, err := runShell(ctx, systemTraitsScript(), 12*time.Second)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return parseSystemTraits(out), nil
+	traits := map[string]string{
+		"sys.cpu_cores":       strconv.Itoa(runtime.NumCPU()),
+		"sys.architecture":    machineArchitecture(),
+		"sys.memory_total_mb": strconv.FormatInt(readMemoryTotalBytes()/(1024*1024), 10),
+		"sys.disk_total_gb":   strconv.FormatUint(readRootDiskTotalBytes()/(1024*1024*1024), 10),
+		"sys.cpu_model":       readCPUModel(),
+	}
+	if hostname, err := os.Hostname(); err == nil {
+		traits["sys.hostname"] = hostname
+	}
+	if nics := physicalNetworkInterfaces(); len(nics) > 0 {
+		traits["sys.network_interfaces"] = strings.Join(nics, ", ")
+	}
+	status, err := (LocalCollector{}).UFWStatus(ctx)
+	if err == nil {
+		traits["sys.ufw_installed"] = strconv.FormatBool(status.Installed)
+		traits["sys.ufw_active"] = strconv.FormatBool(status.Active)
+	}
+	return traits, nil
 }
 
 func (LocalCollector) MetricsSnapshot(ctx context.Context, serverID string) (linux.MetricsSnapshot, error) {
-	out, err := runShell(ctx, metricsScript(), 15*time.Second)
+	firstCPU, err := readCPUStat()
 	if err != nil {
 		return linux.MetricsSnapshot{}, err
 	}
-	snap, err := linux.ParseMetricsOutput(serverID, out)
+	firstNet, err := readNetworkTotals()
 	if err != nil {
 		return linux.MetricsSnapshot{}, err
 	}
-	snap.Time = time.Now().UTC()
-	return snap, nil
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return linux.MetricsSnapshot{}, ctx.Err()
+	case <-timer.C:
+	}
+	secondCPU, err := readCPUStat()
+	if err != nil {
+		return linux.MetricsSnapshot{}, err
+	}
+	secondNet, err := readNetworkTotals()
+	if err != nil {
+		return linux.MetricsSnapshot{}, err
+	}
+	memTotal, memAvailable := readMemoryStats()
+	diskTotal, diskUsed := readRootDiskUsage()
+	hostname, _ := os.Hostname()
+	osInfo, _ := (LocalCollector{}).OSRelease(ctx)
+	kernel := readKernelVersion()
+	uptime := readUptimeSeconds()
+	load := readFirstLine("/proc/loadavg")
+	return linux.MetricsSnapshot{
+		ServerID:           serverID,
+		Time:               time.Now().UTC(),
+		CPUUsagePercent:    cpuUsage(firstCPU, secondCPU),
+		MemoryTotalBytes:   memTotal,
+		MemoryUsedBytes:    maxInt64(0, memTotal-memAvailable),
+		DiskTotalBytes:     int64(diskTotal),
+		DiskUsedBytes:      int64(diskUsed),
+		NetworkRxBytesRate: float64(maxInt64(0, secondNet.rx-firstNet.rx)),
+		NetworkTxBytesRate: float64(maxInt64(0, secondNet.tx-firstNet.tx)),
+		Status: linux.SystemStatus{
+			Hostname:      hostname,
+			KernelVersion: kernel,
+			OSVersion:     osInfo.PrettyName,
+			ServerTime:    time.Now().UTC(),
+			UptimeSeconds: uptime,
+			LoadAverage:   load,
+		},
+	}, nil
 }
 
 func (LocalCollector) UFWStatus(ctx context.Context) (remoteops.UFWStatus, error) {
-	out, err := runShell(ctx, remoteops.UFWStatusScript(), time.Minute)
+	if _, err := exec.LookPath("ufw"); err != nil {
+		return remoteops.UFWStatus{Installed: false, Status: "not_installed"}, nil
+	}
+	verbose, err := runCommand(ctx, time.Minute, "ufw", "status", "verbose")
 	if err != nil {
 		return remoteops.UFWStatus{}, err
 	}
-	return remoteops.ParseUFWStatus(out), nil
+	numbered, err := runCommand(ctx, time.Minute, "ufw", "status", "numbered")
+	if err != nil {
+		return remoteops.UFWStatus{}, err
+	}
+	raw := "panel_ufw_installed=true\n" + verbose + "\npanel_ufw_numbered_begin\n" + numbered
+	return remoteops.ParseUFWStatus(raw), nil
 }
 
-func runShell(ctx context.Context, script string, timeout time.Duration) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+func runCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (string, error) {
+	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sh", "-lc", script)
-	out, err := cmd.CombinedOutput()
-	return string(out), err
+	out, err := exec.CommandContext(runCtx, name, args...).CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
+	}
+	return string(out), nil
 }
 
-func systemTraitsScript() string {
-	return `echo "cores=$(nproc 2>/dev/null || grep -c ^processor /proc/cpuinfo 2>/dev/null || echo 1)"
-echo "mem=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' | awk '{print int($1/1024)}' || echo 0)"
-echo "disk=$(df -m / 2>/dev/null | awk 'NR==2{print $2}' | awk '{print int($1/1024)}' || echo 0)"
-echo "hostname=$(hostname 2>/dev/null || echo unknown)"
-echo "arch=$(uname -m 2>/dev/null || echo unknown)"
-cpu_model=""
-if command -v lscpu >/dev/null 2>&1; then
-  cpu_model="$(lscpu | awk -F: '/Model name/{sub(/^[ \t]+/, "", $2); print $2; exit}')"
-fi
-if [ -z "$cpu_model" ] && [ -r /proc/cpuinfo ]; then
-  cpu_model="$(awk -F: '/model name|Hardware|Processor/{sub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo)"
-fi
-echo "cpu_model=${cpu_model:-unknown}"
-if command -v ip >/dev/null 2>&1; then
-  ip -o addr show scope global | awk '{iface=$2; sub(/@.*/, "", iface); print iface "|" $3 "|" $4}' |
-  while IFS='|' read -r iface family address; do
-    [ -e "/sys/class/net/$iface/device" ] || continue
-    case "$iface" in
-      lo|docker*|veth*|br-*|virbr*|cni*|flannel*|cali*|tun*|tap*|wg*|tailscale*|zt*) continue ;;
-    esac
-    echo "nic=$iface|$family|$address"
-  done
-elif [ -r /proc/net/dev ]; then
-  for iface_path in /sys/class/net/*; do
-    [ -e "$iface_path/device" ] || continue
-    iface="${iface_path##*/}"
-    case "$iface" in
-      lo|docker*|veth*|br-*|virbr*|cni*|flannel*|cali*|tun*|tap*|wg*|tailscale*|zt*) continue ;;
-    esac
-    echo "nic=$iface|link|"
-  done
-fi
-if command -v ufw >/dev/null 2>&1; then
-  echo "ufw_installed=true"
-  if systemctl is-active --quiet ufw 2>/dev/null || ufw status 2>/dev/null | grep -qi "^Status: active"; then
-    echo "ufw_active=true"
-  else
-    echo "ufw_active=false"
-  fi
-else
-  echo "ufw_installed=false"
-  echo "ufw_active=false"
-fi`
+func machineArchitecture() string {
+	switch runtime.GOARCH {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	default:
+		return runtime.GOARCH
+	}
 }
 
-func metricsScript() string {
-	return `net_sample() { ts=$(date +%s%N); awk -v ts="$ts" 'NR>2{iface=$1; sub(":", "", iface); if(iface=="lo") next; rx+=$2; tx+=$10} END{printf "%s %.0f %.0f\n", ts, rx, tx}' /proc/net/dev; }; awk '/^cpu /{idle=$5; total=0; for(i=2;i<=NF;i++) total+=$i; print total,idle}' /proc/stat; free -b | awk '/^Mem:/{print $2,$3}'; df -B1 / | awk 'NR==2{print $2,$3}'; net_sample; sleep 1; net_sample; hostname; uname -r; . /etc/os-release && echo "$PRETTY_NAME"; cut -d. -f1 /proc/uptime; cat /proc/loadavg`
-}
-
-func parseSystemTraits(out string) map[string]string {
-	traits := map[string]string{}
-	nics := []string{}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
+func readCPUModel() string {
+	file, err := os.Open("/proc/cpuinfo")
+	if err != nil {
+		return "unknown"
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(scanner.Text(), ":")
 		if !ok {
 			continue
 		}
-		value = strings.TrimSpace(value)
-		switch key {
-		case "cores":
-			traits["sys.cpu_cores"] = value
-		case "mem":
-			traits["sys.memory_total_mb"] = value
-		case "disk":
-			traits["sys.disk_total_gb"] = value
-		case "hostname":
-			traits["sys.hostname"] = value
-		case "arch":
-			traits["sys.architecture"] = value
-		case "cpu_model":
-			traits["sys.cpu_model"] = value
-		case "nic":
-			name, _, _ := strings.Cut(value, "|")
-			if value != "" && !isVirtualNetworkInterface(name) {
-				nics = append(nics, value)
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "model name", "hardware", "processor":
+			if value = strings.TrimSpace(value); value != "" {
+				return value
 			}
-		case "ufw_installed":
-			traits["sys.ufw_installed"] = value
-		case "ufw_active":
-			traits["sys.ufw_active"] = value
 		}
 	}
-	if len(nics) > 0 {
-		traits["sys.network_interfaces"] = strings.Join(nics, ", ")
+	return "unknown"
+}
+
+func physicalNetworkInterfaces() []string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil
 	}
-	return traits
+	var out []string
+	for _, iface := range interfaces {
+		if isVirtualNetworkInterface(iface.Name) {
+			continue
+		}
+		if _, err := os.Stat("/sys/class/net/" + iface.Name + "/device"); err != nil {
+			continue
+		}
+		addresses, _ := iface.Addrs()
+		if len(addresses) == 0 {
+			out = append(out, iface.Name+"|link|")
+			continue
+		}
+		for _, address := range addresses {
+			family := "inet6"
+			if ip, _, err := net.ParseCIDR(address.String()); err == nil && ip.To4() != nil {
+				family = "inet"
+			}
+			out = append(out, iface.Name+"|"+family+"|"+address.String())
+		}
+	}
+	return out
+}
+
+type cpuStat struct {
+	total uint64
+	idle  uint64
+}
+
+func readCPUStat() (cpuStat, error) {
+	line := readFirstLine("/proc/stat")
+	fields := strings.Fields(line)
+	if len(fields) < 5 || fields[0] != "cpu" {
+		return cpuStat{}, errors.New("invalid /proc/stat cpu line")
+	}
+	var out cpuStat
+	for index, field := range fields[1:] {
+		value, _ := strconv.ParseUint(field, 10, 64)
+		out.total += value
+		if index == 3 || index == 4 {
+			out.idle += value
+		}
+	}
+	return out, nil
+}
+
+func cpuUsage(first, second cpuStat) float64 {
+	total := second.total - first.total
+	idle := second.idle - first.idle
+	if total == 0 || idle > total {
+		return 0
+	}
+	return 100 * float64(total-idle) / float64(total)
+}
+
+type networkTotals struct {
+	rx int64
+	tx int64
+}
+
+func readNetworkTotals() (networkTotals, error) {
+	file, err := os.Open("/proc/net/dev")
+	if err != nil {
+		return networkTotals{}, err
+	}
+	defer file.Close()
+	var out networkTotals
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		name, values, ok := strings.Cut(scanner.Text(), ":")
+		if !ok || strings.TrimSpace(name) == "lo" {
+			continue
+		}
+		fields := strings.Fields(values)
+		if len(fields) < 9 {
+			continue
+		}
+		rx, _ := strconv.ParseInt(fields[0], 10, 64)
+		tx, _ := strconv.ParseInt(fields[8], 10, 64)
+		out.rx += rx
+		out.tx += tx
+	}
+	return out, scanner.Err()
+}
+
+func readMemoryStats() (total, available int64) {
+	file, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0, 0
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		key, value, ok := strings.Cut(scanner.Text(), ":")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(value)
+		if len(fields) == 0 {
+			continue
+		}
+		kib, _ := strconv.ParseInt(fields[0], 10, 64)
+		switch key {
+		case "MemTotal":
+			total = kib * 1024
+		case "MemAvailable":
+			available = kib * 1024
+		}
+	}
+	return total, available
+}
+
+func readMemoryTotalBytes() int64 {
+	total, _ := readMemoryStats()
+	return total
+}
+
+func readRootDiskTotalBytes() uint64 {
+	total, _ := readRootDiskUsage()
+	return total
+}
+
+func readKernelVersion() string {
+	return strings.TrimSpace(readFirstLine("/proc/sys/kernel/osrelease"))
+}
+
+func readUptimeSeconds() int64 {
+	fields := strings.Fields(readFirstLine("/proc/uptime"))
+	if len(fields) == 0 {
+		return 0
+	}
+	value, _ := strconv.ParseFloat(fields[0], 64)
+	return int64(value)
+}
+
+func readFirstLine(path string) string {
+	file, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	if scanner.Scan() {
+		return strings.TrimSpace(scanner.Text())
+	}
+	return ""
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func isVirtualNetworkInterface(name string) bool {

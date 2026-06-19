@@ -25,9 +25,9 @@ type Runner struct {
 }
 
 type UFWRule struct {
-	Port     int
-	Protocol string
-	From     string
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+	From     string `json:"from"`
 }
 
 type UFWStatus struct {

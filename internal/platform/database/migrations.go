@@ -35,6 +35,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 			os_version_id TEXT NOT NULL DEFAULT '',
 			os_pretty_name TEXT NOT NULL DEFAULT '',
 			os_supported INTEGER NOT NULL DEFAULT 0,
+			architecture_os TEXT NOT NULL DEFAULT '',
+			architecture_arch TEXT NOT NULL DEFAULT '',
+			architecture_machine TEXT NOT NULL DEFAULT '',
 			reachable INTEGER NOT NULL DEFAULT 0,
 			sudo_passwordless INTEGER NOT NULL DEFAULT 0,
 			sudo_last_checked_at TEXT,
@@ -372,6 +375,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"os_version_id":        "TEXT NOT NULL DEFAULT ''",
 		"os_pretty_name":       "TEXT NOT NULL DEFAULT ''",
 		"os_supported":         "INTEGER NOT NULL DEFAULT 0",
+		"architecture_os":      "TEXT NOT NULL DEFAULT ''",
+		"architecture_arch":    "TEXT NOT NULL DEFAULT ''",
+		"architecture_machine": "TEXT NOT NULL DEFAULT ''",
 		"reachable":            "INTEGER NOT NULL DEFAULT 0",
 		"sudo_passwordless":    "INTEGER NOT NULL DEFAULT 0",
 		"sudo_last_checked_at": "TEXT",
@@ -515,6 +521,12 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 			os_version_id=COALESCE(os_version_id, ''),
 			os_pretty_name=COALESCE(os_pretty_name, ''),
 			os_supported=COALESCE(os_supported, 0),
+			architecture_os=COALESCE(NULLIF(architecture_os, ''), CASE WHEN json_extract(traits, '$.sys.architecture') IS NOT NULL THEN 'linux' ELSE '' END),
+			architecture_arch=COALESCE(NULLIF(architecture_arch, ''), CASE
+				WHEN lower(json_extract(traits, '$.sys.architecture')) IN ('amd64','x86_64') THEN 'amd64'
+				WHEN lower(json_extract(traits, '$.sys.architecture')) IN ('arm64','aarch64') THEN 'arm64'
+				ELSE '' END),
+			architecture_machine=COALESCE(NULLIF(architecture_machine, ''), json_extract(traits, '$.sys.architecture'), ''),
 			reachable=COALESCE(reachable, 0),
 			sudo_passwordless=COALESCE(sudo_passwordless, 0),
 			last_error=COALESCE(last_error, ''),

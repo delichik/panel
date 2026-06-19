@@ -82,16 +82,6 @@ func TestParseMetricsOutputUsesNetworkDeltas(t *testing.T) {
 	}
 }
 
-func TestCollectMetricsSamplesNetworkCounters(t *testing.T) {
-	exec := &metricsCommandExecutor{stdout: "100 40\n8000 2000\n100000 50000\n1000000000 10 20\n2000000000 20 30\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3 1/2 3"}
-	if _, err := (DebianAdapter{}).CollectMetrics(context.Background(), exec, sshx.Target{ServerID: "srv"}); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(exec.command, "sleep 1") || !strings.Contains(exec.command, `iface=="lo"`) {
-		t.Fatalf("metrics command should sample non-loopback network counters over time, got %q", exec.command)
-	}
-}
-
 func TestRemoteopsRunnerStreamsOutputBeforeCommandReturns(t *testing.T) {
 	sink := &recordingLogSink{}
 	exec := &streamingFakeExecutor{duringRun: func() {

@@ -2,8 +2,10 @@ package packages
 
 import (
 	"context"
+	"strings"
 	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/tasks"
 	id "panel/internal/platform/identity"
 )
@@ -38,7 +40,8 @@ func (s *Service) CollectScheduledPackageRefreshInputs(ctx context.Context) (tas
 	operationID := id.New("op")
 	inputs := []tasks.CreateInput{}
 	for _, srv := range servers {
-		if !srv.OS.Supported || !srv.Reachable || s.hasRecentTask(ctx, "package_refresh", srv.ID, 10*time.Minute) {
+		if !srv.OS.Supported || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible ||
+			strings.TrimSpace(srv.Traits[agentcontract.TraitURL]) == "" || s.hasRecentTask(ctx, "package_refresh", srv.ID, 10*time.Minute) {
 			continue
 		}
 		inputs = append(inputs, tasks.CreateInput{

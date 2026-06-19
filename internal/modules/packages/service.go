@@ -4,9 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
@@ -18,6 +20,7 @@ type Service struct {
 	db         *sql.DB
 	servers    *server.Service
 	exec       sshx.RemoteExecutor
+	agent      agentcontract.MaintenanceClient
 	tasks      *tasks.Service
 	adapter    packageAdapter
 	refreshing map[string]bool
@@ -43,8 +46,12 @@ type packageAdapter interface {
 	UpgradeAll(context.Context, sshx.RemoteExecutor, sshx.Target, linux.LogSink) error
 }
 
-func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor, taskSvc *tasks.Service) *Service {
-	return &Service{db: db, servers: servers, exec: exec, tasks: taskSvc, refreshing: map[string]bool{}}
+func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor, taskSvc *tasks.Service, agent ...agentcontract.MaintenanceClient) *Service {
+	s := &Service{db: db, servers: servers, exec: exec, tasks: taskSvc, refreshing: map[string]bool{}}
+	if len(agent) > 0 {
+		s.agent = agent[0]
+	}
+	return s
 }
 
 func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error) {
@@ -271,7 +278,7 @@ func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv serve
 		return
 	}
 	_ = s.tasks.Advance(ctx, task.ID, "running", "refreshing package updates")
-	updates, err := adapter.ListUpgradeable(ctx, s.exec, server.Target(srv))
+	updates, err := s.listUpgradeable(ctx, srv, adapter)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return
@@ -292,13 +299,13 @@ func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv ser
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading selected packages")
-	err := adapter.UpgradeSelected(ctx, s.exec, server.Target(srv), names, taskLogSink{s.tasks, taskID})
+	err := s.upgradePackages(ctx, taskID, srv, adapter, names, false)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
-	updates, err := adapter.ListUpgradeable(ctx, s.exec, server.Target(srv))
+	updates, err := s.listUpgradeable(ctx, srv, adapter)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -319,13 +326,13 @@ func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.S
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading all packages")
-	err := adapter.UpgradeAll(ctx, s.exec, server.Target(srv), taskLogSink{s.tasks, taskID})
+	err := s.upgradePackages(ctx, taskID, srv, adapter, nil, true)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
-	updates, err := adapter.ListUpgradeable(ctx, s.exec, server.Target(srv))
+	updates, err := s.listUpgradeable(ctx, srv, adapter)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
@@ -335,6 +342,46 @@ func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.S
 		return
 	}
 	_ = s.tasks.Complete(ctx, taskID, "All packages upgraded")
+}
+
+func (s *Service) listUpgradeable(ctx context.Context, srv server.Server, adapter packageAdapter) ([]linux.PackageUpdate, error) {
+	if s.agent == nil {
+		return adapter.ListUpgradeable(ctx, s.exec, server.Target(srv))
+	}
+	baseURL, err := packageAgentURL(srv)
+	if err != nil {
+		return nil, err
+	}
+	return s.agent.PackageUpdates(ctx, baseURL)
+}
+
+func (s *Service) upgradePackages(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter, names []string, all bool) error {
+	if s.agent == nil {
+		if all {
+			return adapter.UpgradeAll(ctx, s.exec, server.Target(srv), taskLogSink{s.tasks, taskID})
+		}
+		return adapter.UpgradeSelected(ctx, s.exec, server.Target(srv), names, taskLogSink{s.tasks, taskID})
+	}
+	baseURL, err := packageAgentURL(srv)
+	if err != nil {
+		return err
+	}
+	result, err := s.agent.UpgradePackages(ctx, baseURL, agentcontract.PackageUpgradeRequest{Names: names, All: all})
+	if strings.TrimSpace(result.Output) != "" {
+		_ = taskLogSink{s.tasks, taskID}.AppendLog(ctx, "stdout", result.Output)
+	}
+	return err
+}
+
+func packageAgentURL(srv server.Server) (string, error) {
+	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
+		return "", panelerr.Validation("agent_incompatible", "Agent is not compatible with package maintenance")
+	}
+	baseURL := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
+	if baseURL == "" {
+		return "", panelerr.Validation("agent_required", "Agent is required for package maintenance")
+	}
+	return baseURL, nil
 }
 
 func (s *Service) replaceUpdates(ctx context.Context, serverID string, updates []linux.PackageUpdate) error {
