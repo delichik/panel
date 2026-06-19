@@ -596,7 +596,7 @@ func TestCheckConfiguredAgentsMarksIncompatibleContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	health := agentHealth("0.9.0")
-	health.Contract.Endpoints = nil
+	health.ContractHash = "different-contract-hash"
 	svc.SetAgentClient(&serverFakeAgentClient{health: health})
 
 	svc.CheckConfiguredAgents(context.Background())
@@ -604,7 +604,7 @@ func TestCheckConfiguredAgentsMarksIncompatibleContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusIncompatible || srv.Traits[agentcontract.TraitVersion] != "0.9.0" || !strings.Contains(srv.Traits[agentcontract.TraitLastError], "agent contract incompatible") {
+	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusIncompatible || srv.Traits[agentcontract.TraitVersion] != "0.9.0" || !strings.Contains(srv.Traits[agentcontract.TraitLastError], "agent contract hash") {
 		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
 	}
 }
@@ -1669,7 +1669,7 @@ func agentHealth(version string) agentcontract.HealthResponse {
 		Status:       "ok",
 		Version:      version,
 		Capabilities: agentcontract.RequiredCapabilities,
-		Contract:     agentcontract.CurrentContract(),
+		ContractHash: agentcontract.CurrentHash(),
 		Docker:       agentcontract.DockerHealth{Host: agentcontract.DefaultDockerHost, Status: "ok"},
 	}
 }

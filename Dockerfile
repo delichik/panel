@@ -32,6 +32,7 @@ ARG PANEL_VERSION=dev
 ARG PANEL_CHANNEL=dev
 ARG PANEL_REPOSITORY
 ARG PANEL_COMMIT
+RUN go run ./cmd/generate-agent-contract-hash
 RUN set -eux; \
   test -n "${TARGETPLATFORM}"; \
   test -n "${TARGETOS}"; \

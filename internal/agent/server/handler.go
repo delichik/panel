@@ -45,7 +45,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if h.runtime != nil {
 			docker = h.runtime.DockerHealth(r.Context())
 		}
-		writeJSON(w, agentcontract.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: agentcontract.Version, Capabilities: agentcontract.RequiredCapabilities, Contract: agentcontract.CurrentContract(), Docker: docker})
+		writeJSON(w, agentcontract.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: agentcontract.Version, Capabilities: agentcontract.RequiredCapabilities, ContractHash: agentcontract.CurrentHash(), Docker: docker})
 	case r.Method == http.MethodGet && path == "/v1/system/os-release":
 		info, err := h.collector.OSRelease(r.Context())
 		writeResult(w, agentcontract.OSReleaseResponse{OSRelease: info}, err)

@@ -64,7 +64,7 @@ type HealthResponse struct {
 	Time         string           `json:"time"`
 	Version      string           `json:"version"`
 	Capabilities []string         `json:"capabilities"`
-	Contract     Contract         `json:"contract"`
+	ContractHash string           `json:"contractHash"`
 	Docker       DockerHealth     `json:"docker"`
 	Certificate  *CertificateInfo `json:"-"`
 }

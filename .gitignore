@@ -10,3 +10,4 @@ data
 tmp
 .codegraph
 docs/servers.md
+internal/agent/contract/contract_hash_generated.go

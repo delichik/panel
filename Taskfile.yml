@@ -8,8 +8,15 @@ env:
   GOCACHE: "{{.ROOT_DIR}}/tmp/go-build"
 
 tasks:
+  generate:agent-contract-hash:
+    desc: Generate the Agent HTTP contract hash
+    cmds:
+      - go run ./cmd/generate-agent-contract-hash
+
   run:backend:
     desc: Debug-run backend service
+    deps:
+      - generate:agent-contract-hash
     env:
       PANEL_LISTEN_ADDRESS: "{{.BACKEND_LISTEN_ADDRESS}}"
     cmds:
@@ -30,6 +37,8 @@ tasks:
 
   test:backend:
     desc: Run backend tests
+    deps:
+      - generate:agent-contract-hash
     cmds:
       - go test ./...
 
@@ -46,6 +55,8 @@ tasks:
 
   build:backend:
     desc: Compile backend packages
+    deps:
+      - generate:agent-contract-hash
     cmds:
       - go build ./...
 

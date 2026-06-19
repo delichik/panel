@@ -32,6 +32,9 @@ func LoadConfig() Config {
 }
 
 func NewServer(cfg Config) (*http.Server, error) {
+	if err := agentcontract.ValidateGeneratedHash(); err != nil {
+		return nil, err
+	}
 	tlsConfig, err := serverTLSConfig(cfg)
 	if err != nil {
 		return nil, err

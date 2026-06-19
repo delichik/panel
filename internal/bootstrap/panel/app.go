@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentclient "panel/internal/agent/client"
+	agentcontract "panel/internal/agent/contract"
 	agentsecurity "panel/internal/agent/security"
 	"panel/internal/modules/applications"
 	"panel/internal/modules/certificates/certs"
@@ -45,6 +46,9 @@ type App struct {
 }
 
 func New(cfg config.Config) (*App, error) {
+	if err := agentcontract.ValidateGeneratedHash(); err != nil {
+		return nil, err
+	}
 	store, err := database.Open(cfg)
 	if err != nil {
 		return nil, err

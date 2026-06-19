@@ -28,9 +28,8 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, "agent missing capabilities: "+strings.Join(missing, ", "))
 		return nil
 	}
-	missingContract := agentcontract.MissingEndpoints(health.Contract)
-	if len(missingContract) > 0 {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, "agent contract incompatible: "+strings.Join(missingContract, ", "))
+	if strings.TrimSpace(health.ContractHash) != agentcontract.CurrentHash() {
+		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, "agent contract hash does not match panel")
 		return nil
 	}
 	if strings.TrimSpace(health.Docker.Host) != "" && strings.TrimSpace(health.Docker.Host) != normalizeDockerHost(srv.DockerHost) {

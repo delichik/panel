@@ -46,10 +46,6 @@ func CurrentContract() Contract {
 	return Contract{Endpoints: endpoints}
 }
 
-func MissingEndpoints(actual Contract) []string {
-	return Missing(CurrentContract(), actual)
-}
-
 type okResponse struct {
 	OK bool `json:"ok"`
 }

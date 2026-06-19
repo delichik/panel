@@ -14,34 +14,20 @@ func TestCurrentContractIncludesHealthContract(t *testing.T) {
 	if health.ID == "" || health.Method != "GET" || health.Path != "/v1/health" || health.Response == nil {
 		t.Fatalf("health endpoint missing from contract: %#v", contract.Endpoints)
 	}
-	if _, ok := health.Response.Fields["contract"]; !ok {
-		t.Fatalf("health response contract field missing: %#v", health.Response.Fields)
+	if _, ok := health.Response.Fields["contractHash"]; !ok {
+		t.Fatalf("health response contract hash field missing: %#v", health.Response.Fields)
 	}
 }
 
-func TestMissingEndpointsAllowsAdditionalFields(t *testing.T) {
-	contract := CurrentContract()
-	for i := range contract.Endpoints {
-		if contract.Endpoints[i].ID != "health" || contract.Endpoints[i].Response == nil {
-			continue
-		}
-		contract.Endpoints[i].Response.Fields["extra"] = Schema{Type: "string", Optional: true}
+func TestGeneratedContractHashMatchesCurrentContract(t *testing.T) {
+	if err := ValidateGeneratedHash(); err != nil {
+		t.Fatal(err)
 	}
-	if missing := MissingEndpoints(contract); len(missing) != 0 {
-		t.Fatalf("additional fields should remain compatible, missing=%v", missing)
+	want, err := Hash(CurrentContract())
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestMissingEndpointsDetectsSchemaChanges(t *testing.T) {
-	contract := CurrentContract()
-	for i := range contract.Endpoints {
-		if contract.Endpoints[i].ID != "runtime-create-container" || contract.Endpoints[i].Request == nil {
-			continue
-		}
-		delete(contract.Endpoints[i].Request.Fields, "spec")
-	}
-	missing := MissingEndpoints(contract)
-	if len(missing) != 1 || missing[0] != "runtime-create-container" {
-		t.Fatalf("expected runtime-create-container incompatibility, got %v", missing)
+	if CurrentHash() != want {
+		t.Fatalf("generated contract hash is stale: got %q want %q", CurrentHash(), want)
 	}
 }
