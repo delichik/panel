@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"log"
+	"sort"
 	"sync"
 	"time"
 )
@@ -24,11 +25,25 @@ type Worker struct {
 }
 
 type RuntimeStats struct {
-	WorkerRunning     bool `json:"workerRunning"`
-	RegisteredTypes   int  `json:"registeredTypes"`
-	ExecutableTypes   int  `json:"executableTypes"`
-	PeriodicTypes     int  `json:"periodicTypes"`
-	RunningExecutions int  `json:"runningExecutions"`
+	WorkerRunning     bool                     `json:"workerRunning"`
+	RegisteredTypes   int                      `json:"registeredTypes"`
+	ExecutableTypes   int                      `json:"executableTypes"`
+	PeriodicTypes     int                      `json:"periodicTypes"`
+	RunningExecutions int                      `json:"runningExecutions"`
+	Definitions       []RuntimeDefinitionStats `json:"definitions"`
+}
+
+type RuntimeDefinitionStats struct {
+	Type                    string `json:"type"`
+	Hidden                  bool   `json:"hidden"`
+	Executable              bool   `json:"executable"`
+	Periodic                bool   `json:"periodic"`
+	AllowRunNow             bool   `json:"allowRunNow"`
+	AllowRetry              bool   `json:"allowRetry"`
+	DefaultMaxRetries       int    `json:"defaultMaxRetries"`
+	ConcurrencyPolicy       string `json:"concurrencyPolicy"`
+	StaleQueuedAfterSeconds int64  `json:"staleQueuedAfterSeconds"`
+	PeriodicIntervalSeconds int64  `json:"periodicIntervalSeconds"`
 }
 
 func NewWorker(service *Service) *Worker {
@@ -88,8 +103,11 @@ func (w *Worker) TaskRuntime() RuntimeStats {
 	stats := RuntimeStats{
 		WorkerRunning:     running,
 		RunningExecutions: w.service.RunningExecutionCount(),
+		Definitions:       []RuntimeDefinitionStats{},
 	}
-	for _, taskType := range w.service.Registry().Types() {
+	taskTypes := w.service.Registry().Types()
+	sort.Strings(taskTypes)
+	for _, taskType := range taskTypes {
 		stats.RegisteredTypes++
 		def, ok := w.service.Registry().Definition(taskType)
 		if !ok {
@@ -101,6 +119,21 @@ func (w *Worker) TaskRuntime() RuntimeStats {
 		if def.Periodic != nil {
 			stats.PeriodicTypes++
 		}
+		detail := RuntimeDefinitionStats{
+			Type:                    def.Type,
+			Hidden:                  def.Hidden,
+			Executable:              def.Execute != nil,
+			Periodic:                def.Periodic != nil,
+			AllowRunNow:             def.AllowRunNow && def.Execute != nil,
+			AllowRetry:              def.AllowRetry && def.Execute != nil,
+			DefaultMaxRetries:       def.DefaultMaxRetries,
+			ConcurrencyPolicy:       def.ConcurrencyPolicy,
+			StaleQueuedAfterSeconds: int64(def.StaleQueuedAfter.Seconds()),
+		}
+		if def.Periodic != nil {
+			detail.PeriodicIntervalSeconds = int64(def.Periodic.Interval.Seconds())
+		}
+		stats.Definitions = append(stats.Definitions, detail)
 	}
 	return stats
 }

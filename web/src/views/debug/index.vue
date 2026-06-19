@@ -8,6 +8,8 @@ import { useI18n } from '@/i18n';
 const refreshIntervalMs = 5000;
 const { formatDateTime, t } = useI18n();
 const snapshot = ref<DebugSnapshotDto | null>(null);
+const activeTab = ref('runtime');
+const activeDatabase = ref('');
 const loading = ref(true);
 const refreshing = ref(false);
 const paused = ref(false);
@@ -48,12 +50,20 @@ const taskItems = computed(() => snapshot.value ? [
   [t('debugPage.runningExecutions'), formatNumber(snapshot.value.tasks.runningExecutions)],
 ] : []);
 
+const selectedDatabase = computed(() =>
+  snapshot.value?.databases.find((database) => database.name === activeDatabase.value)
+  ?? snapshot.value?.databases[0]
+  ?? null);
+
 async function loadSnapshot() {
   if (refreshing.value) return;
   refreshing.value = true;
   error.value = '';
   try {
     snapshot.value = await diagnosticsApi.snapshot();
+    if (!activeDatabase.value || !snapshot.value.databases.some((database) => database.name === activeDatabase.value)) {
+      activeDatabase.value = snapshot.value.databases[0]?.name ?? '';
+    }
   } catch (reason) {
     error.value = reason instanceof Error ? reason.message : t('debugPage.loadFailed');
   } finally {
@@ -117,6 +127,25 @@ function formatNanoseconds(value: number) {
   return `${(value / 1_000_000_000).toFixed(2)} s`;
 }
 
+function formatPercent(value: number) {
+  if (!Number.isFinite(value) || value <= 0) return '0%';
+  return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)}%`;
+}
+
+function formatSeconds(value: number) {
+  return value > 0 ? formatDuration(value) : t('common.notAvailable');
+}
+
+function yesNo(value: boolean) {
+  return value ? t('common.yes') : t('common.no');
+}
+
+function concurrencyLabel(value: string) {
+  const key = `debugPage.concurrency.${value}`;
+  const translated = t(key);
+  return translated === key ? value : translated;
+}
+
 onMounted(() => {
   void loadSnapshot();
   scheduleRefresh();
@@ -154,8 +183,16 @@ onBeforeUnmount(() => {
 
     <PageLoadingState v-if="loading && !snapshot" />
 
-    <div v-else-if="snapshot" class="debug-scroll">
-      <div class="page-summary-grid">
+    <v-card v-else-if="snapshot" variant="outlined" class="debug-workspace">
+      <v-tabs v-model="activeTab" density="comfortable" class="debug-main-tabs">
+        <v-tab value="runtime">{{ t('debugPage.tabs.runtime') }}</v-tab>
+        <v-tab value="tasks">{{ t('debugPage.tabs.tasks') }}</v-tab>
+        <v-tab value="databases">{{ t('debugPage.tabs.databases') }}</v-tab>
+      </v-tabs>
+
+      <v-window v-model="activeTab" class="debug-window">
+        <v-window-item value="runtime" class="debug-pane">
+          <div class="page-summary-grid">
         <div class="page-summary-card">
           <v-icon color="primary">mdi-memory</v-icon>
           <div><div class="text-caption text-medium-emphasis">{{ t('debugPage.currentAlloc') }}</div><strong class="font-tabular">{{ formatBytes(snapshot.memory.allocBytes) }}</strong></div>
@@ -170,11 +207,7 @@ onBeforeUnmount(() => {
         </div>
         <div class="page-summary-card">
           <v-icon color="secondary">mdi-database-outline</v-icon>
-          <div><div class="text-caption text-medium-emphasis">{{ t('debugPage.databaseSize') }}</div><strong class="font-tabular">{{ formatBytes(snapshot.databases.reduce((sum, item) => sum + item.fileSizeBytes, 0)) }}</strong></div>
-        </div>
-        <div class="page-summary-card">
-          <v-icon :color="snapshot.tasks.workerRunning ? 'success' : 'error'">mdi-clipboard-check-outline</v-icon>
-          <div><div class="text-caption text-medium-emphasis">{{ t('debugPage.taskWorker') }}</div><strong>{{ snapshot.tasks.workerRunning ? t('debugPage.running') : t('debugPage.stopped') }}</strong></div>
+          <div><div class="text-caption text-medium-emphasis">{{ t('debugPage.databaseFiles') }}</div><strong class="font-tabular">{{ snapshot.databases.length }}</strong></div>
         </div>
       </div>
 
@@ -187,70 +220,130 @@ onBeforeUnmount(() => {
           <v-card-title>{{ t('debugPage.memoryGc') }}</v-card-title>
           <v-card-text><div class="info-grid"><div v-for="[label, value] in memoryItems" :key="String(label)"><span>{{ label }}</span><strong>{{ value }}</strong></div></div></v-card-text>
         </v-card>
-        <v-card variant="outlined" class="debug-card">
-          <v-card-title class="database-title">
-            <span>{{ t('debugPage.taskRuntime') }}</span>
-            <v-chip :color="snapshot.tasks.workerRunning ? 'success' : 'error'" size="small" variant="tonal">
-              {{ snapshot.tasks.workerRunning ? t('debugPage.running') : t('debugPage.stopped') }}
-            </v-chip>
-          </v-card-title>
-          <v-card-text><div class="info-grid"><div v-for="[label, value] in taskItems" :key="String(label)"><span>{{ label }}</span><strong>{{ value }}</strong></div></div></v-card-text>
-        </v-card>
       </div>
+        </v-window-item>
 
-      <v-card v-for="database in snapshot.databases" :key="database.name" variant="outlined" class="debug-card database-card">
-        <v-card-title class="database-title">
-          <span>{{ databaseTitle(database) }}</span>
-          <v-chip :color="database.healthy ? 'success' : 'error'" size="small" variant="tonal">
-            {{ database.healthy ? t('debugPage.healthy') : t('debugPage.unavailable') }}
-          </v-chip>
-        </v-card-title>
-        <v-card-text>
-          <v-alert v-if="database.errorCode" type="warning" variant="tonal" density="compact" class="mb-4">{{ diagnosticError(database.errorCode) }}</v-alert>
-          <div class="info-grid database-info">
-            <div><span>{{ t('debugPage.fileSize') }}</span><strong>{{ formatBytes(database.fileSizeBytes) }}</strong></div>
-            <div><span>{{ t('debugPage.usedSpace') }}</span><strong>{{ formatBytes(database.usedBytes) }}</strong></div>
-            <div><span>{{ t('debugPage.freeSpace') }}</span><strong>{{ formatBytes(database.freeBytes) }}</strong></div>
-            <div><span>{{ t('debugPage.pages') }}</span><strong>{{ formatNumber(database.pageCount) }} × {{ formatBytes(database.pageSizeBytes) }}</strong></div>
-            <div><span>{{ t('debugPage.openConnections') }}</span><strong>{{ database.connections.openConnections }} / {{ database.connections.maxOpenConnections }}</strong></div>
-            <div><span>{{ t('debugPage.inUseIdle') }}</span><strong>{{ database.connections.inUse }} / {{ database.connections.idle }}</strong></div>
-            <div><span>{{ t('debugPage.waitCount') }}</span><strong>{{ formatNumber(database.connections.waitCount) }}</strong></div>
-            <div><span>{{ t('debugPage.waitDuration') }}</span><strong>{{ formatNanoseconds(database.connections.waitDurationNs) }}</strong></div>
+        <v-window-item value="tasks" class="debug-pane task-pane">
+          <div class="page-summary-grid">
+            <div class="page-summary-card">
+              <v-icon :color="snapshot.tasks.workerRunning ? 'success' : 'error'">mdi-clipboard-check-outline</v-icon>
+              <div><div class="text-caption text-medium-emphasis">{{ t('debugPage.taskWorker') }}</div><strong>{{ snapshot.tasks.workerRunning ? t('debugPage.running') : t('debugPage.stopped') }}</strong></div>
+            </div>
+            <div v-for="[label, value] in taskItems" :key="String(label)" class="page-summary-card">
+              <v-icon color="primary">mdi-format-list-numbered</v-icon>
+              <div><div class="text-caption text-medium-emphasis">{{ label }}</div><strong class="font-tabular">{{ value }}</strong></div>
+            </div>
           </div>
-          <div class="table-heading">{{ t('debugPage.tables') }}</div>
-          <v-table density="compact" class="debug-table">
-            <thead><tr><th>{{ t('debugPage.tableName') }}</th><th class="text-right">{{ t('debugPage.rowCount') }}</th></tr></thead>
-            <tbody>
-              <tr v-if="database.tables.length === 0"><td colspan="2" class="text-center text-medium-emphasis">{{ t('debugPage.noTables') }}</td></tr>
-              <tr v-for="table in database.tables" :key="table.name">
-                <td class="mono">{{ table.name }}</td>
-                <td class="text-right font-tabular">{{ table.errorCode ? diagnosticError(table.errorCode) : formatNumber(table.rowCount) }}</td>
-              </tr>
-            </tbody>
-          </v-table>
-        </v-card-text>
-      </v-card>
-    </div>
+          <div class="debug-table-scroll">
+            <v-table density="compact" class="debug-table task-definition-table">
+              <thead><tr>
+                <th>{{ t('debugPage.taskType') }}</th>
+                <th>{{ t('debugPage.hidden') }}</th>
+                <th>{{ t('debugPage.executable') }}</th>
+                <th>{{ t('debugPage.periodic') }}</th>
+                <th>{{ t('debugPage.runNowRetry') }}</th>
+                <th>{{ t('debugPage.defaultRetries') }}</th>
+                <th>{{ t('debugPage.concurrencyPolicy') }}</th>
+                <th>{{ t('debugPage.staleQueuedAfter') }}</th>
+                <th>{{ t('debugPage.periodicInterval') }}</th>
+              </tr></thead>
+              <tbody>
+                <tr v-for="definition in snapshot.tasks.definitions" :key="definition.type">
+                  <td class="mono">{{ definition.type }}</td>
+                  <td>{{ yesNo(definition.hidden) }}</td>
+                  <td>{{ yesNo(definition.executable) }}</td>
+                  <td>{{ yesNo(definition.periodic) }}</td>
+                  <td>{{ yesNo(definition.allowRunNow) }} / {{ yesNo(definition.allowRetry) }}</td>
+                  <td class="font-tabular">{{ definition.defaultMaxRetries }}</td>
+                  <td>{{ concurrencyLabel(definition.concurrencyPolicy) }}</td>
+                  <td class="font-tabular">{{ formatSeconds(definition.staleQueuedAfterSeconds) }}</td>
+                  <td class="font-tabular">{{ formatSeconds(definition.periodicIntervalSeconds) }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+          </div>
+        </v-window-item>
+
+        <v-window-item value="databases" class="debug-pane database-pane">
+          <v-tabs v-model="activeDatabase" density="compact" class="database-tabs">
+            <v-tab v-for="database in snapshot.databases" :key="database.name" :value="database.name">
+              {{ databaseTitle(database) }}
+              <v-icon :color="database.healthy ? 'success' : 'error'" size="x-small" class="ml-2">mdi-circle</v-icon>
+            </v-tab>
+          </v-tabs>
+          <template v-if="selectedDatabase">
+            <div class="database-content">
+              <v-alert v-if="selectedDatabase.errorCode" type="warning" variant="tonal" density="compact">{{ diagnosticError(selectedDatabase.errorCode) }}</v-alert>
+              <v-alert v-if="selectedDatabase.tableSizeErrorCode" type="warning" variant="tonal" density="compact">{{ diagnosticError(selectedDatabase.tableSizeErrorCode) }}</v-alert>
+          <div class="info-grid database-info">
+                <div><span>{{ t('debugPage.fileSize') }}</span><strong>{{ formatBytes(selectedDatabase.fileSizeBytes) }}</strong></div>
+                <div><span>{{ t('debugPage.usedSpace') }}</span><strong>{{ formatBytes(selectedDatabase.usedBytes) }}</strong></div>
+                <div><span>{{ t('debugPage.freeSpace') }}</span><strong>{{ formatBytes(selectedDatabase.freeBytes) }}</strong></div>
+                <div><span>{{ t('debugPage.pages') }}</span><strong>{{ formatNumber(selectedDatabase.pageCount) }} × {{ formatBytes(selectedDatabase.pageSizeBytes) }}</strong></div>
+                <div><span>{{ t('debugPage.openConnections') }}</span><strong>{{ selectedDatabase.connections.openConnections }} / {{ selectedDatabase.connections.maxOpenConnections }}</strong></div>
+                <div><span>{{ t('debugPage.inUseIdle') }}</span><strong>{{ selectedDatabase.connections.inUse }} / {{ selectedDatabase.connections.idle }}</strong></div>
+                <div><span>{{ t('debugPage.waitCount') }}</span><strong>{{ formatNumber(selectedDatabase.connections.waitCount) }}</strong></div>
+                <div><span>{{ t('debugPage.waitDuration') }}</span><strong>{{ formatNanoseconds(selectedDatabase.connections.waitDurationNs) }}</strong></div>
+              </div>
+              <div class="debug-table-scroll">
+                <v-table density="compact" class="debug-table">
+                  <thead><tr>
+                    <th>{{ t('debugPage.tableName') }}</th>
+                    <th class="text-right">{{ t('debugPage.rowCount') }}</th>
+                    <th class="text-right">{{ t('debugPage.tableDataSize') }}</th>
+                    <th class="text-right">{{ t('debugPage.indexSize') }}</th>
+                    <th class="text-right">{{ t('debugPage.totalSize') }}</th>
+                    <th class="text-right">{{ t('debugPage.databaseShare') }}</th>
+                  </tr></thead>
+                  <tbody>
+                    <tr v-if="selectedDatabase.tables.length === 0"><td colspan="6" class="text-center text-medium-emphasis">{{ t('debugPage.noTables') }}</td></tr>
+                    <tr v-for="table in selectedDatabase.tables" :key="table.name">
+                      <td class="mono">{{ table.name }}</td>
+                      <td class="text-right font-tabular">{{ table.errorCode ? diagnosticError(table.errorCode) : formatNumber(table.rowCount) }}</td>
+                      <td class="text-right font-tabular">{{ formatBytes(table.dataSizeBytes) }}</td>
+                      <td class="text-right font-tabular">{{ formatBytes(table.indexSizeBytes) }}</td>
+                      <td class="text-right font-tabular font-weight-bold">{{ formatBytes(table.totalSizeBytes) }}</td>
+                      <td class="text-right font-tabular">{{ formatPercent(table.databasePercent) }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </div>
+            </div>
+          </template>
+        </v-window-item>
+      </v-window>
+    </v-card>
   </div>
 </template>
 
 <style scoped>
 .debug-page { overflow: hidden; }
 .debug-refresh-state, .database-title { display: flex; align-items: center; gap: 10px; }
-.debug-scroll { min-height: 0; overflow: auto; display: grid; align-content: start; gap: 16px; padding-right: 2px; }
+.debug-workspace { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.debug-workspace:hover { border-color: var(--lp-border) !important; box-shadow: var(--lp-shadow-sm) !important; }
+.debug-main-tabs, .database-tabs { flex: 0 0 auto; border-bottom: 1px solid var(--lp-border); }
+.debug-window { flex: 1 1 auto; min-height: 0; }
+.debug-window :deep(.v-window__container), .debug-window :deep(.v-window-item) { height: 100%; min-height: 0; }
+.debug-pane { overflow: auto; padding: 16px; }
+.task-pane, .database-pane { display: flex; flex-direction: column; gap: 16px; overflow: hidden; }
 .debug-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
 .debug-card:hover { border-color: var(--lp-border) !important; box-shadow: var(--lp-shadow-sm) !important; }
 .debug-card .v-card-title { padding: 16px 18px 12px; font-size: 1rem; font-weight: 700; }
 .info-grid strong { display: block; margin-top: 4px; font-size: 13px; overflow-wrap: anywhere; }
 .database-title { justify-content: space-between; }
-.database-info { margin-bottom: 18px; }
-.table-heading { margin: 4px 0 8px; font-weight: 700; }
+.database-content { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 16px; }
+.database-info { flex: 0 0 auto; }
+.debug-table-scroll { flex: 1 1 auto; min-height: 0; overflow: auto; border: 1px solid var(--lp-border); border-radius: 8px; }
 .debug-table { border: 1px solid var(--lp-border); border-radius: 8px; }
+.debug-table-scroll .debug-table { border: 0; border-radius: 0; }
+.task-definition-table { min-width: 1120px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
 @media (max-width: 900px) { .debug-grid { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
   .debug-page { overflow: visible; }
-  .debug-scroll { overflow: visible; }
+  .debug-workspace, .debug-window, .debug-window :deep(.v-window__container), .debug-window :deep(.v-window-item) { height: auto; overflow: visible; }
+  .debug-pane, .task-pane, .database-pane, .database-content, .debug-table-scroll { overflow: visible; }
+  .debug-table-scroll { overflow-x: auto; }
   .page-toolbar { align-items: flex-start; }
   .debug-refresh-state { align-items: flex-start; flex-direction: column; }
 }

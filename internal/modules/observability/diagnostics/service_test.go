@@ -21,6 +21,14 @@ func (fakeTaskRuntimeProvider) TaskRuntime() tasks.RuntimeStats {
 		ExecutableTypes:   8,
 		PeriodicTypes:     3,
 		RunningExecutions: 2,
+		Definitions: []tasks.RuntimeDefinitionStats{{
+			Type:                    "metrics_collect",
+			Hidden:                  true,
+			Executable:              true,
+			Periodic:                true,
+			ConcurrencyPolicy:       tasks.ConcurrencyParallelAllowed,
+			PeriodicIntervalSeconds: 5,
+		}},
 	}
 }
 
@@ -57,9 +65,15 @@ func TestSnapshotCollectsRuntimeAndSafeDatabaseStatistics(t *testing.T) {
 		if len(database.Tables) != 1 || database.Tables[0].Name != "visible_items" || database.Tables[0].RowCount != 2 {
 			t.Fatalf("unexpected tables for %q: %#v", database.Name, database.Tables)
 		}
+		if database.TableSizeErrorCode == "" && database.Tables[0].TotalSizeBytes <= 0 {
+			t.Fatalf("missing table size for %q: %#v", database.Name, database.Tables[0])
+		}
 		if database.PageSizeBytes <= 0 || database.PageCount <= 0 || database.FileSizeBytes <= 0 {
 			t.Fatalf("missing database sizes for %q: %#v", database.Name, database)
 		}
+	}
+	if len(snapshot.Tasks.Definitions) != 1 || snapshot.Tasks.Definitions[0].Type != "metrics_collect" {
+		t.Fatalf("task definitions not populated: %#v", snapshot.Tasks.Definitions)
 	}
 
 	payload, err := json.Marshal(snapshot)

@@ -7,7 +7,7 @@
 - `web/src/views/servers/packages/index.vue`、`web/src/views/servers/firewall/index.vue`、`internal/platform/i18n`
   - 软件包与防火墙页面的特权能力提示已改为 root 或免密 sudo，并补齐统一特权准入错误的简体中文翻译。
 - `web/src/views/debug/index.vue`
-  - 隐藏 Debug 诊断页的刷新状态、Go runtime、内存/GC、任务 worker 状态、任务注册表统计、当前执行数量、数据库连接与表统计文案已接入英文和简体中文词条；数据库表名和稳定诊断标识不翻译。
+  - 隐藏 Debug 诊断页的运行时/Tasks/数据库 Tab、任务定义能力、数据库文件切换、表与索引空间统计文案已接入英文和简体中文词条；数据库表名和任务类型稳定标识不翻译。
 - `web/src/components/RuntimeLogsDialog.vue`、`web/src/views/containerization/containers/index.vue`
   - 应用运行时日志和容器日志弹窗、刷新按钮、tail 行数和空日志文案已接入英文与简体中文词条；日志正文保留容器原始输出。
 - `web/src/views/runtime/applications/ApplicationDetail.vue`

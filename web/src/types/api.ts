@@ -859,6 +859,10 @@ export interface DebugConnectionStatsDto {
 export interface DebugTableStatsDto {
   name: string;
   rowCount: number;
+  dataSizeBytes: number;
+  indexSizeBytes: number;
+  totalSizeBytes: number;
+  databasePercent: number;
   errorCode?: string;
 }
 
@@ -866,6 +870,7 @@ export interface DebugDatabaseSnapshotDto {
   name: 'app' | 'task' | 'metrics' | string;
   healthy: boolean;
   errorCode?: string;
+  tableSizeErrorCode?: string;
   fileSizeBytes: number;
   pageSizeBytes: number;
   pageCount: number;
@@ -882,6 +887,20 @@ export interface DebugTaskRuntimeDto {
   executableTypes: number;
   periodicTypes: number;
   runningExecutions: number;
+  definitions: DebugTaskDefinitionDto[];
+}
+
+export interface DebugTaskDefinitionDto {
+  type: string;
+  hidden: boolean;
+  executable: boolean;
+  periodic: boolean;
+  allowRunNow: boolean;
+  allowRetry: boolean;
+  defaultMaxRetries: number;
+  concurrencyPolicy: string;
+  staleQueuedAfterSeconds: number;
+  periodicIntervalSeconds: number;
 }
 
 export interface DebugSnapshotDto {

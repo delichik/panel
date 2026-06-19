@@ -72,17 +72,18 @@ type MemoryStats struct {
 }
 
 type DatabaseSnapshot struct {
-	Name          string          `json:"name"`
-	Healthy       bool            `json:"healthy"`
-	ErrorCode     string          `json:"errorCode,omitempty"`
-	FileSizeBytes int64           `json:"fileSizeBytes"`
-	PageSizeBytes int64           `json:"pageSizeBytes"`
-	PageCount     int64           `json:"pageCount"`
-	FreePageCount int64           `json:"freePageCount"`
-	UsedBytes     int64           `json:"usedBytes"`
-	FreeBytes     int64           `json:"freeBytes"`
-	Connections   ConnectionStats `json:"connections"`
-	Tables        []TableStats    `json:"tables"`
+	Name               string          `json:"name"`
+	Healthy            bool            `json:"healthy"`
+	ErrorCode          string          `json:"errorCode,omitempty"`
+	TableSizeErrorCode string          `json:"tableSizeErrorCode,omitempty"`
+	FileSizeBytes      int64           `json:"fileSizeBytes"`
+	PageSizeBytes      int64           `json:"pageSizeBytes"`
+	PageCount          int64           `json:"pageCount"`
+	FreePageCount      int64           `json:"freePageCount"`
+	UsedBytes          int64           `json:"usedBytes"`
+	FreeBytes          int64           `json:"freeBytes"`
+	Connections        ConnectionStats `json:"connections"`
+	Tables             []TableStats    `json:"tables"`
 }
 
 type ConnectionStats struct {
@@ -98,9 +99,13 @@ type ConnectionStats struct {
 }
 
 type TableStats struct {
-	Name      string `json:"name"`
-	RowCount  int64  `json:"rowCount"`
-	ErrorCode string `json:"errorCode,omitempty"`
+	Name            string  `json:"name"`
+	RowCount        int64   `json:"rowCount"`
+	DataSizeBytes   int64   `json:"dataSizeBytes"`
+	IndexSizeBytes  int64   `json:"indexSizeBytes"`
+	TotalSizeBytes  int64   `json:"totalSizeBytes"`
+	DatabasePercent float64 `json:"databasePercent"`
+	ErrorCode       string  `json:"errorCode,omitempty"`
 }
 
 func NewService(databases ...DatabaseSource) *Service {
@@ -240,8 +245,62 @@ func collectDatabase(ctx context.Context, source DatabaseSource) DatabaseSnapsho
 		}
 		out.Tables = append(out.Tables, table)
 	}
+	if err := collectTableSizes(ctx, source.DB, &out); err != nil {
+		out.TableSizeErrorCode = "database_table_sizes_unavailable"
+	}
+	sort.Slice(out.Tables, func(i, j int) bool {
+		if out.Tables[i].TotalSizeBytes == out.Tables[j].TotalSizeBytes {
+			return out.Tables[i].Name < out.Tables[j].Name
+		}
+		return out.Tables[i].TotalSizeBytes > out.Tables[j].TotalSizeBytes
+	})
 	out.Healthy = out.ErrorCode == ""
 	return out
+}
+
+func collectTableSizes(ctx context.Context, db *sql.DB, snapshot *DatabaseSnapshot) error {
+	rows, err := db.QueryContext(ctx, `
+		SELECT m.type, m.name, m.tbl_name, COALESCE(SUM(d.pgsize), 0)
+		FROM sqlite_master AS m
+		LEFT JOIN dbstat AS d ON d.name = m.name
+		WHERE m.type IN ('table', 'index')
+		GROUP BY m.type, m.name, m.tbl_name`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	tableIndex := make(map[string]int, len(snapshot.Tables))
+	for index, table := range snapshot.Tables {
+		tableIndex[table.Name] = index
+	}
+	for rows.Next() {
+		var objectType, name, tableName string
+		var size int64
+		if err := rows.Scan(&objectType, &name, &tableName, &size); err != nil {
+			return err
+		}
+		index, ok := tableIndex[tableName]
+		if !ok {
+			continue
+		}
+		if objectType == "table" && name == tableName {
+			snapshot.Tables[index].DataSizeBytes += size
+		} else if objectType == "index" {
+			snapshot.Tables[index].IndexSizeBytes += size
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for index := range snapshot.Tables {
+		table := &snapshot.Tables[index]
+		table.TotalSizeBytes = table.DataSizeBytes + table.IndexSizeBytes
+		if snapshot.UsedBytes > 0 {
+			table.DatabasePercent = float64(table.TotalSizeBytes) / float64(snapshot.UsedBytes) * 100
+		}
+	}
+	return nil
 }
 
 func quoteIdentifier(value string) string {

@@ -212,4 +212,15 @@ func TestWorkerTaskRuntimeSummarizesRegistryAndExecutions(t *testing.T) {
 	if stats.RegisteredTypes < 2 || stats.ExecutableTypes < 1 || stats.PeriodicTypes != 1 || stats.RunningExecutions != 1 {
 		t.Fatalf("unexpected task runtime stats: %#v", stats)
 	}
+	var periodic RuntimeDefinitionStats
+	for _, definition := range stats.Definitions {
+		if definition.Type == "periodic_runtime" {
+			periodic = definition
+			break
+		}
+	}
+	if !periodic.Executable || !periodic.Periodic || periodic.PeriodicIntervalSeconds != 60 ||
+		periodic.ConcurrencyPolicy != ConcurrencyResourceExclusive {
+		t.Fatalf("unexpected periodic definition stats: %#v", periodic)
+	}
 }

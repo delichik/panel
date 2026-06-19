@@ -28,7 +28,7 @@
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session` 和只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/modules/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。
-- `GET /api/v1/debug/snapshot` 是仅认证用户可访问的只读诊断接口，由 `internal/modules/observability/diagnostics` 提供同一快照时间点的进程、Go runtime 内存/GC、tasks worker 运行状态、已注册/可执行/周期任务类型数量、当前执行数量和 app/task/metrics 三库统计。数据库信息只包含连接池、文件/SQLite 页面大小、用户表名和准确行数，不返回数据库路径、SQL、配置值或任何业务记录与秘密。
+- `GET /api/v1/debug/snapshot` 是仅认证用户可访问的只读诊断接口，由 `internal/modules/observability/diagnostics` 提供同一快照时间点的进程、Go runtime 内存/GC、tasks worker 运行状态、注册任务定义能力和 app/task/metrics 三库统计。数据库信息包含连接池、文件/SQLite 页面大小，以及用户表的准确行数、表数据页大小、索引大小、总占用和数据库占比；表级空间通过 SQLite `dbstat` 读取，不可用时只降级空间统计。接口不返回数据库路径、schema SQL、配置值、任务参数或任何业务记录与秘密。
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；进程日志等级使用 `log.level` 键持久化，默认 `info`，更新 `/api/v1/settings/runtime` 后立即调整 zap `AtomicLevel`；旧数据库启动时由默认设置写入流程自动补齐空值。
 - 后端进程日志统一使用 `internal/platform/logging` 的 zap JSON logger，输出路径固定为 `stdout`。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译；成功和重定向 HTTP 完成日志使用 debug，4xx 使用 warn，5xx 使用 error。
 - 概览仪表盘卡片布局通过 `overview_card_configurations` 保存在应用数据库；当前单管理员模型使用固定 `default` 记录，整套有序卡片配置以稳定值 JSON 原子替换。
