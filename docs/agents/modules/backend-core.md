@@ -72,6 +72,7 @@
 - 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。
 - 启动时必须迁移旧 SSH 明文密码、口令和私钥文件：先写入并验证密文，再删除私钥文件，最后清空旧字段；删除或验证失败时拒绝启动，迁移必须可重复执行。
 - 新增路由集中在 `/api/v1/key-assets`；私钥下载响应必须禁用缓存。
+- 密钥资产文件下载与导出归档下载的公开 URL 保持不变；由于两种三段路径在 Go `ServeMux` 中会交叉匹配，统一由 `/api/v1/key-assets/{downloadPath...}` 分发，避免启动注册路由时 panic。
 - 容器化资源实现位于 `internal/modules/containers`；API 集中在 `/api/v1/servers/{id}/containers|images|networks|volumes`，批量 Application 镜像更新位于 `/api/v1/images/upgrade-selected|upgrade-all`。
 - `bootstrap/panel.New` 还会通过 `internal/agent/security` 初始化 Panel Agent 专用 mTLS 资产，路径为 `<dataRoot>/agent/tls`；该 CA 只用于 Panel 与目标机 agent 的双向认证，不与用户密钥资产混用。Panel 侧调用目标机 agent 使用 `internal/agent/client`，协议与能力声明在 `internal/agent/contract`。
 - Agent 健康响应中的证书信息由 `internal/agent/contract` 自己定义，HTTP client 在 TLS 边界填充；contract 不依赖 `internal/agent/security`。
