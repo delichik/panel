@@ -36,8 +36,15 @@ func (e *SSHExecutor) Exec(ctx context.Context, target Target, command CommandSp
 }
 
 func (e *SSHExecutor) ExecSudo(ctx context.Context, target Target, command CommandSpec) (CommandResult, error) {
-	command.Command = "sudo -n sh -c " + shellQuote(command.Command)
+	command.Command = privilegedCommand(target.PrivilegeMode, command.Command)
 	return e.exec(ctx, target, command)
+}
+
+func privilegedCommand(mode, command string) string {
+	if mode == PrivilegeModeRoot {
+		return command
+	}
+	return "sudo -n sh -c " + shellQuote(command)
 }
 
 func (e *SSHExecutor) Upload(ctx context.Context, target Target, transfer UploadSpec) error {

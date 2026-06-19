@@ -41,6 +41,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			reachable INTEGER NOT NULL DEFAULT 0,
 			sudo_passwordless INTEGER NOT NULL DEFAULT 0,
 			sudo_last_checked_at TEXT,
+			privilege_mode TEXT NOT NULL DEFAULT '',
+			privilege_last_checked_at TEXT,
 			last_checked_at TEXT,
 			last_error TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
@@ -362,29 +364,31 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "servers", map[string]string{
-		"name":                 "TEXT NOT NULL DEFAULT ''",
-		"host":                 "TEXT NOT NULL DEFAULT ''",
-		"port":                 "INTEGER NOT NULL DEFAULT 22",
-		"ssh_username":         "TEXT NOT NULL DEFAULT ''",
-		"credential_id":        "TEXT NOT NULL DEFAULT ''",
-		"docker_host":          "TEXT NOT NULL DEFAULT 'unix:///var/run/docker.sock'",
-		"traits":               "TEXT NOT NULL DEFAULT '{}'",
-		"variables_json":       "TEXT NOT NULL DEFAULT '{}'",
-		"notes":                "TEXT NOT NULL DEFAULT ''",
-		"os_id":                "TEXT NOT NULL DEFAULT ''",
-		"os_version_id":        "TEXT NOT NULL DEFAULT ''",
-		"os_pretty_name":       "TEXT NOT NULL DEFAULT ''",
-		"os_supported":         "INTEGER NOT NULL DEFAULT 0",
-		"architecture_os":      "TEXT NOT NULL DEFAULT ''",
-		"architecture_arch":    "TEXT NOT NULL DEFAULT ''",
-		"architecture_machine": "TEXT NOT NULL DEFAULT ''",
-		"reachable":            "INTEGER NOT NULL DEFAULT 0",
-		"sudo_passwordless":    "INTEGER NOT NULL DEFAULT 0",
-		"sudo_last_checked_at": "TEXT",
-		"last_checked_at":      "TEXT",
-		"last_error":           "TEXT NOT NULL DEFAULT ''",
-		"created_at":           "TEXT NOT NULL DEFAULT ''",
-		"updated_at":           "TEXT NOT NULL DEFAULT ''",
+		"name":                      "TEXT NOT NULL DEFAULT ''",
+		"host":                      "TEXT NOT NULL DEFAULT ''",
+		"port":                      "INTEGER NOT NULL DEFAULT 22",
+		"ssh_username":              "TEXT NOT NULL DEFAULT ''",
+		"credential_id":             "TEXT NOT NULL DEFAULT ''",
+		"docker_host":               "TEXT NOT NULL DEFAULT 'unix:///var/run/docker.sock'",
+		"traits":                    "TEXT NOT NULL DEFAULT '{}'",
+		"variables_json":            "TEXT NOT NULL DEFAULT '{}'",
+		"notes":                     "TEXT NOT NULL DEFAULT ''",
+		"os_id":                     "TEXT NOT NULL DEFAULT ''",
+		"os_version_id":             "TEXT NOT NULL DEFAULT ''",
+		"os_pretty_name":            "TEXT NOT NULL DEFAULT ''",
+		"os_supported":              "INTEGER NOT NULL DEFAULT 0",
+		"architecture_os":           "TEXT NOT NULL DEFAULT ''",
+		"architecture_arch":         "TEXT NOT NULL DEFAULT ''",
+		"architecture_machine":      "TEXT NOT NULL DEFAULT ''",
+		"reachable":                 "INTEGER NOT NULL DEFAULT 0",
+		"sudo_passwordless":         "INTEGER NOT NULL DEFAULT 0",
+		"sudo_last_checked_at":      "TEXT",
+		"privilege_mode":            "TEXT NOT NULL DEFAULT ''",
+		"privilege_last_checked_at": "TEXT",
+		"last_checked_at":           "TEXT",
+		"last_error":                "TEXT NOT NULL DEFAULT ''",
+		"created_at":                "TEXT NOT NULL DEFAULT ''",
+		"updated_at":                "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
@@ -529,6 +533,17 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 			architecture_machine=COALESCE(NULLIF(architecture_machine, ''), json_extract(traits, '$.sys.architecture'), ''),
 			reachable=COALESCE(reachable, 0),
 			sudo_passwordless=COALESCE(sudo_passwordless, 0),
+			privilege_mode=CASE
+				WHEN privilege_mode IN ('root','passwordless_sudo','none') THEN privilege_mode
+				WHEN lower(trim(COALESCE(ssh_username, ''))) = 'root' THEN 'root'
+				WHEN trim(COALESCE(ssh_username, '')) = '' AND EXISTS (
+					SELECT 1 FROM credentials
+					WHERE credentials.id = servers.credential_id
+					  AND lower(trim(COALESCE(credentials.username, ''))) = 'root'
+				) THEN 'root'
+				WHEN COALESCE(sudo_passwordless, 0) = 1 THEN 'passwordless_sudo'
+				ELSE 'none' END,
+			privilege_last_checked_at=COALESCE(privilege_last_checked_at, sudo_last_checked_at, last_checked_at),
 			last_error=COALESCE(last_error, ''),
 			created_at=COALESCE(NULLIF(created_at, ''), ` + nowExpr + `),
 			updated_at=COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), ` + nowExpr + `)`,

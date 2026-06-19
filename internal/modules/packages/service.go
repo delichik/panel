@@ -254,8 +254,9 @@ func (s *Service) ensurePackageAllowed(ctx context.Context, serverID string, req
 	if !srv.OS.Supported {
 		return server.Server{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
 	}
-	if requireSudo && !srv.Sudo.Passwordless {
-		return server.Server{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	if requireSudo && !srv.Privilege.Privileged && srv.Privilege.Mode != sshx.PrivilegeModeRoot &&
+		srv.Privilege.Mode != sshx.PrivilegeModeSudo && !srv.Sudo.Passwordless {
+		return server.Server{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
 	}
 	return srv, nil
 }

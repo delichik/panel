@@ -27,9 +27,16 @@ func TestPrivateKeyAuthMethodRejectsInvalidKey(t *testing.T) {
 }
 
 func TestSudoCommandWrapsNonInteractive(t *testing.T) {
-	got := shellQuote("apt-get update")
-	if got != "'apt-get update'" {
-		t.Fatalf("unexpected shell quote: %s", got)
+	got := privilegedCommand(PrivilegeModeSudo, "apt-get update")
+	if got != "sudo -n sh -c 'apt-get update'" {
+		t.Fatalf("unexpected sudo command: %s", got)
+	}
+}
+
+func TestPrivilegedCommandRunsDirectlyForRoot(t *testing.T) {
+	got := privilegedCommand(PrivilegeModeRoot, "apt-get update")
+	if got != "apt-get update" {
+		t.Fatalf("unexpected root command: %s", got)
 	}
 }
 

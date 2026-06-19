@@ -13,6 +13,14 @@ export interface SudoInfoDto {
   lastCheckedAt: string | null;
 }
 
+export type PrivilegeMode = 'root' | 'passwordless_sudo' | 'none';
+
+export interface PrivilegeInfoDto {
+  mode: PrivilegeMode;
+  privileged: boolean;
+  lastCheckedAt: string | null;
+}
+
 export interface ServerDto {
   id: string;
   name: string;
@@ -25,6 +33,7 @@ export interface ServerDto {
   notes?: string;
   os?: OSInfoDto | null;
   sudo?: SudoInfoDto | null;
+  privilege?: PrivilegeInfoDto | null;
   reachable: boolean;
   loadAverage: string | null;
   lastCheckedAt: string | null;

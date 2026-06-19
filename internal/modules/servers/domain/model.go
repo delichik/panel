@@ -20,6 +20,7 @@ type Server struct {
 	OS            linux.OSRelease   `json:"os"`
 	Architecture  ArchitectureInfo  `json:"architecture"`
 	Sudo          SudoState         `json:"sudo"`
+	Privilege     PrivilegeState    `json:"privilege"`
 	Reachable     bool              `json:"reachable"`
 	LoadAverage   string            `json:"loadAverage"`
 	LastCheckedAt *time.Time        `json:"lastCheckedAt"`
@@ -40,6 +41,12 @@ type SudoState struct {
 	LastCheckedAt *time.Time `json:"lastCheckedAt"`
 }
 
+type PrivilegeState struct {
+	Mode          string     `json:"mode"`
+	Privileged    bool       `json:"privileged"`
+	LastCheckedAt *time.Time `json:"lastCheckedAt"`
+}
+
 type SaveRequest struct {
 	Name         string            `json:"name"`
 	Host         string            `json:"host"`
@@ -57,6 +64,7 @@ type ProbeResult struct {
 	PasswordlessSudo     bool              `json:"passwordlessSudo"`
 	Root                 bool              `json:"root"`
 	Privileged           bool              `json:"privileged"`
+	PrivilegeMode        string            `json:"privilegeMode"`
 	OS                   linux.OSRelease   `json:"os"`
 	Architecture         ArchitectureInfo  `json:"architecture"`
 	Traits               map[string]string `json:"traits"`

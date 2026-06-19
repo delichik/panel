@@ -39,9 +39,12 @@ function taskRoute(taskId = lastTaskId.value) {
 }
 
 const currentServer = computed(() => servers.value.find((server) => server.id === serverId.value));
+function hasPrivilege(server?: ServerDto | null) {
+  return server?.privilege?.privileged === true || server?.sudo?.passwordless === true;
+}
 const operationBlocked = computed(() => {
   const server = currentServer.value;
-  return !server || server.os?.supported === false || server.sudo?.passwordless === false;
+  return !server || server.os?.supported === false || !hasPrivilege(server);
 });
 
 const selectedPackages = computed(() => (updates.value?.updates ?? []).filter(item => selectedPackageNames.value.includes(item.name)));

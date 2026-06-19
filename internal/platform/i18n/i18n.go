@@ -64,6 +64,7 @@ var (
 			"remote_path_invalid":                           "远程路径必须为绝对路径",
 			"remote_file_mode_invalid":                      "远程文件权限模式无效",
 			"passwordless_sudo_required":                    "需要免密 sudo",
+			"privileged_access_required":                    "需要 root 或免密 sudo 权限",
 			"dns_domain_invalid":                            "域名必须是有效的 DNS 名称",
 			"dns_provider_invalid":                          "DNS 提供商必须为 cloudflare",
 			"dns_provider_credentials_unavailable":          "DNS 提供商凭据存储不可用",

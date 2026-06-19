@@ -287,7 +287,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	}
 	found := false
 	for _, log := range logs {
-		if log.Line == "passwordless sudo unavailable: sudo denied" {
+		if log.Line == "privileged access unavailable: sudo denied" {
 			found = true
 		}
 	}
@@ -302,12 +302,24 @@ func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Reachable || !result.Root || !result.Privileged {
+	if !result.Reachable || !result.Root || !result.Privileged || result.PrivilegeMode != sshx.PrivilegeModeRoot {
 		t.Fatalf("expected reachable root probe, got %#v", result)
 	}
 	if result.Traits["sys.architecture"] != "x86_64" || result.Traits["sys.ufw_supported"] != "true" || result.OS.PrettyName != "Debian GNU/Linux 13" ||
 		result.Architecture.OS != "linux" || result.Architecture.Arch != "amd64" {
 		t.Fatalf("unexpected probe detail: %#v", result)
+	}
+}
+
+func TestInitialCollectionPersistsRootPrivilege(t *testing.T) {
+	svc, _, _ := testServerService(t, &connectivityFakeExec{root: true})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "root", Host: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv = waitServerReady(t, svc, srv.ID)
+	if srv.Privilege.Mode != sshx.PrivilegeModeRoot || !srv.Privilege.Privileged || srv.Sudo.Passwordless {
+		t.Fatalf("unexpected persisted root privilege: %#v", srv.Privilege)
 	}
 }
 
@@ -1788,7 +1800,7 @@ func waitServerReady(t *testing.T, svc *Service, serverID string) Server {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if srv.Reachable && srv.OS.Supported && srv.Sudo.Passwordless {
+		if srv.Reachable && srv.OS.Supported && hasPrivilege(srv) {
 			return srv
 		}
 		time.Sleep(20 * time.Millisecond)

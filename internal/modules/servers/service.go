@@ -238,8 +238,8 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 	if !srv.Reachable {
 		return tasks.Task{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
 	}
-	if !srv.Sudo.Passwordless {
-		return tasks.Task{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	if !hasPrivilege(srv) {
+		return tasks.Task{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
 	}
 	adapter, ok := linux.AdapterFor(srv.OS)
 	if !ok {
@@ -288,8 +288,8 @@ func (s *Service) Restart(ctx context.Context, serverID string) (tasks.Task, err
 	if !srv.Reachable {
 		return tasks.Task{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
 	}
-	if !srv.Sudo.Passwordless {
-		return tasks.Task{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	if !hasPrivilege(srv) {
+		return tasks.Task{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
 	}
 	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         restartTaskType,
@@ -331,8 +331,8 @@ func (s *Service) ensureUFWManageable(ctx context.Context, serverID string) (Ser
 	if !srv.Reachable {
 		return Server{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
 	}
-	if !srv.Sudo.Passwordless {
-		return Server{}, panelerr.Validation("passwordless_sudo_required", "Passwordless sudo is required")
+	if !hasPrivilege(srv) {
+		return Server{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
 	}
 	adapter, ok := linux.AdapterFor(srv.OS)
 	if !ok {
@@ -419,11 +419,9 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 		return ProbeResult{Reachable: false, Error: err.Error(), Traits: map[string]string{}}, nil
 	}
 
-	rootRes, rootErr := s.exec.Exec(probeCtx, target, sshx.CommandSpec{Command: "id -u", Timeout: connectivitySudoTimeout})
-	root := rootErr == nil && strings.TrimSpace(rootRes.Stdout) == "0"
-
-	sudoRes, sudoErr := s.exec.ExecSudo(probeCtx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
-	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
+	mode, privilegeErr := s.detectPrivilege(probeCtx, target)
+	root := mode == sshx.PrivilegeModeRoot
+	passwordless := mode == sshx.PrivilegeModeSudo
 
 	architecture, architectureErr := s.detectArchitectureInfo(probeCtx, target)
 	if architectureErr != nil {
@@ -436,13 +434,14 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 		Reachable:        true,
 		PasswordlessSudo: passwordless,
 		Root:             root,
-		Privileged:       root || passwordless,
+		Privileged:       mode != sshx.PrivilegeModeNone,
+		PrivilegeMode:    mode,
 		OS:               osInfo,
 		Architecture:     architecture,
 		Traits:           sysTraits,
 	}
-	if sudoErr != nil && !root {
-		result.PasswordlessSudoText = sudoErr.Error()
+	if privilegeErr != nil && mode == sshx.PrivilegeModeNone {
+		result.PasswordlessSudoText = privilegeErr.Error()
 	}
 	if !osInfo.Supported {
 		result.Error = "unsupported distribution"
@@ -562,17 +561,17 @@ func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv 
 	}
 	osInfo, err := s.detectOS(ctx, srv, target)
 	if err != nil {
-		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, nil, err.Error())
+		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, sshx.PrivilegeModeNone, nil, err.Error())
 		s.failConnectivityTask(ctx, task, srv, err)
 		return
 	}
-	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking passwordless sudo")
-	passwordless := srv.Sudo.Passwordless
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking privileged access")
+	mode := privilegeMode(srv)
 	if _, configured := agentURL(srv); !configured {
-		sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
-		passwordless = sudoErr == nil && sudoRes.ExitCode == 0
-		if sudoErr != nil {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "passwordless sudo unavailable: "+sudoErr.Error())
+		var privilegeErr error
+		mode, privilegeErr = s.detectPrivilege(ctx, target)
+		if privilegeErr != nil && mode == sshx.PrivilegeModeNone {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "privileged access unavailable: "+privilegeErr.Error())
 		}
 	}
 
@@ -589,17 +588,17 @@ func (s *Service) runConnectivityTest(ctx context.Context, task tasks.Task, srv 
 	applyDistroSystemTraits(osInfo, sysTraits)
 
 	if !osInfo.Supported {
-		_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, "unsupported distribution")
+		_ = s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, "unsupported distribution")
 		_ = s.tasks.Complete(ctx, taskID, "Connected, but distribution is unsupported")
 		return
 	}
 
-	_ = s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, "")
-	if passwordless {
+	_ = s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, "")
+	if mode != sshx.PrivilegeModeNone {
 		_ = s.tasks.Complete(ctx, taskID, "Connectivity test passed")
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 	} else {
-		_ = s.tasks.Complete(ctx, taskID, "Connected, passwordless sudo unavailable")
+		_ = s.tasks.Complete(ctx, taskID, "Connected, privileged access unavailable")
 	}
 }
 
@@ -607,14 +606,14 @@ func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks
 	taskID := task.ID
 	osInfo, err := linux.Detect(ctx, s.exec, target)
 	if err != nil {
-		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, false, nil, err.Error())
+		_ = s.markCheck(ctx, srv.ID, false, linux.OSRelease{}, sshx.PrivilegeModeNone, nil, err.Error())
 		s.failConnectivityTask(ctx, task, srv, err)
 		return
 	}
 	_ = s.tasks.Advance(ctx, taskID, "architecture", "detecting server architecture")
 	architecture, err := s.detectArchitectureInfo(ctx, target)
 	if err != nil {
-		_ = s.markCheck(ctx, srv.ID, true, osInfo, false, nil, err.Error())
+		_ = s.markCheck(ctx, srv.ID, true, osInfo, sshx.PrivilegeModeNone, nil, err.Error())
 		s.failConnectivityTask(ctx, task, srv, err)
 		return
 	}
@@ -622,11 +621,10 @@ func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks
 		s.failConnectivityTask(ctx, task, srv, err)
 		return
 	}
-	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking passwordless sudo")
-	sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
-	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
-	if sudoErr != nil {
-		_ = s.tasks.AppendLog(ctx, taskID, "system", "passwordless sudo unavailable: "+sudoErr.Error())
+	_ = s.tasks.Advance(ctx, taskID, "verifying", "checking privileged access")
+	mode, privilegeErr := s.detectPrivilege(ctx, target)
+	if privilegeErr != nil && mode == sshx.PrivilegeModeNone {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "privileged access unavailable: "+privilegeErr.Error())
 	}
 	sysTraits := map[string]string{"sys.architecture": architecture.RawMachine}
 	applyDistroSystemTraits(osInfo, sysTraits)
@@ -634,7 +632,7 @@ func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks
 	if !osInfo.Supported {
 		msg = "unsupported distribution"
 	}
-	if err := s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, msg); err != nil {
+	if err := s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, msg); err != nil {
 		s.failConnectivityTask(ctx, task, srv, err)
 		return
 	}
@@ -642,8 +640,8 @@ func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks
 		_ = s.tasks.Complete(ctx, taskID, "Connected, but distribution is unsupported")
 		return
 	}
-	if !passwordless {
-		_ = s.tasks.Complete(ctx, taskID, "Architecture detected, passwordless sudo unavailable")
+	if mode == sshx.PrivilegeModeNone {
+		_ = s.tasks.Complete(ctx, taskID, "Architecture detected, privileged access unavailable")
 		return
 	}
 	_ = s.tasks.Complete(ctx, taskID, "Architecture detected")
@@ -707,8 +705,7 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
-	sudoRes, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
-	passwordless := sudoErr == nil && sudoRes.ExitCode == 0
+	mode, _ := s.detectPrivilege(ctx, target)
 	sysTraits := map[string]string{}
 	if osInfo.Supported {
 		detected, traitsErr := s.detectSystemTraitsForServer(ctx, srv, target)
@@ -727,7 +724,7 @@ func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, 
 	if !osInfo.Supported {
 		msg = "unsupported distribution"
 	}
-	if err := s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, msg); err != nil {
+	if err := s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, msg); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
@@ -1336,7 +1333,7 @@ func (s *Service) refreshServerTraits(ctx context.Context, taskID string, srv Se
 	if err != nil {
 		return err
 	}
-	passwordless := srv.Sudo.Passwordless
+	mode := privilegeMode(srv)
 	sysTraits := map[string]string{}
 	if osInfo.Supported {
 		detected, traitsErr := s.detectSystemTraitsForServer(ctx, srv, target)
@@ -1355,7 +1352,7 @@ func (s *Service) refreshServerTraits(ctx context.Context, taskID string, srv Se
 	if !osInfo.Supported {
 		msg = "unsupported distribution"
 	}
-	return s.markCheck(ctx, srv.ID, true, osInfo, passwordless, sysTraits, msg)
+	return s.markCheck(ctx, srv.ID, true, osInfo, mode, sysTraits, msg)
 }
 
 func uniqueUFWRules(rules []remoteops.UFWRule) []remoteops.UFWRule {
@@ -1402,8 +1399,13 @@ func applyDistroSystemTraits(osInfo linux.OSRelease, traits map[string]string) {
 	}
 }
 
-func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool, osInfo linux.OSRelease, sudo bool, sysTraits map[string]string, msg string) error {
+func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool, osInfo linux.OSRelease, privilegeMode string, sysTraits map[string]string, msg string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
+	passwordless := privilegeMode == sshx.PrivilegeModeSudo
+	var sudoCheckedAt any = now
+	if privilegeMode == sshx.PrivilegeModeRoot {
+		sudoCheckedAt = nil
+	}
 
 	// 首先拉取已有的 traits (包含用户打的 custom.env 等自定义特征)
 	var rawTraits string
@@ -1429,13 +1431,29 @@ func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool
 
 	traitsJSON, _ := json.Marshal(current)
 
-	_, err = s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,os_id=?,os_version_id=?,os_pretty_name=?,os_supported=?,sudo_passwordless=?,sudo_last_checked_at=?,last_checked_at=?,traits=?,last_error=?,updated_at=? WHERE id=?`,
-		boolInt(reachable), osInfo.ID, osInfo.VersionID, osInfo.PrettyName, boolInt(osInfo.Supported), boolInt(sudo), now, now, string(traitsJSON), msg, now, serverID)
+	_, err = s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,os_id=?,os_version_id=?,os_pretty_name=?,os_supported=?,sudo_passwordless=?,sudo_last_checked_at=?,privilege_mode=?,privilege_last_checked_at=?,last_checked_at=?,traits=?,last_error=?,updated_at=? WHERE id=?`,
+		boolInt(reachable), osInfo.ID, osInfo.VersionID, osInfo.PrettyName, boolInt(osInfo.Supported), boolInt(passwordless), sudoCheckedAt, privilegeMode, now, now, string(traitsJSON), msg, now, serverID)
 	return err
 }
 
 func serverTarget(srv Server) sshx.Target {
-	return sshx.Target{ServerID: srv.ID, Host: srv.Host, Port: srv.Port, Username: srv.SSHUsername, CredentialID: srv.CredentialID}
+	return Target(srv)
+}
+
+func (s *Service) detectPrivilege(ctx context.Context, target sshx.Target) (string, error) {
+	rootResult, rootErr := s.exec.Exec(ctx, target, sshx.CommandSpec{Command: "id -u", Timeout: connectivitySudoTimeout})
+	if rootErr == nil && strings.TrimSpace(rootResult.Stdout) == "0" {
+		return sshx.PrivilegeModeRoot, nil
+	}
+	target.PrivilegeMode = sshx.PrivilegeModeSudo
+	sudoResult, sudoErr := s.exec.ExecSudo(ctx, target, sshx.CommandSpec{Command: "true", Timeout: connectivitySudoTimeout})
+	if sudoErr == nil && sudoResult.ExitCode == 0 {
+		return sshx.PrivilegeModeSudo, nil
+	}
+	if sudoErr != nil {
+		return sshx.PrivilegeModeNone, sudoErr
+	}
+	return sshx.PrivilegeModeNone, rootErr
 }
 
 func validateSave(req SaveRequest) error {

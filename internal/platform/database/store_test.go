@@ -115,6 +115,12 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	if !credentialColumns["secret_ciphertext"] {
 		t.Fatal("fresh credentials schema is missing secret_ciphertext")
 	}
+	serverColumns := tableColumns(t, store.AppDB(), "servers")
+	for _, required := range []string{"privilege_mode", "privilege_last_checked_at"} {
+		if !serverColumns[required] {
+			t.Fatalf("fresh server schema is missing %q", required)
+		}
+	}
 	for _, table := range []string{
 		"docker_capabilities",
 		"docker_runtime_cache",
@@ -205,14 +211,86 @@ func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
 		t.Fatalf("credential defaults not normalized: name=%q type=%q username=%q created=%q updated=%q", credName, credType, credUsername, credCreated, credUpdated)
 	}
 
-	var serverName, serverHost, serverSSHUser, credentialID, traits, notes, osID, osVersionID, osPrettyName, lastError, serverCreated, serverUpdated string
+	var serverName, serverHost, serverSSHUser, credentialID, traits, notes, osID, osVersionID, osPrettyName, privilegeMode, lastError, serverCreated, serverUpdated string
 	var port, osSupported, reachable, sudo int
-	if err := store.AppDB().QueryRow(`SELECT name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,last_error,created_at,updated_at FROM servers WHERE id='srv_legacy'`).
-		Scan(&serverName, &serverHost, &port, &serverSSHUser, &credentialID, &traits, &notes, &osID, &osVersionID, &osPrettyName, &osSupported, &reachable, &sudo, &lastError, &serverCreated, &serverUpdated); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT name,host,port,ssh_username,credential_id,traits,notes,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,privilege_mode,last_error,created_at,updated_at FROM servers WHERE id='srv_legacy'`).
+		Scan(&serverName, &serverHost, &port, &serverSSHUser, &credentialID, &traits, &notes, &osID, &osVersionID, &osPrettyName, &osSupported, &reachable, &sudo, &privilegeMode, &lastError, &serverCreated, &serverUpdated); err != nil {
 		t.Fatal(err)
 	}
-	if serverName != "" || serverHost != "" || port != 22 || serverSSHUser != "" || credentialID != "cred_legacy" || traits != "{}" || notes != "" || osID != "" || osVersionID != "" || osPrettyName != "" || osSupported != 0 || reachable != 0 || sudo != 0 || lastError != "" || serverCreated == "" || serverUpdated == "" {
-		t.Fatalf("server defaults not normalized: name=%q host=%q port=%d ssh=%q credential=%q traits=%q notes=%q os=%q/%q/%q supported=%d reachable=%d sudo=%d lastError=%q created=%q updated=%q", serverName, serverHost, port, serverSSHUser, credentialID, traits, notes, osID, osVersionID, osPrettyName, osSupported, reachable, sudo, lastError, serverCreated, serverUpdated)
+	if serverName != "" || serverHost != "" || port != 22 || serverSSHUser != "" || credentialID != "cred_legacy" || traits != "{}" || notes != "" || osID != "" || osVersionID != "" || osPrettyName != "" || osSupported != 0 || reachable != 0 || sudo != 0 || privilegeMode != "none" || lastError != "" || serverCreated == "" || serverUpdated == "" {
+		t.Fatalf("server defaults not normalized: name=%q host=%q port=%d ssh=%q credential=%q traits=%q notes=%q os=%q/%q/%q supported=%d reachable=%d sudo=%d privilege=%q lastError=%q created=%q updated=%q", serverName, serverHost, port, serverSSHUser, credentialID, traits, notes, osID, osVersionID, osPrettyName, osSupported, reachable, sudo, privilegeMode, lastError, serverCreated, serverUpdated)
+	}
+}
+
+func TestMigratePreservesPasswordlessSudoAsPrivilegeMode(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,credential_id,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'cred',1,'','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var mode string
+	if err := store.AppDB().QueryRow(`SELECT privilege_mode FROM servers WHERE id='srv'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "passwordless_sudo" {
+		t.Fatalf("privilege mode = %q, want passwordless_sudo", mode)
+	}
+}
+
+func TestMigrateRecognizesRootSSHUserAsPrivilegeMode(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'','cred',0,'','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err = Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var mode string
+	if err := store.AppDB().QueryRow(`SELECT privilege_mode FROM servers WHERE id='srv'`).Scan(&mode); err != nil {
+		t.Fatal(err)
+	}
+	if mode != "root" {
+		t.Fatalf("privilege mode = %q, want root", mode)
 	}
 }
 

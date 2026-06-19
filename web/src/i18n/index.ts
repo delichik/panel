@@ -496,6 +496,7 @@ const messages = {
       status: "Status",
       defaultPolicy: "Default policy",
       passwordlessSudo: "Passwordless sudo",
+      privilegedAccess: "Privileged access",
       rules: "Rules",
       ufwMissing: "UFW is not installed on this server.",
       installUfw: "Install UFW",
@@ -778,7 +779,7 @@ const messages = {
       fullUpgradeStarted: "Full package upgrade started",
       fullUpgradeFailed: "Full upgrade failed",
       blockedHint:
-        "This server is not eligible for package operations until distro support and passwordless sudo are confirmed.",
+        "This server is not eligible for package operations until distro support and root or passwordless sudo access are confirmed.",
       lastRefreshed: "Last refreshed",
       refreshing: "Refreshing",
       upgradeSelected: "Upgrade selected",
@@ -1677,6 +1678,7 @@ const messages = {
       status: "状态",
       defaultPolicy: "默认策略",
       passwordlessSudo: "免密 sudo",
+      privilegedAccess: "特权访问",
       rules: "规则",
       ufwMissing: "该服务器尚未安装 UFW。",
       installUfw: "安装 UFW",
@@ -1958,7 +1960,7 @@ const messages = {
       fullUpgradeStarted: "已开始完整软件包升级",
       fullUpgradeFailed: "完整升级失败",
       blockedHint:
-        "在确认发行版支持和免密 sudo 之前，该服务器不能执行软件包操作。",
+        "在确认发行版支持以及 root 或免密 sudo 权限之前，该服务器不能执行软件包操作。",
       lastRefreshed: "最近刷新",
       refreshing: "刷新中",
       upgradeSelected: "升级选中项",

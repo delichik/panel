@@ -19,7 +19,7 @@ func NewServerRepository(db *sql.DB) *ServerRepository {
 }
 
 func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,architecture_os,architecture_arch,architecture_machine,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,architecture_os,architecture_arch,architecture_machine,reachable,sudo_passwordless,sudo_last_checked_at,privilege_mode,privilege_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
 }
 
 func (r *ServerRepository) Get(ctx context.Context, serverID string) (domain.Server, error) {
-	srv, err := scanServer(r.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,architecture_os,architecture_arch,architecture_machine,reachable,sudo_passwordless,sudo_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
+	srv, err := scanServer(r.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,architecture_os,architecture_arch,architecture_machine,reachable,sudo_passwordless,sudo_last_checked_at,privilege_mode,privilege_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
 	if err == sql.ErrNoRows {
 		return domain.Server{}, panelerr.NotFound("server")
 	}
@@ -128,8 +128,8 @@ func scanServer(row serverScanner) (domain.Server, error) {
 	var srv domain.Server
 	var traits, variables, created, updated string
 	var osSupported, reachable, sudo int
-	var sudoAt, checkedAt sql.NullString
-	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &srv.DockerHost, &traits, &variables, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &srv.Architecture.OS, &srv.Architecture.Arch, &srv.Architecture.RawMachine, &reachable, &sudo, &sudoAt, &checkedAt, &srv.LastError, &created, &updated)
+	var sudoAt, privilegeAt, checkedAt sql.NullString
+	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &srv.DockerHost, &traits, &variables, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &srv.Architecture.OS, &srv.Architecture.Arch, &srv.Architecture.RawMachine, &reachable, &sudo, &sudoAt, &srv.Privilege.Mode, &privilegeAt, &checkedAt, &srv.LastError, &created, &updated)
 	if err != nil {
 		return domain.Server{}, err
 	}
@@ -143,9 +143,21 @@ func scanServer(row serverScanner) (domain.Server, error) {
 	srv.OS.Supported = osSupported == 1
 	srv.Reachable = reachable == 1
 	srv.Sudo.Passwordless = sudo == 1
+	if srv.Privilege.Mode == "" {
+		if srv.Sudo.Passwordless {
+			srv.Privilege.Mode = "passwordless_sudo"
+		} else {
+			srv.Privilege.Mode = "none"
+		}
+	}
+	srv.Privilege.Privileged = srv.Privilege.Mode == "root" || srv.Privilege.Mode == "passwordless_sudo"
 	if sudoAt.Valid {
 		v, _ := time.Parse(time.RFC3339Nano, sudoAt.String)
 		srv.Sudo.LastCheckedAt = &v
+	}
+	if privilegeAt.Valid {
+		v, _ := time.Parse(time.RFC3339Nano, privilegeAt.String)
+		srv.Privilege.LastCheckedAt = &v
 	}
 	if checkedAt.Valid {
 		v, _ := time.Parse(time.RFC3339Nano, checkedAt.String)

@@ -36,8 +36,8 @@ const ruleForm = reactive({
 
 const selectedServer = computed(() => servers.value.find((server) => server.id === serverId.value) ?? null);
 const selectedUfwSupported = computed(() => selectedServer.value?.traits?.['sys.ufw_supported'] !== 'false');
-const canUseSudo = computed(() => selectedServer.value?.sudo?.passwordless === true);
-const canManageRules = computed(() => Boolean(selectedServer.value?.reachable && canUseSudo.value && state.value?.supported && state.value?.installed));
+const hasPrivilege = computed(() => selectedServer.value?.privilege?.privileged === true || selectedServer.value?.sudo?.passwordless === true);
+const canManageRules = computed(() => Boolean(selectedServer.value?.reachable && hasPrivilege.value && state.value?.supported && state.value?.installed));
 const canAddRule = computed(() => canManageRules.value && Number(ruleForm.port) > 0 && Number(ruleForm.port) <= 65535);
 const rules = computed(() => state.value?.rules ?? []);
 const {
@@ -218,8 +218,8 @@ onMounted(async () => {
               <strong>{{ state?.defaultPolicy || t('common.notAvailable') }}</strong>
             </div>
             <div>
-              <span>{{ t('firewallPage.passwordlessSudo') }}</span>
-              <v-chip :color="canUseSudo ? 'success' : 'warning'" size="small" variant="tonal" label>{{ canUseSudo ? t('common.yes') : t('common.no') }}</v-chip>
+              <span>{{ t('firewallPage.privilegedAccess') }}</span>
+              <v-chip :color="hasPrivilege ? 'success' : 'warning'" size="small" variant="tonal" label>{{ hasPrivilege ? t('common.yes') : t('common.no') }}</v-chip>
             </div>
             <div>
               <span>{{ t('firewallPage.rules') }}</span>
@@ -236,7 +236,7 @@ onMounted(async () => {
                 size="small"
                 prepend-icon="mdi-shield-check"
                 class="text-none"
-                :disabled="!selectedServer.reachable || !canUseSudo || !selectedUfwSupported"
+                :disabled="!selectedServer.reachable || !hasPrivilege || !selectedUfwSupported"
                 @click="enableDialog = true"
               >
                 {{ t('firewallPage.enableUfw') }}

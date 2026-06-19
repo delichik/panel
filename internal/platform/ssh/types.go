@@ -8,6 +8,9 @@ import (
 const (
 	CredentialTypePassword   = "password"
 	CredentialTypePrivateKey = "private_key"
+	PrivilegeModeRoot        = "root"
+	PrivilegeModeSudo        = "passwordless_sudo"
+	PrivilegeModeNone        = "none"
 )
 
 type ResolvedCredential struct {
@@ -20,11 +23,12 @@ type ResolvedCredential struct {
 }
 
 type Target struct {
-	ServerID     string
-	Host         string
-	Port         int
-	Username     string
-	CredentialID string
+	ServerID      string
+	Host          string
+	Port          int
+	Username      string
+	CredentialID  string
+	PrivilegeMode string
 }
 
 type CommandSpec struct {

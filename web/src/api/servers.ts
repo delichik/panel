@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { AgentCertificateBundleDto, CredentialDto, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
+import type { AgentCertificateBundleDto, CredentialDto, PrivilegeMode, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
 
 export interface ServerInput {
   name: string;
@@ -30,6 +30,7 @@ export interface ServerProbeDto {
   passwordlessSudo: boolean;
   root: boolean;
   privileged: boolean;
+  privilegeMode: PrivilegeMode;
   os: {
     id: string;
     versionId: string;

@@ -346,7 +346,7 @@ async function deleteCredential(credential: CredentialDto) {
 }
 
 function canRestart(server: ServerDto | null) {
-  return Boolean(server?.reachable && server.sudo?.passwordless);
+  return Boolean(server?.reachable && (server.privilege?.privileged || server.sudo?.passwordless));
 }
 
 function restartServer(server: ServerDto) {
@@ -466,7 +466,7 @@ function ufwStatusForServer(server: ServerDto | null) {
 function canInstallUFW(server: ServerDto | null) {
   if (!server) return false;
   const status = ufwStatusForServer(server);
-  return server.reachable && server.sudo?.passwordless === true && status.supported && !status.installed;
+  return server.reachable && (server.privilege?.privileged === true || server.sudo?.passwordless === true) && status.supported && !status.installed;
 }
 
 async function installUFW(server: ServerDto) {

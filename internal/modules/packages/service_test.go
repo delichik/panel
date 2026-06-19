@@ -48,6 +48,36 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	}
 }
 
+func TestPackageServiceAcceptsRootPrivilegeWithoutSudo(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'root','cred','debian','12',1,0,'root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.TaskDB())
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	srv, err := svc.ensurePackageAllowed(context.Background(), "srv", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !srv.Privilege.Privileged || srv.Privilege.Mode != sshx.PrivilegeModeRoot {
+		t.Fatalf("unexpected privilege state: %#v", srv.Privilege)
+	}
+}
+
 func TestRefreshRecordsTask(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
