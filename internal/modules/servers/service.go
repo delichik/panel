@@ -59,7 +59,15 @@ type Service struct {
 	exec      sshx.RemoteExecutor
 	agent     agentcontract.Client
 	agentTLS  *agentsecurity.TLSAssets
+	agentKeys agentTLSProvider
 	tasks     *tasks.Service
+}
+
+type agentTLSProvider interface {
+	EnsureAgentTLSAssets(ctx context.Context) (*agentsecurity.TLSAssets, error)
+	IssueAgentServerCertificate(ctx context.Context, serverID, serverName, host string) (agentsecurity.ServerCertificate, []byte, error)
+	ResetAgentCA(ctx context.Context) (*agentsecurity.TLSAssets, error)
+	ResetAgentClientCertificate(ctx context.Context) (*agentsecurity.TLSAssets, error)
 }
 
 type Option func(*Service)
@@ -74,6 +82,10 @@ func WithAgentClient(client agentcontract.Client) Option {
 
 func WithAgentTLSAssets(assets *agentsecurity.TLSAssets) Option {
 	return func(s *Service) { s.agentTLS = assets }
+}
+
+func WithAgentTLSProvider(provider agentTLSProvider) Option {
+	return func(s *Service) { s.agentKeys = provider }
 }
 
 func NewService(db *sql.DB, exec sshx.RemoteExecutor, taskSvc *tasks.Service, opts ...Option) *Service {

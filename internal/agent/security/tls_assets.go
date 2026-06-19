@@ -28,6 +28,7 @@ type TLSAssets struct {
 	ClientCertPath string
 	ClientKeyPath  string
 	CAPEM          []byte
+	CAKeyPEM       []byte
 	ClientCertPEM  []byte
 	ClientKeyPEM   []byte
 }
@@ -48,6 +49,11 @@ type tlsFile struct {
 	path string
 	data []byte
 }
+
+const (
+	DefaultCAValidity   = 30 * 365 * 24 * time.Hour
+	DefaultLeafValidity = 30 * 24 * time.Hour
+)
 
 func EnsureTLSAssets(dataRoot string) (*TLSAssets, error) {
 	assets := tlsAssetsPaths(dataRoot)
@@ -88,10 +94,29 @@ func loadTLSAssets(assets *TLSAssets) (*TLSAssets, error) {
 	if assets.CAPEM, err = os.ReadFile(assets.CAPath); err != nil {
 		return nil, err
 	}
+	if assets.CAKeyPEM, err = os.ReadFile(assets.CAKeyPath); err != nil {
+		return nil, err
+	}
 	if assets.ClientCertPEM, err = os.ReadFile(assets.ClientCertPath); err != nil {
 		return nil, err
 	}
 	if assets.ClientKeyPEM, err = os.ReadFile(assets.ClientKeyPath); err != nil {
+		return nil, err
+	}
+	return assets, nil
+}
+
+func NewTLSAssetsFromPEM(caPEM, caKeyPEM, clientCertPEM, clientKeyPEM []byte) (*TLSAssets, error) {
+	assets := &TLSAssets{
+		CAPEM:         append([]byte(nil), caPEM...),
+		CAKeyPEM:      append([]byte(nil), caKeyPEM...),
+		ClientCertPEM: append([]byte(nil), clientCertPEM...),
+		ClientKeyPEM:  append([]byte(nil), clientKeyPEM...),
+	}
+	if _, _, err := loadCA(assets.CAPEM, assets.CAKeyPEM, ""); err != nil {
+		return nil, err
+	}
+	if _, err := tls.X509KeyPair(assets.ClientCertPEM, assets.ClientKeyPEM); err != nil {
 		return nil, err
 	}
 	return assets, nil
@@ -105,6 +130,7 @@ func generateTLSAssets(assets *TLSAssets) error {
 	clientCertPEM, clientKeyPEM, err := generateLeaf(caCert, caKey, leafRequest{
 		CommonName: "panel-agent-client",
 		Usages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		Validity:   DefaultLeafValidity,
 	})
 	if err != nil {
 		return err
@@ -129,7 +155,13 @@ func writeTLSFiles(files []tlsFile) error {
 func (a *TLSAssets) ClientTLSConfig() (*tls.Config, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	cert, err := tls.LoadX509KeyPair(a.ClientCertPath, a.ClientKeyPath)
+	var cert tls.Certificate
+	var err error
+	if len(a.ClientCertPEM) > 0 || len(a.ClientKeyPEM) > 0 {
+		cert, err = tls.X509KeyPair(a.ClientCertPEM, a.ClientKeyPEM)
+	} else {
+		cert, err = tls.LoadX509KeyPair(a.ClientCertPath, a.ClientKeyPath)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -172,6 +204,7 @@ func (a *TLSAssets) ResetAll() error {
 	clientCertPEM, clientKeyPEM, err := generateLeaf(caCert, caKey, leafRequest{
 		CommonName: "panel-agent-client",
 		Usages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		Validity:   DefaultLeafValidity,
 	})
 	if err != nil {
 		return err
@@ -185,6 +218,7 @@ func (a *TLSAssets) ResetAll() error {
 		return err
 	}
 	a.CAPEM = caPEM
+	a.CAKeyPEM = caKeyPEM
 	a.ClientCertPEM = clientCertPEM
 	a.ClientKeyPEM = clientKeyPEM
 	return nil
@@ -193,13 +227,14 @@ func (a *TLSAssets) ResetAll() error {
 func (a *TLSAssets) ResetClientCertificate() error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	caCert, caKey, err := loadCA(a.CAPEM, a.CAKeyPath)
+	caCert, caKey, err := loadCA(a.CAPEM, a.CAKeyPEM, a.CAKeyPath)
 	if err != nil {
 		return err
 	}
 	clientCertPEM, clientKeyPEM, err := generateLeaf(caCert, caKey, leafRequest{
 		CommonName: "panel-agent-client",
 		Usages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		Validity:   DefaultLeafValidity,
 	})
 	if err != nil {
 		return err
@@ -218,11 +253,11 @@ func (a *TLSAssets) ResetClientCertificate() error {
 func (a *TLSAssets) IssueServerCertificate(commonName string, hosts []string) (ServerCertificate, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	caCert, caKey, err := loadCA(a.CAPEM, a.CAKeyPath)
+	caCert, caKey, err := loadCA(a.CAPEM, a.CAKeyPEM, a.CAKeyPath)
 	if err != nil {
 		return ServerCertificate{}, err
 	}
-	req := leafRequest{CommonName: commonName, Usages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	req := leafRequest{CommonName: commonName, Usages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, Validity: DefaultLeafValidity}
 	for _, host := range hosts {
 		host = strings.TrimSpace(host)
 		if host == "" {
@@ -246,6 +281,7 @@ type leafRequest struct {
 	DNSNames   []string
 	IPAddrs    []net.IP
 	Usages     []x509.ExtKeyUsage
+	Validity   time.Duration
 }
 
 func generateCA() (crypto.Signer, *x509.Certificate, []byte, []byte, error) {
@@ -258,7 +294,7 @@ func generateCA() (crypto.Signer, *x509.Certificate, []byte, []byte, error) {
 		SerialNumber:          serialNumber(),
 		Subject:               pkix.Name{CommonName: "Panel Agent CA", Organization: []string{"Panel"}},
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.AddDate(10, 0, 0),
+		NotAfter:              now.Add(DefaultCAValidity),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
@@ -280,7 +316,7 @@ func generateCA() (crypto.Signer, *x509.Certificate, []byte, []byte, error) {
 	return key, cert, certPEM, keyPEM, nil
 }
 
-func loadCA(caPEM []byte, keyPath string) (*x509.Certificate, crypto.Signer, error) {
+func loadCA(caPEM []byte, keyPEM []byte, keyPath string) (*x509.Certificate, crypto.Signer, error) {
 	block, _ := pem.Decode(caPEM)
 	if block == nil {
 		return nil, nil, errors.New("invalid agent ca pem")
@@ -289,9 +325,11 @@ func loadCA(caPEM []byte, keyPath string) (*x509.Certificate, crypto.Signer, err
 	if err != nil {
 		return nil, nil, err
 	}
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		return nil, nil, err
+	if len(keyPEM) == 0 {
+		keyPEM, err = os.ReadFile(keyPath)
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	block, _ = pem.Decode(keyPEM)
 	if block == nil {
@@ -314,11 +352,15 @@ func generateLeaf(caCert *x509.Certificate, caKey crypto.Signer, req leafRequest
 		return nil, nil, err
 	}
 	now := time.Now().UTC()
+	validity := req.Validity
+	if validity <= 0 {
+		validity = DefaultLeafValidity
+	}
 	tpl := &x509.Certificate{
 		SerialNumber:          serialNumber(),
 		Subject:               pkix.Name{CommonName: strings.TrimSpace(req.CommonName), Organization: []string{"Panel"}},
 		NotBefore:             now.Add(-time.Hour),
-		NotAfter:              now.AddDate(3, 0, 0),
+		NotAfter:              now.Add(validity),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           req.Usages,
 		BasicConstraintsValid: true,

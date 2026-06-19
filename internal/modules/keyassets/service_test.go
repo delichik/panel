@@ -239,6 +239,112 @@ func TestEnsureLegacySelfSignedMigrated(t *testing.T) {
 	}
 }
 
+func TestEnsureAgentTLSAssetsPersistsInKeyAssets(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	first, err := svc.EnsureAgentTLSAssets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCA, err := first.CAInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstClient, err := first.ClientInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.EnsureAgentTLSAssets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCA, _ := second.CAInfo()
+	secondClient, _ := second.ClientInfo()
+	if secondCA.Fingerprint != firstCA.Fingerprint {
+		t.Fatal("agent CA changed across EnsureAgentTLSAssets calls")
+	}
+	if secondClient.Fingerprint != firstClient.Fingerprint {
+		t.Fatal("agent client certificate changed across EnsureAgentTLSAssets calls")
+	}
+	ca, err := svc.Get(ctx, SystemAgentCAAssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ca.Metadata["systemScope"] != systemAgentScope || ca.Metadata["systemManaged"] != true {
+		t.Fatalf("agent CA metadata = %#v", ca.Metadata)
+	}
+	if ca.NotAfter.Sub(ca.NotBefore) < 29*365*24*time.Hour {
+		t.Fatalf("agent CA lifetime too short: %s", ca.NotAfter.Sub(ca.NotBefore))
+	}
+	client, err := svc.Get(ctx, SystemAgentClientAssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifetime := client.NotAfter.Sub(client.NotBefore); lifetime < 29*24*time.Hour || lifetime > 32*24*time.Hour {
+		t.Fatalf("agent client lifetime = %s", lifetime)
+	}
+}
+
+func TestEnsureAgentTLSAssetsRecreatesMissingCAAndClientTogether(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	first, err := svc.EnsureAgentTLSAssets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCA, _ := first.CAInfo()
+	if _, err := store.AppDB().Exec(`DELETE FROM key_assets WHERE id=?`, SystemAgentCAAssetID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.EnsureAgentTLSAssets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCA, _ := second.CAInfo()
+	if secondCA.Fingerprint == firstCA.Fingerprint {
+		t.Fatal("expected missing CA to regenerate the agent CA")
+	}
+	client, err := svc.Get(ctx, SystemAgentClientAssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.ParentAssetID != SystemAgentCAAssetID {
+		t.Fatalf("client parent after CA regeneration = %q", client.ParentAssetID)
+	}
+}
+
+func TestEnsureAgentTLSAssetsReissuesMissingClientOnly(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	first, err := svc.EnsureAgentTLSAssets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCA, _ := first.CAInfo()
+	firstClient, _ := first.ClientInfo()
+	if _, err := store.AppDB().Exec(`DELETE FROM key_assets WHERE id=?`, SystemAgentClientAssetID); err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.EnsureAgentTLSAssets(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCA, _ := second.CAInfo()
+	secondClient, _ := second.ClientInfo()
+	if secondCA.Fingerprint != firstCA.Fingerprint {
+		t.Fatal("missing client certificate changed the agent CA")
+	}
+	if secondClient.Fingerprint == firstClient.Fingerprint {
+		t.Fatal("expected missing client certificate to be reissued")
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	t.Helper()
 	dir := t.TempDir()

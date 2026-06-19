@@ -10,7 +10,6 @@ import (
 
 	agentclient "panel/internal/agent/client"
 	agentcontract "panel/internal/agent/contract"
-	agentsecurity "panel/internal/agent/security"
 	"panel/internal/modules/applications"
 	"panel/internal/modules/certificates/certs"
 	"panel/internal/modules/certificates/dns"
@@ -53,11 +52,6 @@ func New(cfg config.Config) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	agentTLS, err := agentsecurity.EnsureTLSAssets(cfg.DataRoot)
-	if err != nil {
-		_ = store.Close()
-		return nil, err
-	}
 	secretStore, err := secretstore.Open(cfg, store.AppDB())
 	if err != nil {
 		_ = store.Close()
@@ -75,6 +69,11 @@ func New(cfg config.Config) (*App, error) {
 		keyassets.WithApplicationRefresher(certBridge),
 	)
 	if err := keyAssetSvc.EnsureLegacySelfSignedMigrated(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
+	agentTLS, err := keyAssetSvc.EnsureAgentTLSAssets(context.Background())
+	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
@@ -102,6 +101,7 @@ func New(cfg config.Config) (*App, error) {
 	serverSvc := server.NewService(store.AppDB(), executor, taskSvc,
 		server.WithAgentClient(agentClient),
 		server.WithAgentTLSAssets(agentTLS),
+		server.WithAgentTLSProvider(keyAssetSvc),
 		server.WithMetricsDB(store.MetricsDB()),
 	)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{

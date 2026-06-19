@@ -12,7 +12,7 @@ import (
 )
 
 func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (AgentCertificateBundle, error) {
-	if s.agentTLS == nil {
+	if s.agentKeys == nil && s.agentTLS == nil {
 		return AgentCertificateBundle{}, panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
 	}
 	srv, err := s.Get(ctx, serverID)
@@ -20,12 +20,22 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 		return AgentCertificateBundle{}, err
 	}
 	agentURL := agentDefaultURL(srv.Host)
-	cert, err := s.agentTLS.IssueServerCertificate("panel-agent-"+srv.ID, []string{srv.Host})
-	if err != nil {
-		return AgentCertificateBundle{}, err
+	var cert agentsecurity.ServerCertificate
+	var caPEM []byte
+	if s.agentKeys != nil {
+		cert, caPEM, err = s.agentKeys.IssueAgentServerCertificate(ctx, srv.ID, srv.Name, srv.Host)
+		if err != nil {
+			return AgentCertificateBundle{}, err
+		}
+	} else {
+		cert, err = s.agentTLS.IssueServerCertificate("panel-agent-"+srv.ID, []string{srv.Host})
+		if err != nil {
+			return AgentCertificateBundle{}, err
+		}
+		caPEM = s.agentTLS.CACertificatePEM()
 	}
 	return AgentCertificateBundle{
-		CA:            string(s.agentTLS.CACertificatePEM()),
+		CA:            string(caPEM),
 		Certificate:   string(cert.CertPEM),
 		PrivateKey:    string(cert.KeyPEM),
 		ListenAddress: defaultAgentListenAddress,
@@ -35,6 +45,13 @@ func (s *Service) IssueAgentCertificate(ctx context.Context, serverID string) (A
 }
 
 func (s *Service) SystemCertificates(ctx context.Context) ([]SystemCertificate, error) {
+	if s.agentKeys != nil {
+		assets, err := s.agentKeys.EnsureAgentTLSAssets(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.agentTLS = assets
+	}
 	if s.agentTLS == nil {
 		return nil, panelerr.Validation("agent_tls_unavailable", "Agent TLS assets are unavailable")
 	}
@@ -96,9 +113,17 @@ func (s *Service) runSystemCertificateReset(ctx context.Context, taskID, certifi
 	var err error
 	switch certificateID {
 	case "agent-ca":
-		err = s.agentTLS.ResetAll()
+		if s.agentKeys != nil {
+			s.agentTLS, err = s.agentKeys.ResetAgentCA(ctx)
+		} else {
+			err = s.agentTLS.ResetAll()
+		}
 	case "agent-panel-client":
-		err = s.agentTLS.ResetClientCertificate()
+		if s.agentKeys != nil {
+			s.agentTLS, err = s.agentKeys.ResetAgentClientCertificate(ctx)
+		} else {
+			err = s.agentTLS.ResetClientCertificate()
+		}
 	}
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
