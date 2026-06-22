@@ -4,7 +4,6 @@ import PageLoadingState from '@/components/PageLoadingState.vue';
 
 withDefaults(defineProps<{
   title: string;
-  count: number;
   loading?: boolean;
   empty?: boolean;
   emptyIcon?: string;
@@ -31,13 +30,17 @@ const emit = defineEmits<{
 <template>
   <v-card class="app-selector-panel" variant="outlined" :loading="loading && !empty">
     <div class="app-selector-panel__header">
-      <div class="app-selector-panel__heading min-width-0">
-        <div class="text-subtitle-1 font-weight-bold text-truncate">{{ title }}</div>
-        <slot name="subtitle" />
+      <div class="app-selector-panel__header-main min-width-0">
+        <div v-if="$slots.leading" class="app-selector-panel__header-leading">
+          <slot name="leading" />
+        </div>
+        <div class="app-selector-panel__heading min-width-0">
+          <div class="text-subtitle-1 font-weight-bold text-truncate">{{ title }}</div>
+          <slot name="subtitle" />
+        </div>
       </div>
       <div class="app-selector-panel__header-actions">
         <slot name="actions" />
-        <v-chip size="small" color="primary" variant="tonal" label>{{ count }}</v-chip>
       </div>
     </div>
 
@@ -85,6 +88,19 @@ const emit = defineEmits<{
   min-width: 0;
   padding: 12px 16px;
   background: rgb(var(--v-theme-surface-variant));
+}
+
+.app-selector-panel__header-main {
+  display: flex;
+  align-items: center;
+}
+
+.app-selector-panel__header-leading {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  align-self: stretch;
+  margin-right: 8px;
 }
 
 .app-selector-panel__heading {

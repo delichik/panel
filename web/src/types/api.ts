@@ -717,6 +717,7 @@ export interface ApplicationOperationDto {
 export interface ApplicationRuntimeInstanceDto {
   instanceId: string;
   serverId: string;
+  serverName?: string;
   containerName: string;
   containerId?: string;
   status: string;

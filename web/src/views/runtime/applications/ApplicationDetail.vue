@@ -9,7 +9,7 @@ import RuntimeLogsDialog from '@/components/RuntimeLogsDialog.vue';
 
 const props = defineProps<{ application: ApplicationDto }>();
 const emit = defineEmits<{ changed: [ApplicationDto] }>();
-const { formatDateTime, t } = useI18n();
+const { formatDateTime, t, translateRuntimeStatus } = useI18n();
 const downloading = ref(false);
 const downloadingPersistent = ref(false);
 const restoringPersistent = ref(false);
@@ -46,6 +46,14 @@ const imageStatusLabel = computed(() => {
   if (props.application.imageDigest || imageTargets.value.some((target) => target.checkedAt)) return t('applicationDetail.upToDate');
   return t('applicationDetail.notChecked');
 });
+const runtimeStatus = computed(() => props.application.runtimeStatus || (props.application.enabled ? 'pending' : 'stopped'));
+
+function runtimeStatusColor(status: string) {
+  if (status === 'running') return 'success';
+  if (status === 'pending' || status === 'deploying') return 'warning';
+  if (status === 'failed' || status === 'unknown') return 'error';
+  return 'grey';
+}
 
 function shortDigest(value?: string) {
   if (!value) return t('common.notAvailable');
@@ -215,111 +223,92 @@ watch(() => props.application.id, () => {
 </script>
 
 <template>
-  <div class="detail-stack">
+  <div class="application-detail">
     <v-card variant="outlined" class="detail-card">
-      <div class="detail-heading">
+      <div class="detail-header">
         <div class="min-width-0">
-          <div class="text-subtitle-1 font-weight-bold text-truncate">{{ application.name }}</div>
-          <div class="text-caption text-medium-emphasis text-truncate">{{ application.jobId }} / {{ application.namespace }}</div>
-        </div>
-        <div class="detail-heading-actions">
-          <v-btn size="small" icon="mdi-package-down" variant="text" :title="t('applicationDetail.downloadPackage')" :loading="downloading" @click="downloadPackage" />
-          <v-btn
-            size="small"
-            icon="mdi-database-arrow-down-outline"
-            variant="text"
-            :title="t('applicationDetail.downloadPersistentData')"
-            :disabled="!application.persistentPath"
-            :loading="downloadingPersistent"
-            @click="downloadPersistentData"
-          />
-          <v-btn
-            size="small"
-            icon="mdi-database-arrow-up-outline"
-            variant="text"
-            :title="t('applicationDetail.restorePersistentData')"
-            :disabled="!application.persistentPath"
-            @click="restoreDialog = true"
-          />
-          <v-btn
-            size="small"
-            icon="mdi-swap-horizontal"
-            variant="text"
-            :title="t('applicationDetail.migrateApplication')"
-            :disabled="!!application.persistentPath"
-            @click="openMigrateDialog"
-          />
-          <v-chip :color="application.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ application.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip>
-        </div>
-      </div>
-      <v-divider class="my-3" />
-      <div class="meta-grid">
-        <div><div class="text-caption text-medium-emphasis">{{ t('applicationDetail.generation') }}</div><div class="font-weight-bold font-tabular">{{ application.generation }}</div></div>
-        <div><div class="text-caption text-medium-emphasis">{{ t('applicationDetail.specHash') }}</div><div class="mono text-truncate">{{ application.specHash || t('common.notAvailable') }}</div></div>
-        <div><div class="text-caption text-medium-emphasis">{{ t('applicationDetail.lastEval') }}</div><div class="mono text-truncate">{{ application.lastEvalId || t('common.notAvailable') }}</div></div>
-        <div><div class="text-caption text-medium-emphasis">{{ t('applicationDetail.persistentPath') }}</div><div class="mono text-truncate">{{ application.persistentPath || t('common.notAvailable') }}</div></div>
-      </div>
-      <v-divider class="my-3" />
-      <div class="image-panel">
-        <div class="min-width-0">
-          <div class="d-flex align-center ga-2 mb-1">
-            <div class="text-subtitle-2 font-weight-bold">{{ t('applicationDetail.imageUpdate') }}</div>
-            <v-chip size="x-small" variant="tonal" :color="imageStatusColor" label>
-              {{ imageStatusLabel }}
-            </v-chip>
-          </div>
-          <div class="text-caption text-medium-emphasis text-truncate">{{ application.imageReference || t('applicationDetail.imageHint') }}</div>
-          <div class="digest-grid mt-2">
-            <div><div class="text-caption text-medium-emphasis">{{ t('applicationDetail.applied') }}</div><div class="mono text-truncate">{{ shortDigest(application.imageDigest) }}</div></div>
-            <div><div class="text-caption text-medium-emphasis">{{ t('applicationDetail.latest') }}</div><div class="mono text-truncate">{{ shortDigest(application.imageLatestDigest) }}</div></div>
-            <div><div class="text-caption text-medium-emphasis">{{ t('applicationDetail.checked') }}</div><div class="text-body-2">{{ formatCheckedAt(application.imageCheckedAt) }}</div></div>
+          <div class="text-h6 font-weight-bold text-truncate">{{ application.name }}</div>
+          <div class="text-body-2 text-medium-emphasis text-truncate">{{ application.jobId }} / {{ application.namespace }}</div>
+          <div class="detail-statuses">
+            <v-chip :color="runtimeStatusColor(runtimeStatus)" size="small" variant="tonal" label>{{ translateRuntimeStatus(runtimeStatus) }}</v-chip>
+            <v-chip :color="application.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ application.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip>
           </div>
         </div>
-        <div class="image-actions">
-          <v-btn size="small" prepend-icon="mdi-package-up" color="primary" variant="flat" class="text-none" :disabled="!application.enabled || !application.imageUpdateAvailable" :loading="imageAction === 'update'" @click="updateImage">{{ t('applicationDetail.updateImage') }}</v-btn>
+        <div class="detail-actions">
+          <slot name="actions" />
+          <v-menu location="bottom end">
+            <template #activator="{ props: menuProps }">
+              <v-btn v-bind="menuProps" icon="mdi-dots-vertical" variant="text" size="small" :aria-label="t('common.more')" />
+            </template>
+            <v-list density="compact">
+              <v-list-item prepend-icon="mdi-package-down" :title="t('applicationDetail.downloadPackage')" :disabled="downloading" @click="downloadPackage" />
+              <v-list-item prepend-icon="mdi-database-arrow-down-outline" :title="t('applicationDetail.downloadPersistentData')" :disabled="!application.persistentPath || downloadingPersistent" @click="downloadPersistentData" />
+              <v-list-item prepend-icon="mdi-database-arrow-up-outline" :title="t('applicationDetail.restorePersistentData')" :disabled="!application.persistentPath" @click="restoreDialog = true" />
+              <v-list-item prepend-icon="mdi-swap-horizontal" :title="t('applicationDetail.migrateApplication')" :disabled="!!application.persistentPath" @click="openMigrateDialog" />
+              <slot name="more-actions" />
+            </v-list>
+          </v-menu>
         </div>
       </div>
-      <div v-if="imageTargets.length" class="image-targets mt-3">
-        <v-table density="compact" class="image-target-table">
-          <thead>
-            <tr>
-              <th>{{ t('applicationDetail.server') }}</th>
-              <th>{{ t('common.status') }}</th>
-              <th>{{ t('applicationDetail.applied') }}</th>
-              <th>{{ t('applicationDetail.latest') }}</th>
-              <th>{{ t('applicationDetail.checked') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="target in imageTargets" :key="target.serverId">
-              <td>
-                <div class="font-weight-medium text-truncate">{{ target.serverName || target.serverId }}</div>
-                <div class="text-caption text-medium-emphasis text-truncate">{{ target.reference }}</div>
-              </td>
-              <td>
-                <v-chip size="x-small" variant="tonal" :color="imageTargetStatusColor(target.updateAvailable, target.lastError)" label>
-                  {{ imageTargetStatusLabel(target.updateAvailable, target.lastError) }}
-                </v-chip>
-                <div v-if="target.lastError" class="text-caption text-error text-truncate">{{ target.lastError }}</div>
-              </td>
-              <td class="mono text-truncate">{{ shortDigest(target.localDigest) }}</td>
-              <td class="mono text-truncate">{{ shortDigest(target.latestDigest) }}</td>
-              <td class="text-body-2">{{ formatCheckedAt(target.checkedAt) }}</td>
-            </tr>
-          </tbody>
-        </v-table>
+
+      <div class="detail-body">
+        <v-alert v-if="message" type="info" variant="tonal" density="compact" closable @click:close="message = ''">
+          <div class="task-alert">
+            <span>{{ message }}</span>
+            <v-btn v-if="lastTaskId" size="small" variant="text" :to="taskRoute()" class="text-none">{{ t('taskCenter.task') }}</v-btn>
+          </div>
+        </v-alert>
+        <v-alert v-if="error || application.lastError" type="error" variant="tonal" density="compact">
+          {{ error || application.lastError }}
+        </v-alert>
+
+        <section class="detail-section">
+          <div class="section-title">{{ t('applicationDetail.basicInfo') }}</div>
+          <div class="property-grid">
+            <div><span>{{ t('applicationDetail.generation') }}</span><strong class="font-tabular">{{ application.generation }}</strong></div>
+            <div><span>{{ t('applicationDetail.specHash') }}</span><strong class="mono">{{ application.specHash || t('common.notAvailable') }}</strong></div>
+            <div><span>{{ t('applicationDetail.lastEval') }}</span><strong class="mono">{{ application.lastEvalId || t('common.notAvailable') }}</strong></div>
+            <div><span>{{ t('applicationDetail.persistentPath') }}</span><strong class="mono">{{ application.persistentPath || t('common.notAvailable') }}</strong></div>
+          </div>
+        </section>
+
+        <section class="detail-section">
+          <div class="section-heading">
+            <div class="min-width-0">
+              <div class="section-title">{{ t('applicationDetail.imageUpdate') }}</div>
+              <div class="section-subtitle text-truncate">{{ application.imageReference || t('applicationDetail.imageHint') }}</div>
+            </div>
+            <div class="section-actions">
+              <v-chip size="small" variant="tonal" :color="imageStatusColor" label>{{ imageStatusLabel }}</v-chip>
+              <v-btn size="small" prepend-icon="mdi-package-up" color="primary" variant="flat" class="text-none" :disabled="!application.enabled || !application.imageUpdateAvailable" :loading="imageAction === 'update'" @click="updateImage">{{ t('applicationDetail.updateImage') }}</v-btn>
+            </div>
+          </div>
+          <div class="property-grid property-grid--three">
+            <div><span>{{ t('applicationDetail.applied') }}</span><strong class="mono">{{ shortDigest(application.imageDigest) }}</strong></div>
+            <div><span>{{ t('applicationDetail.latest') }}</span><strong class="mono">{{ shortDigest(application.imageLatestDigest) }}</strong></div>
+            <div><span>{{ t('applicationDetail.checked') }}</span><strong>{{ formatCheckedAt(application.imageCheckedAt) }}</strong></div>
+          </div>
+          <div v-if="imageTargets.length" class="image-targets">
+            <v-table density="compact" class="image-target-table">
+              <thead><tr><th>{{ t('applicationDetail.server') }}</th><th>{{ t('common.status') }}</th><th>{{ t('applicationDetail.applied') }}</th><th>{{ t('applicationDetail.latest') }}</th><th>{{ t('applicationDetail.checked') }}</th></tr></thead>
+              <tbody>
+                <tr v-for="target in imageTargets" :key="target.serverId">
+                  <td><div class="font-weight-medium text-truncate">{{ target.serverName || target.serverId }}</div><div class="text-caption text-medium-emphasis text-truncate">{{ target.reference }}</div></td>
+                  <td><v-chip size="x-small" variant="tonal" :color="imageTargetStatusColor(target.updateAvailable, target.lastError)" label>{{ imageTargetStatusLabel(target.updateAvailable, target.lastError) }}</v-chip><div v-if="target.lastError" class="text-caption text-error">{{ target.lastError }}</div></td>
+                  <td class="mono">{{ shortDigest(target.localDigest) }}</td>
+                  <td class="mono">{{ shortDigest(target.latestDigest) }}</td>
+                  <td>{{ formatCheckedAt(target.checkedAt) }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+          </div>
+          <v-alert v-if="application.imageLastError" type="warning" variant="tonal" density="compact">{{ application.imageLastError }}</v-alert>
+        </section>
+
+        <ApplicationRuntimePanel embedded :application="application" @logs="selectLogs" />
       </div>
-      <v-alert v-if="application.imageLastError" type="warning" variant="tonal" class="mt-3">{{ application.imageLastError }}</v-alert>
-      <v-alert v-if="message" type="info" variant="tonal" class="mt-3" closable @click:close="message = ''">
-        <div class="task-alert">
-          <span>{{ message }}</span>
-          <v-btn v-if="lastTaskId" size="small" variant="text" :to="taskRoute()" class="text-none">{{ t('taskCenter.task') }}</v-btn>
-        </div>
-      </v-alert>
-      <v-alert v-if="error" type="error" variant="tonal" class="mt-3">{{ error }}</v-alert>
-      <v-alert v-if="application.lastError" type="error" variant="tonal" class="mt-3">{{ application.lastError }}</v-alert>
     </v-card>
-    <ApplicationRuntimePanel :application="application" @logs="selectLogs" />
+
     <RuntimeLogsDialog
       v-model:open="logsDialog"
       :title="t('applicationLogs.logs')"
@@ -410,36 +399,45 @@ watch(() => props.application.id, () => {
 </template>
 
 <style scoped>
-.detail-stack { display: grid; gap: 14px; }
-.detail-card { padding: 16px; }
-.detail-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.detail-heading-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.application-detail { display: flex; min-width: 0; min-height: 0; height: 100%; }
+.detail-card { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.detail-header { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px; border-bottom: 1px solid var(--lp-border); }
+.detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.detail-statuses { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.detail-body { display: grid; flex: 1 1 auto; gap: 18px; align-content: start; min-height: 0; padding: 16px; overflow: auto; }
+.detail-section { display: grid; gap: 12px; }
+.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.section-title { font-size: 0.92rem; font-weight: 700; }
+.section-subtitle { margin-top: 2px; color: var(--lp-text-muted); font-size: 0.78rem; }
+.section-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .min-width-0 { min-width: 0; }
-.meta-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.image-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
-.image-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-.digest-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.property-grid--three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.property-grid > div { display: grid; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
+.property-grid span { color: var(--lp-text-muted); font-size: 0.76rem; }
+.property-grid strong { min-width: 0; overflow-wrap: anywhere; font-size: 0.86rem; }
 .image-targets { overflow-x: auto; }
 .image-target-table { min-width: 680px; background: transparent; }
 .image-target-table :deep(td) { vertical-align: middle; }
 .task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.mono { font-size: 0.8rem; }
+.mono { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; font-size: 0.8rem; }
 .migrate-dialog-body { display: grid; gap: 14px; }
 @media (max-width: 900px) {
-  .meta-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .image-panel { grid-template-columns: 1fr; }
-  .image-actions { justify-content: flex-start; }
-  .digest-grid { grid-template-columns: 1fr; }
+  .property-grid--three { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 600px) {
-  .detail-heading {
+  .application-detail { height: auto; }
+  .detail-card, .detail-body { overflow: visible; }
+  .detail-header,
+  .section-heading {
     align-items: stretch;
     flex-direction: column;
   }
-
-  .detail-heading-actions {
+  .detail-actions,
+  .section-actions {
     justify-content: flex-start;
   }
+  .property-grid { grid-template-columns: 1fr; }
 }
 </style>

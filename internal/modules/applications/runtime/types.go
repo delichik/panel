@@ -110,6 +110,7 @@ type Instance struct {
 type InstanceStatus struct {
 	InstanceID    string    `json:"instanceId"`
 	ServerID      string    `json:"serverId"`
+	ServerName    string    `json:"serverName,omitempty"`
 	ContainerName string    `json:"containerName"`
 	ContainerID   string    `json:"containerId,omitempty"`
 	Status        string    `json:"status"`

@@ -8,7 +8,7 @@ import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
 import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
-import { groupTasksByOperation } from './_shared/taskOperations';
+import { groupTasksByOperation, type TaskOperationGroup } from './_shared/taskOperations';
 
 const route = useRoute();
 const TYPE_FILTER_COMMON = '__common';
@@ -97,14 +97,6 @@ const statusFilterItems = computed(() => [
   { title: translateTaskStatus('blocked'), value: 'blocked' },
   { title: translateTaskStatus('cancelled'), value: 'cancelled' },
 ]);
-
-const taskCounts = computed(() => ({
-  active: tasks.value.filter((task) => ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status)).length,
-  queued: tasks.value.filter((task) => task.status === 'queued' || task.status === 'scheduled').length,
-  running: tasks.value.filter((task) => task.status === 'running').length,
-  failed: tasks.value.filter((task) => task.status === 'failed' || task.status === 'blocked').length,
-  completed: tasks.value.filter((task) => task.status === 'completed').length,
-}));
 
 function isSpecialTypeFilter(value: string) {
   return value === TYPE_FILTER_COMMON || value === TYPE_FILTER_ALL;
@@ -215,6 +207,24 @@ function updateTaskPageSize(nextPageSize: number) {
 function serverName(serverId?: string | null) {
   if (!serverId) return t('taskCenter.noNode');
   return servers.value.find((server) => server.id === serverId)?.name || serverId;
+}
+
+function operationObjectLabel(group: TaskOperationGroup) {
+  const task = group.tasks[0];
+  const serverId = task?.nodeId || task?.serverId;
+  const server = serverId ? servers.value.find((item) => item.id === serverId) : null;
+  if (server) return server.name;
+
+  const resourceType = group.resourceType || group.triggerResourceType;
+  const resourceKey = {
+    server: 'server',
+    application: 'application',
+    applications: 'application',
+    certificate: 'certificate',
+    key_asset: 'keyAsset',
+    task_batch: 'taskBatch',
+  }[resourceType];
+  return t(`taskCenter.resourceTypes.${resourceKey || 'systemTask'}`);
 }
 
 function formatTaskType(value?: string) {
@@ -392,14 +402,6 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="task-center page-shell">
-    <div class="task-kpis">
-      <v-chip color="primary" variant="tonal" label>{{ t('taskCenter.active') }} {{ taskCounts.active }}</v-chip>
-      <v-chip color="info" variant="tonal" label>{{ t('taskCenter.queued') }} {{ taskCounts.queued }}</v-chip>
-      <v-chip color="warning" variant="tonal" label>{{ t('taskCenter.running') }} {{ taskCounts.running }}</v-chip>
-      <v-chip color="error" variant="tonal" label>{{ t('taskCenter.failed') }} {{ taskCounts.failed }}</v-chip>
-      <v-chip color="success" variant="tonal" label>{{ t('taskCenter.done') }} {{ taskCounts.completed }}</v-chip>
-    </div>
-
     <v-card variant="outlined" class="filter-bar">
       <v-text-field v-model="operationFilter" :label="t('taskCenter.operationId')" variant="outlined" density="compact" hide-details clearable @keydown.enter="searchTasks" />
       <v-select
@@ -445,7 +447,6 @@ onBeforeUnmount(() => {
       <AppSelectorPanel
         class="operation-panel"
         :title="t('taskCenter.operations')"
-        :count="operationGroups.length"
         :loading="loading"
         :empty="operationGroups.length === 0"
         empty-icon="mdi-progress-clock"
@@ -464,18 +465,11 @@ onBeforeUnmount(() => {
           >
             <span class="operation-item">
               <v-icon :color="taskStatusColor(group.status)" :icon="group.status === 'completed' ? 'mdi-check-circle' : group.failedCount ? 'mdi-alert-circle' : 'mdi-progress-clock'" />
-              <span class="operation-item__body">
-                <span class="operation-title">
-                  <span>{{ formatTaskType(group.tasks[0]?.type) }}</span>
-                  <v-chip :color="taskStatusColor(group.status)" size="x-small" label>{{ statusLabel(group.status) }}</v-chip>
-                </span>
-                <span class="operation-meta">
-                  <span class="mono">{{ shortId(group.operationId) }}</span>
-                  <span>{{ group.resourceType || group.triggerResourceType || t('taskCenter.resource') }} / {{ shortId(group.resourceId || group.triggerResourceId) }}</span>
-                  <span>{{ group.tasks.length }} {{ group.tasks.length === 1 ? t('taskCenter.taskSingular') : t('taskCenter.taskPlural') }}</span>
-                </span>
-                <v-progress-linear :model-value="group.progress" :color="taskStatusColor(group.status)" height="6" rounded class="mt-2" />
+              <span class="operation-item__content">
+                <span class="operation-name">{{ formatTaskType(group.tasks[0]?.type) }}</span>
+                <span class="operation-context">{{ formatTime(group.createdAt) }} · {{ operationObjectLabel(group) }}</span>
               </span>
+              <v-chip :color="taskStatusColor(group.status)" size="x-small" label>{{ statusLabel(group.status) }}</v-chip>
             </span>
           </AppSelectorItem>
       </AppSelectorPanel>
@@ -655,13 +649,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .task-center { min-width: 0; flex: 1 1 auto; min-height: 0; }
 
-.task-kpis {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-
 .filter-bar {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
@@ -697,27 +684,28 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-.operation-item { display: flex; grid-column: 1 / -1; align-items: flex-start; gap: 10px; min-width: 0; }
-.operation-item__body { display: block; flex: 1 1 auto; min-width: 0; }
+.operation-item { display: flex; grid-column: 1 / -1; align-items: center; gap: 10px; min-width: 0; }
 
-.operation-title {
+.operation-item__content {
   display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  align-items: center;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
 }
 
-.operation-title span:first-child {
+.operation-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.operation-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 12px;
+.operation-context {
+  color: var(--lp-text-muted);
+  font-size: 0.76rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .selected-progress {

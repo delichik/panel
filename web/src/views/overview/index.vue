@@ -107,32 +107,6 @@ const serverOptions = computed(() => overview.value.servers.map((server) => ({
   value: server.id,
 })));
 
-const configuredServerIds = computed(() => new Set(cards.value.flatMap((card) => resolveCardServerIds(card))));
-const onlineCount = computed(() => overview.value.servers.filter((server) => server.reachable).length);
-const issueCount = computed(() => packageRowsForServers(overview.value.servers).length + containerRowsForServers(overview.value.servers.map((server) => server.id)).length);
-const overviewSignals = computed(() => [
-  {
-    key: 'online',
-    icon: 'mdi-server-network',
-    color: 'success',
-    value: `${onlineCount.value}/${overview.value.servers.length}`,
-    label: t('overviewPage.onlineSummary', { online: onlineCount.value, total: overview.value.servers.length }),
-  },
-  {
-    key: 'dashboard',
-    icon: 'mdi-view-dashboard-outline',
-    color: 'primary',
-    value: configuredServerIds.value.size || overview.value.servers.length,
-    label: t('overviewPage.dashboardSummary', { count: configuredServerIds.value.size || overview.value.servers.length }),
-  },
-  {
-    key: 'issues',
-    icon: 'mdi-alert-circle-outline',
-    color: issueCount.value > 0 ? 'warning' : 'success',
-    value: issueCount.value,
-    label: t('overviewPage.issueSummary', { count: issueCount.value }),
-  },
-]);
 const presetItems = computed(() => cardPresets.map((preset) => ({
   ...preset,
   title: cardTitle(preset.kind),
@@ -532,17 +506,6 @@ onBeforeUnmount(() => {
 <template>
   <div class="overview-workspace page-shell">
     <div class="overview-actions-row page-toolbar">
-      <div class="overview-signals">
-        <div v-for="signal in overviewSignals" :key="signal.key" class="overview-signal">
-          <span class="overview-signal__icon" :class="`surface-${signal.color}`">
-            <v-icon size="18">{{ signal.icon }}</v-icon>
-          </span>
-          <span class="min-width-0">
-            <span class="overview-signal__value font-tabular">{{ signal.value }}</span>
-            <span class="overview-signal__label text-truncate">{{ signal.label }}</span>
-          </span>
-        </div>
-      </div>
       <div class="overview-actions">
         <template v-if="editMode">
           <v-btn variant="outlined" prepend-icon="mdi-restore" class="text-none" @click="resetCards">{{ t('overviewPage.reset') }}</v-btn>
@@ -761,57 +724,8 @@ onBeforeUnmount(() => {
 .overview-workspace { flex: 1 1 auto; min-height: 0; }
 
 .overview-actions-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 14px;
-  align-items: start;
-}
-
-.overview-signals {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(160px, 1fr));
-  gap: 10px;
-  min-width: 0;
-}
-
-.overview-signal {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-  min-height: 58px;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--lp-surface), transparent 10%);
-  box-shadow: var(--lp-shadow-sm);
-}
-
-.overview-signal__icon {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 8px;
-  flex: 0 0 auto;
-}
-
-.overview-signal__value,
-.overview-signal__label {
-  display: block;
-}
-
-.overview-signal__value {
-  color: var(--lp-text);
-  font-size: 1.05rem;
-  font-weight: 760;
-  line-height: 1.1;
-}
-
-.overview-signal__label {
-  margin-top: 3px;
-  color: var(--lp-text-muted);
-  font-size: 0.78rem;
+  justify-content: flex-end;
 }
 
 .overview-actions {
@@ -1044,10 +958,6 @@ onBeforeUnmount(() => {
   .dashboard-grid {
     flex: none;
     min-height: auto;
-  }
-
-  .overview-signals {
-    grid-template-columns: 1fr;
   }
 
   .overview-actions,

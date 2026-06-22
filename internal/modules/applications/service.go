@@ -2260,11 +2260,13 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 		}
 		if s.runtimeClient != nil && s.servers != nil {
 			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {
+				status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
 				if ensureAgentRuntimeReady(srv) == nil {
 					baseURL, _ := agentURLFromServer(srv)
 					if remote, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID, instance.ContainerName); err == nil {
 						status = remote.InstanceStatus
 						status.ServerID = instance.ServerID
+						status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
 						status.DesiredState = instance.DesiredState
 						_ = s.markRuntimeInstance(ctx, instance.ID, instance.DesiredState, status.Status, status.ContainerID, status.LastError)
 					} else {

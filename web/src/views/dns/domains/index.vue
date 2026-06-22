@@ -240,7 +240,6 @@ onMounted(async () => {
       <AppSelectorPanel
         class="domain-list-card"
         :title="t('domainsPage.domains')"
-        :count="domains.length"
         :loading="loading"
         :empty="domains.length === 0"
         empty-icon="mdi-web-off"
@@ -257,7 +256,6 @@ onMounted(async () => {
           <AppSelectorItem
             v-for="domain in pagedDomains"
             :key="domain.id"
-            as="div"
             :selected="domain.id === selectedDomainId"
             @select="selectedDomainId = domain.id"
           >
@@ -265,15 +263,6 @@ onMounted(async () => {
               <span class="domain-name text-truncate">{{ domain.name }}</span>
               <span class="domain-meta text-truncate">{{ domain.provider }}</span>
             </span>
-              <v-menu>
-                <template #activator="{ props }">
-                  <v-btn v-bind="props" icon="mdi-dots-vertical" variant="text" size="small" @click.stop />
-                </template>
-                <v-list density="compact">
-                  <v-list-item prepend-icon="mdi-pencil" :title="t('common.edit')" @click="resetForm(domain)" />
-                  <v-list-item prepend-icon="mdi-delete" :title="t('common.delete')" class="text-error" @click="askDeleteDomain(domain)" />
-                </v-list>
-              </v-menu>
           </AppSelectorItem>
       </AppSelectorPanel>
 
@@ -285,7 +274,15 @@ onMounted(async () => {
                 <div class="text-h6 font-weight-bold text-truncate">{{ selectedDomain.name }}</div>
                 <div class="text-caption text-medium-emphasis">{{ t('domainsPage.updatedAt') }} {{ formatDateTime(selectedDomain.updatedAt) }}</div>
               </div>
-              <v-chip size="small" label color="primary" variant="tonal">{{ selectedDomain.provider }}</v-chip>
+              <div class="domain-detail-actions">
+                <v-chip size="small" label color="primary" variant="tonal">{{ selectedDomain.provider }}</v-chip>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="resetForm(selectedDomain)">
+                  {{ t('common.edit') }}
+                </v-btn>
+                <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteDomain(selectedDomain)">
+                  {{ t('common.delete') }}
+                </v-btn>
+              </div>
             </div>
             <v-divider />
             <v-card-text class="domain-detail-grid">
@@ -503,6 +500,14 @@ onMounted(async () => {
 .domain-name { font-size: 0.9rem; font-weight: 700; }
 .domain-meta { margin-top: 2px; color: var(--lp-text-muted); font-size: 0.76rem; }
 
+.domain-detail-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .dns-main {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -596,6 +601,10 @@ onMounted(async () => {
 }
 
 @media (max-width: 640px) {
+  .domain-detail-actions {
+    justify-content: flex-start;
+  }
+
   .domain-detail-grid,
   .record-form-grid {
     grid-template-columns: 1fr;

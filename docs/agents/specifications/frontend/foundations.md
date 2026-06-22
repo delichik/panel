@@ -6,7 +6,7 @@
 - 图标：Material Design Icons，使用 `mdi-*`。
 - 字体：Aptos、Segoe UI Variable、Segoe UI、系统无衬线字体。
 - 等宽字体：Cascadia Code、SFMono-Regular、Consolas。
-- 主题：`light` 和 `dark`，由 Vuetify 主题和 `data-theme` 同步控制。
+- 主题：`light` 和 `dark`，由 Vuetify 主题和 `data-theme` 同步控制；用户可选择自动跟随系统或手动固定模式。
 
 ## 设计方向
 
@@ -43,7 +43,18 @@
 - `info`：中性通知、信息状态。
 - `secondary`：次级分类或中性标签。
 
-浅色主题主色为深青绿，深色主题主色为亮青绿。组件应通过 `rgb(var(--v-theme-primary))` 或 Vuetify `color` 属性取色。
+默认使用绿色预设：浅色主题为深青绿，深色主题为亮青绿。用户可让明暗主题共用一个预设，或分别选择预设；配置只保存在当前浏览器。组件必须通过 Vuetify 主题变量或 `color` 属性取色，不能缓存或复制预设色值。
+
+## 主题偏好
+
+- 未保存偏好时使用 `system` 模式，根据 `prefers-color-scheme` 解析实际的 `light` 或 `dark`。
+- 手动选择 `light` 或 `dark` 后，系统外观变化不覆盖用户选择。
+- 自动模式必须监听系统外观变化并即时同步 Vuetify 主题、根节点 `data-theme` 和 `color-scheme`。
+- 主题提供蓝、绿、红、橘、紫、粉、黄七套适配当前低饱和控制台风格的预设，不提供任意颜色输入。
+- 每套预设分别定义浅色和深色变体，并同步覆盖 `primary`、`on-primary` 与 `surface-variant`；`on-primary` 必须满足正文对比度，`surface-variant` 只使用轻微同色倾向。
+- 无效或损坏的本地配置回退到绿色默认预设。
+- 旧版只保存 `light` / `dark` 的浏览器配置迁移为对应手动模式；曾保存任意颜色值的配置迁移为绿色预设。
+- 主题设置属于浏览器级 UI 偏好，不写入后端运行时设置或账号信息。
 
 ## 排版
 
@@ -65,6 +76,7 @@
 
 - 常规颜色、边框、阴影和位移过渡为 `160ms` 至 `250ms`。
 - 全局 `main.css` 统一覆盖 Vuetify 常用显示/隐藏动效，包括 dialog、menu/tooltip 的 scale/fade、snackbar、message、slide 和 expand transition；新增业务页面优先复用这些默认过渡，不要为同类浮层另写独立时长曲线。
+- fade transition 只统一透明起点和时长，不得把显示终点强制设为 `opacity: 1`；对话框遮罩等组件需要保留 Vuetify 定义的目标透明度，避免打开时先变黑再回落。
 - 主要按钮悬浮上移 `1px`，按下下移 `1px`。
 - 主题切换由 `.theme-changing` 统一添加短过渡。
 - 必须尊重 `prefers-reduced-motion: reduce`，关闭非必要动画。

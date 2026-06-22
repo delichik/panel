@@ -38,7 +38,7 @@ export class ApiClient {
 
   constructor(options: ApiClientOptions = {}) {
     this.baseUrl = options.baseUrl ?? '/api/v1';
-    this.fetcher = options.fetcher ?? fetch.bind(globalThis);
+    this.fetcher = options.fetcher ?? defaultFetcher();
     this.getToken = options.getToken ?? readAuthToken;
   }
 
@@ -138,6 +138,13 @@ export class ApiClient {
 }
 
 export const apiClient = new ApiClient();
+
+function defaultFetcher(): typeof fetch {
+  if (import.meta.env.VITE_PANEL_TEST_MODE === 'true') {
+    return (input, init) => import('@/mocks').then(({ mockFetch }) => mockFetch(input, init));
+  }
+  return fetch.bind(globalThis);
+}
 
 async function readEnvelope<T>(response: Response): Promise<ApiEnvelope<T>> {
   const raw = await response.text();

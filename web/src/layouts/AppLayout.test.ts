@@ -16,8 +16,27 @@ describe('AppLayout navigation', () => {
   it('keeps compact header utilities on one row and gives active tasks their own row', () => {
     expect(appLayout).toContain('grid-template-columns: minmax(0, 1fr) auto;');
     expect(appLayout).toContain('grid-column: 1 / -1;');
-    expect(appLayout).toContain('.logout-btn :deep(.v-btn__content)');
-    expect(appLayout).toMatch(/\.user-name\s*\{\s*display:\s*none;/);
+    expect(appLayout).toContain('class="header-utility-strip"');
+  });
+
+  it('opens theme preferences from the header and supports system, light, and dark modes', () => {
+    expect(appLayout).toContain("t('layout.theme.open')");
+    expect(appLayout).toContain("value: 'system' as const");
+    expect(appLayout).toContain("value: 'light' as const");
+    expect(appLayout).toContain("value: 'dark' as const");
+    expect(appLayout).toContain('themePreferences.sharedPreset');
+    expect(appLayout).toContain("setPreset('shared'");
+    expect(appLayout).toContain("setPreset(mode");
+    expect(appLayout).toContain('theme-preset-option');
+    expect(appLayout).not.toContain('type="color"');
+  });
+
+  it('keeps the username and logout action inside the user icon menu', () => {
+    expect(appLayout).toContain("t('layout.userMenu.open')");
+    expect(appLayout).toContain("{{ auth.username || t('layout.userMenu.unknownUser') }}");
+    expect(appLayout).toContain(':title="t(\'layout.logout\')"');
+    expect(appLayout).not.toContain('class="user-pill"');
+    expect(appLayout).not.toContain('class="text-none logout-btn"');
   });
 
   it('shows the build channel marker from version metadata', () => {
@@ -43,5 +62,11 @@ describe('AppLayout navigation', () => {
     expect(appLayout).toContain("to: '/certificates/keys'");
     expect(appLayout).toContain("t('layout.nav.keys')");
     expect(appLayout).not.toContain("to: '/certificates/key-assets'");
+  });
+
+  it('places system certificates under settings', () => {
+    expect(appLayout).toContain("to: '/settings/system-certificates'");
+    expect(appLayout).toContain("t('layout.nav.settingsSystemCertificates')");
+    expect(appLayout).not.toContain("to: '/certificates/system'");
   });
 });

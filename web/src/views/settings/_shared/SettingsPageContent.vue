@@ -7,6 +7,10 @@ import { useSettingsStore } from '@/stores/settings';
 import { systemApi } from '@/api/system';
 import type { LogLevel, RuntimeSettingsDto, RuntimeSettingsUpdate, SystemVersionDto, TokenExpiration } from '@/types/api';
 import PageLoadingState from '@/components/PageLoadingState.vue';
+import {
+  buildRuntimeSettingsSectionUpdate,
+  type RuntimeSettingsSection,
+} from './runtimeSettingsSections';
 
 type SettingsCategory = 'general' | 'security' | 'certificates' | 'system';
 
@@ -18,7 +22,11 @@ const { t, translateCleanupSchedule } = useI18n();
 const settings = ref<RuntimeSettingsDto | null>(null);
 const versionInfo = ref<SystemVersionDto | null>(null);
 const loading = ref(false);
-const saving = ref(false);
+const sectionSaving = reactive<Record<RuntimeSettingsSection, boolean>>({
+  branding: false,
+  runtime: false,
+  certificates: false,
+});
 const accountSaving = ref(false);
 const jwtSaving = ref(false);
 const error = ref('');
@@ -101,22 +109,37 @@ async function loadSettings() {
   }
 }
 
-async function saveRuntimeSettings() {
-  saving.value = true;
+function syncSavedSection(next: RuntimeSettingsDto, section: RuntimeSettingsSection) {
+  if (section === 'branding') {
+    form.branding = { ...next.branding };
+  } else if (section === 'runtime') {
+    form.metricsRetentionDays = next.metricsRetentionDays;
+    form.metricsCollectionIntervalSeconds = next.metricsCollectionIntervalSeconds;
+    form.cleanupSchedule = next.cleanupSchedule;
+    form.tokenExpiration = next.tokenExpiration || '1d';
+    form.language = next.language;
+    form.logLevel = next.logLevel || 'info';
+    form.remoteCommandTimeoutSeconds = next.remoteCommandTimeoutSeconds;
+  } else {
+    form.certificates = { ...next.certificates };
+  }
+}
+
+async function saveRuntimeSettingsSection(section: RuntimeSettingsSection) {
+  if (!settings.value) return;
+  sectionSaving[section] = true;
   try {
-    const next = await settingsStore.updateRuntime({
-      ...form,
-      branding: { ...form.branding },
-      certificates: { ...form.certificates },
-    });
+    const next = await settingsStore.updateRuntime(
+      buildRuntimeSettingsSectionUpdate(settings.value, form, section),
+    );
     settings.value = next;
-    syncForm(next);
+    syncSavedSection(next, section);
     error.value = '';
     showMessage(t('settingsPage.saveSuccess'));
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settingsPage.saveFailed');
   } finally {
-    saving.value = false;
+    sectionSaving[section] = false;
   }
 }
 
@@ -220,125 +243,143 @@ onMounted(loadSettings);
             <h2 class="settings-title">{{ t(`settingsPage.categories.${category}`) }}</h2>
           </div>
 
-          <v-btn
-            v-if="category !== 'security' && category !== 'system'"
-            color="primary"
-            prepend-icon="mdi-content-save"
-            :loading="saving"
-            class="text-none font-weight-bold action-btn"
-            @click="saveRuntimeSettings"
-          >
-            {{ t('common.save') }}
-          </v-btn>
         </div>
 
         <v-form v-if="category === 'general'" class="settings-form">
-          <div class="section-title">{{ t('settingsPage.loginBranding') }}</div>
+          <section class="settings-section">
+            <div class="section-title">{{ t('settingsPage.loginBranding') }}</div>
 
-          <v-text-field
-            v-model="form.branding.loginTitle"
-            :label="t('settingsPage.loginTitle')"
-            :placeholder="t('login.title')"
-            :hint="t('settingsPage.loginTitleHint')"
-            maxlength="80"
-            counter
-            variant="outlined"
-            density="comfortable"
-            persistent-hint
-          />
+            <v-text-field
+              v-model="form.branding.loginTitle"
+              :label="t('settingsPage.loginTitle')"
+              :placeholder="t('login.title')"
+              :hint="t('settingsPage.loginTitleHint')"
+              maxlength="80"
+              counter
+              variant="outlined"
+              density="comfortable"
+              persistent-hint
+            />
 
-          <v-textarea
-            v-model="form.branding.loginSubtitle"
-            :label="t('settingsPage.loginSubtitle')"
-            :placeholder="t('login.subtitle')"
-            :hint="t('settingsPage.loginSubtitleHint')"
-            maxlength="240"
-            counter
-            rows="2"
-            auto-grow
-            variant="outlined"
-            density="comfortable"
-            persistent-hint
-          />
+            <v-textarea
+              v-model="form.branding.loginSubtitle"
+              :label="t('settingsPage.loginSubtitle')"
+              :placeholder="t('login.subtitle')"
+              :hint="t('settingsPage.loginSubtitleHint')"
+              maxlength="240"
+              counter
+              rows="2"
+              auto-grow
+              variant="outlined"
+              density="comfortable"
+              persistent-hint
+            />
+
+            <div class="form-actions">
+              <v-btn
+                color="primary"
+                prepend-icon="mdi-content-save"
+                :loading="sectionSaving.branding"
+                class="text-none font-weight-bold"
+                @click="saveRuntimeSettingsSection('branding')"
+              >
+                {{ t('common.save') }}
+              </v-btn>
+            </div>
+          </section>
 
           <v-divider class="my-2" />
 
-          <div class="section-title">{{ t('settingsPage.runtime') }}</div>
+          <section class="settings-section">
+            <div class="section-title">{{ t('settingsPage.runtime') }}</div>
 
-          <v-text-field
-            v-model.number="form.metricsRetentionDays"
-            type="number"
-            min="1"
-            max="3650"
-            :label="t('settingsPage.metricsRetention')"
-            :suffix="t('settingsPage.days')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+            <v-text-field
+              v-model.number="form.metricsRetentionDays"
+              type="number"
+              min="1"
+              max="3650"
+              :label="t('settingsPage.metricsRetention')"
+              :suffix="t('settingsPage.days')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-          <v-text-field
-            v-model.number="form.metricsCollectionIntervalSeconds"
-            type="number"
-            min="10"
-            max="86400"
-            :label="t('settingsPage.collectionInterval')"
-            :suffix="t('settingsPage.seconds')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+            <v-text-field
+              v-model.number="form.metricsCollectionIntervalSeconds"
+              type="number"
+              min="10"
+              max="86400"
+              :label="t('settingsPage.collectionInterval')"
+              :suffix="t('settingsPage.seconds')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-          <v-text-field
-            v-model.number="form.remoteCommandTimeoutSeconds"
-            type="number"
-            min="1"
-            max="3600"
-            :label="t('settingsPage.remoteCommandTimeout')"
-            :suffix="t('settingsPage.seconds')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+            <v-text-field
+              v-model.number="form.remoteCommandTimeoutSeconds"
+              type="number"
+              min="1"
+              max="3600"
+              :label="t('settingsPage.remoteCommandTimeout')"
+              :suffix="t('settingsPage.seconds')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-          <div>
-            <div class="text-subtitle-2 mb-2 text-medium-emphasis">{{ t('settingsPage.cleanupSchedule') }}</div>
-            <v-btn-toggle v-model="form.cleanupSchedule" mandatory color="primary" density="compact">
-              <v-btn value="hourly" class="text-none">{{ translateCleanupSchedule('hourly') }}</v-btn>
-              <v-btn value="daily" class="text-none">{{ translateCleanupSchedule('daily') }}</v-btn>
-              <v-btn value="weekly" class="text-none">{{ translateCleanupSchedule('weekly') }}</v-btn>
-            </v-btn-toggle>
-          </div>
+            <div>
+              <div class="text-subtitle-2 mb-2 text-medium-emphasis">{{ t('settingsPage.cleanupSchedule') }}</div>
+              <v-btn-toggle v-model="form.cleanupSchedule" mandatory color="primary" density="compact">
+                <v-btn value="hourly" class="text-none">{{ translateCleanupSchedule('hourly') }}</v-btn>
+                <v-btn value="daily" class="text-none">{{ translateCleanupSchedule('daily') }}</v-btn>
+                <v-btn value="weekly" class="text-none">{{ translateCleanupSchedule('weekly') }}</v-btn>
+              </v-btn-toggle>
+            </div>
 
-          <v-select
-            v-model="form.tokenExpiration"
-            :items="tokenExpirationItems()"
-            :label="t('settingsPage.tokenExpiration')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+            <v-select
+              v-model="form.tokenExpiration"
+              :items="tokenExpirationItems()"
+              :label="t('settingsPage.tokenExpiration')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-          <v-select
-            v-model="form.language"
-            :items="[
-              { title: t('languages.en'), value: 'en' },
-              { title: t('languages.zh-CN'), value: 'zh-CN' },
-            ]"
-            :label="t('settingsPage.language')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+            <v-select
+              v-model="form.language"
+              :items="[
+                { title: t('languages.en'), value: 'en' },
+                { title: t('languages.zh-CN'), value: 'zh-CN' },
+              ]"
+              :label="t('settingsPage.language')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-          <v-select
-            v-model="form.logLevel"
-            :items="logLevelItems()"
-            :label="t('settingsPage.logLevel')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+            <v-select
+              v-model="form.logLevel"
+              :items="logLevelItems()"
+              :label="t('settingsPage.logLevel')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
+
+            <div class="form-actions">
+              <v-btn
+                color="primary"
+                prepend-icon="mdi-content-save"
+                :loading="sectionSaving.runtime"
+                class="text-none font-weight-bold"
+                @click="saveRuntimeSettingsSection('runtime')"
+              >
+                {{ t('common.save') }}
+              </v-btn>
+            </div>
+          </section>
         </v-form>
 
         <v-form v-else-if="category === 'security'" class="settings-form">
@@ -439,26 +480,40 @@ onMounted(loadSettings);
         </v-form>
 
         <v-form v-else-if="category === 'certificates'" class="settings-form">
-          <v-text-field
-            v-model="form.certificates.email"
-            type="email"
-            :label="t('settingsPage.certificateEmail')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+          <section class="settings-section">
+            <v-text-field
+              v-model="form.certificates.email"
+              type="email"
+              :label="t('settingsPage.certificateEmail')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
 
-          <v-text-field
-            v-model.number="form.certificates.dnsPropagationDelaySeconds"
-            type="number"
-            min="0"
-            max="3600"
-            :label="t('settingsPage.dnsPropagationDelay')"
-            :suffix="t('settingsPage.seconds')"
-            variant="outlined"
-            density="comfortable"
-            hide-details="auto"
-          />
+            <v-text-field
+              v-model.number="form.certificates.dnsPropagationDelaySeconds"
+              type="number"
+              min="0"
+              max="3600"
+              :label="t('settingsPage.dnsPropagationDelay')"
+              :suffix="t('settingsPage.seconds')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
+
+            <div class="form-actions">
+              <v-btn
+                color="primary"
+                prepend-icon="mdi-content-save"
+                :loading="sectionSaving.certificates"
+                class="text-none font-weight-bold"
+                @click="saveRuntimeSettingsSection('certificates')"
+              >
+                {{ t('common.save') }}
+              </v-btn>
+            </div>
+          </section>
         </v-form>
 
         <div v-else class="system-table">
@@ -543,6 +598,11 @@ onMounted(loadSettings);
   gap: 16px;
 }
 
+.settings-section {
+  display: grid;
+  gap: 16px;
+}
+
 .settings-form :deep(.v-btn-toggle) {
   max-width: 100%;
   flex-wrap: wrap;
@@ -590,10 +650,6 @@ onMounted(loadSettings);
   .settings-header {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .action-btn {
-    width: 100%;
   }
 
   .system-label {

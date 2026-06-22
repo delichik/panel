@@ -6,7 +6,9 @@ import type { ApplicationDto, ApplicationRuntimeDto, ApplicationRuntimeInstanceD
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
 
-const props = defineProps<{ application: ApplicationDto }>();
+const props = withDefaults(defineProps<{ application: ApplicationDto; embedded?: boolean }>(), {
+  embedded: false,
+});
 const emit = defineEmits<{ logs: [{ instanceId: string; containerName: string }] }>();
 const { formatDateTime, t, translateRuntimeDesiredState, translateRuntimeStatus } = useI18n();
 const runtime = ref<ApplicationRuntimeDto | null>(null);
@@ -59,8 +61,8 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
 </script>
 
 <template>
-  <v-card variant="outlined" :loading="loading" class="runtime-card">
-    <div class="d-flex align-center justify-space-between mb-3">
+  <component :is="embedded ? 'section' : 'v-card'" :variant="embedded ? undefined : 'outlined'" :loading="embedded ? undefined : loading" class="runtime-card" :class="{ 'runtime-card--embedded': embedded }">
+    <div class="runtime-header">
       <div class="text-subtitle-1 font-weight-bold">{{ t('applicationRuntime.runtime') }}</div>
       <v-btn size="small" variant="text" icon="mdi-refresh" :title="t('common.refresh')" :loading="loading" @click="loadRuntime" />
     </div>
@@ -98,7 +100,10 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
         <tbody>
           <tr v-for="instance in pagedInstances" :key="instance.instanceId">
             <td class="mono">{{ instance.instanceId }}</td>
-            <td class="mono">{{ instance.serverId }}</td>
+            <td>
+              <div class="font-weight-medium">{{ instance.serverName || instance.serverId }}</div>
+              <div v-if="instance.serverName" class="text-caption text-medium-emphasis mono">{{ instance.serverId }}</div>
+            </td>
             <td class="mono">{{ instance.containerName }}</td>
             <td>
               <v-chip :color="statusColor(instance.status)" size="small" variant="tonal" label>
@@ -118,11 +123,13 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
       </v-table>
       <AppPagination v-model:page="instancePage" v-model:page-size="instancePageSize" :total="instanceTotal" />
     </div>
-  </v-card>
+  </component>
 </template>
 
 <style scoped>
 .runtime-card { padding: 16px; }
+.runtime-card--embedded { padding: 0; }
+.runtime-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .runtime-stack { display: grid; gap: 12px; }
 .runtime-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; }

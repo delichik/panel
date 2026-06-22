@@ -3,23 +3,42 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const page = readFileSync(resolve(__dirname, 'index.vue'), 'utf8');
+const domainCertificatesPage = readFileSync(resolve(__dirname, '../domains/index.vue'), 'utf8');
 
 describe('KeyAssetsPage', () => {
-  it('implements the tabbed key asset workspace and keeps private keys out of inline display', () => {
-    expect(page).toContain("v-tabs v-model=\"activeTab\"");
-    expect(page).toContain("t('keyAssetsPage.tabs.ca')");
-    expect(page).toContain("t('keyAssetsPage.tabs.tls')");
+  it('uses the shared selector-detail workspace and keeps private keys out of inline display', () => {
+    expect(page).toContain('class="asset-workspace"');
+    expect(page).toContain('<AppSelectorPanel');
+    expect(page).toContain('<AppSelectorItem');
+    expect(page).toContain('class="asset-detail-card"');
+    expect(page).toContain('icon="mdi-dots-vertical"');
+    expect(page).toContain(":title=\"t('keyAssetsPage.importAsset')\"");
+    expect(page).toContain(":title=\"t('keyAssetsPage.importArchive')\"");
+    expect(page).toContain(":title=\"t('keyAssetsPage.exportSelected')\"");
+    expect(page).toContain('<template #leading>');
+    expect(page).toContain(':indeterminate="someSelectableSelected"');
+    expect(page).toContain('@update:model-value="toggleSelectAllAssets"');
+    expect(page).toContain('class="asset-selector-checkbox"');
+    expect(page).toContain('margin-left: -6px');
     expect(page).toContain("t('keyAssetsPage.tabs.ssh')");
-    expect(page).toContain("t('keyAssetsPage.privateKeysHiddenHint')");
+    expect(page).not.toContain("t('keyAssetsPage.privateKeysHiddenHint')");
     expect(page).toContain("keyAssetsApi.preflightImportArchive");
     expect(page).toContain("keyAssetsApi.exportSelected");
     expect(page).toContain("keyAssetsApi.reissue");
     expect(page).toContain("keyAssetsApi.regenerate");
-    expect(page).toContain("keyAssetsApi.listSystemCertificates");
-    expect(page).toContain("keyAssetsApi.resetSystemCertificate");
-    expect(page).toContain("t('keyAssetsPage.systemBuiltIn')");
-    expect(page).toContain("t('keyAssetsPage.userDomain')");
+    expect(page).not.toContain("keyAssetsApi.listSystemCertificates");
+    expect(page).not.toContain("keyAssetsApi.resetSystemCertificate");
+    expect(page).not.toContain('systemCertificates');
+    expect(page).not.toContain('system-certificates-card');
+    expect(page).not.toContain('class="table-card"');
     expect(page).not.toContain('privateKeyCiphertext');
+  });
+
+  it('uses selector-detail mode for domain certificates too', () => {
+    expect(domainCertificatesPage).toContain('class="certificate-workspace"');
+    expect(domainCertificatesPage).toContain('<AppSelectorPanel');
+    expect(domainCertificatesPage).toContain('<AppSelectorItem');
+    expect(domainCertificatesPage).toContain('class="certificate-detail"');
   });
 
   it('supports SSH algorithm selection and archive conflict handling', () => {

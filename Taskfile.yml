@@ -29,6 +29,13 @@ tasks:
     cmds:
       - npm --prefix {{.WEB_DIR}} run dev
 
+  run:web:test:
+    desc: Run web dev server with the built-in Mock API
+    env:
+      VITE_PANEL_TEST_MODE: "true"
+    cmds:
+      - npm --prefix {{.WEB_DIR}} run dev
+
   test:
     desc: Run all tests
     cmds:

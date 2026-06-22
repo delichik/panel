@@ -9,9 +9,13 @@ import App from './app/App.vue';
 import { router } from './router';
 import { pinia } from './stores';
 import { syncDocumentLanguage } from './i18n';
-import { getInitialTheme, syncThemeAttribute } from './theme';
+import { getInitialTheme, getInitialThemeColors, syncThemeAttribute } from './theme';
 
+if (import.meta.env.VITE_PANEL_TEST_MODE === 'true' && !globalThis.localStorage?.getItem('authToken')) {
+  globalThis.localStorage?.setItem('authToken', 'mock-session-token');
+}
 const initialTheme = getInitialTheme();
+const initialThemeColors = getInitialThemeColors();
 syncThemeAttribute(initialTheme);
 syncDocumentLanguage();
 
@@ -26,10 +30,11 @@ const vuetify = createVuetify({
         colors: {
           background: '#f7f8f5',
           surface: '#ffffff',
-          'surface-variant': '#eef3ed',
+          'surface-variant': initialThemeColors.light.surfaceVariant,
           'surface-container': '#f9faf7',
           'surface-muted': '#eef1ec',
-          primary: '#0f766e',
+          primary: initialThemeColors.light.primary,
+          'on-primary': initialThemeColors.light.onPrimary,
           secondary: '#6b7280',
           success: '#16a34a',
           warning: '#b45309',
@@ -49,10 +54,11 @@ const vuetify = createVuetify({
         colors: {
           background: '#0d100e',
           surface: '#151a17',
-          'surface-variant': '#202720',
+          'surface-variant': initialThemeColors.dark.surfaceVariant,
           'surface-container': '#171d1a',
           'surface-muted': '#222a25',
-          primary: '#2dd4bf',
+          primary: initialThemeColors.dark.primary,
+          'on-primary': initialThemeColors.dark.onPrimary,
           secondary: '#b5beb7',
           success: '#4ade80',
           warning: '#f59e0b',

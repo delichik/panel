@@ -10,4 +10,16 @@ describe('TaskCenterPage', () => {
     expect(page).toContain('task.allowRetry');
     expect(page).not.toContain('runnableTaskTypes');
   });
+
+  it('keeps the operation selector focused on identity and status', () => {
+    expect(page).not.toContain('taskCounts');
+    expect(page).not.toContain('class="task-kpis"');
+    expect(page).not.toContain('class="operation-meta"');
+    expect(page).not.toContain(':model-value="group.progress"');
+    expect(page).toContain('class="operation-name"');
+    expect(page).toContain('class="operation-context"');
+    expect(page).toContain('formatTime(group.createdAt)');
+    expect(page).toContain('operationObjectLabel(group)');
+    expect(page).toContain('statusLabel(group.status)');
+  });
 });

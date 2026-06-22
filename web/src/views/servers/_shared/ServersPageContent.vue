@@ -6,9 +6,9 @@ import { serversApi, type CredentialInput, type ServerInput } from '@/api/server
 import { tasksApi } from '@/api/tasks';
 import type { CredentialDto, ServerDto, TaskDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
-import AppSelectorItem from '@/components/AppSelectorItem.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
+import ServerSelectorItem from '@/components/ServerSelectorItem.vue';
 import { usePagination } from '@/composables/usePagination';
 
 const route = useRoute();
@@ -63,8 +63,6 @@ const credentialForm = reactive<CredentialInput>({
 });
 
 const selectedServer = computed(() => servers.value.find((server) => server.id === selectedServerId.value) ?? null);
-const reachableCount = computed(() => servers.value.filter((server) => server.reachable).length);
-const agentReadyCount = computed(() => servers.value.filter((server) => server.traits?.['agent.status'] === 'compatible').length);
 const credentialRows = computed(() => credentials.value ?? []);
 const serverCredentialMissing = computed(() => !serverForm.credentialId);
 const serverDockerHostMissing = computed(() => !serverForm.dockerHost.trim());
@@ -514,26 +512,10 @@ onMounted(load);
     <v-alert v-if="visiblePageError" type="error" variant="tonal" density="compact">{{ visiblePageError }}</v-alert>
 
     <template v-if="activeTab === 'servers'">
-      <div class="summary-strip">
-        <v-card variant="outlined" class="summary-card">
-          <div class="summary-icon surface-primary"><v-icon size="18">mdi-server</v-icon></div>
-          <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.servers') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ servers.length }}</div></div>
-        </v-card>
-        <v-card variant="outlined" class="summary-card">
-          <div class="summary-icon surface-success"><v-icon size="18">mdi-lan-connect</v-icon></div>
-          <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.reachable') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ reachableCount }}</div></div>
-        </v-card>
-        <v-card variant="outlined" class="summary-card">
-          <div class="summary-icon surface-warning"><v-icon size="18">mdi-docker</v-icon></div>
-          <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.agentReady') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ agentReadyCount }}</div></div>
-        </v-card>
-      </div>
-
       <div class="servers-workspace">
         <AppSelectorPanel
           class="server-list"
           :title="t('serversPage.registeredServers')"
-          :count="servers.length"
           :loading="loading"
           :empty="servers.length === 0"
           empty-icon="mdi-server-off"
@@ -554,20 +536,13 @@ onMounted(load);
                 @click="resetServerForm()"
               />
           </template>
-            <AppSelectorItem
+            <ServerSelectorItem
               v-for="server in pagedServers"
               :key="server.id"
+              :server="server"
               :selected="selectedServerId === server.id"
               @select="selectedServerId = server.id"
-            >
-              <span class="min-width-0">
-                <span class="server-name text-truncate">{{ server.name }}</span>
-                <span class="server-meta text-truncate">{{ server.host }}:{{ server.port }}</span>
-              </span>
-              <v-chip :color="agentStatusForServer(server).color" size="x-small" variant="tonal" label>
-                {{ agentStatusForServer(server).label }}
-              </v-chip>
-            </AppSelectorItem>
+            />
         </AppSelectorPanel>
 
         <div class="detail-column">
@@ -920,12 +895,8 @@ onMounted(load);
 </template>
 
 <style scoped>
-.summary-strip { max-width: 780px; }
 .servers-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
 .server-list, .detail-column { min-width: 0; min-height: 0; }
-.server-name, .server-meta { display: block; }
-.server-name { font-weight: 700; font-size: 0.9rem; }
-.server-meta { color: var(--lp-text-muted); font-size: 0.76rem; margin-top: 2px; }
 .status-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 999px; background: rgb(var(--v-theme-info)); box-shadow: 0 0 0 4px rgba(var(--v-theme-info), 0.12); }
 .status-dot.success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12); }
 .status-dot.warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14); }
@@ -962,7 +933,7 @@ onMounted(load);
 @media (min-width: 761px) { .detail-column { min-height: 0; overflow: auto; } }
 @media (max-width: 1080px) { .servers-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
-  .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
+  .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .server-task-alert { flex-direction: column; align-items: stretch; }
   .servers-workspace, .detail-card { flex: none; min-height: auto; }
   .detail-card, .credential-table-card { overflow: visible; }

@@ -12,6 +12,9 @@ describe('router key asset routes', () => {
     expect(routerSource).toContain("name: 'certificates-self-signed'");
     expect(routerSource).toContain("path: 'certificates/keys'");
     expect(routerSource).toContain("name: 'certificates-keys'");
+    expect(routerSource).toContain("import SettingsSystemCertificatesPage from '@/views/settings/system-certificates/index.vue'");
+    expect(routerSource).toContain("path: 'settings/system-certificates'");
+    expect(routerSource).toContain("name: 'settings-system-certificates'");
     expect(routerSource).not.toContain("path: 'certificates/key-assets'");
     expect(routerSource).not.toContain("path: 'dns/certificates'");
     expect(routerSource).not.toContain("path: 'applications', redirect: '/containerization/applications'");

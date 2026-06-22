@@ -60,10 +60,12 @@
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
 - containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
-- 应用列表接口会刷新已记录实例的运行时状态并聚合为 `runtimeStatus`，列表只展示应用名称、启用状态、运行状态、镜像更新状态和更新时间；jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在详情。
-- 应用列表在桌面端是满高主从工作区，左侧表格体必须独立滚动并吸收剩余高度，分页固定在列表卡片底部。
+- 应用列表接口会刷新已记录实例的运行时状态并聚合为 `runtimeStatus`；左侧 `AppSelectorPanel` 只展示应用名称、运行状态和更新时间，jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在右侧详情。运行中的应用存在镜像更新时，选择器状态 Chip 使用 warning 色并显示“运行中 · 有更新”，其他运行状态保持原有展示。
+- 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；编辑、部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
+- 应用页面不展示应用总数、已启用和需要关注摘要卡，页面级提示后直接进入主从工作区。
+- 应用右侧详情使用单张满高 outlined 卡片：运行状态和启用状态位于标题下方，操作按钮单独位于头部右侧；可滚动正文按基本信息、镜像更新和运行实例分区。下载包、持久化数据、迁移和删除收进更多菜单，不再把运行时面板渲染为独立并列卡片。
 - 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；`purge` 参数会传给 agent 清理容器。
-- 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。
+- 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。运行时实例响应同时返回 `serverId` 和 `serverName`，前端优先展示服务器名称，并保留 ID 作为辅助信息。
 - 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等节点变量；值来自实际部署目标服务器。
 - 应用文件模板在后端部署渲染阶段可读 `PANEL_SERVER_*` 变量，因此同一应用在不同服务器会得到不同的服务器值。
 - `panel_file` 挂载只接受 `key_asset:<asset-id>:<kind>`，用于稳定引用 Panel 托管密钥或证书文件。

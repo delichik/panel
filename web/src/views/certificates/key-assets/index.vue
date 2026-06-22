@@ -8,8 +8,9 @@ import type {
   KeyAssetImportConflictDto,
   KeyAssetImportConflictStrategy,
   KeyAssetSummaryDto,
-  SystemCertificateDto,
 } from '@/types/api';
+import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
 type AssetTab = 'ca' | 'tls' | 'ssh';
@@ -31,7 +32,6 @@ interface ConfirmDialogState {
 const { t, formatDateTime } = useI18n();
 
 const items = ref<KeyAssetSummaryDto[]>([]);
-const systemCertificates = ref<SystemCertificateDto[]>([]);
 const loading = ref(false);
 const error = ref('');
 const activeTab = ref<AssetTab>(props.mode === 'keys' ? 'ssh' : 'ca');
@@ -139,24 +139,36 @@ let confirmAction: (() => Promise<void>) | null = null;
 const caAssets = computed(() => items.value.filter((item) => item.type === 'ca_certificate'));
 const tlsAssets = computed(() => items.value.filter((item) => item.type === 'tls_certificate'));
 const sshAssets = computed(() => items.value.filter((item) => item.type === 'ssh_key_pair'));
-const pageTitle = computed(() => props.mode === 'keys' ? t('routes.keys.title') : t('routes.selfSignedCertificates.title'));
-const pageSubtitle = computed(() => props.mode === 'keys' ? t('keyAssetsPage.keysSubtitle') : t('keyAssetsPage.certificatesSubtitle'));
-const visibleAssets = computed(() => {
-  if (activeTab.value === 'ca') return caAssets.value;
-  if (activeTab.value === 'tls') return tlsAssets.value;
-  return sshAssets.value;
+type SelectorAsset =
+  { key: string; source: 'user'; type: AssetTab; user: KeyAssetSummaryDto };
+const selectorAssets = computed<SelectorAsset[]>(() => {
+  if (props.mode === 'keys') {
+    return sshAssets.value.map((user) => ({ key: `user:${user.id}`, source: 'user' as const, type: 'ssh' as const, user }));
+  }
+  return [
+    ...caAssets.value.map((user) => ({ key: `user:${user.id}`, source: 'user' as const, type: 'ca' as const, user })),
+    ...tlsAssets.value.map((user) => ({ key: `user:${user.id}`, source: 'user' as const, type: 'tls' as const, user })),
+  ];
 });
+const selectedAssetKey = ref('');
+const selectedAsset = computed(() => selectorAssets.value.find((item) => item.key === selectedAssetKey.value) ?? null);
+const selectorTitle = computed(() => props.mode === 'keys' ? t('routes.keys.title') : t('routes.selfSignedCertificates.title'));
+const selectableUserAssets = computed(() => selectorAssets.value);
+const selectedAssetIds = computed(() => new Set(Object.values(selectedByTab).flat()));
+const allSelectableSelected = computed(
+  () => selectableUserAssets.value.length > 0 && selectableUserAssets.value.every((item) => selectedAssetIds.value.has(item.user.id)),
+);
+const someSelectableSelected = computed(
+  () => selectableUserAssets.value.some((item) => selectedAssetIds.value.has(item.user.id)) && !allSelectableSelected.value,
+);
 const selectedIds = computed({
   get: () => selectedByTab[activeTab.value],
   set: (value: string[]) => {
     selectedByTab[activeTab.value] = Array.from(new Set(value));
   },
 });
-const selectedAssets = computed(() => items.value.filter((item) => selectedByTab[activeTab.value].includes(item.id)));
+const selectedAssets = computed(() => items.value.filter((item) => selectedAssetIds.value.has(item.id)));
 const caOptions = computed(() => caAssets.value.map((item) => ({ title: item.name, value: item.id })));
-const allVisibleSelected = computed(
-  () => visibleAssets.value.length > 0 && visibleAssets.value.every((item) => selectedIds.value.includes(item.id)),
-);
 const exportAssets = computed(() => {
   const included = new Map<string, KeyAssetSummaryDto>();
   for (const item of selectedAssets.value) {
@@ -289,12 +301,27 @@ function toggleSelection(assetId: string, checked: boolean | null) {
   selectedIds.value = selectedIds.value.filter((id) => id !== assetId);
 }
 
-function toggleSelectAll(checked: boolean | null) {
-  if (checked) {
-    selectedIds.value = visibleAssets.value.map((item) => item.id);
+function toggleSelectionFor(type: AssetTab, assetId: string, checked: boolean | null) {
+  activeTab.value = type;
+  const current = selectedByTab[type];
+  selectedByTab[type] = checked ? Array.from(new Set([...current, assetId])) : current.filter((id) => id !== assetId);
+}
+
+function toggleSelectAllAssets(checked: boolean | null) {
+  if (!checked) {
+    selectedByTab.ca = [];
+    selectedByTab.tls = [];
+    selectedByTab.ssh = [];
     return;
   }
-  selectedIds.value = [];
+  selectedByTab.ca = caAssets.value.map((item) => item.id);
+  selectedByTab.tls = tlsAssets.value.map((item) => item.id);
+  selectedByTab.ssh = sshAssets.value.map((item) => item.id);
+}
+
+function selectAsset(item: SelectorAsset) {
+  selectedAssetKey.value = item.key;
+  activeTab.value = item.type;
 }
 
 function openEditor(kind: AssetTab, importMode = false) {
@@ -309,54 +336,18 @@ function openEditor(kind: AssetTab, importMode = false) {
 async function load() {
   loading.value = true;
   try {
-    const [userAssets, builtInCertificates] = await Promise.all([
-      keyAssetsApi.list(),
-      props.mode === 'certificates' ? keyAssetsApi.listSystemCertificates() : Promise.resolve([]),
-    ]);
+    const userAssets = await keyAssetsApi.list();
     items.value = userAssets;
-    systemCertificates.value = builtInCertificates;
+    const availableKeys = new Set([
+      ...userAssets.filter((item) => props.mode === 'keys' ? item.type === 'ssh_key_pair' : item.type !== 'ssh_key_pair').map((item) => `user:${item.id}`),
+    ]);
+    if (!availableKeys.has(selectedAssetKey.value)) selectedAssetKey.value = availableKeys.values().next().value ?? '';
     error.value = '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('keyAssetsPage.loadFailed');
   } finally {
     loading.value = false;
   }
-}
-
-function systemCertificateStatus(item: SystemCertificateDto) {
-  if (item.status === 'valid' || item.status === 'compatible') return t('keyAssetsPage.systemStatusValid');
-  if (item.status === 'expired') return t('keyAssetsPage.systemStatusExpired');
-  if (item.status === 'not_yet_valid') return t('keyAssetsPage.systemStatusNotYetValid');
-  if (item.status === 'incompatible') return t('keyAssetsPage.systemStatusIncompatible');
-  if (item.status === 'unavailable') return t('keyAssetsPage.systemStatusUnavailable');
-  return t('common.unknown');
-}
-
-function systemCertificateName(item: SystemCertificateDto) {
-  if (item.id === 'agent-ca') return t('keyAssetsPage.agentCaName');
-  if (item.id === 'agent-panel-client') return t('keyAssetsPage.agentClientName');
-  if (item.serverName) return t('keyAssetsPage.agentServerName', { name: item.serverName });
-  return item.name;
-}
-
-function triggerSystemReset(item: SystemCertificateDto) {
-  openConfirm(
-    {
-      title: t('keyAssetsPage.systemResetTitle'),
-      message: item.id === 'agent-ca'
-        ? t('keyAssetsPage.systemResetCaMessage')
-        : t('keyAssetsPage.systemResetMessage', { name: systemCertificateName(item) }),
-      confirmLabel: t('keyAssetsPage.systemReset'),
-      color: 'error',
-      acknowledgeRequired: true,
-    },
-    async () => {
-      const result = await keyAssetsApi.resetSystemCertificate(item.id);
-      lastTaskId.value = result.taskId;
-      await load();
-      showMessage(t('keyAssetsPage.systemResetQueued'), 'info');
-    },
-  );
 }
 
 async function afterMutation(taskId?: string, successText = t('keyAssetsPage.operationQueued'), preserveExportTask = false) {
@@ -672,339 +663,91 @@ onMounted(load);
 <template>
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <v-card variant="outlined" class="mb-4">
-      <div class="app-card-header">
-        <div class="min-width-0">
-          <div class="text-h6">{{ pageTitle }}</div>
-          <div class="text-body-2 text-medium-emphasis">{{ pageSubtitle }}</div>
-        </div>
-        <div class="toolbar-actions">
-          <v-btn
-            color="primary"
-            prepend-icon="mdi-shield-plus-outline"
-            class="text-none"
-            @click="openEditor(activeTab, false)"
-          >
-            {{
-              activeTab === 'ca'
-                ? t('keyAssetsPage.createCa')
-                : activeTab === 'tls'
-                  ? t('keyAssetsPage.createTls')
-                  : t('keyAssetsPage.generateSsh')
-            }}
-          </v-btn>
-          <v-btn variant="outlined" prepend-icon="mdi-import" class="text-none" @click="openEditor(activeTab, true)">
-            {{ t('keyAssetsPage.importAsset') }}
-          </v-btn>
-          <v-btn variant="outlined" prepend-icon="mdi-archive-arrow-up-outline" class="text-none" @click="openArchiveDialog">
-            {{ t('keyAssetsPage.importArchive') }}
-          </v-btn>
-          <v-btn
-            variant="outlined"
-            prepend-icon="mdi-archive-arrow-down-outline"
-            class="text-none"
-            :disabled="selectedAssets.length === 0"
-            @click="openExportDialog"
-          >
-            {{ t('keyAssetsPage.exportSelected') }}
-          </v-btn>
-        </div>
-      </div>
-      <v-alert type="info" variant="tonal" class="mx-4 mb-4">
-        {{ t('keyAssetsPage.privateKeysHiddenHint') }}
-      </v-alert>
-    </v-card>
+    <div class="asset-workspace">
+      <AppSelectorPanel
+        :title="selectorTitle"
+        :loading="loading"
+        :empty="selectorAssets.length === 0"
+        :empty-icon="props.mode === 'keys' ? 'mdi-key-outline' : 'mdi-certificate-outline'"
+        :empty-text="t('keyAssetsPage.noAssets')"
+      >
+        <template #leading>
+          <v-checkbox-btn
+            :model-value="allSelectableSelected"
+            :indeterminate="someSelectableSelected"
+            :aria-label="t('keyAssetsPage.selectionSummary', { count: selectedAssets.length })"
+            @update:model-value="toggleSelectAllAssets"
+          />
+        </template>
+        <template #subtitle>
+          <div class="asset-selector-summary">
+            <span class="text-caption text-medium-emphasis">{{ t('keyAssetsPage.selectionSummary', { count: selectedAssets.length }) }}</span>
+          </div>
+        </template>
+        <template #actions>
+          <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="activeTab === 'ca' ? t('keyAssetsPage.createCa') : activeTab === 'tls' ? t('keyAssetsPage.createTls') : t('keyAssetsPage.generateSsh')" @click="openEditor(activeTab, false)" />
+          <v-menu location="bottom end">
+            <template #activator="{ props: menuProps }">
+              <v-btn v-bind="menuProps" icon="mdi-dots-vertical" variant="text" size="small" :aria-label="t('common.more')" />
+            </template>
+            <v-list density="compact">
+              <v-list-item prepend-icon="mdi-import" :title="t('keyAssetsPage.importAsset')" @click="openEditor(activeTab, true)" />
+              <v-list-item prepend-icon="mdi-archive-arrow-up-outline" :title="t('keyAssetsPage.importArchive')" @click="openArchiveDialog" />
+              <v-list-item prepend-icon="mdi-archive-arrow-down-outline" :title="t('keyAssetsPage.exportSelected')" :disabled="selectedAssets.length === 0" @click="openExportDialog" />
+            </v-list>
+          </v-menu>
+        </template>
+        <AppSelectorItem v-for="item in selectorAssets" :key="item.key" as="div" :selected="item.key === selectedAssetKey" @select="selectAsset(item)">
+          <span class="asset-selector-content min-width-0">
+            <v-checkbox-btn
+              class="asset-selector-checkbox"
+              :model-value="selectedByTab[item.type].includes(item.user.id)"
+              @click.stop
+              @update:model-value="toggleSelectionFor(item.type, item.user.id, $event)"
+            />
+            <span class="asset-selector-main min-width-0">
+              <span class="asset-selector-title text-truncate">{{ item.user.name }}</span>
+              <span class="asset-selector-meta text-truncate">{{ item.user.commonName || item.user.fingerprint }}</span>
+            </span>
+          </span>
+          <span class="asset-selector-tail">
+            <v-chip size="x-small" variant="tonal">{{ assetTypeLabel(item.user.type) }}</v-chip>
+          </span>
+        </AppSelectorItem>
+      </AppSelectorPanel>
 
-    <v-card v-if="props.mode === 'certificates'" variant="outlined" class="system-certificates-card">
-      <div class="app-card-header">
-        <div>
-          <div class="text-h6">{{ t('keyAssetsPage.systemCertificates') }}</div>
-          <div class="text-body-2 text-medium-emphasis">{{ t('keyAssetsPage.systemCertificatesHint') }}</div>
-        </div>
-      </div>
-      <div class="table-pane system-certificates-table">
-        <v-table density="comfortable">
-          <thead>
-            <tr>
-              <th>{{ t('common.name') }}</th>
-              <th>{{ t('common.type') }}</th>
-              <th>{{ t('keyAssetsPage.commonName') }}</th>
-              <th>{{ t('common.fingerprint') }}</th>
-              <th>{{ t('common.status') }}</th>
-              <th>{{ t('common.validUntil') }}</th>
-              <th class="text-right">{{ t('common.actions') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="systemCertificates.length === 0">
-              <td colspan="7" class="text-center py-8 text-medium-emphasis">{{ t('keyAssetsPage.noSystemCertificates') }}</td>
-            </tr>
-            <tr v-for="certificate in systemCertificates" :key="certificate.id">
-              <td>
-                <div class="d-flex align-center ga-2">
-                  <span class="font-weight-medium">{{ systemCertificateName(certificate) }}</span>
-                  <v-chip size="x-small" color="info" variant="tonal">{{ t('keyAssetsPage.systemBuiltIn') }}</v-chip>
-                </div>
-                <div v-if="certificate.serverName" class="text-caption text-medium-emphasis">{{ certificate.serverName }}</div>
-              </td>
-              <td>{{ assetTypeLabel(certificate.type) }}</td>
-              <td>{{ certificate.commonName || t('common.notAvailable') }}</td>
-              <td class="mono">{{ certificate.fingerprint || t('common.notAvailable') }}</td>
-              <td>{{ systemCertificateStatus(certificate) }}</td>
-              <td>{{ formatOptionalDate(certificate.notAfter) }}</td>
-              <td class="text-right">
-                <v-btn
-                  size="small"
-                  color="warning"
-                  variant="outlined"
-                  class="text-none"
-                  :disabled="!certificate.canReset"
-                  @click="triggerSystemReset(certificate)"
-                >
-                  {{ t('keyAssetsPage.systemReset') }}
-                </v-btn>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </div>
-    </v-card>
-
-    <v-card variant="outlined" class="table-card">
-      <v-tabs v-model="activeTab" density="comfortable" class="px-4">
-        <v-tab v-if="props.mode === 'certificates'" value="ca">{{ t('keyAssetsPage.tabs.ca') }}</v-tab>
-        <v-tab v-if="props.mode === 'certificates'" value="tls">{{ t('keyAssetsPage.tabs.tls') }}</v-tab>
-        <v-tab v-if="props.mode === 'keys'" value="ssh">{{ t('keyAssetsPage.tabs.ssh') }}</v-tab>
-      </v-tabs>
-      <div class="selection-bar">
-        <div class="text-body-2 text-medium-emphasis">
-          {{ t('keyAssetsPage.selectionSummary', { count: selectedAssets.length }) }}
-        </div>
-        <v-btn
-          v-if="lastExportTaskId"
-          size="small"
-          variant="text"
-          prepend-icon="mdi-download"
-          class="text-none"
-          :loading="busy === 'download-export'"
-          @click="downloadExportArchive"
-        >
-          {{ t('keyAssetsPage.downloadArchive') }}
-        </v-btn>
-      </div>
-      <PageLoadingState v-if="loading && items.length === 0" min-height="360px" />
-      <v-window v-else v-model="activeTab" class="table-window">
-        <v-window-item v-if="props.mode === 'certificates'" value="ca" class="table-pane">
-          <v-table density="comfortable">
-            <thead>
-              <tr>
-                <th class="checkbox-col">
-                  <v-checkbox-btn :model-value="allVisibleSelected" @update:model-value="toggleSelectAll" />
-                </th>
-                <th>{{ t('common.name') }}</th>
-                <th>{{ t('keyAssetsPage.commonName') }}</th>
-                <th>{{ t('common.algorithm') }}</th>
-                <th>{{ t('common.fingerprint') }}</th>
-                <th>{{ t('keyAssetsPage.children') }}</th>
-                <th>{{ t('keyAssetsPage.references') }}</th>
-                <th>{{ t('common.validUntil') }}</th>
-                <th class="text-right">{{ t('common.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="caAssets.length === 0">
-                <td colspan="9" class="text-center py-8 text-medium-emphasis">{{ t('keyAssetsPage.noAssets') }}</td>
-              </tr>
-              <tr v-for="asset in caAssets" :key="asset.id">
-                <td class="checkbox-col">
-                  <v-checkbox-btn :model-value="selectedIds.includes(asset.id)" @update:model-value="toggleSelection(asset.id, $event)" />
-                </td>
-                <td>
-                  <div class="d-flex align-center ga-2">
-                    <span class="font-weight-medium">{{ asset.name }}</span>
-                    <v-chip size="x-small" variant="tonal">{{ t('keyAssetsPage.userDomain') }}</v-chip>
-                  </div>
-                  <div class="text-caption text-medium-emphasis mono">{{ asset.id }}</div>
-                </td>
-                <td>{{ asset.commonName || t('common.notAvailable') }}</td>
-                <td>{{ asset.algorithm || t('common.notAvailable') }}</td>
-                <td class="mono">{{ asset.fingerprint }}</td>
-                <td>{{ asset.childCount }}</td>
-                <td class="cell-wrap">{{ referenceText(asset) }}</td>
-                <td>{{ formatOptionalDate(asset.notAfter) }}</td>
-                <td class="text-right">
-                  <div class="row-actions">
-                    <v-menu>
-                      <template #activator="{ props }">
-                        <v-btn v-bind="props" size="small" variant="outlined" prepend-icon="mdi-download" class="text-none">
-                          {{ t('common.download') }}
-                        </v-btn>
-                      </template>
-                      <v-list density="compact">
-                        <v-list-item
-                          v-for="kind in asset.downloadKinds"
-                          :key="kind"
-                          :title="fileKindLabel(kind)"
-                          @click="downloadAssetFile(asset, kind)"
-                        />
-                      </v-list>
-                    </v-menu>
-                    <v-btn size="small" color="error" variant="outlined" class="text-none" @click="triggerDelete(asset)">
-                      {{ t('common.delete') }}
-                    </v-btn>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
-        </v-window-item>
-
-        <v-window-item v-if="props.mode === 'certificates'" value="tls" class="table-pane">
-          <v-table density="comfortable">
-            <thead>
-              <tr>
-                <th class="checkbox-col">
-                  <v-checkbox-btn :model-value="allVisibleSelected" @update:model-value="toggleSelectAll" />
-                </th>
-                <th>{{ t('common.name') }}</th>
-                <th>{{ t('keyAssetsPage.parentCa') }}</th>
-                <th>{{ t('keyAssetsPage.commonName') }}</th>
-                <th>{{ t('keyAssetsPage.dnsNames') }}</th>
-                <th>{{ t('common.fingerprint') }}</th>
-                <th>{{ t('keyAssetsPage.references') }}</th>
-                <th>{{ t('common.validUntil') }}</th>
-                <th class="text-right">{{ t('common.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="tlsAssets.length === 0">
-                <td colspan="9" class="text-center py-8 text-medium-emphasis">{{ t('keyAssetsPage.noAssets') }}</td>
-              </tr>
-              <tr v-for="asset in tlsAssets" :key="asset.id">
-                <td class="checkbox-col">
-                  <v-checkbox-btn :model-value="selectedIds.includes(asset.id)" @update:model-value="toggleSelection(asset.id, $event)" />
-                </td>
-                <td>
-                  <div class="d-flex align-center ga-2">
-                    <span class="font-weight-medium">{{ asset.name }}</span>
-                    <v-chip size="x-small" variant="tonal">{{ t('keyAssetsPage.userDomain') }}</v-chip>
-                  </div>
-                  <div v-if="!asset.parentAssetId" class="text-caption text-warning">{{ t('keyAssetsPage.standaloneTls') }}</div>
-                </td>
-                <td class="mono">{{ asset.parentAssetId || t('common.notAvailable') }}</td>
-                <td>{{ asset.commonName || t('common.notAvailable') }}</td>
-                <td class="cell-wrap">{{ asset.dnsNames.join(', ') || t('common.notAvailable') }}</td>
-                <td class="mono">{{ asset.fingerprint }}</td>
-                <td class="cell-wrap">{{ referenceText(asset) }}</td>
-                <td>{{ formatOptionalDate(asset.notAfter) }}</td>
-                <td class="text-right">
-                  <div class="row-actions">
-                    <v-menu>
-                      <template #activator="{ props }">
-                        <v-btn v-bind="props" size="small" variant="outlined" prepend-icon="mdi-download" class="text-none">
-                          {{ t('common.download') }}
-                        </v-btn>
-                      </template>
-                      <v-list density="compact">
-                        <v-list-item
-                          v-for="kind in asset.downloadKinds"
-                          :key="kind"
-                          :title="fileKindLabel(kind)"
-                          @click="downloadAssetFile(asset, kind)"
-                        />
-                      </v-list>
-                    </v-menu>
-                    <v-btn
-                      size="small"
-                      variant="outlined"
-                      class="text-none"
-                      :disabled="!asset.canReissue"
-                      @click="triggerReissue(asset)"
-                    >
-                      {{ t('keyAssetsPage.reissue') }}
-                    </v-btn>
-                    <v-btn size="small" color="error" variant="outlined" class="text-none" @click="triggerDelete(asset)">
-                      {{ t('common.delete') }}
-                    </v-btn>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
-        </v-window-item>
-
-        <v-window-item v-if="props.mode === 'keys'" value="ssh" class="table-pane">
-          <v-table density="comfortable">
-            <thead>
-              <tr>
-                <th class="checkbox-col">
-                  <v-checkbox-btn :model-value="allVisibleSelected" @update:model-value="toggleSelectAll" />
-                </th>
-                <th>{{ t('common.name') }}</th>
-                <th>{{ t('common.algorithm') }}</th>
-                <th>{{ t('keyAssetsPage.keySize') }}</th>
-                <th>{{ t('common.fingerprint') }}</th>
-                <th>{{ t('keyAssetsPage.references') }}</th>
-                <th>{{ t('common.updatedAt') }}</th>
-                <th class="text-right">{{ t('common.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="sshAssets.length === 0">
-                <td colspan="8" class="text-center py-8 text-medium-emphasis">{{ t('keyAssetsPage.noAssets') }}</td>
-              </tr>
-              <tr v-for="asset in sshAssets" :key="asset.id">
-                <td class="checkbox-col">
-                  <v-checkbox-btn :model-value="selectedIds.includes(asset.id)" @update:model-value="toggleSelection(asset.id, $event)" />
-                </td>
-                <td>
-                  <div class="d-flex align-center ga-2">
-                    <span>{{ asset.name }}</span>
-                    <v-chip size="x-small" variant="tonal">{{ t('keyAssetsPage.userDomain') }}</v-chip>
-                  </div>
-                </td>
-                <td>{{ asset.algorithm || t('common.notAvailable') }}</td>
-                <td>{{ asset.keySize || t('common.notAvailable') }}</td>
-                <td class="mono">{{ asset.fingerprint }}</td>
-                <td class="cell-wrap">{{ referenceText(asset) }}</td>
-                <td>{{ formatOptionalDate(asset.updatedAt) }}</td>
-                <td class="text-right">
-                  <div class="row-actions">
-                    <v-menu>
-                      <template #activator="{ props }">
-                        <v-btn v-bind="props" size="small" variant="outlined" prepend-icon="mdi-download" class="text-none">
-                          {{ t('common.download') }}
-                        </v-btn>
-                      </template>
-                      <v-list density="compact">
-                        <v-list-item
-                          v-for="kind in asset.downloadKinds"
-                          :key="kind"
-                          :title="fileKindLabel(kind)"
-                          @click="downloadAssetFile(asset, kind)"
-                        />
-                      </v-list>
-                    </v-menu>
-                    <v-btn
-                      size="small"
-                      variant="outlined"
-                      class="text-none"
-                      :disabled="!asset.canRegenerate"
-                      @click="triggerRegenerate(asset)"
-                    >
-                      {{ t('keyAssetsPage.regenerate') }}
-                    </v-btn>
-                    <v-btn size="small" color="error" variant="outlined" class="text-none" @click="triggerDelete(asset)">
-                      {{ t('common.delete') }}
-                    </v-btn>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
-        </v-window-item>
-      </v-window>
-    </v-card>
+      <v-card variant="outlined" class="asset-detail-card">
+        <PageLoadingState v-if="loading && !selectedAsset" min-height="300px" />
+        <template v-else-if="selectedAsset">
+          <div class="asset-detail-header">
+            <div class="min-width-0">
+              <div class="text-h6 font-weight-bold text-truncate">{{ selectedAsset.user.name }}</div>
+              <div class="text-body-2 text-medium-emphasis">{{ assetTypeLabel(selectedAsset.user.type) }}</div>
+            </div>
+            <div class="row-actions">
+              <v-menu>
+                <template #activator="{ props: menuProps }"><v-btn v-bind="menuProps" size="small" variant="outlined" prepend-icon="mdi-download">{{ t('common.download') }}</v-btn></template>
+                <v-list density="compact"><v-list-item v-for="kind in selectedAsset.user.downloadKinds" :key="kind" :title="fileKindLabel(kind)" @click="downloadAssetFile(selectedAsset.user, kind)" /></v-list>
+              </v-menu>
+              <v-btn v-if="selectedAsset.user.type === 'tls_certificate'" size="small" variant="outlined" :disabled="!selectedAsset.user.canReissue" @click="triggerReissue(selectedAsset.user)">{{ t('keyAssetsPage.reissue') }}</v-btn>
+              <v-btn v-if="selectedAsset.user.type === 'ssh_key_pair'" size="small" variant="outlined" :disabled="!selectedAsset.user.canRegenerate" @click="triggerRegenerate(selectedAsset.user)">{{ t('keyAssetsPage.regenerate') }}</v-btn>
+              <v-btn size="small" color="error" variant="outlined" @click="triggerDelete(selectedAsset.user)">{{ t('common.delete') }}</v-btn>
+            </div>
+          </div>
+          <div class="asset-detail-body">
+            <div class="asset-detail-grid">
+              <div><span>{{ t('keyAssetsPage.commonName') }}</span><strong>{{ selectedAsset.user.commonName || t('common.notAvailable') }}</strong></div>
+              <div><span>{{ t('common.fingerprint') }}</span><strong class="mono">{{ selectedAsset.user.fingerprint }}</strong></div>
+              <div><span>{{ t('common.algorithm') }}</span><strong>{{ selectedAsset.user.algorithm || t('common.notAvailable') }}</strong></div>
+              <div><span>{{ t('common.validUntil') }}</span><strong>{{ formatOptionalDate(selectedAsset.user.notAfter) }}</strong></div>
+              <div><span>{{ t('keyAssetsPage.references') }}</span><strong>{{ referenceText(selectedAsset.user) }}</strong></div>
+              <div v-if="selectedAsset.user.type === 'tls_certificate'"><span>{{ t('keyAssetsPage.dnsNames') }}</span><strong>{{ selectedAsset.user.dnsNames.join(', ') || t('common.notAvailable') }}</strong></div>
+            </div>
+          </div>
+        </template>
+        <div v-else class="asset-empty-detail text-medium-emphasis">{{ t('keyAssetsPage.noAssets') }}</div>
+      </v-card>
+    </div>
 
     <v-dialog v-model="editorDialog" max-width="760">
       <v-card class="app-dialog-card">
@@ -1295,50 +1038,67 @@ onMounted(load);
 </template>
 
 <style scoped>
-.toolbar-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  justify-content: flex-end;
+.asset-workspace {
+  display: grid;
+  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
+  flex: 1 1 auto;
+  gap: 18px;
+  min-height: 0;
 }
 
-.selection-bar {
+.asset-detail-card {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.asset-detail-header {
+  display: flex;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 12px;
-  padding: 14px 16px 0;
+  gap: 14px;
+  padding: 16px;
+  border-bottom: 1px solid var(--lp-border);
 }
 
-.table-card {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
+.asset-detail-body {
   min-height: 0;
-  overflow: hidden;
+  padding: 16px;
+  overflow: auto;
 }
 
-.system-certificates-card {
-  display: flex;
-  flex: 0 1 360px;
-  flex-direction: column;
-  min-height: 180px;
-  overflow: hidden;
+.asset-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
-.system-certificates-table {
-  flex: 1 1 auto;
+.asset-detail-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
 }
 
-.table-window {
-  flex: 1 1 auto;
-  min-height: 0;
+.asset-detail-grid span,
+.asset-selector-meta {
+  color: var(--lp-text-muted);
+  font-size: 0.76rem;
 }
 
-.table-window :deep(.v-window__container),
-.table-window :deep(.v-window-item) {
-  min-height: 0;
-}
+.asset-detail-grid strong { overflow-wrap: anywhere; font-size: 0.88rem; }
+.asset-selector-summary { min-height: 20px; }
+.asset-selector-content { display: flex; align-items: center; gap: 8px; margin-left: -6px; }
+.asset-selector-checkbox { flex: 0 0 auto; }
+.asset-selector-main, .asset-selector-title, .asset-selector-meta { display: block; min-width: 0; }
+.asset-selector-title { font-size: 0.9rem; font-weight: 700; }
+.asset-selector-meta { margin-top: 2px; }
+.asset-selector-tail { display: flex; align-items: center; gap: 4px; }
+.asset-empty-detail { display: grid; flex: 1 1 auto; place-items: center; min-height: 220px; padding: 32px; }
 
 .table-pane {
   min-height: 0;
@@ -1430,7 +1190,11 @@ onMounted(load);
   white-space: pre-wrap;
 }
 
-@media (max-width: 960px) {
+@media (max-width: 1080px) {
+  .asset-workspace {
+    grid-template-columns: 1fr;
+  }
+
   .archive-inputs,
   .summary-grid {
     grid-template-columns: 1fr;
@@ -1438,30 +1202,13 @@ onMounted(load);
 }
 
 @media (max-width: 720px) {
-  .table-card,
-  .system-certificates-card,
-  .table-window {
-    flex: none;
-    min-height: auto;
-  }
-
-  .table-card {
-    overflow: visible;
-  }
-
-  .system-certificates-card {
-    overflow: visible;
-  }
-
+  .asset-workspace { flex: none; }
+  .asset-detail-card, .asset-detail-body { overflow: visible; }
+  .asset-detail-header { align-items: stretch; flex-direction: column; }
+  .asset-detail-grid { grid-template-columns: 1fr; }
   .table-pane {
     overflow-x: auto;
     overflow-y: visible;
-  }
-
-  .toolbar-actions,
-  .selection-bar {
-    align-items: stretch;
-    flex-direction: column;
   }
 
   .row-actions {

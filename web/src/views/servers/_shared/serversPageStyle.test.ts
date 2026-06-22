@@ -34,7 +34,6 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).toContain('agentStatusForServer');
     expect(serversPage).toContain('serversApi.deployAgent');
     expect(serversPage).toContain('agentDeployActionLabel');
-    expect(serversPage).toContain("t('serversPage.agentReady')");
     expect(serversPage).toContain("t('serversPage.agentUndeployable')");
     expect(serversPage).toContain("t('serversPage.installAgent')");
     expect(serversPage).toContain("t('serversPage.reinstallAgent')");
@@ -51,9 +50,9 @@ describe('ServersPage shell style alignment', () => {
     expect(serversPage).not.toContain('agent-error-tip');
   });
 
-  it('keeps the server list focused on reachability and agent runtime status', () => {
-    expect(serversPage).toContain('agentStatusForServer(server)');
-    expect(serversPage).not.toContain(`<span class="status-dot" :class="server.reachable ? 'success' : 'warning'" />`);
+  it('uses the same server selector row as server-based feature pages', () => {
+    expect(serversPage).toContain('<ServerSelectorItem');
+    expect(serversPage).toContain(':server="server"');
   });
 
   it('loads servers and credentials without a runtime control-plane projection', () => {

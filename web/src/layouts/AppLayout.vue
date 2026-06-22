@@ -1,13 +1,20 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { useDisplay, useTheme } from 'vuetify';
+import { useDisplay } from 'vuetify';
 import { useAuthStore } from '@/stores/auth';
 import { tasksApi } from '@/api/tasks';
 import { systemApi } from '@/api/system';
 import type { SystemVersionDto, TaskDto } from '@/types/api';
 import { useI18n } from '@/i18n';
-import { markThemeChanging } from '@/theme';
+import {
+  PANEL_THEME_PRESETS,
+  PANEL_THEME_PRESET_NAMES,
+  type PanelThemeMode,
+  type PanelThemeName,
+  type PanelThemePreset,
+  usePanelThemePreferences,
+} from '@/theme';
 
 interface NavItem {
   to?: string;
@@ -27,14 +34,29 @@ interface NavGroup {
 const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
-const theme = useTheme();
 const display = useDisplay();
 const { t, translateTaskStage, translateTaskStatus, translateTaskType } = useI18n();
+const {
+  preferences: themePreferences,
+  setMode: setThemeMode,
+  setSharedPreset,
+  setPreset,
+  resetPresets,
+} = usePanelThemePreferences();
 
-const isDark = computed(() => theme.global.current.value.dark);
 const isCompactLayout = computed(() => display.mdAndDown.value);
 const pageTitle = computed(() => t(String(route.meta.titleKey || 'app.name')));
 const drawerOpen = ref(true);
+const themeModeOptions = computed(() => [
+  { value: 'system' as const, label: t('layout.theme.system'), icon: 'mdi-theme-light-dark' },
+  { value: 'light' as const, label: t('layout.theme.light'), icon: 'mdi-weather-sunny' },
+  { value: 'dark' as const, label: t('layout.theme.dark'), icon: 'mdi-weather-night' },
+]);
+const themeButtonIcon = computed(() => themeModeOptions.value.find((item) => item.value === themePreferences.mode)?.icon ?? 'mdi-palette-outline');
+const themePresetOptions = computed(() => PANEL_THEME_PRESET_NAMES.map((value) => ({
+  value,
+  label: t(`layout.theme.presets.${value}`),
+})));
 const navGroups = computed<NavGroup[]>(() => [
   {
     key: 'overview',
@@ -49,6 +71,18 @@ const navGroups = computed<NavGroup[]>(() => [
       { to: '/credentials', title: t('layout.nav.credentials'), value: 'credentials' },
       { to: '/servers/firewall', title: t('layout.nav.firewall'), value: 'server-firewall' },
       { to: '/servers/packages', title: t('layout.nav.systemPackages'), value: 'system-packages' },
+    ],
+  },
+  {
+    key: 'containerization',
+    icon: 'mdi-docker',
+    title: t('layout.nav.containerization'),
+    items: [
+      { to: '/containerization/applications', title: t('layout.nav.applications'), value: 'applications' },
+      { to: '/containerization/containers', title: t('layout.nav.containers'), value: 'containers' },
+      { to: '/containerization/images', title: t('layout.nav.images'), value: 'images' },
+      { to: '/containerization/networks', title: t('layout.nav.networks'), value: 'networks' },
+      { to: '/containerization/volumes', title: t('layout.nav.volumes'), value: 'volumes' },
     ],
   },
   {
@@ -70,18 +104,6 @@ const navGroups = computed<NavGroup[]>(() => [
     ],
   },
   {
-    key: 'containerization',
-    icon: 'mdi-docker',
-    title: t('layout.nav.containerization'),
-    items: [
-      { to: '/containerization/applications', title: t('layout.nav.applications'), value: 'applications' },
-      { to: '/containerization/containers', title: t('layout.nav.containers'), value: 'containers' },
-      { to: '/containerization/images', title: t('layout.nav.images'), value: 'images' },
-      { to: '/containerization/networks', title: t('layout.nav.networks'), value: 'networks' },
-      { to: '/containerization/volumes', title: t('layout.nav.volumes'), value: 'volumes' },
-    ],
-  },
-  {
     key: 'tasks',
     items: [{ to: '/tasks', icon: 'mdi-clipboard-list', title: t('layout.nav.taskCenter'), value: 'tasks' }],
   },
@@ -93,15 +115,23 @@ const navGroups = computed<NavGroup[]>(() => [
       { to: '/settings/general', title: t('layout.nav.settingsGeneral'), value: 'settings-general' },
       { to: '/settings/security', title: t('layout.nav.settingsSecurity'), value: 'settings-security' },
       { to: '/settings/certificates', title: t('layout.nav.settingsCertificates'), value: 'settings-certificates' },
+      { to: '/settings/system-certificates', title: t('layout.nav.settingsSystemCertificates'), value: 'settings-system-certificates' },
       { to: '/settings/system', title: t('layout.nav.settingsSystem'), value: 'settings-system' },
     ],
   },
 ]);
 
-function toggleTheme() {
-  const nextTheme = theme.global.current.value.dark ? 'light' : 'dark';
-  markThemeChanging();
-  theme.global.name.value = nextTheme;
+function updateThemeMode(value: PanelThemeMode | null) {
+  if (value) setThemeMode(value);
+}
+
+function presetPreviewStyle(preset: PanelThemePreset, mode: PanelThemeName) {
+  const colors = PANEL_THEME_PRESETS[preset][mode];
+  return {
+    '--preset-primary': colors.primary,
+    '--preset-on-primary': colors.onPrimary,
+    '--preset-surface-variant': colors.surfaceVariant,
+  };
 }
 
 watch(isCompactLayout, (compact) => {
@@ -256,16 +286,149 @@ onBeforeUnmount(() => {
             </v-chip>
 
             <div class="header-utility-strip">
-              <v-btn icon size="small" variant="text" class="utility-btn" :aria-label="isDark ? t('layout.theme.toLight') : t('layout.theme.toDark')" @click="toggleTheme">
-                <v-icon>{{ isDark ? 'mdi-weather-sunny' : 'mdi-weather-night' }}</v-icon>
-              </v-btn>
-              <div class="user-pill">
-                <v-icon size="16">mdi-account-circle-outline</v-icon>
-                <span v-if="auth.username" class="user-name">{{ auth.username }}</span>
-              </div>
-              <v-btn variant="outlined" size="small" prepend-icon="mdi-logout" class="text-none logout-btn" @click="logout">
-                {{ t('layout.logout') }}
-              </v-btn>
+              <v-menu location="bottom end" :close-on-content-click="false">
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    icon
+                    size="small"
+                    variant="text"
+                    class="utility-btn"
+                    :aria-label="t('layout.theme.open')"
+                  >
+                    <v-icon>{{ themeButtonIcon }}</v-icon>
+                  </v-btn>
+                </template>
+                <v-card class="theme-menu-card" elevation="8">
+                  <v-card-title class="theme-menu-title">
+                    <v-icon size="18">mdi-palette-outline</v-icon>
+                    {{ t('layout.theme.title') }}
+                  </v-card-title>
+                  <v-card-text class="theme-menu-content">
+                    <div class="theme-field-label">{{ t('layout.theme.mode') }}</div>
+                    <v-btn-toggle
+                      :model-value="themePreferences.mode"
+                      mandatory
+                      divided
+                      density="compact"
+                      variant="outlined"
+                      class="theme-mode-toggle"
+                      @update:model-value="updateThemeMode"
+                    >
+                      <v-btn
+                        v-for="option in themeModeOptions"
+                        :key="option.value"
+                        :value="option.value"
+                        :prepend-icon="option.icon"
+                        size="small"
+                        class="text-none"
+                      >
+                        {{ option.label }}
+                      </v-btn>
+                    </v-btn-toggle>
+                    <div v-if="themePreferences.mode === 'system'" class="theme-mode-hint">
+                      {{ t('layout.theme.systemHint') }}
+                    </div>
+
+                    <v-divider />
+
+                    <v-switch
+                      :model-value="themePreferences.sharedPreset"
+                      :label="t('layout.theme.sharedPreset')"
+                      color="primary"
+                      density="compact"
+                      hide-details
+                      @update:model-value="setSharedPreset(Boolean($event))"
+                    />
+
+                    <div v-if="themePreferences.sharedPreset" class="theme-preset-section">
+                      <div class="theme-field-label">{{ t('layout.theme.preset') }}</div>
+                      <div class="theme-preset-grid">
+                        <button
+                          v-for="option in themePresetOptions"
+                          :key="option.value"
+                          type="button"
+                          class="theme-preset-option"
+                          :class="{ 'theme-preset-option--active': themePreferences.preset === option.value }"
+                          :aria-pressed="themePreferences.preset === option.value"
+                          @click="setPreset('shared', option.value)"
+                        >
+                          <span class="theme-preset-preview theme-preset-preview--split">
+                            <span class="theme-preset-half" :style="presetPreviewStyle(option.value, 'light')">
+                              <span class="theme-preset-primary-dot"><v-icon size="11">mdi-check</v-icon></span>
+                            </span>
+                            <span class="theme-preset-half" :style="presetPreviewStyle(option.value, 'dark')">
+                              <span class="theme-preset-primary-dot"><v-icon size="11">mdi-check</v-icon></span>
+                            </span>
+                          </span>
+                          <span>{{ option.label }}</span>
+                          <v-icon v-if="themePreferences.preset === option.value" size="15" color="primary">mdi-check-circle</v-icon>
+                        </button>
+                      </div>
+                    </div>
+                    <div v-else class="theme-preset-sections">
+                      <div
+                        v-for="mode in (['light', 'dark'] as const)"
+                        :key="mode"
+                        class="theme-preset-section"
+                      >
+                        <div class="theme-field-label">
+                          {{ mode === 'light' ? t('layout.theme.lightPreset') : t('layout.theme.darkPreset') }}
+                        </div>
+                        <div class="theme-preset-grid">
+                          <button
+                            v-for="option in themePresetOptions"
+                            :key="option.value"
+                            type="button"
+                            class="theme-preset-option"
+                            :class="{ 'theme-preset-option--active': themePreferences[`${mode}Preset`] === option.value }"
+                            :aria-pressed="themePreferences[`${mode}Preset`] === option.value"
+                            @click="setPreset(mode, option.value)"
+                          >
+                            <span class="theme-preset-preview" :style="presetPreviewStyle(option.value, mode)">
+                              <span class="theme-preset-primary-dot"><v-icon size="11">mdi-check</v-icon></span>
+                            </span>
+                            <span>{{ option.label }}</span>
+                            <v-icon v-if="themePreferences[`${mode}Preset`] === option.value" size="15" color="primary">mdi-check-circle</v-icon>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <v-btn
+                      variant="text"
+                      size="small"
+                      prepend-icon="mdi-restore"
+                      class="text-none align-self-start"
+                      @click="resetPresets"
+                    >
+                      {{ t('layout.theme.resetPreset') }}
+                    </v-btn>
+                  </v-card-text>
+                </v-card>
+              </v-menu>
+
+              <v-menu location="bottom end">
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    icon
+                    size="small"
+                    variant="text"
+                    class="utility-btn"
+                    :aria-label="t('layout.userMenu.open')"
+                  >
+                    <v-icon>mdi-account-circle-outline</v-icon>
+                  </v-btn>
+                </template>
+                <v-list density="compact" min-width="220">
+                  <v-list-item prepend-icon="mdi-account-circle-outline">
+                    <v-list-item-title class="user-menu-name">{{ auth.username || t('layout.userMenu.unknownUser') }}</v-list-item-title>
+                  </v-list-item>
+                  <v-divider class="my-1" />
+                  <v-list-item prepend-icon="mdi-logout" :title="t('layout.logout')" @click="logout" />
+                </v-list>
+              </v-menu>
             </div>
           </div>
         </header>
@@ -354,21 +517,6 @@ onBeforeUnmount(() => {
 
 .utility-btn {
   color: var(--lp-text-muted);
-}
-
-.user-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  min-height: 36px;
-  padding: 0 4px;
-  color: var(--lp-text-muted);
-}
-
-.logout-btn {
-  min-width: 88px;
-  box-shadow: none !important;
 }
 
 :deep(.v-main) {
@@ -468,16 +616,6 @@ onBeforeUnmount(() => {
 .task-stage {
   margin-left: 8px;
   color: var(--lp-text-muted);
-}
-
-.user-name {
-  color: var(--lp-text);
-  font-size: 0.86rem;
-  font-weight: 650;
-  max-width: 120px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .main-content > :last-child {
@@ -593,27 +731,158 @@ onBeforeUnmount(() => {
     overflow: hidden;
   }
 
-  .user-pill {
-    min-height: 36px;
-    padding: 0;
+}
+</style>
+
+<style>
+.theme-menu-card {
+  width: min(440px, calc(100vw - 24px));
+  border: 1px solid var(--lp-border);
+  border-radius: var(--lp-radius-md) !important;
+}
+
+.theme-menu-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 16px 10px;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.theme-menu-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 8px 16px 14px !important;
+}
+
+.theme-field-label {
+  color: var(--lp-text-muted);
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.theme-mode-toggle {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  width: 100%;
+}
+
+.theme-mode-toggle .v-btn {
+  min-width: 0 !important;
+  padding-inline: 8px !important;
+}
+
+.theme-mode-hint {
+  margin-top: -6px;
+  color: var(--lp-text-muted);
+  font-size: 0.76rem;
+  line-height: 1.4;
+}
+
+.theme-preset-sections,
+.theme-preset-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.theme-preset-sections {
+  gap: 14px;
+}
+
+.theme-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.theme-preset-option {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 5px 8px;
+  border: 1px solid var(--lp-border);
+  border-radius: var(--lp-radius-sm);
+  background: var(--lp-surface);
+  color: var(--lp-text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-align: left;
+  transition: border-color 160ms ease, background-color 160ms ease, box-shadow 160ms ease;
+}
+
+.theme-preset-option:hover {
+  border-color: rgba(var(--v-theme-primary), 0.45);
+  background: rgba(var(--v-theme-primary), 0.04);
+}
+
+.theme-preset-option:focus-visible {
+  outline: 2px solid rgba(var(--v-theme-primary), 0.6);
+  outline-offset: 2px;
+}
+
+.theme-preset-option--active {
+  border-color: rgb(var(--v-theme-primary));
+  background: rgba(var(--v-theme-primary), 0.07);
+  box-shadow: 0 0 0 1px rgba(var(--v-theme-primary), 0.12);
+}
+
+.theme-preset-preview {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 30px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.12);
+  border-radius: 7px;
+  background: var(--preset-surface-variant);
+}
+
+.theme-preset-preview--split {
+  align-items: stretch;
+  justify-content: stretch;
+}
+
+.theme-preset-half {
+  display: flex;
+  flex: 1 1 50%;
+  align-items: center;
+  justify-content: center;
+  background: var(--preset-surface-variant);
+}
+
+.theme-preset-primary-dot {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 99px;
+  background: var(--preset-primary);
+  color: var(--preset-on-primary);
+}
+
+.user-menu-name {
+  max-width: 220px;
+  overflow: hidden;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 420px) {
+  .theme-mode-toggle {
+    grid-template-columns: 1fr;
   }
 
-  .user-name {
-    display: none;
-  }
-
-  .logout-btn {
-    min-width: 36px;
-    width: 36px;
-    padding-inline: 0;
-  }
-
-  .logout-btn :deep(.v-btn__content) {
-    display: none;
-  }
-
-  .logout-btn :deep(.v-btn__prepend) {
-    margin: 0;
+  .theme-preset-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

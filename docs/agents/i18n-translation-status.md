@@ -4,6 +4,14 @@
 
 ## 最近已补齐
 
+- `web/src/views/runtime/applications/index.vue`
+  - 应用选择器中“运行中 · 有更新”状态已接入英文和简体中文词条。
+- `web/src/layouts/AppLayout.vue`、`web/src/theme.ts`
+  - 页头主题菜单的自动/浅色/深色模式、明暗共用或独立预设、蓝绿红橘紫粉黄预设名称、恢复默认主题，以及账户菜单的用户名与退出入口已接入英文和简体中文词条。
+- `web/src/views/runtime/applications/ApplicationDetail.vue`
+  - 应用详情统一为基本信息、镜像和运行实例分区，新增“基本信息”英文与简体中文标题。
+- `web/src/views/settings/system-certificates/index.vue`、`web/src/layouts/AppLayout.vue`
+  - 新增“设置 → 系统证书”导航与路由标题，复用系统证书状态、详情和重置确认的英文与简体中文词条。
 - `web/src/views/runtime/applications/ApplicationDetail.vue`
   - 应用详情镜像更新闭环新增节点级状态、更新节点数量、检查失败和更新镜像按钮文案，已接入英文与简体中文词条；镜像仓库或 Docker 原始诊断继续保留原文。
 - `web/src/views/servers/packages/index.vue`、`web/src/views/servers/firewall/index.vue`、`internal/platform/i18n`
@@ -37,6 +45,7 @@
   - Command 和 args 数组行标签、提示已接入英文、简体中文词条。
 - `web/src/views/tasks/index.vue`
   - 任务类型名称、类型筛选选项、搜索按钮、多选筛选占位、操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。
+  - 操作选择列表的服务器、应用、证书、密钥资产、任务批次和系统任务资源类别已接入英文与简体中文词条；对象缺少可解析名称时不显示裸资源 ID。
   - 手动运行与重试入口由任务 API 返回的注册能力控制，不再按任务类型维护前端白名单；本次未新增需要翻译的任务操作文案。
   - ACME 账号、订单、授权、DNS 验证、DNS 清理和 finalize 任务阶段已接入英文与简体中文词条；ACME/Cloudflare 原始诊断仍保留原文。
   - 容器、镜像、卷、应用协调、Agent 证书重置和常见执行阶段已补齐英文与简体中文词条，避免任务中心显示原始枚举名。

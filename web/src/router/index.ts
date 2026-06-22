@@ -23,6 +23,7 @@ import SettingsGeneralPage from '@/views/settings/general/index.vue';
 import SettingsSecurityPage from '@/views/settings/security/index.vue';
 import SettingsCertificatesPage from '@/views/settings/certificates/index.vue';
 import SettingsSystemPage from '@/views/settings/system/index.vue';
+import SettingsSystemCertificatesPage from '@/views/settings/system-certificates/index.vue';
 import DebugPage from '@/views/debug/index.vue';
 
 export const router = createRouter({
@@ -56,6 +57,7 @@ export const router = createRouter({
         { path: 'settings/general', name: 'settings-general', component: SettingsGeneralPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },
         { path: 'settings/security', name: 'settings-security', component: SettingsSecurityPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
         { path: 'settings/certificates', name: 'settings-certificates', component: SettingsCertificatesPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
+        { path: 'settings/system-certificates', name: 'settings-system-certificates', component: SettingsSystemCertificatesPage, meta: { titleKey: 'routes.settingsSystemCertificates.title' } },
         { path: 'settings/system', name: 'settings-system', component: SettingsSystemPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
         { path: 'debug', name: 'debug', component: DebugPage, meta: { titleKey: 'routes.debug.title' } },
       ],

@@ -4,8 +4,8 @@ import { useI18n } from '@/i18n';
 import { certificatesApi } from '@/api/certificates';
 import { dnsApi } from '@/api/dns';
 import type { CertificateDto, CertificateIssueInput, CertificateScope, DnsDomainDto } from '@/types/api';
-import AppPagination from '@/components/AppPagination.vue';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 
 const certificates = ref<CertificateDto[]>([]);
@@ -18,6 +18,7 @@ const deleteDialog = ref(false);
 const deleting = ref(false);
 const deletingCertificate = ref<CertificateDto | null>(null);
 const renewingId = ref('');
+const selectedCertificateId = ref('');
 const snackbar = ref(false);
 const snackbarText = ref('');
 const snackbarColor = ref('success');
@@ -44,6 +45,7 @@ const {
   total,
   pageItems: pagedCertificates,
 } = usePagination(certificates);
+const selectedCertificate = computed(() => certificates.value.find((item) => item.id === selectedCertificateId.value) ?? null);
 
 const previewDomains = computed(() => {
   const base = domains.value.find((domain) => domain.id === form.domainId)?.name;
@@ -74,6 +76,9 @@ async function load() {
     const [certificateRows, domainRows] = await Promise.all([certificatesApi.list(), dnsApi.listDomains()]);
     certificates.value = certificateRows;
     domains.value = domainRows;
+    if (!certificateRows.some((item) => item.id === selectedCertificateId.value)) {
+      selectedCertificateId.value = certificateRows[0]?.id ?? '';
+    }
     error.value = '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('certificatesPage.loadFailed');
@@ -160,60 +165,57 @@ onMounted(load);
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <v-card variant="outlined" class="table-card">
-      <div class="app-card-header">
-        <v-btn color="primary" prepend-icon="mdi-certificate" class="text-none font-weight-bold action-btn" @click="resetForm">
-          {{ t('certificatesPage.issueCertificate') }}
-        </v-btn>
-      </div>
-      <PageLoadingState v-if="loading && certificates.length === 0" min-height="300px" />
-      <div v-else class="table-scroll">
-        <v-table class="text-left" style="background: transparent;">
-          <thead>
-            <tr>
-              <th class="font-weight-bold">{{ t('common.name') }}</th>
-              <th class="font-weight-bold">{{ t('certificatesPage.domains') }}</th>
-              <th class="font-weight-bold">{{ t('common.status') }}</th>
-              <th class="font-weight-bold">{{ t('certificatesPage.variable') }}</th>
-              <th class="font-weight-bold">{{ t('certificatesPage.renewal') }}</th>
-              <th class="font-weight-bold text-right" style="width: 140px;">{{ t('common.actions') }}</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-if="certificates.length === 0">
-              <td colspan="6" class="text-center py-6 text-medium-emphasis">{{ t('certificatesPage.noCertificates') }}</td>
-            </tr>
-            <tr v-for="row in pagedCertificates" :key="row.id">
-              <td class="font-weight-bold">
-                <div>{{ row.name }}</div>
-                <div class="text-caption text-medium-emphasis">{{ row.prefix }} / {{ row.issuer || 'acme' }}</div>
-              </td>
-              <td>
-                <div class="d-flex flex-wrap" style="gap: 4px;">
-                  <v-chip v-for="domain in row.domains" :key="domain" size="small" label variant="tonal">
-                    {{ domain }}
-                  </v-chip>
-                </div>
-              </td>
-              <td>
-                <v-chip :color="statusColor(row.status)" size="small" label variant="tonal">{{ statusLabel(row.status) }}</v-chip>
-                <div v-if="row.lastError" class="text-caption text-error mt-1">{{ row.lastError }}</div>
-              </td>
-              <td class="font-mono">certs.{{ row.variableName }}</td>
-              <td>
-                <div>{{ formatDate(row.notAfter) }}</div>
-                <div class="text-caption text-medium-emphasis">{{ t('certificatesPage.nextRenewal', { value: formatDate(row.nextRenewAt) }) }}</div>
-              </td>
-              <td class="text-right">
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-autorenew" class="mr-2" :loading="renewingId === row.id" :disabled="row.status !== 'issued'" @click="renewCertificate(row)">{{ t('certificatesPage.renewNow') }}</v-btn>
-                <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteCertificate(row)">{{ t('common.delete') }}</v-btn>
-              </td>
-            </tr>
-          </tbody>
-        </v-table>
-      </div>
-      <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
-    </v-card>
+    <div class="certificate-workspace">
+      <AppSelectorPanel
+        :title="t('routes.domainCertificates.title')"
+        :loading="loading"
+        :empty="certificates.length === 0"
+        empty-icon="mdi-certificate-outline"
+        :empty-text="t('certificatesPage.noCertificates')"
+        :page="page"
+        :page-size="pageSize"
+        :total="total"
+        @update:page="page = $event"
+        @update:page-size="pageSize = $event"
+      >
+        <template #actions>
+          <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="t('certificatesPage.issueCertificate')" @click="resetForm" />
+        </template>
+        <AppSelectorItem v-for="row in pagedCertificates" :key="row.id" :selected="row.id === selectedCertificateId" @select="selectedCertificateId = row.id">
+          <span class="selector-copy min-width-0">
+            <span class="selector-name text-truncate">{{ row.name }}</span>
+            <span class="selector-meta text-truncate">{{ row.domains.join(', ') }}</span>
+          </span>
+          <v-chip :color="statusColor(row.status)" size="x-small" label variant="tonal">{{ statusLabel(row.status) }}</v-chip>
+        </AppSelectorItem>
+      </AppSelectorPanel>
+
+      <v-card variant="outlined" class="certificate-detail">
+        <template v-if="selectedCertificate">
+          <div class="detail-header">
+            <div class="min-width-0">
+              <div class="text-h6 font-weight-bold text-truncate">{{ selectedCertificate.name }}</div>
+              <div class="text-body-2 text-medium-emphasis">{{ selectedCertificate.prefix }} / {{ selectedCertificate.issuer || 'acme' }}</div>
+            </div>
+            <div class="detail-actions">
+              <v-chip :color="statusColor(selectedCertificate.status)" size="small" label variant="tonal">{{ statusLabel(selectedCertificate.status) }}</v-chip>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-autorenew" :loading="renewingId === selectedCertificate.id" :disabled="selectedCertificate.status !== 'issued'" @click="renewCertificate(selectedCertificate)">{{ t('certificatesPage.renewNow') }}</v-btn>
+              <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteCertificate(selectedCertificate)">{{ t('common.delete') }}</v-btn>
+            </div>
+          </div>
+          <div class="detail-body">
+            <div class="detail-grid">
+              <div><span>{{ t('certificatesPage.domains') }}</span><strong>{{ selectedCertificate.domains.join(', ') }}</strong></div>
+              <div><span>{{ t('certificatesPage.variable') }}</span><strong class="font-mono">certs.{{ selectedCertificate.variableName }}</strong></div>
+              <div><span>{{ t('common.validUntil') }}</span><strong>{{ formatDate(selectedCertificate.notAfter) }}</strong></div>
+              <div><span>{{ t('certificatesPage.renewal') }}</span><strong>{{ t('certificatesPage.nextRenewal', { value: formatDate(selectedCertificate.nextRenewAt) }) }}</strong></div>
+            </div>
+            <v-alert v-if="selectedCertificate.lastError" type="error" variant="tonal" density="compact">{{ selectedCertificate.lastError }}</v-alert>
+          </div>
+        </template>
+        <div v-else class="empty-detail text-medium-emphasis">{{ t('certificatesPage.noCertificates') }}</div>
+      </v-card>
+    </div>
 
     <v-dialog v-model="dialog" width="620">
       <v-card class="app-dialog-card">
@@ -308,19 +310,19 @@ onMounted(load);
   gap: 8px;
 }
 
-.table-card {
-  display: flex;
-  flex: 1 1 auto;
-  flex-direction: column;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.table-scroll {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
+.certificate-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); flex: 1 1 auto; gap: 18px; min-height: 0; }
+.certificate-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
+.detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px; border-bottom: 1px solid var(--lp-border); }
+.detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.detail-body { display: grid; gap: 16px; align-content: start; min-height: 0; padding: 16px; overflow: auto; }
+.detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.detail-grid > div { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
+.detail-grid span, .selector-meta { color: var(--lp-text-muted); font-size: 0.76rem; }
+.detail-grid strong { overflow-wrap: anywhere; font-size: 0.88rem; }
+.selector-copy, .selector-name, .selector-meta { display: block; min-width: 0; }
+.selector-name { font-size: 0.9rem; font-weight: 700; }
+.selector-meta { margin-top: 2px; }
+.empty-detail { display: grid; flex: 1 1 auto; place-items: center; min-height: 220px; padding: 32px; }
 
 .preview {
   border: 1px solid var(--lp-border);
@@ -328,17 +330,16 @@ onMounted(load);
   background: color-mix(in srgb, var(--lp-surface-muted), transparent 36%);
 }
 
-@media (max-width: 720px) {
-  .table-card {
-    flex: none;
-    overflow: visible;
-  }
+@media (max-width: 1080px) {
+  .certificate-workspace { grid-template-columns: 1fr; }
+}
 
-  .table-scroll {
-    flex: none;
-    overflow-x: auto;
-    overflow-y: visible;
-  }
+@media (max-width: 720px) {
+  .certificate-workspace { flex: none; }
+  .certificate-detail, .detail-body { overflow: visible; }
+  .detail-header { align-items: stretch; flex-direction: column; }
+  .detail-actions { justify-content: flex-start; }
+  .detail-grid { grid-template-columns: 1fr; }
 
   .cert-domain-grid {
     grid-template-columns: 1fr;

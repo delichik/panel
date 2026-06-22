@@ -84,12 +84,14 @@ async function loadSelectedLogs(tail: number) {
           <td><v-chip size="small" variant="tonal" :color="item.state === 'running' ? 'success' : 'default'">{{ item.status || item.state }}</v-chip></td>
           <td><v-chip v-if="item.managed" size="small" color="primary" variant="tonal">{{ t('containerization.applicationManaged') }}</v-chip><span v-else>{{ t('common.no') }}</span></td>
           <td>{{ formatDateTime(new Date(item.created * 1000).toISOString()) }}</td>
-          <td class="app-table-actions">
-            <v-btn size="small" icon="mdi-text-box-search-outline" variant="text" :title="t('containerization.viewLogs')" @click="openLogs(item)" />
-            <v-btn v-if="item.state !== 'running'" size="small" variant="outlined" @click="ask(item, 'start')">{{ t('containerization.start') }}</v-btn>
-            <v-btn v-if="item.state === 'running'" size="small" variant="outlined" @click="ask(item, 'stop')">{{ t('containerization.stop') }}</v-btn>
-            <v-btn v-if="item.state === 'running'" size="small" variant="outlined" @click="ask(item, 'restart')">{{ t('containerization.restart') }}</v-btn>
-            <v-btn size="small" color="error" variant="outlined" @click="ask(item, 'delete')">{{ t('common.delete') }}</v-btn>
+          <td class="text-right">
+            <div class="app-table-actions">
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-text-box-search-outline" @click="openLogs(item)">{{ t('containerization.viewLogs') }}</v-btn>
+              <v-btn v-if="item.state !== 'running'" size="small" variant="outlined" @click="ask(item, 'start')">{{ t('containerization.start') }}</v-btn>
+              <v-btn v-if="item.state === 'running'" size="small" variant="outlined" @click="ask(item, 'stop')">{{ t('containerization.stop') }}</v-btn>
+              <v-btn v-if="item.state === 'running'" size="small" variant="outlined" @click="ask(item, 'restart')">{{ t('containerization.restart') }}</v-btn>
+              <v-btn size="small" color="error" variant="outlined" @click="ask(item, 'delete')">{{ t('common.delete') }}</v-btn>
+            </div>
           </td>
         </tr>
       </tbody>

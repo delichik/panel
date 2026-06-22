@@ -4,8 +4,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
-import AppPagination from '@/components/AppPagination.vue';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import ApplicationDetail from './ApplicationDetail.vue';
 import ApplicationEditor from './ApplicationEditor.vue';
@@ -26,9 +26,6 @@ const deletingApplication = ref<ApplicationDto | null>(null);
 const { formatDateTime, t, translateRuntimeStatus } = useI18n();
 
 const selectedApplication = computed(() => applications.value.find((app) => app.id === selectedId.value) ?? null);
-const totalCount = computed(() => applications.value.length);
-const enabledCount = computed(() => applications.value.filter((app) => app.enabled).length);
-const attentionCount = computed(() => applications.value.filter((app) => ['failed', 'pending', 'unknown'].includes(runtimeStatus(app)) || app.lastError).length);
 const {
   page,
   pageSize,
@@ -55,17 +52,14 @@ function runtimeStatus(app: ApplicationDto) {
   return app.runtimeStatus || (app.enabled ? 'pending' : 'stopped');
 }
 
-function imageStatusColor(app: ApplicationDto) {
-  if (app.imageLastError) return 'error';
-  if (app.imageUpdateAvailable) return 'warning';
-  if (app.imageDigest) return 'success';
-  return 'grey';
+function selectorStatusColor(app: ApplicationDto) {
+  if (runtimeStatus(app) === 'running' && app.imageUpdateAvailable) return 'warning';
+  return statusColor(runtimeStatus(app));
 }
 
-function imageStatusLabel(app: ApplicationDto) {
-  if (app.imageUpdateAvailable) return t('applicationDetail.updateAvailable');
-  if (app.imageDigest) return t('applicationDetail.tracked');
-  return t('applicationDetail.notChecked');
+function selectorStatusLabel(app: ApplicationDto) {
+  if (runtimeStatus(app) === 'running' && app.imageUpdateAvailable) return t('applicationsPage.runningWithUpdate');
+  return translateRuntimeStatus(runtimeStatus(app));
 }
 
 async function load() {
@@ -165,81 +159,59 @@ onMounted(load);
       </div>
     </v-alert>
 
-    <PageLoadingState v-if="loading && applications.length === 0" min-height="340px" />
-
-    <template v-else>
-    <div class="summary-strip">
-      <v-card variant="outlined" class="summary-card">
-        <div class="summary-icon surface-primary"><v-icon size="18">mdi-apps</v-icon></div>
-        <div><div class="text-caption text-medium-emphasis">{{ t('applicationsPage.applications') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ totalCount }}</div></div>
-      </v-card>
-      <v-card variant="outlined" class="summary-card">
-        <div class="summary-icon surface-success"><v-icon size="18">mdi-toggle-switch-outline</v-icon></div>
-        <div><div class="text-caption text-medium-emphasis">{{ t('common.enabled') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ enabledCount }}</div></div>
-      </v-card>
-      <v-card variant="outlined" class="summary-card">
-        <div class="summary-icon surface-warning"><v-icon size="18">mdi-alert-circle-outline</v-icon></div>
-        <div><div class="text-caption text-medium-emphasis">{{ t('applicationsPage.needsAttention') }}</div><div class="text-h5 font-weight-bold font-tabular">{{ attentionCount }}</div></div>
-      </v-card>
-    </div>
-
     <div class="applications-workspace">
-      <v-card variant="outlined" :loading="loading" class="application-list">
-        <div class="list-header">
-          <div class="list-header-main">
-            <v-btn prepend-icon="mdi-plus" color="primary" variant="flat" class="text-none font-weight-bold action-btn" @click="createApplication">{{ t('applicationsPage.create') }}</v-btn>
-            <div class="text-subtitle-1 font-weight-bold">{{ t('applicationsPage.desiredState') }}</div>
-          </div>
-          <v-chip size="small" variant="tonal" color="primary" label class="font-tabular">{{ t('common.total', { count: totalCount }) }}</v-chip>
-        </div>
-        <div class="application-table-wrap">
-          <v-table class="text-left application-table">
-            <thead>
-              <tr>
-                <th>{{ t('serversPage.name') }}</th><th>{{ t('common.enabled') }}</th><th>{{ t('applicationsPage.runtime') }}</th><th>{{ t('applicationDetail.imageUpdate') }}</th><th>{{ t('common.updatedAt') }}</th><th class="text-right">{{ t('common.actions') }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-if="applications.length === 0"><td colspan="6" class="text-center py-8 text-medium-emphasis">{{ t('applicationsPage.noApplications') }}</td></tr>
-              <tr v-for="app in pagedApplications" :key="app.id" class="application-row cursor-pointer" :class="{ selected: selectedId === app.id }" @click="selectedId = app.id">
-                <td>
-                  <div class="name-line">
-                    <span class="status-dot" :class="statusColor(runtimeStatus(app))" />
-                    <div class="min-width-0">
-                      <div class="font-weight-bold text-truncate">{{ app.name }}</div>
-                      <div class="text-caption text-medium-emphasis text-truncate">{{ app.id }}</div>
-                    </div>
-                  </div>
-                </td>
-                <td><v-chip :color="app.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ app.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip></td>
-                <td><v-chip :color="statusColor(runtimeStatus(app))" size="small" variant="tonal" label>{{ translateRuntimeStatus(runtimeStatus(app)) }}</v-chip></td>
-                <td><v-chip :color="imageStatusColor(app)" size="small" variant="tonal" label>{{ imageStatusLabel(app) }}</v-chip></td>
-                <td class="text-truncate">{{ formatDateTime(app.updatedAt) }}</td>
-                <td class="text-right">
-                  <div class="row-actions">
-                    <v-btn size="small" icon="mdi-pencil" variant="text" @click.stop="editApplication(app)" />
-                    <v-btn size="small" icon="mdi-upload" variant="text" :loading="actionLoading === `deploy:${app.id}`" @click.stop="runAction('deploy', app)" />
-                    <v-btn size="small" icon="mdi-stop-circle-outline" variant="text" :disabled="!app.enabled" :loading="actionLoading === `stop:${app.id}`" @click.stop="runAction('stop', app)" />
-                    <v-btn size="small" icon="mdi-restart" variant="text" :disabled="!app.enabled" :loading="actionLoading === `restart:${app.id}`" @click.stop="runAction('restart', app)" />
-                    <v-btn size="small" icon="mdi-delete" color="error" variant="text" :disabled="app.enabled" :loading="actionLoading === `delete:${app.id}`" @click.stop="askDelete(app)" />
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </v-table>
-        </div>
-        <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
-      </v-card>
+      <AppSelectorPanel
+        class="application-list"
+        :title="t('applicationsPage.applications')"
+        :loading="loading"
+        :empty="applications.length === 0"
+        empty-icon="mdi-application-brackets-outline"
+        :empty-text="t('applicationsPage.noApplications')"
+        :page="page"
+        :page-size="pageSize"
+        :total="total"
+        @update:page="page = $event"
+        @update:page-size="pageSize = $event"
+      >
+        <template #actions>
+          <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="t('applicationsPage.create')" @click="createApplication" />
+        </template>
+        <AppSelectorItem v-for="app in pagedApplications" :key="app.id" :selected="selectedId === app.id" @select="selectedId = app.id">
+          <span class="application-selector-main min-width-0">
+            <span class="status-dot" :class="statusColor(runtimeStatus(app))" />
+            <span class="application-selector-copy min-width-0">
+              <span class="application-selector-name text-truncate">{{ app.name }}</span>
+              <span class="application-selector-meta text-truncate">{{ formatDateTime(app.updatedAt) }}</span>
+            </span>
+          </span>
+          <v-chip :color="selectorStatusColor(app)" size="x-small" variant="tonal" label>{{ selectorStatusLabel(app) }}</v-chip>
+        </AppSelectorItem>
+      </AppSelectorPanel>
 
       <div class="detail-column">
-        <ApplicationDetail v-if="selectedApplication" :application="selectedApplication" @changed="replaceApplication" />
+        <ApplicationDetail v-if="selectedApplication" :application="selectedApplication" @changed="replaceApplication">
+          <template #actions>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="editApplication(selectedApplication)">{{ t('common.edit') }}</v-btn>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-upload" :loading="actionLoading === `deploy:${selectedApplication.id}`" @click="runAction('deploy', selectedApplication)">{{ t('common.deploy') }}</v-btn>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-stop-circle-outline" :disabled="!selectedApplication.enabled" :loading="actionLoading === `stop:${selectedApplication.id}`" @click="runAction('stop', selectedApplication)">{{ t('common.stop') }}</v-btn>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-restart" :disabled="!selectedApplication.enabled" :loading="actionLoading === `restart:${selectedApplication.id}`" @click="runAction('restart', selectedApplication)">{{ t('common.restart') }}</v-btn>
+          </template>
+          <template #more-actions>
+            <v-list-item
+              prepend-icon="mdi-delete"
+              :title="t('common.delete')"
+              class="text-error"
+              :disabled="selectedApplication.enabled"
+              @click="askDelete(selectedApplication)"
+            />
+          </template>
+        </ApplicationDetail>
         <v-card v-else variant="outlined" class="empty-detail">
           <v-icon size="28" color="medium-emphasis">mdi-application-brackets-outline</v-icon>
           <div class="text-body-2 text-medium-emphasis">{{ t('applicationsPage.emptyHint') }}</div>
         </v-card>
       </div>
     </div>
-    </template>
 
     <ApplicationEditor :application="editingApplication" :open="editorOpen" @close="editorOpen = false" @saved="handleSaved" />
 
@@ -272,22 +244,13 @@ onMounted(load);
 </template>
 
 <style scoped>
-.summary-strip { max-width: 720px; }
-.applications-workspace { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(360px, 0.85fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
+.applications-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
 .application-list, .detail-column { min-width: 0; min-height: 0; }
-.application-list { display: flex; flex-direction: column; overflow: hidden; }
-.list-header-main { display: grid; gap: 10px; justify-items: start; }
-.application-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; }
-.application-table { background: transparent; }
-.application-table :deep(td) { height: 58px; border-bottom-color: rgba(var(--v-border-color), 0.06); vertical-align: middle; }
-.cursor-pointer { cursor: pointer; }
-.application-row { transition-property: background-color; transition-duration: 160ms; transition-timing-function: ease; }
-.application-row:hover { background: rgba(var(--v-theme-on-surface), 0.025); }
-.application-row.selected { background: rgba(var(--v-theme-primary), 0.06); }
-.name-line { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.application-selector-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.application-selector-copy, .application-selector-name, .application-selector-meta { display: block; min-width: 0; }
+.application-selector-name { font-size: 0.9rem; font-weight: 700; }
+.application-selector-meta { margin-top: 2px; color: var(--lp-text-muted); font-size: 0.76rem; }
 .min-width-0 { min-width: 0; }
-.row-actions { display: flex; justify-content: flex-end; gap: 2px; }
-.row-actions :deep(.v-btn) { min-width: 40px; min-height: 40px; }
 .task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .status-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 999px; background: rgb(var(--v-theme-info)); box-shadow: 0 0 0 4px rgba(var(--v-theme-info), 0.12); }
 .status-dot.success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12); }
@@ -297,10 +260,7 @@ onMounted(load);
 @media (max-width: 1080px) { .applications-workspace { grid-template-columns: 1fr; overflow: auto; } }
 @media (min-width: 761px) { .detail-column { overflow: auto; } }
 @media (max-width: 760px) {
-  .summary-strip { max-width: none; }
   .applications-workspace { flex: none; min-height: auto; overflow: visible; }
-  .application-list { overflow: visible; }
-  .application-table-wrap { flex: none; overflow-x: auto; overflow-y: visible; }
   .detail-column { overflow: visible; }
 }
 </style>

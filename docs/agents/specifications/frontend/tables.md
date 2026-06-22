@@ -42,6 +42,7 @@
 
 - 靠右排列。
 - `6px` 间距并允许换行。
+- 类应放在表格单元格内的操作组容器上，外层 `td` 保持标准 table-cell 布局和垂直居中。
 - 常规编辑、删除使用 `size="small" variant="outlined"`。
 - 操作较多时使用 `v-menu` 收纳次要动作。
 - 只有图标的行操作必须提供 `title` 或 `aria-label`。
