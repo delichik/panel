@@ -88,7 +88,7 @@
 - 应用重启是可重放应用任务，`application_restart` 由应用模块注册 executor、`run-now` 和 `retry` 能力；executor 复用现有 runtime restart 流程并完成传入任务。
 - 应用刷新是可重放应用任务，`application_refresh` 由应用模块注册 executor、`run-now` 和 `retry` 能力；批量刷新和任务 executor 共用单应用刷新准备逻辑，只对启用且渲染 hash 变化的应用重新部署，任务 executor 在无变化时也会完成传入任务。
 - 应用镜像更新是可重放应用任务，`application_image_update` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 更新入口和任务 executor 共用镜像解析、digest 状态写入、revision 记录和 runtime redeploy 准备逻辑。
-- 新部署 Application 容器名使用 `panel-<application-name>`；停止、重启、状态和日志操作必须使用 `application_instances.container_name`，以兼容旧版本按实例 ID 生成的容器名。agent 必须声明 `runtime-write-files`、`runtime-create-container` 和 `runtime-container-name` capability 才能被视为兼容；旧 `runtime-deploy` 胖接口不再使用。
+- 新部署 Application 容器名使用 `panel-<application-name>`；停止、重启、状态和日志操作必须使用 `application_instances.container_name`，以兼容旧版本按实例 ID 生成的容器名。agent 必须与 Panel 构建版本完全一致才能被视为兼容；旧 `runtime-deploy` 胖接口不再使用。
 
 ## 验证
 

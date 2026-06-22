@@ -4,8 +4,6 @@ import (
 	"context"
 	"crypto/x509"
 	"errors"
-	"fmt"
-	"net"
 	"strings"
 	"time"
 
@@ -23,17 +21,8 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
 		return err
 	}
-	missing := missingAgentCapabilities(health.Capabilities)
-	if len(missing) > 0 {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, "agent missing capabilities: "+strings.Join(missing, ", "))
-		return nil
-	}
-	if strings.TrimSpace(health.ContractHash) != agentcontract.CurrentHash() {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, "agent contract hash does not match panel")
-		return nil
-	}
-	if strings.TrimSpace(health.Docker.Host) != "" && strings.TrimSpace(health.Docker.Host) != normalizeDockerHost(srv.DockerHost) {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, fmt.Sprintf("agent docker host %s does not match server configuration %s", health.Docker.Host, normalizeDockerHost(srv.DockerHost)))
+	if strings.TrimSpace(health.Version) != agentcontract.Version {
+		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, agentVersionMismatchMessage(health.Version))
 		return nil
 	}
 	if health.Docker.Status != "ok" {
@@ -119,14 +108,12 @@ func agentStatusNeedsDeploy(srv Server) bool {
 	return srv.Traits[agentcontract.TraitStatus] == agentcontract.StatusIncompatible
 }
 
-func agentUsesLegacyDefaultPort(srv Server) bool {
-	value, ok := agentURL(srv)
-	if !ok {
-		return false
+func agentVersionMismatchMessage(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = "unknown"
 	}
-	endpoint := strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(value), "https://"), "http://")
-	_, port, err := net.SplitHostPort(endpoint)
-	return err == nil && port == "9443"
+	return "agent version " + version + " does not match panel " + agentcontract.Version
 }
 
 func isAgentCertificateTimeError(err error) bool {

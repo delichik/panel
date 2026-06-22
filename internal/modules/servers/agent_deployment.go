@@ -80,11 +80,6 @@ func (s *Service) CheckConfiguredAgent(ctx context.Context, srv Server) {
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
 	}
-	if agentUsesLegacyDefaultPort(srv) {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", "agent uses legacy port 9443; redeployment required")
-		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
-		return
-	}
 	if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
 		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", msg)
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
@@ -192,12 +187,6 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 
 func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now time.Time) (bool, error) {
 	if _, ok := agentURL(srv); !ok {
-		return true, nil
-	}
-	if agentUsesLegacyDefaultPort(srv) {
-		if err := s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", "agent uses legacy port 9443; redeployment required"); err != nil {
-			return false, err
-		}
 		return true, nil
 	}
 	if expired, msg := agentCertificateRenewalProblem(srv, now); expired {

@@ -591,14 +591,13 @@ func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 	}
 }
 
-func TestCheckConfiguredAgentsMarksIncompatibleContract(t *testing.T) {
+func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	health := agentHealth("0.9.0")
-	health.ContractHash = "different-contract-hash"
 	svc.SetAgentClient(&serverFakeAgentClient{health: health})
 
 	svc.CheckConfiguredAgents(context.Background())
@@ -606,25 +605,29 @@ func TestCheckConfiguredAgentsMarksIncompatibleContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusIncompatible || srv.Traits[agentcontract.TraitVersion] != "0.9.0" || !strings.Contains(srv.Traits[agentcontract.TraitLastError], "agent contract hash") {
+	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusIncompatible || srv.Traits[agentcontract.TraitVersion] != "0.9.0" || !strings.Contains(srv.Traits[agentcontract.TraitLastError], "agent version 0.9.0 does not match panel") {
 		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
 	}
 }
 
-func TestCheckConfiguredAgentsMarksCompatibleWithDifferentPanelVersion(t *testing.T) {
+func TestCheckConfiguredAgentsMarksCompatibleWhenVersionMatches(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth("v0.0.1")})
+	health := agentHealth(agentcontract.Version)
+	health.Capabilities = nil
+	health.ContractHash = "different-contract-hash"
+	health.Docker.Host = "unix:///var/run/other.sock"
+	svc.SetAgentClient(&serverFakeAgentClient{health: health})
 
 	svc.CheckConfiguredAgents(context.Background())
 	srv, err := svc.Get(context.Background(), "srv_agent")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible || srv.Traits[agentcontract.TraitVersion] != "v0.0.1" {
+	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible || srv.Traits[agentcontract.TraitVersion] != agentcontract.Version || srv.Traits[agentcontract.TraitLastError] != "" {
 		t.Fatalf("unexpected agent compatibility traits: %#v", srv.Traits)
 	}
 }
@@ -676,18 +679,12 @@ func TestSynchronousConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 	}
 }
 
-func TestCheckConfiguredAgentsDeploysLegacyDefaultPort(t *testing.T) {
-	_, taskSvc, store := testServerService(t, nil)
+func TestCheckConfiguredAgentsDoesNotDeployLegacyDefaultPort(t *testing.T) {
+	svc, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible","sys.architecture":"x86_64"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
 	}
-	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
-	svc.SetAgentTLSAssets(assets)
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
 
 	svc.CheckConfiguredAgents(context.Background())
@@ -695,8 +692,15 @@ func TestCheckConfiguredAgentsDeploysLegacyDefaultPort(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
-		t.Fatalf("expected legacy 9443 agent to be redeployed on the default port, got %#v", result.Items)
+	if result.Total != 0 {
+		t.Fatalf("legacy 9443 agent should not be redeployed by port alone, got %#v", result.Items)
+	}
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
+		t.Fatalf("expected legacy 9443 agent to remain compatible when version matches, got %#v", srv.Traits)
 	}
 }
 
