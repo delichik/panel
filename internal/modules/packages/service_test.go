@@ -94,7 +94,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','now','now')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','now','now')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,sudo_passwordless,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','ubuntu','24.04','Ubuntu 24.04 LTS',1,1,'now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','ubuntu','24.04','Ubuntu 24.04 LTS',1,1,'passwordless_sudo','now','now')`)
 	if err != nil {
 		t.Fatal(err)
 	}

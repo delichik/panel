@@ -138,7 +138,7 @@ func (s *Service) EnsureLegacySelfSignedMigrated(ctx context.Context) error {
 		}
 		certPEM, err := os.ReadFile(rec.CertPath)
 		if err != nil {
-			return fmt.Errorf("legacy self-signed asset %s certificate: %w", rec.ID, err)
+			return fmt.Errorf("self-signed asset %s certificate: %w", rec.ID, err)
 		}
 		keyPEM, err := os.ReadFile(rec.KeyPath)
 		if err != nil {
@@ -708,7 +708,7 @@ func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFil
 }
 
 func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
-	assetID, kind, err := s.parsePanelFileSource(ctx, source)
+	assetID, kind, err := parsePanelFileSource(source)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,7 +1226,7 @@ func (s *Service) prepareImportedSSHAsset(in ImportRequest, forcedID string) (st
 	}, nil
 }
 
-func (s *Service) parsePanelFileSource(ctx context.Context, source string) (string, string, error) {
+func parsePanelFileSource(source string) (string, string, error) {
 	parts := strings.Split(strings.TrimSpace(source), ":")
 	if len(parts) != 3 {
 		return "", "", panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
@@ -1234,16 +1234,6 @@ func (s *Service) parsePanelFileSource(ctx context.Context, source string) (stri
 	switch parts[0] {
 	case "key_asset":
 		return parts[1], parts[2], nil
-	case "certificate":
-		asset, err := s.getStoredAsset(ctx, parts[1])
-		if err != nil {
-			return "", "", panelerr.NotFound("Panel key asset file")
-		}
-		kind := parts[2]
-		if asset.Type == TypeSSHKeyPair && kind == "public_key" {
-			kind = "ssh_public_key"
-		}
-		return parts[1], kind, nil
 	default:
 		return "", "", panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
 	}
@@ -1361,15 +1351,13 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 		if err := rows.Scan(&applicationID, &applicationName, &specYAML, &reverseProxyJSON); err != nil {
 			return nil, err
 		}
-		for _, prefix := range []string{"key_asset:", "certificate:"} {
-			for _, assetID := range extractAssetIDsFromSpec(specYAML, prefix) {
-				references[assetID] = appendAssetReference(references[assetID], AssetReference{
-					ResourceType: "application",
-					ResourceID:   applicationID,
-					ResourceName: applicationName,
-					Relation:     "panel_file",
-				})
-			}
+		for _, assetID := range extractAssetIDsFromSpec(specYAML, "key_asset:") {
+			references[assetID] = appendAssetReference(references[assetID], AssetReference{
+				ResourceType: "application",
+				ResourceID:   applicationID,
+				ResourceName: applicationName,
+				Relation:     "panel_file",
+			})
 		}
 		var rules []struct {
 			Domain string `json:"domain"`

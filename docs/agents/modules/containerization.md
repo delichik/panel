@@ -36,7 +36,7 @@ Application 新部署容器只写入：
 - `panel.application.generation`
 - `panel.application.spec.hash`
 
-不兼容旧下划线 Label，也不自动迁移旧容器。
+Application 托管容器只识别以上 Label。
 
 ## 队列、同步操作与协调
 
@@ -47,7 +47,7 @@ Application 新部署容器只写入：
 - 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
 - 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
-- containers 模块注册的周期任务每 5 秒收集容器协调输入，由 tasks 内部 worker 驱动。只有已经观察到新托管 Label 并写入 `application_reconcile_states` 的实例会持续协调，避免旧 Label 自动迁移。
+- containers 模块注册的周期任务每 5 秒收集容器协调输入，由 tasks 内部 worker 驱动。只有已经观察到托管 Label 并写入 `application_reconcile_states` 的实例会持续协调。
 - 监控发现容器缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 
 ## 镜像更新

@@ -52,6 +52,11 @@ func (s *Service) recoverAgentForSystemDetection(ctx context.Context, srv Server
 	if agentAutoDeployBlocked(srv) || srv.Traits[agentcontract.TraitStatus] == agentcontract.StatusUndeployable {
 		return
 	}
+	if _, configured := configuredAgentURL(srv); configured && !agentURLMatchesDefault(srv) {
+		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", nonDefaultAgentURLMessage(srv))
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+		return
+	}
 	if _, ok := agentURL(srv); !ok {
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
@@ -106,6 +111,10 @@ func agentCertificateRenewalProblem(srv Server, now time.Time) (bool, string) {
 
 func agentStatusNeedsDeploy(srv Server) bool {
 	return srv.Traits[agentcontract.TraitStatus] == agentcontract.StatusIncompatible
+}
+
+func nonDefaultAgentURLMessage(srv Server) string {
+	return "agent URL must be " + agentDefaultURL(srv.Host) + "; redeployment required"
 }
 
 func agentVersionMismatchMessage(version string) string {

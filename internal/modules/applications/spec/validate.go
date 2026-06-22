@@ -183,7 +183,7 @@ func validPanelFileSource(value string) bool {
 		return false
 	}
 	switch parts[0] {
-	case "certificate", "key_asset":
+	case "key_asset":
 	default:
 		return false
 	}

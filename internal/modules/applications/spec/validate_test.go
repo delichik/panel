@@ -104,6 +104,21 @@ func TestValidateAcceptsKeyAssetPanelFileSource(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsCertificatePanelFileSource(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Mounts: []Mount{{
+			Type:   "panel_file",
+			Source: "certificate:cert_1:private_key",
+			Target: "/etc/ssl/private/key.pem",
+		}},
+	})
+	if !hasIssue(issues, "mounts[0].source") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
 func hasIssue(issues []Issue, field string) bool {
 	for _, issue := range issues {
 		if issue.Field == field {

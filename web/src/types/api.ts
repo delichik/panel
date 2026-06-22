@@ -8,6 +8,12 @@ export interface OSInfoDto {
   supported: boolean;
 }
 
+export interface ArchitectureInfoDto {
+  os: string;
+  arch: string;
+  rawMachine: string;
+}
+
 export interface SudoInfoDto {
   passwordless: boolean;
   lastCheckedAt: string | null;
@@ -32,6 +38,7 @@ export interface ServerDto {
   traits?: Record<string, string>;
   notes?: string;
   os?: OSInfoDto | null;
+  architecture?: ArchitectureInfoDto | null;
   sudo?: SudoInfoDto | null;
   privilege?: PrivilegeInfoDto | null;
   reachable: boolean;

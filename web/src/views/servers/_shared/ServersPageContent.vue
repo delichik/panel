@@ -371,6 +371,11 @@ function traitValue(server: ServerDto | null, key: string) {
   return server?.traits?.[key] || t('common.notAvailable');
 }
 
+function architectureLabel(server: ServerDto | null) {
+  const arch = server?.architecture;
+  return arch?.rawMachine || arch?.arch || t('common.notAvailable');
+}
+
 function agentStatusForServer(server: ServerDto | null) {
   const traits = server?.traits;
   if (traits?.['agent.enabled'] !== 'true' || !traits?.['agent.url']) {
@@ -621,7 +626,7 @@ onMounted(load);
               </div>
               <div class="metric-tile">
                 <v-icon color="info">mdi-chip</v-icon>
-                <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.architecture') }}</div><div class="font-weight-bold">{{ traitValue(selectedServer, 'sys.architecture') }}</div></div>
+                <div><div class="text-caption text-medium-emphasis">{{ t('serversPage.architecture') }}</div><div class="font-weight-bold">{{ architectureLabel(selectedServer) }}</div></div>
               </div>
             </div>
 

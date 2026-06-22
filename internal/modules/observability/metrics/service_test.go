@@ -113,7 +113,7 @@ func TestCollectUsesAgentWhenConfigured(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +127,7 @@ func TestCollectUsesAgentWhenConfigured(t *testing.T) {
 	if err := svc.CollectAt(context.Background(), "srv", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
-	if agentClient.metricsURL != "https://127.0.0.1:9443" || exec.command != "" {
+	if agentClient.metricsURL != "https://127.0.0.1:9786" || exec.command != "" {
 		t.Fatalf("expected agent metrics without SSH fallback, agent=%q ssh=%q", agentClient.metricsURL, exec.command)
 	}
 	series, err := svc.Query(context.Background(), "srv", "1h")
@@ -165,7 +165,7 @@ func TestCollectFailsWhenConfiguredAgentFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
 	if err != nil {
 		t.Fatal(err)
@@ -206,7 +206,7 @@ func TestCollectMarksAgentCertificateTimeError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
 	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
 	if err != nil {
 		t.Fatal(err)

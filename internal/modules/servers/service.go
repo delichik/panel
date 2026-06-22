@@ -453,7 +453,7 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 	if architectureErr != nil {
 		return ProbeResult{Reachable: false, Error: architectureErr.Error(), Traits: map[string]string{}}, nil
 	}
-	sysTraits := map[string]string{"sys.architecture": architecture.RawMachine}
+	sysTraits := map[string]string{}
 	applyDistroSystemTraits(osInfo, sysTraits)
 
 	result := ProbeResult{
@@ -594,7 +594,7 @@ func (s *Service) runInitialServerInfoCollection(ctx context.Context, task tasks
 	if privilegeErr != nil && mode == sshx.PrivilegeModeNone {
 		_ = s.tasks.AppendLog(ctx, taskID, "system", "privileged access unavailable: "+privilegeErr.Error())
 	}
-	sysTraits := map[string]string{"sys.architecture": architecture.RawMachine}
+	sysTraits := map[string]string{}
 	applyDistroSystemTraits(osInfo, sysTraits)
 	msg := ""
 	if !osInfo.Supported {
@@ -1223,17 +1223,6 @@ func (s *Service) agentTargetPlatform(ctx context.Context, srv Server) (string, 
 	if arch == "" {
 		arch = normalizeAgentArch(srv.Architecture.RawMachine)
 	}
-	if arch == "" {
-		arch = normalizeAgentArch(srv.Traits["sys.architecture"])
-	}
-	if arch == "" && s.exec != nil {
-		architecture, err := s.detectArchitectureInfo(ctx, serverTarget(srv))
-		if err == nil {
-			osName = architecture.OS
-			arch = architecture.Arch
-			_ = s.markArchitecture(ctx, srv.ID, architecture)
-		}
-	}
 	if osName == "" {
 		osName = "linux"
 	}
@@ -1281,7 +1270,23 @@ func agentURL(srv Server) (string, bool) {
 	if url == "" {
 		return "", false
 	}
+	if !agentURLMatchesDefault(srv) {
+		return "", false
+	}
 	return url, true
+}
+
+func configuredAgentURL(srv Server) (string, bool) {
+	if !traitEnabled(srv.Traits[agentcontract.TraitEnabled]) {
+		return "", false
+	}
+	url := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
+	return url, url != ""
+}
+
+func agentURLMatchesDefault(srv Server) bool {
+	url, ok := configuredAgentURL(srv)
+	return ok && strings.TrimRight(url, "/") == agentDefaultURL(srv.Host)
 }
 
 func isVirtualNetworkInterface(name string) bool {
@@ -1412,9 +1417,8 @@ func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool
 	}
 
 	// 剔除之前可刷新的 sys. 特征，用本次新探测到的 sysTraits 覆盖。
-	// 部署架构有独立结构化字段；保留旧 sys.architecture 供旧客户端兼容展示。
 	for k := range current {
-		if strings.HasPrefix(k, "sys.") && k != "sys.architecture" {
+		if strings.HasPrefix(k, "sys.") {
 			delete(current, k)
 		}
 	}

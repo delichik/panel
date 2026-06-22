@@ -35,7 +35,6 @@ func (LocalCollector) SystemTraits(ctx context.Context) (map[string]string, erro
 	}
 	traits := map[string]string{
 		"sys.cpu_cores":       strconv.Itoa(runtime.NumCPU()),
-		"sys.architecture":    machineArchitecture(),
 		"sys.memory_total_mb": strconv.FormatInt(readMemoryTotalBytes()/(1024*1024), 10),
 		"sys.disk_total_gb":   strconv.FormatUint(readRootDiskTotalBytes()/(1024*1024*1024), 10),
 		"sys.cpu_model":       readCPUModel(),
@@ -154,17 +153,6 @@ func runCommand(ctx context.Context, timeout time.Duration, name string, args ..
 		return string(out), fmt.Errorf("%s: %w: %s", name, err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
-}
-
-func machineArchitecture() string {
-	switch runtime.GOARCH {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "aarch64"
-	default:
-		return runtime.GOARCH
-	}
 }
 
 func readCPUModel() string {

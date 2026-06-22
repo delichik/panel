@@ -61,7 +61,6 @@
   - 应用：`web/src/views/runtime/applications/index.vue`
   - 容器、镜像、网络、卷：`web/src/views/containerization/`
   - API：`web/src/api/containerization.ts`
-  - 旧 `/applications` 重定向到 `/containerization/applications`
 - Runtime 应用实现：
   - 应用运行时面板位于 `applications/` 目录内，日志查看复用 `web/src/components/RuntimeLogsDialog.vue` 弹窗展示 agent runtime 实例或 Docker 容器日志。
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`
@@ -70,7 +69,6 @@
   - 自签证书：`self-signed/index.vue`
   - 密钥：`keys/index.vue`
   - 两个页面复用 `key-assets/index.vue` 的资产工作区
-  - 旧 `/dns/certificates` 重定向到 `/certificates/domains`
 - 任务中心：`web/src/views/tasks/index.vue`
 - 设置菜单组：`web/src/views/settings/`
   - 通用：`general/index.vue`
@@ -100,7 +98,7 @@
 
 ## 自签证书与密钥页面
 
-- 证书一级菜单包含“自签证书”与“密钥”两个二级入口，路由分别为 `/certificates/self-signed` 和 `/certificates/keys`；旧 `/certificates/key-assets` 重定向到自签证书页面。
+- 证书一级菜单包含“自签证书”与“密钥”两个二级入口，路由分别为 `/certificates/self-signed` 和 `/certificates/keys`。
 - 自签证书页面展示用户域 CA/TLS 证书，并单独展示带“系统内置”标签的 Panel 侧 Agent CA、Panel Agent 客户端证书，以及每台服务器已签发且有元数据的 Agent 服务端证书。系统证书只能重置，不能删除、导入、导出或参与批量选择；重置单台服务器 Agent 服务端证书会触发该服务器 Agent 重装，控制用户域 CA/TLS 的 tab 必须放在系统内置证书区域下方，不能暗示会切换系统内置证书。
 - 密钥页面只展示用户域 SSH 密钥对；用户生成或导入的 CA、TLS 和 SSH 资产统一标记为“用户域”。
 - 用户域资产支持生成、导入、下载、删除、重新签发或重新生成。

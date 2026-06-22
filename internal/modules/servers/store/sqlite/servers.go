@@ -135,20 +135,13 @@ func scanServer(row serverScanner) (domain.Server, error) {
 	}
 	srv.Traits = map[string]string{}
 	_ = json.Unmarshal([]byte(traits), &srv.Traits)
-	if srv.Architecture.RawMachine == "" {
-		srv.Architecture.RawMachine = srv.Traits["sys.architecture"]
-	}
 	srv.Variables = map[string]string{}
 	_ = json.Unmarshal([]byte(variables), &srv.Variables)
 	srv.OS.Supported = osSupported == 1
 	srv.Reachable = reachable == 1
 	srv.Sudo.Passwordless = sudo == 1
 	if srv.Privilege.Mode == "" {
-		if srv.Sudo.Passwordless {
-			srv.Privilege.Mode = "passwordless_sudo"
-		} else {
-			srv.Privilege.Mode = "none"
-		}
+		srv.Privilege.Mode = "none"
 	}
 	srv.Privilege.Privileged = srv.Privilege.Mode == "root" || srv.Privilege.Mode == "passwordless_sudo"
 	if sudoAt.Valid {

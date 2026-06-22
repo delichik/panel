@@ -73,7 +73,7 @@ func TestImageRefreshDoesNotHoldDatabaseWriteLockWhileResolvingDigests(t *testin
 	}
 }
 
-func TestManagedLabelsOnlyAcceptsNewApplicationLabels(t *testing.T) {
+func TestManagedLabelsOnlyAcceptsApplicationLabels(t *testing.T) {
 	appID, instanceID, managed := managedLabels(map[string]string{
 		"panel.application.managed":     "true",
 		"panel.application.id":          "app-1",
@@ -87,7 +87,7 @@ func TestManagedLabelsOnlyAcceptsNewApplicationLabels(t *testing.T) {
 		"panel.application_id": "app-1",
 		"panel.instance_id":    "instance-1",
 	}); managed {
-		t.Fatal("legacy labels must not be recognized")
+		t.Fatal("unmanaged labels must not be recognized")
 	}
 }
 

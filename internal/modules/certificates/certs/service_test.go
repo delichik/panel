@@ -141,17 +141,22 @@ func TestPanelFileCatalogReturnsReferencesWithoutPrivateKeyContent(t *testing.T)
 		t.Fatal(err)
 	}
 	found := false
+	source := ""
 	for _, item := range catalog {
 		if item.ResourceID == leaf.ID && item.Kind == "private_key" {
-			found = !strings.Contains(item.Source, "BEGIN")
+			source = item.Source
+			found = strings.HasPrefix(item.Source, "key_asset:") && !strings.Contains(item.Source, "BEGIN")
 		}
 	}
 	if !found {
 		t.Fatalf("private key reference missing from catalog: %#v", catalog)
 	}
-	content, err := svc.ReadPanelFile(ctx, "certificate:"+leaf.ID+":private_key")
+	content, err := svc.ReadPanelFile(ctx, source)
 	if err != nil || !strings.Contains(string(content), "PRIVATE KEY") {
 		t.Fatalf("private key read failed: err=%v content=%q", err, content)
+	}
+	if _, err := svc.ReadPanelFile(ctx, "certificate:"+leaf.ID+":private_key"); err == nil {
+		t.Fatal("expected certificate source to be rejected")
 	}
 }
 

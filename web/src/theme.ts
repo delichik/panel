@@ -1,5 +1,4 @@
 export const THEME_STORAGE_KEY = 'linux-panel-theme';
-const LEGACY_THEME_STORAGE_KEY = 'theme';
 
 export type PanelThemeName = 'light' | 'dark';
 
@@ -14,7 +13,7 @@ export function isPanelThemeName(value: unknown): value is PanelThemeName {
 export function getInitialTheme(): PanelThemeName {
   if (typeof window === 'undefined') return 'light';
 
-  const stored = window.localStorage.getItem(THEME_STORAGE_KEY) ?? window.localStorage.getItem(LEGACY_THEME_STORAGE_KEY);
+  const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
   return isPanelThemeName(stored) ? stored : 'light';
 }
 
@@ -22,7 +21,6 @@ export function persistTheme(name: PanelThemeName) {
   if (typeof window === 'undefined') return;
 
   window.localStorage.setItem(THEME_STORAGE_KEY, name);
-  window.localStorage.setItem(LEGACY_THEME_STORAGE_KEY, name);
 }
 
 export function syncThemeAttribute(name: PanelThemeName) {

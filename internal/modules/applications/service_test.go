@@ -436,7 +436,7 @@ func TestPanelFileMountCreatesReadOnlyRuntimeFile(t *testing.T) {
 	if _, err := svc.Create(context.Background(), SaveInput{
 		Name:     "tls",
 		Enabled:  true,
-		SpecYAML: "name: tls\nimage: nginx\nmounts:\n  - type: panel_file\n    source: certificate:cert_1:certificate\n    target: /etc/tls/cert.pem\n",
+		SpecYAML: "name: tls\nimage: nginx\nmounts:\n  - type: panel_file\n    source: key_asset:cert_1:certificate\n    target: /etc/tls/cert.pem\n",
 	}); err != nil {
 		t.Fatal(err)
 	}

@@ -76,6 +76,11 @@ func (s *Service) CheckConfiguredAgent(ctx context.Context, srv Server) {
 		}
 		return
 	}
+	if _, configured := configuredAgentURL(srv); configured && !agentURLMatchesDefault(srv) {
+		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", nonDefaultAgentURLMessage(srv))
+		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
+		return
+	}
 	if _, ok := agentURL(srv); !ok {
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
@@ -186,6 +191,12 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 }
 
 func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now time.Time) (bool, error) {
+	if _, configured := configuredAgentURL(srv); configured && !agentURLMatchesDefault(srv) {
+		if err := s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", nonDefaultAgentURLMessage(srv)); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
 	if _, ok := agentURL(srv); !ok {
 		return true, nil
 	}

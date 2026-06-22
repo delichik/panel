@@ -468,80 +468,25 @@ func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) 
 
 func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error) {
 	out := []applications.PanelFileDefinition{}
-	certs, err := s.List(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for _, cert := range certs {
-		if cert.Status != StatusIssued {
-			continue
-		}
-		out = append(out,
-			applications.PanelFileDefinition{ID: cert.ID + ":certificate", ResourceID: cert.ID, ResourceType: "acme", Name: cert.Name, Kind: "certificate", Source: "certificate:" + cert.ID + ":certificate"},
-			applications.PanelFileDefinition{ID: cert.ID + ":private_key", ResourceID: cert.ID, ResourceType: "acme", Name: cert.Name, Kind: "private_key", Source: "certificate:" + cert.ID + ":private_key"},
-		)
-	}
 	if s.keyAssets != nil {
 		files, err := s.keyAssets.PanelFileCatalog(ctx)
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, files...)
-	} else {
-		selfSigned, err := s.ListSelfSigned(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, cert := range selfSigned {
-			out = append(out,
-				applications.PanelFileDefinition{ID: cert.ID + ":certificate", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "certificate", Source: "certificate:" + cert.ID + ":certificate"},
-				applications.PanelFileDefinition{ID: cert.ID + ":private_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "private_key", Source: "certificate:" + cert.ID + ":private_key"},
-				applications.PanelFileDefinition{ID: cert.ID + ":public_key", ResourceID: cert.ID, ResourceType: "self_signed", Name: cert.Name, Kind: "public_key", Source: "certificate:" + cert.ID + ":public_key"},
-			)
-		}
 	}
 	return out, nil
 }
 
 func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
 	parts := strings.Split(strings.TrimSpace(source), ":")
-	if len(parts) != 3 || (parts[0] != "certificate" && parts[0] != "key_asset") {
+	if len(parts) != 3 || parts[0] != "key_asset" {
 		return nil, panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
 	}
-	if parts[0] == "key_asset" {
-		if s.keyAssets == nil {
-			return nil, panelerr.NotFound("Panel key asset file")
-		}
-		return s.keyAssets.ReadPanelFile(ctx, source)
+	if s.keyAssets == nil {
+		return nil, panelerr.NotFound("Panel key asset file")
 	}
-	if cert, err := s.Get(ctx, parts[1]); err == nil {
-		switch parts[2] {
-		case "certificate":
-			return os.ReadFile(cert.CertificatePath)
-		case "private_key":
-			return os.ReadFile(cert.PrivateKeyPath)
-		}
-	}
-	if s.keyAssets != nil {
-		if data, err := s.keyAssets.ReadPanelFile(ctx, source); err == nil {
-			return data, nil
-		}
-	}
-	cert, err := s.GetSelfSigned(ctx, parts[1])
-	if err != nil {
-		return nil, panelerr.NotFound("Panel certificate file")
-	}
-	switch parts[2] {
-	case "certificate":
-	case "private_key":
-	case "public_key":
-		if s.keyAssets != nil {
-			return s.keyAssets.ReadPanelFile(ctx, "key_asset:"+cert.ID+":"+parts[2])
-		}
-	default:
-		return nil, panelerr.Validation("panel_file_kind_invalid", "Panel certificate file kind is invalid")
-	}
-	return nil, panelerr.NotFound("Panel certificate file")
+	return s.keyAssets.ReadPanelFile(ctx, source)
 }
 
 func (s *Service) certificateInUse(ctx context.Context, certID string, domains []string, variableName string) (bool, error) {
@@ -550,14 +495,10 @@ func (s *Service) certificateInUse(ctx context.Context, certID string, domains [
 		return false, err
 	}
 	defer rows.Close()
-	sourcePrefix := "certificate:" + certID + ":"
 	for rows.Next() {
 		var spec, proxy string
 		if err := rows.Scan(&spec, &proxy); err != nil {
 			return false, err
-		}
-		if strings.Contains(spec, sourcePrefix) {
-			return true, nil
 		}
 		if variableName != "" && strings.Contains(spec, ".certs."+variableName) {
 			return true, nil

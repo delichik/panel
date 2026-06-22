@@ -56,7 +56,7 @@
 - 应用部署的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
 - 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的操作只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得创建新的运行时操作任务、不得修改应用启用状态，也不得回退 SSH。运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
 - 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。
-- Application 容器使用 `panel.application.*` Label 标识；旧下划线 Label 不兼容且不自动迁移。
+- Application 容器使用 `panel.application.*` Label 标识。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
 - containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
@@ -66,7 +66,7 @@
 - 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。
 - 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等节点变量；值来自实际部署目标服务器。
 - 应用文件模板在后端部署渲染阶段可读 `PANEL_SERVER_*` 变量，因此同一应用在不同服务器会得到不同的服务器值。
-- `panel_file` 挂载使用 `key_asset:<asset-id>:<kind>` 稳定引用 Panel 托管密钥或证书文件；旧 `certificate:<resource-id>:<kind>` 来源仍可被后端读取以服务已有应用规格，但新目录和页面只生成 `key_asset:`。
+- `panel_file` 挂载只接受 `key_asset:<asset-id>:<kind>`，用于稳定引用 Panel 托管密钥或证书文件。
 - 私钥内容不通过目录 API 返回，只在部署渲染时由后端解密并作为只读 managed file 下发给 agent。
 - 密钥资产服务扫描应用 spec 和反向代理域名，返回精确的应用 ID、名称及 `panel_file` / `reverse_proxy` 引用，用于删除保护和导入覆盖确认。
 - 证书续签、密钥资产重新签发、SSH 密钥重新生成和批量导入会调用 `RedeployEnabledApplications`，确保每台服务器重新按自身变量渲染。
@@ -88,7 +88,7 @@
 - 应用重启是可重放应用任务，`application_restart` 由应用模块注册 executor、`run-now` 和 `retry` 能力；executor 复用现有 runtime restart 流程并完成传入任务。
 - 应用刷新是可重放应用任务，`application_refresh` 由应用模块注册 executor、`run-now` 和 `retry` 能力；批量刷新和任务 executor 共用单应用刷新准备逻辑，只对启用且渲染 hash 变化的应用重新部署，任务 executor 在无变化时也会完成传入任务。
 - 应用镜像更新是可重放应用任务，`application_image_update` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 更新入口和任务 executor 共用镜像解析、digest 状态写入、revision 记录和 runtime redeploy 准备逻辑。
-- 新部署 Application 容器名使用 `panel-<application-name>`；停止、重启、状态和日志操作必须使用 `application_instances.container_name`，以兼容旧版本按实例 ID 生成的容器名。agent 必须与 Panel 构建版本完全一致才能被视为兼容；旧 `runtime-deploy` 胖接口不再使用。
+- 新部署 Application 容器名使用 `panel-<application-name>`；停止、重启、状态和日志操作必须使用 `application_instances.container_name`。agent 必须与 Panel 构建版本完全一致才能被视为兼容；部署流程使用当前 agent 原子接口。
 
 ## 验证
 
