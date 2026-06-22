@@ -13,6 +13,7 @@ describe('selector detail workspaces', () => {
       read('servers/packages/index.vue'),
       read('servers/firewall/index.vue'),
       read('dns/domains/index.vue'),
+      read('tasks/index.vue'),
     ];
 
     for (const page of pages) {
@@ -39,12 +40,27 @@ describe('selector detail workspaces', () => {
     expect(domainsPage).toContain('recordsLoading && records.length === 0 && selectedDomain');
   });
 
-  it('keeps the shared server selector visually flat', () => {
+  it('uses the shared selector components across left-side selectors', () => {
     const selector = read('../components/ServerSelector.vue');
+    const serversPage = read('servers/_shared/ServersPageContent.vue');
+    const domainsPage = read('dns/domains/index.vue');
+    const tasksPage = read('tasks/index.vue');
 
-    expect(selector).toContain('class="server-item"');
+    for (const page of [selector, serversPage, domainsPage, tasksPage]) {
+      expect(page).toContain('<AppSelectorPanel');
+      expect(page).toContain('<AppSelectorItem');
+    }
+
     expect(selector).toContain('class="status-dot"');
-    expect(selector).not.toContain('transform: translateY');
-    expect(selector).not.toContain('animation: pulse-green');
+  });
+
+  it('keeps selector loading content within the narrow panel', () => {
+    const panel = read('../components/AppSelectorPanel.vue');
+    const loading = read('../components/PageLoadingState.vue');
+
+    expect(panel).toContain('<PageLoadingState v-if="loading && empty" compact');
+    expect(loading).toContain('width: min(320px, 100%)');
+    expect(loading).toContain(':size="compact ? 32 : 42"');
+    expect(loading).not.toContain('72vw');
   });
 });

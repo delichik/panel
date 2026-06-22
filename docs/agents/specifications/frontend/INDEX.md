@@ -42,7 +42,9 @@
 | --- | --- | --- |
 | `AppPagination.vue` | 多个列表、表格和子面板 | [pagination.md](pagination.md) |
 | `PageLoadingState.vue` | 多数页面的首次网络加载 | [loading-empty.md](loading-empty.md) |
-| `ServerSelector.vue` | 防火墙、软件包页面 | [selection-lists.md](selection-lists.md) |
+| `AppSelectorPanel.vue` | 主从页面左侧选择器外壳 | [selection-lists.md](selection-lists.md) |
+| `AppSelectorItem.vue` | 服务器、域名和任务选择行 | [selection-lists.md](selection-lists.md) |
+| `ServerSelector.vue` | 防火墙、软件包和容器资源页面 | [selection-lists.md](selection-lists.md) |
 | `TaskLogPanel.vue` | 任务详情日志 | [logs.md](logs.md) |
 
 ## 使用要求

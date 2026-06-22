@@ -1,8 +1,16 @@
 # 选择列表与主从模式
 
+## 共享选择器组件
+
+`AppSelectorPanel.vue` 是所有主从页面左侧选择器的统一外壳，负责 outlined 满高卡片、标题、数量、紧凑加载态、空状态、内部滚动区和底部分页。
+
+`AppSelectorItem.vue` 是统一选择行，默认渲染原生 `button`；存在行尾菜单等嵌套操作时使用 `as="div"`，组件会补充 option 角色、焦点和 Enter/Space 键盘选择行为。业务名称、元数据、状态、菜单或进度通过插槽提供。
+
+服务器节点、服务器资源页、域名和任务中心操作列表必须组合这两个组件，不得各自复制面板或选择行 CSS。
+
 ## 共享服务器选择器
 
-`ServerSelector.vue` 用于从服务器集合中选择一个目标，当前复用于防火墙和软件包页面。
+`ServerSelector.vue` 是基于 `AppSelectorPanel` 和 `AppSelectorItem` 的服务器业务适配层，用于从服务器集合中选择一个目标，当前复用于防火墙、软件包和容器资源页面。
 
 ### Props 与事件
 
@@ -13,7 +21,7 @@
 | `loading` | `boolean` | 加载状态 |
 | `update:modelValue` | event | 选择变化 |
 
-组件内部使用 `PageLoadingState`、`AppPagination` 和 `usePagination`。
+组件内部使用 `AppSelectorPanel`、`AppSelectorItem` 和 `usePagination`。
 
 ## 服务器选择器结构
 
@@ -23,6 +31,12 @@
 - 每项显示状态点、服务器名称和一分钟负载。
 - 选中项使用淡主色背景和主色边框。
 - 空数据时显示服务器离线图标和说明。
+
+## 加载态约束
+
+- 选择器首次加载由 `AppSelectorPanel` 使用 `PageLoadingState` 的 `compact` 模式展示。
+- 紧凑模式 spinner 为 `32px`，骨架宽度按选择器容器的 `100%` 计算，不得使用 `vw`，避免超出约 `300px` 到 `340px` 的左栏。
+- 已有选择项刷新时保留列表，并使用卡片顶部 loading 状态。
 
 ## 通用选择行
 
@@ -87,8 +101,11 @@
 
 ## 源码依据
 
+- `web/src/components/AppSelectorPanel.vue`
+- `web/src/components/AppSelectorItem.vue`
 - `web/src/components/ServerSelector.vue`
 - `web/src/views/servers/_shared/ServersPageContent.vue`
 - `web/src/views/dns/domains/index.vue`
+- `web/src/views/tasks/index.vue`
 - `web/src/views/servers/firewall/index.vue`
 - `web/src/views/servers/packages/index.vue`

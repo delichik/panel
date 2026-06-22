@@ -4,6 +4,8 @@ import { useI18n } from '@/i18n';
 import { dnsApi } from '@/api/dns';
 import type { DnsDomainDto, DnsDomainInput, DnsRecordDto, DnsRecordInput, DnsRecordType } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
+import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
 
@@ -234,33 +236,35 @@ onMounted(async () => {
   <div class="page-shell dns-workspace">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <PageLoadingState v-if="loading && domains.length === 0" min-height="340px" />
-
-    <div v-else class="dns-grid">
-      <v-card variant="outlined" class="domain-list-card">
-        <div class="app-card-header domain-list-header">
-          <div>
-            <div class="text-subtitle-1 font-weight-bold">{{ t('domainsPage.domains') }}</div>
-            <div class="text-caption text-medium-emphasis">{{ t('common.total', { count: domains.length }) }}</div>
-          </div>
+    <div class="dns-grid">
+      <AppSelectorPanel
+        class="domain-list-card"
+        :title="t('domainsPage.domains')"
+        :count="domains.length"
+        :loading="loading"
+        :empty="domains.length === 0"
+        empty-icon="mdi-web-off"
+        :empty-text="t('domainsPage.noDomains')"
+        :page="domainPage"
+        :page-size="domainPageSize"
+        :total="domainTotal"
+        @update:page="domainPage = $event"
+        @update:page-size="domainPageSize = $event"
+      >
+        <template #actions>
           <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="t('domainsPage.addDomain')" @click="resetForm()" />
-        </div>
-        <v-divider />
-        <v-list class="domain-list" density="comfortable" nav>
-          <v-list-item v-if="domains.length === 0 && !loading" class="text-medium-emphasis">
-            {{ t('domainsPage.noDomains') }}
-          </v-list-item>
-          <v-list-item
+        </template>
+          <AppSelectorItem
             v-for="domain in pagedDomains"
             :key="domain.id"
-            class="domain-list-item"
-            :active="domain.id === selectedDomainId"
-            :title="domain.name"
-            :subtitle="domain.provider"
-            rounded="lg"
-            @click="selectedDomainId = domain.id"
+            as="div"
+            :selected="domain.id === selectedDomainId"
+            @select="selectedDomainId = domain.id"
           >
-            <template #append>
+            <span class="min-width-0">
+              <span class="domain-name text-truncate">{{ domain.name }}</span>
+              <span class="domain-meta text-truncate">{{ domain.provider }}</span>
+            </span>
               <v-menu>
                 <template #activator="{ props }">
                   <v-btn v-bind="props" icon="mdi-dots-vertical" variant="text" size="small" @click.stop />
@@ -270,11 +274,8 @@ onMounted(async () => {
                   <v-list-item prepend-icon="mdi-delete" :title="t('common.delete')" class="text-error" @click="askDeleteDomain(domain)" />
                 </v-list>
               </v-menu>
-            </template>
-          </v-list-item>
-        </v-list>
-        <AppPagination v-model:page="domainPage" v-model:page-size="domainPageSize" :total="domainTotal" />
-      </v-card>
+          </AppSelectorItem>
+      </AppSelectorPanel>
 
       <div class="dns-main">
         <v-card variant="outlined" class="detail-card">
@@ -493,41 +494,14 @@ onMounted(async () => {
   overflow: hidden;
 }
 
-.domain-list-card {
-  display: flex;
-  flex-direction: column;
-}
-
-.domain-list-header,
 .records-header {
   align-items: center;
 }
 
-.domain-list {
-  display: grid;
-  flex: 1 1 auto;
-  gap: 8px;
-  align-content: start;
-  grid-auto-rows: max-content;
-  min-height: 0;
-  padding: 10px;
-  overflow: auto;
-}
-
-.domain-list-item {
-  border: 1px solid transparent;
-  border-radius: 8px;
-  transition: background-color 0.16s ease, border-color 0.16s ease;
-}
-
-.domain-list-item:hover {
-  background: rgba(var(--v-theme-on-surface), 0.025);
-}
-
-.domain-list-item.v-list-item--active {
-  border-color: rgba(var(--v-theme-primary), 0.26);
-  background: rgba(var(--v-theme-primary), 0.06);
-}
+.domain-name,
+.domain-meta { display: block; }
+.domain-name { font-size: 0.9rem; font-weight: 700; }
+.domain-meta { margin-top: 2px; color: var(--lp-text-muted); font-size: 0.76rem; }
 
 .dns-main {
   display: grid;
@@ -601,8 +575,7 @@ onMounted(async () => {
 
 @media (max-width: 760px) {
   .dns-workspace,
-  .dns-grid,
-  .domain-list {
+  .dns-grid {
     flex: none;
   }
 
@@ -613,10 +586,6 @@ onMounted(async () => {
   .domain-list-card,
   .detail-card,
   .records-card {
-    overflow: visible;
-  }
-
-  .domain-list {
     overflow: visible;
   }
 

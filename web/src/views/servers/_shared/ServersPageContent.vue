@@ -6,6 +6,8 @@ import { serversApi, type CredentialInput, type ServerInput } from '@/api/server
 import { tasksApi } from '@/api/tasks';
 import type { CredentialDto, ServerDto, TaskDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
+import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
 
@@ -512,9 +514,6 @@ onMounted(load);
     <v-alert v-if="visiblePageError" type="error" variant="tonal" density="compact">{{ visiblePageError }}</v-alert>
 
     <template v-if="activeTab === 'servers'">
-      <PageLoadingState v-if="loading && servers.length === 0" min-height="340px" />
-
-      <template v-else>
       <div class="summary-strip">
         <v-card variant="outlined" class="summary-card">
           <div class="summary-icon surface-primary"><v-icon size="18">mdi-server</v-icon></div>
@@ -531,31 +530,35 @@ onMounted(load);
       </div>
 
       <div class="servers-workspace">
-        <v-card variant="outlined" :loading="loading" class="server-list">
-          <div class="list-header">
-            <div class="list-header-main">
+        <AppSelectorPanel
+          class="server-list"
+          :title="t('serversPage.registeredServers')"
+          :count="servers.length"
+          :loading="loading"
+          :empty="servers.length === 0"
+          empty-icon="mdi-server-off"
+          :empty-text="t('serversPage.noServers')"
+          :page="serverPage"
+          :page-size="serverPageSize"
+          :total="serverTotal"
+          @update:page="serverPage = $event"
+          @update:page-size="serverPageSize = $event"
+        >
+          <template #actions>
               <v-btn
                 color="primary"
-                prepend-icon="mdi-plus"
+                icon="mdi-plus"
                 variant="flat"
-                class="text-none font-weight-bold action-btn"
+                size="small"
+                :aria-label="t('serversPage.addServer')"
                 @click="resetServerForm()"
-              >
-                {{ t('serversPage.addServer') }}
-              </v-btn>
-              <div class="text-subtitle-1 font-weight-bold">{{ t('serversPage.registeredServers') }}</div>
-            </div>
-            <v-chip size="small" variant="tonal" color="primary" label>{{ t('common.total', { count: servers.length }) }}</v-chip>
-          </div>
-
-          <div class="server-list-body">
-            <button
+              />
+          </template>
+            <AppSelectorItem
               v-for="server in pagedServers"
               :key="server.id"
-              class="server-row"
-              :class="{ selected: selectedServerId === server.id }"
-              type="button"
-              @click="selectedServerId = server.id"
+              :selected="selectedServerId === server.id"
+              @select="selectedServerId = server.id"
             >
               <span class="min-width-0">
                 <span class="server-name text-truncate">{{ server.name }}</span>
@@ -564,14 +567,8 @@ onMounted(load);
               <v-chip :color="agentStatusForServer(server).color" size="x-small" variant="tonal" label>
                 {{ agentStatusForServer(server).label }}
               </v-chip>
-            </button>
-            <div v-if="servers.length === 0" class="empty-list">
-              <v-icon size="32" color="medium-emphasis">mdi-server-off</v-icon>
-              <div class="text-body-2 text-medium-emphasis">{{ t('serversPage.noServers') }}</div>
-            </div>
-          </div>
-          <AppPagination v-model:page="serverPage" v-model:page-size="serverPageSize" :total="serverTotal" />
-        </v-card>
+            </AppSelectorItem>
+        </AppSelectorPanel>
 
         <div class="detail-column">
           <v-card v-if="selectedServer" variant="outlined" class="detail-card">
@@ -732,7 +729,6 @@ onMounted(load);
           </v-card>
         </div>
       </div>
-      </template>
     </template>
 
     <PageLoadingState v-else-if="loading && credentialRows.length === 0" min-height="320px" />
@@ -927,19 +923,12 @@ onMounted(load);
 .summary-strip { max-width: 780px; }
 .servers-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
 .server-list, .detail-column { min-width: 0; min-height: 0; }
-.server-list { display: flex; flex-direction: column; overflow: hidden; }
-.list-header-main { display: grid; gap: 10px; justify-items: start; }
-.server-list-body { display: grid; gap: 8px; align-content: start; grid-auto-rows: max-content; min-height: 0; padding: 10px; overflow: auto; }
-.server-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 10px; width: 100%; padding: 11px 12px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: inherit; text-align: left; cursor: pointer; transition: background-color 0.16s ease, border-color 0.16s ease; }
-.server-row:hover { background: rgba(var(--v-theme-on-surface), 0.025); }
-.server-row.selected { border-color: rgba(var(--v-theme-primary), 0.26); background: rgba(var(--v-theme-primary), 0.06); }
 .server-name, .server-meta { display: block; }
 .server-name { font-weight: 700; font-size: 0.9rem; }
 .server-meta { color: var(--lp-text-muted); font-size: 0.76rem; margin-top: 2px; }
 .status-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 999px; background: rgb(var(--v-theme-info)); box-shadow: 0 0 0 4px rgba(var(--v-theme-info), 0.12); }
 .status-dot.success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12); }
 .status-dot.warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14); }
-.empty-list { display: grid; place-items: center; gap: 10px; min-height: 220px; padding: 32px; text-align: center; }
 .detail-column { display: flex; }
 .detail-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; padding: 16px; overflow: hidden; }
 .detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
@@ -976,8 +965,8 @@ onMounted(load);
   .summary-strip, .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .server-task-alert { flex-direction: column; align-items: stretch; }
   .servers-workspace, .detail-card { flex: none; min-height: auto; }
-  .server-list, .detail-card, .credential-table-card { overflow: visible; }
-  .server-list-body, .detail-sections, .credential-table-wrap { overflow: visible; }
+  .detail-card, .credential-table-card { overflow: visible; }
+  .detail-sections, .credential-table-wrap { overflow: visible; }
   .detail-column { display: block; }
 }
 </style>

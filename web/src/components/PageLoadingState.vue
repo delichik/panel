@@ -4,14 +4,15 @@ import { useI18n } from '@/i18n';
 defineProps<{
   message?: string;
   minHeight?: string;
+  compact?: boolean;
 }>();
 
 const { t } = useI18n();
 </script>
 
 <template>
-  <div class="page-loading-state" :style="{ minHeight: minHeight || '260px' }" role="status" aria-live="polite">
-    <v-progress-circular indeterminate color="primary" size="42" width="4" />
+  <div class="page-loading-state" :class="{ 'page-loading-state--compact': compact }" :style="{ minHeight: minHeight || '260px' }" role="status" aria-live="polite">
+    <v-progress-circular indeterminate color="primary" :size="compact ? 32 : 42" :width="compact ? 3 : 4" />
     <div class="page-loading-state__text">{{ message || t('common.loading') }}</div>
     <div class="page-loading-state__skeleton" aria-hidden="true">
       <span />
@@ -27,6 +28,8 @@ const { t } = useI18n();
   place-items: center;
   align-content: center;
   gap: 14px;
+  width: 100%;
+  min-width: 0;
   padding: var(--lp-space-6);
   border: 1px solid var(--lp-border);
   border-radius: var(--lp-radius-sm);
@@ -45,7 +48,17 @@ const { t } = useI18n();
 .page-loading-state__skeleton {
   display: grid;
   gap: 8px;
-  width: min(320px, 72vw);
+  width: min(320px, 100%);
+}
+
+.page-loading-state--compact {
+  gap: 10px;
+  padding: var(--lp-space-4);
+  box-shadow: none;
+}
+
+.page-loading-state--compact .page-loading-state__skeleton {
+  width: min(220px, 100%);
 }
 
 .page-loading-state__skeleton span {

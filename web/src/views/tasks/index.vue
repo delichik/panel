@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
-import AppPagination from '@/components/AppPagination.vue';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
 import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
@@ -442,41 +442,43 @@ onBeforeUnmount(() => {
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
     <div class="task-workspace">
-      <v-card variant="outlined" :loading="loading" class="operation-panel">
-        <div class="panel-title">
-          <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.operations') }}</div>
-        </div>
-        <v-divider />
-        <PageLoadingState v-if="loading && tasks.length === 0" min-height="280px" />
-        <v-list v-else lines="three" density="compact" class="operation-list">
-          <v-list-item
+      <AppSelectorPanel
+        class="operation-panel"
+        :title="t('taskCenter.operations')"
+        :count="operationGroups.length"
+        :loading="loading"
+        :empty="operationGroups.length === 0"
+        empty-icon="mdi-progress-clock"
+        :empty-text="t('taskCenter.noTaskOperations')"
+        :page="page"
+        :page-size="pageSize"
+        :total="total"
+        @update:page="updateTaskPage"
+        @update:page-size="updateTaskPageSize"
+      >
+          <AppSelectorItem
             v-for="group in operationGroups"
             :key="group.operationId"
-            :active="group.operationId === selectedOperationId"
-            rounded="0"
-            @click="selectOperation(group.operationId)"
+            :selected="group.operationId === selectedOperationId"
+            @select="selectOperation(group.operationId)"
           >
-            <template #prepend>
+            <span class="operation-item">
               <v-icon :color="taskStatusColor(group.status)" :icon="group.status === 'completed' ? 'mdi-check-circle' : group.failedCount ? 'mdi-alert-circle' : 'mdi-progress-clock'" />
-            </template>
-            <v-list-item-title class="operation-title">
-              <span>{{ formatTaskType(group.tasks[0]?.type) }}</span>
-              <v-chip :color="taskStatusColor(group.status)" size="x-small" label>{{ statusLabel(group.status) }}</v-chip>
-            </v-list-item-title>
-            <v-list-item-subtitle>
-              <div class="operation-meta">
-                <span class="mono">{{ shortId(group.operationId) }}</span>
-                <span>{{ group.resourceType || group.triggerResourceType || t('taskCenter.resource') }} / {{ shortId(group.resourceId || group.triggerResourceId) }}</span>
-                <span>{{ group.tasks.length }} {{ group.tasks.length === 1 ? t('taskCenter.taskSingular') : t('taskCenter.taskPlural') }}</span>
-              </div>
-              <v-progress-linear :model-value="group.progress" :color="taskStatusColor(group.status)" height="6" rounded class="mt-2" />
-            </v-list-item-subtitle>
-          </v-list-item>
-          <v-list-item v-if="operationGroups.length === 0" :title="t('taskCenter.noTaskOperations')" />
-        </v-list>
-        <v-divider />
-        <AppPagination :page="page" :page-size="pageSize" :total="total" @update:page="updateTaskPage" @update:page-size="updateTaskPageSize" />
-      </v-card>
+              <span class="operation-item__body">
+                <span class="operation-title">
+                  <span>{{ formatTaskType(group.tasks[0]?.type) }}</span>
+                  <v-chip :color="taskStatusColor(group.status)" size="x-small" label>{{ statusLabel(group.status) }}</v-chip>
+                </span>
+                <span class="operation-meta">
+                  <span class="mono">{{ shortId(group.operationId) }}</span>
+                  <span>{{ group.resourceType || group.triggerResourceType || t('taskCenter.resource') }} / {{ shortId(group.resourceId || group.triggerResourceId) }}</span>
+                  <span>{{ group.tasks.length }} {{ group.tasks.length === 1 ? t('taskCenter.taskSingular') : t('taskCenter.taskPlural') }}</span>
+                </span>
+                <v-progress-linear :model-value="group.progress" :color="taskStatusColor(group.status)" height="6" rounded class="mt-2" />
+              </span>
+            </span>
+          </AppSelectorItem>
+      </AppSelectorPanel>
 
       <section class="main-panel">
         <v-card variant="outlined" class="lifecycle-panel">
@@ -681,7 +683,7 @@ onBeforeUnmount(() => {
 
 .task-workspace {
   display: grid;
-  grid-template-columns: minmax(300px, 0.72fr) minmax(620px, 1.35fr);
+  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
   flex: 1 1 auto;
   gap: 16px;
   min-height: 0;
@@ -695,11 +697,8 @@ onBeforeUnmount(() => {
   min-height: 0;
 }
 
-.operation-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
+.operation-item { display: flex; grid-column: 1 / -1; align-items: flex-start; gap: 10px; min-width: 0; }
+.operation-item__body { display: block; flex: 1 1 auto; min-width: 0; }
 
 .operation-title {
   display: flex;
@@ -829,13 +828,7 @@ tr.selected {
   gap: 12px;
 }
 
-@media (max-width: 1280px) {
-  .task-workspace {
-    grid-template-columns: minmax(280px, 0.8fr) minmax(560px, 1.2fr);
-  }
-}
-
-@media (max-width: 980px) {
+@media (max-width: 1080px) {
   .panel-title {
     align-items: stretch;
     flex-direction: column;
@@ -851,7 +844,6 @@ tr.selected {
 @media (max-width: 760px) {
   .task-center,
   .task-workspace,
-  .operation-list,
   .task-table-wrap {
     flex: none;
   }
@@ -863,10 +855,6 @@ tr.selected {
 
   .operation-panel,
   .task-table-panel {
-    overflow: visible;
-  }
-
-  .operation-list {
     overflow: visible;
   }
 
