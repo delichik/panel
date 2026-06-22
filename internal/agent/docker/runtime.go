@@ -514,8 +514,7 @@ func (c *dockerAPIClient) ping(ctx context.Context) error {
 }
 
 func (c *dockerAPIClient) pullImage(ctx context.Context, image string) error {
-	query := url.Values{}
-	query.Set("fromImage", image)
+	query := dockerPullImageQuery(image)
 	req, err := c.newRequest(ctx, http.MethodPost, "/images/create?"+query.Encode(), nil)
 	if err != nil {
 		return err
@@ -530,6 +529,33 @@ func (c *dockerAPIClient) pullImage(ctx context.Context, image string) error {
 	}
 	_, _ = io.Copy(io.Discard, res.Body)
 	return nil
+}
+
+func dockerPullImageQuery(image string) url.Values {
+	fromImage, tag := dockerPullImageParts(strings.TrimSpace(image))
+	query := url.Values{}
+	query.Set("fromImage", fromImage)
+	if tag != "" {
+		query.Set("tag", tag)
+	}
+	return query
+}
+
+func dockerPullImageParts(image string) (string, string) {
+	if image == "" || strings.Contains(image, "@") {
+		return image, ""
+	}
+	lastSlash := strings.LastIndex(image, "/")
+	lastColon := strings.LastIndex(image, ":")
+	if lastColon > lastSlash {
+		fromImage := image[:lastColon]
+		tag := image[lastColon+1:]
+		if fromImage == "" || tag == "" {
+			return image, ""
+		}
+		return fromImage, tag
+	}
+	return image, "latest"
 }
 
 func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.Spec) (string, error) {
