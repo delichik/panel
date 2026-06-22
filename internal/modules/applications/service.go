@@ -240,7 +240,17 @@ func (s *Service) List(ctx context.Context) ([]Application, error) {
 		}
 		apps = append(apps, app)
 	}
-	return apps, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	for i := range apps {
+		app, err := s.withImageUpdateStatus(ctx, apps[i])
+		if err != nil {
+			return nil, err
+		}
+		apps[i] = app
+	}
+	return apps, nil
 }
 
 func (s *Service) ListWithRuntime(ctx context.Context) ([]Application, error) {
@@ -259,6 +269,14 @@ func (s *Service) ListWithRuntime(ctx context.Context) ([]Application, error) {
 }
 
 func (s *Service) Get(ctx context.Context, appID string) (Application, error) {
+	app, err := s.getApplication(ctx, appID)
+	if err != nil {
+		return Application{}, err
+	}
+	return s.withImageUpdateStatus(ctx, app)
+}
+
+func (s *Service) getApplication(ctx context.Context, appID string) (Application, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+applicationColumns+` FROM applications WHERE id=?`, appID)
 	app, err := scanApplication(row)
 	if err == sql.ErrNoRows {
@@ -603,9 +621,13 @@ func (s *Service) UpdateImage(ctx context.Context, appID string) (OperationResul
 	if err := s.deployRuntimeSpec(ctx, taskID, app, job); err != nil {
 		return OperationResult{}, err
 	}
+	if err := s.markApplicationImageTargetsCurrent(ctx, app); err != nil {
+		return OperationResult{}, err
+	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
 		return OperationResult{}, err
 	}
+	app, _ = s.withImageUpdateStatus(ctx, app)
 	return OperationResult{TaskID: taskID, EvalID: app.LastEvalID, Application: app}, nil
 }
 
@@ -620,6 +642,9 @@ func (s *Service) RunImageUpdateTask(tc tasks.TaskContext) error {
 		return err
 	}
 	if err := s.deployRuntimeSpec(ctx, task.ID, app, job); err != nil {
+		return err
+	}
+	if err := s.markApplicationImageTargetsCurrent(ctx, app); err != nil {
 		return err
 	}
 	return s.reconcileReverseProxy(ctx)
@@ -674,6 +699,40 @@ func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Applica
 		return Application{}, appruntime.Spec{}, err
 	}
 	return app, job, nil
+}
+
+func (s *Service) markApplicationImageTargetsCurrent(ctx context.Context, app Application) error {
+	if strings.TrimSpace(app.ImageDigest) == "" {
+		return nil
+	}
+	instances, err := s.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		return err
+	}
+	checkedAt := time.Now().UTC()
+	if app.ImageCheckedAt != nil && !app.ImageCheckedAt.IsZero() {
+		checkedAt = *app.ImageCheckedAt
+	}
+	for _, instance := range instances {
+		references := imageReferenceCandidates(instance.RuntimeSpec.Image, app.ImageReference)
+		if len(references) == 0 {
+			continue
+		}
+		for _, reference := range references {
+			if _, err := s.db.ExecContext(ctx, `INSERT INTO image_updates(server_id,reference,local_digest,latest_digest,update_available,last_error,checked_at)
+				VALUES(?,?,?,?,0,'',?)
+				ON CONFLICT(server_id,reference) DO UPDATE SET
+					local_digest=excluded.local_digest,
+					latest_digest=excluded.latest_digest,
+					update_available=0,
+					last_error='',
+					checked_at=excluded.checked_at`,
+				instance.ServerID, reference, app.ImageDigest, app.ImageDigest, formatTime(checkedAt)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, error) {
@@ -1099,6 +1158,71 @@ func (s *Service) withRuntimeSummary(ctx context.Context, app Application) (Appl
 	}
 	statuses := s.refreshInstanceStatuses(ctx, instances)
 	app.RuntimeStatus = aggregateRuntimeStatus(app.Enabled, statuses)
+	return app, nil
+}
+
+func (s *Service) withImageUpdateStatus(ctx context.Context, app Application) (Application, error) {
+	instances, err := s.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		return Application{}, err
+	}
+	if len(instances) == 0 {
+		return app, nil
+	}
+	targets := make([]ImageUpdateTarget, 0, len(instances))
+	updateAvailable := false
+	var latestCheckedAt *time.Time
+	var firstLatestDigest string
+	var firstLocalDigest string
+	for _, instance := range instances {
+		reference := strings.TrimSpace(instance.RuntimeSpec.Image)
+		if reference == "" {
+			reference = app.ImageReference
+		}
+		target := ImageUpdateTarget{
+			ServerID:   instance.ServerID,
+			ServerName: serverNameForImageTarget(ctx, s.servers, instance.ServerID),
+			Reference:  reference,
+		}
+		if reference != "" {
+			cached, ok, err := s.cachedImageUpdate(ctx, instance.ServerID, imageReferenceCandidates(reference, app.ImageReference))
+			if err != nil {
+				return Application{}, err
+			}
+			if ok {
+				target.LocalDigest = cached.LocalDigest
+				target.LatestDigest = cached.LatestDigest
+				target.UpdateAvailable = cached.UpdateAvailable
+				target.CheckedAt = cached.CheckedAt
+				target.LastError = cached.LastError
+				if firstLocalDigest == "" {
+					firstLocalDigest = cached.LocalDigest
+				}
+				if firstLatestDigest == "" {
+					firstLatestDigest = cached.LatestDigest
+				}
+				if cached.CheckedAt != nil && (latestCheckedAt == nil || cached.CheckedAt.After(*latestCheckedAt)) {
+					checked := *cached.CheckedAt
+					latestCheckedAt = &checked
+				}
+			}
+		}
+		if target.UpdateAvailable {
+			updateAvailable = true
+		}
+		targets = append(targets, target)
+	}
+	app.ImageUpdateTargets = targets
+	app.ImageUpdateAvailable = updateAvailable
+	if firstLocalDigest != "" && app.ImageDigest == "" {
+		app.ImageDigest = firstLocalDigest
+	}
+	if firstLatestDigest != "" {
+		app.ImageLatestDigest = firstLatestDigest
+	}
+	if latestCheckedAt != nil {
+		app.ImageCheckedAt = latestCheckedAt
+	}
 	return app, nil
 }
 
@@ -2091,6 +2215,36 @@ func scanRuntimeInstance(row appScanner) (appruntime.Instance, error) {
 	return instance, nil
 }
 
+type cachedImageUpdate struct {
+	LocalDigest     string
+	LatestDigest    string
+	UpdateAvailable bool
+	CheckedAt       *time.Time
+	LastError       string
+}
+
+func (s *Service) cachedImageUpdate(ctx context.Context, serverID string, references []string) (cachedImageUpdate, bool, error) {
+	for _, reference := range references {
+		var item cachedImageUpdate
+		var available int
+		var checked string
+		err := s.db.QueryRowContext(ctx, `SELECT local_digest,latest_digest,update_available,last_error,checked_at FROM image_updates WHERE server_id=? AND reference=?`, serverID, reference).
+			Scan(&item.LocalDigest, &item.LatestDigest, &available, &item.LastError, &checked)
+		if err == sql.ErrNoRows {
+			continue
+		}
+		if err != nil {
+			return cachedImageUpdate{}, false, err
+		}
+		item.UpdateAvailable = available == 1
+		if parsed, err := time.Parse(time.RFC3339Nano, checked); err == nil {
+			item.CheckedAt = &parsed
+		}
+		return item, true, nil
+	}
+	return cachedImageUpdate{}, false, nil
+}
+
 func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appruntime.Instance) []appruntime.InstanceStatus {
 	out := make([]appruntime.InstanceStatus, 0, len(instances))
 	for _, instance := range instances {
@@ -2180,6 +2334,51 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func serverNameForImageTarget(ctx context.Context, provider ServerProvider, serverID string) string {
+	if provider == nil {
+		return ""
+	}
+	srv, err := provider.Get(ctx, serverID)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
+}
+
+func imageReferenceCandidates(values ...string) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		for _, candidate := range []string{value, imageReferenceWithLatest(value)} {
+			if candidate == "" {
+				continue
+			}
+			if _, ok := seen[candidate]; ok {
+				continue
+			}
+			seen[candidate] = struct{}{}
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+func imageReferenceWithLatest(reference string) string {
+	if reference == "" || strings.Contains(reference, "@") {
+		return ""
+	}
+	lastSlash := strings.LastIndex(reference, "/")
+	lastColon := strings.LastIndex(reference, ":")
+	if lastColon > lastSlash {
+		return ""
+	}
+	return reference + ":latest"
 }
 
 func normalizeDeploymentTargets(mode string, servers []string, persistentPath string) (string, []string, error) {

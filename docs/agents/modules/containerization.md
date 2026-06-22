@@ -59,6 +59,7 @@ Application 新部署容器只写入：
 - 所有带标签且可解析的镜像都显示更新状态；普通容器镜像不提供升级操作。
 - Application 镜像升级复用 `applications.Service.UpdateImage` 并重新部署。
 - Application 详情不提供手动镜像检查按钮；镜像检查由 containers 周期任务自动刷新，用户只手动触发实际更新。
+- Application 详情会按运行实例的服务器和镜像引用读取 `image_updates` 聚合为应用级状态；任一节点可更新即视为该应用可更新。应用镜像更新成功后，应用模块会同步对应节点的检查缓存，后续周期刷新再校准实际 Docker 镜像状态。
 
 ## 验证
 

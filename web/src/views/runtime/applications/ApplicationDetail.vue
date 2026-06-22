@@ -27,15 +27,24 @@ const lastTaskId = ref('');
 const logTarget = ref<{ instanceId: string; containerName: string } | null>(null);
 const logsDialog = ref(false);
 const selectedRestoreFile = computed(() => Array.isArray(restoreFile.value) ? restoreFile.value[0] : restoreFile.value);
+const imageTargets = computed(() => props.application.imageUpdateTargets ?? []);
+const imageUpdateTargetCount = computed(() => imageTargets.value.filter((target) => target.updateAvailable).length);
+const imageTargetHasError = computed(() => imageTargets.value.some((target) => !!target.lastError));
 const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name || server.id} (${server.id})`,
   value: server.id,
 })));
 const imageStatusColor = computed(() => {
-  if (props.application.imageLastError) return 'error';
+  if (props.application.imageLastError || imageTargetHasError.value) return 'error';
   if (props.application.imageUpdateAvailable) return 'warning';
-  if (props.application.imageDigest) return 'success';
+  if (props.application.imageDigest || imageTargets.value.some((target) => target.checkedAt)) return 'success';
   return 'grey';
+});
+const imageStatusLabel = computed(() => {
+  if (props.application.imageLastError || imageTargetHasError.value) return t('applicationDetail.checkFailedStatus');
+  if (props.application.imageUpdateAvailable) return t('applicationDetail.updateTargetCount', { count: imageUpdateTargetCount.value });
+  if (props.application.imageDigest || imageTargets.value.some((target) => target.checkedAt)) return t('applicationDetail.upToDate');
+  return t('applicationDetail.notChecked');
 });
 
 function shortDigest(value?: string) {
@@ -48,6 +57,16 @@ function shortDigest(value?: string) {
 function formatCheckedAt(value?: string) {
   if (!value) return t('common.never');
   return formatDateTime(value);
+}
+
+function imageTargetStatusColor(updateAvailable: boolean, lastError?: string) {
+  if (lastError) return 'error';
+  return updateAvailable ? 'warning' : 'success';
+}
+
+function imageTargetStatusLabel(updateAvailable: boolean, lastError?: string) {
+  if (lastError) return t('applicationDetail.checkFailedStatus');
+  return updateAvailable ? t('applicationDetail.updateAvailable') : t('applicationDetail.upToDate');
 }
 
 async function downloadPackage() {
@@ -246,7 +265,7 @@ watch(() => props.application.id, () => {
           <div class="d-flex align-center ga-2 mb-1">
             <div class="text-subtitle-2 font-weight-bold">{{ t('applicationDetail.imageUpdate') }}</div>
             <v-chip size="x-small" variant="tonal" :color="imageStatusColor" label>
-              {{ application.imageUpdateAvailable ? t('applicationDetail.updateAvailable') : application.imageDigest ? t('applicationDetail.tracked') : t('applicationDetail.notChecked') }}
+              {{ imageStatusLabel }}
             </v-chip>
           </div>
           <div class="text-caption text-medium-emphasis text-truncate">{{ application.imageReference || t('applicationDetail.imageHint') }}</div>
@@ -257,8 +276,38 @@ watch(() => props.application.id, () => {
           </div>
         </div>
         <div class="image-actions">
-          <v-btn size="small" prepend-icon="mdi-package-up" color="primary" variant="flat" class="text-none" :disabled="!application.enabled" :loading="imageAction === 'update'" @click="updateImage">{{ t('common.update') }}</v-btn>
+          <v-btn size="small" prepend-icon="mdi-package-up" color="primary" variant="flat" class="text-none" :disabled="!application.enabled || !application.imageUpdateAvailable" :loading="imageAction === 'update'" @click="updateImage">{{ t('applicationDetail.updateImage') }}</v-btn>
         </div>
+      </div>
+      <div v-if="imageTargets.length" class="image-targets mt-3">
+        <v-table density="compact" class="image-target-table">
+          <thead>
+            <tr>
+              <th>{{ t('applicationDetail.server') }}</th>
+              <th>{{ t('common.status') }}</th>
+              <th>{{ t('applicationDetail.applied') }}</th>
+              <th>{{ t('applicationDetail.latest') }}</th>
+              <th>{{ t('applicationDetail.checked') }}</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="target in imageTargets" :key="target.serverId">
+              <td>
+                <div class="font-weight-medium text-truncate">{{ target.serverName || target.serverId }}</div>
+                <div class="text-caption text-medium-emphasis text-truncate">{{ target.reference }}</div>
+              </td>
+              <td>
+                <v-chip size="x-small" variant="tonal" :color="imageTargetStatusColor(target.updateAvailable, target.lastError)" label>
+                  {{ imageTargetStatusLabel(target.updateAvailable, target.lastError) }}
+                </v-chip>
+                <div v-if="target.lastError" class="text-caption text-error text-truncate">{{ target.lastError }}</div>
+              </td>
+              <td class="mono text-truncate">{{ shortDigest(target.localDigest) }}</td>
+              <td class="mono text-truncate">{{ shortDigest(target.latestDigest) }}</td>
+              <td class="text-body-2">{{ formatCheckedAt(target.checkedAt) }}</td>
+            </tr>
+          </tbody>
+        </v-table>
       </div>
       <v-alert v-if="application.imageLastError" type="warning" variant="tonal" class="mt-3">{{ application.imageLastError }}</v-alert>
       <v-alert v-if="message" type="info" variant="tonal" class="mt-3" closable @click:close="message = ''">
@@ -370,6 +419,9 @@ watch(() => props.application.id, () => {
 .image-panel { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px; align-items: start; }
 .image-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .digest-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.image-targets { overflow-x: auto; }
+.image-target-table { min-width: 680px; background: transparent; }
+.image-target-table :deep(td) { vertical-align: middle; }
 .task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .mono { font-size: 0.8rem; }
 .migrate-dialog-body { display: grid; gap: 14px; }

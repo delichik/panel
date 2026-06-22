@@ -499,6 +499,7 @@ export interface ApplicationDto {
   imageLatestDigest?: string;
   imageCheckedAt?: string;
   imageUpdateAvailable?: boolean;
+  imageUpdateTargets?: ApplicationImageUpdateTargetDto[];
   imageLastError?: string;
   jobId: string;
   namespace: string;
@@ -509,6 +510,17 @@ export interface ApplicationDto {
   allocationCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ApplicationImageUpdateTargetDto {
+  serverId: string;
+  serverName?: string;
+  reference: string;
+  localDigest?: string;
+  latestDigest?: string;
+  updateAvailable: boolean;
+  checkedAt?: string;
+  lastError?: string;
 }
 
 export interface ApplicationSaveDto {

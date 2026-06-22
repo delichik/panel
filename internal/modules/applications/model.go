@@ -19,32 +19,44 @@ const (
 )
 
 type Application struct {
-	ID                   string             `json:"id"`
-	Name                 string             `json:"name"`
-	Enabled              bool               `json:"enabled"`
-	SpecYAML             string             `json:"specYaml"`
-	Variables            map[string]string  `json:"variables"`
-	ResolvedVariables    map[string]any     `json:"resolvedVariables,omitempty"`
-	PersistentPath       string             `json:"persistentPath,omitempty"`
-	DeploymentMode       string             `json:"deploymentMode"`
-	DeploymentServers    []string           `json:"deploymentServers"`
-	ReverseProxy         []ReverseProxyRule `json:"reverseProxy"`
-	Generation           int                `json:"generation"`
-	SpecHash             string             `json:"specHash"`
-	ImageReference       string             `json:"imageReference,omitempty"`
-	ImageDigest          string             `json:"imageDigest,omitempty"`
-	ImageLatestDigest    string             `json:"imageLatestDigest,omitempty"`
-	ImageCheckedAt       *time.Time         `json:"imageCheckedAt,omitempty"`
-	ImageUpdateAvailable bool               `json:"imageUpdateAvailable"`
-	ImageLastError       string             `json:"imageLastError,omitempty"`
-	JobID                string             `json:"jobId"`
-	Namespace            string             `json:"namespace"`
-	LastEvalID           string             `json:"lastEvalId,omitempty"`
-	LastDeploymentID     string             `json:"lastDeploymentId,omitempty"`
-	LastError            string             `json:"lastError,omitempty"`
-	RuntimeStatus        string             `json:"runtimeStatus,omitempty"`
-	CreatedAt            time.Time          `json:"createdAt"`
-	UpdatedAt            time.Time          `json:"updatedAt"`
+	ID                   string              `json:"id"`
+	Name                 string              `json:"name"`
+	Enabled              bool                `json:"enabled"`
+	SpecYAML             string              `json:"specYaml"`
+	Variables            map[string]string   `json:"variables"`
+	ResolvedVariables    map[string]any      `json:"resolvedVariables,omitempty"`
+	PersistentPath       string              `json:"persistentPath,omitempty"`
+	DeploymentMode       string              `json:"deploymentMode"`
+	DeploymentServers    []string            `json:"deploymentServers"`
+	ReverseProxy         []ReverseProxyRule  `json:"reverseProxy"`
+	Generation           int                 `json:"generation"`
+	SpecHash             string              `json:"specHash"`
+	ImageReference       string              `json:"imageReference,omitempty"`
+	ImageDigest          string              `json:"imageDigest,omitempty"`
+	ImageLatestDigest    string              `json:"imageLatestDigest,omitempty"`
+	ImageCheckedAt       *time.Time          `json:"imageCheckedAt,omitempty"`
+	ImageUpdateAvailable bool                `json:"imageUpdateAvailable"`
+	ImageUpdateTargets   []ImageUpdateTarget `json:"imageUpdateTargets,omitempty"`
+	ImageLastError       string              `json:"imageLastError,omitempty"`
+	JobID                string              `json:"jobId"`
+	Namespace            string              `json:"namespace"`
+	LastEvalID           string              `json:"lastEvalId,omitempty"`
+	LastDeploymentID     string              `json:"lastDeploymentId,omitempty"`
+	LastError            string              `json:"lastError,omitempty"`
+	RuntimeStatus        string              `json:"runtimeStatus,omitempty"`
+	CreatedAt            time.Time           `json:"createdAt"`
+	UpdatedAt            time.Time           `json:"updatedAt"`
+}
+
+type ImageUpdateTarget struct {
+	ServerID        string     `json:"serverId"`
+	ServerName      string     `json:"serverName,omitempty"`
+	Reference       string     `json:"reference"`
+	LocalDigest     string     `json:"localDigest,omitempty"`
+	LatestDigest    string     `json:"latestDigest,omitempty"`
+	UpdateAvailable bool       `json:"updateAvailable"`
+	CheckedAt       *time.Time `json:"checkedAt,omitempty"`
+	LastError       string     `json:"lastError,omitempty"`
 }
 
 type ReverseProxyRule struct {

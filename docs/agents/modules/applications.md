@@ -83,6 +83,7 @@
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`args` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
 - 应用部署是可重放应用任务，`application_deploy` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 部署入口和任务 executor 共用当前应用快照刷新、部署校验、启用应用和 runtime deploy 准备逻辑。
 - 镜像更新检查是可重放应用任务，`application_image_check` 由应用模块注册 executor、`run-now` 和 `retry` 能力；应用详情只展示最近自动检查结果和手动“更新”动作，不再提供手动检查入口。
+- 应用详情的镜像更新状态必须聚合已部署实例所在服务器的 `image_updates` 结果；只要任一实例服务器对应镜像有更新，应用 DTO 的 `imageUpdateAvailable` 即为 true，并通过 `imageUpdateTargets` 返回节点级本地摘要、最新摘要、检查时间和错误。应用镜像更新成功后需要把对应节点镜像检查缓存标记为已更新，避免旧缓存让详情继续显示可更新。
 - 应用停止是可重放应用任务，`application_stop` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 停止入口会把 `purge` 写入任务参数，executor 解析参数后复用 runtime stop 流程并完成传入任务。
 - 应用重启是可重放应用任务，`application_restart` 由应用模块注册 executor、`run-now` 和 `retry` 能力；executor 复用现有 runtime restart 流程并完成传入任务。
 - 应用刷新是可重放应用任务，`application_refresh` 由应用模块注册 executor、`run-now` 和 `retry` 能力；批量刷新和任务 executor 共用单应用刷新准备逻辑，只对启用且渲染 hash 变化的应用重新部署，任务 executor 在无变化时也会完成传入任务。

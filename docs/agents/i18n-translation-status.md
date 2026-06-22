@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/runtime/applications/ApplicationDetail.vue`
+  - 应用详情镜像更新闭环新增节点级状态、更新节点数量、检查失败和更新镜像按钮文案，已接入英文与简体中文词条；镜像仓库或 Docker 原始诊断继续保留原文。
 - `web/src/views/servers/packages/index.vue`、`web/src/views/servers/firewall/index.vue`、`internal/platform/i18n`
   - 软件包与防火墙页面的特权能力提示已改为 root 或免密 sudo，并补齐统一特权准入错误的简体中文翻译。
 - `web/src/views/debug/index.vue`

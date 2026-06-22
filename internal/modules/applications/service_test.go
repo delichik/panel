@@ -783,6 +783,69 @@ func TestImageUpdateTaskExecutorUpdatesImageDeploysRuntimeAndCompletesTask(t *te
 	}
 }
 
+func TestGetAggregatesImageUpdatesFromRuntimeInstances(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO image_updates(server_id,reference,local_digest,latest_digest,update_available,last_error,checked_at) VALUES(?,?,?,?,?,?,?), (?,?,?,?,?,?,?)`,
+		"srv-a", "nginx:latest", "sha256:old", "sha256:new", 1, "", now,
+		"srv-b", "nginx:latest", "sha256:new", "sha256:new", 0, "", now); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ImageUpdateAvailable {
+		t.Fatalf("expected app update to be available: %#v", got)
+	}
+	if len(got.ImageUpdateTargets) != 2 {
+		t.Fatalf("targets = %#v", got.ImageUpdateTargets)
+	}
+	if got.ImageUpdateTargets[0].ServerID != "srv-a" || !got.ImageUpdateTargets[0].UpdateAvailable || got.ImageUpdateTargets[0].LatestDigest != "sha256:new" {
+		t.Fatalf("first target = %#v", got.ImageUpdateTargets[0])
+	}
+	if got.ImageUpdateTargets[1].ServerID != "srv-b" || got.ImageUpdateTargets[1].UpdateAvailable {
+		t.Fatalf("second target = %#v", got.ImageUpdateTargets[1])
+	}
+}
+
+func TestUpdateImageMarksNodeImageCacheCurrent(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	svc.imageResolver = fakeImageResolver{result: ImageDigestResult{Reference: "nginx", Digest: "sha256:new"}}
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO image_updates(server_id,reference,local_digest,latest_digest,update_available,last_error,checked_at) VALUES(?,?,?,?,?,?,?)`,
+		"srv-a", "nginx:latest", "sha256:old", "sha256:new", 1, "", now); err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.UpdateImage(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Application.ImageUpdateAvailable {
+		t.Fatalf("expected returned app to be current: %#v", result.Application.ImageUpdateTargets)
+	}
+	var available int
+	var localDigest string
+	if err := svc.db.QueryRowContext(ctx, `SELECT local_digest,update_available FROM image_updates WHERE server_id=? AND reference=?`, "srv-a", "nginx:latest").Scan(&localDigest, &available); err != nil {
+		t.Fatal(err)
+	}
+	if localDigest != "sha256:new" || available != 0 {
+		t.Fatalf("cache local=%q available=%d", localDigest, available)
+	}
+}
+
 func TestRestartTaskExecutorRestartsRuntimeAndCompletesTask(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
