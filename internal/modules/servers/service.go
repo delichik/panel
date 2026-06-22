@@ -1223,6 +1223,14 @@ func (s *Service) agentTargetPlatform(ctx context.Context, srv Server) (string, 
 	if arch == "" {
 		arch = normalizeAgentArch(srv.Architecture.RawMachine)
 	}
+	if arch == "" && s.exec != nil {
+		architecture, err := s.detectArchitectureInfo(ctx, serverTarget(srv))
+		if err == nil {
+			osName = architecture.OS
+			arch = architecture.Arch
+			_ = s.markArchitecture(ctx, srv.ID, architecture)
+		}
+	}
 	if osName == "" {
 		osName = "linux"
 	}

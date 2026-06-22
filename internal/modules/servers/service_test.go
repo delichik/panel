@@ -1255,12 +1255,31 @@ func TestVerifyRemoteAgentCertificateFileComparesNewCertificateHash(t *testing.T
 	}
 }
 
-func TestAgentTargetPlatformRequiresStructuredArchitecture(t *testing.T) {
-	svc := &Service{exec: agentArchFakeExec{arch: "x86_64"}}
-	if _, err := svc.agentTargetPlatform(context.Background(), Server{Host: "127.0.0.1", Port: 22, CredentialID: "cred_1"}); err == nil {
-		t.Fatal("expected missing structured architecture to fail")
+func TestAgentTargetPlatformDetectsMissingStructuredArchitecture(t *testing.T) {
+	svc, _, store := testServerService(t, agentArchFakeExec{arch: "x86_64"})
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,created_at,updated_at) VALUES('srv_arch','s','127.0.0.1',22,'du','cred_1','now','now')`); err != nil {
+		t.Fatal(err)
 	}
-	platform, err := svc.agentTargetPlatform(context.Background(), Server{Architecture: ArchitectureInfo{OS: "linux", Arch: "amd64", RawMachine: "x86_64"}})
+	srv, err := svc.Get(context.Background(), "srv_arch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform, err := svc.agentTargetPlatform(context.Background(), srv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if platform != "linux-amd64" {
+		t.Fatalf("expected linux-amd64, got %q", platform)
+	}
+	updated, err := svc.Get(context.Background(), "srv_arch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Architecture.OS != "linux" || updated.Architecture.Arch != "amd64" || updated.Architecture.RawMachine != "x86_64" {
+		t.Fatalf("expected detected architecture to be persisted, got %#v", updated.Architecture)
+	}
+
+	platform, err = svc.agentTargetPlatform(context.Background(), Server{Architecture: ArchitectureInfo{OS: "linux", Arch: "amd64", RawMachine: "x86_64"}})
 	if err != nil {
 		t.Fatal(err)
 	}

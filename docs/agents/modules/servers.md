@@ -64,7 +64,7 @@
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
 - 新增服务器响应可携带 `initialTaskId` 指向首次 bootstrap 探测任务。该任务只通过 SSH 读取发行版、CPU 架构并检查非交互特权能力；在架构信息成功落库前失败时必须标记任务失败并删除刚创建的服务器记录，让用户回到表单修正 SSH 信息。
 - 特权能力统一持久化为 `privilege.mode=root|passwordless_sudo|none`、派生的 `privilege.privileged` 和检查时间。UID 0 使用 `root` 并直接执行特权命令；非 root 且 `sudo -n` 成功时使用 `passwordless_sudo`；其他情况使用 `none`。软件包、UFW、重启和 Agent bootstrap 只按 `privilege.mode` 判断准入。
-- 服务器架构信息使用结构化 `architecture.os`、`architecture.arch` 和 `architecture.rawMachine`，数据库列为 `architecture_os`、`architecture_arch`、`architecture_machine`。Agent 部署选包只读取结构化架构字段。
+- 服务器架构信息使用结构化 `architecture.os`、`architecture.arch` 和 `architecture.rawMachine`，数据库列为 `architecture_os`、`architecture_arch`、`architecture_machine`。Agent 部署选包优先读取结构化架构字段；字段缺失时通过 SSH `uname -m` 探测目标节点并写回结构化字段。
 - bootstrap 成功后按现有受限自动部署状态机创建 Agent 部署任务。Agent 部署或完整系统信息刷新失败不得删除节点；自动部署连续失败 2 次后标记 `agent.status=undeployable` 和 `agent.auto_deploy_blocked=true`，周期检查停止自动部署。用户手动部署会解除阻止，部署及兼容性检查成功后恢复为 `compatible`。
 - 完整系统信息由兼容 Agent 读取并交给 `internal/platform/linux/` 解析支持的 Debian/Ubuntu 版本；Agent 内部直接读取 `/etc/os-release`、`/proc`、`/sys`、网络接口和 `statfs`，不再使用系统信息 bash 脚本。如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。
 - 服务器列表和详情读取不得创建连通性或系统信息后台任务。`POST /api/v1/servers/{id}/test` 是同步普通函数，只验证 SSH 并更新可达状态与特权模式，不进入任务中心。周期可达状态以 `metrics_collect` 为准：采集成功标记可达，实际采集失败标记不可达。
@@ -98,7 +98,7 @@
 - Panel 启动检查或周期检查发现服务器未配置 agent URL、agent URL 不是当前默认地址、`agent.status=incompatible`、agent 版本与 Panel 不一致、证书过期/尚未生效/距过期不足 30 天，或健康检查因 mTLS server 证书时间错误失败时，必须自动创建或复用 `server_agent_deploy` 任务安装/修复 agent；缺少能力、agent HTTP contract hash 不一致和 Docker host 不一致不单独触发重装；单纯 `agent.status=unavailable`、网络超时、连接拒绝、服务器失联或 Docker 不可用不得触发自动重装。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent`，默认监听 `tcp/9786`，重启前必须停止 systemd 服务并清理残留 `panel-agent` 进程，写入后必须校验远端 `server.pem` 确实是新签发证书，启动失败必须输出 `systemctl status` 和 `journalctl -u panel-agent.service` 诊断，启动后必须校验 `tcp/9786` 实际吐出的服务端证书指纹匹配新证书；部署证书包的 `agent.url` 必须使用当前服务器 `host` 生成；如果服务器 `host` 被修改，Agent URL 和证书元数据必须失效并要求重部署。如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署、CA 重置、版本不一致、证书修复和服务器 host 变更触发的重装必须复用并立即启动该任务。同一服务器在最近一次成功部署后，系统自动触发的 agent 部署失败达到 2 次后必须标记 `agent.status=undeployable` 并停止自动尝试；`undeployable` 状态不得由周期检查继续部署。
 - `POST /api/v1/servers/{id}/agent/deploy` 是手动兜底入口，返回并启动 `server_agent_deploy` 任务；任务中心重试或立即运行也支持该任务类型。未安装时前端显示安装按钮，已安装但异常时显示重装按钮。服务器详情页只显示一条紧凑的服务器错误提示，优先展示 `agent.last_error`，不再在访问信息区重复渲染第二条 Agent 错误横幅。
 - agent 部署任务通过 SSH 上传独立 `panel-agent` 二进制到目标机，再以 `/usr/local/bin/panel-agent` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url` 并立即执行健康检查。
-- Panel 固定从 `/app/panel-agents/<goos>-<goarch>/panel-agent` 读取 agent bundle，并根据目标服务器结构化 `architecture.os`/`architecture.arch` 选择 `linux-amd64` 或 `linux-arm64`。该位置不可通过配置或环境变量修改；发布镜像会把随 Panel 构建的 agent bundle 复制到 `/app/panel-agents`，部署任务每次直接读取对应文件并上传到目标机。
+- Panel 固定从 `/app/panel-agents/<goos>-<goarch>/panel-agent` 读取 agent bundle，并根据目标服务器结构化 `architecture.os`/`architecture.arch` 选择 `linux-amd64` 或 `linux-arm64`；结构化架构缺失时先探测目标节点并持久化结果。该位置不可通过配置或环境变量修改；发布镜像会把随 Panel 构建的 agent bundle 复制到 `/app/panel-agents`，部署任务每次直接读取对应文件并上传到目标机。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
 ## 验证
