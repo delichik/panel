@@ -40,10 +40,6 @@ func (s *Service) checkAgent(ctx context.Context, srv Server) error {
 			NotBefore:   health.Certificate.NotBefore,
 			NotAfter:    health.Certificate.NotAfter,
 		})
-		if time.Now().UTC().Add(agentCertificateRenewBefore).After(health.Certificate.NotAfter) {
-			_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, health.Version, "agent certificate expires soon; redeployment required")
-			return nil
-		}
 	}
 	return s.markAgentStatus(ctx, srv.ID, agentcontract.StatusCompatible, health.Version, "")
 }
@@ -61,8 +57,10 @@ func (s *Service) recoverAgentForSystemDetection(ctx context.Context, srv Server
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
 	}
-	if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", msg)
+	if renewal, msg := agentCertificateRenewalProblem(srv, time.Now()); renewal {
+		if msg != "" {
+			_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", msg)
+		}
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
 	}
@@ -103,7 +101,7 @@ func agentCertificateRenewalProblem(srv Server, now time.Time) (bool, string) {
 		if notAfter, err := time.Parse(time.RFC3339Nano, value); err == nil && now.After(notAfter) {
 			return true, "agent certificate has expired; redeployment required"
 		} else if err == nil && now.Add(agentCertificateRenewBefore).After(notAfter) {
-			return true, "agent certificate expires soon; redeployment required"
+			return true, ""
 		}
 	}
 	return false, ""

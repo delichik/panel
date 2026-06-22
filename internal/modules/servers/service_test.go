@@ -639,6 +639,37 @@ func TestCheckConfiguredAgentsMarksCompatibleWhenVersionMatches(t *testing.T) {
 	}
 }
 
+func TestCheckAgentKeepsExpiringCertificateCompatible(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	health := agentHealth(agentcontract.Version)
+	health.Certificate = &agentcontract.CertificateInfo{
+		Fingerprint: "ABC",
+		CommonName:  "panel-agent-srv_agent",
+		NotBefore:   now.Add(-time.Hour),
+		NotAfter:    now.Add(agentCertificateRenewBefore / 2),
+	}
+	svc.SetAgentClient(&serverFakeAgentClient{health: health})
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.checkAgent(context.Background(), srv); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible || updated.Traits[agentcontract.TraitLastError] != "" {
+		t.Fatalf("expiring certificate should remain compatible without warning, got %#v", updated.Traits)
+	}
+}
+
 func TestSynchronousConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	srv, err := createSvc.Create(context.Background(), SaveRequest{
@@ -849,6 +880,23 @@ func TestCheckConfiguredAgentsDeploysExpiringStoredAgentCertificate(t *testing.T
 	}
 	if result.Total != 1 || result.Items[0].TriggeredBy != "system" {
 		t.Fatalf("expected periodic check to deploy expiring configured agent certificate, got %#v", result.Items)
+	}
+}
+
+func TestAgentCertificateRenewalProblemKeepsFreshCertificateCompatible(t *testing.T) {
+	now := time.Now().UTC()
+	fresh := Server{Traits: map[string]string{
+		agentcontract.TraitCertificateNotAfter: now.Add(agentsecurity.DefaultLeafValidity).Format(time.RFC3339Nano),
+	}}
+	if renewal, msg := agentCertificateRenewalProblem(fresh, now); renewal {
+		t.Fatalf("fresh agent certificate should not require renewal: %s", msg)
+	}
+
+	expiring := Server{Traits: map[string]string{
+		agentcontract.TraitCertificateNotAfter: now.Add(agentCertificateRenewBefore / 2).Format(time.RFC3339Nano),
+	}}
+	if renewal, msg := agentCertificateRenewalProblem(expiring, now); !renewal || msg != "" {
+		t.Fatal("agent certificate inside renewal window should require renewal")
 	}
 }
 

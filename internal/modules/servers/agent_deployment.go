@@ -85,8 +85,10 @@ func (s *Service) CheckConfiguredAgent(ctx context.Context, srv Server) {
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
 	}
-	if expired, msg := agentCertificateRenewalProblem(srv, time.Now()); expired {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", msg)
+	if renewal, msg := agentCertificateRenewalProblem(srv, time.Now()); renewal {
+		if msg != "" {
+			_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", msg)
+		}
 		_, _ = s.ensureAgentDeployTask(context.Background(), srv.ID, "system", true)
 		return
 	}
@@ -106,6 +108,13 @@ func (s *Service) CheckConfiguredAgent(ctx context.Context, srv Server) {
 	}
 	updated, err := s.Get(ctx, srv.ID)
 	if err != nil {
+		return
+	}
+	if renewal, msg := agentCertificateRenewalProblem(updated, time.Now()); renewal {
+		if msg != "" {
+			_ = s.markAgentStatus(ctx, updated.ID, agentcontract.StatusIncompatible, "", msg)
+		}
+		_, _ = s.ensureAgentDeployTask(context.Background(), updated.ID, "system", true)
 		return
 	}
 	if updated.Traits[agentcontract.TraitStatus] == agentcontract.StatusIncompatible {
@@ -200,9 +209,11 @@ func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now tim
 	if _, ok := agentURL(srv); !ok {
 		return true, nil
 	}
-	if expired, msg := agentCertificateRenewalProblem(srv, now); expired {
-		if err := s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", msg); err != nil {
-			return false, err
+	if renewal, msg := agentCertificateRenewalProblem(srv, now); renewal {
+		if msg != "" {
+			if err := s.markAgentStatus(ctx, srv.ID, agentcontract.StatusIncompatible, "", msg); err != nil {
+				return false, err
+			}
 		}
 		return true, nil
 	}
