@@ -1,10 +1,12 @@
 package applications
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -431,7 +433,7 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 func TestPanelFileMountCreatesReadOnlyRuntimeFile(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
-	svc.SetPanelFileProvider(fakePanelFileProvider{content: []byte("CERTIFICATE")})
+	svc.SetInternalFileProvider(fakeInternalFileProvider{content: []byte("CERTIFICATE")})
 
 	if _, err := svc.Create(context.Background(), SaveInput{
 		Name:     "tls",
@@ -1030,8 +1032,8 @@ func (s *Service) SetBuiltinVariableResolver(resolver BuiltinVariableResolver) {
 	s.builtinResolver = resolver
 }
 
-func (s *Service) SetPanelFileProvider(provider PanelFileProvider) {
-	s.panelFiles = provider
+func (s *Service) SetInternalFileProvider(provider InternalFileProvider) {
+	s.internalFiles = provider
 }
 
 func (s *Service) SetServerProvider(provider ServerProvider) {
@@ -1183,14 +1185,15 @@ func (f fakeImageResolver) Resolve(ctx context.Context, image string) (ImageDige
 	return f.result, f.err
 }
 
-type fakePanelFileProvider struct {
+type fakeInternalFileProvider struct {
 	content []byte
 }
 
-func (f fakePanelFileProvider) PanelFileCatalog(ctx context.Context) ([]PanelFileDefinition, error) {
+func (f fakeInternalFileProvider) InternalFileCatalog(ctx context.Context) ([]PanelFileDefinition, error) {
 	return nil, nil
 }
 
-func (f fakePanelFileProvider) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
-	return append([]byte(nil), f.content...), nil
+func (f fakeInternalFileProvider) OpenInternalFile(ctx context.Context, source string) (io.ReadCloser, InternalFileInfo, error) {
+	content := append([]byte(nil), f.content...)
+	return io.NopCloser(bytes.NewReader(content)), InternalFileInfo{Mode: "0644", Size: int64(len(content))}, nil
 }

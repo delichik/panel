@@ -68,7 +68,10 @@
 - 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。运行时实例响应同时返回 `serverId` 和 `serverName`，前端优先展示服务器名称，并保留 ID 作为辅助信息。
 - 模板目录提供 `server.id`、`server.name`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username` 等节点变量；值来自实际部署目标服务器。
 - 应用文件模板在后端部署渲染阶段可读 `PANEL_SERVER_*` 变量，因此同一应用在不同服务器会得到不同的服务器值。
-- `panel_file` 挂载只接受 `key_asset:<asset-id>:<kind>`，用于稳定引用 Panel 托管密钥或证书文件。
+- `panel_file` 挂载通过应用侧内部文件 registry 分发，来源模块必须在装配阶段显式注册自己的 source scheme；当前只注册 `key_asset:<asset-id>:<kind>`，用于稳定引用用户域 Panel 托管密钥或证书文件。
+- 内部文件读取接口使用 `OpenInternalFile` 流式打开，registry 只负责按 source scheme 分发；当前 agent managed-file 契约仍在应用部署组装阶段读取为内存内容后下发。
+- 系统内置 Agent CA、Panel Agent 客户端证书和 Agent 服务端证书不注册为应用内部文件来源，即使底层作为系统托管资产保存，也不能作为应用文件挂载。
+- 应用内置变量同样通过应用侧变量 registry 注册，来源模块按根 key 注册变量集合；当前证书模块注册 `certs`，模板仍通过 `.certs.<variable>` 读取。
 - 私钥内容不通过目录 API 返回，只在部署渲染时由后端解密并作为只读 managed file 下发给 agent。
 - 密钥资产服务扫描应用 spec 和反向代理域名，返回精确的应用 ID、名称及 `panel_file` / `reverse_proxy` 引用，用于删除保护和导入覆盖确认。
 - 证书续签、密钥资产重新签发、SSH 密钥重新生成和批量导入会调用 `RedeployEnabledApplications`，确保每台服务器重新按自身变量渲染。

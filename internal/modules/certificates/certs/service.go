@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"panel/internal/modules/applications"
 	"panel/internal/modules/certificates/dns"
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/keyassets"
@@ -56,8 +55,6 @@ type keyAssetProvider interface {
 	CreateTLS(ctx context.Context, in keyassets.CreateTLSRequest) (keyassets.Asset, error)
 	ReissueTLS(ctx context.Context, assetID string) (keyassets.ReissueResult, error)
 	Delete(ctx context.Context, assetID string) error
-	PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error)
-	ReadPanelFile(ctx context.Context, source string) ([]byte, error)
 	ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error)
 }
 
@@ -438,6 +435,14 @@ func (s *Service) Delete(ctx context.Context, certID string) error {
 }
 
 func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) {
+	certVars, err := s.ApplicationVariables(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"certs": certVars}, nil
+}
+
+func (s *Service) ApplicationVariables(ctx context.Context) (any, error) {
 	certs, err := s.List(ctx)
 	if err != nil {
 		return nil, err
@@ -463,30 +468,7 @@ func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) 
 			"domains":         append([]string(nil), cert.Domains...),
 		}
 	}
-	return map[string]any{"certs": certVars}, nil
-}
-
-func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error) {
-	out := []applications.PanelFileDefinition{}
-	if s.keyAssets != nil {
-		files, err := s.keyAssets.PanelFileCatalog(ctx)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, files...)
-	}
-	return out, nil
-}
-
-func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
-	parts := strings.Split(strings.TrimSpace(source), ":")
-	if len(parts) != 3 || parts[0] != "key_asset" {
-		return nil, panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
-	}
-	if s.keyAssets == nil {
-		return nil, panelerr.NotFound("Panel key asset file")
-	}
-	return s.keyAssets.ReadPanelFile(ctx, source)
+	return certVars, nil
 }
 
 func (s *Service) certificateInUse(ctx context.Context, certID string, domains []string, variableName string) (bool, error) {

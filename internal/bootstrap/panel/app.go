@@ -92,6 +92,9 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
+	internalFileRegistry := applications.NewInternalFileRegistry()
+	internalFileRegistry.Register("key_asset", keyAssetSvc)
+	variableRegistry := applications.NewApplicationVariableRegistry()
 	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
 	agentClient, err := agentclient.NewHTTPClient(agentTLS, cfg.RemoteTimeout())
 	if err != nil {
@@ -108,8 +111,8 @@ func New(cfg config.Config) (*App, error) {
 		SaveSessionDir: applicationSaveSessionDir(cfg),
 	},
 		applications.WithServerProvider(serverSvc),
-		applications.WithBuiltinVariableResolver(certBridge),
-		applications.WithPanelFileProvider(certBridge),
+		applications.WithBuiltinVariableResolver(variableRegistry),
+		applications.WithInternalFileProvider(internalFileRegistry),
 		applications.WithContainerOperationQueue(containerBridge),
 	)
 	certBridge.apps = applicationSvc
@@ -131,7 +134,7 @@ func New(cfg config.Config) (*App, error) {
 		certs.WithKeyAssetProvider(keyAssetSvc),
 		certs.WithApplicationRefresher(certBridge),
 	)
-	certBridge.certs = certSvc
+	variableRegistry.Register("certs", certSvc)
 	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, metricsSvc, packageSvc, certSvc)
 	systemSvc := systeminfo.NewService(nil)
 	systemSvc.Start(context.Background())

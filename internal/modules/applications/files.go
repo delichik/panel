@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"io"
 	"strings"
 	"time"
 
@@ -150,15 +151,27 @@ func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec app
 	managed := append([]appruntime.ManagedFile(nil), job.Files...)
 	for _, mount := range fileMounts {
 		if strings.TrimSpace(mount.Type) == "panel_file" {
-			if s.panelFiles == nil {
-				return appruntime.Spec{}, panelerr.Validation("panel_file_provider_unavailable", "Panel managed file provider is unavailable")
+			if s.internalFiles == nil {
+				return appruntime.Spec{}, panelerr.Validation("panel_file_provider_unavailable", "Internal file provider is unavailable")
 			}
-			content, err := s.panelFiles.ReadPanelFile(ctx, mount.Source)
+			reader, info, err := s.internalFiles.OpenInternalFile(ctx, mount.Source)
 			if err != nil {
 				return appruntime.Spec{}, err
 			}
+			content, err := io.ReadAll(reader)
+			closeErr := reader.Close()
+			if err != nil {
+				return appruntime.Spec{}, err
+			}
+			if closeErr != nil {
+				return appruntime.Spec{}, closeErr
+			}
 			rel := panelFileAllocationName(mount.Source)
-			managed = append(managed, appruntime.ManagedFile{Path: rel, Content: content, Mode: panelFilePerms(mount.Source)})
+			mode := strings.TrimSpace(info.Mode)
+			if mode == "" {
+				mode = panelFilePerms(mount.Source)
+			}
+			managed = append(managed, appruntime.ManagedFile{Path: rel, Content: content, Mode: mode})
 			mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: true})
 			continue
 		}

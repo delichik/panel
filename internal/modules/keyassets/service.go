@@ -1,6 +1,7 @@
 package keyassets
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/x509"
@@ -9,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -686,13 +688,16 @@ func (s *Service) ReadFile(ctx context.Context, assetID, kind string) ([]byte, s
 	return nil, "", panelerr.Validation("panel_file_kind_invalid", "Key asset file kind is invalid")
 }
 
-func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error) {
+func (s *Service) InternalFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error) {
 	assets, err := s.List(ctx)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]applications.PanelFileDefinition, 0, len(assets)*3)
 	for _, asset := range assets {
+		if isSystemManagedAsset(asset) {
+			continue
+		}
 		for _, kind := range fileKindsForAsset(asset.Type) {
 			out = append(out, applications.PanelFileDefinition{
 				ID:           asset.ID + ":" + kind,
@@ -707,13 +712,27 @@ func (s *Service) PanelFileCatalog(ctx context.Context) ([]applications.PanelFil
 	return out, nil
 }
 
-func (s *Service) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
-	assetID, kind, err := parsePanelFileSource(source)
+func (s *Service) OpenInternalFile(ctx context.Context, source string) (io.ReadCloser, applications.InternalFileInfo, error) {
+	assetID, kind, err := parseInternalFileSource(source)
 	if err != nil {
-		return nil, err
+		return nil, applications.InternalFileInfo{}, err
 	}
-	content, _, err := s.ReadFile(ctx, assetID, kind)
-	return content, err
+	asset, err := s.Get(ctx, assetID)
+	if err != nil {
+		return nil, applications.InternalFileInfo{}, err
+	}
+	if isSystemManagedAsset(asset) {
+		return nil, applications.InternalFileInfo{}, panelerr.NotFound("internal key asset file")
+	}
+	content, filename, err := s.ReadFile(ctx, assetID, kind)
+	if err != nil {
+		return nil, applications.InternalFileInfo{}, err
+	}
+	return io.NopCloser(bytes.NewReader(content)), applications.InternalFileInfo{
+		Name: filename,
+		Mode: panelFileMode(kind),
+		Size: int64(len(content)),
+	}, nil
 }
 
 func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error) {
@@ -1226,7 +1245,7 @@ func (s *Service) prepareImportedSSHAsset(in ImportRequest, forcedID string) (st
 	}, nil
 }
 
-func parsePanelFileSource(source string) (string, string, error) {
+func parseInternalFileSource(source string) (string, string, error) {
 	parts := strings.Split(strings.TrimSpace(source), ":")
 	if len(parts) != 3 {
 		return "", "", panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
@@ -1473,6 +1492,19 @@ func decorateAsset(asset Asset, references []AssetReference, childCount int) Ass
 	asset.CanRegenerate = asset.Type == TypeSSHKeyPair
 	asset.FileKinds = fileKindsForAsset(asset.Type)
 	return asset
+}
+
+func isSystemManagedAsset(asset Asset) bool {
+	return asset.Metadata[systemManagedKey] == true
+}
+
+func panelFileMode(kind string) string {
+	switch strings.TrimSpace(kind) {
+	case "private_key", "ca_private_key":
+		return "0600"
+	default:
+		return "0644"
+	}
 }
 
 func importIDPrefix(assetType string) string {

@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ import (
 	"panel/internal/platform/secrets"
 )
 
-func TestCreateAssetsExposePanelFilesAndProtectDeletes(t *testing.T) {
+func TestCreateAssetsExposeInternalFilesAndProtectDeletes(t *testing.T) {
 	svc, store, closeFn := newTestService(t)
 	defer closeFn()
 	ctx := context.Background()
@@ -52,7 +53,7 @@ mounts:
 		t.Fatal(err)
 	}
 
-	catalog, err := svc.PanelFileCatalog(ctx)
+	catalog, err := svc.InternalFileCatalog(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +70,7 @@ mounts:
 	if !foundTLS || !foundSSH {
 		t.Fatalf("panel file catalog missing expected items: %#v", catalog)
 	}
-	privateKey, err := svc.ReadPanelFile(ctx, "key_asset:"+sshAsset.ID+":private_key")
+	privateKey, err := readPanelFileForTest(ctx, svc, "key_asset:"+sshAsset.ID+":private_key")
 	if err != nil || !strings.Contains(string(privateKey), "PRIVATE KEY") {
 		t.Fatalf("ssh private key read failed: err=%v", err)
 	}
@@ -85,6 +86,27 @@ mounts:
 	}
 	if err := svc.Delete(ctx, sshAsset.ID); err == nil {
 		t.Fatal("expected in-use SSH asset delete to be blocked")
+	}
+}
+
+func TestSystemManagedAssetsAreNotApplicationInternalFiles(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+	if _, err := svc.EnsureAgentTLSAssets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := svc.InternalFileCatalog(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range catalog {
+		if item.ResourceID == SystemAgentCAAssetID || item.ResourceID == SystemAgentClientAssetID {
+			t.Fatalf("system managed asset exposed as application panel file: %#v", item)
+		}
+	}
+	if _, err := readPanelFileForTest(ctx, svc, "key_asset:"+SystemAgentCAAssetID+":certificate"); err == nil {
+		t.Fatal("expected system managed asset panel file read to be rejected")
 	}
 }
 
@@ -139,6 +161,15 @@ func TestListReportsExactPanelFileAndReverseProxyReferences(t *testing.T) {
 	if byID[ca.ID].ChildCount != 1 {
 		t.Fatalf("CA child count = %d", byID[ca.ID].ChildCount)
 	}
+}
+
+func readPanelFileForTest(ctx context.Context, svc *Service, source string) ([]byte, error) {
+	reader, _, err := svc.OpenInternalFile(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	return io.ReadAll(reader)
 }
 
 func TestImportRejectsEncryptedPrivateKeyAndSupportsArchiveFlows(t *testing.T) {

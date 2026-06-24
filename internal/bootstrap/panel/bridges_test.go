@@ -7,9 +7,6 @@ import (
 
 func TestApplicationCertificateBridgeRejectsUseBeforeInitialization(t *testing.T) {
 	bridge := &applicationCertificateBridge{}
-	if _, err := bridge.BuiltinVariables(context.Background()); err == nil {
-		t.Fatal("expected uninitialized certificate bridge error")
-	}
 	if _, err := bridge.RedeployEnabledApplications(context.Background()); err == nil {
 		t.Fatal("expected uninitialized application bridge error")
 	}

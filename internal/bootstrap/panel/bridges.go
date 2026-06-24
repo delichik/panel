@@ -5,34 +5,11 @@ import (
 	"errors"
 
 	"panel/internal/modules/applications"
-	"panel/internal/modules/certificates/certs"
 	"panel/internal/modules/containers"
 )
 
 type applicationCertificateBridge struct {
-	apps  *applications.Service
-	certs *certs.Service
-}
-
-func (b *applicationCertificateBridge) BuiltinVariables(ctx context.Context) (map[string]any, error) {
-	if b.certs == nil {
-		return nil, errors.New("certificate service is not initialized")
-	}
-	return b.certs.BuiltinVariables(ctx)
-}
-
-func (b *applicationCertificateBridge) PanelFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error) {
-	if b.certs == nil {
-		return nil, errors.New("certificate service is not initialized")
-	}
-	return b.certs.PanelFileCatalog(ctx)
-}
-
-func (b *applicationCertificateBridge) ReadPanelFile(ctx context.Context, source string) ([]byte, error) {
-	if b.certs == nil {
-		return nil, errors.New("certificate service is not initialized")
-	}
-	return b.certs.ReadPanelFile(ctx, source)
+	apps *applications.Service
 }
 
 func (b *applicationCertificateBridge) RedeployChangedApplications(ctx context.Context) (int, error) {

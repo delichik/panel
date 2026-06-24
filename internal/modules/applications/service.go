@@ -69,7 +69,7 @@ type Service struct {
 	configProvider  func() Config
 	renderer        templatex.Renderer
 	builtinResolver BuiltinVariableResolver
-	panelFiles      PanelFileProvider
+	internalFiles   InternalFileProvider
 	proxyReconciler ReverseProxyReconciler
 	imageResolver   ImageDigestResolver
 	operationQueue  ContainerOperationQueue
@@ -103,15 +103,6 @@ type LogResult struct {
 type PackageResult struct {
 	Filename string
 	Content  []byte
-}
-
-type BuiltinVariableResolver interface {
-	BuiltinVariables(ctx context.Context) (map[string]any, error)
-}
-
-type PanelFileProvider interface {
-	PanelFileCatalog(ctx context.Context) ([]PanelFileDefinition, error)
-	ReadPanelFile(ctx context.Context, source string) ([]byte, error)
 }
 
 type ReverseProxyReconciler interface {
@@ -159,8 +150,8 @@ func WithBuiltinVariableResolver(resolver BuiltinVariableResolver) Option {
 	return func(s *Service) { s.builtinResolver = resolver }
 }
 
-func WithPanelFileProvider(provider PanelFileProvider) Option {
-	return func(s *Service) { s.panelFiles = provider }
+func WithInternalFileProvider(provider InternalFileProvider) Option {
+	return func(s *Service) { s.internalFiles = provider }
 }
 
 func WithContainerOperationQueue(queue ContainerOperationQueue) Option {
@@ -216,8 +207,8 @@ func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) 
 		{Key: "server.ssh_port", Category: "server", SpecExpression: "${node.meta.panel_ssh_port}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_PORT" }}`},
 		{Key: "server.ssh_username", Category: "server", SpecExpression: "${node.meta.panel_ssh_username}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_USERNAME" }}`},
 	}}
-	if s.panelFiles != nil {
-		files, err := s.panelFiles.PanelFileCatalog(ctx)
+	if s.internalFiles != nil {
+		files, err := s.internalFiles.InternalFileCatalog(ctx)
 		if err != nil {
 			return TemplateCatalog{}, err
 		}
