@@ -1825,6 +1825,14 @@ func (f *serverFakeAgentClient) UFWDelete(_ context.Context, url string, _ agent
 	f.ufwURL = url
 	return f.ufw, f.err
 }
+
+func (f *serverFakeAgentClient) Fail2BanStatus(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{Installed: true, Active: true, Jails: []string{"sshd"}}, f.err
+}
+
+func (f *serverFakeAgentClient) ApplyFail2Ban(context.Context, string, agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{Installed: true, Active: true, Jails: []string{"sshd"}}, f.err
+}
 func (f *serverFakeAgentClient) RestartSystem(context.Context, string) error {
 	return f.err
 }

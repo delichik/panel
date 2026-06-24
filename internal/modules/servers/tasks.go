@@ -40,6 +40,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		},
 		{Type: ufwInstallTaskType, StaleQueuedAfter: 10 * time.Minute},
 		{Type: ufwEnableTaskType},
+		{Type: fail2banApplyTaskType},
 		{Type: restartTaskType},
 		{
 			Type:        agentDeployTaskType,

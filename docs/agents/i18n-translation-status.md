@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/servers/firewall/index.vue`、`internal/modules/servers/fail2ban.go`
+  - 防火墙页新增 fail2ban 表单/YAML 双模式配置、安装/应用任务提示、任务类型和后端校验错误码，已接入英文与简体中文词条；目标机 `fail2ban-client`、systemd 和命令诊断保持原文。
 - `web/src/views/runtime/applications/index.vue`
   - 应用选择器中“运行中 · 有更新”状态已接入英文和简体中文词条。
 - `web/src/layouts/AppLayout.vue`、`web/src/theme.ts`

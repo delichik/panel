@@ -33,6 +33,7 @@ const ufwInstallTaskType = "server_ufw_install"
 const ufwEnableTaskType = "server_ufw_enable"
 const ufwInstallTimeout = 5 * time.Minute
 const ufwManageTimeout = time.Minute
+const fail2banApplyTaskType = "server_fail2ban_apply"
 const restartTaskType = "server_restart"
 const restartTimeout = 15 * time.Second
 const agentDeployTaskType = "server_agent_deploy"

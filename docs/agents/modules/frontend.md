@@ -64,6 +64,7 @@
   - 节点：`node/index.vue`
   - 凭据：`credentials/index.vue`
   - 防火墙：`firewall/index.vue`
+    - 页面同时管理 UFW 规则和 fail2ban。fail2ban 区域提供表单与结构化 YAML Raw 双模式；Raw 使用 Panel 的 `jails` 结构并可与表单双向转换，不是目标机原始 fail2ban 配置文件。
   - 软件包：`packages/index.vue`
   - 组内共享：`_shared/`
   - 服务器详情的 Agent 操作通过 `POST /api/v1/servers/{id}/agent/deploy` 创建部署任务；未安装时显示安装，已安装但异常时显示重装，并通过任务中心跟踪结果。

@@ -49,7 +49,7 @@
 - 任务进入 `completed`、`failed`、`failed_retryable`、`blocked` 或 `cancelled` 等终态后，后台 worker 后续的完成/失败/重试写入不得覆盖既有终态；服务器删除会把该服务器的 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务标记为 `cancelled`，避免卡住删除或被调度器继续捡起。
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
 - Panel 启动时以及 tasks 内部 worker 运行期间每 5 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
-- 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用，必须在 API 返回前先标记为 `running`。`server_agent_deploy` 虽然也由内存 goroutine 执行，但必须接入调度器 `run-now` / `retry`，用于恢复旧的排队部署任务并重新同步 agent 证书。
+- 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用、fail2ban 应用，必须在 API 返回前先标记为 `running`。`server_agent_deploy` 虽然也由内存 goroutine 执行，但必须接入调度器 `run-now` / `retry`，用于恢复旧的排队部署任务并重新同步 agent 证书。
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
@@ -63,14 +63,14 @@
 
 ## 跨模块依赖
 
-- 服务器测试、重启、UFW、agent 部署和软件包维护依赖本模块记录任务；其中没有 executor 的一次性 worker 或记录型任务只保留任务记录，不暴露任务中心重试。
+- 服务器测试、重启、UFW、fail2ban、agent 部署和软件包维护依赖本模块记录任务；其中没有 executor 的一次性 worker 或记录型任务只保留任务记录，不暴露任务中心重试。
 - 应用部署、停止、重启、镜像检查和镜像更新依赖本模块记录任务；实际容器操作由应用服务调用 agent runtime API。
 - 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；成功后会立即创建 `container_refresh`、`image_refresh` 或 `volume_refresh` 刷新任务。
 - 手动镜像刷新、Application 镜像升级和 Application 协调恢复仍依赖本模块记录任务；同服务器 Docker 写操作由容器化模块串行执行。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。
 - 启用服务器 agent 后，`metrics_collect` 与普通 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、`metrics_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
-- 软件包刷新/升级、UFW 写操作和服务器重启必须路由到兼容 Agent，不允许回退 SSH。长耗时 APT 请求使用独立 Agent maintenance HTTP 超时并把命令输出写入 Panel 任务日志；SSH 只保留 Agent bootstrap、安装、修复和证书恢复。
+- 软件包刷新/升级、UFW 写操作、fail2ban 安装/应用和服务器重启必须路由到兼容 Agent，不允许回退 SSH。长耗时 APT 请求使用独立 Agent maintenance HTTP 超时并把命令输出写入 Panel 任务日志；SSH 只保留 Agent bootstrap、安装、修复和证书恢复。
 
 ## 密钥资产任务
 

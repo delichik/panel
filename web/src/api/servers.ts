@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { AgentCertificateBundleDto, CredentialDto, PrivilegeMode, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
+import type { AgentCertificateBundleDto, CredentialDto, Fail2BanStateDto, Fail2BanUpdateInput, PrivilegeMode, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
 
 export interface ServerInput {
   name: string;
@@ -89,6 +89,15 @@ export function createServersApi(client = apiClient) {
     },
     deleteUFWRule(serverId: string, number: number) {
       return client.delete<UfwStateDto>(`/servers/${serverId}/ufw/rules/${number}`);
+    },
+    fail2BanState(serverId: string) {
+      return client.get<Fail2BanStateDto>(`/servers/${serverId}/fail2ban`);
+    },
+    saveFail2Ban(serverId: string, input: Fail2BanUpdateInput) {
+      return client.put<TaskCreatedDto>(`/servers/${serverId}/fail2ban`, input);
+    },
+    installFail2Ban(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/fail2ban/install`);
     },
     async listCredentials() {
       return normalizeList(await client.get<CredentialDto[] | null>('/credentials'));

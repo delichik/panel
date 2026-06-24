@@ -96,6 +96,41 @@ type UFWAllowRequest struct {
 	From     string `json:"from"`
 }
 
+type Fail2BanState struct {
+	ServerID   string         `json:"serverId"`
+	Installed  bool           `json:"installed"`
+	Active     bool           `json:"active"`
+	Jails      []string       `json:"jails"`
+	Raw        string         `json:"raw"`
+	ConfigYAML string         `json:"configYaml"`
+	Config     Fail2BanConfig `json:"config"`
+	UpdatedAt  *time.Time     `json:"updatedAt,omitempty"`
+}
+
+type Fail2BanUpdateRequest struct {
+	ConfigYAML string `json:"configYaml"`
+}
+
+type Fail2BanConfig struct {
+	Jails []Fail2BanJail `json:"jails" yaml:"jails"`
+}
+
+type Fail2BanJail struct {
+	Name     string            `json:"name" yaml:"name"`
+	Enabled  bool              `json:"enabled" yaml:"enabled"`
+	Filter   string            `json:"filter,omitempty" yaml:"filter,omitempty"`
+	LogPath  string            `json:"logpath,omitempty" yaml:"logpath,omitempty"`
+	Backend  string            `json:"backend,omitempty" yaml:"backend,omitempty"`
+	Port     string            `json:"port,omitempty" yaml:"port,omitempty"`
+	Protocol string            `json:"protocol,omitempty" yaml:"protocol,omitempty"`
+	Action   string            `json:"action,omitempty" yaml:"action,omitempty"`
+	MaxRetry int               `json:"maxretry,omitempty" yaml:"maxretry,omitempty"`
+	FindTime string            `json:"findtime,omitempty" yaml:"findtime,omitempty"`
+	BanTime  string            `json:"bantime,omitempty" yaml:"bantime,omitempty"`
+	IgnoreIP []string          `json:"ignoreip,omitempty" yaml:"ignoreip,omitempty"`
+	Options  map[string]string `json:"options,omitempty" yaml:"options,omitempty"`
+}
+
 type AgentCertificateBundle struct {
 	CA            string `json:"ca"`
 	Certificate   string `json:"certificate"`

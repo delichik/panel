@@ -24,6 +24,18 @@ export const initialMockState = {
     'srv-edge': { serverId: 'srv-edge', supported: true, installed: true, active: true, status: 'active', defaultPolicy: 'deny (incoming), allow (outgoing)', rules: [{ number: 1, to: '22/tcp', action: 'ALLOW IN', from: '10.0.0.0/8' }, { number: 2, to: '80,443/tcp', action: 'ALLOW IN', from: 'Anywhere' }] },
     'srv-db': { serverId: 'srv-db', supported: true, installed: true, active: false, status: 'inactive', defaultPolicy: 'deny (incoming), allow (outgoing)', rules: [] },
   } as Record<string, { serverId: string; supported: boolean; installed: boolean; active: boolean; status: string; defaultPolicy: string; rules: Array<{ number: number; to: string; action: string; from: string }> }>,
+  fail2ban: {
+    'srv-edge': {
+      serverId: 'srv-edge',
+      installed: true,
+      active: true,
+      jails: ['sshd'],
+      raw: 'Status\n|- Number of jail:\t1\n`- Jail list:\tsshd\n',
+      configYaml: 'jails:\n  - name: sshd\n    enabled: true\n    filter: sshd\n    port: ssh\n    logpath: /var/log/auth.log\n    backend: systemd\n    maxretry: 5\n    findtime: 10m\n    bantime: 1h\n    ignoreip:\n      - 127.0.0.1/8\n',
+      config: { jails: [{ name: 'sshd', enabled: true, filter: 'sshd', port: 'ssh', logpath: '/var/log/auth.log', backend: 'systemd', maxretry: 5, findtime: '10m', bantime: '1h', ignoreip: ['127.0.0.1/8'], options: {} }] },
+      updatedAt: now,
+    },
+  } as Record<string, { serverId: string; installed: boolean; active: boolean; jails: string[]; raw: string; configYaml: string; config: { jails: Array<Record<string, unknown>> }; updatedAt?: string }>,
   packageUpdates: [
     { name: 'docker-ce', installedVersion: '27.5.0', candidateVersion: '28.1.1', source: 'Docker CE Stable' },
     { name: 'openssl', installedVersion: '3.0.13-1', candidateVersion: '3.0.14-1', source: 'Ubuntu Security' },

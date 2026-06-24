@@ -97,6 +97,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		status, err := h.collector.DeleteUFW(r.Context(), req)
 		writeResult(w, agentcontract.UFWStatusResponseFromStatus(status), err)
+	case r.Method == http.MethodGet && path == "/v1/fail2ban/status":
+		status, err := h.collector.Fail2BanStatus(r.Context())
+		writeResult(w, status, err)
+	case r.Method == http.MethodPost && path == "/v1/fail2ban/apply":
+		var req agentcontract.Fail2BanApplyRequest
+		if !decodeJSON(w, r, &req) {
+			return
+		}
+		status, err := h.collector.ApplyFail2Ban(r.Context(), req)
+		writeResult(w, status, err)
 	case r.Method == http.MethodPost && path == "/v1/system/restart":
 		err := h.collector.RestartSystem(r.Context())
 		writeResult(w, map[string]bool{"ok": err == nil}, err)

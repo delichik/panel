@@ -99,6 +99,41 @@ export interface UfwAllowInput {
   from?: string;
 }
 
+export interface Fail2BanJailDto {
+  name: string;
+  enabled: boolean;
+  filter?: string;
+  logpath?: string;
+  backend?: string;
+  port?: string;
+  protocol?: string;
+  action?: string;
+  maxretry?: number;
+  findtime?: string;
+  bantime?: string;
+  ignoreip?: string[];
+  options?: Record<string, string>;
+}
+
+export interface Fail2BanConfigDto {
+  jails: Fail2BanJailDto[];
+}
+
+export interface Fail2BanStateDto {
+  serverId: string;
+  installed: boolean;
+  active: boolean;
+  jails: string[];
+  raw: string;
+  configYaml: string;
+  config: Fail2BanConfigDto;
+  updatedAt?: string | null;
+}
+
+export interface Fail2BanUpdateInput {
+  configYaml: string;
+}
+
 export interface CredentialDto {
   id: string;
   name: string;

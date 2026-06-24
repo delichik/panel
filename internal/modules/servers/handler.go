@@ -180,6 +180,37 @@ func (h *Handler) DeleteUFWRule(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, state)
 }
 
+func (h *Handler) Fail2BanState(w http.ResponseWriter, r *http.Request) {
+	state, err := h.service.Fail2BanState(r.Context(), serverIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, state)
+}
+
+func (h *Handler) SaveFail2Ban(w http.ResponseWriter, r *http.Request) {
+	var req Fail2BanUpdateRequest
+	if !httpx.Decode(w, r, &req) {
+		return
+	}
+	task, err := h.service.SaveFail2Ban(r.Context(), serverIDFromRequest(r), req)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
+func (h *Handler) InstallFail2Ban(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.InstallFail2Ban(r.Context(), serverIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]any{"taskId": task.ID})
+}
+
 func serverIDFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.PathValue("id"))
 }

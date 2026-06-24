@@ -64,6 +64,12 @@ func (s *Store) Migrate(ctx context.Context) error {
 			refreshed_at TEXT NOT NULL,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS fail2ban_configs (
+			server_id TEXT PRIMARY KEY,
+			config_yaml TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS image_updates (
 			server_id TEXT NOT NULL,
 			reference TEXT NOT NULL,
