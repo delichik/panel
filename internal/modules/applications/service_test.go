@@ -634,6 +634,51 @@ func TestRuntimeRefreshesInstanceStatuses(t *testing.T) {
 	}
 }
 
+func TestRuntimeShowsSelectedTargetThatFailsBeforeInstanceDeploy(t *testing.T) {
+	svc, _, servers, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	srvC := readyServer("srv-c")
+	srvC.Traits[agentcontract.TraitStatus] = agentcontract.StatusUndeployable
+	servers.items[srvC.ID] = srvC
+	insertApplicationTestServer(t, svc, srvC)
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           false,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a", "srv-b", "srv-c"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Deploy(ctx, app.ID); err == nil {
+		t.Fatal("expected partial deployment failure")
+	}
+	runtime, err := svc.Runtime(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.Instances) != 3 {
+		t.Fatalf("runtime instances = %#v", runtime.Instances)
+	}
+	var failed appruntime.InstanceStatus
+	for _, instance := range runtime.Instances {
+		if instance.ServerID == "srv-c" {
+			failed = instance
+			break
+		}
+	}
+	if failed.ServerID != "srv-c" || failed.Status != appruntime.StatusFailed || failed.LastError == "" {
+		t.Fatalf("failed target not represented: %#v", runtime.Instances)
+	}
+	if runtime.Operation == nil || len(runtime.Operation.Targets) != 3 || runtime.Operation.Status != LifecycleStatusPartiallyDeployed {
+		t.Fatalf("operation = %#v", runtime.Operation)
+	}
+}
+
 func TestListWithRuntimeRefreshesRuntimeStatus(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -1100,6 +1145,17 @@ func readyServer(id string) server.Server {
 		Variables: map[string]string{
 			"role": id + "-role",
 		},
+	}
+}
+
+func insertApplicationTestServer(t *testing.T, svc *Service, srv server.Server) {
+	t.Helper()
+	traits, _ := json.Marshal(srv.Traits)
+	variables, _ := json.Marshal(srv.Variables)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := svc.db.Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, "cred_1", srv.DockerHost, string(traits), string(variables), now, now); err != nil {
+		t.Fatal(err)
 	}
 }
 

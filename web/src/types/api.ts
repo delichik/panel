@@ -757,6 +757,7 @@ export interface ApplicationRuntimeInstanceDto {
   containerId?: string;
   status: string;
   desiredState: string;
+  stage?: string;
   image?: string;
   startedAt?: string;
   finishedAt?: string;
@@ -769,8 +770,45 @@ export interface ApplicationRuntimeDto {
   applicationId: string;
   runtimeId: string;
   status: string;
+  operation?: ApplicationLifecycleOperationDto;
   instances: ApplicationRuntimeInstanceDto[];
   observedAt: string;
+}
+
+export interface ApplicationLifecycleOperationDto {
+  id: string;
+  applicationId: string;
+  type: string;
+  status: string;
+  taskId?: string;
+  generation: number;
+  specHash?: string;
+  trigger?: string;
+  error?: string;
+  targets?: ApplicationLifecycleTargetDto[];
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  updatedAt: string;
+}
+
+export interface ApplicationLifecycleTargetDto {
+  id: string;
+  operationId: string;
+  applicationId: string;
+  serverId: string;
+  serverName?: string;
+  status: string;
+  desiredState: string;
+  instanceId?: string;
+  containerName?: string;
+  containerId?: string;
+  stage?: string;
+  error?: string;
+  createdAt: string;
+  startedAt?: string;
+  finishedAt?: string;
+  updatedAt: string;
 }
 
 export interface ApplicationLogsDto {

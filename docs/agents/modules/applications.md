@@ -42,9 +42,10 @@
 
 ## 数据与行为约定
 
-- 主要表包括 `applications`、`application_files`、`application_revisions`、`application_instances`。
+- 主要表包括 `applications`、`application_files`、`application_revisions`、`application_lifecycle_operations`、`application_lifecycle_targets`、`application_instances`。
 - appspec 以 YAML 输入，经 `internal/modules/applications/spec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器并编排运行时步骤，再通过目标机 `panel-agent` 的原子接口写入托管文件、拉取镜像、删除旧容器、创建容器、启动容器和刷新状态。
-- `application_instances` 是 Panel 的运行时事实表，按 `application_id + server_id` 记录实例、容器名、容器 ID、期望状态、最近状态、渲染后的 runtime spec 和部署 generation。
+- `application_lifecycle_operations` 记录一次应用生命周期意图，当前用于部署类流程，保存应用、任务、generation、spec hash、操作类型、整体状态和错误；`application_lifecycle_targets` 按服务器记录本次操作的目标状态、阶段、实例 ID、容器信息和错误。选中 3 台服务器时必须先落 3 条 target，即使某台在 agent 校验、模板渲染或容器创建前失败，也必须在运行时视图中显示为 failed/pending，不得只展示已经创建过 `application_instances` 的服务器。
+- `application_instances` 是 Panel 的当前运行时事实表，按 `application_id + server_id` 记录实例、容器名、容器 ID、期望状态、最近状态、渲染后的 runtime spec 和部署 generation；它不再承担“本次部署目标清单”的职责。
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID，并依赖数据库外键级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
 - 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后只移除来源 `application_instances` 记录，不停止或删除来源容器。
@@ -54,18 +55,19 @@
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
 - 启用应用、部署、镜像更新等流程需要先校验和计划，再确认目标服务器 agent runtime 可用，然后写入应用修订和实例记录；部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标部署中单台服务器部署失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
 - 应用部署的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
-- 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的操作只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得创建新的运行时操作任务、不得修改应用启用状态，也不得回退 SSH。运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
-- 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。
+- 应用部署流程必须先创建 lifecycle operation 和全部目标 target，再逐台执行 `validate_agent`、`render`、`write_files`、`pull_image`、`remove_*_container`、`create_container`、`start_container`、`inspect` 等阶段；每阶段失败都更新对应 target，成功实例继续保留，部分失败时 operation 状态为 `partially_deployed`。
+- 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的远端调用只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得发起 agent runtime 调用，也不得回退 SSH。部署类 lifecycle operation 仍必须为选中目标记录 failed target，避免配置目标在运行时视图中消失；运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
+- 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。部署 target 失败原因必须写入 lifecycle target，供运行时视图展示。
 - Application 容器使用 `panel.application.*` Label 标识。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
 - containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
-- 应用列表接口会刷新已记录实例的运行时状态并聚合为 `runtimeStatus`；左侧 `AppSelectorPanel` 只展示应用名称、运行状态和更新时间，jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在右侧详情。运行中的应用存在镜像更新时，选择器状态 Chip 使用 warning 色并显示“运行中 · 有更新”，其他运行状态保持原有展示。
+- 应用列表接口会刷新已记录实例的运行时状态，并合并最近 lifecycle operation targets 后聚合为 `runtimeStatus`；左侧 `AppSelectorPanel` 只展示应用名称、运行状态和更新时间，jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在右侧详情。运行中的应用存在镜像更新时，选择器状态 Chip 使用 warning 色并显示“运行中 · 有更新”，其他运行状态保持原有展示。
 - 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；编辑、部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
 - 应用页面不展示应用总数、已启用和需要关注摘要卡，页面级提示后直接进入主从工作区。
 - 应用右侧详情使用单张满高 outlined 卡片：运行状态和启用状态位于标题下方，操作按钮单独位于头部右侧；可滚动正文按基本信息、镜像更新和运行实例分区。下载包、持久化数据、迁移和删除收进更多菜单，不再把运行时面板渲染为独立并列卡片。
 - 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；`purge` 参数会传给 agent 清理容器。
-- 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。运行时实例响应同时返回 `serverId` 和 `serverName`，前端优先展示服务器名称，并保留 ID 作为辅助信息。
+- 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。运行时实例响应同时返回 `serverId`、`serverName` 和 lifecycle `stage`，前端优先展示服务器名称，并保留 ID 作为辅助信息；没有容器的 pending/failed target 不提供日志入口。
 - 模板目录提供 `app.id`、`app.name`、`app.namespace`、`app.generation` 等应用变量，可用于 appspec YAML 和应用文件模板。
 - 模板目录提供 `server.id`、`server.name`、`server.host`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username`、`server.variables.<key>` 等节点变量；appspec YAML 中的节点差异仍通过 `${node.meta.panel_*}` 和容器内 `PANEL_SERVER_*` 环境变量表达，应用文件模板在部署到每台目标服务器前会用实际目标服务器上下文重新渲染，因此同一应用在不同服务器会得到不同文件内容。
 - `panel_file` 挂载通过应用侧内部文件 registry 分发，来源模块必须在装配阶段显式注册自己的 source scheme；当前只注册 `key_asset:<asset-id>:<kind>`，用于稳定引用用户域 Panel 托管密钥或证书文件。
@@ -93,6 +95,7 @@
 - 应用重启是可重放应用任务，`application_restart` 由应用模块注册 executor、`run-now` 和 `retry` 能力；executor 复用现有 runtime restart 流程并完成传入任务。
 - 应用刷新是可重放应用任务，`application_refresh` 由应用模块注册 executor、`run-now` 和 `retry` 能力；批量刷新和任务 executor 共用单应用刷新准备逻辑，只对启用且渲染 hash 变化的应用重新部署，任务 executor 在无变化时也会完成传入任务。
 - 应用镜像更新是可重放应用任务，`application_image_update` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 更新入口和任务 executor 共用镜像解析、digest 状态写入、revision 记录和 runtime redeploy 准备逻辑。
+- 应用部署、停止、重启、刷新和镜像更新任务共享应用级 lifecycle 并发 key，同一应用同一时间不得并行运行多个生命周期操作；不同应用仍可并行。
 - 新部署 Application 容器名使用 `panel-<application-name>`；停止、重启、状态和日志操作必须使用 `application_instances.container_name`。agent 必须与 Panel 构建版本完全一致才能被视为兼容；部署流程使用当前 agent 原子接口。
 
 ## 验证

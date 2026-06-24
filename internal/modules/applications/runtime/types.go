@@ -115,6 +115,7 @@ type InstanceStatus struct {
 	ContainerID   string    `json:"containerId,omitempty"`
 	Status        string    `json:"status"`
 	DesiredState  string    `json:"desiredState"`
+	Stage         string    `json:"stage,omitempty"`
 	Image         string    `json:"image,omitempty"`
 	StartedAt     string    `json:"startedAt,omitempty"`
 	FinishedAt    string    `json:"finishedAt,omitempty"`

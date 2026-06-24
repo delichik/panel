@@ -11,28 +11,32 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Type:              TaskTypeDeploy,
 			AllowRunNow:       true,
 			AllowRetry:        true,
-			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
+			ConcurrencyKey:    applicationLifecycleConcurrencyKey,
 			Execute:           s.RunDeployTask,
 		},
 		{
 			Type:              TaskTypeStop,
 			AllowRunNow:       true,
 			AllowRetry:        true,
-			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
+			ConcurrencyKey:    applicationLifecycleConcurrencyKey,
 			Execute:           s.RunStopTask,
 		},
 		{
 			Type:              TaskTypeRestart,
 			AllowRunNow:       true,
 			AllowRetry:        true,
-			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
+			ConcurrencyKey:    applicationLifecycleConcurrencyKey,
 			Execute:           s.RunRestartTask,
 		},
 		{
 			Type:              TaskTypeRefresh,
 			AllowRunNow:       true,
 			AllowRetry:        true,
-			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
+			ConcurrencyKey:    applicationLifecycleConcurrencyKey,
 			Execute:           s.RunRefreshTask,
 		},
 		{
@@ -46,10 +50,25 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Type:              TaskTypeImageUpdate,
 			AllowRunNow:       true,
 			AllowRetry:        true,
-			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
+			ConcurrencyKey:    applicationLifecycleConcurrencyKey,
 			Execute:           s.RunImageUpdateTask,
 		},
 	} {
 		taskSvc.MustRegister(def)
 	}
+}
+
+func applicationLifecycleConcurrencyKey(in tasks.CreateInput) string {
+	appID := in.ResourceID
+	if appID == "" {
+		appID = in.ServerID
+	}
+	if appID == "" {
+		appID = in.NodeID
+	}
+	if appID == "" {
+		return ""
+	}
+	return "application:lifecycle:" + appID
 }

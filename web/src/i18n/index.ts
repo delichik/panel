@@ -765,6 +765,7 @@ const messages = {
       group: "Group",
       client: "Client",
       desired: "Desired",
+      stage: "Stage",
       image: "Image",
       logs: "Logs",
       noAllocations: "No allocations",
@@ -773,6 +774,8 @@ const messages = {
       noEvaluations: "No evaluations",
       statusPending: "pending",
       statusDeploying: "deploying",
+      statusDeployed: "deployed",
+      statusPartiallyDeployed: "partially deployed",
       statusRunning: "running",
       statusStopped: "stopped",
       statusDead: "dead",
@@ -791,6 +794,18 @@ const messages = {
       desiredRunning: "running",
       desiredStopped: "stopped",
       desiredEvict: "evict",
+      latestOperation: "Latest operation",
+      stageValidateAgent: "validate agent",
+      stageRender: "render",
+      stagePrepareInstance: "prepare instance",
+      stageWriteFiles: "write files",
+      stagePullImage: "pull image",
+      stageRemovePreviousContainer: "remove previous container",
+      stageRemoveTargetContainer: "remove target container",
+      stageCreateContainer: "create container",
+      stageStartContainer: "start container",
+      stageInspect: "inspect",
+      stageStoreInstance: "store instance",
     },
     applicationLogs: {
       logs: "Logs",
@@ -2045,6 +2060,7 @@ const messages = {
       group: "组",
       client: "客户端",
       desired: "期望",
+      stage: "阶段",
       image: "镜像",
       logs: "日志",
       noAllocations: "暂无分配",
@@ -2053,6 +2069,8 @@ const messages = {
       noEvaluations: "暂无评估",
       statusPending: "待处理",
       statusDeploying: "部署中",
+      statusDeployed: "已部署",
+      statusPartiallyDeployed: "部分部署",
       statusRunning: "运行中",
       statusStopped: "已停止",
       statusDead: "已停止",
@@ -2071,6 +2089,18 @@ const messages = {
       desiredRunning: "运行",
       desiredStopped: "停止",
       desiredEvict: "驱逐",
+      latestOperation: "最近操作",
+      stageValidateAgent: "校验 Agent",
+      stageRender: "渲染",
+      stagePrepareInstance: "准备实例",
+      stageWriteFiles: "写入文件",
+      stagePullImage: "拉取镜像",
+      stageRemovePreviousContainer: "移除旧容器",
+      stageRemoveTargetContainer: "移除目标容器",
+      stageCreateContainer: "创建容器",
+      stageStartContainer: "启动容器",
+      stageInspect: "检查容器",
+      stageStoreInstance: "保存实例",
     },
     applicationLogs: {
       logs: "日志",
@@ -2653,6 +2683,7 @@ export function useI18n() {
     translateApplicationFileKind,
     translateRuntimeStatus,
     translateRuntimeDesiredState,
+    translateLifecycleStage,
     formatDateTime,
     formatTime,
   };
@@ -2731,6 +2762,8 @@ export function translateRuntimeStatus(value?: string | null) {
   const key = {
     pending: "applicationRuntime.statusPending",
     deploying: "applicationRuntime.statusDeploying",
+    deployed: "applicationRuntime.statusDeployed",
+    partially_deployed: "applicationRuntime.statusPartiallyDeployed",
     running: "applicationRuntime.statusRunning",
     stopped: "applicationRuntime.statusStopped",
     failed: "applicationRuntime.statusFailed",
@@ -2744,6 +2777,24 @@ export function translateRuntimeDesiredState(value?: string | null) {
   const key = {
     running: "applicationRuntime.desiredRunning",
     stopped: "applicationRuntime.desiredStopped",
+  }[value];
+  return key ? lookupWithFallback(key, humanizeEnum(value)) : humanizeEnum(value);
+}
+
+export function translateLifecycleStage(value?: string | null) {
+  if (!value) return t("common.notAvailable");
+  const key = {
+    validate_agent: "applicationRuntime.stageValidateAgent",
+    render: "applicationRuntime.stageRender",
+    prepare_instance: "applicationRuntime.stagePrepareInstance",
+    write_files: "applicationRuntime.stageWriteFiles",
+    pull_image: "applicationRuntime.stagePullImage",
+    remove_previous_container: "applicationRuntime.stageRemovePreviousContainer",
+    remove_target_container: "applicationRuntime.stageRemoveTargetContainer",
+    create_container: "applicationRuntime.stageCreateContainer",
+    start_container: "applicationRuntime.stageStartContainer",
+    inspect: "applicationRuntime.stageInspect",
+    store_instance: "applicationRuntime.stageStoreInstance",
   }[value];
   return key ? lookupWithFallback(key, humanizeEnum(value)) : humanizeEnum(value);
 }

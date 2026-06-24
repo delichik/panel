@@ -16,6 +16,22 @@ const (
 
 	DeploymentModeAll      = "all"
 	DeploymentModeSelected = "selected"
+
+	LifecycleTypeDeploy      = "deploy"
+	LifecycleTypeRefresh     = "refresh"
+	LifecycleTypeImageUpdate = "image_update"
+
+	LifecycleStatusPending           = "pending"
+	LifecycleStatusDeploying         = "deploying"
+	LifecycleStatusDeployed          = "deployed"
+	LifecycleStatusPartiallyDeployed = "partially_deployed"
+	LifecycleStatusFailed            = "failed"
+
+	LifecycleTargetStatusPending   = "pending"
+	LifecycleTargetStatusPreparing = "preparing"
+	LifecycleTargetStatusDeploying = "deploying"
+	LifecycleTargetStatusRunning   = "running"
+	LifecycleTargetStatusFailed    = "failed"
 )
 
 type Application struct {
@@ -135,8 +151,45 @@ type Runtime struct {
 	ApplicationID string                      `json:"applicationId"`
 	RuntimeID     string                      `json:"runtimeId"`
 	Status        string                      `json:"status"`
+	Operation     *LifecycleOperation         `json:"operation,omitempty"`
 	Instances     []appruntime.InstanceStatus `json:"instances"`
 	ObservedAt    time.Time                   `json:"observedAt"`
+}
+
+type LifecycleOperation struct {
+	ID            string            `json:"id"`
+	ApplicationID string            `json:"applicationId"`
+	Type          string            `json:"type"`
+	Status        string            `json:"status"`
+	TaskID        string            `json:"taskId,omitempty"`
+	Generation    int               `json:"generation"`
+	SpecHash      string            `json:"specHash,omitempty"`
+	Trigger       string            `json:"trigger,omitempty"`
+	Error         string            `json:"error,omitempty"`
+	Targets       []LifecycleTarget `json:"targets,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	StartedAt     *time.Time        `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time        `json:"finishedAt,omitempty"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+}
+
+type LifecycleTarget struct {
+	ID            string     `json:"id"`
+	OperationID   string     `json:"operationId"`
+	ApplicationID string     `json:"applicationId"`
+	ServerID      string     `json:"serverId"`
+	ServerName    string     `json:"serverName,omitempty"`
+	Status        string     `json:"status"`
+	DesiredState  string     `json:"desiredState"`
+	InstanceID    string     `json:"instanceId,omitempty"`
+	ContainerName string     `json:"containerName,omitempty"`
+	ContainerID   string     `json:"containerId,omitempty"`
+	Stage         string     `json:"stage,omitempty"`
+	Error         string     `json:"error,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	StartedAt     *time.Time `json:"startedAt,omitempty"`
+	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
+	UpdatedAt     time.Time  `json:"updatedAt"`
 }
 
 type SaveInput struct {

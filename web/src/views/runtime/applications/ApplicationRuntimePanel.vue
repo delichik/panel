@@ -10,7 +10,7 @@ const props = withDefaults(defineProps<{ application: ApplicationDto; embedded?:
   embedded: false,
 });
 const emit = defineEmits<{ logs: [{ instanceId: string; containerName: string }] }>();
-const { formatDateTime, t, translateRuntimeDesiredState, translateRuntimeStatus } = useI18n();
+const { formatDateTime, t, translateLifecycleStage, translateRuntimeDesiredState, translateRuntimeStatus } = useI18n();
 const runtime = ref<ApplicationRuntimeDto | null>(null);
 const loading = ref(false);
 const error = ref('');
@@ -41,8 +41,10 @@ onMounted(loadRuntime);
 function statusColor(status?: string | null) {
   switch (status) {
     case 'running':
+    case 'deployed':
       return 'success';
     case 'failed':
+    case 'partially_deployed':
       return 'error';
     case 'deploying':
     case 'pending':
@@ -73,6 +75,11 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
         <span class="text-caption text-medium-emphasis">{{ formatDateTime(runtime.observedAt) }}</span>
         <span class="text-caption text-medium-emphasis mono">{{ runtime.runtimeId || t('common.notAvailable') }}</span>
       </div>
+      <div v-if="runtime.operation" class="runtime-summary">
+        <span class="text-caption text-medium-emphasis">{{ t('applicationRuntime.latestOperation') }}</span>
+        <v-chip :color="statusColor(runtime.operation.status)" size="small" variant="tonal" label>{{ translateRuntimeStatus(runtime.operation.status) }}</v-chip>
+        <span class="text-caption text-medium-emphasis mono">{{ runtime.operation.id }}</span>
+      </div>
 
       <v-alert
         v-for="instance in failedInstances"
@@ -93,6 +100,7 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
             <th>{{ t('applicationRuntime.container') }}</th>
             <th>{{ t('common.status') }}</th>
             <th>{{ t('applicationRuntime.desired') }}</th>
+            <th>{{ t('applicationRuntime.stage') }}</th>
             <th>{{ t('applicationRuntime.image') }}</th>
             <th class="text-right">{{ t('applicationRuntime.logs') }}</th>
           </tr>
@@ -111,13 +119,14 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
               </v-chip>
             </td>
             <td>{{ translateRuntimeDesiredState(instance.desiredState) }}</td>
+            <td>{{ instance.stage ? translateLifecycleStage(instance.stage) : t('common.notAvailable') }}</td>
             <td class="text-truncate image-cell">{{ instance.image || t('common.notAvailable') }}</td>
             <td class="text-right">
-              <v-btn size="small" icon="mdi-text-box-search-outline" variant="text" :title="t('applicationRuntime.logs')" :disabled="!instance.instanceId" @click="openLogs(instance)" />
+              <v-btn size="small" icon="mdi-text-box-search-outline" variant="text" :title="t('applicationRuntime.logs')" :disabled="!instance.instanceId || !instance.containerName" @click="openLogs(instance)" />
             </td>
           </tr>
           <tr v-if="instances.length === 0">
-            <td colspan="7" class="text-center text-medium-emphasis py-4">{{ t('applicationRuntime.noInstances') }}</td>
+            <td colspan="8" class="text-center text-medium-emphasis py-4">{{ t('applicationRuntime.noInstances') }}</td>
           </tr>
         </tbody>
       </v-table>

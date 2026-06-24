@@ -1144,17 +1144,157 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 		return ApplicationRuntime{}, err
 	}
 	out.Instances = s.refreshInstanceStatuses(ctx, instances)
+	if operation, err := s.latestLifecycleOperation(ctx, app.ID); err == nil && operation.ID != "" {
+		out.Operation = &operation
+		out.Instances = mergeLifecycleTargetsIntoStatuses(out.Instances, operation.Targets)
+	} else if app.Enabled {
+		out.Instances = mergeLifecycleTargetsIntoStatuses(out.Instances, s.expectedLifecycleTargets(ctx, app))
+	}
 	out.Status = aggregateRuntimeStatus(app.Enabled, out.Instances)
 	return out, nil
 }
 
+func (s *Service) latestLifecycleOperation(ctx context.Context, appID string) (LifecycleOperation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
+		FROM application_lifecycle_operations WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, appID)
+	op, err := scanLifecycleOperation(row)
+	if err == sql.ErrNoRows {
+		return LifecycleOperation{}, panelerr.NotFound("application_lifecycle_operation")
+	}
+	if err != nil {
+		return LifecycleOperation{}, err
+	}
+	targets, err := s.lifecycleTargets(ctx, op.ID)
+	if err != nil {
+		return LifecycleOperation{}, err
+	}
+	op.Targets = targets
+	return op, nil
+}
+
+func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]LifecycleTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,operation_id,application_id,server_id,status,desired_state,instance_id,container_name,container_id,stage,error,created_at,started_at,finished_at,updated_at
+		FROM application_lifecycle_targets WHERE operation_id=? ORDER BY server_id ASC`, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []LifecycleTarget{}
+	for rows.Next() {
+		target, err := scanLifecycleTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		if s.servers != nil {
+			if srv, err := s.servers.Get(ctx, target.ServerID); err == nil {
+				target.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
+			}
+		}
+		out = append(out, target)
+	}
+	return out, rows.Err()
+}
+
+func (s *Service) expectedLifecycleTargets(ctx context.Context, app Application) []LifecycleTarget {
+	targets, err := s.deploymentTargets(ctx, app)
+	if err != nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	out := make([]LifecycleTarget, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, LifecycleTarget{
+			ID:            "expected-" + runtimeInstanceID(app.ID, target.ID),
+			ApplicationID: app.ID,
+			ServerID:      target.ID,
+			ServerName:    strings.TrimSpace(firstNonEmpty(target.Name, target.ID)),
+			Status:        LifecycleTargetStatusPending,
+			DesiredState:  appruntime.DesiredRunning,
+			InstanceID:    runtimeInstanceID(app.ID, target.ID),
+			ContainerName: runtimeContainerName(app),
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		})
+	}
+	return out
+}
+
+func mergeLifecycleTargetsIntoStatuses(statuses []appruntime.InstanceStatus, targets []LifecycleTarget) []appruntime.InstanceStatus {
+	if len(targets) == 0 {
+		return statuses
+	}
+	out := append([]appruntime.InstanceStatus(nil), statuses...)
+	byServer := map[string]int{}
+	byInstance := map[string]int{}
+	for i, status := range out {
+		if status.ServerID != "" {
+			byServer[status.ServerID] = i
+		}
+		if status.InstanceID != "" {
+			byInstance[status.InstanceID] = i
+		}
+	}
+	for _, target := range targets {
+		idx, ok := byInstance[target.InstanceID]
+		if !ok {
+			idx, ok = byServer[target.ServerID]
+		}
+		if ok {
+			if out[idx].LastError == "" {
+				out[idx].LastError = target.Error
+			}
+			if out[idx].ContainerName == "" {
+				out[idx].ContainerName = target.ContainerName
+			}
+			if out[idx].ContainerID == "" {
+				out[idx].ContainerID = target.ContainerID
+			}
+			if out[idx].Stage == "" {
+				out[idx].Stage = target.Stage
+			}
+			continue
+		}
+		out = append(out, appruntime.InstanceStatus{
+			InstanceID:    target.InstanceID,
+			ServerID:      target.ServerID,
+			ServerName:    target.ServerName,
+			ContainerName: target.ContainerName,
+			ContainerID:   target.ContainerID,
+			Status:        runtimeStatusFromLifecycleTarget(target.Status),
+			DesiredState:  target.DesiredState,
+			Stage:         target.Stage,
+			LastError:     target.Error,
+			ObservedAt:    target.UpdatedAt,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].ServerID == out[j].ServerID {
+			return out[i].InstanceID < out[j].InstanceID
+		}
+		return out[i].ServerID < out[j].ServerID
+	})
+	return out
+}
+
+func runtimeStatusFromLifecycleTarget(status string) string {
+	switch status {
+	case LifecycleTargetStatusRunning:
+		return appruntime.StatusRunning
+	case LifecycleTargetStatusFailed:
+		return appruntime.StatusFailed
+	case LifecycleTargetStatusDeploying, LifecycleTargetStatusPreparing:
+		return appruntime.StatusDeploying
+	default:
+		return appruntime.StatusPending
+	}
+}
+
 func (s *Service) withRuntimeSummary(ctx context.Context, app Application) (Application, error) {
-	instances, err := s.runtimeInstances(ctx, app.ID)
+	runtime, err := s.Runtime(ctx, app.ID)
 	if err != nil {
 		return Application{}, err
 	}
-	statuses := s.refreshInstanceStatuses(ctx, instances)
-	app.RuntimeStatus = aggregateRuntimeStatus(app.Enabled, statuses)
+	app.RuntimeStatus = runtime.Status
 	return app, nil
 }
 
@@ -1526,28 +1666,46 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 	if len(targets) == 0 {
 		return panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
+	operation, err := s.createLifecycleOperation(ctx, app, spec, taskID, LifecycleTypeDeploy, targets)
+	if err != nil {
+		return err
+	}
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.Advance(ctx, taskID, "deploying", "deploying application instances")
 	}
 	files, err := s.listFiles(ctx, app.ID, true)
 	if err != nil {
+		_ = s.finishLifecycleOperation(ctx, operation.ID, LifecycleStatusFailed, err)
 		return err
 	}
 	failures := []runtimeDeploymentFailure{}
 	for _, target := range targets {
 		targetName := firstNonEmpty(target.Name, target.ID, target.Host)
-		baseURL, ok := agentURLFromServer(target)
-		if !ok {
-			err := panelerr.Validation("agent_required", "Agent is required for application deployment")
+		targetID := lifecycleTargetID(operation.ID, target.ID)
+		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusPreparing, Stage: "validate_agent", Started: true})
+		if err := ensureAgentRuntimeReady(target); err != nil {
 			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "validate_agent", Error: err.Error(), Finished: true})
 			if s.tasks != nil && taskID != "" {
 				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "deploying on "+targetName+" failed: "+err.Error())
 			}
 			continue
 		}
+		baseURL, ok := agentURLFromServer(target)
+		if !ok {
+			err := panelerr.Validation("agent_required", "Agent is required for application deployment")
+			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "validate_agent", Error: err.Error(), Finished: true})
+			if s.tasks != nil && taskID != "" {
+				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "deploying on "+targetName+" failed: "+err.Error())
+			}
+			continue
+		}
+		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusPreparing, Stage: "render"})
 		instanceSpec, err := s.runtimeSpecForServer(ctx, app, spec, target, files)
 		if err != nil {
 			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "render", Error: err.Error(), Finished: true})
 			if s.tasks != nil && taskID != "" {
 				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "rendering on "+targetName+" failed: "+err.Error())
 			}
@@ -1558,36 +1716,43 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			previousContainerName = previous.ContainerName
 		}
 		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "prepare_instance", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, Error: err.Error(), Finished: true})
 			return err
 		}
+		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "write_files", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName})
 		if s.tasks != nil && taskID != "" {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+targetName)
 		}
 		var result agentcontract.RuntimeInstanceResponse
 		err = s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "write_files"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
 				return s.runtimeClient.RuntimeWriteFiles(runCtx, baseURL, agentcontract.RuntimeWriteFilesRequest{Spec: instanceSpec})
 			}); err != nil {
 				return err
 			}
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "pull_image"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "pull image", func(context.Context) error {
 				return s.runtimeClient.DockerImagePull(runCtx, baseURL, instanceSpec.Image)
 			}); err != nil {
 				return err
 			}
 			if previousContainerName != "" && previousContainerName != instanceSpec.ContainerName {
+				_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "remove_previous_container"})
 				if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove previous container", func(context.Context) error {
 					return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, previousContainerName)
 				}); err != nil {
 					return err
 				}
 			}
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "remove_target_container"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove target container", func(context.Context) error {
 				return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, instanceSpec.ContainerName)
 			}); err != nil {
 				return err
 			}
 			var created agentcontract.RuntimeCreateContainerResponse
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "create_container"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "create container", func(context.Context) error {
 				var createErr error
 				created, createErr = s.runtimeClient.RuntimeCreateContainer(runCtx, baseURL, agentcontract.RuntimeCreateContainerRequest{ServerID: target.ID, Spec: instanceSpec})
@@ -1595,12 +1760,14 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			}); err != nil {
 				return err
 			}
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "start_container", ContainerID: created.ContainerID})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "start container", func(context.Context) error {
 				return s.runtimeClient.DockerContainerAction(runCtx, baseURL, firstNonEmpty(created.ContainerID, instanceSpec.ContainerName), "start")
 			}); err != nil {
 				return err
 			}
 			var status agentcontract.RuntimeStatusResponse
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "inspect"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "inspect container", func(context.Context) error {
 				var statusErr error
 				status, statusErr = s.runtimeClient.RuntimeStatus(runCtx, baseURL, instanceSpec.InstanceID, instanceSpec.ContainerName)
@@ -1622,22 +1789,139 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			_ = s.handleAgentError(ctx, target, err)
 			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
 			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Error: err.Error(), Finished: true})
 			if s.tasks != nil && taskID != "" {
 				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "deploying on "+targetName+" failed: "+err.Error())
 			}
 			continue
 		}
 		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "store_instance", Error: err.Error(), Finished: true})
 			return err
 		}
+		targetStatus := LifecycleTargetStatusRunning
+		if result.Status != appruntime.StatusRunning {
+			targetStatus = result.Status
+		}
+		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: targetStatus, Stage: "inspect", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, ContainerID: result.ContainerID, Finished: true})
 	}
 	if len(failures) > 0 {
-		return runtimeDeploymentError(len(targets), failures)
+		err := runtimeDeploymentError(len(targets), failures)
+		status := LifecycleStatusFailed
+		if len(failures) < len(targets) {
+			status = LifecycleStatusPartiallyDeployed
+		}
+		_ = s.finishLifecycleOperation(ctx, operation.ID, status, err)
+		return err
+	}
+	if err := s.finishLifecycleOperation(ctx, operation.ID, LifecycleStatusDeployed, nil); err != nil {
+		return err
 	}
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.Complete(ctx, taskID, "Application deployed")
 	}
 	return nil
+}
+
+type lifecycleTargetUpdate struct {
+	Status        string
+	Stage         string
+	InstanceID    string
+	ContainerName string
+	ContainerID   string
+	Error         string
+	Started       bool
+	Finished      bool
+}
+
+func (s *Service) createLifecycleOperation(ctx context.Context, app Application, spec appruntime.Spec, taskID, opType string, targets []server.Server) (LifecycleOperation, error) {
+	now := time.Now().UTC()
+	operation := LifecycleOperation{
+		ID:            id.New("alop"),
+		ApplicationID: app.ID,
+		Type:          opType,
+		Status:        LifecycleStatusDeploying,
+		TaskID:        taskID,
+		Generation:    spec.Generation,
+		SpecHash:      spec.SpecHash,
+		Trigger:       "system",
+		CreatedAt:     now,
+		StartedAt:     &now,
+		UpdatedAt:     now,
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		operation.ID, operation.ApplicationID, operation.Type, operation.Status, operation.TaskID, operation.Generation, operation.SpecHash, operation.Trigger, operation.Error, formatTime(operation.CreatedAt), nullableTime(operation.StartedAt), nil, formatTime(operation.UpdatedAt))
+	if err != nil {
+		return LifecycleOperation{}, err
+	}
+	for _, target := range targets {
+		targetID := lifecycleTargetID(operation.ID, target.ID)
+		instanceID := runtimeInstanceID(app.ID, target.ID)
+		containerName := runtimeContainerName(app)
+		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,status,desired_state,instance_id,container_name,container_id,stage,error,created_at,started_at,finished_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			targetID, operation.ID, app.ID, target.ID, LifecycleTargetStatusPending, appruntime.DesiredRunning, instanceID, containerName, "", "", "", formatTime(now), nil, nil, formatTime(now))
+		if err != nil {
+			return LifecycleOperation{}, err
+		}
+	}
+	return operation, nil
+}
+
+func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in lifecycleTargetUpdate) error {
+	now := formatTime(time.Now().UTC())
+	updates := []string{"updated_at=?"}
+	args := []any{now}
+	if in.Status != "" {
+		updates = append(updates, "status=?")
+		args = append(args, in.Status)
+	}
+	if in.Stage != "" {
+		updates = append(updates, "stage=?")
+		args = append(args, in.Stage)
+	}
+	if in.InstanceID != "" {
+		updates = append(updates, "instance_id=?")
+		args = append(args, in.InstanceID)
+	}
+	if in.ContainerName != "" {
+		updates = append(updates, "container_name=?")
+		args = append(args, in.ContainerName)
+	}
+	if in.ContainerID != "" {
+		updates = append(updates, "container_id=?")
+		args = append(args, in.ContainerID)
+	}
+	if in.Error != "" {
+		updates = append(updates, "error=?")
+		args = append(args, in.Error)
+	}
+	if in.Started {
+		updates = append(updates, "started_at=COALESCE(started_at, ?)")
+		args = append(args, now)
+	}
+	if in.Finished {
+		updates = append(updates, "finished_at=?")
+		args = append(args, now)
+	}
+	args = append(args, targetID)
+	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+` WHERE id=?`, args...)
+	return err
+}
+
+func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, status string, cause error) error {
+	now := formatTime(time.Now().UTC())
+	errText := ""
+	if cause != nil {
+		errText = cause.Error()
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?, error=?, finished_at=?, updated_at=? WHERE id=?`, status, errText, now, now, operationID)
+	return err
+}
+
+func lifecycleTargetID(operationID, serverID string) string {
+	return strings.TrimSpace(operationID) + "-" + sanitizeRuntimeName(serverID)
 }
 
 func (s *Service) runRuntimeDeployStep(ctx context.Context, taskID, targetName, step string, run func(context.Context) error) error {
@@ -2034,9 +2318,6 @@ func (s *Service) deploymentTargets(ctx context.Context, app Application) ([]ser
 			if err != nil {
 				return nil, err
 			}
-			if err := ensureAgentRuntimeReady(srv); err != nil {
-				return nil, err
-			}
 			out = append(out, srv)
 		}
 		return out, nil
@@ -2257,6 +2538,45 @@ func scanRuntimeInstance(row appScanner) (appruntime.Instance, error) {
 	instance.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	instance.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	return instance, nil
+}
+
+func scanLifecycleOperation(row appScanner) (LifecycleOperation, error) {
+	var op LifecycleOperation
+	var created, updated string
+	var started, finished sql.NullString
+	if err := row.Scan(&op.ID, &op.ApplicationID, &op.Type, &op.Status, &op.TaskID, &op.Generation, &op.SpecHash, &op.Trigger, &op.Error, &created, &started, &finished, &updated); err != nil {
+		return LifecycleOperation{}, err
+	}
+	op.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	op.StartedAt = parseOptionalTime(started)
+	op.FinishedAt = parseOptionalTime(finished)
+	op.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+	return op, nil
+}
+
+func scanLifecycleTarget(row appScanner) (LifecycleTarget, error) {
+	var target LifecycleTarget
+	var created, updated string
+	var started, finished sql.NullString
+	if err := row.Scan(&target.ID, &target.OperationID, &target.ApplicationID, &target.ServerID, &target.Status, &target.DesiredState, &target.InstanceID, &target.ContainerName, &target.ContainerID, &target.Stage, &target.Error, &created, &started, &finished, &updated); err != nil {
+		return LifecycleTarget{}, err
+	}
+	target.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	target.StartedAt = parseOptionalTime(started)
+	target.FinishedAt = parseOptionalTime(finished)
+	target.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+	return target, nil
+}
+
+func parseOptionalTime(value sql.NullString) *time.Time {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value.String)
+	if err != nil {
+		return nil
+	}
+	return &parsed
 }
 
 type cachedImageUpdate struct {
