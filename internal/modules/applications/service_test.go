@@ -359,17 +359,17 @@ func TestRefreshTaskExecutorRedeploysChangedApplicationAndCompletesTask(t *testi
 func TestTemplateVariablesRenderIntoRuntimeSpec(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
-	svc.SetBuiltinVariableResolver(fakeBuiltinResolver{
-		"certs": map[string]any{
-			"example_com": map[string]any{
-				"certificatePem": "CERT",
-			},
+	registry := NewApplicationVariableRegistry()
+	registry.Register("certs", fakeVariableSource{value: map[string]any{
+		"example_com": map[string]any{
+			"certificatePem": "CERT",
 		},
-	})
+	}})
+	svc.SetBuiltinVariableResolver(registry)
 
 	app, err := svc.Create(context.Background(), SaveInput{
 		Name:      "web",
-		SpecYAML:  "name: web\nimage: '{{ .vars.image }}'\nenv:\n  TLS_CERT: '{{ .certs.example_com.certificatePem }}'\n",
+		SpecYAML:  "name: web\nimage: '{{ .vars.image }}'\nenv:\n  APP_NAME: '{{ .app.name }}'\n  TLS_CERT: '{{ .certs.example_com.certificatePem }}'\n",
 		Variables: map[string]string{"image": "nginx:1.27"},
 	})
 	if err != nil {
@@ -382,10 +382,10 @@ func TestTemplateVariablesRenderIntoRuntimeSpec(t *testing.T) {
 	if len(issues) > 0 {
 		t.Fatalf("issues = %#v", issues)
 	}
-	if spec.Image != "nginx:1.27" || spec.Env["TLS_CERT"] != "CERT" {
+	if spec.Image != "nginx:1.27" || spec.Env["APP_NAME"] != "web" || spec.Env["TLS_CERT"] != "CERT" {
 		t.Fatalf("rendered spec = %#v", spec)
 	}
-	if app.ResolvedVariables["image"] != "nginx:1.27" || app.ResolvedVariables["certs"] == nil {
+	if app.ResolvedVariables["image"] != "nginx:1.27" || app.ResolvedVariables["app"] == nil || app.ResolvedVariables["certs"] == nil {
 		t.Fatalf("resolved variables = %#v", app.ResolvedVariables)
 	}
 }
@@ -427,6 +427,46 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	}
 	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Target != "/etc/app.conf" {
 		t.Fatalf("mounts = %#v", spec.Mounts)
+	}
+}
+
+func TestApplicationFileTemplateRendersPerTargetServerVariables(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:     "web",
+		Enabled:  false,
+		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: config/node.conf\n    target: /etc/node.conf\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
+		Path:          "config/node.conf",
+		Kind:          "template",
+		ContentBase64: base64.StdEncoding.EncodeToString([]byte("name={{ .server.name }} role={{ index .server.variables \"role\" }} app={{ .app.name }}")),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Update(ctx, app.ID, SaveInput{
+		Name:     app.Name,
+		Enabled:  true,
+		SpecYAML: app.SpecYAML,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	byServer := map[string]string{}
+	for _, deploy := range runtime.deploys {
+		if len(deploy.Spec.Files) != 1 {
+			t.Fatalf("files = %#v", deploy.Spec.Files)
+		}
+		byServer[deploy.ServerID] = string(deploy.Spec.Files[0].Content)
+	}
+	if byServer["srv-a"] != "name=srv-a role=srv-a-role app=web" || byServer["srv-b"] != "name=srv-b role=srv-b-role app=web" {
+		t.Fatalf("rendered files by server = %#v", byServer)
 	}
 }
 
@@ -1010,9 +1050,10 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 	}
 	for _, srv := range servers.items {
 		traits, _ := json.Marshal(srv.Traits)
+		variables, _ := json.Marshal(srv.Variables)
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, "cred_1", srv.DockerHost, string(traits), now, now); err != nil {
+		if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+			srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, "cred_1", srv.DockerHost, string(traits), string(variables), now, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1055,6 +1096,9 @@ func readyServer(id string) server.Server {
 			agentcontract.TraitEnabled: "true",
 			agentcontract.TraitURL:     "https://" + id + ".agent",
 			agentcontract.TraitStatus:  agentcontract.StatusCompatible,
+		},
+		Variables: map[string]string{
+			"role": id + "-role",
 		},
 	}
 }
@@ -1172,7 +1216,7 @@ func (f *fakeServerProvider) Get(ctx context.Context, id string) (server.Server,
 
 type fakeBuiltinResolver map[string]any
 
-func (f fakeBuiltinResolver) BuiltinVariables(ctx context.Context) (map[string]any, error) {
+func (f fakeBuiltinResolver) BuiltinVariables(ctx context.Context, render ApplicationVariableContext) (map[string]any, error) {
 	return map[string]any(f), nil
 }
 

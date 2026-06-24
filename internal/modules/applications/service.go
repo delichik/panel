@@ -130,7 +130,7 @@ func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Ser
 	if cfg.SaveSessionDir == "" {
 		cfg.SaveSessionDir = filepath.Join("tmp", "application-save-sessions")
 	}
-	s := &Service{db: db, runtimeClient: runtimeClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), imageResolver: NewRegistryImageResolver(), saveSessions: map[string]*saveSession{}}
+	s := &Service{db: db, runtimeClient: runtimeClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), builtinResolver: NewApplicationVariableRegistry(), imageResolver: NewRegistryImageResolver(), saveSessions: map[string]*saveSession{}}
 	s.startSaveSessionCleanup()
 	return s
 }
@@ -201,11 +201,17 @@ func (s *Service) currentConfig() Config {
 
 func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) {
 	catalog := TemplateCatalog{Variables: []TemplateVariableDefinition{
+		{Key: "app.id", Category: "application", SpecExpression: "{{ .app.id }}", TemplateExpression: "{{ .app.id }}"},
+		{Key: "app.name", Category: "application", SpecExpression: "{{ .app.name }}", TemplateExpression: "{{ .app.name }}"},
+		{Key: "app.namespace", Category: "application", SpecExpression: "{{ .app.namespace }}", TemplateExpression: "{{ .app.namespace }}"},
+		{Key: "app.generation", Category: "application", SpecExpression: "{{ .app.generation }}", TemplateExpression: "{{ .app.generation }}"},
 		{Key: "server.id", Category: "server", SpecExpression: "${node.meta.panel_server_id}", TemplateExpression: `{{ env "PANEL_SERVER_ID" }}`},
 		{Key: "server.name", Category: "server", SpecExpression: "${node.meta.panel_server_name}", TemplateExpression: `{{ env "PANEL_SERVER_NAME" }}`},
+		{Key: "server.host", Category: "server", SpecExpression: "${node.meta.panel_ssh_host}", TemplateExpression: `{{ .server.host }}`},
 		{Key: "server.ssh_host", Category: "server", SpecExpression: "${node.meta.panel_ssh_host}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_HOST" }}`},
 		{Key: "server.ssh_port", Category: "server", SpecExpression: "${node.meta.panel_ssh_port}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_PORT" }}`},
 		{Key: "server.ssh_username", Category: "server", SpecExpression: "${node.meta.panel_ssh_username}", TemplateExpression: `{{ env "PANEL_SERVER_SSH_USERNAME" }}`},
+		{Key: "server.variables.<key>", Category: "server", SpecExpression: "", TemplateExpression: `{{ index .server.variables "<key>" }}`},
 	}}
 	if s.internalFiles != nil {
 		files, err := s.internalFiles.InternalFileCatalog(ctx)
@@ -1341,7 +1347,8 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if err != nil {
 		return preparedApplication{}, err
 	}
-	data, err := s.templateData(ctx, variables, files)
+	appContext := Application{ID: appID, Name: in.Name, Generation: generation, Namespace: s.currentConfig().Namespace, DeploymentMode: in.DeploymentMode}
+	data, err := s.templateData(ctx, appContext, variables, files, nil)
 	if err != nil {
 		return preparedApplication{}, err
 	}
@@ -1400,7 +1407,7 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 			return appruntime.Spec{}, nil, err
 		}
 	}
-	data, err := s.templateData(ctx, app.Variables, files)
+	data, err := s.templateData(ctx, app, app.Variables, files, nil)
 	if err != nil {
 		return appruntime.Spec{}, nil, err
 	}
@@ -1445,7 +1452,7 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 }
 
 func (s *Service) renderSpecYAML(ctx context.Context, source string, variables map[string]string) (string, error) {
-	data, err := s.templateData(ctx, variables, nil)
+	data, err := s.templateData(ctx, Application{}, variables, nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -1461,7 +1468,7 @@ func (s *Service) resolveApplicationImage(ctx context.Context, app Application) 
 	if err != nil {
 		return ImageDigestResult{}, checkedAt, err
 	}
-	data, err := s.templateData(ctx, app.Variables, files)
+	data, err := s.templateData(ctx, app, app.Variables, files, nil)
 	if err != nil {
 		return ImageDigestResult{}, checkedAt, err
 	}
@@ -1487,7 +1494,7 @@ func (s *Service) renderTemplate(ctx context.Context, source string, data map[st
 	return s.renderer.Render(ctx, source, data)
 }
 
-func (s *Service) templateData(ctx context.Context, variables map[string]string, files []ApplicationFile) (map[string]any, error) {
+func (s *Service) templateData(ctx context.Context, app Application, variables map[string]string, files []ApplicationFile, target *server.Server) (map[string]any, error) {
 	data := map[string]any{}
 	varMap := map[string]any{}
 	for key, value := range variables {
@@ -1497,7 +1504,7 @@ func (s *Service) templateData(ctx context.Context, variables map[string]string,
 	data["vars"] = varMap
 	data["files"] = fileVariables(files)
 	if s.builtinResolver != nil {
-		builtins, err := s.builtinResolver.BuiltinVariables(ctx)
+		builtins, err := s.builtinResolver.BuiltinVariables(ctx, ApplicationVariableContext{Application: app, Config: s.currentConfig(), Server: target})
 		if err != nil {
 			return nil, err
 		}
@@ -1522,6 +1529,10 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.Advance(ctx, taskID, "deploying", "deploying application instances")
 	}
+	files, err := s.listFiles(ctx, app.ID, true)
+	if err != nil {
+		return err
+	}
 	failures := []runtimeDeploymentFailure{}
 	for _, target := range targets {
 		targetName := firstNonEmpty(target.Name, target.ID, target.Host)
@@ -1534,7 +1545,14 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			}
 			continue
 		}
-		instanceSpec := runtimeSpecForServer(app, spec, target)
+		instanceSpec, err := s.runtimeSpecForServer(ctx, app, spec, target, files)
+		if err != nil {
+			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
+			if s.tasks != nil && taskID != "" {
+				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "rendering on "+targetName+" failed: "+err.Error())
+			}
+			continue
+		}
 		previousContainerName := ""
 		if previous, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID); err == nil {
 			previousContainerName = previous.ContainerName
@@ -1546,7 +1564,7 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+targetName)
 		}
 		var result agentcontract.RuntimeInstanceResponse
-		err := s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
+		err = s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
 				return s.runtimeClient.RuntimeWriteFiles(runCtx, baseURL, agentcontract.RuntimeWriteFilesRequest{Spec: instanceSpec})
 			}); err != nil {
@@ -2048,7 +2066,7 @@ func ensureAgentRuntimeReady(srv server.Server) error {
 	return nil
 }
 
-func runtimeSpecForServer(app Application, spec appruntime.Spec, srv server.Server) appruntime.Spec {
+func (s *Service) runtimeSpecForServer(ctx context.Context, app Application, spec appruntime.Spec, srv server.Server, files []ApplicationFile) (appruntime.Spec, error) {
 	out := spec
 	out.ApplicationID = app.ID
 	out.InstanceID = runtimeInstanceID(app.ID, srv.ID)
@@ -2069,7 +2087,42 @@ func runtimeSpecForServer(app Application, spec appruntime.Spec, srv server.Serv
 			out.Env[key] = value
 		}
 	}
-	return out
+	renderedFiles, err := s.renderManagedFilesForServer(ctx, app, srv, out.Files, files)
+	if err != nil {
+		return appruntime.Spec{}, err
+	}
+	out.Files = renderedFiles
+	return out, nil
+}
+
+func (s *Service) renderManagedFilesForServer(ctx context.Context, app Application, srv server.Server, managed []appruntime.ManagedFile, files []ApplicationFile) ([]appruntime.ManagedFile, error) {
+	if len(managed) == 0 || len(files) == 0 {
+		return managed, nil
+	}
+	filesByPath := map[string]ApplicationFile{}
+	for _, file := range files {
+		filesByPath[file.Path] = file
+	}
+	data, err := s.templateData(ctx, app, app.Variables, files, &srv)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]appruntime.ManagedFile(nil), managed...)
+	for i, item := range out {
+		file, ok := filesByPath[item.Path]
+		if !ok || file.Kind != "template" {
+			continue
+		}
+		text := string(file.Content)
+		if s.renderer != nil {
+			text, err = s.renderer.Render(ctx, text, data)
+			if err != nil {
+				return nil, err
+			}
+		}
+		out[i].Content = []byte(text)
+	}
+	return out, nil
 }
 
 func runtimeInstanceID(appID, serverID string) string {
@@ -2482,7 +2535,7 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 	if len(app.ReverseProxy) == 0 {
 		return "", "", nil
 	}
-	data, err := s.templateData(ctx, app.Variables, files)
+	data, err := s.templateData(ctx, app, app.Variables, files, nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -2542,7 +2595,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 		if err != nil {
 			return nil, err
 		}
-		data, err := s.templateData(ctx, app.Variables, files)
+		data, err := s.templateData(ctx, app, app.Variables, files, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -2729,7 +2782,7 @@ func applicationHash(spec appspec.Spec, variables map[string]string, persistentP
 	payload := map[string]any{
 		"spec":           appspec.Normalize(spec),
 		"variables":      variables,
-		"resolved":       resolved,
+		"resolved":       stableResolvedVariables(resolved),
 		"persistentPath": persistentPath,
 		"deployment": map[string]any{
 			"mode":    deploymentMode,
@@ -2744,6 +2797,16 @@ func applicationHash(spec appspec.Spec, variables map[string]string, persistentP
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func stableResolvedVariables(resolved map[string]any) map[string]any {
+	raw, _ := json.Marshal(resolved)
+	out := map[string]any{}
+	_ = json.Unmarshal(raw, &out)
+	if appValue, ok := out["app"].(map[string]any); ok {
+		delete(appValue, "generation")
+	}
+	return out
 }
 
 func normalizePersistentPath(value string) (string, error) {

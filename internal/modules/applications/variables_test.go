@@ -10,7 +10,7 @@ func TestApplicationVariableRegistryRegistersRootKeys(t *testing.T) {
 	registry.Register("certs", fakeVariableSource{value: map[string]any{"web": "tls"}})
 	registry.Register("custom", fakeVariableSource{value: "value"})
 
-	vars, err := registry.BuiltinVariables(context.Background())
+	vars, err := registry.BuiltinVariables(context.Background(), ApplicationVariableContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,6 +28,6 @@ type fakeVariableSource struct {
 	err   error
 }
 
-func (f fakeVariableSource) ApplicationVariables(ctx context.Context) (any, error) {
+func (f fakeVariableSource) ApplicationVariables(ctx context.Context, render ApplicationVariableContext) (any, error) {
 	return f.value, f.err
 }

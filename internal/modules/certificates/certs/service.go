@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/modules/applications"
 	"panel/internal/modules/certificates/dns"
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/keyassets"
@@ -435,14 +436,14 @@ func (s *Service) Delete(ctx context.Context, certID string) error {
 }
 
 func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) {
-	certVars, err := s.ApplicationVariables(ctx)
+	certVars, err := s.ApplicationVariables(ctx, applications.ApplicationVariableContext{})
 	if err != nil {
 		return nil, err
 	}
 	return map[string]any{"certs": certVars}, nil
 }
 
-func (s *Service) ApplicationVariables(ctx context.Context) (any, error) {
+func (s *Service) ApplicationVariables(ctx context.Context, render applications.ApplicationVariableContext) (any, error) {
 	certs, err := s.List(ctx)
 	if err != nil {
 		return nil, err
