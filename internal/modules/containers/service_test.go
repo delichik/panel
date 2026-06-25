@@ -181,6 +181,58 @@ func TestContainerActionRunsSynchronouslyAndStartsRefreshTask(t *testing.T) {
 	}
 }
 
+func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
+	svc, taskSvc, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
+		VALUES('credential-1','credential','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO servers(id,name,host,port,credential_id,docker_host,traits,created_at,updated_at)
+		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,persistent_path,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		app.ID, app.Name, 1, "name: web\nimage: nginx\n", "{}", "{}", "", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
+		t.Fatal(err)
+	}
+	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		State: "exited",
+		Labels: map[string]string{
+			"panel.application.managed":     "true",
+			"panel.application.id":          app.ID,
+			"panel.application.instance.id": app.ID + "-server-1",
+			"panel.application.generation":  "3",
+			"panel.application.spec.hash":   "hash-3",
+		},
+	}}
+	if _, err := taskSvc.Create(ctx, tasks.CreateInput{
+		Type:         TaskApplicationReconcile,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		TriggerType:  "scheduler",
+		Status:       tasks.StatusFailed,
+		Summary:      "failed reconcile",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 1 {
+		t.Fatalf("inputs = %#v", inputs)
+	}
+	if inputs[0].NextRunAt == nil || inputs[0].NextRunAt.Before(time.Now().UTC().Add(20*time.Second)) {
+		t.Fatalf("expected reconcile backoff next run, input=%#v", inputs[0])
+	}
+}
+
 func TestContainerLogsClampsTail(t *testing.T) {
 	svc, _, fakeAgent, _ := newContainerizationTestService(t)
 	result, err := svc.ContainerLogs(context.Background(), "server-1", "container-1", 20000)
@@ -252,14 +304,15 @@ func (p fakeServerProvider) List(context.Context) ([]server.Server, error) {
 }
 
 type fakeContainerizationAgent struct {
-	mu      sync.Mutex
-	actions []string
-	logTail int
-	images  []agentcontract.DockerImage
+	mu         sync.Mutex
+	actions    []string
+	logTail    int
+	images     []agentcontract.DockerImage
+	containers []agentcontract.DockerContainer
 }
 
 func (a *fakeContainerizationAgent) DockerContainers(context.Context, string) ([]agentcontract.DockerContainer, error) {
-	return nil, nil
+	return append([]agentcontract.DockerContainer(nil), a.containers...), nil
 }
 
 func (a *fakeContainerizationAgent) DockerContainerLogs(_ context.Context, _, id string, tail int) (agentcontract.DockerContainerLogsResponse, error) {
@@ -306,6 +359,22 @@ type blockingImageResolver struct {
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
+}
+
+type fakeApplicationUpdater struct {
+	apps []applications.Application
+}
+
+func (f fakeApplicationUpdater) List(context.Context) ([]applications.Application, error) {
+	return append([]applications.Application(nil), f.apps...), nil
+}
+
+func (f fakeApplicationUpdater) UpdateImage(context.Context, string) (applications.OperationResult, error) {
+	return applications.OperationResult{}, nil
+}
+
+func (f fakeApplicationUpdater) Deploy(context.Context, string) (applications.OperationResult, error) {
+	return applications.OperationResult{}, nil
 }
 
 func (r *blockingImageResolver) Resolve(ctx context.Context, _ string) (applications.ImageDigestResult, error) {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -300,6 +301,47 @@ func TestDeployTaskExecutorEnablesAppDeploysRuntimeAndCompletesTask(t *testing.T
 	if storedTask.Status != tasks.StatusCompleted {
 		t.Fatalf("expected completed deploy task, got %#v", storedTask)
 	}
+}
+
+func TestDeployReturnsBeforeRuntimeDeploymentCompletes(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.createEntered = make(chan struct{})
+	runtime.createRelease = make(chan struct{})
+	done := make(chan OperationResult, 1)
+	errs := make(chan error, 1)
+	go func() {
+		result, err := svc.Deploy(ctx, app.ID)
+		if err != nil {
+			errs <- err
+			return
+		}
+		done <- result
+	}()
+	var result OperationResult
+	select {
+	case err := <-errs:
+		t.Fatal(err)
+	case result = <-done:
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("Deploy waited for runtime deployment to complete")
+	}
+	if result.TaskID == "" || !result.Application.Enabled {
+		t.Fatalf("deploy result = %#v", result)
+	}
+	select {
+	case <-runtime.createEntered:
+	case <-time.After(time.Second):
+		t.Fatal("background deployment did not reach runtime create")
+	}
+	close(runtime.createRelease)
+	waitApplicationTaskStatus(t, svc.tasks, result.TaskID, tasks.StatusCompleted)
 }
 
 func TestRefreshTaskExecutorRedeploysChangedApplicationAndCompletesTask(t *testing.T) {
@@ -654,9 +696,11 @@ func TestRuntimeShowsSelectedTargetThatFailsBeforeInstanceDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Deploy(ctx, app.ID); err == nil {
-		t.Fatal("expected partial deployment failure")
+	result, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
 	}
+	waitApplicationTaskStatus(t, svc.tasks, result.TaskID, tasks.StatusFailed)
 	runtime, err := svc.Runtime(ctx, app.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -1159,6 +1203,23 @@ func insertApplicationTestServer(t *testing.T, svc *Service, srv server.Server) 
 	}
 }
 
+func waitApplicationTaskStatus(t *testing.T, taskSvc *tasks.Service, taskID, status string) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		task, err := taskSvc.Get(context.Background(), taskID)
+		if err == nil && task.Status == status {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	task, err := taskSvc.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get task %s: %v", taskID, err)
+	}
+	t.Fatalf("task %s status = %s, want %s", taskID, task.Status, status)
+}
+
 type fakeRuntimeClient struct {
 	writes               []agentcontract.RuntimeWriteFilesRequest
 	deploys              []agentcontract.RuntimeCreateContainerRequest
@@ -1178,6 +1239,9 @@ type fakeRuntimeClient struct {
 	restoreContent       []byte
 	deployErr            error
 	deployErrByServer    map[string]error
+	createEntered        chan struct{}
+	createRelease        chan struct{}
+	createOnce           sync.Once
 }
 
 func (f *fakeRuntimeClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error {
@@ -1196,6 +1260,16 @@ func (f *fakeRuntimeClient) DockerContainerDelete(ctx context.Context, baseURL, 
 }
 
 func (f *fakeRuntimeClient) RuntimeCreateContainer(ctx context.Context, baseURL string, req agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
+	if f.createEntered != nil {
+		f.createOnce.Do(func() { close(f.createEntered) })
+	}
+	if f.createRelease != nil {
+		select {
+		case <-ctx.Done():
+			return agentcontract.RuntimeCreateContainerResponse{}, ctx.Err()
+		case <-f.createRelease:
+		}
+	}
 	f.deploys = append(f.deploys, req)
 	if f.deployErrByServer != nil {
 		if err, ok := f.deployErrByServer[req.ServerID]; ok {

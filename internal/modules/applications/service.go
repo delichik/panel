@@ -737,21 +737,30 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
-	taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
+	if s.tasks == nil {
+		if err := s.runDeployTask(ctx, "", app, job); err != nil {
+			return OperationResult{}, err
+		}
+		return OperationResult{Application: app}, nil
+	}
+	task, created, err := s.recordRunningTaskObject(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.runDeployTask(ctx, taskID, app, job); err != nil {
-		if s.tasks != nil && taskID != "" {
-			_ = s.tasks.Fail(ctx, taskID, err)
-		}
-		return OperationResult{}, err
+	if created {
+		go func() {
+			defer s.tasks.FinishExecution(task.ID)
+			runCtx := s.tasks.ExecutionContext(task.ID)
+			if err := s.runDeployTask(runCtx, task.ID, app, job); err != nil {
+				_ = s.tasks.Fail(context.Background(), task.ID, err)
+			}
+		}()
 	}
-	result := OperationResult{TaskID: taskID, Application: app}
+	result := OperationResult{TaskID: task.ID, Application: app}
 	if runtime, err := s.Runtime(ctx, app.ID); err == nil {
 		result.ApplicationRuntime = &runtime
-		if s.tasks != nil && taskID != "" {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "Current application runtime status: "+runtime.Status)
+		if created {
+			_ = s.tasks.AppendLog(ctx, task.ID, "system", "Current application runtime status: "+runtime.Status)
 		}
 	}
 	return result, nil
@@ -1042,12 +1051,42 @@ func (s *Service) RedeployEnabledApplications(ctx context.Context) (int, error) 
 		if !app.Enabled {
 			continue
 		}
-		if _, err := s.Deploy(ctx, app.ID); err != nil {
+		refreshed, spec, err := s.prepareEnabledApplicationRedeploy(ctx, app)
+		if err != nil {
+			return redeployed, err
+		}
+		taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, refreshed.ID, "Deploying application "+refreshed.Name)
+		if err != nil {
+			return redeployed, err
+		}
+		if err := s.runDeployTask(ctx, taskID, refreshed, spec); err != nil {
 			return redeployed, err
 		}
 		redeployed++
 	}
 	return redeployed, nil
+}
+
+func (s *Service) prepareEnabledApplicationRedeploy(ctx context.Context, app Application) (Application, appruntime.Spec, error) {
+	refreshed, err := s.refreshApplicationSnapshot(ctx, app)
+	if err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	spec, issues, err := s.renderApplication(ctx, refreshed)
+	if err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	if len(issues) > 0 {
+		return Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
+	}
+	targets, err := s.deploymentTargets(ctx, refreshed)
+	if err != nil {
+		return Application{}, appruntime.Spec{}, err
+	}
+	if len(targets) == 0 {
+		return Application{}, appruntime.Spec{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+	}
+	return refreshed, spec, nil
 }
 
 func (s *Service) Stop(ctx context.Context, appID string, purge bool) (OperationResult, error) {
@@ -2254,14 +2293,24 @@ func (s *Service) recordTask(ctx context.Context, taskType, appID, summary strin
 }
 
 func (s *Service) recordRunningTask(ctx context.Context, taskType, appID, summary string) (string, error) {
-	return s.recordRunningTaskWithParams(ctx, taskType, appID, summary, "")
+	task, _, err := s.recordRunningTaskObjectWithParams(ctx, taskType, appID, summary, "")
+	return task.ID, err
 }
 
 func (s *Service) recordRunningTaskWithParams(ctx context.Context, taskType, appID, summary, paramsJSON string) (string, error) {
+	task, _, err := s.recordRunningTaskObjectWithParams(ctx, taskType, appID, summary, paramsJSON)
+	return task.ID, err
+}
+
+func (s *Service) recordRunningTaskObject(ctx context.Context, taskType, appID, summary string) (tasks.Task, bool, error) {
+	return s.recordRunningTaskObjectWithParams(ctx, taskType, appID, summary, "")
+}
+
+func (s *Service) recordRunningTaskObjectWithParams(ctx context.Context, taskType, appID, summary, paramsJSON string) (tasks.Task, bool, error) {
 	if s.tasks == nil {
-		return "", nil
+		return tasks.Task{}, false, nil
 	}
-	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         taskType,
 		ResourceType: "application",
 		ResourceID:   appID,
@@ -2270,9 +2319,9 @@ func (s *Service) recordRunningTaskWithParams(ctx context.Context, taskType, app
 		Summary:      summary,
 	}, tasks.Trigger{Type: "system"})
 	if err != nil {
-		return "", err
+		return tasks.Task{}, false, err
 	}
-	return task.ID, nil
+	return task, created, nil
 }
 
 func stopTaskParamsJSON(purge bool) string {

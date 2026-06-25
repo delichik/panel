@@ -53,14 +53,14 @@
 - 文件内容通过 API 以 base64 承载；应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
-- 启用应用、部署、镜像更新等流程需要先校验和计划，再确认目标服务器 agent runtime 可用，然后写入应用修订和实例记录；部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标部署中单台服务器部署失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
+- 启用应用、部署、镜像更新等流程需要先校验和计划，再确认目标服务器 agent runtime 可用，然后写入应用修订和实例记录；手动部署 HTTP 入口只创建并启动应用部署任务后返回，实际部署由任务后台执行。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标部署中单台服务器部署失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
 - 应用部署的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
 - 应用部署流程必须先创建 lifecycle operation 和全部目标 target，再逐台执行 `validate_agent`、`render`、`write_files`、`pull_image`、`remove_*_container`、`create_container`、`start_container`、`inspect` 等阶段；每阶段失败都更新对应 target，成功实例继续保留，部分失败时 operation 状态为 `partially_deployed`。
 - 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的远端调用只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得发起 agent runtime 调用，也不得回退 SSH。部署类 lifecycle operation 仍必须为选中目标记录 failed target，避免配置目标在运行时视图中消失；运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
 - 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。部署 target 失败原因必须写入 lifecycle target，供运行时视图展示。
 - Application 容器使用 `panel.application.*` Label 标识。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
-- containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
+- containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。同一应用连续协调失败后必须按指数退避设置下一次运行时间，避免端口占用等持续错误造成紧密重复部署。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用列表接口会刷新已记录实例的运行时状态，并合并最近 lifecycle operation targets 后聚合为 `runtimeStatus`；左侧 `AppSelectorPanel` 只展示应用名称、运行状态和更新时间，jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在右侧详情。运行中的应用存在镜像更新时，选择器状态 Chip 使用 warning 色并显示“运行中 · 有更新”，其他运行状态保持原有展示。
 - 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；编辑、部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。

@@ -36,6 +36,8 @@ const (
 	TaskApplicationReconcile = "application_reconcile"
 )
 
+const applicationReconcileMaxBackoff = 10 * time.Minute
+
 type AgentClient interface {
 	DockerContainers(context.Context, string) ([]agentcontract.DockerContainer, error)
 	DockerContainerLogs(context.Context, string, string, int) (agentcontract.DockerContainerLogsResponse, error)
@@ -593,12 +595,19 @@ func (s *Service) MonitorApplications(ctx context.Context) error {
 			if !drifted {
 				continue
 			}
+			nextRunAt, err := s.nextApplicationReconcileRunAt(ctx, app.ID)
+			if err != nil {
+				continue
+			}
 			task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 				Type: TaskApplicationReconcile, ServerID: srv.ID, ResourceType: "application",
 				ResourceID: app.ID, TriggerType: "scheduler", Summary: "Reconciling application " + app.Name,
-				MaxRetries: 3,
+				MaxRetries: 3, NextRunAt: nextRunAt,
 			}, tasks.Trigger{Type: "scheduler", Periodic: true})
 			if err != nil || !created {
+				continue
+			}
+			if nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
 				continue
 			}
 			if err := s.tasks.Start(ctx, task.ID); err != nil {
@@ -676,6 +685,10 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 			if !drifted {
 				continue
 			}
+			nextRunAt, err := s.nextApplicationReconcileRunAt(ctx, app.ID)
+			if err != nil {
+				return inputs, err
+			}
 			inputs = append(inputs, tasks.CreateInput{
 				OperationID:  operationID,
 				Type:         TaskApplicationReconcile,
@@ -685,10 +698,41 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 				TriggerType:  "scheduler",
 				Summary:      "Reconciling application " + app.Name,
 				MaxRetries:   3,
+				NextRunAt:    nextRunAt,
 			})
 		}
 	}
 	return inputs, nil
+}
+
+func (s *Service) nextApplicationReconcileRunAt(ctx context.Context, appID string) (*time.Time, error) {
+	if s.tasks == nil {
+		return nil, nil
+	}
+	failures, err := s.tasks.CountFailuresSinceLastSuccess(ctx, TaskApplicationReconcile, "application", appID, []string{tasks.StatusFailed, tasks.StatusBlocked, tasks.StatusCancelled}, "user")
+	if err != nil {
+		return nil, err
+	}
+	if failures <= 0 {
+		return nil, nil
+	}
+	delay := applicationReconcileBackoff(failures)
+	next := time.Now().UTC().Add(delay)
+	return &next, nil
+}
+
+func applicationReconcileBackoff(failures int) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	delay := 30 * time.Second
+	for i := 1; i < failures; i++ {
+		delay *= 2
+		if delay >= applicationReconcileMaxBackoff {
+			return applicationReconcileMaxBackoff
+		}
+	}
+	return delay
 }
 
 func (s *Service) RunApplicationReconcileTask(tc tasks.TaskContext) error {
