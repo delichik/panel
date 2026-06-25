@@ -2,6 +2,7 @@ import type { TaskDto } from '@/types/api';
 
 export interface TaskOperationGroup {
   operationId: string;
+  executionMode: string;
   triggerType: string;
   triggerResourceType: string;
   triggerResourceId: string;
@@ -16,6 +17,7 @@ export interface TaskOperationGroup {
   progress: number;
   activeCount: number;
   failedCount: number;
+  allTasks: TaskDto[];
   tasks: TaskDto[];
 }
 
@@ -29,9 +31,15 @@ export function groupTasksByOperation(tasks: TaskDto[]): TaskOperationGroup[] {
   return Array.from(groups.entries())
     .map(([operationId, rows]) => {
       const sorted = rows.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      const childRows = sorted
+        .filter((task) => task.parentTaskId)
+        .sort((a, b) => (a.childIndex || 0) - (b.childIndex || 0) || b.createdAt.localeCompare(a.createdAt));
+      const taskRows = childRows.length > 0 ? childRows : sorted;
       const trigger = sorted.find((task) => task.triggerType === 'user') ?? sorted.find((task) => task.triggerType) ?? sorted[0];
+      const parent = sorted.find((task) => !task.parentTaskId && task.childCount && task.childCount > 0);
       return {
         operationId,
+        executionMode: parent?.executionMode || trigger?.executionMode || '',
         triggerType: trigger?.triggerType || '',
         triggerResourceType: trigger?.triggerResourceType || '',
         triggerResourceId: trigger?.triggerResourceId || '',
@@ -44,9 +52,10 @@ export function groupTasksByOperation(tasks: TaskDto[]): TaskOperationGroup[] {
         nextRunAt: earliest(sorted.map((task) => task.nextRunAt).filter(Boolean) as string[]),
         status: summarizeStatus(sorted),
         progress: summarizeProgress(sorted),
-        activeCount: sorted.filter((task) => ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status)).length,
-        failedCount: sorted.filter((task) => ['failed', 'blocked'].includes(task.status)).length,
-        tasks: sorted,
+        activeCount: taskRows.filter((task) => ['queued', 'scheduled', 'running', 'failed_retryable'].includes(task.status)).length,
+        failedCount: taskRows.filter((task) => ['failed', 'blocked'].includes(task.status)).length,
+        allTasks: sorted,
+        tasks: taskRows,
       };
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));

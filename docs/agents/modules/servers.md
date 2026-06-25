@@ -94,7 +94,7 @@
 - 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9786`。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent URL 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 但 URL 不是当前默认地址的服务器会标记为 `incompatible` 并自动重装；已配置当前默认 URL 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits。`agent.version` 必须与当前 Panel 构建版本完全一致，否则标记 `incompatible` 并自动重装；健康检查返回的 `capabilities`、agent HTTP contract hash 和 Docker host 不作为兼容性门槛。连续系统自动部署失败达到上限后进入 `undeployable`。
 - Agent 健康检查必须返回 Docker 健康状态和 Docker host；Panel 要求 Docker 正常且 agent 报告的 Docker host 与服务器配置一致。
 - Application 运行时要求 agent 与 Panel 构建版本一致；部署编排在 Panel 侧完成，agent 只执行写托管文件、创建容器、容器动作和状态读取等原子接口。
-- Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、fail2ban status/apply、应用 runtime 文件写入/容器创建/stop/restart/status/logs/持久化目录打包与恢复，以及 Docker 容器、容器日志、镜像、网络和卷资源 API。
+- Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、fail2ban status/apply、应用 runtime 文件写入/容器创建/stop/restart/status/logs/持久化目录打包与恢复，以及 Docker 容器、容器日志、镜像、网络和卷资源 API。应用 runtime stop 总会删除目标容器；`purge=true` 时额外删除实例运行目录，`removeApplicationData=true` 时删除整个应用运行目录。
 - 依赖 agent 的读取和运行时能力必须只在 `agent.status=compatible` 且 `agent.url` 存在时执行；agent 未部署、异常、不兼容、无法部署或客户端不可用时，当前操作或定时任务不得执行，也不得回退 SSH。例外是 agent 部署、重装、证书同步等恢复 agent 本身的任务。
 - Docker 资源查询和操作只走 agent Docker Engine API，不回退 SSH。
 - 启用 agent 后，读取类能力、软件包刷新/升级、UFW 状态及写操作、fail2ban 状态及配置应用、服务器重启、指标采集和应用运行时操作必须走 agent，不允许回退 SSH。APT/UFW/fail2ban 由 Agent 参数化调用固定命令；服务器重启由 Agent 通过 `busctl` 调用 logind D-Bus `Reboot`。

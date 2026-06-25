@@ -62,9 +62,26 @@ func (r *LocalRuntime) Stop(ctx context.Context, req agentcontract.RuntimeStopRe
 	if err := r.client.stopContainer(ctx, name, 10); err != nil && !isDockerNotFound(err) {
 		return agentcontract.RuntimeInstanceResponse{}, err
 	}
+	if err := r.client.removeContainer(ctx, name, true); err != nil && !isDockerNotFound(err) {
+		return agentcontract.RuntimeInstanceResponse{}, err
+	}
 	if req.Purge {
-		if err := r.client.removeContainer(ctx, name, true); err != nil && !isDockerNotFound(err) {
-			return agentcontract.RuntimeInstanceResponse{}, err
+		if req.RemoveApplicationData {
+			appDir, err := safeApplicationRootDir(r.root, req.ApplicationID)
+			if err != nil {
+				return agentcontract.RuntimeInstanceResponse{}, err
+			}
+			if err := os.RemoveAll(appDir); err != nil {
+				return agentcontract.RuntimeInstanceResponse{}, err
+			}
+		} else {
+			instanceDir, err := safeApplicationRuntimeDir(r.root, req.ApplicationID, filepath.Join("instances", req.InstanceID))
+			if err != nil {
+				return agentcontract.RuntimeInstanceResponse{}, err
+			}
+			if err := os.RemoveAll(instanceDir); err != nil {
+				return agentcontract.RuntimeInstanceResponse{}, err
+			}
 		}
 	}
 	status := appruntime.StatusStopped
@@ -414,6 +431,26 @@ func safeApplicationRuntimeDir(root, appID, area string) (string, error) {
 	}
 	if cleanTarget != cleanBase && !strings.HasPrefix(cleanTarget, cleanBase+string(os.PathSeparator)) {
 		return "", errors.New("runtime application path escapes the application workspace")
+	}
+	return cleanTarget, nil
+}
+
+func safeApplicationRootDir(root, appID string) (string, error) {
+	appID = strings.TrimSpace(appID)
+	if appID == "" || strings.ContainsAny(appID, `/\`) {
+		return "", errors.New("runtime application path is invalid")
+	}
+	target := filepath.Join(root, appID)
+	cleanRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", err
+	}
+	cleanTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if cleanTarget != cleanRoot && !strings.HasPrefix(cleanTarget, cleanRoot+string(os.PathSeparator)) {
+		return "", errors.New("runtime application path escapes the runtime root")
 	}
 	return cleanTarget, nil
 }

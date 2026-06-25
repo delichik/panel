@@ -82,6 +82,7 @@
   - 密钥：`keys/index.vue`
   - 两个页面复用 `key-assets/index.vue` 的资产工作区
 - 任务中心：`web/src/views/tasks/index.vue`
+  - 左侧选择器展示按 `operationId` 聚合的操作；右侧“操作中的任务”展示具体执行任务。批量父任务只提供操作聚合、状态汇总和执行模式，表格中展示其子任务。
 - 设置菜单组：`web/src/views/settings/`
   - 通用：`general/index.vue`
     - 运行时表单包含指标保留、采集间隔、远程命令超时、清理计划、Token 过期时间、语言和后端日志等级；日志等级保存为稳定值 `debug`、`info`、`warn` 或 `error`。

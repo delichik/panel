@@ -591,6 +591,11 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 	if len(runtime.stops) != 2 || runtime.stops[0].InstanceID != app.ID+"-srv-a" || runtime.stops[1].InstanceID != app.ID+"-srv-b" {
 		t.Fatalf("stops = %#v", runtime.stops)
 	}
+	for _, req := range runtime.stops {
+		if req.ApplicationID != app.ID || req.Purge || req.RemoveApplicationData {
+			t.Fatalf("stop should remove container without purging files: %#v", req)
+		}
+	}
 	result, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeStop, Limit: 1})
 	if err != nil {
 		t.Fatal(err)
@@ -641,6 +646,80 @@ func TestStopTaskExecutorUsesPurgeParamAndCompletesTask(t *testing.T) {
 	}
 	if storedTask.Status != tasks.StatusCompleted {
 		t.Fatalf("expected completed stop task, got %#v", storedTask)
+	}
+}
+
+func TestSelectedDeploymentRemovalPurgesRemovedInstance(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a", "srv-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeStops := len(runtime.stops)
+	updated, err := svc.Update(ctx, app.ID, SaveInput{
+		Name:              "web",
+		Enabled:           true,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-b"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.DeploymentServers) != 1 || updated.DeploymentServers[0] != "srv-b" {
+		t.Fatalf("deployment servers = %#v", updated.DeploymentServers)
+	}
+	if len(runtime.stops) != beforeStops+1 {
+		t.Fatalf("stops = %#v", runtime.stops)
+	}
+	cleanup := runtime.stops[len(runtime.stops)-1]
+	if cleanup.InstanceID != app.ID+"-srv-a" || !cleanup.Purge || cleanup.RemoveApplicationData {
+		t.Fatalf("removed selected target cleanup = %#v", cleanup)
+	}
+	instances, err := svc.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 1 || instances[0].ServerID != "srv-b" {
+		t.Fatalf("instances = %#v", instances)
+	}
+}
+
+func TestDeleteApplicationPurgesRuntimeData(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	beforeDeleteStops := len(runtime.stops)
+	if err := svc.Delete(ctx, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.stops) != beforeDeleteStops+2 {
+		t.Fatalf("delete cleanup stops = %#v", runtime.stops)
+	}
+	for _, req := range runtime.stops[beforeDeleteStops:] {
+		if req.ApplicationID != app.ID || !req.Purge || !req.RemoveApplicationData {
+			t.Fatalf("delete should purge application runtime data: %#v", req)
+		}
+	}
+	if _, err := svc.Get(ctx, app.ID); err == nil {
+		t.Fatal("expected application to be deleted")
 	}
 }
 
@@ -1087,8 +1166,11 @@ func TestMigrateDeploysTargetAndDropsSourceInstance(t *testing.T) {
 	if len(instances) != 1 || instances[0].ServerID != "srv-b" {
 		t.Fatalf("instances = %#v", instances)
 	}
-	if len(runtime.stops) != 0 {
-		t.Fatalf("source should not be stopped during lossless migration: %#v", runtime.stops)
+	if len(runtime.stops) != 1 {
+		t.Fatalf("source should be cleaned during migration: %#v", runtime.stops)
+	}
+	if runtime.stops[0].InstanceID != app.ID+"-srv-a" || !runtime.stops[0].Purge || runtime.stops[0].RemoveApplicationData {
+		t.Fatalf("source migration cleanup = %#v", runtime.stops[0])
 	}
 	lastDeploy := runtime.deploys[len(runtime.deploys)-1]
 	if lastDeploy.ServerID != "srv-b" {
@@ -1289,7 +1371,11 @@ func (f *fakeRuntimeClient) DockerContainerAction(ctx context.Context, baseURL, 
 
 func (f *fakeRuntimeClient) RuntimeStop(ctx context.Context, baseURL string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
 	f.stops = append(f.stops, req)
-	return agentcontract.RuntimeInstanceResponse{InstanceID: req.InstanceID, Status: appruntime.StatusStopped, ObservedAt: time.Now().UTC()}, nil
+	status := appruntime.StatusStopped
+	if req.Purge {
+		status = "purged"
+	}
+	return agentcontract.RuntimeInstanceResponse{InstanceID: req.InstanceID, Status: status, ObservedAt: time.Now().UTC()}, nil
 }
 
 func (f *fakeRuntimeClient) RuntimeRestart(ctx context.Context, baseURL string, req agentcontract.RuntimeRestartRequest) (agentcontract.RuntimeInstanceResponse, error) {

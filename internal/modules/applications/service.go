@@ -335,11 +335,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 			return Application{}, err
 		}
 		if app.Enabled {
-			taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
-			if err != nil {
-				return Application{}, err
-			}
-			if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
+			if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
 				return Application{}, err
 			}
 		}
@@ -352,11 +348,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 		return Application{}, applicationSaveError(err)
 	}
 	if app.Enabled {
-		taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
-		if err != nil {
-			return Application{}, err
-		}
-		if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
+		if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
 			return Application{}, err
 		}
 	}
@@ -442,13 +434,12 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 			}
 		}
 		if shouldDeploy {
-			taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
-			if err != nil {
+			if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
 				return Application{}, err
 			}
-			if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
-				return Application{}, err
-			}
+		}
+		if err := s.cleanupRemovedDeploymentInstances(ctx, "", current, app); err != nil {
+			return Application{}, err
 		}
 		if shouldStop {
 			taskID, err := s.recordRunningTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
@@ -468,13 +459,12 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 		return Application{}, applicationSaveError(err)
 	}
 	if shouldDeploy {
-		taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
-		if err != nil {
+		if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
 			return Application{}, err
 		}
-		if err := s.deployRuntimeSpec(ctx, taskID, app, prepared.job); err != nil {
-			return Application{}, err
-		}
+	}
+	if err := s.cleanupRemovedDeploymentInstances(ctx, "", current, app); err != nil {
+		return Application{}, err
 	}
 	if shouldStop {
 		taskID, err := s.recordRunningTask(ctx, TaskTypeStop, app.ID, "Stopping application "+app.Name)
@@ -498,6 +488,9 @@ func (s *Service) Delete(ctx context.Context, appID string) error {
 	}
 	if app.Enabled {
 		return panelerr.Conflict("application_enabled", "Disable the application before deleting it")
+	}
+	if err := s.purgeApplicationRuntimeData(ctx, app.ID); err != nil {
+		return err
 	}
 	_, err = s.db.ExecContext(ctx, `DELETE FROM applications WHERE id=?`, appID)
 	if err != nil {
@@ -738,23 +731,18 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 		return OperationResult{}, err
 	}
 	if s.tasks == nil {
-		if err := s.runDeployTask(ctx, "", app, job); err != nil {
+		if err := s.runDeployTask(ctx, "", app, job, nil, ""); err != nil {
 			return OperationResult{}, err
 		}
 		return OperationResult{Application: app}, nil
 	}
-	task, created, err := s.recordRunningTaskObject(ctx, TaskTypeDeploy, app.ID, "Deploying application "+app.Name)
+	batch, _, err := s.deploymentTaskBatch(ctx, app, job, "Deploying application "+app.Name, "user")
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if created {
-		go func() {
-			defer s.tasks.FinishExecution(task.ID)
-			runCtx := s.tasks.ExecutionContext(task.ID)
-			if err := s.runDeployTask(runCtx, task.ID, app, job); err != nil {
-				_ = s.tasks.Fail(context.Background(), task.ID, err)
-			}
-		}()
+	task, created, err := tasks.NewManager(s.tasks).CreateBatchAndRun(ctx, batch, tasks.Trigger{Type: "user", Manual: true})
+	if err != nil {
+		return OperationResult{}, err
 	}
 	result := OperationResult{TaskID: task.ID, Application: app}
 	if runtime, err := s.Runtime(ctx, app.ID); err == nil {
@@ -776,7 +764,8 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 	if err != nil {
 		return err
 	}
-	return s.runDeployTask(ctx, task.ID, app, job)
+	opts := deployTaskOptions(task)
+	return s.runDeployTask(ctx, task.ID, app, job, opts.targetIDs, opts.lifecycleOperationID)
 }
 
 func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application, appruntime.Spec, error) {
@@ -810,8 +799,8 @@ func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application,
 	return app, job, nil
 }
 
-func (s *Service) runDeployTask(ctx context.Context, taskID string, app Application, job appruntime.Spec) error {
-	if err := s.deployRuntimeSpec(ctx, taskID, app, job); err != nil {
+func (s *Service) runDeployTask(ctx context.Context, taskID string, app Application, job appruntime.Spec, targetIDs []string, lifecycleOperationID string) error {
+	if err := s.deployRuntimeSpecTargets(ctx, taskID, app, job, targetIDs, lifecycleOperationID); err != nil {
 		return err
 	}
 	return s.reconcileReverseProxy(ctx)
@@ -930,15 +919,11 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 			return OperationResult{}, err
 		}
 	}
-	taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, app.ID, "Migrating application "+app.Name)
+	taskID, err := s.runDeploymentTaskBatch(ctx, migrated, job, "Migrating application "+app.Name)
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.deployRuntimeSpec(ctx, taskID, migrated, job); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
-		return OperationResult{}, err
-	}
-	if err := s.deleteRuntimeInstanceForServer(ctx, app.ID, sourceServerID); err != nil {
+	if err := s.purgeRuntimeInstanceForServer(ctx, taskID, app.ID, sourceServerID, false); err != nil {
 		return OperationResult{}, err
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
@@ -965,11 +950,7 @@ func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) 
 		if !changed {
 			continue
 		}
-		taskID, err := s.recordRunningTask(ctx, TaskTypeRefresh, refreshed.ID, "Refreshing application "+refreshed.Name)
-		if err != nil {
-			return redeployed, err
-		}
-		if err := s.deployRuntimeSpec(ctx, taskID, refreshed, spec); err != nil {
+		if _, err := s.runDeploymentTaskBatch(ctx, refreshed, spec, "Refreshing application "+refreshed.Name); err != nil {
 			return redeployed, err
 		}
 		redeployed++
@@ -1055,11 +1036,7 @@ func (s *Service) RedeployEnabledApplications(ctx context.Context) (int, error) 
 		if err != nil {
 			return redeployed, err
 		}
-		taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, refreshed.ID, "Deploying application "+refreshed.Name)
-		if err != nil {
-			return redeployed, err
-		}
-		if err := s.runDeployTask(ctx, taskID, refreshed, spec); err != nil {
+		if _, err := s.runDeploymentTaskBatch(ctx, refreshed, spec, "Deploying application "+refreshed.Name); err != nil {
 			return redeployed, err
 		}
 		redeployed++
@@ -1695,6 +1672,10 @@ func (s *Service) templateData(ctx context.Context, app Application, variables m
 }
 
 func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Application, spec appruntime.Spec) error {
+	return s.deployRuntimeSpecTargets(ctx, taskID, app, spec, nil, "")
+}
+
+func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, app Application, spec appruntime.Spec, targetIDs []string, lifecycleOperationID string) error {
 	if s.runtimeClient == nil {
 		return panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
 	}
@@ -1702,12 +1683,17 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 	if err != nil {
 		return err
 	}
+	targets = filterDeploymentTargets(targets, targetIDs)
 	if len(targets) == 0 {
 		return panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
-	operation, err := s.createLifecycleOperation(ctx, app, spec, taskID, LifecycleTypeDeploy, targets)
-	if err != nil {
-		return err
+	operation := LifecycleOperation{ID: strings.TrimSpace(lifecycleOperationID)}
+	if operation.ID == "" {
+		var err error
+		operation, err = s.createLifecycleOperation(ctx, app, spec, taskID, LifecycleTypeDeploy, targets)
+		if err != nil {
+			return err
+		}
 	}
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.Advance(ctx, taskID, "deploying", "deploying application instances")
@@ -1846,14 +1832,22 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 	}
 	if len(failures) > 0 {
 		err := runtimeDeploymentError(len(targets), failures)
-		status := LifecycleStatusFailed
-		if len(failures) < len(targets) {
-			status = LifecycleStatusPartiallyDeployed
+		if lifecycleOperationID == "" {
+			status := LifecycleStatusFailed
+			if len(failures) < len(targets) {
+				status = LifecycleStatusPartiallyDeployed
+			}
+			_ = s.finishLifecycleOperation(ctx, operation.ID, status, err)
+		} else {
+			_ = s.finishDeploymentOperationFromTargets(ctx, operation.ID)
 		}
-		_ = s.finishLifecycleOperation(ctx, operation.ID, status, err)
 		return err
 	}
-	if err := s.finishLifecycleOperation(ctx, operation.ID, LifecycleStatusDeployed, nil); err != nil {
+	if lifecycleOperationID == "" {
+		if err := s.finishLifecycleOperation(ctx, operation.ID, LifecycleStatusDeployed, nil); err != nil {
+			return err
+		}
+	} else if err := s.finishDeploymentOperationFromTargets(ctx, operation.ID); err != nil {
 		return err
 	}
 	if s.tasks != nil && taskID != "" {
@@ -1959,6 +1953,48 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 	return err
 }
 
+func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, operationID string) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT server_id,status,error FROM application_lifecycle_targets WHERE operation_id=?`, operationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	total := 0
+	failed := 0
+	pending := 0
+	failures := []runtimeDeploymentFailure{}
+	for rows.Next() {
+		total++
+		var serverID, status, errText string
+		if err := rows.Scan(&serverID, &status, &errText); err != nil {
+			return err
+		}
+		switch status {
+		case LifecycleTargetStatusFailed:
+			failed++
+			if strings.TrimSpace(errText) != "" {
+				failures = append(failures, runtimeDeploymentFailure{targetName: serverID, err: errors.New(errText)})
+			}
+		case LifecycleTargetStatusPending, LifecycleTargetStatusPreparing, LifecycleTargetStatusDeploying:
+			pending++
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if total == 0 || pending > 0 {
+		return nil
+	}
+	if failed == 0 {
+		return s.finishLifecycleOperation(ctx, operationID, LifecycleStatusDeployed, nil)
+	}
+	status := LifecycleStatusPartiallyDeployed
+	if failed == total {
+		status = LifecycleStatusFailed
+	}
+	return s.finishLifecycleOperation(ctx, operationID, status, runtimeDeploymentError(total, failures))
+}
+
 func lifecycleTargetID(operationID, serverID string) string {
 	return strings.TrimSpace(operationID) + "-" + sanitizeRuntimeName(serverID)
 }
@@ -2035,7 +2071,7 @@ func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string
 		var result agentcontract.RuntimeInstanceResponse
 		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
 			var runErr error
-			result, runErr = s.runtimeClient.RuntimeStop(runCtx, baseURL, agentcontract.RuntimeStopRequest{InstanceID: instance.ID, ContainerName: instance.ContainerName, Purge: purge})
+			result, runErr = s.runtimeClient.RuntimeStop(runCtx, baseURL, agentcontract.RuntimeStopRequest{ApplicationID: appID, InstanceID: instance.ID, ContainerName: instance.ContainerName, Purge: purge})
 			return runErr
 		})
 		if err != nil {
@@ -2324,6 +2360,150 @@ func (s *Service) recordRunningTaskObjectWithParams(ctx context.Context, taskTyp
 	return task, created, nil
 }
 
+type deployTaskParams struct {
+	AppID                string `json:"appId,omitempty"`
+	ServerID             string `json:"serverId,omitempty"`
+	LifecycleOperationID string `json:"lifecycleOperationId,omitempty"`
+}
+
+func (s *Service) deploymentTaskBatch(ctx context.Context, app Application, spec appruntime.Spec, summary, triggerType string) (tasks.CreateBatchInput, string, error) {
+	targets, err := s.deploymentTargets(ctx, app)
+	if err != nil {
+		return tasks.CreateBatchInput{}, "", err
+	}
+	operation, err := s.createLifecycleOperation(ctx, app, spec, "", LifecycleTypeDeploy, targets)
+	if err != nil {
+		return tasks.CreateBatchInput{}, "", err
+	}
+	inputs := make([]tasks.CreateInput, 0, len(targets))
+	for _, target := range targets {
+		params, err := json.Marshal(deployTaskParams{AppID: app.ID, ServerID: target.ID, LifecycleOperationID: operation.ID})
+		if err != nil {
+			return tasks.CreateBatchInput{}, "", err
+		}
+		inputs = append(inputs, tasks.CreateInput{
+			Type:         TaskTypeDeploy,
+			ServerID:     target.ID,
+			ResourceType: "application",
+			ResourceID:   app.ID,
+			ParamsJSON:   string(params),
+			Summary:      summary,
+		})
+	}
+	return tasks.CreateBatchInput{
+		Type:          TaskTypeDeploy,
+		Summary:       summary,
+		OperationID:   id.New("op"),
+		TriggerType:   firstNonEmpty(triggerType, "system"),
+		ExecutionMode: tasks.ExecutionModeSerial,
+		Inputs:        inputs,
+	}, operation.ID, nil
+}
+
+func (s *Service) runDeploymentTaskBatch(ctx context.Context, app Application, spec appruntime.Spec, summary string) (string, error) {
+	if s.tasks == nil {
+		return "", s.runDeployTask(ctx, "", app, spec, nil, "")
+	}
+	batch, operationID, err := s.deploymentTaskBatch(ctx, app, spec, summary, "system")
+	if err != nil {
+		return "", err
+	}
+	manager := tasks.NewManager(s.tasks)
+	if len(batch.Inputs) == 1 {
+		task, created, err := manager.Create(ctx, batch.Inputs[0], tasks.Trigger{Type: "system"})
+		if err != nil || !created {
+			return task.ID, err
+		}
+		defer s.tasks.FinishExecution(task.ID)
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return task.ID, err
+		}
+		opts := deployTaskOptions(task)
+		if err := s.runDeployTask(ctx, task.ID, app, spec, opts.targetIDs, opts.lifecycleOperationID); err != nil {
+			_ = s.tasks.Fail(ctx, task.ID, err)
+			return task.ID, err
+		}
+		if err := s.deploymentOperationError(ctx, operationID); err != nil {
+			return task.ID, err
+		}
+		return task.ID, nil
+	}
+	task, _, created, err := manager.CreateBatch(ctx, batch, tasks.Trigger{Type: "system"})
+	if err != nil || !created {
+		return task.ID, err
+	}
+	defer s.tasks.FinishExecution(task.ID)
+	if err := manager.Run(ctx, task); err != nil {
+		return task.ID, err
+	}
+	if err := s.deploymentOperationError(ctx, operationID); err != nil {
+		return task.ID, err
+	}
+	return task.ID, nil
+}
+
+func (s *Service) deploymentOperationError(ctx context.Context, operationID string) error {
+	var status, errText string
+	err := s.db.QueryRowContext(ctx, `SELECT status,error FROM application_lifecycle_operations WHERE id=?`, operationID).Scan(&status, &errText)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if status != LifecycleStatusFailed && status != LifecycleStatusPartiallyDeployed {
+		return nil
+	}
+	if strings.TrimSpace(errText) == "" {
+		errText = "Application deployment failed"
+	}
+	return panelerr.BadGateway("application_runtime_operation_failed", errText)
+}
+
+type deployTaskRunOptions struct {
+	targetIDs            []string
+	lifecycleOperationID string
+}
+
+func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
+	if strings.TrimSpace(task.ParamsJSON) != "" {
+		var params deployTaskParams
+		if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err == nil && strings.TrimSpace(params.ServerID) != "" {
+			return deployTaskRunOptions{
+				targetIDs:            []string{strings.TrimSpace(params.ServerID)},
+				lifecycleOperationID: strings.TrimSpace(params.LifecycleOperationID),
+			}
+		}
+	}
+	if strings.TrimSpace(task.ServerID) != "" && strings.TrimSpace(task.ResourceID) != "" {
+		return deployTaskRunOptions{targetIDs: []string{strings.TrimSpace(task.ServerID)}}
+	}
+	return deployTaskRunOptions{}
+}
+
+func filterDeploymentTargets(targets []server.Server, targetIDs []string) []server.Server {
+	if len(targetIDs) == 0 {
+		return targets
+	}
+	wanted := map[string]bool{}
+	for _, targetID := range targetIDs {
+		targetID = strings.TrimSpace(targetID)
+		if targetID != "" {
+			wanted[targetID] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return targets
+	}
+	out := make([]server.Server, 0, len(targets))
+	for _, target := range targets {
+		if wanted[target.ID] {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
 func stopTaskParamsJSON(purge bool) string {
 	if !purge {
 		return "{}"
@@ -2526,6 +2706,92 @@ func (s *Service) deleteRuntimeInstanceForServer(ctx context.Context, appID, ser
 	}
 	_, err = s.db.ExecContext(ctx, `DELETE FROM application_reconcile_states WHERE instance_id=?`, instance.ID)
 	return err
+}
+
+func (s *Service) cleanupRemovedDeploymentInstances(ctx context.Context, taskID string, before, after Application) error {
+	if after.DeploymentMode != DeploymentModeSelected {
+		return nil
+	}
+	desired := map[string]struct{}{}
+	for _, serverID := range after.DeploymentServers {
+		serverID = strings.TrimSpace(serverID)
+		if serverID != "" {
+			desired[serverID] = struct{}{}
+		}
+	}
+	instances, err := s.runtimeInstances(ctx, before.ID)
+	if err != nil {
+		return err
+	}
+	for _, instance := range instances {
+		if _, keep := desired[instance.ServerID]; keep {
+			continue
+		}
+		if err := s.purgeRuntimeInstance(ctx, taskID, instance, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) purgeRuntimeInstanceForServer(ctx context.Context, taskID, appID, serverID string, removeApplicationData bool) error {
+	instance, err := s.runtimeInstanceForServer(ctx, appID, serverID)
+	if err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return s.purgeRuntimeInstance(ctx, taskID, instance, removeApplicationData)
+}
+
+func (s *Service) purgeApplicationRuntimeData(ctx context.Context, appID string) error {
+	instances, err := s.runtimeInstances(ctx, appID)
+	if err != nil {
+		return err
+	}
+	if len(instances) == 0 {
+		return nil
+	}
+	byServer := map[string]appruntime.Instance{}
+	for _, instance := range instances {
+		byServer[instance.ServerID] = instance
+	}
+	for _, instance := range byServer {
+		if err := s.purgeRuntimeInstance(ctx, "", instance, true); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) purgeRuntimeInstance(ctx context.Context, taskID string, instance appruntime.Instance, removeApplicationData bool) error {
+	srv, err := s.servers.Get(ctx, instance.ServerID)
+	if err != nil {
+		return err
+	}
+	if err := ensureAgentRuntimeReady(srv); err != nil {
+		return err
+	}
+	baseURL, _ := agentURLFromServer(srv)
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "cleaning "+instance.ContainerName+" on "+firstNonEmpty(srv.Name, srv.ID, srv.Host))
+	}
+	err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
+		_, runErr := s.runtimeClient.RuntimeStop(runCtx, baseURL, agentcontract.RuntimeStopRequest{
+			ApplicationID:         instance.ApplicationID,
+			InstanceID:            instance.ID,
+			ContainerName:         instance.ContainerName,
+			Purge:                 true,
+			RemoveApplicationData: removeApplicationData,
+		})
+		return runErr
+	})
+	if err != nil {
+		_ = s.handleAgentError(ctx, srv, err)
+		return runtimeOperationError(err)
+	}
+	return s.deleteRuntimeInstanceForServer(ctx, instance.ApplicationID, instance.ServerID)
 }
 
 func (s *Service) runtimeInstances(ctx context.Context, appID string) ([]appruntime.Instance, error) {
@@ -3043,11 +3309,7 @@ func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error 
 	if err := s.updateApplication(ctx, current); err != nil {
 		return err
 	}
-	taskID, err := s.recordRunningTask(ctx, TaskTypeDeploy, current.ID, "Deploying application "+current.Name)
-	if err != nil {
-		return err
-	}
-	if err := s.deployRuntimeSpec(ctx, taskID, current, job); err != nil {
+	if _, err := s.runDeploymentTaskBatch(ctx, current, job, "Deploying application "+current.Name); err != nil {
 		return err
 	}
 	return s.reconcileReverseProxy(ctx)

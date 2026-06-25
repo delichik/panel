@@ -299,6 +299,9 @@ func (m *Manager) RunChildren(ctx context.Context, parent Task, children []Task)
 		if err := m.Run(ctx, child); err != nil {
 			joined = errors.Join(joined, err)
 		}
+		if err := m.childFailure(ctx, child.ID); err != nil {
+			joined = errors.Join(joined, err)
+		}
 		m.service.FinishExecution(child.ID)
 	}
 	return joined
@@ -358,6 +361,9 @@ func (m *Manager) runChildrenParallel(ctx context.Context, children []Task) erro
 			if err := m.Run(ctx, child); err != nil {
 				errs <- err
 			}
+			if err := m.childFailure(ctx, child.ID); err != nil {
+				errs <- err
+			}
 		}()
 	}
 	wg.Wait()
@@ -367,4 +373,20 @@ func (m *Manager) runChildrenParallel(ctx context.Context, children []Task) erro
 		joined = errors.Join(joined, err)
 	}
 	return joined
+}
+
+func (m *Manager) childFailure(ctx context.Context, taskID string) error {
+	latest, err := m.service.Get(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	switch latest.Status {
+	case StatusFailed, StatusFailedRetryable, StatusBlocked, StatusCancelled:
+		if latest.Error != "" {
+			return errors.New(latest.Error)
+		}
+		return errors.New("child task " + taskID + " ended with status " + latest.Status)
+	default:
+		return nil
+	}
 }

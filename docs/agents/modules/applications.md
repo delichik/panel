@@ -48,12 +48,13 @@
 - `application_instances` 是 Panel 的当前运行时事实表，按 `application_id + server_id` 记录实例、容器名、容器 ID、期望状态、最近状态、渲染后的 runtime spec 和部署 generation；它不再承担“本次部署目标清单”的职责。
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID，并依赖数据库外键级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
-- 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后只移除来源 `application_instances` 记录，不停止或删除来源容器。
+- 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后删除来源服务器上的容器和该实例运行目录，并移除来源 `application_instances` 记录。
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 文件内容通过 API 以 base64 承载；应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
 - 启用应用、部署、镜像更新等流程需要先校验和计划，再确认目标服务器 agent runtime 可用，然后写入应用修订和实例记录；手动部署 HTTP 入口只创建并启动应用部署任务后返回，实际部署由任务后台执行。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标部署中单台服务器部署失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
+- 多目标应用部署必须按任务系统“操作 + 任务”语义建模：一次部署请求是一个操作，每个目标服务器是该操作下的一个 `application_deploy` 任务，任务参数或资源字段必须能定位到对应服务器和应用。创建启用应用、更新启用应用、手动部署、迁移、变量刷新、持久化数据恢复后的重部署和系统触发的启用应用重部署，都必须通过同一目标级部署任务入口创建可见执行对象。`application_lifecycle_operations` / `application_lifecycle_targets` 继续保存运行时领域状态和前端运行实例视图，但不得作为任务中心中目标级执行对象的替代品。
 - 应用部署的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
 - 应用部署流程必须先创建 lifecycle operation 和全部目标 target，再逐台执行 `validate_agent`、`render`、`write_files`、`pull_image`、`remove_*_container`、`create_container`、`start_container`、`inspect` 等阶段；每阶段失败都更新对应 target，成功实例继续保留，部分失败时 operation 状态为 `partially_deployed`。
 - 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的远端调用只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得发起 agent runtime 调用，也不得回退 SSH。部署类 lifecycle operation 仍必须为选中目标记录 failed target，避免配置目标在运行时视图中消失；运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
@@ -66,7 +67,7 @@
 - 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；编辑、部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
 - 应用页面不展示应用总数、已启用和需要关注摘要卡，页面级提示后直接进入主从工作区。
 - 应用右侧详情使用单张满高 outlined 卡片：运行状态和启用状态位于标题下方，操作按钮单独位于头部右侧；可滚动正文按基本信息、镜像更新和运行实例分区。下载包、持久化数据、迁移和删除收进更多菜单，不再把运行时面板渲染为独立并列卡片。
-- 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；`purge` 参数会传给 agent 清理容器。
+- 应用停止会更新应用为 disabled，并对当前实例调用 agent runtime stop；停止必须删除容器以释放端口和容器名，但保留应用托管文件与 persistent 数据。删除应用、从 `selected` 部署目标中移除服务器、迁移来源实例时才使用清理模式删除对应运行数据；删除应用会清理整个应用运行目录，包含 persistent 数据。
 - 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。运行时实例响应同时返回 `serverId`、`serverName` 和 lifecycle `stage`，前端优先展示服务器名称，并保留 ID 作为辅助信息；没有容器的 pending/failed target 不提供日志入口。
 - 模板目录提供 `app.id`、`app.name`、`app.namespace`、`app.generation` 等应用变量，可用于 appspec YAML 和应用文件模板。
 - 模板目录提供 `server.id`、`server.name`、`server.host`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username`、`server.variables.<key>` 等节点变量；appspec YAML 中的节点差异仍通过 `${node.meta.panel_*}` 和容器内 `PANEL_SERVER_*` 环境变量表达，应用文件模板在部署到每台目标服务器前会用实际目标服务器上下文重新渲染，因此同一应用在不同服务器会得到不同文件内容。
@@ -88,7 +89,7 @@
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML 编辑；可视化页也要继续提供挂载编辑入口并与 YAML 往返同步。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入 YAML 编辑。
 - YAML 标签页只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须作为两个标签页共享的表单区展示，不能只出现在可视化页。
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`args` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
-- 应用部署是可重放应用任务，`application_deploy` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 部署入口和任务 executor 共用当前应用快照刷新、部署校验、启用应用和 runtime deploy 准备逻辑。
+- 应用部署是可重放应用任务，`application_deploy` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 部署入口和任务 executor 共用当前应用快照刷新、部署校验、启用应用和 runtime deploy 准备逻辑。部署目标超过一个时，入口应通过 `tasks.Manager.CreateBatch` / `CreateBatchAndRun` 创建同一操作下的目标级部署任务，并按注册定义决定串行或并行执行；应用生命周期并发策略当前要求同一应用串行部署，因此应用部署 batch 使用 `ExecutionModeSerial`。部署开始前先创建一个覆盖全部目标的 `application_lifecycle_operations` 聚合，并把 lifecycle operation ID 写入每个目标任务参数，子任务只更新自己的 target，最后一个完成的子任务负责把聚合状态收敛为 deployed、failed 或 partially_deployed。
 - 镜像更新检查是可重放应用任务，`application_image_check` 由应用模块注册 executor、`run-now` 和 `retry` 能力；应用详情只展示最近自动检查结果和手动“更新”动作，不再提供手动检查入口。
 - 应用详情的镜像更新状态必须聚合已部署实例所在服务器的 `image_updates` 结果；只要任一实例服务器对应镜像有更新，应用 DTO 的 `imageUpdateAvailable` 即为 true，并通过 `imageUpdateTargets` 返回节点级本地摘要、最新摘要、检查时间和错误。应用镜像更新成功后需要把对应节点镜像检查缓存标记为已更新，避免旧缓存让详情继续显示可更新。
 - 应用停止是可重放应用任务，`application_stop` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 停止入口会把 `purge` 写入任务参数，executor 解析参数后复用 runtime stop 流程并完成传入任务。

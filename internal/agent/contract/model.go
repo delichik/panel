@@ -198,9 +198,11 @@ type RuntimeCreateContainerResponse struct {
 }
 
 type RuntimeStopRequest struct {
-	InstanceID    string `json:"instanceId"`
-	ContainerName string `json:"containerName,omitempty"`
-	Purge         bool   `json:"purge"`
+	ApplicationID         string `json:"applicationId,omitempty"`
+	InstanceID            string `json:"instanceId"`
+	ContainerName         string `json:"containerName,omitempty"`
+	Purge                 bool   `json:"purge"`
+	RemoveApplicationData bool   `json:"removeApplicationData,omitempty"`
 }
 
 type RuntimeRestartRequest struct {

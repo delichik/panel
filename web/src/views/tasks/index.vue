@@ -236,6 +236,16 @@ function taskDisplayTitle(task?: TaskDto | null) {
   return formatTaskType(task.type);
 }
 
+function executionModeLabel(value?: string | null) {
+  if (!value) return t('common.notAvailable');
+  return t(`taskCenter.executionModes.${value}`);
+}
+
+function taskOrdinalLabel(task: TaskDto) {
+  if (!task.parentTaskId || !task.childCount || task.childCount <= 1) return formatTaskType(task.type);
+  return t('taskCenter.taskOrdinal', { index: task.childIndex || 1, count: task.childCount });
+}
+
 function shortId(value?: string | null) {
   if (!value) return t('common.notAvailable');
   return value.length > 18 ? `${value.slice(0, 10)}...${value.slice(-6)}` : value;
@@ -511,6 +521,14 @@ onBeforeUnmount(() => {
                 <strong>{{ formatDateTime(selectedTask.finishedAt) }}</strong>
               </div>
               <div>
+                <span>{{ t('taskCenter.executionMode') }}</span>
+                <strong>{{ executionModeLabel(selectedOperation?.executionMode || selectedTask.executionMode) }}</strong>
+              </div>
+              <div>
+                <span>{{ t('taskCenter.operationTaskCount') }}</span>
+                <strong>{{ selectedOperation?.tasks.length ?? 1 }}</strong>
+              </div>
+              <div>
                 <span>{{ t('taskCenter.queuedFor') }}</span>
                 <strong>{{ durationBetween(selectedTask.createdAt, selectedTask.startedAt) }}</strong>
               </div>
@@ -588,7 +606,8 @@ onBeforeUnmount(() => {
                   @click="selectedTaskId = task.id"
                 >
                   <td>
-                    <div class="font-weight-medium">{{ formatTaskType(task.type) }}</div>
+                    <div class="font-weight-medium">{{ taskOrdinalLabel(task) }}</div>
+                    <div v-if="task.parentTaskId" class="text-caption text-medium-emphasis">{{ formatTaskType(task.type) }}</div>
                     <div class="text-caption text-medium-emphasis mono">{{ shortId(task.id) }}</div>
                   </td>
                   <td>{{ serverName(task.nodeId || task.serverId) }}</td>

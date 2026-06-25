@@ -822,6 +822,10 @@ export interface TaskDto {
   id: string;
   operationId?: string;
   type: string;
+  parentTaskId?: string;
+  childIndex?: number;
+  childCount?: number;
+  executionMode?: string;
   serverId: string | null;
   nodeId?: string | null;
   resourceType?: string;
