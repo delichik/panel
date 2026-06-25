@@ -104,7 +104,7 @@ func TestValidateAcceptsKeyAssetPanelFileSource(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsCertificatePanelFileSource(t *testing.T) {
+func TestValidateAcceptsCertificatePanelFileSource(t *testing.T) {
 	issues := Validate(Spec{
 		Name:  "web",
 		Image: "nginx",
@@ -112,6 +112,21 @@ func TestValidateRejectsCertificatePanelFileSource(t *testing.T) {
 			Type:   "panel_file",
 			Source: "certificate:cert_1:private_key",
 			Target: "/etc/ssl/private/key.pem",
+		}},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsInvalidCertificatePanelFileKind(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Mounts: []Mount{{
+			Type:   "panel_file",
+			Source: "certificate:cert_1:public_key",
+			Target: "/etc/ssl/public.pem",
 		}},
 	})
 	if !hasIssue(issues, "mounts[0].source") {

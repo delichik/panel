@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -435,6 +436,58 @@ func (s *Service) Delete(ctx context.Context, certID string) error {
 	return nil
 }
 
+func (s *Service) InternalFileCatalog(ctx context.Context) ([]applications.PanelFileDefinition, error) {
+	certs, err := s.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]applications.PanelFileDefinition, 0, len(certs)*2)
+	for _, cert := range certs {
+		if cert.Status != StatusIssued {
+			continue
+		}
+		for _, kind := range certificateInternalFileKinds() {
+			out = append(out, applications.PanelFileDefinition{
+				ID:           cert.ID + ":" + kind,
+				ResourceID:   cert.ID,
+				ResourceType: "certificate",
+				Name:         cert.Name,
+				Kind:         kind,
+				Source:       "certificate:" + cert.ID + ":" + kind,
+			})
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) OpenInternalFile(ctx context.Context, source string) (io.ReadCloser, applications.InternalFileInfo, error) {
+	certID, kind, err := parseInternalFileSource(source)
+	if err != nil {
+		return nil, applications.InternalFileInfo{}, err
+	}
+	cert, err := s.Get(ctx, certID)
+	if err != nil {
+		return nil, applications.InternalFileInfo{}, err
+	}
+	if cert.Status != StatusIssued {
+		return nil, applications.InternalFileInfo{}, panelerr.NotFound("certificate internal file")
+	}
+	path, filename, mode, err := certificateInternalFilePath(cert, kind)
+	if err != nil {
+		return nil, applications.InternalFileInfo{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, applications.InternalFileInfo{}, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, applications.InternalFileInfo{}, err
+	}
+	return file, applications.InternalFileInfo{Name: filename, Mode: mode, Size: info.Size()}, nil
+}
+
 func (s *Service) BuiltinVariables(ctx context.Context) (map[string]any, error) {
 	certVars, err := s.ApplicationVariables(ctx, applications.ApplicationVariableContext{})
 	if err != nil {
@@ -472,6 +525,39 @@ func (s *Service) ApplicationVariables(ctx context.Context, render applications.
 	return certVars, nil
 }
 
+func parseInternalFileSource(source string) (string, string, error) {
+	parts := strings.Split(strings.TrimSpace(source), ":")
+	if len(parts) != 3 || parts[0] != "certificate" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", panelerr.Validation("panel_file_source_invalid", "Panel file source is invalid")
+	}
+	kind := strings.TrimSpace(parts[2])
+	switch kind {
+	case "certificate", "private_key":
+		return strings.TrimSpace(parts[1]), kind, nil
+	default:
+		return "", "", panelerr.Validation("panel_file_kind_invalid", "Certificate file kind is invalid")
+	}
+}
+
+func certificateInternalFileKinds() []string {
+	return []string{"certificate", "private_key"}
+}
+
+func certificateInternalFilePath(cert Certificate, kind string) (string, string, string, error) {
+	base := strings.ReplaceAll(strings.TrimSpace(cert.Name), " ", "-")
+	if base == "" {
+		base = cert.ID
+	}
+	switch kind {
+	case "certificate":
+		return cert.CertificatePath, base + "-certificate.pem", "0644", nil
+	case "private_key":
+		return cert.PrivateKeyPath, base + "-private_key.pem", "0600", nil
+	default:
+		return "", "", "", panelerr.Validation("panel_file_kind_invalid", "Certificate file kind is invalid")
+	}
+}
+
 func (s *Service) certificateInUse(ctx context.Context, certID string, domains []string, variableName string) (bool, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT spec_yaml,reverse_proxy_json FROM applications`)
 	if err != nil {
@@ -482,6 +568,9 @@ func (s *Service) certificateInUse(ctx context.Context, certID string, domains [
 		var spec, proxy string
 		if err := rows.Scan(&spec, &proxy); err != nil {
 			return false, err
+		}
+		if certID != "" && strings.Contains(spec, "certificate:"+certID+":") {
+			return true, nil
 		}
 		if variableName != "" && strings.Contains(spec, ".certs."+variableName) {
 			return true, nil

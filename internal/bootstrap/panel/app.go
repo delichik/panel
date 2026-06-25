@@ -134,6 +134,7 @@ func New(cfg config.Config) (*App, error) {
 		certs.WithKeyAssetProvider(keyAssetSvc),
 		certs.WithApplicationRefresher(certBridge),
 	)
+	internalFileRegistry.Register("certificate", certSvc)
 	variableRegistry.Register("certs", certSvc)
 	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, metricsSvc, packageSvc, certSvc)
 	systemSvc := systeminfo.NewService(nil)

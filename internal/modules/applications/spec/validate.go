@@ -183,9 +183,17 @@ func validPanelFileSource(value string) bool {
 		return false
 	}
 	switch parts[0] {
-	case "key_asset":
+	case "key_asset", "certificate":
 	default:
 		return false
+	}
+	if parts[0] == "certificate" {
+		switch parts[2] {
+		case "certificate", "private_key":
+			return true
+		default:
+			return false
+		}
 	}
 	switch parts[2] {
 	case "certificate", "private_key", "public_key", "ssh_public_key", "ca_certificate", "ca_private_key":
