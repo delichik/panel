@@ -52,7 +52,18 @@ function updatePageSize(value: number) {
       density="compact"
       :total-visible="paginationVisible"
       @update:model-value="emit('update:page', Number($event))"
-    />
+    >
+      <template #item="{ props: itemProps, page: itemPage, isActive }">
+        <button
+          v-bind="itemProps"
+          type="button"
+          class="app-pagination__page"
+          :class="{ 'app-pagination__page--active': isActive }"
+        >
+          {{ itemPage }}
+        </button>
+      </template>
+    </v-pagination>
   </div>
 </template>
 
@@ -83,9 +94,37 @@ function updatePageSize(value: number) {
   padding-inline: 8px;
 }
 
-.app-pagination :deep(.v-pagination__item--is-active .v-btn) {
-  background: rgb(var(--v-theme-primary));
-  color: rgb(var(--v-theme-on-primary));
+.app-pagination__page {
+  display: inline-grid;
+  place-items: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: var(--lp-radius-sm);
+  background: transparent;
+  color: var(--lp-text);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.app-pagination__page:hover {
+  background: rgba(var(--v-theme-primary), 0.08);
+  color: var(--lp-text);
+}
+
+.app-pagination__page--active {
+  border-color: rgba(var(--v-theme-primary), 0.68);
+  background: transparent;
+  color: var(--lp-text);
+}
+
+.app-pagination__page:disabled {
+  cursor: default;
+  opacity: 0.5;
 }
 
 @media (max-width: 760px) {
