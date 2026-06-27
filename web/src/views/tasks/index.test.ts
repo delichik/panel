@@ -22,4 +22,13 @@ describe('TaskCenterPage', () => {
     expect(page).toContain('operationObjectLabel(group)');
     expect(page).toContain('statusLabel(group.status)');
   });
+
+  it('normalizes cleared search filters before applying them', () => {
+    expect(page).toContain('function normalizeStatusFilter');
+    expect(page).toContain('function normalizeOperationFilter');
+    expect(page).toContain('statusFilter.value = normalizedStatus');
+    expect(page).toContain('operationFilter.value = normalizedOperation');
+    expect(page).toContain('appliedStatusFilter.value = [...normalizedStatus]');
+    expect(page).toContain('appliedOperationFilter.value = normalizedOperation');
+  });
 });

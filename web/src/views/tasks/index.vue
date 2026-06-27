@@ -62,9 +62,9 @@ const steps = ref<TaskStepDto[]>([]);
 const servers = ref<ServerDto[]>([]);
 const selectedTaskId = ref('');
 const selectedOperationId = ref('');
-const statusFilter = ref<TaskStatus[]>([]);
+const statusFilter = ref<TaskStatus[] | null>([]);
 const appliedStatusFilter = ref<TaskStatus[]>([]);
-const operationFilter = ref('');
+const operationFilter = ref<string | null>('');
 const appliedOperationFilter = ref('');
 const typeFilter = ref<string[]>([TYPE_FILTER_COMMON]);
 const appliedTypeFilter = ref<string[]>([TYPE_FILTER_COMMON]);
@@ -117,6 +117,15 @@ function onTypeFilterChange(values: string[] | string | null) {
   typeFilter.value = normalizeTypeFilter(values, typeFilter.value);
 }
 
+function normalizeStatusFilter(values: TaskStatus[] | TaskStatus | null | undefined) {
+  const selected = Array.isArray(values) ? values : values ? [values] : [];
+  return Array.from(new Set(selected.filter(Boolean)));
+}
+
+function normalizeOperationFilter(value: string | null | undefined) {
+  return value?.trim() ?? '';
+}
+
 function taskTypeApiFilter(values: string[]) {
   const normalized = normalizeTypeFilter(values, values);
   if (normalized.includes(TYPE_FILTER_ALL)) return { includeInternal: true, commonOnly: false, types: [] };
@@ -132,8 +141,12 @@ function typeFilterForLinkedTask(task: TaskDto) {
 }
 
 function searchTasks() {
-  appliedStatusFilter.value = [...statusFilter.value];
-  appliedOperationFilter.value = operationFilter.value.trim();
+  const normalizedStatus = normalizeStatusFilter(statusFilter.value);
+  const normalizedOperation = normalizeOperationFilter(operationFilter.value);
+  statusFilter.value = normalizedStatus;
+  operationFilter.value = normalizedOperation;
+  appliedStatusFilter.value = [...normalizedStatus];
+  appliedOperationFilter.value = normalizedOperation;
   appliedTypeFilter.value = normalizeTypeFilter(typeFilter.value, typeFilter.value);
   reloadFirstPage();
 }
