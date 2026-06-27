@@ -39,6 +39,77 @@ describe('frontend Mock API', () => {
     }
   });
 
+  it('includes varied states for visual test coverage', async () => {
+    const servers = await data('/servers');
+    const applications = await data('/applications');
+    const certificates = await data('/certificates');
+    const keyAssets = await data('/key-assets');
+    const tasks = await data('/tasks?page=1&pageSize=50');
+    const debug = await data('/debug/snapshot');
+
+    expect(servers).toEqual(expect.arrayContaining([
+      expect.objectContaining({ reachable: false }),
+      expect.objectContaining({ privilege: expect.objectContaining({ mode: 'none' }) }),
+      expect.objectContaining({ traits: expect.objectContaining({ 'agent.status': 'compatible' }) }),
+    ]));
+    expect(applications).toEqual(expect.arrayContaining([
+      expect.objectContaining({ runtimeStatus: 'running', imageUpdateAvailable: true }),
+      expect.objectContaining({ runtimeStatus: 'failed' }),
+      expect.objectContaining({ runtimeStatus: 'deploying' }),
+    ]));
+    expect(certificates).toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: 'issued' }),
+      expect.objectContaining({ status: 'issuing' }),
+      expect.objectContaining({ status: 'failed' }),
+    ]));
+    expect(keyAssets).toEqual(expect.arrayContaining([
+      expect.objectContaining({ algorithm: 'rsa' }),
+      expect.objectContaining({ hasPrivateKey: false }),
+    ]));
+    expect(tasks.items.map((task: { status: string }) => task.status)).toEqual(expect.arrayContaining(['queued', 'scheduled', 'running', 'completed', 'failed', 'failed_retryable', 'blocked', 'cancelled']));
+    expect(tasks.items).toEqual(expect.arrayContaining([expect.objectContaining({ parentTaskId: 'task-batch-parent' })]));
+    expect(debug.databases).toEqual(expect.arrayContaining([expect.objectContaining({ healthy: false })]));
+  });
+
+  it('provides enough rows to display multi-page pagination controls', async () => {
+    const servers = await data('/servers');
+    const credentials = await data('/credentials');
+    const domains = await data('/dns/domains');
+    const records = await data('/dns/domains/domain-example/records');
+    const packages = await data('/servers/srv-edge/packages/updates');
+    const applications = await data('/applications');
+    const certificates = await data('/certificates');
+    const files = await data('/applications/app-web/files');
+    const runtime = await data('/applications/app-web/runtime');
+
+    for (const rows of [servers, credentials, domains, records, packages.updates, applications, certificates, files, runtime.instances]) {
+      expect(rows.length).toBeGreaterThan(100);
+    }
+  });
+
+  it('keeps task pages populated beyond the first page', async () => {
+    const first = await data('/tasks?page=1&pageSize=20');
+    const second = await data('/tasks?page=2&pageSize=20');
+    const far = await data('/tasks?page=99&pageSize=20');
+
+    expect(first.total).toBeGreaterThanOrEqual(1000);
+    expect(second.items.length).toBeGreaterThan(0);
+    expect(far.items.length).toBeGreaterThan(0);
+  });
+
+  it('persists overview card edits in memory', async () => {
+    const configuration = { cards: [{ id: 'custom-network', kind: 'network', width: 4, height: 3, range: '6h', networkDirection: 'tx', serverIds: ['srv-edge'] }] };
+
+    await data('/overview/cards', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(configuration),
+    });
+
+    expect(await data('/overview/cards')).toEqual(configuration);
+    expect((await data('/overview/cards/custom-network/data')).card).toEqual(configuration.cards[0]);
+  });
+
   it('keeps mutations in memory until the Mock API is reset', async () => {
     const created = await data('/dns/domains', {
       method: 'POST',
@@ -51,6 +122,28 @@ describe('frontend Mock API', () => {
 
     resetMockApi();
     expect(await data('/dns/domains')).not.toContainEqual(expect.objectContaining({ name: 'created.example.test' }));
+  });
+
+  it('supports edit and operation routes used by visual pages', async () => {
+    const updatedDomain = await data('/dns/domains/domain-example', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'edited.example.test', provider: 'cloudflare' }),
+    });
+    const updatedRecord = await data('/dns/domains/domain-example/records/rec-a', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '@', type: 'A', value: '203.0.113.44', ttl: 1, proxied: false }),
+    });
+    const renewed = await data('/certificates/cert-web/renew', { method: 'POST' });
+    const reset = await data('/key-assets/system/agent-ca/reset', { method: 'POST' });
+    const preflight = await data('/key-assets/imports/preflight', { method: 'POST', body: new FormData() });
+
+    expect(updatedDomain.name).toBe('edited.example.test');
+    expect(updatedRecord.value).toBe('203.0.113.44');
+    expect(renewed.renewed).toBe(true);
+    expect(reset.taskId).toMatch(/^task-/);
+    expect(preflight.requiresDangerConfirm).toBe(true);
   });
 
   it('returns a structured error for an unimplemented route', async () => {

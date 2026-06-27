@@ -39,6 +39,7 @@
 - 不依赖后端的前端测试模式通过 `task run:web:test` 启动；该任务设置 `VITE_PANEL_TEST_MODE=true`，由 `web/src/mocks/` 接管 `/api/v1` 请求并自动建立演示会话。
 - Mock API 必须保持统一 JSON envelope，并与 `web/src/api/` 的现有路径和响应结构一致；主要页面新增或修改接口时同步维护 Mock 路由和种子数据。
 - Mock 数据只保存在当前浏览器页面的内存中，常用写操作会更新内存状态，刷新页面后恢复种子数据；未实现的 Mock 路由必须返回明确的 `mock_route_not_found` 错误。
+- Mock 种子数据应覆盖主要页面和共享组件的展示状态，包括正常、异常、禁用、长文本、批量任务、空列表、证书/镜像/运行时错误和调试页不健康状态；新增页面状态时同步补充 `web/src/mocks/data.ts` 与相关 Mock 路由测试。
 - `ApiClient` 期望后端返回统一 JSON envelope；如果服务返回 HTML 或其他非 JSON 内容，前端必须转换为本地化的可读错误。
 - 用户可见的数据列表应使用共享分页组件 `web/src/components/AppPagination.vue`；数组型接口优先通过 `web/src/composables/usePagination.ts` 做前端分页。
 - 页面或列表的初次网络加载应使用 `web/src/components/PageLoadingState.vue`；已有内容后的刷新保留卡片 `:loading` 或按钮 loading。
