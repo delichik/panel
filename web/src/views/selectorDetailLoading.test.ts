@@ -27,6 +27,10 @@ describe('selector detail workspaces', () => {
     const packagesPage = read('servers/packages/index.vue');
     const firewallPage = read('servers/firewall/index.vue');
     const domainsPage = read('dns/domains/index.vue');
+    const runtimePanel = read('runtime/applications/ApplicationRuntimePanel.vue');
+    const logsDialog = read('../components/RuntimeLogsDialog.vue');
+    const tasksPage = read('tasks/index.vue');
+    const applicationEditor = read('runtime/applications/ApplicationEditor.vue');
 
     expect(packagesPage).toContain('updates.value = null;');
     expect(packagesPage).toContain('requestId !== updatesRequestId || serverId.value !== requestedServerId');
@@ -43,6 +47,21 @@ describe('selector detail workspaces', () => {
     expect(domainsPage).toContain('@click="resetForm(selectedDomain)"');
     expect(domainsPage).toContain('@click="askDeleteDomain(selectedDomain)"');
     expect(domainsPage).not.toContain('icon="mdi-dots-vertical"');
+
+    expect(runtimePanel).toContain('runtime.value = null;');
+    expect(runtimePanel).toContain('requestId !== runtimeRequestId || props.application.id !== requestedApplicationId');
+    expect(runtimePanel).toContain('loading && !runtime');
+
+    expect(logsDialog).toContain('logs.value = \'\';');
+    expect(logsDialog).toContain('requestId !== logsRequestId || props.targetKey !== requestedTargetKey');
+    expect(logsDialog).toContain('loading && !logs');
+
+    expect(tasksPage).toContain('steps.value = [];');
+    expect(tasksPage).toContain('requestId !== stepsRequestId || selectedTaskId.value !== taskId');
+    expect(tasksPage).toContain('stepsLoading && steps.length === 0');
+
+    expect(applicationEditor).toContain('filesRequestId += 1;');
+    expect(applicationEditor).toContain('requestId !== filesRequestId || props.application?.id !== applicationId || !props.open');
   });
 
   it('uses the shared selector components across left-side selectors', () => {
@@ -82,6 +101,26 @@ describe('selector detail workspaces', () => {
     expect(packagesPage).toContain('<ServerSelector');
     expect(resourcePage).toContain('<ServerSelector');
     for (const page of resourceConsumers) expect(page).toContain('<ResourcePage');
+  });
+
+  it('clears server resource content and ignores late server responses', () => {
+    const resourceConsumers = [
+      read('containerization/containers/index.vue'),
+      read('containerization/images/index.vue'),
+      read('containerization/networks/index.vue'),
+      read('containerization/volumes/index.vue'),
+    ];
+
+    for (const page of resourceConsumers) {
+      expect(page).toContain('const requestedServerId = serverId.value;');
+      expect(page).toContain('serverId.value !== requestedServerId');
+      expect(page).toContain('loading.value = false;');
+    }
+
+    expect(resourceConsumers[0]).toContain('items.value = [];');
+    expect(resourceConsumers[1]).toContain('data.value = null;');
+    expect(resourceConsumers[2]).toContain('items.value = [];');
+    expect(resourceConsumers[3]).toContain('items.value = [];');
   });
 
   it('keeps selector loading content within the narrow panel', () => {

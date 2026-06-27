@@ -10,12 +10,30 @@ const items = ref<DockerNetworkDto[]>([]);
 const loading = ref(false);
 const error = ref('');
 const { servers, serverId, loadingServers } = useDockerServers(load);
+let networksRequestId = 0;
 async function load() {
-  if (!serverId.value) return;
+  const requestedServerId = serverId.value;
+  const requestId = ++networksRequestId;
+  items.value = [];
+  error.value = '';
+  if (!requestedServerId) {
+    loading.value = false;
+    return;
+  }
   loading.value = true;
-  try { items.value = await containerizationApi.networks(serverId.value); error.value = ''; }
-  catch (err) { error.value = err instanceof Error ? err.message : t('containerization.loadFailed'); }
-  finally { loading.value = false; }
+  try {
+    const result = await containerizationApi.networks(requestedServerId);
+    if (requestId !== networksRequestId || serverId.value !== requestedServerId) return;
+    items.value = result;
+    error.value = '';
+  } catch (err) {
+    if (requestId !== networksRequestId || serverId.value !== requestedServerId) return;
+    error.value = err instanceof Error ? err.message : t('containerization.loadFailed');
+  } finally {
+    if (requestId === networksRequestId && serverId.value === requestedServerId) {
+      loading.value = false;
+    }
+  }
 }
 </script>
 <template>

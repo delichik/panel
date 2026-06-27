@@ -60,6 +60,7 @@ const templateVariables = ref<ApplicationTemplateVariableDto[]>([]);
 const panelFiles = ref<ApplicationPanelFileDto[]>([]);
 const templateTextarea = ref();
 const yamlTextarea = ref();
+let filesRequestId = 0;
 const fileForm = reactive({
   mode: 'single' as 'single' | 'archive',
   path: 'config/app.conf',
@@ -100,6 +101,7 @@ watch(() => props.open, (open) => {
   activeEditorTab.value = 'visual';
   files.value = [];
   pendingArchives.value = [];
+  filesRequestId += 1;
   void loadServers();
   void loadTemplateCatalog();
   if (app) void loadFiles(app.id);
@@ -232,9 +234,13 @@ function cloneReverseProxy(rules: ApplicationReverseProxyRuleDto[]) {
 }
 
 async function loadFiles(applicationId: string) {
+  const requestId = ++filesRequestId;
   try {
-    files.value = (await applicationsApi.files(applicationId)).map(toEditorFile);
+    const result = (await applicationsApi.files(applicationId)).map(toEditorFile);
+    if (requestId !== filesRequestId || props.application?.id !== applicationId || !props.open) return;
+    files.value = result;
   } catch (err) {
+    if (requestId !== filesRequestId || props.application?.id !== applicationId || !props.open) return;
     error.value = err instanceof Error ? err.message : t('applicationEditor.loadFilesFailed');
   }
 }

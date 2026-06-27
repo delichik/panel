@@ -20,18 +20,38 @@ const operationLoading = ref(false);
 const snackbar = ref(false);
 const message = ref('');
 const { servers, serverId, loadingServers } = useDockerServers(load);
+let imagesRequestId = 0;
 
 const items = computed(() => data.value?.items ?? []);
 const selectableApps = computed(() => [...new Set(items.value.filter(item => item.updateAvailable && item.upgradeable).flatMap(item => item.applicationIds))]);
 const unusedImages = computed(() => items.value.filter(item => !item.inUse));
 
 async function load() {
-  if (!serverId.value) return;
-  loading.value = true;
+  const requestedServerId = serverId.value;
+  const requestId = ++imagesRequestId;
+  data.value = null;
   selected.value = [];
-  try { data.value = await containerizationApi.images(serverId.value); error.value = ''; }
-  catch (err) { data.value = null; error.value = err instanceof Error ? err.message : t('containerization.loadFailed'); }
-  finally { loading.value = false; }
+  deleteTarget.value = null;
+  error.value = '';
+  if (!requestedServerId) {
+    loading.value = false;
+    return;
+  }
+  loading.value = true;
+  try {
+    const result = await containerizationApi.images(requestedServerId);
+    if (requestId !== imagesRequestId || serverId.value !== requestedServerId) return;
+    data.value = result;
+    error.value = '';
+  } catch (err) {
+    if (requestId !== imagesRequestId || serverId.value !== requestedServerId) return;
+    data.value = null;
+    error.value = err instanceof Error ? err.message : t('containerization.loadFailed');
+  } finally {
+    if (requestId === imagesRequestId && serverId.value === requestedServerId) {
+      loading.value = false;
+    }
+  }
 }
 
 async function refresh() {

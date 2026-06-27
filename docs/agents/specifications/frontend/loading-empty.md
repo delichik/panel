@@ -28,6 +28,8 @@
 
 - 只在没有可展示旧内容时显示。
 - 列表刷新且旧内容仍存在时保留内容，改用卡片或按钮 loading。
+- 切换服务器、应用、域名、任务等上下文后，异步子详情必须立即清空旧内容并显示 `PageLoadingState` 或等价局部加载遮罩。
+- 上下文型异步请求必须记录请求时的上下文 ID，并在响应返回时忽略已经不匹配当前上下文的迟到响应。
 - 组件高度应接近加载完成后的区域，减少布局跳动。
 - 骨架宽度必须相对当前容器计算；禁止使用 `vw`，避免在窄卡片中横向溢出。
 
@@ -83,12 +85,15 @@
 
 已有数据刷新失败时保留数据，并显示局部错误提示。
 
+切换上下文加载详情时不保留旧详情；清空内容后按“加载、错误、空数据”顺序展示，避免用户误以为旧数据属于新选择项。
+
 ## 禁忌
 
 - 不在加载中同时显示“暂无数据”。
 - 不为每个页面重新实现 spinner 和骨架。
 - 不让空状态只有图标而没有说明。
 - 不在纯展示空状态中放多个竞争操作。
+- 不让旧上下文的异步响应覆盖当前选择项。
 
 ## 源码依据
 
@@ -96,3 +101,5 @@
 - `web/src/styles/main.css`
 - `web/src/views/servers/_shared/ServersPageContent.vue`
 - `web/src/views/servers/firewall/index.vue`
+- `web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
+- `web/src/views/containerization/_shared/ResourcePage.vue`

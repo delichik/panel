@@ -5,6 +5,7 @@ import { useI18n } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
 import AppSelectorItem from '@/components/AppSelectorItem.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
 import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
@@ -69,6 +70,7 @@ const appliedOperationFilter = ref('');
 const typeFilter = ref<string[]>([TYPE_FILTER_COMMON]);
 const appliedTypeFilter = ref<string[]>([TYPE_FILTER_COMMON]);
 const loading = ref(false);
+const stepsLoading = ref(false);
 const actionLoading = ref('');
 const error = ref('');
 const detailsDialog = ref(false);
@@ -76,6 +78,7 @@ const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
 let timer: number | undefined;
+let stepsRequestId = 0;
 
 const operationGroups = computed(() => groupTasksByOperation(tasks.value));
 const selectedTask = computed(() => tasks.value.find((task) => task.id === selectedTaskId.value) ?? null);
@@ -188,14 +191,25 @@ async function loadTasks() {
 }
 
 async function loadSteps() {
+  const taskId = selectedTaskId.value;
+  const requestId = ++stepsRequestId;
+  steps.value = [];
   if (!detailsDialog.value || !selectedTaskId.value) {
-    steps.value = [];
+    stepsLoading.value = false;
     return;
   }
+  stepsLoading.value = true;
   try {
-    steps.value = await tasksApi.steps(selectedTaskId.value);
+    const result = await tasksApi.steps(taskId);
+    if (requestId !== stepsRequestId || selectedTaskId.value !== taskId || !detailsDialog.value) return;
+    steps.value = result;
   } catch {
+    if (requestId !== stepsRequestId || selectedTaskId.value !== taskId || !detailsDialog.value) return;
     steps.value = [];
+  } finally {
+    if (requestId === stepsRequestId && selectedTaskId.value === taskId) {
+      stepsLoading.value = false;
+    }
   }
 }
 
@@ -650,7 +664,8 @@ onBeforeUnmount(() => {
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body task-details-dialog">
-          <v-timeline v-if="steps.length" side="end" density="compact" class="mb-4">
+          <PageLoadingState v-if="stepsLoading && steps.length === 0" compact min-height="180px" class="mb-4" />
+          <v-timeline v-else-if="steps.length" side="end" density="compact" class="mb-4">
             <v-timeline-item v-for="step in steps" :key="step.id" :dot-color="taskStatusColor(step.status)" size="small">
               <div class="step-row">
                 <strong>{{ translateTaskStage(step.step) }}</strong>

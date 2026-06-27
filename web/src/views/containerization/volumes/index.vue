@@ -16,12 +16,31 @@ const snackbar = ref(false);
 const message = ref('');
 const { servers, serverId, loadingServers } = useDockerServers(load);
 const unusedVolumes = computed(() => items.value.filter(item => !item.inUse));
+let volumesRequestId = 0;
 async function load() {
-  if (!serverId.value) return;
+  const requestedServerId = serverId.value;
+  const requestId = ++volumesRequestId;
+  items.value = [];
+  pending.value = null;
+  error.value = '';
+  if (!requestedServerId) {
+    loading.value = false;
+    return;
+  }
   loading.value = true;
-  try { items.value = await containerizationApi.volumes(serverId.value); error.value = ''; }
-  catch (err) { error.value = err instanceof Error ? err.message : t('containerization.loadFailed'); }
-  finally { loading.value = false; }
+  try {
+    const result = await containerizationApi.volumes(requestedServerId);
+    if (requestId !== volumesRequestId || serverId.value !== requestedServerId) return;
+    items.value = result;
+    error.value = '';
+  } catch (err) {
+    if (requestId !== volumesRequestId || serverId.value !== requestedServerId) return;
+    error.value = err instanceof Error ? err.message : t('containerization.loadFailed');
+  } finally {
+    if (requestId === volumesRequestId && serverId.value === requestedServerId) {
+      loading.value = false;
+    }
+  }
 }
 async function remove() {
   if (!pending.value) return;

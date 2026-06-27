@@ -4,6 +4,7 @@ import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto, ApplicationRuntimeDto, ApplicationRuntimeInstanceDto } from '@/types/api';
 import AppPagination from '@/components/AppPagination.vue';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
 
 const props = withDefaults(defineProps<{ application: ApplicationDto; embedded?: boolean }>(), {
@@ -14,6 +15,7 @@ const { formatDateTime, t, translateLifecycleStage, translateRuntimeDesiredState
 const runtime = ref<ApplicationRuntimeDto | null>(null);
 const loading = ref(false);
 const error = ref('');
+let runtimeRequestId = 0;
 const instances = computed(() => runtime.value?.instances ?? []);
 const failedInstances = computed(() => instances.value.filter((instance) => instance.lastError));
 const {
@@ -24,14 +26,23 @@ const {
 } = usePagination(instances);
 
 async function loadRuntime() {
+  const requestedApplicationId = props.application.id;
+  const requestId = ++runtimeRequestId;
+  runtime.value = null;
+  error.value = '';
   loading.value = true;
   try {
-    runtime.value = await applicationsApi.runtime(props.application.id);
+    const result = await applicationsApi.runtime(requestedApplicationId);
+    if (requestId !== runtimeRequestId || props.application.id !== requestedApplicationId) return;
+    runtime.value = result;
     error.value = '';
   } catch (err) {
+    if (requestId !== runtimeRequestId || props.application.id !== requestedApplicationId) return;
     error.value = err instanceof Error ? err.message : t('applicationRuntime.loadFailed');
   } finally {
-    loading.value = false;
+    if (requestId === runtimeRequestId && props.application.id === requestedApplicationId) {
+      loading.value = false;
+    }
   }
 }
 
@@ -69,7 +80,8 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
       <v-btn size="small" variant="text" icon="mdi-refresh" :title="t('common.refresh')" :loading="loading" @click="loadRuntime" />
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
-    <div v-if="runtime" class="runtime-stack">
+    <PageLoadingState v-if="loading && !runtime" min-height="220px" />
+    <div v-else-if="runtime" class="runtime-stack">
       <div class="runtime-summary">
         <v-chip :color="statusColor(runtime.status)" size="small" variant="tonal" label>{{ translateRuntimeStatus(runtime.status) }}</v-chip>
         <span class="text-caption text-medium-emphasis">{{ formatDateTime(runtime.observedAt) }}</span>

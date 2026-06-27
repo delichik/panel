@@ -17,17 +17,33 @@ const message = ref('');
 const logTarget = ref<DockerContainerDto | null>(null);
 const logsDialog = ref(false);
 const { servers, serverId, loadingServers } = useDockerServers(load);
+let containersRequestId = 0;
 
 async function load() {
-  if (!serverId.value) return;
+  const requestedServerId = serverId.value;
+  const requestId = ++containersRequestId;
+  items.value = [];
+  pending.value = null;
+  logTarget.value = null;
+  logsDialog.value = false;
+  error.value = '';
+  if (!requestedServerId) {
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   try {
-    items.value = await containerizationApi.containers(serverId.value);
+    const result = await containerizationApi.containers(requestedServerId);
+    if (requestId !== containersRequestId || serverId.value !== requestedServerId) return;
+    items.value = result;
     error.value = '';
   } catch (err) {
+    if (requestId !== containersRequestId || serverId.value !== requestedServerId) return;
     error.value = err instanceof Error ? err.message : t('containerization.loadFailed');
   } finally {
-    loading.value = false;
+    if (requestId === containersRequestId && serverId.value === requestedServerId) {
+      loading.value = false;
+    }
   }
 }
 

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
+import PageLoadingState from '@/components/PageLoadingState.vue';
 
 const props = withDefaults(defineProps<{
   open: boolean;
@@ -20,6 +21,7 @@ const logs = ref('');
 const loading = ref(false);
 const error = ref('');
 const canLoad = computed(() => Boolean(props.targetKey || props.title));
+let logsRequestId = 0;
 
 function normalizedTail() {
   const value = Number(tail.value);
@@ -33,16 +35,25 @@ function close() {
 
 async function loadLogs() {
   if (!canLoad.value) return;
+  const requestedTargetKey = props.targetKey;
+  const requestId = ++logsRequestId;
   const nextTail = normalizedTail();
   tail.value = nextTail;
+  logs.value = '';
+  error.value = '';
   loading.value = true;
   try {
-    logs.value = await props.loader(nextTail);
+    const result = await props.loader(nextTail);
+    if (requestId !== logsRequestId || props.targetKey !== requestedTargetKey) return;
+    logs.value = result;
     error.value = '';
   } catch (err) {
+    if (requestId !== logsRequestId || props.targetKey !== requestedTargetKey) return;
     error.value = err instanceof Error ? err.message : t('applicationLogs.loadFailed');
   } finally {
-    loading.value = false;
+    if (requestId === logsRequestId && props.targetKey === requestedTargetKey) {
+      loading.value = false;
+    }
   }
 }
 
@@ -82,7 +93,10 @@ watch(() => [props.open, props.targetKey], ([open]) => {
             {{ t('common.refresh') }}
           </v-btn>
         </div>
-        <pre class="log-output">{{ logs || t('applicationLogs.emptyContent') }}</pre>
+        <div class="log-output-wrap">
+          <pre class="log-output">{{ logs || t('applicationLogs.emptyContent') }}</pre>
+          <PageLoadingState v-if="loading && !logs" compact min-height="260px" class="log-loading-state" />
+        </div>
       </v-card-text>
       <v-divider />
       <v-card-actions class="app-dialog-actions">
@@ -130,6 +144,16 @@ watch(() => [props.open, props.targetKey], ([open]) => {
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+.log-output-wrap {
+  position: relative;
+  min-height: 260px;
+}
+
+.log-loading-state {
+  position: absolute;
+  inset: 0;
 }
 
 .min-width-0 {
