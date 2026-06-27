@@ -74,6 +74,10 @@ const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name} (${server.host})`,
   value: server.id,
 })));
+const proxyTargetTypeOptions = computed(() => [
+  { title: t('applicationEditor.targetLocal'), value: 'local' },
+  { title: t('applicationEditor.targetContainer'), value: 'container' },
+]);
 const {
   page: filePage,
   pageSize: filePageSize,
@@ -210,7 +214,7 @@ function updateMountType(mount: MountForm) {
 }
 
 function addProxyRule() {
-  form.reverseProxy = [...(form.reverseProxy ?? []), { domain: '', targetPort: 80, paths: [{ path: '/', webSocket: false }] }];
+  form.reverseProxy = [...(form.reverseProxy ?? []), { domain: '', targetType: 'local', targetPort: 80, paths: [{ path: '/', webSocket: false }] }];
 }
 
 function addProxyPath(rule: ApplicationReverseProxyRuleDto) {
@@ -228,9 +232,16 @@ function removeAt<T>(items: T[], index: number) {
 function cloneReverseProxy(rules: ApplicationReverseProxyRuleDto[]) {
   return rules.map((rule) => ({
     domain: rule.domain,
+    targetType: rule.targetType === 'container' ? 'container' : 'local',
     targetPort: rule.targetPort,
     paths: rule.paths?.map((path) => ({ path: path.path, webSocket: path.webSocket })) ?? [{ path: '/', webSocket: false }],
   }));
+}
+
+function proxyTargetName(rule: ApplicationReverseProxyRuleDto) {
+  return rule.targetType === 'container'
+    ? (specForm.name || t('applicationEditor.appTargetFallback'))
+    : t('applicationEditor.nodeTarget');
 }
 
 async function loadFiles(applicationId: string) {
@@ -463,6 +474,7 @@ function readInput(): ApplicationSaveDto {
       .filter((rule) => rule.domain.trim())
       .map((rule) => ({
         domain: rule.domain.trim(),
+        targetType: rule.targetType === 'container' ? 'container' : 'local',
         targetPort: Number(rule.targetPort || 0),
         paths: (rule.paths ?? [])
           .filter((path) => path.path.trim())
@@ -783,7 +795,15 @@ async function save(deploy = false) {
               <div class="proxy-rule-header">
                 <v-text-field v-model="rule.domain" :label="t('applicationEditor.domain')" density="compact" variant="outlined" hide-details />
                 <v-icon icon="mdi-arrow-right" size="20" class="proxy-arrow" />
-                <span class="proxy-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
+                <v-select
+                  v-model="rule.targetType"
+                  :items="proxyTargetTypeOptions"
+                  :label="t('applicationEditor.targetDestination')"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                />
+                <span class="proxy-target-name">{{ proxyTargetName(rule) }}:</span>
                 <v-text-field v-model.number="rule.targetPort" type="number" min="1" max="65535" :label="t('applicationEditor.target')" density="compact" variant="outlined" hide-details />
                 <v-btn icon="mdi-delete" variant="text" color="error" @click="removeProxyRule(ruleIndex)" />
               </div>
@@ -924,7 +944,7 @@ async function save(deploy = false) {
 .network-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .network-arrow { justify-self: center; }
 .network-target-name { font-size: 0.82rem; }
-.proxy-rule-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto auto 140px 40px; gap: 8px; align-items: center; margin-bottom: 10px; }
+.proxy-rule-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(150px, 0.65fr) auto 140px 40px; gap: 8px; align-items: center; margin-bottom: 10px; }
 .proxy-arrow,
 .proxy-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .proxy-arrow { justify-self: center; }

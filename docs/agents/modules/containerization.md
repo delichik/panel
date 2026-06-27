@@ -34,7 +34,7 @@ Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`
 
 - 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施应用部署范围，不作为独立节点开关。
 - 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、删除旧容器、创建容器并启动；不得新增 agent 侧胖反向代理接口。
-- nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。
+- 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。
 - 静态站点配置保存域名、路径和宿主机根目录；部署时作为只读 bind mount 挂入 nginx 容器。
 - 应用里的 `reverseProxy` 规则只会被下发到反向代理设施应用覆盖的服务器；未指定为设施应用部署目标的服务器忽略这些规则。
 - 设施应用部署和普通 Docker/Application 写操作共享每服务器容器操作队列。
@@ -50,6 +50,8 @@ Application 新部署容器只写入：
 - `panel.application.spec.hash`
 
 Application 托管容器只识别以上 Label。
+
+Application bridge 网络容器由 Agent 创建时自动放入受管 Docker 网络 `panel-apps`；该网络不存在时由 Agent 创建。该网络用于入口网关在容器目标模式下解析并访问 Application 容器名。
 
 ## 队列、同步操作与协调
 

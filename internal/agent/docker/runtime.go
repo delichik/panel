@@ -25,6 +25,7 @@ import (
 
 const defaultRuntimeRoot = "/opt/panel/apps"
 const dockerImagePullTimeout = 15 * time.Minute
+const managedBridgeNetwork = "panel-apps"
 
 type LocalRuntime struct {
 	dockerHost string
@@ -342,6 +343,9 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 	if strings.TrimSpace(spec.Image) == "" {
 		return "", errors.New("image is required")
 	}
+	if err := r.client.ensureManagedNetwork(ctx, dockerNetworkMode(spec.NetworkMode)); err != nil {
+		return "", err
+	}
 	return r.client.createContainer(ctx, spec)
 }
 
@@ -612,7 +616,8 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 		HostConfig: dockerHostConfig{
 			Binds:        dockerBinds(defaultRuntimeRoot, spec),
 			PortBindings: dockerPortBindings(spec.Ports),
-			NetworkMode:  spec.NetworkMode,
+			NetworkMode:  dockerNetworkMode(spec.NetworkMode),
+			ExtraHosts:   dockerExtraHosts(spec.NetworkMode),
 			Privileged:   spec.Privileged,
 			RestartPolicy: dockerRestartPolicy{
 				Name: dockerRestartName(spec.Restart.Policy),
@@ -903,6 +908,7 @@ type dockerHostConfig struct {
 	Binds         []string                       `json:"Binds,omitempty"`
 	PortBindings  map[string][]map[string]string `json:"PortBindings,omitempty"`
 	NetworkMode   string                         `json:"NetworkMode,omitempty"`
+	ExtraHosts    []string                       `json:"ExtraHosts,omitempty"`
 	Privileged    bool                           `json:"Privileged,omitempty"`
 	RestartPolicy dockerRestartPolicy            `json:"RestartPolicy,omitempty"`
 	Memory        int64                          `json:"Memory,omitempty"`
@@ -911,6 +917,82 @@ type dockerHostConfig struct {
 
 type dockerRestartPolicy struct {
 	Name string `json:"Name,omitempty"`
+}
+
+func (c *dockerAPIClient) ensureManagedNetwork(ctx context.Context, networkMode string) error {
+	if networkMode != managedBridgeNetwork {
+		return nil
+	}
+	if err := c.inspectNetwork(ctx, managedBridgeNetwork); err == nil {
+		return nil
+	} else if !isDockerNotFound(err) {
+		return err
+	}
+	return c.createNetwork(ctx, managedBridgeNetwork)
+}
+
+func (c *dockerAPIClient) inspectNetwork(ctx context.Context, name string) error {
+	req, err := c.newRequest(ctx, http.MethodGet, "/networks/"+url.PathEscape(name), nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusNotFound {
+		return dockerNotFound{name}
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerError(res, "inspect network")
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	return nil
+}
+
+func (c *dockerAPIClient) createNetwork(ctx context.Context, name string) error {
+	body, _ := json.Marshal(map[string]any{
+		"Name":       name,
+		"Driver":     "bridge",
+		"Attachable": true,
+		"Labels": map[string]string{
+			"panel.managed": "true",
+		},
+	})
+	req, err := c.newRequest(ctx, http.MethodPost, "/networks/create", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		err := dockerError(res, "create network")
+		if isDockerAlreadyExists(err) {
+			return nil
+		}
+		return err
+	}
+	_, _ = io.Copy(io.Discard, res.Body)
+	return nil
+}
+
+func dockerNetworkMode(mode string) string {
+	if strings.TrimSpace(mode) == "bridge" {
+		return managedBridgeNetwork
+	}
+	return mode
+}
+
+func dockerExtraHosts(mode string) []string {
+	if strings.TrimSpace(mode) == "bridge" {
+		return []string{"host.docker.internal:host-gateway"}
+	}
+	return nil
 }
 
 type dockerInspectResponse struct {
@@ -1050,6 +1132,14 @@ func (e dockerNotFound) Error() string { return "docker container not found: " +
 func isDockerNotFound(err error) bool {
 	var nf dockerNotFound
 	return errors.As(err, &nf)
+}
+
+func isDockerAlreadyExists(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "already exists") || strings.Contains(msg, "is already present")
 }
 
 type dockerNotModified struct{ name string }

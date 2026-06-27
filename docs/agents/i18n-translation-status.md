@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/runtime/applications/ApplicationEditor.vue`
+  - 应用反向代理目的地选择、本地/容器选项已接入英文与简体中文词条；稳定值 `local`、`container` 不翻译。
 - `internal/platform/http`、`internal/platform/i18n`、`internal/modules/applications`
   - 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程中的校验失败会保留具体字段与错误原因：`application_invalid` 的 `error.message` 显示第一条 `<field>: <message>`，完整列表放在 `error.details.issues`，并按当前语言翻译 issue message，避免统一翻译覆盖 appspec/YAML 的真实问题。
 - `web/src/views/containerization/facility-apps/index.vue`

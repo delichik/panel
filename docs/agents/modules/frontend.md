@@ -79,6 +79,7 @@
   - 设施应用页面当前内置“反向代理”，通过部署服务器多选表示哪些节点开启反向代理能力；页面中大屏使用满高主从工作区，右侧详情内部滚动。
 - Runtime 应用实现：
   - 应用运行时面板位于 `applications/` 目录内，日志查看复用 `web/src/components/RuntimeLogsDialog.vue` 弹窗展示 agent runtime 实例或 Docker 容器日志。
+  - 应用编辑器的反向代理规则为每条规则展示目的地选择，稳定值为 `local` 或 `container`；旧数据按 `local` 展示和保存。
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`
 - 证书菜单组：`web/src/views/certificates/`
   - 域名证书：`domains/index.vue`

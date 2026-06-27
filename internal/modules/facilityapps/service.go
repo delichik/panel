@@ -24,6 +24,8 @@ import (
 
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 
+const proxyBridgeLocalHost = "host.docker.internal"
+
 type AgentRuntimeClient interface {
 	RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error
 	RuntimeCreateContainer(ctx context.Context, baseURL string, req agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error)
@@ -386,6 +388,15 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 		return appruntime.Spec{}, err
 	}
 	hash := specHash(serverID, cfg, routes, nginx, files)
+	networkMode := "host"
+	var ports []appruntime.Port
+	if applicationRoutesNeedContainerNetwork(routes) {
+		networkMode = "bridge"
+		ports = []appruntime.Port{
+			{Label: "http", ContainerPort: 80, HostPort: 80, Protocol: "tcp"},
+			{Label: "https", ContainerPort: 443, HostPort: 443, Protocol: "tcp"},
+		}
+	}
 	if managedFilesContainPrefix(files, "certs/") {
 		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: "certs", Target: proxyTLSMountRoot, ReadOnly: true})
 	}
@@ -399,7 +410,8 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 		ContainerName: proxyContainerName,
 		Name:          "reverse-proxy",
 		Image:         cfg.Image,
-		NetworkMode:   "host",
+		Ports:         ports,
+		NetworkMode:   networkMode,
 		Mounts: append([]appruntime.Mount{
 			{Type: "managed_file", Source: proxyConfigPath, Target: proxyContainerConf, ReadOnly: true},
 		}, mounts...),
@@ -425,6 +437,10 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 	files := []appruntime.ManagedFile{}
 	certFiles := map[string]struct{}{}
 	hosts := map[string]*proxyHost{}
+	localUpstreamHost := "127.0.0.1"
+	if applicationRoutesNeedContainerNetwork(apps) {
+		localUpstreamHost = proxyBridgeLocalHost
+	}
 	for i, site := range cfg.StaticSites {
 		if !staticSiteTargetsServer(site, serverID) {
 			continue
@@ -492,13 +508,24 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		cert := bestCertificate(domain, certificates)
 		appendCertificateFiles(cert, &files, certFiles)
 		var domainConfig strings.Builder
-		writeProxyServer(&domainConfig, domain, host, nil, false)
+		writeProxyServer(&domainConfig, domain, host, nil, false, localUpstreamHost)
 		if cert != nil {
-			writeProxyServer(&domainConfig, domain, host, cert, true)
+			writeProxyServer(&domainConfig, domain, host, cert, true, localUpstreamHost)
 		}
 		appendManagedFile(&files, appruntime.ManagedFile{Path: nginxDomainConfigPath(domain), Content: []byte(domainConfig.String()), Mode: "0644"})
 	}
 	return mainConfig, mounts, files, nil
+}
+
+func applicationRoutesNeedContainerNetwork(apps []applications.ApplicationReverseProxyConfig) bool {
+	for _, app := range apps {
+		for _, route := range app.Routes {
+			if strings.TrimSpace(route.TargetType) == applications.ReverseProxyTargetContainer {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func renderMainNginxConfig() string {
@@ -646,7 +673,7 @@ func appendManagedFile(files *[]appruntime.ManagedFile, file appruntime.ManagedF
 	*files = append(*files, file)
 }
 
-func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, cert *proxycert.Certificate, https bool) {
+func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, cert *proxycert.Certificate, https bool, localUpstreamHost string) {
 	b.WriteString("\n    server {\n")
 	if https {
 		b.WriteString("        listen 443 ssl;\n")
@@ -672,7 +699,7 @@ func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, cert *
 		return len(firstNonEmptyPath(proxyRoutes[i].Paths)) > len(firstNonEmptyPath(proxyRoutes[j].Paths))
 	})
 	for _, route := range proxyRoutes {
-		writeProxyLocations(b, route, https)
+		writeProxyLocations(b, route, https, localUpstreamHost)
 	}
 	b.WriteString("    }\n")
 }
@@ -750,11 +777,11 @@ func writeFacilityProxyLocation(b *strings.Builder, pathValue, target, sourceMod
 	b.WriteString("        }\n")
 }
 
-func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRoute, https bool) {
+func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRoute, https bool, localUpstreamHost string) {
 	for _, routePath := range route.Paths {
 		pathValue := sanitizeNginxPath(firstNonEmpty(routePath.Path, "/"))
 		b.WriteString("        location " + pathValue + " {\n")
-		b.WriteString("            proxy_pass http://127.0.0.1:" + strconv.Itoa(route.TargetPort) + ";\n")
+		b.WriteString("            proxy_pass " + applicationProxyUpstream(route, localUpstreamHost) + ";\n")
 		b.WriteString("            proxy_set_header Host $host;\n")
 		b.WriteString("            proxy_set_header X-Real-IP $remote_addr;\n")
 		b.WriteString("            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
@@ -770,6 +797,20 @@ func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRout
 		}
 		b.WriteString("        }\n")
 	}
+}
+
+func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstreamHost string) string {
+	host := strings.TrimSpace(localUpstreamHost)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if strings.TrimSpace(route.TargetType) == applications.ReverseProxyTargetContainer {
+		container := strings.TrimSpace(route.TargetContainer)
+		if container != "" && validNginxValue(container) {
+			host = container
+		}
+	}
+	return "http://" + host + ":" + strconv.Itoa(route.TargetPort)
 }
 
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {

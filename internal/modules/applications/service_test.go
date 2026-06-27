@@ -1274,6 +1274,25 @@ func readyServer(id string) server.Server {
 	}
 }
 
+func TestNormalizeReverseProxyRulesTargetType(t *testing.T) {
+	rules, err := normalizeReverseProxyRules([]ReverseProxyRule{
+		{Domain: "local.example.test", TargetPort: 8080, Paths: []ReverseProxyPath{{Path: "/"}}},
+		{Domain: "container.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 80, Paths: []ReverseProxyPath{{Path: "/app"}}},
+	})
+	if err != nil {
+		t.Fatalf("normalize reverse proxy: %v", err)
+	}
+	if rules[0].TargetType != ReverseProxyTargetLocal {
+		t.Fatalf("local target type = %q", rules[0].TargetType)
+	}
+	if rules[1].TargetType != ReverseProxyTargetContainer {
+		t.Fatalf("container target type = %q", rules[1].TargetType)
+	}
+	if _, err := normalizeReverseProxyRules([]ReverseProxyRule{{Domain: "bad.example.test", TargetType: "remote", TargetPort: 80}}); err == nil {
+		t.Fatal("expected invalid target type error")
+	}
+}
+
 func insertApplicationTestServer(t *testing.T, svc *Service, srv server.Server) {
 	t.Helper()
 	traits, _ := json.Marshal(srv.Traits)

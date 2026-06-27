@@ -36,6 +36,7 @@ func TestRenderNginxConfigGroupsRoutesByDomain(t *testing.T) {
 		{
 			Routes: []applications.ReverseProxyRoute{
 				{Domain: "static.example.test", TargetPort: 8080, Paths: []applications.ReverseProxyPath{{Path: "/api"}}},
+				{Domain: "static.example.test", TargetType: applications.ReverseProxyTargetContainer, TargetPort: 9000, TargetContainer: "panel-website", Paths: []applications.ReverseProxyPath{{Path: "/app"}}},
 			},
 		},
 	}
@@ -69,6 +70,9 @@ func TestRenderNginxConfigGroupsRoutesByDomain(t *testing.T) {
 		"proxy_pass https://upstream.example.test;",
 		"proxy_set_header Host $host;",
 		"location /api {",
+		"proxy_pass http://host.docker.internal:8080;",
+		"location /app {",
+		"proxy_pass http://panel-website:9000;",
 	} {
 		if !strings.Contains(domainConfig, want) {
 			t.Fatalf("expected nginx config to contain %q, got:\n%s", want, domainConfig)
@@ -76,6 +80,29 @@ func TestRenderNginxConfigGroupsRoutesByDomain(t *testing.T) {
 	}
 	if len(mounts) != 2 {
 		t.Fatalf("expected two static mounts, got %d", len(mounts))
+	}
+}
+
+func TestProxySpecUsesBridgeNetworkWhenApplicationRouteTargetsContainer(t *testing.T) {
+	svc := &Service{}
+	cfg := ReverseProxyConfig{ID: ReverseProxyID, Image: defaultProxyImage, DeploymentServers: []string{"srv-edge"}}
+	apps := []applications.ApplicationReverseProxyConfig{
+		{
+			Routes: []applications.ReverseProxyRoute{
+				{Domain: "app.example.test", TargetType: applications.ReverseProxyTargetContainer, TargetPort: 80, TargetContainer: "panel-website", Paths: []applications.ReverseProxyPath{{Path: "/"}}},
+			},
+		},
+	}
+
+	spec, err := svc.proxySpec(context.Background(), "srv-edge", cfg, apps, nil)
+	if err != nil {
+		t.Fatalf("proxy spec: %v", err)
+	}
+	if spec.NetworkMode != "bridge" {
+		t.Fatalf("network mode = %q, want bridge", spec.NetworkMode)
+	}
+	if !hasPort(spec.Ports, 80, 80) || !hasPort(spec.Ports, 443, 443) {
+		t.Fatalf("expected 80/443 port bindings, ports=%#v", spec.Ports)
 	}
 }
 
@@ -189,6 +216,15 @@ func managedFileContent(files []appruntime.ManagedFile, path string) string {
 func hasMount(mounts []appruntime.Mount, source, target string) bool {
 	for _, mount := range mounts {
 		if mount.Source == source && mount.Target == target {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPort(ports []appruntime.Port, containerPort, hostPort int) bool {
+	for _, port := range ports {
+		if port.ContainerPort == containerPort && port.HostPort == hostPort {
 			return true
 		}
 	}

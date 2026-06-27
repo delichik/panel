@@ -646,6 +646,7 @@ export interface ApplicationSaveDto {
 
 export interface ApplicationReverseProxyRuleDto {
   domain: string;
+  targetType?: 'local' | 'container' | string;
   targetPort: number;
   paths: ApplicationReverseProxyPathDto[];
 }

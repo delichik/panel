@@ -3114,6 +3114,10 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		if domain == "" {
 			continue
 		}
+		targetType := normalizeReverseProxyTargetType(rule.TargetType)
+		if targetType == "" {
+			return nil, panelerr.Validation("application_reverse_proxy_target_type_invalid", "reverse proxy target type is invalid")
+		}
 		if rule.TargetPort <= 0 || rule.TargetPort > 65535 {
 			return nil, panelerr.Validation("application_reverse_proxy_target_port_invalid", "reverse proxy target port must be between 1 and 65535")
 		}
@@ -3133,11 +3137,23 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		}
 		out = append(out, ReverseProxyRule{
 			Domain:     domain,
+			TargetType: targetType,
 			TargetPort: rule.TargetPort,
 			Paths:      paths,
 		})
 	}
 	return out, nil
+}
+
+func normalizeReverseProxyTargetType(value string) string {
+	switch strings.TrimSpace(value) {
+	case "", ReverseProxyTargetLocal:
+		return ReverseProxyTargetLocal
+	case ReverseProxyTargetContainer:
+		return ReverseProxyTargetContainer
+	default:
+		return ""
+	}
 }
 
 func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReverseProxyRule, data map[string]any) ([]ReverseProxyRule, error) {
@@ -3172,7 +3188,7 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 		if len(paths) == 0 {
 			paths = append(paths, ReverseProxyPath{Path: "/"})
 		}
-		out = append(out, ReverseProxyRule{Domain: domain, TargetPort: rule.TargetPort, Paths: paths})
+		out = append(out, ReverseProxyRule{Domain: domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, Paths: paths})
 	}
 	return out, nil
 }
@@ -3208,8 +3224,8 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 			b.WriteString("    location ")
 			b.WriteString(proxyPath.Path)
 			b.WriteString(" {\n")
-			b.WriteString("        proxy_pass http://127.0.0.1:")
-			b.WriteString(strconv.Itoa(rule.TargetPort))
+			b.WriteString("        proxy_pass ")
+			b.WriteString(reverseProxyUpstream(rule, runtimeContainerName(app), "127.0.0.1"))
 			b.WriteString(";\n")
 			b.WriteString("        proxy_set_header Host $host;\n")
 			b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
@@ -3225,6 +3241,20 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 		b.WriteString("}\n")
 	}
 	return reverseProxyConfigName(app), b.String(), nil
+}
+
+func reverseProxyUpstream(rule ReverseProxyRule, containerName, localHost string) string {
+	host := strings.TrimSpace(localHost)
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	if normalizeReverseProxyTargetType(rule.TargetType) == ReverseProxyTargetContainer {
+		container := strings.TrimSpace(containerName)
+		if container != "" && validNginxToken(container) {
+			host = container
+		}
+	}
+	return "http://" + host + ":" + strconv.Itoa(rule.TargetPort)
 }
 
 func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]ApplicationReverseProxyConfig, error) {
@@ -3255,7 +3285,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 			for _, item := range rule.Paths {
 				paths = append(paths, ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket})
 			}
-			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetPort: rule.TargetPort, Paths: paths})
+			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), Paths: paths})
 		}
 		out = append(out, ApplicationReverseProxyConfig{
 			ApplicationID:     app.ID,

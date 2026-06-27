@@ -17,6 +17,9 @@ const (
 	DeploymentModeAll      = "all"
 	DeploymentModeSelected = "selected"
 
+	ReverseProxyTargetLocal     = "local"
+	ReverseProxyTargetContainer = "container"
+
 	LifecycleTypeDeploy      = "deploy"
 	LifecycleTypeRefresh     = "refresh"
 	LifecycleTypeImageUpdate = "image_update"
@@ -77,6 +80,7 @@ type ImageUpdateTarget struct {
 
 type ReverseProxyRule struct {
 	Domain     string             `json:"domain"`
+	TargetType string             `json:"targetType,omitempty"`
 	TargetPort int                `json:"targetPort"`
 	Paths      []ReverseProxyPath `json:"paths"`
 }
@@ -96,9 +100,11 @@ type ApplicationReverseProxyConfig struct {
 }
 
 type ReverseProxyRoute struct {
-	Domain     string             `json:"domain"`
-	TargetPort int                `json:"targetPort"`
-	Paths      []ReverseProxyPath `json:"paths"`
+	Domain          string             `json:"domain"`
+	TargetType      string             `json:"targetType,omitempty"`
+	TargetPort      int                `json:"targetPort"`
+	TargetContainer string             `json:"targetContainer,omitempty"`
+	Paths           []ReverseProxyPath `json:"paths"`
 }
 
 type ApplicationFile struct {
