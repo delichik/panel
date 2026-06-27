@@ -382,9 +382,12 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 	if err != nil {
 		return appruntime.Spec{}, err
 	}
-	hash := specHash(serverID, cfg, routes, nginx)
+	hash := specHash(serverID, cfg, routes, nginx, files)
 	if managedFilesContainPrefix(files, "certs/") {
 		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: "certs", Target: proxyTLSMountRoot, ReadOnly: true})
+	}
+	if managedFilesContainPrefix(files, proxyConfigDir+"/") {
+		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: proxyConfigDir, Target: proxyContainerConfDir, ReadOnly: true})
 	}
 	return appruntime.Spec{
 		ID:            proxyApplicationID,
@@ -414,9 +417,7 @@ func managedFilesContainPrefix(files []appruntime.ManagedFile, prefix string) bo
 }
 
 func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg ReverseProxyConfig, apps []applications.ApplicationReverseProxyConfig, certificates []proxycert.Certificate) (string, []appruntime.Mount, []appruntime.ManagedFile, error) {
-	var b strings.Builder
-	b.WriteString("events {}\nhttp {\n")
-	b.WriteString("    map $http_upgrade $connection_upgrade { default upgrade; '' close; }\n")
+	mainConfig := renderMainNginxConfig()
 	mounts := []appruntime.Mount{}
 	files := []appruntime.ManagedFile{}
 	certFiles := map[string]struct{}{}
@@ -472,13 +473,88 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		host := hosts[domain]
 		cert := bestCertificate(domain, certificates)
 		appendCertificateFiles(cert, &files, certFiles)
-		writeProxyServer(&b, domain, host, nil, false)
+		var domainConfig strings.Builder
+		writeProxyServer(&domainConfig, domain, host, nil, false)
 		if cert != nil {
-			writeProxyServer(&b, domain, host, cert, true)
+			writeProxyServer(&domainConfig, domain, host, cert, true)
 		}
+		appendManagedFile(&files, appruntime.ManagedFile{Path: nginxDomainConfigPath(domain), Content: []byte(domainConfig.String()), Mode: "0644"})
 	}
-	b.WriteString("}\n")
-	return b.String(), mounts, files, nil
+	return mainConfig, mounts, files, nil
+}
+
+func renderMainNginxConfig() string {
+	return `user nginx;
+worker_processes auto;
+error_log /dev/stderr;
+pid /run/nginx.pid;
+
+include /usr/share/nginx/modules/*.conf;
+
+events {
+    worker_connections 1024;
+}
+
+http {
+    log_format main '$remote_addr - $remote_user [$time_local] "$request" '
+                    '$status $body_bytes_sent "$http_referer" '
+                    '"$http_user_agent" "$http_x_forwarded_for"';
+
+    access_log /dev/stdout main;
+
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 4096;
+    client_max_body_size 50m;
+    client_header_buffer_size 32k;
+    large_client_header_buffers 4 32k;
+
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+
+    http2 on;
+    http3 on;
+    ssl_early_data on;
+    quic_retry on;
+
+    ssl_session_cache shared:SSL:50m;
+    ssl_session_timeout 1h;
+    ssl_ciphers EECDH+CHACHA20:EECDH+CHACHA20-draft:EECDH+AES128:RSA+AES128:EECDH+AES256:RSA+AES256;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_buffer_size 4k;
+
+    map $http_upgrade $connection_upgrade {
+        default upgrade;
+        '' "";
+    }
+
+    include /etc/nginx/conf.d/*.conf;
+}
+`
+}
+
+func nginxDomainConfigPath(domain string) string {
+	return proxyConfigDir + "/" + nginxDomainConfigName(domain) + ".conf"
+}
+
+func nginxDomainConfigName(domain string) string {
+	domain = strings.ToLower(strings.TrimSpace(domain))
+	var b strings.Builder
+	for _, r := range domain {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '.' || r == '-' {
+			b.WriteRune(r)
+			continue
+		}
+		b.WriteByte('_')
+	}
+	name := strings.Trim(b.String(), ".-_")
+	if name == "" {
+		return "domain"
+	}
+	return name
 }
 
 type proxyHost struct {
@@ -556,6 +632,7 @@ func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, cert *
 	b.WriteString("\n    server {\n")
 	if https {
 		b.WriteString("        listen 443 ssl;\n")
+		b.WriteString("        listen 443 quic;\n")
 	} else {
 		b.WriteString("        listen 80;\n")
 	}
@@ -563,6 +640,7 @@ func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, cert *
 	if cert != nil {
 		b.WriteString("        ssl_certificate " + certPath(cert.ID, "certificate") + ";\n")
 		b.WriteString("        ssl_certificate_key " + certPath(cert.ID, "private-key") + ";\n")
+		b.WriteString("        add_header Alt-Svc 'h3=\":443\"; ma=86400' always;\n")
 	}
 	facilityRoutes := append([]proxyFacilityRoute(nil), host.Facility...)
 	sort.SliceStable(facilityRoutes, func(i, j int) bool {
@@ -1077,10 +1155,20 @@ func removedServers(previous, next []string) []string {
 	return out
 }
 
-func specHash(serverID string, cfg ReverseProxyConfig, routes []applications.ApplicationReverseProxyConfig, nginx string) string {
-	raw, _ := json.Marshal(map[string]any{"server": serverID, "config": cfg, "routes": routes, "nginx": nginx})
+func specHash(serverID string, cfg ReverseProxyConfig, routes []applications.ApplicationReverseProxyConfig, nginx string, files []appruntime.ManagedFile) string {
+	raw, _ := json.Marshal(map[string]any{"server": serverID, "config": cfg, "routes": routes, "nginx": nginx, "nginxFiles": nginxConfigFileContents(files)})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])
+}
+
+func nginxConfigFileContents(files []appruntime.ManagedFile) map[string]string {
+	out := map[string]string{}
+	for _, file := range files {
+		if strings.HasPrefix(file.Path, proxyConfigDir+"/") {
+			out[file.Path] = string(file.Content)
+		}
+	}
+	return out
 }
 
 func instanceID(serverID string) string {

@@ -7,15 +7,17 @@ import (
 )
 
 const (
-	ReverseProxyID       = "reverse_proxy"
-	defaultProxyImage    = "nginx:1.27-alpine"
-	proxyApplicationID   = "facility-reverse-proxy"
-	proxyInstancePrefix  = "facility-reverse-proxy-"
-	proxyContainerName   = "panel-facility-reverse-proxy"
-	proxyConfigPath      = "nginx.conf"
-	proxyContainerConf   = "/etc/nginx/nginx.conf"
-	proxyStaticMountRoot = "/srv/panel-static"
-	proxyTLSMountRoot    = "/etc/nginx/panel-certs"
+	ReverseProxyID        = "reverse_proxy"
+	defaultProxyImage     = "nginx:1.27-alpine"
+	proxyApplicationID    = "facility-reverse-proxy"
+	proxyInstancePrefix   = "facility-reverse-proxy-"
+	proxyContainerName    = "panel-facility-reverse-proxy"
+	proxyConfigPath       = "nginx.conf"
+	proxyContainerConf    = "/etc/nginx/nginx.conf"
+	proxyConfigDir        = "conf.d"
+	proxyContainerConfDir = "/etc/nginx/conf.d"
+	proxyStaticMountRoot  = "/srv/panel-static"
+	proxyTLSMountRoot     = "/etc/nginx/panel-certs"
 
 	StaticSourceHostPath       = "host_path"
 	StaticSourceUploadedFile   = "uploaded_file"

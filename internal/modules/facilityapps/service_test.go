@@ -11,6 +11,8 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/applications"
+	appruntime "panel/internal/modules/applications/runtime"
+	"panel/internal/modules/certificates/proxycert"
 	server "panel/internal/modules/servers"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
@@ -38,12 +40,19 @@ func TestRenderNginxConfigGroupsRoutesByDomain(t *testing.T) {
 		},
 	}
 
-	nginx, mounts, _, err := svc.renderNginxConfig(context.Background(), "srv-edge", cfg, apps, nil)
+	nginx, mounts, files, err := svc.renderNginxConfig(context.Background(), "srv-edge", cfg, apps, nil)
 	if err != nil {
 		t.Fatalf("render nginx config: %v", err)
 	}
-	if strings.Count(nginx, "server_name static.example.test;") != 1 {
-		t.Fatalf("expected one http server for domain, got config:\n%s", nginx)
+	if !strings.Contains(nginx, "include /etc/nginx/conf.d/*.conf;") {
+		t.Fatalf("expected main nginx config to include domain config directory, got:\n%s", nginx)
+	}
+	domainConfig := managedFileContent(files, "conf.d/static.example.test.conf")
+	if domainConfig == "" {
+		t.Fatalf("expected per-domain nginx config file, files=%#v", files)
+	}
+	if strings.Count(domainConfig, "server_name static.example.test;") != 1 {
+		t.Fatalf("expected one http server for domain, got config:\n%s", domainConfig)
 	}
 	for _, want := range []string{
 		"location / {",
@@ -61,13 +70,95 @@ func TestRenderNginxConfigGroupsRoutesByDomain(t *testing.T) {
 		"proxy_set_header Host $host;",
 		"location /api {",
 	} {
-		if !strings.Contains(nginx, want) {
-			t.Fatalf("expected nginx config to contain %q, got:\n%s", want, nginx)
+		if !strings.Contains(domainConfig, want) {
+			t.Fatalf("expected nginx config to contain %q, got:\n%s", want, domainConfig)
 		}
 	}
 	if len(mounts) != 2 {
 		t.Fatalf("expected two static mounts, got %d", len(mounts))
 	}
+}
+
+func TestProxySpecMountsPerDomainNginxConfigDirectory(t *testing.T) {
+	svc := &Service{}
+	cfg := ReverseProxyConfig{
+		ID:                ReverseProxyID,
+		Image:             defaultProxyImage,
+		DeploymentServers: []string{"srv-edge"},
+		StaticSites: []StaticSite{
+			{Domain: "static.example.test", Path: "/", RootPath: "/srv/www/root", SourceType: StaticSourceHostPath},
+		},
+	}
+
+	spec, err := svc.proxySpec(context.Background(), "srv-edge", cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("proxy spec: %v", err)
+	}
+	if managedFileContent(spec.Files, "nginx.conf") == "" {
+		t.Fatalf("expected main nginx config file, files=%#v", spec.Files)
+	}
+	if managedFileContent(spec.Files, "conf.d/static.example.test.conf") == "" {
+		t.Fatalf("expected per-domain nginx config file, files=%#v", spec.Files)
+	}
+	if !hasMount(spec.Mounts, "nginx.conf", "/etc/nginx/nginx.conf") {
+		t.Fatalf("expected main nginx config mount, mounts=%#v", spec.Mounts)
+	}
+	if !hasMount(spec.Mounts, "conf.d", "/etc/nginx/conf.d") {
+		t.Fatalf("expected nginx conf.d directory mount, mounts=%#v", spec.Mounts)
+	}
+}
+
+func TestRenderNginxConfigWritesHttpsQuicServerWhenCertificateMatches(t *testing.T) {
+	svc := &Service{}
+	cfg := ReverseProxyConfig{
+		ID:                ReverseProxyID,
+		Image:             defaultProxyImage,
+		DeploymentServers: []string{"srv-edge"},
+		StaticSites: []StaticSite{
+			{Domain: "secure.example.test", Path: "/", RootPath: "/srv/www/root", SourceType: StaticSourceHostPath},
+		},
+	}
+	certificates := []proxycert.Certificate{
+		{ID: "cert-1", Domains: []string{"secure.example.test"}, CertificatePEM: "CERT", PrivateKeyPEM: "KEY"},
+	}
+
+	_, _, files, err := svc.renderNginxConfig(context.Background(), "srv-edge", cfg, nil, certificates)
+	if err != nil {
+		t.Fatalf("render nginx config: %v", err)
+	}
+	domainConfig := managedFileContent(files, "conf.d/secure.example.test.conf")
+	for _, want := range []string{
+		"listen 443 ssl;",
+		"listen 443 quic;",
+		"ssl_certificate /etc/nginx/panel-certs/cert-1/certificate.pem;",
+		"ssl_certificate_key /etc/nginx/panel-certs/cert-1/private-key.pem;",
+		"add_header Alt-Svc 'h3=\":443\"; ma=86400' always;",
+	} {
+		if !strings.Contains(domainConfig, want) {
+			t.Fatalf("expected HTTPS domain config to contain %q, got:\n%s", want, domainConfig)
+		}
+	}
+	if managedFileContent(files, "certs/cert-1/certificate.pem") != "CERT" {
+		t.Fatalf("expected certificate managed file, files=%#v", files)
+	}
+}
+
+func managedFileContent(files []appruntime.ManagedFile, path string) string {
+	for _, file := range files {
+		if file.Path == path {
+			return string(file.Content)
+		}
+	}
+	return ""
+}
+
+func hasMount(mounts []appruntime.Mount, source, target string) bool {
+	for _, mount := range mounts {
+		if mount.Source == source && mount.Target == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestNormalizeInputRejectsDuplicateDomainPath(t *testing.T) {
