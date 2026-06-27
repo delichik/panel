@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/runtime/applications/ApplicationDetail.vue`
+  - 持久化数据上传入口新增“导入持久化数据”未部署迁移文案，已接入英文与简体中文词条；已部署应用继续使用恢复并重启文案。
 - `web/src/views/runtime/applications/ApplicationEditor.vue`
   - 应用反向代理目的地选择、本地/容器选项已接入英文与简体中文词条；稳定值 `local`、`container` 不翻译。
 - `internal/platform/http`、`internal/platform/i18n`、`internal/modules/applications`

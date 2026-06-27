@@ -1130,6 +1130,39 @@ func TestRestorePersistentDataRestoresAndRestarts(t *testing.T) {
 	}
 }
 
+func TestRestorePersistentDataImportsBeforeFirstDeploy(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "db",
+		Enabled:           false,
+		SpecYAML:          "name: db\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.RestorePersistentData(ctx, app.ID, []byte("zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskID != "" {
+		t.Fatalf("expected no restart task before first deploy, got %q", result.TaskID)
+	}
+	if result.Application.ID != app.ID {
+		t.Fatalf("expected restored application %q, got %q", app.ID, result.Application.ID)
+	}
+	if runtime.restoreBaseURL != "https://srv-a.agent" || runtime.restoreApplicationID != app.ID || string(runtime.restoreContent) != "zip" {
+		t.Fatalf("restore baseURL=%q application=%q content=%q", runtime.restoreBaseURL, runtime.restoreApplicationID, runtime.restoreContent)
+	}
+	if len(runtime.restarts) != 0 {
+		t.Fatalf("expected no restart before first deploy, got %d", len(runtime.restarts))
+	}
+}
+
 func TestMigrateDeploysTargetAndDropsSourceInstance(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

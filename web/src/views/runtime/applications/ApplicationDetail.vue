@@ -30,6 +30,10 @@ const selectedRestoreFile = computed(() => Array.isArray(restoreFile.value) ? re
 const imageTargets = computed(() => props.application.imageUpdateTargets ?? []);
 const imageUpdateTargetCount = computed(() => imageTargets.value.filter((target) => target.updateAvailable).length);
 const imageTargetHasError = computed(() => imageTargets.value.some((target) => !!target.lastError));
+const persistentRestoreWillRestart = computed(() => (props.application.allocationCount ?? 0) > 0);
+const persistentRestoreTitle = computed(() => persistentRestoreWillRestart.value ? t('applicationDetail.restorePersistentData') : t('applicationDetail.importPersistentData'));
+const persistentRestoreAction = computed(() => persistentRestoreWillRestart.value ? t('applicationDetail.restoreAndRestart') : t('applicationDetail.importPersistentData'));
+const persistentRestoreWarning = computed(() => persistentRestoreWillRestart.value ? t('applicationDetail.restorePersistentWarning') : t('applicationDetail.importPersistentWarning'));
 const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name || server.id} (${server.id})`,
   value: server.id,
@@ -146,8 +150,9 @@ async function restorePersistentData() {
   restoringPersistent.value = true;
   try {
     const result = await applicationsApi.restorePersistentData(props.application.id, file);
+    if (result.application) emit('changed', result.application);
     lastTaskId.value = result.taskId || '';
-    message.value = t('applicationDetail.restorePersistentStarted');
+    message.value = result.taskId ? t('applicationDetail.restorePersistentStarted') : t('applicationDetail.importPersistentStarted');
     restoreDialog.value = false;
     restoreFile.value = null;
     error.value = '';
@@ -243,7 +248,7 @@ watch(() => props.application.id, () => {
             <v-list density="compact">
               <v-list-item prepend-icon="mdi-package-down" :title="t('applicationDetail.downloadPackage')" :disabled="downloading" @click="downloadPackage" />
               <v-list-item prepend-icon="mdi-database-arrow-down-outline" :title="t('applicationDetail.downloadPersistentData')" :disabled="!application.persistentPath || downloadingPersistent" @click="downloadPersistentData" />
-              <v-list-item prepend-icon="mdi-database-arrow-up-outline" :title="t('applicationDetail.restorePersistentData')" :disabled="!application.persistentPath" @click="restoreDialog = true" />
+              <v-list-item prepend-icon="mdi-database-arrow-up-outline" :title="persistentRestoreTitle" :disabled="!application.persistentPath" @click="restoreDialog = true" />
               <v-list-item prepend-icon="mdi-swap-horizontal" :title="t('applicationDetail.migrateApplication')" :disabled="!!application.persistentPath" @click="openMigrateDialog" />
               <slot name="more-actions" />
             </v-list>
@@ -320,13 +325,13 @@ watch(() => props.application.id, () => {
     <v-dialog v-model="restoreDialog" width="560">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
-          <span class="app-dialog-title-text">{{ t('applicationDetail.restorePersistentData') }}</span>
+          <span class="app-dialog-title-text">{{ persistentRestoreTitle }}</span>
           <v-btn icon="mdi-close" variant="text" :aria-label="t('common.close')" @click="restoreDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
           <v-alert type="warning" variant="tonal" density="compact" class="mb-4">
-            {{ t('applicationDetail.restorePersistentWarning') }}
+            {{ persistentRestoreWarning }}
           </v-alert>
           <v-file-input
             v-model="restoreFile"
@@ -341,7 +346,7 @@ watch(() => props.application.id, () => {
         <v-card-actions class="app-dialog-actions">
           <v-btn variant="text" class="text-none" :disabled="restoringPersistent" @click="restoreDialog = false">{{ t('common.cancel') }}</v-btn>
           <v-btn color="warning" variant="flat" class="text-none" :loading="restoringPersistent" :disabled="!selectedRestoreFile" @click="restorePersistentData">
-            {{ t('applicationDetail.restoreAndRestart') }}
+            {{ persistentRestoreAction }}
           </v-btn>
         </v-card-actions>
       </v-card>

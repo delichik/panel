@@ -1462,10 +1462,19 @@ func (s *Service) RestorePersistentData(ctx context.Context, appID string, conte
 		return OperationResult{}, panelerr.Validation("application_persistent_archive_required", "Persistent data archive is required")
 	}
 	instance, err := s.primaryRuntimeInstance(ctx, app.ID)
+	shouldRestart := true
+	serverID := instance.ServerID
 	if err != nil {
-		return OperationResult{}, err
+		if !isPanelNotFound(err) {
+			return OperationResult{}, err
+		}
+		serverID, err = persistentRestoreTargetServer(app)
+		if err != nil {
+			return OperationResult{}, err
+		}
+		shouldRestart = false
 	}
-	srv, err := s.servers.Get(ctx, instance.ServerID)
+	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -1476,6 +1485,9 @@ func (s *Service) RestorePersistentData(ctx context.Context, appID string, conte
 	if _, err := s.runtimeClient.RuntimePersistentRestore(ctx, baseURL, app.ID, content); err != nil {
 		_ = s.handleAgentError(ctx, srv, err)
 		return OperationResult{}, runtimeOperationError(err)
+	}
+	if !shouldRestart {
+		return OperationResult{Application: app}, nil
 	}
 	return s.Restart(ctx, app.ID)
 }
@@ -2843,6 +2855,22 @@ func (s *Service) primaryRuntimeInstance(ctx context.Context, appID string) (app
 		return appruntime.Instance{}, panelerr.NotFound("application_instance")
 	}
 	return instances[0], nil
+}
+
+func persistentRestoreTargetServer(app Application) (string, error) {
+	mode, servers, err := normalizeDeploymentTargets(app.DeploymentMode, app.DeploymentServers, app.PersistentPath)
+	if err != nil {
+		return "", err
+	}
+	if mode != DeploymentModeSelected || len(servers) != 1 {
+		return "", panelerr.Validation("application_persistent_single_target_required", "persistent applications must target exactly one server")
+	}
+	return servers[0], nil
+}
+
+func isPanelNotFound(err error) bool {
+	var panelError *panelerr.Error
+	return errors.As(err, &panelError) && panelError.Code == "not_found"
 }
 
 func (s *Service) runtimeInstanceForServer(ctx context.Context, appID, serverID string) (appruntime.Instance, error) {
