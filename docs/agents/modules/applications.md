@@ -50,6 +50,7 @@
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID，并依赖数据库外键级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
 - 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后删除来源服务器上的容器和该实例运行目录，并移除来源 `application_instances` 记录。
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
+- 应用 `reverseProxy` 字段只描述应用希望暴露的域名、路径和目标端口，不代表所有部署节点都会启用反向代理。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖的服务器才会接收该应用在对应服务器上的反向代理配置。
 - 文件内容通过 API 以 base64 承载；应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
@@ -59,7 +60,7 @@
 - 应用部署流程必须先创建 lifecycle operation 和全部目标 target，再逐台执行 `validate_agent`、`render`、`write_files`、`pull_image`、`remove_*_container`、`create_container`、`start_container`、`inspect` 等阶段；每阶段失败都更新对应 target，成功实例继续保留，部分失败时 operation 状态为 `partially_deployed`。
 - 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的远端调用只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得发起 agent runtime 调用，也不得回退 SSH。部署类 lifecycle operation 仍必须为选中目标记录 failed target，避免配置目标在运行时视图中消失；运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
 - 应用运行时部署、停止、重启、状态刷新和日志读取遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前应用操作仍按原始 agent 错误失败，避免在证书未修复前继续误操作。部署 target 失败原因必须写入 lifecycle target，供运行时视图展示。
-- Application 容器使用 `panel.application.*` Label 标识。
+- Application 容器使用 `panel.application.*` Label 标识；设施应用的反向代理 nginx 容器也复用 runtime 原子能力创建，但其配置来源和生命周期归 `internal/modules/facilityapps` 管理。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
 - containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。同一应用连续协调失败后必须按指数退避设置下一次运行时间，避免端口占用等持续错误造成紧密重复部署。
 - `application_deploy` 任务表示 Panel 已完成一次部署请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
@@ -107,3 +108,9 @@
 ## 文档更新触发
 
 新增 appspec 字段、应用持久化字段、API、应用文件行为、部署流程、镜像更新逻辑、运行时展示字段或 agent runtime 契约时，必须更新本文档。
+
+## Application Folder Archives
+
+- Application save sessions support `POST /api/v1/application-save-sessions/{id}/files/archive` for multipart folder archive uploads. This endpoint is used only when the user explicitly chooses the folder archive mode; ordinary single-file uploads continue to use the `/files` JSON/base64 endpoint and must not be unpacked.
+- Folder archives support zip, tar, tar.gz, and tgz. The backend validates archive paths so entries cannot escape the application workspace, then expands each entry as `basePath + archive relative path` into `application_files`.
+- Extracted entries keep normal application-file semantics and can be mounted with appspec `mounts.type=file`. This feature does not introduce a new mount type.

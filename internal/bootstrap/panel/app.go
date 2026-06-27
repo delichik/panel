@@ -14,6 +14,7 @@ import (
 	"panel/internal/modules/certificates/certs"
 	"panel/internal/modules/certificates/dns"
 	"panel/internal/modules/containers"
+	"panel/internal/modules/facilityapps"
 	"panel/internal/modules/identity"
 	"panel/internal/modules/keyassets"
 	"panel/internal/modules/observability/diagnostics"
@@ -134,6 +135,12 @@ func New(cfg config.Config) (*App, error) {
 		certs.WithKeyAssetProvider(keyAssetSvc),
 		certs.WithApplicationRefresher(certBridge),
 	)
+	facilitySvc := facilityapps.NewService(store.AppDB(), agentClient, serverSvc, applicationSvc,
+		facilityapps.WithContainerOperationQueue(containerSvc),
+		facilityapps.WithDataRoot(cfg.DataRoot),
+		facilityapps.WithCertificateProvider(certSvc),
+	)
+	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	internalFileRegistry.Register("certificate", certSvc)
 	variableRegistry.Register("certs", certSvc)
 	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, metricsSvc, packageSvc, certSvc)
@@ -171,7 +178,7 @@ func New(cfg config.Config) (*App, error) {
 	taskWorker.Start(context.Background())
 	metricsCleanup.Start(context.Background())
 	logging.L().Info("background services started")
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, taskWorker), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, taskWorker), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -207,7 +214,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -224,6 +231,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	metricsH.RegisterRoutes(a.mux, authenticated)
 	packageH.RegisterRoutes(a.mux, authenticated)
 	containerH.RegisterRoutes(a.mux, authenticated)
+	facilityH.RegisterRoutes(a.mux, authenticated)
 	applicationH.RegisterRoutes(a.mux, authenticated)
 	taskH.RegisterRoutes(a.mux, authenticated)
 	overviewH.RegisterRoutes(a.mux, authenticated)

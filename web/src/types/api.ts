@@ -523,6 +523,65 @@ export interface PackageRefreshDto {
   taskId?: string;
 }
 
+export interface FacilityReverseProxyConfigDto {
+  id: string;
+  deploymentServers: string[];
+  image: string;
+  staticSites: FacilityStaticSiteDto[];
+  staticAssets?: FacilityStaticAssetDto[];
+  routeSummaries?: FacilityRouteSummaryDto[];
+  lastError?: string;
+  updatedAt: string;
+  routes: number;
+  enabledServers: string[];
+}
+
+export interface FacilityReverseProxySaveDto {
+  deploymentServers: string[];
+  image: string;
+  staticSites: FacilityStaticSiteDto[];
+}
+
+export interface FacilityStaticSiteDto {
+  domain: string;
+  path: string;
+  ruleType?: 'static' | 'redirect' | 'proxy_pass' | string;
+  rootPath?: string;
+  sourceType?: 'host_path' | 'uploaded_file' | 'uploaded_bundle' | string;
+  assetId?: string;
+  redirectUrl?: string;
+  redirectCode?: number;
+  proxyUrl?: string;
+  proxySourceMode?: 'preserve_source' | 'hide_source' | string;
+  deploymentServers?: string[];
+}
+
+export interface FacilityStaticAssetDto {
+  id: string;
+  name: string;
+  kind: 'uploaded_file' | 'uploaded_bundle' | string;
+  filename: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FacilityRouteSummaryDto {
+  domain: string;
+  path: string;
+  source: 'application' | 'static_site' | string;
+  serverIds: string[];
+  httpsStatus: 'domain_certificate' | 'self_signed_certificate' | 'disabled' | string;
+  certificateId?: string;
+  certificateName?: string;
+  matchedDomains?: string[];
+}
+
+export interface FacilityReverseProxyOperationDto {
+  config: FacilityReverseProxyConfigDto;
+}
+
 export interface ApplicationDto {
   id: string;
   name: string;

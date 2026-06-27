@@ -72,8 +72,10 @@
 - 容器化菜单组：
   - 一级菜单排列在域名菜单之前。
   - 应用：`web/src/views/runtime/applications/index.vue`
+  - 设施应用：`web/src/views/containerization/facility-apps/index.vue`
   - 容器、镜像、网络、卷：`web/src/views/containerization/`
-  - API：`web/src/api/containerization.ts`
+  - API：`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
+  - 设施应用页面当前内置“反向代理”，通过部署服务器多选表示哪些节点开启反向代理能力；页面中大屏使用满高主从工作区，右侧详情内部滚动。
 - Runtime 应用实现：
   - 应用运行时面板位于 `applications/` 目录内，日志查看复用 `web/src/components/RuntimeLogsDialog.vue` 弹窗展示 agent runtime 实例或 Docker 容器日志。
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`

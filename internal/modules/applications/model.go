@@ -125,6 +125,13 @@ type FileDeleteInput struct {
 	Path string `json:"path"`
 }
 
+type FileArchiveInput struct {
+	BasePath string
+	Kind     string
+	FileName string
+	Content  []byte
+}
+
 type BeginSaveSessionInput struct {
 	ApplicationID string    `json:"applicationId,omitempty"`
 	Save          SaveInput `json:"save"`

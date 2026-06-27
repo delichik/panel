@@ -63,6 +63,28 @@ export const initialMockState = {
     { name: 'very-long-package-name-used-to-check-table-overflow-in-the-update-list', installedVersion: '1.0.0-alpha.20260622074000', candidateVersion: '1.0.1-security.20260622080000', source: 'Internal Mirror' },
     ...Array.from({ length: 120 }, (_, index) => ({ name: `demo-package-${numbered(index)}`, installedVersion: `1.${index}.0`, candidateVersion: `1.${index}.1`, source: index % 2 === 0 ? 'Ubuntu Security' : 'Internal Mirror' })),
   ],
+  facilityReverseProxy: {
+    id: 'reverse_proxy',
+    deploymentServers: ['srv-edge'],
+    image: 'nginx:1.27-alpine',
+    staticSites: [
+      { domain: 'static.example.test', path: '/', ruleType: 'static', rootPath: '/srv/panel/static/example', sourceType: 'host_path', deploymentServers: [] },
+      { domain: 'static.example.test', path: '/docs', ruleType: 'static', assetId: 'facility_static_demo', sourceType: 'uploaded_bundle', deploymentServers: [] },
+      { domain: 'static.example.test', path: '/old', ruleType: 'redirect', redirectUrl: 'https://static.example.test/docs', redirectCode: 301, deploymentServers: [] },
+      { domain: 'static.example.test', path: '/legacy-api', ruleType: 'proxy_pass', proxyUrl: 'http://10.20.0.11:18080', proxySourceMode: 'hide_source', deploymentServers: [] },
+    ],
+    staticAssets: [{ id: 'facility_static_demo', name: 'Landing bundle', kind: 'uploaded_bundle', filename: 'landing.zip', size: 4096, sha256: 'sha256:mock-static', createdAt: now, updatedAt: now }],
+    routeSummaries: [
+      { domain: 'static.example.test', path: '/', source: 'static_site', serverIds: ['srv-edge'], httpsStatus: 'disabled' },
+      { domain: 'static.example.test', path: '/docs', source: 'static_site', serverIds: ['srv-edge'], httpsStatus: 'disabled' },
+      { domain: 'static.example.test', path: '/old', source: 'static_site', serverIds: ['srv-edge'], httpsStatus: 'disabled' },
+      { domain: 'static.example.test', path: '/legacy-api', source: 'static_site', serverIds: ['srv-edge'], httpsStatus: 'disabled' },
+    ],
+    lastError: '',
+    updatedAt: now,
+    routes: 4,
+    enabledServers: ['srv-edge'],
+  },
   overviewCards: [
     { id: 'cpu-main', kind: 'cpu', width: 6, height: 4, range: '1h', networkDirection: 'both', serverIds: ['srv-edge', 'srv-db'] },
     { id: 'memory-main', kind: 'memory', width: 6, height: 4, range: '6h', networkDirection: 'both', serverIds: ['srv-edge', 'srv-db', 'srv-staging'] },

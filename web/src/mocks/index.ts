@@ -146,9 +146,46 @@ export const mockFetch: typeof fetch = async (input, init = {}) => {
   if (path === '/applications' && method === 'GET') return envelope(state.applications);
   if (path === '/applications' && method === 'POST') { const body = await jsonBody(request); const row = { ...body, id: nextId('app'), generation: 1, specHash: 'sha256:new', jobId: String(body.name ?? 'new-app'), namespace: 'default', runtimeStatus: body.enabled ? 'pending' : 'stopped', allocationCount: 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; state.applications.push(row as typeof state.applications[number]); return envelope(row, 201); }
   if (path === '/application-template-catalog' && method === 'GET') return envelope({ variables: [{ key: 'server.name', category: 'server', specExpression: '${server.name}', templateExpression: '{{ server.name }}' }, { key: 'certificate.WEB_TLS.certificate', category: 'certificate', specExpression: '${certificate.WEB_TLS.certificate}', templateExpression: '{{ certificate.WEB_TLS.certificate }}' }], panelFiles: [{ id: 'panel-nginx', resourceId: 'app-web', resourceType: 'application', name: 'nginx.conf', kind: 'template', source: 'panel' }] });
+  if (path === '/facility-apps/reverse-proxy' && method === 'GET') return envelope(state.facilityReverseProxy);
+  if (path === '/facility-apps/reverse-proxy' && method === 'PUT') {
+    const body = await jsonBody(request);
+    state.facilityReverseProxy = {
+      ...state.facilityReverseProxy,
+      deploymentServers: Array.isArray(body.deploymentServers) ? body.deploymentServers : [],
+      image: String(body.image || 'nginx:1.27-alpine'),
+      staticSites: Array.isArray(body.staticSites) ? body.staticSites : [],
+      enabledServers: Array.isArray(body.deploymentServers) ? body.deploymentServers : [],
+      routeSummaries: Array.isArray(body.staticSites) ? body.staticSites.map((site: any) => ({ domain: site.domain, path: site.path || '/', source: 'static_site', serverIds: site.deploymentServers?.length ? site.deploymentServers : body.deploymentServers ?? [], httpsStatus: 'disabled' })) : [],
+      routes: Array.isArray(body.staticSites) ? body.staticSites.length : 0,
+      updatedAt: new Date().toISOString(),
+    };
+    return envelope(state.facilityReverseProxy);
+  }
+  if (path === '/facility-apps/reverse-proxy/reconcile' && method === 'POST') return envelope({ config: state.facilityReverseProxy });
+  if (path === '/facility-apps/reverse-proxy/static-assets' && method === 'GET') return envelope(state.facilityReverseProxy.staticAssets ?? []);
+  if (path === '/facility-apps/reverse-proxy/static-assets' && method === 'POST') {
+    const form = await request.formData();
+    const file = form.get('file') as File | null;
+    const nowText = new Date().toISOString();
+    const asset = { id: nextId('facility_static'), name: String(form.get('name') || file?.name || 'Static asset'), kind: String(form.get('kind') || 'uploaded_file'), filename: file?.name || 'asset.bin', size: file?.size || 0, sha256: 'sha256:mock-static-upload', createdAt: nowText, updatedAt: nowText };
+    state.facilityReverseProxy.staticAssets = [asset, ...(state.facilityReverseProxy.staticAssets ?? [])];
+    return envelope(asset, 201);
+  }
+  match = path.match(/^\/facility-apps\/reverse-proxy\/static-assets\/([^/]+)$/);
+  if (match && method === 'DELETE') { state.facilityReverseProxy.staticAssets = (state.facilityReverseProxy.staticAssets ?? []).filter((asset: any) => asset.id !== match![1]); return new Response(null, { status: 204 }); }
   if (path === '/application-save-sessions' && method === 'POST') return envelope({ id: nextId('save'), expiresAt: '2026-06-22T09:00:00Z', files: [] }, 201);
-  match = path.match(/^\/application-save-sessions\/([^/]+)\/(files|files\/delete|commit)$/);
-  if (match && method === 'POST') { if (match[2] === 'commit') return envelope(state.applications[0]); const body = await jsonBody(request); return match[2] === 'files/delete' ? new Response(null, { status: 204 }) : envelope({ id: nextId('file'), applicationId: '', path: body.path, kind: body.kind, contentType: body.contentType || 'text/plain', size: 128, sha256: 'sha256:mock', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }); }
+  match = path.match(/^\/application-save-sessions\/([^/]+)\/(files|files\/archive|files\/delete|commit)$/);
+  if (match && method === 'POST') {
+    if (match[2] === 'commit') return envelope(state.applications[0]);
+    if (match[2] === 'files/archive') {
+      const form = await request.formData();
+      const basePath = String(form.get('basePath') || 'public').replace(/^\/+|\/+$/g, '');
+      const kind = String(form.get('kind') || 'binary');
+      return envelope([{ id: nextId('file'), applicationId: '', path: `${basePath || 'public'}/index.html`, kind, contentType: 'text/html', size: 256, sha256: 'sha256:mock-archive', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }]);
+    }
+    const body = await jsonBody(request);
+    return match[2] === 'files/delete' ? new Response(null, { status: 204 }) : envelope({ id: nextId('file'), applicationId: '', path: body.path, kind: body.kind, contentType: body.contentType || 'text/plain', size: 128, sha256: 'sha256:mock', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+  }
   match = path.match(/^\/applications\/([^/]+)(?:\/(.*))?$/);
   if (match) {
     const app = state.applications.find((item) => item.id === match![1]); const suffix = match[2] ?? '';

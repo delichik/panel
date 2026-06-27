@@ -755,6 +755,8 @@ func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Cer
 		domains = append(domains, stored.IPAddresses...)
 		out = append(out, proxycert.Certificate{
 			ID:             stored.ID,
+			Name:           stored.Name,
+			Source:         "self_signed_certificate",
 			Domains:        domains,
 			CertificatePEM: stored.certificateText,
 			PrivateKeyPEM:  string(privateKeyPEM),

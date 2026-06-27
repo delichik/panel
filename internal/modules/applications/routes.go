@@ -9,6 +9,7 @@ import (
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("POST /api/v1/application-save-sessions", auth(http.HandlerFunc(h.BeginSaveSession)))
 	mux.Handle("POST /api/v1/application-save-sessions/{id}/files", auth(http.HandlerFunc(h.UploadSaveSessionFile)))
+	mux.Handle("POST /api/v1/application-save-sessions/{id}/files/archive", auth(http.HandlerFunc(h.UploadSaveSessionArchive)))
 	mux.Handle("POST /api/v1/application-save-sessions/{id}/files/delete", auth(http.HandlerFunc(h.DeleteSaveSessionFile)))
 	mux.Handle("POST /api/v1/application-save-sessions/{id}/commit", auth(http.HandlerFunc(h.CommitSaveSession)))
 

@@ -70,6 +70,13 @@ export function createApplicationsApi(client: ApiClient = apiClient) {
     uploadSaveSessionFile(sessionId: string, input: ApplicationFileSaveDto) {
       return client.post<ApplicationFileDto>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files`, input);
     },
+    uploadSaveSessionArchive(sessionId: string, input: { basePath: string; kind: string; file: File }) {
+      const form = new FormData();
+      form.set('basePath', input.basePath);
+      form.set('kind', input.kind);
+      form.set('file', input.file);
+      return client.postForm<ApplicationFileDto[]>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files/archive`, form);
+    },
     deleteSaveSessionFile(sessionId: string, input: ApplicationFileDeleteDto) {
       return client.post<void>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files/delete`, input);
     },

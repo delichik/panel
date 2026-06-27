@@ -79,6 +79,7 @@ const navGroups = computed<NavGroup[]>(() => [
     title: t('layout.nav.containerization'),
     items: [
       { to: '/containerization/applications', title: t('layout.nav.applications'), value: 'applications' },
+      { to: '/containerization/facility-apps', title: t('layout.nav.facilityApps'), value: 'facility-apps' },
       { to: '/containerization/containers', title: t('layout.nav.containers'), value: 'containers' },
       { to: '/containerization/images', title: t('layout.nav.images'), value: 'images' },
       { to: '/containerization/networks', title: t('layout.nav.networks'), value: 'networks' },

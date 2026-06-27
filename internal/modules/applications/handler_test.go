@@ -143,6 +143,34 @@ func TestHandlerRestorePersistentData(t *testing.T) {
 	}
 }
 
+func TestHandlerUploadSaveSessionArchive(t *testing.T) {
+	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", Path: "public/index.html", Kind: "binary"}}}
+	handler := NewHandler(fake)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("basePath", "public")
+	_ = writer.WriteField("kind", "binary")
+	part, err := writer.CreateFormFile("file", "site.zip")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = part.Write([]byte("zip"))
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, func(next http.Handler) http.Handler { return next })
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/application-save-sessions/asave-1/files/archive", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK || fake.sessionID != "asave-1" || fake.fileArchiveInput.BasePath != "public" || fake.fileArchiveInput.Kind != "binary" || string(fake.fileArchiveInput.Content) != "zip" {
+		t.Fatalf("archive status=%d session=%q input=%#v body=%s", rec.Code, fake.sessionID, fake.fileArchiveInput, rec.Body.String())
+	}
+}
+
 func TestHandlerDeployAndStopApplication(t *testing.T) {
 	fake := &fakeApplicationService{op: OperationResult{TaskID: "task-1", EvalID: "eval-1", Application: Application{ID: "app-1"}}}
 	handler := NewHandler(fake)
@@ -187,6 +215,7 @@ type fakeApplicationService struct {
 	files                     []ApplicationFile
 	saved                     SaveInput
 	fileInput                 FileSaveInput
+	fileArchiveInput          FileArchiveInput
 	op                        OperationResult
 	runtime                   ApplicationRuntime
 	logs                      LogResult
@@ -266,6 +295,12 @@ func (f *fakeApplicationService) UploadSaveSessionFile(ctx context.Context, sess
 	f.sessionID = sessionID
 	f.fileInput = in
 	return ApplicationFile{ID: "file-1", Path: in.Path, Kind: in.Kind}, nil
+}
+
+func (f *fakeApplicationService) UploadSaveSessionArchive(ctx context.Context, sessionID string, in FileArchiveInput) ([]ApplicationFile, error) {
+	f.sessionID = sessionID
+	f.fileArchiveInput = in
+	return f.files, nil
 }
 
 func (f *fakeApplicationService) DeleteSaveSessionFile(ctx context.Context, sessionID string, in FileDeleteInput) error {

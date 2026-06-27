@@ -27,6 +27,12 @@ interface EditorFile {
   sha256: string;
   contentBase64?: string;
 }
+interface PendingArchive {
+  id: string;
+  basePath: string;
+  kind: ApplicationFileKind;
+  file: File;
+}
 
 const form = reactive<ApplicationSaveDto>({ name: '', enabled: false, specYaml: defaultSpec(), variables: {}, persistentPath: '', deploymentMode: 'all', deploymentServers: [], reverseProxy: [] });
 const specForm = reactive({
@@ -49,11 +55,13 @@ const loading = ref('');
 const error = ref('');
 const servers = ref<ServerDto[]>([]);
 const files = ref<EditorFile[]>([]);
+const pendingArchives = ref<PendingArchive[]>([]);
 const templateVariables = ref<ApplicationTemplateVariableDto[]>([]);
 const panelFiles = ref<ApplicationPanelFileDto[]>([]);
 const templateTextarea = ref();
 const yamlTextarea = ref();
 const fileForm = reactive({
+  mode: 'single' as 'single' | 'archive',
   path: 'config/app.conf',
   kind: 'template' as ApplicationFileKind,
   template: '',
@@ -91,6 +99,7 @@ watch(() => props.open, (open) => {
   error.value = '';
   activeEditorTab.value = 'visual';
   files.value = [];
+  pendingArchives.value = [];
   void loadServers();
   void loadTemplateCatalog();
   if (app) void loadFiles(app.id);
@@ -308,6 +317,17 @@ async function addFile() {
   const path = fileForm.path.trim();
   if (!path) return;
   const picked = selectedFile();
+  if (fileForm.mode === 'archive') {
+    if (!picked) return;
+    pendingArchives.value.push({
+      id: `archive-${Date.now()}`,
+      basePath: path,
+      kind: fileForm.kind,
+      file: picked,
+    });
+    fileForm.file = null;
+    return;
+  }
   const contentBase64 = fileForm.kind === 'template'
     ? encodeText(fileForm.template)
     : picked
@@ -328,6 +348,11 @@ async function addFile() {
   else files.value.push(next);
   fileForm.template = '';
   fileForm.file = null;
+}
+
+function removeArchive(archive: PendingArchive) {
+  const index = pendingArchives.value.findIndex((item) => item.id === archive.id);
+  if (index >= 0) pendingArchives.value.splice(index, 1);
 }
 
 function removeFile(file: EditorFile) {
@@ -461,6 +486,13 @@ async function save(deploy = false) {
         kind: file.kind,
         contentType: '',
         contentBase64: file.contentBase64,
+      });
+    }
+    for (const archive of pendingArchives.value) {
+      await applicationsApi.uploadSaveSessionArchive(session.id, {
+        basePath: archive.basePath,
+        kind: archive.kind,
+        file: archive.file,
       });
     }
     const app = await applicationsApi.commitSaveSession(session.id);
@@ -773,6 +805,10 @@ async function save(deploy = false) {
 
             <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
             <div class="file-form">
+              <v-btn-toggle v-model="fileForm.mode" density="compact" mandatory divided class="span-all">
+                <v-btn value="single">{{ t('applicationEditor.singleFile') }}</v-btn>
+                <v-btn value="archive">{{ t('applicationEditor.folderArchive') }}</v-btn>
+              </v-btn-toggle>
               <v-text-field v-model="fileForm.path" :label="t('applicationEditor.workspacePath')" density="compact" variant="outlined" hide-details />
               <v-select
                 v-model="fileForm.kind"
@@ -788,7 +824,7 @@ async function save(deploy = false) {
                 hide-details
               />
               <v-textarea
-                v-if="fileForm.kind === 'template'"
+                v-if="fileForm.mode === 'single' && fileForm.kind === 'template'"
                 ref="templateTextarea"
                 v-model="fileForm.template"
                 :label="t('applicationEditor.template')"
@@ -797,7 +833,7 @@ async function save(deploy = false) {
                 spellcheck="false"
                 class="mono-input span-all"
               />
-              <v-menu v-if="fileForm.kind === 'template'">
+              <v-menu v-if="fileForm.mode === 'single' && fileForm.kind === 'template'">
                 <template #activator="{ props: menuProps }">
                   <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none span-all">{{ t('applicationEditor.insertVariable') }}</v-btn>
                 </template>
@@ -808,13 +844,24 @@ async function save(deploy = false) {
               <v-file-input
                 v-else
                 v-model="fileForm.file"
-                :label="t('applicationEditor.binaryFile')"
+                :label="fileForm.mode === 'archive' ? t('applicationEditor.folderArchiveFile') : t('applicationEditor.binaryFile')"
                 density="compact"
                 variant="outlined"
                 hide-details
                 class="span-all"
               />
-              <v-btn color="primary" variant="flat" class="text-none" :disabled="!fileForm.path || (fileForm.kind === 'binary' && !selectedFile())" @click="addFile">{{ t('common.addFile') }}</v-btn>
+              <v-btn color="primary" variant="flat" class="text-none" :disabled="!fileForm.path || (fileForm.mode === 'archive' && !selectedFile()) || (fileForm.mode === 'single' && fileForm.kind === 'binary' && !selectedFile())" @click="addFile">
+                {{ fileForm.mode === 'archive' ? t('applicationEditor.addFolderArchive') : t('common.addFile') }}
+              </v-btn>
+            </div>
+            <div v-if="pendingArchives.length" class="pending-archives">
+              <div v-for="archive in pendingArchives" :key="archive.id" class="pending-archive">
+                <div class="min-width-0">
+                  <strong class="text-truncate">{{ archive.basePath }}</strong>
+                  <div class="text-caption text-medium-emphasis text-truncate">{{ archive.file.name }} / {{ translateApplicationFileKind(archive.kind) }}</div>
+                </div>
+                <v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeArchive(archive)" />
+              </div>
             </div>
             <v-table density="compact" class="mt-3">
               <thead><tr><th>{{ t('common.path') }}</th><th>{{ t('applicationEditor.kind') }}</th><th>{{ t('common.size') }}</th><th>{{ t('common.sha256') }}</th><th class="text-right">{{ t('common.actions') }}</th></tr></thead>
@@ -878,6 +925,9 @@ async function save(deploy = false) {
 .proxy-target-name { font-size: 0.82rem; }
 .proxy-path-row { grid-template-columns: minmax(0, 1fr) 130px 40px; }
 .file-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.pending-archives { display: grid; gap: 8px; margin-top: 10px; }
+.pending-archive { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--lp-border); border-radius: 8px; }
+.min-width-0 { min-width: 0; }
 .repeat-row > .v-btn,
 .proxy-rule-header > .v-btn {
   justify-self: end;

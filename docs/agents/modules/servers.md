@@ -96,6 +96,7 @@
 - Agent 健康检查必须返回 Docker 健康状态和 Docker host；Panel 要求 Docker 正常且 agent 报告的 Docker host 与服务器配置一致。
 - Application 运行时要求 agent 与 Panel 构建版本一致；部署编排在 Panel 侧完成，agent 只执行写托管文件、创建容器、容器动作和状态读取等原子接口。
 - Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、fail2ban status/apply、应用 runtime 文件写入/容器创建/stop/restart/status/logs/持久化目录打包与恢复，以及 Docker 容器、容器日志、镜像、网络和卷资源 API。应用 runtime stop 总会删除目标容器；`purge=true` 时额外删除实例运行目录，`removeApplicationData=true` 时删除整个应用运行目录。
+- 反向代理设施应用依赖兼容 Agent 的 runtime 文件写入、容器创建、容器停止/删除、镜像拉取和容器启动能力；未部署、不兼容或不可用的 Agent 不会处理设施应用配置，也不回退 SSH。服务器 traits 中的 `agent.reverse_proxy.enabled` 由设施应用部署服务器列表派生维护，仅用于 UFW 安装时自动放行反向代理端口，不提供独立节点开关。
 - 依赖 agent 的读取和运行时能力必须只在 `agent.status=compatible` 且 `agent.url` 存在时执行；agent 未部署、异常、不兼容、无法部署或客户端不可用时，当前操作或定时任务不得执行，也不得回退 SSH。例外是 agent 部署、重装、证书同步等恢复 agent 本身的任务。
 - Docker 资源查询和操作只走 agent Docker Engine API，不回退 SSH。
 - 启用 agent 后，读取类能力、软件包刷新/升级、UFW 状态及写操作、fail2ban 状态及配置应用、服务器重启、指标采集和应用运行时操作必须走 agent，不允许回退 SSH。APT/UFW/fail2ban 由 Agent 参数化调用固定命令；服务器重启由 Agent 通过 `busctl` 调用 logind D-Bus `Reboot`。

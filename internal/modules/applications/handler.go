@@ -27,6 +27,7 @@ type applicationService interface {
 	DeleteFile(ctx context.Context, id, fileID string) error
 	BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error)
 	UploadSaveSessionFile(ctx context.Context, sessionID string, in FileSaveInput) (ApplicationFile, error)
+	UploadSaveSessionArchive(ctx context.Context, sessionID string, in FileArchiveInput) ([]ApplicationFile, error)
 	DeleteSaveSessionFile(ctx context.Context, sessionID string, in FileDeleteInput) error
 	CommitSaveSession(ctx context.Context, sessionID string) (Application, error)
 	Package(ctx context.Context, id string) (PackageResult, error)
@@ -236,6 +237,39 @@ func (h *Handler) UploadSaveSessionFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.JSON(w, http.StatusOK, file)
+}
+
+func (h *Handler) UploadSaveSessionArchive(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes)
+	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read archive upload"))
+		return
+	}
+	files, err := h.service.UploadSaveSessionArchive(r.Context(), saveSessionIDFromRequest(r), FileArchiveInput{
+		BasePath: r.FormValue("basePath"),
+		Kind:     r.FormValue("kind"),
+		FileName: header.Filename,
+		Content:  content,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, files)
 }
 
 func (h *Handler) DeleteSaveSessionFile(w http.ResponseWriter, r *http.Request) {

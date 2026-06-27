@@ -203,6 +203,24 @@ func (s *Store) Migrate(ctx context.Context) error {
 			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS facility_app_configs (
+			id TEXT PRIMARY KEY,
+			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+			image TEXT NOT NULL DEFAULT '',
+			static_sites_json TEXT NOT NULL DEFAULT '[]',
+			last_error TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS facility_static_assets (
+			id TEXT PRIMARY KEY,
+			name TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN ('uploaded_file','uploaded_bundle')),
+			filename TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0,
+			sha256 TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS dns_domains (
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL UNIQUE,
@@ -405,6 +423,26 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"image_checked_at":           "TEXT",
 		"image_update_available":     "INTEGER NOT NULL DEFAULT 0",
 		"image_last_error":           "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "facility_app_configs", map[string]string{
+		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
+		"image":                      "TEXT NOT NULL DEFAULT ''",
+		"static_sites_json":          "TEXT NOT NULL DEFAULT '[]'",
+		"last_error":                 "TEXT NOT NULL DEFAULT ''",
+		"updated_at":                 "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "facility_static_assets", map[string]string{
+		"name":       "TEXT NOT NULL DEFAULT ''",
+		"kind":       "TEXT NOT NULL DEFAULT 'uploaded_file'",
+		"filename":   "TEXT NOT NULL DEFAULT ''",
+		"size":       "INTEGER NOT NULL DEFAULT 0",
+		"sha256":     "TEXT NOT NULL DEFAULT ''",
+		"created_at": "TEXT NOT NULL DEFAULT ''",
+		"updated_at": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}

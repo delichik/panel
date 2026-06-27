@@ -1,12 +1,18 @@
 package applications
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -98,6 +104,43 @@ func (s *Service) UploadSaveSessionFile(ctx context.Context, sessionID string, i
 	}
 	_ = ctx
 	return staged.applicationFile(nil), nil
+}
+
+func (s *Service) UploadSaveSessionArchive(ctx context.Context, sessionID string, in FileArchiveInput) ([]ApplicationFile, error) {
+	session, err := s.getSaveSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	kind := strings.TrimSpace(in.Kind)
+	if kind != "binary" && kind != "template" {
+		return nil, panelerr.Validation("application_file_kind_invalid", "file kind must be binary or template")
+	}
+	if len(in.Content) == 0 {
+		return nil, panelerr.Validation("application_file_content_invalid", "file content is required")
+	}
+	basePath, err := normalizeApplicationArchiveBasePath(in.BasePath)
+	if err != nil {
+		return nil, err
+	}
+	items, err := extractApplicationFileArchive(bytes.NewReader(in.Content), int64(len(in.Content)), in.FileName)
+	if err != nil {
+		return nil, err
+	}
+	files := make([]ApplicationFile, 0, len(items))
+	for _, item := range items {
+		targetPath := item.Name
+		if basePath != "" {
+			targetPath = path.Join(basePath, item.Name)
+		}
+		staged, err := s.stageFileBytes(session, targetPath, kind, "", item.Content, time.Now().UTC())
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, staged.applicationFile(nil))
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	_ = ctx
+	return files, nil
 }
 
 func (s *Service) DeleteSaveSessionFile(ctx context.Context, sessionID string, in FileDeleteInput) error {
@@ -334,4 +377,112 @@ func normalizeApplicationFilesForSave(appID string, files []ApplicationFile, now
 		out = append(out, file)
 	}
 	return out
+}
+
+type archivedApplicationFile struct {
+	Name    string
+	Content []byte
+}
+
+func extractApplicationFileArchive(reader io.ReaderAt, size int64, filename string) ([]archivedApplicationFile, error) {
+	lower := strings.ToLower(strings.TrimSpace(filename))
+	switch {
+	case strings.HasSuffix(lower, ".zip"):
+		zr, err := zip.NewReader(reader, size)
+		if err != nil {
+			return nil, panelerr.Validation("application_file_archive_invalid", "application file archive is invalid")
+		}
+		return extractApplicationZip(zr)
+	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
+		gz, err := gzip.NewReader(io.NewSectionReader(reader, 0, size))
+		if err != nil {
+			return nil, panelerr.Validation("application_file_archive_invalid", "application file archive is invalid")
+		}
+		defer gz.Close()
+		return extractApplicationTar(tar.NewReader(gz))
+	case strings.HasSuffix(lower, ".tar"):
+		return extractApplicationTar(tar.NewReader(io.NewSectionReader(reader, 0, size)))
+	default:
+		return nil, panelerr.Validation("application_file_archive_invalid", "folder uploads must use zip, tar, tar.gz, or tgz")
+	}
+}
+
+func extractApplicationZip(reader *zip.Reader) ([]archivedApplicationFile, error) {
+	out := []archivedApplicationFile{}
+	for _, file := range reader.File {
+		name := cleanApplicationArchivePath(file.Name)
+		if name == "" || file.FileInfo().IsDir() {
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			return nil, err
+		}
+		content, readErr := io.ReadAll(rc)
+		closeErr := rc.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		out = append(out, archivedApplicationFile{Name: name, Content: content})
+	}
+	return nonEmptyApplicationArchive(out)
+}
+
+func extractApplicationTar(reader *tar.Reader) ([]archivedApplicationFile, error) {
+	out := []archivedApplicationFile{}
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, panelerr.Validation("application_file_archive_invalid", "application file archive is invalid")
+		}
+		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
+			continue
+		}
+		name := cleanApplicationArchivePath(header.Name)
+		if name == "" {
+			continue
+		}
+		content, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, archivedApplicationFile{Name: name, Content: content})
+	}
+	return nonEmptyApplicationArchive(out)
+}
+
+func nonEmptyApplicationArchive(files []archivedApplicationFile) ([]archivedApplicationFile, error) {
+	if len(files) == 0 {
+		return nil, panelerr.Validation("application_file_archive_empty", "application file archive is empty")
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	return files, nil
+}
+
+func cleanApplicationArchivePath(value string) string {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	value = strings.TrimPrefix(value, "/")
+	value = path.Clean(value)
+	if value == "." || strings.HasPrefix(value, "../") || value == ".." {
+		return ""
+	}
+	return value
+}
+
+func normalizeApplicationArchiveBasePath(value string) (string, error) {
+	value = strings.Trim(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/"), "/")
+	if value == "" {
+		return "", nil
+	}
+	normalized, err := normalizeApplicationFilePath(value + "/.archive-base")
+	if err != nil {
+		return "", err
+	}
+	return path.Dir(normalized), nil
 }

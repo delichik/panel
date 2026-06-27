@@ -162,6 +162,14 @@ func WithImageDigestResolver(resolver ImageDigestResolver) Option {
 	return func(s *Service) { s.imageResolver = resolver }
 }
 
+func WithReverseProxyReconciler(reconciler ReverseProxyReconciler) Option {
+	return func(s *Service) { s.proxyReconciler = reconciler }
+}
+
+func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
+	s.proxyReconciler = reconciler
+}
+
 func NewServiceWithOptions(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Service, cfg Config, opts ...Option) *Service {
 	s := NewService(db, runtimeClient, taskSvc, cfg)
 	for _, opt := range opts {
