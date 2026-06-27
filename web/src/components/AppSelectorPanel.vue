@@ -62,6 +62,7 @@ const emit = defineEmits<{
       :page="page"
       :page-size="pageSize"
       :total="total"
+      compact
       @update:page="emit('update:page', $event)"
       @update:page-size="emit('update:pageSize', $event)"
     />

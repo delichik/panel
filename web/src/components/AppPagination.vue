@@ -8,8 +8,10 @@ const props = withDefaults(defineProps<{
   pageSize: number;
   total: number;
   pageSizes?: number[];
+  compact?: boolean;
 }>(), {
   pageSizes: () => [10, 20, 50, 100],
+  compact: false,
 });
 
 const emit = defineEmits<{
@@ -20,7 +22,7 @@ const emit = defineEmits<{
 const display = useDisplay();
 const { t } = useI18n();
 const totalPages = computed(() => Math.max(1, Math.ceil(props.total / props.pageSize)));
-const paginationVisible = computed(() => display.smAndDown.value ? 5 : 10);
+const paginationVisible = computed(() => props.compact || display.smAndDown.value ? 5 : 10);
 
 function updatePageSize(value: number) {
   emit('update:pageSize', value);
@@ -29,11 +31,12 @@ function updatePageSize(value: number) {
 </script>
 
 <template>
-  <div v-if="total > 0" class="app-pagination">
-    <div class="app-pagination__total text-caption text-medium-emphasis">
+  <div v-if="total > 0" class="app-pagination" :class="{ 'app-pagination--compact': compact }">
+    <div v-if="!compact" class="app-pagination__total text-caption text-medium-emphasis">
       {{ t('common.total', { count: total }) }}
     </div>
     <v-select
+      v-if="!compact"
       :model-value="pageSize"
       :items="pageSizes"
       :label="t('common.pageSize')"
@@ -73,6 +76,11 @@ function updatePageSize(value: number) {
 .app-pagination__size {
   max-width: 118px;
   flex: 0 0 118px;
+}
+
+.app-pagination--compact {
+  justify-content: center;
+  padding-inline: 8px;
 }
 
 .app-pagination :deep(.v-pagination__item--is-active .v-btn) {
