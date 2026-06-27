@@ -74,6 +74,7 @@
 - 服务器列表和详情读取不得创建连通性或系统信息后台任务。`POST /api/v1/servers/{id}/test` 是同步普通函数，只验证 SSH 并更新可达状态与特权模式，不进入任务中心。周期可达状态以 `metrics_collect` 为准：采集成功标记可达，实际采集失败标记不可达。
 - `server_info_collect` 首次 bootstrap 在创建服务器后立即运行；后续完整系统信息 refresh 固定每小时一次且只走兼容 Agent。refresh 失败只能使任务失败或可重试，不得回滚或删除已有服务器。
 - 系统探测写入 `sys.*` traits；网卡采集要求 `/sys/class/net/{name}/device` 存在，并过滤 Docker、veth、bridge、CNI、隧道和 overlay 等常见虚拟接口。
+- Agent 写入 `sys.cpu_model` 时优先使用 `/proc/cpuinfo` 的 `model name` 或 `hardware`；`processor` 仅在不是纯数字 CPU 编号时作为兜底，避免把 `processor: 0` 展示成 CPU 型号。
 - SSH 密码、私钥和私钥口令统一封装到 `credentials.secret_ciphertext`，并通过 `internal/platform/secrets` 加密；不得通过 API 响应或任务日志返回秘密内容。
 - `internal/platform/linux/remoteops/` 仅用于 Agent bootstrap、安装、证书验证和恢复路径中的 SSH 特权操作。
 - 软件包维护基于 APT，只对支持的系统执行；刷新和升级必须通过兼容 Agent 使用固定 `apt-get`/`apt` 可执行文件及参数调用，不拼接 shell，也不回退 SSH。

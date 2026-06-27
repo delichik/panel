@@ -156,23 +156,37 @@ func runCommand(ctx context.Context, timeout time.Duration, name string, args ..
 }
 
 func readCPUModel() string {
-	file, err := os.Open("/proc/cpuinfo")
+	return readCPUModelFrom("/proc/cpuinfo")
+}
+
+func readCPUModelFrom(path string) string {
+	file, err := os.Open(path)
 	if err != nil {
 		return "unknown"
 	}
 	defer file.Close()
 	scanner := bufio.NewScanner(file)
+	fallback := ""
 	for scanner.Scan() {
 		key, value, ok := strings.Cut(scanner.Text(), ":")
 		if !ok {
 			continue
 		}
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
 		switch strings.ToLower(strings.TrimSpace(key)) {
-		case "model name", "hardware", "processor":
-			if value = strings.TrimSpace(value); value != "" {
-				return value
+		case "model name", "hardware":
+			return value
+		case "processor":
+			if _, err := strconv.Atoi(value); err != nil && fallback == "" {
+				fallback = value
 			}
 		}
+	}
+	if fallback != "" {
+		return fallback
 	}
 	return "unknown"
 }
