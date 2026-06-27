@@ -57,7 +57,7 @@ Application 托管容器只识别以上 Label。
 - 普通容器、镜像、卷页面发起的写操作进入队列同步执行，不创建操作任务；API 在 Agent 操作完成或失败后返回。
 - 镜像拉取是长耗时操作，Panel 到 agent 以及 agent 到 Docker Engine 的 pull 请求超时均为 15 分钟；未显式写 tag 的镜像引用按 Docker CLI 语义拉取 `latest`，agent 调 Docker Engine API 时必须显式传递 `tag=latest`；其它 Docker 查询、容器动作和卷动作保持常规短超时。
 - Application 部署、停止、重启也共享同一服务器队列，但保留 Application 自身任务记录；Application 部署由 Panel 编排写文件、拉镜像、删旧容器、创建、启动和状态刷新等原子 agent/Docker 调用，不使用 agent 侧胖部署接口。
-- 设施应用保存和 reconcile 也共享同一服务器队列；当前同步执行并直接返回，不创建任务记录。
+- 设施应用保存和 reconcile 也共享同一服务器队列；当前同步执行并直接返回，不创建任务中心记录，但必须写入 `application_lifecycle_operations` / `application_lifecycle_targets` 作为设施应用部署记录。
 - 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
 - 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
@@ -102,3 +102,4 @@ Application 托管容器只识别以上 Label。
 - nginx config generation groups by domain per gateway node: one HTTP server block, plus one HTTPS server block when a matching certificate exists, contains all static locations and application proxy locations for that domain.
 - Facility routes and application reverse proxy routes both show HTTPS/certificate state on the domain group header. Individual path rows show only path-specific properties such as rule type, target, static source, redirect target, or upstream proxy target.
 - Uploaded site content is distributed through agent managed files and mounted read-only into the nginx container. Server directories still use read-only bind mounts from the target node.
+- Facility reverse proxy deployment maintains a hidden managed application identity with id `facility-reverse-proxy` only to satisfy application lifecycle foreign keys and deployment record queries. The facility configuration remains in `facility_app_configs`, the managed identity is filtered out of normal application lists, and each save/reconcile writes the latest `application_lifecycle_operations` plus per-node `application_lifecycle_targets` shown on the facility app page.

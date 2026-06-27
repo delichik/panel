@@ -19,6 +19,7 @@ import (
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/servers"
 	panelerr "panel/internal/platform/errors"
+	id "panel/internal/platform/identity"
 )
 
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
@@ -102,6 +103,9 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 	if summaries, err := s.routeSummaries(ctx, cfg); err == nil {
 		cfg.RouteSummaries = summaries
 	}
+	if operation, err := s.latestLifecycleOperation(ctx); err == nil && operation.ID != "" {
+		cfg.Operation = &operation
+	}
 	return cfg, nil
 }
 
@@ -122,7 +126,6 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	}
 	if err := s.reconcileReverseProxy(ctx, removedServers(previous.DeploymentServers, next.DeploymentServers)); err != nil {
 		_ = s.setLastError(ctx, err.Error())
-		return ReverseProxyConfig{}, err
 	}
 	return s.GetReverseProxy(ctx)
 }
@@ -180,35 +183,63 @@ func (s *Service) reconcileReverseProxy(ctx context.Context, stopServers []strin
 	if err != nil {
 		return err
 	}
+	generation, cfgHash, err := s.ensureReverseProxyApplication(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	operation, err := s.createLifecycleOperation(ctx, cfg, stopServers, generation, cfgHash)
+	if err != nil {
+		return err
+	}
 	failures := []string{}
 	for _, serverID := range stopServers {
+		targetID := lifecycleTargetID(operation.ID, serverID)
+		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusDeploying, Stage: "stop_container", Started: true})
 		if err := s.stopServerProxy(ctx, serverID); err != nil {
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusFailed, Stage: "stop_container", Error: err.Error(), Finished: true})
 			failures = append(failures, serverID+": "+err.Error())
+		} else {
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusRunning, Stage: "stop_container", Finished: true})
 		}
 	}
 	if len(cfg.DeploymentServers) == 0 {
 		if len(failures) > 0 {
-			return errors.New(strings.Join(failures, "; "))
+			err := errors.New(strings.Join(failures, "; "))
+			_ = s.finishLifecycleOperation(ctx, operation.ID, lifecycleStatusForFailures(len(stopServers), len(failures)), err)
+			return err
 		}
+		_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusDeployed, nil)
 		_ = s.setLastError(ctx, "")
 		return nil
 	}
 	routes, err := s.routesByServer(ctx, cfg.DeploymentServers)
 	if err != nil {
+		_ = s.failDeployTargets(ctx, operation.ID, cfg.DeploymentServers, "render", err)
+		_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusFailed, err)
 		return err
 	}
 	certificates, err := s.reverseProxyCertificates(ctx)
 	if err != nil {
+		_ = s.failDeployTargets(ctx, operation.ID, cfg.DeploymentServers, "render", err)
+		_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusFailed, err)
 		return err
 	}
 	for _, serverID := range cfg.DeploymentServers {
+		targetID := lifecycleTargetID(operation.ID, serverID)
+		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusPreparing, Stage: "validate_agent", Started: true})
 		if err := s.deployServerProxy(ctx, cfg, serverID, routes[serverID], certificates); err != nil {
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusFailed, Stage: "deploy_proxy", Error: err.Error(), Finished: true})
 			failures = append(failures, serverID+": "+err.Error())
+		} else {
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusRunning, Stage: "deploy_proxy", InstanceID: instanceID(serverID), ContainerName: proxyContainerName, Finished: true})
 		}
 	}
 	if len(failures) > 0 {
-		return errors.New(strings.Join(failures, "; "))
+		err := errors.New(strings.Join(failures, "; "))
+		_ = s.finishLifecycleOperation(ctx, operation.ID, lifecycleStatusForFailures(len(cfg.DeploymentServers)+len(stopServers), len(failures)), err)
+		return err
 	}
+	_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusDeployed, nil)
 	return s.setLastError(ctx, "")
 }
 
@@ -699,6 +730,195 @@ func (s *Service) setLastError(ctx context.Context, message string) error {
 	return err
 }
 
+func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg ReverseProxyConfig) (int, string, error) {
+	cfgHash := facilityConfigHash(cfg)
+	now := time.Now().UTC()
+	var generation int
+	var currentHash string
+	err := s.db.QueryRowContext(ctx, `SELECT generation,spec_hash FROM applications WHERE id=?`, proxyApplicationID).Scan(&generation, &currentHash)
+	if err == sql.ErrNoRows {
+		deploymentServers, _ := json.Marshal(cfg.DeploymentServers)
+		reverseProxy, _ := json.Marshal([]applications.ReverseProxyRule{})
+		_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,persistent_path,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			proxyApplicationID, "__panel_facility_reverse_proxy__", boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), "{}", "{}", "", applications.DeploymentModeSelected, string(deploymentServers), string(reverseProxy), 1, cfgHash, cfg.Image, "", "", nil, 0, "", proxyApplicationID, "facility", "", "", cfg.LastError, formatTime(now), formatTime(now))
+		return 1, cfgHash, err
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	if currentHash != cfgHash {
+		generation += 1
+	}
+	deploymentServers, _ := json.Marshal(cfg.DeploymentServers)
+	_, err = s.db.ExecContext(ctx, `UPDATE applications SET enabled=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,last_error=?,updated_at=? WHERE id=?`,
+		boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), applications.DeploymentModeSelected, string(deploymentServers), generation, cfgHash, cfg.Image, cfg.LastError, formatTime(now), proxyApplicationID)
+	if err != nil {
+		return 0, "", err
+	}
+	return generation, cfgHash, nil
+}
+
+func (s *Service) createLifecycleOperation(ctx context.Context, cfg ReverseProxyConfig, stopServers []string, generation int, cfgHash string) (applications.LifecycleOperation, error) {
+	now := time.Now().UTC()
+	operation := applications.LifecycleOperation{
+		ID:            id.New("alop"),
+		ApplicationID: proxyApplicationID,
+		Type:          applications.LifecycleTypeDeploy,
+		Status:        applications.LifecycleStatusDeploying,
+		Generation:    generation,
+		SpecHash:      cfgHash,
+		Trigger:       "facility_app",
+		CreatedAt:     now,
+		StartedAt:     &now,
+		UpdatedAt:     now,
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		operation.ID, operation.ApplicationID, operation.Type, operation.Status, "", operation.Generation, operation.SpecHash, operation.Trigger, "", formatTime(now), formatTime(now), nil, formatTime(now))
+	if err != nil {
+		return applications.LifecycleOperation{}, err
+	}
+	desired := map[string]string{}
+	for _, serverID := range stopServers {
+		desired[serverID] = appruntime.DesiredStopped
+	}
+	for _, serverID := range cfg.DeploymentServers {
+		desired[serverID] = appruntime.DesiredRunning
+	}
+	serverIDs := make([]string, 0, len(desired))
+	for serverID := range desired {
+		serverIDs = append(serverIDs, serverID)
+	}
+	sort.Strings(serverIDs)
+	for _, serverID := range serverIDs {
+		target := applications.LifecycleTarget{
+			ID:            lifecycleTargetID(operation.ID, serverID),
+			OperationID:   operation.ID,
+			ApplicationID: proxyApplicationID,
+			ServerID:      serverID,
+			Status:        applications.LifecycleTargetStatusPending,
+			DesiredState:  desired[serverID],
+			InstanceID:    instanceID(serverID),
+			ContainerName: proxyContainerName,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,status,desired_state,instance_id,container_name,container_id,stage,error,created_at,started_at,finished_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			target.ID, target.OperationID, target.ApplicationID, target.ServerID, target.Status, target.DesiredState, target.InstanceID, target.ContainerName, "", "", "", formatTime(now), nil, nil, formatTime(now))
+		if err != nil {
+			return applications.LifecycleOperation{}, err
+		}
+		operation.Targets = append(operation.Targets, target)
+	}
+	return operation, nil
+}
+
+type lifecycleTargetUpdate struct {
+	Status        string
+	Stage         string
+	InstanceID    string
+	ContainerName string
+	ContainerID   string
+	Error         string
+	Started       bool
+	Finished      bool
+}
+
+func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in lifecycleTargetUpdate) error {
+	updates := []string{}
+	args := []any{}
+	add := func(column string, value any) {
+		updates = append(updates, column+"=?")
+		args = append(args, value)
+	}
+	if in.Status != "" {
+		add("status", in.Status)
+	}
+	if in.Stage != "" {
+		add("stage", in.Stage)
+	}
+	if in.InstanceID != "" {
+		add("instance_id", in.InstanceID)
+	}
+	if in.ContainerName != "" {
+		add("container_name", in.ContainerName)
+	}
+	if in.ContainerID != "" {
+		add("container_id", in.ContainerID)
+	}
+	if in.Error != "" {
+		add("error", in.Error)
+	}
+	now := formatTime(time.Now().UTC())
+	if in.Started {
+		add("started_at", now)
+	}
+	if in.Finished {
+		add("finished_at", now)
+	}
+	add("updated_at", now)
+	args = append(args, targetID)
+	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+` WHERE id=?`, args...)
+	return err
+}
+
+func (s *Service) failDeployTargets(ctx context.Context, operationID string, serverIDs []string, stage string, cause error) error {
+	for _, serverID := range serverIDs {
+		if err := s.updateLifecycleTarget(ctx, lifecycleTargetID(operationID, serverID), lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusFailed, Stage: stage, Error: cause.Error(), Started: true, Finished: true}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, status string, cause error) error {
+	errText := ""
+	if cause != nil {
+		errText = cause.Error()
+	}
+	now := formatTime(time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?,error=?,finished_at=?,updated_at=? WHERE id=?`, status, errText, now, now, operationID)
+	return err
+}
+
+func (s *Service) latestLifecycleOperation(ctx context.Context) (applications.LifecycleOperation, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
+		FROM application_lifecycle_operations WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, proxyApplicationID)
+	operation, err := scanLifecycleOperation(row)
+	if err == sql.ErrNoRows {
+		return applications.LifecycleOperation{}, panelerr.NotFound("facility_app_lifecycle_operation")
+	}
+	if err != nil {
+		return applications.LifecycleOperation{}, err
+	}
+	targets, err := s.lifecycleTargets(ctx, operation.ID)
+	if err != nil {
+		return applications.LifecycleOperation{}, err
+	}
+	operation.Targets = targets
+	return operation, nil
+}
+
+func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]applications.LifecycleTarget, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id,t.operation_id,t.application_id,t.server_id,COALESCE(s.name,''),t.status,t.desired_state,t.instance_id,t.container_name,t.container_id,t.stage,t.error,t.created_at,t.started_at,t.finished_at,t.updated_at
+		FROM application_lifecycle_targets t LEFT JOIN servers s ON s.id=t.server_id WHERE t.operation_id=? ORDER BY t.server_id ASC`, operationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	targets := []applications.LifecycleTarget{}
+	for rows.Next() {
+		target, err := scanLifecycleTarget(rows)
+		if err != nil {
+			return nil, err
+		}
+		targets = append(targets, target)
+	}
+	return targets, rows.Err()
+}
+
 func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 	image := strings.TrimSpace(in.Image)
 	if image == "" {
@@ -1061,6 +1281,89 @@ func routeSummary(domain, pathValue, source string, serverIDs []string, certific
 		summary.MatchedDomains = append([]string(nil), cert.Domains...)
 	}
 	return summary
+}
+
+type lifecycleScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanLifecycleOperation(row lifecycleScanner) (applications.LifecycleOperation, error) {
+	var operation applications.LifecycleOperation
+	var created, updated string
+	var started, finished sql.NullString
+	if err := row.Scan(&operation.ID, &operation.ApplicationID, &operation.Type, &operation.Status, &operation.TaskID, &operation.Generation, &operation.SpecHash, &operation.Trigger, &operation.Error, &created, &started, &finished, &updated); err != nil {
+		return applications.LifecycleOperation{}, err
+	}
+	operation.CreatedAt = parseTime(created)
+	operation.StartedAt = parseOptionalTime(started)
+	operation.FinishedAt = parseOptionalTime(finished)
+	operation.UpdatedAt = parseTime(updated)
+	return operation, nil
+}
+
+func scanLifecycleTarget(row lifecycleScanner) (applications.LifecycleTarget, error) {
+	var target applications.LifecycleTarget
+	var created, updated string
+	var started, finished sql.NullString
+	if err := row.Scan(&target.ID, &target.OperationID, &target.ApplicationID, &target.ServerID, &target.ServerName, &target.Status, &target.DesiredState, &target.InstanceID, &target.ContainerName, &target.ContainerID, &target.Stage, &target.Error, &created, &started, &finished, &updated); err != nil {
+		return applications.LifecycleTarget{}, err
+	}
+	target.CreatedAt = parseTime(created)
+	target.StartedAt = parseOptionalTime(started)
+	target.FinishedAt = parseOptionalTime(finished)
+	target.UpdatedAt = parseTime(updated)
+	return target, nil
+}
+
+func parseOptionalTime(value sql.NullString) *time.Time {
+	if !value.Valid || strings.TrimSpace(value.String) == "" {
+		return nil
+	}
+	parsed := parseTime(value.String)
+	if parsed.IsZero() {
+		return nil
+	}
+	return &parsed
+}
+
+func boolInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+func lifecycleTargetID(operationID, serverID string) string {
+	return operationID + "-" + strings.TrimSpace(serverID)
+}
+
+func lifecycleStatusForFailures(total, failures int) string {
+	if failures <= 0 {
+		return applications.LifecycleStatusDeployed
+	}
+	if total > 0 && failures >= total {
+		return applications.LifecycleStatusFailed
+	}
+	return applications.LifecycleStatusPartiallyDeployed
+}
+
+func facilityConfigHash(cfg ReverseProxyConfig) string {
+	raw, _ := json.Marshal(map[string]any{
+		"image":             cfg.Image,
+		"deploymentServers": cfg.DeploymentServers,
+		"staticSites":       cfg.StaticSites,
+	})
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+func facilitySpecYAML(cfg ReverseProxyConfig) string {
+	return strings.Join([]string{
+		"kind: facility/reverse-proxy",
+		"name: entrance-gateway",
+		"image: " + cfg.Image,
+		"",
+	}, "\n")
 }
 
 func formatTime(value time.Time) string {

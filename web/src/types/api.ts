@@ -530,6 +530,7 @@ export interface FacilityReverseProxyConfigDto {
   staticSites: FacilityStaticSiteDto[];
   staticAssets?: FacilityStaticAssetDto[];
   routeSummaries?: FacilityRouteSummaryDto[];
+  operation?: ApplicationLifecycleOperationDto;
   lastError?: string;
   updatedAt: string;
   routes: number;

@@ -80,6 +80,8 @@ type Service struct {
 
 type ApplicationRuntime = Runtime
 
+const facilityReverseProxyApplicationID = "facility-reverse-proxy"
+
 type PlanResult struct {
 	Application Application             `json:"application"`
 	Spec        appruntime.Spec         `json:"spec"`
@@ -232,7 +234,7 @@ func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) 
 }
 
 func (s *Service) List(ctx context.Context) ([]Application, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+applicationColumns+` FROM applications ORDER BY name ASC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+applicationColumns+` FROM applications WHERE id<>? ORDER BY name ASC`, facilityReverseProxyApplicationID)
 	if err != nil {
 		return nil, err
 	}

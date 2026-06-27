@@ -1,6 +1,10 @@
 package facilityapps
 
-import "time"
+import (
+	"time"
+
+	"panel/internal/modules/applications"
+)
 
 const (
 	ReverseProxyID       = "reverse_proxy"
@@ -30,16 +34,17 @@ const (
 )
 
 type ReverseProxyConfig struct {
-	ID                string         `json:"id"`
-	DeploymentServers []string       `json:"deploymentServers"`
-	Image             string         `json:"image"`
-	StaticSites       []StaticSite   `json:"staticSites"`
-	StaticAssets      []StaticAsset  `json:"staticAssets"`
-	RouteSummaries    []RouteSummary `json:"routeSummaries"`
-	LastError         string         `json:"lastError,omitempty"`
-	UpdatedAt         time.Time      `json:"updatedAt"`
-	Routes            int            `json:"routes"`
-	EnabledServers    []string       `json:"enabledServers"`
+	ID                string                           `json:"id"`
+	DeploymentServers []string                         `json:"deploymentServers"`
+	Image             string                           `json:"image"`
+	StaticSites       []StaticSite                     `json:"staticSites"`
+	StaticAssets      []StaticAsset                    `json:"staticAssets"`
+	RouteSummaries    []RouteSummary                   `json:"routeSummaries"`
+	Operation         *applications.LifecycleOperation `json:"operation,omitempty"`
+	LastError         string                           `json:"lastError,omitempty"`
+	UpdatedAt         time.Time                        `json:"updatedAt"`
+	Routes            int                              `json:"routes"`
+	EnabledServers    []string                         `json:"enabledServers"`
 }
 
 type ReverseProxySaveInput struct {

@@ -114,3 +114,8 @@
 - Application save sessions support `POST /api/v1/application-save-sessions/{id}/files/archive` for multipart folder archive uploads. This endpoint is used only when the user explicitly chooses the folder archive mode; ordinary single-file uploads continue to use the `/files` JSON/base64 endpoint and must not be unpacked.
 - Folder archives support zip, tar, tar.gz, and tgz. The backend validates archive paths so entries cannot escape the application workspace, then expands each entry as `basePath + archive relative path` into `application_files`.
 - Extracted entries keep normal application-file semantics and can be mounted with appspec `mounts.type=file`. This feature does not introduce a new mount type.
+
+## Managed Facility Application Identity
+
+- Facility applications can reserve hidden application identities for lifecycle records. The reverse proxy facility app uses `facility-reverse-proxy`; it exists so `application_lifecycle_operations` and `application_lifecycle_targets` keep their normal foreign-key and query semantics.
+- `applications.Service.List` and normal application pages must filter this identity out. Facility pages should read their own config endpoint and render the embedded lifecycle operation instead of exposing the managed identity as a user-editable application.

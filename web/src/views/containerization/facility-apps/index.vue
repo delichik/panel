@@ -8,7 +8,7 @@ import { useI18n } from '@/i18n';
 
 type FacilityStaticSiteForm = FacilityStaticSiteDto & { localGroupId: string };
 
-const { t, formatDateTime } = useI18n();
+const { t, formatDateTime, translateLifecycleStage, translateRuntimeDesiredState, translateRuntimeStatus } = useI18n();
 const loading = ref(true);
 const saving = ref(false);
 const reconciling = ref(false);
@@ -62,6 +62,7 @@ const proxySourceModeOptions = computed(() => [
   { title: t('facilityAppsPage.hideSource'), value: 'hide_source' },
 ]);
 const applicationRouteSummaries = computed(() => (config.value?.routeSummaries ?? []).filter((item) => item.source === 'application'));
+const lifecycleTargets = computed(() => config.value?.operation?.targets ?? []);
 const applicationRouteGroups = computed(() => {
   const groups: Array<{ domain: string; httpsStatus: string; items: typeof applicationRouteSummaries.value }> = [];
   const byDomain = new Map<string, number>();
@@ -78,17 +79,19 @@ const applicationRouteGroups = computed(() => {
 });
 const staticSiteGroups = computed(() => {
   const groups: Array<{ key: string; domain: string; indexes: number[]; deploymentServers: string[] | null; sites: Array<{ site: FacilityStaticSiteForm; index: number }> }> = [];
-  const byDomain = new Map<string, number>();
+  const byGroupId = new Map<string, number>();
   form.staticSites.forEach((site, index) => {
-    const domain = site.domain?.trim() ?? '';
-    const key = domain || site.localGroupId;
-    let groupIndex = byDomain.get(key);
+    const key = site.localGroupId;
+    let groupIndex = byGroupId.get(key);
     if (groupIndex === undefined) {
       groupIndex = groups.length;
-      byDomain.set(key, groupIndex);
-      groups.push({ key, domain, indexes: [], deploymentServers: null, sites: [] });
+      byGroupId.set(key, groupIndex);
+      groups.push({ key, domain: site.domain?.trim() ?? '', indexes: [], deploymentServers: null, sites: [] });
     }
     const group = groups[groupIndex];
+    if (!group.domain && site.domain?.trim()) {
+      group.domain = site.domain.trim();
+    }
     group.indexes.push(index);
     group.sites.push({ site, index });
     group.deploymentServers = mergeDomainServers(group.deploymentServers, site.deploymentServers ?? []);
@@ -130,15 +133,26 @@ function applyConfig(next: FacilityReverseProxyConfigDto) {
   form.deploymentServers = [...(next.deploymentServers ?? [])];
   form.image = next.image || 'nginx:1.27-alpine';
   staticAssets.value = next.staticAssets ?? staticAssets.value;
+  const groupIds = new Map<string, string>();
   form.staticSites = (next.staticSites ?? []).map((site) => ({
     ...site,
-    localGroupId: nextLocalGroupId(),
+    localGroupId: groupIdForStaticSite(site, groupIds),
     ruleType: site.ruleType || 'static',
     sourceType: site.sourceType || 'host_path',
     redirectCode: site.redirectCode || 302,
     proxySourceMode: site.proxySourceMode || 'preserve_source',
     deploymentServers: [...(site.deploymentServers ?? [])],
   }));
+}
+
+function groupIdForStaticSite(site: FacilityStaticSiteDto, groupIds: Map<string, string>) {
+  const key = site.domain?.trim() || nextLocalGroupId();
+  let groupId = groupIds.get(key);
+  if (!groupId) {
+    groupId = nextLocalGroupId();
+    groupIds.set(key, groupId);
+  }
+  return groupId;
 }
 
 function newStaticSite(domain = '', deploymentServers: string[] = [], localGroupId = nextLocalGroupId()): FacilityStaticSiteForm {
@@ -267,6 +281,25 @@ function httpsStatusColor(status: string) {
   return undefined;
 }
 
+function runtimeStatusColor(status?: string | null) {
+  switch (status) {
+    case 'running':
+    case 'deployed':
+      return 'success';
+    case 'failed':
+    case 'partially_deployed':
+      return 'error';
+    case 'deploying':
+    case 'pending':
+    case 'preparing':
+      return 'warning';
+    case 'stopped':
+      return 'secondary';
+    default:
+      return 'primary';
+  }
+}
+
 function httpsStatusLabel(status: string) {
   if (status === 'domain_certificate') return t('facilityAppsPage.validCertificate');
   if (status === 'self_signed_certificate') return t('facilityAppsPage.selfSignedCertificate');
@@ -341,6 +374,59 @@ onMounted(load);
               <strong>{{ config ? formatDateTime(config.updatedAt) : t('common.never') }}</strong>
             </div>
           </div>
+
+          <section class="facility-section">
+            <div class="section-title">{{ t('facilityAppsPage.deploymentRecords') }}</div>
+            <div v-if="!config?.operation" class="empty-inline">
+              {{ t('facilityAppsPage.noDeploymentRecords') }}
+            </div>
+            <div v-else class="deployment-record">
+              <div class="deployment-record__summary">
+                <v-chip :color="runtimeStatusColor(config.operation.status)" size="small" variant="tonal" label>
+                  {{ translateRuntimeStatus(config.operation.status) }}
+                </v-chip>
+                <span class="text-caption text-medium-emphasis mono">{{ config.operation.id }}</span>
+                <span class="text-caption text-medium-emphasis">
+                  {{ formatDateTime(config.operation.finishedAt || config.operation.updatedAt) }}
+                </span>
+              </div>
+              <div class="deployment-target-table">
+                <v-table density="compact">
+                  <thead>
+                    <tr>
+                      <th>{{ t('applicationRuntime.server') }}</th>
+                      <th>{{ t('common.status') }}</th>
+                      <th>{{ t('applicationRuntime.desired') }}</th>
+                      <th>{{ t('applicationRuntime.stage') }}</th>
+                      <th>{{ t('applicationRuntime.container') }}</th>
+                      <th>{{ t('common.updatedAt') }}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="target in lifecycleTargets" :key="target.id">
+                      <td>
+                        <div class="font-weight-medium">{{ target.serverName || target.serverId }}</div>
+                        <div v-if="target.serverName" class="text-caption text-medium-emphasis mono">{{ target.serverId }}</div>
+                      </td>
+                      <td>
+                        <v-chip :color="runtimeStatusColor(target.status)" size="small" variant="tonal" label>
+                          {{ translateRuntimeStatus(target.status) }}
+                        </v-chip>
+                        <div v-if="target.error" class="text-caption text-error">{{ target.error }}</div>
+                      </td>
+                      <td>{{ translateRuntimeDesiredState(target.desiredState) }}</td>
+                      <td>{{ target.stage ? translateLifecycleStage(target.stage) : t('common.notAvailable') }}</td>
+                      <td class="mono">{{ target.containerName || target.instanceId || t('common.notAvailable') }}</td>
+                      <td>{{ formatDateTime(target.finishedAt || target.updatedAt) }}</td>
+                    </tr>
+                    <tr v-if="!lifecycleTargets.length">
+                      <td colspan="6" class="text-center text-medium-emphasis py-4">{{ t('facilityAppsPage.noDeploymentTargets') }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </div>
+            </div>
+          </section>
 
           <section class="facility-section">
             <div class="section-title">{{ t('facilityAppsPage.gatewayNodes') }}</div>
@@ -610,6 +696,26 @@ onMounted(load);
   gap: 12px;
 }
 
+.deployment-record {
+  display: grid;
+  gap: 10px;
+}
+
+.deployment-record__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+}
+
+.deployment-target-table {
+  min-width: 0;
+  overflow: auto;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+}
+
 .section-heading {
   justify-content: space-between;
 }
@@ -720,6 +826,11 @@ onMounted(load);
 
 .min-width-0 {
   min-width: 0;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
 }
 
 @media (max-width: 1080px) {

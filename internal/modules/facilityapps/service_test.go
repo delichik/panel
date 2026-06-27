@@ -2,10 +2,18 @@ package facilityapps
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/applications"
+	server "panel/internal/modules/servers"
+	"panel/internal/platform/config"
+	storage "panel/internal/platform/database"
 )
 
 func TestRenderNginxConfigGroupsRoutesByDomain(t *testing.T) {
@@ -74,4 +82,117 @@ func TestNormalizeInputRejectsDuplicateDomainPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected duplicate domain/path validation error")
 	}
+}
+
+func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
+	svc, closeStore := newFacilityTestService(t, errors.New("pull failed"))
+	defer closeStore()
+
+	cfg, err := svc.SaveReverseProxy(context.Background(), ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-edge"},
+		Image:             defaultProxyImage,
+		StaticSites: []StaticSite{
+			{Domain: "static.example.test", Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceHostPath, RootPath: "/srv/www"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save reverse proxy: %v", err)
+	}
+	if len(cfg.StaticSites) != 1 {
+		t.Fatalf("static sites = %#v", cfg.StaticSites)
+	}
+	if cfg.StaticSites[0].Domain != "static.example.test" || cfg.StaticSites[0].RootPath != "/srv/www" {
+		t.Fatalf("saved static site = %#v", cfg.StaticSites[0])
+	}
+	if !strings.Contains(cfg.LastError, "pull failed") {
+		t.Fatalf("last error = %q", cfg.LastError)
+	}
+	if cfg.Operation == nil || cfg.Operation.Status != applications.LifecycleStatusFailed {
+		t.Fatalf("operation = %#v", cfg.Operation)
+	}
+}
+
+func newFacilityTestService(t *testing.T, agentErr error) (*Service, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES(?,?,?,?,?,?)`,
+		"cred-1", "credential", "password", "root", now, now); err != nil {
+		t.Fatal(err)
+	}
+	traits := map[string]string{
+		agentcontract.TraitURL:    "https://srv-edge.agent",
+		agentcontract.TraitStatus: agentcontract.StatusCompatible,
+	}
+	rawTraits, _ := json.Marshal(traits)
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		"srv-edge", "Edge", "127.0.0.1", 22, "root", "cred-1", agentcontract.DefaultDockerHost, string(rawTraits), "{}", now, now); err != nil {
+		t.Fatal(err)
+	}
+	provider := facilityTestServers{items: map[string]server.Server{
+		"srv-edge": {
+			ID:          "srv-edge",
+			Name:        "Edge",
+			Host:        "127.0.0.1",
+			Port:        22,
+			SSHUsername: "root",
+			DockerHost:  agentcontract.DefaultDockerHost,
+			Traits:      traits,
+		},
+	}}
+	svc := NewService(store.AppDB(), facilityTestAgent{err: agentErr}, provider, nil)
+	return svc, func() { _ = store.Close() }
+}
+
+type facilityTestServers struct {
+	items map[string]server.Server
+}
+
+func (p facilityTestServers) List(context.Context) ([]server.Server, error) {
+	out := make([]server.Server, 0, len(p.items))
+	for _, item := range p.items {
+		out = append(out, item)
+	}
+	return out, nil
+}
+
+func (p facilityTestServers) Get(_ context.Context, id string) (server.Server, error) {
+	item, ok := p.items[id]
+	if !ok {
+		return server.Server{}, errors.New("server not found")
+	}
+	return item, nil
+}
+
+type facilityTestAgent struct {
+	err error
+}
+
+func (a facilityTestAgent) RuntimeWriteFiles(context.Context, string, agentcontract.RuntimeWriteFilesRequest) error {
+	return a.err
+}
+
+func (a facilityTestAgent) RuntimeCreateContainer(context.Context, string, agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
+	return agentcontract.RuntimeCreateContainerResponse{}, a.err
+}
+
+func (a facilityTestAgent) RuntimeStop(context.Context, string, agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
+	return agentcontract.RuntimeInstanceResponse{}, nil
+}
+
+func (a facilityTestAgent) DockerImagePull(context.Context, string, string) error {
+	return a.err
+}
+
+func (a facilityTestAgent) DockerContainerAction(context.Context, string, string, string) error {
+	return a.err
 }
