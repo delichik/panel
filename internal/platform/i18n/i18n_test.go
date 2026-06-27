@@ -18,3 +18,10 @@ func TestTranslateLocaleUsesSpecificRuntimeDeploymentPrefix(t *testing.T) {
 		t.Fatalf("translation = %q", got)
 	}
 }
+
+func TestTranslateLocaleUsesCodeSpecificPrefix(t *testing.T) {
+	got := TranslateLocale(LocaleSimplifiedChinese, "cloudflare_unreachable", "Cloudflare API unreachable: dial tcp timeout")
+	if !strings.HasPrefix(got, "无法访问 Cloudflare API：") || !strings.Contains(got, "dial tcp timeout") {
+		t.Fatalf("translation = %q", got)
+	}
+}
