@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `internal/platform/http`、`internal/modules/applications`
+  - 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程中的校验失败会保留具体字段与错误原因：`application_invalid` 的 `error.message` 显示第一条 `<field>: <message>`，完整列表放在 `error.details.issues`，避免统一翻译覆盖 appspec/YAML 的真实问题。
 - `web/src/views/containerization/facility-apps/index.vue`
   - Entrance gateway domain groups, route type labels, redirect fields, proxy_pass fields, and source-request mode labels are wired through `web/src/i18n/index.ts` for English and Simplified Chinese.
   - Facility reverse proxy deployment records, empty states, target table labels, and facility-specific lifecycle stages are wired through `web/src/i18n/index.ts` for English and Simplified Chinese.

@@ -430,7 +430,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 			return Application{}, err
 		}
 		if len(issues) > 0 {
-			return Application{}, panelerr.Validation("application_invalid", issues[0].Message)
+			return Application{}, applicationValidationError(issues)
 		}
 		prepared.job = job
 	}
@@ -531,7 +531,7 @@ func (s *Service) Plan(ctx context.Context, appID string) (PlanResult, error) {
 		return PlanResult{}, err
 	}
 	if len(issues) > 0 {
-		return PlanResult{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return PlanResult{}, applicationValidationError(issues)
 	}
 	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
@@ -683,7 +683,7 @@ func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Applica
 		return Application{}, appruntime.Spec{}, err
 	}
 	if len(issues) > 0 {
-		return Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return Application{}, appruntime.Spec{}, applicationValidationError(issues)
 	}
 	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
@@ -792,7 +792,7 @@ func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application,
 		return Application{}, appruntime.Spec{}, err
 	}
 	if len(issues) > 0 {
-		return Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return Application{}, appruntime.Spec{}, applicationValidationError(issues)
 	}
 	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
@@ -875,7 +875,7 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 		return OperationResult{}, err
 	}
 	if len(issues) > 0 {
-		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return OperationResult{}, applicationValidationError(issues)
 	}
 	if runtimeSpecUsesExternalMounts(currentJob) {
 		return OperationResult{}, panelerr.Conflict("application_migration_mounts_not_supported", "Applications with host paths or Docker volumes cannot use lossless migration")
@@ -919,7 +919,7 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 		return OperationResult{}, err
 	}
 	if len(issues) > 0 {
-		return OperationResult{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return OperationResult{}, applicationValidationError(issues)
 	}
 	if err := s.updateApplication(ctx, migrated); err != nil {
 		return OperationResult{}, applicationSaveError(err)
@@ -1016,7 +1016,7 @@ func (s *Service) prepareChangedApplicationRefresh(ctx context.Context, app Appl
 		return false, Application{}, appruntime.Spec{}, err
 	}
 	if len(issues) > 0 {
-		return false, Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return false, Application{}, appruntime.Spec{}, applicationValidationError(issues)
 	}
 	targets, err := s.deploymentTargets(ctx, refreshed)
 	if err != nil {
@@ -1064,7 +1064,7 @@ func (s *Service) prepareEnabledApplicationRedeploy(ctx context.Context, app App
 		return Application{}, appruntime.Spec{}, err
 	}
 	if len(issues) > 0 {
-		return Application{}, appruntime.Spec{}, panelerr.Validation("application_invalid", issues[0].Message)
+		return Application{}, appruntime.Spec{}, applicationValidationError(issues)
 	}
 	targets, err := s.deploymentTargets(ctx, refreshed)
 	if err != nil {
@@ -1556,7 +1556,7 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 		Spec:       spec,
 	})
 	if len(renderIssues) > 0 {
-		return preparedApplication{}, panelerr.Validation("application_invalid", renderIssues[0].Message)
+		return preparedApplication{}, applicationValidationError(validationIssuesFromSpecIssues(renderIssues))
 	}
 	return preparedApplication{spec: spec, variables: variables, resolvedVariables: data, persistentPath: persistentPath, deploymentMode: deploymentMode, deploymentServers: deploymentServers, reverseProxy: reverseProxy, hash: hash, job: job}, nil
 }
@@ -1644,7 +1644,7 @@ func (s *Service) resolveApplicationImage(ctx context.Context, app Application) 
 	}
 	spec, issues := appspec.DecodeYAML(renderedYAML)
 	if len(issues) > 0 {
-		return ImageDigestResult{}, checkedAt, panelerr.Validation("application_invalid", issues[0].Message)
+		return ImageDigestResult{}, checkedAt, applicationValidationError(validationIssuesFromSpecIssues(issues))
 	}
 	result, err := s.imageResolver.Resolve(ctx, spec.Image)
 	if result.Reference == "" {
@@ -2303,13 +2303,14 @@ func runtimeOperationError(err error) error {
 }
 
 func applicationSpecIssueError(issue appspec.Issue) error {
+	issues := validationIssuesFromSpecIssues([]appspec.Issue{issue})
 	switch issue.Field {
 	case "command":
-		return panelerr.Validation("application_command_invalid", issue.Message)
+		return panelerr.WithDetails(panelerr.Validation("application_command_invalid", issue.Message), map[string]any{"issues": issues})
 	case "specYaml":
-		return panelerr.Validation("application_spec_yaml_invalid", issue.Message)
+		return panelerr.WithDetails(panelerr.Validation("application_spec_yaml_invalid", issue.Message), map[string]any{"issues": issues})
 	default:
-		return panelerr.Validation("application_invalid", issue.Message)
+		return applicationValidationError(issues)
 	}
 }
 
@@ -3313,7 +3314,7 @@ func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error 
 		return err
 	}
 	if len(issues) > 0 {
-		return panelerr.Validation("application_invalid", issues[0].Message)
+		return applicationValidationError(issues)
 	}
 	current.UpdatedAt = time.Now().UTC()
 	if err := s.updateApplication(ctx, current); err != nil {
@@ -3603,6 +3604,27 @@ func (s *Service) Package(ctx context.Context, appID string) (PackageResult, err
 
 func validationResult(issues []ValidationIssue) ValidationResult {
 	return ValidationResult{Valid: len(issues) == 0, Issues: issues}
+}
+
+func applicationValidationError(issues []ValidationIssue) error {
+	if len(issues) == 0 {
+		return panelerr.Validation("application_invalid", "application definition is invalid")
+	}
+	message := issues[0].Message
+	if field := strings.TrimSpace(issues[0].Field); field != "" {
+		message = field + ": " + message
+	}
+	return panelerr.WithDetails(panelerr.Validation("application_invalid", message), map[string]any{
+		"issues": issues,
+	})
+}
+
+func validationIssuesFromSpecIssues(specIssues []appspec.Issue) []ValidationIssue {
+	issues := make([]ValidationIssue, 0, len(specIssues))
+	for _, issue := range specIssues {
+		issues = append(issues, ValidationIssue{Field: issue.Field, Message: issue.Message})
+	}
+	return issues
 }
 
 type appScanner interface{ Scan(...any) error }

@@ -6,12 +6,18 @@ type Error struct {
 	Code       string
 	Message    string
 	HTTPStatus int
+	Details    map[string]any
 }
 
 func (e *Error) Error() string { return e.Message }
 
 func New(status int, code, message string) *Error {
 	return &Error{HTTPStatus: status, Code: code, Message: message}
+}
+
+func WithDetails(err *Error, details map[string]any) *Error {
+	err.Details = details
+	return err
 }
 
 func BadRequest(code, message string) *Error { return New(http.StatusBadRequest, code, message) }

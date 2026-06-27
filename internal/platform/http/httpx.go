@@ -37,11 +37,19 @@ func Error(w http.ResponseWriter, err error) {
 	status := http.StatusInternalServerError
 	code := "internal_error"
 	message := "Internal server error"
+	var details map[string]any
 	var domain *panelerr.Error
 	if errors.As(err, &domain) {
 		status = domain.HTTPStatus
 		code = domain.Code
-		message = i18n.Translate(domain.Code, domain.Message)
+		if len(domain.Details) > 0 {
+			details = domain.Details
+		}
+		if code == "application_invalid" && details != nil {
+			message = domain.Message
+		} else {
+			message = i18n.Translate(domain.Code, domain.Message)
+		}
 	} else {
 		message = i18n.Translate(code, message)
 	}
@@ -53,7 +61,7 @@ func Error(w http.ResponseWriter, err error) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(Envelope{Data: nil, Error: &APIError{Code: code, Message: message}})
+	_ = json.NewEncoder(w).Encode(Envelope{Data: nil, Error: &APIError{Code: code, Message: message, Details: details}})
 }
 
 func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
