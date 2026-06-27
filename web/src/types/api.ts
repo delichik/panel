@@ -527,6 +527,7 @@ export interface FacilityReverseProxyConfigDto {
   id: string;
   deploymentServers: string[];
   image: string;
+  panelEntry: FacilityPanelEntryDto;
   staticSites: FacilityStaticSiteDto[];
   staticAssets?: FacilityStaticAssetDto[];
   routeSummaries?: FacilityRouteSummaryDto[];
@@ -540,7 +541,14 @@ export interface FacilityReverseProxyConfigDto {
 export interface FacilityReverseProxySaveDto {
   deploymentServers: string[];
   image: string;
+  panelEntry: FacilityPanelEntryDto;
   staticSites: FacilityStaticSiteDto[];
+}
+
+export interface FacilityPanelEntryDto {
+  enabled: boolean;
+  serverId?: string;
+  domain?: string;
 }
 
 export interface FacilityStaticSiteDto {
@@ -571,7 +579,7 @@ export interface FacilityStaticAssetDto {
 export interface FacilityRouteSummaryDto {
   domain: string;
   path: string;
-  source: 'application' | 'static_site' | string;
+  source: 'application' | 'static_site' | 'system_panel' | string;
   serverIds: string[];
   httpsStatus: 'domain_certificate' | 'self_signed_certificate' | 'disabled' | string;
   certificateId?: string;

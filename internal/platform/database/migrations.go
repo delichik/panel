@@ -207,6 +207,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
 			image TEXT NOT NULL DEFAULT '',
+			panel_entry_json TEXT NOT NULL DEFAULT '{}',
 			static_sites_json TEXT NOT NULL DEFAULT '[]',
 			last_error TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
@@ -429,6 +430,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.ensureAppColumns(ctx, "facility_app_configs", map[string]string{
 		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
 		"image":                      "TEXT NOT NULL DEFAULT ''",
+		"panel_entry_json":           "TEXT NOT NULL DEFAULT '{}'",
 		"static_sites_json":          "TEXT NOT NULL DEFAULT '[]'",
 		"last_error":                 "TEXT NOT NULL DEFAULT ''",
 		"updated_at":                 "TEXT NOT NULL DEFAULT ''",

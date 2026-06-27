@@ -9,6 +9,7 @@ import (
 const (
 	ReverseProxyID        = "reverse_proxy"
 	defaultProxyImage     = "nginx:1.27-alpine"
+	defaultPanelUpstream  = "http://127.0.0.1:8080"
 	proxyApplicationID    = "facility-reverse-proxy"
 	proxyInstancePrefix   = "facility-reverse-proxy-"
 	proxyContainerName    = "panel-facility-reverse-proxy"
@@ -39,6 +40,7 @@ type ReverseProxyConfig struct {
 	ID                string                           `json:"id"`
 	DeploymentServers []string                         `json:"deploymentServers"`
 	Image             string                           `json:"image"`
+	PanelEntry        PanelEntry                       `json:"panelEntry"`
 	StaticSites       []StaticSite                     `json:"staticSites"`
 	StaticAssets      []StaticAsset                    `json:"staticAssets"`
 	RouteSummaries    []RouteSummary                   `json:"routeSummaries"`
@@ -52,7 +54,14 @@ type ReverseProxyConfig struct {
 type ReverseProxySaveInput struct {
 	DeploymentServers []string     `json:"deploymentServers"`
 	Image             string       `json:"image"`
+	PanelEntry        PanelEntry   `json:"panelEntry"`
 	StaticSites       []StaticSite `json:"staticSites"`
+}
+
+type PanelEntry struct {
+	Enabled  bool   `json:"enabled"`
+	ServerID string `json:"serverId,omitempty"`
+	Domain   string `json:"domain,omitempty"`
 }
 
 type StaticSite struct {

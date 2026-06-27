@@ -143,6 +143,40 @@ func TestRenderNginxConfigWritesHttpsQuicServerWhenCertificateMatches(t *testing
 	}
 }
 
+func TestRenderNginxConfigWritesPanelEntryOnSelectedGatewayNode(t *testing.T) {
+	svc := &Service{}
+	cfg := ReverseProxyConfig{
+		ID:                ReverseProxyID,
+		Image:             defaultProxyImage,
+		DeploymentServers: []string{"srv-edge", "srv-other"},
+		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-edge", Domain: "panel.example.test"},
+	}
+
+	_, _, files, err := svc.renderNginxConfig(context.Background(), "srv-edge", cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("render nginx config: %v", err)
+	}
+	domainConfig := managedFileContent(files, "conf.d/panel.example.test.conf")
+	for _, want := range []string{
+		"server_name panel.example.test;",
+		"location / {",
+		"proxy_pass http://127.0.0.1:8080;",
+		"proxy_set_header Host $host;",
+	} {
+		if !strings.Contains(domainConfig, want) {
+			t.Fatalf("expected Panel entry config to contain %q, got:\n%s", want, domainConfig)
+		}
+	}
+
+	_, _, otherFiles, err := svc.renderNginxConfig(context.Background(), "srv-other", cfg, nil, nil)
+	if err != nil {
+		t.Fatalf("render nginx config for other server: %v", err)
+	}
+	if got := managedFileContent(otherFiles, "conf.d/panel.example.test.conf"); got != "" {
+		t.Fatalf("did not expect Panel entry on non-host gateway node, got:\n%s", got)
+	}
+}
+
 func managedFileContent(files []appruntime.ManagedFile, path string) string {
 	for _, file := range files {
 		if file.Path == path {
@@ -175,6 +209,31 @@ func TestNormalizeInputRejectsDuplicateDomainPath(t *testing.T) {
 	}
 }
 
+func TestNormalizeInputRequiresPanelEntryServerToBeGatewayNode(t *testing.T) {
+	_, err := normalizeInput(ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-edge"},
+		Image:             defaultProxyImage,
+		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-other", Domain: "panel.example.test"},
+	})
+	if err == nil {
+		t.Fatal("expected panel entry server validation error")
+	}
+}
+
+func TestNormalizeInputRejectsPanelEntryStaticRootConflict(t *testing.T) {
+	_, err := normalizeInput(ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-edge"},
+		Image:             defaultProxyImage,
+		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-edge", Domain: "panel.example.test"},
+		StaticSites: []StaticSite{
+			{Domain: "panel.example.test", Path: "/", RootPath: "/srv/www", SourceType: StaticSourceHostPath},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected panel entry static route conflict")
+	}
+}
+
 func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
 	svc, closeStore := newFacilityTestService(t, errors.New("pull failed"))
 	defer closeStore()
@@ -182,6 +241,7 @@ func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
 	cfg, err := svc.SaveReverseProxy(context.Background(), ReverseProxySaveInput{
 		DeploymentServers: []string{"srv-edge"},
 		Image:             defaultProxyImage,
+		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-edge", Domain: "panel.example.test"},
 		StaticSites: []StaticSite{
 			{Domain: "static.example.test", Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceHostPath, RootPath: "/srv/www"},
 		},
@@ -194,6 +254,9 @@ func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
 	}
 	if cfg.StaticSites[0].Domain != "static.example.test" || cfg.StaticSites[0].RootPath != "/srv/www" {
 		t.Fatalf("saved static site = %#v", cfg.StaticSites[0])
+	}
+	if !cfg.PanelEntry.Enabled || cfg.PanelEntry.Domain != "panel.example.test" {
+		t.Fatalf("saved panel entry = %#v", cfg.PanelEntry)
 	}
 	if !strings.Contains(cfg.LastError, "pull failed") {
 		t.Fatalf("last error = %q", cfg.LastError)

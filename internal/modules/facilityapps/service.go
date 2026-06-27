@@ -95,6 +95,9 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		return ReverseProxyConfig{}, err
 	}
 	cfg.Routes = len(cfg.StaticSites) + s.routeCount(ctx, cfg.DeploymentServers)
+	if cfg.PanelEntry.Enabled {
+		cfg.Routes++
+	}
 	cfg.EnabledServers = append([]string(nil), cfg.DeploymentServers...)
 	assets, err := s.ListStaticAssets(ctx)
 	if err == nil {
@@ -460,8 +463,23 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 			if domain == "" || route.TargetPort <= 0 {
 				continue
 			}
+			if cfg.PanelEntry.Enabled && cfg.PanelEntry.ServerID == serverID && domain == cfg.PanelEntry.Domain && reverseProxyRouteHasPath(route, "/") {
+				return "", nil, nil, panelerr.Conflict("facility_panel_entry_route_conflict", "Panel entry domain conflicts with an application route")
+			}
 			host := hostForDomain(hosts, domain)
 			host.Proxy = append(host.Proxy, route)
+		}
+	}
+	if cfg.PanelEntry.Enabled && cfg.PanelEntry.ServerID == serverID {
+		domain := sanitizeNginxToken(cfg.PanelEntry.Domain)
+		if domain != "" {
+			host := hostForDomain(hosts, domain)
+			host.Facility = append(host.Facility, proxyFacilityRoute{
+				Path:            "/",
+				RuleType:        StaticRuleProxyPass,
+				ProxyURL:        defaultPanelUpstream,
+				ProxySourceMode: ProxySourcePreserve,
+			})
 		}
 	}
 	domains := make([]string, 0, len(hosts))
@@ -756,9 +774,9 @@ func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRout
 
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg := ReverseProxyConfig{ID: ReverseProxyID, Image: defaultProxyImage, DeploymentServers: []string{}, StaticSites: []StaticSite{}}
-	row := s.db.QueryRowContext(ctx, `SELECT deployment_server_ids_json,image,static_sites_json,last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID)
-	var serversRaw, staticRaw, updated string
-	if err := row.Scan(&serversRaw, &cfg.Image, &staticRaw, &cfg.LastError, &updated); err != nil {
+	row := s.db.QueryRowContext(ctx, `SELECT deployment_server_ids_json,image,panel_entry_json,static_sites_json,last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID)
+	var serversRaw, panelRaw, staticRaw, updated string
+	if err := row.Scan(&serversRaw, &cfg.Image, &panelRaw, &staticRaw, &cfg.LastError, &updated); err != nil {
 		if err == sql.ErrNoRows {
 			cfg.UpdatedAt = time.Now().UTC()
 			return cfg, nil
@@ -766,10 +784,12 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 		return ReverseProxyConfig{}, err
 	}
 	_ = json.Unmarshal([]byte(serversRaw), &cfg.DeploymentServers)
+	_ = json.Unmarshal([]byte(panelRaw), &cfg.PanelEntry)
 	_ = json.Unmarshal([]byte(staticRaw), &cfg.StaticSites)
 	if cfg.DeploymentServers == nil {
 		cfg.DeploymentServers = []string{}
 	}
+	cfg.PanelEntry = normalizeStoredPanelEntry(cfg.PanelEntry)
 	if cfg.StaticSites == nil {
 		cfg.StaticSites = []StaticSite{}
 	}
@@ -791,15 +811,19 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 	if err != nil {
 		return err
 	}
+	panelRaw, err := json.Marshal(cfg.PanelEntry)
+	if err != nil {
+		return err
+	}
 	staticRaw, err := json.Marshal(cfg.StaticSites)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,static_sites_json,last_error,updated_at)
-		VALUES(?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,image=excluded.image,static_sites_json=excluded.static_sites_json,updated_at=excluded.updated_at`,
-		ReverseProxyID, string(serversRaw), cfg.Image, string(staticRaw), cfg.LastError, now)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,panel_entry_json,static_sites_json,last_error,updated_at)
+		VALUES(?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,image=excluded.image,panel_entry_json=excluded.panel_entry_json,static_sites_json=excluded.static_sites_json,updated_at=excluded.updated_at`,
+		ReverseProxyID, string(serversRaw), cfg.Image, string(panelRaw), string(staticRaw), cfg.LastError, now)
 	return err
 }
 
@@ -1087,7 +1111,45 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 		routeKeys[routeKey] = struct{}{}
 		sites = append(sites, StaticSite{Domain: domain, Path: pathValue, RuleType: ruleType, RootPath: root, SourceType: sourceType, AssetID: assetID, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, DeploymentServers: siteServers})
 	}
-	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, Image: image, StaticSites: sites}, nil
+	panelEntry, err := normalizePanelEntry(in.PanelEntry, serverSet, sites)
+	if err != nil {
+		return ReverseProxyConfig{}, err
+	}
+	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, Image: image, PanelEntry: panelEntry, StaticSites: sites}, nil
+}
+
+func normalizePanelEntry(in PanelEntry, serverSet map[string]struct{}, sites []StaticSite) (PanelEntry, error) {
+	if !in.Enabled {
+		return PanelEntry{}, nil
+	}
+	serverID := strings.TrimSpace(in.ServerID)
+	domain := strings.TrimSpace(in.Domain)
+	if serverID == "" {
+		return PanelEntry{}, panelerr.Validation("facility_panel_entry_server_required", "Panel entry server is required")
+	}
+	if _, ok := serverSet[serverID]; !ok {
+		return PanelEntry{}, panelerr.Validation("facility_panel_entry_server_invalid", "Panel entry server must be selected as a gateway node")
+	}
+	if domain == "" || !validNginxToken(domain) {
+		return PanelEntry{}, panelerr.Validation("facility_panel_entry_domain_invalid", "Panel entry domain is invalid")
+	}
+	for _, site := range sites {
+		if site.Domain == domain && sanitizeNginxPath(firstNonEmpty(site.Path, "/")) == "/" && staticSiteTargetsServer(site, serverID) {
+			return PanelEntry{}, panelerr.Conflict("facility_panel_entry_static_conflict", "Panel entry domain conflicts with a static route")
+		}
+	}
+	return PanelEntry{Enabled: true, ServerID: serverID, Domain: domain}, nil
+}
+
+func normalizeStoredPanelEntry(in PanelEntry) PanelEntry {
+	if !in.Enabled {
+		return PanelEntry{}
+	}
+	return PanelEntry{
+		Enabled:  true,
+		ServerID: strings.TrimSpace(in.ServerID),
+		Domain:   strings.TrimSpace(in.Domain),
+	}
 }
 
 func normalizedStaticRuleType(value string) string {
@@ -1240,6 +1302,16 @@ func staticSiteTargetsServer(site StaticSite, serverID string) bool {
 	return false
 }
 
+func reverseProxyRouteHasPath(route applications.ReverseProxyRoute, pathValue string) bool {
+	pathValue = sanitizeNginxPath(pathValue)
+	for _, routePath := range route.Paths {
+		if sanitizeNginxPath(firstNonEmpty(routePath.Path, "/")) == pathValue {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) reverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error) {
 	if s.certificates == nil {
 		return nil, nil
@@ -1331,6 +1403,9 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([
 			serverIDs = cfg.DeploymentServers
 		}
 		out = append(out, routeSummary(domain, pathValue, "static_site", serverIDs, certificates))
+	}
+	if cfg.PanelEntry.Enabled {
+		out = append(out, routeSummary(cfg.PanelEntry.Domain, "/", "system_panel", []string{cfg.PanelEntry.ServerID}, certificates))
 	}
 	for serverID, apps := range routes {
 		for _, app := range apps {
@@ -1439,6 +1514,7 @@ func facilityConfigHash(cfg ReverseProxyConfig) string {
 	raw, _ := json.Marshal(map[string]any{
 		"image":             cfg.Image,
 		"deploymentServers": cfg.DeploymentServers,
+		"panelEntry":        cfg.PanelEntry,
 		"staticSites":       cfg.StaticSites,
 	})
 	sum := sha256.Sum256(raw)

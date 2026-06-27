@@ -94,6 +94,7 @@ Application 托管容器只识别以上 Label。
 ## Entrance Gateway UI And Static Content
 
 - The reverse proxy facility app is presented in the frontend as an entrance gateway. Deployment servers are called gateway nodes in this context because selecting them means those nodes listen on 80/443 and process application routes plus static sites.
+- The entrance gateway owns the Panel access entry. `panelEntry` is a system route, not a normal static site row: when enabled, the selected gateway node proxies the configured domain at `/` to the local Panel service at `http://127.0.0.1:8080`. The selected Panel host must also be one of the gateway nodes, and the Panel entry cannot share the same domain plus root path with a static route.
 - Entrance gateway routes are configured as domain groups with multiple path routes under each domain. The API still persists the existing flat `staticSites` list; the UI groups rows by domain and does not require a database migration for this shape change.
 - Gateway node selection is edited on the domain group header and is written to every path route under that domain. A path row should not expose its own node selector.
 - Each path route can be static content, a redirect, or a manual proxy_pass. The route row displays route-specific fields only; HTTPS status belongs to the domain group header because certificates are matched by domain, not by path.

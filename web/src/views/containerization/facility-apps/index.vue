@@ -3,7 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue';
 import { facilityAppsApi } from '@/api/facilityApps';
 import { serversApi } from '@/api/servers';
 import PageLoadingState from '@/components/PageLoadingState.vue';
-import type { FacilityReverseProxyConfigDto, FacilityStaticAssetDto, FacilityStaticSiteDto, ServerDto } from '@/types/api';
+import type { FacilityPanelEntryDto, FacilityReverseProxyConfigDto, FacilityStaticAssetDto, FacilityStaticSiteDto, ServerDto } from '@/types/api';
 import { useI18n } from '@/i18n';
 
 type FacilityStaticSiteForm = FacilityStaticSiteDto & { localGroupId: string };
@@ -27,6 +27,7 @@ const uploadForm = reactive({
 const form = reactive({
   deploymentServers: [] as string[],
   image: 'nginx:1.27-alpine',
+  panelEntry: { enabled: false, serverId: '', domain: '' } as FacilityPanelEntryDto,
   staticSites: [] as FacilityStaticSiteForm[],
 });
 let localGroupSequence = 0;
@@ -35,6 +36,7 @@ const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name} - ${server.host}`,
   value: server.id,
 })));
+const gatewayServerOptions = computed(() => serverOptions.value.filter((option) => form.deploymentServers.includes(option.value)));
 const enabledServerNames = computed(() => form.deploymentServers
   .map((id) => servers.value.find((server) => server.id === id)?.name ?? id)
   .join(', '));
@@ -62,6 +64,7 @@ const proxySourceModeOptions = computed(() => [
   { title: t('facilityAppsPage.hideSource'), value: 'hide_source' },
 ]);
 const applicationRouteSummaries = computed(() => (config.value?.routeSummaries ?? []).filter((item) => item.source === 'application'));
+const panelRouteSummary = computed(() => (config.value?.routeSummaries ?? []).find((item) => item.source === 'system_panel'));
 const lifecycleTargets = computed(() => config.value?.operation?.targets ?? []);
 const applicationRouteGroups = computed(() => {
   const groups: Array<{ domain: string; httpsStatus: string; items: typeof applicationRouteSummaries.value }> = [];
@@ -132,6 +135,11 @@ function applyConfig(next: FacilityReverseProxyConfigDto) {
   config.value = next;
   form.deploymentServers = [...(next.deploymentServers ?? [])];
   form.image = next.image || 'nginx:1.27-alpine';
+  form.panelEntry = {
+    enabled: Boolean(next.panelEntry?.enabled),
+    serverId: next.panelEntry?.serverId ?? '',
+    domain: next.panelEntry?.domain ?? '',
+  };
   staticAssets.value = next.staticAssets ?? staticAssets.value;
   const groupIds = new Map<string, string>();
   form.staticSites = (next.staticSites ?? []).map((site) => ({
@@ -196,6 +204,11 @@ async function save() {
     const next = await facilityAppsApi.saveReverseProxy({
       deploymentServers: form.deploymentServers,
       image: form.image,
+      panelEntry: {
+        enabled: Boolean(form.panelEntry.enabled),
+        serverId: form.panelEntry.serverId || '',
+        domain: form.panelEntry.domain || '',
+      },
       staticSites: normalizedStaticSitesForSave(),
     });
     applyConfig(next);
@@ -448,6 +461,50 @@ onMounted(load);
               density="comfortable"
               hide-details="auto"
             />
+          </section>
+
+          <section class="facility-section">
+            <div class="section-title">{{ t('facilityAppsPage.panelEntry') }}</div>
+            <div class="panel-entry-card">
+              <v-switch
+                v-model="form.panelEntry.enabled"
+                :label="t('facilityAppsPage.enablePanelEntry')"
+                color="primary"
+                hide-details
+              />
+              <div class="panel-entry-grid">
+                <v-select
+                  v-model="form.panelEntry.serverId"
+                  :items="gatewayServerOptions"
+                  :label="t('facilityAppsPage.panelHost')"
+                  variant="outlined"
+                  density="comfortable"
+                  hide-details="auto"
+                  :disabled="!form.panelEntry.enabled"
+                />
+                <v-text-field
+                  v-model="form.panelEntry.domain"
+                  :label="t('facilityAppsPage.panelDomain')"
+                  variant="outlined"
+                  density="comfortable"
+                  hide-details="auto"
+                  :disabled="!form.panelEntry.enabled"
+                />
+                <div class="domain-https-status">
+                  <v-chip
+                    size="small"
+                    :color="httpsStatusColor(panelRouteSummary?.httpsStatus || 'disabled')"
+                    variant="tonal"
+                    label
+                  >
+                    {{ httpsStatusLabel(panelRouteSummary?.httpsStatus || 'disabled') }}
+                  </v-chip>
+                </div>
+              </div>
+              <div class="text-caption text-medium-emphasis">
+                {{ t('facilityAppsPage.panelEntryHint') }}
+              </div>
+            </div>
           </section>
 
           <section class="facility-section">
@@ -732,6 +789,21 @@ onMounted(load);
   border-radius: 8px;
 }
 
+.panel-entry-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+}
+
+.panel-entry-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.9fr) minmax(220px, 1.1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
 .static-domain-card__header {
   display: grid;
   grid-template-columns: minmax(180px, 0.9fr) minmax(220px, 1.1fr) minmax(180px, auto) auto;
@@ -853,6 +925,7 @@ onMounted(load);
   }
 
   .facility-summary,
+  .panel-entry-grid,
   .static-domain-card__header,
   .static-route-row__main,
   .asset-upload-row,
