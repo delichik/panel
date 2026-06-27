@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"reflect"
+	"strings"
 
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
@@ -46,7 +48,7 @@ func Error(w http.ResponseWriter, err error) {
 			details = domain.Details
 		}
 		if code == "application_invalid" && details != nil {
-			message = domain.Message
+			message, details = translateApplicationValidationError(domain.Message, details)
 		} else {
 			message = i18n.Translate(domain.Code, domain.Message)
 		}
@@ -71,4 +73,105 @@ func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
 		return false
 	}
 	return true
+}
+
+func translateApplicationValidationError(message string, details map[string]any) (string, map[string]any) {
+	translatedDetails, firstField, firstMessage := translateApplicationValidationDetails(details)
+	if firstMessage != "" {
+		if firstField != "" {
+			return firstField + ": " + firstMessage, translatedDetails
+		}
+		return firstMessage, translatedDetails
+	}
+	return translateValidationMessage(message), translatedDetails
+}
+
+func translateApplicationValidationDetails(details map[string]any) (map[string]any, string, string) {
+	if details == nil {
+		return nil, "", ""
+	}
+	rawIssues, ok := details["issues"]
+	if !ok {
+		return details, "", ""
+	}
+	value := reflect.ValueOf(rawIssues)
+	if value.Kind() != reflect.Slice && value.Kind() != reflect.Array {
+		return details, "", ""
+	}
+	issues := make([]map[string]string, 0, value.Len())
+	for i := 0; i < value.Len(); i++ {
+		field, message, ok := validationIssueFromValue(value.Index(i))
+		if !ok {
+			continue
+		}
+		issues = append(issues, map[string]string{
+			"field":   field,
+			"message": translateValidationMessage(message),
+		})
+	}
+	if len(issues) == 0 {
+		return details, "", ""
+	}
+	translated := make(map[string]any, len(details))
+	for key, value := range details {
+		translated[key] = value
+	}
+	translated["issues"] = issues
+	return translated, issues[0]["field"], issues[0]["message"]
+}
+
+func validationIssueFromValue(value reflect.Value) (string, string, bool) {
+	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return "", "", false
+		}
+		value = value.Elem()
+	}
+	switch value.Kind() {
+	case reflect.Struct:
+		field := stringField(value.FieldByName("Field"))
+		message := stringField(value.FieldByName("Message"))
+		return field, message, message != ""
+	case reflect.Map:
+		field := stringMapValue(value, "field")
+		message := stringMapValue(value, "message")
+		return field, message, message != ""
+	default:
+		return "", "", false
+	}
+}
+
+func stringField(value reflect.Value) string {
+	if !value.IsValid() || value.Kind() != reflect.String {
+		return ""
+	}
+	return value.String()
+}
+
+func stringMapValue(value reflect.Value, key string) string {
+	if value.Type().Key().Kind() != reflect.String {
+		return ""
+	}
+	item := value.MapIndex(reflect.ValueOf(key))
+	for item.IsValid() && (item.Kind() == reflect.Interface || item.Kind() == reflect.Pointer) {
+		if item.IsNil() {
+			return ""
+		}
+		item = item.Elem()
+	}
+	if !item.IsValid() || item.Kind() != reflect.String {
+		return ""
+	}
+	return item.String()
+}
+
+func translateValidationMessage(message string) string {
+	field, detail, ok := strings.Cut(message, ": ")
+	if ok {
+		translated := i18n.Translate("", detail)
+		if translated != detail {
+			return field + ": " + translated
+		}
+	}
+	return i18n.Translate("", message)
 }

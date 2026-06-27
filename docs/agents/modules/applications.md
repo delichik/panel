@@ -42,7 +42,7 @@
 
 ## 校验错误
 
-- 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程遇到 appspec/YAML 校验失败时，不能只返回泛化的 `application_invalid` 文案。API 错误响应保持 `code=application_invalid`，`error.message` 显示第一条 `<field>: <message>`，并在 `error.details.issues` 返回完整 `{ field, message }` 列表，字段结构与 `/validate` 接口一致。
+- 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程遇到 appspec/YAML 校验失败时，不能只返回泛化的 `application_invalid` 文案。API 错误响应保持 `code=application_invalid`，`error.message` 显示第一条 `<field>: <message>`，并在 `error.details.issues` 返回完整 `{ field, message }` 列表，字段结构与 `/validate` 接口一致；`message` 和每条 issue 的 `message` 必须按当前语言翻译，`field` 保持稳定路径用于定位。
 
 ## 数据与行为约定
 

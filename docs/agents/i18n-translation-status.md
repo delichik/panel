@@ -4,11 +4,12 @@
 
 ## 最近已补齐
 
-- `internal/platform/http`、`internal/modules/applications`
-  - 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程中的校验失败会保留具体字段与错误原因：`application_invalid` 的 `error.message` 显示第一条 `<field>: <message>`，完整列表放在 `error.details.issues`，避免统一翻译覆盖 appspec/YAML 的真实问题。
+- `internal/platform/http`、`internal/platform/i18n`、`internal/modules/applications`
+  - 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程中的校验失败会保留具体字段与错误原因：`application_invalid` 的 `error.message` 显示第一条 `<field>: <message>`，完整列表放在 `error.details.issues`，并按当前语言翻译 issue message，避免统一翻译覆盖 appspec/YAML 的真实问题。
 - `web/src/views/containerization/facility-apps/index.vue`
   - Entrance gateway domain groups, route type labels, redirect fields, proxy_pass fields, and source-request mode labels are wired through `web/src/i18n/index.ts` for English and Simplified Chinese.
   - Facility reverse proxy deployment records, empty states, target table labels, and facility-specific lifecycle stages are wired through `web/src/i18n/index.ts` for English and Simplified Chinese.
+  - Panel access entry labels, host/domain fields, enable switch, and helper text are wired through `web/src/i18n/index.ts` for English and Simplified Chinese.
 - `web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
   - 应用运行时新增 lifecycle operation 摘要、部署阶段列、部分部署状态和部署阶段文案，已接入英文与简体中文词条；Agent/Docker 原始错误原因继续保留原文。
 - `web/src/views/servers/firewall/index.vue`、`internal/modules/servers/fail2ban.go`

@@ -27,10 +27,18 @@ func TestApplicationValidationErrorKeepsIssueDetails(t *testing.T) {
 	if env.Error == nil {
 		t.Fatalf("error envelope is nil")
 	}
-	if env.Error.Message != "image: image is required" {
+	if env.Error.Message != "image: 镜像不能为空" {
 		t.Fatalf("message = %q", env.Error.Message)
 	}
 	if env.Error.Details == nil || env.Error.Details["issues"] == nil {
 		t.Fatalf("details = %#v", env.Error.Details)
+	}
+	rawIssues, ok := env.Error.Details["issues"].([]any)
+	if !ok || len(rawIssues) != 1 {
+		t.Fatalf("issues = %#v", env.Error.Details["issues"])
+	}
+	issue, ok := rawIssues[0].(map[string]any)
+	if !ok || issue["field"] != "image" || issue["message"] != "镜像不能为空" {
+		t.Fatalf("issue = %#v", rawIssues[0])
 	}
 }
