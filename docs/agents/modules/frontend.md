@@ -36,6 +36,7 @@
 - 新增或修改用户可见文案必须走 `useI18n()` 和 `web/src/i18n/index.ts`，并更新多语言状态文档。
 - 持久化 UI 配置只保存稳定值，不保存已经翻译的标题或说明。
 - API 调用经 `ApiClient`，默认 base URL 是 `/api/v1`；后端 API 变更时同步更新 `web/src/api/`、`web/src/types/api.ts` 和相关测试。
+- 全量备份主流程是在正常设置页写 pending export 并提示重启；重启后的启动期维护服务使用 `/maintenance/backup` 展示导出进度、密码输入和下载入口。
 - 不依赖后端的前端测试模式通过 `task run:web:test` 启动；该任务设置 `VITE_PANEL_TEST_MODE=true`，由 `web/src/mocks/` 接管 `/api/v1` 请求并自动建立演示会话。
 - Mock API 必须保持统一 JSON envelope，并与 `web/src/api/` 的现有路径和响应结构一致；主要页面新增或修改接口时同步维护 Mock 路由和种子数据。
 - Mock 数据只保存在当前浏览器页面的内存中，常用写操作会更新内存状态，刷新页面后恢复种子数据；未实现的 Mock 路由必须返回明确的 `mock_route_not_found` 错误。
@@ -96,7 +97,11 @@
   - 证书：`certificates/index.vue`
   - 系统：`system/index.vue`
   - 系统证书：`system-certificates/index.vue`
+  - 备份与还原：`backups/index.vue`
   - 组内共享：`_shared/`
+- 维护页：
+  - 备份导出维护页：`web/src/views/maintenance/backup.vue`
+  - 该页不使用全局 AppLayout；启动期备份导出维护服务会托管前端静态资源并显示阶段、进度、不敏感备份元数据、下载和结束维护入口。结束维护只清理 pending 标记，仍需重启回到正常 Panel。
 - 登录与强制改密：`web/src/views/auth/`
 - 隐藏诊断页：`web/src/views/debug/index.vue`
   - 认证路由为 `/debug`，不加入侧边菜单，只能通过直接地址访问。

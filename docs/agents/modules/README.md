@@ -14,6 +14,7 @@
 | 任务范围 | 优先阅读 |
 | --- | --- |
 | 启动装配、API 路由、配置、存储、认证、运行时设置、系统版本与更新检查 | [backend-core.md](backend-core.md) |
+| 全量备份导出、维护模式、启动期覆盖还原、恢复模式页面 | [backup-restore.md](backup-restore.md) |
 | Vue 页面、API client、Pinia store、路由、样式和前端测试 | [frontend.md](frontend.md) |
 | 服务器、SSH 凭据、系统探测、UFW、概览指标、APT 软件包 | [servers.md](servers.md) |
 | 后台任务、任务步骤、任务日志、重试、手动运行、周期调度 | [tasks-scheduler.md](tasks-scheduler.md) |

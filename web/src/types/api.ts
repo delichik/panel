@@ -1077,6 +1077,57 @@ export interface DebugSnapshotDto {
   databases: DebugDatabaseSnapshotDto[];
 }
 
+export type BackupMaintenanceMode = 'normal' | 'backup_exporting' | 'restore_pending' | 'restore_running' | string;
+
+export interface BackupManifestFileDto {
+  path: string;
+  size: number;
+  sha256: string;
+}
+
+export interface BackupManifestDto {
+  formatVersion: number;
+  panelVersion: string;
+  createdAt: string;
+  encrypted: boolean;
+  includes: string[];
+  files: BackupManifestFileDto[];
+  metadata?: Record<string, string>;
+}
+
+export interface BackupStatusDto {
+  mode: BackupMaintenanceMode;
+  phase: string;
+  progress: number;
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+  exportId?: string;
+  downloadAvailable: boolean;
+  restartSupported: boolean;
+  manifest?: BackupManifestDto;
+}
+
+export interface BackupExportInput {
+  encrypt: boolean;
+  password: string;
+}
+
+export interface BackupExportDto {
+  exportId: string;
+}
+
+export interface RestorePreflightDto {
+  manifest: BackupManifestDto;
+  encrypted: boolean;
+  passwordRequired: boolean;
+}
+
+export interface RestoreConfirmDto {
+  pending: boolean;
+  restartSupported: boolean;
+}
+
 export type TokenExpiration = '10m' | '1h' | '1d' | '5d' | '30d' | 'never';
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 

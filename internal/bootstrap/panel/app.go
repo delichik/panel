@@ -11,6 +11,7 @@ import (
 	agentclient "panel/internal/agent/client"
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/applications"
+	"panel/internal/modules/backups"
 	"panel/internal/modules/certificates/certs"
 	"panel/internal/modules/certificates/dns"
 	"panel/internal/modules/containers"
@@ -161,6 +162,13 @@ func New(cfg config.Config) (*App, error) {
 			Schedule:      runtime.CleanupSchedule,
 		}
 	})
+	backupSvc := backups.NewService(backups.ArchiveConfig{
+		DataRoot:        cfg.DataRoot,
+		AppDatabase:     cfg.AppDatabase,
+		TaskDatabase:    cfg.TaskDatabase,
+		MetricsDatabase: cfg.MetricsDatabase,
+		PanelVersion:    systemSvc.Version().Version,
+	})
 	a := &App{
 		cfg:            cfg,
 		store:          store,
@@ -178,7 +186,7 @@ func New(cfg config.Config) (*App, error) {
 	taskWorker.Start(context.Background())
 	metricsCleanup.Start(context.Background())
 	logging.L().Info("background services started")
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, taskWorker), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, taskWorker), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -195,7 +203,9 @@ func (a *App) Close() error {
 	}
 	return a.store.Close()
 }
-func (a *App) Handler() http.Handler { return logging.HTTPMiddleware(a.mux) }
+func (a *App) Handler() http.Handler {
+	return logging.HTTPMiddleware(a.mux)
+}
 
 func registerTaskDefinitions(taskSvc *tasks.Service, settingsSvc *settings.Service, keyAssetSvc *keyassets.Service, serverSvc *server.Service, applicationSvc *applications.Service, containerSvc *containerization.Service, metricsSvc *metrics.Service, packageSvc *packages.Service, certSvc *certs.Service) {
 	collectionInterval := func() time.Duration {
@@ -214,7 +224,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -223,6 +233,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 
 	authenticated := a.auth.RequireAuth
 	settingsH.RegisterPublicRoutes(a.mux)
+	backupH.RegisterRoutes(a.mux, authenticated)
 	credH.RegisterRoutes(a.mux, authenticated)
 	dnsH.RegisterRoutes(a.mux, authenticated)
 	certH.RegisterRoutes(a.mux, authenticated)

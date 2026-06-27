@@ -10,6 +10,7 @@ import (
 	"time"
 
 	panelbootstrap "panel/internal/bootstrap/panel"
+	"panel/internal/modules/backups"
 	"panel/internal/platform/config"
 	"panel/internal/platform/logging"
 
@@ -25,7 +26,19 @@ func main() {
 		logger.Fatal("load config failed", zap.Error(err))
 	}
 
-	application, err := panelbootstrap.New(cfg)
+	var application interface {
+		Handler() http.Handler
+		Close() error
+	}
+	if backups.PendingRestoreExists(cfg.DataRoot) {
+		logger.Warn("pending restore detected; starting restore mode")
+		application, err = backups.NewRestoreApp(cfg)
+	} else if backups.PendingExportExists(cfg.DataRoot) {
+		logger.Warn("pending backup export detected; starting backup export mode")
+		application, err = backups.NewExportApp(cfg)
+	} else {
+		application, err = panelbootstrap.New(cfg)
+	}
 	if err != nil {
 		logger.Fatal("initialize app failed", zap.Error(err))
 	}

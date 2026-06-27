@@ -246,6 +246,12 @@ var (
 			"key_asset_import_conflict":                      "导入资产存在冲突",
 			"key_asset_import_plan_expired":                  "导入预检计划已过期",
 			"key_asset_import_confirmation_required":         "覆盖使用中的密钥资产前需要危险确认",
+			"restore_password_required":                      "备份密码不能为空",
+			"restore_password_invalid":                       "备份密码无效",
+			"restore_archive_invalid":                        "备份归档无效",
+			"restore_compatibility_failed":                   "备份归档版本不受支持",
+			"restore_archive_required":                       "必须上传备份归档",
+			"restore_confirmation_required":                  "必须确认覆盖还原",
 		},
 	}
 

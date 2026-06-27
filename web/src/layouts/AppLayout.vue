@@ -118,6 +118,7 @@ const navGroups = computed<NavGroup[]>(() => [
       { to: '/settings/certificates', title: t('layout.nav.settingsCertificates'), value: 'settings-certificates' },
       { to: '/settings/system-certificates', title: t('layout.nav.settingsSystemCertificates'), value: 'settings-system-certificates' },
       { to: '/settings/system', title: t('layout.nav.settingsSystem'), value: 'settings-system' },
+      { to: '/settings/backups', title: t('layout.nav.settingsBackups'), value: 'settings-backups' },
     ],
   },
 ]);
