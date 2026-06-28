@@ -101,7 +101,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			spec_yaml TEXT NOT NULL,
 			variables_json TEXT NOT NULL DEFAULT '{}',
 			resolved_variables_json TEXT NOT NULL DEFAULT '{}',
-			persistent_path TEXT NOT NULL DEFAULT '',
 			deployment_mode TEXT NOT NULL DEFAULT 'all',
 			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
 			reverse_proxy_json TEXT NOT NULL DEFAULT '[]',
@@ -413,7 +412,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "applications", map[string]string{
-		"persistent_path":            "TEXT NOT NULL DEFAULT ''",
 		"resolved_variables_json":    "TEXT NOT NULL DEFAULT '{}'",
 		"deployment_mode":            "TEXT NOT NULL DEFAULT 'all'",
 		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
@@ -425,6 +423,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"image_update_available":     "INTEGER NOT NULL DEFAULT 0",
 		"image_last_error":           "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
+		return err
+	}
+	if err := s.dropAppColumnIfExists(ctx, "applications", "persistent_path"); err != nil {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "facility_app_configs", map[string]string{
@@ -655,8 +656,41 @@ func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[
 	return ensureColumns(ctx, s.appDB, table, columns)
 }
 
+func (s *Store) dropAppColumnIfExists(ctx context.Context, table, column string) error {
+	return dropColumnIfExists(ctx, s.appDB, table, column)
+}
+
 func (s *Store) ensureTaskColumns(ctx context.Context, table string, columns map[string]string) error {
 	return ensureColumns(ctx, s.taskDB, table, columns)
+}
+
+func dropColumnIfExists(ctx context.Context, db *sql.DB, table, column string) error {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	exists := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pk int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			exists = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	_, err = db.ExecContext(ctx, `ALTER TABLE `+table+` DROP COLUMN `+column)
+	return err
 }
 
 func ensureColumns(ctx context.Context, db *sql.DB, table string, columns map[string]string) error {

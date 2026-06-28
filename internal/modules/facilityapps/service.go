@@ -882,9 +882,9 @@ func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg Reverse
 	if err == sql.ErrNoRows {
 		deploymentServers, _ := json.Marshal(cfg.DeploymentServers)
 		reverseProxy, _ := json.Marshal([]applications.ReverseProxyRule{})
-		_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,persistent_path,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			proxyApplicationID, "__panel_facility_reverse_proxy__", boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), "{}", "{}", "", applications.DeploymentModeSelected, string(deploymentServers), string(reverseProxy), 1, cfgHash, cfg.Image, "", "", nil, 0, "", proxyApplicationID, "facility", "", "", cfg.LastError, formatTime(now), formatTime(now))
+		_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			proxyApplicationID, "__panel_facility_reverse_proxy__", boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), "{}", "{}", applications.DeploymentModeSelected, string(deploymentServers), string(reverseProxy), 1, cfgHash, cfg.Image, "", "", nil, 0, "", proxyApplicationID, "facility", "", "", cfg.LastError, formatTime(now), formatTime(now))
 		return 1, cfgHash, err
 	}
 	if err != nil {

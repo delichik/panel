@@ -210,7 +210,6 @@ type SaveInput struct {
 	Enabled           bool               `json:"enabled"`
 	SpecYAML          string             `json:"specYaml"`
 	Variables         map[string]string  `json:"variables"`
-	PersistentPath    string             `json:"persistentPath"`
 	DeploymentMode    string             `json:"deploymentMode"`
 	DeploymentServers []string           `json:"deploymentServers"`
 	ReverseProxy      []ReverseProxyRule `json:"reverseProxy"`

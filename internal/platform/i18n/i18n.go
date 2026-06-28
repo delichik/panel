@@ -184,7 +184,6 @@ var (
 			"application_persistent_data_unavailable":        "应用未使用持久化存储",
 			"application_persistent_archive_invalid":         "Agent 返回的持久化数据压缩包无效",
 			"application_persistent_archive_required":        "必须上传持久化数据压缩包",
-			"application_persistent_path_invalid":            "持久化路径无效",
 			"runtime_instance_required":                      "必须选择运行时实例",
 			"application_deployment_mode_invalid":            "部署模式必须为 all 或 selected",
 			"application_deployment_servers_required":        "请至少选择一个部署服务器",

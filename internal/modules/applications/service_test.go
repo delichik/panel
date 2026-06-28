@@ -569,6 +569,41 @@ func TestPersistentDeploymentRequiresExactlyOneServer(t *testing.T) {
 	}
 }
 
+func TestPersistentPathIsDerivedAfterUpdate(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "db",
+		Enabled:           false,
+		SpecYAML:          "name: db\nimage: postgres\nmounts:\n  - type: persistent\n    source: data\n    target: /var/lib/postgresql/data\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.PersistentPath == "" {
+		t.Fatal("expected managed persistent path")
+	}
+	updated, err := svc.Update(ctx, app.ID, SaveInput{
+		Name:              app.Name,
+		Enabled:           app.Enabled,
+		SpecYAML:          app.SpecYAML,
+		Variables:         app.Variables,
+		DeploymentMode:    app.DeploymentMode,
+		DeploymentServers: app.DeploymentServers,
+		ReverseProxy:      app.ReverseProxy,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.PersistentPath != app.PersistentPath {
+		t.Fatalf("persistent path = %q, want %q", updated.PersistentPath, app.PersistentPath)
+	}
+}
+
 func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

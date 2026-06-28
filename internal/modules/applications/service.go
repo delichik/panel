@@ -885,7 +885,6 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 		Enabled:           app.Enabled,
 		SpecYAML:          app.SpecYAML,
 		Variables:         app.Variables,
-		PersistentPath:    app.PersistentPath,
 		DeploymentMode:    DeploymentModeSelected,
 		DeploymentServers: []string{targetServerID},
 		ReverseProxy:      app.ReverseProxy,
@@ -1521,10 +1520,6 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if variables == nil {
 		variables = map[string]string{}
 	}
-	persistentPath, err := normalizePersistentPath(in.PersistentPath)
-	if err != nil {
-		return preparedApplication{}, err
-	}
 	appContext := Application{ID: appID, Name: in.Name, Generation: generation, Namespace: s.currentConfig().Namespace, DeploymentMode: in.DeploymentMode}
 	data, err := s.templateData(ctx, appContext, variables, files, nil)
 	if err != nil {
@@ -1538,7 +1533,8 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if len(specIssues) > 0 {
 		return preparedApplication{}, applicationSpecIssueError(specIssues[0])
 	}
-	if persistentPath == "" && specUsesPersistentMount(spec) {
+	persistentPath := ""
+	if specUsesPersistentMount(spec) {
 		persistentPath = applicationPersistentDir(appID)
 	}
 	deploymentMode, deploymentServers, err := normalizeDeploymentTargets(in.DeploymentMode, in.DeploymentServers, persistentPath)
@@ -1553,7 +1549,7 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if err != nil {
 		return preparedApplication{}, err
 	}
-	hash, err := applicationHash(spec, variables, persistentPath, deploymentMode, deploymentServers, resolvedReverseProxy, files, data)
+	hash, err := applicationHash(spec, variables, deploymentMode, deploymentServers, resolvedReverseProxy, files, data)
 	if err != nil {
 		return preparedApplication{}, err
 	}
@@ -2174,8 +2170,8 @@ func (s *Service) insertApplication(ctx context.Context, app Application) error 
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,persistent_path,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.PersistentPath, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		app.ID, app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
 	return err
 }
 
@@ -2196,8 +2192,8 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE applications SET name=?,enabled=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,persistent_path=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.PersistentPath, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+	_, err = s.db.ExecContext(ctx, `UPDATE applications SET name=?,enabled=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -2242,8 +2238,8 @@ func (s *Service) insertApplicationWithExec(ctx context.Context, exec sqlExec, a
 	if err != nil {
 		return err
 	}
-	_, err = exec.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,persistent_path,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.PersistentPath, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
+	_, err = exec.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		app.ID, app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
 	return err
 }
 
@@ -2264,8 +2260,8 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec sqlExec, a
 	if err != nil {
 		return err
 	}
-	_, err = exec.ExecContext(ctx, `UPDATE applications SET name=?,enabled=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,persistent_path=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.PersistentPath, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+	_, err = exec.ExecContext(ctx, `UPDATE applications SET name=?,enabled=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		app.Name, boolInt(app.Enabled), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -3401,7 +3397,6 @@ func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Applic
 		Enabled:           current.Enabled,
 		SpecYAML:          current.SpecYAML,
 		Variables:         current.Variables,
-		PersistentPath:    current.PersistentPath,
 		DeploymentMode:    current.DeploymentMode,
 		DeploymentServers: current.DeploymentServers,
 		ReverseProxy:      current.ReverseProxy,
@@ -3469,7 +3464,7 @@ func fileVariables(files []ApplicationFile) map[string]any {
 	return map[string]any{"items": items, "byPath": byPath}
 }
 
-func applicationHash(spec appspec.Spec, variables map[string]string, persistentPath string, deploymentMode string, deploymentServers []string, reverseProxy []ReverseProxyRule, files []ApplicationFile, resolved map[string]any) (string, error) {
+func applicationHash(spec appspec.Spec, variables map[string]string, deploymentMode string, deploymentServers []string, reverseProxy []ReverseProxyRule, files []ApplicationFile, resolved map[string]any) (string, error) {
 	fileRefs := make([]map[string]any, 0, len(files))
 	for _, file := range files {
 		fileRefs = append(fileRefs, map[string]any{
@@ -3480,10 +3475,9 @@ func applicationHash(spec appspec.Spec, variables map[string]string, persistentP
 		})
 	}
 	payload := map[string]any{
-		"spec":           appspec.Normalize(spec),
-		"variables":      variables,
-		"resolved":       stableResolvedVariables(resolved),
-		"persistentPath": persistentPath,
+		"spec":      appspec.Normalize(spec),
+		"variables": variables,
+		"resolved":  stableResolvedVariables(resolved),
 		"deployment": map[string]any{
 			"mode":    deploymentMode,
 			"servers": deploymentServers,
@@ -3507,14 +3501,6 @@ func stableResolvedVariables(resolved map[string]any) map[string]any {
 		delete(appValue, "generation")
 	}
 	return out
-}
-
-func normalizePersistentPath(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return "", nil
-	}
-	return "", panelerr.Validation("application_persistent_path_invalid", "persistent path is managed by Panel and must not be customized")
 }
 
 func normalizeApplicationFilePath(value string) (string, error) {
@@ -3691,7 +3677,7 @@ type sqlExec interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-const applicationColumns = `id,name,enabled,spec_yaml,variables_json,resolved_variables_json,persistent_path,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at`
+const applicationColumns = `id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at`
 
 func scanApplication(row appScanner) (Application, error) {
 	var app Application
@@ -3699,7 +3685,7 @@ func scanApplication(row appScanner) (Application, error) {
 	var variables, resolvedVariables, deploymentServers, reverseProxy string
 	var createdAt, updatedAt string
 	var imageCheckedAt sql.NullString
-	if err := row.Scan(&app.ID, &app.Name, &enabled, &app.SpecYAML, &variables, &resolvedVariables, &app.PersistentPath, &app.DeploymentMode, &deploymentServers, &reverseProxy, &app.Generation, &app.SpecHash, &app.ImageReference, &app.ImageDigest, &app.ImageLatestDigest, &imageCheckedAt, &imageUpdateAvailable, &app.ImageLastError, &app.JobID, &app.Namespace, &app.LastEvalID, &app.LastDeploymentID, &app.LastError, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&app.ID, &app.Name, &enabled, &app.SpecYAML, &variables, &resolvedVariables, &app.DeploymentMode, &deploymentServers, &reverseProxy, &app.Generation, &app.SpecHash, &app.ImageReference, &app.ImageDigest, &app.ImageLatestDigest, &imageCheckedAt, &imageUpdateAvailable, &app.ImageLastError, &app.JobID, &app.Namespace, &app.LastEvalID, &app.LastDeploymentID, &app.LastError, &createdAt, &updatedAt); err != nil {
 		return Application{}, err
 	}
 	app.Enabled = enabled == 1
@@ -3737,9 +3723,18 @@ func scanApplication(row appScanner) (Application, error) {
 	if app.ReverseProxy == nil {
 		app.ReverseProxy = []ReverseProxyRule{}
 	}
+	app.PersistentPath = persistentPathForSpecYAML(app.ID, app.SpecYAML)
 	app.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	app.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 	return app, nil
+}
+
+func persistentPathForSpecYAML(appID, specYAML string) string {
+	spec, issues := appspec.DecodeYAML(specYAML)
+	if len(issues) > 0 || !specUsesPersistentMount(spec) {
+		return ""
+	}
+	return applicationPersistentDir(appID)
 }
 
 func boolInt(value bool) int {

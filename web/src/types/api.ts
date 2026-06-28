@@ -638,7 +638,6 @@ export interface ApplicationSaveDto {
   enabled: boolean;
   specYaml: string;
   variables: Record<string, string>;
-  persistentPath?: string;
   deploymentMode?: 'all' | 'selected' | string;
   deploymentServers?: string[];
   reverseProxy?: ApplicationReverseProxyRuleDto[];

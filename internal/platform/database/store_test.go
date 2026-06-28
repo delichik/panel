@@ -144,6 +144,10 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 			t.Fatalf("expected table %q to exist", table)
 		}
 	}
+	applicationColumns := tableColumns(t, store.AppDB(), "applications")
+	if applicationColumns["persistent_path"] {
+		t.Fatal("fresh applications schema must not contain persistent_path")
+	}
 	dnsColumns := tableColumns(t, store.AppDB(), "dns_domains")
 	for _, required := range []string{"provider_config_json", "provider_secret_ciphertext"} {
 		if !dnsColumns[required] {
@@ -183,6 +187,54 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 		if tableExists(t, store.AppDB(), table) {
 			t.Fatalf("old orchestration table %q must not exist in fresh schema", table)
 		}
+	}
+}
+
+func TestMigrateDropsApplicationPersistentPath(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE applications (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 0,
+		spec_yaml TEXT NOT NULL,
+		variables_json TEXT NOT NULL DEFAULT '{}',
+		resolved_variables_json TEXT NOT NULL DEFAULT '{}',
+		persistent_path TEXT NOT NULL DEFAULT '',
+		deployment_mode TEXT NOT NULL DEFAULT 'all',
+		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+		reverse_proxy_json TEXT NOT NULL DEFAULT '[]',
+		generation INTEGER NOT NULL DEFAULT 1,
+		spec_hash TEXT NOT NULL DEFAULT '',
+		job_id TEXT NOT NULL,
+		namespace TEXT NOT NULL DEFAULT 'default',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	columns := tableColumns(t, store.AppDB(), "applications")
+	if columns["persistent_path"] {
+		t.Fatal("migrated applications schema must not contain persistent_path")
 	}
 }
 

@@ -34,7 +34,7 @@ interface PendingArchive {
   file: File;
 }
 
-const form = reactive<ApplicationSaveDto>({ name: '', enabled: false, specYaml: defaultSpec(), variables: {}, persistentPath: '', deploymentMode: 'all', deploymentServers: [], reverseProxy: [] });
+const form = reactive<ApplicationSaveDto>({ name: '', enabled: false, specYaml: defaultSpec(), variables: {}, deploymentMode: 'all', deploymentServers: [], reverseProxy: [] });
 const specForm = reactive({
   name: 'web',
   image: '',
@@ -92,7 +92,6 @@ watch(() => props.open, (open) => {
   form.enabled = app?.enabled ?? false;
   form.specYaml = app?.specYaml ?? defaultSpec();
   form.variables = { ...(app?.variables ?? {}) };
-  form.persistentPath = app?.persistentPath ?? '';
   form.deploymentMode = app?.deploymentMode ?? 'all';
   form.deploymentServers = [...(app?.deploymentServers ?? [])];
   form.reverseProxy = cloneReverseProxy(app?.reverseProxy ?? []);
@@ -467,7 +466,6 @@ function readInput(): ApplicationSaveDto {
     variables: Object.fromEntries(variableRows.value
       .filter((item) => item.key.trim())
       .map((item) => [item.key.trim(), item.value])),
-    persistentPath: '',
     deploymentMode: form.deploymentMode || 'all',
     deploymentServers: form.deploymentMode === 'selected' ? [...(form.deploymentServers ?? [])] : [],
     reverseProxy: (form.reverseProxy ?? [])
