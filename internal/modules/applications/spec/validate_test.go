@@ -33,6 +33,13 @@ func TestNormalizeDropsBlankCommandItems(t *testing.T) {
 	}
 }
 
+func TestNormalizeDefaultsRestartPolicyToNo(t *testing.T) {
+	spec := Normalize(Spec{Name: "web", Image: "nginx"})
+	if spec.Restart.Policy != "no" {
+		t.Fatalf("restart policy = %q, want no", spec.Restart.Policy)
+	}
+}
+
 func TestValidateRejectsInvalidPortRange(t *testing.T) {
 	issues := Validate(Spec{Name: "web", Image: "nginx", Ports: []Port{{Label: "http", To: 70000}}})
 	if !hasIssue(issues, "ports[0].to") {

@@ -10,7 +10,7 @@ import { parseSpecYaml, toSpecYaml } from './appSpecYaml';
 
 const props = defineProps<{ application: ApplicationDto | null; open: boolean }>();
 const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
-const { t, translateApplicationFileKind, translateApplicationRestartPolicy } = useI18n();
+const { t, translateApplicationFileKind } = useI18n();
 
 interface PortForm { label: string; to: number; static: number | null }
 interface StringListItem { value: string }
@@ -43,7 +43,6 @@ const specForm = reactive({
   args: [] as StringListItem[],
   cpu: null as number | null,
   memoryMb: null as number | null,
-  restartPolicy: 'unless-stopped' as 'no' | 'on-failure' | 'always' | 'unless-stopped',
   privileged: false,
   ports: [] as PortForm[],
   env: [] as EnvForm[],
@@ -123,7 +122,7 @@ watch(activeEditorTab, (tab, previous) => {
 });
 
 function defaultSpec() {
-  return 'name: web\nnetworkMode: bridge\nrestart:\n  policy: unless-stopped\n';
+  return 'name: web\nnetworkMode: bridge\n';
 }
 
 function loadDefaultSpecForm(appName?: string) {
@@ -134,7 +133,6 @@ function loadDefaultSpecForm(appName?: string) {
   specForm.args = [];
   specForm.cpu = null;
   specForm.memoryMb = null;
-  specForm.restartPolicy = 'unless-stopped';
   specForm.privileged = false;
   specForm.ports = [];
   specForm.env = [];
@@ -153,10 +151,6 @@ function loadSpecForm(raw: string, appName?: string) {
   specForm.args = arrayItems(parsed.args, false);
   specForm.cpu = numericLimit(objectValue(parsed.resources)?.cpu);
   specForm.memoryMb = numericLimit(objectValue(parsed.resources)?.memoryMb);
-  const restartPolicy = stringValue(objectValue(parsed.restart)?.policy);
-  if (restartPolicy === 'no' || restartPolicy === 'on-failure' || restartPolicy === 'always' || restartPolicy === 'unless-stopped') {
-    specForm.restartPolicy = restartPolicy;
-  }
   specForm.privileged = Boolean(parsed.privileged);
   specForm.ports = arrayValue(parsed.ports).map((item, index) => {
     const port = objectValue(item);
@@ -426,7 +420,6 @@ function buildSpecYaml() {
   if (cpu !== null) resources.cpu = cpu;
   if (memoryMb !== null) resources.memoryMb = memoryMb;
   if (Object.keys(resources).length) spec.resources = resources;
-  spec.restart = { policy: specForm.restartPolicy };
   if (specForm.privileged) spec.privileged = true;
   if (mounts.length) spec.mounts = mounts;
   if (!mounts.length && arrayValue(currentSpec?.mounts).length) spec.mounts = currentSpec?.mounts;
@@ -646,18 +639,6 @@ async function save(deploy = false) {
           <section class="editor-section">
             <div class="section-title">{{ t('applicationEditor.runtime') }}</div>
             <div class="field-grid">
-              <v-select
-                v-model="specForm.restartPolicy"
-                :items="[
-                  { title: translateApplicationRestartPolicy('unless-stopped'), value: 'unless-stopped' },
-                  { title: translateApplicationRestartPolicy('always'), value: 'always' },
-                  { title: translateApplicationRestartPolicy('on-failure'), value: 'on-failure' },
-                  { title: translateApplicationRestartPolicy('no'), value: 'no' },
-                ]"
-                :label="t('applicationEditor.policy')"
-                density="compact"
-                variant="outlined"
-              />
               <v-text-field v-model.number="specForm.cpu" type="number" min="0" :label="t('applicationEditor.cpuMhz')" density="compact" variant="outlined" />
               <v-text-field v-model.number="specForm.memoryMb" type="number" min="0" :label="t('applicationEditor.memoryMb')" density="compact" variant="outlined" />
               <v-switch v-model="specForm.privileged" :label="t('applicationEditor.privilegedContainer')" color="primary" density="compact" hide-details class="switch-field" />

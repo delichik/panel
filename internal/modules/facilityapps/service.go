@@ -416,7 +416,7 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 			{Type: "managed_file", Source: proxyConfigPath, Target: proxyContainerConf, ReadOnly: true},
 		}, mounts...),
 		Files:      append([]appruntime.ManagedFile{{Path: proxyConfigPath, Content: []byte(nginx), Mode: "0644"}}, files...),
-		Restart:    appruntime.Restart{Policy: "unless-stopped"},
+		Restart:    appruntime.Restart{Policy: "no"},
 		Generation: 1,
 		SpecHash:   hash,
 	}, nil

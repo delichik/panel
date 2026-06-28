@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -65,6 +66,45 @@ func TestDockerAPIClientPullImagePassesExplicitLatestTag(t *testing.T) {
 				t.Fatalf("tag query = %#v, want %q", gotTags, *tc.tag)
 			}
 		})
+	}
+}
+
+func TestDockerAPIClientCreateContainerOmitsRestartPolicy(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("method = %s, want POST", r.Method)
+		}
+		if r.URL.Path != "/containers/create" {
+			t.Errorf("path = %s, want /containers/create", r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		bodies <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":"container-1"}`))
+	}))
+	defer server.Close()
+
+	client := &dockerAPIClient{host: server.URL, client: server.Client()}
+	_, err := client.createContainer(context.Background(), appruntime.Spec{
+		Image:         "nginx:1.27",
+		ContainerName: "panel-web",
+		Restart:      appruntime.Restart{Policy: "always"},
+	})
+	if err != nil {
+		t.Fatalf("createContainer() error = %v", err)
+	}
+
+	body := <-bodies
+	hostConfig, ok := body["HostConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("HostConfig = %#v", body["HostConfig"])
+	}
+	if _, ok := hostConfig["RestartPolicy"]; ok {
+		t.Fatalf("RestartPolicy was sent in create payload: %#v", hostConfig["RestartPolicy"])
 	}
 }
 

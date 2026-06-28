@@ -29,7 +29,7 @@ func Normalize(spec Spec) Spec {
 	}
 	spec.Restart.Policy = strings.TrimSpace(spec.Restart.Policy)
 	if spec.Restart.Policy == "" {
-		spec.Restart.Policy = "unless-stopped"
+		spec.Restart.Policy = "no"
 	}
 	if spec.Restart.IntervalSeconds == 0 {
 		spec.Restart.IntervalSeconds = 1800

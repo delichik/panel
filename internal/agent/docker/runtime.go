@@ -683,9 +683,6 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 			NetworkMode:  dockerNetworkMode(spec.NetworkMode),
 			ExtraHosts:   dockerExtraHosts(spec.NetworkMode),
 			Privileged:   spec.Privileged,
-			RestartPolicy: dockerRestartPolicy{
-				Name: dockerRestartName(spec.Restart.Policy),
-			},
 		},
 	}
 	if spec.Resources.MemoryMB > 0 {
@@ -974,13 +971,8 @@ type dockerHostConfig struct {
 	NetworkMode   string                         `json:"NetworkMode,omitempty"`
 	ExtraHosts    []string                       `json:"ExtraHosts,omitempty"`
 	Privileged    bool                           `json:"Privileged,omitempty"`
-	RestartPolicy dockerRestartPolicy            `json:"RestartPolicy,omitempty"`
 	Memory        int64                          `json:"Memory,omitempty"`
 	NanoCPUs      int64                          `json:"NanoCpus,omitempty"`
-}
-
-type dockerRestartPolicy struct {
-	Name string `json:"Name,omitempty"`
 }
 
 func (c *dockerAPIClient) ensureManagedNetwork(ctx context.Context, networkMode string) error {
@@ -1139,19 +1131,6 @@ func dockerBinds(root string, spec appruntime.Spec) []string {
 		binds = append(binds, source+":"+mount.Target+":"+mode)
 	}
 	return binds
-}
-
-func dockerRestartName(policy string) string {
-	switch strings.TrimSpace(policy) {
-	case "always":
-		return "always"
-	case "unless-stopped":
-		return "unless-stopped"
-	case "on-failure":
-		return "on-failure"
-	default:
-		return "no"
-	}
 }
 
 func dockerStateToRuntime(status string, running bool, exitCode int) string {
