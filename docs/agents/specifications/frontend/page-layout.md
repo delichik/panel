@@ -75,7 +75,7 @@
 
 ## 主从双栏
 
-服务器、域名、防火墙和软件包页面使用：
+服务器、域名、防火墙、fail2ban 和软件包页面使用：
 
 ```css
 grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
@@ -127,5 +127,6 @@ gap: 18px;
 - `web/src/layouts/AppLayout.vue`
 - `web/src/views/servers/_shared/ServersPageContent.vue`
 - `web/src/views/dns/domains/index.vue`
-- `web/src/views/servers/firewall/index.vue`
-- `web/src/views/servers/packages/index.vue`
+- `web/src/views/security/firewall/index.vue`
+- `web/src/views/security/fail2ban/index.vue`
+- `web/src/views/resources/packages/index.vue`

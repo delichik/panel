@@ -69,21 +69,36 @@ const navGroups = computed<NavGroup[]>(() => [
     items: [
       { to: '/servers', title: t('layout.nav.node'), value: 'node' },
       { to: '/credentials', title: t('layout.nav.credentials'), value: 'credentials' },
-      { to: '/servers/firewall', title: t('layout.nav.firewall'), value: 'server-firewall' },
-      { to: '/servers/packages', title: t('layout.nav.systemPackages'), value: 'system-packages' },
     ],
   },
   {
-    key: 'containerization',
-    icon: 'mdi-docker',
-    title: t('layout.nav.containerization'),
+    key: 'security',
+    icon: 'mdi-shield-lock-outline',
+    title: t('layout.nav.security'),
     items: [
-      { to: '/containerization/applications', title: t('layout.nav.applications'), value: 'applications' },
-      { to: '/containerization/facility-apps', title: t('layout.nav.facilityApps'), value: 'facility-apps' },
-      { to: '/containerization/containers', title: t('layout.nav.containers'), value: 'containers' },
-      { to: '/containerization/images', title: t('layout.nav.images'), value: 'images' },
-      { to: '/containerization/networks', title: t('layout.nav.networks'), value: 'networks' },
-      { to: '/containerization/volumes', title: t('layout.nav.volumes'), value: 'volumes' },
+      { to: '/security/firewall', title: t('layout.nav.firewall'), value: 'server-firewall' },
+      { to: '/security/fail2ban', title: t('layout.nav.fail2ban'), value: 'server-fail2ban' },
+    ],
+  },
+  {
+    key: 'resources',
+    icon: 'mdi-cube-outline',
+    title: t('layout.nav.resources'),
+    items: [
+      { to: '/resources/packages', title: t('layout.nav.systemPackages'), value: 'system-packages' },
+      { to: '/resources/containers', title: t('layout.nav.containers'), value: 'containers' },
+      { to: '/resources/images', title: t('layout.nav.images'), value: 'images' },
+      { to: '/resources/networks', title: t('layout.nav.networks'), value: 'networks' },
+      { to: '/resources/volumes', title: t('layout.nav.volumes'), value: 'volumes' },
+    ],
+  },
+  {
+    key: 'applications',
+    icon: 'mdi-apps',
+    title: t('layout.nav.applicationGroup'),
+    items: [
+      { to: '/applications/apps', title: t('layout.nav.applications'), value: 'applications' },
+      { to: '/applications/facility-apps', title: t('layout.nav.facilityApps'), value: 'facility-apps' },
     ],
   },
   {

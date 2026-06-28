@@ -97,5 +97,5 @@ Tooltip 不是以下内容的替代：
 
 - `web/src/views/dns/domains/index.vue`
 - `web/src/views/overview/index.vue`
-- `web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
-- `web/src/views/runtime/applications/ApplicationEditor.vue`
+- `web/src/views/applications/apps/ApplicationRuntimePanel.vue`
+- `web/src/views/applications/apps/ApplicationEditor.vue`

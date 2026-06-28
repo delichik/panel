@@ -100,6 +100,7 @@
 - `web/src/components/PageLoadingState.vue`
 - `web/src/styles/main.css`
 - `web/src/views/servers/_shared/ServersPageContent.vue`
-- `web/src/views/servers/firewall/index.vue`
-- `web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
-- `web/src/views/containerization/_shared/ResourcePage.vue`
+- `web/src/views/security/firewall/index.vue`
+- `web/src/views/security/fail2ban/index.vue`
+- `web/src/views/applications/apps/ApplicationRuntimePanel.vue`
+- `web/src/views/resources/_shared/ResourcePage.vue`

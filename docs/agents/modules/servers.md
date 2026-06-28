@@ -30,8 +30,9 @@
 
 - 服务器与凭据页面：`web/src/views/servers/_shared/ServersPageContent.vue`
 - 服务器选择器：`web/src/components/ServerSelector.vue`
-- 软件包页面：`web/src/views/servers/packages/index.vue`
-- 防火墙与 fail2ban 页面：`web/src/views/servers/firewall/index.vue`
+- 软件包页面：`web/src/views/resources/packages/index.vue`
+- 防火墙页面：`web/src/views/security/firewall/index.vue`
+- fail2ban 页面：`web/src/views/security/fail2ban/index.vue`
 - 概览页面：`web/src/views/overview/index.vue`
 - API：`web/src/api/servers.ts`、`web/src/api/packages.ts`、`web/src/api/overview.ts`
 - 类型：`web/src/types/api.ts`
@@ -40,7 +41,7 @@
 
 - 服务器列表和共享服务器选择器在桌面端作为内部滚动选择列表使用；列表行必须按内容高度从顶部排列，不能被剩余高度拉伸。
 - 服务器节点页直接进入选择器与详情工作区，不在顶部重复展示服务器数量、可达数量或 Agent 就绪数量摘要。
-- 防火墙、软件包和资源页左侧服务器选择栏复用 `ServerSelector.vue`，不要复制一套不同尺寸的选择行。
+- 防火墙、fail2ban、软件包和资源页左侧服务器选择栏复用 `ServerSelector.vue`，不要复制一套不同尺寸的选择行。
 - 凭据、软件包和防火墙规则等带分页表格在桌面端必须让表格体吸收剩余高度，分页固定在卡片或面板底部。
 
 ## API 范围

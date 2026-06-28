@@ -103,6 +103,10 @@ const messages = {
         node: "Node",
         credentials: "Credentials",
         firewall: "Firewall",
+        fail2ban: "fail2ban",
+        security: "Security",
+        resources: "Resources",
+        applicationGroup: "Applications",
         systemPackages: "System Packages",
         dns: "DNS",
         domains: "Domains",
@@ -176,6 +180,9 @@ const messages = {
       },
       firewall: {
         title: "Firewall",
+      },
+      fail2ban: {
+        title: "fail2ban",
       },
       systemPackages: {
         title: "System Packages",
@@ -1555,6 +1562,10 @@ const messages = {
         node: "节点",
         credentials: "凭据",
         firewall: "防火墙",
+        fail2ban: "fail2ban",
+        security: "安全",
+        resources: "资源",
+        applicationGroup: "应用",
         systemPackages: "系统软件包",
         dns: "DNS",
         domains: "域名",
@@ -1628,6 +1639,9 @@ const messages = {
       },
       firewall: {
         title: "防火墙",
+      },
+      fail2ban: {
+        title: "fail2ban",
       },
       systemPackages: {
         title: "系统软件包",

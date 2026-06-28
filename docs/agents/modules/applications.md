@@ -19,10 +19,10 @@
 
 ## 前端入口
 
-- 应用列表：`web/src/views/runtime/applications/index.vue`
-- 编辑器：`web/src/views/runtime/applications/ApplicationEditor.vue`
-- 详情：`web/src/views/runtime/applications/ApplicationDetail.vue`
-- 运行时面板：`web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
+- 应用列表：`web/src/views/applications/apps/index.vue`
+- 编辑器：`web/src/views/applications/apps/ApplicationEditor.vue`
+- 详情：`web/src/views/applications/apps/ApplicationDetail.vue`
+- 运行时面板：`web/src/views/applications/apps/ApplicationRuntimePanel.vue`
 - 日志弹窗：`web/src/components/RuntimeLogsDialog.vue`
 - API：`web/src/api/applications.ts`
 - 类型：`web/src/types/api.ts`

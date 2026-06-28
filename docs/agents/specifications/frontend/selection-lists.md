@@ -115,5 +115,6 @@
 - `web/src/views/servers/_shared/ServersPageContent.vue`
 - `web/src/views/dns/domains/index.vue`
 - `web/src/views/tasks/index.vue`
-- `web/src/views/servers/firewall/index.vue`
-- `web/src/views/servers/packages/index.vue`
+- `web/src/views/security/firewall/index.vue`
+- `web/src/views/security/fail2ban/index.vue`
+- `web/src/views/resources/packages/index.vue`

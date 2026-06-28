@@ -83,5 +83,5 @@
 - `web/src/styles/main.css`
 - `web/src/views/dns/domains/index.vue`
 - `web/src/views/servers/_shared/ServersPageContent.vue`
-- `web/src/views/runtime/applications/ApplicationEditor.vue`
+- `web/src/views/applications/apps/ApplicationEditor.vue`
 - `web/src/views/certificates/key-assets/index.vue`

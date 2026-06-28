@@ -17,8 +17,20 @@ describe('router key asset routes', () => {
     expect(routerSource).toContain("name: 'settings-system-certificates'");
     expect(routerSource).not.toContain("path: 'certificates/key-assets'");
     expect(routerSource).not.toContain("path: 'dns/certificates'");
-    expect(routerSource).not.toContain("path: 'applications', redirect: '/containerization/applications'");
-    expect(routerSource).not.toContain("path: 'packages', redirect: '/servers/packages'");
+  });
+
+  it('uses current menu paths while redirecting old server and containerization paths', () => {
+    expect(routerSource).toContain("import FirewallPage from '@/views/security/firewall/index.vue'");
+    expect(routerSource).toContain("import Fail2BanPage from '@/views/security/fail2ban/index.vue'");
+    expect(routerSource).toContain("import PackageUpdatesPage from '@/views/resources/packages/index.vue'");
+    expect(routerSource).toContain("import ApplicationsPage from '@/views/applications/apps/index.vue'");
+    expect(routerSource).toContain("path: 'servers/firewall', redirect: '/security/firewall'");
+    expect(routerSource).toContain("path: 'servers/packages', redirect: '/resources/packages'");
+    expect(routerSource).toContain("path: 'containerization/applications', redirect: '/applications/apps'");
+    expect(routerSource).toContain("path: 'containerization/containers', redirect: '/resources/containers'");
+    expect(routerSource).toContain("path: 'security/fail2ban', name: 'server-fail2ban'");
+    expect(routerSource).toContain("path: 'resources/packages', name: 'system-packages'");
+    expect(routerSource).toContain("path: 'applications/apps', name: 'applications'");
   });
 });
 

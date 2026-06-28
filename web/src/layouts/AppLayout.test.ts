@@ -51,9 +51,21 @@ describe('AppLayout navigation', () => {
     expect(appLayout).not.toContain("value: 'dns-records'");
   });
 
-  it('exposes the UFW firewall page in the server group', () => {
-    expect(appLayout).toContain("to: '/servers/firewall'");
+  it('groups security, resources, and applications as separate navigation areas', () => {
+    expect(appLayout).toContain("key: 'security'");
+    expect(appLayout).toContain("t('layout.nav.security')");
+    expect(appLayout).toContain("to: '/security/firewall'");
     expect(appLayout).toContain("t('layout.nav.firewall')");
+    expect(appLayout).toContain("to: '/security/fail2ban'");
+    expect(appLayout).toContain("t('layout.nav.fail2ban')");
+    expect(appLayout).toContain("key: 'resources'");
+    expect(appLayout).toContain("to: '/resources/packages'");
+    expect(appLayout).toContain("to: '/resources/containers'");
+    expect(appLayout).toContain("key: 'applications'");
+    expect(appLayout).toContain("to: '/applications/apps'");
+    expect(appLayout).toContain("to: '/applications/facility-apps'");
+    expect(appLayout).not.toContain("to: '/servers/firewall'");
+    expect(appLayout).not.toContain("to: '/containerization/applications'");
   });
 
   it('splits self-signed certificates and keys into separate menu entries', () => {

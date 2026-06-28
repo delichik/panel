@@ -62,4 +62,4 @@
 - `web/src/styles/main.css`
 - `web/src/layouts/AppLayout.vue`
 - `web/src/views/servers/_shared/ServersPageContent.vue`
-- `web/src/views/runtime/applications/index.vue`
+- `web/src/views/applications/apps/index.vue`

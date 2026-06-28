@@ -617,7 +617,7 @@ onBeforeUnmount(() => {
             v-for="server in packageRows(card)"
             :key="server.id"
             class="message-row"
-            @click="router.push('/servers/packages')"
+            @click="router.push('/resources/packages')"
           >
             <div>
               <div class="font-weight-bold text-body-2">{{ server.name }}</div>

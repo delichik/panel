@@ -10,11 +10,12 @@ describe('selector detail workspaces', () => {
   it('uses the shared selector width across desktop layouts', () => {
     const pages = [
       read('servers/_shared/ServersPageContent.vue'),
-      read('servers/packages/index.vue'),
-      read('servers/firewall/index.vue'),
+      read('resources/packages/index.vue'),
+      read('security/firewall/index.vue'),
+      read('security/fail2ban/index.vue'),
       read('dns/domains/index.vue'),
       read('tasks/index.vue'),
-      read('runtime/applications/index.vue'),
+      read('applications/apps/index.vue'),
     ];
 
     for (const page of pages) {
@@ -24,13 +25,14 @@ describe('selector detail workspaces', () => {
   });
 
   it('clears stale async details and ignores late responses', () => {
-    const packagesPage = read('servers/packages/index.vue');
-    const firewallPage = read('servers/firewall/index.vue');
+    const packagesPage = read('resources/packages/index.vue');
+    const firewallPage = read('security/firewall/index.vue');
+    const fail2banPage = read('security/fail2ban/index.vue');
     const domainsPage = read('dns/domains/index.vue');
-    const runtimePanel = read('runtime/applications/ApplicationRuntimePanel.vue');
+    const runtimePanel = read('applications/apps/ApplicationRuntimePanel.vue');
     const logsDialog = read('../components/RuntimeLogsDialog.vue');
     const tasksPage = read('tasks/index.vue');
-    const applicationEditor = read('runtime/applications/ApplicationEditor.vue');
+    const applicationEditor = read('applications/apps/ApplicationEditor.vue');
 
     expect(packagesPage).toContain('updates.value = null;');
     expect(packagesPage).toContain('requestId !== updatesRequestId || serverId.value !== requestedServerId');
@@ -39,6 +41,10 @@ describe('selector detail workspaces', () => {
     expect(firewallPage).toContain('state.value = null;');
     expect(firewallPage).toContain('requestId !== stateRequestId || serverId.value !== requestedServerId');
     expect(firewallPage).toContain('loadingState && !state');
+
+    expect(fail2banPage).toContain('fail2banState.value = null;');
+    expect(fail2banPage).toContain('requestId !== stateRequestId || serverId.value !== requestedServerId');
+    expect(fail2banPage).toContain('loadingState && !fail2banState');
 
     expect(domainsPage).toContain('records.value = [];');
     expect(domainsPage).toContain('requestId !== recordsRequestId || selectedDomainId.value !== domain.id');
@@ -87,28 +93,30 @@ describe('selector detail workspaces', () => {
   });
 
   it('routes every server-based selector through the same presentation', () => {
-    const firewallPage = read('servers/firewall/index.vue');
-    const packagesPage = read('servers/packages/index.vue');
-    const resourcePage = read('containerization/_shared/ResourcePage.vue');
+    const firewallPage = read('security/firewall/index.vue');
+    const packagesPage = read('resources/packages/index.vue');
+    const fail2banPage = read('security/fail2ban/index.vue');
+    const resourcePage = read('resources/_shared/ResourcePage.vue');
     const resourceConsumers = [
-      read('containerization/containers/index.vue'),
-      read('containerization/images/index.vue'),
-      read('containerization/networks/index.vue'),
-      read('containerization/volumes/index.vue'),
+      read('resources/containers/index.vue'),
+      read('resources/images/index.vue'),
+      read('resources/networks/index.vue'),
+      read('resources/volumes/index.vue'),
     ];
 
     expect(firewallPage).toContain('<ServerSelector');
     expect(packagesPage).toContain('<ServerSelector');
+    expect(fail2banPage).toContain('<ServerSelector');
     expect(resourcePage).toContain('<ServerSelector');
     for (const page of resourceConsumers) expect(page).toContain('<ResourcePage');
   });
 
   it('clears server resource content and ignores late server responses', () => {
     const resourceConsumers = [
-      read('containerization/containers/index.vue'),
-      read('containerization/images/index.vue'),
-      read('containerization/networks/index.vue'),
-      read('containerization/volumes/index.vue'),
+      read('resources/containers/index.vue'),
+      read('resources/images/index.vue'),
+      read('resources/networks/index.vue'),
+      read('resources/volumes/index.vue'),
     ];
 
     for (const page of resourceConsumers) {

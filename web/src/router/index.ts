@@ -7,14 +7,15 @@ import LoginPage from '@/views/auth/login/index.vue';
 import OverviewPage from '@/views/overview/index.vue';
 import ServerNodePage from '@/views/servers/node/index.vue';
 import ServerCredentialsPage from '@/views/servers/credentials/index.vue';
-import PackageUpdatesPage from '@/views/servers/packages/index.vue';
-import FirewallPage from '@/views/servers/firewall/index.vue';
-import ApplicationsPage from '@/views/runtime/applications/index.vue';
-import FacilityAppsPage from '@/views/containerization/facility-apps/index.vue';
-import ContainersPage from '@/views/containerization/containers/index.vue';
-import ImagesPage from '@/views/containerization/images/index.vue';
-import NetworksPage from '@/views/containerization/networks/index.vue';
-import VolumesPage from '@/views/containerization/volumes/index.vue';
+import PackageUpdatesPage from '@/views/resources/packages/index.vue';
+import FirewallPage from '@/views/security/firewall/index.vue';
+import Fail2BanPage from '@/views/security/fail2ban/index.vue';
+import ApplicationsPage from '@/views/applications/apps/index.vue';
+import FacilityAppsPage from '@/views/applications/facility-apps/index.vue';
+import ContainersPage from '@/views/resources/containers/index.vue';
+import ImagesPage from '@/views/resources/images/index.vue';
+import NetworksPage from '@/views/resources/networks/index.vue';
+import VolumesPage from '@/views/resources/volumes/index.vue';
 import CertificatesPage from '@/views/certificates/domains/index.vue';
 import SelfSignedCertificatesPage from '@/views/certificates/self-signed/index.vue';
 import KeysPage from '@/views/certificates/keys/index.vue';
@@ -44,14 +45,23 @@ export const router = createRouter({
         { path: 'overview', name: 'overview', component: OverviewPage, meta: { titleKey: 'routes.overview.title' } },
         { path: 'servers', name: 'servers', component: ServerNodePage, meta: { titleKey: 'routes.servers.title' } },
         { path: 'credentials', name: 'credentials', component: ServerCredentialsPage, meta: { titleKey: 'routes.credentials.title' } },
-        { path: 'servers/firewall', name: 'server-firewall', component: FirewallPage, meta: { titleKey: 'routes.firewall.title' } },
-        { path: 'servers/packages', name: 'system-packages', component: PackageUpdatesPage, meta: { titleKey: 'routes.systemPackages.title' } },
-        { path: 'containerization/applications', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
-        { path: 'containerization/facility-apps', name: 'facility-apps', component: FacilityAppsPage, meta: { titleKey: 'routes.facilityApps.title' } },
-        { path: 'containerization/containers', name: 'containers', component: ContainersPage, meta: { titleKey: 'routes.containers.title' } },
-        { path: 'containerization/images', name: 'images', component: ImagesPage, meta: { titleKey: 'routes.images.title' } },
-        { path: 'containerization/networks', name: 'networks', component: NetworksPage, meta: { titleKey: 'routes.networks.title' } },
-        { path: 'containerization/volumes', name: 'volumes', component: VolumesPage, meta: { titleKey: 'routes.volumes.title' } },
+        { path: 'servers/firewall', redirect: '/security/firewall' },
+        { path: 'servers/packages', redirect: '/resources/packages' },
+        { path: 'containerization/applications', redirect: '/applications/apps' },
+        { path: 'containerization/facility-apps', redirect: '/applications/facility-apps' },
+        { path: 'containerization/containers', redirect: '/resources/containers' },
+        { path: 'containerization/images', redirect: '/resources/images' },
+        { path: 'containerization/networks', redirect: '/resources/networks' },
+        { path: 'containerization/volumes', redirect: '/resources/volumes' },
+        { path: 'security/firewall', name: 'server-firewall', component: FirewallPage, meta: { titleKey: 'routes.firewall.title' } },
+        { path: 'security/fail2ban', name: 'server-fail2ban', component: Fail2BanPage, meta: { titleKey: 'routes.fail2ban.title' } },
+        { path: 'resources/packages', name: 'system-packages', component: PackageUpdatesPage, meta: { titleKey: 'routes.systemPackages.title' } },
+        { path: 'resources/containers', name: 'containers', component: ContainersPage, meta: { titleKey: 'routes.containers.title' } },
+        { path: 'resources/images', name: 'images', component: ImagesPage, meta: { titleKey: 'routes.images.title' } },
+        { path: 'resources/networks', name: 'networks', component: NetworksPage, meta: { titleKey: 'routes.networks.title' } },
+        { path: 'resources/volumes', name: 'volumes', component: VolumesPage, meta: { titleKey: 'routes.volumes.title' } },
+        { path: 'applications/apps', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/facility-apps', name: 'facility-apps', component: FacilityAppsPage, meta: { titleKey: 'routes.facilityApps.title' } },
         { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
         { path: 'certificates', redirect: '/certificates/domains' },
         { path: 'certificates/domains', name: 'certificates-domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },

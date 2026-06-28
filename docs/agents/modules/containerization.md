@@ -11,12 +11,13 @@
 - Agent Docker Engine API：`internal/agent/docker/`；Agent HTTP 路由：`internal/agent/server/`
 - Application 运行时：`internal/modules/applications/service.go`
 - 周期任务：`internal/modules/containers/tasks.go`，由 `internal/modules/tasks/` 内部 worker 驱动
-- 前端页面：`web/src/views/containerization/`
+- 前端资源页面：`web/src/views/resources/`
+- 前端设施应用页面：`web/src/views/applications/facility-apps/`
 - 前端 API：`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
 
 ## 页面与 API
 
-“容器化”一级菜单包含应用、设施应用、容器、镜像、网络和卷。容器、镜像、网络、卷使用左侧服务器选择器和右侧内部滚动列表。
+菜单上容器相关能力拆分为“资源”和“应用”两个一级分组：资源包含容器、镜像、网络和卷；应用包含普通应用和设施应用。容器、镜像、网络、卷使用左侧服务器选择器和右侧内部滚动列表。
 
 - 设施应用页面当前管理内置“反向代理”设施应用。该设施应用保存 nginx 镜像、部署服务器和静态站点配置；指定的部署服务器即视为开启反向代理能力。
 - 容器支持查询、查看日志、启动、停止、重启、删除；表格行操作沿用统一的 `app-table-actions` 操作组，日志入口与其他行操作使用小型 outlined 文本按钮。

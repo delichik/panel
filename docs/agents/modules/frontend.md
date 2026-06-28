@@ -26,7 +26,7 @@
 
 - 前端使用 Vue 3、Vue Router、Pinia、Vuetify、ECharts 和 Vitest。
 - 新增页面或共享组件前先查阅 `docs/agents/specifications/frontend/INDEX.md`，复用已有基础组件、组合模式和响应式规则。
-- 页面按菜单层级组织在 `web/src/views/` 下；每个菜单页面使用独立目录和 `index.vue` 入口。
+- 页面按菜单层级组织在 `web/src/views/` 下；每个菜单页面使用独立目录和 `index.vue` 入口。旧路径兼容重定向不保留重复导航入口。
 - 仅在同一菜单组内复用的实现放在对应 `web/src/views/<group>/_shared/`；跨页面共享组件继续放在 `web/src/components/`。
 - 全局布局在 `web/src/layouts/AppLayout.vue`；侧边导航列表必须在抽屉内部独立滚动。
 - 全局页头根据系统版本 API 返回的构建通道展示环境标识；`dev` 通道在标题旁显示紧凑 DEV Chip，正式通道不显示。
@@ -66,20 +66,24 @@
 - 服务器菜单组：`web/src/views/servers/`
   - 节点：`node/index.vue`
   - 凭据：`credentials/index.vue`
-  - 防火墙：`firewall/index.vue`
-    - 页面同时管理 UFW 规则和 fail2ban。fail2ban 区域提供表单与结构化 YAML Raw 双模式；Raw 使用 Panel 的 `jails` 结构并可与表单双向转换，不是目标机原始 fail2ban 配置文件。
-  - 软件包：`packages/index.vue`
   - 组内共享：`_shared/`
   - 服务器详情的 Agent 操作通过 `POST /api/v1/servers/{id}/agent/deploy` 创建部署任务；未安装时显示安装，已安装但异常时显示重装，并通过任务中心跟踪结果。
-- 容器化菜单组：
-  - 一级菜单排列在域名菜单之前。
-  - 应用：`web/src/views/runtime/applications/index.vue`
-  - 设施应用：`web/src/views/containerization/facility-apps/index.vue`
-  - 容器、镜像、网络、卷：`web/src/views/containerization/`
+- 安全菜单组：
+  - 防火墙：`web/src/views/security/firewall/index.vue`
+    - 页面只管理 UFW 规则和启用流程。
+  - fail2ban：`web/src/views/security/fail2ban/index.vue`
+    - 页面提供表单与结构化 YAML Raw 双模式；Raw 使用 Panel 的 `jails` 结构并可与表单双向转换，不是目标机原始 fail2ban 配置文件。
+- 资源菜单组：
+  - 软件包：`web/src/views/resources/packages/index.vue`
+  - 容器、镜像、网络、卷：`web/src/views/resources/`
+  - 资源页共享：`web/src/views/resources/_shared/`
+- 应用菜单组：
+  - 应用：`web/src/views/applications/apps/index.vue`
+  - 设施应用：`web/src/views/applications/facility-apps/index.vue`
   - API：`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
   - 设施应用页面当前内置“反向代理”，通过部署服务器多选表示哪些节点开启反向代理能力；页面中大屏使用满高主从工作区，右侧详情内部滚动。
 - Runtime 应用实现：
-  - 应用运行时面板位于 `applications/` 目录内，日志查看复用 `web/src/components/RuntimeLogsDialog.vue` 弹窗展示 agent runtime 实例或 Docker 容器日志。
+  - 应用运行时面板位于 `web/src/views/applications/apps/` 目录内，日志查看复用 `web/src/components/RuntimeLogsDialog.vue` 弹窗展示 agent runtime 实例或 Docker 容器日志。
   - 应用编辑器的反向代理规则为每条规则展示目的地选择，稳定值为 `local` 或 `container`；旧数据按 `local` 展示和保存。
 - DNS 域名与记录：`web/src/views/dns/domains/index.vue`
 - 证书菜单组：`web/src/views/certificates/`

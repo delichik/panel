@@ -88,4 +88,4 @@
 - `web/src/styles/main.css`
 - `web/src/components/tasks/TaskLogPanel.vue`
 - `web/src/views/tasks/index.vue`
-- `web/src/views/runtime/applications/ApplicationRuntimePanel.vue`
+- `web/src/views/applications/apps/ApplicationRuntimePanel.vue`

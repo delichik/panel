@@ -14,8 +14,9 @@ describe('ServersPage shell style alignment', () => {
     expect(appLayout).toContain("to: '/credentials'");
     expect(appLayout).toContain("t('layout.nav.credentials')");
     expect(router).toContain("{ path: 'credentials', name: 'credentials', component: ServerCredentialsPage");
-    expect(router).toContain("{ path: 'servers/firewall', name: 'server-firewall'");
-    expect(appLayout).toContain("to: '/servers/firewall'");
+    expect(router).toContain("{ path: 'security/firewall', name: 'server-firewall'");
+    expect(router).toContain("{ path: 'servers/firewall', redirect: '/security/firewall' }");
+    expect(appLayout).toContain("to: '/security/firewall'");
     expect(appLayout).toContain("t('layout.nav.firewall')");
     expect(serversPage).not.toContain('<v-tabs');
     expect(serversPage).not.toMatch(/<v-tab[\s>]/);
