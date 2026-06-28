@@ -95,11 +95,11 @@ func renderMounts(appID string, volumes []Volume, mounts []Mount) []appruntime.M
 		source := strings.TrimSpace(mount.Source)
 		switch mountType {
 		case "file", "panel_file":
-			out = append(out, appruntime.Mount{Type: "managed_file", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly})
+			out = append(out, appruntime.Mount{Type: "managed_file", Source: source, Target: mount.Target, ReadOnly: true})
 		case "volume":
 			out = append(out, appruntime.Mount{Type: "volume", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly})
 		case "persistent":
-			out = append(out, appruntime.Mount{Type: "persistent", Source: persistentMountSource(appID, source), Target: mount.Target, ReadOnly: mount.ReadOnly})
+			out = append(out, appruntime.Mount{Type: "persistent", Source: persistentMountSource(appID, source), Target: mount.Target, ReadOnly: mount.ReadOnly, UID: cloneInt(mount.UID), GID: cloneInt(mount.GID), Mode: strings.TrimSpace(mount.Mode)})
 		default:
 			out = append(out, appruntime.Mount{Type: "bind", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly})
 		}
@@ -114,6 +114,14 @@ func persistentMountSource(appID, source string) string {
 		return base
 	}
 	return base + "/" + source
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

@@ -54,6 +54,9 @@ type Mount struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"readOnly,omitempty"`
+	UID      *int   `json:"uid,omitempty"`
+	GID      *int   `json:"gid,omitempty"`
+	Mode     string `json:"mode,omitempty"`
 }
 
 type ManagedFile struct {

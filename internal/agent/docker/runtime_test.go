@@ -5,7 +5,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
+
+	appruntime "panel/internal/modules/applications/runtime"
 )
 
 func TestDockerAPIClientPullImagePassesExplicitLatestTag(t *testing.T) {
@@ -60,5 +65,51 @@ func TestDockerAPIClientPullImagePassesExplicitLatestTag(t *testing.T) {
 				t.Fatalf("tag query = %#v, want %q", gotTags, *tc.tag)
 			}
 		})
+	}
+}
+
+func TestPreparePersistentMountsCreatesManagedDirectory(t *testing.T) {
+	root := t.TempDir()
+	appID := "app-1"
+	source := filepath.Join(root, appID, "persistent", "data", "logs")
+	r := &LocalRuntime{root: root}
+	spec := appruntime.Spec{
+		ApplicationID: appID,
+		Mounts: []appruntime.Mount{{
+			Type:   "persistent",
+			Source: source,
+			Target: "/opt/data/logs",
+			Mode:   "0755",
+		}},
+	}
+
+	if err := r.preparePersistentMounts(spec); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.IsDir() {
+		t.Fatalf("persistent mount source is not a directory: %s", source)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
+		t.Fatalf("mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
+func TestPreparePersistentMountsRejectsEscapedDirectory(t *testing.T) {
+	root := t.TempDir()
+	r := &LocalRuntime{root: root}
+	err := r.preparePersistentMounts(appruntime.Spec{
+		ApplicationID: "app-1",
+		Mounts: []appruntime.Mount{{
+			Type:   "persistent",
+			Source: filepath.Join(root, "other", "data"),
+			Target: "/data",
+		}},
+	})
+	if err == nil {
+		t.Fatal("expected escaped persistent mount path to be rejected")
 	}
 }

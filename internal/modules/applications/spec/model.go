@@ -63,6 +63,9 @@ type Mount struct {
 	Source   string `json:"source" yaml:"source"`
 	Target   string `json:"target" yaml:"target"`
 	ReadOnly bool   `json:"readOnly" yaml:"readOnly"`
+	UID      *int   `json:"uid,omitempty" yaml:"uid,omitempty"`
+	GID      *int   `json:"gid,omitempty" yaml:"gid,omitempty"`
+	Mode     string `json:"mode,omitempty" yaml:"mode,omitempty"`
 }
 
 type Restart struct {

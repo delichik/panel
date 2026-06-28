@@ -65,3 +65,10 @@ func (b *applicationContainerBridge) Deploy(ctx context.Context, id string) (app
 	}
 	return b.apps.Deploy(ctx, id)
 }
+
+func (b *applicationContainerBridge) ReconcileDeploy(ctx context.Context, id string) (applications.OperationResult, error) {
+	if b.apps == nil {
+		return applications.OperationResult{}, errors.New("application service is not initialized")
+	}
+	return b.apps.ReconcileDeploy(ctx, id)
+}

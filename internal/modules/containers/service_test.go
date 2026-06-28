@@ -2,6 +2,7 @@ package containerization
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -233,6 +234,48 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 	}
 }
 
+func TestApplicationReconcileFailureStaysRetryableWithBackoff(t *testing.T) {
+	svc, taskSvc, _, _ := newContainerizationTestService(t)
+	ctx := context.Background()
+	reconcileCalls := 0
+	deployCalls := 0
+	svc.apps = fakeApplicationUpdater{
+		reconcileErr:   errors.New("port is already allocated"),
+		reconcileCalls: &reconcileCalls,
+		deployCalls:    &deployCalls,
+	}
+	task, err := taskSvc.Create(ctx, tasks.CreateInput{
+		Type:         TaskApplicationReconcile,
+		ResourceType: "application",
+		ResourceID:   "app-1",
+		TriggerType:  "scheduler",
+		MaxRetries:   3,
+		Summary:      "reconcile",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	svc.runApplicationReconcile(ctx, task, "app-1")
+
+	got, err := taskSvc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != tasks.StatusFailedRetryable {
+		t.Fatalf("expected retryable reconcile failure, got %#v", got)
+	}
+	if got.NextRunAt == nil || got.NextRunAt.Before(time.Now().UTC().Add(20*time.Second)) {
+		t.Fatalf("expected reconcile retry backoff, got %#v", got)
+	}
+	if reconcileCalls != 1 {
+		t.Fatalf("expected reconcile deploy call, got %d", reconcileCalls)
+	}
+	if deployCalls != 0 {
+		t.Fatalf("manual deploy entry should not be used by reconcile, got %d", deployCalls)
+	}
+}
+
 func TestContainerLogsClampsTail(t *testing.T) {
 	svc, _, fakeAgent, _ := newContainerizationTestService(t)
 	result, err := svc.ContainerLogs(context.Background(), "server-1", "container-1", 20000)
@@ -362,7 +405,10 @@ type blockingImageResolver struct {
 }
 
 type fakeApplicationUpdater struct {
-	apps []applications.Application
+	apps           []applications.Application
+	reconcileErr   error
+	reconcileCalls *int
+	deployCalls    *int
 }
 
 func (f fakeApplicationUpdater) List(context.Context) ([]applications.Application, error) {
@@ -374,7 +420,17 @@ func (f fakeApplicationUpdater) UpdateImage(context.Context, string) (applicatio
 }
 
 func (f fakeApplicationUpdater) Deploy(context.Context, string) (applications.OperationResult, error) {
+	if f.deployCalls != nil {
+		*f.deployCalls = *f.deployCalls + 1
+	}
 	return applications.OperationResult{}, nil
+}
+
+func (f fakeApplicationUpdater) ReconcileDeploy(context.Context, string) (applications.OperationResult, error) {
+	if f.reconcileCalls != nil {
+		*f.reconcileCalls = *f.reconcileCalls + 1
+	}
+	return applications.OperationResult{}, f.reconcileErr
 }
 
 func (r *blockingImageResolver) Resolve(ctx context.Context, _ string) (applications.ImageDigestResult, error) {

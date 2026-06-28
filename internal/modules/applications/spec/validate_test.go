@@ -134,6 +134,25 @@ func TestValidateRejectsInvalidCertificatePanelFileKind(t *testing.T) {
 	}
 }
 
+func TestValidatePersistentMountPermissions(t *testing.T) {
+	negative := -1
+	issues := Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{{Type: "persistent", Source: "data", Target: "/data", UID: &negative, Mode: "bad"}}})
+	if !hasIssue(issues, "mounts[0].uid") || !hasIssue(issues, "mounts[0].mode") {
+		t.Fatalf("issues = %#v", issues)
+	}
+
+	uid := 1000
+	issues = Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{{Type: "host", Source: "/srv/data", Target: "/data", UID: &uid}}})
+	if !hasIssue(issues, "mounts[0]") {
+		t.Fatalf("issues = %#v", issues)
+	}
+
+	issues = Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{{Type: "persistent", Source: "data", Target: "/data", UID: &uid, Mode: "0755"}}})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
 func hasIssue(issues []Issue, field string) bool {
 	for _, issue := range issues {
 		if issue.Field == field {

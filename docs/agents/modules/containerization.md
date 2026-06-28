@@ -64,8 +64,8 @@ Application bridge 网络容器由 Agent 创建时自动放入受管 Docker 网�
 - 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
 - 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
-- containers 模块注册的周期任务每 5 秒收集容器协调输入，由 tasks 内部 worker 驱动。只有已经观察到托管 Label 并写入 `application_reconcile_states` 的实例会持续协调。
-- 监控发现容器缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。
+- containers 模块注册的周期任务每 5 秒收集容器协调输入，由 tasks 内部 worker 驱动；5 秒只是采集频率，不是失败重试间隔。只有已经观察到托管 Label 并写入 `application_reconcile_states` 的实例会持续协调。
+- 监控发现容器缺失、停止或 generation/spec hash 偏差时创建 `application_reconcile`。协调恢复必须通过应用服务的系统同步重部署入口执行，并把部署错误回传给当前 `application_reconcile` 任务，由任务的 `failed_retryable.next_run_at` 做指数退避；不得调用手动部署入口异步再创建一组“用户部署”任务，否则会绕过退避并造成重复部署。
 
 ## 镜像更新
 

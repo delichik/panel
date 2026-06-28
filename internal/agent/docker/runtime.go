@@ -393,6 +393,48 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 	if err := os.MkdirAll(filepath.Join(r.root, spec.ApplicationID, "persistent"), 0o700); err != nil {
 		return err
 	}
+	return r.preparePersistentMounts(spec)
+}
+
+func (r *LocalRuntime) preparePersistentMounts(spec appruntime.Spec) error {
+	for _, mount := range spec.Mounts {
+		if mount.Type != "persistent" {
+			continue
+		}
+		source, err := safePersistentMountDir(r.root, spec.ApplicationID, mount.Source)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o700)
+		if strings.TrimSpace(mount.Mode) != "" {
+			parsed, err := strconv.ParseUint(strings.TrimSpace(mount.Mode), 8, 32)
+			if err != nil {
+				return fmt.Errorf("persistent mount mode is invalid: %w", err)
+			}
+			mode = os.FileMode(parsed)
+		}
+		if err := os.MkdirAll(source, mode); err != nil {
+			return err
+		}
+		if strings.TrimSpace(mount.Mode) != "" {
+			if err := os.Chmod(source, mode); err != nil {
+				return err
+			}
+		}
+		if mount.UID != nil || mount.GID != nil {
+			uid := -1
+			gid := -1
+			if mount.UID != nil {
+				uid = *mount.UID
+			}
+			if mount.GID != nil {
+				gid = *mount.GID
+			}
+			if err := os.Chown(source, uid, gid); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -455,6 +497,28 @@ func safeApplicationRootDir(root, appID string) (string, error) {
 	}
 	if cleanTarget != cleanRoot && !strings.HasPrefix(cleanTarget, cleanRoot+string(os.PathSeparator)) {
 		return "", errors.New("runtime application path escapes the runtime root")
+	}
+	return cleanTarget, nil
+}
+
+func safePersistentMountDir(root, appID, source string) (string, error) {
+	appID = strings.TrimSpace(appID)
+	source = strings.TrimSpace(source)
+	if appID == "" || strings.ContainsAny(appID, `/\`) || source == "" {
+		return "", errors.New("persistent mount path is invalid")
+	}
+	base := filepath.Join(root, appID, "persistent")
+	target := filepath.Clean(source)
+	cleanBase, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	cleanTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if cleanTarget != cleanBase && !strings.HasPrefix(cleanTarget, cleanBase+string(os.PathSeparator)) {
+		return "", errors.New("persistent mount path escapes the persistent directory")
 	}
 	return cleanTarget, nil
 }

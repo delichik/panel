@@ -764,6 +764,19 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	return result, nil
 }
 
+func (s *Service) ReconcileDeploy(ctx context.Context, appID string) (OperationResult, error) {
+	app, job, err := s.prepareDeploy(ctx, appID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	taskID, err := s.runDeploymentTaskBatch(ctx, app, job, "Reconciling application "+app.Name)
+	result := OperationResult{TaskID: taskID, Application: app}
+	if err != nil {
+		return result, err
+	}
+	return result, nil
+}
+
 func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 	ctx, task := tc.Context, tc.Task
 	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)

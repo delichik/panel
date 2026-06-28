@@ -9,6 +9,7 @@ import (
 )
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
+var fileModePattern = regexp.MustCompile(`^[0-7]{3,4}$`)
 
 func Normalize(spec Spec) Spec {
 	spec.Count = 1
@@ -172,6 +173,18 @@ func Validate(spec Spec) []Issue {
 		}
 		if !strings.HasPrefix(mount.Target, "/") {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].target", i), Message: "mount target must be an absolute Linux path"})
+		}
+		if mount.UID != nil && *mount.UID < 0 {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].uid", i), Message: "mount uid cannot be negative"})
+		}
+		if mount.GID != nil && *mount.GID < 0 {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].gid", i), Message: "mount gid cannot be negative"})
+		}
+		if strings.TrimSpace(mount.Mode) != "" && !fileModePattern.MatchString(strings.TrimSpace(mount.Mode)) {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].mode", i), Message: "mount mode must be an octal file mode such as 0755"})
+		}
+		if mountType != "persistent" && (mount.UID != nil || mount.GID != nil || strings.TrimSpace(mount.Mode) != "") {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d]", i), Message: "mount uid, gid, and mode are only supported for persistent mounts"})
 		}
 	}
 	return issues

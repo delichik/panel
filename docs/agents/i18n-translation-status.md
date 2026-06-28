@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `internal/modules/applications/spec`、`internal/platform/i18n`
+  - appspec `persistent` 挂载新增 `uid`、`gid`、`mode` 权限校验文案，已接入简体中文翻译；宿主机权限应用失败继续保留系统原始诊断。
 - `web/src/layouts/AppLayout.vue`、`web/src/router/index.ts`
   - 菜单重排为服务器、安全、资源和应用分组，新增 fail2ban 独立路由标题，已接入英文与简体中文词条；旧路径仅作为重定向，不新增展示文案。
 - `internal/agent/client/client.go`、`internal/platform/i18n`

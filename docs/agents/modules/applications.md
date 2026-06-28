@@ -53,10 +53,12 @@
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。尚未部署的 `persistent` 应用允许先向选定服务器导入 zip，agent 会创建并覆盖 Panel 托管的 persistent 目录，导入完成后不触发重启，用于从 compose 等外部运行方式迁移数据后再首次启动。
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID，并依赖数据库外键级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
 - 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后删除来源服务器上的容器和该实例运行目录，并移除来源 `application_instances` 记录。
+- `persistent` 挂载支持在单条 mount 上配置 `uid`、`gid` 和目录 `mode`（如 `"0755"`），部署写入托管文件阶段会确保对应宿主机持久化子目录存在并应用权限，解决非 root 容器进程写入持久化目录的问题。权限字段只适用于 `persistent`，不得用于 host/global bind 或 Docker volume，避免 Panel 修改用户自管宿主机目录或 Docker 管理卷。
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 应用持久化目录不保存为数据库字段；是否启用 persistent 由 appspec 的 `mounts.type=persistent` 派生，详情响应里的 `persistentPath` 只读生成自 `applicationPersistentDir(app.ID)`，保存 DTO 不包含 `persistentPath`。
 - 应用 `reverseProxy` 字段只描述应用希望暴露的域名、路径、目标端口和目标类型，不代表所有部署节点都会启用反向代理。`targetType` 支持 `local` 与 `container`：旧数据或空值按 `local` 处理，代理到目标节点本地端口；`container` 代理到同节点 Application 容器名和目标端口。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖的服务器才会接收该应用在对应服务器上的反向代理配置。
 - 文件内容通过 API 以 base64 承载；应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
+- `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器，YAML 中即使写入 `readOnly: false` 也不得让容器修改这些由 Panel 管理的文件。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
 - 启用应用、部署、镜像更新等流程需要先校验和计划，再确认目标服务器 agent runtime 可用，然后写入应用修订和实例记录；手动部署 HTTP 入口只创建并启动应用部署任务后返回，实际部署由任务后台执行。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标部署中单台服务器部署失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。

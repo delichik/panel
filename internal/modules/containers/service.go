@@ -64,6 +64,7 @@ type ApplicationUpdater interface {
 	List(context.Context) ([]applications.Application, error)
 	UpdateImage(context.Context, string) (applications.OperationResult, error)
 	Deploy(context.Context, string) (applications.OperationResult, error)
+	ReconcileDeploy(context.Context, string) (applications.OperationResult, error)
 }
 
 type Container struct {
@@ -709,7 +710,7 @@ func (s *Service) nextApplicationReconcileRunAt(ctx context.Context, appID strin
 	if s.tasks == nil {
 		return nil, nil
 	}
-	failures, err := s.tasks.CountFailuresSinceLastSuccess(ctx, TaskApplicationReconcile, "application", appID, []string{tasks.StatusFailed, tasks.StatusBlocked, tasks.StatusCancelled}, "user")
+	failures, err := s.tasks.CountFailuresSinceLastSuccess(ctx, TaskApplicationReconcile, "application", appID, []string{tasks.StatusFailed, tasks.StatusFailedRetryable, tasks.StatusBlocked, tasks.StatusCancelled}, "user")
 	if err != nil {
 		return nil, err
 	}
@@ -981,7 +982,7 @@ func (s *Service) runApplicationReconcile(ctx context.Context, task tasks.Task, 
 	if err := ctx.Err(); err != nil {
 		return
 	}
-	if _, err := s.apps.Deploy(ctx, appID); err != nil {
+	if _, err := s.apps.ReconcileDeploy(ctx, appID); err != nil {
 		_ = s.tasks.FailRetryable(ctx, task.ID, err)
 		return
 	}
