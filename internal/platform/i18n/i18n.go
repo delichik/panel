@@ -408,6 +408,9 @@ var (
 				"Application runtime operation failed: deployment failed on ": "应用运行时操作失败：部署失败目标 ",
 				"Application runtime operation failed: ":                      "应用运行时操作失败：",
 			},
+			"agent_request_failed": {
+				"Agent request failed: ": "Agent 请求失败：",
+			},
 		},
 	}
 

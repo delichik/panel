@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
@@ -11,6 +13,7 @@ import (
 
 	agentsecurity "panel/internal/agent/security"
 	agentserver "panel/internal/agent/server"
+	panelerr "panel/internal/platform/errors"
 )
 
 func TestHTTPClientHealthCapturesPeerCertificateInfo(t *testing.T) {
@@ -57,5 +60,26 @@ func TestHTTPClientHealthCapturesPeerCertificateInfo(t *testing.T) {
 	}
 	if health.Certificate.Fingerprint != issued.Fingerprint || !health.Certificate.NotAfter.Equal(issued.NotAfter) {
 		t.Fatalf("unexpected peer certificate info: got %#v want %#v", health.Certificate, issued)
+	}
+}
+
+func TestDecodeAgentResponseWrapsRemoteErrorAsBadGateway(t *testing.T) {
+	rec := httptest.NewRecorder()
+	rec.Code = http.StatusBadGateway
+	rec.Body.WriteString(`{"error":"ufw: permission denied"}`)
+
+	err := decodeAgentResponse(rec.Result(), nil)
+	if err == nil {
+		t.Fatal("expected agent error")
+	}
+	var domain *panelerr.Error
+	if !errors.As(err, &domain) {
+		t.Fatalf("expected platform error, got %T: %v", err, err)
+	}
+	if domain.HTTPStatus != http.StatusBadGateway || domain.Code != "agent_request_failed" {
+		t.Fatalf("unexpected wrapped error: %#v", domain)
+	}
+	if domain.Message != "Agent request failed: ufw: permission denied" {
+		t.Fatalf("unexpected message: %q", domain.Message)
 	}
 }

@@ -358,15 +358,15 @@ func (s *Service) ensureUFWManageable(ctx context.Context, serverID string) (Ser
 	if !srv.Reachable {
 		return Server{}, panelerr.Validation("server_not_reachable", "Server connectivity has not been confirmed")
 	}
-	if !hasPrivilege(srv) {
-		return Server{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
-	}
 	adapter, ok := linux.AdapterFor(srv.OS)
 	if !ok {
 		return Server{}, panelerr.Validation("server_not_supported", "Server distribution is not supported")
 	}
 	if !adapter.SupportsUFW() {
 		return Server{}, panelerr.Validation("ufw_not_supported", "UFW is not supported on this distribution")
+	}
+	if !hasPrivilege(srv) && !hasCompatibleAgent(srv) {
+		return Server{}, panelerr.Validation("privileged_access_required", "Root or passwordless sudo access is required")
 	}
 	return srv, nil
 }
@@ -800,11 +800,14 @@ func (s *Service) runRestart(ctx context.Context, taskID string, srv Server) {
 }
 
 func (s *Service) agentMaintenance(srv Server) (agentcontract.MaintenanceClient, string, bool, error) {
+	baseURL, configured := agentURL(srv)
 	maintenance, available := s.agent.(agentcontract.MaintenanceClient)
 	if !available {
+		if configured {
+			return nil, "", true, panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
+		}
 		return nil, "", false, nil
 	}
-	baseURL, configured := agentURL(srv)
 	if !configured {
 		return nil, "", true, panelerr.Validation("agent_required", "Agent is required for server maintenance")
 	}
@@ -812,6 +815,11 @@ func (s *Service) agentMaintenance(srv Server) (agentcontract.MaintenanceClient,
 		return nil, "", true, panelerr.Validation("agent_incompatible", "Agent is not compatible with server maintenance")
 	}
 	return maintenance, baseURL, true, nil
+}
+
+func hasCompatibleAgent(srv Server) bool {
+	_, configured := agentURL(srv)
+	return configured && srv.Traits[agentcontract.TraitStatus] == agentcontract.StatusCompatible
 }
 
 func (s *Service) detectArchitectureInfo(ctx context.Context, target sshx.Target) (ArchitectureInfo, error) {

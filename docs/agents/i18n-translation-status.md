@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `internal/agent/client/client.go`、`internal/platform/i18n`
+  - Agent maintenance HTTP 错误现在作为 `agent_request_failed` 业务错误返回，简体中文按前缀翻译为“Agent 请求失败：...”，保留远端命令原始诊断。
 - `web/src/views/settings/backups/index.vue`、`web/src/views/maintenance/backup.vue`、`internal/modules/backups`
   - 新增备份与还原设置页、备份导出维护页、维护阶段、启动期输入导出密码、危险确认、重启进入备份导出模式、还原预检和 pending restore 提示文案，已接入英文与简体中文词条。
   - 新增备份/还原后端错误码 `restore_*` 等简体中文翻译；备份归档中的业务数据和第三方诊断不在页面展开显示。

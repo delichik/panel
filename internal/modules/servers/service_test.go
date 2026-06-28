@@ -562,6 +562,43 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestUFWStateUsesCompatibleAgentWithoutStoredPrivilege(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,0,'none','now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.TaskDB())
+	exec := &ufwManageFakeExec{}
+	agentClient := &serverFakeAgentClient{ufw: remoteops.UFWStatus{Installed: true, Active: false, Status: "inactive"}}
+	svc := newServerServiceForTest(store, exec, taskSvc)
+	svc.SetAgentClient(agentClient)
+
+	state, err := svc.UFWState(context.Background(), "srv_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agentClient.ufwURL != "https://127.0.0.1:9786" || len(exec.commands) != 0 {
+		t.Fatalf("expected compatible agent without SSH fallback, agent=%q commands=%#v", agentClient.ufwURL, exec.commands)
+	}
+	if !state.Installed || state.Active {
+		t.Fatalf("unexpected agent UFW state: %#v", state)
+	}
+}
+
 func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

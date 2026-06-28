@@ -15,6 +15,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	agentsecurity "panel/internal/agent/security"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
 )
@@ -394,12 +395,7 @@ func (c *HTTPClient) getResponseWithDo(ctx context.Context, baseURL, path string
 
 func decodeAgentResponse(res *http.Response, out any) error {
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		var er agentcontract.ErrorResponse
-		_ = json.NewDecoder(res.Body).Decode(&er)
-		if er.Error == "" {
-			er.Error = res.Status
-		}
-		return fmt.Errorf("agent request failed: %s", er.Error)
+		return decodeAgentError(res)
 	}
 	return json.NewDecoder(res.Body).Decode(out)
 }
@@ -430,12 +426,7 @@ func (c *HTTPClient) postWithDo(ctx context.Context, baseURL, path string, in, o
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		var er agentcontract.ErrorResponse
-		_ = json.NewDecoder(res.Body).Decode(&er)
-		if er.Error == "" {
-			er.Error = res.Status
-		}
-		return fmt.Errorf("agent request failed: %s", er.Error)
+		return decodeAgentError(res)
 	}
 	if out == nil {
 		return nil
@@ -458,12 +449,16 @@ func (c *HTTPClient) delete(ctx context.Context, baseURL, path string) error {
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		var er agentcontract.ErrorResponse
-		_ = json.NewDecoder(res.Body).Decode(&er)
-		if er.Error == "" {
-			er.Error = res.Status
-		}
-		return fmt.Errorf("agent request failed: %s", er.Error)
+		return decodeAgentError(res)
 	}
 	return nil
+}
+
+func decodeAgentError(res *http.Response) error {
+	var er agentcontract.ErrorResponse
+	_ = json.NewDecoder(res.Body).Decode(&er)
+	if er.Error == "" {
+		er.Error = res.Status
+	}
+	return panelerr.BadGateway("agent_request_failed", fmt.Sprintf("Agent request failed: %s", er.Error))
 }
