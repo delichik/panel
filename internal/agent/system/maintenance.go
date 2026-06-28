@@ -100,18 +100,25 @@ func (c LocalCollector) DeleteUFW(ctx context.Context, req agentcontract.UFWDele
 }
 
 func (c LocalCollector) Fail2BanStatus(ctx context.Context) (agentcontract.Fail2BanStatusResponse, error) {
+	panelConfigPresent := fileExists(fail2banPanelConfigPath)
 	if _, err := exec.LookPath("fail2ban-client"); err != nil {
-		return agentcontract.Fail2BanStatusResponse{Installed: false, Active: false}, nil
+		return agentcontract.Fail2BanStatusResponse{Installed: false, Active: false, PanelConfigPresent: panelConfigPresent}, nil
 	}
 	out, err := runCommand(ctx, time.Minute, "fail2ban-client", "status")
 	if err != nil {
-		return agentcontract.Fail2BanStatusResponse{}, err
+		return agentcontract.Fail2BanStatusResponse{
+			Installed:          true,
+			Active:             false,
+			PanelConfigPresent: panelConfigPresent,
+			Raw:                out,
+		}, nil
 	}
 	return agentcontract.Fail2BanStatusResponse{
-		Installed: true,
-		Active:    true,
-		Jails:     parseFail2BanJails(out),
-		Raw:       out,
+		Installed:          true,
+		Active:             true,
+		PanelConfigPresent: panelConfigPresent,
+		Jails:              parseFail2BanJails(out),
+		Raw:                out,
 	}, nil
 }
 
@@ -155,6 +162,24 @@ func (c LocalCollector) ApplyFail2Ban(ctx context.Context, req agentcontract.Fai
 	return c.Fail2BanStatus(ctx)
 }
 
+func (c LocalCollector) ReleaseFail2Ban(ctx context.Context) (agentcontract.Fail2BanStatusResponse, error) {
+	if _, err := exec.LookPath("fail2ban-client"); err != nil {
+		_ = os.Remove(fail2banPanelConfigPath)
+		return c.Fail2BanStatus(ctx)
+	}
+	if err := os.Remove(fail2banPanelConfigPath); err != nil && !os.IsNotExist(err) {
+		return agentcontract.Fail2BanStatusResponse{}, err
+	}
+	if _, err := exec.LookPath("systemctl"); err == nil {
+		if _, err := runCommand(ctx, 2*time.Minute, "systemctl", "reload-or-restart", "fail2ban"); err != nil {
+			return agentcontract.Fail2BanStatusResponse{}, err
+		}
+	} else if _, err := runCommand(ctx, time.Minute, "fail2ban-client", "reload"); err != nil {
+		return agentcontract.Fail2BanStatusResponse{}, err
+	}
+	return c.Fail2BanStatus(ctx)
+}
+
 func restoreFail2BanConfig(previous []byte, previousErr error) {
 	if previousErr == nil {
 		_ = os.WriteFile(fail2banPanelConfigPath, previous, 0644)
@@ -163,6 +188,11 @@ func restoreFail2BanConfig(previous []byte, previousErr error) {
 	if os.IsNotExist(previousErr) {
 		_ = os.Remove(fail2banPanelConfigPath)
 	}
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (LocalCollector) RestartSystem(ctx context.Context) error {

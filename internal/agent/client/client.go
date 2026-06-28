@@ -231,6 +231,12 @@ func (c *HTTPClient) ApplyFail2Ban(ctx context.Context, baseURL string, req agen
 	return out, err
 }
 
+func (c *HTTPClient) ReleaseFail2Ban(ctx context.Context, baseURL string) (agentcontract.Fail2BanStatusResponse, error) {
+	var out agentcontract.Fail2BanStatusResponse
+	err := c.postWithDo(ctx, baseURL, "/v1/fail2ban/release", nil, &out, c.doMaintenance)
+	return out, err
+}
+
 func (c *HTTPClient) RestartSystem(ctx context.Context, baseURL string) error {
 	return c.postWithDo(ctx, baseURL, "/v1/system/restart", nil, nil, c.doMaintenance)
 }

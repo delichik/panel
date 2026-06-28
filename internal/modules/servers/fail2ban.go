@@ -24,7 +24,7 @@ func (s *Service) Fail2BanState(ctx context.Context, serverID string) (Fail2BanS
 	if err != nil {
 		return Fail2BanState{}, err
 	}
-	configYAML, updatedAt, err := s.loadFail2BanConfig(ctx, serverID)
+	configYAML, managed, updatedAt, err := s.loadFail2BanConfig(ctx, serverID)
 	if err != nil {
 		return Fail2BanState{}, err
 	}
@@ -32,7 +32,7 @@ func (s *Service) Fail2BanState(ctx context.Context, serverID string) (Fail2BanS
 	if err != nil {
 		return Fail2BanState{}, err
 	}
-	state := Fail2BanState{ServerID: serverID, ConfigYAML: normalizedYAML, Config: config, UpdatedAt: updatedAt, Jails: []string{}}
+	state := Fail2BanState{ServerID: serverID, Managed: managed, ConfigYAML: normalizedYAML, Config: config, UpdatedAt: updatedAt, Jails: []string{}}
 	maintenance, baseURL, ok, err := s.agentMaintenance(srv)
 	if err != nil {
 		return Fail2BanState{}, err
@@ -47,29 +47,53 @@ func (s *Service) Fail2BanState(ctx context.Context, serverID string) (Fail2BanS
 	}
 	state.Installed = status.Installed
 	state.Active = status.Active
+	state.PanelConfigPresent = status.PanelConfigPresent
 	state.Jails = status.Jails
 	state.Raw = status.Raw
 	return state, nil
 }
 
-func (s *Service) SaveFail2Ban(ctx context.Context, serverID string, req Fail2BanUpdateRequest) (tasks.Task, error) {
+func (s *Service) SaveFail2Ban(ctx context.Context, serverID string, req Fail2BanUpdateRequest) (Fail2BanState, error) {
 	config, normalizedYAML, err := parseFail2BanYAML(req.ConfigYAML)
 	if err != nil {
-		return tasks.Task{}, err
+		return Fail2BanState{}, err
 	}
-	return s.createFail2BanApplyTask(ctx, serverID, config, normalizedYAML, "Applying fail2ban configuration")
+	_ = config
+	if err := s.saveFail2BanConfig(ctx, serverID, normalizedYAML, nil); err != nil {
+		return Fail2BanState{}, err
+	}
+	return s.Fail2BanState(ctx, serverID)
 }
 
-func (s *Service) InstallFail2Ban(ctx context.Context, serverID string) (tasks.Task, error) {
-	configYAML, _, err := s.loadFail2BanConfig(ctx, serverID)
-	if err != nil {
-		return tasks.Task{}, err
+func (s *Service) EnableFail2Ban(ctx context.Context, serverID string, req Fail2BanEnableRequest) (tasks.Task, error) {
+	configYAML := req.ConfigYAML
+	if strings.TrimSpace(configYAML) == "" {
+		loaded, _, _, err := s.loadFail2BanConfig(ctx, serverID)
+		if err != nil {
+			return tasks.Task{}, err
+		}
+		configYAML = loaded
 	}
 	config, normalizedYAML, err := parseFail2BanYAML(configYAML)
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	return s.createFail2BanApplyTask(ctx, serverID, config, normalizedYAML, "Installing fail2ban")
+	state, err := s.Fail2BanState(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if state.Installed && !state.Managed && !req.ConfirmTakeover {
+		return tasks.Task{}, panelerr.Validation("fail2ban_takeover_confirmation_required", "Taking over an installed fail2ban service requires confirmation")
+	}
+	return s.createFail2BanApplyTask(ctx, serverID, config, normalizedYAML, "Applying fail2ban protection rules")
+}
+
+func (s *Service) InstallFail2Ban(ctx context.Context, serverID string) (tasks.Task, error) {
+	return s.EnableFail2Ban(ctx, serverID, Fail2BanEnableRequest{ConfirmTakeover: true})
+}
+
+func (s *Service) ReleaseFail2Ban(ctx context.Context, serverID string) (tasks.Task, error) {
+	return s.createFail2BanReleaseTask(ctx, serverID, "Releasing fail2ban management")
 }
 
 func (s *Service) createFail2BanApplyTask(ctx context.Context, serverID string, config Fail2BanConfig, configYAML, summary string) (tasks.Task, error) {
@@ -103,6 +127,37 @@ func (s *Service) createFail2BanApplyTask(ctx context.Context, serverID string, 
 	return task, nil
 }
 
+func (s *Service) createFail2BanReleaseTask(ctx context.Context, serverID string, summary string) (tasks.Task, error) {
+	srv, err := s.ensureFail2BanManageable(ctx, serverID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+		Type:         fail2banApplyTaskType,
+		ServerID:     serverID,
+		ResourceType: connectivityResourceType,
+		ResourceID:   serverID,
+		TriggerType:  "user",
+		Summary:      summary,
+		MaxRetries:   0,
+	}, tasks.Trigger{Type: "user", Manual: true})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	if !created {
+		return task, nil
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return tasks.Task{}, err
+	}
+	task, err = s.tasks.Get(ctx, task.ID)
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	go s.runReleaseFail2Ban(s.tasks.ExecutionContext(task.ID), task.ID, srv)
+	return task, nil
+}
+
 func (s *Service) runApplyFail2Ban(ctx context.Context, taskID string, srv Server, config Fail2BanConfig, configYAML string) {
 	defer s.tasks.FinishExecution(taskID)
 	if err := ctx.Err(); err != nil {
@@ -124,11 +179,40 @@ func (s *Service) runApplyFail2Ban(ctx context.Context, taskID string, srv Serve
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
-	if err := s.saveFail2BanConfig(ctx, srv.ID, configYAML); err != nil {
+	managed := true
+	if err := s.saveFail2BanConfig(ctx, srv.ID, configYAML, &managed); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
 		return
 	}
 	_ = s.tasks.Complete(ctx, taskID, "fail2ban configuration applied")
+}
+
+func (s *Service) runReleaseFail2Ban(ctx context.Context, taskID string, srv Server) {
+	defer s.tasks.FinishExecution(taskID)
+	if err := ctx.Err(); err != nil {
+		return
+	}
+	_ = s.tasks.Advance(ctx, taskID, "releasing", "releasing fail2ban management")
+	maintenance, baseURL, ok, err := s.agentMaintenance(srv)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	if !ok {
+		_ = s.tasks.Fail(ctx, taskID, panelerr.Validation("agent_required", "Agent is required for fail2ban configuration"))
+		return
+	}
+	if _, err := maintenance.ReleaseFail2Ban(ctx, baseURL); err != nil {
+		_ = s.handleAgentCertificateTimeError(ctx, srv, err)
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	managed := false
+	if err := s.saveFail2BanManaged(ctx, srv.ID, managed); err != nil {
+		_ = s.tasks.Fail(ctx, taskID, err)
+		return
+	}
+	_ = s.tasks.Complete(ctx, taskID, "fail2ban management released")
 }
 
 func (s *Service) ensureFail2BanManageable(ctx context.Context, serverID string) (Server, error) {
@@ -148,26 +232,43 @@ func (s *Service) ensureFail2BanManageable(ctx context.Context, serverID string)
 	return srv, nil
 }
 
-func (s *Service) loadFail2BanConfig(ctx context.Context, serverID string) (string, *time.Time, error) {
+func (s *Service) loadFail2BanConfig(ctx context.Context, serverID string) (string, bool, *time.Time, error) {
 	var raw, updatedRaw string
-	err := s.db.QueryRowContext(ctx, `SELECT config_yaml, updated_at FROM fail2ban_configs WHERE server_id=?`, serverID).Scan(&raw, &updatedRaw)
+	var managedInt int
+	err := s.db.QueryRowContext(ctx, `SELECT config_yaml, managed, updated_at FROM fail2ban_configs WHERE server_id=?`, serverID).Scan(&raw, &managedInt, &updatedRaw)
 	if err == nil {
 		updated, _ := time.Parse(time.RFC3339Nano, updatedRaw)
 		if updated.IsZero() {
-			return raw, nil, nil
+			return raw, managedInt == 1, nil, nil
 		}
-		return raw, &updated, nil
+		return raw, managedInt == 1, &updated, nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return defaultFail2BanYAML(), nil, nil
+		return defaultFail2BanYAML(), false, nil, nil
 	}
-	return "", nil, err
+	return "", false, nil, err
 }
 
-func (s *Service) saveFail2BanConfig(ctx context.Context, serverID, configYAML string) error {
+func (s *Service) saveFail2BanConfig(ctx context.Context, serverID, configYAML string, managed *bool) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO fail2ban_configs(server_id, config_yaml, updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO UPDATE SET config_yaml=excluded.config_yaml, updated_at=excluded.updated_at`, serverID, configYAML, now)
+	managedValue := 0
+	if managed != nil && *managed {
+		managedValue = 1
+	}
+	if managed == nil {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO fail2ban_configs(server_id, config_yaml, updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO UPDATE SET config_yaml=excluded.config_yaml, updated_at=excluded.updated_at`, serverID, configYAML, now)
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO fail2ban_configs(server_id, config_yaml, managed, updated_at) VALUES(?,?,?,?) ON CONFLICT(server_id) DO UPDATE SET config_yaml=excluded.config_yaml, managed=excluded.managed, updated_at=excluded.updated_at`, serverID, configYAML, managedValue, now)
 	return err
+}
+
+func (s *Service) saveFail2BanManaged(ctx context.Context, serverID string, managed bool) error {
+	configYAML, _, _, err := s.loadFail2BanConfig(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	return s.saveFail2BanConfig(ctx, serverID, configYAML, &managed)
 }
 
 func parseFail2BanYAML(raw string) (Fail2BanConfig, string, error) {
@@ -246,6 +347,7 @@ func defaultFail2BanYAML() string {
 	return strings.TrimSpace(`jails:
   - name: sshd
     enabled: true
+    preset: ssh
     filter: sshd
     port: ssh
     logpath: /var/log/auth.log
@@ -264,6 +366,7 @@ func fail2BanConfigToAgent(config Fail2BanConfig) agentcontract.Fail2BanConfig {
 		jails = append(jails, agentcontract.Fail2BanJail{
 			Name:     jail.Name,
 			Enabled:  jail.Enabled,
+			Preset:   jail.Preset,
 			Filter:   jail.Filter,
 			LogPath:  jail.LogPath,
 			Backend:  jail.Backend,

@@ -52,7 +52,7 @@
 - Agent 系统证书：`GET /api/v1/key-assets/system`，重置：`POST /api/v1/key-assets/system/{id}/reset`
 - 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，任务型重启 `POST /api/v1/servers/{id}/restart`，任务型 UFW 安装 `POST /api/v1/servers/{id}/ufw/install`
 - UFW：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/enable`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`
-- fail2ban：`GET /api/v1/servers/{id}/fail2ban`，`PUT /api/v1/servers/{id}/fail2ban`，`POST /api/v1/servers/{id}/fail2ban/install`
+- fail2ban：`GET /api/v1/servers/{id}/fail2ban`，`PUT /api/v1/servers/{id}/fail2ban`，`POST /api/v1/servers/{id}/fail2ban/enable`，`POST /api/v1/servers/{id}/fail2ban/release`，`POST /api/v1/servers/{id}/fail2ban/install`
 - 指标：`GET /api/v1/servers/{id}/metrics`
 - 软件包：`GET /api/v1/servers/{id}/packages/updates`，`POST /api/v1/servers/{id}/packages/refresh`，`POST /api/v1/servers/{id}/packages/upgrade-selected`，`POST /api/v1/servers/{id}/packages/upgrade-all`
 - 概览：`GET /api/v1/overview`
@@ -66,7 +66,7 @@
 - `service.go` 保留服务器运维、探测和 UFW 等流程；服务器资源 CRUD 放在 `registry.go`，Agent 部署和健康检查分别放在 `agent_deployment.go` 与 `agent_health.go`，fail2ban 配置放在 `fail2ban.go`，新增代码不要重新揉回主 service 文件。
 - 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
-- fail2ban 配置按服务器保存到应用数据库 `fail2ban_configs`。前端提供表单和结构化 YAML 两种编辑方式；YAML 是 Panel 自己的 `jails` 结构，不是直接写入目标机的原始 fail2ban 配置。Panel 解析并校验 jail 名称、重复项、单行值和 option key 后，通过兼容 Agent 渲染为 `/etc/fail2ban/jail.d/panel.local`，目标机用 `fail2ban-client -t` 校验通过后才重启或 reload 服务，成功后 Panel 才持久化 YAML。
+- fail2ban 配置按服务器保存到应用数据库 `fail2ban_configs`，其中 `managed` 表示 Panel 是否接管目标机 fail2ban。前端默认展示“防护规则”列表，结构化 YAML 是高级编辑模式；YAML 是 Panel 自己的 `jails` 结构，不是直接写入目标机的原始 fail2ban 配置。`PUT /fail2ban` 只保存 Panel 草稿，不写目标机；`POST /fail2ban/enable` 在未安装时安装 fail2ban 并自动接管，在已安装未接管时必须由前端传入确认后才接管；接管后通过兼容 Agent 渲染为 `/etc/fail2ban/jail.d/panel.local`，目标机用 `fail2ban-client -t` 校验通过后才重启或 reload 服务，成功后 Panel 才把 `managed` 置为 true。`POST /fail2ban/release` 删除 Panel 生成配置并把 `managed` 置为 false，不导入或恢复用户原始 fail2ban 文件。
 - 新增服务器响应可携带 `initialTaskId` 指向首次 bootstrap 探测任务。该任务只通过 SSH 读取发行版、CPU 架构并检查非交互特权能力；在架构信息成功落库前失败时必须标记任务失败并删除刚创建的服务器记录，让用户回到表单修正 SSH 信息。
 - 特权能力统一持久化为 `privilege.mode=root|passwordless_sudo|none`、派生的 `privilege.privileged` 和检查时间。UID 0 使用 `root` 并直接执行特权命令；非 root 且 `sudo -n` 成功时使用 `passwordless_sudo`；其他情况使用 `none`。软件包、UFW、重启和 Agent bootstrap 只按 `privilege.mode` 判断准入。
 - 服务器架构信息使用结构化 `architecture.os`、`architecture.arch` 和 `architecture.rawMachine`，数据库列为 `architecture_os`、`architecture_arch`、`architecture_machine`。Agent 部署选包优先读取结构化架构字段；字段缺失时通过 SSH `uname -m` 探测目标节点并写回结构化字段。

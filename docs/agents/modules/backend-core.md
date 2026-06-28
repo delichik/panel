@@ -33,7 +33,7 @@
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；进程日志等级使用 `log.level` 键持久化，默认 `info`，更新 `/api/v1/settings/runtime` 后立即调整 zap `AtomicLevel`；旧数据库启动时由默认设置写入流程自动补齐空值。
 - 后端进程日志统一使用 `internal/platform/logging` 的 zap JSON logger，输出路径固定为 `stdout`。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译；成功和重定向 HTTP 完成日志使用 debug，4xx 使用 warn，5xx 使用 error。
 - 概览仪表盘卡片布局通过 `overview_card_configurations` 保存在应用数据库；当前单管理员模型使用固定 `default` 记录，整套有序卡片配置以稳定值 JSON 原子替换。
-- Docker 镜像更新缓存使用 `image_updates`、`image_refreshes`，Application 容器协调观察状态使用 `application_reconcile_states`；fail2ban 的 Panel 托管 YAML 使用 `fail2ban_configs` 按服务器保存；Docker 实时资源清单不复制到数据库。
+- Docker 镜像更新缓存使用 `image_updates`、`image_refreshes`，Application 容器协调观察状态使用 `application_reconcile_states`；fail2ban 的 Panel 草稿 YAML 与接管开关使用 `fail2ban_configs` 按服务器保存；Docker 实时资源清单不复制到数据库。
 - 后端对外错误响应需要走 `platform/errors`、`platform/http` 和 `platform/i18n`，不要在 handler 中散落用户可见错误文案。
 - `internal/platform` 禁止依赖 `internal/modules`；业务模块之间禁止直接导入其他模块的 `store` 实现。`internal/architecture/dependencies_test.go` 固化这些依赖边界。
 - API method/path 清单由 `internal/bootstrap/panel/routes_manifest_test.go` 固化；有意调整 API 时必须同步确认前后端契约后更新清单，目录重构不得顺便改变清单。

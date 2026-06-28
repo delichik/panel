@@ -16,6 +16,7 @@ type UFWRule = domain.UFWRule
 type UFWAllowRequest = domain.UFWAllowRequest
 type Fail2BanState = domain.Fail2BanState
 type Fail2BanUpdateRequest = domain.Fail2BanUpdateRequest
+type Fail2BanEnableRequest = domain.Fail2BanEnableRequest
 type Fail2BanConfig = domain.Fail2BanConfig
 type Fail2BanJail = domain.Fail2BanJail
 type AgentCertificateBundle = domain.AgentCertificateBundle

@@ -67,20 +67,27 @@ describe('serversApi', () => {
   });
 
   it('manages fail2ban state and configuration', async () => {
-    const state = { serverId: 'srv_1', installed: true, active: true, jails: ['sshd'], raw: '', configYaml: 'jails: []\n', config: { jails: [] } };
+    const state = { serverId: 'srv_1', installed: true, active: true, managed: false, panelConfigPresent: false, jails: ['sshd'], raw: '', configYaml: 'jails: []\n', config: { jails: [] } };
+    const saved = { ...state, configYaml: 'jails: []\n' };
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(jsonResponse({ data: state, error: null }))
-      .mockResolvedValueOnce(jsonResponse({ data: { taskId: 'task_apply' }, error: null }, 202))
+      .mockResolvedValueOnce(jsonResponse({ data: saved, error: null }))
+      .mockResolvedValueOnce(jsonResponse({ data: { taskId: 'task_enable' }, error: null }, 202))
+      .mockResolvedValueOnce(jsonResponse({ data: { taskId: 'task_release' }, error: null }, 202))
       .mockResolvedValueOnce(jsonResponse({ data: { taskId: 'task_install' }, error: null }, 202));
     const api = createServersApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
 
     await expect(api.fail2BanState('srv_1')).resolves.toEqual(state);
-    await expect(api.saveFail2Ban('srv_1', { configYaml: 'jails: []\n' })).resolves.toEqual({ taskId: 'task_apply' });
+    await expect(api.saveFail2Ban('srv_1', { configYaml: 'jails: []\n' })).resolves.toEqual(saved);
+    await expect(api.enableFail2Ban('srv_1', { configYaml: 'jails: []\n', confirmTakeover: true })).resolves.toEqual({ taskId: 'task_enable' });
+    await expect(api.releaseFail2Ban('srv_1')).resolves.toEqual({ taskId: 'task_release' });
     await expect(api.installFail2Ban('srv_1')).resolves.toEqual({ taskId: 'task_install' });
 
     expect(fetcher).toHaveBeenNthCalledWith(1, '/api/v1/servers/srv_1/fail2ban', expect.objectContaining({ method: 'GET' }));
     expect(fetcher).toHaveBeenNthCalledWith(2, '/api/v1/servers/srv_1/fail2ban', expect.objectContaining({ method: 'PUT', body: JSON.stringify({ configYaml: 'jails: []\n' }) }));
-    expect(fetcher).toHaveBeenNthCalledWith(3, '/api/v1/servers/srv_1/fail2ban/install', expect.objectContaining({ method: 'POST' }));
+    expect(fetcher).toHaveBeenNthCalledWith(3, '/api/v1/servers/srv_1/fail2ban/enable', expect.objectContaining({ method: 'POST', body: JSON.stringify({ configYaml: 'jails: []\n', confirmTakeover: true }) }));
+    expect(fetcher).toHaveBeenNthCalledWith(4, '/api/v1/servers/srv_1/fail2ban/release', expect.objectContaining({ method: 'POST' }));
+    expect(fetcher).toHaveBeenNthCalledWith(5, '/api/v1/servers/srv_1/fail2ban/install', expect.objectContaining({ method: 'POST' }));
   });
 });

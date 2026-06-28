@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { AgentCertificateBundleDto, CredentialDto, Fail2BanStateDto, Fail2BanUpdateInput, PrivilegeMode, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
+import type { AgentCertificateBundleDto, CredentialDto, Fail2BanEnableInput, Fail2BanStateDto, Fail2BanUpdateInput, PrivilegeMode, ServerDto, UfwAllowInput, UfwStateDto } from '@/types/api';
 
 export interface ServerInput {
   name: string;
@@ -94,7 +94,13 @@ export function createServersApi(client = apiClient) {
       return client.get<Fail2BanStateDto>(`/servers/${serverId}/fail2ban`);
     },
     saveFail2Ban(serverId: string, input: Fail2BanUpdateInput) {
-      return client.put<TaskCreatedDto>(`/servers/${serverId}/fail2ban`, input);
+      return client.put<Fail2BanStateDto>(`/servers/${serverId}/fail2ban`, input);
+    },
+    enableFail2Ban(serverId: string, input: Fail2BanEnableInput = {}) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/fail2ban/enable`, input);
+    },
+    releaseFail2Ban(serverId: string) {
+      return client.post<TaskCreatedDto>(`/servers/${serverId}/fail2ban/release`);
     },
     installFail2Ban(serverId: string) {
       return client.post<TaskCreatedDto>(`/servers/${serverId}/fail2ban/install`);

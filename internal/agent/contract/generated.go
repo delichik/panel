@@ -24,6 +24,7 @@ func CurrentContract() Contract {
 		{ID: "ufw-delete", Method: "POST", Path: "/v1/ufw/rules/delete", Request: schemaOf[UFWDeleteRequest](), Response: schemaOf[UFWStatusResponse]()},
 		{ID: "fail2ban-status", Method: "GET", Path: "/v1/fail2ban/status", Response: schemaOf[Fail2BanStatusResponse]()},
 		{ID: "fail2ban-apply", Method: "POST", Path: "/v1/fail2ban/apply", Request: schemaOf[Fail2BanApplyRequest](), Response: schemaOf[Fail2BanStatusResponse]()},
+		{ID: "fail2ban-release", Method: "POST", Path: "/v1/fail2ban/release", Response: schemaOf[Fail2BanStatusResponse]()},
 		{ID: "system-restart", Method: "POST", Path: "/v1/system/restart", Response: schemaOf[okResponse]()},
 		{ID: "docker-containers", Method: "GET", Path: "/v1/docker/containers", Response: schemaOf[DockerContainersResponse]()},
 		{ID: "docker-container-logs", Method: "GET", Path: "/v1/docker/containers/{id}/logs", Query: map[string]string{"tail": "int"}, Response: schemaOf[DockerContainerLogsResponse]()},

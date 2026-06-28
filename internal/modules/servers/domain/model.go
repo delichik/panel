@@ -97,18 +97,25 @@ type UFWAllowRequest struct {
 }
 
 type Fail2BanState struct {
-	ServerID   string         `json:"serverId"`
-	Installed  bool           `json:"installed"`
-	Active     bool           `json:"active"`
-	Jails      []string       `json:"jails"`
-	Raw        string         `json:"raw"`
-	ConfigYAML string         `json:"configYaml"`
-	Config     Fail2BanConfig `json:"config"`
-	UpdatedAt  *time.Time     `json:"updatedAt,omitempty"`
+	ServerID           string         `json:"serverId"`
+	Installed          bool           `json:"installed"`
+	Active             bool           `json:"active"`
+	Managed            bool           `json:"managed"`
+	PanelConfigPresent bool           `json:"panelConfigPresent"`
+	Jails              []string       `json:"jails"`
+	Raw                string         `json:"raw"`
+	ConfigYAML         string         `json:"configYaml"`
+	Config             Fail2BanConfig `json:"config"`
+	UpdatedAt          *time.Time     `json:"updatedAt,omitempty"`
 }
 
 type Fail2BanUpdateRequest struct {
 	ConfigYAML string `json:"configYaml"`
+}
+
+type Fail2BanEnableRequest struct {
+	ConfigYAML      string `json:"configYaml"`
+	ConfirmTakeover bool   `json:"confirmTakeover"`
 }
 
 type Fail2BanConfig struct {
@@ -118,6 +125,7 @@ type Fail2BanConfig struct {
 type Fail2BanJail struct {
 	Name     string            `json:"name" yaml:"name"`
 	Enabled  bool              `json:"enabled" yaml:"enabled"`
+	Preset   string            `json:"preset,omitempty" yaml:"preset,omitempty"`
 	Filter   string            `json:"filter,omitempty" yaml:"filter,omitempty"`
 	LogPath  string            `json:"logpath,omitempty" yaml:"logpath,omitempty"`
 	Backend  string            `json:"backend,omitempty" yaml:"backend,omitempty"`

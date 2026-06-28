@@ -67,6 +67,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS fail2ban_configs (
 			server_id TEXT PRIMARY KEY,
 			config_yaml TEXT NOT NULL,
+			managed INTEGER NOT NULL DEFAULT 0,
 			updated_at TEXT NOT NULL,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
@@ -446,6 +447,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"sha256":     "TEXT NOT NULL DEFAULT ''",
 		"created_at": "TEXT NOT NULL DEFAULT ''",
 		"updated_at": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "fail2ban_configs", map[string]string{
+		"managed": "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
 		return err
 	}

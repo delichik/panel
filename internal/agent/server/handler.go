@@ -107,6 +107,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		status, err := h.collector.ApplyFail2Ban(r.Context(), req)
 		writeResult(w, status, err)
+	case r.Method == http.MethodPost && path == "/v1/fail2ban/release":
+		status, err := h.collector.ReleaseFail2Ban(r.Context())
+		writeResult(w, status, err)
 	case r.Method == http.MethodPost && path == "/v1/system/restart":
 		err := h.collector.RestartSystem(r.Context())
 		writeResult(w, map[string]bool{"ok": err == nil}, err)

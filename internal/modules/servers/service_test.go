@@ -1870,6 +1870,9 @@ func (f *serverFakeAgentClient) Fail2BanStatus(context.Context, string) (agentco
 func (f *serverFakeAgentClient) ApplyFail2Ban(context.Context, string, agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
 	return agentcontract.Fail2BanStatusResponse{Installed: true, Active: true, Jails: []string{"sshd"}}, f.err
 }
+func (f *serverFakeAgentClient) ReleaseFail2Ban(context.Context, string) (agentcontract.Fail2BanStatusResponse, error) {
+	return agentcontract.Fail2BanStatusResponse{Installed: true, Active: true, PanelConfigPresent: false, Jails: []string{}}, f.err
+}
 func (f *serverFakeAgentClient) RestartSystem(context.Context, string) error {
 	return f.err
 }

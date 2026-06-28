@@ -66,6 +66,7 @@ var (
 			"fail2ban_maxretry_invalid":                      "fail2ban 最大失败次数不能为负数",
 			"fail2ban_value_invalid":                         "fail2ban 参数值必须为单行文本",
 			"fail2ban_option_key_invalid":                    "fail2ban 高级参数名无效",
+			"fail2ban_takeover_confirmation_required":        "接管已安装的 fail2ban 前必须确认",
 			"server_executor_unavailable":                    "服务器连通性测试执行器不可用",
 			"agent_tls_unavailable":                          "Agent TLS 资产不可用",
 			"agent_required":                                 "此操作需要可用的 Agent",

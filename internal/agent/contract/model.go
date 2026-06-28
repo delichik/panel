@@ -34,7 +34,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "system-restart", "runtime-write-files", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -54,6 +54,7 @@ type MaintenanceClient interface {
 	UFWDelete(ctx context.Context, url string, req UFWDeleteRequest) (remoteops.UFWStatus, error)
 	Fail2BanStatus(ctx context.Context, url string) (Fail2BanStatusResponse, error)
 	ApplyFail2Ban(ctx context.Context, url string, req Fail2BanApplyRequest) (Fail2BanStatusResponse, error)
+	ReleaseFail2Ban(ctx context.Context, url string) (Fail2BanStatusResponse, error)
 	RestartSystem(ctx context.Context, url string) error
 }
 
@@ -160,6 +161,7 @@ type Fail2BanConfig struct {
 type Fail2BanJail struct {
 	Name     string            `json:"name" yaml:"name"`
 	Enabled  bool              `json:"enabled" yaml:"enabled"`
+	Preset   string            `json:"preset,omitempty" yaml:"preset,omitempty"`
 	Filter   string            `json:"filter,omitempty" yaml:"filter,omitempty"`
 	LogPath  string            `json:"logpath,omitempty" yaml:"logpath,omitempty"`
 	Backend  string            `json:"backend,omitempty" yaml:"backend,omitempty"`
@@ -174,10 +176,11 @@ type Fail2BanJail struct {
 }
 
 type Fail2BanStatusResponse struct {
-	Installed bool     `json:"installed"`
-	Active    bool     `json:"active"`
-	Jails     []string `json:"jails"`
-	Raw       string   `json:"raw"`
+	Installed          bool     `json:"installed"`
+	Active             bool     `json:"active"`
+	PanelConfigPresent bool     `json:"panelConfigPresent"`
+	Jails              []string `json:"jails"`
+	Raw                string   `json:"raw"`
 }
 
 type Fail2BanApplyRequest struct {

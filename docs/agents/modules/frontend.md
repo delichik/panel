@@ -72,7 +72,7 @@
   - 防火墙：`web/src/views/security/firewall/index.vue`
     - 页面只管理 UFW 规则和启用流程。
   - fail2ban：`web/src/views/security/fail2ban/index.vue`
-    - 页面提供表单与结构化 YAML Raw 双模式；Raw 使用 Panel 的 `jails` 结构并可与表单双向转换，不是目标机原始 fail2ban 配置文件。
+    - 页面以防护规则列表作为默认模式，SSH、Nginx、Apache、Postfix、Dovecot 和自定义模板只负责生成 jail 初值；结构化 YAML 是高级模式，使用 Panel 的 `jails` 结构并可与规则列表双向转换，不是目标机原始 fail2ban 配置文件。未接管时保存只落 Panel 草稿，接管/启用和取消接管通过独立动作触发任务。
 - 资源菜单组：
   - 软件包：`web/src/views/resources/packages/index.vue`
   - 容器、镜像、网络、卷：`web/src/views/resources/`

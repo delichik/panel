@@ -102,6 +102,7 @@ export interface UfwAllowInput {
 export interface Fail2BanJailDto {
   name: string;
   enabled: boolean;
+  preset?: string;
   filter?: string;
   logpath?: string;
   backend?: string;
@@ -123,6 +124,8 @@ export interface Fail2BanStateDto {
   serverId: string;
   installed: boolean;
   active: boolean;
+  managed: boolean;
+  panelConfigPresent: boolean;
   jails: string[];
   raw: string;
   configYaml: string;
@@ -132,6 +135,11 @@ export interface Fail2BanStateDto {
 
 export interface Fail2BanUpdateInput {
   configYaml: string;
+}
+
+export interface Fail2BanEnableInput {
+  configYaml?: string;
+  confirmTakeover?: boolean;
 }
 
 export interface CredentialDto {
