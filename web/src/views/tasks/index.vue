@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
@@ -77,7 +77,6 @@ const detailsDialog = ref(false);
 const page = ref(1);
 const pageSize = ref(20);
 const total = ref(0);
-let timer: number | undefined;
 let stepsRequestId = 0;
 
 const operationGroups = computed(() => groupTasksByOperation(tasks.value));
@@ -109,8 +108,13 @@ function normalizeTypeFilter(values: string[] | string | null | undefined, previ
   const selected = Array.isArray(values) ? values : values ? [values] : [];
   const selectedSet = new Set(selected);
   const previousSet = new Set(previous);
-  if (selectedSet.has(TYPE_FILTER_ALL) && !previousSet.has(TYPE_FILTER_ALL)) return [TYPE_FILTER_ALL];
-  if (selectedSet.has(TYPE_FILTER_COMMON) && !previousSet.has(TYPE_FILTER_COMMON)) return [TYPE_FILTER_COMMON];
+  if (selectedSet.has(TYPE_FILTER_ALL) && selectedSet.has(TYPE_FILTER_COMMON)) {
+    if (!previousSet.has(TYPE_FILTER_ALL)) return [TYPE_FILTER_ALL];
+    if (!previousSet.has(TYPE_FILTER_COMMON)) return [TYPE_FILTER_COMMON];
+    return previousSet.has(TYPE_FILTER_ALL) ? [TYPE_FILTER_ALL] : [TYPE_FILTER_COMMON];
+  }
+  if (selectedSet.has(TYPE_FILTER_ALL)) return [TYPE_FILTER_ALL];
+  if (selectedSet.has(TYPE_FILTER_COMMON)) return [TYPE_FILTER_COMMON];
   const exactTypes = selected.filter((value) => !isSpecialTypeFilter(value));
   if (exactTypes.length > 0) return Array.from(new Set(exactTypes));
   return [TYPE_FILTER_COMMON];
@@ -164,6 +168,7 @@ async function loadTasks() {
         types: typeApiFilter.types,
         includeInternal: typeApiFilter.includeInternal,
         commonOnly: typeApiFilter.commonOnly,
+        operationPage: true,
         operationId: appliedOperationFilter.value,
         page: page.value,
         pageSize: pageSize.value,
@@ -421,20 +426,15 @@ function openDetailsDialog() {
   detailsDialog.value = true;
 }
 
-function startPolling() {
-  if (timer) window.clearInterval(timer);
+function loadTaskCenter() {
   void loadRouteTask();
-  timer = window.setInterval(loadTasks, 5000);
 }
 
 watch([selectedTaskId, detailsDialog], loadSteps);
 watch(() => route.query.task, () => {
   void loadRouteTask();
 });
-onMounted(startPolling);
-onBeforeUnmount(() => {
-  if (timer) window.clearInterval(timer);
-});
+onMounted(loadTaskCenter);
 </script>
 
 <template>

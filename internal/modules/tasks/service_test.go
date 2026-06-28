@@ -297,6 +297,54 @@ func TestListPaginatesTasks(t *testing.T) {
 	}
 }
 
+func TestListOperationPagePaginatesOperationsAndReturnsTheirTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	oldOp, err := svc.Create(ctx, CreateInput{OperationID: "op-old", Type: "test", Summary: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := svc.Create(ctx, CreateInput{OperationID: "op-batch", Type: "test", Summary: "batch parent", ChildCount: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childIDs := []string{}
+	for i := 1; i <= 3; i++ {
+		child, err := svc.Create(ctx, CreateInput{OperationID: "op-batch", Type: "test", ParentTaskID: parent.ID, ChildIndex: i, ChildCount: 3, Summary: "batch child"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		childIDs = append(childIDs, child.ID)
+	}
+	newOp, err := svc.Create(ctx, CreateInput{OperationID: "op-new", Type: "test", Summary: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.List(ctx, ListFilter{Limit: 2, OperationPage: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Total != 3 || got.Page != 1 || got.PageSize != 2 {
+		t.Fatalf("unexpected operation page metadata: %#v", got)
+	}
+	ids := map[string]bool{}
+	for _, item := range got.Items {
+		ids[item.ID] = true
+		if item.OperationID == oldOp.OperationID {
+			t.Fatalf("old operation should not be on the first operation page: %#v", got.Items)
+		}
+	}
+	if !ids[newOp.ID] || !ids[parent.ID] {
+		t.Fatalf("expected newest operation and batch parent, got %#v", got.Items)
+	}
+	for _, id := range childIDs {
+		if !ids[id] {
+			t.Fatalf("expected batch child %s on the operation page, got %#v", id, got.Items)
+		}
+	}
+}
+
 func TestFailRunningWithoutExecutionMarksOnlyUntrackedTasksFailed(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

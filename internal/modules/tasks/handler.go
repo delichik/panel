@@ -48,6 +48,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		IncludeInternal:  truthyQuery(r, "includeInternal") || truthyQuery(r, "include_internal"),
 		ExcludeScheduled: truthyQuery(r, "commonOnly") || truthyQuery(r, "common_only"),
 		OperationID:      r.URL.Query().Get("operation_id"),
+		OperationPage:    truthyQuery(r, "operationPage") || truthyQuery(r, "operation_page"),
 		Limit:            limit,
 		Offset:           offset,
 	})

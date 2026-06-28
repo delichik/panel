@@ -31,4 +31,19 @@ describe('TaskCenterPage', () => {
     expect(page).toContain('appliedStatusFilter.value = [...normalizedStatus]');
     expect(page).toContain('appliedOperationFilter.value = normalizedOperation');
   });
+
+  it('requests pages by operation instead of raw task rows', () => {
+    expect(page).toContain('operationPage: true');
+  });
+
+  it('keeps all types selected when applying the search', () => {
+    expect(page).toContain('if (selectedSet.has(TYPE_FILTER_ALL)) return [TYPE_FILTER_ALL];');
+    expect(page).toContain('if (normalized.includes(TYPE_FILTER_ALL)) return { includeInternal: true, commonOnly: false, types: [] };');
+  });
+
+  it('does not auto refresh the task center in the background', () => {
+    expect(page).not.toContain('setInterval');
+    expect(page).not.toContain('clearInterval');
+    expect(page).not.toContain('startPolling');
+  });
 });

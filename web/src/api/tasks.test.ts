@@ -41,14 +41,14 @@ describe('tasksApi', () => {
     );
   });
 
-  it('requests the common task view', async () => {
+  it('requests the common operation view', async () => {
     const fetcher = vi.fn().mockResolvedValue(jsonResponse({ data: { items: [], total: 0, page: 1, pageSize: 20 }, error: null }));
     const api = createTasksApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
 
-    await api.list({ commonOnly: true });
+    await api.list({ commonOnly: true, operationPage: true });
 
     expect(fetcher).toHaveBeenCalledWith(
-      '/api/v1/tasks?page=1&pageSize=20&commonOnly=true',
+      '/api/v1/tasks?page=1&pageSize=20&commonOnly=true&operationPage=true',
       expect.objectContaining({ method: 'GET' }),
     );
   });

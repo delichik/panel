@@ -28,6 +28,7 @@ type ListFilter struct {
 	IncludeInternal  bool
 	ExcludeScheduled bool
 	OperationID      string
+	OperationPage    bool
 	Limit            int
 	Offset           int
 }
@@ -574,6 +575,9 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	if len(conditions) > 0 {
 		where = ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
+	if filter.OperationPage {
+		return s.listOperationPage(ctx, filter, where, args)
+	}
 	countQuery := `SELECT COUNT(*) FROM tasks` + where
 	var total int
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
@@ -582,6 +586,65 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	query := `SELECT ` + taskColumns + ` FROM tasks` + where + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
 	args = append(args, filter.Limit, filter.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return ListResult{}, err
+	}
+	defer rows.Close()
+	out := []Task{}
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return ListResult{}, err
+		}
+		out = append(out, task)
+	}
+	if err := rows.Err(); err != nil {
+		return ListResult{}, err
+	}
+	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
+}
+
+func (s *Service) listOperationPage(ctx context.Context, filter ListFilter, where string, args []any) (ListResult, error) {
+	const operationKey = `COALESCE(NULLIF(operation_id,''), id)`
+	countQuery := `SELECT COUNT(DISTINCT ` + operationKey + `) FROM tasks` + where
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+		return ListResult{}, err
+	}
+
+	keyArgs := append([]any{}, args...)
+	keyArgs = append(keyArgs, filter.Limit, filter.Offset)
+	keyQuery := `SELECT ` + operationKey + ` AS operation_key, MAX(created_at) AS operation_created_at FROM tasks` + where + ` GROUP BY operation_key ORDER BY operation_created_at DESC, operation_key DESC LIMIT ? OFFSET ?`
+	keyRows, err := s.db.QueryContext(ctx, keyQuery, keyArgs...)
+	if err != nil {
+		return ListResult{}, err
+	}
+	defer keyRows.Close()
+	keys := []string{}
+	for keyRows.Next() {
+		var key, createdAt string
+		if err := keyRows.Scan(&key, &createdAt); err != nil {
+			return ListResult{}, err
+		}
+		keys = append(keys, key)
+	}
+	if err := keyRows.Err(); err != nil {
+		return ListResult{}, err
+	}
+	if len(keys) == 0 {
+		return ListResult{Items: []Task{}, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
+	}
+
+	itemArgs := append([]any{}, args...)
+	itemArgs = append(itemArgs, stringArgs(keys)...)
+	query := `SELECT ` + taskColumns + ` FROM tasks` + where
+	if where == "" {
+		query += ` WHERE `
+	} else {
+		query += ` AND `
+	}
+	query += operationKey + ` IN (` + placeholders(len(keys)) + `) ORDER BY created_at DESC, id DESC`
+	rows, err := s.db.QueryContext(ctx, query, itemArgs...)
 	if err != nil {
 		return ListResult{}, err
 	}
