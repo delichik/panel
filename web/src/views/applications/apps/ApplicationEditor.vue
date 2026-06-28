@@ -16,7 +16,7 @@ interface PortForm { label: string; to: number; static: number | null }
 interface StringListItem { value: string }
 interface EnvForm { key: string; value: string }
 type MountType = 'volume' | 'host' | 'file' | 'panel_file' | 'persistent';
-interface MountForm { type: MountType; source: string; target: string; readOnly: boolean }
+interface MountForm { type: MountType; source: string; target: string; readOnly: boolean; uid: number | null | ''; gid: number | null | ''; mode: string }
 interface VariableForm { key: string; value: string }
 interface EditorFile {
   id: string;
@@ -176,6 +176,9 @@ function loadSpecForm(raw: string, appName?: string) {
       source: stringValue(mount?.source),
       target: stringValue(mount?.target) || '/data',
       readOnly: Boolean(mount?.readOnly),
+      uid: nonNegativeNumberValue(mount?.uid),
+      gid: nonNegativeNumberValue(mount?.gid),
+      mode: stringValue(mount?.mode),
     };
   });
 }
@@ -197,7 +200,7 @@ function addVariable() {
 }
 
 function addMount(type: MountType = 'volume') {
-  specForm.mounts.push({ type, source: defaultMountSource(type), target: '/data', readOnly: false });
+  specForm.mounts.push({ type, source: defaultMountSource(type), target: '/data', readOnly: mountDefaultsReadOnly(type), uid: null, gid: null, mode: '' });
 }
 
 function defaultMountSource(type: MountType) {
@@ -210,6 +213,16 @@ function defaultMountSource(type: MountType) {
 
 function updateMountType(mount: MountForm) {
   mount.source = defaultMountSource(mount.type);
+  mount.readOnly = mountDefaultsReadOnly(mount.type);
+  if (mount.type !== 'persistent') {
+    mount.uid = null;
+    mount.gid = null;
+    mount.mode = '';
+  }
+}
+
+function mountDefaultsReadOnly(type: MountType) {
+  return type === 'file' || type === 'panel_file';
 }
 
 function addProxyRule() {
@@ -402,7 +415,7 @@ function buildSpecYaml() {
     .map((port) => ({ label: port.label.trim(), to: Number(port.to), ...(port.static ? { static: Number(port.static) } : {}) })) : [];
   const mounts = specForm.mounts
     .filter((mount) => mount.target.trim() && (mount.type === 'persistent' || mount.source.trim()))
-    .map((mount) => ({ type: mount.type, source: mount.source.trim(), target: mount.target.trim(), readOnly: mount.readOnly }));
+    .map(mountYamlValue);
   if (command.length) spec.command = command;
   if (args.length) spec.args = args;
   if (Object.keys(env).length) spec.env = env;
@@ -425,6 +438,35 @@ function numericLimit(value: unknown) {
   if (value === null || value === undefined || value === '') return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nonNegativeNumberValue(value: unknown) {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+}
+
+function mountYamlValue(mount: MountForm) {
+  const out: Record<string, unknown> = {
+    type: mount.type,
+    source: mount.source.trim(),
+    target: mount.target.trim(),
+    readOnly: mount.type === 'file' || mount.type === 'panel_file' ? true : mount.readOnly,
+  };
+  if (mount.type === 'persistent') {
+    const uid = mountPermissionNumber(mount.uid);
+    const gid = mountPermissionNumber(mount.gid);
+    if (uid !== null) out.uid = uid;
+    if (gid !== null) out.gid = gid;
+    if (mount.mode.trim()) out.mode = mount.mode.trim();
+  }
+  return out;
+}
+
+function mountPermissionNumber(value: number | null | '') {
+  if (value === null || value === '') return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
 function objectValue(value: unknown): Record<string, unknown> | null {
@@ -713,7 +755,10 @@ async function save(deploy = false) {
               />
               <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
               <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
-              <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" density="compact" hide-details />
+              <v-text-field v-if="mount.type === 'persistent'" v-model.number="mount.uid" type="number" min="0" :label="t('applicationEditor.mountUid')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-if="mount.type === 'persistent'" v-model.number="mount.gid" type="number" min="0" :label="t('applicationEditor.mountGid')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-if="mount.type === 'persistent'" v-model="mount.mode" :label="t('applicationEditor.mountMode')" placeholder="0755" density="compact" variant="outlined" hide-details />
+              <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" :disabled="mount.type === 'file' || mount.type === 'panel_file'" density="compact" hide-details />
               <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.mounts, index)" />
             </div>
             <div class="mount-actions">
@@ -932,7 +977,7 @@ async function save(deploy = false) {
 .ports-row { grid-template-columns: minmax(120px, 1fr) auto minmax(96px, 0.6fr) auto auto minmax(96px, 0.6fr) 40px; }
 .command-row { grid-template-columns: minmax(0, 1fr) 40px; }
 .env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
-.mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) auto 40px; }
+.mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) 86px 86px 96px auto 40px; }
 .mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .variable-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
 .proxy-rule { border: 1px solid var(--lp-border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }

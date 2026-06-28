@@ -750,6 +750,9 @@ export interface RuntimeMountDto {
   source: string;
   target: string;
   readOnly?: boolean;
+  uid?: number;
+  gid?: number;
+  mode?: string;
 }
 
 export interface RuntimeManagedFileDto {
