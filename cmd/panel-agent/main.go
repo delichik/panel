@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	agentbootstrap "panel/internal/bootstrap/agent"
+
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -22,8 +23,8 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("panel agent listening on https://%s", cfg.ListenAddress)
-		errCh <- server.ListenAndServeTLS("", "")
+		log.Printf("panel agent listening on grpc://%s", cfg.ListenAddress)
+		errCh <- server.Serve()
 	}()
 
 	stop := make(chan os.Signal, 1)
@@ -32,14 +33,21 @@ func main() {
 	case sig := <-stop:
 		log.Printf("received %s, shutting down", sig)
 	case err := <-errCh:
-		if !errors.Is(err, http.ErrServerClosed) {
+		if !errors.Is(err, grpc.ErrServerStopped) {
 			log.Fatalf("server error: %v", err)
 		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		log.Printf("shutdown error: %v", err)
+	done := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		log.Printf("shutdown timeout: %v", ctx.Err())
 	}
 }

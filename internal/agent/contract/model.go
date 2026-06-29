@@ -62,6 +62,8 @@ type ErrorResponse struct {
 	Error string `json:"error"`
 }
 
+type EmptyRequest struct{}
+
 type HealthResponse struct {
 	Status       string           `json:"status"`
 	Time         string           `json:"time"`
@@ -114,6 +116,10 @@ type MetricsSnapshotResponse struct {
 		Load5         float64   `json:"load5"`
 		Load15        float64   `json:"load15"`
 	} `json:"status"`
+}
+
+type MetricsSnapshotRequest struct {
+	ServerID string `json:"serverId"`
 }
 
 type UFWStatusResponse struct {
@@ -337,6 +343,47 @@ type DockerVolumesResponse struct {
 
 type DockerImagePullRequest struct {
 	Reference string `json:"reference"`
+}
+
+type RuntimeStatusRequest struct {
+	InstanceID    string `json:"instanceId"`
+	ContainerName string `json:"containerName,omitempty"`
+}
+
+type RuntimeLogsRequest struct {
+	InstanceID    string `json:"instanceId"`
+	ContainerName string `json:"containerName,omitempty"`
+	Tail          int    `json:"tail,omitempty"`
+}
+
+type RuntimePersistentArchiveRequest struct {
+	ApplicationID string `json:"applicationId"`
+}
+
+type DockerContainerLogsRequest struct {
+	ID   string `json:"id"`
+	Tail int    `json:"tail,omitempty"`
+}
+
+type DockerContainerActionRequest struct {
+	ID     string `json:"id"`
+	Action string `json:"action"`
+}
+
+type DockerContainerDeleteRequest struct {
+	ID string `json:"id"`
+}
+
+type DockerImageDeleteRequest struct {
+	ID string `json:"id"`
+}
+
+type DockerVolumeDeleteRequest struct {
+	Name string `json:"name"`
+}
+
+type OKResponse struct {
+	OK bool `json:"ok"`
 }
 
 func SnapshotResponse(s linux.MetricsSnapshot) MetricsSnapshotResponse {

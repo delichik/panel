@@ -5,12 +5,14 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
-	"net/http"
+	"net"
 	"os"
-	"time"
 
 	agentcontract "panel/internal/agent/contract"
-	agentserver "panel/internal/agent/server"
+	agentrpc "panel/internal/agent/rpc"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 type Config struct {
@@ -31,7 +33,12 @@ func LoadConfig() Config {
 	}
 }
 
-func NewServer(cfg Config) (*http.Server, error) {
+type Server struct {
+	Addr string
+	grpc *grpc.Server
+}
+
+func NewServer(cfg Config) (*Server, error) {
 	if err := agentcontract.ValidateGeneratedHash(); err != nil {
 		return nil, err
 	}
@@ -39,12 +46,21 @@ func NewServer(cfg Config) (*http.Server, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &http.Server{
-		Addr:              cfg.ListenAddress,
-		Handler:           agentserver.NewHandler(agentserver.HandlerConfig{DockerHost: cfg.DockerHost}),
-		TLSConfig:         tlsConfig,
-		ReadHeaderTimeout: 10 * time.Second,
-	}, nil
+	grpcServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(tlsConfig)))
+	agentrpc.RegisterAgentService(grpcServer, agentrpc.NewHandler(agentrpc.HandlerConfig{DockerHost: cfg.DockerHost}))
+	return &Server{Addr: cfg.ListenAddress, grpc: grpcServer}, nil
+}
+
+func (s *Server) Serve() error {
+	listener, err := net.Listen("tcp", s.Addr)
+	if err != nil {
+		return err
+	}
+	return s.grpc.Serve(listener)
+}
+
+func (s *Server) GracefulStop() {
+	s.grpc.GracefulStop()
 }
 
 func envDefault(key, fallback string) string {

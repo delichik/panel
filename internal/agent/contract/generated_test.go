@@ -4,18 +4,21 @@ import "testing"
 
 func TestCurrentContractIncludesHealthContract(t *testing.T) {
 	contract := CurrentContract()
-	var health Endpoint
-	for _, endpoint := range contract.Endpoints {
-		if endpoint.ID == "health" {
-			health = endpoint
+	var health Method
+	for _, method := range contract.Methods {
+		if method.ID == "Health" {
+			health = method
 			break
 		}
 	}
-	if health.ID == "" || health.Method != "GET" || health.Path != "/v1/health" || health.Response == nil {
-		t.Fatalf("health endpoint missing from contract: %#v", contract.Endpoints)
+	if health.ID == "" || health.Service != agentService || health.RPC != "Health" || health.Response == nil {
+		t.Fatalf("health method missing from contract: %#v", contract.Methods)
 	}
-	if _, ok := health.Response.Fields["contractHash"]; !ok {
-		t.Fatalf("health response contract hash field missing: %#v", health.Response.Fields)
+	if health.Response.Type != "panel.agent.v1.HealthResponse" {
+		t.Fatalf("health response type mismatch: %#v", health.Response)
+	}
+	if contract.ProtoFile == nil || contract.ProtoFile.GetName() != "agent.proto" {
+		t.Fatalf("proto descriptor missing from contract: %#v", contract.ProtoFile)
 	}
 }
 

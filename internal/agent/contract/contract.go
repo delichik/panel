@@ -1,4 +1,4 @@
-// Package contract defines the stable, implementation-independent Agent HTTP
+// Package contract defines the stable, implementation-independent Agent gRPC
 // contract model and compatibility rules shared by the Panel and Agent sides.
 package contract
 
@@ -8,21 +8,23 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"google.golang.org/protobuf/types/descriptorpb"
 )
 
 var currentContractHash string
 
 type Contract struct {
-	Endpoints []Endpoint `json:"endpoints"`
+	ProtoFile *descriptorpb.FileDescriptorProto `json:"protoFile"`
+	Methods   []Method                          `json:"methods"`
 }
 
-type Endpoint struct {
-	ID       string            `json:"id"`
-	Method   string            `json:"method"`
-	Path     string            `json:"path"`
-	Query    map[string]string `json:"query,omitempty"`
-	Request  *Schema           `json:"request,omitempty"`
-	Response *Schema           `json:"response,omitempty"`
+type Method struct {
+	ID       string  `json:"id"`
+	Service  string  `json:"service"`
+	RPC      string  `json:"rpc"`
+	Request  *Schema `json:"request,omitempty"`
+	Response *Schema `json:"response,omitempty"`
 }
 
 type Schema struct {
@@ -43,7 +45,7 @@ func ValidateGeneratedHash() error {
 
 func validateGeneratedHash(value string) error {
 	if strings.TrimSpace(value) == "" {
-		return errors.New("agent HTTP contract hash is empty; run the contract hash generator before building")
+		return errors.New("agent gRPC contract hash is empty; run the contract hash generator before building")
 	}
 	return nil
 }

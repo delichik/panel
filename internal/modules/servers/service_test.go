@@ -939,7 +939,7 @@ func TestAgentCertificateRenewalProblemKeepsFreshCertificateCompatible(t *testin
 
 func TestCheckConfiguredAgentsDoesNotDeployUnavailableNetworkError(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
-	lastErr := `Get "https://127.0.0.1:9786/v1/health": dial tcp 127.0.0.1:9786: i/o timeout`
+	lastErr := `rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 127.0.0.1:9786: i/o timeout"`
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"unavailable","agent.last_error":"` + strings.ReplaceAll(lastErr, `"`, `\"`) + `"}`
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
 		t.Fatal(err)
@@ -1221,13 +1221,13 @@ func TestSystemCertificatesSkipAgentServerWithoutCertificateMetadata(t *testing.
 	}
 }
 
-func TestResetPanelAgentClientCertificateReloadsHTTPClient(t *testing.T) {
+func TestResetPanelAgentClientCertificateReloadsGRPCClient(t *testing.T) {
 	svc, taskSvc, _ := testServerService(t, nil)
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	client, err := agentclient.NewHTTPClient(assets, time.Second)
+	client, err := agentclient.NewGRPCClient(assets, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1289,7 +1289,7 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 }
 
 func TestAgentCertificateTimeErrorDetectedFromMessage(t *testing.T) {
-	err := errString(`Get "https://127.0.0.1:9786/v1/system/os-release": tls: failed to verify certificate: x509: certificate has expired or is not yet valid`)
+	err := errString(`rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: tls: failed to verify certificate: x509: certificate has expired or is not yet valid"`)
 	if !isAgentCertificateTimeError(err) {
 		t.Fatal("expected Go TLS certificate time message to be detected")
 	}

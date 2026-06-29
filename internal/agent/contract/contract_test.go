@@ -9,19 +9,19 @@ func TestValidateGeneratedHashRejectsEmptyValue(t *testing.T) {
 }
 
 func TestHashIsStableAcrossMapInsertionOrder(t *testing.T) {
-	first := Contract{Endpoints: []Endpoint{{
-		ID:     "health",
-		Method: "GET",
-		Path:   "/v1/health",
+	first := Contract{Methods: []Method{{
+		ID:      "health",
+		Service: "panel.agent.v1.AgentService",
+		RPC:     "Health",
 		Response: &Schema{Type: "object", Fields: map[string]Schema{
 			"status": {Type: "string"},
 			"extra":  {Type: "string", Optional: true},
 		}},
 	}}}
-	second := Contract{Endpoints: []Endpoint{{
-		ID:     "health",
-		Method: "GET",
-		Path:   "/v1/health",
+	second := Contract{Methods: []Method{{
+		ID:      "health",
+		Service: "panel.agent.v1.AgentService",
+		RPC:     "Health",
 		Response: &Schema{Type: "object", Fields: map[string]Schema{
 			"extra":  {Type: "string", Optional: true},
 			"status": {Type: "string"},
@@ -42,18 +42,18 @@ func TestHashIsStableAcrossMapInsertionOrder(t *testing.T) {
 }
 
 func TestHashChangesWhenContractChanges(t *testing.T) {
-	original := Contract{Endpoints: []Endpoint{{
-		ID:     "create",
-		Method: "POST",
-		Path:   "/v1/create",
+	original := Contract{Methods: []Method{{
+		ID:      "create",
+		Service: "panel.agent.v1.AgentService",
+		RPC:     "Create",
 		Request: &Schema{Type: "object", Fields: map[string]Schema{
 			"spec": {Type: "object"},
 		}},
 	}}}
-	changed := Contract{Endpoints: []Endpoint{{
+	changed := Contract{Methods: []Method{{
 		ID:      "create",
-		Method:  "POST",
-		Path:    "/v1/create",
+		Service: "panel.agent.v1.AgentService",
+		RPC:     "Create",
 		Request: &Schema{Type: "object", Fields: map[string]Schema{}},
 	}}}
 

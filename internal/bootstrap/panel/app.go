@@ -98,7 +98,7 @@ func New(cfg config.Config) (*App, error) {
 	internalFileRegistry.Register("key_asset", keyAssetSvc)
 	variableRegistry := applications.NewApplicationVariableRegistry()
 	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
-	agentClient, err := agentclient.NewHTTPClient(agentTLS, cfg.RemoteTimeout())
+	agentClient, err := agentclient.NewGRPCClient(agentTLS, cfg.RemoteTimeout())
 	if err != nil {
 		_ = store.Close()
 		return nil, err

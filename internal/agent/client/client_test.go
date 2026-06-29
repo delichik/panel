@@ -5,18 +5,23 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"path/filepath"
 	"testing"
 	"time"
 
+	agentrpc "panel/internal/agent/rpc"
 	agentsecurity "panel/internal/agent/security"
-	agentserver "panel/internal/agent/server"
 	panelerr "panel/internal/platform/errors"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/status"
 )
 
-func TestHTTPClientHealthCapturesPeerCertificateInfo(t *testing.T) {
+func TestGRPCClientHealthCapturesPeerCertificateInfo(t *testing.T) {
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
@@ -33,21 +38,27 @@ func TestHTTPClientHealthCapturesPeerCertificateInfo(t *testing.T) {
 	if !pool.AppendCertsFromPEM(assets.CACertificatePEM()) {
 		t.Fatal("invalid test CA")
 	}
-	server := httptest.NewUnstartedServer(agentserver.NewHandler(agentserver.HandlerConfig{DockerHost: "unix:///tmp/panel-test.sock"}))
-	server.TLS = &tls.Config{
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.Creds(credentials.NewTLS(&tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{keyPair},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    pool,
-	}
-	server.StartTLS()
-	defer server.Close()
-	client, err := NewHTTPClient(assets, time.Second)
+	})))
+	agentrpc.RegisterAgentService(server, agentrpc.NewHandler(agentrpc.HandlerConfig{DockerHost: "unix:///tmp/panel-test.sock"}))
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	defer server.Stop()
+	client, err := NewGRPCClient(assets, time.Second)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	health, err := client.Health(context.Background(), server.URL)
+	health, err := client.Health(context.Background(), "https://"+listener.Addr().String())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,12 +74,8 @@ func TestHTTPClientHealthCapturesPeerCertificateInfo(t *testing.T) {
 	}
 }
 
-func TestDecodeAgentResponseWrapsRemoteErrorAsBadGateway(t *testing.T) {
-	rec := httptest.NewRecorder()
-	rec.Code = http.StatusBadGateway
-	rec.Body.WriteString(`{"error":"ufw: permission denied"}`)
-
-	err := decodeAgentResponse(rec.Result(), nil)
+func TestWrapAgentErrorAsBadGateway(t *testing.T) {
+	err := wrapAgentError(status.Error(codes.Internal, "ufw: permission denied"))
 	if err == nil {
 		t.Fatal("expected agent error")
 	}

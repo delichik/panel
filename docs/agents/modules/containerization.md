@@ -8,7 +8,7 @@
 
 - Panel 服务与 API：`internal/modules/containers/`；HTTP 路由在 `routes.go` 注册。
 - 设施应用服务与 API：`internal/modules/facilityapps/`；当前内置反向代理设施应用。
-- Agent Docker Engine API：`internal/agent/docker/`；Agent HTTP 路由：`internal/agent/server/`
+- Agent Docker Engine API：`internal/agent/docker/`；Agent gRPC service：`internal/agent/rpc/`
 - Application 运行时：`internal/modules/applications/service.go`
 - 周期任务：`internal/modules/containers/tasks.go`，由 `internal/modules/tasks/` 内部 worker 驱动
 - 前端资源页面：`web/src/views/resources/`

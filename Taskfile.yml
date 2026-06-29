@@ -9,7 +9,7 @@ env:
 
 tasks:
   generate:agent-contract-hash:
-    desc: Generate the Agent HTTP contract hash
+    desc: Generate the Agent gRPC contract hash
     cmds:
       - go run ./cmd/generate-agent-contract-hash
 

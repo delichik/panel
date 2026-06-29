@@ -1,160 +1,101 @@
 package client
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"net/http"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	agentpb "panel/internal/agent/pb"
+	agentrpc "panel/internal/agent/rpc"
 	agentsecurity "panel/internal/agent/security"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/peer"
+	"google.golang.org/grpc/status"
 )
 
-type HTTPClient struct {
-	mu                sync.RWMutex
-	client            *http.Client
-	pullClient        *http.Client
-	maintenanceClient *http.Client
-	timeout           time.Duration
+type GRPCClient struct {
+	mu        sync.RWMutex
+	tlsAssets *agentsecurity.TLSAssets
+	timeout   time.Duration
 }
 
 const dockerImagePullTimeout = 15 * time.Minute
 const maintenanceTimeout = 65 * time.Minute
 
-func NewHTTPClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*HTTPClient, error) {
+func NewGRPCClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*GRPCClient, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
-	client := &HTTPClient{timeout: timeout}
+	client := &GRPCClient{timeout: timeout}
 	if err := client.ReloadTLSAssets(tlsAssets); err != nil {
 		return nil, err
 	}
 	return client, nil
 }
 
-func (c *HTTPClient) ReloadTLSAssets(tlsAssets *agentsecurity.TLSAssets) error {
-	tlsConfig, err := tlsAssets.ClientTLSConfig()
-	if err != nil {
+func (c *GRPCClient) ReloadTLSAssets(tlsAssets *agentsecurity.TLSAssets) error {
+	if tlsAssets == nil {
+		return fmt.Errorf("agent tls assets are not configured")
+	}
+	if _, err := tlsAssets.ClientTLSConfig(); err != nil {
 		return err
 	}
-	next := &http.Client{
-		Timeout: c.timeout,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig,
-		},
-	}
-	nextPull := &http.Client{
-		Timeout: dockerImagePullTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig.Clone(),
-		},
-	}
-	nextMaintenance := &http.Client{
-		Timeout: maintenanceTimeout,
-		Transport: &http.Transport{
-			TLSClientConfig: tlsConfig.Clone(),
-		},
-	}
 	c.mu.Lock()
-	previous := c.client
-	previousPull := c.pullClient
-	previousMaintenance := c.maintenanceClient
-	c.client = next
-	c.pullClient = nextPull
-	c.maintenanceClient = nextMaintenance
+	c.tlsAssets = tlsAssets
 	c.mu.Unlock()
-	if previous != nil {
-		if transport, ok := previous.Transport.(*http.Transport); ok {
-			transport.CloseIdleConnections()
-		}
-	}
-	if previousPull != nil {
-		if transport, ok := previousPull.Transport.(*http.Transport); ok {
-			transport.CloseIdleConnections()
-		}
-	}
-	if previousMaintenance != nil {
-		if transport, ok := previousMaintenance.Transport.(*http.Transport); ok {
-			transport.CloseIdleConnections()
-		}
-	}
 	return nil
 }
 
-func (c *HTTPClient) doMaintenance(req *http.Request) (*http.Response, error) {
-	c.mu.RLock()
-	client := c.maintenanceClient
-	c.mu.RUnlock()
-	if client == nil {
-		return nil, fmt.Errorf("agent maintenance http client is not configured")
-	}
-	return client.Do(req)
-}
-
-func (c *HTTPClient) do(req *http.Request) (*http.Response, error) {
-	c.mu.RLock()
-	client := c.client
-	c.mu.RUnlock()
-	if client == nil {
-		return nil, fmt.Errorf("agent http client is not configured")
-	}
-	return client.Do(req)
-}
-
-func (c *HTTPClient) doPull(req *http.Request) (*http.Response, error) {
-	c.mu.RLock()
-	client := c.pullClient
-	c.mu.RUnlock()
-	if client == nil {
-		return nil, fmt.Errorf("agent http client is not configured")
-	}
-	return client.Do(req)
-}
-
-func (c *HTTPClient) Health(ctx context.Context, baseURL string) (agentcontract.HealthResponse, error) {
-	var out agentcontract.HealthResponse
-	res, err := c.getResponse(ctx, baseURL, "/v1/health", nil)
+func (c *GRPCClient) Health(ctx context.Context, endpoint string) (agentcontract.HealthResponse, error) {
+	var pr peer.Peer
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.HealthResponse, error) {
+		return client.Health(ctx, &agentpb.Empty{}, grpc.Peer(&pr))
+	})
 	if err != nil {
-		return out, err
-	}
-	defer res.Body.Close()
-	if err := decodeAgentResponse(res, &out); err != nil {
 		return agentcontract.HealthResponse{}, err
 	}
-	if res.TLS != nil && len(res.TLS.PeerCertificates) > 0 {
-		cert := res.TLS.PeerCertificates[0]
+	health := agentrpc.ContractHealth(out)
+	if tlsInfo, ok := pr.AuthInfo.(credentials.TLSInfo); ok && len(tlsInfo.State.PeerCertificates) > 0 {
+		cert := tlsInfo.State.PeerCertificates[0]
 		sum := sha256.Sum256(cert.Raw)
-		out.Certificate = &agentcontract.CertificateInfo{
+		health.Certificate = &agentcontract.CertificateInfo{
 			Fingerprint: fmt.Sprintf("%X", sum[:]),
 			CommonName:  cert.Subject.CommonName,
 			NotBefore:   cert.NotBefore,
 			NotAfter:    cert.NotAfter,
 		}
 	}
-	return out, nil
+	return health, nil
 }
 
-func (c *HTTPClient) OSRelease(ctx context.Context, baseURL string) (linux.OSRelease, error) {
-	var out agentcontract.OSReleaseResponse
-	if err := c.get(ctx, baseURL, "/v1/system/os-release", nil, &out); err != nil {
+func (c *GRPCClient) OSRelease(ctx context.Context, endpoint string) (linux.OSRelease, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OSReleaseResponse, error) {
+		return client.OSRelease(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
 		return linux.OSRelease{}, err
 	}
-	return out.OSRelease, nil
+	return agentrpc.GoOSRelease(out), nil
 }
 
-func (c *HTTPClient) SystemTraits(ctx context.Context, baseURL string) (map[string]string, error) {
-	var out agentcontract.SystemTraitsResponse
-	if err := c.get(ctx, baseURL, "/v1/system/traits", nil, &out); err != nil {
+func (c *GRPCClient) SystemTraits(ctx context.Context, endpoint string) (map[string]string, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.SystemTraitsResponse, error) {
+		return client.SystemTraits(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
 		return nil, err
 	}
 	if out.Traits == nil {
@@ -163,308 +104,345 @@ func (c *HTTPClient) SystemTraits(ctx context.Context, baseURL string) (map[stri
 	return out.Traits, nil
 }
 
-func (c *HTTPClient) MetricsSnapshot(ctx context.Context, baseURL string, serverID string) (linux.MetricsSnapshot, error) {
-	var out agentcontract.MetricsSnapshotResponse
-	query := url.Values{}
-	query.Set("serverId", serverID)
-	if err := c.get(ctx, baseURL, "/v1/metrics/snapshot", query, &out); err != nil {
+func (c *GRPCClient) MetricsSnapshot(ctx context.Context, endpoint string, serverID string) (linux.MetricsSnapshot, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.MetricsSnapshotResponse, error) {
+		return client.MetricsSnapshot(ctx, &agentpb.MetricsSnapshotRequest{ServerId: serverID})
+	})
+	if err != nil {
 		return linux.MetricsSnapshot{}, err
 	}
-	return agentcontract.SnapshotFromResponse(out), nil
+	return agentrpc.GoSnapshot(out), nil
 }
 
-func (c *HTTPClient) UFWStatus(ctx context.Context, baseURL string) (remoteops.UFWStatus, error) {
-	var out agentcontract.UFWStatusResponse
-	if err := c.get(ctx, baseURL, "/v1/ufw/status", nil, &out); err != nil {
-		return remoteops.UFWStatus{}, err
-	}
-	return agentcontract.UFWStatusFromResponse(out), nil
+func (c *GRPCClient) UFWStatus(ctx context.Context, endpoint string) (remoteops.UFWStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
+		return client.UFWStatus(ctx, &agentpb.Empty{})
+	})
+	return agentrpc.GoUFWStatus(out), err
 }
 
-func (c *HTTPClient) PackageUpdates(ctx context.Context, baseURL string) ([]linux.PackageUpdate, error) {
-	var out agentcontract.PackageUpdatesResponse
-	if err := c.getWithDo(ctx, baseURL, "/v1/system/packages/updates", nil, &out, c.doMaintenance); err != nil {
+func (c *GRPCClient) PackageUpdates(ctx context.Context, endpoint string) ([]linux.PackageUpdate, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.PackageUpdatesResponse, error) {
+		return client.PackageUpdates(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
 		return nil, err
 	}
-	return out.Items, nil
+	return agentrpc.GoPackageUpdates(out.Items), nil
 }
 
-func (c *HTTPClient) UpgradePackages(ctx context.Context, baseURL string, req agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
-	var out agentcontract.CommandResponse
-	err := c.postWithDo(ctx, baseURL, "/v1/system/packages/upgrade", req, &out, c.doMaintenance)
-	return out, err
-}
-
-func (c *HTTPClient) UFWInstall(ctx context.Context, baseURL string, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
-	var out agentcontract.UFWStatusResponse
-	err := c.postWithDo(ctx, baseURL, "/v1/ufw/install", req, &out, c.doMaintenance)
-	return agentcontract.UFWStatusFromResponse(out), err
-}
-
-func (c *HTTPClient) UFWEnable(ctx context.Context, baseURL string, req agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
-	var out agentcontract.UFWStatusResponse
-	err := c.postWithDo(ctx, baseURL, "/v1/ufw/enable", req, &out, c.doMaintenance)
-	return agentcontract.UFWStatusFromResponse(out), err
-}
-
-func (c *HTTPClient) UFWAllow(ctx context.Context, baseURL string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
-	var out agentcontract.UFWStatusResponse
-	err := c.postWithDo(ctx, baseURL, "/v1/ufw/rules", req, &out, c.doMaintenance)
-	return agentcontract.UFWStatusFromResponse(out), err
-}
-
-func (c *HTTPClient) UFWDelete(ctx context.Context, baseURL string, req agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
-	var out agentcontract.UFWStatusResponse
-	err := c.postWithDo(ctx, baseURL, "/v1/ufw/rules/delete", req, &out, c.doMaintenance)
-	return agentcontract.UFWStatusFromResponse(out), err
-}
-
-func (c *HTTPClient) Fail2BanStatus(ctx context.Context, baseURL string) (agentcontract.Fail2BanStatusResponse, error) {
-	var out agentcontract.Fail2BanStatusResponse
-	err := c.getWithDo(ctx, baseURL, "/v1/fail2ban/status", nil, &out, c.doMaintenance)
-	return out, err
-}
-
-func (c *HTTPClient) ApplyFail2Ban(ctx context.Context, baseURL string, req agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
-	var out agentcontract.Fail2BanStatusResponse
-	err := c.postWithDo(ctx, baseURL, "/v1/fail2ban/apply", req, &out, c.doMaintenance)
-	return out, err
-}
-
-func (c *HTTPClient) ReleaseFail2Ban(ctx context.Context, baseURL string) (agentcontract.Fail2BanStatusResponse, error) {
-	var out agentcontract.Fail2BanStatusResponse
-	err := c.postWithDo(ctx, baseURL, "/v1/fail2ban/release", nil, &out, c.doMaintenance)
-	return out, err
-}
-
-func (c *HTTPClient) RestartSystem(ctx context.Context, baseURL string) error {
-	return c.postWithDo(ctx, baseURL, "/v1/system/restart", nil, nil, c.doMaintenance)
-}
-
-func (c *HTTPClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error {
-	return c.post(ctx, baseURL, "/v1/runtime/applications/files", req, nil)
-}
-
-func (c *HTTPClient) RuntimeCreateContainer(ctx context.Context, baseURL string, req agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
-	var out agentcontract.RuntimeCreateContainerResponse
-	err := c.post(ctx, baseURL, "/v1/runtime/applications/containers/create", req, &out)
-	return out, err
-}
-
-func (c *HTTPClient) RuntimeStop(ctx context.Context, baseURL string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
-	var out agentcontract.RuntimeInstanceResponse
-	err := c.post(ctx, baseURL, "/v1/runtime/applications/stop", req, &out)
-	return out, err
-}
-
-func (c *HTTPClient) RuntimeRestart(ctx context.Context, baseURL string, req agentcontract.RuntimeRestartRequest) (agentcontract.RuntimeInstanceResponse, error) {
-	var out agentcontract.RuntimeInstanceResponse
-	err := c.post(ctx, baseURL, "/v1/runtime/applications/restart", req, &out)
-	return out, err
-}
-
-func (c *HTTPClient) RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agentcontract.RuntimeStatusResponse, error) {
-	var out agentcontract.RuntimeStatusResponse
-	query := url.Values{}
-	if strings.TrimSpace(containerName) != "" {
-		query.Set("containerName", containerName)
+func (c *GRPCClient) UpgradePackages(ctx context.Context, endpoint string, req agentcontract.PackageUpgradeRequest) (agentcontract.CommandResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.CommandResponse, error) {
+		return client.UpgradePackages(ctx, &agentpb.PackageUpgradeRequest{Names: append([]string(nil), req.Names...), All: req.All})
+	})
+	if out == nil {
+		out = &agentpb.CommandResponse{}
 	}
-	err := c.get(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(instanceID)+"/status", query, &out)
-	return out, err
+	return agentcontract.CommandResponse{Output: out.Output}, err
 }
 
-func (c *HTTPClient) RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agentcontract.RuntimeLogsResponse, error) {
-	var out agentcontract.RuntimeLogsResponse
-	query := url.Values{}
-	if strings.TrimSpace(containerName) != "" {
-		query.Set("containerName", containerName)
+func (c *GRPCClient) UFWInstall(ctx context.Context, endpoint string, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
+	rules := make([]*agentpb.UFWRule, 0, len(req.Rules))
+	for _, rule := range req.Rules {
+		rules = append(rules, agentrpc.PBUFWRule(rule))
 	}
-	if tail > 0 {
-		query.Set("tail", fmt.Sprintf("%d", tail))
-	}
-	err := c.get(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(instanceID)+"/logs", query, &out)
-	return out, err
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
+		return client.UFWInstall(ctx, &agentpb.UFWInstallRequest{Rules: rules})
+	})
+	return agentrpc.GoUFWStatus(out), err
 }
 
-func (c *HTTPClient) RuntimePersistentArchive(ctx context.Context, baseURL, applicationID string) (agentcontract.RuntimePersistentArchiveResponse, error) {
-	var out agentcontract.RuntimePersistentArchiveResponse
-	err := c.get(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(applicationID)+"/persistent/archive", nil, &out)
+func (c *GRPCClient) UFWEnable(ctx context.Context, endpoint string, req agentcontract.UFWEnableRequest) (remoteops.UFWStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
+		return client.UFWEnable(ctx, &agentpb.UFWEnableRequest{SshPort: int32(req.SSHPort)})
+	})
+	return agentrpc.GoUFWStatus(out), err
+}
+
+func (c *GRPCClient) UFWAllow(ctx context.Context, endpoint string, req agentcontract.UFWAllowRequest) (remoteops.UFWStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
+		return client.UFWAllow(ctx, &agentpb.UFWAllowRequest{Rule: agentrpc.PBUFWRule(req.Rule)})
+	})
+	return agentrpc.GoUFWStatus(out), err
+}
+
+func (c *GRPCClient) UFWDelete(ctx context.Context, endpoint string, req agentcontract.UFWDeleteRequest) (remoteops.UFWStatus, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.UFWStatusResponse, error) {
+		return client.UFWDelete(ctx, &agentpb.UFWDeleteRequest{Number: int32(req.Number)})
+	})
+	return agentrpc.GoUFWStatus(out), err
+}
+
+func (c *GRPCClient) Fail2BanStatus(ctx context.Context, endpoint string) (agentcontract.Fail2BanStatusResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.Fail2BanStatusResponse, error) {
+		return client.Fail2BanStatus(ctx, &agentpb.Empty{})
+	})
+	return agentrpc.GoFail2BanStatus(out), err
+}
+
+func (c *GRPCClient) ApplyFail2Ban(ctx context.Context, endpoint string, req agentcontract.Fail2BanApplyRequest) (agentcontract.Fail2BanStatusResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.Fail2BanStatusResponse, error) {
+		return client.ApplyFail2Ban(ctx, &agentpb.Fail2BanApplyRequest{Config: agentrpc.PBFail2BanConfig(req.Config)})
+	})
+	return agentrpc.GoFail2BanStatus(out), err
+}
+
+func (c *GRPCClient) ReleaseFail2Ban(ctx context.Context, endpoint string) (agentcontract.Fail2BanStatusResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.Fail2BanStatusResponse, error) {
+		return client.ReleaseFail2Ban(ctx, &agentpb.Empty{})
+	})
+	return agentrpc.GoFail2BanStatus(out), err
+}
+
+func (c *GRPCClient) RestartSystem(ctx context.Context, endpoint string) error {
+	_, err := callRPC(c, ctx, endpoint, maintenanceTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.RestartSystem(ctx, &agentpb.Empty{})
+	})
+	return err
+}
+
+func (c *GRPCClient) RuntimeWriteFiles(ctx context.Context, endpoint string, req agentcontract.RuntimeWriteFilesRequest) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.RuntimeWriteFiles(ctx, &agentpb.RuntimeWriteFilesRequest{Spec: agentrpc.PBSpec(req.Spec)})
+	})
+	return err
+}
+
+func (c *GRPCClient) RuntimeCreateContainer(ctx context.Context, endpoint string, req agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeCreateContainerResponse, error) {
+		return client.RuntimeCreateContainer(ctx, &agentpb.RuntimeCreateContainerRequest{ServerId: req.ServerID, Spec: agentrpc.PBSpec(req.Spec)})
+	})
+	if out == nil {
+		out = &agentpb.RuntimeCreateContainerResponse{}
+	}
+	return agentcontract.RuntimeCreateContainerResponse{ContainerID: out.ContainerId}, err
+}
+
+func (c *GRPCClient) RuntimeStop(ctx context.Context, endpoint string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeInstanceResponse, error) {
+		return client.RuntimeStop(ctx, &agentpb.RuntimeStopRequest{ApplicationId: req.ApplicationID, InstanceId: req.InstanceID, ContainerName: req.ContainerName, Purge: req.Purge, RemoveApplicationData: req.RemoveApplicationData})
+	})
+	return agentrpc.GoRuntimeInstance(out), err
+}
+
+func (c *GRPCClient) RuntimeRestart(ctx context.Context, endpoint string, req agentcontract.RuntimeRestartRequest) (agentcontract.RuntimeInstanceResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeInstanceResponse, error) {
+		return client.RuntimeRestart(ctx, &agentpb.RuntimeRestartRequest{InstanceId: req.InstanceID, ContainerName: req.ContainerName})
+	})
+	return agentrpc.GoRuntimeInstance(out), err
+}
+
+func (c *GRPCClient) RuntimeStatus(ctx context.Context, endpoint, instanceID, containerName string) (agentcontract.RuntimeStatusResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeStatusResponse, error) {
+		return client.RuntimeStatus(ctx, &agentpb.RuntimeStatusRequest{InstanceId: instanceID, ContainerName: containerName})
+	})
+	return agentrpc.GoRuntimeStatus(out), err
+}
+
+func (c *GRPCClient) RuntimeLogs(ctx context.Context, endpoint, instanceID, containerName string, tail int) (agentcontract.RuntimeLogsResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeLogsResponse, error) {
+		return client.RuntimeLogs(ctx, &agentpb.RuntimeLogsRequest{InstanceId: instanceID, ContainerName: containerName, Tail: int32(tail)})
+	})
+	if out == nil {
+		out = &agentpb.RuntimeLogsResponse{}
+	}
+	return agentcontract.RuntimeLogsResponse{InstanceID: out.InstanceId, Logs: out.Logs}, err
+}
+
+func (c *GRPCClient) RuntimePersistentArchive(ctx context.Context, endpoint, applicationID string) (agentcontract.RuntimePersistentArchiveResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimePersistentArchiveResponse, error) {
+		return client.RuntimePersistentArchive(ctx, &agentpb.RuntimePersistentArchiveRequest{ApplicationId: applicationID})
+	})
 	if err != nil {
 		return agentcontract.RuntimePersistentArchiveResponse{}, err
 	}
-	if strings.TrimSpace(out.ContentBase64) != "" {
-		if _, err := base64.StdEncoding.DecodeString(out.ContentBase64); err != nil {
-			return agentcontract.RuntimePersistentArchiveResponse{}, err
-		}
+	return agentcontract.RuntimePersistentArchiveResponse{
+		ApplicationID: out.ApplicationId,
+		Filename:      out.Filename,
+		ContentBase64: base64.StdEncoding.EncodeToString(out.Content),
+	}, nil
+}
+
+func (c *GRPCClient) RuntimePersistentRestore(ctx context.Context, endpoint, applicationID string, content []byte) (agentcontract.RuntimePersistentRestoreResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimePersistentRestoreResponse, error) {
+		return client.RuntimePersistentRestore(ctx, &agentpb.RuntimePersistentRestoreRequest{ApplicationId: applicationID, Content: append([]byte(nil), content...)})
+	})
+	if out == nil {
+		out = &agentpb.RuntimePersistentRestoreResponse{}
+	}
+	return agentcontract.RuntimePersistentRestoreResponse{ApplicationID: out.ApplicationId, Restored: out.Restored}, err
+}
+
+func (c *GRPCClient) DockerContainers(ctx context.Context, endpoint string) ([]agentcontract.DockerContainer, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.DockerContainersResponse, error) {
+		return client.DockerContainers(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]agentcontract.DockerContainer, 0, len(out.Items))
+	for _, item := range out.Items {
+		items = append(items, agentrpc.GoDockerContainer(item))
+	}
+	return items, nil
+}
+
+func (c *GRPCClient) DockerContainerLogs(ctx context.Context, endpoint, id string, tail int) (agentcontract.DockerContainerLogsResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.DockerContainerLogsResponse, error) {
+		return client.DockerContainerLogs(ctx, &agentpb.DockerContainerLogsRequest{Id: id, Tail: int32(tail)})
+	})
+	if out == nil {
+		out = &agentpb.DockerContainerLogsResponse{}
+	}
+	return agentcontract.DockerContainerLogsResponse{ContainerID: out.ContainerId, Logs: out.Logs}, err
+}
+
+func (c *GRPCClient) DockerContainerAction(ctx context.Context, endpoint, id, action string) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.DockerContainerAction(ctx, &agentpb.DockerContainerActionRequest{Id: id, Action: action})
+	})
+	return err
+}
+
+func (c *GRPCClient) DockerContainerDelete(ctx context.Context, endpoint, id string) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.DockerContainerDelete(ctx, &agentpb.DockerContainerDeleteRequest{Id: id})
+	})
+	return err
+}
+
+func (c *GRPCClient) DockerImages(ctx context.Context, endpoint string) ([]agentcontract.DockerImage, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.DockerImagesResponse, error) {
+		return client.DockerImages(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]agentcontract.DockerImage, 0, len(out.Items))
+	for _, item := range out.Items {
+		items = append(items, agentrpc.GoDockerImage(item))
+	}
+	return items, nil
+}
+
+func (c *GRPCClient) DockerImagePull(ctx context.Context, endpoint, reference string) error {
+	_, err := callRPC(c, ctx, endpoint, dockerImagePullTimeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.DockerImagePull(ctx, &agentpb.DockerImagePullRequest{Reference: reference})
+	})
+	return err
+}
+
+func (c *GRPCClient) DockerImageDelete(ctx context.Context, endpoint, id string) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.DockerImageDelete(ctx, &agentpb.DockerImageDeleteRequest{Id: id})
+	})
+	return err
+}
+
+func (c *GRPCClient) DockerNetworks(ctx context.Context, endpoint string) ([]agentcontract.DockerNetwork, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.DockerNetworksResponse, error) {
+		return client.DockerNetworks(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]agentcontract.DockerNetwork, 0, len(out.Items))
+	for _, item := range out.Items {
+		items = append(items, agentrpc.GoDockerNetwork(item))
+	}
+	return items, nil
+}
+
+func (c *GRPCClient) DockerVolumes(ctx context.Context, endpoint string) ([]agentcontract.DockerVolume, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.DockerVolumesResponse, error) {
+		return client.DockerVolumes(ctx, &agentpb.Empty{})
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := make([]agentcontract.DockerVolume, 0, len(out.Items))
+	for _, item := range out.Items {
+		items = append(items, agentrpc.GoDockerVolume(item))
+	}
+	return items, nil
+}
+
+func (c *GRPCClient) DockerVolumeDelete(ctx context.Context, endpoint, name string) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.DockerVolumeDelete(ctx, &agentpb.DockerVolumeDeleteRequest{Name: name})
+	})
+	return err
+}
+
+func callRPC[T any](c *GRPCClient, ctx context.Context, endpoint string, timeout time.Duration, fn func(context.Context, agentpb.AgentServiceClient) (T, error)) (T, error) {
+	var zero T
+	conn, err := c.dial(endpoint)
+	if err != nil {
+		return zero, err
+	}
+	defer conn.Close()
+	callCtx := ctx
+	cancel := func() {}
+	if timeout > 0 {
+		callCtx, cancel = context.WithTimeout(ctx, timeout)
+	}
+	defer cancel()
+	out, err := fn(callCtx, agentpb.NewAgentServiceClient(conn))
+	if err != nil {
+		return zero, wrapAgentError(err)
 	}
 	return out, nil
 }
 
-func (c *HTTPClient) RuntimePersistentRestore(ctx context.Context, baseURL, applicationID string, content []byte) (agentcontract.RuntimePersistentRestoreResponse, error) {
-	var out agentcontract.RuntimePersistentRestoreResponse
-	err := c.post(ctx, baseURL, "/v1/runtime/applications/"+url.PathEscape(applicationID)+"/persistent/restore", agentcontract.RuntimePersistentRestoreRequest{
-		ApplicationID: applicationID,
-		ContentBase64: base64.StdEncoding.EncodeToString(content),
-	}, &out)
-	return out, err
-}
-
-func (c *HTTPClient) DockerContainers(ctx context.Context, baseURL string) ([]agentcontract.DockerContainer, error) {
-	var out agentcontract.DockerContainersResponse
-	err := c.get(ctx, baseURL, "/v1/docker/containers", nil, &out)
-	return out.Items, err
-}
-
-func (c *HTTPClient) DockerContainerLogs(ctx context.Context, baseURL, id string, tail int) (agentcontract.DockerContainerLogsResponse, error) {
-	var out agentcontract.DockerContainerLogsResponse
-	query := url.Values{}
-	if tail > 0 {
-		query.Set("tail", fmt.Sprintf("%d", tail))
-	}
-	err := c.get(ctx, baseURL, "/v1/docker/containers/"+url.PathEscape(id)+"/logs", query, &out)
-	return out, err
-}
-
-func (c *HTTPClient) DockerContainerAction(ctx context.Context, baseURL, id, action string) error {
-	return c.post(ctx, baseURL, "/v1/docker/containers/"+url.PathEscape(id)+"/"+url.PathEscape(action), nil, nil)
-}
-
-func (c *HTTPClient) DockerContainerDelete(ctx context.Context, baseURL, id string) error {
-	return c.delete(ctx, baseURL, "/v1/docker/containers/"+url.PathEscape(id))
-}
-
-func (c *HTTPClient) DockerImages(ctx context.Context, baseURL string) ([]agentcontract.DockerImage, error) {
-	var out agentcontract.DockerImagesResponse
-	err := c.get(ctx, baseURL, "/v1/docker/images", nil, &out)
-	return out.Items, err
-}
-
-func (c *HTTPClient) DockerImagePull(ctx context.Context, baseURL, reference string) error {
-	return c.postWithDo(ctx, baseURL, "/v1/docker/images/pull", agentcontract.DockerImagePullRequest{Reference: reference}, nil, c.doPull)
-}
-
-func (c *HTTPClient) DockerImageDelete(ctx context.Context, baseURL, id string) error {
-	return c.delete(ctx, baseURL, "/v1/docker/images/"+url.PathEscape(id))
-}
-
-func (c *HTTPClient) DockerNetworks(ctx context.Context, baseURL string) ([]agentcontract.DockerNetwork, error) {
-	var out agentcontract.DockerNetworksResponse
-	err := c.get(ctx, baseURL, "/v1/docker/networks", nil, &out)
-	return out.Items, err
-}
-
-func (c *HTTPClient) DockerVolumes(ctx context.Context, baseURL string) ([]agentcontract.DockerVolume, error) {
-	var out agentcontract.DockerVolumesResponse
-	err := c.get(ctx, baseURL, "/v1/docker/volumes", nil, &out)
-	return out.Items, err
-}
-
-func (c *HTTPClient) DockerVolumeDelete(ctx context.Context, baseURL, name string) error {
-	return c.delete(ctx, baseURL, "/v1/docker/volumes/"+url.PathEscape(name))
-}
-
-func (c *HTTPClient) get(ctx context.Context, baseURL, path string, query url.Values, out any) error {
-	return c.getWithDo(ctx, baseURL, path, query, out, c.do)
-}
-
-func (c *HTTPClient) getWithDo(ctx context.Context, baseURL, path string, query url.Values, out any, do func(*http.Request) (*http.Response, error)) error {
-	res, err := c.getResponseWithDo(ctx, baseURL, path, query, do)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	return decodeAgentResponse(res, out)
-}
-
-func (c *HTTPClient) getResponse(ctx context.Context, baseURL, path string, query url.Values) (*http.Response, error) {
-	return c.getResponseWithDo(ctx, baseURL, path, query, c.do)
-}
-
-func (c *HTTPClient) getResponseWithDo(ctx context.Context, baseURL, path string, query url.Values, do func(*http.Request) (*http.Response, error)) (*http.Response, error) {
-	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
+func (c *GRPCClient) dial(endpoint string) (*grpc.ClientConn, error) {
+	target, err := grpcTarget(endpoint)
 	if err != nil {
 		return nil, err
 	}
-	if len(query) > 0 {
-		u.RawQuery = query.Encode()
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := do(req)
-	if err != nil {
-		return nil, err
-	}
-	return res, nil
-}
-
-func decodeAgentResponse(res *http.Response, out any) error {
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return decodeAgentError(res)
-	}
-	return json.NewDecoder(res.Body).Decode(out)
-}
-
-func (c *HTTPClient) post(ctx context.Context, baseURL, path string, in, out any) error {
-	return c.postWithDo(ctx, baseURL, path, in, out, c.do)
-}
-
-func (c *HTTPClient) postWithDo(ctx context.Context, baseURL, path string, in, out any, do func(*http.Request) (*http.Response, error)) error {
-	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
-	if err != nil {
-		return err
-	}
-	var body bytes.Buffer
-	if in != nil {
-		if err := json.NewEncoder(&body).Encode(in); err != nil {
-			return err
+	c.mu.RLock()
+	tlsAssets := c.tlsAssets
+	c.mu.RUnlock()
+	var transport grpc.DialOption
+	if tlsAssets == nil {
+		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
+	} else {
+		tlsConfig, err := tlsAssets.ClientTLSConfig()
+		if err != nil {
+			return nil, err
 		}
+		transport = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.String(), &body)
-	if err != nil {
-		return err
+	return grpc.NewClient(target, transport)
+}
+
+func grpcTarget(endpoint string) (string, error) {
+	value := strings.TrimSpace(endpoint)
+	if value == "" {
+		return "", fmt.Errorf("agent endpoint is empty")
 	}
-	req.Header.Set("Content-Type", "application/json")
-	res, err := do(req)
-	if err != nil {
-		return err
+	if strings.Contains(value, "://") {
+		parsed, err := url.Parse(value)
+		if err != nil {
+			return "", err
+		}
+		value = parsed.Host
 	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return decodeAgentError(res)
+	if value == "" {
+		return "", fmt.Errorf("agent endpoint is empty")
 	}
-	if out == nil {
+	if _, _, err := net.SplitHostPort(value); err != nil {
+		return "", err
+	}
+	return value, nil
+}
+
+func wrapAgentError(err error) error {
+	if err == nil {
 		return nil
 	}
-	return json.NewDecoder(res.Body).Decode(out)
-}
-
-func (c *HTTPClient) delete(ctx context.Context, baseURL, path string) error {
-	u, err := url.Parse(strings.TrimRight(baseURL, "/") + path)
-	if err != nil {
-		return err
+	message := err.Error()
+	if st, ok := status.FromError(err); ok && st.Message() != "" {
+		message = st.Message()
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.String(), nil)
-	if err != nil {
-		return err
-	}
-	res, err := c.do(req)
-	if err != nil {
-		return err
-	}
-	defer res.Body.Close()
-	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return decodeAgentError(res)
-	}
-	return nil
-}
-
-func decodeAgentError(res *http.Response) error {
-	var er agentcontract.ErrorResponse
-	_ = json.NewDecoder(res.Body).Decode(&er)
-	if er.Error == "" {
-		er.Error = res.Status
-	}
-	return panelerr.BadGateway("agent_request_failed", fmt.Sprintf("Agent request failed: %s", er.Error))
+	return panelerr.BadGateway("agent_request_failed", fmt.Sprintf("Agent request failed: %s", message))
 }
