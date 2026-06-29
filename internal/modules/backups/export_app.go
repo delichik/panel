@@ -12,6 +12,7 @@ import (
 
 	"panel/internal/platform/buildinfo"
 	"panel/internal/platform/config"
+	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 
 	_ "modernc.org/sqlite"
@@ -109,7 +110,7 @@ func (a *ExportApp) statusAPI(w http.ResponseWriter, r *http.Request) {
 func (a *ExportApp) downloadAPI(w http.ResponseWriter, r *http.Request) {
 	status := a.currentStatus()
 	if status.Phase != PhaseCompleted || status.ExportID != r.PathValue("id") || !status.DownloadAvailable {
-		http.NotFound(w, r)
+		httpx.Error(w, panelerr.NotFound("backup export"))
 		return
 	}
 	path := filepath.Join(a.cfg.DataRoot, "tmp", "backups", status.ExportID+".panel-backup")
@@ -234,6 +235,9 @@ func (a *ExportApp) fail(message string) {
 }
 
 func (a *ExportApp) static(w http.ResponseWriter, r *http.Request) {
+	if maintenanceAPINotFound(w, r) {
+		return
+	}
 	if redirectMaintenanceRoot(w, r) {
 		return
 	}

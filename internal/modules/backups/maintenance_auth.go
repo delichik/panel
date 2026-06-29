@@ -169,3 +169,11 @@ func redirectMaintenanceRoot(w http.ResponseWriter, r *http.Request) bool {
 	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
 	return true
 }
+
+func maintenanceAPINotFound(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/") {
+		return false
+	}
+	httpx.Error(w, panelerr.NotFound("api route"))
+	return true
+}

@@ -46,6 +46,8 @@
 - `POST /api/v1/backups/export/exit`
 - `GET /api/v1/backups/export/{id}/download`
 
+维护模式的页面兜底不得处理 `/api/` 路径；未注册 API 必须返回 JSON 错误响应，避免前端 API client 收到 HTTP 200 的 HTML 页面。
+
 恢复模式仅注册最小 API：
 
 - `GET /api/v1/restore/status`

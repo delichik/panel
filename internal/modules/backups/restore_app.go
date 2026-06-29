@@ -249,6 +249,9 @@ func copyFile(src, dst string, mode os.FileMode) error {
 }
 
 func (a *RestoreApp) page(w http.ResponseWriter, r *http.Request) {
+	if maintenanceAPINotFound(w, r) {
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = restorePageTemplate.Execute(w, nil)
 }
