@@ -75,14 +75,20 @@ async function confirmRestore() {
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <div class="backup-workspace">
-      <v-card variant="outlined" class="backup-card">
-        <v-card-title class="backup-title">
-          <v-icon>mdi-archive-arrow-down-outline</v-icon>
-          {{ t('backupRestore.exportTitle') }}
-        </v-card-title>
-        <v-card-text class="backup-card-body">
-          <p>{{ t('backupRestore.exportDescription') }}</p>
+    <v-card :loading="loading" variant="outlined" class="settings-surface pa-6">
+      <div class="settings-header">
+        <div>
+          <div class="text-overline text-medium-emphasis">{{ t('layout.nav.settings') }}</div>
+          <h2 class="settings-title">{{ t('routes.settingsBackups.title') }}</h2>
+        </div>
+      </div>
+
+      <v-form class="settings-form">
+        <section class="settings-section">
+          <div class="section-title">{{ t('backupRestore.exportTitle') }}</div>
+
+          <p class="section-description">{{ t('backupRestore.exportDescription') }}</p>
+
           <v-switch
             v-model="encryptBackup"
             color="primary"
@@ -95,26 +101,27 @@ async function confirmRestore() {
           <v-alert v-else type="warning" variant="tonal">
             {{ t('backupRestore.unencryptedWarning') }}
           </v-alert>
-        </v-card-text>
-        <v-card-actions>
-          <v-btn
-            color="primary"
-            prepend-icon="mdi-play"
-            :disabled="!canStartExport"
-            @click="exportDialog = true"
-          >
-            {{ t('backupRestore.startExport') }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
 
-      <v-card variant="outlined" class="backup-card">
-        <v-card-title class="backup-title">
-          <v-icon>mdi-archive-arrow-up-outline</v-icon>
-          {{ t('backupRestore.restoreTitle') }}
-        </v-card-title>
-        <v-card-text class="backup-card-body">
-          <p>{{ t('backupRestore.restoreDescription') }}</p>
+          <div class="form-actions">
+            <v-btn
+              color="primary"
+              prepend-icon="mdi-play"
+              :disabled="!canStartExport"
+              class="text-none font-weight-bold"
+              @click="exportDialog = true"
+            >
+              {{ t('backupRestore.startExport') }}
+            </v-btn>
+          </div>
+        </section>
+
+        <v-divider class="my-2" />
+
+        <section class="settings-section">
+          <div class="section-title">{{ t('backupRestore.restoreTitle') }}</div>
+
+          <p class="section-description">{{ t('backupRestore.restoreDescription') }}</p>
+
           <v-file-input
             v-model="restoreFile"
             :label="t('backupRestore.backupFile')"
@@ -132,15 +139,19 @@ async function confirmRestore() {
             density="comfortable"
             hide-details="auto"
           />
-          <v-btn
-            variant="outlined"
-            prepend-icon="mdi-shield-search"
-            :disabled="!restoreFile"
-            :loading="loading"
-            @click="preflightRestore"
-          >
-            {{ t('backupRestore.preflight') }}
-          </v-btn>
+
+          <div class="form-actions">
+            <v-btn
+              variant="outlined"
+              prepend-icon="mdi-shield-search"
+              :disabled="!restoreFile"
+              :loading="loading"
+              class="text-none font-weight-bold"
+              @click="preflightRestore"
+            >
+              {{ t('backupRestore.preflight') }}
+            </v-btn>
+          </div>
 
           <v-alert v-if="restorePlan" type="info" variant="tonal">
             {{ t('backupRestore.preflightSummary', {
@@ -148,19 +159,21 @@ async function confirmRestore() {
               created: formatDateTime(restorePlan.manifest.createdAt),
             }) }}
           </v-alert>
-        </v-card-text>
-        <v-card-actions>
-          <v-btn
-            color="error"
-            prepend-icon="mdi-alert"
-            :disabled="!restorePlan"
-            @click="restoreDialog = true"
-          >
-            {{ t('backupRestore.confirmRestore') }}
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </div>
+
+          <div class="form-actions">
+            <v-btn
+              color="error"
+              prepend-icon="mdi-alert"
+              :disabled="!restorePlan"
+              class="text-none font-weight-bold"
+              @click="restoreDialog = true"
+            >
+              {{ t('backupRestore.confirmRestore') }}
+            </v-btn>
+          </div>
+        </section>
+      </v-form>
+    </v-card>
 
     <v-dialog v-model="exportDialog" max-width="520">
       <v-card>
@@ -196,42 +209,76 @@ async function confirmRestore() {
 </template>
 
 <style scoped>
-.backup-workspace {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 18px;
-  min-height: 0;
-}
-
-.backup-card {
+.settings-surface {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
+  overflow: auto;
   border-color: var(--lp-border) !important;
-  background: var(--lp-surface) !important;
+  background-color: var(--lp-surface) !important;
 }
 
-.backup-title {
+.settings-header {
   display: flex;
   align-items: center;
-  gap: 10px;
-  font-size: 1rem;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.settings-title {
+  margin: 0;
+  color: var(--lp-text);
+  font-size: 1.18rem;
   font-weight: 760;
+  line-height: 1.2;
+  letter-spacing: 0;
 }
 
-.backup-card-body {
+.settings-form {
   display: grid;
-  gap: 14px;
+  max-width: 560px;
+  gap: 16px;
 }
 
-.backup-card-body p {
+.settings-section {
+  display: grid;
+  gap: 16px;
+}
+
+.section-title {
+  color: var(--lp-text);
+  font-size: 0.96rem;
+  font-weight: 720;
+}
+
+.section-description {
   margin: 0;
   color: var(--lp-text-muted);
+  line-height: 1.6;
 }
 
-@media (max-width: 960px) {
-  .backup-workspace {
-    grid-template-columns: 1fr;
+.form-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+@media (max-width: 720px) {
+  .settings-surface {
+    flex: none;
+    overflow: visible;
+  }
+
+  .settings-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .settings-form,
+  .form-actions,
+  .form-actions .v-btn {
+    width: 100%;
   }
 }
 </style>
