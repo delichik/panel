@@ -106,6 +106,28 @@ func TestProxySpecUsesBridgeNetworkWhenApplicationRouteTargetsContainer(t *testi
 	}
 }
 
+func TestDeployServerProxyPurgesExistingProxyContainer(t *testing.T) {
+	agent := &facilityTestAgent{}
+	svc, closeStore := newFacilityTestServiceWithAgent(t, agent)
+	defer closeStore()
+
+	if err := svc.deployServerProxy(context.Background(), ReverseProxyConfig{
+		ID:                ReverseProxyID,
+		Image:             defaultProxyImage,
+		DeploymentServers: []string{"srv-edge"},
+	}, "srv-edge", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(agent.stops) != 1 {
+		t.Fatalf("stops = %#v", agent.stops)
+	}
+	stop := agent.stops[0]
+	if stop.ApplicationID != proxyApplicationID || stop.InstanceID != instanceID("srv-edge") || stop.ContainerName != proxyContainerName || !stop.Purge {
+		t.Fatalf("proxy stop request = %#v", stop)
+	}
+}
+
 func TestProxySpecMountsPerDomainNginxConfigDirectory(t *testing.T) {
 	svc := &Service{}
 	cfg := ReverseProxyConfig{
@@ -303,6 +325,10 @@ func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
 }
 
 func newFacilityTestService(t *testing.T, agentErr error) (*Service, func()) {
+	return newFacilityTestServiceWithAgent(t, &facilityTestAgent{err: agentErr})
+}
+
+func newFacilityTestServiceWithAgent(t *testing.T, agent *facilityTestAgent) (*Service, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -339,7 +365,7 @@ func newFacilityTestService(t *testing.T, agentErr error) (*Service, func()) {
 			Traits:      traits,
 		},
 	}}
-	svc := NewService(store.AppDB(), facilityTestAgent{err: agentErr}, provider, nil)
+	svc := NewService(store.AppDB(), agent, provider, nil)
 	return svc, func() { _ = store.Close() }
 }
 
@@ -364,25 +390,27 @@ func (p facilityTestServers) Get(_ context.Context, id string) (server.Server, e
 }
 
 type facilityTestAgent struct {
-	err error
+	err   error
+	stops []agentcontract.RuntimeStopRequest
 }
 
-func (a facilityTestAgent) RuntimeWriteFiles(context.Context, string, agentcontract.RuntimeWriteFilesRequest) error {
+func (a *facilityTestAgent) RuntimeWriteFiles(context.Context, string, agentcontract.RuntimeWriteFilesRequest) error {
 	return a.err
 }
 
-func (a facilityTestAgent) RuntimeCreateContainer(context.Context, string, agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
+func (a *facilityTestAgent) RuntimeCreateContainer(context.Context, string, agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
 	return agentcontract.RuntimeCreateContainerResponse{}, a.err
 }
 
-func (a facilityTestAgent) RuntimeStop(context.Context, string, agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
+func (a *facilityTestAgent) RuntimeStop(_ context.Context, _ string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
+	a.stops = append(a.stops, req)
 	return agentcontract.RuntimeInstanceResponse{}, nil
 }
 
-func (a facilityTestAgent) DockerImagePull(context.Context, string, string) error {
+func (a *facilityTestAgent) DockerImagePull(context.Context, string, string) error {
 	return a.err
 }
 
-func (a facilityTestAgent) DockerContainerAction(context.Context, string, string, string) error {
+func (a *facilityTestAgent) DockerContainerAction(context.Context, string, string, string) error {
 	return a.err
 }

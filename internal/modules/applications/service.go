@@ -3401,7 +3401,7 @@ func (s *Service) reconcileReverseProxy(ctx context.Context) error {
 	if s.proxyReconciler == nil {
 		return nil
 	}
-	return s.proxyReconciler.ReconcileReverseProxy(ctx)
+	return runtimeOperationError(s.proxyReconciler.ReconcileReverseProxy(ctx))
 }
 
 func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Application) (Application, error) {

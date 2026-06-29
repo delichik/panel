@@ -288,6 +288,7 @@ func (s *Service) deployServerProxy(ctx context.Context, cfg ReverseProxyConfig,
 			ApplicationID: proxyApplicationID,
 			InstanceID:    instanceID(serverID),
 			ContainerName: proxyContainerName,
+			Purge:         true,
 		})
 		if err := s.agent.RuntimeWriteFiles(runCtx, baseURL, agentcontract.RuntimeWriteFilesRequest{Spec: spec}); err != nil {
 			_ = s.handleAgentError(runCtx, srv, err)

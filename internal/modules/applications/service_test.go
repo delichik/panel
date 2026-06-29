@@ -640,6 +640,30 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 	}
 }
 
+func TestStopAppWrapsReverseProxyReconcileFailure(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetReverseProxyReconciler(fakeReverseProxyReconciler{err: errors.New("create container failed: Conflict")})
+
+	_, err = svc.Stop(ctx, app.ID, false)
+	if err == nil {
+		t.Fatal("expected reverse proxy reconcile error")
+	}
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) {
+		t.Fatalf("expected panel error, got %T %v", err, err)
+	}
+	if appErr.Code != "application_runtime_operation_failed" || appErr.HTTPStatus != 502 || !strings.Contains(appErr.Message, "create container failed: Conflict") {
+		t.Fatalf("unexpected wrapped error: %#v", appErr)
+	}
+}
+
 func TestStopTaskExecutorUsesPurgeParamAndCompletesTask(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -1411,6 +1435,14 @@ type fakeRuntimeClient struct {
 	createEntered        chan struct{}
 	createRelease        chan struct{}
 	createOnce           sync.Once
+}
+
+type fakeReverseProxyReconciler struct {
+	err error
+}
+
+func (f fakeReverseProxyReconciler) ReconcileReverseProxy(context.Context) error {
+	return f.err
 }
 
 func (f *fakeRuntimeClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error {
