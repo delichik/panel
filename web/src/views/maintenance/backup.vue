@@ -17,6 +17,7 @@ const phaseText = computed(() => t(`backupRestore.phases.${status.value?.phase |
 const canDownload = computed(() => Boolean(status.value?.downloadAvailable && status.value.exportId));
 const isFinished = computed(() => status.value?.phase === 'completed' || status.value?.phase === 'failed');
 const needsPassword = computed(() => status.value?.phase === 'password_required');
+const canStart = computed(() => status.value?.phase === 'ready');
 
 async function loadStatus() {
   try {
@@ -48,7 +49,7 @@ async function downloadBackup() {
 async function exitMaintenance() {
   loading.value = true;
   try {
-    await backupsApi.exitExportMaintenance();
+    status.value = await backupsApi.exitExportMaintenance();
     finished.value = true;
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('backupRestore.exitFailed');
@@ -65,6 +66,17 @@ async function submitPassword() {
     await loadStatus();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('backupRestore.passwordSubmitFailed');
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function startExport() {
+  loading.value = true;
+  try {
+    status.value = await backupsApi.startPreparedExport();
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('backupRestore.startPreparedExportFailed');
   } finally {
     loading.value = false;
   }
@@ -146,6 +158,16 @@ onBeforeUnmount(() => {
       <div class="maintenance-actions">
         <v-btn
           color="primary"
+          prepend-icon="mdi-play"
+          :disabled="!canStart"
+          :loading="loading"
+          class="text-none font-weight-bold"
+          @click="startExport"
+        >
+          {{ t('backupRestore.startPreparedExport') }}
+        </v-btn>
+        <v-btn
+          color="primary"
           prepend-icon="mdi-download"
           :disabled="!canDownload"
           :loading="loading"
@@ -165,7 +187,7 @@ onBeforeUnmount(() => {
         </v-btn>
       </div>
       <v-alert v-if="finished" type="success" variant="tonal" class="mt-4">
-        {{ t('backupRestore.restartAfterExport') }}
+        {{ t(status?.restartSupported ? 'backupRestore.restartingAfterExport' : 'backupRestore.restartAfterExport') }}
       </v-alert>
     </v-card>
   </div>

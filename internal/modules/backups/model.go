@@ -56,7 +56,8 @@ type ExportRequest struct {
 }
 
 type ExportResponse struct {
-	ExportID string `json:"exportId"`
+	ExportID         string `json:"exportId"`
+	RestartSupported bool   `json:"restartSupported"`
 }
 
 type RestorePreflightResponse struct {

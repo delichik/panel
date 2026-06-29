@@ -28,12 +28,12 @@ async function startExport() {
   loading.value = true;
   error.value = '';
   try {
-    await backupsApi.startExport({
+    const result = await backupsApi.startExport({
       encrypt: encryptBackup.value,
       password: '',
     });
     exportDialog.value = false;
-    showMessage(t('backupRestore.exportPending'));
+    showMessage(t(result.restartSupported ? 'backupRestore.exportRestarting' : 'backupRestore.exportPending'));
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('backupRestore.exportFailed');
   } finally {
@@ -60,9 +60,9 @@ async function confirmRestore() {
   loading.value = true;
   error.value = '';
   try {
-    await backupsApi.confirmRestore(restoreFile.value, restorePassword.value);
+    const result = await backupsApi.confirmRestore(restoreFile.value, restorePassword.value);
     restoreDialog.value = false;
-    showMessage(t('backupRestore.restorePending'));
+    showMessage(t(result.restartSupported ? 'backupRestore.restoreRestarting' : 'backupRestore.restorePending'));
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('backupRestore.restoreConfirmFailed');
   } finally {

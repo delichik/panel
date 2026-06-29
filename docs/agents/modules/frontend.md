@@ -141,3 +141,10 @@
 - 用户域资产支持生成、导入、下载、删除、重新签发或重新生成。
 - 批量导出要求输入至少 12 位密码；批量导入使用 multipart 上传，先展示预检摘要、冲突和受影响引用，再提交处理策略。
 - 前端 API 位于 `web/src/api/keyAssets.ts`，共享 client 的 `postForm` 负责 multipart 请求。
+
+## Backup/restore container restart UI
+
+- Backup and restore pages must not call a standalone restart endpoint. There is no such API.
+- Existing backup/restore responses expose `restartSupported`. When it is true, the UI should tell the user Panel is restarting automatically as part of the current backup/restore workflow. When false, keep the manual restart instruction.
+- Settings backup page uses the result of `POST /api/v1/backups/export` and `POST /api/v1/backups/restore/confirm` to choose the pending/restarting snackbar text.
+- Backup export maintenance page uses the status returned by `POST /api/v1/backups/export/exit` to choose the finished/restarting message.

@@ -16,10 +16,11 @@ import (
 )
 
 type RestoreApp struct {
-	cfg    config.Config
-	mux    *http.ServeMux
-	mu     sync.RWMutex
-	status Status
+	cfg       config.Config
+	mux       *http.ServeMux
+	mu        sync.RWMutex
+	status    Status
+	restarter Restarter
 }
 
 func PendingRestoreExists(dataRoot string) bool {
@@ -28,15 +29,17 @@ func PendingRestoreExists(dataRoot string) bool {
 }
 
 func NewRestoreApp(cfg config.Config) (*RestoreApp, error) {
+	restarter := NewContainerRestarter()
 	app := &RestoreApp{
-		cfg: cfg,
-		mux: http.NewServeMux(),
+		cfg:       cfg,
+		mux:       http.NewServeMux(),
+		restarter: restarter,
 		status: Status{
 			Mode:             ModeRestoreRunning,
 			Phase:            PhaseIdle,
 			Progress:         0,
 			StartedAt:        time.Now().UTC(),
-			RestartSupported: false,
+			RestartSupported: restarter.Supported(),
 		},
 	}
 	app.routes()
@@ -91,7 +94,11 @@ func (a *RestoreApp) clearPendingAPI(w http.ResponseWriter, r *http.Request) {
 	a.status.FinishedAt = time.Now().UTC()
 	a.status.Error = ""
 	a.mu.Unlock()
-	httpx.JSON(w, http.StatusOK, a.currentStatus())
+	status := a.currentStatus()
+	httpx.JSON(w, http.StatusOK, status)
+	if status.RestartSupported {
+		a.restarter.RestartSoon()
+	}
 }
 
 func (a *RestoreApp) apply(ctx context.Context, password string) {
@@ -136,6 +143,9 @@ func (a *RestoreApp) apply(ctx context.Context, password string) {
 	}
 	_ = os.RemoveAll(pendingDir(a.cfg.DataRoot))
 	a.set(PhaseCompleted, 100, "")
+	if a.restarter.Supported() {
+		a.restarter.RestartSoon()
+	}
 }
 
 func (a *RestoreApp) applyStaged(ctx context.Context, staging string) error {
@@ -267,10 +277,10 @@ input{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #ccd3d
 <div class="row"><span>Encrypted</span><span id="encrypted">-</span></div>
 <div id="passwordBox" style="display:none"><input id="password" type="password" placeholder="Backup password"><button onclick="submitPassword()">Continue restore</button></div>
 <div id="error" class="error" style="display:none"></div>
-<p class="muted" id="done" style="display:none">Restore completed. Restart Panel to continue.</p>
+<p class="muted" id="done" style="display:none"></p>
 </section></main>
 <script>
-async function load(){const r=await fetch('/api/v1/restore/status');const e=await r.json();const s=e.data;document.getElementById('progress').value=s.progress||0;document.getElementById('phase').textContent=s.phase||'-';document.getElementById('created').textContent=s.manifest?.createdAt?new Date(s.manifest.createdAt).toLocaleString():'-';document.getElementById('version').textContent=s.manifest?.panelVersion||'-';document.getElementById('encrypted').textContent=s.manifest?.encrypted?'yes':'no';document.getElementById('passwordBox').style.display=s.phase==='password_required'?'block':'none';document.getElementById('done').style.display=s.phase==='completed'?'block':'none';const err=document.getElementById('error');err.style.display=s.error?'block':'none';err.textContent=s.error||'';if(s.phase!=='completed')setTimeout(load,1500)}
+async function load(){const r=await fetch('/api/v1/restore/status');const e=await r.json();const s=e.data;document.getElementById('progress').value=s.progress||0;document.getElementById('phase').textContent=s.phase||'-';document.getElementById('created').textContent=s.manifest?.createdAt?new Date(s.manifest.createdAt).toLocaleString():'-';document.getElementById('version').textContent=s.manifest?.panelVersion||'-';document.getElementById('encrypted').textContent=s.manifest?.encrypted?'yes':'no';document.getElementById('passwordBox').style.display=s.phase==='password_required'?'block':'none';const done=document.getElementById('done');done.style.display=s.phase==='completed'?'block':'none';done.textContent=s.restartSupported?'Restore completed. Panel is restarting.':'Restore completed. Restart Panel to continue.';const err=document.getElementById('error');err.style.display=s.error?'block':'none';err.textContent=s.error||'';if(s.phase!=='completed')setTimeout(load,1500)}
 async function submitPassword(){await fetch('/api/v1/restore/password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({password:document.getElementById('password').value})});load()}
 load()
 </script></body></html>`))

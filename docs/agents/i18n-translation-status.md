@@ -12,6 +12,7 @@
   - Agent maintenance gRPC 错误现在作为 `agent_request_failed` 业务错误返回，简体中文按前缀翻译为“Agent 请求失败：...”，保留远端命令原始诊断。
 - `web/src/views/settings/backups/index.vue`、`web/src/views/maintenance/backup.vue`、`internal/modules/backups`
   - 新增备份与还原设置页、备份导出维护页、维护阶段、启动期输入导出密码、危险确认、重启进入备份导出模式、还原预检和 pending restore 提示文案，已接入英文与简体中文词条。
+  - 导出维护页改为登录后手动开始导出，补齐“开始导出”、ready 阶段和开始失败提示的英文与简体中文词条。
   - 新增备份/还原后端错误码 `restore_*` 等简体中文翻译；备份归档中的业务数据和第三方诊断不在页面展开显示。
 - `web/src/views/applications/apps/ApplicationDetail.vue`
   - 持久化数据上传入口新增“导入持久化数据”未部署迁移文案，已接入英文与简体中文词条；已部署应用继续使用恢复并重启文案。
@@ -118,3 +119,6 @@
 - `web/src/views/applications/facility-apps/index.vue`?`web/src/api/facilityApps.ts`
 
 - `web/src/views/applications/apps/ApplicationEditor.vue`?`web/src/views/applications/facility-apps/index.vue`
+
+- `web/src/views/settings/backups/index.vue`、`web/src/views/maintenance/backup.vue`、`internal/modules/backups`
+  - 备份导出、还原确认和导出维护退出在容器内自重启时新增自动重启提示文案，已接入英文与简体中文词条；不新增独立 restart API。

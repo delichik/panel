@@ -18,6 +18,9 @@ export function createBackupsApi(client: ApiClient = apiClient) {
     exitExportMaintenance() {
       return client.post<BackupStatusDto>('/backups/export/exit');
     },
+    startPreparedExport() {
+      return client.post<BackupStatusDto>('/backups/export/start');
+    },
     downloadExport(exportId: string) {
       return client.download(`/backups/export/${encodeURIComponent(exportId)}/download`);
     },

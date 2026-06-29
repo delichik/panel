@@ -34,7 +34,7 @@ export const router = createRouter({
   history: createWebHistory(),
   routes: [
     { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
-    { path: '/maintenance/backup', name: 'maintenance-backup', component: BackupMaintenancePage, meta: { public: true, titleKey: 'routes.maintenanceBackup.title' } },
+    { path: '/maintenance/backup', name: 'maintenance-backup', component: BackupMaintenancePage, meta: { requiresAuth: true, maintenance: true, titleKey: 'routes.maintenanceBackup.title' } },
     { path: '/change-password', name: 'change-password', component: ChangePasswordPage, meta: { requiresAuth: true, allowPasswordChange: true } },
     {
       path: '/',
@@ -87,7 +87,7 @@ router.beforeEach(async (to) => {
   if (!auth.checked) {
     await auth.restoreSession();
   }
-  if (auth.authenticated && !auth.passwordChangeRequired) {
+  if (auth.authenticated && !auth.passwordChangeRequired && !to.meta.maintenance) {
     try {
       await settings.loadRuntime();
     } catch {
@@ -95,12 +95,16 @@ router.beforeEach(async (to) => {
     }
   }
   if (to.meta.public && auth.authenticated) {
+    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '';
+    if (redirect.startsWith('/maintenance/')) {
+      return redirect;
+    }
     return auth.passwordChangeRequired ? '/change-password' : '/overview';
   }
   if (!to.meta.public && !auth.authenticated) {
     return { path: '/login', query: { redirect: to.fullPath } };
   }
-  if (auth.authenticated && auth.passwordChangeRequired && !to.meta.allowPasswordChange) {
+  if (auth.authenticated && auth.passwordChangeRequired && !to.meta.allowPasswordChange && !to.meta.maintenance) {
     return { path: '/change-password', query: { redirect: to.fullPath } };
   }
   if (to.name === 'change-password' && auth.authenticated && !auth.passwordChangeRequired) {

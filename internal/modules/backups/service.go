@@ -19,11 +19,25 @@ var (
 )
 
 type Service struct {
-	cfg ArchiveConfig
+	cfg       ArchiveConfig
+	restarter Restarter
 }
 
-func NewService(cfg ArchiveConfig) *Service {
-	return &Service{cfg: cfg}
+type Option func(*Service)
+
+func WithRestarter(restarter Restarter) Option {
+	return func(s *Service) { s.restarter = restarter }
+}
+
+func NewService(cfg ArchiveConfig, opts ...Option) *Service {
+	s := &Service{cfg: cfg, restarter: NewContainerRestarter()}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.restarter == nil {
+		s.restarter = noopRestarter{}
+	}
+	return s
 }
 
 func (s *Service) StartExport(_ context.Context, req ExportRequest) (ExportResponse, error) {
@@ -35,7 +49,11 @@ func (s *Service) StartExport(_ context.Context, req ExportRequest) (ExportRespo
 	}); err != nil {
 		return ExportResponse{}, err
 	}
-	return ExportResponse{ExportID: exportID}, nil
+	restartSupported := s.restarter.Supported()
+	if restartSupported {
+		s.restarter.RestartSoon()
+	}
+	return ExportResponse{ExportID: exportID, RestartSupported: restartSupported}, nil
 }
 
 func writePendingExport(dataRoot string, marker pendingExport) error {
@@ -110,7 +128,11 @@ func (s *Service) SavePendingRestore(uploadedPath, password string) (RestoreConf
 	if err := os.WriteFile(filepath.Join(dir, "pending.json"), markerBytes, 0600); err != nil {
 		return RestoreConfirmResponse{}, err
 	}
-	return RestoreConfirmResponse{Pending: true, RestartSupported: false}, nil
+	restartSupported := s.restarter.Supported()
+	if restartSupported {
+		s.restarter.RestartSoon()
+	}
+	return RestoreConfirmResponse{Pending: true, RestartSupported: restartSupported}, nil
 }
 
 func pendingDir(dataRoot string) string {

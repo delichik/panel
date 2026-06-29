@@ -18,10 +18,12 @@ import (
 )
 
 type ExportApp struct {
-	cfg    config.Config
-	mux    *http.ServeMux
-	mu     sync.RWMutex
-	status Status
+	cfg       config.Config
+	mux       *http.ServeMux
+	mu        sync.RWMutex
+	status    Status
+	restarter Restarter
+	auth      *maintenanceAuth
 }
 
 func PendingExportExists(dataRoot string) bool {
@@ -30,15 +32,22 @@ func PendingExportExists(dataRoot string) bool {
 }
 
 func NewExportApp(cfg config.Config) (*ExportApp, error) {
+	restarter := NewContainerRestarter()
+	auth, err := newMaintenanceAuth(context.Background(), cfg.AppDatabase)
+	if err != nil {
+		return nil, err
+	}
 	app := &ExportApp{
-		cfg: cfg,
-		mux: http.NewServeMux(),
+		cfg:       cfg,
+		mux:       http.NewServeMux(),
+		restarter: restarter,
+		auth:      auth,
 		status: Status{
 			Mode:             ModeBackupExporting,
-			Phase:            PhaseFreezing,
-			Progress:         5,
+			Phase:            PhaseReady,
+			Progress:         10,
 			StartedAt:        time.Now().UTC(),
-			RestartSupported: false,
+			RestartSupported: restarter.Supported(),
 		},
 	}
 	app.routes()
@@ -50,8 +59,6 @@ func NewExportApp(cfg config.Config) (*ExportApp, error) {
 	app.setExportID(marker.ExportID)
 	if marker.Encrypt {
 		app.set(PhasePassword, 10, "")
-	} else {
-		go app.run(context.Background(), "")
 	}
 	return app, nil
 }
@@ -60,14 +67,33 @@ func (a *ExportApp) Handler() http.Handler { return a.mux }
 func (a *ExportApp) Close() error          { return nil }
 
 func (a *ExportApp) routes() {
-	a.mux.HandleFunc("GET /api/v1/backups/export/current", a.statusAPI)
-	a.mux.HandleFunc("POST /api/v1/backups/export/password", a.passwordAPI)
-	a.mux.HandleFunc("GET /api/v1/backups/export/{id}/download", a.downloadAPI)
-	a.mux.HandleFunc("POST /api/v1/backups/export/exit", a.exitAPI)
+	a.mux.HandleFunc("POST /api/v1/auth/login", a.auth.loginAPI)
+	a.mux.HandleFunc("GET /api/v1/auth/session", a.auth.sessionAPI)
+	a.mux.HandleFunc("POST /api/v1/auth/logout", a.auth.logoutAPI)
+	a.mux.HandleFunc("GET /api/v1/backups/export/current", a.auth.require(a.statusAPI))
+	a.mux.HandleFunc("POST /api/v1/backups/export/start", a.auth.require(a.startAPI))
+	a.mux.HandleFunc("POST /api/v1/backups/export/password", a.auth.require(a.passwordAPI))
+	a.mux.HandleFunc("GET /api/v1/backups/export/{id}/download", a.auth.require(a.downloadAPI))
+	a.mux.HandleFunc("POST /api/v1/backups/export/exit", a.auth.require(a.exitAPI))
 	a.mux.HandleFunc("/", a.static)
 }
 
+func (a *ExportApp) startAPI(w http.ResponseWriter, r *http.Request) {
+	status := a.currentStatus()
+	if status.Phase != PhaseReady {
+		httpx.JSON(w, http.StatusConflict, status)
+		return
+	}
+	go a.run(context.Background(), "")
+	httpx.JSON(w, http.StatusAccepted, a.currentStatus())
+}
+
 func (a *ExportApp) passwordAPI(w http.ResponseWriter, r *http.Request) {
+	status := a.currentStatus()
+	if status.Phase != PhasePassword {
+		httpx.JSON(w, http.StatusConflict, status)
+		return
+	}
 	var req RestorePasswordRequest
 	if !httpx.Decode(w, r, &req) {
 		return
@@ -100,6 +126,9 @@ func (a *ExportApp) exitAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = os.RemoveAll(exportPendingDir(a.cfg.DataRoot))
 	httpx.JSON(w, http.StatusOK, status)
+	if status.RestartSupported {
+		a.restarter.RestartSoon()
+	}
 }
 
 func (a *ExportApp) run(ctx context.Context, password string) {
@@ -162,7 +191,7 @@ func checkpointSQLiteFiles(ctx context.Context, paths ...string) error {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			return err
 		}
-		db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+		db, err := sql.Open("sqlite", sqliteFileDSN(path))
 		if err != nil {
 			return err
 		}
@@ -205,6 +234,9 @@ func (a *ExportApp) fail(message string) {
 }
 
 func (a *ExportApp) static(w http.ResponseWriter, r *http.Request) {
+	if redirectMaintenanceRoot(w, r) {
+		return
+	}
 	dist := filepath.Join("web", "dist")
 	index := filepath.Join(dist, "index.html")
 	if _, err := os.Stat(index); err != nil {

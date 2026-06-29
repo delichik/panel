@@ -1124,6 +1124,7 @@ export interface BackupExportInput {
 
 export interface BackupExportDto {
   exportId: string;
+  restartSupported: boolean;
 }
 
 export interface RestorePreflightDto {
