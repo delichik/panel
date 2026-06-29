@@ -667,8 +667,7 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 	payload := dockerCreateRequest{
 		Image:        spec.Image,
 		Env:          dockerEnv(spec.Env),
-		Cmd:          append([]string(nil), spec.Args...),
-		Entrypoint:   append([]string(nil), spec.Command...),
+		Cmd:          append([]string(nil), spec.Command...),
 		ExposedPorts: dockerExposedPorts(spec.Ports),
 		Labels: map[string]string{
 			"panel.application.managed":     "true",
@@ -959,20 +958,19 @@ type dockerCreateRequest struct {
 	Image        string              `json:"Image"`
 	Env          []string            `json:"Env,omitempty"`
 	Cmd          []string            `json:"Cmd,omitempty"`
-	Entrypoint   []string            `json:"Entrypoint,omitempty"`
 	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
 	Labels       map[string]string   `json:"Labels,omitempty"`
 	HostConfig   dockerHostConfig    `json:"HostConfig"`
 }
 
 type dockerHostConfig struct {
-	Binds         []string                       `json:"Binds,omitempty"`
-	PortBindings  map[string][]map[string]string `json:"PortBindings,omitempty"`
-	NetworkMode   string                         `json:"NetworkMode,omitempty"`
-	ExtraHosts    []string                       `json:"ExtraHosts,omitempty"`
-	Privileged    bool                           `json:"Privileged,omitempty"`
-	Memory        int64                          `json:"Memory,omitempty"`
-	NanoCPUs      int64                          `json:"NanoCpus,omitempty"`
+	Binds        []string                       `json:"Binds,omitempty"`
+	PortBindings map[string][]map[string]string `json:"PortBindings,omitempty"`
+	NetworkMode  string                         `json:"NetworkMode,omitempty"`
+	ExtraHosts   []string                       `json:"ExtraHosts,omitempty"`
+	Privileged   bool                           `json:"Privileged,omitempty"`
+	Memory       int64                          `json:"Memory,omitempty"`
+	NanoCPUs     int64                          `json:"NanoCpus,omitempty"`
 }
 
 func (c *dockerAPIClient) ensureManagedNetwork(ctx context.Context, networkMode string) error {

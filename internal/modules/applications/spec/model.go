@@ -6,7 +6,6 @@ type Spec struct {
 	Count       int               `json:"count" yaml:"count"`
 	NetworkMode string            `json:"networkMode" yaml:"networkMode"`
 	Command     []string          `json:"command" yaml:"command"`
-	Args        []string          `json:"args" yaml:"args"`
 	Env         map[string]string `json:"env" yaml:"env"`
 	Ports       []Port            `json:"ports" yaml:"ports"`
 	Resources   Resources         `json:"resources" yaml:"resources"`

@@ -22,7 +22,6 @@ type Spec struct {
 	Name          string            `json:"name"`
 	Image         string            `json:"image"`
 	Command       []string          `json:"command,omitempty"`
-	Args          []string          `json:"args,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
 	Ports         []Port            `json:"ports,omitempty"`
 	NetworkMode   string            `json:"networkMode"`

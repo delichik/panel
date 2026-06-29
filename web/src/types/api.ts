@@ -793,7 +793,6 @@ export interface ApplicationRuntimeSpecDto {
   name: string;
   image: string;
   command?: string[];
-  args?: string[];
   env?: Record<string, string>;
   ports?: RuntimePortDto[];
   networkMode: string;

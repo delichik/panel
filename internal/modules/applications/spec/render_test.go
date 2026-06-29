@@ -6,7 +6,6 @@ const sampleSpecYAML = `
 name: web
 image: nginx:1.27
 command: []
-args: []
 env:
   MODE: prod
 ports:
@@ -156,7 +155,6 @@ image: jiasongji/anytls
 networkMode: host
 command:
   - "/app/anytls-server"
-args:
   - "-l"
   - ":9443"
   - "-p"
@@ -182,11 +180,8 @@ restart:
 	if runtimeSpec.NetworkMode != "host" || len(runtimeSpec.Ports) != 0 {
 		t.Fatalf("host network render = mode %q ports %#v", runtimeSpec.NetworkMode, runtimeSpec.Ports)
 	}
-	if got := runtimeSpec.Command; len(got) != 1 || got[0] != "/app/anytls-server" {
+	if got := runtimeSpec.Command; len(got) != 5 || got[0] != "/app/anytls-server" || got[2] != ":9443" {
 		t.Fatalf("command = %#v", got)
-	}
-	if got := runtimeSpec.Args; len(got) != 4 || got[1] != ":9443" {
-		t.Fatalf("args = %#v", got)
 	}
 }
 

@@ -66,7 +66,7 @@
 - `web/src/views/applications/apps/`
   - 应用运行时实例状态、期望状态、日志入口、容器名和实例 ID 文案已接入 `web/src/i18n/index.ts`。
 - `web/src/views/applications/apps/ApplicationEditor.vue`
-  - Command 和 args 数组行标签、提示已接入英文、简体中文词条。
+  - Application command 数组行标签、提示已接入英文、简体中文词条；应用编辑器不再提供独立 args 字段。
 - `web/src/views/tasks/index.vue`
   - 任务中心按“操作”为聚合对象、“任务”为具体执行对象展示；批量父任务的执行模式、操作内任务数和子任务序号已接入英文与简体中文词条。
   - 任务类型名称、类型筛选选项、搜索按钮、多选筛选占位、操作标题、步骤名称、任务阶段和日志面板任务类型已按稳定标识翻译。

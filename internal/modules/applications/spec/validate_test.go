@@ -16,20 +16,17 @@ func TestValidateRejectsMissingImage(t *testing.T) {
 	}
 }
 
-func TestValidateRejectsCommandWithMultipleItems(t *testing.T) {
+func TestValidateAcceptsCommandWithMultipleItems(t *testing.T) {
 	issues := Validate(Spec{Name: "web", Image: "nginx", Command: []string{"nginx", "-g", "daemon off;"}})
-	if !hasIssue(issues, "command") {
+	if len(issues) != 0 {
 		t.Fatalf("issues = %#v", issues)
 	}
 }
 
 func TestNormalizeDropsBlankCommandItems(t *testing.T) {
-	spec := Normalize(Spec{Name: "web", Image: "nginx", Command: []string{" "}, Args: []string{"", " --debug "}})
-	if len(spec.Command) != 0 {
+	spec := Normalize(Spec{Name: "web", Image: "nginx", Command: []string{" ", " --debug "}})
+	if len(spec.Command) != 1 || spec.Command[0] != "--debug" {
 		t.Fatalf("command = %#v", spec.Command)
-	}
-	if len(spec.Args) != 1 || spec.Args[0] != "--debug" {
-		t.Fatalf("args = %#v", spec.Args)
 	}
 }
 

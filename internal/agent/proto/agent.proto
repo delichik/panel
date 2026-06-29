@@ -203,7 +203,8 @@ message RuntimeSpec {
   string name = 5;
   string image = 6;
   repeated string command = 7;
-  repeated string args = 8;
+  reserved 8;
+  reserved "args";
   map<string, string> env = 9;
   repeated RuntimePort ports = 10;
   string network_mode = 11;

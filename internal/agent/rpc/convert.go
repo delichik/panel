@@ -257,7 +257,7 @@ func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 	}
 	return &agentpb.RuntimeSpec{
 		Id: in.ID, ApplicationId: in.ApplicationID, InstanceId: in.InstanceID, ContainerName: in.ContainerName,
-		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...), Args: append([]string(nil), in.Args...),
+		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
 		Env: cloneMap(in.Env), Ports: ports, NetworkMode: in.NetworkMode,
 		Resources:  &agentpb.RuntimeResources{Cpu: int32(in.Resources.CPU), MemoryMb: int32(in.Resources.MemoryMB)},
 		Privileged: in.Privileged, Mounts: mounts, Files: files,
@@ -316,7 +316,7 @@ func goSpec(in *agentpb.RuntimeSpec) appruntime.Spec {
 	}
 	out := appruntime.Spec{
 		ID: in.Id, ApplicationID: in.ApplicationId, InstanceID: in.InstanceId, ContainerName: in.ContainerName,
-		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...), Args: append([]string(nil), in.Args...),
+		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
 		Env: cloneMap(in.Env), Ports: ports, NetworkMode: in.NetworkMode, Privileged: in.Privileged,
 		Mounts: mounts, Files: files, Services: services, Checks: checks, Generation: int(in.Generation), SpecHash: in.SpecHash,
 	}

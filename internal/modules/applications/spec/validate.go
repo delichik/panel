@@ -14,7 +14,6 @@ var fileModePattern = regexp.MustCompile(`^[0-7]{3,4}$`)
 func Normalize(spec Spec) Spec {
 	spec.Count = 1
 	spec.Command = nonEmptyStringItems(spec.Command)
-	spec.Args = nonEmptyStringItems(spec.Args)
 	if spec.NetworkMode == "" {
 		spec.NetworkMode = "bridge"
 	}
@@ -74,9 +73,6 @@ func Validate(spec Spec) []Issue {
 	}
 	if strings.TrimSpace(spec.Image) == "" {
 		issues = append(issues, Issue{Field: "image", Message: "image is required"})
-	}
-	if len(spec.Command) > 1 {
-		issues = append(issues, Issue{Field: "command", Message: "command must contain only the executable; put flags and values in args"})
 	}
 	if spec.NetworkMode != "bridge" && spec.NetworkMode != "host" {
 		issues = append(issues, Issue{Field: "networkMode", Message: "networkMode must be bridge or host"})

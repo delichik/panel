@@ -91,15 +91,15 @@
 
 ## Application Editor Command Fields
 
-- `ApplicationEditor.vue` 的可视化编辑同时维护 appspec `command` 和 `args` 有序数组。每一行是一个 argv 项，编辑器不得按空格拆分用户输入。
-- `command` 只表示可执行文件或 entrypoint；所有 flag 和参数值必须写入 `args`。
-- 后端 appspec 校验拒绝超过一个非空 `command` 项，空 command/args 项会正规化为未设置，避免不填写 command 时阻塞保存。
+- `ApplicationEditor.vue` 的可视化编辑只维护 appspec `command` 有序数组。每一行是一个 argv 项，编辑器不得按空格拆分用户输入。
+- `command` 表示完整容器命令数组，包含可执行文件、flag 和参数值；运行时写入 Docker `Cmd`，不得翻译成 `Entrypoint`。
+- 后端 appspec 校验允许多个非空 `command` 项，空 command 项会正规化为未设置，避免不填写 command 时阻塞保存。
 - 应用编辑器包含可视化和 YAML 两个标签页。可视化页是单页分区表单：标准短字段使用双列网格，端口映射和挂载行保持全宽重复行，便于阅读密集网络和存储设置。
 - 应用编辑器的可视化挂载行必须展示并往返保存 `persistent` 挂载的 `uid`、`gid` 和 `mode`；`file`、`panel_file` 等 Panel managed file 挂载在可视化页显示为只读且不可取消。
 - 应用编辑器弹窗在桌面端可使用较宽布局承载密集表单；端口、挂载和反向代理等复杂重复行在中等宽度下必须提前折叠为单列，避免多个字段、说明文本和操作按钮被挤在一行。
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML 编辑；可视化页也要继续提供挂载编辑入口并与 YAML 往返同步。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入 YAML 编辑。
 - YAML 标签页只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须作为两个标签页共享的表单区展示，不能只出现在可视化页。
-- 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`args` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
+- 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`command` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
 - 应用部署是可重放应用任务，`application_deploy` 由应用模块注册 executor、`run-now` 和 `retry` 能力；HTTP 部署入口和任务 executor 共用当前应用快照刷新、部署校验、启用应用和 runtime deploy 准备逻辑。部署目标超过一个时，入口应通过 `tasks.Manager.CreateBatch` / `CreateBatchAndRun` 创建同一操作下的目标级部署任务，并按注册定义决定串行或并行执行；应用生命周期并发策略当前要求同一应用串行部署，因此应用部署 batch 使用 `ExecutionModeSerial`。部署开始前先创建一个覆盖全部目标的 `application_lifecycle_operations` 聚合，并把 lifecycle operation ID 写入每个目标任务参数，子任务只更新自己的 target，最后一个完成的子任务负责把聚合状态收敛为 deployed、failed 或 partially_deployed。
 - 镜像更新检查是可重放应用任务，`application_image_check` 由应用模块注册 executor、`run-now` 和 `retry` 能力；应用详情只展示最近自动检查结果和手动“更新”动作，不再提供手动检查入口。
 - 应用详情的镜像更新状态必须聚合已部署实例所在服务器的 `image_updates` 结果；只要任一实例服务器对应镜像有更新，应用 DTO 的 `imageUpdateAvailable` 即为 true，并通过 `imageUpdateTargets` 返回节点级本地摘要、最新摘要、检查时间和错误。应用镜像更新成功后需要把对应节点镜像检查缓存标记为已更新，避免旧缓存让详情继续显示可更新。

@@ -40,7 +40,6 @@ const specForm = reactive({
   image: '',
   networkMode: 'bridge' as 'bridge' | 'host',
   command: [] as StringListItem[],
-  args: [] as StringListItem[],
   cpu: null as number | null,
   memoryMb: null as number | null,
   privileged: false,
@@ -130,7 +129,6 @@ function loadDefaultSpecForm(appName?: string) {
   specForm.image = '';
   specForm.networkMode = 'bridge';
   specForm.command = [];
-  specForm.args = [];
   specForm.cpu = null;
   specForm.memoryMb = null;
   specForm.privileged = false;
@@ -148,7 +146,6 @@ function loadSpecForm(raw: string, appName?: string) {
   const networkMode = stringValue(parsed.networkMode);
   specForm.networkMode = networkMode === 'host' ? 'host' : 'bridge';
   specForm.command = arrayItems(parsed.command, false);
-  specForm.args = arrayItems(parsed.args, false);
   specForm.cpu = numericLimit(objectValue(parsed.resources)?.cpu);
   specForm.memoryMb = numericLimit(objectValue(parsed.resources)?.memoryMb);
   specForm.privileged = Boolean(parsed.privileged);
@@ -402,7 +399,6 @@ function buildSpecYaml() {
     networkMode: specForm.networkMode,
   };
   const command = stringListValues(specForm.command);
-  const args = stringListValues(specForm.args);
   const env = Object.fromEntries(specForm.env.filter((item) => item.key.trim()).map((item) => [item.key.trim(), item.value]));
   const ports = specForm.networkMode === 'bridge' ? specForm.ports
     .filter((port) => port.label.trim() && port.to)
@@ -411,7 +407,6 @@ function buildSpecYaml() {
     .filter((mount) => mount.target.trim() && (mount.type === 'persistent' || mount.source.trim()))
     .map(mountYamlValue);
   if (command.length) spec.command = command;
-  if (args.length) spec.args = args;
   if (Object.keys(env).length) spec.env = env;
   if (ports.length) spec.ports = ports;
   const resources: Record<string, number> = {};
@@ -599,39 +594,19 @@ async function save(deploy = false) {
           <v-divider class="section-divider" />
 
           <section class="editor-section">
-            <div class="command-grid">
-              <div>
-                <div class="section-title">{{ t('applicationEditor.command') }}</div>
-                <div v-for="(item, index) in specForm.command" :key="`command-${index}`" class="repeat-row command-row">
-                  <v-text-field
-                    v-model="item.value"
-                    :label="t('applicationEditor.commandItem', { index: index + 1 })"
-                    :hint="index === 0 ? t('applicationEditor.commandHint') : ''"
-                    density="compact"
-                    variant="outlined"
-                    hide-details="auto"
-                  />
-                  <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.command.length === 1" @click="removeAt(specForm.command, index)" />
-                </div>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.command)">{{ t('applicationEditor.addCommandItem') }}</v-btn>
-              </div>
-
-              <div>
-                <div class="section-title">{{ t('applicationEditor.arguments') }}</div>
-                <div v-for="(item, index) in specForm.args" :key="`args-${index}`" class="repeat-row command-row">
-                  <v-text-field
-                    v-model="item.value"
-                    :label="t('applicationEditor.argumentItem', { index: index + 1 })"
-                    :hint="index === 0 ? t('applicationEditor.argumentsHint') : ''"
-                    density="compact"
-                    variant="outlined"
-                    hide-details="auto"
-                  />
-                  <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.args.length === 0" @click="removeAt(specForm.args, index)" />
-                </div>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.args)">{{ t('applicationEditor.addArgumentItem') }}</v-btn>
-              </div>
+            <div class="section-title">{{ t('applicationEditor.command') }}</div>
+            <div v-for="(item, index) in specForm.command" :key="`command-${index}`" class="repeat-row command-row">
+              <v-text-field
+                v-model="item.value"
+                :label="t('applicationEditor.commandItem', { index: index + 1 })"
+                :hint="index === 0 ? t('applicationEditor.commandHint') : ''"
+                density="compact"
+                variant="outlined"
+                hide-details="auto"
+              />
+              <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.command.length === 1" @click="removeAt(specForm.command, index)" />
             </div>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.command)">{{ t('applicationEditor.addCommandItem') }}</v-btn>
           </section>
 
           <v-divider class="section-divider" />
@@ -947,7 +922,6 @@ async function save(deploy = false) {
 .editor-section { min-width: 0; }
 .section-divider { margin: 18px 0; }
 .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
-.command-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 .switch-field { min-height: 40px; }
 .span-2 { grid-column: span 2; }
 .span-all { grid-column: 1 / -1; }
@@ -986,7 +960,6 @@ async function save(deploy = false) {
 .hash-cell { max-width: 180px; }
 @media (max-width: 1180px) {
   .field-grid,
-  .command-grid,
   .mount-row,
   .ports-row,
   .command-row,

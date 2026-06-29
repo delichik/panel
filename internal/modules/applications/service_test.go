@@ -91,7 +91,6 @@ image: jiasongji/anytls
 networkMode: host
 command:
   - "/app/anytls-server"
-args:
   - "-l"
   - ":9443"
   - "-p"
@@ -110,11 +109,8 @@ restart:
 	if spec.NetworkMode != "host" || len(spec.Ports) != 0 {
 		t.Fatalf("runtime network = %q ports %#v", spec.NetworkMode, spec.Ports)
 	}
-	if len(spec.Command) != 1 || spec.Command[0] != "/app/anytls-server" {
+	if len(spec.Command) != 5 || spec.Command[0] != "/app/anytls-server" || spec.Command[2] != ":9443" {
 		t.Fatalf("command = %#v", spec.Command)
-	}
-	if len(spec.Args) != 4 || spec.Args[1] != ":9443" {
-		t.Fatalf("args = %#v", spec.Args)
 	}
 }
 
@@ -177,7 +173,7 @@ func TestCreateDuplicateAppNameReturnsValidation(t *testing.T) {
 	}
 }
 
-func TestCreateDisabledSelectedApplicationWithArgsStoresTargets(t *testing.T) {
+func TestCreateDisabledSelectedApplicationWithCommandStoresTargets(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -190,7 +186,6 @@ image: jiasongji/anytls
 networkMode: host
 command:
   - /app/anytls-server
-args:
   - -l
   - :9443
   - -p
@@ -211,27 +206,6 @@ restart:
 	}
 	if len(runtime.deploys) != 0 {
 		t.Fatalf("disabled create should not call agent runtime, deploys = %#v", runtime.deploys)
-	}
-}
-
-func TestCreateRejectsArgumentsInCommandArray(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-
-	_, err := svc.Create(context.Background(), SaveInput{
-		Name: "anytls",
-		SpecYAML: `name: anytls
-image: jiasongji/anytls
-networkMode: host
-command:
-  - /app/anytls-server
-  - -l
-  - :9443
-`,
-	})
-	var appErr *panelerr.Error
-	if !errors.As(err, &appErr) || appErr.Code != "application_command_invalid" {
-		t.Fatalf("err = %#v", err)
 	}
 }
 
