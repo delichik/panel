@@ -131,6 +131,7 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 	}
 	if triggeredBy == "user" {
 		_ = s.setAgentAutoDeployBlocked(ctx, serverID, false)
+		_ = s.resetAgentAutoDeployBackoffTime(ctx, serverID)
 	}
 	if triggeredBy != "user" {
 		srv, err := s.Get(ctx, serverID)
@@ -157,6 +158,9 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 			_ = s.setAgentAutoDeployBlocked(ctx, serverID, true)
 			return tasks.Task{}, panelerr.Conflict("agent_auto_deploy_exhausted", msg)
 		}
+		if !s.agentAutoDeployRetryDue(srv, time.Now()) {
+			return tasks.Task{}, nil
+		}
 	}
 	srv, err := s.Get(ctx, serverID)
 	if err != nil {
@@ -179,6 +183,9 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 			task.TriggeredBy = "user"
 		}
 		if run && task.Status != tasks.StatusRunning {
+			if triggeredBy != "user" && !agentAutoDeployTaskDue(task, time.Now()) {
+				return task, nil
+			}
 			task, err = s.tasks.RunNow(ctx, task.ID)
 			if err != nil {
 				return tasks.Task{}, err
@@ -224,14 +231,42 @@ func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now tim
 }
 
 func (s *Service) agentAutoDeployAllowed(ctx context.Context, serverID string) (bool, int, error) {
-	if s.tasks == nil {
-		return true, 0, nil
-	}
-	failures, err := s.tasks.CountFailuresSinceLastSuccess(ctx, agentDeployTaskType, connectivityResourceType, serverID, []string{tasks.StatusFailed, tasks.StatusBlocked, tasks.StatusCancelled}, "user")
+	srv, err := s.Get(ctx, serverID)
 	if err != nil {
 		return false, 0, err
 	}
+	failures := traitInt(srv.Traits, agentcontract.TraitAutoDeployFailures)
 	return failures < agentAutoDeployMaxFailures, failures, nil
+}
+
+func (s *Service) agentAutoDeployRetryDue(srv Server, now time.Time) bool {
+	failures := traitInt(srv.Traits, agentcontract.TraitAutoDeployFailures)
+	if failures <= 0 {
+		return true
+	}
+	lastFailure, err := time.Parse(time.RFC3339Nano, srv.Traits[agentcontract.TraitAutoDeployLastFailure])
+	if err != nil {
+		return true
+	}
+	return !lastFailure.Add(agentAutoDeployBackoffDuration(failures)).After(now)
+}
+
+func agentAutoDeployTaskDue(task tasks.Task, now time.Time) bool {
+	return task.NextRunAt == nil || !task.NextRunAt.After(now)
+}
+
+func agentAutoDeployBackoffDuration(failures int) time.Duration {
+	if failures <= 1 {
+		return 30 * time.Second
+	}
+	delay := 30 * time.Second
+	for i := 1; i < failures; i++ {
+		delay *= 2
+		if delay >= 10*time.Minute {
+			return 10 * time.Minute
+		}
+	}
+	return delay
 }
 
 func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server) {
@@ -332,6 +367,7 @@ func (s *Service) failAgentDeployTask(ctx context.Context, taskID string, srv Se
 	if err != nil || task.TriggeredBy == "user" {
 		return
 	}
+	_, _ = s.recordAgentAutoDeployFailure(ctx, srv.ID)
 	_ = s.markAgentUndeployableIfAutoDeployExhausted(ctx, srv.ID)
 }
 

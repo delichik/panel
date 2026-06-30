@@ -41,6 +41,7 @@ const agentCertificateResetTaskType = "agent_certificate_reset"
 const agentCertificateResourceType = "agent_certificate"
 const agentDeployTimeout = 2 * time.Minute
 const agentAutoDeployMaxFailures = 2
+const agentAutoDeployHealthyChecksToReset = 5
 const agentCertificateRenewBefore = 7 * 24 * time.Hour
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 const defaultAgentListenAddress = "0.0.0.0:9786"
@@ -979,10 +980,64 @@ func (s *Service) markAgentStatus(ctx context.Context, serverID, status, version
 	} else {
 		traits[agentcontract.TraitLastError] = msg
 	}
+	if status == agentcontract.StatusCompatible {
+		streak := traitInt(traits, agentcontract.TraitHealthSuccessStreak) + 1
+		if streak >= agentAutoDeployHealthyChecksToReset {
+			delete(traits, agentcontract.TraitHealthSuccessStreak)
+			delete(traits, agentcontract.TraitAutoDeployFailures)
+			delete(traits, agentcontract.TraitAutoDeployLastFailure)
+			delete(traits, agentcontract.TraitAutoDeployBlocked)
+		} else {
+			traits[agentcontract.TraitHealthSuccessStreak] = strconv.Itoa(streak)
+		}
+	} else {
+		delete(traits, agentcontract.TraitHealthSuccessStreak)
+	}
 	traitsJSON, _ := json.Marshal(traits)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)
 	return err
+}
+
+func (s *Service) recordAgentAutoDeployFailure(ctx context.Context, serverID string) (int, error) {
+	var rawTraits string
+	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+		return 0, err
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	failures := traitInt(traits, agentcontract.TraitAutoDeployFailures) + 1
+	traits[agentcontract.TraitAutoDeployFailures] = strconv.Itoa(failures)
+	traits[agentcontract.TraitAutoDeployLastFailure] = time.Now().UTC().Format(time.RFC3339Nano)
+	delete(traits, agentcontract.TraitHealthSuccessStreak)
+	traitsJSON, _ := json.Marshal(traits)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
+	return failures, err
+}
+
+func (s *Service) resetAgentAutoDeployBackoffTime(ctx context.Context, serverID string) error {
+	var rawTraits string
+	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+		return err
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	if traitInt(traits, agentcontract.TraitAutoDeployFailures) == 0 {
+		return nil
+	}
+	traits[agentcontract.TraitAutoDeployLastFailure] = time.Now().UTC().Format(time.RFC3339Nano)
+	delete(traits, agentcontract.TraitHealthSuccessStreak)
+	traitsJSON, _ := json.Marshal(traits)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
+	return err
+}
+
+func traitInt(traits map[string]string, key string) int {
+	value, err := strconv.Atoi(strings.TrimSpace(traits[key]))
+	if err != nil || value < 0 {
+		return 0
+	}
+	return value
 }
 
 func (s *Service) markAgentCertificate(ctx context.Context, serverID string, info agentsecurity.CertificateInfo) error {

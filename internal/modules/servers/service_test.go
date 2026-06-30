@@ -1116,30 +1116,128 @@ func TestDeployAgentStartsExistingQueuedTask(t *testing.T) {
 	}
 }
 
-func TestAgentCertificateTimeErrorMarksUndeployableAfterAutoDeployFailures(t *testing.T) {
+func TestSystemAgentDeployRespectsAutoDeployBackoff(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	traits := map[string]string{
-		agentcontract.TraitEnabled: "true",
-		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitEnabled:               "true",
+		agentcontract.TraitURL:                   "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:                agentcontract.StatusIncompatible,
+		agentcontract.TraitAutoDeployFailures:    "1",
+		agentcontract.TraitAutoDeployLastFailure: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
 	if err != nil {
 		t.Fatal(err)
 	}
 	setServerArchitecture(t, store, srv.ID)
-	for i := 0; i < agentAutoDeployMaxFailures; i++ {
-		if _, err := taskSvc.Create(context.Background(), tasks.CreateInput{
-			Type:         agentDeployTaskType,
-			ServerID:     srv.ID,
-			ResourceType: connectivityResourceType,
-			ResourceID:   srv.ID,
-			TriggeredBy:  "system",
-			Status:       tasks.StatusFailed,
-			Summary:      "failed agent deploy",
-		}); err != nil {
+	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
+
+	svc.CheckConfiguredAgent(context.Background(), srv)
+
+	result, err := taskSvc.List(context.Background(), tasks.ListFilter{Type: agentDeployTaskType, ServerID: srv.ID, IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("expected auto deploy to wait for backoff, got %#v", result.Items)
+	}
+}
+
+func TestManualAgentDeployResetsAutoDeployBackoffTime(t *testing.T) {
+	createSvc, taskSvc, store := testServerService(t, nil)
+	oldFailureAt := time.Now().UTC().Add(-time.Hour)
+	traits := map[string]string{
+		agentcontract.TraitEnabled:               "true",
+		agentcontract.TraitURL:                   "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:                agentcontract.StatusIncompatible,
+		agentcontract.TraitAutoDeployFailures:    "1",
+		agentcontract.TraitAutoDeployLastFailure: oldFailureAt.Format(time.RFC3339Nano),
+	}
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setServerArchitecture(t, store, srv.ID)
+	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newServerServiceForTest(store, agentArchFakeExec{arch: "x86_64"}, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
+	before := time.Now().UTC()
+
+	if _, err := svc.DeployAgent(context.Background(), srv.ID); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Get(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetAt, err := time.Parse(time.RFC3339Nano, updated.Traits[agentcontract.TraitAutoDeployLastFailure])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resetAt.Before(before) || !resetAt.After(oldFailureAt) {
+		t.Fatalf("expected manual deploy to reset backoff time, old=%s reset=%s before=%s", oldFailureAt, resetAt, before)
+	}
+	if updated.Traits[agentcontract.TraitAutoDeployFailures] != "1" {
+		t.Fatalf("expected manual deploy to preserve failure count until healthy checks clear it, got %#v", updated.Traits)
+	}
+}
+
+func TestAgentHealthRequiresFiveSuccessesToClearAutoDeployFailures(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	lastFailure := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","agent.auto_deploy_failures":"1","agent.auto_deploy_last_failure_at":"` + lastFailure + `"}`
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
+	srv, err := svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < agentAutoDeployHealthyChecksToReset-1; i++ {
+		svc.CheckConfiguredAgent(context.Background(), srv)
+		srv, err = svc.Get(context.Background(), "srv_agent")
+		if err != nil {
 			t.Fatal(err)
 		}
+		if srv.Traits[agentcontract.TraitAutoDeployFailures] == "" {
+			t.Fatalf("auto deploy failures cleared after %d successful checks, want five", i+1)
+		}
 	}
+	svc.CheckConfiguredAgent(context.Background(), srv)
+	srv, err = svc.Get(context.Background(), "srv_agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if srv.Traits[agentcontract.TraitAutoDeployFailures] != "" || srv.Traits[agentcontract.TraitAutoDeployLastFailure] != "" || srv.Traits[agentcontract.TraitHealthSuccessStreak] != "" {
+		t.Fatalf("expected auto deploy retry traits to clear after five successful checks, got %#v", srv.Traits)
+	}
+}
+
+func TestAgentCertificateTimeErrorMarksUndeployableAfterAutoDeployFailures(t *testing.T) {
+	createSvc, taskSvc, store := testServerService(t, nil)
+	traits := map[string]string{
+		agentcontract.TraitEnabled:               "true",
+		agentcontract.TraitURL:                   "https://127.0.0.1:9786",
+		agentcontract.TraitAutoDeployFailures:    fmt.Sprintf("%d", agentAutoDeployMaxFailures),
+		agentcontract.TraitAutoDeployLastFailure: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano),
+	}
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setServerArchitecture(t, store, srv.ID)
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
