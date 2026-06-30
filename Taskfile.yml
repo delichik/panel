@@ -56,9 +56,9 @@ tasks:
 
   build:
     desc: Build backend and frontend
-    cmds:
-      - task build:backend
-      - task build:web
+    deps:
+      - build:backend
+      - build:web
 
   build:backend:
     desc: Compile backend packages

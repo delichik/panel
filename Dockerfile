@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY web/ ./
 RUN npm run build
 
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend-build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS go-source
 WORKDIR /src
 
 COPY go.mod go.sum ./
@@ -25,22 +25,18 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 
-ARG TARGETPLATFORM
-ARG TARGETOS
-ARG TARGETARCH
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  go run ./cmd/generate-agent-contract-hash
+
+FROM go-source AS agent-bundle-build
 ARG PANEL_VERSION=dev
 ARG PANEL_CHANNEL=dev
 ARG PANEL_REPOSITORY
 ARG PANEL_COMMIT
-RUN go run ./cmd/generate-agent-contract-hash
-RUN set -eux; \
-  test -n "${TARGETPLATFORM}"; \
-  test -n "${TARGETOS}"; \
-  test -n "${TARGETARCH}"; \
-  case "${TARGETPLATFORM}" in \
-    "${TARGETOS}/${TARGETARCH}"|"${TARGETOS}/${TARGETARCH}/"*) ;; \
-    *) echo "TARGETPLATFORM=${TARGETPLATFORM} does not match ${TARGETOS}/${TARGETARCH}"; exit 1 ;; \
-  esac; \
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  set -eux; \
   verify_machine() { \
     binary="$1"; \
     arch="$2"; \
@@ -61,7 +57,36 @@ RUN set -eux; \
       -ldflags="${ldflags}" \
       -o "${agent_dir}/panel-agent" ./cmd/panel-agent; \
     verify_machine "${agent_dir}/panel-agent" "${agent_arch}"; \
-  done; \
+  done
+
+FROM go-source AS target-binaries-build
+ARG TARGETPLATFORM
+ARG TARGETOS
+ARG TARGETARCH
+ARG PANEL_VERSION=dev
+ARG PANEL_CHANNEL=dev
+ARG PANEL_REPOSITORY
+ARG PANEL_COMMIT
+RUN --mount=type=cache,target=/go/pkg/mod \
+  --mount=type=cache,target=/root/.cache/go-build \
+  set -eux; \
+  test -n "${TARGETPLATFORM}"; \
+  test -n "${TARGETOS}"; \
+  test -n "${TARGETARCH}"; \
+  case "${TARGETPLATFORM}" in \
+    "${TARGETOS}/${TARGETARCH}"|"${TARGETOS}/${TARGETARCH}/"*) ;; \
+    *) echo "TARGETPLATFORM=${TARGETPLATFORM} does not match ${TARGETOS}/${TARGETARCH}"; exit 1 ;; \
+  esac; \
+  verify_machine() { \
+    binary="$1"; \
+    arch="$2"; \
+    machine="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n')"; \
+    case "${arch}/${machine}" in \
+      amd64/3e00|arm64/b700) ;; \
+      *) echo "compiled ${binary} ELF machine ${machine} does not match GOARCH=${arch}"; exit 1 ;; \
+    esac; \
+  }; \
+  ldflags="-s -w -X panel/internal/platform/buildinfo.Version=${PANEL_VERSION} -X panel/internal/platform/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/platform/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/platform/buildinfo.Commit=${PANEL_COMMIT}"; \
   CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath \
     -ldflags="${ldflags}" \
     -o /out/panel ./cmd/panel; \
@@ -71,7 +96,7 @@ RUN set -eux; \
     -o /out/panel-init ./cmd/panel-init; \
   verify_machine /out/panel-init "${TARGETARCH}"
 
-FROM --platform=$TARGETPLATFORM alpine:3.22 AS runtime
+FROM --platform=$TARGETPLATFORM alpine:3.22 AS runtime-base
 WORKDIR /app
 
 RUN apk add --no-cache ca-certificates tzdata \
@@ -79,12 +104,6 @@ RUN apk add --no-cache ca-certificates tzdata \
   && adduser -S -G panel -h /app panel \
   && mkdir -p /app/data /app/web/dist \
   && chown -R panel:panel /app
-
-COPY --from=backend-build /out/panel /app/panel
-COPY --from=backend-build /out/panel-init /app/panel-init
-COPY --from=backend-build /out/panel-agents /app/panel-agents
-COPY --from=web-build /src/web/dist /app/web/dist
-COPY config.example.json /app/config.example.json
 
 ENV PANEL_LISTEN_ADDRESS=0.0.0.0:8080 \
     PANEL_DATA_ROOT=/app/data \
@@ -95,6 +114,27 @@ EXPOSE 8080
 VOLUME ["/app/data"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1
+
+FROM runtime-base AS runtime-from-artifacts
+ARG TARGETOS
+ARG TARGETARCH
+COPY release-artifacts/panel/${TARGETOS}-${TARGETARCH}/panel /app/panel
+COPY release-artifacts/panel-init/${TARGETOS}-${TARGETARCH}/panel-init /app/panel-init
+COPY release-artifacts/panel-agents /app/panel-agents
+COPY release-artifacts/web-dist /app/web/dist
+COPY config.example.json /app/config.example.json
+RUN chmod +x /app/panel /app/panel-init /app/panel-agents/*/panel-agent \
+  && chown -R panel:panel /app
+
+USER panel
+ENTRYPOINT ["/app/panel-init"]
+
+FROM runtime-base AS runtime
+COPY --from=target-binaries-build /out/panel /app/panel
+COPY --from=target-binaries-build /out/panel-init /app/panel-init
+COPY --from=agent-bundle-build /out/panel-agents /app/panel-agents
+COPY --from=web-build /src/web/dist /app/web/dist
+COPY config.example.json /app/config.example.json
 
 USER panel
 ENTRYPOINT ["/app/panel-init"]

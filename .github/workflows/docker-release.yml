@@ -77,7 +77,7 @@ jobs:
           echo "channel=${channel}" >> "$GITHUB_OUTPUT"
           echo "Generated version ${version}."
 
-  build-amd64:
+  build-web:
     runs-on: ubuntu-24.04
     needs: generate-version
 
@@ -85,67 +85,234 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
-      - name: Compute image metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=${{ needs.generate-version.outputs.version }},enable=${{ github.ref_name == 'main' }}
-            type=raw,value=latest,enable=${{ github.ref_name == 'main' }}
-            type=sha,enable=${{ github.ref_name == 'main' }}
-            type=raw,value=dev,enable=${{ github.ref_name == 'dev' }}
+      - name: Install frontend dependencies
+        run: npm --prefix web ci
 
-      - name: Build and push amd64 image by digest
-        id: build
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64
-          outputs: type=image,name=${{ env.IMAGE_NAME }},name-canonical=true,push-by-digest=true,push=true
-          cache-from: type=gha,scope=linux-amd64
-          cache-to: type=gha,mode=max,scope=linux-amd64
-          build-args: |
-            PANEL_VERSION=${{ needs.generate-version.outputs.version }}
-            PANEL_CHANNEL=${{ needs.generate-version.outputs.channel }}
-            PANEL_REPOSITORY=${{ github.repository }}
-            PANEL_COMMIT=${{ github.sha }}
-          labels: ${{ steps.meta.outputs.labels }}
+      - name: Build frontend bundle
+        run: npm --prefix web run build
 
-      - name: Export image digest
-        shell: bash
-        run: |
-          mkdir -p /tmp/digests
-          digest="${{ steps.build.outputs.digest }}"
-          touch "/tmp/digests/${digest#sha256:}"
-
-      - name: Upload image digest
+      - name: Upload frontend bundle
         uses: actions/upload-artifact@v4
         with:
-          name: digests-linux-amd64
-          path: /tmp/digests/*
+          name: web-dist
+          path: web/dist
           if-no-files-found: error
           retention-days: 1
 
-  build-arm64:
-    runs-on: ubuntu-24.04-arm
+  prepare-go-cache:
+    runs-on: ubuntu-24.04
     needs: generate-version
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+  build-agent-bundle:
+    runs-on: ubuntu-24.04
+    needs:
+      - generate-version
+      - prepare-go-cache
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build agent bundle
+        shell: bash
+        env:
+          PANEL_VERSION: ${{ needs.generate-version.outputs.version }}
+          PANEL_CHANNEL: ${{ needs.generate-version.outputs.channel }}
+          PANEL_REPOSITORY: ${{ github.repository }}
+          PANEL_COMMIT: ${{ github.sha }}
+        run: |
+          set -euxo pipefail
+          go run ./cmd/generate-agent-contract-hash
+
+          verify_machine() {
+            binary="$1"
+            arch="$2"
+            machine="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n')"
+            case "${arch}/${machine}" in
+              amd64/3e00|arm64/b700) ;;
+              *) echo "compiled ${binary} ELF machine ${machine} does not match GOARCH=${arch}"; exit 1 ;;
+            esac
+          }
+
+          ldflags="-s -w -X panel/internal/platform/buildinfo.Version=${PANEL_VERSION} -X panel/internal/platform/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/platform/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/platform/buildinfo.Commit=${PANEL_COMMIT}"
+          mkdir -p /tmp/release-artifacts/panel-agents
+          for platform in linux/amd64 linux/arm64; do
+            agent_os="${platform%/*}"
+            agent_arch="${platform#*/}"
+            agent_dir="/tmp/release-artifacts/panel-agents/${agent_os}-${agent_arch}"
+            mkdir -p "${agent_dir}"
+            CGO_ENABLED=0 GOOS="${agent_os}" GOARCH="${agent_arch}" go build -trimpath \
+              -ldflags="${ldflags}" \
+              -o "${agent_dir}/panel-agent" ./cmd/panel-agent
+            verify_machine "${agent_dir}/panel-agent" "${agent_arch}"
+          done
+
+      - name: Upload agent bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-agents
+          path: /tmp/release-artifacts/panel-agents
+          if-no-files-found: error
+          retention-days: 1
+
+  build-target-binary:
+    runs-on: ubuntu-24.04
+    needs:
+      - generate-version
+      - prepare-go-cache
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - binary: panel
+            package: ./cmd/panel
+            target_os: linux
+            target_arch: amd64
+            artifact_platform: linux-amd64
+          - binary: panel
+            package: ./cmd/panel
+            target_os: linux
+            target_arch: arm64
+            artifact_platform: linux-arm64
+          - binary: panel-init
+            package: ./cmd/panel-init
+            target_os: linux
+            target_arch: amd64
+            artifact_platform: linux-amd64
+          - binary: panel-init
+            package: ./cmd/panel-init
+            target_os: linux
+            target_arch: arm64
+            artifact_platform: linux-arm64
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build ${{ matrix.binary }} for ${{ matrix.target_os }}/${{ matrix.target_arch }}
+        shell: bash
+        env:
+          PANEL_VERSION: ${{ needs.generate-version.outputs.version }}
+          PANEL_CHANNEL: ${{ needs.generate-version.outputs.channel }}
+          PANEL_REPOSITORY: ${{ github.repository }}
+          PANEL_COMMIT: ${{ github.sha }}
+          TARGET_OS: ${{ matrix.target_os }}
+          TARGET_ARCH: ${{ matrix.target_arch }}
+          TARGET_BINARY: ${{ matrix.binary }}
+          TARGET_PACKAGE: ${{ matrix.package }}
+          ARTIFACT_PLATFORM: ${{ matrix.artifact_platform }}
+        run: |
+          set -euxo pipefail
+          go run ./cmd/generate-agent-contract-hash
+
+          verify_machine() {
+            binary="$1"
+            arch="$2"
+            machine="$(od -An -tx1 -j18 -N2 "${binary}" | tr -d ' \n')"
+            case "${arch}/${machine}" in
+              amd64/3e00|arm64/b700) ;;
+              *) echo "compiled ${binary} ELF machine ${machine} does not match GOARCH=${arch}"; exit 1 ;;
+            esac
+          }
+
+          ldflags="-s -w -X panel/internal/platform/buildinfo.Version=${PANEL_VERSION} -X panel/internal/platform/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/platform/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/platform/buildinfo.Commit=${PANEL_COMMIT}"
+          output_dir="/tmp/release-artifacts/${TARGET_BINARY}/${ARTIFACT_PLATFORM}"
+          mkdir -p "${output_dir}"
+          CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" go build -trimpath \
+            -ldflags="${ldflags}" \
+            -o "${output_dir}/${TARGET_BINARY}" "${TARGET_PACKAGE}"
+          verify_machine "${output_dir}/${TARGET_BINARY}" "${TARGET_ARCH}"
+
+      - name: Upload ${{ matrix.binary }} artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.binary }}-${{ matrix.artifact_platform }}
+          path: /tmp/release-artifacts/${{ matrix.binary }}/${{ matrix.artifact_platform }}/${{ matrix.binary }}
+          if-no-files-found: error
+          retention-days: 1
+
+  package-image:
+    needs:
+      - generate-version
+      - build-web
+      - build-agent-bundle
+      - build-target-binary
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            artifact_platform: linux-amd64
+            runner: ubuntu-24.04
+            cache_scope: package-linux-amd64
+            digest_name: digests-linux-amd64
+          - platform: linux/arm64
+            artifact_platform: linux-arm64
+            runner: ubuntu-24.04-arm
+            cache_scope: package-linux-arm64
+            digest_name: digests-linux-arm64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download frontend bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: web-dist
+          path: release-artifacts/web-dist
+
+      - name: Download agent bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-agents
+          path: release-artifacts/panel-agents
+
+      - name: Download panel binary
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-${{ matrix.artifact_platform }}
+          path: release-artifacts/panel/${{ matrix.artifact_platform }}
+
+      - name: Download panel-init binary
+        uses: actions/download-artifact@v4
+        with:
+          name: panel-init-${{ matrix.artifact_platform }}
+          path: release-artifacts/panel-init/${{ matrix.artifact_platform }}
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -167,21 +334,17 @@ jobs:
             type=sha,enable=${{ github.ref_name == 'main' }}
             type=raw,value=dev,enable=${{ github.ref_name == 'dev' }}
 
-      - name: Build and push arm64 image by digest
+      - name: Build and push ${{ matrix.platform }} image by digest
         id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/arm64
+          target: runtime-from-artifacts
+          platforms: ${{ matrix.platform }}
           outputs: type=image,name=${{ env.IMAGE_NAME }},name-canonical=true,push-by-digest=true,push=true
-          cache-from: type=gha,scope=linux-arm64
-          cache-to: type=gha,mode=max,scope=linux-arm64
-          build-args: |
-            PANEL_VERSION=${{ needs.generate-version.outputs.version }}
-            PANEL_CHANNEL=${{ needs.generate-version.outputs.channel }}
-            PANEL_REPOSITORY=${{ github.repository }}
-            PANEL_COMMIT=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
           labels: ${{ steps.meta.outputs.labels }}
 
       - name: Export image digest
@@ -194,7 +357,7 @@ jobs:
       - name: Upload image digest
         uses: actions/upload-artifact@v4
         with:
-          name: digests-linux-arm64
+          name: ${{ matrix.digest_name }}
           path: /tmp/digests/*
           if-no-files-found: error
           retention-days: 1
@@ -203,8 +366,7 @@ jobs:
     runs-on: ubuntu-24.04
     needs:
       - generate-version
-      - build-amd64
-      - build-arm64
+      - package-image
     permissions:
       contents: write
       packages: write

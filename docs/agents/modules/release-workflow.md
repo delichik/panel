@@ -15,9 +15,14 @@
 - dev 发布复用当前最大正式修订号并追加 UTC 时间戳；尚无正式 tag 时以修订号 `0` 为基线。
 - workflow 按分支使用独立 concurrency group。main 发布串行执行；新的 dev push 会取消同分支尚未完成的旧构建。
 - 新版本 tag 会在构建前指向触发 workflow 的 `main` commit 并推送到仓库，以占用版本号；同一主次版本的修订号只会递增，不会复用历史缺口。
-- `build-amd64` 和 `build-arm64` 分别构建对应架构镜像，并按 digest 推送到 GHCR。
-- 两个架构构建都会把自动生成的版本、发布通道（`release` 或 `dev`）、`${{ github.repository }}` 和 commit SHA 作为 Docker build args 传入，再通过 Go `ldflags` 注入 `internal/platform/buildinfo`。
-- Docker 镜像同时包含主服务 `/app/panel` 和独立 agent bundle `/app/panel-agents/`；当前 bundle 包含 `linux-amd64/panel-agent` 与 `linux-arm64/panel-agent`。每个架构的镜像都必须携带完整 agent bundle，且 agent 二进制必须注入与 Panel 相同的版本信息；Panel 自动部署 agent 时会按目标服务器架构读取对应文件并上传到目标机。Docker 后端构建在编译 Panel 和两种架构 Agent 前先生成被忽略的 `internal/agent/contract/contract_hash_generated.go`，确保三个二进制引用同一个 gRPC contract hash；Agent 是否需要重部署由健康检查返回的版本号与当前 Panel 版本是否完全一致决定，不再由能力列表或 gRPC contract hash 决定。
+- 编译阶段先完全并行产出平台无关和平台相关 artifact：
+  - `build-web` 只构建一次前端 `web/dist`，不区分目标平台。
+  - `prepare-go-cache` 先下载 Go modules 并写入 Actions cache，后续 Go 编译 job 再并行恢复该缓存，降低冷缓存时的重复下载。
+  - `build-agent-bundle` 只构建一次完整 agent bundle，当前包含 `linux-amd64/panel-agent` 与 `linux-arm64/panel-agent`。
+  - `build-target-binary` 按 `panel` / `panel-init` 与 `linux/amd64` / `linux/arm64` 的矩阵并行编译目标平台二进制。
+- 所有 Go 编译 job 都会把自动生成的版本、发布通道（`release` 或 `dev`）、`${{ github.repository }}` 和 commit SHA 通过 Go `ldflags` 注入 `internal/platform/buildinfo`。
+- Docker 镜像打包阶段由 `package-image` 在 `linux/amd64` 和 `linux/arm64` 上并行执行，只把前一阶段产出的 artifact 复制进镜像并按 digest 推送到 GHCR；CI 使用 Dockerfile 的 `runtime-from-artifacts` target。本地默认 `docker build` 仍会通过 Dockerfile 内置阶段自行构建前端、目标平台 `panel` / `panel-init` 和完整 agent bundle。
+- Docker 镜像同时包含主服务 `/app/panel` 和独立 agent bundle `/app/panel-agents/`。每个架构的镜像都必须携带完整 agent bundle，且 agent 二进制必须注入与 Panel 相同的版本信息；Panel 自动部署 agent 时会按目标服务器架构读取对应文件并上传到目标机。Go 编译在编译 Panel 和两种架构 Agent 前先生成被忽略的 `internal/agent/contract/contract_hash_generated.go`，确保三个二进制引用同一个 gRPC contract hash；Agent 是否需要重部署由健康检查返回的版本号与当前 Panel 版本是否完全一致决定，不再由能力列表或 gRPC contract hash 决定。
 - `publish-manifest` 汇总两个架构的 digest，发布以下镜像标签：
   - main：自动生成的版本号、`latest` 和 commit sha。
   - dev：只发布并覆盖 `dev`，不发布版本号、commit sha 或 `latest`。
