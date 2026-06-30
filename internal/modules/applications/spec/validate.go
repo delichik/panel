@@ -17,12 +17,6 @@ func Normalize(spec Spec) Spec {
 	if spec.NetworkMode == "" {
 		spec.NetworkMode = "bridge"
 	}
-	if spec.Resources.CPU == 0 {
-		spec.Resources.CPU = 100
-	}
-	if spec.Resources.MemoryMB == 0 {
-		spec.Resources.MemoryMB = 128
-	}
 	if spec.Env == nil {
 		spec.Env = map[string]string{}
 	}

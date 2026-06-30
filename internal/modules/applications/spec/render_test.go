@@ -149,6 +149,35 @@ func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
 	}
 }
 
+func TestRenderLeavesEmptyAndZeroResourcesUnlimited(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+	}{
+		{name: "empty", yaml: "name: web\nimage: nginx\n"},
+		{name: "zero", yaml: "name: web\nimage: nginx\nresources:\n  cpu: 0\n  memoryMb: 0\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			spec, issues := DecodeYAML(tc.yaml)
+			if len(issues) > 0 {
+				t.Fatalf("decode issues = %#v", issues)
+			}
+
+			runtimeSpec, issues := Render(RenderInput{
+				AppID:    "app-1",
+				Spec:     spec,
+				SpecHash: "hash-1",
+			})
+			if len(issues) > 0 {
+				t.Fatalf("render issues = %#v", issues)
+			}
+			if runtimeSpec.Resources.CPU != 0 || runtimeSpec.Resources.MemoryMB != 0 {
+				t.Fatalf("resources should remain unlimited: %#v", runtimeSpec.Resources)
+			}
+		})
+	}
+}
+
 func TestRenderAnyTLSHostNetworkSpec(t *testing.T) {
 	spec, issues := DecodeYAML(`name: anytls
 image: jiasongji/anytls
