@@ -1,74 +1,61 @@
 package backups
 
 import (
-	"errors"
-	"os"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
 
-func TestProcessRestarterDetectsDockerEnv(t *testing.T) {
-	r := processRestarter{
-		stat: func(path string) (os.FileInfo, error) {
-			if path == "/.dockerenv" {
-				return fakeFileInfo{}, nil
-			}
-			return nil, os.ErrNotExist
-		},
-		readFile: func(string) ([]byte, error) { return nil, os.ErrNotExist },
-		exit:     func(int) {},
-	}
-	if !r.Supported() {
-		t.Fatal("expected /.dockerenv to mark restart supported")
-	}
-}
-
-func TestProcessRestarterDetectsContainerCgroup(t *testing.T) {
-	r := processRestarter{
-		stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
-		readFile: func(string) ([]byte, error) { return []byte("0::/system.slice/docker-abc.scope"), nil },
-		exit:     func(int) {},
-	}
-	if !r.Supported() {
-		t.Fatal("expected docker cgroup to mark restart supported")
-	}
-}
-
-func TestProcessRestarterUnsupportedOutsideContainer(t *testing.T) {
-	r := processRestarter{
-		stat:     func(string) (os.FileInfo, error) { return nil, os.ErrNotExist },
-		readFile: func(string) ([]byte, error) { return []byte("0::/init.scope"), nil },
-		exit:     func(int) {},
-	}
+func TestInitRestarterUnsupportedWithoutRestartURL(t *testing.T) {
+	t.Setenv(InitRestartURLEnv, "")
+	t.Setenv(InitRestartTokenEnv, "secret")
+	r := NewPanelInitRestarter(t.TempDir())
 	if r.Supported() {
-		t.Fatal("expected non-container cgroup to be unsupported")
+		t.Fatal("expected restart to be unsupported without panel_init restart URL")
 	}
 }
 
-func TestProcessRestarterRestartSoonExitsAfterDelay(t *testing.T) {
-	exited := make(chan int, 1)
-	r := processRestarter{
-		delay:    time.Millisecond,
-		stat:     func(string) (os.FileInfo, error) { return fakeFileInfo{}, nil },
-		readFile: func(string) ([]byte, error) { return nil, errors.New("unused") },
-		exit:     func(code int) { exited <- code },
+func TestInitRestarterUnsupportedWithoutRestartToken(t *testing.T) {
+	t.Setenv(InitRestartURLEnv, "http://127.0.0.1/restart")
+	t.Setenv(InitRestartTokenEnv, "")
+	r := NewPanelInitRestarter(t.TempDir())
+	if r.Supported() {
+		t.Fatal("expected restart to be unsupported without panel_init restart token")
 	}
-	r.RestartSoon()
+}
+
+func TestInitRestarterPostsRequestedMode(t *testing.T) {
+	received := make(chan restartRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get(InitRestartTokenHeader); got != "secret-token" {
+			t.Errorf("token header = %q, want secret-token", got)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		var req restartRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Error(err)
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		received <- req
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	t.Setenv(InitRestartURLEnv, server.URL)
+	t.Setenv(InitRestartTokenEnv, "secret-token")
+	r := NewPanelInitRestarter(t.TempDir())
+
+	r.RestartSoon(MaintenanceModeRestore)
+
 	select {
-	case code := <-exited:
-		if code != 0 {
-			t.Fatalf("expected exit code 0, got %d", code)
+	case req := <-received:
+		if req.Mode != MaintenanceModeRestore {
+			t.Fatalf("mode = %q, want %q", req.Mode, MaintenanceModeRestore)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("expected delayed exit")
+		t.Fatal("expected restart request")
 	}
 }
-
-type fakeFileInfo struct{}
-
-func (fakeFileInfo) Name() string       { return ".dockerenv" }
-func (fakeFileInfo) Size() int64        { return 0 }
-func (fakeFileInfo) Mode() os.FileMode  { return 0 }
-func (fakeFileInfo) ModTime() time.Time { return time.Time{} }
-func (fakeFileInfo) IsDir() bool        { return false }
-func (fakeFileInfo) Sys() any           { return nil }

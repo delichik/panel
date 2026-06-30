@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,7 +18,22 @@ import (
 	"go.uber.org/zap"
 )
 
+type maintenanceApplication interface {
+	ListenAndServe(address string) error
+}
+
 func main() {
+	maintenanceMode := flag.String("maintenance-mode", backups.MaintenanceModeNormal, "startup maintenance mode")
+	initRestartURL := flag.String("init-restart-url", "", "local panel_init restart URL")
+	initRestartToken := flag.String("init-restart-token", "", "local panel_init restart token")
+	flag.Parse()
+	if *initRestartURL != "" {
+		_ = os.Setenv(backups.InitRestartURLEnv, *initRestartURL)
+	}
+	if *initRestartToken != "" {
+		_ = os.Setenv(backups.InitRestartTokenEnv, *initRestartToken)
+	}
+
 	logger := logging.L()
 	defer logging.Sync()
 
@@ -30,13 +46,16 @@ func main() {
 		Handler() http.Handler
 		Close() error
 	}
-	if backups.PendingRestoreExists(cfg.DataRoot) {
+	if *maintenanceMode == backups.MaintenanceModeRestore && backups.PendingRestoreExists(cfg.DataRoot) {
 		logger.Warn("pending restore detected; starting restore mode")
 		application, err = backups.NewRestoreApp(cfg)
-	} else if backups.PendingExportExists(cfg.DataRoot) {
+	} else if *maintenanceMode == backups.MaintenanceModeExport && backups.PendingExportExists(cfg.DataRoot) {
 		logger.Warn("pending backup export detected; starting backup export mode")
 		application, err = backups.NewExportApp(cfg)
 	} else {
+		if *maintenanceMode != "" && *maintenanceMode != backups.MaintenanceModeNormal {
+			logger.Warn("maintenance mode requested but no matching pending work exists; starting normal mode", zap.String("mode", *maintenanceMode))
+		}
 		application, err = panelbootstrap.New(cfg)
 	}
 	if err != nil {
@@ -53,11 +72,15 @@ func main() {
 		Handler:           application.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
+	serve := server.ListenAndServe
+	if isolated, ok := application.(maintenanceApplication); ok {
+		serve = func() error { return isolated.ListenAndServe(cfg.ListenAddress) }
+	}
 
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("panel listening", zap.String("address", cfg.ListenAddress), zap.String("url", "http://"+cfg.ListenAddress))
-		errCh <- server.ListenAndServe()
+		errCh <- serve()
 	}()
 
 	stop := make(chan os.Signal, 1)
@@ -72,10 +95,12 @@ func main() {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("server shutdown failed", zap.Error(err))
+	if _, ok := application.(maintenanceApplication); !ok {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			logger.Error("server shutdown failed", zap.Error(err))
+		}
 	}
 	logger.Info("panel shutdown complete")
 }

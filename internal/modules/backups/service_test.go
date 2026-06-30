@@ -88,4 +88,6 @@ type fakeRestarter struct {
 }
 
 func (r *fakeRestarter) Supported() bool { return r.supported }
-func (r *fakeRestarter) RestartSoon()    { r.calls++ }
+func (r *fakeRestarter) RestartSoon(string) {
+	r.calls++
+}

@@ -32,7 +32,7 @@ func TestRestoreAppPageDoesNotServeHTMLForUnknownAPI(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/settings/public-branding", nil)
 	rec := httptest.NewRecorder()
 
-	app.page(rec, req)
+	app.fallback(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404, got %d", rec.Code)
@@ -42,6 +42,36 @@ func TestRestoreAppPageDoesNotServeHTMLForUnknownAPI(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "<!doctype html") {
 		t.Fatal("expected API fallback not to serve restore HTML")
+	}
+}
+
+func TestRestoreAppFallbackDoesNotServeHTMLForBusinessRoutes(t *testing.T) {
+	app := &RestoreApp{}
+	req := httptest.NewRequest(http.MethodGet, "/applications/apps", nil)
+	rec := httptest.NewRecorder()
+
+	app.fallback(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "<!doctype html") {
+		t.Fatal("expected business route fallback not to serve restore HTML")
+	}
+}
+
+func TestExportAppStaticDoesNotServeHTMLForBusinessRoutes(t *testing.T) {
+	app := &ExportApp{}
+	req := httptest.NewRequest(http.MethodGet, "/applications/apps", nil)
+	rec := httptest.NewRecorder()
+
+	app.static(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "<!doctype html") {
+		t.Fatal("expected business route fallback not to serve maintenance HTML")
 	}
 }
 

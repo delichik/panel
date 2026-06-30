@@ -18,6 +18,7 @@ import (
 type RestoreApp struct {
 	cfg       config.Config
 	mux       *http.ServeMux
+	listener  maintenanceListener
 	mu        sync.RWMutex
 	status    Status
 	restarter Restarter
@@ -29,7 +30,7 @@ func PendingRestoreExists(dataRoot string) bool {
 }
 
 func NewRestoreApp(cfg config.Config) (*RestoreApp, error) {
-	restarter := NewContainerRestarter()
+	restarter := NewPanelInitRestarter(cfg.DataRoot)
 	app := &RestoreApp{
 		cfg:       cfg,
 		mux:       http.NewServeMux(),
@@ -58,14 +59,25 @@ func NewRestoreApp(cfg config.Config) (*RestoreApp, error) {
 }
 
 func (a *RestoreApp) Handler() http.Handler { return a.mux }
-func (a *RestoreApp) Close() error          { return nil }
+
+func (a *RestoreApp) ListenAndServe(address string) error {
+	return a.listener.listenAndServe(address, a.Handler())
+}
+
+func (a *RestoreApp) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return a.listener.shutdown(ctx)
+}
 
 func (a *RestoreApp) routes() {
 	a.mux.HandleFunc("GET /api/v1/restore/status", a.statusAPI)
 	a.mux.HandleFunc("POST /api/v1/restore/password", a.passwordAPI)
 	a.mux.HandleFunc("POST /api/v1/restore/retry", a.retryAPI)
 	a.mux.HandleFunc("POST /api/v1/restore/clear-pending", a.clearPendingAPI)
-	a.mux.HandleFunc("/", a.page)
+	a.mux.HandleFunc("GET /maintenance/restore", a.page)
+	a.mux.HandleFunc("GET /maintenance/restore/", a.page)
+	a.mux.HandleFunc("/", a.fallback)
 }
 
 func (a *RestoreApp) statusAPI(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +109,9 @@ func (a *RestoreApp) clearPendingAPI(w http.ResponseWriter, r *http.Request) {
 	status := a.currentStatus()
 	httpx.JSON(w, http.StatusOK, status)
 	if status.RestartSupported {
-		a.restarter.RestartSoon()
+		a.restarter.RestartSoon(MaintenanceModeNormal)
+	} else {
+		a.listener.shutdownSoon(800 * time.Millisecond)
 	}
 }
 
@@ -144,7 +158,9 @@ func (a *RestoreApp) apply(ctx context.Context, password string) {
 	_ = os.RemoveAll(pendingDir(a.cfg.DataRoot))
 	a.set(PhaseCompleted, 100, "")
 	if a.restarter.Supported() {
-		a.restarter.RestartSoon()
+		a.restarter.RestartSoon(MaintenanceModeNormal)
+	} else {
+		a.listener.shutdownSoon(5 * time.Second)
 	}
 }
 
@@ -249,11 +265,19 @@ func copyFile(src, dst string, mode os.FileMode) error {
 }
 
 func (a *RestoreApp) page(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = restorePageTemplate.Execute(w, nil)
+}
+
+func (a *RestoreApp) fallback(w http.ResponseWriter, r *http.Request) {
 	if maintenanceAPINotFound(w, r) {
 		return
 	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_ = restorePageTemplate.Execute(w, nil)
+	if r.URL.Path == "/" {
+		http.Redirect(w, r, "/maintenance/restore", http.StatusTemporaryRedirect)
+		return
+	}
+	http.NotFound(w, r)
 }
 
 var restorePageTemplate = template.Must(template.New("restore").Parse(`<!doctype html>

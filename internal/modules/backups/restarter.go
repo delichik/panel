@@ -1,56 +1,68 @@
 package backups
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"net/http"
 	"os"
-	"strings"
 	"time"
+)
+
+var errRestartRejected = errors.New("panel_init restart request rejected")
+
+const (
+	InitRestartURLEnv      = "PANEL_INIT_RESTART_URL"
+	InitRestartTokenEnv    = "PANEL_INIT_RESTART_TOKEN"
+	InitRestartTokenHeader = "X-Panel-Init-Token"
+	MaintenanceModeNormal  = "normal"
+	MaintenanceModeExport  = "backup_export"
+	MaintenanceModeRestore = "restore"
 )
 
 type Restarter interface {
 	Supported() bool
-	RestartSoon()
+	RestartSoon(mode string)
 }
 
 type noopRestarter struct{}
 
-func (noopRestarter) Supported() bool { return false }
-func (noopRestarter) RestartSoon()    {}
+func (noopRestarter) Supported() bool         { return false }
+func (noopRestarter) RestartSoon(mode string) {}
 
-type processRestarter struct {
-	delay    time.Duration
-	stat     func(string) (os.FileInfo, error)
-	readFile func(string) ([]byte, error)
-	exit     func(int)
+type initRestarter struct {
+	delay  time.Duration
+	url    string
+	token  string
+	client *http.Client
 }
 
-func NewContainerRestarter() Restarter {
-	return processRestarter{
-		delay:    800 * time.Millisecond,
-		stat:     os.Stat,
-		readFile: os.ReadFile,
-		exit:     os.Exit,
+type restartRequest struct {
+	Mode      string    `json:"mode"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+func NewPanelInitRestarter(dataRoot string) Restarter {
+	_ = dataRoot
+	return initRestarter{
+		delay: 800 * time.Millisecond,
+		url:   os.Getenv(InitRestartURLEnv),
+		token: os.Getenv(InitRestartTokenEnv),
+		client: &http.Client{
+			Timeout: 2 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}
 }
 
-func (r processRestarter) Supported() bool {
-	if r.stat == nil || r.readFile == nil {
-		return false
-	}
-	if _, err := r.stat("/.dockerenv"); err == nil {
-		return true
-	}
-	raw, err := r.readFile("/proc/1/cgroup")
-	if err != nil {
-		return false
-	}
-	cgroup := strings.ToLower(string(raw))
-	return strings.Contains(cgroup, "docker") ||
-		strings.Contains(cgroup, "containerd") ||
-		strings.Contains(cgroup, "kubepods")
+func (r initRestarter) Supported() bool {
+	return r.url != "" && r.token != "" && r.client != nil
 }
 
-func (r processRestarter) RestartSoon() {
-	if !r.Supported() || r.exit == nil {
+func (r initRestarter) RestartSoon(mode string) {
+	if !r.Supported() {
 		return
 	}
 	delay := r.delay
@@ -59,6 +71,34 @@ func (r processRestarter) RestartSoon() {
 	}
 	go func() {
 		time.Sleep(delay)
-		r.exit(0)
+		_ = r.requestRestart(mode)
 	}()
+}
+
+func (r initRestarter) requestRestart(mode string) error {
+	if mode == "" {
+		mode = MaintenanceModeNormal
+	}
+	raw, err := json.MarshalIndent(restartRequest{
+		Mode:      mode,
+		CreatedAt: time.Now().UTC(),
+	}, "", "  ")
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, r.url, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(InitRestartTokenHeader, r.token)
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return errRestartRejected
+	}
+	return nil
 }

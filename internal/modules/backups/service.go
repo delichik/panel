@@ -30,7 +30,7 @@ func WithRestarter(restarter Restarter) Option {
 }
 
 func NewService(cfg ArchiveConfig, opts ...Option) *Service {
-	s := &Service{cfg: cfg, restarter: NewContainerRestarter()}
+	s := &Service{cfg: cfg, restarter: NewPanelInitRestarter(cfg.DataRoot)}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -51,7 +51,7 @@ func (s *Service) StartExport(_ context.Context, req ExportRequest) (ExportRespo
 	}
 	restartSupported := s.restarter.Supported()
 	if restartSupported {
-		s.restarter.RestartSoon()
+		s.restarter.RestartSoon(MaintenanceModeExport)
 	}
 	return ExportResponse{ExportID: exportID, RestartSupported: restartSupported}, nil
 }
@@ -130,7 +130,7 @@ func (s *Service) SavePendingRestore(uploadedPath, password string) (RestoreConf
 	}
 	restartSupported := s.restarter.Supported()
 	if restartSupported {
-		s.restarter.RestartSoon()
+		s.restarter.RestartSoon(MaintenanceModeRestore)
 	}
 	return RestoreConfirmResponse{Pending: true, RestartSupported: restartSupported}, nil
 }

@@ -21,6 +21,7 @@ import (
 type ExportApp struct {
 	cfg       config.Config
 	mux       *http.ServeMux
+	listener  maintenanceListener
 	mu        sync.RWMutex
 	status    Status
 	restarter Restarter
@@ -33,7 +34,7 @@ func PendingExportExists(dataRoot string) bool {
 }
 
 func NewExportApp(cfg config.Config) (*ExportApp, error) {
-	restarter := NewContainerRestarter()
+	restarter := NewPanelInitRestarter(cfg.DataRoot)
 	auth, err := newMaintenanceAuth(context.Background(), cfg.AppDatabase)
 	if err != nil {
 		return nil, err
@@ -65,7 +66,16 @@ func NewExportApp(cfg config.Config) (*ExportApp, error) {
 }
 
 func (a *ExportApp) Handler() http.Handler { return a.mux }
-func (a *ExportApp) Close() error          { return nil }
+
+func (a *ExportApp) ListenAndServe(address string) error {
+	return a.listener.listenAndServe(address, a.Handler())
+}
+
+func (a *ExportApp) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return a.listener.shutdown(ctx)
+}
 
 func (a *ExportApp) routes() {
 	a.mux.HandleFunc("POST /api/v1/auth/login", a.auth.loginAPI)
@@ -125,10 +135,19 @@ func (a *ExportApp) exitAPI(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusConflict, status)
 		return
 	}
-	_ = os.RemoveAll(exportPendingDir(a.cfg.DataRoot))
+	a.cleanupTemporaryFiles(status)
 	httpx.JSON(w, http.StatusOK, status)
 	if status.RestartSupported {
-		a.restarter.RestartSoon()
+		a.restarter.RestartSoon(MaintenanceModeNormal)
+	} else {
+		a.listener.shutdownSoon(800 * time.Millisecond)
+	}
+}
+
+func (a *ExportApp) cleanupTemporaryFiles(status Status) {
+	_ = os.RemoveAll(exportPendingDir(a.cfg.DataRoot))
+	if status.ExportID != "" {
+		_ = os.Remove(filepath.Join(a.cfg.DataRoot, "tmp", "backups", status.ExportID+".panel-backup"))
 	}
 }
 
@@ -241,6 +260,10 @@ func (a *ExportApp) static(w http.ResponseWriter, r *http.Request) {
 	if redirectMaintenanceRoot(w, r) {
 		return
 	}
+	if r.URL.Path != "/maintenance/backup" && r.URL.Path != "/maintenance/backup/" && !isMaintenanceAssetPath(r.URL.Path) {
+		http.NotFound(w, r)
+		return
+	}
 	dist := filepath.Join("web", "dist")
 	index := filepath.Join(dist, "index.html")
 	if _, err := os.Stat(index); err != nil {
@@ -248,15 +271,22 @@ func (a *ExportApp) static(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("Panel backup export mode is running. Build the frontend into web/dist to serve the maintenance UI.\n"))
 		return
 	}
-	rel := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(r.URL.Path)), "/")
-	if rel == "." || rel == "" {
+	if r.URL.Path == "/maintenance/backup" || r.URL.Path == "/maintenance/backup/" {
 		http.ServeFile(w, r, index)
 		return
 	}
+	rel := strings.TrimPrefix(filepath.ToSlash(filepath.Clean(r.URL.Path)), "/")
 	path := filepath.Join(dist, rel)
 	if info, err := os.Stat(path); err == nil && !info.IsDir() {
 		http.ServeFile(w, r, path)
 		return
 	}
-	http.ServeFile(w, r, index)
+	http.NotFound(w, r)
+}
+
+func isMaintenanceAssetPath(path string) bool {
+	clean := filepath.ToSlash(filepath.Clean(path))
+	return strings.HasPrefix(clean, "/assets/") ||
+		clean == "/favicon.ico" ||
+		clean == "/manifest.webmanifest"
 }

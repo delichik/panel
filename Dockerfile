@@ -65,7 +65,11 @@ RUN set -eux; \
   CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath \
     -ldflags="${ldflags}" \
     -o /out/panel ./cmd/panel; \
-  verify_machine /out/panel "${TARGETARCH}"
+  verify_machine /out/panel "${TARGETARCH}"; \
+  CGO_ENABLED=0 GOOS="${TARGETOS}" GOARCH="${TARGETARCH}" go build -trimpath \
+    -ldflags="${ldflags}" \
+    -o /out/panel-init ./cmd/panel-init; \
+  verify_machine /out/panel-init "${TARGETARCH}"
 
 FROM --platform=$TARGETPLATFORM alpine:3.22 AS runtime
 WORKDIR /app
@@ -77,6 +81,7 @@ RUN apk add --no-cache ca-certificates tzdata \
   && chown -R panel:panel /app
 
 COPY --from=backend-build /out/panel /app/panel
+COPY --from=backend-build /out/panel-init /app/panel-init
 COPY --from=backend-build /out/panel-agents /app/panel-agents
 COPY --from=web-build /src/web/dist /app/web/dist
 COPY config.example.json /app/config.example.json
@@ -92,4 +97,4 @@ VOLUME ["/app/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 CMD wget -qO- http://127.0.0.1:8080/ >/dev/null || exit 1
 
 USER panel
-ENTRYPOINT ["/app/panel"]
+ENTRYPOINT ["/app/panel-init"]
