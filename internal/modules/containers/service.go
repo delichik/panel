@@ -36,7 +36,10 @@ const (
 	TaskApplicationReconcile = "application_reconcile"
 )
 
-const applicationReconcileMaxBackoff = 10 * time.Minute
+const (
+	applicationReconcileMaxBackoff           = 10 * time.Minute
+	applicationReconcileHealthyChecksToReset = 5
+)
 
 type AgentClient interface {
 	DockerContainers(context.Context, string) ([]agentcontract.DockerContainer, error)
@@ -532,90 +535,22 @@ func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
 }
 
 func (s *Service) MonitorApplications(ctx context.Context) error {
-	if s.apps == nil || s.tasks == nil {
-		return nil
-	}
-	servers, err := s.servers.List(ctx)
+	inputs, err := s.CollectApplicationReconcileTasks(ctx, id.New("op"))
 	if err != nil {
 		return err
 	}
-	apps, err := s.apps.List(ctx)
-	if err != nil {
-		return err
-	}
-	appByID := map[string]applications.Application{}
-	for _, app := range apps {
-		appByID[app.ID] = app
-	}
-	for _, srv := range servers {
-		if !srv.Reachable || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
+	for _, input := range inputs {
+		task, created, err := tasks.NewManager(s.tasks).Create(ctx, input, tasks.Trigger{Type: "scheduler", Periodic: true})
+		if err != nil || !created {
 			continue
 		}
-		baseURL := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
-		containers, err := s.agent.DockerContainers(ctx, baseURL)
-		if err != nil {
-			_ = s.handleAgentError(ctx, srv, err)
+		if task.NextRunAt != nil && task.NextRunAt.After(time.Now().UTC()) {
 			continue
 		}
-		observed := map[string]agentcontract.DockerContainer{}
-		for _, container := range containers {
-			appID, instanceID, managed := managedLabels(container.Labels)
-			if !managed {
-				continue
-			}
-			observed[instanceID] = container
-			_, _ = s.db.ExecContext(ctx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
-				VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
-				instanceID, appID, srv.ID, time.Now().UTC().Format(time.RFC3339Nano))
-		}
-		rows, err := s.db.QueryContext(ctx, `SELECT instance_id,application_id FROM application_reconcile_states WHERE server_id=?`, srv.ID)
-		if err != nil {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
 			continue
 		}
-		type expected struct{ instanceID, appID string }
-		var expectedItems []expected
-		for rows.Next() {
-			var item expected
-			if rows.Scan(&item.instanceID, &item.appID) == nil {
-				expectedItems = append(expectedItems, item)
-			}
-		}
-		rows.Close()
-		for _, item := range expectedItems {
-			app, ok := appByID[item.appID]
-			if !ok || !app.Enabled {
-				continue
-			}
-			container, found := observed[item.instanceID]
-			drifted := !found || container.State != "running"
-			if found {
-				drifted = drifted ||
-					container.Labels["panel.application.generation"] != strconv.Itoa(app.Generation) ||
-					container.Labels["panel.application.spec.hash"] != app.SpecHash
-			}
-			if !drifted {
-				continue
-			}
-			nextRunAt, err := s.nextApplicationReconcileRunAt(ctx, app.ID)
-			if err != nil {
-				continue
-			}
-			task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
-				Type: TaskApplicationReconcile, ServerID: srv.ID, ResourceType: "application",
-				ResourceID: app.ID, TriggerType: "scheduler", Summary: "Reconciling application " + app.Name,
-				MaxRetries: 3, NextRunAt: nextRunAt,
-			}, tasks.Trigger{Type: "scheduler", Periodic: true})
-			if err != nil || !created {
-				continue
-			}
-			if nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
-				continue
-			}
-			if err := s.tasks.Start(ctx, task.ID); err != nil {
-				continue
-			}
-			go s.runApplicationReconcile(s.tasks.ExecutionContext(task.ID), task, app.ID)
-		}
+		go s.runApplicationReconcile(s.tasks.ExecutionContext(task.ID), task, input.ResourceID)
 	}
 	return nil
 }
@@ -636,7 +571,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 	for _, app := range apps {
 		appByID[app.ID] = app
 	}
-	inputs := []tasks.CreateInput{}
+	observations := map[string]reconcileObservation{}
 	for _, srv := range servers {
 		if !srv.Reachable || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 			continue
@@ -683,43 +618,137 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 					container.Labels["panel.application.generation"] != strconv.Itoa(app.Generation) ||
 					container.Labels["panel.application.spec.hash"] != app.SpecHash
 			}
-			if !drifted {
-				continue
+			observation := observations[app.ID]
+			observation.app = app
+			if observation.serverID == "" {
+				observation.serverID = srv.ID
 			}
-			nextRunAt, err := s.nextApplicationReconcileRunAt(ctx, app.ID)
-			if err != nil {
-				return inputs, err
-			}
-			inputs = append(inputs, tasks.CreateInput{
-				OperationID:  operationID,
-				Type:         TaskApplicationReconcile,
-				ServerID:     srv.ID,
-				ResourceType: "application",
-				ResourceID:   app.ID,
-				TriggerType:  "scheduler",
-				Summary:      "Reconciling application " + app.Name,
-				MaxRetries:   3,
-				NextRunAt:    nextRunAt,
-			})
+			observation.seen = true
+			observation.drifted = observation.drifted || drifted
+			observations[app.ID] = observation
 		}
+	}
+	inputs := []tasks.CreateInput{}
+	for appID, observation := range observations {
+		if !observation.seen {
+			continue
+		}
+		if !observation.drifted {
+			_ = s.recordApplicationReconcileHealthy(ctx, appID)
+			continue
+		}
+		_ = s.resetApplicationReconcileHealthStreak(ctx, appID)
+		nextRunAt, err := s.nextApplicationReconcileRunAt(ctx, appID)
+		if err != nil {
+			return inputs, err
+		}
+		if nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
+			continue
+		}
+		inputs = append(inputs, tasks.CreateInput{
+			OperationID:  operationID,
+			Type:         TaskApplicationReconcile,
+			ServerID:     observation.serverID,
+			ResourceType: "application",
+			ResourceID:   appID,
+			TriggerType:  "scheduler",
+			Summary:      "Reconciling application " + observation.app.Name,
+		})
 	}
 	return inputs, nil
 }
 
+type reconcileObservation struct {
+	app      applications.Application
+	serverID string
+	seen     bool
+	drifted  bool
+}
+
 func (s *Service) nextApplicationReconcileRunAt(ctx context.Context, appID string) (*time.Time, error) {
-	if s.tasks == nil {
-		return nil, nil
-	}
-	failures, err := s.tasks.CountFailuresSinceLastSuccess(ctx, TaskApplicationReconcile, "application", appID, []string{tasks.StatusFailed, tasks.StatusFailedRetryable, tasks.StatusBlocked, tasks.StatusCancelled}, "user")
+	state, err := s.applicationReconcileState(ctx, appID)
 	if err != nil {
 		return nil, err
 	}
+	failures := state.failures
 	if failures <= 0 {
 		return nil, nil
 	}
-	delay := applicationReconcileBackoff(failures)
-	next := time.Now().UTC().Add(delay)
+	if state.nextRunAt != nil {
+		return state.nextRunAt, nil
+	}
+	next := time.Now().UTC().Add(applicationReconcileBackoff(failures))
+	_ = s.updateApplicationReconcileBackoff(ctx, appID, failures, next)
 	return &next, nil
+}
+
+type applicationReconcileState struct {
+	failures      int
+	nextRunAt     *time.Time
+	successStreak int
+}
+
+func (s *Service) applicationReconcileState(ctx context.Context, appID string) (applicationReconcileState, error) {
+	var failures sql.NullInt64
+	var nextRunAt sql.NullString
+	var successStreak sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(reconcile_failures), MAX(NULLIF(reconcile_next_run_at,'')), MAX(reconcile_success_streak) FROM application_reconcile_states WHERE application_id=?`, appID).Scan(&failures, &nextRunAt, &successStreak)
+	if err != nil {
+		return applicationReconcileState{}, err
+	}
+	state := applicationReconcileState{}
+	if failures.Valid && failures.Int64 > 0 {
+		state.failures = int(failures.Int64)
+	}
+	if successStreak.Valid && successStreak.Int64 > 0 {
+		state.successStreak = int(successStreak.Int64)
+	}
+	if nextRunAt.Valid && strings.TrimSpace(nextRunAt.String) != "" {
+		if parsed, err := time.Parse(time.RFC3339Nano, nextRunAt.String); err == nil {
+			state.nextRunAt = &parsed
+		}
+	}
+	return state, nil
+}
+
+func (s *Service) updateApplicationReconcileBackoff(ctx context.Context, appID string, failures int, next time.Time) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_failures=?,reconcile_next_run_at=?,reconcile_success_streak=0 WHERE application_id=?`,
+		failures, next.UTC().Format(time.RFC3339Nano), appID)
+	return err
+}
+
+func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID string) error {
+	state, err := s.applicationReconcileState(ctx, appID)
+	if err != nil {
+		return err
+	}
+	failures := state.failures + 1
+	next := time.Now().UTC().Add(applicationReconcileBackoff(failures))
+	return s.updateApplicationReconcileBackoff(ctx, appID, failures, next)
+}
+
+func (s *Service) recordApplicationReconcileHealthy(ctx context.Context, appID string) error {
+	state, err := s.applicationReconcileState(ctx, appID)
+	if err != nil || state.failures <= 0 {
+		return err
+	}
+	streak := state.successStreak + 1
+	if streak >= applicationReconcileHealthyChecksToReset {
+		_, err = s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_failures=0,reconcile_next_run_at='',reconcile_success_streak=0 WHERE application_id=?`, appID)
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_success_streak=? WHERE application_id=?`, streak, appID)
+	return err
+}
+
+func (s *Service) resetApplicationReconcileHealthStreak(ctx context.Context, appID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_success_streak=0 WHERE application_id=?`, appID)
+	return err
+}
+
+func (s *Service) clearApplicationReconcileNextRun(ctx context.Context, appID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_next_run_at='' WHERE application_id=?`, appID)
+	return err
 }
 
 func applicationReconcileBackoff(failures int) time.Duration {
@@ -983,9 +1012,11 @@ func (s *Service) runApplicationReconcile(ctx context.Context, task tasks.Task, 
 		return
 	}
 	if _, err := s.apps.ReconcileDeploy(ctx, appID); err != nil {
-		_ = s.tasks.FailRetryable(ctx, task.ID, err)
+		_ = s.recordApplicationReconcileFailure(ctx, appID)
+		_ = s.tasks.Fail(ctx, task.ID, err)
 		return
 	}
+	_ = s.clearApplicationReconcileNextRun(ctx, appID)
 	_ = s.tasks.Complete(ctx, task.ID, "Application reconciled")
 }
 

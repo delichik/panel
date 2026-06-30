@@ -36,10 +36,9 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 			Execute:    s.RunVolumeRefreshTask,
 		},
 		{
-			Type:              TaskApplicationReconcile,
-			AllowRetry:        true,
-			DefaultMaxRetries: 3,
-			Execute:           s.RunApplicationReconcileTask,
+			Type:       TaskApplicationReconcile,
+			AllowRetry: true,
+			Execute:    s.RunApplicationReconcileTask,
 			Periodic: &tasks.Periodic{
 				Interval:      5 * time.Second,
 				CollectInputs: s.CollectApplicationReconcileInputs,

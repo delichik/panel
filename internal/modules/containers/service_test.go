@@ -183,21 +183,12 @@ func TestContainerActionRunsSynchronouslyAndStartsRefreshTask(t *testing.T) {
 }
 
 func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
-	svc, taskSvc, fakeAgent, store := newContainerizationTestService(t)
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
-	if _, err := store.AppDB().Exec(`
-		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
-		VALUES('credential-1','credential','password','root','now','now')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AppDB().Exec(`
-		INSERT INTO servers(id,name,host,port,credential_id,docker_host,traits,created_at,updated_at)
-		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, app.Name, 1, "name: web\nimage: nginx\n", "{}", "{}", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
+	insertReconcileFixtureRows(t, store, app)
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		VALUES('app-1-server-1','app-1','server-1','now',1,?)`, time.Now().UTC().Add(30*time.Second).Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
 	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
@@ -211,34 +202,27 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 			"panel.application.spec.hash":   "hash-3",
 		},
 	}}
-	if _, err := taskSvc.Create(ctx, tasks.CreateInput{
-		Type:         TaskApplicationReconcile,
-		ResourceType: "application",
-		ResourceID:   app.ID,
-		TriggerType:  "scheduler",
-		Status:       tasks.StatusFailed,
-		Summary:      "failed reconcile",
-	}); err != nil {
-		t.Fatal(err)
-	}
 
 	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 1 {
-		t.Fatalf("inputs = %#v", inputs)
-	}
-	if inputs[0].NextRunAt == nil || inputs[0].NextRunAt.Before(time.Now().UTC().Add(20*time.Second)) {
-		t.Fatalf("expected reconcile backoff next run, input=%#v", inputs[0])
+	if len(inputs) != 0 {
+		t.Fatalf("expected reconcile to wait for shared backoff, got %#v", inputs)
 	}
 }
 
-func TestApplicationReconcileFailureStaysRetryableWithBackoff(t *testing.T) {
-	svc, taskSvc, _, _ := newContainerizationTestService(t)
+func TestApplicationReconcileFailureUsesSharedBackoffCounter(t *testing.T) {
+	svc, taskSvc, _, store := newContainerizationTestService(t)
 	ctx := context.Background()
 	reconcileCalls := 0
 	deployCalls := 0
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+		VALUES('app-1-server-1','app-1','server-1','now')`); err != nil {
+		t.Fatal(err)
+	}
 	svc.apps = fakeApplicationUpdater{
 		reconcileErr:   errors.New("port is already allocated"),
 		reconcileCalls: &reconcileCalls,
@@ -249,7 +233,6 @@ func TestApplicationReconcileFailureStaysRetryableWithBackoff(t *testing.T) {
 		ResourceType: "application",
 		ResourceID:   "app-1",
 		TriggerType:  "scheduler",
-		MaxRetries:   3,
 		Summary:      "reconcile",
 	})
 	if err != nil {
@@ -262,17 +245,138 @@ func TestApplicationReconcileFailureStaysRetryableWithBackoff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != tasks.StatusFailedRetryable {
-		t.Fatalf("expected retryable reconcile failure, got %#v", got)
+	if got.Status != tasks.StatusFailed {
+		t.Fatalf("expected failed reconcile task, got %#v", got)
 	}
-	if got.NextRunAt == nil || got.NextRunAt.Before(time.Now().UTC().Add(20*time.Second)) {
-		t.Fatalf("expected reconcile retry backoff, got %#v", got)
+	if got.RetryCount != 0 || got.NextRunAt != nil {
+		t.Fatalf("task retry counter should not drive reconcile backoff, got %#v", got)
+	}
+	var failures int
+	var nextRunAt string
+	if err := svc.db.QueryRow(`SELECT reconcile_failures,reconcile_next_run_at FROM application_reconcile_states WHERE application_id='app-1'`).Scan(&failures, &nextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 1 {
+		t.Fatalf("shared failure counter = %d, want 1", failures)
+	}
+	parsedNextRunAt, err := time.Parse(time.RFC3339Nano, nextRunAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsedNextRunAt.Before(time.Now().UTC().Add(20 * time.Second)) {
+		t.Fatalf("expected shared reconcile backoff, got %s", nextRunAt)
 	}
 	if reconcileCalls != 1 {
 		t.Fatalf("expected reconcile deploy call, got %d", reconcileCalls)
 	}
 	if deployCalls != 0 {
 		t.Fatalf("manual deploy entry should not be used by reconcile, got %d", deployCalls)
+	}
+}
+
+func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		State: "exited",
+		Labels: map[string]string{
+			"panel.application.managed":     "true",
+			"panel.application.id":          app.ID,
+			"panel.application.instance.id": app.ID + "-server-1",
+			"panel.application.generation":  "3",
+			"panel.application.spec.hash":   "hash-3",
+		},
+	}}
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("expected no reconcile input before stored backoff time, got %#v", inputs)
+	}
+	var storedNextRunAt string
+	if err := store.AppDB().QueryRow(`SELECT reconcile_next_run_at FROM application_reconcile_states WHERE application_id='app-1'`).Scan(&storedNextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if storedNextRunAt != nextRunAt.Format(time.RFC3339Nano) {
+		t.Fatalf("next run moved: got %s want %s", storedNextRunAt, nextRunAt.Format(time.RFC3339Nano))
+	}
+}
+
+func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		VALUES('app-1-server-1','app-1','server-1','now',2,?)`, time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		State: "running",
+		Labels: map[string]string{
+			"panel.application.managed":     "true",
+			"panel.application.id":          app.ID,
+			"panel.application.instance.id": app.ID + "-server-1",
+			"panel.application.generation":  "3",
+			"panel.application.spec.hash":   "hash-3",
+		},
+	}}
+
+	for i := 0; i < applicationReconcileHealthyChecksToReset-1; i++ {
+		inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(inputs) != 0 {
+			t.Fatalf("healthy app should not reconcile, got %#v", inputs)
+		}
+		var failures, streak int
+		if err := store.AppDB().QueryRow(`SELECT reconcile_failures,reconcile_success_streak FROM application_reconcile_states WHERE application_id='app-1'`).Scan(&failures, &streak); err != nil {
+			t.Fatal(err)
+		}
+		if failures != 2 || streak != i+1 {
+			t.Fatalf("after %d healthy checks failures=%d streak=%d", i+1, failures, streak)
+		}
+	}
+	if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1"); err != nil {
+		t.Fatal(err)
+	}
+	var failures, streak int
+	var nextRunAt string
+	if err := store.AppDB().QueryRow(`SELECT reconcile_failures,reconcile_success_streak,reconcile_next_run_at FROM application_reconcile_states WHERE application_id='app-1'`).Scan(&failures, &streak, &nextRunAt); err != nil {
+		t.Fatal(err)
+	}
+	if failures != 0 || streak != 0 || nextRunAt != "" {
+		t.Fatalf("expected retry state cleared, failures=%d streak=%d next=%q", failures, streak, nextRunAt)
+	}
+}
+
+func insertReconcileFixtureRows(t *testing.T, store *storage.Store, app applications.Application) {
+	t.Helper()
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
+		VALUES('credential-1','credential','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO servers(id,name,host,port,credential_id,docker_host,traits,created_at,updated_at)
+		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		app.ID, app.Name, boolInt(app.Enabled), "name: web\nimage: nginx\n", "{}", "{}", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -92,6 +92,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 			application_id TEXT NOT NULL,
 			server_id TEXT NOT NULL,
 			observed_at TEXT NOT NULL,
+			reconcile_failures INTEGER NOT NULL DEFAULT 0,
+			reconcile_next_run_at TEXT NOT NULL DEFAULT '',
+			reconcile_success_streak INTEGER NOT NULL DEFAULT 0,
 			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
@@ -423,6 +426,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"image_checked_at":           "TEXT",
 		"image_update_available":     "INTEGER NOT NULL DEFAULT 0",
 		"image_last_error":           "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "application_reconcile_states", map[string]string{
+		"reconcile_failures":       "INTEGER NOT NULL DEFAULT 0",
+		"reconcile_next_run_at":    "TEXT NOT NULL DEFAULT ''",
+		"reconcile_success_streak": "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
 		return err
 	}
