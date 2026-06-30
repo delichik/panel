@@ -260,7 +260,7 @@ func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
 		Env: cloneMap(in.Env), Ports: ports, NetworkMode: in.NetworkMode,
 		Resources:  &agentpb.RuntimeResources{Cpu: int32(in.Resources.CPU), MemoryMb: int32(in.Resources.MemoryMB)},
-		Privileged: in.Privileged, Mounts: mounts, Files: files,
+		Privileged: in.Privileged, CapAdd: append([]string(nil), in.CapAdd...), Mounts: mounts, Files: files,
 		Restart:  &agentpb.RuntimeRestart{Policy: in.Restart.Policy, Attempts: int32(in.Restart.Attempts), IntervalSeconds: int32(in.Restart.IntervalSeconds), DelaySeconds: int32(in.Restart.DelaySeconds), Mode: in.Restart.Mode},
 		Services: services, Checks: checks, Generation: int32(in.Generation), SpecHash: in.SpecHash,
 	}
@@ -317,7 +317,7 @@ func goSpec(in *agentpb.RuntimeSpec) appruntime.Spec {
 	out := appruntime.Spec{
 		ID: in.Id, ApplicationID: in.ApplicationId, InstanceID: in.InstanceId, ContainerName: in.ContainerName,
 		Name: in.Name, Image: in.Image, Command: append([]string(nil), in.Command...),
-		Env: cloneMap(in.Env), Ports: ports, NetworkMode: in.NetworkMode, Privileged: in.Privileged,
+		Env: cloneMap(in.Env), Ports: ports, NetworkMode: in.NetworkMode, Privileged: in.Privileged, CapAdd: append([]string(nil), in.CapAdd...),
 		Mounts: mounts, Files: files, Services: services, Checks: checks, Generation: int(in.Generation), SpecHash: in.SpecHash,
 	}
 	if in.Resources != nil {

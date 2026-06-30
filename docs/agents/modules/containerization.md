@@ -54,6 +54,8 @@ Application 托管容器只识别以上 Label。
 
 Application bridge 网络容器由 Agent 创建时自动放入受管 Docker 网络 `panel-apps`；该网络不存在时由 Agent 创建。该网络用于入口网关在容器目标模式下解析并访问 Application 容器名。
 
+Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并在创建容器时写入 Docker `HostConfig.CapAdd`。缺省或空数组不下发任何 capability；该字段仅表示用户显式追加的 Linux capability，可与 `Privileged` 同时出现。
+
 ## 队列、同步操作与协调
 
 - 每台服务器一条独立 Docker 资源写操作队列；同服务器串行，不同服务器并行。

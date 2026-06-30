@@ -682,6 +682,7 @@ func (c *dockerAPIClient) createContainer(ctx context.Context, spec appruntime.S
 			NetworkMode:  dockerNetworkMode(spec.NetworkMode),
 			ExtraHosts:   dockerExtraHosts(spec.NetworkMode),
 			Privileged:   spec.Privileged,
+			CapAdd:       append([]string(nil), spec.CapAdd...),
 		},
 	}
 	if spec.Resources.MemoryMB > 0 {
@@ -969,6 +970,7 @@ type dockerHostConfig struct {
 	NetworkMode  string                         `json:"NetworkMode,omitempty"`
 	ExtraHosts   []string                       `json:"ExtraHosts,omitempty"`
 	Privileged   bool                           `json:"Privileged,omitempty"`
+	CapAdd       []string                       `json:"CapAdd,omitempty"`
 	Memory       int64                          `json:"Memory,omitempty"`
 	NanoCPUs     int64                          `json:"NanoCpus,omitempty"`
 }

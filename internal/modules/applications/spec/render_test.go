@@ -133,6 +133,7 @@ func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
 			Image:       "alpine",
 			NetworkMode: "host",
 			Privileged:  true,
+			CapAdd:      []string{"net_admin", "NET_ADMIN", "SYS_TIME"},
 		},
 	})
 	if len(issues) > 0 {
@@ -143,6 +144,9 @@ func TestRenderHostNetworkAndPrivilegedContainer(t *testing.T) {
 	}
 	if !runtimeSpec.Privileged {
 		t.Fatalf("privileged = false")
+	}
+	if got := runtimeSpec.CapAdd; len(got) != 2 || got[0] != "NET_ADMIN" || got[1] != "SYS_TIME" {
+		t.Fatalf("capAdd = %#v", got)
 	}
 	if len(runtimeSpec.Ports) != 0 {
 		t.Fatalf("host mode should not render ports: %#v", runtimeSpec.Ports)

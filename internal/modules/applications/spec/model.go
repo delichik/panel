@@ -10,6 +10,7 @@ type Spec struct {
 	Ports       []Port            `json:"ports" yaml:"ports"`
 	Resources   Resources         `json:"resources" yaml:"resources"`
 	Privileged  bool              `json:"privileged" yaml:"privileged"`
+	CapAdd      []string          `json:"capAdd" yaml:"capAdd"`
 	Constraints []Constraint      `json:"constraints" yaml:"constraints"`
 	Services    []Service         `json:"services" yaml:"services"`
 	Checks      []Check           `json:"checks" yaml:"checks"`

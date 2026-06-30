@@ -217,6 +217,7 @@ message RuntimeSpec {
   repeated RuntimeCheck checks = 18;
   int32 generation = 19;
   string spec_hash = 20;
+  repeated string cap_add = 21;
 }
 
 message RuntimePort {

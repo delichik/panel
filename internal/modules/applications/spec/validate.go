@@ -10,10 +10,12 @@ import (
 
 var namePattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`)
 var fileModePattern = regexp.MustCompile(`^[0-7]{3,4}$`)
+var capabilityPattern = regexp.MustCompile(`^[A-Z0-9_]+$`)
 
 func Normalize(spec Spec) Spec {
 	spec.Count = 1
 	spec.Command = nonEmptyStringItems(spec.Command)
+	spec.CapAdd = normalizeCapabilities(spec.CapAdd)
 	if spec.NetworkMode == "" {
 		spec.NetworkMode = "bridge"
 	}
@@ -59,6 +61,23 @@ func nonEmptyStringItems(items []string) []string {
 	return out
 }
 
+func normalizeCapabilities(items []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.ToUpper(strings.TrimSpace(item))
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
 func Validate(spec Spec) []Issue {
 	spec = Normalize(spec)
 	var issues []Issue
@@ -76,6 +95,11 @@ func Validate(spec Spec) []Issue {
 	}
 	if spec.Resources.MemoryMB < 0 {
 		issues = append(issues, Issue{Field: "resources.memoryMb", Message: "memoryMb cannot be negative"})
+	}
+	for i, capability := range spec.CapAdd {
+		if !capabilityPattern.MatchString(capability) {
+			issues = append(issues, Issue{Field: fmt.Sprintf("capAdd[%d]", i), Message: "capability must use uppercase letters, digits, or underscores"})
+		}
 	}
 	switch spec.Restart.Policy {
 	case "no", "on-failure", "always", "unless-stopped":

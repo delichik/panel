@@ -33,6 +33,7 @@ func Render(in RenderInput) (appruntime.Spec, []Issue) {
 		NetworkMode:   spec.NetworkMode,
 		Resources:     appruntime.Resources{CPU: spec.Resources.CPU, MemoryMB: spec.Resources.MemoryMB},
 		Privileged:    spec.Privileged,
+		CapAdd:        append([]string(nil), spec.CapAdd...),
 		Mounts:        renderMounts(in.AppID, spec.Volumes, spec.Mounts),
 		Restart: appruntime.Restart{
 			Policy:          spec.Restart.Policy,

@@ -92,7 +92,7 @@ func TestDockerAPIClientCreateContainerOmitsRestartPolicy(t *testing.T) {
 	_, err := client.createContainer(context.Background(), appruntime.Spec{
 		Image:         "nginx:1.27",
 		ContainerName: "panel-web",
-		Restart:      appruntime.Restart{Policy: "always"},
+		Restart:       appruntime.Restart{Policy: "always"},
 	})
 	if err != nil {
 		t.Fatalf("createContainer() error = %v", err)
@@ -105,6 +105,40 @@ func TestDockerAPIClientCreateContainerOmitsRestartPolicy(t *testing.T) {
 	}
 	if _, ok := hostConfig["RestartPolicy"]; ok {
 		t.Fatalf("RestartPolicy was sent in create payload: %#v", hostConfig["RestartPolicy"])
+	}
+}
+
+func TestDockerAPIClientCreateContainerSendsCapAdd(t *testing.T) {
+	bodies := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode body: %v", err)
+		}
+		bodies <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"Id":"container-1"}`))
+	}))
+	defer server.Close()
+
+	client := &dockerAPIClient{host: server.URL, client: server.Client()}
+	_, err := client.createContainer(context.Background(), appruntime.Spec{
+		Image:         "nginx:1.27",
+		ContainerName: "panel-web",
+		CapAdd:        []string{"NET_ADMIN", "SYS_TIME"},
+	})
+	if err != nil {
+		t.Fatalf("createContainer() error = %v", err)
+	}
+
+	body := <-bodies
+	hostConfig, ok := body["HostConfig"].(map[string]any)
+	if !ok {
+		t.Fatalf("HostConfig = %#v", body["HostConfig"])
+	}
+	got, ok := hostConfig["CapAdd"].([]any)
+	if !ok || len(got) != 2 || got[0] != "NET_ADMIN" || got[1] != "SYS_TIME" {
+		t.Fatalf("CapAdd = %#v", hostConfig["CapAdd"])
 	}
 }
 

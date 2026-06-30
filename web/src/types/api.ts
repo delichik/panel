@@ -798,6 +798,7 @@ export interface ApplicationRuntimeSpecDto {
   networkMode: string;
   resources: RuntimeResourcesDto;
   privileged?: boolean;
+  capAdd?: string[];
   mounts?: RuntimeMountDto[];
   files?: RuntimeManagedFileDto[];
   restart: RuntimeRestartDto;

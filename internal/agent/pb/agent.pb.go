@@ -1544,7 +1544,6 @@ type RuntimeSpec struct {
 	Name          string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
 	Image         string                 `protobuf:"bytes,6,opt,name=image,proto3" json:"image,omitempty"`
 	Command       []string               `protobuf:"bytes,7,rep,name=command,proto3" json:"command,omitempty"`
-	Args          []string               `protobuf:"bytes,8,rep,name=args,proto3" json:"args,omitempty"`
 	Env           map[string]string      `protobuf:"bytes,9,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	Ports         []*RuntimePort         `protobuf:"bytes,10,rep,name=ports,proto3" json:"ports,omitempty"`
 	NetworkMode   string                 `protobuf:"bytes,11,opt,name=network_mode,json=networkMode,proto3" json:"network_mode,omitempty"`
@@ -1557,6 +1556,7 @@ type RuntimeSpec struct {
 	Checks        []*RuntimeCheck        `protobuf:"bytes,18,rep,name=checks,proto3" json:"checks,omitempty"`
 	Generation    int32                  `protobuf:"varint,19,opt,name=generation,proto3" json:"generation,omitempty"`
 	SpecHash      string                 `protobuf:"bytes,20,opt,name=spec_hash,json=specHash,proto3" json:"spec_hash,omitempty"`
+	CapAdd        []string               `protobuf:"bytes,21,rep,name=cap_add,json=capAdd,proto3" json:"cap_add,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1636,13 +1636,6 @@ func (x *RuntimeSpec) GetImage() string {
 func (x *RuntimeSpec) GetCommand() []string {
 	if x != nil {
 		return x.Command
-	}
-	return nil
-}
-
-func (x *RuntimeSpec) GetArgs() []string {
-	if x != nil {
-		return x.Args
 	}
 	return nil
 }
@@ -1729,6 +1722,13 @@ func (x *RuntimeSpec) GetSpecHash() string {
 		return x.SpecHash
 	}
 	return ""
+}
+
+func (x *RuntimeSpec) GetCapAdd() []string {
+	if x != nil {
+		return x.CapAdd
+	}
+	return nil
 }
 
 type RuntimePort struct {
@@ -4353,7 +4353,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x05jails\x18\x04 \x03(\tR\x05jails\x12\x10\n" +
 	"\x03raw\x18\x05 \x01(\tR\x03raw\"N\n" +
 	"\x14Fail2BanApplyRequest\x126\n" +
-	"\x06config\x18\x01 \x01(\v2\x1e.panel.agent.v1.Fail2BanConfigR\x06config\"\xe3\x06\n" +
+	"\x06config\x18\x01 \x01(\v2\x1e.panel.agent.v1.Fail2BanConfigR\x06config\"\xf4\x06\n" +
 	"\vRuntimeSpec\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12%\n" +
 	"\x0eapplication_id\x18\x02 \x01(\tR\rapplicationId\x12\x1f\n" +
@@ -4362,8 +4362,7 @@ const file_agent_proto_rawDesc = "" +
 	"\x0econtainer_name\x18\x04 \x01(\tR\rcontainerName\x12\x12\n" +
 	"\x04name\x18\x05 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x06 \x01(\tR\x05image\x12\x18\n" +
-	"\acommand\x18\a \x03(\tR\acommand\x12\x12\n" +
-	"\x04args\x18\b \x03(\tR\x04args\x126\n" +
+	"\acommand\x18\a \x03(\tR\acommand\x126\n" +
 	"\x03env\x18\t \x03(\v2$.panel.agent.v1.RuntimeSpec.EnvEntryR\x03env\x121\n" +
 	"\x05ports\x18\n" +
 	" \x03(\v2\x1b.panel.agent.v1.RuntimePortR\x05ports\x12!\n" +
@@ -4380,10 +4379,11 @@ const file_agent_proto_rawDesc = "" +
 	"\n" +
 	"generation\x18\x13 \x01(\x05R\n" +
 	"generation\x12\x1b\n" +
-	"\tspec_hash\x18\x14 \x01(\tR\bspecHash\x1a6\n" +
+	"\tspec_hash\x18\x14 \x01(\tR\bspecHash\x12\x17\n" +
+	"\acap_add\x18\x15 \x03(\tR\x06capAdd\x1a6\n" +
 	"\bEnvEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x83\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\b\x10\tR\x04args\"\x83\x01\n" +
 	"\vRuntimePort\x12\x14\n" +
 	"\x05label\x18\x01 \x01(\tR\x05label\x12%\n" +
 	"\x0econtainer_port\x18\x02 \x01(\x05R\rcontainerPort\x12\x1b\n" +

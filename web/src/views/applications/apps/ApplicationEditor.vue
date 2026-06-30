@@ -43,6 +43,7 @@ const specForm = reactive({
   cpu: null as number | null,
   memoryMb: null as number | null,
   privileged: false,
+  capAdd: [] as StringListItem[],
   ports: [] as PortForm[],
   env: [] as EnvForm[],
   mounts: [] as MountForm[],
@@ -132,6 +133,7 @@ function loadDefaultSpecForm(appName?: string) {
   specForm.cpu = null;
   specForm.memoryMb = null;
   specForm.privileged = false;
+  specForm.capAdd = [];
   specForm.ports = [];
   specForm.env = [];
   specForm.mounts = [];
@@ -149,6 +151,7 @@ function loadSpecForm(raw: string, appName?: string) {
   specForm.cpu = numericLimit(objectValue(parsed.resources)?.cpu);
   specForm.memoryMb = numericLimit(objectValue(parsed.resources)?.memoryMb);
   specForm.privileged = Boolean(parsed.privileged);
+  specForm.capAdd = arrayItems(parsed.capAdd, false).map((item) => ({ value: item.value.toUpperCase() }));
   specForm.ports = arrayValue(parsed.ports).map((item, index) => {
     const port = objectValue(item);
     return {
@@ -416,6 +419,8 @@ function buildSpecYaml() {
   if (memoryMb !== null) resources.memoryMb = memoryMb;
   if (Object.keys(resources).length) spec.resources = resources;
   if (specForm.privileged) spec.privileged = true;
+  const capAdd = capabilityValues(specForm.capAdd);
+  if (capAdd.length) spec.capAdd = capAdd;
   if (mounts.length) spec.mounts = mounts;
   if (!mounts.length && arrayValue(currentSpec?.mounts).length) spec.mounts = currentSpec?.mounts;
   if (arrayValue(currentSpec?.volumes).length) spec.volumes = currentSpec?.volumes;
@@ -481,6 +486,18 @@ function arrayItems(value: unknown, keepBlank: boolean) {
 
 function stringListValues(items: StringListItem[]) {
   return items.map((item) => item.value.trim()).filter(Boolean);
+}
+
+function capabilityValues(items: StringListItem[]) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of stringListValues(items)) {
+    const value = item.toUpperCase();
+    if (seen.has(value)) continue;
+    seen.add(value);
+    out.push(value);
+  }
+  return out;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -618,6 +635,19 @@ async function save(deploy = false) {
               <v-text-field v-model.number="specForm.memoryMb" type="number" min="0" :label="t('applicationEditor.memoryMb')" density="compact" variant="outlined" />
               <v-switch v-model="specForm.privileged" :label="t('applicationEditor.privilegedContainer')" color="primary" density="compact" hide-details class="switch-field" />
             </div>
+            <div class="section-title mt-2">{{ t('applicationEditor.capabilities') }}</div>
+            <div v-for="(item, index) in specForm.capAdd" :key="`cap-${index}`" class="repeat-row cap-row">
+              <v-text-field
+                v-model="item.value"
+                :label="t('applicationEditor.capabilityItem', { index: index + 1 })"
+                :hint="index === 0 ? t('applicationEditor.capabilityHint') : ''"
+                density="compact"
+                variant="outlined"
+                hide-details="auto"
+              />
+              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.capAdd, index)" />
+            </div>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.capAdd)">{{ t('applicationEditor.addCapability') }}</v-btn>
           </section>
 
           <v-divider class="section-divider" />
@@ -931,6 +961,7 @@ async function save(deploy = false) {
 .placement-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
 .ports-row { grid-template-columns: minmax(120px, 1fr) auto minmax(96px, 0.6fr) auto auto minmax(96px, 0.6fr) 40px; }
 .command-row { grid-template-columns: minmax(0, 1fr) 40px; }
+.cap-row { grid-template-columns: minmax(0, 1fr) 40px; }
 .env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
 .mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) 86px 86px 96px auto 40px; }
 .mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
@@ -963,6 +994,7 @@ async function save(deploy = false) {
   .mount-row,
   .ports-row,
   .command-row,
+  .cap-row,
   .env-row,
   .variable-row,
   .proxy-rule-header,

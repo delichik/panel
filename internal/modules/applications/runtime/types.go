@@ -27,6 +27,7 @@ type Spec struct {
 	NetworkMode   string            `json:"networkMode"`
 	Resources     Resources         `json:"resources"`
 	Privileged    bool              `json:"privileged,omitempty"`
+	CapAdd        []string          `json:"capAdd,omitempty"`
 	Mounts        []Mount           `json:"mounts,omitempty"`
 	Files         []ManagedFile     `json:"files,omitempty"`
 	Restart       Restart           `json:"restart"`

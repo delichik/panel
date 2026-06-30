@@ -335,6 +335,7 @@ var (
 			"networkMode must be bridge or host":                                              "networkMode 必须为 bridge 或 host",
 			"cpu cannot be negative":                                                          "CPU 不能为负数",
 			"memoryMb cannot be negative":                                                     "memoryMb 不能为负数",
+			"capability must use uppercase letters, digits, or underscores":                   "capability 只能使用大写字母、数字或下划线",
 			"restart policy must be no, on-failure, always, or unless-stopped":                "重启策略必须为 no、on-failure、always 或 unless-stopped",
 			"restart attempts cannot be negative":                                             "重启尝试次数不能为负数",
 			"restart interval cannot be negative":                                             "重启间隔不能为负数",
