@@ -242,7 +242,7 @@ function serverName(serverId?: string | null) {
 }
 
 function operationObjectLabel(group: TaskOperationGroup) {
-  const task = group.tasks[0];
+  const task = group.tasks.find((item) => item.parentTaskId) ?? group.tasks[0];
   const serverId = task?.nodeId || task?.serverId;
   const server = serverId ? servers.value.find((item) => item.id === serverId) : null;
   if (server) return server.name;
@@ -273,7 +273,18 @@ function executionModeLabel(value?: string | null) {
   return t(`taskCenter.executionModes.${value}`);
 }
 
+function isBatchParentTask(task: TaskDto) {
+  return !task.parentTaskId && !!task.childCount && task.childCount > 0;
+}
+
+function operationTaskCount(group?: TaskOperationGroup | null) {
+  if (!group) return 1;
+  const childCount = group.tasks.filter((task) => task.parentTaskId).length;
+  return childCount || group.tasks.length;
+}
+
 function taskOrdinalLabel(task: TaskDto) {
+  if (isBatchParentTask(task)) return t('taskCenter.operationSummary');
   if (!task.parentTaskId || !task.childCount || task.childCount <= 1) return formatTaskType(task.type);
   return t('taskCenter.taskOrdinal', { index: task.childIndex || 1, count: task.childCount });
 }
@@ -553,7 +564,7 @@ onMounted(loadTaskCenter);
               </div>
               <div>
                 <span>{{ t('taskCenter.operationTaskCount') }}</span>
-                <strong>{{ selectedOperation?.tasks.length ?? 1 }}</strong>
+                <strong>{{ operationTaskCount(selectedOperation) }}</strong>
               </div>
               <div>
                 <span>{{ t('taskCenter.queuedFor') }}</span>
@@ -634,7 +645,7 @@ onMounted(loadTaskCenter);
                 >
                   <td>
                     <div class="font-weight-medium">{{ taskOrdinalLabel(task) }}</div>
-                    <div v-if="task.parentTaskId" class="text-caption text-medium-emphasis">{{ formatTaskType(task.type) }}</div>
+                    <div v-if="task.parentTaskId || isBatchParentTask(task)" class="text-caption text-medium-emphasis">{{ formatTaskType(task.type) }}</div>
                     <div class="text-caption text-medium-emphasis mono">{{ shortId(task.id) }}</div>
                   </td>
                   <td>{{ serverName(task.nodeId || task.serverId) }}</td>

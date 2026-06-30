@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/tasks/index.vue`
+  - 任务中心批量父任务新增“操作汇总”行，父任务步骤、日志和错误可直接查看；新增标签已接入英文与简体中文词条。
 - `internal/modules/applications/spec`、`internal/platform/i18n`
   - appspec `persistent` 挂载新增 `uid`、`gid`、`mode` 权限校验文案，应用编辑器可视化挂载行新增 UID/GID/权限字段，已接入英文与简体中文翻译；宿主机权限应用失败继续保留系统原始诊断。
 - `web/src/layouts/AppLayout.vue`、`web/src/router/index.ts`

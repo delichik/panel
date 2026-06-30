@@ -34,17 +34,18 @@ export function groupTasksByOperation(tasks: TaskDto[]): TaskOperationGroup[] {
       const childRows = sorted
         .filter((task) => task.parentTaskId)
         .sort((a, b) => (a.childIndex || 0) - (b.childIndex || 0) || b.createdAt.localeCompare(a.createdAt));
-      const taskRows = childRows.length > 0 ? childRows : sorted;
-      const trigger = sorted.find((task) => task.triggerType === 'user') ?? sorted.find((task) => task.triggerType) ?? sorted[0];
       const parent = sorted.find((task) => !task.parentTaskId && task.childCount && task.childCount > 0);
+      const taskRows = childRows.length > 0 ? (parent ? [parent, ...childRows] : childRows) : sorted;
+      const trigger = sorted.find((task) => task.triggerType === 'user') ?? sorted.find((task) => task.triggerType) ?? sorted[0];
+      const contextTask = childRows[0] ?? trigger ?? sorted[0];
       return {
         operationId,
         executionMode: parent?.executionMode || trigger?.executionMode || '',
         triggerType: trigger?.triggerType || '',
         triggerResourceType: trigger?.triggerResourceType || '',
         triggerResourceId: trigger?.triggerResourceId || '',
-        resourceType: trigger?.resourceType || '',
-        resourceId: trigger?.resourceId || '',
+        resourceType: contextTask?.resourceType || trigger?.resourceType || '',
+        resourceId: contextTask?.resourceId || trigger?.resourceId || '',
         summary: trigger?.summary || sorted[0]?.summary || '',
         createdAt: sorted[0]?.createdAt || '',
         startedAt: earliest(sorted.map((task) => task.startedAt).filter(Boolean) as string[]),

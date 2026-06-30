@@ -43,16 +43,19 @@ describe('groupTasksByOperation', () => {
     expect(groups[1].finishedAt).toBe('2026-05-23T00:02:00Z');
   });
 
-  it('uses child tasks as the operation task list when a batch parent exists', () => {
+  it('keeps the batch parent visible before child tasks', () => {
     const groups = groupTasksByOperation([
-      task({ id: 'task-parent', operationId: 'op-2', childCount: 2, executionMode: 'parallel', createdAt: '2026-05-23T00:00:00Z' }),
-      task({ id: 'task-a', operationId: 'op-2', parentTaskId: 'task-parent', childIndex: 2, childCount: 2, resourceId: 'srv-b', createdAt: '2026-05-23T00:00:01Z' }),
-      task({ id: 'task-b', operationId: 'op-2', parentTaskId: 'task-parent', childIndex: 1, childCount: 2, resourceId: 'srv-a', createdAt: '2026-05-23T00:00:02Z' }),
+      task({ id: 'task-parent', operationId: 'op-2', childCount: 2, executionMode: 'parallel', status: 'failed', createdAt: '2026-05-23T00:00:00Z' }),
+      task({ id: 'task-a', operationId: 'op-2', parentTaskId: 'task-parent', childIndex: 2, childCount: 2, resourceType: 'application', resourceId: 'app-web', status: 'completed', createdAt: '2026-05-23T00:00:01Z' }),
+      task({ id: 'task-b', operationId: 'op-2', parentTaskId: 'task-parent', childIndex: 1, childCount: 2, resourceType: 'application', resourceId: 'app-api', status: 'completed', createdAt: '2026-05-23T00:00:02Z' }),
     ]);
 
     expect(groups).toHaveLength(1);
     expect(groups[0].executionMode).toBe('parallel');
+    expect(groups[0].status).toBe('failed');
+    expect(groups[0].resourceType).toBe('application');
+    expect(groups[0].resourceId).toBe('app-api');
     expect(groups[0].allTasks.map((item) => item.id)).toEqual(['task-b', 'task-a', 'task-parent']);
-    expect(groups[0].tasks.map((item) => item.id)).toEqual(['task-b', 'task-a']);
+    expect(groups[0].tasks.map((item) => item.id)).toEqual(['task-parent', 'task-b', 'task-a']);
   });
 });
