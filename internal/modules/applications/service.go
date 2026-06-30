@@ -1839,6 +1839,12 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 				Error:         status.LastError,
 				ObservedAt:    status.ObservedAt,
 			}
+			if result.Status != appruntime.StatusRunning {
+				if strings.TrimSpace(result.Error) != "" {
+					return errors.New(result.Error)
+				}
+				return fmt.Errorf("container %s is %s after start", instanceSpec.ContainerName, firstNonEmpty(result.Status, "not running"))
+			}
 			return nil
 		})
 		if err != nil {

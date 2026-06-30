@@ -156,3 +156,50 @@ func TestManagerCreateBatchCreatesParentAndChildren(t *testing.T) {
 		t.Fatalf("expected serial child execution, got %#v", ran)
 	}
 }
+
+func TestManagerRunParentTreatsCompletedChildrenAsAlreadyDone(t *testing.T) {
+	svc := newTestService(t)
+	ran := 0
+	svc.MustRegister(Definition{
+		Type:              "batch_child_done",
+		ConcurrencyPolicy: ConcurrencyParallelAllowed,
+		Execute: func(TaskContext) error {
+			ran++
+			return nil
+		},
+	})
+	manager := NewManager(svc)
+	parent, children, created, err := manager.CreateBatch(context.Background(), CreateBatchInput{
+		Type:          "batch_child_done",
+		OperationID:   "op_child_done",
+		ExecutionMode: ExecutionModeSerial,
+		Inputs: []CreateInput{
+			{ResourceType: "server", ResourceID: "srv_1"},
+			{ResourceType: "server", ResourceID: "srv_2"},
+		},
+	}, Trigger{Type: "user"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || len(children) != 2 {
+		t.Fatalf("expected batch children, parent=%#v children=%#v created=%v", parent, children, created)
+	}
+	for _, child := range children {
+		if err := svc.Complete(context.Background(), child.ID, "child already done"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.Run(context.Background(), parent); err != nil {
+		t.Fatal(err)
+	}
+	gotParent, err := svc.Get(context.Background(), parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotParent.Status != StatusCompleted {
+		t.Fatalf("expected completed parent, got %#v", gotParent)
+	}
+	if ran != 0 {
+		t.Fatalf("completed children should not run again, ran=%d", ran)
+	}
+}

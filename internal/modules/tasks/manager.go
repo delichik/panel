@@ -202,6 +202,9 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 	}
 	claimed, err := m.service.claimExecution(ctx, task.ID)
 	if err != nil {
+		if latest, latestErr := m.service.Get(ctx, task.ID); latestErr == nil && isTerminalStatus(latest.Status) {
+			return nil
+		}
 		return err
 	}
 	if !claimed {

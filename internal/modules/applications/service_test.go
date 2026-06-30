@@ -158,6 +158,51 @@ func TestCreateEnabledAppContinuesDeployingRemainingTargetsAfterRuntimeError(t *
 	}
 }
 
+func TestCreateEnabledAppFailsTargetWhenContainerExitsAfterStart(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+
+	var appID string
+	runtime.statuses = map[string]appruntime.InstanceStatus{}
+	runtimeStatus := appruntime.InstanceStatus{
+		Status:     appruntime.StatusStopped,
+		LastError:  "container exited with code 1",
+		ObservedAt: time.Now().UTC(),
+	}
+	runtime.statusHook = func(instanceID string) {
+		if strings.HasSuffix(instanceID, "-srv-a") {
+			runtime.statuses[instanceID] = runtimeStatus
+		}
+	}
+
+	app, err := svc.Create(context.Background(), SaveInput{
+		Name:     "web",
+		Enabled:  true,
+		SpecYAML: "name: web\nimage: nginx\n",
+	})
+	if err == nil {
+		t.Fatal("expected deploy error")
+	}
+	appID = app.ID
+	var appErr *panelerr.Error
+	if !errors.As(err, &appErr) || appErr.Code != "application_runtime_operation_failed" {
+		t.Fatalf("err = %#v", err)
+	}
+	if !strings.Contains(appErr.Message, "container exited with code 1") || !strings.Contains(appErr.Message, "1 of 2") {
+		t.Fatalf("message = %q", appErr.Message)
+	}
+	if err := svc.db.QueryRowContext(context.Background(), `SELECT id FROM applications WHERE name=?`, "web").Scan(&appID); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := svc.runtimeInstanceForServer(context.Background(), appID, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.Status != appruntime.StatusFailed || !strings.Contains(instance.LastError, "container exited with code 1") {
+		t.Fatalf("instance = %#v", instance)
+	}
+}
+
 func TestCreateDuplicateAppNameReturnsValidation(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -1409,6 +1454,7 @@ type fakeRuntimeClient struct {
 	createEntered        chan struct{}
 	createRelease        chan struct{}
 	createOnce           sync.Once
+	statusHook           func(instanceID string)
 }
 
 type fakeReverseProxyReconciler struct {
@@ -1477,6 +1523,9 @@ func (f *fakeRuntimeClient) RuntimeRestart(ctx context.Context, baseURL string, 
 }
 
 func (f *fakeRuntimeClient) RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agentcontract.RuntimeStatusResponse, error) {
+	if f.statusHook != nil {
+		f.statusHook(instanceID)
+	}
 	if f.statuses != nil {
 		if status, ok := f.statuses[instanceID]; ok {
 			return agentcontract.RuntimeStatusResponse{InstanceStatus: status}, nil
