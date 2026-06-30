@@ -192,8 +192,10 @@ func TestWorkerTaskRuntimeSummarizesRegistryAndExecutions(t *testing.T) {
 		Type:    "periodic_runtime",
 		Execute: func(TaskContext) error { return nil },
 		Periodic: &Periodic{
-			Interval:      time.Minute,
-			CollectInputs: func(context.Context) (CreateBatchInput, bool, error) { return CreateBatchInput{}, false, nil },
+			Interval: time.Minute,
+			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
+				return CreateBatchInput{}, false, nil
+			},
 		},
 	})
 	task, err := svc.Create(context.Background(), CreateInput{Type: "test"})

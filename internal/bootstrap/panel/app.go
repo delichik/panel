@@ -123,6 +123,7 @@ func New(cfg config.Config) (*App, error) {
 		containerization.WithApplicationUpdater(containerBridge),
 	)
 	containerBridge.containers = containerSvc
+	applicationSvc.SetApplicationReconcileTrigger(containerSvc)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor, metrics.WithAgentClient(agentClient))
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc, agentClient)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
@@ -140,8 +141,11 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithContainerOperationQueue(containerSvc),
 		facilityapps.WithDataRoot(cfg.DataRoot),
 		facilityapps.WithCertificateProvider(certSvc),
+		facilityapps.WithApplicationReconcileTrigger(containerSvc),
 	)
+	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
+	applicationSvc.SetFacilityRuntimeProvider(facilitySvc)
 	internalFileRegistry.Register("certificate", certSvc)
 	variableRegistry.Register("certs", certSvc)
 	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, metricsSvc, packageSvc, certSvc)

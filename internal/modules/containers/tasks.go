@@ -2,6 +2,7 @@ package containerization
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -36,9 +37,12 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 			Execute:    s.RunVolumeRefreshTask,
 		},
 		{
-			Type:       TaskApplicationReconcile,
-			AllowRetry: true,
-			Execute:    s.RunApplicationReconcileTask,
+			Type:              TaskApplicationReconcile,
+			AllowRunNow:       true,
+			AllowRetry:        true,
+			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
+			ConcurrencyKey:    applicationReconcileConcurrencyKey,
+			Execute:           s.RunApplicationReconcileTask,
 			Periodic: &tasks.Periodic{
 				Interval:      5 * time.Second,
 				CollectInputs: s.CollectApplicationReconcileInputs,
@@ -59,6 +63,14 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 	} {
 		taskSvc.MustRegister(def)
 	}
+}
+
+type ApplicationReconcileTrigger struct {
+	ApplicationIDs []string `json:"applicationIds"`
+	ServerIDs      []string `json:"serverIds"`
+	Force          bool     `json:"force"`
+	Reason         string   `json:"reason"`
+	StopServers    []string `json:"stopServers"`
 }
 
 func (s *Service) RunContainerRefreshTask(tc tasks.TaskContext) error {
@@ -89,20 +101,56 @@ func (s *Service) RunApplicationImageUpgradeTask(tc tasks.TaskContext) error {
 	return nil
 }
 
-func (s *Service) CollectApplicationReconcileInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+func (s *Service) CollectApplicationReconcileInputs(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
 	operationID := id.New("op")
-	inputs, err := s.CollectApplicationReconcileTasks(ctx, operationID)
+	inputs, err := s.CollectApplicationReconcileTasks(ctx, operationID, trigger)
 	if err != nil || len(inputs) == 0 {
 		return tasks.CreateBatchInput{}, false, err
 	}
+	triggerType := firstNonEmpty(trigger.Type, "scheduler")
+	taskType := TaskApplicationReconcile
+	if len(inputs) > 0 && strings.TrimSpace(inputs[0].Type) != "" {
+		taskType = inputs[0].Type
+	}
 	return tasks.CreateBatchInput{
-		Type:          TaskApplicationReconcile,
+		Type:          taskType,
 		OperationID:   operationID,
-		TriggerType:   "scheduler",
+		TriggerType:   triggerType,
 		Summary:       "Monitoring application containers",
 		ExecutionMode: tasks.ExecutionModeParallel,
 		Inputs:        inputs,
 	}, true, nil
+}
+
+func applicationReconcileConcurrencyKey(in tasks.CreateInput) string {
+	appID := firstNonEmpty(in.ResourceID, in.TriggerResourceID, in.ServerID, in.NodeID)
+	if appID == "" {
+		return ""
+	}
+	return "application:lifecycle:" + appID
+}
+
+func applicationReconcileTriggerPayload(trigger tasks.PeriodicTrigger) ApplicationReconcileTrigger {
+	out := ApplicationReconcileTrigger{}
+	switch value := trigger.Payload.(type) {
+	case ApplicationReconcileTrigger:
+		out = value
+	case *ApplicationReconcileTrigger:
+		if value != nil {
+			out = *value
+		}
+	case map[string]any:
+		if raw, err := json.Marshal(value); err == nil {
+			_ = json.Unmarshal(raw, &out)
+		}
+	}
+	if trigger.TriggerResourceType == "application" && strings.TrimSpace(trigger.TriggerResourceID) != "" {
+		out.ApplicationIDs = append(out.ApplicationIDs, strings.TrimSpace(trigger.TriggerResourceID))
+	}
+	out.ApplicationIDs = uniqueStrings(out.ApplicationIDs)
+	out.ServerIDs = uniqueStrings(out.ServerIDs)
+	out.StopServers = uniqueStrings(out.StopServers)
+	return out
 }
 
 func (s *Service) CollectImageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {

@@ -18,6 +18,7 @@ import (
 	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/servers"
+	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -51,6 +52,10 @@ type ContainerOperationQueue interface {
 	Execute(ctx context.Context, serverID string, run func(context.Context) error) error
 }
 
+type ApplicationReconcileTrigger interface {
+	TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error)
+}
+
 type CertificateProvider interface {
 	ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error)
 }
@@ -64,6 +69,7 @@ type Service struct {
 	certificates CertificateProvider
 	agentErrors  AgentErrorHandler
 	queue        ContainerOperationQueue
+	reconciler   ApplicationReconcileTrigger
 }
 
 type Option func(*Service)
@@ -78,6 +84,10 @@ func WithDataRoot(dataRoot string) Option {
 
 func WithCertificateProvider(provider CertificateProvider) Option {
 	return func(s *Service) { s.certificates = provider }
+}
+
+func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option {
+	return func(s *Service) { s.reconciler = trigger }
 }
 
 func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, apps ApplicationProvider, opts ...Option) *Service {
@@ -129,7 +139,7 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err := s.syncReverseProxyTraits(ctx, previous.DeploymentServers, next.DeploymentServers); err != nil {
 		return ReverseProxyConfig{}, err
 	}
-	if err := s.reconcileReverseProxy(ctx, removedServers(previous.DeploymentServers, next.DeploymentServers)); err != nil {
+	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, next.DeploymentServers)); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 	}
 	return s.GetReverseProxy(ctx)
@@ -168,11 +178,11 @@ func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []s
 }
 
 func (s *Service) ReconcileReverseProxy(ctx context.Context) error {
-	return s.reconcileReverseProxy(ctx, nil)
+	return s.triggerReverseProxyReconcile(ctx, "application_change", nil)
 }
 
 func (s *Service) ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult, error) {
-	if err := s.reconcileReverseProxy(ctx, nil); err != nil {
+	if err := s.triggerReverseProxyReconcile(ctx, "user", nil); err != nil {
 		_ = s.setLastError(ctx, err.Error())
 		return ReconcileResult{}, err
 	}
@@ -181,6 +191,60 @@ func (s *Service) ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult
 		return ReconcileResult{}, err
 	}
 	return ReconcileResult{Config: cfg}, nil
+}
+
+func (s *Service) RuntimeSpecForServer(ctx context.Context, app applications.Application, srv server.Server) (appruntime.Spec, bool, error) {
+	if app.ID != proxyApplicationID {
+		return appruntime.Spec{}, false, nil
+	}
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		return appruntime.Spec{}, true, err
+	}
+	routes, err := s.routesByServer(ctx, []string{srv.ID})
+	if err != nil {
+		return appruntime.Spec{}, true, err
+	}
+	certificates, err := s.reverseProxyCertificates(ctx)
+	if err != nil {
+		return appruntime.Spec{}, true, err
+	}
+	spec, err := s.proxySpec(ctx, srv.ID, cfg, routes[srv.ID], certificates)
+	if err != nil {
+		return appruntime.Spec{}, true, err
+	}
+	spec.Generation = app.Generation
+	spec.SpecHash = app.SpecHash
+	return spec, true, nil
+}
+
+func (s *Service) triggerReverseProxyReconcile(ctx context.Context, triggerType string, stopServers []string) error {
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		return err
+	}
+	if _, _, err := s.ensureReverseProxyApplication(ctx, cfg); err != nil {
+		return err
+	}
+	if s.reconciler == nil {
+		return s.reconcileReverseProxy(ctx, stopServers)
+	}
+	_, _, err = s.reconciler.TriggerApplicationReconcile(ctx, tasks.PeriodicTrigger{
+		Type:                firstNonEmpty(triggerType, "facility_app"),
+		Manual:              triggerType == "user",
+		TriggerResourceType: "application",
+		TriggerResourceID:   proxyApplicationID,
+		Payload:             reverseProxyReconcilePayload(stopServers),
+	})
+	return err
+}
+
+func reverseProxyReconcilePayload(stopServers []string) map[string]any {
+	return map[string]any{
+		"applicationIds": []string{proxyApplicationID},
+		"reason":         "reverse_proxy_changed",
+		"stopServers":    uniqueSorted(stopServers),
+	}
 }
 
 func (s *Service) reconcileReverseProxy(ctx context.Context, stopServers []string) error {

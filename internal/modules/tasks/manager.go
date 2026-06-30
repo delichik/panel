@@ -275,6 +275,34 @@ func (m *Manager) CreateBatchAndRun(ctx context.Context, batch CreateBatchInput,
 	return parent, true, nil
 }
 
+func (m *Manager) TriggerPeriodicNow(ctx context.Context, taskType string, trigger PeriodicTrigger) (Task, bool, error) {
+	if m == nil || m.service == nil {
+		return Task{}, false, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
+	}
+	def, ok := m.service.Registry().Definition(taskType)
+	if !ok {
+		return Task{}, false, panelerr.Validation("task_type_unregistered", "Task type is not registered")
+	}
+	if def.Periodic == nil || def.Periodic.CollectInputs == nil || def.Execute == nil {
+		return Task{}, false, panelerr.Validation("task_periodic_unavailable", "Periodic task trigger is unavailable")
+	}
+	if trigger.Type == "" {
+		trigger.Type = "manual"
+	}
+	batch, shouldRun, err := def.Periodic.CollectInputs(ctx, trigger)
+	if err != nil || !shouldRun {
+		return Task{}, false, err
+	}
+	if batch.Type == "" {
+		batch.Type = def.Type
+	}
+	if batch.TriggerType == "" {
+		batch.TriggerType = trigger.Type
+	}
+	taskTrigger := Trigger{Type: batch.TriggerType, Manual: trigger.Manual, Periodic: true}
+	return m.CreateBatchAndRun(ctx, batch, taskTrigger)
+}
+
 func (m *Manager) RunParent(ctx context.Context, parent Task) error {
 	children, err := m.service.Children(ctx, parent.ID)
 	if err != nil {

@@ -12,10 +12,10 @@ type PeriodicRunner struct {
 	wg      sync.WaitGroup
 }
 
-func NewIntervalCollector(defaultInterval time.Duration, intervalProvider func() time.Duration, collect func(context.Context) (CreateBatchInput, bool, error)) func(context.Context) (CreateBatchInput, bool, error) {
+func NewIntervalCollector(defaultInterval time.Duration, intervalProvider func() time.Duration, collect func(context.Context) (CreateBatchInput, bool, error)) func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
 	var mu sync.Mutex
 	lastRun := time.Now()
-	return func(ctx context.Context) (CreateBatchInput, bool, error) {
+	return func(ctx context.Context, trigger PeriodicTrigger) (CreateBatchInput, bool, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		interval := defaultInterval
@@ -24,7 +24,7 @@ func NewIntervalCollector(defaultInterval time.Duration, intervalProvider func()
 				interval = configured
 			}
 		}
-		if time.Since(lastRun) < interval {
+		if isSchedulerPeriodicTrigger(trigger) && time.Since(lastRun) < interval {
 			return CreateBatchInput{}, false, nil
 		}
 		batch, shouldRun, err := collect(ctx)
@@ -81,26 +81,13 @@ func (r *PeriodicRunner) run(ctx context.Context, def Definition) {
 	if def.Periodic == nil || def.Periodic.CollectInputs == nil || def.Execute == nil {
 		return
 	}
-	batch, shouldRun, err := def.Periodic.CollectInputs(ctx)
+	_, _, err := r.manager.TriggerPeriodicNow(ctx, def.Type, PeriodicTrigger{Type: "scheduler"})
 	if err != nil {
-		log.Printf("periodic task %s inputs: %v", def.Type, err)
+		log.Printf("periodic task %s trigger: %v", def.Type, err)
 		return
 	}
-	if !shouldRun {
-		return
-	}
-	if batch.Type == "" {
-		batch.Type = def.Type
-	}
-	if batch.TriggerType == "" {
-		batch.TriggerType = "scheduler"
-	}
-	_, created, err := r.manager.CreateBatchAndRun(ctx, batch, Trigger{Type: batch.TriggerType, Periodic: true})
-	if err != nil {
-		log.Printf("periodic task %s create: %v", def.Type, err)
-		return
-	}
-	if !created {
-		return
-	}
+}
+
+func isSchedulerPeriodicTrigger(trigger PeriodicTrigger) bool {
+	return trigger.Type == "" || trigger.Type == "scheduler"
 }

@@ -28,6 +28,14 @@ type Trigger struct {
 	Periodic bool
 }
 
+type PeriodicTrigger struct {
+	Type                string
+	Manual              bool
+	TriggerResourceType string
+	TriggerResourceID   string
+	Payload             any
+}
+
 type TaskContext struct {
 	Context context.Context
 	Task    Task
@@ -66,7 +74,7 @@ type Definition struct {
 
 type Periodic struct {
 	Interval      time.Duration
-	CollectInputs func(context.Context) (CreateBatchInput, bool, error)
+	CollectInputs func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error)
 }
 
 type Registry struct {

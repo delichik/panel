@@ -60,27 +60,29 @@ type AgentErrorHandler interface {
 }
 
 type Service struct {
-	db              *sql.DB
-	runtimeClient   AgentRuntimeClient
-	servers         ServerProvider
-	agentErrors     AgentErrorHandler
-	tasks           *tasks.Service
-	config          Config
-	configProvider  func() Config
-	renderer        templatex.Renderer
-	builtinResolver BuiltinVariableResolver
-	internalFiles   InternalFileProvider
-	proxyReconciler ReverseProxyReconciler
-	imageResolver   ImageDigestResolver
-	operationQueue  ContainerOperationQueue
-	sessionMu       sync.Mutex
-	saveSessions    map[string]*saveSession
-	cleanupOnce     sync.Once
+	db               *sql.DB
+	runtimeClient    AgentRuntimeClient
+	servers          ServerProvider
+	agentErrors      AgentErrorHandler
+	tasks            *tasks.Service
+	config           Config
+	configProvider   func() Config
+	renderer         templatex.Renderer
+	builtinResolver  BuiltinVariableResolver
+	internalFiles    InternalFileProvider
+	proxyReconciler  ReverseProxyReconciler
+	reconcileTrigger ApplicationReconcileTrigger
+	imageResolver    ImageDigestResolver
+	operationQueue   ContainerOperationQueue
+	facilityRuntime  FacilityRuntimeProvider
+	sessionMu        sync.Mutex
+	saveSessions     map[string]*saveSession
+	cleanupOnce      sync.Once
 }
 
 type ApplicationRuntime = Runtime
 
-const facilityReverseProxyApplicationID = "facility-reverse-proxy"
+const FacilityReverseProxyApplicationID = "facility-reverse-proxy"
 
 type PlanResult struct {
 	Application Application             `json:"application"`
@@ -111,12 +113,20 @@ type ReverseProxyReconciler interface {
 	ReconcileReverseProxy(ctx context.Context) error
 }
 
+type ApplicationReconcileTrigger interface {
+	TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error)
+}
+
 type ImageDigestResolver interface {
 	Resolve(ctx context.Context, image string) (ImageDigestResult, error)
 }
 
 type ContainerOperationQueue interface {
 	Execute(ctx context.Context, serverID string, run func(context.Context) error) error
+}
+
+type FacilityRuntimeProvider interface {
+	RuntimeSpecForServer(ctx context.Context, app Application, srv server.Server) (appruntime.Spec, bool, error)
 }
 
 func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Service, cfg Config) *Service {
@@ -168,8 +178,24 @@ func WithReverseProxyReconciler(reconciler ReverseProxyReconciler) Option {
 	return func(s *Service) { s.proxyReconciler = reconciler }
 }
 
+func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option {
+	return func(s *Service) { s.reconcileTrigger = trigger }
+}
+
+func WithFacilityRuntimeProvider(provider FacilityRuntimeProvider) Option {
+	return func(s *Service) { s.facilityRuntime = provider }
+}
+
 func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
 	s.proxyReconciler = reconciler
+}
+
+func (s *Service) SetApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) {
+	s.reconcileTrigger = trigger
+}
+
+func (s *Service) SetFacilityRuntimeProvider(provider FacilityRuntimeProvider) {
+	s.facilityRuntime = provider
 }
 
 func NewServiceWithOptions(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Service, cfg Config, opts ...Option) *Service {
@@ -234,7 +260,7 @@ func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) 
 }
 
 func (s *Service) List(ctx context.Context) ([]Application, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+applicationColumns+` FROM applications WHERE id<>? ORDER BY name ASC`, facilityReverseProxyApplicationID)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+applicationColumns+` FROM applications WHERE id<>? ORDER BY name ASC`, FacilityReverseProxyApplicationID)
 	if err != nil {
 		return nil, err
 	}
@@ -345,7 +371,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 			return Application{}, err
 		}
 		if app.Enabled {
-			if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
+			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
 				return Application{}, err
 			}
 		}
@@ -358,7 +384,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 		return Application{}, applicationSaveError(err)
 	}
 	if app.Enabled {
-		if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
+		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
 			return Application{}, err
 		}
 	}
@@ -444,7 +470,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 			}
 		}
 		if shouldDeploy {
-			if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
+			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
 				return Application{}, err
 			}
 		}
@@ -469,7 +495,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 		return Application{}, applicationSaveError(err)
 	}
 	if shouldDeploy {
-		if _, err := s.runDeploymentTaskBatch(ctx, app, prepared.job, "Deploying application "+app.Name); err != nil {
+		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
 			return Application{}, err
 		}
 	}
@@ -764,19 +790,6 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	return result, nil
 }
 
-func (s *Service) ReconcileDeploy(ctx context.Context, appID string) (OperationResult, error) {
-	app, job, err := s.prepareDeploy(ctx, appID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	taskID, err := s.runDeploymentTaskBatch(ctx, app, job, "Reconciling application "+app.Name)
-	result := OperationResult{TaskID: taskID, Application: app}
-	if err != nil {
-		return result, err
-	}
-	return result, nil
-}
-
 func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 	ctx, task := tc.Context, tc.Task
 	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
@@ -788,6 +801,20 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 		return err
 	}
 	opts := deployTaskOptions(task)
+	if opts.action == "stop" {
+		if len(opts.targetIDs) == 0 {
+			return panelerr.Validation("application_task_target_required", "Application task target is required")
+		}
+		for _, targetID := range opts.targetIDs {
+			if err := s.purgeRuntimeInstanceForServer(ctx, task.ID, app.ID, targetID, opts.purge); err != nil {
+				return err
+			}
+		}
+		if s.tasks != nil && task.ID != "" {
+			_ = s.tasks.Complete(ctx, task.ID, "Application target stopped")
+		}
+		return nil
+	}
 	return s.runDeployTask(ctx, task.ID, app, job, opts.targetIDs, opts.lifecycleOperationID)
 }
 
@@ -1124,11 +1151,11 @@ func (s *Service) RunStopTask(tc tasks.TaskContext) error {
 	if err := s.ensureRuntimeInstancesReady(ctx, appID); err != nil {
 		return err
 	}
-	purge, err := stopTaskPurge(task.ParamsJSON)
+	opts, err := stopTaskOptions(task)
 	if err != nil {
 		return err
 	}
-	return s.stopRuntimeInstances(ctx, task.ID, appID, purge)
+	return s.stopRuntimeInstances(ctx, task.ID, appID, opts.purge, opts.targetIDs)
 }
 
 func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, error) {
@@ -2088,12 +2115,19 @@ func (s *Service) ensureRuntimeInstancesReady(ctx context.Context, appID string)
 	return nil
 }
 
-func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string, purge bool) error {
+func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string, purge bool, targetIDs ...[]string) error {
 	instances, err := s.runtimeInstances(ctx, appID)
 	if err != nil {
 		return err
 	}
+	var wanted map[string]bool
+	if len(targetIDs) > 0 {
+		wanted = stringBoolSet(targetIDs[0])
+	}
 	for _, instance := range instances {
+		if len(wanted) > 0 && !wanted[instance.ServerID] {
+			continue
+		}
 		srv, err := s.servers.Get(ctx, instance.ServerID)
 		if err != nil {
 			return err
@@ -2402,12 +2436,64 @@ type deployTaskParams struct {
 	AppID                string `json:"appId,omitempty"`
 	ServerID             string `json:"serverId,omitempty"`
 	LifecycleOperationID string `json:"lifecycleOperationId,omitempty"`
+	Action               string `json:"action,omitempty"`
+	Purge                bool   `json:"purge,omitempty"`
 }
 
-func (s *Service) deploymentTaskBatch(ctx context.Context, app Application, spec appruntime.Spec, summary, triggerType string) (tasks.CreateBatchInput, string, error) {
+type deployBatchOptions struct {
+	targetIDs []string
+}
+
+func (s *Service) DeploymentTaskInputs(ctx context.Context, appID string, targetIDs []string, summary, triggerType string) ([]tasks.CreateInput, error) {
+	app, job, err := s.prepareDeploy(ctx, appID)
+	if err != nil {
+		return nil, err
+	}
+	batch, _, err := s.deploymentTaskBatch(ctx, app, job, summary, triggerType, deployBatchOptions{targetIDs: targetIDs})
+	if err != nil {
+		return nil, err
+	}
+	return batch.Inputs, nil
+}
+
+func (s *Service) StopTaskInputs(ctx context.Context, appID string, targetIDs []string, purge bool, summary, triggerType string) ([]tasks.CreateInput, error) {
+	if _, err := s.Get(ctx, appID); err != nil {
+		return nil, err
+	}
+	targetIDs = uniqueStringItems(targetIDs)
+	inputs := make([]tasks.CreateInput, 0, len(targetIDs))
+	for _, serverID := range targetIDs {
+		params, err := json.Marshal(struct {
+			Purge    bool   `json:"purge,omitempty"`
+			ServerID string `json:"serverId,omitempty"`
+			Action   string `json:"action,omitempty"`
+		}{Purge: purge, ServerID: serverID, Action: "stop"})
+		if err != nil {
+			return nil, err
+		}
+		inputs = append(inputs, tasks.CreateInput{
+			Type:         TaskTypeDeploy,
+			ServerID:     serverID,
+			ResourceType: "application",
+			ResourceID:   appID,
+			TriggerType:  triggerType,
+			ParamsJSON:   string(params),
+			Summary:      summary,
+		})
+	}
+	return inputs, nil
+}
+
+func (s *Service) deploymentTaskBatch(ctx context.Context, app Application, spec appruntime.Spec, summary, triggerType string, opts ...deployBatchOptions) (tasks.CreateBatchInput, string, error) {
 	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
 		return tasks.CreateBatchInput{}, "", err
+	}
+	if len(opts) > 0 {
+		targets = filterDeploymentTargets(targets, opts[0].targetIDs)
+	}
+	if len(targets) == 0 {
+		return tasks.CreateBatchInput{}, "", panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
 	operation, err := s.createLifecycleOperation(ctx, app, spec, "", LifecycleTypeDeploy, targets)
 	if err != nil {
@@ -2480,6 +2566,24 @@ func (s *Service) runDeploymentTaskBatch(ctx context.Context, app Application, s
 	return task.ID, nil
 }
 
+func (s *Service) triggerApplicationReconcile(ctx context.Context, app Application, spec appruntime.Spec, triggerType, fallbackSummary string) error {
+	if s.reconcileTrigger == nil {
+		_, err := s.runDeploymentTaskBatch(ctx, app, spec, fallbackSummary)
+		return err
+	}
+	_, _, err := s.reconcileTrigger.TriggerApplicationReconcile(ctx, tasks.PeriodicTrigger{
+		Type:                firstNonEmpty(triggerType, "application_change"),
+		TriggerResourceType: "application",
+		TriggerResourceID:   app.ID,
+		Payload: map[string]any{
+			"applicationIds": []string{app.ID},
+			"force":          true,
+			"reason":         firstNonEmpty(triggerType, "application_change"),
+		},
+	})
+	return err
+}
+
 func (s *Service) deploymentOperationError(ctx context.Context, operationID string) error {
 	var status, errText string
 	err := s.db.QueryRowContext(ctx, `SELECT status,error FROM application_lifecycle_operations WHERE id=?`, operationID).Scan(&status, &errText)
@@ -2501,6 +2605,8 @@ func (s *Service) deploymentOperationError(ctx context.Context, operationID stri
 type deployTaskRunOptions struct {
 	targetIDs            []string
 	lifecycleOperationID string
+	action               string
+	purge                bool
 }
 
 func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
@@ -2510,6 +2616,8 @@ func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
 			return deployTaskRunOptions{
 				targetIDs:            []string{strings.TrimSpace(params.ServerID)},
 				lifecycleOperationID: strings.TrimSpace(params.LifecycleOperationID),
+				action:               strings.TrimSpace(params.Action),
+				purge:                params.Purge,
 			}
 		}
 	}
@@ -2523,13 +2631,7 @@ func filterDeploymentTargets(targets []server.Server, targetIDs []string) []serv
 	if len(targetIDs) == 0 {
 		return targets
 	}
-	wanted := map[string]bool{}
-	for _, targetID := range targetIDs {
-		targetID = strings.TrimSpace(targetID)
-		if targetID != "" {
-			wanted[targetID] = true
-		}
-	}
+	wanted := stringBoolSet(targetIDs)
 	if len(wanted) == 0 {
 		return targets
 	}
@@ -2542,11 +2644,62 @@ func filterDeploymentTargets(targets []server.Server, targetIDs []string) []serv
 	return out
 }
 
+func stringBoolSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = true
+		}
+	}
+	return out
+}
+
+func uniqueStringItems(values []string) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
+}
+
 func stopTaskParamsJSON(purge bool) string {
 	if !purge {
 		return "{}"
 	}
 	return `{"purge":true}`
+}
+
+type stopTaskRunOptions struct {
+	purge     bool
+	targetIDs []string
+}
+
+func stopTaskOptions(task tasks.Task) (stopTaskRunOptions, error) {
+	out := stopTaskRunOptions{}
+	if strings.TrimSpace(task.ParamsJSON) != "" && strings.TrimSpace(task.ParamsJSON) != "{}" {
+		var params struct {
+			Purge    bool   `json:"purge"`
+			ServerID string `json:"serverId"`
+		}
+		if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err != nil {
+			return stopTaskRunOptions{}, err
+		}
+		out.purge = params.Purge
+		if strings.TrimSpace(params.ServerID) != "" {
+			out.targetIDs = []string{strings.TrimSpace(params.ServerID)}
+		}
+	}
+	if len(out.targetIDs) == 0 && strings.TrimSpace(task.ServerID) != "" && strings.TrimSpace(task.ResourceID) != "" {
+		out.targetIDs = []string{strings.TrimSpace(task.ServerID)}
+	}
+	return out, nil
 }
 
 func stopTaskPurge(paramsJSON string) (bool, error) {
@@ -2615,6 +2768,11 @@ func ensureAgentRuntimeReady(srv server.Server) error {
 }
 
 func (s *Service) runtimeSpecForServer(ctx context.Context, app Application, spec appruntime.Spec, srv server.Server, files []ApplicationFile) (appruntime.Spec, error) {
+	if s.facilityRuntime != nil {
+		if facilitySpec, ok, err := s.facilityRuntime.RuntimeSpecForServer(ctx, app, srv); err != nil || ok {
+			return facilitySpec, err
+		}
+	}
 	out := spec
 	out.ApplicationID = app.ID
 	out.InstanceID = runtimeInstanceID(app.ID, srv.ID)

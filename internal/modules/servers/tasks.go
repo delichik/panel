@@ -97,7 +97,7 @@ func serverInfoConcurrencyKey(in tasks.CreateInput) string {
 	return "server_info:" + serverID
 }
 
-func (s *Service) CollectAgentCheckInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {
+func (s *Service) CollectAgentCheckInputs(ctx context.Context, _ tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
 	servers, err := s.List(ctx)
 	if err != nil {
 		return tasks.CreateBatchInput{}, false, err

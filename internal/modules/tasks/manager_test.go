@@ -3,8 +3,10 @@ package tasks
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestCreateRejectsUnregisteredTaskType(t *testing.T) {
@@ -33,6 +35,48 @@ func TestManagerResourceExclusiveReturnsActiveTask(t *testing.T) {
 	}
 	if created || second.ID != first.ID {
 		t.Fatalf("expected active task reuse, created=%v first=%s second=%s", created, first.ID, second.ID)
+	}
+}
+
+func TestManagerTriggerPeriodicNowPassesPayloadToCollector(t *testing.T) {
+	svc := newTestService(t)
+	var gotPayload any
+	svc.MustRegister(Definition{
+		Type:              "periodic_manual",
+		ConcurrencyPolicy: ConcurrencyParallelAllowed,
+		Execute:           func(TaskContext) error { return nil },
+		Periodic: &Periodic{
+			Interval: time.Minute,
+			CollectInputs: func(_ context.Context, trigger PeriodicTrigger) (CreateBatchInput, bool, error) {
+				gotPayload = trigger.Payload
+				return CreateBatchInput{
+					Type:        "periodic_manual",
+					TriggerType: trigger.Type,
+					Inputs: []CreateInput{{
+						Type:         "periodic_manual",
+						ResourceType: "application",
+						ResourceID:   trigger.TriggerResourceID,
+						TriggerType:  trigger.Type,
+					}},
+				}, true, nil
+			},
+		},
+	})
+	payload := struct{ ApplicationIDs []string }{ApplicationIDs: []string{"app_1"}}
+	task, created, err := NewManager(svc).TriggerPeriodicNow(context.Background(), "periodic_manual", PeriodicTrigger{
+		Type:                "application_save",
+		TriggerResourceType: "application",
+		TriggerResourceID:   "app_1",
+		Payload:             payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || task.ResourceID != "app_1" || task.TriggerType != "application_save" {
+		t.Fatalf("unexpected triggered task: created=%v task=%#v", created, task)
+	}
+	if !reflect.DeepEqual(gotPayload, payload) {
+		t.Fatalf("payload was not passed through: %#v", gotPayload)
 	}
 }
 

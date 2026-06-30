@@ -67,7 +67,8 @@ type ApplicationUpdater interface {
 	List(context.Context) ([]applications.Application, error)
 	UpdateImage(context.Context, string) (applications.OperationResult, error)
 	Deploy(context.Context, string) (applications.OperationResult, error)
-	ReconcileDeploy(context.Context, string) (applications.OperationResult, error)
+	DeploymentTaskInputs(context.Context, string, []string, string, string) ([]tasks.CreateInput, error)
+	StopTaskInputs(context.Context, string, []string, bool, string, string) ([]tasks.CreateInput, error)
 }
 
 type Container struct {
@@ -517,6 +518,13 @@ func (s *Service) RefreshAllScheduled(ctx context.Context) error {
 	return nil
 }
 
+func (s *Service) TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error) {
+	if s.tasks == nil {
+		return tasks.Task{}, false, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
+	}
+	return tasks.NewManager(s.tasks).TriggerPeriodicNow(ctx, TaskApplicationReconcile, trigger)
+}
+
 func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
 	ctx, task := tc.Context, tc.Task
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
@@ -535,30 +543,37 @@ func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
 }
 
 func (s *Service) MonitorApplications(ctx context.Context) error {
-	inputs, err := s.CollectApplicationReconcileTasks(ctx, id.New("op"))
+	inputs, err := s.CollectApplicationReconcileTasks(ctx, id.New("op"), tasks.PeriodicTrigger{Type: "scheduler"})
 	if err != nil {
 		return err
 	}
+	manager := tasks.NewManager(s.tasks)
 	for _, input := range inputs {
-		task, created, err := tasks.NewManager(s.tasks).Create(ctx, input, tasks.Trigger{Type: "scheduler", Periodic: true})
+		task, created, err := manager.Create(ctx, input, tasks.Trigger{Type: "scheduler", Periodic: true})
 		if err != nil || !created {
 			continue
 		}
 		if task.NextRunAt != nil && task.NextRunAt.After(time.Now().UTC()) {
 			continue
 		}
-		if err := s.tasks.Start(ctx, task.ID); err != nil {
-			continue
-		}
-		go s.runApplicationReconcile(s.tasks.ExecutionContext(task.ID), task, input.ResourceID)
+		go func(task tasks.Task) {
+			defer s.tasks.FinishExecution(task.ID)
+			_ = manager.Run(context.Background(), task)
+		}(task)
 	}
 	return nil
 }
 
-func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operationID string) ([]tasks.CreateInput, error) {
+func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operationID string, trigger tasks.PeriodicTrigger) ([]tasks.CreateInput, error) {
 	if s.apps == nil || s.tasks == nil {
 		return nil, nil
 	}
+	explicit := applicationReconcileTriggerPayload(trigger)
+	if explicit.requiresExplicitTasks() {
+		return s.explicitApplicationReconcileTasks(ctx, operationID, trigger, explicit)
+	}
+	wantedApps := stringSet(explicit.ApplicationIDs)
+	wantedServers := stringSet(explicit.ServerIDs)
 	servers, err := s.servers.List(ctx)
 	if err != nil {
 		return nil, err
@@ -573,6 +588,9 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 	}
 	observations := map[string]reconcileObservation{}
 	for _, srv := range servers {
+		if len(wantedServers) > 0 && !wantedServers[srv.ID] {
+			continue
+		}
 		if !srv.Reachable || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 			continue
 		}
@@ -607,6 +625,9 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 		}
 		rows.Close()
 		for _, item := range expectedItems {
+			if len(wantedApps) > 0 && !wantedApps[item.appID] {
+				continue
+			}
 			app, ok := appByID[item.appID]
 			if !ok || !app.Enabled {
 				continue
@@ -620,11 +641,10 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 			}
 			observation := observations[app.ID]
 			observation.app = app
-			if observation.serverID == "" {
-				observation.serverID = srv.ID
-			}
 			observation.seen = true
-			observation.drifted = observation.drifted || drifted
+			if drifted {
+				observation.driftedServerIDs = append(observation.driftedServerIDs, srv.ID)
+			}
 			observations[app.ID] = observation
 		}
 	}
@@ -633,7 +653,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 		if !observation.seen {
 			continue
 		}
-		if !observation.drifted {
+		if len(observation.driftedServerIDs) == 0 {
 			_ = s.recordApplicationReconcileHealthy(ctx, appID)
 			continue
 		}
@@ -645,24 +665,79 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 		if nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
 			continue
 		}
-		inputs = append(inputs, tasks.CreateInput{
-			OperationID:  operationID,
-			Type:         TaskApplicationReconcile,
-			ServerID:     observation.serverID,
-			ResourceType: "application",
-			ResourceID:   appID,
-			TriggerType:  "scheduler",
-			Summary:      "Reconciling application " + observation.app.Name,
-		})
+		deployInputs, err := s.apps.DeploymentTaskInputs(ctx, appID, observation.driftedServerIDs, "Reconciling application "+observation.app.Name, "scheduler")
+		if err != nil {
+			return inputs, err
+		}
+		for _, input := range deployInputs {
+			input.OperationID = operationID
+			input.TriggerType = "scheduler"
+			inputs = append(inputs, input)
+		}
+	}
+	return inputs, nil
+}
+
+func (payload ApplicationReconcileTrigger) requiresExplicitTasks() bool {
+	if payload.Force || len(payload.StopServers) > 0 {
+		return true
+	}
+	for _, appID := range payload.ApplicationIDs {
+		if appID == applications.FacilityReverseProxyApplicationID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) explicitApplicationReconcileTasks(ctx context.Context, operationID string, trigger tasks.PeriodicTrigger, payload ApplicationReconcileTrigger) ([]tasks.CreateInput, error) {
+	triggerType := firstNonEmpty(trigger.Type, "manual")
+	appIDs := payload.ApplicationIDs
+	if len(appIDs) == 0 {
+		apps, err := s.apps.List(ctx)
+		if err != nil {
+			return nil, err
+		}
+		for _, app := range apps {
+			if app.Enabled {
+				appIDs = append(appIDs, app.ID)
+			}
+		}
+	}
+	inputs := make([]tasks.CreateInput, 0, len(appIDs))
+	for _, appID := range appIDs {
+		deployInputs, err := s.apps.DeploymentTaskInputs(ctx, appID, payload.ServerIDs, "Reconciling application "+appID, triggerType)
+		if err != nil {
+			return inputs, err
+		}
+		for _, input := range deployInputs {
+			input.OperationID = operationID
+			input.TriggerType = triggerType
+			input.TriggerResourceType = trigger.TriggerResourceType
+			input.TriggerResourceID = trigger.TriggerResourceID
+			inputs = append(inputs, input)
+		}
+		if appID == applications.FacilityReverseProxyApplicationID && len(payload.StopServers) > 0 {
+			stopInputs, err := s.apps.StopTaskInputs(ctx, appID, payload.StopServers, true, "Stopping application "+appID, triggerType)
+			if err != nil {
+				return inputs, err
+			}
+			for _, input := range stopInputs {
+				input.OperationID = operationID
+				input.TriggerType = triggerType
+				input.TriggerResourceType = trigger.TriggerResourceType
+				input.TriggerResourceID = trigger.TriggerResourceID
+				inputs = append(inputs, input)
+			}
+		}
 	}
 	return inputs, nil
 }
 
 type reconcileObservation struct {
-	app      applications.Application
-	serverID string
-	seen     bool
-	drifted  bool
+	app              applications.Application
+	seen             bool
+	driftedServerIDs []string
 }
 
 func (s *Service) nextApplicationReconcileRunAt(ctx context.Context, appID string) (*time.Time, error) {
@@ -766,16 +841,7 @@ func applicationReconcileBackoff(failures int) time.Duration {
 }
 
 func (s *Service) RunApplicationReconcileTask(tc tasks.TaskContext) error {
-	ctx, task := tc.Context, tc.Task
-	appID := firstNonEmpty(task.ResourceID, task.TriggerResourceID)
-	if appID == "" {
-		return panelerr.Validation("application_required", "Application is required")
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
-		return err
-	}
-	s.runApplicationReconcile(s.tasks.ExecutionContext(task.ID), task, appID)
-	return nil
+	return panelerr.Validation("application_reconcile_collector_only", "Application reconcile is a collector-only task")
 }
 
 func (s *Service) UpgradeApplications(ctx context.Context, applicationIDs []string, all bool) (tasks.Task, error) {
@@ -1006,20 +1072,6 @@ func (s *Service) runApplicationUpdates(task tasks.Task, applicationIDs []string
 	_ = s.tasks.Complete(ctx, task.ID, "Application images updated")
 }
 
-func (s *Service) runApplicationReconcile(ctx context.Context, task tasks.Task, appID string) {
-	defer s.tasks.FinishExecution(task.ID)
-	if err := ctx.Err(); err != nil {
-		return
-	}
-	if _, err := s.apps.ReconcileDeploy(ctx, appID); err != nil {
-		_ = s.recordApplicationReconcileFailure(ctx, appID)
-		_ = s.tasks.Fail(ctx, task.ID, err)
-		return
-	}
-	_ = s.clearApplicationReconcileNextRun(ctx, appID)
-	_ = s.tasks.Complete(ctx, task.ID, "Application reconciled")
-}
-
 func (s *Service) readyServer(ctx context.Context, serverID string) (server.Server, string, error) {
 	srv, err := s.servers.Get(ctx, serverID)
 	if err != nil {
@@ -1142,6 +1194,17 @@ func uniqueStrings(values []string) []string {
 		}
 		seen[value] = struct{}{}
 		out = append(out, value)
+	}
+	return out
+}
+
+func stringSet(values []string) map[string]bool {
+	out := map[string]bool{}
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out[value] = true
+		}
 	}
 	return out
 }

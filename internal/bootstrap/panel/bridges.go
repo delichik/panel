@@ -6,6 +6,8 @@ import (
 
 	"panel/internal/modules/applications"
 	"panel/internal/modules/containers"
+	"panel/internal/modules/facilityapps"
+	"panel/internal/modules/tasks"
 )
 
 type applicationCertificateBridge struct {
@@ -36,6 +38,7 @@ func (b *applicationCertificateBridge) ReconcileReverseProxy(ctx context.Context
 type applicationContainerBridge struct {
 	apps       *applications.Service
 	containers *containerization.Service
+	facility   *facilityapps.Service
 }
 
 func (b *applicationContainerBridge) Execute(ctx context.Context, serverID string, run func(context.Context) error) error {
@@ -66,9 +69,16 @@ func (b *applicationContainerBridge) Deploy(ctx context.Context, id string) (app
 	return b.apps.Deploy(ctx, id)
 }
 
-func (b *applicationContainerBridge) ReconcileDeploy(ctx context.Context, id string) (applications.OperationResult, error) {
+func (b *applicationContainerBridge) DeploymentTaskInputs(ctx context.Context, id string, targetServerIDs []string, summary, triggerType string) ([]tasks.CreateInput, error) {
 	if b.apps == nil {
-		return applications.OperationResult{}, errors.New("application service is not initialized")
+		return nil, errors.New("application service is not initialized")
 	}
-	return b.apps.ReconcileDeploy(ctx, id)
+	return b.apps.DeploymentTaskInputs(ctx, id, targetServerIDs, summary, triggerType)
+}
+
+func (b *applicationContainerBridge) StopTaskInputs(ctx context.Context, id string, targetServerIDs []string, purge bool, summary, triggerType string) ([]tasks.CreateInput, error) {
+	if b.apps == nil {
+		return nil, errors.New("application service is not initialized")
+	}
+	return b.apps.StopTaskInputs(ctx, id, targetServerIDs, purge, summary, triggerType)
 }

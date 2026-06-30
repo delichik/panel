@@ -12,18 +12,21 @@ func TestIntervalCollectorThrottlesAndAdvancesAfterWork(t *testing.T) {
 		runs++
 		return CreateBatchInput{Type: "periodic_test"}, true, nil
 	})
-	if _, shouldRun, err := collector(context.Background()); err != nil || shouldRun {
+	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "scheduler"}); err != nil || shouldRun {
 		t.Fatalf("first call should be throttled, shouldRun=%v err=%v", shouldRun, err)
 	}
 	time.Sleep(25 * time.Millisecond)
-	if _, shouldRun, err := collector(context.Background()); err != nil || !shouldRun {
+	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "scheduler"}); err != nil || !shouldRun {
 		t.Fatalf("due call should run, shouldRun=%v err=%v", shouldRun, err)
 	}
-	if _, shouldRun, err := collector(context.Background()); err != nil || shouldRun {
+	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "scheduler"}); err != nil || shouldRun {
 		t.Fatalf("immediate next call should be throttled, shouldRun=%v err=%v", shouldRun, err)
 	}
-	if runs != 1 {
-		t.Fatalf("collector ran %d times, want 1", runs)
+	if _, shouldRun, err := collector(context.Background(), PeriodicTrigger{Type: "manual"}); err != nil || !shouldRun {
+		t.Fatalf("manual trigger should bypass interval throttle, shouldRun=%v err=%v", shouldRun, err)
+	}
+	if runs != 2 {
+		t.Fatalf("collector ran %d times, want 2", runs)
 	}
 }
 
@@ -33,7 +36,7 @@ func TestPeriodicRunnerCollectInputsFalseSkipsTaskRecord(t *testing.T) {
 		Type: "periodic_skip",
 		Periodic: &Periodic{
 			Interval: time.Minute,
-			CollectInputs: func(context.Context) (CreateBatchInput, bool, error) {
+			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
 				return CreateBatchInput{}, false, nil
 			},
 		},
@@ -63,7 +66,7 @@ func TestPeriodicRunnerCollectInputsCreatesSingleTaskInstance(t *testing.T) {
 		Type: "periodic_run",
 		Periodic: &Periodic{
 			Interval: time.Minute,
-			CollectInputs: func(context.Context) (CreateBatchInput, bool, error) {
+			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
 				return CreateBatchInput{
 					Type:        "periodic_run",
 					TriggerType: "scheduler",

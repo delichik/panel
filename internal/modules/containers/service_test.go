@@ -2,7 +2,6 @@ package containerization
 
 import (
 	"context"
-	"errors"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -203,74 +202,12 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 		},
 	}}
 
-	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1")
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(inputs) != 0 {
 		t.Fatalf("expected reconcile to wait for shared backoff, got %#v", inputs)
-	}
-}
-
-func TestApplicationReconcileFailureUsesSharedBackoffCounter(t *testing.T) {
-	svc, taskSvc, _, store := newContainerizationTestService(t)
-	ctx := context.Background()
-	reconcileCalls := 0
-	deployCalls := 0
-	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
-	insertReconcileFixtureRows(t, store, app)
-	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
-		VALUES('app-1-server-1','app-1','server-1','now')`); err != nil {
-		t.Fatal(err)
-	}
-	svc.apps = fakeApplicationUpdater{
-		reconcileErr:   errors.New("port is already allocated"),
-		reconcileCalls: &reconcileCalls,
-		deployCalls:    &deployCalls,
-	}
-	task, err := taskSvc.Create(ctx, tasks.CreateInput{
-		Type:         TaskApplicationReconcile,
-		ResourceType: "application",
-		ResourceID:   "app-1",
-		TriggerType:  "scheduler",
-		Summary:      "reconcile",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	svc.runApplicationReconcile(ctx, task, "app-1")
-
-	got, err := taskSvc.Get(ctx, task.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Status != tasks.StatusFailed {
-		t.Fatalf("expected failed reconcile task, got %#v", got)
-	}
-	if got.RetryCount != 0 || got.NextRunAt != nil {
-		t.Fatalf("task retry counter should not drive reconcile backoff, got %#v", got)
-	}
-	var failures int
-	var nextRunAt string
-	if err := svc.db.QueryRow(`SELECT reconcile_failures,reconcile_next_run_at FROM application_reconcile_states WHERE application_id='app-1'`).Scan(&failures, &nextRunAt); err != nil {
-		t.Fatal(err)
-	}
-	if failures != 1 {
-		t.Fatalf("shared failure counter = %d, want 1", failures)
-	}
-	parsedNextRunAt, err := time.Parse(time.RFC3339Nano, nextRunAt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if parsedNextRunAt.Before(time.Now().UTC().Add(20 * time.Second)) {
-		t.Fatalf("expected shared reconcile backoff, got %s", nextRunAt)
-	}
-	if reconcileCalls != 1 {
-		t.Fatalf("expected reconcile deploy call, got %d", reconcileCalls)
-	}
-	if deployCalls != 0 {
-		t.Fatalf("manual deploy entry should not be used by reconcile, got %d", deployCalls)
 	}
 }
 
@@ -296,7 +233,7 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 		},
 	}}
 
-	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1")
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +271,7 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 	}}
 
 	for i := 0; i < applicationReconcileHealthyChecksToReset-1; i++ {
-		inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1")
+		inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -349,7 +286,7 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 			t.Fatalf("after %d healthy checks failures=%d streak=%d", i+1, failures, streak)
 		}
 	}
-	if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1"); err != nil {
+	if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
 		t.Fatal(err)
 	}
 	var failures, streak int
@@ -359,6 +296,32 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 	}
 	if failures != 0 || streak != 0 || nextRunAt != "" {
 		t.Fatalf("expected retry state cleared, failures=%d streak=%d next=%q", failures, streak, nextRunAt)
+	}
+}
+
+func TestApplicationReconcileForceProducesDeployInputs(t *testing.T) {
+	svc, _, _, _ := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{
+		Type: "manual",
+		Payload: ApplicationReconcileTrigger{
+			ApplicationIDs: []string{app.ID},
+			ServerIDs:      []string{"server-1"},
+			Force:          true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 1 {
+		t.Fatalf("inputs = %#v", inputs)
+	}
+	input := inputs[0]
+	if input.Type != applications.TaskTypeDeploy || input.ResourceID != app.ID || input.ServerID != "server-1" || input.OperationID != "op-1" {
+		t.Fatalf("deploy input = %#v", input)
 	}
 }
 
@@ -392,6 +355,33 @@ func TestContainerLogsClampsTail(t *testing.T) {
 	if fakeAgent.logTail != 10000 {
 		t.Fatalf("tail = %d, want 10000", fakeAgent.logTail)
 	}
+}
+
+func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
+	svc, taskSvc, _, _ := newContainerizationTestService(t)
+	taskSvc.MustRegister(tasks.Definition{
+		Type: applications.TaskTypeDeploy,
+		Execute: func(tc tasks.TaskContext) error {
+			return tc.Service.Complete(tc.Context, tc.Task.ID, "Application deployment handled")
+		},
+	})
+	svc.apps = fakeApplicationUpdater{}
+	task, created, err := svc.TriggerApplicationReconcile(context.Background(), tasks.PeriodicTrigger{
+		Type:                "facility_app",
+		TriggerResourceType: "application",
+		TriggerResourceID:   applications.FacilityReverseProxyApplicationID,
+		Payload: ApplicationReconcileTrigger{
+			ApplicationIDs: []string{applications.FacilityReverseProxyApplicationID},
+			StopServers:    []string{"server-old"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || task.ResourceID != applications.FacilityReverseProxyApplicationID || task.TriggerType != "facility_app" || task.Type != applications.TaskTypeDeploy {
+		t.Fatalf("unexpected reconcile task: created=%v task=%#v", created, task)
+	}
+	waitTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
 }
 
 func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fakeContainerizationAgent, *storage.Store) {
@@ -509,10 +499,8 @@ type blockingImageResolver struct {
 }
 
 type fakeApplicationUpdater struct {
-	apps           []applications.Application
-	reconcileErr   error
-	reconcileCalls *int
-	deployCalls    *int
+	apps []applications.Application
+	err  error
 }
 
 func (f fakeApplicationUpdater) List(context.Context) ([]applications.Application, error) {
@@ -524,17 +512,37 @@ func (f fakeApplicationUpdater) UpdateImage(context.Context, string) (applicatio
 }
 
 func (f fakeApplicationUpdater) Deploy(context.Context, string) (applications.OperationResult, error) {
-	if f.deployCalls != nil {
-		*f.deployCalls = *f.deployCalls + 1
-	}
 	return applications.OperationResult{}, nil
 }
 
-func (f fakeApplicationUpdater) ReconcileDeploy(context.Context, string) (applications.OperationResult, error) {
-	if f.reconcileCalls != nil {
-		*f.reconcileCalls = *f.reconcileCalls + 1
+func (f fakeApplicationUpdater) DeploymentTaskInputs(_ context.Context, appID string, serverIDs []string, summary, triggerType string) ([]tasks.CreateInput, error) {
+	inputs := make([]tasks.CreateInput, 0, len(serverIDs))
+	for _, serverID := range serverIDs {
+		inputs = append(inputs, tasks.CreateInput{
+			Type:         applications.TaskTypeDeploy,
+			ServerID:     serverID,
+			ResourceType: "application",
+			ResourceID:   appID,
+			TriggerType:  triggerType,
+			Summary:      summary,
+		})
 	}
-	return applications.OperationResult{}, f.reconcileErr
+	return inputs, f.err
+}
+
+func (f fakeApplicationUpdater) StopTaskInputs(_ context.Context, appID string, serverIDs []string, purge bool, summary, triggerType string) ([]tasks.CreateInput, error) {
+	inputs := make([]tasks.CreateInput, 0, len(serverIDs))
+	for _, serverID := range serverIDs {
+		inputs = append(inputs, tasks.CreateInput{
+			Type:         applications.TaskTypeDeploy,
+			ServerID:     serverID,
+			ResourceType: "application",
+			ResourceID:   appID,
+			TriggerType:  triggerType,
+			Summary:      summary,
+		})
+	}
+	return inputs, f.err
 }
 
 func (r *blockingImageResolver) Resolve(ctx context.Context, _ string) (applications.ImageDigestResult, error) {

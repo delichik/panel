@@ -20,7 +20,10 @@ func TestApplicationContainerBridgeRejectsUseBeforeInitialization(t *testing.T) 
 	if _, err := bridge.List(context.Background()); err == nil {
 		t.Fatal("expected uninitialized application bridge error")
 	}
-	if _, err := bridge.ReconcileDeploy(context.Background(), "app"); err == nil {
+	if _, err := bridge.DeploymentTaskInputs(context.Background(), "app", nil, "", ""); err == nil {
+		t.Fatal("expected uninitialized application bridge error")
+	}
+	if _, err := bridge.StopTaskInputs(context.Background(), "app", nil, false, "", ""); err == nil {
 		t.Fatal("expected uninitialized application bridge error")
 	}
 }
