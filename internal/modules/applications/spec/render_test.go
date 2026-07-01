@@ -218,7 +218,7 @@ restart:
 	}
 }
 
-func TestRenderPersistentMountPermissionsAndManagedFilesReadOnly(t *testing.T) {
+func TestRenderMountPermissions(t *testing.T) {
 	uid := 1000
 	gid := 1001
 	runtimeSpec, issues := Render(RenderInput{
@@ -230,8 +230,8 @@ func TestRenderPersistentMountPermissionsAndManagedFilesReadOnly(t *testing.T) {
 			Image: "nginx",
 			Mounts: []Mount{
 				{Type: "persistent", Source: "data", Target: "/opt/data", UID: &uid, GID: &gid, Mode: "0755"},
-				{Type: "file", Source: "config/app.conf", Target: "/etc/app.conf"},
-				{Type: "panel_file", Source: "certificate:cert-1:certificate", Target: "/etc/tls/cert.pem", ReadOnly: false},
+				{Type: "file", Source: "config/app.conf", Target: "/etc/app.conf", UID: &uid, GID: &gid, Mode: "0755"},
+				{Type: "panel_file", Source: "certificate:cert-1:certificate", Target: "/etc/tls/cert.pem", ReadOnly: true, UID: &uid, GID: &gid},
 			},
 		},
 	})
@@ -241,7 +241,10 @@ func TestRenderPersistentMountPermissionsAndManagedFilesReadOnly(t *testing.T) {
 	if got := runtimeSpec.Mounts[0]; got.Type != "persistent" || got.Source != "/opt/panel/apps/app-1/persistent/data" || got.UID == nil || *got.UID != uid || got.GID == nil || *got.GID != gid || got.Mode != "0755" {
 		t.Fatalf("persistent mount = %#v", got)
 	}
-	if !runtimeSpec.Mounts[1].ReadOnly || !runtimeSpec.Mounts[2].ReadOnly {
-		t.Fatalf("managed file mounts must be read-only: %#v", runtimeSpec.Mounts)
+	if got := runtimeSpec.Mounts[1]; got.Type != "managed_file" || got.ReadOnly || got.UID == nil || *got.UID != uid || got.GID == nil || *got.GID != gid || got.Mode != "0755" {
+		t.Fatalf("application file mount = %#v", got)
+	}
+	if got := runtimeSpec.Mounts[2]; got.Type != "managed_file" || !got.ReadOnly || got.UID == nil || *got.UID != uid || got.GID == nil || *got.GID != gid || got.Mode != "" {
+		t.Fatalf("panel file mount = %#v", got)
 	}
 }

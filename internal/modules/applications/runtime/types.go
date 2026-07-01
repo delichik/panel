@@ -63,6 +63,8 @@ type ManagedFile struct {
 	Path    string `json:"path"`
 	Content []byte `json:"content"`
 	Mode    string `json:"mode,omitempty"`
+	UID     *int   `json:"uid,omitempty"`
+	GID     *int   `json:"gid,omitempty"`
 }
 
 type Restart struct {

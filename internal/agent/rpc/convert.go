@@ -245,7 +245,14 @@ func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 	}
 	files := make([]*agentpb.RuntimeManagedFile, 0, len(in.Files))
 	for _, item := range in.Files {
-		files = append(files, &agentpb.RuntimeManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: item.Mode})
+		file := &agentpb.RuntimeManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: item.Mode}
+		if item.UID != nil {
+			file.Uid = wrapperspb.Int32(int32(*item.UID))
+		}
+		if item.GID != nil {
+			file.Gid = wrapperspb.Int32(int32(*item.GID))
+		}
+		files = append(files, file)
 	}
 	services := make([]*agentpb.RuntimeService, 0, len(in.Services))
 	for _, item := range in.Services {
@@ -298,7 +305,16 @@ func goSpec(in *agentpb.RuntimeSpec) appruntime.Spec {
 		if item == nil {
 			continue
 		}
-		files = append(files, appruntime.ManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: item.Mode})
+		file := appruntime.ManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: item.Mode}
+		if item.Uid != nil {
+			value := int(item.Uid.Value)
+			file.UID = &value
+		}
+		if item.Gid != nil {
+			value := int(item.Gid.Value)
+			file.GID = &value
+		}
+		files = append(files, file)
 	}
 	services := make([]appruntime.Service, 0, len(in.Services))
 	for _, item := range in.Services {

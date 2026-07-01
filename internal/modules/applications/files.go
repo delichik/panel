@@ -171,8 +171,8 @@ func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec app
 			if mode == "" {
 				mode = panelFilePerms(mount.Source)
 			}
-			managed = append(managed, appruntime.ManagedFile{Path: rel, Content: content, Mode: mode})
-			mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: true})
+			managed = append(managed, appruntime.ManagedFile{Path: rel, Content: content, Mode: mode, UID: cloneInt(mount.UID), GID: cloneInt(mount.GID)})
+			mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: mount.ReadOnly})
 			continue
 		}
 		rel, err := normalizeApplicationWorkspacePath(mount.Source)
@@ -194,10 +194,22 @@ func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec app
 			}
 			rendered = []byte(text)
 		}
-		managed = append(managed, appruntime.ManagedFile{Path: rel, Content: rendered, Mode: "0644"})
+		mode := strings.TrimSpace(mount.Mode)
+		if mode == "" {
+			mode = "0644"
+		}
+		managed = append(managed, appruntime.ManagedFile{Path: rel, Content: rendered, Mode: mode, UID: cloneInt(mount.UID), GID: cloneInt(mount.GID)})
 		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: mount.ReadOnly})
 	}
 	job.Mounts = mounts
 	job.Files = managed
 	return job, nil
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }

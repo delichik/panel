@@ -148,7 +148,7 @@ func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 			{Type: "volume", Source: "cache", Target: "/cache", Mode: "rw"},
 		},
 		Files: []appruntime.ManagedFile{
-			{Path: "/app/config.yaml", Content: []byte("enabled: true\n"), Mode: "0640"},
+			{Path: "/app/config.yaml", Content: []byte("enabled: true\n"), Mode: "0640", UID: &uid, GID: &gid},
 		},
 		Restart: appruntime.Restart{
 			Policy:          "on-failure",
@@ -173,6 +173,9 @@ func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 	}
 	if pb.Mounts[0].Gid == nil || pb.Mounts[0].Gid.Value != int32(gid) {
 		t.Fatalf("GID wrapper was not preserved: %#v", pb.Mounts[0].Gid)
+	}
+	if pb.Files[0].Uid == nil || pb.Files[0].Uid.Value != int32(uid) || pb.Files[0].Gid == nil || pb.Files[0].Gid.Value != int32(gid) {
+		t.Fatalf("managed file ownership wrappers were not preserved: %#v", pb.Files[0])
 	}
 
 	got := goSpec(pb)

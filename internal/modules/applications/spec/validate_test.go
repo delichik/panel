@@ -138,7 +138,7 @@ func TestValidateRejectsInvalidCertificatePanelFileKind(t *testing.T) {
 	}
 }
 
-func TestValidatePersistentMountPermissions(t *testing.T) {
+func TestValidateMountOwnershipAndPermissions(t *testing.T) {
 	negative := -1
 	issues := Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{{Type: "persistent", Source: "data", Target: "/data", UID: &negative, Mode: "bad"}}})
 	if !hasIssue(issues, "mounts[0].uid") || !hasIssue(issues, "mounts[0].mode") {
@@ -151,7 +151,17 @@ func TestValidatePersistentMountPermissions(t *testing.T) {
 		t.Fatalf("issues = %#v", issues)
 	}
 
-	issues = Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{{Type: "persistent", Source: "data", Target: "/data", UID: &uid, Mode: "0755"}}})
+	issues = Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{{Type: "panel_file", Source: "certificate:cert_1:certificate", Target: "/cert.pem", Mode: "0755"}}})
+	if !hasIssue(issues, "mounts[0]") {
+		t.Fatalf("issues = %#v", issues)
+	}
+
+	gid := 1001
+	issues = Validate(Spec{Name: "web", Image: "nginx", Mounts: []Mount{
+		{Type: "persistent", Source: "data", Target: "/data", UID: &uid, Mode: "0755"},
+		{Type: "file", Source: "bin/start.sh", Target: "/usr/local/bin/start.sh", UID: &uid, GID: &gid, Mode: "0755"},
+		{Type: "panel_file", Source: "certificate:cert_1:certificate", Target: "/cert.pem", UID: &uid, GID: &gid},
+	}})
 	if len(issues) != 0 {
 		t.Fatalf("issues = %#v", issues)
 	}

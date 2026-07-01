@@ -95,7 +95,7 @@ func renderMounts(appID string, volumes []Volume, mounts []Mount) []appruntime.M
 		source := strings.TrimSpace(mount.Source)
 		switch mountType {
 		case "file", "panel_file":
-			out = append(out, appruntime.Mount{Type: "managed_file", Source: source, Target: mount.Target, ReadOnly: true})
+			out = append(out, appruntime.Mount{Type: "managed_file", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly, UID: cloneInt(mount.UID), GID: cloneInt(mount.GID), Mode: strings.TrimSpace(mount.Mode)})
 		case "volume":
 			out = append(out, appruntime.Mount{Type: "volume", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly})
 		case "persistent":

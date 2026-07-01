@@ -56,7 +56,7 @@
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。尚未部署的 `persistent` 应用允许先向选定服务器导入 zip，agent 会创建并覆盖 Panel 托管的 persistent 目录，导入完成后不触发重启，用于从 compose 等外部运行方式迁移数据后再首次启动。
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID，并依赖数据库外键级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
 - 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后删除来源服务器上的容器和该实例运行目录，并移除来源 `application_instances` 记录。
-- `persistent` 挂载支持在单条 mount 上配置 `uid`、`gid` 和目录 `mode`（如 `"0755"`），部署写入托管文件阶段会确保对应宿主机持久化子目录存在并应用权限，解决非 root 容器进程写入持久化目录的问题。权限字段只适用于 `persistent`，不得用于 host/global bind 或 Docker volume，避免 Panel 修改用户自管宿主机目录或 Docker 管理卷。
+- `persistent` 挂载支持在单条 mount 上配置 `uid`、`gid` 和目录 `mode`（如 `"0755"`），部署写入托管文件阶段会确保对应宿主机持久化子目录存在并应用权限，解决非 root 容器进程写入持久化目录的问题。`file` 和 `panel_file` 挂载也支持 `uid`/`gid`，用于 Panel 写入节点 runtime 文件后的 chown；`file` 挂载额外支持 `mode`，前端可视化编辑只暴露“可执行”开关并写为 `0755`。`panel_file` 不允许用户配置 mode，其权限来自内部文件来源。`readOnly` 只表示 Docker bind mount 的 `:ro`，不等同于节点文件权限。权限字段不得用于 host/global bind 或 Docker volume，避免 Panel 修改用户自管宿主机目录或 Docker 管理卷。
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 应用持久化目录不保存为数据库字段；是否启用 persistent 由 appspec 的 `mounts.type=persistent` 派生，详情响应里的 `persistentPath` 只读生成自 `applicationPersistentDir(app.ID)`，保存 DTO 不包含 `persistentPath`。
 - 应用 `reverseProxy` 字段只描述应用希望暴露的域名、路径、目标端口和目标类型，不代表所有部署节点都会启用反向代理。`targetType` 支持 `local` 与 `container`：旧数据或空值按 `local` 处理，代理到目标节点本地端口；`container` 代理到同节点 Application 容器名和目标端口。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖的服务器才会接收该应用在对应服务器上的反向代理配置。
@@ -64,7 +64,7 @@
 - `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器，YAML 中即使写入 `readOnly: false` 也不得让容器修改这些由 Panel 管理的文件。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
-- 启用、停用、部署同步、删除和镜像更新等流程先校验并保存 desired state，再通过 task 框架立即触发 `application_reconcile` 指定该应用；协调 collector 负责比较期望状态与运行状态，并产出可见批次父任务 `application_target_batch` 与私有单目标任务：`application_target_apply` 创建/重建目标容器，`application_target_stop` 停止并保留数据，`application_target_purge` 清理运行数据。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标同步中单台服务器失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；容器 start 后 inspect 结果必须为 running，否则视为该目标失败并保留容器退出/运行时诊断，不能把启动后立刻退出的容器标记为成功；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
+- 启用、停用、部署同步、删除和镜像更新等流程先校验并保存 desired state，再通过 task 框架立即触发 `application_reconcile` 指定该应用；编辑器“保存并应用”只提交保存会话，启用应用由保存接口触发协调，不得在前端保存成功后额外调用 `/deploy`。协调 collector 负责比较期望状态与运行状态，并产出可见批次父任务 `application_target_batch` 与私有单目标任务：`application_target_apply` 创建/重建目标容器，`application_target_stop` 停止并保留数据，`application_target_purge` 清理运行数据。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标同步中单台服务器失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；容器 start 后 inspect 结果必须为 running，否则视为该目标失败并保留容器退出/运行时诊断，不能把启动后立刻退出的容器标记为成功；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
 - 多目标应用同步必须按任务系统“操作 + 任务”语义建模：一次协调请求是一个操作，每个目标服务器是该操作下的一个私有目标任务，任务参数或资源字段必须能定位到对应服务器和应用。创建启用应用、更新启用应用、手动同步、迁移、变量刷新、持久化数据恢复后的重同步和系统触发的启用应用重同步，都必须通过协调器创建目标任务；HTTP、普通业务服务和前端不得直接创建或运行 `application_target_*`。`application_lifecycle_operations` / `application_lifecycle_targets` 继续保存运行时领域状态和前端运行实例视图，但不得作为任务中心中目标级执行对象的替代品。
 - 应用同步的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
 - 应用同步流程必须先创建 lifecycle operation 和全部目标 target，再逐台执行 `validate_agent`、`render`、`write_files`、`pull_image`、`remove_*_container`、`create_container`、`start_container`、`inspect` 等阶段；每阶段失败都更新对应 target，成功实例继续保留，部分失败时 operation 状态为 `partially_deployed`。
@@ -99,7 +99,7 @@
 - 后端 appspec 校验允许多个非空 `command` 项，空 command 项会正规化为未设置，避免不填写 command 时阻塞保存。
 - 应用编辑器包含可视化和 YAML 两个标签页。可视化页是单页分区表单：标准短字段使用双列网格，端口映射和挂载行保持全宽重复行，便于阅读密集网络和存储设置。
 - 应用编辑器可视化页必须往返保存 appspec `capAdd` 列表；输入项保存时按 Docker capability 稳定值大写化，不保存翻译文案。
-- 应用编辑器的可视化挂载行必须展示并往返保存 `persistent` 挂载的 `uid`、`gid` 和 `mode`；`file`、`panel_file` 等 Panel managed file 挂载在可视化页显示为只读且不可取消。
+- 应用编辑器的可视化挂载行主行只放类型、来源、容器路径和操作按钮；权限配置放在默认收起的第二行。第二行展示 Docker 只读挂载开关，以及按类型可用的节点文件权限字段：`file` / `panel_file` / `persistent` 支持 `uid`、`gid`，`file` 支持“可执行”开关，`persistent` 支持任意 `mode`，`panel_file` 不显示 mode。
 - 应用编辑器弹窗在桌面端可使用较宽布局承载密集表单；端口、挂载和反向代理等复杂重复行在中等宽度下必须提前折叠为单列，避免多个字段、说明文本和操作按钮被挤在一行。
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML 编辑；可视化页也要继续提供挂载编辑入口并与 YAML 往返同步。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入 YAML 编辑。
 - YAML 标签页只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须作为两个标签页共享的表单区展示，不能只出现在可视化页。

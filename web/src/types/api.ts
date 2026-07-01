@@ -761,6 +761,8 @@ export interface RuntimeManagedFileDto {
   path: string;
   content: string;
   mode?: string;
+  uid?: number;
+  gid?: number;
 }
 
 export interface RuntimeRestartDto {

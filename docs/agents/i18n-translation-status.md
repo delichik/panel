@@ -4,6 +4,10 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/apps/ApplicationEditor.vue`
+  - 应用编辑器主按钮从“保存并部署”调整为“保存并应用 / Save and apply”，已接入英文与简体中文词条；保存启用应用只提交保存会话，由保存接口触发协调。
+- `web/src/views/applications/apps/ApplicationEditor.vue`、`internal/modules/applications/spec`、`internal/platform/i18n`
+  - 应用挂载高级权限项新增默认收起的“挂载选项”、Docker 只读挂载和应用文件可执行开关，已接入英文与简体中文词条；后端新增 file/panel_file/persistent 挂载属主和 file/persistent mode 校验文案的简体中文翻译。
 - `web/src/views/applications/apps/index.vue`、`web/src/views/applications/facility-apps/index.vue`、`internal/platform/i18n`
   - 应用控制平面重构后的“同步 / 停用 / 立即同步 / 删除后由同步清理运行时资源”文案已接入英文与简体中文词条；新增后端错误码 `application_reconciler_unavailable` 已接入简体中文翻译。
 - `web/src/views/tasks/index.vue`

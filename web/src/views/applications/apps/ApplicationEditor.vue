@@ -16,7 +16,7 @@ interface PortForm { label: string; to: number; static: number | null }
 interface StringListItem { value: string }
 interface EnvForm { key: string; value: string }
 type MountType = 'volume' | 'host' | 'file' | 'panel_file' | 'persistent';
-interface MountForm { type: MountType; source: string; target: string; readOnly: boolean; uid: number | null | ''; gid: number | null | ''; mode: string }
+interface MountForm { type: MountType; source: string; target: string; readOnly: boolean; uid: number | null | ''; gid: number | null | ''; mode: string; expanded: boolean }
 interface VariableForm { key: string; value: string }
 interface EditorFile {
   id: string;
@@ -173,6 +173,7 @@ function loadSpecForm(raw: string, appName?: string) {
       uid: nonNegativeNumberValue(mount?.uid),
       gid: nonNegativeNumberValue(mount?.gid),
       mode: stringValue(mount?.mode),
+      expanded: false,
     };
   });
 }
@@ -194,7 +195,7 @@ function addVariable() {
 }
 
 function addMount(type: MountType = 'volume') {
-  specForm.mounts.push({ type, source: defaultMountSource(type), target: '/data', readOnly: mountDefaultsReadOnly(type), uid: null, gid: null, mode: '' });
+  specForm.mounts.push({ type, source: defaultMountSource(type), target: '/data', readOnly: mountDefaultsReadOnly(type), uid: null, gid: null, mode: '', expanded: false });
 }
 
 function defaultMountSource(type: MountType) {
@@ -208,15 +209,40 @@ function defaultMountSource(type: MountType) {
 function updateMountType(mount: MountForm) {
   mount.source = defaultMountSource(mount.type);
   mount.readOnly = mountDefaultsReadOnly(mount.type);
-  if (mount.type !== 'persistent') {
+  if (!mountSupportsOwnership(mount.type)) {
     mount.uid = null;
     mount.gid = null;
+  }
+  if (!mountSupportsMode(mount.type)) {
     mount.mode = '';
   }
 }
 
 function mountDefaultsReadOnly(type: MountType) {
   return type === 'file' || type === 'panel_file';
+}
+
+function mountSupportsOwnership(type: MountType) {
+  return type === 'file' || type === 'panel_file' || type === 'persistent';
+}
+
+function mountSupportsMode(type: MountType) {
+  return type === 'file' || type === 'persistent';
+}
+
+function mountSupportsExecutable(type: MountType) {
+  return type === 'file';
+}
+
+function fileMountExecutable(mount: MountForm) {
+  const mode = mount.mode.trim();
+  if (!mode) return false;
+  const parsed = Number.parseInt(mode, 8);
+  return Number.isFinite(parsed) && (parsed & 0o111) !== 0;
+}
+
+function setFileMountExecutable(mount: MountForm, value: boolean | null) {
+  mount.mode = value ? '0755' : '';
 }
 
 function addProxyRule() {
@@ -444,13 +470,15 @@ function mountYamlValue(mount: MountForm) {
     type: mount.type,
     source: mount.source.trim(),
     target: mount.target.trim(),
-    readOnly: mount.type === 'file' || mount.type === 'panel_file' ? true : mount.readOnly,
+    readOnly: mount.readOnly,
   };
-  if (mount.type === 'persistent') {
+  if (mountSupportsOwnership(mount.type)) {
     const uid = mountPermissionNumber(mount.uid);
     const gid = mountPermissionNumber(mount.gid);
     if (uid !== null) out.uid = uid;
     if (gid !== null) out.gid = gid;
+  }
+  if (mountSupportsMode(mount.type)) {
     if (mount.mode.trim()) out.mode = mount.mode.trim();
   }
   return out;
@@ -528,8 +556,8 @@ function readInput(): ApplicationSaveDto {
   };
 }
 
-async function save(deploy = false) {
-  loading.value = deploy ? 'deploy' : 'save';
+async function save() {
+  loading.value = 'save';
   try {
     const input = readInput();
     const session = await applicationsApi.beginSaveSession({
@@ -559,12 +587,7 @@ async function save(deploy = false) {
       });
     }
     const app = await applicationsApi.commitSaveSession(session.id);
-    if (deploy) {
-      const result = await applicationsApi.deploy(app.id);
-      emit('saved', result.application ?? app, result.taskId);
-    } else {
-      emit('saved', app);
-    }
+    emit('saved', app);
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('applicationEditor.saveFailed');
   } finally {
@@ -703,49 +726,62 @@ async function save(deploy = false) {
 
           <section class="editor-section">
             <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
-            <div v-for="(mount, index) in specForm.mounts" :key="index" class="repeat-row mount-row">
-              <v-select v-model="mount.type" :items="[
-                { title: t('applicationEditor.dockerVolume'), value: 'volume' },
-                { title: t('applicationEditor.hostPath'), value: 'host' },
-                { title: t('applicationEditor.appFile'), value: 'file' },
-                { title: t('applicationEditor.panelFile'), value: 'panel_file' },
-                { title: t('applicationEditor.persistent'), value: 'persistent' },
-              ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
-              <v-combobox
-                v-if="mount.type === 'file'"
-                v-model="mount.source"
-                :items="files.map(file => file.path)"
-                :label="t('applicationEditor.workspaceFile')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-select
-                v-else-if="mount.type === 'panel_file'"
-                v-model="mount.source"
-                :items="panelFiles"
-                item-value="source"
-                :item-title="item => `${item.name} / ${item.kind}`"
-                :label="t('applicationEditor.panelFile')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-text-field
-                v-else-if="mount.type === 'persistent'"
-                v-model="mount.source"
-                :label="t('applicationEditor.persistentSubpath')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
-              <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
-              <v-text-field v-if="mount.type === 'persistent'" v-model.number="mount.uid" type="number" min="0" :label="t('applicationEditor.mountUid')" density="compact" variant="outlined" hide-details />
-              <v-text-field v-if="mount.type === 'persistent'" v-model.number="mount.gid" type="number" min="0" :label="t('applicationEditor.mountGid')" density="compact" variant="outlined" hide-details />
-              <v-text-field v-if="mount.type === 'persistent'" v-model="mount.mode" :label="t('applicationEditor.mountMode')" placeholder="0755" density="compact" variant="outlined" hide-details />
-              <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnly')" :disabled="mount.type === 'file' || mount.type === 'panel_file'" density="compact" hide-details />
-              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.mounts, index)" />
+            <div v-for="(mount, index) in specForm.mounts" :key="index" class="mount-item">
+              <div class="repeat-row mount-row">
+                <v-select v-model="mount.type" :items="[
+                  { title: t('applicationEditor.dockerVolume'), value: 'volume' },
+                  { title: t('applicationEditor.hostPath'), value: 'host' },
+                  { title: t('applicationEditor.appFile'), value: 'file' },
+                  { title: t('applicationEditor.panelFile'), value: 'panel_file' },
+                  { title: t('applicationEditor.persistent'), value: 'persistent' },
+                ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
+                <v-combobox
+                  v-if="mount.type === 'file'"
+                  v-model="mount.source"
+                  :items="files.map(file => file.path)"
+                  :label="t('applicationEditor.workspaceFile')"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                />
+                <v-select
+                  v-else-if="mount.type === 'panel_file'"
+                  v-model="mount.source"
+                  :items="panelFiles"
+                  item-value="source"
+                  :item-title="item => `${item.name} / ${item.kind}`"
+                  :label="t('applicationEditor.panelFile')"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                />
+                <v-text-field
+                  v-else-if="mount.type === 'persistent'"
+                  v-model="mount.source"
+                  :label="t('applicationEditor.persistentSubpath')"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                />
+                <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
+                <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
+                <v-btn :icon="mount.expanded ? 'mdi-chevron-up' : 'mdi-tune-variant'" variant="text" :aria-label="t('applicationEditor.mountOptions')" @click="mount.expanded = !mount.expanded" />
+                <v-btn icon="mdi-delete" variant="text" color="error" :aria-label="t('common.delete')" @click="removeAt(specForm.mounts, index)" />
+              </div>
+              <div v-if="mount.expanded" class="repeat-row mount-options-row">
+                <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnlyMount')" density="compact" hide-details />
+                <v-text-field v-if="mountSupportsOwnership(mount.type)" v-model.number="mount.uid" type="number" min="0" :label="t('applicationEditor.mountUid')" density="compact" variant="outlined" hide-details />
+                <v-text-field v-if="mountSupportsOwnership(mount.type)" v-model.number="mount.gid" type="number" min="0" :label="t('applicationEditor.mountGid')" density="compact" variant="outlined" hide-details />
+                <v-checkbox
+                  v-if="mountSupportsExecutable(mount.type)"
+                  :model-value="fileMountExecutable(mount)"
+                  :label="t('applicationEditor.executableFile')"
+                  density="compact"
+                  hide-details
+                  @update:model-value="setFileMountExecutable(mount, $event)"
+                />
+                <v-text-field v-else-if="mount.type === 'persistent'" v-model="mount.mode" :label="t('applicationEditor.mountMode')" placeholder="0755" density="compact" variant="outlined" hide-details />
+              </div>
             </div>
             <div class="mount-actions">
               <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
@@ -938,7 +974,7 @@ async function save(deploy = false) {
       <v-divider />
       <v-card-actions class="app-dialog-actions">
         <v-btn variant="text" class="text-none" @click="emit('close')">{{ t('common.cancel') }}</v-btn>
-        <v-btn color="primary" variant="flat" class="text-none" :loading="Boolean(loading)" @click="save(form.enabled)">
+        <v-btn color="primary" variant="flat" class="text-none" :loading="Boolean(loading)" @click="save()">
           {{ form.enabled ? t('common.saveAndDeploy') : t('common.save') }}
         </v-btn>
       </v-card-actions>
@@ -963,7 +999,9 @@ async function save(deploy = false) {
 .command-row { grid-template-columns: minmax(0, 1fr) 40px; }
 .cap-row { grid-template-columns: minmax(0, 1fr) 40px; }
 .env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
-.mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) 86px 86px 96px auto 40px; }
+.mount-item { display: grid; gap: 6px; margin-bottom: 8px; }
+.mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) 40px 40px; margin-bottom: 0; }
+.mount-options-row { grid-template-columns: minmax(150px, auto) repeat(3, minmax(110px, 0.5fr)); margin-bottom: 0; padding-left: 158px; }
 .mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .variable-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
 .proxy-rule { border: 1px solid var(--lp-border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
@@ -992,6 +1030,7 @@ async function save(deploy = false) {
 @media (max-width: 1180px) {
   .field-grid,
   .mount-row,
+  .mount-options-row,
   .ports-row,
   .command-row,
   .cap-row,
@@ -1002,6 +1041,9 @@ async function save(deploy = false) {
   .file-form,
   .placement-row {
     grid-template-columns: 1fr;
+  }
+  .mount-options-row {
+    padding-left: 0;
   }
 }
 

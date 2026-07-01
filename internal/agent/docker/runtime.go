@@ -399,11 +399,14 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 			return err
 		}
-		mode := os.FileMode(0o600)
-		if file.Mode == "0644" {
-			mode = 0o644
+		mode, err := managedFileMode(file.Mode)
+		if err != nil {
+			return err
 		}
 		if err := os.WriteFile(target, file.Content, mode); err != nil {
+			return err
+		}
+		if err := applyOwnership(target, file.UID, file.GID); err != nil {
 			return err
 		}
 	}
@@ -438,21 +441,38 @@ func (r *LocalRuntime) preparePersistentMounts(spec appruntime.Spec) error {
 				return err
 			}
 		}
-		if mount.UID != nil || mount.GID != nil {
-			uid := -1
-			gid := -1
-			if mount.UID != nil {
-				uid = *mount.UID
-			}
-			if mount.GID != nil {
-				gid = *mount.GID
-			}
-			if err := os.Chown(source, uid, gid); err != nil {
-				return err
-			}
+		if err := applyOwnership(source, mount.UID, mount.GID); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func managedFileMode(value string) (os.FileMode, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0o600, nil
+	}
+	parsed, err := strconv.ParseUint(value, 8, 32)
+	if err != nil {
+		return 0, fmt.Errorf("managed file mode is invalid: %w", err)
+	}
+	return os.FileMode(parsed), nil
+}
+
+func applyOwnership(path string, uidValue, gidValue *int) error {
+	if uidValue == nil && gidValue == nil {
+		return nil
+	}
+	uid := -1
+	gid := -1
+	if uidValue != nil {
+		uid = *uidValue
+	}
+	if gidValue != nil {
+		gid = *gidValue
+	}
+	return os.Chown(path, uid, gid)
 }
 
 func safeRuntimePath(root, appID, instanceID, area, rel string) (string, error) {

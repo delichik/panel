@@ -507,7 +507,7 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	app, err := svc.Create(ctx, SaveInput{
 		Name:     "web",
 		Enabled:  false,
-		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: config/app.conf\n    target: /etc/app.conf\n",
+		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: config/app.conf\n    target: /etc/app.conf\n    uid: 1000\n    gid: 1001\n    mode: \"0755\"\n",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -533,6 +533,9 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	spec := runtime.deploys[0].Spec
 	if len(spec.Files) != 1 || spec.Files[0].Path != "config/app.conf" || string(spec.Files[0].Content) != "server=localhost" {
 		t.Fatalf("files = %#v", spec.Files)
+	}
+	if spec.Files[0].Mode != "0755" || spec.Files[0].UID == nil || *spec.Files[0].UID != 1000 || spec.Files[0].GID == nil || *spec.Files[0].GID != 1001 {
+		t.Fatalf("file permissions = %#v", spec.Files[0])
 	}
 	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Target != "/etc/app.conf" {
 		t.Fatalf("mounts = %#v", spec.Mounts)
@@ -587,13 +590,16 @@ func TestPanelFileMountCreatesReadOnlyRuntimeFile(t *testing.T) {
 	if _, err := svc.Create(context.Background(), SaveInput{
 		Name:     "tls",
 		Enabled:  true,
-		SpecYAML: "name: tls\nimage: nginx\nmounts:\n  - type: panel_file\n    source: key_asset:cert_1:certificate\n    target: /etc/tls/cert.pem\n",
+		SpecYAML: "name: tls\nimage: nginx\nmounts:\n  - type: panel_file\n    source: key_asset:cert_1:certificate\n    target: /etc/tls/cert.pem\n    readOnly: true\n    uid: 1000\n    gid: 1001\n",
 	}); err != nil {
 		t.Fatal(err)
 	}
 	spec := runtime.deploys[0].Spec
 	if len(spec.Files) != 1 || string(spec.Files[0].Content) != "CERTIFICATE" || spec.Files[0].Mode != "0644" {
 		t.Fatalf("files = %#v", spec.Files)
+	}
+	if spec.Files[0].UID == nil || *spec.Files[0].UID != 1000 || spec.Files[0].GID == nil || *spec.Files[0].GID != 1001 {
+		t.Fatalf("file ownership = %#v", spec.Files[0])
 	}
 	if len(spec.Mounts) != 1 || spec.Mounts[0].Target != "/etc/tls/cert.pem" || !spec.Mounts[0].ReadOnly {
 		t.Fatalf("mounts = %#v", spec.Mounts)

@@ -197,11 +197,22 @@ func Validate(spec Spec) []Issue {
 		if strings.TrimSpace(mount.Mode) != "" && !fileModePattern.MatchString(strings.TrimSpace(mount.Mode)) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].mode", i), Message: "mount mode must be an octal file mode such as 0755"})
 		}
-		if mountType != "persistent" && (mount.UID != nil || mount.GID != nil || strings.TrimSpace(mount.Mode) != "") {
-			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d]", i), Message: "mount uid, gid, and mode are only supported for persistent mounts"})
+		if !mountSupportsOwnership(mountType) && (mount.UID != nil || mount.GID != nil) {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d]", i), Message: "mount uid and gid are only supported for file, panel_file, and persistent mounts"})
+		}
+		if !mountSupportsMode(mountType) && strings.TrimSpace(mount.Mode) != "" {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d]", i), Message: "mount mode is only supported for file and persistent mounts"})
 		}
 	}
 	return issues
+}
+
+func mountSupportsOwnership(mountType string) bool {
+	return mountType == "file" || mountType == "panel_file" || mountType == "persistent"
+}
+
+func mountSupportsMode(mountType string) bool {
+	return mountType == "file" || mountType == "persistent"
 }
 
 func validPanelFileSource(value string) bool {

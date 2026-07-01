@@ -267,6 +267,8 @@ message RuntimeManagedFile {
   string path = 1;
   bytes content = 2;
   string mode = 3;
+  google.protobuf.Int32Value uid = 4;
+  google.protobuf.Int32Value gid = 5;
 }
 
 message RuntimeRestart {
