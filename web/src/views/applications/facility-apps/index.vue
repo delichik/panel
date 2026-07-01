@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import { facilityAppsApi } from '@/api/facilityApps';
 import { serversApi } from '@/api/servers';
 import PageLoadingState from '@/components/PageLoadingState.vue';
@@ -9,6 +10,7 @@ import { useI18n } from '@/i18n';
 type FacilityStaticSiteForm = FacilityStaticSiteDto & { localGroupId: string };
 
 const { t, formatDateTime, translateLifecycleStage, translateRuntimeDesiredState, translateRuntimeStatus } = useI18n();
+const router = useRouter();
 const loading = ref(true);
 const saving = ref(false);
 const reconciling = ref(false);
@@ -319,6 +321,10 @@ function httpsStatusLabel(status: string) {
   return t('facilityAppsPage.httpsDisabled');
 }
 
+function openApplications() {
+  router.push({ name: 'applications' });
+}
+
 
 function formatBytes(value: number) {
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
@@ -607,7 +613,12 @@ onMounted(load);
           </section>
 
           <section class="facility-section">
-            <div class="section-title">{{ t('facilityAppsPage.applicationRoutes') }}</div>
+            <div class="section-heading">
+              <div class="section-title">{{ t('facilityAppsPage.applicationRoutes') }}</div>
+              <v-btn size="small" variant="outlined" prepend-icon="mdi-application-cog-outline" @click="openApplications">
+                {{ t('facilityAppsPage.openApplications') }}
+              </v-btn>
+            </div>
             <div v-if="!applicationRouteGroups.length" class="empty-inline">
               {{ t('facilityAppsPage.noRouteSummaries') }}
             </div>

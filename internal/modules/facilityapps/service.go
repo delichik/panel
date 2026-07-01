@@ -213,7 +213,6 @@ func (s *Service) RuntimeSpecForServer(ctx context.Context, app applications.App
 		return appruntime.Spec{}, true, err
 	}
 	spec.Generation = app.Generation
-	spec.SpecHash = app.SpecHash
 	return spec, true, nil
 }
 
@@ -686,6 +685,9 @@ func writeFacilityProxyLocation(b *strings.Builder, pathValue, target, sourceMod
 			b.WriteString("            proxy_set_header X-Forwarded-Proto $scheme;\n")
 		}
 	}
+	b.WriteString("            proxy_http_version 1.1;\n")
+	b.WriteString("            proxy_set_header Upgrade $http_upgrade;\n")
+	b.WriteString("            proxy_set_header Connection $connection_upgrade;\n")
 	b.WriteString("        }\n")
 }
 

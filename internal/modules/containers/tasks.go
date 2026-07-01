@@ -7,6 +7,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	"panel/internal/modules/applications"
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
@@ -109,12 +110,8 @@ func (s *Service) CollectApplicationReconcileInputs(ctx context.Context, trigger
 		return tasks.CreateBatchInput{}, false, err
 	}
 	triggerType := firstNonEmpty(trigger.Type, "scheduler")
-	taskType := TaskApplicationReconcile
-	if len(inputs) > 0 && strings.TrimSpace(inputs[0].Type) != "" {
-		taskType = inputs[0].Type
-	}
 	return tasks.CreateBatchInput{
-		Type:          taskType,
+		Type:          applications.TaskTypeTargetBatch,
 		OperationID:   operationID,
 		TriggerType:   triggerType,
 		Summary:       "Monitoring application containers",

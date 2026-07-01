@@ -676,6 +676,7 @@ const messages = {
       hideSource: "Hide client source",
       applicationRoute: "Application route",
       applicationRoutes: "Application routes",
+      openApplications: "Open applications",
     },
     firewallPage: {
       loadFailed: "Unable to load firewall data",
@@ -1468,7 +1469,10 @@ const messages = {
       acme_finalize: "ACME finalize",
     },
     taskType: {
-      application_deploy: "Application deploy",
+      application_target_batch: "Application coordination",
+      application_target_apply: "Application target sync",
+      application_target_stop: "Application target stop",
+      application_target_purge: "Application target cleanup",
       application_stop: "Application stop",
       application_restart: "Application restart",
       application_refresh: "Application refresh",
@@ -2179,6 +2183,7 @@ const messages = {
       preserveSource: "\u900f\u4f20\u5ba2\u6237\u7aef\u6765\u6e90",
       hideSource: "\u9690\u85cf\u5ba2\u6237\u7aef\u6765\u6e90",
       applicationRoute: "\u5e94\u7528\u8def\u7531",
+      openApplications: "\u6253\u5f00\u5e94\u7528",
     },
     firewallPage: {
       loadFailed: "无法加载防火墙数据",
@@ -2970,7 +2975,10 @@ const messages = {
       acme_finalize: "ACME 完成签发",
     },
     taskType: {
-      application_deploy: "应用部署",
+      application_target_batch: "应用协调",
+      application_target_apply: "应用目标同步",
+      application_target_stop: "应用目标停止",
+      application_target_purge: "应用目标清理",
       application_stop: "应用停止",
       application_restart: "应用重启",
       application_refresh: "应用刷新",

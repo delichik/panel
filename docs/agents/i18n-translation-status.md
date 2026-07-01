@@ -6,6 +6,10 @@
 
 - `web/src/views/applications/apps/index.vue`、`web/src/views/applications/facility-apps/index.vue`、`internal/platform/i18n`
   - 应用控制平面重构后的“同步 / 停用 / 立即同步 / 删除后由同步清理运行时资源”文案已接入英文与简体中文词条；新增后端错误码 `application_reconciler_unavailable` 已接入简体中文翻译。
+- `web/src/views/tasks/index.vue`
+  - 任务中心新增应用协调与目标任务展示名：`application_target_batch`、`application_target_apply`、`application_target_stop`、`application_target_purge` 已接入英文与简体中文词条。
+- `web/src/views/applications/facility-apps/index.vue`
+  - 入口网关应用路由区域新增“打开应用”入口，英文与简体中文词条已接入 `web/src/i18n/index.ts`。
 - `web/src/views/applications/apps/ApplicationEditor.vue`
   - 应用编辑器新增 Docker capability (`capAdd`) 可视化输入，字段标签、提示和添加按钮已接入英文与简体中文词条；保存值为 Docker capability 稳定标识，不翻译。
 - `web/src/views/tasks/index.vue`

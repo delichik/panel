@@ -249,6 +249,32 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 	}
 }
 
+func TestExplicitApplicationReconcileRespectsStoredBackoffTime(t *testing.T) {
+	svc, _, _, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{
+		Type: "application_change",
+		Payload: ApplicationReconcileTrigger{
+			ApplicationIDs: []string{app.ID},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("expected explicit reconcile to wait for stored backoff, got %#v", inputs)
+	}
+}
+
 func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testing.T) {
 	svc, _, fakeAgent, store := newContainerizationTestService(t)
 	ctx := context.Background()
@@ -320,7 +346,7 @@ func TestApplicationReconcileForceProducesDeployInputs(t *testing.T) {
 		t.Fatalf("inputs = %#v", inputs)
 	}
 	input := inputs[0]
-	if input.Type != applications.TaskTypeDeploy || input.ResourceID != app.ID || input.ServerID != "server-1" || input.OperationID != "op-1" {
+	if input.Type != applications.TaskTypeTargetApply || input.ResourceID != app.ID || input.ServerID != "server-1" || input.OperationID != "op-1" {
 		t.Fatalf("deploy input = %#v", input)
 	}
 }
@@ -360,7 +386,7 @@ func TestContainerLogsClampsTail(t *testing.T) {
 func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	svc, taskSvc, _, _ := newContainerizationTestService(t)
 	taskSvc.MustRegister(tasks.Definition{
-		Type: applications.TaskTypeDeploy,
+		Type: applications.TaskTypeTargetApply,
 		Execute: func(tc tasks.TaskContext) error {
 			return tc.Service.Complete(tc.Context, tc.Task.ID, "Application deployment handled")
 		},
@@ -378,7 +404,7 @@ func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created || task.ResourceID != applications.FacilityReverseProxyApplicationID || task.TriggerType != "facility_app" || task.Type != applications.TaskTypeDeploy {
+	if !created || task.ResourceID != applications.FacilityReverseProxyApplicationID || task.TriggerType != "facility_app" || task.Type != applications.TaskTypeTargetApply {
 		t.Fatalf("unexpected reconcile task: created=%v task=%#v", created, task)
 	}
 	waitTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
@@ -519,7 +545,7 @@ func (f fakeApplicationUpdater) DeploymentTaskInputs(_ context.Context, appID st
 	inputs := make([]tasks.CreateInput, 0, len(serverIDs))
 	for _, serverID := range serverIDs {
 		inputs = append(inputs, tasks.CreateInput{
-			Type:         applications.TaskTypeDeploy,
+			Type:         applications.TaskTypeTargetApply,
 			ServerID:     serverID,
 			ResourceType: "application",
 			ResourceID:   appID,
@@ -538,7 +564,7 @@ func (f fakeApplicationUpdater) StopTaskInputs(_ context.Context, appID string, 
 	inputs := make([]tasks.CreateInput, 0, len(serverIDs))
 	for _, serverID := range serverIDs {
 		inputs = append(inputs, tasks.CreateInput{
-			Type:         applications.TaskTypeDeploy,
+			Type:         applications.TaskTypeTargetApply,
 			ServerID:     serverID,
 			ResourceType: "application",
 			ResourceID:   appID,

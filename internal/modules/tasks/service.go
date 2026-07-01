@@ -406,6 +406,25 @@ func (s *Service) ExistingActiveByConcurrencyKey(ctx context.Context, concurrenc
 	return task, true, nil
 }
 
+func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKey string) (Task, bool, error) {
+	concurrencyKey = strings.TrimSpace(concurrencyKey)
+	if concurrencyKey == "" {
+		return Task{}, false, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
+		FROM tasks
+		WHERE concurrency_key=? AND status IN (?,?,?,?)
+		ORDER BY created_at ASC LIMIT 1`, concurrencyKey, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
+	task, err := scanTask(row)
+	if err == sql.ErrNoRows {
+		return Task{}, false, nil
+	}
+	if err != nil {
+		return Task{}, false, err
+	}
+	return task, true, nil
+}
+
 func (s *Service) CountByServerStatuses(ctx context.Context, serverID string, statuses ...string) (int, error) {
 	statuses = cleanFilterValues(statuses...)
 	if len(statuses) == 0 {

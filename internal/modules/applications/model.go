@@ -7,7 +7,10 @@ import (
 )
 
 const (
-	TaskTypeDeploy      = "application_deploy"
+	TaskTypeTargetBatch = "application_target_batch"
+	TaskTypeTargetApply = "application_target_apply"
+	TaskTypeTargetStop  = "application_target_stop"
+	TaskTypeTargetPurge = "application_target_purge"
 	TaskTypeStop        = "application_stop"
 	TaskTypeRestart     = "application_restart"
 	TaskTypeRefresh     = "application_refresh"
@@ -230,6 +233,7 @@ type OperationResult struct {
 
 type ReconcileTaskOptions struct {
 	Purge bool
+	Force bool
 }
 
 type MigrationInput struct {

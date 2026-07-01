@@ -389,7 +389,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 			return Application{}, err
 		}
 		if app.Enabled {
-			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
+			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
 				return Application{}, err
 			}
 		}
@@ -402,7 +402,7 @@ func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []App
 		return Application{}, applicationSaveError(err)
 	}
 	if app.Enabled {
-		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
+		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
 			return Application{}, err
 		}
 	}
@@ -488,7 +488,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 			}
 		}
 		if shouldDeploy || shouldStop {
-			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
+			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
 				return Application{}, err
 			}
 		}
@@ -501,7 +501,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 		return Application{}, applicationSaveError(err)
 	}
 	if shouldDeploy || shouldStop {
-		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Deploying application "+app.Name); err != nil {
+		if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
 			return Application{}, err
 		}
 	}
@@ -768,10 +768,9 @@ func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, er
 	if err != nil {
 		return OperationResult{}, err
 	}
-	task, err := s.triggerApplicationReconcileTask(ctx, app.ID, "application_deploy", map[string]any{
+	task, err := s.triggerApplicationReconcileTask(ctx, app.ID, "application_sync", map[string]any{
 		"applicationIds": []string{app.ID},
-		"force":          true,
-		"reason":         "application_deploy",
+		"reason":         "application_sync",
 	})
 	if err != nil {
 		return OperationResult{}, err
@@ -842,7 +841,11 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 	if err != nil {
 		return err
 	}
-	return s.runDeployTask(ctx, task.ID, app, job, opts.targetIDs, opts.lifecycleOperationID)
+	if err := s.runDeployTask(ctx, task.ID, app, job, opts.targetIDs, opts.lifecycleOperationID); err != nil {
+		_ = s.recordApplicationReconcileFailure(ctx, app.ID)
+		return err
+	}
+	return nil
 }
 
 func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application, appruntime.Spec, error) {
@@ -1108,11 +1111,15 @@ func (s *Service) RedeployEnabledApplications(ctx context.Context) (int, error) 
 		if !app.Enabled {
 			continue
 		}
-		refreshed, spec, err := s.prepareEnabledApplicationRedeploy(ctx, app)
+		refreshed, _, err := s.prepareEnabledApplicationRedeploy(ctx, app)
 		if err != nil {
 			return redeployed, err
 		}
-		if err := s.triggerApplicationReconcile(ctx, refreshed, spec, "application_redeploy", "Deploying application "+refreshed.Name); err != nil {
+		if err := s.triggerApplicationReconcileWithPayload(ctx, refreshed.ID, "application_redeploy", map[string]any{
+			"applicationIds": []string{refreshed.ID},
+			"force":          true,
+			"reason":         "application_redeploy",
+		}); err != nil {
 			return redeployed, err
 		}
 		redeployed++
@@ -1942,7 +1949,7 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 		return err
 	}
 	if s.tasks != nil && taskID != "" {
-		_ = s.tasks.Complete(ctx, taskID, "Application deployed")
+		_ = s.tasks.Complete(ctx, taskID, "Application synced")
 	}
 	return nil
 }
@@ -2481,7 +2488,8 @@ type deployTaskParams struct {
 }
 
 type deployBatchOptions struct {
-	targetIDs []string
+	targetIDs     []string
+	skipSatisfied bool
 }
 
 func (s *Service) DeploymentTaskInputs(ctx context.Context, appID string, targetIDs []string, summary, triggerType string) ([]tasks.CreateInput, error) {
@@ -2501,11 +2509,18 @@ func (s *Service) DeploymentTaskInputsWithOptions(ctx context.Context, appID str
 		}
 		return s.StopTaskInputs(ctx, appID, stopTargets, app.DeletionRequested || opts.Purge, summary, triggerType)
 	}
+	if app.Kind == ApplicationKindFacility && app.DeploymentMode == DeploymentModeSelected && len(app.DeploymentServers) == 0 {
+		stopTargets, err := s.reconcileStopTargets(ctx, app, targetIDs)
+		if err != nil {
+			return nil, err
+		}
+		return s.StopTaskInputs(ctx, appID, stopTargets, opts.Purge, summary, triggerType)
+	}
 	app, job, err := s.prepareDeploy(ctx, appID)
 	if err != nil {
 		return nil, err
 	}
-	batch, _, err := s.deploymentTaskBatch(ctx, app, job, summary, triggerType, deployBatchOptions{targetIDs: targetIDs})
+	batch, _, err := s.deploymentTaskBatch(ctx, app, job, summary, triggerType, deployBatchOptions{targetIDs: targetIDs, skipSatisfied: !opts.Force})
 	if err != nil {
 		return nil, err
 	}
@@ -2556,7 +2571,7 @@ func (s *Service) targetActionTaskInputs(ctx context.Context, app Application, t
 			return nil, err
 		}
 		inputs = append(inputs, tasks.CreateInput{
-			Type:         TaskTypeDeploy,
+			Type:         targetTaskTypeForAction(action),
 			ServerID:     serverID,
 			ResourceType: "application",
 			ResourceID:   app.ID,
@@ -2625,9 +2640,22 @@ func (s *Service) deploymentTaskBatch(ctx context.Context, app Application, spec
 	}
 	if len(opts) > 0 {
 		targets = filterDeploymentTargets(targets, opts[0].targetIDs)
+		if opts[0].skipSatisfied {
+			targets, err = s.filterUnsatisfiedDeploymentTargets(ctx, app, spec, targets)
+			if err != nil {
+				return tasks.CreateBatchInput{}, "", err
+			}
+		}
 	}
 	if len(targets) == 0 {
-		return tasks.CreateBatchInput{}, "", panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
+		return tasks.CreateBatchInput{
+			Type:          TaskTypeTargetBatch,
+			Summary:       summary,
+			OperationID:   id.New("op"),
+			TriggerType:   firstNonEmpty(triggerType, "system"),
+			ExecutionMode: tasks.ExecutionModeSerial,
+			Inputs:        []tasks.CreateInput{},
+		}, "", nil
 	}
 	operation, err := s.createLifecycleOperation(ctx, app, spec, "", LifecycleTypeDeploy, targets)
 	if err != nil {
@@ -2640,7 +2668,7 @@ func (s *Service) deploymentTaskBatch(ctx context.Context, app Application, spec
 			return tasks.CreateBatchInput{}, "", err
 		}
 		inputs = append(inputs, tasks.CreateInput{
-			Type:         TaskTypeDeploy,
+			Type:         TaskTypeTargetApply,
 			ServerID:     target.ID,
 			ResourceType: "application",
 			ResourceID:   app.ID,
@@ -2649,13 +2677,59 @@ func (s *Service) deploymentTaskBatch(ctx context.Context, app Application, spec
 		})
 	}
 	return tasks.CreateBatchInput{
-		Type:          TaskTypeDeploy,
+		Type:          TaskTypeTargetBatch,
 		Summary:       summary,
 		OperationID:   id.New("op"),
 		TriggerType:   firstNonEmpty(triggerType, "system"),
 		ExecutionMode: tasks.ExecutionModeSerial,
 		Inputs:        inputs,
 	}, operation.ID, nil
+}
+
+func targetTaskTypeForAction(action string) string {
+	switch strings.TrimSpace(action) {
+	case "stop":
+		return TaskTypeTargetStop
+	case "purge":
+		return TaskTypeTargetPurge
+	default:
+		return TaskTypeTargetApply
+	}
+}
+
+func (s *Service) filterUnsatisfiedDeploymentTargets(ctx context.Context, app Application, spec appruntime.Spec, targets []server.Server) ([]server.Server, error) {
+	out := make([]server.Server, 0, len(targets))
+	for _, target := range targets {
+		desired, err := s.runtimeSpecForServer(ctx, app, spec, target, nil)
+		if err != nil {
+			return nil, err
+		}
+		instance, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID)
+		if err != nil {
+			if isNotFound(err) {
+				out = append(out, target)
+				continue
+			}
+			return nil, err
+		}
+		if !runtimeInstanceSatisfiesDesired(instance, desired) {
+			out = append(out, target)
+		}
+	}
+	return out, nil
+}
+
+func runtimeInstanceSatisfiesDesired(instance appruntime.Instance, desired appruntime.Spec) bool {
+	if instance.DesiredState != appruntime.DesiredRunning || instance.Status != appruntime.StatusRunning {
+		return false
+	}
+	if instance.LastDeployedGeneration != desired.Generation {
+		return false
+	}
+	if strings.TrimSpace(instance.RuntimeSpec.SpecHash) != "" {
+		return instance.RuntimeSpec.SpecHash == desired.SpecHash
+	}
+	return strings.TrimSpace(desired.SpecHash) == ""
 }
 
 func (s *Service) runDeploymentTaskBatch(ctx context.Context, app Application, spec appruntime.Spec, summary string) (string, error) {
@@ -2703,7 +2777,6 @@ func (s *Service) runDeploymentTaskBatch(ctx context.Context, app Application, s
 func (s *Service) triggerApplicationReconcile(ctx context.Context, app Application, spec appruntime.Spec, triggerType, fallbackSummary string) error {
 	return s.triggerApplicationReconcileWithPayload(ctx, app.ID, triggerType, map[string]any{
 		"applicationIds": []string{app.ID},
-		"force":          true,
 		"reason":         firstNonEmpty(triggerType, "application_change"),
 	})
 }
@@ -2745,7 +2818,7 @@ func (s *Service) deploymentOperationError(ctx context.Context, operationID stri
 		return nil
 	}
 	if strings.TrimSpace(errText) == "" {
-		errText = "Application deployment failed"
+		errText = "Application sync failed"
 	}
 	return panelerr.BadGateway("application_runtime_operation_failed", errText)
 }
@@ -2761,18 +2834,35 @@ func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
 	if strings.TrimSpace(task.ParamsJSON) != "" {
 		var params deployTaskParams
 		if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err == nil && strings.TrimSpace(params.ServerID) != "" {
+			action := strings.TrimSpace(params.Action)
+			if action == "" {
+				action = targetActionForTaskType(task.Type)
+			}
 			return deployTaskRunOptions{
 				targetIDs:            []string{strings.TrimSpace(params.ServerID)},
 				lifecycleOperationID: strings.TrimSpace(params.LifecycleOperationID),
-				action:               strings.TrimSpace(params.Action),
+				action:               action,
 				purge:                params.Purge,
 			}
 		}
 	}
 	if strings.TrimSpace(task.ServerID) != "" && strings.TrimSpace(task.ResourceID) != "" {
-		return deployTaskRunOptions{targetIDs: []string{strings.TrimSpace(task.ServerID)}}
+		return deployTaskRunOptions{targetIDs: []string{strings.TrimSpace(task.ServerID)}, action: targetActionForTaskType(task.Type)}
 	}
 	return deployTaskRunOptions{}
+}
+
+func targetActionForTaskType(taskType string) string {
+	switch strings.TrimSpace(taskType) {
+	case TaskTypeTargetStop:
+		return "stop"
+	case TaskTypeTargetPurge:
+		return "purge"
+	case TaskTypeTargetApply:
+		return "apply"
+	default:
+		return ""
+	}
 }
 
 func filterDeploymentTargets(targets []server.Server, targetIDs []string) []server.Server {
@@ -3119,6 +3209,9 @@ func (s *Service) stopRuntimeInstanceForServer(ctx context.Context, taskID, appI
 		return runErr
 	})
 	if err != nil {
+		if isRuntimeAlreadyRequestedState(err) {
+			return s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, appruntime.StatusStopped, "", "")
+		}
 		_ = s.handleAgentError(ctx, srv, err)
 		_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, appruntime.StatusFailed, "", err.Error())
 		return runtimeOperationError(err)
@@ -3140,6 +3233,42 @@ func (s *Service) deleteApplicationIfRuntimeGone(ctx context.Context, appID stri
 	}
 	_, err = s.db.ExecContext(ctx, `DELETE FROM applications WHERE id=? AND deletion_requested=1`, appID)
 	return err
+}
+
+func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID string) error {
+	if err := s.ensureApplicationReconcileStateRows(ctx, appID); err != nil {
+		return err
+	}
+	var failures sql.NullInt64
+	err := s.db.QueryRowContext(ctx, `SELECT MAX(reconcile_failures) FROM application_reconcile_states WHERE application_id=?`, appID).Scan(&failures)
+	if err != nil {
+		return err
+	}
+	nextFailures := 1
+	if failures.Valid && failures.Int64 > 0 {
+		nextFailures = int(failures.Int64) + 1
+	}
+	nextRun := time.Now().UTC().Add(applicationReconcileFailureBackoff(nextFailures))
+	_, err = s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_failures=?,reconcile_next_run_at=?,reconcile_success_streak=0 WHERE application_id=?`,
+		nextFailures, nextRun.Format(time.RFC3339Nano), appID)
+	return err
+}
+
+func (s *Service) ensureApplicationReconcileStateRows(ctx context.Context, appID string) error {
+	instances, err := s.runtimeInstances(ctx, appID)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, instance := range instances {
+		_, err := s.db.ExecContext(ctx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+			VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
+			instance.ID, instance.ApplicationID, instance.ServerID, now)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) purgeApplicationRuntimeData(ctx context.Context, appID string) error {
@@ -3185,10 +3314,34 @@ func (s *Service) purgeRuntimeInstance(ctx context.Context, taskID string, insta
 		return runErr
 	})
 	if err != nil {
+		if isRuntimeAlreadyRequestedState(err) {
+			return s.deleteRuntimeInstanceForServer(ctx, instance.ApplicationID, instance.ServerID)
+		}
 		_ = s.handleAgentError(ctx, srv, err)
 		return runtimeOperationError(err)
 	}
 	return s.deleteRuntimeInstanceForServer(ctx, instance.ApplicationID, instance.ServerID)
+}
+
+func isRuntimeAlreadyRequestedState(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "already has requested state")
+}
+
+func applicationReconcileFailureBackoff(failures int) time.Duration {
+	if failures <= 0 {
+		return 0
+	}
+	delay := 30 * time.Second
+	for i := 1; i < failures; i++ {
+		delay *= 2
+		if delay >= 10*time.Minute {
+			return 10 * time.Minute
+		}
+	}
+	return delay
 }
 
 func (s *Service) runtimeInstances(ctx context.Context, appID string) ([]appruntime.Instance, error) {
@@ -3752,7 +3905,7 @@ func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error 
 	if err := s.updateApplication(ctx, current); err != nil {
 		return err
 	}
-	if _, err := s.runDeploymentTaskBatch(ctx, current, job, "Deploying application "+current.Name); err != nil {
+	if _, err := s.runDeploymentTaskBatch(ctx, current, job, "Syncing application "+current.Name); err != nil {
 		return err
 	}
 	return s.reconcileReverseProxy(ctx)

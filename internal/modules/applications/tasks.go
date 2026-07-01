@@ -1,6 +1,10 @@
 package applications
 
-import "panel/internal/modules/tasks"
+import (
+	"strings"
+
+	"panel/internal/modules/tasks"
+)
 
 func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
@@ -8,11 +12,30 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	}
 	for _, def := range []tasks.Definition{
 		{
-			Type:              TaskTypeDeploy,
-			AllowRunNow:       true,
-			AllowRetry:        true,
-			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
-			ConcurrencyKey:    applicationLifecycleConcurrencyKey,
+			Type:              TaskTypeTargetBatch,
+			Summary:           "Application target coordination",
+			ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
+			Execute:           func(tasks.TaskContext) error { return nil },
+		},
+		{
+			Type:              TaskTypeTargetApply,
+			Hidden:            true,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
+			ConcurrencyKey:    applicationTargetConcurrencyKey,
+			Execute:           s.RunDeployTask,
+		},
+		{
+			Type:              TaskTypeTargetStop,
+			Hidden:            true,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
+			ConcurrencyKey:    applicationTargetConcurrencyKey,
+			Execute:           s.RunDeployTask,
+		},
+		{
+			Type:              TaskTypeTargetPurge,
+			Hidden:            true,
+			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
+			ConcurrencyKey:    applicationTargetConcurrencyKey,
 			Execute:           s.RunDeployTask,
 		},
 		{
@@ -57,6 +80,15 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	} {
 		taskSvc.MustRegister(def)
 	}
+}
+
+func applicationTargetConcurrencyKey(in tasks.CreateInput) string {
+	appID := in.ResourceID
+	serverID := in.ServerID
+	if strings.TrimSpace(appID) == "" || strings.TrimSpace(serverID) == "" {
+		return applicationLifecycleConcurrencyKey(in)
+	}
+	return "application:target:" + strings.TrimSpace(appID) + ":" + strings.TrimSpace(serverID)
 }
 
 func applicationLifecycleConcurrencyKey(in tasks.CreateInput) string {

@@ -670,7 +670,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 		if nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
 			continue
 		}
-		deployInputs, err := s.apps.DeploymentTaskInputs(ctx, appID, observation.driftedServerIDs, "Reconciling application "+observation.app.Name, "scheduler")
+		deployInputs, err := s.apps.DeploymentTaskInputs(ctx, appID, observation.driftedServerIDs, "Syncing application "+observation.app.Name, "scheduler")
 		if err != nil {
 			return inputs, err
 		}
@@ -691,13 +691,8 @@ func (s *Service) listApplicationsForReconcile(ctx context.Context) ([]applicati
 }
 
 func (payload ApplicationReconcileTrigger) requiresExplicitTasks() bool {
-	if payload.Force || payload.Purge || len(payload.StopServers) > 0 {
+	if payload.Force || payload.Purge || len(payload.StopServers) > 0 || len(payload.ApplicationIDs) > 0 {
 		return true
-	}
-	for _, appID := range payload.ApplicationIDs {
-		if appID == applications.FacilityReverseProxyApplicationID {
-			return true
-		}
 	}
 	return false
 }
@@ -718,7 +713,16 @@ func (s *Service) explicitApplicationReconcileTasks(ctx context.Context, operati
 	}
 	inputs := make([]tasks.CreateInput, 0, len(appIDs))
 	for _, appID := range appIDs {
-		deployInputs, err := s.apps.DeploymentTaskInputsWithOptions(ctx, appID, payload.ServerIDs, applications.ReconcileTaskOptions{Purge: payload.Purge}, "Reconciling application "+appID, triggerType)
+		if !trigger.Manual && triggerType != "user" {
+			nextRunAt, err := s.nextApplicationReconcileRunAt(ctx, appID)
+			if err != nil {
+				return inputs, err
+			}
+			if nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
+				continue
+			}
+		}
+		deployInputs, err := s.apps.DeploymentTaskInputsWithOptions(ctx, appID, payload.ServerIDs, applications.ReconcileTaskOptions{Purge: payload.Purge, Force: payload.Force}, "Syncing application "+appID, triggerType)
 		if err != nil {
 			return inputs, err
 		}

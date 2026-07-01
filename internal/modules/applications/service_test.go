@@ -288,22 +288,24 @@ func TestDeployTaskExecutorEnablesAppDeploysRuntimeAndCompletesTask(t *testing.T
 		t.Fatal(err)
 	}
 	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
-		Type:         TaskTypeDeploy,
+		Type:         TaskTypeTargetApply,
 		ResourceType: "application",
 		ResourceID:   app.ID,
-		Summary:      "Deploying application " + app.Name,
+		ServerID:     "srv-a",
+		Summary:      "Syncing application " + app.Name,
+		ParamsJSON:   `{"serverId":"srv-a","action":"apply"}`,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	def, ok := svc.tasks.Registry().Definition(TaskTypeDeploy)
+	def, ok := svc.tasks.Registry().Definition(TaskTypeTargetApply)
 	if !ok || def.Execute == nil {
-		t.Fatal("expected application deploy executor")
+		t.Fatal("expected application target apply executor")
 	}
 	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.deploys) != 2 {
+	if len(runtime.deploys) != 1 || runtime.deploys[0].ServerID != "srv-a" {
 		t.Fatalf("deploys = %#v", runtime.deploys)
 	}
 	deployed, err := svc.Get(ctx, app.ID)
@@ -319,6 +321,52 @@ func TestDeployTaskExecutorEnablesAppDeploysRuntimeAndCompletesTask(t *testing.T
 	}
 	if storedTask.Status != tasks.StatusCompleted {
 		t.Fatalf("expected completed deploy task, got %#v", storedTask)
+	}
+}
+
+func TestDeploymentTaskInputsSkipSatisfiedTargetsUnlessForced(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.markRuntimeInstance(ctx, app.ID+"-srv-b", appruntime.DesiredRunning, appruntime.StatusFailed, "", "boom"); err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := svc.DeploymentTaskInputsWithOptions(ctx, app.ID, nil, ReconcileTaskOptions{}, "Syncing application web", "scheduler")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 1 || inputs[0].ServerID != "srv-b" {
+		t.Fatalf("expected only failed target to reconcile, got %#v", inputs)
+	}
+	inputs, err = svc.DeploymentTaskInputsWithOptions(ctx, app.ID, nil, ReconcileTaskOptions{Force: true}, "Syncing application web", "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 2 {
+		t.Fatalf("forced redeploy should include both targets, got %#v", inputs)
+	}
+}
+
+func TestPurgeRuntimeInstanceTreatsAlreadyRequestedStateAsSuccess(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.stopErr = errors.New("docker resource already has requested state: /containers/panel-web/stop?t=10")
+	if err := svc.purgeRuntimeInstanceForServer(ctx, "task-1", app.ID, "srv-a", true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.runtimeInstanceForServer(ctx, app.ID, "srv-a"); !isNotFound(err) {
+		t.Fatalf("expected runtime instance to be removed, got err=%v", err)
 	}
 }
 
@@ -650,7 +698,7 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 			t.Fatalf("stop should remove container without purging files: %#v", req)
 		}
 	}
-	result, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeDeploy, Limit: 10})
+	result, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeTargetStop, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -662,7 +710,7 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 		}
 	}
 	if !foundStop {
-		t.Fatalf("expected deploy task with stop action, got %#v", result.Items)
+		t.Fatalf("expected target stop task, got %#v", result.Items)
 	}
 }
 
@@ -1387,10 +1435,11 @@ func (f *fakeApplicationReconcileTrigger) TriggerApplicationReconcile(ctx contex
 		appIDs = []string{strings.TrimSpace(trigger.TriggerResourceID)}
 	}
 	purge, _ := payload["purge"].(bool)
+	force, _ := payload["force"].(bool)
 	stopServers := stringSlicePayload(payload["stopServers"])
 	inputs := []tasks.CreateInput{}
 	for _, appID := range appIDs {
-		deployInputs, err := f.svc.DeploymentTaskInputs(ctx, appID, nil, "Reconciling application "+appID, firstNonEmpty(trigger.Type, "test"))
+		deployInputs, err := f.svc.DeploymentTaskInputsWithOptions(ctx, appID, nil, ReconcileTaskOptions{Purge: purge, Force: force}, "Syncing application "+appID, firstNonEmpty(trigger.Type, "test"))
 		if err != nil {
 			return tasks.Task{}, false, err
 		}
@@ -1407,12 +1456,12 @@ func (f *fakeApplicationReconcileTrigger) TriggerApplicationReconcile(ctx contex
 		return tasks.Task{}, false, nil
 	}
 	manager := tasks.NewManager(f.tasks)
-	if trigger.Type == "application_deploy" {
+	if trigger.Type == "application_sync" {
 		batch := tasks.CreateBatchInput{
 			Type:          inputs[0].Type,
 			OperationID:   "test-reconcile",
 			TriggerType:   firstNonEmpty(trigger.Type, "test"),
-			Summary:       "Reconciling application",
+			Summary:       "Syncing application",
 			ExecutionMode: tasks.ExecutionModeSerial,
 			Inputs:        inputs,
 		}
@@ -1573,6 +1622,7 @@ type fakeRuntimeClient struct {
 	restoreContent       []byte
 	deployErr            error
 	deployErrByServer    map[string]error
+	stopErr              error
 	createEntered        chan struct{}
 	createRelease        chan struct{}
 	createOnce           sync.Once
@@ -1632,6 +1682,9 @@ func (f *fakeRuntimeClient) DockerContainerAction(ctx context.Context, baseURL, 
 
 func (f *fakeRuntimeClient) RuntimeStop(ctx context.Context, baseURL string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
 	f.stops = append(f.stops, req)
+	if f.stopErr != nil {
+		return agentcontract.RuntimeInstanceResponse{}, f.stopErr
+	}
 	status := appruntime.StatusStopped
 	if req.Purge {
 		status = "purged"

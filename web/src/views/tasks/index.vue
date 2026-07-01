@@ -17,7 +17,10 @@ const TYPE_FILTER_ALL = '__all';
 const hiddenByCommonTaskTypes = new Set(['metrics_collect']);
 const { formatDateTime, formatTime, t, translateTaskStage, translateTaskStatus, translateTaskType } = useI18n();
 const supportedTaskTypes = [
-  'application_deploy',
+  'application_target_batch',
+  'application_target_apply',
+  'application_target_stop',
+  'application_target_purge',
   'application_stop',
   'application_restart',
   'application_refresh',

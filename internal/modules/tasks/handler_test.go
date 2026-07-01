@@ -56,7 +56,7 @@ func TestHandlerRunNowDispatchesQueuedTask(t *testing.T) {
 
 func TestHandlerRunNowRejectsUnsupportedTaskType(t *testing.T) {
 	svc := newTestService(t)
-	task, err := svc.Create(context.Background(), CreateInput{Type: "application_deploy", Status: StatusQueued})
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task", Status: StatusQueued})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func TestHandlerRunNowRejectsUnsupportedTaskType(t *testing.T) {
 
 func TestHandlerRunNowRejectsDefinitionWithoutCapability(t *testing.T) {
 	svc := newTestService(t)
-	task, err := svc.Create(context.Background(), CreateInput{Type: "application_deploy", Status: StatusQueued})
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task", Status: StatusQueued})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestHandlerListParsesMultiValueFilters(t *testing.T) {
 		ConcurrencyPolicy: ConcurrencyResourceExclusive,
 	})
 	ctx := context.Background()
-	running, err := svc.Create(ctx, CreateInput{Type: "application_deploy", Status: StatusRunning})
+	running, err := svc.Create(ctx, CreateInput{Type: "sample_task", Status: StatusRunning})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,12 +144,12 @@ func TestHandlerListParsesMultiValueFilters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Create(ctx, CreateInput{Type: "application_restart", Status: StatusCompleted}); err != nil {
+	if _, err := svc.Create(ctx, CreateInput{Type: "sample_restart", Status: StatusCompleted}); err != nil {
 		t.Fatal(err)
 	}
 	handler := NewHandler(svc)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?status=running&status=failed&type=application_deploy&type=package_refresh&includeInternal=true", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?status=running&status=failed&type=sample_task&type=package_refresh&includeInternal=true", nil)
 	rec := httptest.NewRecorder()
 
 	handler.List(rec, req)
@@ -180,7 +180,7 @@ func TestHandlerListParsesMultiValueFilters(t *testing.T) {
 		if task.Type == "package_refresh" && (!task.AllowRunNow || !task.AllowRetry) {
 			t.Fatalf("expected registered capabilities in task response: %#v", task)
 		}
-		if task.Type == "application_deploy" && (task.AllowRunNow || task.AllowRetry) {
+		if task.Type == "sample_task" && (task.AllowRunNow || task.AllowRetry) {
 			t.Fatalf("unexpected capabilities for unsupported test definition: %#v", task)
 		}
 	}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
+	"time"
 
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
@@ -33,7 +35,7 @@ func (m *Manager) Create(ctx context.Context, in CreateInput, trigger Trigger) (
 		}
 	}
 	in.ConcurrencyKey = ConcurrencyKeyFor(def, in)
-	if in.ConcurrencyKey != "" && def.ConcurrencyPolicy != ConcurrencyParallelAllowed {
+	if in.ConcurrencyKey != "" && def.ConcurrencyPolicy != ConcurrencyParallelAllowed && def.ConcurrencyPolicy != ConcurrencyResourceQueue {
 		if existing, ok, err := m.service.ExistingActiveByConcurrencyKey(ctx, in.ConcurrencyKey); err != nil {
 			return Task{}, false, err
 		} else if ok {
@@ -56,16 +58,7 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 		task, created, err := m.Create(ctx, inputs[0], trigger)
 		return task, nil, created, err
 	}
-	def, ok := m.service.Registry().Definition(inputs[0].Type)
-	if !ok {
-		return Task{}, nil, false, panelerr.Validation("task_type_unregistered", "Task type is not registered")
-	}
-	for _, in := range inputs[1:] {
-		if in.Type != inputs[0].Type {
-			return Task{}, nil, false, panelerr.Validation("task_batch_type_mismatch", "All batch task inputs must use the same task type")
-		}
-	}
-	inputs, existing, err := m.filterBatchInputs(ctx, def, inputs, trigger)
+	inputs, existing, err := m.filterBatchInputs(ctx, inputs, trigger)
 	if err != nil {
 		return Task{}, nil, false, err
 	}
@@ -73,8 +66,13 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 		return existing, nil, false, nil
 	}
 	if len(inputs) == 1 {
-		task, created, err := m.createAfterBeforeStart(ctx, def, inputs[0])
+		task, created, err := m.createAfterBeforeStart(ctx, inputs[0])
 		return task, nil, created, err
+	}
+	parentType := firstNonEmpty(batch.Type, inputs[0].Type)
+	def, ok := m.service.Registry().Definition(parentType)
+	if !ok {
+		return Task{}, nil, false, panelerr.Validation("task_type_unregistered", "Task type is not registered")
 	}
 	operationID := firstNonEmpty(batch.OperationID, inputs[0].OperationID, id.New("op"))
 	executionMode := batch.ExecutionMode
@@ -83,7 +81,7 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	}
 	parentInput := CreateInput{
 		OperationID:    operationID,
-		Type:           inputs[0].Type,
+		Type:           parentType,
 		ExecutionMode:  executionMode,
 		ResourceType:   "task_batch",
 		ResourceID:     operationID,
@@ -117,7 +115,6 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	}
 	children := make([]Task, 0, len(inputs))
 	for idx, childInput := range inputs {
-		childInput.Type = parent.Type
 		childInput.OperationID = operationID
 		childInput.ParentTaskID = parent.ID
 		childInput.ChildIndex = idx + 1
@@ -129,7 +126,11 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 		if childInput.TriggeredBy == "" {
 			childInput.TriggeredBy = parent.TriggeredBy
 		}
-		childInput.ConcurrencyKey = ConcurrencyKeyFor(def, childInput)
+		childDef, ok := m.service.Registry().Definition(childInput.Type)
+		if !ok {
+			return Task{}, nil, false, panelerr.Validation("task_type_unregistered", "Task type is not registered")
+		}
+		childInput.ConcurrencyKey = ConcurrencyKeyFor(childDef, childInput)
 		child, err := m.service.createTx(ctx, tx, childInput, true)
 		if err != nil {
 			return Task{}, nil, false, err
@@ -142,9 +143,13 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	return parent, children, true, nil
 }
 
-func (m *Manager) createAfterBeforeStart(ctx context.Context, def Definition, in CreateInput) (Task, bool, error) {
+func (m *Manager) createAfterBeforeStart(ctx context.Context, in CreateInput) (Task, bool, error) {
+	def, ok := m.service.Registry().Definition(in.Type)
+	if !ok {
+		return Task{}, false, panelerr.Validation("task_type_unregistered", "Task type is not registered")
+	}
 	in.ConcurrencyKey = ConcurrencyKeyFor(def, in)
-	if in.ConcurrencyKey != "" && def.ConcurrencyPolicy != ConcurrencyParallelAllowed {
+	if in.ConcurrencyKey != "" && def.ConcurrencyPolicy != ConcurrencyParallelAllowed && def.ConcurrencyPolicy != ConcurrencyResourceQueue {
 		if existing, ok, err := m.service.ExistingActiveByConcurrencyKey(ctx, in.ConcurrencyKey); err != nil {
 			return Task{}, false, err
 		} else if ok {
@@ -155,10 +160,14 @@ func (m *Manager) createAfterBeforeStart(ctx context.Context, def Definition, in
 	return task, true, err
 }
 
-func (m *Manager) filterBatchInputs(ctx context.Context, def Definition, inputs []CreateInput, trigger Trigger) ([]CreateInput, Task, error) {
+func (m *Manager) filterBatchInputs(ctx context.Context, inputs []CreateInput, trigger Trigger) ([]CreateInput, Task, error) {
 	out := make([]CreateInput, 0, len(inputs))
 	var firstExisting Task
 	for _, in := range inputs {
+		def, ok := m.service.Registry().Definition(in.Type)
+		if !ok {
+			return nil, Task{}, panelerr.Validation("task_type_unregistered", "Task type is not registered")
+		}
 		if def.BeforeStart != nil {
 			shouldRun, err := def.BeforeStart(ctx, in, trigger)
 			if err != nil {
@@ -169,7 +178,7 @@ func (m *Manager) filterBatchInputs(ctx context.Context, def Definition, inputs 
 			}
 		}
 		in.ConcurrencyKey = ConcurrencyKeyFor(def, in)
-		if in.ConcurrencyKey != "" && def.ConcurrencyPolicy != ConcurrencyParallelAllowed {
+		if in.ConcurrencyKey != "" && def.ConcurrencyPolicy != ConcurrencyParallelAllowed && def.ConcurrencyPolicy != ConcurrencyResourceQueue {
 			existing, ok, err := m.service.ExistingActiveByConcurrencyKey(ctx, in.ConcurrencyKey)
 			if err != nil {
 				return nil, Task{}, err
@@ -196,6 +205,11 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 	}
 	if def.Execute == nil {
 		return panelerr.Validation("task_executor_unregistered", "Task executor is not registered")
+	}
+	if def.ConcurrencyPolicy == ConcurrencyResourceQueue {
+		if err := m.waitForQueueTurn(ctx, task); err != nil {
+			return err
+		}
 	}
 	if m.service.HasRunningExecution(task.ID) {
 		return nil
@@ -249,6 +263,28 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 		summary = def.Summary
 	}
 	return m.service.Complete(ctx, task.ID, summary)
+}
+
+func (m *Manager) waitForQueueTurn(ctx context.Context, task Task) error {
+	if strings.TrimSpace(task.ConcurrencyKey) == "" {
+		return nil
+	}
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		first, ok, err := m.service.FirstActiveByConcurrencyKey(ctx, task.ConcurrencyKey)
+		if err != nil {
+			return err
+		}
+		if !ok || first.ID == task.ID {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (m *Manager) CreateAndRun(ctx context.Context, in CreateInput, trigger Trigger) (Task, bool, error) {

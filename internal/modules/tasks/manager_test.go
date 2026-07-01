@@ -38,6 +38,52 @@ func TestManagerResourceExclusiveReturnsActiveTask(t *testing.T) {
 	}
 }
 
+func TestManagerResourceQueueCreatesAndRunsInOrder(t *testing.T) {
+	svc := newTestService(t)
+	var mu sync.Mutex
+	ran := []string{}
+	svc.MustRegister(Definition{
+		Type:              "queued_task",
+		ConcurrencyPolicy: ConcurrencyResourceQueue,
+		Execute: func(tc TaskContext) error {
+			mu.Lock()
+			ran = append(ran, tc.Task.ResourceID)
+			mu.Unlock()
+			return nil
+		},
+	})
+	manager := NewManager(svc)
+	first, created, err := manager.Create(context.Background(), CreateInput{Type: "queued_task", ResourceType: "server", ResourceID: "srv_1"}, Trigger{Manual: true})
+	if err != nil || !created {
+		t.Fatalf("first create: task=%#v created=%v err=%v", first, created, err)
+	}
+	second, created, err := manager.Create(context.Background(), CreateInput{Type: "queued_task", ResourceType: "server", ResourceID: "srv_1"}, Trigger{Manual: true})
+	if err != nil || !created {
+		t.Fatalf("second create should queue: task=%#v created=%v err=%v", second, created, err)
+	}
+	if first.ID == second.ID {
+		t.Fatalf("queued task reused existing task: first=%s second=%s", first.ID, second.ID)
+	}
+	gotSecond, err := svc.Get(context.Background(), second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSecond.Status != StatusQueued {
+		t.Fatalf("second should be queued before first runs, got %#v", gotSecond)
+	}
+	if err := manager.Run(context.Background(), first); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Run(context.Background(), second); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !reflect.DeepEqual(ran, []string{"srv_1", "srv_1"}) {
+		t.Fatalf("unexpected run order %#v", ran)
+	}
+}
+
 func TestManagerTriggerPeriodicNowPassesPayloadToCollector(t *testing.T) {
 	svc := newTestService(t)
 	var gotPayload any
@@ -198,6 +244,49 @@ func TestManagerCreateBatchCreatesParentAndChildren(t *testing.T) {
 	defer mu.Unlock()
 	if len(ran) != 2 || ran[0] != "srv_1" || ran[1] != "srv_2" {
 		t.Fatalf("expected serial child execution, got %#v", ran)
+	}
+}
+
+func TestManagerCreateBatchAllowsMixedChildTypes(t *testing.T) {
+	svc := newTestService(t)
+	ran := []string{}
+	for _, taskType := range []string{"mixed_apply", "mixed_stop"} {
+		taskType := taskType
+		svc.MustRegister(Definition{
+			Type:              taskType,
+			ConcurrencyPolicy: ConcurrencyResourceQueue,
+			Execute: func(tc TaskContext) error {
+				ran = append(ran, tc.Task.Type+":"+tc.Task.ResourceID)
+				return nil
+			},
+		})
+	}
+	svc.MustRegister(Definition{
+		Type:              "mixed_batch",
+		ConcurrencyPolicy: ConcurrencyResourceExclusive,
+		Execute:           func(TaskContext) error { return nil },
+	})
+	manager := NewManager(svc)
+	parent, children, created, err := manager.CreateBatch(context.Background(), CreateBatchInput{
+		Type:          "mixed_batch",
+		OperationID:   "op_mixed",
+		ExecutionMode: ExecutionModeSerial,
+		Inputs: []CreateInput{
+			{Type: "mixed_apply", ResourceType: "application", ResourceID: "app_1", ServerID: "srv_1"},
+			{Type: "mixed_stop", ResourceType: "application", ResourceID: "app_1", ServerID: "srv_2"},
+		},
+	}, Trigger{Type: "scheduler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || parent.Type != "mixed_batch" || len(children) != 2 || children[0].Type != "mixed_apply" || children[1].Type != "mixed_stop" {
+		t.Fatalf("unexpected mixed batch: parent=%#v children=%#v created=%v", parent, children, created)
+	}
+	if err := manager.Run(context.Background(), parent); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ran, []string{"mixed_apply:app_1", "mixed_stop:app_1"}) {
+		t.Fatalf("mixed batch run order = %#v", ran)
 	}
 }
 

@@ -27,8 +27,8 @@ func newTestService(t *testing.T) *Service {
 	svc := NewService(store.TaskDB())
 	for _, def := range []Definition{
 		{Type: "test", ConcurrencyPolicy: ConcurrencyParallelAllowed},
-		{Type: "application_deploy", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
-		{Type: "application_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "sample_task", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "sample_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
 		{Type: "package_refresh", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "metrics_collect", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "server_connectivity_test", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
@@ -79,7 +79,7 @@ func TestTaskLifecycleAndLogs(t *testing.T) {
 
 func TestCreateCompletedTaskHasFinishedState(t *testing.T) {
 	svc := newTestService(t)
-	task, err := svc.Create(context.Background(), CreateInput{Type: "application_deploy", Status: StatusCompleted, Summary: "registered"})
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task", Status: StatusCompleted, Summary: "registered"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +126,7 @@ func TestListFiltersByStatusServerAndType(t *testing.T) {
 func TestListFiltersByMultipleStatusesAndTypes(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
-	runningApp, err := svc.Create(ctx, CreateInput{Type: "application_deploy", ServerID: "srv_1", Summary: "deploy"})
+	runningApp, err := svc.Create(ctx, CreateInput{Type: "sample_task", ServerID: "srv_1", Summary: "deploy"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,14 +137,14 @@ func TestListFiltersByMultipleStatusesAndTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	completedApp, err := svc.Create(ctx, CreateInput{Type: "application_restart", ServerID: "srv_1", Summary: "restart", Status: StatusCompleted})
+	completedApp, err := svc.Create(ctx, CreateInput{Type: "sample_restart", ServerID: "srv_1", Summary: "restart", Status: StatusCompleted})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	got, err := svc.List(ctx, ListFilter{
 		Statuses: []string{StatusRunning, StatusFailed},
-		Types:    []string{"application_deploy", "package_refresh"},
+		Types:    []string{"sample_task", "package_refresh"},
 		ServerID: "srv_1",
 		Limit:    50,
 	})
@@ -533,7 +533,7 @@ func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 	ctx := context.Background()
 	task, err := svc.Create(ctx, CreateInput{
 		OperationID:         "op_1",
-		Type:                "application_deploy",
+		Type:                "sample_task",
 		ServerID:            "srv_1",
 		NodeID:              "srv_1",
 		ResourceType:        "application",
