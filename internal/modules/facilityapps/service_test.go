@@ -14,6 +14,7 @@ import (
 	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/modules/certificates/proxycert"
 	server "panel/internal/modules/servers"
+	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 )
@@ -106,25 +107,25 @@ func TestProxySpecUsesBridgeNetworkWhenApplicationRouteTargetsContainer(t *testi
 	}
 }
 
-func TestDeployServerProxyPurgesExistingProxyContainer(t *testing.T) {
-	agent := &facilityTestAgent{}
-	svc, closeStore := newFacilityTestServiceWithAgent(t, agent)
+func TestRuntimeSpecUsesManagedProxyIdentity(t *testing.T) {
+	svc, closeStore := newFacilityTestServiceWithAgent(t, &facilityTestAgent{})
 	defer closeStore()
 
-	if err := svc.deployServerProxy(context.Background(), ReverseProxyConfig{
+	cfg := ReverseProxyConfig{
 		ID:                ReverseProxyID,
 		Image:             defaultProxyImage,
 		DeploymentServers: []string{"srv-edge"},
-	}, "srv-edge", nil, nil); err != nil {
+	}
+	if _, _, err := svc.ensureReverseProxyApplication(context.Background(), cfg); err != nil {
 		t.Fatal(err)
 	}
-
-	if len(agent.stops) != 1 {
-		t.Fatalf("stops = %#v", agent.stops)
+	app := applications.Application{ID: proxyApplicationID, Generation: 1, SpecHash: facilityConfigHash(cfg)}
+	spec, ok, err := svc.RuntimeSpecForServer(context.Background(), app, readyFacilityServer("srv-edge"))
+	if err != nil || !ok {
+		t.Fatalf("runtime spec ok=%v err=%v", ok, err)
 	}
-	stop := agent.stops[0]
-	if stop.ApplicationID != proxyApplicationID || stop.InstanceID != instanceID("srv-edge") || stop.ContainerName != proxyContainerName || !stop.Purge {
-		t.Fatalf("proxy stop request = %#v", stop)
+	if spec.ApplicationID != proxyApplicationID || spec.InstanceID != instanceID("srv-edge") || spec.ContainerName != proxyContainerName {
+		t.Fatalf("runtime identity = %#v", spec)
 	}
 }
 
@@ -319,9 +320,6 @@ func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
 	if !strings.Contains(cfg.LastError, "pull failed") {
 		t.Fatalf("last error = %q", cfg.LastError)
 	}
-	if cfg.Operation == nil || cfg.Operation.Status != applications.LifecycleStatusFailed {
-		t.Fatalf("operation = %#v", cfg.Operation)
-	}
 }
 
 func newFacilityTestService(t *testing.T, agentErr error) (*Service, func()) {
@@ -365,8 +363,22 @@ func newFacilityTestServiceWithAgent(t *testing.T, agent *facilityTestAgent) (*S
 			Traits:      traits,
 		},
 	}}
-	svc := NewService(store.AppDB(), agent, provider, nil)
+	reconciler := &facilityTestReconciler{err: agent.err}
+	svc := NewService(store.AppDB(), agent, provider, nil, WithApplicationReconcileTrigger(reconciler))
+	reconciler.svc = svc
 	return svc, func() { _ = store.Close() }
+}
+
+type facilityTestReconciler struct {
+	svc *Service
+	err error
+}
+
+func (r *facilityTestReconciler) TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error) {
+	if r.err != nil {
+		return tasks.Task{}, true, r.err
+	}
+	return tasks.Task{}, true, nil
 }
 
 type facilityTestServers struct {
@@ -387,6 +399,21 @@ func (p facilityTestServers) Get(_ context.Context, id string) (server.Server, e
 		return server.Server{}, errors.New("server not found")
 	}
 	return item, nil
+}
+
+func readyFacilityServer(id string) server.Server {
+	return server.Server{
+		ID:          id,
+		Name:        id,
+		Host:        "127.0.0.1",
+		Port:        22,
+		SSHUsername: "root",
+		DockerHost:  agentcontract.DefaultDockerHost,
+		Traits: map[string]string{
+			agentcontract.TraitURL:    "https://" + id + ".agent",
+			agentcontract.TraitStatus: agentcontract.StatusCompatible,
+		},
+	}
 }
 
 type facilityTestAgent struct {

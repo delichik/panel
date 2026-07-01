@@ -73,7 +73,7 @@
 ## 跨模块依赖
 
 - 服务器测试、重启、UFW、fail2ban、agent 部署和软件包维护依赖本模块记录任务；其中没有 executor 的一次性 worker 或记录型任务只保留任务记录，不暴露任务中心重试。fail2ban 的接管/应用和取消接管共用 `server_fail2ban_apply` 一次性 worker 任务，保存草稿不创建任务。
-- 应用部署、停止、重启、镜像检查和镜像更新依赖本模块记录任务；实际容器操作由应用服务调用 agent runtime API。
+- 应用同步、停止收敛、清理收敛、重启、镜像检查和镜像更新依赖本模块记录任务；保存、停用、删除等业务入口只写 desired state 并触发 `application_reconcile`，协调器产出目标级 `application_deploy` 任务，任务参数 `action=apply|stop|purge` 决定实际运行时动作。
 - 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；成功后会立即创建 `container_refresh`、`image_refresh` 或 `volume_refresh` 刷新任务。
 - 手动镜像刷新、Application 镜像升级和 Application 协调恢复仍依赖本模块记录任务；同服务器 Docker 写操作由容器化模块串行执行。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。

@@ -14,6 +14,9 @@ const (
 	TaskTypeImageCheck  = "application_image_check"
 	TaskTypeImageUpdate = "application_image_update"
 
+	ApplicationKindUser     = "application"
+	ApplicationKindFacility = "facility_application"
+
 	DeploymentModeAll      = "all"
 	DeploymentModeSelected = "selected"
 
@@ -39,8 +42,10 @@ const (
 
 type Application struct {
 	ID                   string              `json:"id"`
+	Kind                 string              `json:"kind"`
 	Name                 string              `json:"name"`
 	Enabled              bool                `json:"enabled"`
+	DeletionRequested    bool                `json:"deletionRequested,omitempty"`
 	SpecYAML             string              `json:"specYaml"`
 	Variables            map[string]string   `json:"variables"`
 	ResolvedVariables    map[string]any      `json:"resolvedVariables,omitempty"`
@@ -221,6 +226,10 @@ type OperationResult struct {
 	DeploymentID       string      `json:"deploymentId,omitempty"`
 	Application        Application `json:"application"`
 	ApplicationRuntime *Runtime    `json:"runtime,omitempty"`
+}
+
+type ReconcileTaskOptions struct {
+	Purge bool
 }
 
 type MigrationInput struct {

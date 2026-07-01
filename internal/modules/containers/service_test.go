@@ -530,6 +530,10 @@ func (f fakeApplicationUpdater) DeploymentTaskInputs(_ context.Context, appID st
 	return inputs, f.err
 }
 
+func (f fakeApplicationUpdater) DeploymentTaskInputsWithOptions(ctx context.Context, appID string, serverIDs []string, _ applications.ReconcileTaskOptions, summary, triggerType string) ([]tasks.CreateInput, error) {
+	return f.DeploymentTaskInputs(ctx, appID, serverIDs, summary, triggerType)
+}
+
 func (f fakeApplicationUpdater) StopTaskInputs(_ context.Context, appID string, serverIDs []string, purge bool, summary, triggerType string) ([]tasks.CreateInput, error) {
 	inputs := make([]tasks.CreateInput, 0, len(serverIDs))
 	for _, serverID := range serverIDs {

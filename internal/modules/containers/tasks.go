@@ -69,6 +69,7 @@ type ApplicationReconcileTrigger struct {
 	ApplicationIDs []string `json:"applicationIds"`
 	ServerIDs      []string `json:"serverIds"`
 	Force          bool     `json:"force"`
+	Purge          bool     `json:"purge"`
 	Reason         string   `json:"reason"`
 	StopServers    []string `json:"stopServers"`
 }
@@ -117,7 +118,7 @@ func (s *Service) CollectApplicationReconcileInputs(ctx context.Context, trigger
 		OperationID:   operationID,
 		TriggerType:   triggerType,
 		Summary:       "Monitoring application containers",
-		ExecutionMode: tasks.ExecutionModeParallel,
+		ExecutionMode: tasks.ExecutionModeSerial,
 		Inputs:        inputs,
 	}, true, nil
 }

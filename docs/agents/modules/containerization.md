@@ -29,7 +29,7 @@
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
-设施应用 API 挂在 `/api/v1/facility-apps/reverse-proxy`，支持读取、保存和手动 reconcile。保存反向代理设施应用会更新本地配置和隐藏应用期望状态，然后通过 task 框架立即触发 `application_reconcile` 周期任务协调 `facility-reverse-proxy`；实际重建当前部署服务器上的 `panel-facility-reverse-proxy` nginx 容器、停止从部署服务器列表移除的节点，均由协调任务异步执行。
+设施应用 API 挂在 `/api/v1/facility-apps/reverse-proxy`，支持读取、保存和手动同步。保存反向代理设施应用会更新本地配置和隐藏应用 desired state，然后通过 task 框架立即触发 `application_reconcile` 周期任务协调 `facility-reverse-proxy`；实际重建当前部署服务器上的 `panel-facility-reverse-proxy` nginx 容器、停止从部署服务器列表移除的节点，均由协调任务异步执行。
 
 ## 设施应用
 
@@ -62,12 +62,12 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - 普通容器、镜像、卷页面发起的写操作进入队列同步执行，不创建操作任务；API 在 Agent 操作完成或失败后返回。
 - 镜像拉取是长耗时操作，Panel 到 agent 以及 agent 到 Docker Engine 的 pull 请求超时均为 15 分钟；未显式写 tag 的镜像引用按 Docker CLI 语义拉取 `latest`，agent 调 Docker Engine API 时必须显式传递 `tag=latest`；其它 Docker 查询、容器动作和卷动作保持常规短超时。
 - Application 部署、停止、重启也共享同一服务器队列，但保留 Application 自身任务记录；Application 部署由 Panel 编排写文件、拉镜像、删旧容器、创建、启动和状态刷新等原子 agent/Docker 调用，不使用 agent 侧胖部署接口。
-- 设施应用保存和手动 reconcile 不直接同步执行远端 Docker 操作；它们通过 `TriggerPeriodicNow(application_reconcile)` 立即触发指定应用协调，目标应用为隐藏身份 `facility-reverse-proxy`。协调 collector 会为设施部署节点产出 `application_deploy` 输入，并为从部署服务器列表移除的节点产出同一 deploy handler 的 `action=stop` 输入；执行时仍共享同一服务器队列，并写入 `application_lifecycle_operations` / `application_lifecycle_targets` 作为设施应用部署记录。
+- 设施应用保存和手动同步不直接执行远端 Docker 操作；它们通过 `TriggerPeriodicNow(application_reconcile)` 立即触发指定应用协调，目标应用为隐藏身份 `facility-reverse-proxy`。协调 collector 会为设施部署节点产出 `application_deploy action=apply` 输入，并为从部署服务器列表移除的节点产出同一 deploy handler 的 `action=stop` 输入；执行时仍共享同一服务器队列，并写入 `application_lifecycle_operations` / `application_lifecycle_targets` 作为设施应用部署记录。设施模块只能提供配置校验和 runtime spec provider，不得在缺少协调器时 fallback 到直接 agent/Docker 部署。
 - 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
 - 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
 - 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
 - containers 模块注册的周期任务每 5 秒收集容器协调输入，由 tasks 内部 worker 驱动；5 秒只是采集频率，不是失败重试间隔。被动扫描只有已经观察到托管 Label 并写入 `application_reconcile_states` 的实例会持续协调；应用或设施配置变更等外部事件可以通过 `PeriodicTrigger` payload 指定 application ID 立即触发一次 `application_reconcile` collector，不依赖 Label 已被观察。
-- 监控发现容器缺失、停止或 generation/spec hash 偏差时，`application_reconcile` collector 只负责收集需要处理的应用与服务器，应用目标会被转换为对应 app/server 的 `application_deploy` 输入，部署 handler 只消费任务输入中的目标，不再接收外部过滤参数。显式触发的协调 payload 可传 `applicationIds`、`serverIds` 和 `force`：未强制时这些字段只限制观测范围；`force=true` 时直接为过滤后的目标产出部署输入。协调恢复必须通过应用服务生成目标级部署任务，并把部署错误回传给当前任务；自动协调只使用 `application_reconcile_states.reconcile_failures` 这一套连续失败计数器计算指数退避，并把等待时间写入 `reconcile_next_run_at`。任务自身不再维护另一套自动 retry 计数；未到 `reconcile_next_run_at` 或 collector 结果为空时不创建任务记录。连续 5 轮观测到该应用全部托管实例正常后，才清空失败计数和下次运行时间。不得调用手动部署入口异步再创建一组“用户部署”任务，否则会绕过退避并造成重复部署。
+- 监控发现容器缺失、停止或 generation/spec hash 偏差时，`application_reconcile` collector 只负责收集需要处理的应用与服务器，应用目标会被转换为对应 app/server 的 `application_deploy action=apply` 输入，部署 handler 只消费任务输入中的目标，不再接收外部过滤参数。显式触发的协调 payload 可传 `applicationIds`、`serverIds`、`force`、`stopServers` 和 `purge`：未强制时这些字段只限制观测范围；`force=true` 时直接根据 desired state 为过滤后的目标产出 `apply`、`stop` 或 `purge` 输入。协调恢复必须通过应用服务生成目标级部署任务，并把部署错误回传给当前任务；自动协调只使用 `application_reconcile_states.reconcile_failures` 这一套连续失败计数器计算指数退避，并把等待时间写入 `reconcile_next_run_at`。任务自身不再维护另一套自动 retry 计数；未到 `reconcile_next_run_at` 或 collector 结果为空时不创建任务记录。连续 5 轮观测到该应用全部托管实例正常后，才清空失败计数和下次运行时间。不得调用手动部署入口异步再创建一组“用户部署”任务，否则会绕过退避并造成重复部署。
 
 ## 镜像更新
 

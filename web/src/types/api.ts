@@ -601,8 +601,10 @@ export interface FacilityReverseProxyOperationDto {
 
 export interface ApplicationDto {
   id: string;
+  kind?: 'application' | 'facility_application' | string;
   name: string;
   enabled: boolean;
+  deletionRequested?: boolean;
   specYaml: string;
   variables: Record<string, string>;
   resolvedVariables?: Record<string, unknown>;

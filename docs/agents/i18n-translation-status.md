@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/apps/index.vue`、`web/src/views/applications/facility-apps/index.vue`、`internal/platform/i18n`
+  - 应用控制平面重构后的“同步 / 停用 / 立即同步 / 删除后由同步清理运行时资源”文案已接入英文与简体中文词条；新增后端错误码 `application_reconciler_unavailable` 已接入简体中文翻译。
 - `web/src/views/applications/apps/ApplicationEditor.vue`
   - 应用编辑器新增 Docker capability (`capAdd`) 可视化输入，字段标签、提示和添加按钮已接入英文与简体中文词条；保存值为 Docker capability 稳定标识，不翻译。
 - `web/src/views/tasks/index.vue`
@@ -115,14 +117,6 @@
 - 某个页面仍未翻译但继续被修改。
 - 新增后端错误码或用户可见错误文本。
 - 新增用户可见文案但暂未完成翻译。
-
-- `web/src/views/applications/facility-apps/index.vue`?`web/src/api/facilityApps.ts`
-
-- `web/src/views/applications/facility-apps/index.vue`?`web/src/api/facilityApps.ts`
-
-- `web/src/views/applications/facility-apps/index.vue`?`web/src/api/facilityApps.ts`
-
-- `web/src/views/applications/apps/ApplicationEditor.vue`?`web/src/views/applications/facility-apps/index.vue`
 
 - `web/src/views/settings/backups/index.vue`、`web/src/views/maintenance/backup.vue`、`internal/modules/backups`
   - 备份导出、还原确认和导出维护退出在容器内自重启时新增自动重启提示文案，已接入英文与简体中文词条；不新增独立 restart API。

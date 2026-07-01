@@ -80,8 +80,9 @@
 - 应用菜单组：
   - 应用：`web/src/views/applications/apps/index.vue`
   - 设施应用：`web/src/views/applications/facility-apps/index.vue`
-  - API：`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
+  - API：`web/src/api/applications.ts`、`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
   - 设施应用页面当前内置“反向代理”，通过部署服务器多选表示哪些节点开启反向代理能力；页面中大屏使用满高主从工作区，右侧详情内部滚动。
+- 应用页面操作语义跟随轻量控制平面：主操作“同步”表示保存/启用 desired state 后触发协调，不承诺当前请求内完成部署；“停用”只写 disabled desired state 并触发协调停止现有实例；删除会提交清理期望并由协调任务清理运行时资源。设施应用的手动操作显示为“立即同步”，不使用“协调”作为用户按钮文案。
 - Runtime 应用实现：
   - 应用运行时面板位于 `web/src/views/applications/apps/` 目录内，日志查看复用 `web/src/components/RuntimeLogsDialog.vue` 弹窗展示 agent runtime 实例或 Docker 容器日志。
   - 应用编辑器的反向代理规则为每条规则展示目的地选择，稳定值为 `local` 或 `container`；旧数据按 `local` 展示和保存。

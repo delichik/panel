@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -227,7 +226,7 @@ func (s *Service) triggerReverseProxyReconcile(ctx context.Context, triggerType 
 		return err
 	}
 	if s.reconciler == nil {
-		return s.reconcileReverseProxy(ctx, stopServers)
+		return panelerr.Validation("application_reconciler_unavailable", "Application reconciler is unavailable")
 	}
 	_, _, err = s.reconciler.TriggerApplicationReconcile(ctx, tasks.PeriodicTrigger{
 		Type:                firstNonEmpty(triggerType, "facility_app"),
@@ -245,158 +244,6 @@ func reverseProxyReconcilePayload(stopServers []string) map[string]any {
 		"reason":         "reverse_proxy_changed",
 		"stopServers":    uniqueSorted(stopServers),
 	}
-}
-
-func (s *Service) reconcileReverseProxy(ctx context.Context, stopServers []string) error {
-	cfg, err := s.loadConfig(ctx)
-	if err != nil {
-		return err
-	}
-	generation, cfgHash, err := s.ensureReverseProxyApplication(ctx, cfg)
-	if err != nil {
-		return err
-	}
-	operation, err := s.createLifecycleOperation(ctx, cfg, stopServers, generation, cfgHash)
-	if err != nil {
-		return err
-	}
-	failures := []string{}
-	for _, serverID := range stopServers {
-		targetID := lifecycleTargetID(operation.ID, serverID)
-		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusDeploying, Stage: "stop_container", Started: true})
-		if err := s.stopServerProxy(ctx, serverID); err != nil {
-			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusFailed, Stage: "stop_container", Error: err.Error(), Finished: true})
-			failures = append(failures, serverID+": "+err.Error())
-		} else {
-			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusRunning, Stage: "stop_container", Finished: true})
-		}
-	}
-	if len(cfg.DeploymentServers) == 0 {
-		if len(failures) > 0 {
-			err := errors.New(strings.Join(failures, "; "))
-			_ = s.finishLifecycleOperation(ctx, operation.ID, lifecycleStatusForFailures(len(stopServers), len(failures)), err)
-			return err
-		}
-		_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusDeployed, nil)
-		_ = s.setLastError(ctx, "")
-		return nil
-	}
-	routes, err := s.routesByServer(ctx, cfg.DeploymentServers)
-	if err != nil {
-		_ = s.failDeployTargets(ctx, operation.ID, cfg.DeploymentServers, "render", err)
-		_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusFailed, err)
-		return err
-	}
-	certificates, err := s.reverseProxyCertificates(ctx)
-	if err != nil {
-		_ = s.failDeployTargets(ctx, operation.ID, cfg.DeploymentServers, "render", err)
-		_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusFailed, err)
-		return err
-	}
-	for _, serverID := range cfg.DeploymentServers {
-		targetID := lifecycleTargetID(operation.ID, serverID)
-		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusPreparing, Stage: "validate_agent", Started: true})
-		if err := s.deployServerProxy(ctx, cfg, serverID, routes[serverID], certificates); err != nil {
-			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusFailed, Stage: "deploy_proxy", Error: err.Error(), Finished: true})
-			failures = append(failures, serverID+": "+err.Error())
-		} else {
-			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: applications.LifecycleTargetStatusRunning, Stage: "deploy_proxy", InstanceID: instanceID(serverID), ContainerName: proxyContainerName, Finished: true})
-		}
-	}
-	if len(failures) > 0 {
-		err := errors.New(strings.Join(failures, "; "))
-		_ = s.finishLifecycleOperation(ctx, operation.ID, lifecycleStatusForFailures(len(cfg.DeploymentServers)+len(stopServers), len(failures)), err)
-		return err
-	}
-	_ = s.finishLifecycleOperation(ctx, operation.ID, applications.LifecycleStatusDeployed, nil)
-	return s.setLastError(ctx, "")
-}
-
-func (s *Service) stopServerProxy(ctx context.Context, serverID string) error {
-	srv, baseURL, err := s.readyServer(ctx, serverID)
-	if err != nil {
-		return err
-	}
-	run := func(runCtx context.Context) error {
-		_, err := s.agent.RuntimeStop(runCtx, baseURL, agentcontract.RuntimeStopRequest{
-			ApplicationID: proxyApplicationID,
-			InstanceID:    instanceID(serverID),
-			ContainerName: proxyContainerName,
-		})
-		if err != nil {
-			_ = s.handleAgentError(runCtx, srv, err)
-		}
-		return err
-	}
-	if s.queue != nil {
-		return s.queue.Execute(ctx, serverID, run)
-	}
-	return run(ctx)
-}
-
-func (s *Service) deployServerProxy(ctx context.Context, cfg ReverseProxyConfig, serverID string, routes []applications.ApplicationReverseProxyConfig, certificates []proxycert.Certificate) error {
-	srv, baseURL, err := s.readyServer(ctx, serverID)
-	if err != nil {
-		return err
-	}
-	spec, err := s.proxySpec(ctx, serverID, cfg, routes, certificates)
-	if err != nil {
-		return err
-	}
-	run := func(runCtx context.Context) error {
-		if err := s.agent.DockerImagePull(runCtx, baseURL, cfg.Image); err != nil {
-			_ = s.handleAgentError(runCtx, srv, err)
-			return err
-		}
-		_, _ = s.agent.RuntimeStop(runCtx, baseURL, agentcontract.RuntimeStopRequest{
-			ApplicationID: proxyApplicationID,
-			InstanceID:    instanceID(serverID),
-			ContainerName: proxyContainerName,
-			Purge:         true,
-		})
-		if err := s.agent.RuntimeWriteFiles(runCtx, baseURL, agentcontract.RuntimeWriteFilesRequest{Spec: spec}); err != nil {
-			_ = s.handleAgentError(runCtx, srv, err)
-			return err
-		}
-		if _, err := s.agent.RuntimeCreateContainer(runCtx, baseURL, agentcontract.RuntimeCreateContainerRequest{ServerID: serverID, Spec: spec}); err != nil {
-			_ = s.handleAgentError(runCtx, srv, err)
-			return err
-		}
-		if err := s.agent.DockerContainerAction(runCtx, baseURL, proxyContainerName, "start"); err != nil {
-			_ = s.handleAgentError(runCtx, srv, err)
-			return err
-		}
-		return nil
-	}
-	if s.queue != nil {
-		return s.queue.Execute(ctx, serverID, run)
-	}
-	return run(ctx)
-}
-
-func (s *Service) readyServer(ctx context.Context, serverID string) (server.Server, string, error) {
-	if s.servers == nil {
-		return server.Server{}, "", panelerr.Validation("server_provider_unavailable", "Server provider is unavailable")
-	}
-	srv, err := s.servers.Get(ctx, serverID)
-	if err != nil {
-		return server.Server{}, "", err
-	}
-	baseURL := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
-	if baseURL == "" {
-		return server.Server{}, "", panelerr.Validation("agent_required", "Agent is required for facility applications")
-	}
-	if srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
-		return server.Server{}, "", panelerr.Validation("agent_incompatible", "Agent is not compatible with facility applications")
-	}
-	return srv, baseURL, nil
-}
-
-func (s *Service) handleAgentError(ctx context.Context, srv server.Server, err error) bool {
-	if s.agentErrors == nil {
-		return false
-	}
-	return s.agentErrors.HandleAgentError(ctx, srv, err)
 }
 
 func (s *Service) routeCount(ctx context.Context, serverIDs []string) int {
@@ -947,9 +794,9 @@ func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg Reverse
 	if err == sql.ErrNoRows {
 		deploymentServers, _ := json.Marshal(cfg.DeploymentServers)
 		reverseProxy, _ := json.Marshal([]applications.ReverseProxyRule{})
-		_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			proxyApplicationID, "__panel_facility_reverse_proxy__", boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), "{}", "{}", applications.DeploymentModeSelected, string(deploymentServers), string(reverseProxy), 1, cfgHash, cfg.Image, "", "", nil, 0, "", proxyApplicationID, "facility", "", "", cfg.LastError, formatTime(now), formatTime(now))
+		_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			proxyApplicationID, applications.ApplicationKindFacility, "__panel_facility_reverse_proxy__", boolInt(len(cfg.DeploymentServers) > 0), 0, facilitySpecYAML(cfg), "{}", "{}", applications.DeploymentModeSelected, string(deploymentServers), string(reverseProxy), 1, cfgHash, cfg.Image, "", "", nil, 0, "", proxyApplicationID, "facility", "", "", cfg.LastError, formatTime(now), formatTime(now))
 		return 1, cfgHash, err
 	}
 	if err != nil {
@@ -959,8 +806,8 @@ func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg Reverse
 		generation += 1
 	}
 	deploymentServers, _ := json.Marshal(cfg.DeploymentServers)
-	_, err = s.db.ExecContext(ctx, `UPDATE applications SET enabled=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,last_error=?,updated_at=? WHERE id=?`,
-		boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), applications.DeploymentModeSelected, string(deploymentServers), generation, cfgHash, cfg.Image, cfg.LastError, formatTime(now), proxyApplicationID)
+	_, err = s.db.ExecContext(ctx, `UPDATE applications SET kind=?,enabled=?,deletion_requested=0,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,last_error=?,updated_at=? WHERE id=?`,
+		applications.ApplicationKindFacility, boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), applications.DeploymentModeSelected, string(deploymentServers), generation, cfgHash, cfg.Image, cfg.LastError, formatTime(now), proxyApplicationID)
 	if err != nil {
 		return 0, "", err
 	}

@@ -34,8 +34,8 @@ const {
 } = usePagination(applications);
 
 function actionLabel(action: 'deploy' | 'stop' | 'restart' | 'delete') {
-  if (action === 'deploy') return t('common.deploy');
-  if (action === 'stop') return t('common.stop');
+  if (action === 'deploy') return t('applicationsPage.sync');
+  if (action === 'stop') return t('applicationsPage.disable');
   if (action === 'restart') return t('common.restart');
   return t('common.delete');
 }
@@ -120,7 +120,7 @@ async function runAction(action: 'deploy' | 'stop' | 'restart' | 'delete', app: 
     if (action === 'delete') {
       await applicationsApi.delete(app.id);
       lastTaskId.value = '';
-      message.value = t('applicationsPage.deleted', { name: app.name });
+      message.value = t('applicationsPage.deleteRequested', { name: app.name });
       deleteDialog.value = false;
       deletingApplication.value = null;
     } else {
@@ -192,8 +192,8 @@ onMounted(load);
         <ApplicationDetail v-if="selectedApplication" :application="selectedApplication" @changed="replaceApplication">
           <template #actions>
             <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="editApplication(selectedApplication)">{{ t('common.edit') }}</v-btn>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-upload" :loading="actionLoading === `deploy:${selectedApplication.id}`" @click="runAction('deploy', selectedApplication)">{{ t('common.deploy') }}</v-btn>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-stop-circle-outline" :disabled="!selectedApplication.enabled" :loading="actionLoading === `stop:${selectedApplication.id}`" @click="runAction('stop', selectedApplication)">{{ t('common.stop') }}</v-btn>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-sync" :loading="actionLoading === `deploy:${selectedApplication.id}`" @click="runAction('deploy', selectedApplication)">{{ t('applicationsPage.sync') }}</v-btn>
+            <v-btn size="small" variant="outlined" prepend-icon="mdi-stop-circle-outline" :disabled="!selectedApplication.enabled" :loading="actionLoading === `stop:${selectedApplication.id}`" @click="runAction('stop', selectedApplication)">{{ t('applicationsPage.disable') }}</v-btn>
             <v-btn size="small" variant="outlined" prepend-icon="mdi-restart" :disabled="!selectedApplication.enabled" :loading="actionLoading === `restart:${selectedApplication.id}`" @click="runAction('restart', selectedApplication)">{{ t('common.restart') }}</v-btn>
           </template>
           <template #more-actions>
@@ -201,7 +201,6 @@ onMounted(load);
               prepend-icon="mdi-delete"
               :title="t('common.delete')"
               class="text-error"
-              :disabled="selectedApplication.enabled"
               @click="askDelete(selectedApplication)"
             />
           </template>

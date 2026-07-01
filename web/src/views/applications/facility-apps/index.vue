@@ -234,11 +234,11 @@ async function reconcile() {
   try {
     const result = await facilityAppsApi.reconcileReverseProxy();
     applyConfig(result.config);
-    message.value = t('facilityAppsPage.reconciled');
+    message.value = t('facilityAppsPage.syncRequested');
     snackbar.value = true;
     error.value = '';
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('facilityAppsPage.reconcileFailed');
+    error.value = err instanceof Error ? err.message : t('facilityAppsPage.syncFailed');
   } finally {
     reconciling.value = false;
   }
@@ -361,7 +361,7 @@ onMounted(load);
           </div>
           <div class="facility-actions">
             <v-btn size="small" variant="outlined" prepend-icon="mdi-refresh" :loading="reconciling" @click="reconcile">
-              {{ t('facilityAppsPage.reconcile') }}
+              {{ t('facilityAppsPage.syncNow') }}
             </v-btn>
             <v-btn size="small" color="primary" variant="flat" prepend-icon="mdi-content-save" :loading="saving" @click="save">
               {{ t('common.save') }}

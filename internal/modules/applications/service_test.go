@@ -650,12 +650,19 @@ func TestStopAppCallsRuntimeAndDisablesApp(t *testing.T) {
 			t.Fatalf("stop should remove container without purging files: %#v", req)
 		}
 	}
-	result, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeStop, Limit: 1})
+	result, err := svc.tasks.List(ctx, tasks.ListFilter{Type: TaskTypeDeploy, Limit: 10})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 1 || result.Items[0].ParamsJSON != "{}" {
-		t.Fatalf("expected stop task to preserve default purge params, got %#v", result.Items)
+	foundStop := false
+	for _, item := range result.Items {
+		if strings.Contains(item.ParamsJSON, `"action":"stop"`) && !strings.Contains(item.ParamsJSON, `"purge":true`) {
+			foundStop = true
+			break
+		}
+	}
+	if !foundStop {
+		t.Fatalf("expected deploy task with stop action, got %#v", result.Items)
 	}
 }
 
@@ -853,12 +860,25 @@ func TestRuntimeShowsSelectedTargetThatFailsBeforeInstanceDeploy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := svc.Deploy(ctx, app.ID)
-	if err != nil {
+	if _, err := svc.Deploy(ctx, app.ID); err != nil {
 		t.Fatal(err)
 	}
-	waitApplicationTaskStatus(t, svc.tasks, result.TaskID, tasks.StatusFailed)
-	runtime, err := svc.Runtime(ctx, app.ID)
+	var runtime Runtime
+	for i := 0; i < 20; i++ {
+		runtime, err = svc.Runtime(ctx, app.ID)
+		if err == nil && len(runtime.Instances) == 3 {
+			for _, instance := range runtime.Instances {
+				if instance.ServerID == "srv-c" && instance.Status == appruntime.StatusFailed {
+					goto runtimeReady
+				}
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+runtimeReady:
+	if len(runtime.Instances) == 0 {
+		runtime, err = svc.Runtime(ctx, app.ID)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1348,7 +1368,109 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 	})
 	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
+	svc.SetApplicationReconcileTrigger(&fakeApplicationReconcileTrigger{svc: svc, tasks: taskSvc})
 	return svc, runtime, servers, func() { _ = store.Close() }
+}
+
+type fakeApplicationReconcileTrigger struct {
+	svc   *Service
+	tasks *tasks.Service
+}
+
+func (f *fakeApplicationReconcileTrigger) TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error) {
+	payload := map[string]any{}
+	if raw, ok := trigger.Payload.(map[string]any); ok {
+		payload = raw
+	}
+	appIDs := stringSlicePayload(payload["applicationIds"])
+	if len(appIDs) == 0 && strings.TrimSpace(trigger.TriggerResourceID) != "" {
+		appIDs = []string{strings.TrimSpace(trigger.TriggerResourceID)}
+	}
+	purge, _ := payload["purge"].(bool)
+	stopServers := stringSlicePayload(payload["stopServers"])
+	inputs := []tasks.CreateInput{}
+	for _, appID := range appIDs {
+		deployInputs, err := f.svc.DeploymentTaskInputs(ctx, appID, nil, "Reconciling application "+appID, firstNonEmpty(trigger.Type, "test"))
+		if err != nil {
+			return tasks.Task{}, false, err
+		}
+		inputs = append(inputs, deployInputs...)
+		if len(stopServers) > 0 {
+			stopInputs, err := f.svc.StopTaskInputs(ctx, appID, stopServers, purge, "Stopping application "+appID, firstNonEmpty(trigger.Type, "test"))
+			if err != nil {
+				return tasks.Task{}, false, err
+			}
+			inputs = append(inputs, stopInputs...)
+		}
+	}
+	if len(inputs) == 0 {
+		return tasks.Task{}, false, nil
+	}
+	manager := tasks.NewManager(f.tasks)
+	if trigger.Type == "application_deploy" {
+		batch := tasks.CreateBatchInput{
+			Type:          inputs[0].Type,
+			OperationID:   "test-reconcile",
+			TriggerType:   firstNonEmpty(trigger.Type, "test"),
+			Summary:       "Reconciling application",
+			ExecutionMode: tasks.ExecutionModeSerial,
+			Inputs:        inputs,
+		}
+		parent, _, created, err := manager.CreateBatch(ctx, batch, tasks.Trigger{Type: firstNonEmpty(trigger.Type, "test"), Manual: trigger.Manual})
+		if err != nil || !created {
+			return parent, created, err
+		}
+		go func(task tasks.Task) {
+			defer f.tasks.FinishExecution(task.ID)
+			_ = manager.Run(context.Background(), task)
+		}(parent)
+		return parent, true, nil
+	}
+	var first tasks.Task
+	createdAny := false
+	for i, input := range inputs {
+		if strings.TrimSpace(input.OperationID) == "" {
+			input.OperationID = "test-reconcile"
+		}
+		task, created, err := manager.Create(ctx, input, tasks.Trigger{Type: firstNonEmpty(trigger.Type, "test"), Manual: trigger.Manual})
+		if i == 0 {
+			first = task
+		}
+		if err != nil || !created {
+			return first, createdAny, err
+		}
+		createdAny = true
+		if err := manager.Run(ctx, task); err != nil {
+			return first, true, err
+		}
+		var params deployTaskParams
+		if strings.TrimSpace(input.ParamsJSON) != "" {
+			_ = json.Unmarshal([]byte(input.ParamsJSON), &params)
+		}
+		if strings.TrimSpace(params.LifecycleOperationID) != "" {
+			if err := f.svc.deploymentOperationError(ctx, params.LifecycleOperationID); err != nil {
+				return first, true, err
+			}
+		}
+	}
+	return first, createdAny, nil
+}
+
+func stringSlicePayload(value any) []string {
+	switch items := value.(type) {
+	case []string:
+		return items
+	case []any:
+		out := []string{}
+		for _, item := range items {
+			if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+				out = append(out, strings.TrimSpace(text))
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func (s *Service) SetBuiltinVariableResolver(resolver BuiltinVariableResolver) {

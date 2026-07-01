@@ -100,8 +100,10 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS applications (
 			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL DEFAULT 'application',
 			name TEXT NOT NULL,
 			enabled INTEGER NOT NULL DEFAULT 0,
+			deletion_requested INTEGER NOT NULL DEFAULT 0,
 			spec_yaml TEXT NOT NULL,
 			variables_json TEXT NOT NULL DEFAULT '{}',
 			resolved_variables_json TEXT NOT NULL DEFAULT '{}',
@@ -416,6 +418,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "applications", map[string]string{
+		"kind":                       "TEXT NOT NULL DEFAULT 'application'",
+		"deletion_requested":         "INTEGER NOT NULL DEFAULT 0",
 		"resolved_variables_json":    "TEXT NOT NULL DEFAULT '{}'",
 		"deployment_mode":            "TEXT NOT NULL DEFAULT 'all'",
 		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",

@@ -68,7 +68,12 @@ type ApplicationUpdater interface {
 	UpdateImage(context.Context, string) (applications.OperationResult, error)
 	Deploy(context.Context, string) (applications.OperationResult, error)
 	DeploymentTaskInputs(context.Context, string, []string, string, string) ([]tasks.CreateInput, error)
+	DeploymentTaskInputsWithOptions(context.Context, string, []string, applications.ReconcileTaskOptions, string, string) ([]tasks.CreateInput, error)
 	StopTaskInputs(context.Context, string, []string, bool, string, string) ([]tasks.CreateInput, error)
+}
+
+type ApplicationReconcileLister interface {
+	ListForReconcile(context.Context) ([]applications.Application, error)
 }
 
 type Container struct {
@@ -578,7 +583,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 	if err != nil {
 		return nil, err
 	}
-	apps, err := s.apps.List(ctx)
+	apps, err := s.listApplicationsForReconcile(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -678,8 +683,15 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 	return inputs, nil
 }
 
+func (s *Service) listApplicationsForReconcile(ctx context.Context) ([]applications.Application, error) {
+	if lister, ok := s.apps.(ApplicationReconcileLister); ok {
+		return lister.ListForReconcile(ctx)
+	}
+	return s.apps.List(ctx)
+}
+
 func (payload ApplicationReconcileTrigger) requiresExplicitTasks() bool {
-	if payload.Force || len(payload.StopServers) > 0 {
+	if payload.Force || payload.Purge || len(payload.StopServers) > 0 {
 		return true
 	}
 	for _, appID := range payload.ApplicationIDs {
@@ -706,7 +718,7 @@ func (s *Service) explicitApplicationReconcileTasks(ctx context.Context, operati
 	}
 	inputs := make([]tasks.CreateInput, 0, len(appIDs))
 	for _, appID := range appIDs {
-		deployInputs, err := s.apps.DeploymentTaskInputs(ctx, appID, payload.ServerIDs, "Reconciling application "+appID, triggerType)
+		deployInputs, err := s.apps.DeploymentTaskInputsWithOptions(ctx, appID, payload.ServerIDs, applications.ReconcileTaskOptions{Purge: payload.Purge}, "Reconciling application "+appID, triggerType)
 		if err != nil {
 			return inputs, err
 		}
@@ -717,8 +729,8 @@ func (s *Service) explicitApplicationReconcileTasks(ctx context.Context, operati
 			input.TriggerResourceID = trigger.TriggerResourceID
 			inputs = append(inputs, input)
 		}
-		if appID == applications.FacilityReverseProxyApplicationID && len(payload.StopServers) > 0 {
-			stopInputs, err := s.apps.StopTaskInputs(ctx, appID, payload.StopServers, true, "Stopping application "+appID, triggerType)
+		if len(payload.StopServers) > 0 {
+			stopInputs, err := s.apps.StopTaskInputs(ctx, appID, payload.StopServers, payload.Purge, "Stopping application "+appID, triggerType)
 			if err != nil {
 				return inputs, err
 			}
