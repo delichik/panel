@@ -954,6 +954,90 @@ runtimeReady:
 	}
 }
 
+func TestReconcileInterruptedLifecycleTasksMarksDeployingTargetFailed(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := appruntime.Spec{
+		ApplicationID: app.ID,
+		InstanceID:    app.ID + "-srv-a",
+		ContainerName: "panel-web",
+		Generation:    app.Generation,
+		SpecHash:      app.SpecHash,
+	}
+	operation, err := svc.createLifecycleOperationForServerIDs(ctx, app, spec, "", LifecycleTypeDeploy, []string{"srv-a"}, appruntime.DesiredRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetID := lifecycleTargetID(operation.ID, "srv-a")
+	if err := svc.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{
+		Status:        LifecycleTargetStatusDeploying,
+		Stage:         "start_container",
+		InstanceID:    spec.InstanceID,
+		ContainerName: spec.ContainerName,
+		ContainerID:   "container-srv-a",
+		Started:       true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.upsertRuntimeInstance(ctx, app.ID, "srv-a", spec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	params, _ := json.Marshal(deployTaskParams{
+		AppID:                app.ID,
+		ServerID:             "srv-a",
+		LifecycleOperationID: operation.ID,
+		Action:               "apply",
+	})
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeTargetApply,
+		ServerID:     "srv-a",
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		ParamsJSON:   string(params),
+		Status:       tasks.StatusRunning,
+		Summary:      "Syncing application web",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	interrupted := errors.New("Task was marked running but no active execution exists in this Panel process")
+	if err := svc.tasks.Fail(ctx, task.ID, interrupted); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.ReconcileInterruptedLifecycleTasks(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	targets, err := svc.lifecycleTargets(ctx, operation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Status != LifecycleTargetStatusFailed || !strings.Contains(targets[0].Error, interrupted.Error()) || targets[0].FinishedAt == nil {
+		t.Fatalf("target = %#v", targets)
+	}
+	finished, err := svc.latestLifecycleOperation(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if finished.Status != LifecycleStatusFailed || !strings.Contains(finished.Error, interrupted.Error()) {
+		t.Fatalf("operation = %#v", finished)
+	}
+	instances, err := svc.runtimeInstances(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(instances) != 1 || instances[0].Status != appruntime.StatusFailed || !strings.Contains(instances[0].LastError, interrupted.Error()) {
+		t.Fatalf("instances = %#v", instances)
+	}
+}
+
 func TestListWithRuntimeUsesCachedRuntimeStatus(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

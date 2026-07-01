@@ -66,6 +66,7 @@
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
 - 启用、停用、部署同步、删除和镜像更新等流程先校验并保存 desired state，再通过 task 框架立即触发 `application_reconcile` 指定该应用；编辑器“保存并应用”只提交保存会话，启用应用由保存接口触发协调，不得在前端保存成功后额外调用 `/deploy`。编辑器保存期间必须用覆盖当前弹窗的阻塞进度遮罩展示保存会话、旧文件删除、文件上传、压缩包上传和提交保存等阶段，并禁止关闭弹窗。协调 collector 负责比较期望状态与运行状态，并产出可见批次父任务 `application_target_batch` 与私有单目标任务：`application_target_apply` 创建/重建目标容器，`application_target_stop` 停止并保留数据，`application_target_purge` 清理运行数据。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标同步中单台服务器失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；容器 start 后 inspect 结果必须为 running，否则视为该目标失败并保留容器退出/运行时诊断，不能把启动后立刻退出的容器标记为成功；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
 - 多目标应用同步必须按任务系统“操作 + 任务”语义建模：一次协调请求是一个操作，每个目标服务器是该操作下的一个私有目标任务，任务参数或资源字段必须能定位到对应服务器和应用。创建启用应用、更新启用应用、手动同步、迁移、变量刷新、持久化数据恢复后的重同步和系统触发的启用应用重同步，都必须通过协调器创建目标任务；HTTP、普通业务服务和前端不得直接创建或运行 `application_target_*`。`application_lifecycle_operations` / `application_lifecycle_targets` 继续保存运行时领域状态和前端运行实例视图，但不得作为任务中心中目标级执行对象的替代品。
+- 目标任务失败、取消或 Panel 重启后被任务系统标记为 orphan failed 时，应用模块必须把对应 `application_lifecycle_targets` 从 pending/preparing/deploying 收敛为 failed，并聚合更新 lifecycle operation；apply 任务中断留下的 deploying 实例缓存也要标记为 failed，避免运行时视图永久显示部署中。
 - 应用同步的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
 - 应用同步流程必须先创建 lifecycle operation 和全部目标 target，再逐台执行 `validate_agent`、`render`、`write_files`、`pull_image`、`remove_*_container`、`create_container`、`start_container`、`inspect` 等阶段；每阶段失败都更新对应 target，成功实例继续保留，部分失败时 operation 状态为 `partially_deployed`。
 - 应用 deploy/stop/restart/logs/runtime status 等依赖 agent 的远端调用只在目标服务器存在 `agent.url` 且 `agent.status=compatible` 时执行；agent 未部署、异常、不兼容或无法部署时不得发起 agent runtime 调用，也不得回退 SSH。部署类 lifecycle operation 仍必须为选中目标记录 failed target，避免配置目标在运行时视图中消失；运行时状态刷新遇到 agent 未就绪时只返回数据库中的已知状态，不发起远端调用。
@@ -73,7 +74,7 @@
 - Application 容器使用 `panel.application.*` Label 标识；设施应用的反向代理 nginx 容器也复用 runtime 原子能力创建，但其配置来源和生命周期归 `internal/modules/facilityapps` 管理。
 - Application 容器创建时不得向 Docker Engine 下发 `RestartPolicy`；appspec 默认 `restart.policy=no`，应用编辑器不再主动输出 `restart` 块，容器长期重启、停止和重部署只由 Panel 的任务、协调和生命周期流程管理。
 - Application 部署、停止、重启和镜像更新后的容器重建与普通容器操作共享目标服务器的单队列。
-- containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时，由 `application_reconcile` collector 创建对应 app/server 的 `application_target_apply` 输入，目标 handler 不再重新决定目标。显式协调 payload 支持按 `applicationIds`、`serverIds` 过滤；默认同步只为未满足 desired state 的目标产出输入，已经 running 且 generation/spec hash 匹配的成功节点不得因为其他节点失败而重复部署；只有 `force=true` 的系统级重部署才跳过该过滤并重建过滤范围内的全部目标。设施应用可以通过应用模块的 facility runtime provider 提供每台服务器的 runtime spec；目标拆分、lifecycle、队列和 agent 原子部署步骤仍复用应用目标任务。collector 收集为空时不创建任务记录。同一应用连续协调失败后必须按应用级指数退避设置下一次运行时间，退避状态保存在 `application_reconcile_states`，自动协调和非手动显式协调都必须尊重 `reconcile_next_run_at`；连续 5 轮观测到该应用全部托管实例正常后，才清空协调失败计数。
+- containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时，由 `application_reconcile` collector 创建对应 app/server 的 `application_target_apply` 输入，目标 handler 不再重新决定目标。显式协调 payload 支持按 `applicationIds`、`serverIds` 过滤；默认同步只为未满足 desired state 的目标产出输入，已经 running 且 generation/spec hash 匹配的成功节点不得因为其他节点失败而重复部署；配置保存、停用、删除、设施应用保存和系统级重部署等 desired state 变更必须使用 `force=true` 绕过退避并重建过滤范围内的全部目标。设施应用可以通过应用模块的 facility runtime provider 提供每台服务器的 runtime spec；目标拆分、lifecycle、队列和 agent 原子部署步骤仍复用应用目标任务。collector 收集为空时不创建任务记录。同一应用连续协调失败后必须按应用级指数退避设置下一次运行时间，退避状态保存在 `application_reconcile_states`，自动协调和非强制显式协调必须尊重 `reconcile_next_run_at`；连续 5 轮观测到该应用全部托管实例正常后，才清空协调失败计数。
 - 应用目标任务在任务中心展示为“应用目标应用 / 停止 / 清理”，表示 Panel 已完成一次目标收敛请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用列表接口使用数据库中已缓存的运行时实例状态，并合并最近 lifecycle operation targets 后聚合为 `runtimeStatus`；不得为了左侧列表摘要逐应用、逐节点调用远端 Agent 刷新容器状态。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。左侧 `AppSelectorPanel` 只展示应用名称、运行状态和更新时间，jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在右侧详情。运行中的应用存在镜像更新时，选择器状态 Chip 使用 warning 色并显示“运行中 · 有更新”，其他运行状态保持原有展示。
 - 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；编辑、部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
@@ -90,7 +91,7 @@
 - 应用内置变量同样通过应用侧变量 registry 注册，来源模块按根 key 注册变量集合；当前证书模块注册 `certs`，模板仍通过 `.certs.<variable>` 读取。
 - 私钥内容不通过目录 API 返回，只在部署渲染时由后端解密并作为只读 managed file 下发给 agent。
 - 密钥资产服务扫描应用 spec 和反向代理域名，返回精确的应用 ID、名称及 `panel_file` / `reverse_proxy` 引用，用于删除保护和导入覆盖确认。
-- 证书续签、密钥资产重新签发、SSH 密钥重新生成和批量导入会调用 `RedeployEnabledApplications`，确保每台服务器重新按自身变量渲染。
+- 证书续签、密钥资产重新签发、SSH 密钥重新生成和批量导入会调用应用重部署/刷新，并独立触发设施反向代理协调；普通应用刷新失败不能阻断入口网关证书更新尝试。
 
 ## Application Editor Command Fields
 

@@ -23,6 +23,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
 			ConcurrencyKey:    applicationTargetConcurrencyKey,
 			Execute:           s.RunDeployTask,
+			OnFailure:         s.handleTargetTaskFailure,
 		},
 		{
 			Type:              TaskTypeTargetStop,
@@ -30,6 +31,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
 			ConcurrencyKey:    applicationTargetConcurrencyKey,
 			Execute:           s.RunDeployTask,
+			OnFailure:         s.handleTargetTaskFailure,
 		},
 		{
 			Type:              TaskTypeTargetPurge,
@@ -37,6 +39,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
 			ConcurrencyKey:    applicationTargetConcurrencyKey,
 			Execute:           s.RunDeployTask,
+			OnFailure:         s.handleTargetTaskFailure,
 		},
 		{
 			Type:              TaskTypeStop,

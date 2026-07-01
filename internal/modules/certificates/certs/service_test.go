@@ -297,6 +297,21 @@ func TestRenewFailureRecordsLastErrorAndTask(t *testing.T) {
 	}
 }
 
+func TestRefreshApplicationsAttemptsReverseProxyWhenApplicationRedeployFails(t *testing.T) {
+	svc, _, closeStore := newTestService(t)
+	defer closeStore()
+	refresher := &fakeApplicationRefresher{redeployChangedErr: errors.New("application refresh failed")}
+	svc.applications = refresher
+
+	err := svc.refreshApplications(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "application refresh failed") {
+		t.Fatalf("refresh error = %v", err)
+	}
+	if refresher.redeployChangedCalls != 1 || refresher.reconcileReverseProxyCalls != 1 {
+		t.Fatalf("refresher calls changed=%d proxy=%d", refresher.redeployChangedCalls, refresher.reconcileReverseProxyCalls)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -323,6 +338,30 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	svc := NewServiceWithProvider(store.AppDB(), cfg, fake, taskSvc, WithKeyAssetProvider(keyAssetSvc))
 	svc.RegisterTasks(taskSvc)
 	return svc, fake, func() { _ = store.Close() }
+}
+
+type fakeApplicationRefresher struct {
+	redeployChangedErr         error
+	redeployEnabledErr         error
+	reconcileReverseProxyErr   error
+	redeployChangedCalls       int
+	redeployEnabledCalls       int
+	reconcileReverseProxyCalls int
+}
+
+func (f *fakeApplicationRefresher) RedeployChangedApplications(context.Context) (int, error) {
+	f.redeployChangedCalls++
+	return 0, f.redeployChangedErr
+}
+
+func (f *fakeApplicationRefresher) RedeployEnabledApplications(context.Context) (int, error) {
+	f.redeployEnabledCalls++
+	return 0, f.redeployEnabledErr
+}
+
+func (f *fakeApplicationRefresher) ReconcileReverseProxy(context.Context) error {
+	f.reconcileReverseProxyCalls++
+	return f.reconcileReverseProxyErr
 }
 
 type fakeProvider struct {

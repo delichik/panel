@@ -772,7 +772,7 @@ func (s *Service) explicitApplicationReconcileTasks(ctx context.Context, operati
 	}
 	inputs := make([]tasks.CreateInput, 0, len(appIDs))
 	for _, appID := range appIDs {
-		if !trigger.Manual && triggerType != "user" {
+		if !payload.Force && !trigger.Manual && triggerType != "user" {
 			nextRunAt, err := s.nextApplicationReconcileRunAt(ctx, appID)
 			if err != nil {
 				return inputs, err

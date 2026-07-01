@@ -363,6 +363,31 @@ func TestSaveReverseProxyClearsPreviousLastError(t *testing.T) {
 	}
 }
 
+func TestSaveReverseProxyForcesReconcile(t *testing.T) {
+	svc, closeStore := newFacilityTestService(t, nil)
+	defer closeStore()
+	reconciler, ok := svc.reconciler.(*facilityTestReconciler)
+	if !ok {
+		t.Fatal("expected facility test reconciler")
+	}
+
+	if _, err := svc.SaveReverseProxy(context.Background(), ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-edge"},
+		Image:             defaultProxyImage,
+	}); err != nil {
+		t.Fatalf("save reverse proxy: %v", err)
+	}
+
+	payload, ok := reconciler.lastTrigger.Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload = %#v", reconciler.lastTrigger.Payload)
+	}
+	force, _ := payload["force"].(bool)
+	if !force {
+		t.Fatalf("expected force reconcile payload, got %#v", payload)
+	}
+}
+
 func TestUploadStaticAssetUploadedFilePersistsDeployableContent(t *testing.T) {
 	svc, closeStore := newFacilityTestService(t, nil)
 	defer closeStore()
@@ -523,11 +548,13 @@ func newFacilityTestServiceWithAgent(t *testing.T, agent *facilityTestAgent) (*S
 }
 
 type facilityTestReconciler struct {
-	svc *Service
-	err error
+	svc         *Service
+	err         error
+	lastTrigger tasks.PeriodicTrigger
 }
 
 func (r *facilityTestReconciler) TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error) {
+	r.lastTrigger = trigger
 	if r.err != nil {
 		return tasks.Task{}, true, r.err
 	}

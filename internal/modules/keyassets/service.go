@@ -1096,10 +1096,14 @@ func (s *Service) refreshApplications(ctx context.Context) error {
 	if s.applications == nil {
 		return nil
 	}
+	var joined error
 	if _, err := s.applications.RedeployEnabledApplications(ctx); err != nil {
-		return err
+		joined = errors.Join(joined, err)
 	}
-	return s.applications.ReconcileReverseProxy(ctx)
+	if err := s.applications.ReconcileReverseProxy(ctx); err != nil {
+		joined = errors.Join(joined, err)
+	}
+	return joined
 }
 
 func (s *Service) prepareImportedAsset(ctx context.Context, in ImportRequest, forcedID string) (storedAsset, error) {

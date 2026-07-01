@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -376,6 +377,21 @@ func TestEnsureAgentTLSAssetsReissuesMissingClientOnly(t *testing.T) {
 	}
 }
 
+func TestRefreshApplicationsAttemptsReverseProxyWhenEnabledRedeployFails(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	refresher := &fakeApplicationRefresher{redeployEnabledErr: errors.New("application redeploy failed")}
+	svc.applications = refresher
+
+	err := svc.refreshApplications(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "application redeploy failed") {
+		t.Fatalf("refresh error = %v", err)
+	}
+	if refresher.redeployEnabledCalls != 1 || refresher.reconcileReverseProxyCalls != 1 {
+		t.Fatalf("refresher calls enabled=%d proxy=%d", refresher.redeployEnabledCalls, refresher.reconcileReverseProxyCalls)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -400,6 +416,23 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 
 func encodeBase64(value []byte) string {
 	return base64.StdEncoding.EncodeToString(value)
+}
+
+type fakeApplicationRefresher struct {
+	redeployEnabledErr         error
+	reconcileReverseProxyErr   error
+	redeployEnabledCalls       int
+	reconcileReverseProxyCalls int
+}
+
+func (f *fakeApplicationRefresher) RedeployEnabledApplications(context.Context) (int, error) {
+	f.redeployEnabledCalls++
+	return 0, f.redeployEnabledErr
+}
+
+func (f *fakeApplicationRefresher) ReconcileReverseProxy(context.Context) error {
+	f.reconcileReverseProxyCalls++
+	return f.reconcileReverseProxyErr
 }
 
 func testCertificatePair(t *testing.T) (string, string) {

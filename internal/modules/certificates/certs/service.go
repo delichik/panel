@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -772,10 +773,14 @@ func (s *Service) refreshApplications(ctx context.Context) error {
 	if s.applications == nil {
 		return nil
 	}
+	var joined error
 	if _, err := s.applications.RedeployChangedApplications(ctx); err != nil {
-		return err
+		joined = errors.Join(joined, err)
 	}
-	return s.applications.ReconcileReverseProxy(ctx)
+	if err := s.applications.ReconcileReverseProxy(ctx); err != nil {
+		joined = errors.Join(joined, err)
+	}
+	return joined
 }
 
 type preparedIssueRequest struct {

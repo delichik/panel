@@ -41,7 +41,7 @@
 - `bootstrap/panel.New` 负责打开数据库、创建 service、连接跨模块依赖、集中注册业务任务、启动 tasks 内部 worker 和各模块自有后台 worker，并调用各模块路由注册器。业务任务定义必须在所有相关业务 service 和 bridge 创建完成后，通过集中注册阶段调用各模块 `RegisterTasks`，不要穿插在 service 构造过程中零散注册。证书、密钥资产、应用和容器之间的双向协作通过 `internal/bootstrap/panel/bridges.go` 中的窄接口 bridge 注入，禁止在生产装配中用 service setter 回连形成环。
 - Panel 与 Panel Agent 启动装配都会校验构建时生成的 Agent gRPC contract hash；该 hash 基于 `agent.proto` 的 protobuf descriptor，变量为空时必须立即返回明确启动错误，不能以空 hash 继续运行。
 - bootstrap bridge 在依赖尚未装配时必须返回明确错误，不能 nil pointer panic；相关防护由 `internal/bootstrap/panel/bridges_test.go` 覆盖。
-- `bootstrap/panel.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。
+- `bootstrap/panel.New` 创建任务服务后会立即校验数据库中的 `running` 任务；当前进程内没有对应 execution 对象的任务会在其他后台服务启动前标记为失败。应用服务装配完成后还会收敛这些失败目标任务对应的 lifecycle target，避免重启后应用运行时状态永久停在部署中。
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session` 和只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/modules/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。

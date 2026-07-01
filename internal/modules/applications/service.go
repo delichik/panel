@@ -848,6 +848,10 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 	return nil
 }
 
+func (s *Service) handleTargetTaskFailure(ctx context.Context, task tasks.Task, cause error) error {
+	return s.failLifecycleTargetForTask(ctx, task, cause)
+}
+
 func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application, appruntime.Spec, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
@@ -2112,6 +2116,105 @@ func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, oper
 	return s.finishLifecycleOperation(ctx, operationID, status, runtimeDeploymentError(total, failures))
 }
 
+func (s *Service) ReconcileInterruptedLifecycleTasks(ctx context.Context) error {
+	if s.tasks == nil {
+		return nil
+	}
+	var joined error
+	for _, taskType := range []string{TaskTypeTargetApply, TaskTypeTargetStop, TaskTypeTargetPurge} {
+		offset := 0
+		for {
+			result, err := s.tasks.List(ctx, tasks.ListFilter{
+				Type:            taskType,
+				Statuses:        []string{tasks.StatusFailed, tasks.StatusCancelled},
+				Limit:           200,
+				Offset:          offset,
+				IncludeInternal: true,
+			})
+			if err != nil {
+				return err
+			}
+			for _, task := range result.Items {
+				if err := s.failLifecycleTargetForTask(ctx, task, nil); err != nil {
+					joined = errors.Join(joined, err)
+				}
+			}
+			offset += len(result.Items)
+			if len(result.Items) == 0 || offset >= result.Total {
+				break
+			}
+		}
+	}
+	return joined
+}
+
+func (s *Service) failLifecycleTargetForTask(ctx context.Context, task tasks.Task, cause error) error {
+	opts := deployTaskOptions(task)
+	if opts.lifecycleOperationID == "" || len(opts.targetIDs) == 0 {
+		return nil
+	}
+	message := targetTaskFailureMessage(task, cause)
+	var joined error
+	for _, serverID := range opts.targetIDs {
+		targetID := lifecycleTargetID(opts.lifecycleOperationID, serverID)
+		changed, err := s.failLifecycleTargetIfActive(ctx, targetID, message)
+		if err != nil {
+			joined = errors.Join(joined, err)
+			continue
+		}
+		if !changed {
+			continue
+		}
+		if opts.action == "apply" {
+			if err := s.failDeployingRuntimeInstanceForTarget(ctx, task.ResourceID, serverID, message); err != nil {
+				joined = errors.Join(joined, err)
+			}
+		}
+		if err := s.finishDeploymentOperationFromTargets(ctx, opts.lifecycleOperationID); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	return joined
+}
+
+func targetTaskFailureMessage(task tasks.Task, cause error) string {
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		return cause.Error()
+	}
+	if strings.TrimSpace(task.Error) != "" {
+		return task.Error
+	}
+	if strings.TrimSpace(task.Status) != "" {
+		return "Task ended with status " + task.Status
+	}
+	return "Application target task ended before lifecycle target finished"
+}
+
+func (s *Service) failLifecycleTargetIfActive(ctx context.Context, targetID, message string) (bool, error) {
+	now := formatTime(time.Now().UTC())
+	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET status=?, error=?, stage=CASE WHEN stage='' THEN ? ELSE stage END, finished_at=COALESCE(finished_at, ?), updated_at=?
+		WHERE id=? AND status IN (?,?,?)`,
+		LifecycleTargetStatusFailed, message, "interrupted", now, now, targetID,
+		LifecycleTargetStatusPending, LifecycleTargetStatusPreparing, LifecycleTargetStatusDeploying)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	return affected > 0, err
+}
+
+func (s *Service) failDeployingRuntimeInstanceForTarget(ctx context.Context, appID, serverID, message string) error {
+	if strings.TrimSpace(appID) == "" || strings.TrimSpace(serverID) == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `UPDATE application_instances
+		SET status=?, last_error=?, updated_at=?
+		WHERE application_id=? AND server_id=? AND status IN (?,?)`,
+		appruntime.StatusFailed, message, formatTime(time.Now().UTC()), appID, serverID, appruntime.StatusPending, appruntime.StatusDeploying)
+	return err
+}
+
 func lifecycleTargetID(operationID, serverID string) string {
 	return strings.TrimSpace(operationID) + "-" + sanitizeRuntimeName(serverID)
 }
@@ -2783,6 +2886,7 @@ func (s *Service) runDeploymentTaskBatch(ctx context.Context, app Application, s
 func (s *Service) triggerApplicationReconcile(ctx context.Context, app Application, spec appruntime.Spec, triggerType, fallbackSummary string) error {
 	return s.triggerApplicationReconcileWithPayload(ctx, app.ID, triggerType, map[string]any{
 		"applicationIds": []string{app.ID},
+		"force":          true,
 		"reason":         firstNonEmpty(triggerType, "application_change"),
 	})
 }

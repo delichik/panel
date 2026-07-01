@@ -147,6 +147,10 @@ func New(cfg config.Config) (*App, error) {
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	applicationSvc.SetFacilityRuntimeProvider(facilitySvc)
+	if err := applicationSvc.ReconcileInterruptedLifecycleTasks(context.Background()); err != nil {
+		_ = store.Close()
+		return nil, err
+	}
 	internalFileRegistry.Register("certificate", certSvc)
 	variableRegistry.Register("certs", certSvc)
 	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, metricsSvc, packageSvc, certSvc)

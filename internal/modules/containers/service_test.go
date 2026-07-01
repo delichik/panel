@@ -252,7 +252,7 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 	}
 }
 
-func TestExplicitApplicationReconcileRespectsStoredBackoffTime(t *testing.T) {
+func TestNonForcedExplicitApplicationReconcileRespectsStoredBackoffTime(t *testing.T) {
 	svc, _, _, store := newContainerizationTestService(t)
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
@@ -275,6 +275,37 @@ func TestExplicitApplicationReconcileRespectsStoredBackoffTime(t *testing.T) {
 	}
 	if len(inputs) != 0 {
 		t.Fatalf("expected explicit reconcile to wait for stored backoff, got %#v", inputs)
+	}
+}
+
+func TestForcedExplicitApplicationReconcileIgnoresStoredBackoffTime(t *testing.T) {
+	svc, _, _, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{
+		Type: "application_change",
+		Payload: ApplicationReconcileTrigger{
+			ApplicationIDs: []string{app.ID},
+			ServerIDs:      []string{"server-1"},
+			Force:          true,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 1 {
+		t.Fatalf("expected forced reconcile input despite stored backoff, got %#v", inputs)
+	}
+	if inputs[0].ServerID != "server-1" || inputs[0].OperationID != "op-1" {
+		t.Fatalf("forced reconcile input = %#v", inputs[0])
 	}
 }
 

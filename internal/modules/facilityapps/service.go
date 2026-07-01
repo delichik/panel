@@ -240,6 +240,7 @@ func (s *Service) triggerReverseProxyReconcile(ctx context.Context, triggerType 
 func reverseProxyReconcilePayload(stopServers []string) map[string]any {
 	return map[string]any{
 		"applicationIds": []string{proxyApplicationID},
+		"force":          true,
 		"reason":         "reverse_proxy_changed",
 		"stopServers":    uniqueSorted(stopServers),
 	}
