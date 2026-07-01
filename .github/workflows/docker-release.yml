@@ -423,6 +423,64 @@ jobs:
         shell: bash
         run: docker buildx imagetools inspect ${{ env.IMAGE_NAME }}:dev
 
+      - name: Delete old dev package versions
+        if: github.ref_name == 'dev'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PACKAGE_OWNER: ${{ github.repository_owner }}
+          PACKAGE_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+
+          package_name_encoded="$(jq -rn --arg value "${PACKAGE_NAME}" '$value | @uri')"
+          org_endpoint="/orgs/${PACKAGE_OWNER}/packages/container/${package_name_encoded}/versions"
+          user_endpoint="/users/${PACKAGE_OWNER}/packages/container/${package_name_encoded}/versions"
+          versions_file="$(mktemp)"
+          endpoint=""
+
+          if gh api --paginate "${org_endpoint}" > "${versions_file}" 2>/tmp/ghcr-cleanup-error; then
+            endpoint="${org_endpoint}"
+          elif gh api --paginate "${user_endpoint}" > "${versions_file}"; then
+            endpoint="${user_endpoint}"
+          else
+            cat /tmp/ghcr-cleanup-error >&2 || true
+            echo "Failed to list GHCR package versions for ${PACKAGE_OWNER}/${PACKAGE_NAME}."
+            exit 1
+          fi
+
+          current_digests_file="$(mktemp)"
+          find /tmp/digests -type f -printf 'sha256:%f\n' | sort -u > "${current_digests_file}"
+          current_digests_json="$(jq -Rcs 'split("\n")[:-1]' "${current_digests_file}")"
+
+          mapfile -t delete_ids < <(
+            jq -sr --argjson currentDigests "${current_digests_json}" '
+              add
+              | .[]
+              | (.metadata.container.tags // []) as $tags
+              | (.name // "") as $name
+              | select(
+                  (
+                    ($tags | index("dev")) or
+                    ($tags | index("latest")) or
+                    ($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) or
+                    ($currentDigests | index($name))
+                  ) | not
+                )
+              | .id
+            ' "${versions_file}"
+          )
+
+          if [ "${#delete_ids[@]}" -eq 0 ]; then
+            echo "No old GHCR package versions to delete."
+            exit 0
+          fi
+
+          for version_id in "${delete_ids[@]}"; do
+            echo "Deleting GHCR package version ${version_id}."
+            gh api --method DELETE "${endpoint}/${version_id}"
+          done
+
       - name: Create GitHub release
         if: github.ref_name == 'main'
         uses: softprops/action-gh-release@v2

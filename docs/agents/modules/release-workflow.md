@@ -26,6 +26,7 @@
 - `publish-manifest` 汇总两个架构的 digest，发布以下镜像标签：
   - main：自动生成的版本号、`latest` 和 commit sha。
   - dev：只发布并覆盖 `dev`，不发布版本号、commit sha 或 `latest`。
+- dev 的 manifest 发布并 inspect 成功后，会清理同一 GHCR container package 中旧的开发版本：保留当前 `dev`、正式版本号标签、`latest` 和本轮多架构 manifest 依赖的当前平台 digest，删除其他未受保护的 package version，包括旧的无标签 digest 和 sha-only 版本。
 - main 的 `publish-manifest` 末尾使用 `softprops/action-gh-release` 为自动生成的版本 tag 创建 GitHub Release，并启用自动 release notes；dev 跳过该步骤。
 
 ## 修改注意事项
@@ -34,7 +35,7 @@
 - 不要把发布触发器改为 `release` 事件；推送到 `main` 或 `dev` 后会发布对应通道。
 - workflow 需要 `permissions.contents: write` 来推送版本 tag 和创建 GitHub Release，推送 GHCR 镜像需要 `permissions.packages: write`。
 - 不要移除 main 的串行 concurrency；正式版本生成依赖它避免并发运行选择相同修订号。
-- dev 通道不得创建 tag、Release，或覆盖 `latest`、正式版本号和 commit sha 标签。
+- dev 通道不得创建 tag、Release，或覆盖 `latest`、正式版本号和 commit sha 标签；dev 清理只能在 `dev` manifest 已成功发布并 inspect 后运行，且必须保护本轮 `/tmp/digests` 中的当前平台 digest，避免删除当前多架构 manifest 仍引用的镜像内容。
 - 如果新增 release 附件，必须确保附件生成和上传步骤在创建 GitHub Release 之前完成，且失败时不要创建 release。
 - 发布构建必须保持 `PANEL_VERSION`、`PANEL_CHANNEL`、`PANEL_REPOSITORY`、`PANEL_COMMIT` 注入一致；`PANEL_CHANNEL` 在 main 为 `release`、dev 为 `dev`，未注入或无效值按开发通道处理。
 - 修改发布流程后同步更新本文档和模块索引。
