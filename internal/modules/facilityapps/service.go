@@ -777,7 +777,7 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,panel_entry_json,static_sites_json,last_error,updated_at)
 		VALUES(?,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,image=excluded.image,panel_entry_json=excluded.panel_entry_json,static_sites_json=excluded.static_sites_json,updated_at=excluded.updated_at`,
+		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,image=excluded.image,panel_entry_json=excluded.panel_entry_json,static_sites_json=excluded.static_sites_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
 		ReverseProxyID, string(serversRaw), cfg.Image, string(panelRaw), string(staticRaw), cfg.LastError, now)
 	return err
 }

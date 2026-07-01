@@ -331,6 +331,38 @@ func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
 	}
 }
 
+func TestSaveReverseProxyClearsPreviousLastError(t *testing.T) {
+	svc, closeStore := newFacilityTestService(t, nil)
+	defer closeStore()
+	ctx := context.Background()
+
+	if err := svc.saveConfig(ctx, ReverseProxyConfig{
+		ID:                ReverseProxyID,
+		Image:             defaultProxyImage,
+		DeploymentServers: []string{"srv-edge"},
+		LastError:         "select at least one deployment server",
+	}); err != nil {
+		t.Fatalf("seed reverse proxy config: %v", err)
+	}
+	if err := svc.setLastError(ctx, "select at least one deployment server"); err != nil {
+		t.Fatalf("seed last error: %v", err)
+	}
+
+	cfg, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-edge"},
+		Image:             defaultProxyImage,
+		StaticSites: []StaticSite{
+			{Domain: "static.example.test", Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceHostPath, RootPath: "/srv/www"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save reverse proxy: %v", err)
+	}
+	if cfg.LastError != "" {
+		t.Fatalf("last error = %q, want cleared", cfg.LastError)
+	}
+}
+
 func TestUploadStaticAssetUploadedFilePersistsDeployableContent(t *testing.T) {
 	svc, closeStore := newFacilityTestService(t, nil)
 	defer closeStore()

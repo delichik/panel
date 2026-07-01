@@ -948,7 +948,7 @@ runtimeReady:
 	}
 }
 
-func TestListWithRuntimeRefreshesRuntimeStatus(t *testing.T) {
+func TestListWithRuntimeUsesCachedRuntimeStatus(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -961,6 +961,10 @@ func TestListWithRuntimeRefreshesRuntimeStatus(t *testing.T) {
 		app.ID + "-srv-a": {InstanceID: app.ID + "-srv-a", ContainerName: "panel-web", Status: appruntime.StatusRunning, ObservedAt: time.Now().UTC()},
 		app.ID + "-srv-b": {InstanceID: app.ID + "-srv-b", ContainerName: "panel-web", Status: appruntime.StatusRunning, ObservedAt: time.Now().UTC()},
 	}
+	statusCalls := 0
+	runtime.statusHook = func(string) {
+		statusCalls++
+	}
 
 	apps, err := svc.ListWithRuntime(ctx)
 	if err != nil {
@@ -968,6 +972,9 @@ func TestListWithRuntimeRefreshesRuntimeStatus(t *testing.T) {
 	}
 	if len(apps) != 1 || apps[0].RuntimeStatus != appruntime.StatusRunning {
 		t.Fatalf("apps = %#v", apps)
+	}
+	if statusCalls != 0 {
+		t.Fatalf("list runtime summary made %d remote status calls", statusCalls)
 	}
 }
 

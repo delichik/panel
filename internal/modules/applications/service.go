@@ -1389,11 +1389,17 @@ func runtimeStatusFromLifecycleTarget(status string) string {
 }
 
 func (s *Service) withRuntimeSummary(ctx context.Context, app Application) (Application, error) {
-	runtime, err := s.Runtime(ctx, app.ID)
+	instances, err := s.runtimeInstances(ctx, app.ID)
 	if err != nil {
 		return Application{}, err
 	}
-	app.RuntimeStatus = runtime.Status
+	statuses := s.cachedInstanceStatuses(ctx, instances)
+	if operation, err := s.latestLifecycleOperation(ctx, app.ID); err == nil && operation.ID != "" {
+		statuses = mergeLifecycleTargetsIntoStatuses(statuses, operation.Targets)
+	} else if app.Enabled {
+		statuses = mergeLifecycleTargetsIntoStatuses(statuses, s.expectedLifecycleTargets(ctx, app))
+	}
+	app.RuntimeStatus = aggregateRuntimeStatus(app.Enabled, statuses)
 	return app, nil
 }
 
@@ -3491,18 +3497,9 @@ func (s *Service) cachedImageUpdate(ctx context.Context, serverID string, refere
 }
 
 func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appruntime.Instance) []appruntime.InstanceStatus {
-	out := make([]appruntime.InstanceStatus, 0, len(instances))
-	for _, instance := range instances {
-		status := appruntime.InstanceStatus{
-			InstanceID:    instance.ID,
-			ServerID:      instance.ServerID,
-			ContainerName: instance.ContainerName,
-			ContainerID:   instance.ContainerID,
-			Status:        instance.Status,
-			DesiredState:  instance.DesiredState,
-			LastError:     instance.LastError,
-			ObservedAt:    time.Now().UTC(),
-		}
+	out := s.cachedInstanceStatuses(ctx, instances)
+	for i, instance := range instances {
+		status := out[i]
 		if s.runtimeClient != nil && s.servers != nil {
 			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {
 				status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
@@ -3518,6 +3515,29 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 						_ = s.handleAgentError(ctx, srv, err)
 					}
 				}
+			}
+		}
+		out[i] = status
+	}
+	return out
+}
+
+func (s *Service) cachedInstanceStatuses(ctx context.Context, instances []appruntime.Instance) []appruntime.InstanceStatus {
+	out := make([]appruntime.InstanceStatus, 0, len(instances))
+	for _, instance := range instances {
+		status := appruntime.InstanceStatus{
+			InstanceID:    instance.ID,
+			ServerID:      instance.ServerID,
+			ContainerName: instance.ContainerName,
+			ContainerID:   instance.ContainerID,
+			Status:        instance.Status,
+			DesiredState:  instance.DesiredState,
+			LastError:     instance.LastError,
+			ObservedAt:    time.Now().UTC(),
+		}
+		if s.servers != nil {
+			if srv, err := s.servers.Get(ctx, instance.ServerID); err == nil {
+				status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
 			}
 		}
 		out = append(out, status)
