@@ -1,9 +1,14 @@
 package facilityapps
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,6 +22,7 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
 )
 
 func TestRenderNginxConfigGroupsRoutesByDomain(t *testing.T) {
@@ -322,6 +328,118 @@ func TestSaveReverseProxyReturnsSavedConfigWhenReconcileFails(t *testing.T) {
 	}
 }
 
+func TestUploadStaticAssetUploadedFilePersistsDeployableContent(t *testing.T) {
+	svc, closeStore := newFacilityTestService(t, nil)
+	defer closeStore()
+
+	asset, err := svc.UploadStaticAsset(context.Background(), StaticAssetUploadInput{
+		Name:     "Home page",
+		Kind:     StaticSourceUploadedFile,
+		FileName: "../index.html",
+		Content:  []byte("<h1>Hello</h1>"),
+	})
+	if err != nil {
+		t.Fatalf("upload static file: %v", err)
+	}
+	if asset.Kind != StaticSourceUploadedFile || asset.Filename != "index.html" || asset.Size != int64(len("<h1>Hello</h1>")) {
+		t.Fatalf("asset metadata = %#v", asset)
+	}
+
+	files, err := svc.staticAssetFiles(asset.ID)
+	if err != nil {
+		t.Fatalf("read static asset files: %v", err)
+	}
+	if len(files) != 1 || files[0].Path != "index.html" || string(files[0].Content) != "<h1>Hello</h1>" {
+		t.Fatalf("deployable files = %#v", files)
+	}
+	if _, err := os.Stat(filepath.Join(svc.staticAssetContentDir(asset.ID), "index.html")); err != nil {
+		t.Fatalf("uploaded file was not saved under content dir: %v", err)
+	}
+
+	assets, err := svc.ListStaticAssets(context.Background())
+	if err != nil {
+		t.Fatalf("list static assets: %v", err)
+	}
+	if len(assets) != 1 || assets[0].ID != asset.ID {
+		t.Fatalf("listed assets = %#v, want uploaded asset", assets)
+	}
+}
+
+func TestUploadStaticAssetBundleRejectsTraversalAndEmptyArchives(t *testing.T) {
+	tests := []struct {
+		name     string
+		filename string
+		content  []byte
+	}{
+		{name: "zip traversal", filename: "site.zip", content: zipArchive(t, map[string]string{"../escape.txt": "nope"})},
+		{name: "tar traversal", filename: "site.tar", content: tarArchive(t, map[string]string{"../escape.txt": "nope"})},
+		{name: "tar gzip traversal", filename: "site.tar.gz", content: gzipBytes(t, tarArchive(t, map[string]string{"../escape.txt": "nope"}))},
+		{name: "empty zip", filename: "empty.zip", content: zipArchive(t, nil)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, closeStore := newFacilityTestService(t, nil)
+			defer closeStore()
+
+			_, err := svc.UploadStaticAsset(context.Background(), StaticAssetUploadInput{
+				Name:     tt.name,
+				Kind:     StaticSourceUploadedBundle,
+				FileName: tt.filename,
+				Content:  tt.content,
+			})
+			if err == nil {
+				t.Fatal("expected bundle upload to reject unsafe or empty archive")
+			}
+			assets, listErr := svc.ListStaticAssets(context.Background())
+			if listErr != nil {
+				t.Fatalf("list static assets: %v", listErr)
+			}
+			if len(assets) != 0 {
+				t.Fatalf("rejected upload left persisted assets: %#v", assets)
+			}
+		})
+	}
+}
+
+func TestDeleteStaticAssetReturnsConflictWhenReferencedByConfig(t *testing.T) {
+	svc, closeStore := newFacilityTestService(t, nil)
+	defer closeStore()
+	ctx := context.Background()
+
+	asset, err := svc.UploadStaticAsset(ctx, StaticAssetUploadInput{
+		Name:     "Referenced bundle",
+		Kind:     StaticSourceUploadedBundle,
+		FileName: "site.zip",
+		Content:  zipArchive(t, map[string]string{"index.html": "ok"}),
+	})
+	if err != nil {
+		t.Fatalf("upload static bundle: %v", err)
+	}
+	if err := svc.saveConfig(ctx, ReverseProxyConfig{
+		ID:                ReverseProxyID,
+		Image:             defaultProxyImage,
+		DeploymentServers: []string{"srv-edge"},
+		StaticSites: []StaticSite{{
+			Domain:     "static.example.test",
+			Path:       "/",
+			RuleType:   StaticRuleStatic,
+			SourceType: StaticSourceUploadedBundle,
+			AssetID:    asset.ID,
+		}},
+	}); err != nil {
+		t.Fatalf("save reverse proxy config: %v", err)
+	}
+
+	err = svc.DeleteStaticAsset(ctx, asset.ID)
+	if !isPanelConflict(err, "facility_static_asset_in_use") {
+		t.Fatalf("delete referenced asset error = %v, want conflict", err)
+	}
+	if _, err := svc.getStaticAsset(ctx, asset.ID); err != nil {
+		t.Fatalf("referenced asset should remain after failed delete: %v", err)
+	}
+}
+
 func newFacilityTestService(t *testing.T, agentErr error) (*Service, func()) {
 	return newFacilityTestServiceWithAgent(t, &facilityTestAgent{err: agentErr})
 }
@@ -364,7 +482,7 @@ func newFacilityTestServiceWithAgent(t *testing.T, agent *facilityTestAgent) (*S
 		},
 	}}
 	reconciler := &facilityTestReconciler{err: agent.err}
-	svc := NewService(store.AppDB(), agent, provider, nil, WithApplicationReconcileTrigger(reconciler))
+	svc := NewService(store.AppDB(), agent, provider, nil, WithDataRoot(cfg.DataRoot), WithApplicationReconcileTrigger(reconciler))
 	reconciler.svc = svc
 	return svc, func() { _ = store.Close() }
 }
@@ -440,4 +558,59 @@ func (a *facilityTestAgent) DockerImagePull(context.Context, string, string) err
 
 func (a *facilityTestAgent) DockerContainerAction(context.Context, string, string, string) error {
 	return a.err
+}
+
+func zipArchive(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range entries {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("create zip entry: %v", err)
+		}
+		if _, err := w.Write([]byte(content)); err != nil {
+			t.Fatalf("write zip entry: %v", err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip archive: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func tarArchive(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for name, content := range entries {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(content))}); err != nil {
+			t.Fatalf("write tar header: %v", err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("write tar entry: %v", err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar archive: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func gzipBytes(t *testing.T, content []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	if _, err := gw.Write(content); err != nil {
+		t.Fatalf("write gzip content: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("close gzip content: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func isPanelConflict(err error, code string) bool {
+	var panel *panelerr.Error
+	return errors.As(err, &panel) && panel.HTTPStatus == 409 && panel.Code == code
 }

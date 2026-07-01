@@ -85,9 +85,11 @@ func TestSavePendingRestoreSchedulesContainerRestart(t *testing.T) {
 type fakeRestarter struct {
 	supported bool
 	calls     int
+	modes     []string
 }
 
 func (r *fakeRestarter) Supported() bool { return r.supported }
-func (r *fakeRestarter) RestartSoon(string) {
+func (r *fakeRestarter) RestartSoon(mode string) {
 	r.calls++
+	r.modes = append(r.modes, mode)
 }
