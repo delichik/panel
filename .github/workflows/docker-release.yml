@@ -434,8 +434,10 @@ jobs:
           set -euo pipefail
 
           package_name_encoded="$(jq -rn --arg value "${PACKAGE_NAME}" '$value | @uri')"
+
           org_endpoint="/orgs/${PACKAGE_OWNER}/packages/container/${package_name_encoded}/versions"
           user_endpoint="/users/${PACKAGE_OWNER}/packages/container/${package_name_encoded}/versions"
+
           versions_file="$(mktemp)"
           endpoint=""
 
@@ -449,23 +451,28 @@ jobs:
             exit 1
           fi
 
-          current_digests_file="$(mktemp)"
-          find /tmp/digests -type f -printf 'sha256:%f\n' | sort -u > "${current_digests_file}"
-          current_digests_json="$(jq -Rcs 'split("\n")[:-1]' "${current_digests_file}")"
+          cutoff="$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ')"
+
+          echo "Keep package versions updated after: ${cutoff}"
 
           mapfile -t delete_ids < <(
-            jq -sr --argjson currentDigests "${current_digests_json}" '
+            jq -sr --arg cutoff "${cutoff}" '
               add
               | .[]
               | (.metadata.container.tags // []) as $tags
-              | (.name // "") as $name
+              | (.updated_at // .created_at // "") as $time
               | select(
+                  # 保留带 tag 的版本
                   (
-                    ($tags | index("dev")) or
-                    ($tags | index("latest")) or
-                    ($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))) or
-                    ($currentDigests | index($name))
-                  ) | not
+                    ($tags | index("dev"))
+                    or ($tags | index("latest"))
+                    or ($tags | any(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")))
+                  )
+                  | not
+                )
+              | select(
+                  # 只删除超过 24 小时的旧版本
+                  $time < $cutoff
                 )
               | .id
             ' "${versions_file}"
@@ -480,7 +487,7 @@ jobs:
             echo "Deleting GHCR package version ${version_id}."
             gh api --method DELETE "${endpoint}/${version_id}"
           done
-
+    
       - name: Create GitHub release
         if: github.ref_name == 'main'
         uses: softprops/action-gh-release@v2
