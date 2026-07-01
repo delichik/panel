@@ -10,6 +10,22 @@ describe('ApplicationEditor', () => {
     expect(editor).not.toContain('applicationsApi.deploy(app.id)');
   });
 
+  it('blocks the editor while showing save progress stages', () => {
+    expect(editor).toContain(':persistent="saving"');
+    expect(editor).toContain('v-overlay :model-value="saving" contained persistent');
+    expect(editor).toContain("t('applicationEditor.saveStepStartingSession')");
+    expect(editor).toContain("t('applicationEditor.saveStepDeletingFile'");
+    expect(editor).toContain("t('applicationEditor.saveStepUploadingFile'");
+    expect(editor).toContain("t('applicationEditor.saveStepUploadingArchive'");
+    expect(editor).toContain("t('applicationEditor.saveStepCommitApplying')");
+    expect(editor).toContain(':disabled="saving" @click="requestClose(false)"');
+  });
+
+  it('keeps the editor header and footer without heavy divider lines', () => {
+    expect(editor).not.toContain('<v-divider />\r\n      <v-card-text class="app-dialog-body">');
+    expect(editor).not.toContain('</v-card-text>\r\n      <v-divider />');
+  });
+
   it('exposes persistent mount permissions in the visual editor', () => {
     expect(editor).toContain('uid: nonNegativeNumberValue(mount?.uid)');
     expect(editor).toContain('gid: nonNegativeNumberValue(mount?.gid)');

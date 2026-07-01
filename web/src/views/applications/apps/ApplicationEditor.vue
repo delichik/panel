@@ -51,6 +51,7 @@ const specForm = reactive({
 const activeEditorTab = ref<'visual' | 'yaml'>('visual');
 const variableRows = ref<VariableForm[]>([]);
 const loading = ref('');
+const saveStep = ref('');
 const error = ref('');
 const servers = ref<ServerDto[]>([]);
 const files = ref<EditorFile[]>([]);
@@ -69,6 +70,7 @@ const fileForm = reactive({
 });
 
 const title = computed(() => (props.application ? t('applicationEditor.editTitle', { name: props.application.name }) : t('applicationEditor.createTitle')));
+const saving = computed(() => Boolean(loading.value));
 const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name} (${server.host})`,
   value: server.id,
@@ -556,54 +558,70 @@ function readInput(): ApplicationSaveDto {
   };
 }
 
+function requestClose(open: boolean) {
+  if (open || saving.value) return;
+  emit('close');
+}
+
 async function save() {
   loading.value = 'save';
+  error.value = '';
+  saveStep.value = t('applicationEditor.saveStepPreparing');
   try {
     const input = readInput();
+    saveStep.value = t('applicationEditor.saveStepStartingSession');
     const session = await applicationsApi.beginSaveSession({
       applicationId: props.application?.id,
       save: input,
     });
     const finalPaths = new Set(files.value.map((file) => file.path));
-    for (const staged of session.files) {
-      if (!finalPaths.has(staged.path)) {
-        await applicationsApi.deleteSaveSessionFile(session.id, { path: staged.path });
-      }
+    const filesToDelete = session.files.filter((staged) => !finalPaths.has(staged.path));
+    for (let index = 0; index < filesToDelete.length; index += 1) {
+      const staged = filesToDelete[index];
+      saveStep.value = t('applicationEditor.saveStepDeletingFile', { current: index + 1, total: filesToDelete.length });
+      await applicationsApi.deleteSaveSessionFile(session.id, { path: staged.path });
     }
-    for (const file of files.value) {
-      if (!file.contentBase64) continue;
+    const filesToUpload = files.value.filter((file) => file.contentBase64);
+    for (let index = 0; index < filesToUpload.length; index += 1) {
+      const file = filesToUpload[index];
+      saveStep.value = t('applicationEditor.saveStepUploadingFile', { current: index + 1, total: filesToUpload.length });
       await applicationsApi.uploadSaveSessionFile(session.id, {
         path: file.path,
         kind: file.kind,
         contentType: '',
-        contentBase64: file.contentBase64,
+        contentBase64: file.contentBase64 || '',
       });
     }
-    for (const archive of pendingArchives.value) {
+    for (let index = 0; index < pendingArchives.value.length; index += 1) {
+      const archive = pendingArchives.value[index];
+      saveStep.value = t('applicationEditor.saveStepUploadingArchive', { current: index + 1, total: pendingArchives.value.length });
       await applicationsApi.uploadSaveSessionArchive(session.id, {
         basePath: archive.basePath,
         kind: archive.kind,
         file: archive.file,
       });
     }
+    saveStep.value = input.enabled
+      ? t('applicationEditor.saveStepCommitApplying')
+      : t('applicationEditor.saveStepCommitting');
     const app = await applicationsApi.commitSaveSession(session.id);
     emit('saved', app);
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('applicationEditor.saveFailed');
   } finally {
     loading.value = '';
+    saveStep.value = '';
   }
 }
 </script>
 
 <template>
-  <v-dialog :model-value="open" width="min(1120px, calc(100vw - 32px))" @update:model-value="emit('close')">
+  <v-dialog :model-value="open" width="min(1120px, calc(100vw - 32px))" :persistent="saving" @update:model-value="requestClose">
     <v-card class="app-dialog-card editor-card">
       <v-card-title class="app-dialog-title">
         <span class="app-dialog-title-text">{{ title }}</span>
-        <v-btn icon="mdi-close" variant="text" @click="emit('close')" />
+        <v-btn icon="mdi-close" variant="text" :disabled="saving" @click="requestClose(false)" />
       </v-card-title>
-      <v-divider />
       <v-card-text class="app-dialog-body">
         <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
         <div class="editor-main">
@@ -971,19 +989,25 @@ async function save() {
           </section>
         </div>
       </v-card-text>
-      <v-divider />
       <v-card-actions class="app-dialog-actions">
-        <v-btn variant="text" class="text-none" @click="emit('close')">{{ t('common.cancel') }}</v-btn>
-        <v-btn color="primary" variant="flat" class="text-none" :loading="Boolean(loading)" @click="save()">
+        <v-btn variant="text" class="text-none" :disabled="saving" @click="requestClose(false)">{{ t('common.cancel') }}</v-btn>
+        <v-btn color="primary" variant="flat" class="text-none" :loading="saving" :disabled="saving" @click="save()">
           {{ form.enabled ? t('common.saveAndDeploy') : t('common.save') }}
         </v-btn>
       </v-card-actions>
+      <v-overlay :model-value="saving" contained persistent scrim="surface" class="editor-save-overlay">
+        <div class="editor-save-progress" role="status" aria-live="polite">
+          <v-progress-circular indeterminate color="primary" :size="42" :width="4" />
+          <div class="editor-save-title">{{ t('applicationEditor.saveInProgress') }}</div>
+          <div class="editor-save-step">{{ saveStep }}</div>
+        </div>
+      </v-overlay>
     </v-card>
   </v-dialog>
 </template>
 
 <style scoped>
-.editor-card { max-height: calc(100dvh - 24px); }
+.editor-card { max-height: calc(100dvh - 24px); position: relative; overflow: hidden; }
 .editor-main { min-width: 0; }
 .editor-section { min-width: 0; }
 .section-divider { margin: 18px 0; }
@@ -1021,6 +1045,31 @@ async function save() {
 .pending-archives { display: grid; gap: 8px; margin-top: 10px; }
 .pending-archive { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .min-width-0 { min-width: 0; }
+.editor-save-overlay :deep(.v-overlay__scrim) { opacity: 0.86; }
+.editor-save-overlay :deep(.v-overlay__content) {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.editor-save-progress {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  max-width: min(360px, calc(100% - 48px));
+  padding: 24px;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  background: rgb(var(--v-theme-surface));
+  box-shadow: var(--lp-shadow-2);
+  text-align: center;
+}
+.editor-save-title {
+  font-weight: 700;
+}
+.editor-save-step {
+  color: var(--lp-text-muted);
+}
 .repeat-row > .v-btn,
 .proxy-rule-header > .v-btn {
   justify-self: end;
