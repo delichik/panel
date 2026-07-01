@@ -160,6 +160,23 @@ func (r *LocalRuntime) Containers(ctx context.Context) ([]agentcontract.DockerCo
 	return r.client.listContainers(ctx)
 }
 
+func (r *LocalRuntime) ContainerEvents(ctx context.Context) (<-chan struct{}, <-chan error) {
+	events := make(chan struct{}, 16)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errs)
+		if r == nil || r.client == nil {
+			errs <- errors.New("runtime is not configured")
+			return
+		}
+		if err := r.client.watchContainerEvents(ctx, events); err != nil && ctx.Err() == nil {
+			errs <- err
+		}
+	}()
+	return events, errs
+}
+
 func (r *LocalRuntime) ContainerLogs(ctx context.Context, id string, tail int) (string, error) {
 	if r == nil || r.client == nil {
 		return "", errors.New("runtime is not configured")
@@ -555,9 +572,10 @@ func containerNameForInstance(instanceID string) string {
 }
 
 type dockerAPIClient struct {
-	host       string
-	client     *http.Client
-	pullClient *http.Client
+	host        string
+	client      *http.Client
+	pullClient  *http.Client
+	eventClient *http.Client
 }
 
 func newDockerAPIClient(host string) (*dockerAPIClient, error) {
@@ -587,19 +605,28 @@ func newDockerAPIClient(host string) (*dockerAPIClient, error) {
 			},
 		}
 		return &dockerAPIClient{
-			host:       host,
-			client:     &http.Client{Transport: transport, Timeout: 2 * time.Minute},
-			pullClient: &http.Client{Transport: pullTransport, Timeout: dockerImagePullTimeout},
+			host:        host,
+			client:      &http.Client{Transport: transport, Timeout: 2 * time.Minute},
+			pullClient:  &http.Client{Transport: pullTransport, Timeout: dockerImagePullTimeout},
+			eventClient: &http.Client{Transport: cloneDockerTransport(transport)},
 		}, nil
 	case "http", "https":
 		return &dockerAPIClient{
-			host:       host,
-			client:     &http.Client{Timeout: 2 * time.Minute},
-			pullClient: &http.Client{Timeout: dockerImagePullTimeout},
+			host:        host,
+			client:      &http.Client{Timeout: 2 * time.Minute},
+			pullClient:  &http.Client{Timeout: dockerImagePullTimeout},
+			eventClient: &http.Client{},
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported docker host %q", host)
 	}
+}
+
+func cloneDockerTransport(base *http.Transport) *http.Transport {
+	if base == nil {
+		return nil
+	}
+	return base.Clone()
 }
 
 func (c *dockerAPIClient) ping(ctx context.Context) error {
@@ -838,6 +865,46 @@ func (c *dockerAPIClient) listContainers(ctx context.Context) ([]agentcontract.D
 		out = []agentcontract.DockerContainer{}
 	}
 	return out, nil
+}
+
+func (c *dockerAPIClient) watchContainerEvents(ctx context.Context, out chan<- struct{}) error {
+	filters, _ := json.Marshal(map[string][]string{
+		"type":  {"container"},
+		"event": {"create", "start", "stop", "die", "destroy", "restart", "kill", "pause", "unpause"},
+	})
+	query := url.Values{}
+	query.Set("filters", string(filters))
+	req, err := c.newRequest(ctx, http.MethodGet, "/events?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	client := c.eventClient
+	if client == nil {
+		client = c.client
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerError(res, "watch container events")
+	}
+	decoder := json.NewDecoder(res.Body)
+	for ctx.Err() == nil {
+		var event map[string]any
+		if err := decoder.Decode(&event); err != nil {
+			if errors.Is(err, io.EOF) && ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		select {
+		case out <- struct{}{}:
+		default:
+		}
+	}
+	return ctx.Err()
 }
 
 func (c *dockerAPIClient) listImages(ctx context.Context) ([]agentcontract.DockerImage, error) {

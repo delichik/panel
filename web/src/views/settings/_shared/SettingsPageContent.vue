@@ -44,6 +44,7 @@ const category = computed<SettingsCategory>(() => {
 const form = reactive<RuntimeSettingsUpdate>({
   metricsRetentionDays: 7,
   metricsCollectionIntervalSeconds: 60,
+  containerReportIntervalSeconds: 5,
   cleanupSchedule: 'daily',
   tokenExpiration: '1d',
   language: 'en',
@@ -79,6 +80,7 @@ function showMessage(text: string, color = 'success') {
 function syncForm(next: RuntimeSettingsDto) {
   form.metricsRetentionDays = next.metricsRetentionDays;
   form.metricsCollectionIntervalSeconds = next.metricsCollectionIntervalSeconds;
+  form.containerReportIntervalSeconds = next.containerReportIntervalSeconds;
   form.cleanupSchedule = next.cleanupSchedule;
   form.tokenExpiration = next.tokenExpiration || '1d';
   form.language = next.language;
@@ -115,6 +117,7 @@ function syncSavedSection(next: RuntimeSettingsDto, section: RuntimeSettingsSect
   } else if (section === 'runtime') {
     form.metricsRetentionDays = next.metricsRetentionDays;
     form.metricsCollectionIntervalSeconds = next.metricsCollectionIntervalSeconds;
+    form.containerReportIntervalSeconds = next.containerReportIntervalSeconds;
     form.cleanupSchedule = next.cleanupSchedule;
     form.tokenExpiration = next.tokenExpiration || '1d';
     form.language = next.language;
@@ -308,9 +311,21 @@ onMounted(loadSettings);
             <v-text-field
               v-model.number="form.metricsCollectionIntervalSeconds"
               type="number"
-              min="10"
+              min="1"
               max="86400"
-              :label="t('settingsPage.collectionInterval')"
+              :label="t('settingsPage.metricsReportInterval')"
+              :suffix="t('settingsPage.seconds')"
+              variant="outlined"
+              density="comfortable"
+              hide-details="auto"
+            />
+
+            <v-text-field
+              v-model.number="form.containerReportIntervalSeconds"
+              type="number"
+              min="1"
+              max="86400"
+              :label="t('settingsPage.containerReportInterval')"
               :suffix="t('settingsPage.seconds')"
               variant="outlined"
               density="comfortable"

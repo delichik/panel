@@ -26,10 +26,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 		Hidden:            true,
 		ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
 		Execute:           s.RunCollectTask,
-		Periodic: &tasks.Periodic{
-			Interval:      time.Second,
-			CollectInputs: tasks.NewIntervalCollector(time.Minute, collectionInterval, s.CollectTaskInputs),
-		},
 	})
 }
 

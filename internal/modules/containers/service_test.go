@@ -156,14 +156,14 @@ func TestExecuteAllowsDifferentServersToRunConcurrently(t *testing.T) {
 	wg.Wait()
 }
 
-func TestContainerActionRunsSynchronouslyAndStartsRefreshTask(t *testing.T) {
-	svc, taskSvc, fakeAgent, store := newContainerizationTestService(t)
+func TestContainerActionRunsSynchronouslyWithoutRefreshTask(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
 	result, err := svc.ContainerAction(context.Background(), "server-1", "container-1", "restart")
 	if err != nil {
 		t.Fatalf("container action: %v", err)
 	}
-	if result.RefreshTaskID == "" {
-		t.Fatal("expected refresh task id")
+	if result.RefreshTaskID != "" {
+		t.Fatalf("container action should not create refresh task, got %q", result.RefreshTaskID)
 	}
 	fakeAgent.mu.Lock()
 	actions := append([]string(nil), fakeAgent.actions...)
@@ -171,13 +171,12 @@ func TestContainerActionRunsSynchronouslyAndStartsRefreshTask(t *testing.T) {
 	if len(actions) != 1 || actions[0] != "container-1:restart" {
 		t.Fatalf("expected synchronous container action before return, got %#v", actions)
 	}
-	waitTaskStatus(t, taskSvc, result.RefreshTaskID, tasks.StatusCompleted)
 	var operationTasks int
-	if err := store.TaskDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type IN (?,?,?,?)`, TaskContainerStart, TaskContainerStop, TaskContainerRestart, TaskContainerDelete).Scan(&operationTasks); err != nil {
+	if err := store.TaskDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&operationTasks); err != nil {
 		t.Fatal(err)
 	}
 	if operationTasks != 0 {
-		t.Fatalf("container operation task should not be created, got %d", operationTasks)
+		t.Fatalf("container action should not create tasks, got %d", operationTasks)
 	}
 }
 
@@ -192,6 +191,7 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 	}
 	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
 	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
 		State: "exited",
 		Labels: map[string]string{
 			"panel.application.managed":     "true",
@@ -201,6 +201,7 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 			"panel.application.spec.hash":   "hash-3",
 		},
 	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
 
 	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
 	if err != nil {
@@ -223,6 +224,7 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
 		State: "exited",
 		Labels: map[string]string{
 			"panel.application.managed":     "true",
@@ -232,6 +234,7 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 			"panel.application.spec.hash":   "hash-3",
 		},
 	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
 
 	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
 	if err != nil {
@@ -286,6 +289,7 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 		t.Fatal(err)
 	}
 	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
 		State: "running",
 		Labels: map[string]string{
 			"panel.application.managed":     "true",
@@ -295,6 +299,7 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 			"panel.application.spec.hash":   "hash-3",
 		},
 	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
 
 	for i := 0; i < applicationReconcileHealthyChecksToReset-1; i++ {
 		inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
@@ -516,6 +521,13 @@ func (a *fakeContainerizationAgent) DockerVolumes(context.Context, string) ([]ag
 
 func (a *fakeContainerizationAgent) DockerVolumeDelete(context.Context, string, string) error {
 	return nil
+}
+
+func saveReportedContainers(t *testing.T, svc *Service, serverID string, items []agentcontract.DockerContainer) {
+	t.Helper()
+	if err := svc.SaveReportedContainers(context.Background(), serverID, time.Now().UTC(), items); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type blockingImageResolver struct {

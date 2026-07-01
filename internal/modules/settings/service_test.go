@@ -35,6 +35,7 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 	got, err := svc.Update(context.Background(), RuntimeUpdate{
 		MetricsRetentionDays:             30,
 		MetricsCollectionIntervalSeconds: 120,
+		ContainerReportIntervalSeconds:   3,
 		CleanupSchedule:                  "weekly",
 		TokenExpiration:                  TokenExpiration5Days,
 		Language:                         "zh-CN",
@@ -46,7 +47,7 @@ func TestRuntimeSettingsUpdatePersists(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.LogLevel != "debug" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
+	if got.MetricsRetentionDays != 30 || got.MetricsCollectionIntervalSeconds != 120 || got.ContainerReportIntervalSeconds != 3 || got.CleanupSchedule != "weekly" || got.TokenExpiration != TokenExpiration5Days || got.Language != "zh-CN" || got.LogLevel != "debug" || got.RemoteCommandTimeoutSeconds != 45 || got.Branding.LoginTitle != "Operations" || got.Branding.LoginSubtitle != "Manage infrastructure" || got.Certificates.Email != "admin@example.com" || got.Certificates.DNSPropagationDelaySeconds != 10 {
 		t.Fatalf("unexpected runtime settings: %#v", got)
 	}
 	if got := svc.Runtime(); got.MetricsRetentionDays != 30 {

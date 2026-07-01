@@ -117,3 +117,12 @@
 ## 文档更新触发
 
 新增支持系统、远程命令、服务器字段、凭据字段、agent 能力、指标字段、软件包行为、防火墙/fail2ban 行为或相关 API 时，必须更新本文档。
+ 
+## Agent Report Stream
+
+- Agent deployment must not write any Panel callback or report address into `/etc/panel-agent/panel-agent.env`; nodes must never assume Panel is reachable from the node side.
+- Panel actively dials the normal agent mTLS endpoint and opens `AgentReportService.Report` for metrics and container status reporting. The agent only responds on this Panel-initiated stream.
+- The report stream uses the same Panel Agent CA and endpoint as other agent gRPC calls.
+- Panel inspects report streams every second, reconnects missing streams, rebuilds streams when `agent.url` changes, and marks streams with no incoming messages for `max(10s, min(metricsInterval, containerInterval) * 3)` as disconnected. This only updates `agent.report.status`, `agent.report.last_message_at`, and `agent.report.last_error`; it must not downgrade the normal Agent health status.
+- Periodic metrics and container reports use Unix-aligned `sampleAt` values. For an interval of 3 seconds, the stored timestamp must be divisible by 3 and must represent the scheduled sample boundary, not the receive time. Docker event-triggered `container_change` snapshots use the event sampling second and are accepted outside the periodic boundary.
+- Agent metrics and Docker status collection is driven by a shared watcher hub: no active stream means no sampling, and multiple streams reuse the same sample instead of collecting multiple times. Docker container events also wake the hub to send immediate `container_change` full snapshots in addition to periodic samples.

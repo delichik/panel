@@ -458,6 +458,7 @@ func ContractHealth(in *agentpb.HealthResponse) agentcontract.HealthResponse {
 }
 func GoOSRelease(in *agentpb.OSReleaseResponse) linux.OSRelease            { return goOSRelease(in) }
 func GoSnapshot(in *agentpb.MetricsSnapshotResponse) linux.MetricsSnapshot { return goSnapshot(in) }
+func PBSnapshot(in linux.MetricsSnapshot) *agentpb.MetricsSnapshotResponse { return pbSnapshot(in) }
 func GoPackageUpdates(items []*agentpb.PackageUpdate) []linux.PackageUpdate {
 	return goPackageUpdates(items)
 }
@@ -478,6 +479,9 @@ func GoRuntimeStatus(in *agentpb.RuntimeStatusResponse) agentcontract.RuntimeSta
 }
 func GoDockerContainer(in *agentpb.DockerContainer) agentcontract.DockerContainer {
 	return goDockerContainer(in)
+}
+func PBDockerContainer(in agentcontract.DockerContainer) *agentpb.DockerContainer {
+	return pbDockerContainer(in)
 }
 func GoDockerImage(in *agentpb.DockerImage) agentcontract.DockerImage { return goDockerImage(in) }
 func GoDockerNetwork(in *agentpb.DockerNetwork) agentcontract.DockerNetwork {

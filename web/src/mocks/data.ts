@@ -21,7 +21,7 @@ export const initialMockState = {
   authenticated: true,
   runtimeSettings: {
     listenAddress: '127.0.0.1:8080', appDatabase: 'data/panel.db', metricsDatabase: 'data/metrics.db', dataRoot: 'data',
-    metricsRetentionDays: 30, metricsCollectionIntervalSeconds: 60, cleanupSchedule: '0 3 * * *', tokenExpiration: '5d',
+    metricsRetentionDays: 30, metricsCollectionIntervalSeconds: 60, containerReportIntervalSeconds: 5, cleanupSchedule: '0 3 * * *', tokenExpiration: '5d',
     language: 'zh-CN', logLevel: 'info', remoteCommandTimeoutSeconds: 300,
     branding: { loginTitle: 'Panel Mock', loginSubtitle: 'Frontend test mode' },
     certificates: { email: 'ops@example.test', dnsPropagationDelaySeconds: 30 }, jwtSecretConfigured: true,

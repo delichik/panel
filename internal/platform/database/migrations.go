@@ -98,6 +98,19 @@ func (s *Store) Migrate(ctx context.Context) error {
 			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS container_observations (
+			server_id TEXT NOT NULL,
+			container_id TEXT NOT NULL,
+			sample_at TEXT NOT NULL,
+			container_json TEXT NOT NULL,
+			managed INTEGER NOT NULL DEFAULT 0,
+			application_id TEXT NOT NULL DEFAULT '',
+			instance_id TEXT NOT NULL DEFAULT '',
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(server_id, container_id),
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_container_observations_server_sample ON container_observations(server_id, sample_at)`,
 		`CREATE TABLE IF NOT EXISTS applications (
 			id TEXT PRIMARY KEY,
 			kind TEXT NOT NULL DEFAULT 'application',

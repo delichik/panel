@@ -9,6 +9,7 @@ const settings: RuntimeSettingsDto = {
   dataRoot: 'data',
   metricsRetentionDays: 7,
   metricsCollectionIntervalSeconds: 60,
+  containerReportIntervalSeconds: 5,
   cleanupSchedule: 'daily',
   tokenExpiration: '1d',
   language: 'en',
@@ -28,6 +29,7 @@ const settings: RuntimeSettingsDto = {
 const form: RuntimeSettingsUpdate = {
   metricsRetentionDays: 90,
   metricsCollectionIntervalSeconds: 120,
+  containerReportIntervalSeconds: 3,
   cleanupSchedule: 'weekly',
   tokenExpiration: '5d',
   language: 'zh-CN',
@@ -48,6 +50,7 @@ describe('buildRuntimeSettingsSectionUpdate', () => {
     expect(buildRuntimeSettingsSectionUpdate(settings, form, 'branding')).toEqual({
       metricsRetentionDays: 7,
       metricsCollectionIntervalSeconds: 60,
+      containerReportIntervalSeconds: 5,
       cleanupSchedule: 'daily',
       tokenExpiration: '1d',
       language: 'en',
@@ -70,6 +73,7 @@ describe('buildRuntimeSettingsSectionUpdate', () => {
     expect(buildRuntimeSettingsSectionUpdate(settings, form, 'certificates')).toEqual({
       metricsRetentionDays: 7,
       metricsCollectionIntervalSeconds: 60,
+      containerReportIntervalSeconds: 5,
       cleanupSchedule: 'daily',
       tokenExpiration: '1d',
       language: 'en',

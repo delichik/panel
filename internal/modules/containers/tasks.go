@@ -19,11 +19,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 	}
 	for _, def := range []tasks.Definition{
 		{
-			Type:       TaskContainerRefresh,
-			AllowRetry: true,
-			Execute:    s.RunContainerRefreshTask,
-		},
-		{
 			Type:       TaskImageRefresh,
 			AllowRetry: true,
 			Execute:    s.RunImageRefreshTask,
@@ -73,15 +68,6 @@ type ApplicationReconcileTrigger struct {
 	Purge          bool     `json:"purge"`
 	Reason         string   `json:"reason"`
 	StopServers    []string `json:"stopServers"`
-}
-
-func (s *Service) RunContainerRefreshTask(tc tasks.TaskContext) error {
-	ctx, task := tc.Context, tc.Task
-	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
-	return s.runSimpleRefreshTask(ctx, task, serverID, "Containers refreshed", func(runCtx context.Context, baseURL string) error {
-		_, err := s.agent.DockerContainers(runCtx, baseURL)
-		return err
-	})
 }
 
 func (s *Service) RunVolumeRefreshTask(tc tasks.TaskContext) error {

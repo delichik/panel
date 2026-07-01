@@ -76,7 +76,7 @@
 
 - 服务器测试、重启、UFW、fail2ban、agent 部署和软件包维护依赖本模块记录任务；其中没有 executor 的一次性 worker 或记录型任务只保留任务记录，不暴露任务中心重试。fail2ban 的接管/应用和取消接管共用 `server_fail2ban_apply` 一次性 worker 任务，保存草稿不创建任务。
 - 应用同步、停止收敛、清理收敛、重启、镜像检查和镜像更新依赖本模块记录任务；保存、停用、删除等业务入口只写 desired state 并触发 `application_reconcile`，协调器产出可见父任务 `application_target_batch` 和私有目标任务 `application_target_apply`、`application_target_stop` 或 `application_target_purge`。每个目标任务只能处理一个应用在一个服务器上的一个动作，并使用 `application:target:<appId>:<serverId>` 队列 key 串行运行。
-- 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；成功后会立即创建 `container_refresh`、`image_refresh` 或 `volume_refresh` 刷新任务。
+- 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；容器状态由 Agent report stream 更新缓存，镜像和卷操作成功后会立即创建 `image_refresh` 或 `volume_refresh` 刷新任务。
 - 手动镜像刷新、Application 镜像升级和 Application 协调恢复仍依赖本模块记录任务；同服务器 Docker 写操作由容器化模块串行执行。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。
@@ -97,3 +97,10 @@
 ## 文档更新触发
 
 新增任务类型、注册字段、并发策略、一次性 worker 排队超时清理能力、周期输入收集规则、状态、步骤结构、日志语义、调度项、手动运行行为或任务筛选字段时，必须更新本文档。
+ 
+## Active Agent Reporting
+
+- `metrics_collect` remains registered as an executable hidden task for manual recovery/debug compatibility, but it is no longer scheduled periodically. Normal metrics ingestion comes from the agent report stream.
+- Container status refresh no longer drives application reconciliation by pulling every compatible agent. Reconciliation uses cached reported observations and only creates target tasks for drifted app/server pairs.
+- Runtime report intervals are pushed to agents through Panel-initiated report streams, so changing settings must not require creating or retrying task records.
+- The agent report stream is a watcher of an agent-side shared collector hub. Task scheduling must not add separate metrics or Docker polling loops for the same data path.

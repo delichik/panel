@@ -10,6 +10,7 @@ export function buildRuntimeSettingsSectionUpdate(
   const update: RuntimeSettingsUpdate = {
     metricsRetentionDays: settings.metricsRetentionDays,
     metricsCollectionIntervalSeconds: settings.metricsCollectionIntervalSeconds,
+    containerReportIntervalSeconds: settings.containerReportIntervalSeconds,
     cleanupSchedule: settings.cleanupSchedule,
     tokenExpiration: settings.tokenExpiration,
     language: settings.language,
@@ -24,6 +25,7 @@ export function buildRuntimeSettingsSectionUpdate(
   } else if (section === 'runtime') {
     update.metricsRetentionDays = form.metricsRetentionDays;
     update.metricsCollectionIntervalSeconds = form.metricsCollectionIntervalSeconds;
+    update.containerReportIntervalSeconds = form.containerReportIntervalSeconds;
     update.cleanupSchedule = form.cleanupSchedule;
     update.tokenExpiration = form.tokenExpiration;
     update.language = form.language;

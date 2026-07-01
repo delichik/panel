@@ -1335,3 +1335,99 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "agent.proto",
 }
+
+const (
+	AgentReportService_Report_FullMethodName = "/panel.agent.v1.AgentReportService/Report"
+)
+
+// AgentReportServiceClient is the client API for AgentReportService service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+type AgentReportServiceClient interface {
+	Report(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AgentReportControl, AgentReport], error)
+}
+
+type agentReportServiceClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewAgentReportServiceClient(cc grpc.ClientConnInterface) AgentReportServiceClient {
+	return &agentReportServiceClient{cc}
+}
+
+func (c *agentReportServiceClient) Report(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[AgentReportControl, AgentReport], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentReportService_ServiceDesc.Streams[0], AgentReportService_Report_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[AgentReportControl, AgentReport]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentReportService_ReportClient = grpc.BidiStreamingClient[AgentReportControl, AgentReport]
+
+// AgentReportServiceServer is the server API for AgentReportService service.
+// All implementations must embed UnimplementedAgentReportServiceServer
+// for forward compatibility.
+type AgentReportServiceServer interface {
+	Report(grpc.BidiStreamingServer[AgentReportControl, AgentReport]) error
+	mustEmbedUnimplementedAgentReportServiceServer()
+}
+
+// UnimplementedAgentReportServiceServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedAgentReportServiceServer struct{}
+
+func (UnimplementedAgentReportServiceServer) Report(grpc.BidiStreamingServer[AgentReportControl, AgentReport]) error {
+	return status.Errorf(codes.Unimplemented, "method Report not implemented")
+}
+func (UnimplementedAgentReportServiceServer) mustEmbedUnimplementedAgentReportServiceServer() {}
+func (UnimplementedAgentReportServiceServer) testEmbeddedByValue()                            {}
+
+// UnsafeAgentReportServiceServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to AgentReportServiceServer will
+// result in compilation errors.
+type UnsafeAgentReportServiceServer interface {
+	mustEmbedUnimplementedAgentReportServiceServer()
+}
+
+func RegisterAgentReportServiceServer(s grpc.ServiceRegistrar, srv AgentReportServiceServer) {
+	// If the following call pancis, it indicates UnimplementedAgentReportServiceServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&AgentReportService_ServiceDesc, srv)
+}
+
+func _AgentReportService_Report_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(AgentReportServiceServer).Report(&grpc.GenericServerStream[AgentReportControl, AgentReport]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentReportService_ReportServer = grpc.BidiStreamingServer[AgentReportControl, AgentReport]
+
+// AgentReportService_ServiceDesc is the grpc.ServiceDesc for AgentReportService service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var AgentReportService_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "panel.agent.v1.AgentReportService",
+	HandlerType: (*AgentReportServiceServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Report",
+			Handler:       _AgentReportService_Report_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "agent.proto",
+}

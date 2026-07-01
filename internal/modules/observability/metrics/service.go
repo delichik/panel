@@ -159,6 +159,18 @@ func (s *Service) Save(ctx context.Context, snap linux.MetricsSnapshot) error {
 	return err
 }
 
+func (s *Service) SaveReported(ctx context.Context, serverID string, sampleAt time.Time, snap linux.MetricsSnapshot) error {
+	snap.ServerID = serverID
+	snap.Time = sampleAt
+	if err := s.Save(ctx, snap); err != nil {
+		return err
+	}
+	if reporter, ok := s.servers.(reachabilityReporter); ok {
+		_ = reporter.RecordMetricsReachability(ctx, serverID, true, "")
+	}
+	return nil
+}
+
 func (s *Service) Query(ctx context.Context, serverID, rng string) (Series, error) {
 	duration := map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "1d": 24 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}[rng]
 	if duration == 0 {

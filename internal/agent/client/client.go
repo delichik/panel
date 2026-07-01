@@ -35,6 +35,20 @@ type GRPCClient struct {
 const dockerImagePullTimeout = 15 * time.Minute
 const maintenanceTimeout = 65 * time.Minute
 
+type ReportConfig struct {
+	ServerID                  string
+	MetricsIntervalSeconds    int
+	ContainersIntervalSeconds int
+}
+
+type AgentReport struct {
+	SampleAt      time.Time
+	Metrics       *linux.MetricsSnapshot
+	Containers    []agentcontract.DockerContainer
+	HasContainers bool
+	Reason        string
+}
+
 func NewGRPCClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*GRPCClient, error) {
 	if timeout == 0 {
 		timeout = 30 * time.Second
@@ -372,6 +386,81 @@ func (c *GRPCClient) DockerVolumeDelete(ctx context.Context, endpoint, name stri
 		return client.DockerVolumeDelete(ctx, &agentpb.DockerVolumeDeleteRequest{Name: name})
 	})
 	return err
+}
+
+func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config func() ReportConfig, handle func(context.Context, AgentReport) error) error {
+	conn, err := c.dial(endpoint)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	stream, err := agentpb.NewAgentReportServiceClient(conn).Report(ctx)
+	if err != nil {
+		return wrapAgentError(err)
+	}
+	errCh := make(chan error, 2)
+	sendConfig := func(cfg ReportConfig) error {
+		return stream.Send(&agentpb.AgentReportControl{
+			ServerId: cfg.ServerID,
+			Config: &agentpb.AgentReportConfig{
+				MetricsIntervalSeconds:    int32(cfg.MetricsIntervalSeconds),
+				ContainersIntervalSeconds: int32(cfg.ContainersIntervalSeconds),
+			},
+		})
+	}
+	go func() {
+		var last ReportConfig
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			next := config()
+			if next != last {
+				if err := sendConfig(next); err != nil {
+					errCh <- err
+					return
+				}
+				last = next
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case err := <-errCh:
+			return wrapAgentError(err)
+		default:
+		}
+		msg, err := stream.Recv()
+		if err != nil {
+			return wrapAgentError(err)
+		}
+		report := AgentReport{Reason: msg.Reason}
+		if msg.SampleAt != nil {
+			report.SampleAt = msg.SampleAt.AsTime().UTC().Truncate(time.Second)
+		}
+		if msg.Metrics != nil {
+			snap := agentrpc.GoSnapshot(msg.Metrics)
+			report.Metrics = &snap
+		}
+		if msg.Containers != nil {
+			report.HasContainers = true
+			report.Containers = make([]agentcontract.DockerContainer, 0, len(msg.Containers.Items))
+			for _, item := range msg.Containers.Items {
+				report.Containers = append(report.Containers, agentrpc.GoDockerContainer(item))
+			}
+		}
+		if handle != nil {
+			if err := handle(ctx, report); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func callRPC[T any](c *GRPCClient, ctx context.Context, endpoint string, timeout time.Duration, fn func(context.Context, agentpb.AgentServiceClient) (T, error)) (T, error) {

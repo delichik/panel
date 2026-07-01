@@ -43,6 +43,7 @@ type ServerVariableDefinitionsUpdate struct {
 type RuntimeUpdate struct {
 	MetricsRetentionDays             int                         `json:"metricsRetentionDays"`
 	MetricsCollectionIntervalSeconds int                         `json:"metricsCollectionIntervalSeconds"`
+	ContainerReportIntervalSeconds   int                         `json:"containerReportIntervalSeconds"`
 	CleanupSchedule                  string                      `json:"cleanupSchedule"`
 	TokenExpiration                  string                      `json:"tokenExpiration"`
 	Language                         string                      `json:"language"`
@@ -59,6 +60,7 @@ type RuntimeSettings struct {
 	DataRoot                         string                     `json:"dataRoot"`
 	MetricsRetentionDays             int                        `json:"metricsRetentionDays"`
 	MetricsCollectionIntervalSeconds int                        `json:"metricsCollectionIntervalSeconds"`
+	ContainerReportIntervalSeconds   int                        `json:"containerReportIntervalSeconds"`
 	CleanupSchedule                  string                     `json:"cleanupSchedule"`
 	TokenExpiration                  string                     `json:"tokenExpiration"`
 	Language                         string                     `json:"language"`
@@ -154,6 +156,9 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	if input.RemoteCommandTimeoutSeconds == 0 {
 		input.RemoteCommandTimeoutSeconds = current.RemoteCommandTimeoutSeconds
 	}
+	if input.ContainerReportIntervalSeconds == 0 {
+		input.ContainerReportIntervalSeconds = current.ContainerReportIntervalSeconds
+	}
 	certSettings := current.Certificates
 	if input.Certificates != nil {
 		certSettings = *input.Certificates
@@ -172,6 +177,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 		DataRoot:                         current.DataRoot,
 		MetricsRetentionDays:             input.MetricsRetentionDays,
 		MetricsCollectionIntervalSeconds: input.MetricsCollectionIntervalSeconds,
+		ContainerReportIntervalSeconds:   input.ContainerReportIntervalSeconds,
 		CleanupSchedule:                  input.CleanupSchedule,
 		TokenExpiration:                  NormalizeTokenExpiration(input.TokenExpiration),
 		Language:                         i18n.NormalizeLocale(input.Language),
@@ -191,6 +197,7 @@ func (s *Service) Update(ctx context.Context, input RuntimeUpdate) (RuntimeSetti
 	s.mu.Lock()
 	s.rt.MetricsRetentionDays = next.MetricsRetentionDays
 	s.rt.MetricsCollectionIntervalSeconds = next.MetricsCollectionIntervalSeconds
+	s.rt.ContainerReportIntervalSeconds = next.ContainerReportIntervalSeconds
 	s.rt.CleanupSchedule = next.CleanupSchedule
 	s.rt.TokenExpiration = next.TokenExpiration
 	s.rt.Language = next.Language
@@ -310,6 +317,10 @@ func (s *Service) load(ctx context.Context) error {
 			if n, err := strconv.Atoi(value); err == nil {
 				next.MetricsCollectionIntervalSeconds = n
 			}
+		case "containerReportIntervalSeconds":
+			if n, err := strconv.Atoi(value); err == nil {
+				next.ContainerReportIntervalSeconds = n
+			}
 		case "cleanupSchedule":
 			next.CleanupSchedule = value
 		case RuntimeSettingTokenExpiration:
@@ -374,6 +385,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		DataRoot:                         cfg.DataRoot,
 		MetricsRetentionDays:             7,
 		MetricsCollectionIntervalSeconds: 60,
+		ContainerReportIntervalSeconds:   5,
 		CleanupSchedule:                  "daily",
 		TokenExpiration:                  DefaultTokenExpiration,
 		Language:                         i18n.DefaultLocale(),
@@ -393,6 +405,7 @@ func runtimeValues(settings RuntimeSettings, includeJWT bool) map[string]string 
 	values := map[string]string{
 		"metricsRetentionDays":                             strconv.Itoa(settings.MetricsRetentionDays),
 		"metricsCollectionIntervalSeconds":                 strconv.Itoa(settings.MetricsCollectionIntervalSeconds),
+		"containerReportIntervalSeconds":                   strconv.Itoa(settings.ContainerReportIntervalSeconds),
 		"cleanupSchedule":                                  settings.CleanupSchedule,
 		RuntimeSettingTokenExpiration:                      settings.TokenExpiration,
 		"language":                                         settings.Language,
@@ -413,8 +426,11 @@ func validateRuntimeSettings(settings RuntimeSettings) error {
 	if settings.MetricsRetentionDays < 1 {
 		return panelerr.Validation("invalid_metrics_retention", "Metrics retention must be at least 1 day")
 	}
-	if settings.MetricsCollectionIntervalSeconds < 10 {
-		return panelerr.Validation("invalid_metrics_interval", "Metrics collection interval must be at least 10 seconds")
+	if settings.MetricsCollectionIntervalSeconds < 1 {
+		return panelerr.Validation("invalid_metrics_interval", "Metrics collection interval must be at least 1 second")
+	}
+	if settings.ContainerReportIntervalSeconds < 1 {
+		return panelerr.Validation("invalid_container_report_interval", "Container report interval must be at least 1 second")
 	}
 	switch settings.CleanupSchedule {
 	case "hourly", "daily", "weekly":

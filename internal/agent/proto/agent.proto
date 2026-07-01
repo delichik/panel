@@ -43,7 +43,28 @@ service AgentService {
   rpc RuntimePersistentRestore(RuntimePersistentRestoreRequest) returns (RuntimePersistentRestoreResponse);
 }
 
+service AgentReportService {
+  rpc Report(stream AgentReportControl) returns (stream AgentReport);
+}
+
 message Empty {}
+
+message AgentReportControl {
+  string server_id = 1;
+  AgentReportConfig config = 2;
+}
+
+message AgentReport {
+  google.protobuf.Timestamp sample_at = 1;
+  MetricsSnapshotResponse metrics = 2;
+  DockerContainersResponse containers = 3;
+  string reason = 4;
+}
+
+message AgentReportConfig {
+  int32 metrics_interval_seconds = 1;
+  int32 containers_interval_seconds = 2;
+}
 
 message OKResponse {
   bool ok = 1;

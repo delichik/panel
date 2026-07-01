@@ -27,10 +27,17 @@ const (
 	TraitCertificateNotBefore   = "agent.certificate.not_before"
 	TraitCertificateNotAfter    = "agent.certificate.not_after"
 
+	TraitReportStatus        = "agent.report.status"
+	TraitReportLastMessageAt = "agent.report.last_message_at"
+	TraitReportLastError     = "agent.report.last_error"
+
 	StatusCompatible   = "compatible"
 	StatusIncompatible = "incompatible"
 	StatusUnavailable  = "unavailable"
 	StatusUndeployable = "undeployable"
+
+	ReportStatusConnected    = "connected"
+	ReportStatusDisconnected = "disconnected"
 
 	DefaultDockerHost = "unix:///var/run/docker.sock"
 )

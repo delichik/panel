@@ -257,7 +257,7 @@ func (a *TLSAssets) IssueServerCertificate(commonName string, hosts []string) (S
 	if err != nil {
 		return ServerCertificate{}, err
 	}
-	req := leafRequest{CommonName: commonName, Usages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, Validity: DefaultLeafValidity}
+	req := leafRequest{CommonName: commonName, Usages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}, Validity: DefaultLeafValidity}
 	for _, host := range hosts {
 		host = strings.TrimSpace(host)
 		if host == "" {

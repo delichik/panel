@@ -60,7 +60,7 @@
 - `web/src/views/resources/`、`internal/modules/containers`
   - 资源导航、容器/镜像/网络/卷页面、托管警告、镜像批量升级和资源删除文案已接入英文与简体中文词条；Docker Engine 和镜像仓库原始诊断保留原文。
   - 镜像“更多”菜单、全部更新确认、删除未使用镜像确认，以及卷删除未使用确认已接入英文与简体中文词条。
-  - 容器、镜像和卷同步操作完成提示，以及 `container_refresh` / `volume_refresh` 刷新任务类型已接入英文与简体中文词条。
+  - 容器、镜像和卷同步操作完成提示，以及 `volume_refresh` 刷新任务类型已接入英文与简体中文词条；容器状态改由 Agent report stream 更新，不再提供 `container_refresh` 任务类型。
 
 - `web/src/views/settings/_shared/SettingsPageContent.vue`、`internal/modules/settings`
   - Runtime 日志等级设置的前端标签、选项文案和 `invalid_log_level` 后端错误码已接入英文、简体中文词条；进程日志内容保持英文，不纳入翻译。
@@ -124,3 +124,6 @@
 
 - `web/src/views/settings/backups/index.vue`、`web/src/views/maintenance/backup.vue`、`internal/modules/backups`
   - 备份导出、还原确认和导出维护退出在容器内自重启时新增自动重启提示文案，已接入英文与简体中文词条；不新增独立 restart API。
+ 
+- `web/src/views/settings/_shared/SettingsPageContent.vue`
+  - Metrics report interval and container report interval labels are wired through `web/src/i18n/index.ts` for English and Simplified Chinese.

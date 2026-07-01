@@ -213,7 +213,7 @@ export const mockFetch: typeof fetch = async (input, init = {}) => {
     const resource = match[2]; const suffix = match[3] ?? '';
     if (resource === 'containers' && !suffix && method === 'GET') return envelope(state.containers);
     if (resource === 'containers' && suffix.endsWith('/logs') && method === 'GET') return envelope({ containerId: decodeURIComponent(suffix.split('/')[0]), logs: '[mock] container log line 1\n[mock] container log line 2\n' });
-    if (resource === 'containers' && suffix && method === 'POST') return envelope({ refreshTaskId: taskCreated('container.action', match[1]).id }, 202);
+    if (resource === 'containers' && suffix && method === 'POST') return envelope({});
     if (resource === 'containers' && suffix && method === 'DELETE') { state.containers = state.containers.filter((item) => item.id !== decodeURIComponent(suffix)); return envelope({}); }
     if (resource === 'images' && !suffix && method === 'GET') return envelope({ serverId: match[1], items: state.images, lastRefreshedAt: new Date().toISOString(), refreshing: false });
     if (resource === 'images' && suffix === 'refresh' && method === 'POST') return envelope({ taskId: taskCreated('images.refresh', match[1]).id }, 202);

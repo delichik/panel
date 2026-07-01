@@ -25,7 +25,7 @@
 - 网络只读。
 - 卷支持查询、单个删除和批量删除未使用卷，必须展示使用状态；批量删除执行时需重新查询使用状态，只删除执行瞬间仍未使用的卷。
 - 容器、镜像、卷页面发起的资源写操作同步执行并返回；手动镜像刷新和 Application 镜像升级仍创建任务。
-- 同步资源写操作成功后立即创建对应刷新任务：容器使用 `container_refresh`，镜像使用 `image_refresh`，卷使用 `volume_refresh`。
+- 同步资源写操作成功后，容器列表等待 Agent report stream 的近实时/周期快照更新缓存；镜像和卷仍立即创建对应刷新任务：镜像使用 `image_refresh`，卷使用 `volume_refresh`。
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
@@ -109,3 +109,10 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - Facility routes and application reverse proxy routes both show HTTPS/certificate state on the domain group header. Individual path rows show only path-specific properties such as rule type, target, static source, redirect target, or upstream proxy target.
 - Uploaded site content is distributed through agent managed files and mounted read-only into the nginx container. Server directories still use read-only bind mounts from the target node.
 - Facility reverse proxy deployment maintains a hidden managed application identity with id `facility-reverse-proxy` only to satisfy application lifecycle foreign keys and deployment record queries. The facility configuration remains in `facility_app_configs`, the managed identity is filtered out of normal application lists, and each save/reconcile writes the latest `application_lifecycle_operations` plus per-node `application_lifecycle_targets` shown on the facility app page.
+ 
+## Agent Report Cache
+
+- Container list reads use the latest `container_observations` snapshot saved from the agent report stream. They no longer pull `DockerContainers` during normal list or application reconciliation paths.
+- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report.
+- Application reconciliation collectors read cached observations only. A server that reports a failed or drifted container can generate work for that server without redeploying other servers that are already healthy.
+- `application_reconcile_states` keeps the exponential backoff state. Automatic reconciliation must honor `reconcile_next_run_at`; healthy observations clear failures only after the configured success streak.

@@ -44,6 +44,7 @@ type App struct {
 	tasks          *tasks.Worker
 	metricsCleanup *metrics.CleanupWorker
 	system         *systeminfo.Service
+	agentReports   *agentReportCollector
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -173,6 +174,7 @@ func New(cfg config.Config) (*App, error) {
 		MetricsDatabase: cfg.MetricsDatabase,
 		PanelVersion:    systemSvc.Version().Version,
 	})
+	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc)
 	a := &App{
 		cfg:            cfg,
 		store:          store,
@@ -181,6 +183,7 @@ func New(cfg config.Config) (*App, error) {
 		tasks:          taskWorker,
 		metricsCleanup: metricsCleanup,
 		system:         systemSvc,
+		agentReports:   reportCollector,
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -189,6 +192,7 @@ func New(cfg config.Config) (*App, error) {
 	}()
 	taskWorker.Start(context.Background())
 	metricsCleanup.Start(context.Background())
+	reportCollector.Start(context.Background())
 	logging.L().Info("background services started")
 	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, taskWorker), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.L().Info("application initialized")
@@ -204,6 +208,9 @@ func (a *App) Close() error {
 	}
 	if a.system != nil {
 		a.system.Close()
+	}
+	if a.agentReports != nil {
+		a.agentReports.Stop()
 	}
 	return a.store.Close()
 }

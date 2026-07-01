@@ -970,6 +970,7 @@ export interface RuntimeSettingsDto {
   dataRoot: string;
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
+  containerReportIntervalSeconds: number;
   cleanupSchedule: string;
   tokenExpiration: TokenExpiration;
   language: string;
@@ -1157,6 +1158,7 @@ export interface RuntimeBrandingSettingsDto {
 export interface RuntimeSettingsUpdate {
   metricsRetentionDays: number;
   metricsCollectionIntervalSeconds: number;
+  containerReportIntervalSeconds: number;
   cleanupSchedule: string;
   tokenExpiration: TokenExpiration;
   language: string;

@@ -3,6 +3,7 @@ package containerization
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strconv"
@@ -23,7 +24,6 @@ const (
 	TaskContainerStop        = "container_stop"
 	TaskContainerRestart     = "container_restart"
 	TaskContainerDelete      = "container_delete"
-	TaskContainerRefresh     = "container_refresh"
 	TaskImagePull            = "image_pull"
 	TaskImageRefresh         = "image_refresh"
 	TaskImageDelete          = "image_delete"
@@ -162,13 +162,11 @@ func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, tas
 }
 
 func (s *Service) Containers(ctx context.Context, serverID string) ([]Container, error) {
-	srv, baseURL, err := s.readyServer(ctx, serverID)
-	if err != nil {
+	if _, _, err := s.readyServer(ctx, serverID); err != nil {
 		return nil, err
 	}
-	items, err := s.agent.DockerContainers(ctx, baseURL)
+	items, _, err := s.reportedContainers(ctx, serverID)
 	if err != nil {
-		_ = s.handleAgentError(ctx, srv, err)
 		return nil, err
 	}
 	out := make([]Container, 0, len(items))
@@ -177,6 +175,79 @@ func (s *Service) Containers(ctx context.Context, serverID string) ([]Container,
 		out = append(out, Container{DockerContainer: item, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
 	}
 	return out, nil
+}
+
+func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, sampleAt time.Time, items []agentcontract.DockerContainer) error {
+	serverID = strings.TrimSpace(serverID)
+	if serverID == "" {
+		return panelerr.Validation("server_required", "Server is required")
+	}
+	if sampleAt.IsZero() {
+		sampleAt = time.Now().UTC()
+	}
+	sampleAt = sampleAt.UTC().Truncate(time.Second)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `DELETE FROM container_observations WHERE server_id=?`, serverID); err != nil {
+		return err
+	}
+	for _, item := range items {
+		if strings.TrimSpace(item.ID) == "" {
+			continue
+		}
+		appID, instanceID, managed := managedLabels(item.Labels)
+		raw, err := json.Marshal(item)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO container_observations(server_id,container_id,sample_at,container_json,managed,application_id,instance_id,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+			serverID, item.ID, sampleAt.Format(time.RFC3339Nano), string(raw), boolInt(managed), appID, instanceID, now); err != nil {
+			return err
+		}
+		if managed {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+				VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
+				instanceID, appID, serverID, sampleAt.Format(time.RFC3339Nano)); err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Service) reportedContainers(ctx context.Context, serverID string) ([]agentcontract.DockerContainer, *time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT container_json,sample_at FROM container_observations WHERE server_id=? ORDER BY container_id`, serverID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	items := []agentcontract.DockerContainer{}
+	var latest time.Time
+	for rows.Next() {
+		var raw, sampleRaw string
+		if err := rows.Scan(&raw, &sampleRaw); err != nil {
+			return nil, nil, err
+		}
+		var item agentcontract.DockerContainer
+		if err := json.Unmarshal([]byte(raw), &item); err != nil {
+			return nil, nil, err
+		}
+		if sampleAt, err := time.Parse(time.RFC3339Nano, sampleRaw); err == nil && sampleAt.After(latest) {
+			latest = sampleAt
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if latest.IsZero() {
+		return items, nil, nil
+	}
+	return items, &latest, nil
 }
 
 func (s *Service) ContainerLogs(ctx context.Context, serverID, containerID string, tail int) (ContainerLogs, error) {
@@ -461,13 +532,6 @@ func (s *Service) DeleteUnusedVolumes(ctx context.Context, serverID string) (Ope
 	return s.refreshOperationResult(ctx, serverID, "volumes")
 }
 
-func (s *Service) RefreshContainers(ctx context.Context, serverID, triggerType, operationID string) (tasks.Task, error) {
-	return s.startSimpleResourceRefresh(ctx, serverID, TaskContainerRefresh, triggerType, operationID, "Refreshing containers", "Containers refreshed", func(runCtx context.Context, baseURL string) error {
-		_, err := s.agent.DockerContainers(runCtx, baseURL)
-		return err
-	})
-}
-
 func (s *Service) RefreshVolumes(ctx context.Context, serverID, triggerType, operationID string) (tasks.Task, error) {
 	return s.startSimpleResourceRefresh(ctx, serverID, TaskVolumeRefresh, triggerType, operationID, "Refreshing volumes", "Volumes refreshed", func(runCtx context.Context, baseURL string) error {
 		_, err := s.agent.DockerVolumes(runCtx, baseURL)
@@ -599,22 +663,17 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, operatio
 		if !srv.Reachable || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
 			continue
 		}
-		baseURL := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
-		containers, err := s.agent.DockerContainers(ctx, baseURL)
+		containers, _, err := s.reportedContainers(ctx, srv.ID)
 		if err != nil {
-			_ = s.handleAgentError(ctx, srv, err)
 			continue
 		}
 		observed := map[string]agentcontract.DockerContainer{}
 		for _, container := range containers {
-			appID, instanceID, managed := managedLabels(container.Labels)
+			_, instanceID, managed := managedLabels(container.Labels)
 			if !managed {
 				continue
 			}
 			observed[instanceID] = container
-			_, _ = s.db.ExecContext(ctx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
-				VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
-				instanceID, appID, srv.ID, time.Now().UTC().Format(time.RFC3339Nano))
 		}
 		rows, err := s.db.QueryContext(ctx, `SELECT instance_id,application_id FROM application_reconcile_states WHERE server_id=?`, srv.ID)
 		if err != nil {
@@ -943,7 +1002,7 @@ func (s *Service) refreshOperationResult(ctx context.Context, serverID, resource
 	)
 	switch resource {
 	case "containers":
-		task, err = s.RefreshContainers(refreshCtx, serverID, "user", "")
+		return OperationResult{}, nil
 	case "images":
 		task, err = s.RefreshImages(refreshCtx, serverID, "user", "")
 	case "volumes":

@@ -1087,6 +1087,31 @@ func (s *Service) markAgentConfigured(ctx context.Context, serverID, url string)
 	return err
 }
 
+func (s *Service) RecordAgentReportStream(ctx context.Context, serverID string, connected bool, lastMessageAt time.Time, msg string) error {
+	var rawTraits string
+	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+		return err
+	}
+	traits := map[string]string{}
+	_ = json.Unmarshal([]byte(rawTraits), &traits)
+	if connected {
+		traits[agentcontract.TraitReportStatus] = agentcontract.ReportStatusConnected
+		delete(traits, agentcontract.TraitReportLastError)
+	} else {
+		traits[agentcontract.TraitReportStatus] = agentcontract.ReportStatusDisconnected
+		if strings.TrimSpace(msg) != "" {
+			traits[agentcontract.TraitReportLastError] = strings.TrimSpace(msg)
+		}
+	}
+	if !lastMessageAt.IsZero() {
+		traits[agentcontract.TraitReportLastMessageAt] = lastMessageAt.UTC().Format(time.RFC3339Nano)
+	}
+	traitsJSON, _ := json.Marshal(traits)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)
+	return err
+}
+
 func missingAgentCapabilities(values []string) []string {
 	have := map[string]struct{}{}
 	for _, value := range values {

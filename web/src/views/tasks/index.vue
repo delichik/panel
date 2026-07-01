@@ -50,7 +50,6 @@ const supportedTaskTypes = [
   'container_stop',
   'container_restart',
   'container_delete',
-  'container_refresh',
   'image_pull',
   'image_refresh',
   'image_delete',

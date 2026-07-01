@@ -17,8 +17,10 @@ import (
 
 type Handler struct {
 	agentpb.UnimplementedAgentServiceServer
+	agentpb.UnimplementedAgentReportServiceServer
 	collector agentsystem.LocalCollector
 	runtime   *agentdocker.LocalRuntime
+	reports   *reportHub
 }
 
 type HandlerConfig struct {
@@ -31,11 +33,16 @@ func NewHandler(cfg ...HandlerConfig) *Handler {
 		dockerHost = cfg[0].DockerHost
 	}
 	runtime, _ := agentdocker.NewLocalRuntime(dockerHost)
-	return &Handler{collector: agentsystem.LocalCollector{}, runtime: runtime}
+	collector := agentsystem.LocalCollector{}
+	return &Handler{collector: collector, runtime: runtime, reports: newReportHub(collector, runtime)}
 }
 
 func RegisterAgentService(server *grpc.Server, handler *Handler) {
 	agentpb.RegisterAgentServiceServer(server, handler)
+}
+
+func RegisterAgentReportService(server *grpc.Server, handler *Handler) {
+	agentpb.RegisterAgentReportServiceServer(server, handler)
 }
 
 func remoteError(err error) error {

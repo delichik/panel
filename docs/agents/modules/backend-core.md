@@ -7,6 +7,16 @@
 - Backup/restore restart requests POST the next mode to the local `panel_init` listener, asking it to restart Panel with `--maintenance-mode backup_export`, `restore`, or `normal`.
 - `cmd/panel/main.go` must not enter backup/restore maintenance mode from pending files alone; the maintenance mode argument is the required gate.
 
+## Agent Report Stream
+
+- Panel starts an internal `agentReportCollector` worker from `internal/bootstrap/panel/agent_report_collector.go`. It does not expose a Panel-side report API or listen address.
+- The collector actively dials each compatible agent and opens `AgentReportService.Report`. Panel sends the current metrics and container report intervals on the stream; the agent responds on that same Panel-initiated stream with metrics and container snapshots.
+- The collector inspects compatible agents every second. It creates missing streams, recreates streams when the agent endpoint changes, and cancels streams with no messages for `max(10s, min(metricsInterval, containerInterval) * 3)`. Stream health is recorded in `agent.report.status`, `agent.report.last_message_at`, and `agent.report.last_error`; it does not change the normal `agent.status`.
+- Agent-side report streams are watchers over one shared collector hub. The hub starts only while at least one watcher exists, stops when the last watcher leaves, and broadcasts one collected periodic result to all watchers that are due at the same Unix-aligned `sampleAt`.
+- The agent also watches Docker container events while report watchers exist. Container create/start/stop/die/destroy and related events trigger an immediate full container snapshot with reason `container_change`; periodic Unix-aligned full snapshots remain the baseline.
+- Runtime settings now include `containerReportIntervalSeconds` in addition to `metricsCollectionIntervalSeconds`. Both values are persisted in `runtime_settings`, exposed through `/api/v1/settings/runtime`, and may be changed while agents are connected.
+- App database schema includes `container_observations`, which stores the latest full container snapshot per server. Metrics snapshots continue to use the metrics database.
+
 ## 适用场景
 
 修改服务启动、依赖装配、API 路由、配置加载、数据库迁移、认证、运行时设置、统一响应或错误处理时，先读本文档。
