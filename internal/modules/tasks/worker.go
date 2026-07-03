@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	defaultQueuePollInterval   = 5 * time.Second
+	defaultQueuePollInterval   = time.Second
 	defaultCleanupInterval     = time.Second
 	defaultOrphanCheckInterval = 5 * time.Second
 )

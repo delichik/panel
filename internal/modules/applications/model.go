@@ -35,12 +35,32 @@ const (
 	LifecycleStatusDeployed          = "deployed"
 	LifecycleStatusPartiallyDeployed = "partially_deployed"
 	LifecycleStatusFailed            = "failed"
+	LifecycleStatusSuperseded        = "superseded"
 
-	LifecycleTargetStatusPending   = "pending"
-	LifecycleTargetStatusPreparing = "preparing"
-	LifecycleTargetStatusDeploying = "deploying"
-	LifecycleTargetStatusRunning   = "running"
-	LifecycleTargetStatusFailed    = "failed"
+	LifecycleTargetStatusPending    = "pending"
+	LifecycleTargetStatusPreparing  = "preparing"
+	LifecycleTargetStatusDeploying  = "deploying"
+	LifecycleTargetStatusRunning    = "running"
+	LifecycleTargetStatusFailed     = "failed"
+	LifecycleTargetStatusSuperseded = "superseded"
+
+	LifecycleTargetActionApply = "apply"
+	LifecycleTargetActionStop  = "stop"
+	LifecycleTargetActionPurge = "purge"
+
+	LifecycleTargetStatePlanned         = "planned"
+	LifecycleTargetStateReady           = "ready"
+	LifecycleTargetStateClaimed         = "claimed"
+	LifecycleTargetStatePreparing       = "preparing"
+	LifecycleTargetStateApplying        = "applying"
+	LifecycleTargetStateStopping        = "stopping"
+	LifecycleTargetStatePurging         = "purging"
+	LifecycleTargetStateVerifying       = "verifying"
+	LifecycleTargetStateSucceeded       = "succeeded"
+	LifecycleTargetStateFailedRetryable = "failed_retryable"
+	LifecycleTargetStateFailed          = "failed"
+	LifecycleTargetStateSuperseded      = "superseded"
+	LifecycleTargetStateCancelled       = "cancelled"
 )
 
 type Application struct {
@@ -195,22 +215,36 @@ type LifecycleOperation struct {
 }
 
 type LifecycleTarget struct {
-	ID            string     `json:"id"`
-	OperationID   string     `json:"operationId"`
-	ApplicationID string     `json:"applicationId"`
-	ServerID      string     `json:"serverId"`
-	ServerName    string     `json:"serverName,omitempty"`
-	Status        string     `json:"status"`
-	DesiredState  string     `json:"desiredState"`
-	InstanceID    string     `json:"instanceId,omitempty"`
-	ContainerName string     `json:"containerName,omitempty"`
-	ContainerID   string     `json:"containerId,omitempty"`
-	Stage         string     `json:"stage,omitempty"`
-	Error         string     `json:"error,omitempty"`
-	CreatedAt     time.Time  `json:"createdAt"`
-	StartedAt     *time.Time `json:"startedAt,omitempty"`
-	FinishedAt    *time.Time `json:"finishedAt,omitempty"`
-	UpdatedAt     time.Time  `json:"updatedAt"`
+	ID                string     `json:"id"`
+	OperationID       string     `json:"operationId"`
+	ApplicationID     string     `json:"applicationId"`
+	ServerID          string     `json:"serverId"`
+	ServerName        string     `json:"serverName,omitempty"`
+	Action            string     `json:"action,omitempty"`
+	State             string     `json:"state,omitempty"`
+	Status            string     `json:"status"`
+	TargetKey         string     `json:"targetKey,omitempty"`
+	DesiredState      string     `json:"desiredState"`
+	DesiredGeneration int        `json:"desiredGeneration,omitempty"`
+	DesiredSpecHash   string     `json:"desiredSpecHash,omitempty"`
+	Priority          int        `json:"priority,omitempty"`
+	Attempt           int        `json:"attempt,omitempty"`
+	NextRunAt         *time.Time `json:"nextRunAt,omitempty"`
+	LeaseOwner        string     `json:"leaseOwner,omitempty"`
+	LeaseExpiresAt    *time.Time `json:"leaseExpiresAt,omitempty"`
+	ClaimedTaskID     string     `json:"claimedTaskId,omitempty"`
+	InstanceID        string     `json:"instanceId,omitempty"`
+	ContainerName     string     `json:"containerName,omitempty"`
+	ContainerID       string     `json:"containerId,omitempty"`
+	Stage             string     `json:"stage,omitempty"`
+	Error             string     `json:"error,omitempty"`
+	ErrorCode         string     `json:"errorCode,omitempty"`
+	ErrorMessage      string     `json:"errorMessage,omitempty"`
+	ErrorDetail       string     `json:"errorDetail,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	StartedAt         *time.Time `json:"startedAt,omitempty"`
+	FinishedAt        *time.Time `json:"finishedAt,omitempty"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 type SaveInput struct {
@@ -231,9 +265,29 @@ type OperationResult struct {
 	ApplicationRuntime *Runtime    `json:"runtime,omitempty"`
 }
 
-type ReconcileTaskOptions struct {
-	Purge bool
-	Force bool
+type DeploymentPlanRequest struct {
+	ApplicationID       string
+	ServerIDs           []string
+	StopServers         []string
+	Purge               bool
+	Force               bool
+	Manual              bool
+	TriggerType         string
+	TriggerResourceType string
+	TriggerResourceID   string
+	Reason              string
+}
+
+type DeploymentPlanResult struct {
+	OperationIDs        []string
+	CreatedTargetIDs    []string
+	ReusedTargetIDs     []string
+	SupersededTargetIDs []string
+	BlockedTargetIDs    []string
+	CreatedTargets      []LifecycleTarget
+	ReusedTargets       []LifecycleTarget
+	SupersededTargets   []LifecycleTarget
+	BlockedTargets      []LifecycleTarget
 }
 
 type MigrationInput struct {

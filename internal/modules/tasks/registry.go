@@ -154,6 +154,11 @@ func ConcurrencyKeyFor(def Definition, in CreateInput) string {
 		}
 		return ""
 	case ConcurrencyResourceQueue, ConcurrencyResourceExclusive, "":
+		if def.ConcurrencyKey != nil {
+			if key := strings.TrimSpace(def.ConcurrencyKey(in)); key != "" {
+				return key
+			}
+		}
 		resourceType := firstNonEmpty(in.ResourceType, "task")
 		resourceID := firstNonEmpty(in.ResourceID, in.ServerID, in.NodeID)
 		if resourceID == "" {

@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/tasks/index.vue`
+  - Task Center deployment target projection labels, target diagnostics, retry/backoff text, claimed-task text, and lifecycle target state labels are wired through `web/src/i18n/index.ts` for English and Simplified Chinese. Docker/Agent diagnostic payloads are displayed as original runtime text and are not translated.
 - `web/src/views/applications/apps/ApplicationEditor.vue`
   - 应用编辑器主按钮从“保存并部署”调整为“保存并应用 / Save and apply”，保存中的阻塞遮罩和保存阶段文案已接入英文与简体中文词条；保存启用应用只提交保存会话，由保存接口触发协调。
 - `web/src/views/applications/apps/ApplicationEditor.vue`、`internal/modules/applications/spec`、`internal/platform/i18n`
@@ -12,6 +14,7 @@
   - 应用控制平面重构后的“同步 / 停用 / 立即同步 / 删除后由同步清理运行时资源”文案已接入英文与简体中文词条；新增后端错误码 `application_reconciler_unavailable` 已接入简体中文翻译。
 - `web/src/views/tasks/index.vue`
   - 任务中心新增应用协调与目标任务展示名：`application_target_batch`、`application_target_apply`、`application_target_stop`、`application_target_purge` 已接入英文与简体中文词条。
+  - 任务中心新增应用部署上下文字段：部署列、目标标题、动作、generation 与 spec hash 摘要已接入英文与简体中文词条。
 - `web/src/views/applications/facility-apps/index.vue`
   - 入口网关应用路由区域新增“打开应用”入口，英文与简体中文词条已接入 `web/src/i18n/index.ts`。
 - `web/src/views/applications/apps/ApplicationEditor.vue`
@@ -131,3 +134,7 @@
  
 - `web/src/views/settings/_shared/SettingsPageContent.vue`
   - Metrics report interval and container report interval labels are wired through `web/src/i18n/index.ts` for English and Simplified Chinese.
+
+## Backend Error Translation Notes
+
+- `container_managed_by_application` currently returns its English source message. Add Simplified Chinese coverage when container resource action errors are next wired through backend i18n.

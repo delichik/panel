@@ -45,7 +45,7 @@ func (s *Service) RunAgentDeployTask(tc tasks.TaskContext) error {
 			return err
 		}
 	}
-	go s.runDeployAgent(s.tasks.ExecutionContext(task.ID), task.ID, srv)
+	s.runDeployAgent(ctx, task.ID, srv)
 	return nil
 }
 
@@ -190,20 +190,23 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 			if err != nil {
 				return tasks.Task{}, err
 			}
-			if err := s.RunAgentDeployTask(tasks.TaskContext{Context: ctx, Task: task, Service: s.tasks}); err != nil {
-				return tasks.Task{}, err
-			}
+			s.startAgentDeployTask(task, srv)
 			task, _ = s.tasks.Get(ctx, task.ID)
 		}
 		return task, nil
 	}
 	if run {
-		if err := s.RunAgentDeployTask(tasks.TaskContext{Context: ctx, Task: task, Service: s.tasks}); err != nil {
-			return tasks.Task{}, err
-		}
+		s.startAgentDeployTask(task, srv)
 		task, _ = s.tasks.Get(ctx, task.ID)
 	}
 	return task, nil
+}
+
+func (s *Service) startAgentDeployTask(task tasks.Task, srv Server) {
+	if err := s.tasks.Start(context.Background(), task.ID); err != nil {
+		return
+	}
+	go s.runDeployAgent(s.tasks.ExecutionContext(task.ID), task.ID, srv)
 }
 
 func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now time.Time) (bool, error) {

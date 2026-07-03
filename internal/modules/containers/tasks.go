@@ -34,11 +34,8 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 		},
 		{
 			Type:              TaskApplicationReconcile,
-			AllowRunNow:       true,
-			AllowRetry:        true,
 			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
 			ConcurrencyKey:    applicationReconcileConcurrencyKey,
-			Execute:           s.RunApplicationReconcileTask,
 			Periodic: &tasks.Periodic{
 				Interval:      5 * time.Second,
 				CollectInputs: s.CollectApplicationReconcileInputs,
@@ -90,18 +87,17 @@ func (s *Service) RunApplicationImageUpgradeTask(tc tasks.TaskContext) error {
 }
 
 func (s *Service) CollectApplicationReconcileInputs(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.CreateBatchInput, bool, error) {
-	operationID := id.New("op")
-	inputs, err := s.CollectApplicationReconcileTasks(ctx, operationID, trigger)
+	inputs, err := s.CollectApplicationReconcileTasks(ctx, "", trigger)
 	if err != nil || len(inputs) == 0 {
 		return tasks.CreateBatchInput{}, false, err
 	}
 	triggerType := firstNonEmpty(trigger.Type, "scheduler")
 	return tasks.CreateBatchInput{
 		Type:          applications.TaskTypeTargetBatch,
-		OperationID:   operationID,
 		TriggerType:   triggerType,
 		Summary:       "Monitoring application containers",
 		ExecutionMode: tasks.ExecutionModeSerial,
+		ForceParent:   true,
 		Inputs:        inputs,
 	}, true, nil
 }

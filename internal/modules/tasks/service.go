@@ -406,6 +406,26 @@ func (s *Service) ExistingActiveByConcurrencyKey(ctx context.Context, concurrenc
 	return task, true, nil
 }
 
+func (s *Service) ExistingActiveByConcurrencyKeyAndType(ctx context.Context, concurrencyKey, taskType string) (Task, bool, error) {
+	concurrencyKey = strings.TrimSpace(concurrencyKey)
+	taskType = strings.TrimSpace(taskType)
+	if concurrencyKey == "" || taskType == "" {
+		return Task{}, false, nil
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
+		FROM tasks
+		WHERE concurrency_key=? AND type=? AND status IN (?,?,?,?)
+		ORDER BY created_at DESC LIMIT 1`, concurrencyKey, taskType, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
+	task, err := scanTask(row)
+	if err == sql.ErrNoRows {
+		return Task{}, false, nil
+	}
+	if err != nil {
+		return Task{}, false, err
+	}
+	return task, true, nil
+}
+
 func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKey string) (Task, bool, error) {
 	concurrencyKey = strings.TrimSpace(concurrencyKey)
 	if concurrencyKey == "" {
@@ -982,6 +1002,8 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 	return s.Create(ctx, CreateInput{
 		OperationID:         old.OperationID,
 		Type:                old.Type,
+		ExecutionMode:       old.ExecutionMode,
+		ScheduleKey:         old.ScheduleKey,
 		ServerID:            old.ServerID,
 		NodeID:              old.NodeID,
 		ResourceType:        old.ResourceType,
@@ -990,6 +1012,8 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 		TriggerResourceType: old.ResourceType,
 		TriggerResourceID:   old.ResourceID,
 		TriggerTaskID:       old.ID,
+		TriggeredBy:         old.TriggeredBy,
+		ParamsJSON:          old.ParamsJSON,
 		MetadataJSON:        old.MetadataJSON,
 		Summary:             "Retrying " + old.Summary,
 		MaxRetries:          old.MaxRetries,

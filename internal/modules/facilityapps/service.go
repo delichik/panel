@@ -850,21 +850,34 @@ func (s *Service) createLifecycleOperation(ctx context.Context, cfg ReverseProxy
 	}
 	sort.Strings(serverIDs)
 	for _, serverID := range serverIDs {
-		target := applications.LifecycleTarget{
-			ID:            lifecycleTargetID(operation.ID, serverID),
-			OperationID:   operation.ID,
-			ApplicationID: proxyApplicationID,
-			ServerID:      serverID,
-			Status:        applications.LifecycleTargetStatusPending,
-			DesiredState:  desired[serverID],
-			InstanceID:    instanceID(serverID),
-			ContainerName: proxyContainerName,
-			CreatedAt:     now,
-			UpdatedAt:     now,
+		action := applications.LifecycleTargetActionApply
+		state := applications.LifecycleTargetStatePlanned
+		priority := 10
+		if desired[serverID] == appruntime.DesiredStopped {
+			action = applications.LifecycleTargetActionStop
+			priority = 20
 		}
-		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,status,desired_state,instance_id,container_name,container_id,stage,error,created_at,started_at,finished_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			target.ID, target.OperationID, target.ApplicationID, target.ServerID, target.Status, target.DesiredState, target.InstanceID, target.ContainerName, "", "", "", formatTime(now), nil, nil, formatTime(now))
+		target := applications.LifecycleTarget{
+			ID:                lifecycleTargetID(operation.ID, serverID),
+			OperationID:       operation.ID,
+			ApplicationID:     proxyApplicationID,
+			ServerID:          serverID,
+			Action:            action,
+			State:             state,
+			Status:            applications.LifecycleTargetStatusPending,
+			TargetKey:         lifecycleTargetKey(proxyApplicationID, serverID),
+			DesiredState:      desired[serverID],
+			DesiredGeneration: generation,
+			DesiredSpecHash:   cfgHash,
+			Priority:          priority,
+			InstanceID:        instanceID(serverID),
+			ContainerName:     proxyContainerName,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			target.ID, target.OperationID, target.ApplicationID, target.ServerID, target.Action, target.State, target.Status, target.TargetKey, target.DesiredState, target.DesiredGeneration, target.DesiredSpecHash, target.Priority, 0, "", "", "", "", target.InstanceID, target.ContainerName, "", "", "", "", "", "", formatTime(now), nil, nil, formatTime(now))
 		if err != nil {
 			return applications.LifecycleOperation{}, err
 		}
@@ -892,7 +905,20 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 		args = append(args, value)
 	}
 	if in.Status != "" {
-		add("status", in.Status)
+		updates = append(updates, "status=?", `state=CASE
+			WHEN ?='pending' THEN 'planned'
+			WHEN ?='preparing' THEN 'preparing'
+			WHEN ?='deploying' AND action='stop' THEN 'stopping'
+			WHEN ?='deploying' AND action='purge' THEN 'purging'
+			WHEN ?='deploying' THEN 'applying'
+			WHEN ?='running' THEN 'succeeded'
+			WHEN ?='failed' THEN 'failed'
+			WHEN ?='superseded' THEN 'superseded'
+			ELSE state END`)
+		args = append(args, in.Status)
+		for i := 0; i < 8; i++ {
+			args = append(args, in.Status)
+		}
 	}
 	if in.Stage != "" {
 		add("stage", in.Stage)
@@ -908,6 +934,11 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 	}
 	if in.Error != "" {
 		add("error", in.Error)
+		updates = append(updates,
+			"error_message=CASE WHEN error_message='' THEN ? ELSE error_message END",
+			"error_detail=CASE WHEN error_detail='' THEN ? ELSE error_detail END",
+		)
+		args = append(args, in.Error, in.Error)
 	}
 	now := formatTime(time.Now().UTC())
 	if in.Started {
@@ -960,7 +991,7 @@ func (s *Service) latestLifecycleOperation(ctx context.Context) (applications.Li
 }
 
 func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]applications.LifecycleTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT t.id,t.operation_id,t.application_id,t.server_id,COALESCE(s.name,''),t.status,t.desired_state,t.instance_id,t.container_name,t.container_id,t.stage,t.error,t.created_at,t.started_at,t.finished_at,t.updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT t.id,t.operation_id,t.application_id,t.server_id,COALESCE(s.name,''),t.action,t.state,t.status,t.target_key,t.desired_state,t.desired_generation,t.desired_spec_hash,t.priority,t.attempt,t.next_run_at,t.lease_owner,t.lease_expires_at,t.claimed_task_id,t.instance_id,t.container_name,t.container_id,t.stage,t.error,t.error_code,t.error_message,t.error_detail,t.created_at,t.started_at,t.finished_at,t.updated_at
 		FROM application_lifecycle_targets t LEFT JOIN servers s ON s.id=t.server_id WHERE t.operation_id=? ORDER BY t.server_id ASC`, operationID)
 	if err != nil {
 		return nil, err
@@ -1423,10 +1454,12 @@ func scanLifecycleOperation(row lifecycleScanner) (applications.LifecycleOperati
 func scanLifecycleTarget(row lifecycleScanner) (applications.LifecycleTarget, error) {
 	var target applications.LifecycleTarget
 	var created, updated string
-	var started, finished sql.NullString
-	if err := row.Scan(&target.ID, &target.OperationID, &target.ApplicationID, &target.ServerID, &target.ServerName, &target.Status, &target.DesiredState, &target.InstanceID, &target.ContainerName, &target.ContainerID, &target.Stage, &target.Error, &created, &started, &finished, &updated); err != nil {
+	var nextRunAt, leaseExpiresAt, started, finished sql.NullString
+	if err := row.Scan(&target.ID, &target.OperationID, &target.ApplicationID, &target.ServerID, &target.ServerName, &target.Action, &target.State, &target.Status, &target.TargetKey, &target.DesiredState, &target.DesiredGeneration, &target.DesiredSpecHash, &target.Priority, &target.Attempt, &nextRunAt, &target.LeaseOwner, &leaseExpiresAt, &target.ClaimedTaskID, &target.InstanceID, &target.ContainerName, &target.ContainerID, &target.Stage, &target.Error, &target.ErrorCode, &target.ErrorMessage, &target.ErrorDetail, &created, &started, &finished, &updated); err != nil {
 		return applications.LifecycleTarget{}, err
 	}
+	target.NextRunAt = parseOptionalTime(nextRunAt)
+	target.LeaseExpiresAt = parseOptionalTime(leaseExpiresAt)
 	target.CreatedAt = parseTime(created)
 	target.StartedAt = parseOptionalTime(started)
 	target.FinishedAt = parseOptionalTime(finished)
@@ -1454,6 +1487,10 @@ func boolInt(value bool) int {
 
 func lifecycleTargetID(operationID, serverID string) string {
 	return operationID + "-" + strings.TrimSpace(serverID)
+}
+
+func lifecycleTargetKey(appID, serverID string) string {
+	return "application:" + strings.TrimSpace(appID) + ":server:" + strings.TrimSpace(serverID)
 }
 
 func lifecycleStatusForFailures(total, failures int) string {

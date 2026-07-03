@@ -881,13 +881,24 @@ export interface ApplicationLifecycleTargetDto {
   applicationId: string;
   serverId: string;
   serverName?: string;
+  action?: string;
+  state?: string;
   status: string;
   desiredState: string;
+  desiredGeneration?: number;
+  desiredSpecHash?: string;
+  attempt?: number;
+  nextRunAt?: string | null;
+  claimedTaskId?: string;
+  claimedTaskStatus?: string;
   instanceId?: string;
   containerName?: string;
   containerId?: string;
   stage?: string;
   error?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  errorDetail?: string;
   createdAt: string;
   startedAt?: string;
   finishedAt?: string;
@@ -932,6 +943,59 @@ export interface TaskDto {
   finishedAt: string | null;
   allowRunNow: boolean;
   allowRetry: boolean;
+  deployment?: TaskDeploymentProjectionDto;
+}
+
+export interface TaskDeploymentProjectionDto {
+  operation?: TaskDeploymentOperationProjectionDto;
+  target?: TaskDeploymentTargetProjectionDto;
+}
+
+export interface TaskDeploymentOperationProjectionDto {
+  id: string;
+  applicationId: string;
+  applicationName?: string;
+  type: string;
+  status: string;
+  trigger?: string;
+  generation?: number;
+  specHash?: string;
+  error?: string;
+  targets?: TaskDeploymentTargetProjectionDto[];
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  updatedAt: string;
+}
+
+export interface TaskDeploymentTargetProjectionDto {
+  id: string;
+  operationId: string;
+  applicationId: string;
+  applicationName?: string;
+  serverId: string;
+  serverName?: string;
+  action?: string;
+  state?: string;
+  status: string;
+  stage?: string;
+  attempt?: number;
+  nextRunAt?: string | null;
+  claimedTaskId?: string;
+  claimedTaskStatus?: string;
+  instanceId?: string;
+  containerName?: string;
+  containerId?: string;
+  desiredState?: string;
+  desiredGeneration?: number;
+  desiredSpecHash?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  errorDetail?: string;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  updatedAt: string;
 }
 
 export interface TaskStepDto {

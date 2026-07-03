@@ -54,7 +54,7 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	if len(inputs) == 0 {
 		return Task{}, nil, false, nil
 	}
-	if len(inputs) == 1 {
+	if len(inputs) == 1 && !batch.ForceParent {
 		task, created, err := m.Create(ctx, inputs[0], trigger)
 		return task, nil, created, err
 	}
@@ -65,7 +65,7 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	if len(inputs) == 0 {
 		return existing, nil, false, nil
 	}
-	if len(inputs) == 1 {
+	if len(inputs) == 1 && !batch.ForceParent {
 		task, created, err := m.createAfterBeforeStart(ctx, inputs[0])
 		return task, nil, created, err
 	}
@@ -91,7 +91,7 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 		ParamsJSON:     batchParamsJSON(inputs),
 		ChildCount:     len(inputs),
 		ConcurrencyKey: "batch:" + operationID,
-		MetadataJSON:   "{}",
+		MetadataJSON:   firstNonEmpty(inputs[0].MetadataJSON, "{}"),
 	}
 	if parentInput.TriggerType == "" {
 		parentInput.TriggerType = trigger.Type

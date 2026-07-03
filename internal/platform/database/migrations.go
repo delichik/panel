@@ -187,13 +187,27 @@ func (s *Store) Migrate(ctx context.Context) error {
 			operation_id TEXT NOT NULL,
 			application_id TEXT NOT NULL,
 			server_id TEXT NOT NULL,
+			action TEXT NOT NULL DEFAULT 'apply',
+			state TEXT NOT NULL DEFAULT 'planned',
 			status TEXT NOT NULL DEFAULT 'pending',
+			target_key TEXT NOT NULL DEFAULT '',
 			desired_state TEXT NOT NULL DEFAULT 'running',
+			desired_generation INTEGER NOT NULL DEFAULT 0,
+			desired_spec_hash TEXT NOT NULL DEFAULT '',
+			priority INTEGER NOT NULL DEFAULT 0,
+			attempt INTEGER NOT NULL DEFAULT 0,
+			next_run_at TEXT NOT NULL DEFAULT '',
+			lease_owner TEXT NOT NULL DEFAULT '',
+			lease_expires_at TEXT NOT NULL DEFAULT '',
+			claimed_task_id TEXT NOT NULL DEFAULT '',
 			instance_id TEXT NOT NULL DEFAULT '',
 			container_name TEXT NOT NULL DEFAULT '',
 			container_id TEXT NOT NULL DEFAULT '',
 			stage TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
+			error_code TEXT NOT NULL DEFAULT '',
+			error_message TEXT NOT NULL DEFAULT '',
+			error_detail TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			started_at TEXT,
 			finished_at TEXT,
@@ -204,6 +218,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation ON application_lifecycle_targets(operation_id, server_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_state_due ON application_lifecycle_targets(state, next_run_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_app_server ON application_lifecycle_targets(application_id, server_id, state)`,
 		`CREATE TABLE IF NOT EXISTS application_instances (
 			id TEXT PRIMARY KEY,
 			application_id TEXT NOT NULL,
@@ -453,6 +469,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.migrateApplicationLifecycleTargets(ctx); err != nil {
+		return err
+	}
 	if err := s.dropAppColumnIfExists(ctx, "applications", "persistent_path"); err != nil {
 		return err
 	}
@@ -676,6 +695,103 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 			last_error=COALESCE(last_error, ''),
 			created_at=COALESCE(NULLIF(created_at, ''), ` + nowExpr + `),
 			updated_at=COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), ` + nowExpr + `)`,
+	}
+	for _, stmt := range statements {
+		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
+	if err := s.ensureAppColumns(ctx, "application_lifecycle_targets", map[string]string{
+		"action":             "TEXT NOT NULL DEFAULT 'apply'",
+		"state":              "TEXT NOT NULL DEFAULT 'planned'",
+		"target_key":         "TEXT NOT NULL DEFAULT ''",
+		"desired_generation": "INTEGER NOT NULL DEFAULT 0",
+		"desired_spec_hash":  "TEXT NOT NULL DEFAULT ''",
+		"priority":           "INTEGER NOT NULL DEFAULT 0",
+		"attempt":            "INTEGER NOT NULL DEFAULT 0",
+		"next_run_at":        "TEXT NOT NULL DEFAULT ''",
+		"lease_owner":        "TEXT NOT NULL DEFAULT ''",
+		"lease_expires_at":   "TEXT NOT NULL DEFAULT ''",
+		"claimed_task_id":    "TEXT NOT NULL DEFAULT ''",
+		"error_code":         "TEXT NOT NULL DEFAULT ''",
+		"error_message":      "TEXT NOT NULL DEFAULT ''",
+		"error_detail":       "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	statements := []string{
+		`UPDATE application_lifecycle_targets
+			SET action=CASE
+					WHEN action IN ('apply','stop','purge') THEN action
+					WHEN desired_state='stopped' THEN 'stop'
+					ELSE 'apply'
+				END,
+				state=CASE
+					WHEN state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','succeeded','failed_retryable','failed','superseded','cancelled') THEN state
+					WHEN status='pending' THEN 'planned'
+					WHEN status='preparing' THEN 'preparing'
+					WHEN status='deploying' AND desired_state='stopped' THEN 'stopping'
+					WHEN status='deploying' THEN 'applying'
+					WHEN status='running' THEN 'succeeded'
+					WHEN status='failed' THEN 'failed'
+					WHEN status='superseded' THEN 'superseded'
+					ELSE 'planned'
+				END,
+				target_key=CASE
+					WHEN target_key <> '' THEN target_key
+					ELSE 'application:' || application_id || ':server:' || server_id
+				END,
+				desired_generation=CASE
+					WHEN desired_generation > 0 THEN desired_generation
+					ELSE COALESCE((SELECT generation FROM application_lifecycle_operations WHERE application_lifecycle_operations.id=application_lifecycle_targets.operation_id), 0)
+				END,
+				desired_spec_hash=CASE
+					WHEN desired_spec_hash <> '' THEN desired_spec_hash
+					ELSE COALESCE((SELECT spec_hash FROM application_lifecycle_operations WHERE application_lifecycle_operations.id=application_lifecycle_targets.operation_id), '')
+				END,
+				priority=CASE
+					WHEN priority > 0 THEN priority
+					WHEN action='purge' THEN 30
+					WHEN action='stop' OR desired_state='stopped' THEN 20
+					ELSE 10
+				END,
+				error_message=CASE WHEN error_message <> '' THEN error_message ELSE COALESCE(error, '') END,
+				error_detail=CASE WHEN error_detail <> '' THEN error_detail ELSE COALESCE(error, '') END`,
+		`WITH ranked AS (
+			SELECT id,
+				ROW_NUMBER() OVER (
+					PARTITION BY target_key
+					ORDER BY updated_at DESC, created_at DESC, id DESC
+				) AS rn
+			FROM application_lifecycle_targets
+			WHERE target_key <> ''
+			  AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')
+		)
+		UPDATE application_lifecycle_targets
+			SET state='superseded',
+				status='superseded',
+				error=CASE WHEN error <> '' THEN error ELSE 'Superseded during lifecycle state-machine migration' END,
+				error_code=CASE WHEN error_code <> '' THEN error_code ELSE 'superseded' END,
+				error_message=CASE WHEN error_message <> '' THEN error_message ELSE 'Superseded during lifecycle state-machine migration' END,
+				error_detail=CASE WHEN error_detail <> '' THEN error_detail ELSE 'Older duplicate active target superseded before adding active target uniqueness' END,
+				stage=CASE WHEN stage <> '' THEN stage ELSE 'superseded' END,
+				finished_at=COALESCE(finished_at, strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+				updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+			WHERE id IN (SELECT id FROM ranked WHERE rn > 1)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_application_lifecycle_targets_active_key
+			ON application_lifecycle_targets(target_key)
+			WHERE target_key <> ''
+			  AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')`,
+		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_state_due
+			ON application_lifecycle_targets(state, next_run_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_app_server
+			ON application_lifecycle_targets(application_id, server_id, state)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation
+			ON application_lifecycle_targets(operation_id, server_id)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {

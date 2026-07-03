@@ -14,9 +14,14 @@ type RunNowRunner interface {
 	RunNow(ctx context.Context, task Task) error
 }
 
+type DeploymentProjectionProvider interface {
+	DecorateDeploymentTasks(ctx context.Context, tasks []Task) error
+}
+
 type Handler struct {
-	service *Service
-	runner  RunNowRunner
+	service     *Service
+	runner      RunNowRunner
+	deployments DeploymentProjectionProvider
 }
 
 func NewHandler(service *Service, runners ...RunNowRunner) *Handler {
@@ -25,6 +30,10 @@ func NewHandler(service *Service, runners ...RunNowRunner) *Handler {
 		runner = runners[0]
 	}
 	return &Handler{service: service, runner: runner}
+}
+
+func (h *Handler) SetDeploymentProjectionProvider(provider DeploymentProjectionProvider) {
+	h.deployments = provider
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -57,6 +66,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.decorateList(&tasks)
+	if err := h.decorateDeploymentTasks(r.Context(), tasks.Items); err != nil {
+		httpx.Error(w, err)
+		return
+	}
 	httpx.JSON(w, http.StatusOK, tasks)
 }
 
@@ -67,6 +80,12 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.decorateTask(&task)
+	items := []Task{task}
+	if err := h.decorateDeploymentTasks(r.Context(), items); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	task = items[0]
 	httpx.JSON(w, http.StatusOK, task)
 }
 
@@ -168,6 +187,13 @@ func (h *Handler) decorateTask(task *Task) {
 	}
 	task.AllowRunNow = def.AllowRunNow
 	task.AllowRetry = def.AllowRetry
+}
+
+func (h *Handler) decorateDeploymentTasks(ctx context.Context, items []Task) error {
+	if h == nil || h.deployments == nil || len(items) == 0 {
+		return nil
+	}
+	return h.deployments.DecorateDeploymentTasks(ctx, items)
 }
 
 func (h *Handler) canRunNow(task Task) bool {

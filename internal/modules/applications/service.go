@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"path"
 	"path/filepath"
 	"sort"
@@ -40,7 +41,6 @@ type AgentRuntimeClient interface {
 	RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error
 	RuntimeCreateContainer(ctx context.Context, baseURL string, req agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error)
 	RuntimeStop(ctx context.Context, baseURL string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error)
-	RuntimeRestart(ctx context.Context, baseURL string, req agentcontract.RuntimeRestartRequest) (agentcontract.RuntimeInstanceResponse, error)
 	RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agentcontract.RuntimeStatusResponse, error)
 	RuntimeLogs(ctx context.Context, baseURL, instanceID, containerName string, tail int) (agentcontract.RuntimeLogsResponse, error)
 	RuntimePersistentArchive(ctx context.Context, baseURL, applicationID string) (agentcontract.RuntimePersistentArchiveResponse, error)
@@ -72,6 +72,7 @@ type Service struct {
 	internalFiles    InternalFileProvider
 	proxyReconciler  ReverseProxyReconciler
 	reconcileTrigger ApplicationReconcileTrigger
+	deployment       DeploymentDispatcher
 	imageResolver    ImageDigestResolver
 	operationQueue   ContainerOperationQueue
 	facilityRuntime  FacilityRuntimeProvider
@@ -81,6 +82,8 @@ type Service struct {
 }
 
 type ApplicationRuntime = Runtime
+
+var errLifecycleTargetLeaseLost = errors.New("application lifecycle target lease lost")
 
 const FacilityReverseProxyApplicationID = "facility-reverse-proxy"
 
@@ -182,6 +185,10 @@ func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option
 	return func(s *Service) { s.reconcileTrigger = trigger }
 }
 
+func WithDeploymentDispatcher(dispatcher DeploymentDispatcher) Option {
+	return func(s *Service) { s.deployment = dispatcher }
+}
+
 func WithFacilityRuntimeProvider(provider FacilityRuntimeProvider) Option {
 	return func(s *Service) { s.facilityRuntime = provider }
 }
@@ -192,6 +199,10 @@ func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
 
 func (s *Service) SetApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) {
 	s.reconcileTrigger = trigger
+}
+
+func (s *Service) SetDeploymentDispatcher(dispatcher DeploymentDispatcher) {
+	s.deployment = dispatcher
 }
 
 func (s *Service) SetFacilityRuntimeProvider(provider FacilityRuntimeProvider) {
@@ -665,17 +676,28 @@ func (s *Service) RunImageUpdateTask(tc tasks.TaskContext) error {
 	if appID == "" {
 		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
 	}
+	if s.tasks != nil && task.ID != "" {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
+	}
 	app, job, err := s.prepareImageUpdate(ctx, appID)
 	if err != nil {
 		return err
 	}
-	if err := s.deployRuntimeSpec(ctx, task.ID, app, job); err != nil {
+	if err := s.triggerApplicationReconcile(ctx, app, job, "application_image_update", "Updating image for "+app.Name); err != nil {
 		return err
 	}
 	if err := s.markApplicationImageTargetsCurrent(ctx, app); err != nil {
 		return err
 	}
-	return s.reconcileReverseProxy(ctx)
+	if err := s.reconcileReverseProxy(ctx); err != nil {
+		return err
+	}
+	if s.tasks != nil && task.ID != "" {
+		return s.tasks.Complete(ctx, task.ID, "Application image update planned")
+	}
+	return nil
 }
 
 func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Application, appruntime.Spec, error) {
@@ -789,6 +811,16 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
 	}
 	opts := deployTaskOptions(task)
+	claimed, err := s.ensureLifecycleTargetClaimedForTask(ctx, task, opts)
+	if err != nil {
+		return err
+	}
+	if !claimed {
+		if s.tasks != nil && task.ID != "" {
+			_ = s.tasks.Complete(ctx, task.ID, "Application target already claimed or completed")
+		}
+		return nil
+	}
 	if opts.action == "stop" || opts.action == "purge" {
 		app, err := s.Get(ctx, appID)
 		if err != nil {
@@ -797,35 +829,18 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 		if len(opts.targetIDs) == 0 {
 			return panelerr.Validation("application_task_target_required", "Application task target is required")
 		}
-		removeApplicationData := opts.purge
-		stage := "stop_container"
-		if removeApplicationData {
-			stage = "purge_runtime"
+		if strings.TrimSpace(opts.lifecycleTargetID) == "" {
+			if s.tasks != nil && task.ID != "" {
+				_ = s.tasks.Complete(ctx, task.ID, "Application target task has no lifecycle target")
+			}
+			return nil
 		}
-		for _, targetID := range opts.targetIDs {
-			targetRowID := lifecycleTargetID(opts.lifecycleOperationID, targetID)
-			if opts.lifecycleOperationID != "" {
-				_ = s.updateLifecycleTarget(ctx, targetRowID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: stage, Started: true})
-			}
-			var err error
-			if opts.action == "purge" {
-				err = s.purgeRuntimeInstanceForServer(ctx, task.ID, app.ID, targetID, removeApplicationData)
-			} else {
-				err = s.stopRuntimeInstanceForServer(ctx, task.ID, app.ID, targetID)
-			}
-			if err != nil {
-				if opts.lifecycleOperationID != "" {
-					_ = s.updateLifecycleTarget(ctx, targetRowID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: stage, Error: err.Error(), Finished: true})
-					_ = s.finishDeploymentOperationFromTargets(ctx, opts.lifecycleOperationID)
-				}
-				return err
-			}
-			if opts.lifecycleOperationID != "" {
-				_ = s.updateLifecycleTarget(ctx, targetRowID, lifecycleTargetUpdate{Status: LifecycleTargetStatusRunning, Stage: stage, Finished: true})
-			}
+		target, err := s.lifecycleTargetByID(ctx, opts.lifecycleTargetID)
+		if err != nil {
+			return err
 		}
-		if opts.lifecycleOperationID != "" {
-			_ = s.finishDeploymentOperationFromTargets(ctx, opts.lifecycleOperationID)
+		if err := s.runStopLifecycleTargetTask(ctx, task, app, target, opts.action, opts.removeApplicationData); err != nil {
+			return err
 		}
 		if app.DeletionRequested {
 			if err := s.deleteApplicationIfRuntimeGone(ctx, app.ID); err != nil {
@@ -841,9 +856,28 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 	if err != nil {
 		return err
 	}
-	if err := s.runDeployTask(ctx, task.ID, app, job, opts.targetIDs, opts.lifecycleOperationID); err != nil {
-		_ = s.recordApplicationReconcileFailure(ctx, app.ID)
-		return err
+	if opts.action == "apply" && deploymentTaskSuperseded(app, opts) {
+		if err := s.supersedeLifecycleTargetForTask(ctx, task, "desired state changed before this target started"); err != nil {
+			return err
+		}
+		if s.tasks != nil && task.ID != "" {
+			_ = s.tasks.Complete(ctx, task.ID, "Application target superseded")
+		}
+		return nil
+	}
+	if strings.TrimSpace(opts.lifecycleTargetID) != "" {
+		target, err := s.lifecycleTargetByID(ctx, opts.lifecycleTargetID)
+		if err != nil {
+			return err
+		}
+		if err := s.runApplyLifecycleTargetTask(ctx, task, app, job, target); err != nil {
+			_ = s.recordApplicationReconcileFailure(ctx, app.ID)
+			return err
+		}
+		return nil
+	}
+	if s.tasks != nil && task.ID != "" {
+		_ = s.tasks.Complete(ctx, task.ID, "Application target task has no lifecycle target")
 	}
 	return nil
 }
@@ -1002,11 +1036,12 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 			return OperationResult{}, err
 		}
 	}
-	taskID, err := s.runDeploymentTaskBatch(ctx, migrated, job, "Migrating application "+app.Name)
+	task, err := s.triggerApplicationReconcileTask(ctx, migrated.ID, "application_migrate", map[string]any{
+		"applicationIds": []string{migrated.ID},
+		"force":          true,
+		"reason":         "application_migrate",
+	})
 	if err != nil {
-		return OperationResult{}, err
-	}
-	if err := s.purgeRuntimeInstanceForServer(ctx, taskID, app.ID, sourceServerID, false); err != nil {
 		return OperationResult{}, err
 	}
 	if err := s.reconcileReverseProxy(ctx); err != nil {
@@ -1016,7 +1051,7 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 	if err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{TaskID: taskID, Application: out}, nil
+	return OperationResult{TaskID: task.ID, Application: out}, nil
 }
 
 func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) {
@@ -1052,6 +1087,11 @@ func (s *Service) RunRefreshTask(tc tasks.TaskContext) error {
 	if appID == "" {
 		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
 	}
+	if s.tasks != nil && task.ID != "" {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
+	}
 	app, err := s.Get(ctx, appID)
 	if err != nil {
 		return err
@@ -1066,10 +1106,16 @@ func (s *Service) RunRefreshTask(tc tasks.TaskContext) error {
 		}
 		return s.tasks.Complete(ctx, task.ID, "Application refresh not needed")
 	}
-	if err := s.deployRuntimeSpec(ctx, task.ID, refreshed, spec); err != nil {
+	if err := s.triggerApplicationReconcile(ctx, refreshed, spec, "application_refresh", "Refreshing application "+refreshed.Name); err != nil {
 		return err
 	}
-	return s.reconcileReverseProxy(ctx)
+	if err := s.reconcileReverseProxy(ctx); err != nil {
+		return err
+	}
+	if s.tasks != nil && task.ID != "" {
+		return s.tasks.Complete(ctx, task.ID, "Application refresh planned")
+	}
+	return nil
 }
 
 func (s *Service) prepareChangedApplicationRefresh(ctx context.Context, app Application) (bool, Application, appruntime.Spec, error) {
@@ -1186,14 +1232,23 @@ func (s *Service) RunStopTask(tc tasks.TaskContext) error {
 	if appID == "" {
 		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
 	}
-	if err := s.ensureRuntimeInstancesReady(ctx, appID); err != nil {
-		return err
+	if s.tasks != nil && task.ID != "" {
+		if err := s.tasks.Start(ctx, task.ID); err != nil {
+			return err
+		}
 	}
 	opts, err := stopTaskOptions(task)
 	if err != nil {
 		return err
 	}
-	return s.stopRuntimeInstances(ctx, task.ID, appID, opts.purge, opts.targetIDs)
+	result, err := s.Stop(ctx, appID, opts.purge)
+	if err != nil {
+		return err
+	}
+	if s.tasks != nil && task.ID != "" {
+		return s.tasks.Complete(ctx, task.ID, firstNonEmpty(result.DeploymentID, "Application stop planned"))
+	}
+	return nil
 }
 
 func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, error) {
@@ -1204,19 +1259,21 @@ func (s *Service) Restart(ctx context.Context, appID string) (OperationResult, e
 	if err := s.ensureRuntimeInstancesReady(ctx, app.ID); err != nil {
 		return OperationResult{}, err
 	}
-	taskID, err := s.recordRunningTask(ctx, TaskTypeRestart, appID, "Restarting application")
+	plan, err := s.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID: app.ID,
+		Force:         true,
+		Manual:        true,
+		TriggerType:   "application_restart",
+		Reason:        "application_restart",
+	})
 	if err != nil {
-		return OperationResult{}, err
-	}
-	if err := s.restartRuntimeInstances(ctx, taskID, app.ID); err != nil {
-		_ = s.tasks.Fail(ctx, taskID, err)
 		return OperationResult{}, err
 	}
 	runtime, err := s.Runtime(ctx, appID)
 	if err != nil {
 		return OperationResult{}, err
 	}
-	return OperationResult{TaskID: taskID, ApplicationRuntime: &runtime}, nil
+	return OperationResult{DeploymentID: firstString(plan.OperationIDs), ApplicationRuntime: &runtime}, nil
 }
 
 func (s *Service) RunRestartTask(tc tasks.TaskContext) error {
@@ -1225,10 +1282,14 @@ func (s *Service) RunRestartTask(tc tasks.TaskContext) error {
 	if appID == "" {
 		return panelerr.Validation("application_task_resource_required", "Application task resource is required")
 	}
-	if err := s.ensureRuntimeInstancesReady(ctx, appID); err != nil {
+	result, err := s.Restart(ctx, appID)
+	if err != nil {
 		return err
 	}
-	return s.restartRuntimeInstances(ctx, task.ID, appID)
+	if s.tasks != nil && task.ID != "" {
+		return s.tasks.Complete(ctx, task.ID, firstNonEmpty(result.DeploymentID, "Application restart planned"))
+	}
+	return nil
 }
 
 func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime, error) {
@@ -1276,7 +1337,7 @@ func (s *Service) latestLifecycleOperation(ctx context.Context, appID string) (L
 }
 
 func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]LifecycleTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,operation_id,application_id,server_id,status,desired_state,instance_id,container_name,container_id,stage,error,created_at,started_at,finished_at,updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
 		FROM application_lifecycle_targets WHERE operation_id=? ORDER BY server_id ASC`, operationID)
 	if err != nil {
 		return nil, err
@@ -1296,6 +1357,12 @@ func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]L
 		out = append(out, target)
 	}
 	return out, rows.Err()
+}
+
+func (s *Service) lifecycleTargetByID(ctx context.Context, targetID string) (LifecycleTarget, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
+		FROM application_lifecycle_targets WHERE id=?`, targetID)
+	return scanLifecycleTarget(row)
 }
 
 func (s *Service) expectedLifecycleTargets(ctx context.Context, app Application) []LifecycleTarget {
@@ -1387,6 +1454,8 @@ func runtimeStatusFromLifecycleTarget(status string) string {
 		return appruntime.StatusFailed
 	case LifecycleTargetStatusDeploying, LifecycleTargetStatusPreparing:
 		return appruntime.StatusDeploying
+	case LifecycleTargetStatusSuperseded:
+		return appruntime.StatusPending
 	default:
 		return appruntime.StatusPending
 	}
@@ -1572,7 +1641,22 @@ func (s *Service) RestorePersistentData(ctx context.Context, appID string, conte
 	if !shouldRestart {
 		return OperationResult{Application: app}, nil
 	}
-	return s.Restart(ctx, app.ID)
+	plan, err := s.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID: app.ID,
+		ServerIDs:     []string{serverID},
+		Force:         true,
+		Manual:        true,
+		TriggerType:   "application_persistent_restore",
+		Reason:        "application_persistent_restore",
+	})
+	if err != nil {
+		return OperationResult{}, err
+	}
+	runtime, err := s.Runtime(ctx, app.ID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	return OperationResult{DeploymentID: firstString(plan.OperationIDs), Application: app, ApplicationRuntime: &runtime}, nil
 }
 
 type preparedApplication struct {
@@ -1777,6 +1861,285 @@ func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Appl
 	return s.deployRuntimeSpecTargets(ctx, taskID, app, spec, nil, "")
 }
 
+func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Task, app Application, spec appruntime.Spec, targetRow LifecycleTarget) error {
+	targetID := targetRow.ID
+	taskID := task.ID
+	target, err := s.servers.Get(ctx, targetRow.ServerID)
+	if err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "load_server", "server_unavailable", err, true)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	targetName := firstNonEmpty(target.Name, target.ID, target.Host)
+	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStatePreparing, Stage: "validate_agent", Started: true, OwnerTaskID: taskID}); err != nil {
+		return err
+	}
+	if err := s.ensureLifecycleTargetStillOwnedByTask(ctx, targetID, taskID); err != nil {
+		return err
+	}
+	if err := ensureAgentRuntimeReady(target); err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "validate_agent", "agent_unavailable", err, true)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	baseURL, ok := agentURLFromServer(target)
+	if !ok {
+		err := panelerr.Validation("agent_required", "Agent is required for application deployment")
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "validate_agent", "agent_unavailable", err, true)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	files, err := s.listFiles(ctx, app.ID, true)
+	if err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "load_files", "render_failed", err, false)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStatePreparing, Stage: "render", OwnerTaskID: taskID}); err != nil {
+		return err
+	}
+	instanceSpec, err := s.runtimeSpecForServer(ctx, app, spec, target, files)
+	if err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "render", "render_failed", err, false)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	previousContainerName := ""
+	if previous, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID); err == nil {
+		previousContainerName = previous.ContainerName
+	}
+	if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "prepare_instance", "render_failed", err, false)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+targetName)
+	}
+	var result agentcontract.RuntimeInstanceResponse
+	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "waiting_server_queue", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, OwnerTaskID: taskID}); err != nil {
+		return err
+	}
+	err = s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
+		return s.withLifecycleTargetLeaseHeartbeat(runCtx, targetID, taskID, func(runCtx context.Context) error {
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "write_files", OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
+				return s.runtimeClient.RuntimeWriteFiles(runCtx, baseURL, agentcontract.RuntimeWriteFilesRequest{Spec: instanceSpec})
+			}); err != nil {
+				return deploymentStageError{stage: "write_files", code: "write_files_failed", retryable: true, err: err}
+			}
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "pull_image", OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "pull image", func(context.Context) error {
+				return s.runtimeClient.DockerImagePull(runCtx, baseURL, instanceSpec.Image)
+			}); err != nil {
+				return deploymentStageError{stage: "pull_image", code: "pull_image_failed", retryable: true, err: err}
+			}
+			if previousContainerName != "" && previousContainerName != instanceSpec.ContainerName {
+				if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+					return err
+				}
+				if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "remove_previous_container", OwnerTaskID: taskID}); err != nil {
+					return err
+				}
+				if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove previous container", func(context.Context) error {
+					return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, previousContainerName)
+				}); err != nil {
+					return deploymentStageError{stage: "remove_previous_container", code: "remove_container_failed", retryable: true, err: err}
+				}
+			}
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "remove_target_container", OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove target container", func(context.Context) error {
+				return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, instanceSpec.ContainerName)
+			}); err != nil {
+				return deploymentStageError{stage: "remove_target_container", code: "remove_container_failed", retryable: true, err: err}
+			}
+			var created agentcontract.RuntimeCreateContainerResponse
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "create_container", OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "create container", func(context.Context) error {
+				var createErr error
+				created, createErr = s.runtimeClient.RuntimeCreateContainer(runCtx, baseURL, agentcontract.RuntimeCreateContainerRequest{ServerID: target.ID, Spec: instanceSpec})
+				return createErr
+			}); err != nil {
+				return deploymentStageError{stage: "create_container", code: "create_container_failed", retryable: false, err: err}
+			}
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "start_container", ContainerID: created.ContainerID, OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "start container", func(context.Context) error {
+				return s.runtimeClient.DockerContainerAction(runCtx, baseURL, firstNonEmpty(created.ContainerID, instanceSpec.ContainerName), "start")
+			}); err != nil {
+				return deploymentStageError{stage: "start_container", code: "start_container_failed", retryable: false, err: err}
+			}
+			var status agentcontract.RuntimeStatusResponse
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "inspect", OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "inspect container", func(context.Context) error {
+				var statusErr error
+				status, statusErr = s.runtimeClient.RuntimeStatus(runCtx, baseURL, instanceSpec.InstanceID, instanceSpec.ContainerName)
+				return statusErr
+			}); err != nil {
+				return deploymentStageError{stage: "inspect", code: "verify_failed", retryable: true, err: err}
+			}
+			result = agentcontract.RuntimeInstanceResponse{
+				InstanceID:    instanceSpec.InstanceID,
+				ContainerName: instanceSpec.ContainerName,
+				ContainerID:   firstNonEmpty(status.ContainerID, created.ContainerID),
+				Status:        status.Status,
+				Error:         status.LastError,
+				ObservedAt:    status.ObservedAt,
+			}
+			if result.Status != appruntime.StatusRunning {
+				if strings.TrimSpace(result.Error) != "" {
+					return deploymentStageError{stage: "inspect", code: "verify_failed", retryable: false, err: errors.New(result.Error)}
+				}
+				return deploymentStageError{stage: "inspect", code: "verify_failed", retryable: false, err: fmt.Errorf("container %s is %s after start", instanceSpec.ContainerName, firstNonEmpty(result.Status, "not running"))}
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		if errors.Is(err, errLifecycleTargetLeaseLost) {
+			return err
+		}
+		stageErr := normalizeDeploymentStageError(err, "apply", "application_runtime_operation_failed", true)
+		_ = s.handleAgentError(ctx, target, stageErr.err)
+		_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", stageErr.err.Error())
+		_ = s.failLifecycleTargetExecution(ctx, targetID, stageErr.stage, stageErr.code, stageErr.err, stageErr.retryable)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, "stderr", "deploying on "+targetName+" failed: "+stageErr.err.Error())
+		}
+		return stageErr.err
+	}
+	if err := s.ensureLifecycleTargetStillOwnedByTask(ctx, targetID, taskID); err != nil {
+		return err
+	}
+	if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "store_instance", "verify_failed", err, false)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateVerifying, Stage: "inspect", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, ContainerID: result.ContainerID, OwnerTaskID: taskID}); err != nil {
+		return err
+	}
+	if err := s.enqueueLifecycleTargetVerification(ctx, targetID, targetRow.OperationID); err != nil {
+		return err
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.Complete(ctx, taskID, "Application synced")
+	}
+	return nil
+}
+
+func (s *Service) runStopLifecycleTargetTask(ctx context.Context, task tasks.Task, app Application, targetRow LifecycleTarget, action string, removeApplicationData bool) error {
+	targetID := targetRow.ID
+	taskID := task.ID
+	if err := s.ensureLifecycleTargetStillOwnedByTask(ctx, targetID, taskID); err != nil {
+		return err
+	}
+	srv, err := s.servers.Get(ctx, targetRow.ServerID)
+	if err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "load_server", "server_unavailable", err, true)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	targetName := firstNonEmpty(srv.Name, srv.ID, srv.Host)
+	if err := ensureAgentRuntimeReady(srv); err != nil {
+		_ = s.failLifecycleTargetExecution(ctx, targetID, "validate_agent", "agent_unavailable", err, true)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		return err
+	}
+	state := LifecycleTargetStateStopping
+	stage := "stop_container"
+	if action == LifecycleTargetActionPurge || removeApplicationData {
+		state = LifecycleTargetStatePurging
+		stage = "purge_runtime"
+	}
+	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStatePreparing, Stage: "validate_agent", Started: true, OwnerTaskID: taskID}); err != nil {
+		return err
+	}
+	if err := s.ensureLifecycleTargetStillOwnedByTask(ctx, targetID, taskID); err != nil {
+		return err
+	}
+	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: state, Stage: "waiting_server_queue", OwnerTaskID: taskID}); err != nil {
+		return err
+	}
+	if s.tasks != nil && taskID != "" {
+		verb := "stopping"
+		if state == LifecycleTargetStatePurging {
+			verb = "purging"
+		}
+		_ = s.tasks.AppendLog(ctx, taskID, "system", verb+" "+app.Name+" on "+targetName)
+	}
+	err = s.executeContainerOperation(ctx, targetRow.ServerID, func(runCtx context.Context) error {
+		return s.withLifecycleTargetLeaseHeartbeat(runCtx, targetID, taskID, func(runCtx context.Context) error {
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: state, Stage: stage, OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			if state == LifecycleTargetStatePurging {
+				return s.purgeRuntimeInstanceForServer(runCtx, taskID, app.ID, targetRow.ServerID, removeApplicationData)
+			}
+			return s.stopRuntimeInstanceForServer(runCtx, taskID, app.ID, targetRow.ServerID)
+		})
+	})
+	if err != nil {
+		if errors.Is(err, errLifecycleTargetLeaseLost) {
+			return err
+		}
+		stageErr := normalizeDeploymentStageError(err, stage, "application_runtime_operation_failed", true)
+		_ = s.handleAgentError(ctx, srv, stageErr.err)
+		_ = s.failLifecycleTargetExecution(ctx, targetID, stageErr.stage, stageErr.code, stageErr.err, stageErr.retryable)
+		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, "stderr", stage+" on "+targetName+" failed: "+stageErr.err.Error())
+		}
+		return stageErr.err
+	}
+	if err := s.ensureLifecycleTargetStillOwnedByTask(ctx, targetID, taskID); err != nil {
+		return err
+	}
+	if err := s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateVerifying, Stage: "verify", OwnerTaskID: taskID}); err != nil {
+		return err
+	}
+	if err := s.enqueueLifecycleTargetVerification(ctx, targetID, targetRow.OperationID); err != nil {
+		return err
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.Complete(ctx, taskID, "Application target stopped")
+	}
+	return nil
+}
+
 func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, app Application, spec appruntime.Spec, targetIDs []string, lifecycleOperationID string) error {
 	if s.runtimeClient == nil {
 		return panelerr.Validation("agent_runtime_unavailable", "Agent runtime client is unavailable")
@@ -1799,6 +2162,10 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 	}
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.Advance(ctx, taskID, "deploying", "deploying application instances")
+	}
+	leaseTaskID := ""
+	if strings.TrimSpace(lifecycleOperationID) != "" {
+		leaseTaskID = taskID
 	}
 	files, err := s.listFiles(ctx, app.ID, true)
 	if err != nil {
@@ -1846,16 +2213,25 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "prepare_instance", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, Error: err.Error(), Finished: true})
 			return err
 		}
+		if err := s.ensureLifecycleTargetStillOwnedByTask(ctx, targetID, leaseTaskID); err != nil {
+			return err
+		}
 		_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "write_files", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName})
 		if s.tasks != nil && taskID != "" {
 			_ = s.tasks.AppendLog(ctx, taskID, "system", "deploying "+instanceSpec.ContainerName+" on "+targetName)
 		}
 		var result agentcontract.RuntimeInstanceResponse
 		err = s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
+				return err
+			}
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "write_files"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
 				return s.runtimeClient.RuntimeWriteFiles(runCtx, baseURL, agentcontract.RuntimeWriteFilesRequest{Spec: instanceSpec})
 			}); err != nil {
+				return err
+			}
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
 				return err
 			}
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "pull_image"})
@@ -1865,12 +2241,18 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 				return err
 			}
 			if previousContainerName != "" && previousContainerName != instanceSpec.ContainerName {
+				if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
+					return err
+				}
 				_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "remove_previous_container"})
 				if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove previous container", func(context.Context) error {
 					return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, previousContainerName)
 				}); err != nil {
 					return err
 				}
+			}
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
+				return err
 			}
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "remove_target_container"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove target container", func(context.Context) error {
@@ -1879,12 +2261,18 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 				return err
 			}
 			var created agentcontract.RuntimeCreateContainerResponse
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
+				return err
+			}
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "create_container"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "create container", func(context.Context) error {
 				var createErr error
 				created, createErr = s.runtimeClient.RuntimeCreateContainer(runCtx, baseURL, agentcontract.RuntimeCreateContainerRequest{ServerID: target.ID, Spec: instanceSpec})
 				return createErr
 			}); err != nil {
+				return err
+			}
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
 				return err
 			}
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "start_container", ContainerID: created.ContainerID})
@@ -1894,6 +2282,9 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 				return err
 			}
 			var status agentcontract.RuntimeStatusResponse
+			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
+				return err
+			}
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "inspect"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "inspect container", func(context.Context) error {
 				var statusErr error
@@ -1919,6 +2310,9 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 			return nil
 		})
 		if err != nil {
+			if errors.Is(err, errLifecycleTargetLeaseLost) {
+				return err
+			}
 			_ = s.handleAgentError(ctx, target, err)
 			_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
 			failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: err})
@@ -1927,6 +2321,9 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 				_ = s.tasks.AppendLog(ctx, taskID, "stderr", "deploying on "+targetName+" failed: "+err.Error())
 			}
 			continue
+		}
+		if err := s.ensureLifecycleTargetStillOwnedByTask(ctx, targetID, leaseTaskID); err != nil {
+			return err
 		}
 		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "store_instance", Error: err.Error(), Finished: true})
@@ -1965,14 +2362,58 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 }
 
 type lifecycleTargetUpdate struct {
+	State         string
 	Status        string
 	Stage         string
 	InstanceID    string
 	ContainerName string
 	ContainerID   string
 	Error         string
+	ErrorCode     string
+	ErrorMessage  string
+	ErrorDetail   string
 	Started       bool
 	Finished      bool
+	OwnerTaskID   string
+}
+
+type deploymentStageError struct {
+	stage     string
+	code      string
+	retryable bool
+	err       error
+}
+
+func (e deploymentStageError) Error() string {
+	if e.err == nil {
+		return ""
+	}
+	return e.err.Error()
+}
+
+func (e deploymentStageError) Unwrap() error {
+	return e.err
+}
+
+func normalizeDeploymentStageError(err error, stage, code string, retryable bool) deploymentStageError {
+	var stageErr deploymentStageError
+	if errors.As(err, &stageErr) {
+		if stageErr.stage == "" {
+			stageErr.stage = stage
+		}
+		if stageErr.code == "" {
+			stageErr.code = code
+		}
+		return stageErr
+	}
+	return deploymentStageError{stage: stage, code: code, retryable: retryable, err: err}
+}
+
+type lifecycleOperationCreateOptions struct {
+	DesiredState string
+	Action       string
+	InitialState string
+	Trigger      string
 }
 
 func (s *Service) createLifecycleOperation(ctx context.Context, app Application, spec appruntime.Spec, taskID, opType string, targets []server.Server) (LifecycleOperation, error) {
@@ -1984,6 +2425,10 @@ func (s *Service) createLifecycleOperation(ctx context.Context, app Application,
 }
 
 func (s *Service) createLifecycleOperationForServerIDs(ctx context.Context, app Application, spec appruntime.Spec, taskID, opType string, serverIDs []string, desiredState string) (LifecycleOperation, error) {
+	return s.createLifecycleOperationForServerIDsWithOptions(ctx, app, spec, taskID, opType, serverIDs, lifecycleOperationCreateOptions{DesiredState: desiredState})
+}
+
+func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Context, app Application, spec appruntime.Spec, taskID, opType string, serverIDs []string, opts lifecycleOperationCreateOptions) (LifecycleOperation, error) {
 	now := time.Now().UTC()
 	operation := LifecycleOperation{
 		ID:            id.New("alop"),
@@ -1993,7 +2438,7 @@ func (s *Service) createLifecycleOperationForServerIDs(ctx context.Context, app 
 		TaskID:        taskID,
 		Generation:    spec.Generation,
 		SpecHash:      spec.SpecHash,
-		Trigger:       "system",
+		Trigger:       firstNonEmpty(opts.Trigger, "system"),
 		CreatedAt:     now,
 		StartedAt:     &now,
 		UpdatedAt:     now,
@@ -2009,13 +2454,19 @@ func (s *Service) createLifecycleOperationForServerIDs(ctx context.Context, app 
 		targetID := lifecycleTargetID(operation.ID, serverID)
 		instanceID := runtimeInstanceID(app.ID, serverID)
 		containerName := runtimeContainerName(app)
+		desiredState := firstNonEmpty(opts.DesiredState, appruntime.DesiredRunning)
+		action := firstNonEmpty(opts.Action, lifecycleActionForDesiredState(desiredState))
+		state := firstNonEmpty(opts.InitialState, LifecycleTargetStatePlanned)
+		status := lifecycleStatusForState(state)
+		targetKey := lifecycleTargetKey(app.ID, serverID)
+		priority := lifecyclePriorityForAction(action)
 		if instance, err := s.runtimeInstanceForServer(ctx, app.ID, serverID); err == nil {
 			instanceID = instance.ID
 			containerName = instance.ContainerName
 		}
-		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,status,desired_state,instance_id,container_name,container_id,stage,error,created_at,started_at,finished_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			targetID, operation.ID, app.ID, serverID, LifecycleTargetStatusPending, firstNonEmpty(desiredState, appruntime.DesiredRunning), instanceID, containerName, "", "", "", formatTime(now), nil, nil, formatTime(now))
+		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			targetID, operation.ID, app.ID, serverID, action, state, status, targetKey, desiredState, spec.Generation, spec.SpecHash, priority, 0, "", "", "", "", instanceID, containerName, "", "", "", "", "", "", formatTime(now), nil, nil, formatTime(now))
 		if err != nil {
 			return LifecycleOperation{}, err
 		}
@@ -2028,8 +2479,24 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 	updates := []string{"updated_at=?"}
 	args := []any{now}
 	if in.Status != "" {
-		updates = append(updates, "status=?")
+		updates = append(updates, "status=?", `state=CASE
+			WHEN ?='pending' THEN 'planned'
+			WHEN ?='preparing' THEN 'preparing'
+			WHEN ?='deploying' AND action='stop' THEN 'stopping'
+			WHEN ?='deploying' AND action='purge' THEN 'purging'
+			WHEN ?='deploying' THEN 'applying'
+			WHEN ?='running' THEN 'succeeded'
+			WHEN ?='failed' THEN 'failed'
+			WHEN ?='superseded' THEN 'superseded'
+			ELSE state END`)
 		args = append(args, in.Status)
+		for i := 0; i < 8; i++ {
+			args = append(args, in.Status)
+		}
+	}
+	if in.State != "" {
+		updates = append(updates, "state=?", "status=?")
+		args = append(args, in.State, lifecycleStatusForState(in.State))
 	}
 	if in.Stage != "" {
 		updates = append(updates, "stage=?")
@@ -2051,6 +2518,18 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 		updates = append(updates, "error=?")
 		args = append(args, in.Error)
 	}
+	if in.ErrorCode != "" {
+		updates = append(updates, "error_code=?")
+		args = append(args, in.ErrorCode)
+	}
+	if in.ErrorMessage != "" {
+		updates = append(updates, "error_message=?")
+		args = append(args, in.ErrorMessage)
+	}
+	if in.ErrorDetail != "" {
+		updates = append(updates, "error_detail=?")
+		args = append(args, in.ErrorDetail)
+	}
 	if in.Started {
 		updates = append(updates, "started_at=COALESCE(started_at, ?)")
 		args = append(args, now)
@@ -2059,8 +2538,229 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 		updates = append(updates, "finished_at=?")
 		args = append(args, now)
 	}
+	where := ` WHERE id=?`
 	args = append(args, targetID)
-	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+` WHERE id=?`, args...)
+	if strings.TrimSpace(in.OwnerTaskID) != "" {
+		where += ` AND claimed_task_id=? AND lease_owner=? AND lease_expires_at<>'' AND lease_expires_at>? AND state IN (?,?,?,?,?)`
+		args = append(args,
+			strings.TrimSpace(in.OwnerTaskID),
+			lifecycleTaskLeaseOwner(in.OwnerTaskID),
+			formatTime(time.Now().UTC()),
+			LifecycleTargetStateClaimed,
+			LifecycleTargetStatePreparing,
+			LifecycleTargetStateApplying,
+			LifecycleTargetStateStopping,
+			LifecycleTargetStatePurging)
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+where, args...)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(in.OwnerTaskID) != "" {
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 0 {
+			return errLifecycleTargetLeaseLost
+		}
+	}
+	return err
+}
+
+func (s *Service) failLifecycleTargetExecution(ctx context.Context, targetID, stage, code string, cause error, retryable bool) error {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return nil
+	}
+	if cause == nil {
+		cause = errors.New("application lifecycle target failed")
+	}
+	now := time.Now().UTC()
+	state := LifecycleTargetStateFailed
+	nextRunAt := ""
+	finishedAt := any(formatTime(now))
+	if retryable {
+		state = LifecycleTargetStateFailedRetryable
+		nextRunAt = formatTime(now.Add(lifecycleExecutionRetryDelay(ctx, s.db, targetID)))
+		finishedAt = nil
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?,
+			status=?,
+			stage=?,
+			error=?,
+			error_code=?,
+			error_message=?,
+			error_detail=?,
+			attempt=attempt+1,
+			next_run_at=?,
+			lease_owner='',
+			lease_expires_at='',
+			finished_at=?,
+			updated_at=?
+		WHERE id=?
+		  AND state IN ('claimed','preparing','applying','stopping','purging','verifying')`,
+		state,
+		lifecycleStatusForState(state),
+		stage,
+		cause.Error(),
+		firstNonEmpty(code, "application_runtime_operation_failed"),
+		cause.Error(),
+		cause.Error(),
+		nextRunAt,
+		finishedAt,
+		formatTime(now),
+		targetID)
+	if err != nil {
+		return err
+	}
+	_, err = res.RowsAffected()
+	return err
+}
+
+func (s *Service) enqueueLifecycleTargetVerification(ctx context.Context, targetID, operationID string) error {
+	if s.deployment != nil {
+		s.deployment.EnqueueVerify(targetID)
+		return nil
+	}
+	if err := s.verifyLifecycleTargetNow(ctx, targetID); err != nil {
+		return err
+	}
+	target, err := s.lifecycleTargetByID(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	if err := s.afterLifecycleTargetVerified(ctx, target); err != nil {
+		return err
+	}
+	return s.finishDeploymentOperationFromTargets(ctx, operationID)
+}
+
+func (s *Service) enqueueDeploymentAggregate(ctx context.Context, operationID string) error {
+	if s.deployment != nil {
+		s.deployment.EnqueueAggregate(operationID)
+		return nil
+	}
+	return s.finishDeploymentOperationFromTargets(ctx, operationID)
+}
+
+func (s *Service) afterLifecycleTargetVerified(ctx context.Context, target LifecycleTarget) error {
+	app, err := s.Get(ctx, target.ApplicationID)
+	if err != nil && !isNotFound(err) {
+		return err
+	}
+	if err == nil && app.DeletionRequested {
+		if err := s.deleteApplicationIfRuntimeGone(ctx, app.ID); err != nil {
+			return err
+		}
+	}
+	if target.Action == LifecycleTargetActionApply || target.Action == LifecycleTargetActionStop || target.Action == LifecycleTargetActionPurge {
+		return s.reconcileReverseProxy(ctx)
+	}
+	return nil
+}
+
+func lifecycleExecutionRetryDelay(ctx context.Context, db *sql.DB, targetID string) time.Duration {
+	attempt := 0
+	if db != nil {
+		_ = db.QueryRowContext(ctx, `SELECT attempt FROM application_lifecycle_targets WHERE id=?`, targetID).Scan(&attempt)
+	}
+	delays := []time.Duration{
+		10 * time.Second,
+		30 * time.Second,
+		time.Minute,
+		2 * time.Minute,
+		5 * time.Minute,
+		10 * time.Minute,
+	}
+	if attempt < 0 {
+		attempt = 0
+	}
+	if attempt >= len(delays) {
+		return withLifecycleRetryJitter(delays[len(delays)-1])
+	}
+	return withLifecycleRetryJitter(delays[attempt])
+}
+
+func withLifecycleRetryJitter(delay time.Duration) time.Duration {
+	if delay <= 0 {
+		return delay
+	}
+	jitterMax := delay / 5
+	if jitterMax <= 0 {
+		return delay
+	}
+	return delay + time.Duration(rand.Int64N(int64(jitterMax)+1))
+}
+
+func (s *Service) verifyLifecycleTargetNow(ctx context.Context, targetID string) error {
+	target, err := s.lifecycleTargetByID(ctx, targetID)
+	if err != nil {
+		return err
+	}
+	switch target.Action {
+	case LifecycleTargetActionApply:
+		instance, err := s.runtimeInstanceForServer(ctx, target.ApplicationID, target.ServerID)
+		if err != nil {
+			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, true)
+			return err
+		}
+		if instance.DesiredState != appruntime.DesiredRunning || instance.Status != appruntime.StatusRunning {
+			err := fmt.Errorf("runtime instance %s is %s/%s", instance.ID, instance.DesiredState, instance.Status)
+			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, true)
+			return err
+		}
+		if instance.LastDeployedGeneration != target.DesiredGeneration {
+			err := fmt.Errorf("runtime generation %d does not match desired generation %d", instance.LastDeployedGeneration, target.DesiredGeneration)
+			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, false)
+			return err
+		}
+		if strings.TrimSpace(target.DesiredSpecHash) != "" && strings.TrimSpace(instance.RuntimeSpec.SpecHash) != strings.TrimSpace(target.DesiredSpecHash) {
+			err := fmt.Errorf("runtime spec hash %s does not match desired spec hash %s", instance.RuntimeSpec.SpecHash, target.DesiredSpecHash)
+			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, false)
+			return err
+		}
+	case LifecycleTargetActionStop, LifecycleTargetActionPurge:
+		instance, err := s.runtimeInstanceForServer(ctx, target.ApplicationID, target.ServerID)
+		if err != nil && !isNotFound(err) {
+			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, true)
+			return err
+		}
+		if err == nil && instance.DesiredState != appruntime.DesiredStopped && instance.Status == appruntime.StatusRunning {
+			err := fmt.Errorf("runtime instance %s is still running", instance.ID)
+			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, true)
+			return err
+		}
+	}
+	now := formatTime(time.Now().UTC())
+	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?,
+			status=?,
+			stage=?,
+			error='',
+			error_code='',
+			error_message='',
+			error_detail='',
+			attempt=0,
+			next_run_at='',
+			lease_owner='',
+			lease_expires_at='',
+			finished_at=?,
+			updated_at=?
+		WHERE id=?
+		  AND state=?`,
+		LifecycleTargetStateSucceeded,
+		lifecycleStatusForState(LifecycleTargetStateSucceeded),
+		firstNonEmpty(target.Stage, "verify"),
+		now,
+		now,
+		target.ID,
+		LifecycleTargetStateVerifying)
+	if err != nil {
+		return err
+	}
+	_, err = res.RowsAffected()
 	return err
 }
 
@@ -2075,7 +2775,7 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 }
 
 func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, operationID string) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT server_id,status,error FROM application_lifecycle_targets WHERE operation_id=?`, operationID)
+	rows, err := s.db.QueryContext(ctx, `SELECT server_id,state,error FROM application_lifecycle_targets WHERE operation_id=?`, operationID)
 	if err != nil {
 		return err
 	}
@@ -2083,20 +2783,24 @@ func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, oper
 	total := 0
 	failed := 0
 	pending := 0
+	superseded := 0
 	failures := []runtimeDeploymentFailure{}
 	for rows.Next() {
 		total++
-		var serverID, status, errText string
-		if err := rows.Scan(&serverID, &status, &errText); err != nil {
+		var serverID, state, errText string
+		if err := rows.Scan(&serverID, &state, &errText); err != nil {
 			return err
 		}
-		switch status {
-		case LifecycleTargetStatusFailed:
+		switch state {
+		case LifecycleTargetStateFailed, LifecycleTargetStateCancelled:
 			failed++
 			if strings.TrimSpace(errText) != "" {
 				failures = append(failures, runtimeDeploymentFailure{targetName: serverID, err: errors.New(errText)})
 			}
-		case LifecycleTargetStatusPending, LifecycleTargetStatusPreparing, LifecycleTargetStatusDeploying:
+		case LifecycleTargetStateSuperseded:
+			superseded++
+		case LifecycleTargetStateSucceeded:
+		default:
 			pending++
 		}
 	}
@@ -2105,6 +2809,9 @@ func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, oper
 	}
 	if total == 0 || pending > 0 {
 		return nil
+	}
+	if superseded == total {
+		return s.finishLifecycleOperation(ctx, operationID, LifecycleStatusSuperseded, nil)
 	}
 	if failed == 0 {
 		return s.finishLifecycleOperation(ctx, operationID, LifecycleStatusDeployed, nil)
@@ -2177,6 +2884,88 @@ func (s *Service) failLifecycleTargetForTask(ctx context.Context, task tasks.Tas
 	return joined
 }
 
+func (s *Service) FailPlannedLifecycleTargets(ctx context.Context, inputs []tasks.CreateInput, cause error) error {
+	message := "Application target task was not created"
+	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
+		message = cause.Error()
+	}
+	seenOperations := map[string]bool{}
+	var joined error
+	for _, input := range inputs {
+		if strings.TrimSpace(input.ParamsJSON) == "" {
+			continue
+		}
+		var params deployTaskParams
+		if err := json.Unmarshal([]byte(input.ParamsJSON), &params); err != nil {
+			continue
+		}
+		operationID := strings.TrimSpace(params.LifecycleOperationID)
+		serverID := strings.TrimSpace(params.ServerID)
+		if operationID == "" || serverID == "" {
+			continue
+		}
+		targetID := lifecycleTargetID(operationID, serverID)
+		if _, err := s.failLifecycleTargetIfActive(ctx, targetID, message); err != nil {
+			joined = errors.Join(joined, err)
+		}
+		seenOperations[operationID] = true
+	}
+	for operationID := range seenOperations {
+		if err := s.finishDeploymentOperationFromTargets(ctx, operationID); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	return joined
+}
+
+func deploymentTaskSuperseded(app Application, opts deployTaskRunOptions) bool {
+	if opts.desiredGeneration > 0 && app.Generation != opts.desiredGeneration {
+		return true
+	}
+	if strings.TrimSpace(opts.desiredSpecHash) != "" && strings.TrimSpace(app.SpecHash) != strings.TrimSpace(opts.desiredSpecHash) {
+		return true
+	}
+	return false
+}
+
+func (s *Service) supersedeLifecycleTargetForTask(ctx context.Context, task tasks.Task, message string) error {
+	opts := deployTaskOptions(task)
+	if opts.lifecycleOperationID == "" || len(opts.targetIDs) == 0 {
+		return nil
+	}
+	var joined error
+	for _, serverID := range opts.targetIDs {
+		targetID := lifecycleTargetID(opts.lifecycleOperationID, serverID)
+		if err := s.supersedeLifecycleTargetIfActive(ctx, targetID, message); err != nil {
+			joined = errors.Join(joined, err)
+			continue
+		}
+		if err := s.finishDeploymentOperationFromTargets(ctx, opts.lifecycleOperationID); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	return joined
+}
+
+func (s *Service) supersedeLifecycleTargetIfActive(ctx context.Context, targetID, message string) error {
+	now := formatTime(time.Now().UTC())
+	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?, status=?, error=?, error_code=CASE WHEN error_code='' THEN ? ELSE error_code END,
+			error_message=CASE WHEN error_message='' THEN ? ELSE error_message END,
+			error_detail=CASE WHEN error_detail='' THEN ? ELSE error_detail END,
+			stage=?,
+			attempt=0,
+			next_run_at='',
+			lease_owner='',
+			lease_expires_at='',
+			finished_at=COALESCE(finished_at, ?),
+			updated_at=?
+		WHERE id=? AND state IN (?,?,?,?)`,
+		LifecycleTargetStateSuperseded, LifecycleTargetStatusSuperseded, message, "superseded", message, message, "superseded", now, now, targetID,
+		LifecycleTargetStatePlanned, LifecycleTargetStateReady, LifecycleTargetStateClaimed, LifecycleTargetStatePreparing)
+	return err
+}
+
 func targetTaskFailureMessage(task tasks.Task, cause error) string {
 	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
 		return cause.Error()
@@ -2193,10 +2982,15 @@ func targetTaskFailureMessage(task tasks.Task, cause error) string {
 func (s *Service) failLifecycleTargetIfActive(ctx context.Context, targetID, message string) (bool, error) {
 	now := formatTime(time.Now().UTC())
 	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
-		SET status=?, error=?, stage=CASE WHEN stage='' THEN ? ELSE stage END, finished_at=COALESCE(finished_at, ?), updated_at=?
-		WHERE id=? AND status IN (?,?,?)`,
-		LifecycleTargetStatusFailed, message, "interrupted", now, now, targetID,
-		LifecycleTargetStatusPending, LifecycleTargetStatusPreparing, LifecycleTargetStatusDeploying)
+		SET state=?, status=?, error=?,
+			error_code=CASE WHEN error_code='' THEN ? ELSE error_code END,
+			error_message=CASE WHEN error_message='' THEN ? ELSE error_message END,
+			error_detail=CASE WHEN error_detail='' THEN ? ELSE error_detail END,
+			stage=CASE WHEN stage='' THEN ? ELSE stage END,
+			finished_at=COALESCE(finished_at, ?), updated_at=?
+		WHERE id=? AND state IN (?,?,?,?,?,?,?,?)`,
+		LifecycleTargetStateFailed, LifecycleTargetStatusFailed, message, "task_create_failed", message, message, "interrupted", now, now, targetID,
+		LifecycleTargetStatePlanned, LifecycleTargetStateReady, LifecycleTargetStateClaimed, LifecycleTargetStatePreparing, LifecycleTargetStateApplying, LifecycleTargetStateStopping, LifecycleTargetStatePurging, LifecycleTargetStateVerifying)
 	if err != nil {
 		return false, err
 	}
@@ -2217,6 +3011,69 @@ func (s *Service) failDeployingRuntimeInstanceForTarget(ctx context.Context, app
 
 func lifecycleTargetID(operationID, serverID string) string {
 	return strings.TrimSpace(operationID) + "-" + sanitizeRuntimeName(serverID)
+}
+
+func lifecycleTargetKey(appID, serverID string) string {
+	return "application:" + strings.TrimSpace(appID) + ":server:" + strings.TrimSpace(serverID)
+}
+
+func lifecycleActionForDesiredState(desiredState string) string {
+	if strings.TrimSpace(desiredState) == appruntime.DesiredStopped {
+		return LifecycleTargetActionStop
+	}
+	return LifecycleTargetActionApply
+}
+
+func lifecyclePriorityForAction(action string) int {
+	switch strings.TrimSpace(action) {
+	case LifecycleTargetActionPurge:
+		return 30
+	case LifecycleTargetActionStop:
+		return 20
+	default:
+		return 10
+	}
+}
+
+func lifecycleStatusForState(state string) string {
+	switch strings.TrimSpace(state) {
+	case LifecycleTargetStateSucceeded:
+		return LifecycleTargetStatusRunning
+	case LifecycleTargetStateFailedRetryable, LifecycleTargetStateFailed, LifecycleTargetStateCancelled:
+		return LifecycleTargetStatusFailed
+	case LifecycleTargetStateSuperseded:
+		return LifecycleTargetStatusSuperseded
+	case LifecycleTargetStateClaimed, LifecycleTargetStatePreparing:
+		return LifecycleTargetStatusPreparing
+	case LifecycleTargetStateApplying, LifecycleTargetStateStopping, LifecycleTargetStatePurging, LifecycleTargetStateVerifying:
+		return LifecycleTargetStatusDeploying
+	default:
+		return LifecycleTargetStatusPending
+	}
+}
+
+func lifecycleStateForStatus(status, action string) string {
+	switch strings.TrimSpace(status) {
+	case LifecycleTargetStatusPreparing:
+		return LifecycleTargetStatePreparing
+	case LifecycleTargetStatusDeploying:
+		switch strings.TrimSpace(action) {
+		case LifecycleTargetActionStop:
+			return LifecycleTargetStateStopping
+		case LifecycleTargetActionPurge:
+			return LifecycleTargetStatePurging
+		default:
+			return LifecycleTargetStateApplying
+		}
+	case LifecycleTargetStatusRunning:
+		return LifecycleTargetStateSucceeded
+	case LifecycleTargetStatusFailed:
+		return LifecycleTargetStateFailed
+	case LifecycleTargetStatusSuperseded:
+		return LifecycleTargetStateSuperseded
+	default:
+		return LifecycleTargetStatePlanned
+	}
 }
 
 func (s *Service) runRuntimeDeployStep(ctx context.Context, taskID, targetName, step string, run func(context.Context) error) error {
@@ -2320,46 +3177,91 @@ func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string
 	return nil
 }
 
-func (s *Service) restartRuntimeInstances(ctx context.Context, taskID, appID string) error {
-	instances, err := s.runtimeInstances(ctx, appID)
-	if err != nil {
-		return err
-	}
-	for _, instance := range instances {
-		srv, err := s.servers.Get(ctx, instance.ServerID)
-		if err != nil {
-			return err
-		}
-		if err := ensureAgentRuntimeReady(srv); err != nil {
-			return err
-		}
-		baseURL, _ := agentURLFromServer(srv)
-		var result agentcontract.RuntimeInstanceResponse
-		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
-			var runErr error
-			result, runErr = s.runtimeClient.RuntimeRestart(runCtx, baseURL, agentcontract.RuntimeRestartRequest{InstanceID: instance.ID, ContainerName: instance.ContainerName})
-			return runErr
-		})
-		if err != nil {
-			_ = s.handleAgentError(ctx, srv, err)
-			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, appruntime.StatusFailed, "", err.Error())
-			return runtimeOperationError(err)
-		}
-		if err := s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredRunning, result.Status, result.ContainerID, ""); err != nil {
-			return err
-		}
-	}
-	if s.tasks != nil && taskID != "" {
-		_ = s.tasks.Complete(ctx, taskID, "Application restarted")
-	}
-	return nil
-}
-
 func (s *Service) executeContainerOperation(ctx context.Context, serverID string, run func(context.Context) error) error {
 	if s.operationQueue == nil {
 		return run(ctx)
 	}
 	return s.operationQueue.Execute(ctx, serverID, run)
+}
+
+func (s *Service) withLifecycleTargetLeaseHeartbeat(ctx context.Context, targetID, taskID string, run func(context.Context) error) error {
+	if strings.TrimSpace(targetID) == "" || strings.TrimSpace(taskID) == "" {
+		return run(ctx)
+	}
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	interval := defaultDeploymentLeaseTTL / 3
+	if interval < 10*time.Second {
+		interval = 10 * time.Second
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-runCtx.Done():
+				return
+			case <-ticker.C:
+				if err := s.renewLifecycleTargetTaskLease(runCtx, targetID, taskID); err != nil {
+					errCh <- err
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	if err := s.renewLifecycleTargetTaskLease(runCtx, targetID, taskID); err != nil {
+		return err
+	}
+	err := run(runCtx)
+	cancel()
+	select {
+	case heartbeatErr := <-errCh:
+		if err == nil || errors.Is(err, context.Canceled) {
+			return heartbeatErr
+		}
+	default:
+	}
+	return err
+}
+
+func (s *Service) renewLifecycleTargetTaskLease(ctx context.Context, targetID, taskID string) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	now := time.Now().UTC()
+	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET lease_expires_at=?,
+			updated_at=?
+		WHERE id=?
+		  AND claimed_task_id=?
+		  AND lease_owner=?
+		  AND lease_expires_at<>''
+		  AND lease_expires_at>?
+		  AND state IN (?,?,?,?,?)`,
+		formatTime(now.Add(defaultDeploymentLeaseTTL)),
+		formatTime(now),
+		strings.TrimSpace(targetID),
+		strings.TrimSpace(taskID),
+		lifecycleTaskLeaseOwner(taskID),
+		formatTime(now),
+		LifecycleTargetStateClaimed,
+		LifecycleTargetStatePreparing,
+		LifecycleTargetStateApplying,
+		LifecycleTargetStateStopping,
+		LifecycleTargetStatePurging)
+	if err != nil {
+		return err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return errLifecycleTargetLeaseLost
+	}
+	return nil
 }
 
 func (s *Service) insertApplication(ctx context.Context, app Application) error {
@@ -2589,107 +3491,247 @@ func (s *Service) recordRunningTaskObjectWithParams(ctx context.Context, taskTyp
 }
 
 type deployTaskParams struct {
-	AppID                string `json:"appId,omitempty"`
-	ServerID             string `json:"serverId,omitempty"`
-	LifecycleOperationID string `json:"lifecycleOperationId,omitempty"`
-	Action               string `json:"action,omitempty"`
-	Purge                bool   `json:"purge,omitempty"`
+	AppID                 string `json:"appId,omitempty"`
+	ServerID              string `json:"serverId,omitempty"`
+	LifecycleOperationID  string `json:"lifecycleOperationId,omitempty"`
+	LifecycleTargetID     string `json:"lifecycleTargetId,omitempty"`
+	Generation            int    `json:"generation,omitempty"`
+	SpecHash              string `json:"specHash,omitempty"`
+	Action                string `json:"action,omitempty"`
+	Purge                 bool   `json:"purge,omitempty"`
+	RemoveApplicationData bool   `json:"removeApplicationData,omitempty"`
 }
 
-type deployBatchOptions struct {
-	targetIDs     []string
-	skipSatisfied bool
-}
-
-func (s *Service) DeploymentTaskInputs(ctx context.Context, appID string, targetIDs []string, summary, triggerType string) ([]tasks.CreateInput, error) {
-	return s.DeploymentTaskInputsWithOptions(ctx, appID, targetIDs, ReconcileTaskOptions{}, summary, triggerType)
-}
-
-func (s *Service) DeploymentTaskInputsWithOptions(ctx context.Context, appID string, targetIDs []string, opts ReconcileTaskOptions, summary, triggerType string) ([]tasks.CreateInput, error) {
-	app, err := s.Get(ctx, appID)
+func (s *Service) PlanApplicationDeployment(ctx context.Context, req DeploymentPlanRequest) (DeploymentPlanResult, error) {
+	result, err := s.planApplicationDeployment(ctx, req)
 	if err != nil {
-		return nil, err
+		return DeploymentPlanResult{}, err
 	}
-	targetIDs = uniqueStringItems(targetIDs)
+	s.enqueueDeploymentPlanResult(result)
+	return result, nil
+}
+
+func (s *Service) planApplicationDeployment(ctx context.Context, req DeploymentPlanRequest) (DeploymentPlanResult, error) {
+	app, err := s.Get(ctx, req.ApplicationID)
+	if err != nil {
+		return DeploymentPlanResult{}, err
+	}
+	targetIDs := uniqueStringItems(req.ServerIDs)
+	stopRequestIDs := uniqueStringItems(append(append([]string{}, req.StopServers...), req.ServerIDs...))
+	triggerType := firstNonEmpty(req.TriggerType, "system")
 	if app.DeletionRequested || !app.Enabled {
-		stopTargets, err := s.reconcileStopTargets(ctx, app, targetIDs)
+		stopTargets, err := s.reconcileStopTargets(ctx, app, stopRequestIDs)
 		if err != nil {
-			return nil, err
+			return DeploymentPlanResult{}, err
 		}
-		return s.StopTaskInputs(ctx, appID, stopTargets, app.DeletionRequested || opts.Purge, summary, triggerType)
+		action := LifecycleTargetActionStop
+		if app.DeletionRequested || req.Purge {
+			action = LifecycleTargetActionPurge
+		}
+		return s.planTargetActions(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, stopTargets, action, appruntime.DesiredStopped, triggerType)
 	}
 	if app.Kind == ApplicationKindFacility && app.DeploymentMode == DeploymentModeSelected && len(app.DeploymentServers) == 0 {
-		stopTargets, err := s.reconcileStopTargets(ctx, app, targetIDs)
+		stopTargets, err := s.reconcileStopTargets(ctx, app, stopRequestIDs)
 		if err != nil {
-			return nil, err
+			return DeploymentPlanResult{}, err
 		}
-		return s.StopTaskInputs(ctx, appID, stopTargets, opts.Purge, summary, triggerType)
+		action := LifecycleTargetActionStop
+		if req.Purge {
+			action = LifecycleTargetActionPurge
+		}
+		return s.planTargetActions(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, stopTargets, action, appruntime.DesiredStopped, triggerType)
 	}
-	app, job, err := s.prepareDeploy(ctx, appID)
+	planApply := len(req.StopServers) == 0 || len(targetIDs) > 0
+	result := DeploymentPlanResult{}
+	if !planApply {
+		explicitStopResult := DeploymentPlanResult{}
+		if len(req.StopServers) > 0 {
+			action := LifecycleTargetActionStop
+			if req.Purge {
+				action = LifecycleTargetActionPurge
+			}
+			explicitStopResult, err = s.planTargetActions(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, req.StopServers, action, appruntime.DesiredStopped, triggerType)
+			if err != nil {
+				return DeploymentPlanResult{}, err
+			}
+		}
+		return explicitStopResult, nil
+	}
+	app, job, err := s.prepareDeploy(ctx, app.ID)
 	if err != nil {
-		return nil, err
+		return DeploymentPlanResult{}, err
 	}
-	batch, _, err := s.deploymentTaskBatch(ctx, app, job, summary, triggerType, deployBatchOptions{targetIDs: targetIDs, skipSatisfied: !opts.Force})
+	targets, err := s.deploymentTargets(ctx, app)
 	if err != nil {
-		return nil, err
+		return DeploymentPlanResult{}, err
 	}
-	inputs := append([]tasks.CreateInput{}, batch.Inputs...)
+	targets = filterDeploymentTargets(targets, targetIDs)
+	if !req.Force {
+		targets, err = s.filterUnsatisfiedDeploymentTargets(ctx, app, job, targets)
+		if err != nil {
+			return DeploymentPlanResult{}, err
+		}
+	}
+	result, err = s.planTargetActions(ctx, app, job, serverIDsFromTargets(targets), LifecycleTargetActionApply, appruntime.DesiredRunning, triggerType)
+	if err != nil {
+		return DeploymentPlanResult{}, err
+	}
 	stopTargets, err := s.reconcileRemovedTargets(ctx, app, targetIDs)
 	if err != nil {
-		return nil, err
+		return DeploymentPlanResult{}, err
 	}
-	stopInputs, err := s.targetActionTaskInputs(ctx, app, stopTargets, "purge", false, summary, triggerType)
+	stopResult, err := s.planTargetActions(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, stopTargets, LifecycleTargetActionPurge, appruntime.DesiredStopped, triggerType)
 	if err != nil {
-		return nil, err
+		return DeploymentPlanResult{}, err
 	}
-	inputs = append(inputs, stopInputs...)
-	return inputs, nil
-}
-
-func (s *Service) StopTaskInputs(ctx context.Context, appID string, targetIDs []string, purge bool, summary, triggerType string) ([]tasks.CreateInput, error) {
-	app, err := s.Get(ctx, appID)
-	if err != nil {
-		return nil, err
-	}
-	action := "stop"
-	if purge {
-		action = "purge"
-	}
-	return s.targetActionTaskInputs(ctx, app, targetIDs, action, purge, summary, triggerType)
-}
-
-func (s *Service) targetActionTaskInputs(ctx context.Context, app Application, targetIDs []string, action string, removeApplicationData bool, summary, triggerType string) ([]tasks.CreateInput, error) {
-	targetIDs = uniqueStringItems(targetIDs)
-	if len(targetIDs) == 0 {
-		return nil, nil
-	}
-	operation, err := s.createLifecycleOperationForServerIDs(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, "", LifecycleTypeDeploy, targetIDs, appruntime.DesiredStopped)
-	if err != nil {
-		return nil, err
-	}
-	inputs := make([]tasks.CreateInput, 0, len(targetIDs))
-	for _, serverID := range targetIDs {
-		params, err := json.Marshal(deployTaskParams{
-			AppID:                app.ID,
-			ServerID:             serverID,
-			LifecycleOperationID: operation.ID,
-			Action:               action,
-			Purge:                removeApplicationData,
-		})
-		if err != nil {
-			return nil, err
+	explicitStopResult := DeploymentPlanResult{}
+	if len(req.StopServers) > 0 {
+		action := LifecycleTargetActionStop
+		if req.Purge {
+			action = LifecycleTargetActionPurge
 		}
-		inputs = append(inputs, tasks.CreateInput{
-			Type:         targetTaskTypeForAction(action),
-			ServerID:     serverID,
-			ResourceType: "application",
-			ResourceID:   app.ID,
-			TriggerType:  triggerType,
-			ParamsJSON:   string(params),
-			Summary:      summary,
-		})
+		explicitStopResult, err = s.planTargetActions(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, req.StopServers, action, appruntime.DesiredStopped, triggerType)
+		if err != nil {
+			return DeploymentPlanResult{}, err
+		}
 	}
-	return inputs, nil
+	return mergeDeploymentPlanResults(result, stopResult, explicitStopResult), nil
+}
+
+func (s *Service) enqueueDeploymentPlanResult(result DeploymentPlanResult) {
+	if s == nil || s.deployment == nil {
+		return
+	}
+	for _, target := range result.CreatedTargets {
+		s.deployment.EnqueueExecute(target.ID)
+	}
+	for _, target := range result.SupersededTargets {
+		if strings.TrimSpace(target.OperationID) != "" {
+			s.deployment.EnqueueAggregate(target.OperationID)
+		}
+	}
+	for _, operationID := range result.OperationIDs {
+		s.deployment.EnqueueAggregate(operationID)
+	}
+}
+
+func (s *Service) planTargetActions(ctx context.Context, app Application, spec appruntime.Spec, serverIDs []string, action, desiredState, triggerType string) (DeploymentPlanResult, error) {
+	serverIDs = uniqueStringItems(serverIDs)
+	result := DeploymentPlanResult{}
+	if len(serverIDs) == 0 {
+		return result, nil
+	}
+	action = firstNonEmpty(action, lifecycleActionForDesiredState(desiredState))
+	createIDs := []string{}
+	for _, serverID := range serverIDs {
+		active, found, err := s.activeLifecycleTarget(ctx, app.ID, serverID)
+		if err != nil {
+			return result, err
+		}
+		if !found {
+			createIDs = append(createIDs, serverID)
+			continue
+		}
+		if active.Action == action && active.DesiredGeneration == spec.Generation && strings.TrimSpace(active.DesiredSpecHash) == strings.TrimSpace(spec.SpecHash) {
+			result.ReusedTargetIDs = append(result.ReusedTargetIDs, active.ID)
+			result.ReusedTargets = append(result.ReusedTargets, active)
+			continue
+		}
+		if action == LifecycleTargetActionApply && active.Action == LifecycleTargetActionApply &&
+			(active.DesiredGeneration != spec.Generation || strings.TrimSpace(active.DesiredSpecHash) != strings.TrimSpace(spec.SpecHash)) {
+			if !lifecycleTargetCanBeSupersededBeforeMutation(active.State) {
+				result.BlockedTargetIDs = append(result.BlockedTargetIDs, active.ID)
+				result.BlockedTargets = append(result.BlockedTargets, active)
+				continue
+			}
+			if err := s.supersedeLifecycleTargetIfActive(ctx, active.ID, "Desired application revision changed before this target started"); err != nil {
+				return result, err
+			}
+			active.State = LifecycleTargetStateSuperseded
+			active.Status = LifecycleTargetStatusSuperseded
+			result.SupersededTargetIDs = append(result.SupersededTargetIDs, active.ID)
+			result.SupersededTargets = append(result.SupersededTargets, active)
+			createIDs = append(createIDs, serverID)
+			continue
+		}
+		if lifecyclePriorityForAction(action) > active.Priority && lifecycleTargetCanBeSupersededBeforeMutation(active.State) {
+			if err := s.supersedeLifecycleTargetIfActive(ctx, active.ID, "Higher-priority application target action replaced this target"); err != nil {
+				return result, err
+			}
+			active.State = LifecycleTargetStateSuperseded
+			active.Status = LifecycleTargetStatusSuperseded
+			result.SupersededTargetIDs = append(result.SupersededTargetIDs, active.ID)
+			result.SupersededTargets = append(result.SupersededTargets, active)
+			createIDs = append(createIDs, serverID)
+			continue
+		}
+		result.BlockedTargetIDs = append(result.BlockedTargetIDs, active.ID)
+		result.BlockedTargets = append(result.BlockedTargets, active)
+	}
+	if len(createIDs) == 0 {
+		return result, nil
+	}
+	operation, err := s.createLifecycleOperationForServerIDsWithOptions(ctx, app, spec, "", LifecycleTypeDeploy, createIDs, lifecycleOperationCreateOptions{
+		DesiredState: desiredState,
+		Action:       action,
+		InitialState: LifecycleTargetStateReady,
+		Trigger:      triggerType,
+	})
+	if err != nil {
+		return result, err
+	}
+	result.OperationIDs = append(result.OperationIDs, operation.ID)
+	created, err := s.lifecycleTargets(ctx, operation.ID)
+	if err != nil {
+		return result, err
+	}
+	for _, target := range created {
+		result.CreatedTargetIDs = append(result.CreatedTargetIDs, target.ID)
+		result.CreatedTargets = append(result.CreatedTargets, target)
+	}
+	return result, nil
+}
+
+func (s *Service) activeLifecycleTarget(ctx context.Context, appID, serverID string) (LifecycleTarget, bool, error) {
+	row := s.db.QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
+		FROM application_lifecycle_targets
+		WHERE target_key=?
+		  AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')
+		ORDER BY updated_at DESC, created_at DESC, id DESC
+		LIMIT 1`, lifecycleTargetKey(appID, serverID))
+	target, err := scanLifecycleTarget(row)
+	if err == sql.ErrNoRows {
+		return LifecycleTarget{}, false, nil
+	}
+	if err != nil {
+		return LifecycleTarget{}, false, err
+	}
+	return target, true, nil
+}
+
+func lifecycleTargetCanBeSupersededBeforeMutation(state string) bool {
+	switch strings.TrimSpace(state) {
+	case LifecycleTargetStatePlanned, LifecycleTargetStateReady, LifecycleTargetStateClaimed, LifecycleTargetStatePreparing:
+		return true
+	default:
+		return false
+	}
+}
+
+func mergeDeploymentPlanResults(items ...DeploymentPlanResult) DeploymentPlanResult {
+	out := DeploymentPlanResult{}
+	for _, item := range items {
+		out.OperationIDs = append(out.OperationIDs, item.OperationIDs...)
+		out.CreatedTargetIDs = append(out.CreatedTargetIDs, item.CreatedTargetIDs...)
+		out.ReusedTargetIDs = append(out.ReusedTargetIDs, item.ReusedTargetIDs...)
+		out.SupersededTargetIDs = append(out.SupersededTargetIDs, item.SupersededTargetIDs...)
+		out.BlockedTargetIDs = append(out.BlockedTargetIDs, item.BlockedTargetIDs...)
+		out.CreatedTargets = append(out.CreatedTargets, item.CreatedTargets...)
+		out.ReusedTargets = append(out.ReusedTargets, item.ReusedTargets...)
+		out.SupersededTargets = append(out.SupersededTargets, item.SupersededTargets...)
+		out.BlockedTargets = append(out.BlockedTargets, item.BlockedTargets...)
+	}
+	return out
 }
 
 func (s *Service) reconcileStopTargets(ctx context.Context, app Application, targetIDs []string) ([]string, error) {
@@ -2742,59 +3784,6 @@ func (s *Service) reconcileRemovedTargets(ctx context.Context, app Application, 
 	return uniqueStringItems(out), nil
 }
 
-func (s *Service) deploymentTaskBatch(ctx context.Context, app Application, spec appruntime.Spec, summary, triggerType string, opts ...deployBatchOptions) (tasks.CreateBatchInput, string, error) {
-	targets, err := s.deploymentTargets(ctx, app)
-	if err != nil {
-		return tasks.CreateBatchInput{}, "", err
-	}
-	if len(opts) > 0 {
-		targets = filterDeploymentTargets(targets, opts[0].targetIDs)
-		if opts[0].skipSatisfied {
-			targets, err = s.filterUnsatisfiedDeploymentTargets(ctx, app, spec, targets)
-			if err != nil {
-				return tasks.CreateBatchInput{}, "", err
-			}
-		}
-	}
-	if len(targets) == 0 {
-		return tasks.CreateBatchInput{
-			Type:          TaskTypeTargetBatch,
-			Summary:       summary,
-			OperationID:   id.New("op"),
-			TriggerType:   firstNonEmpty(triggerType, "system"),
-			ExecutionMode: tasks.ExecutionModeSerial,
-			Inputs:        []tasks.CreateInput{},
-		}, "", nil
-	}
-	operation, err := s.createLifecycleOperation(ctx, app, spec, "", LifecycleTypeDeploy, targets)
-	if err != nil {
-		return tasks.CreateBatchInput{}, "", err
-	}
-	inputs := make([]tasks.CreateInput, 0, len(targets))
-	for _, target := range targets {
-		params, err := json.Marshal(deployTaskParams{AppID: app.ID, ServerID: target.ID, LifecycleOperationID: operation.ID, Action: "apply"})
-		if err != nil {
-			return tasks.CreateBatchInput{}, "", err
-		}
-		inputs = append(inputs, tasks.CreateInput{
-			Type:         TaskTypeTargetApply,
-			ServerID:     target.ID,
-			ResourceType: "application",
-			ResourceID:   app.ID,
-			ParamsJSON:   string(params),
-			Summary:      summary,
-		})
-	}
-	return tasks.CreateBatchInput{
-		Type:          TaskTypeTargetBatch,
-		Summary:       summary,
-		OperationID:   id.New("op"),
-		TriggerType:   firstNonEmpty(triggerType, "system"),
-		ExecutionMode: tasks.ExecutionModeSerial,
-		Inputs:        inputs,
-	}, operation.ID, nil
-}
-
 func targetTaskTypeForAction(action string) string {
 	switch strings.TrimSpace(action) {
 	case "stop":
@@ -2839,48 +3828,6 @@ func runtimeInstanceSatisfiesDesired(instance appruntime.Instance, desired appru
 		return instance.RuntimeSpec.SpecHash == desired.SpecHash
 	}
 	return strings.TrimSpace(desired.SpecHash) == ""
-}
-
-func (s *Service) runDeploymentTaskBatch(ctx context.Context, app Application, spec appruntime.Spec, summary string) (string, error) {
-	if s.tasks == nil {
-		return "", s.runDeployTask(ctx, "", app, spec, nil, "")
-	}
-	batch, operationID, err := s.deploymentTaskBatch(ctx, app, spec, summary, "system")
-	if err != nil {
-		return "", err
-	}
-	manager := tasks.NewManager(s.tasks)
-	if len(batch.Inputs) == 1 {
-		task, created, err := manager.Create(ctx, batch.Inputs[0], tasks.Trigger{Type: "system"})
-		if err != nil || !created {
-			return task.ID, err
-		}
-		defer s.tasks.FinishExecution(task.ID)
-		if err := s.tasks.Start(ctx, task.ID); err != nil {
-			return task.ID, err
-		}
-		opts := deployTaskOptions(task)
-		if err := s.runDeployTask(ctx, task.ID, app, spec, opts.targetIDs, opts.lifecycleOperationID); err != nil {
-			_ = s.tasks.Fail(ctx, task.ID, err)
-			return task.ID, err
-		}
-		if err := s.deploymentOperationError(ctx, operationID); err != nil {
-			return task.ID, err
-		}
-		return task.ID, nil
-	}
-	task, _, created, err := manager.CreateBatch(ctx, batch, tasks.Trigger{Type: "system"})
-	if err != nil || !created {
-		return task.ID, err
-	}
-	defer s.tasks.FinishExecution(task.ID)
-	if err := manager.Run(ctx, task); err != nil {
-		return task.ID, err
-	}
-	if err := s.deploymentOperationError(ctx, operationID); err != nil {
-		return task.ID, err
-	}
-	return task.ID, nil
 }
 
 func (s *Service) triggerApplicationReconcile(ctx context.Context, app Application, spec appruntime.Spec, triggerType, fallbackSummary string) error {
@@ -2934,10 +3881,14 @@ func (s *Service) deploymentOperationError(ctx context.Context, operationID stri
 }
 
 type deployTaskRunOptions struct {
-	targetIDs            []string
-	lifecycleOperationID string
-	action               string
-	purge                bool
+	targetIDs             []string
+	lifecycleOperationID  string
+	lifecycleTargetID     string
+	desiredGeneration     int
+	desiredSpecHash       string
+	action                string
+	purge                 bool
+	removeApplicationData bool
 }
 
 func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
@@ -2949,10 +3900,14 @@ func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
 				action = targetActionForTaskType(task.Type)
 			}
 			return deployTaskRunOptions{
-				targetIDs:            []string{strings.TrimSpace(params.ServerID)},
-				lifecycleOperationID: strings.TrimSpace(params.LifecycleOperationID),
-				action:               action,
-				purge:                params.Purge,
+				targetIDs:             []string{strings.TrimSpace(params.ServerID)},
+				lifecycleOperationID:  strings.TrimSpace(params.LifecycleOperationID),
+				lifecycleTargetID:     strings.TrimSpace(params.LifecycleTargetID),
+				desiredGeneration:     params.Generation,
+				desiredSpecHash:       strings.TrimSpace(params.SpecHash),
+				action:                action,
+				purge:                 params.Purge,
+				removeApplicationData: params.RemoveApplicationData,
 			}
 		}
 	}
@@ -2960,6 +3915,94 @@ func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
 		return deployTaskRunOptions{targetIDs: []string{strings.TrimSpace(task.ServerID)}, action: targetActionForTaskType(task.Type)}
 	}
 	return deployTaskRunOptions{}
+}
+
+func (s *Service) ensureLifecycleTargetClaimedForTask(ctx context.Context, task tasks.Task, opts deployTaskRunOptions) (bool, error) {
+	targetID := strings.TrimSpace(opts.lifecycleTargetID)
+	if targetID == "" && strings.TrimSpace(opts.lifecycleOperationID) != "" && len(opts.targetIDs) == 1 {
+		targetID = lifecycleTargetID(opts.lifecycleOperationID, opts.targetIDs[0])
+	}
+	if targetID == "" {
+		return true, nil
+	}
+	target, err := s.lifecycleTargetByID(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
+	}
+	owner := lifecycleTaskLeaseOwner(task.ID)
+	now := time.Now().UTC()
+	leaseActive := target.LeaseExpiresAt != nil && target.LeaseExpiresAt.After(now)
+	if target.State == LifecycleTargetStateClaimed && target.ClaimedTaskID == task.ID && target.LeaseOwner == owner && leaseActive {
+		return true, nil
+	}
+	switch target.State {
+	case LifecycleTargetStatePreparing, LifecycleTargetStateApplying, LifecycleTargetStateStopping, LifecycleTargetStatePurging:
+		return target.ClaimedTaskID == task.ID && target.LeaseOwner == owner && leaseActive, nil
+	case LifecycleTargetStateReady:
+	default:
+		return false, nil
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?,
+			status=?,
+			lease_owner=?,
+			lease_expires_at=?,
+			claimed_task_id=?,
+			started_at=COALESCE(started_at, ?),
+			updated_at=?
+		WHERE id=?
+		  AND state=?
+		  AND (next_run_at='' OR next_run_at<=?)
+		  AND (claimed_task_id='' OR claimed_task_id=?)`,
+		LifecycleTargetStateClaimed,
+		lifecycleStatusForState(LifecycleTargetStateClaimed),
+		owner,
+		formatTime(now.Add(defaultDeploymentLeaseTTL)),
+		task.ID,
+		formatTime(now),
+		formatTime(now),
+		targetID,
+		LifecycleTargetStateReady,
+		formatTime(now),
+		task.ID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	return affected > 0, err
+}
+
+func (s *Service) ensureLifecycleTargetStillOwnedByTask(ctx context.Context, targetID, taskID string) error {
+	targetID = strings.TrimSpace(targetID)
+	taskID = strings.TrimSpace(taskID)
+	if targetID == "" || taskID == "" {
+		return nil
+	}
+	target, err := s.lifecycleTargetByID(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		return err
+	}
+	if target.ClaimedTaskID == taskID && target.LeaseOwner == lifecycleTaskLeaseOwner(taskID) && target.LeaseExpiresAt != nil && target.LeaseExpiresAt.After(time.Now().UTC()) {
+		switch target.State {
+		case LifecycleTargetStateClaimed, LifecycleTargetStatePreparing, LifecycleTargetStateApplying, LifecycleTargetStateStopping, LifecycleTargetStatePurging:
+			return nil
+		}
+	}
+	return errLifecycleTargetLeaseLost
+}
+
+func lifecycleTaskLeaseOwner(taskID string) string {
+	taskID = strings.TrimSpace(taskID)
+	if taskID == "" {
+		return "task"
+	}
+	return "task:" + taskID
 }
 
 func targetActionForTaskType(taskType string) string {
@@ -2990,6 +4033,14 @@ func filterDeploymentTargets(targets []server.Server, targetIDs []string) []serv
 		}
 	}
 	return out
+}
+
+func serverIDsFromTargets(targets []server.Server) []string {
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		out = append(out, target.ID)
+	}
+	return uniqueStringItems(out)
 }
 
 func stringBoolSet(values []string) map[string]bool {
@@ -3548,10 +4599,57 @@ func scanLifecycleOperation(row appScanner) (LifecycleOperation, error) {
 func scanLifecycleTarget(row appScanner) (LifecycleTarget, error) {
 	var target LifecycleTarget
 	var created, updated string
-	var started, finished sql.NullString
-	if err := row.Scan(&target.ID, &target.OperationID, &target.ApplicationID, &target.ServerID, &target.Status, &target.DesiredState, &target.InstanceID, &target.ContainerName, &target.ContainerID, &target.Stage, &target.Error, &created, &started, &finished, &updated); err != nil {
+	var nextRunAt, leaseExpiresAt, started, finished sql.NullString
+	if err := row.Scan(
+		&target.ID,
+		&target.OperationID,
+		&target.ApplicationID,
+		&target.ServerID,
+		&target.Action,
+		&target.State,
+		&target.Status,
+		&target.TargetKey,
+		&target.DesiredState,
+		&target.DesiredGeneration,
+		&target.DesiredSpecHash,
+		&target.Priority,
+		&target.Attempt,
+		&nextRunAt,
+		&target.LeaseOwner,
+		&leaseExpiresAt,
+		&target.ClaimedTaskID,
+		&target.InstanceID,
+		&target.ContainerName,
+		&target.ContainerID,
+		&target.Stage,
+		&target.Error,
+		&target.ErrorCode,
+		&target.ErrorMessage,
+		&target.ErrorDetail,
+		&created,
+		&started,
+		&finished,
+		&updated,
+	); err != nil {
 		return LifecycleTarget{}, err
 	}
+	if strings.TrimSpace(target.Action) == "" {
+		target.Action = lifecycleActionForDesiredState(target.DesiredState)
+	}
+	if strings.TrimSpace(target.State) == "" {
+		target.State = lifecycleStateForStatus(target.Status, target.Action)
+	}
+	if strings.TrimSpace(target.Status) == "" {
+		target.Status = lifecycleStatusForState(target.State)
+	}
+	if strings.TrimSpace(target.TargetKey) == "" {
+		target.TargetKey = lifecycleTargetKey(target.ApplicationID, target.ServerID)
+	}
+	if target.Priority == 0 {
+		target.Priority = lifecyclePriorityForAction(target.Action)
+	}
+	target.NextRunAt = parseOptionalTime(nextRunAt)
+	target.LeaseExpiresAt = parseOptionalTime(leaseExpiresAt)
 	target.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	target.StartedAt = parseOptionalTime(started)
 	target.FinishedAt = parseOptionalTime(finished)
@@ -4029,7 +5127,7 @@ func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error 
 	if err := s.updateApplication(ctx, current); err != nil {
 		return err
 	}
-	if _, err := s.runDeploymentTaskBatch(ctx, current, job, "Syncing application "+current.Name); err != nil {
+	if err := s.triggerApplicationReconcile(ctx, current, job, "application_change", "Syncing application "+current.Name); err != nil {
 		return err
 	}
 	return s.reconcileReverseProxy(ctx)

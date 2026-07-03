@@ -45,6 +45,7 @@ type App struct {
 	metricsCleanup *metrics.CleanupWorker
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
+	deployments    applications.DeploymentDispatcher
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -125,6 +126,8 @@ func New(cfg config.Config) (*App, error) {
 	)
 	containerBridge.containers = containerSvc
 	applicationSvc.SetApplicationReconcileTrigger(containerSvc)
+	deploymentDispatcher := applications.NewDeploymentDispatcher(applicationSvc)
+	applicationSvc.SetDeploymentDispatcher(deploymentDispatcher)
 	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor, metrics.WithAgentClient(agentClient))
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc, agentClient)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
@@ -188,17 +191,23 @@ func New(cfg config.Config) (*App, error) {
 		metricsCleanup: metricsCleanup,
 		system:         systemSvc,
 		agentReports:   reportCollector,
+		deployments:    deploymentDispatcher,
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		serverSvc.CheckConfiguredAgents(ctx)
 	}()
+	if err := deploymentDispatcher.Start(context.Background()); err != nil {
+		return nil, err
+	}
 	taskWorker.Start(context.Background())
 	metricsCleanup.Start(context.Background())
 	reportCollector.Start(context.Background())
 	logging.L().Info("background services started")
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), tasks.NewHandler(taskSvc, taskWorker), metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
+	taskHandler.SetDeploymentProjectionProvider(applicationSvc)
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -215,6 +224,9 @@ func (a *App) Close() error {
 	}
 	if a.agentReports != nil {
 		a.agentReports.Stop()
+	}
+	if a.deployments != nil {
+		_ = a.deployments.Stop(context.Background())
 	}
 	return a.store.Close()
 }

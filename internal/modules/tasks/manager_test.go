@@ -247,6 +247,39 @@ func TestManagerCreateBatchCreatesParentAndChildren(t *testing.T) {
 	}
 }
 
+func TestManagerCreateBatchForceParentKeepsSingleChildVisible(t *testing.T) {
+	svc := newTestService(t)
+	svc.MustRegister(Definition{
+		Type:              "single_child",
+		ConcurrencyPolicy: ConcurrencyParallelAllowed,
+		Execute:           func(TaskContext) error { return nil },
+	})
+	svc.MustRegister(Definition{
+		Type:              "single_parent",
+		ConcurrencyPolicy: ConcurrencyResourceExclusive,
+		Execute:           func(TaskContext) error { return nil },
+	})
+	manager := NewManager(svc)
+	parent, children, created, err := manager.CreateBatch(context.Background(), CreateBatchInput{
+		Type:          "single_parent",
+		OperationID:   "op_single",
+		ExecutionMode: ExecutionModeSerial,
+		ForceParent:   true,
+		Inputs: []CreateInput{
+			{Type: "single_child", ResourceType: "application", ResourceID: "app_1", ServerID: "srv_1", MetadataJSON: `{"applicationName":"web"}`},
+		},
+	}, Trigger{Type: "scheduler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || parent.Type != "single_parent" || parent.ChildCount != 1 || len(children) != 1 {
+		t.Fatalf("expected forced parent with one child, parent=%#v children=%#v created=%v", parent, children, created)
+	}
+	if children[0].ParentTaskID != parent.ID || parent.MetadataJSON != `{"applicationName":"web"}` {
+		t.Fatalf("unexpected forced parent metadata: parent=%#v children=%#v", parent, children)
+	}
+}
+
 func TestManagerCreateBatchAllowsMixedChildTypes(t *testing.T) {
 	svc := newTestService(t)
 	ran := []string{}

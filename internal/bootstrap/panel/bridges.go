@@ -7,7 +7,6 @@ import (
 	"panel/internal/modules/applications"
 	"panel/internal/modules/containers"
 	"panel/internal/modules/facilityapps"
-	"panel/internal/modules/tasks"
 )
 
 type applicationCertificateBridge struct {
@@ -69,23 +68,9 @@ func (b *applicationContainerBridge) Deploy(ctx context.Context, id string) (app
 	return b.apps.Deploy(ctx, id)
 }
 
-func (b *applicationContainerBridge) DeploymentTaskInputs(ctx context.Context, id string, targetServerIDs []string, summary, triggerType string) ([]tasks.CreateInput, error) {
+func (b *applicationContainerBridge) PlanApplicationDeployment(ctx context.Context, req applications.DeploymentPlanRequest) (applications.DeploymentPlanResult, error) {
 	if b.apps == nil {
-		return nil, errors.New("application service is not initialized")
+		return applications.DeploymentPlanResult{}, errors.New("application service is not initialized")
 	}
-	return b.apps.DeploymentTaskInputs(ctx, id, targetServerIDs, summary, triggerType)
-}
-
-func (b *applicationContainerBridge) DeploymentTaskInputsWithOptions(ctx context.Context, id string, targetServerIDs []string, opts applications.ReconcileTaskOptions, summary, triggerType string) ([]tasks.CreateInput, error) {
-	if b.apps == nil {
-		return nil, errors.New("application service is not initialized")
-	}
-	return b.apps.DeploymentTaskInputsWithOptions(ctx, id, targetServerIDs, opts, summary, triggerType)
-}
-
-func (b *applicationContainerBridge) StopTaskInputs(ctx context.Context, id string, targetServerIDs []string, purge bool, summary, triggerType string) ([]tasks.CreateInput, error) {
-	if b.apps == nil {
-		return nil, errors.New("application service is not initialized")
-	}
-	return b.apps.StopTaskInputs(ctx, id, targetServerIDs, purge, summary, triggerType)
+	return b.apps.PlanApplicationDeployment(ctx, req)
 }

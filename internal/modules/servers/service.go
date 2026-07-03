@@ -497,7 +497,9 @@ func (s *Service) RunServerInfoTask(tc tasks.TaskContext) error {
 		}
 		return err
 	}
-	s.startServerInfoTask(task, srv)
+	taskCtx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	s.runServerInfoTask(taskCtx, task, srv)
 	return nil
 }
 

@@ -180,6 +180,46 @@ func TestContainerActionRunsSynchronouslyWithoutRefreshTask(t *testing.T) {
 	}
 }
 
+func TestContainerActionRejectsManagedApplicationContainer(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
+		VALUES('credential-1','credential','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO servers(id,name,host,port,credential_id,docker_host,traits,created_at,updated_at)
+		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at)
+		VALUES('app-1','web',1,'name: web\nimage: nginx\n','{}','{}','all','[]','[]',1,'hash-1','panel-web','apps','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO container_observations(server_id,container_id,sample_at,container_json,managed,application_id,instance_id,updated_at)
+		VALUES(?,?,?,?,?,?,?,?)`,
+		"server-1",
+		"container-1",
+		time.Now().UTC().Format(time.RFC3339Nano),
+		`{"id":"container-1"}`,
+		1,
+		"app-1",
+		"app-1-server-1",
+		time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := svc.ContainerAction(context.Background(), "server-1", "container-1", "restart"); err == nil {
+		t.Fatal("expected managed application container action to be rejected")
+	}
+	fakeAgent.mu.Lock()
+	actions := append([]string(nil), fakeAgent.actions...)
+	fakeAgent.mu.Unlock()
+	if len(actions) != 0 {
+		t.Fatalf("managed application container should not be mutated directly, got %#v", actions)
+	}
+}
+
 func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 	svc, _, fakeAgent, store := newContainerizationTestService(t)
 	ctx := context.Background()
@@ -189,7 +229,7 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 		VALUES('app-1-server-1','app-1','server-1','now',1,?)`, time.Now().UTC().Add(30*time.Second).Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = &fakeApplicationUpdater{apps: []applications.Application{app}}
 	fakeAgent.containers = []agentcontract.DockerContainer{{
 		ID:    "container-1",
 		State: "exited",
@@ -217,7 +257,7 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
 	insertReconcileFixtureRows(t, store, app)
-	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = &fakeApplicationUpdater{apps: []applications.Application{app}}
 	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
 	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
 		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
@@ -257,7 +297,7 @@ func TestNonForcedExplicitApplicationReconcileRespectsStoredBackoffTime(t *testi
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
 	insertReconcileFixtureRows(t, store, app)
-	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = &fakeApplicationUpdater{apps: []applications.Application{app}}
 	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
 	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
 		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
@@ -283,7 +323,8 @@ func TestForcedExplicitApplicationReconcileIgnoresStoredBackoffTime(t *testing.T
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
 	insertReconcileFixtureRows(t, store, app)
-	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
 	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
 	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
 		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
@@ -301,11 +342,11 @@ func TestForcedExplicitApplicationReconcileIgnoresStoredBackoffTime(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 1 {
-		t.Fatalf("expected forced reconcile input despite stored backoff, got %#v", inputs)
+	if len(inputs) != 0 {
+		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
 	}
-	if inputs[0].ServerID != "server-1" || inputs[0].OperationID != "op-1" {
-		t.Fatalf("forced reconcile input = %#v", inputs[0])
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || updater.plans[0].ServerIDs[0] != "server-1" || !updater.plans[0].Force {
+		t.Fatalf("forced reconcile plan = %#v", updater.plans)
 	}
 }
 
@@ -314,7 +355,7 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
 	insertReconcileFixtureRows(t, store, app)
-	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = &fakeApplicationUpdater{apps: []applications.Application{app}}
 	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
 		VALUES('app-1-server-1','app-1','server-1','now',2,?)`, time.Now().UTC().Add(time.Minute).Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
@@ -361,11 +402,12 @@ func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testin
 	}
 }
 
-func TestApplicationReconcileForceProducesDeployInputs(t *testing.T) {
+func TestApplicationReconcileForcePlansDeployment(t *testing.T) {
 	svc, _, _, _ := newContainerizationTestService(t)
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
-	svc.apps = fakeApplicationUpdater{apps: []applications.Application{app}}
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
 
 	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{
 		Type: "manual",
@@ -378,12 +420,11 @@ func TestApplicationReconcileForceProducesDeployInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 1 {
-		t.Fatalf("inputs = %#v", inputs)
+	if len(inputs) != 0 {
+		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
 	}
-	input := inputs[0]
-	if input.Type != applications.TaskTypeTargetApply || input.ResourceID != app.ID || input.ServerID != "server-1" || input.OperationID != "op-1" {
-		t.Fatalf("deploy input = %#v", input)
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || updater.plans[0].ServerIDs[0] != "server-1" || !updater.plans[0].Force {
+		t.Fatalf("deploy plan = %#v", updater.plans)
 	}
 }
 
@@ -422,12 +463,18 @@ func TestContainerLogsClampsTail(t *testing.T) {
 func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	svc, taskSvc, _, _ := newContainerizationTestService(t)
 	taskSvc.MustRegister(tasks.Definition{
+		Type:              applications.TaskTypeTargetBatch,
+		ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive,
+		Execute:           func(tasks.TaskContext) error { return nil },
+	})
+	taskSvc.MustRegister(tasks.Definition{
 		Type: applications.TaskTypeTargetApply,
 		Execute: func(tc tasks.TaskContext) error {
 			return tc.Service.Complete(tc.Context, tc.Task.ID, "Application deployment handled")
 		},
 	})
-	svc.apps = fakeApplicationUpdater{}
+	updater := &fakeApplicationUpdater{}
+	svc.apps = updater
 	task, created, err := svc.TriggerApplicationReconcile(context.Background(), tasks.PeriodicTrigger{
 		Type:                "facility_app",
 		TriggerResourceType: "application",
@@ -440,10 +487,12 @@ func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !created || task.ResourceID != applications.FacilityReverseProxyApplicationID || task.TriggerType != "facility_app" || task.Type != applications.TaskTypeTargetApply {
-		t.Fatalf("unexpected reconcile task: created=%v task=%#v", created, task)
+	if created || task.ID != "" {
+		t.Fatalf("reconcile trigger should only plan lifecycle targets, created=%v task=%#v", created, task)
 	}
-	waitTaskStatus(t, taskSvc, task.ID, tasks.StatusCompleted)
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != applications.FacilityReverseProxyApplicationID || updater.plans[0].StopServers[0] != "server-old" {
+		t.Fatalf("unexpected reconcile plans: %#v", updater.plans)
+	}
 }
 
 func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fakeContainerizationAgent, *storage.Store) {
@@ -568,8 +617,9 @@ type blockingImageResolver struct {
 }
 
 type fakeApplicationUpdater struct {
-	apps []applications.Application
-	err  error
+	apps  []applications.Application
+	err   error
+	plans []applications.DeploymentPlanRequest
 }
 
 func (f fakeApplicationUpdater) List(context.Context) ([]applications.Application, error) {
@@ -584,38 +634,9 @@ func (f fakeApplicationUpdater) Deploy(context.Context, string) (applications.Op
 	return applications.OperationResult{}, nil
 }
 
-func (f fakeApplicationUpdater) DeploymentTaskInputs(_ context.Context, appID string, serverIDs []string, summary, triggerType string) ([]tasks.CreateInput, error) {
-	inputs := make([]tasks.CreateInput, 0, len(serverIDs))
-	for _, serverID := range serverIDs {
-		inputs = append(inputs, tasks.CreateInput{
-			Type:         applications.TaskTypeTargetApply,
-			ServerID:     serverID,
-			ResourceType: "application",
-			ResourceID:   appID,
-			TriggerType:  triggerType,
-			Summary:      summary,
-		})
-	}
-	return inputs, f.err
-}
-
-func (f fakeApplicationUpdater) DeploymentTaskInputsWithOptions(ctx context.Context, appID string, serverIDs []string, _ applications.ReconcileTaskOptions, summary, triggerType string) ([]tasks.CreateInput, error) {
-	return f.DeploymentTaskInputs(ctx, appID, serverIDs, summary, triggerType)
-}
-
-func (f fakeApplicationUpdater) StopTaskInputs(_ context.Context, appID string, serverIDs []string, purge bool, summary, triggerType string) ([]tasks.CreateInput, error) {
-	inputs := make([]tasks.CreateInput, 0, len(serverIDs))
-	for _, serverID := range serverIDs {
-		inputs = append(inputs, tasks.CreateInput{
-			Type:         applications.TaskTypeTargetApply,
-			ServerID:     serverID,
-			ResourceType: "application",
-			ResourceID:   appID,
-			TriggerType:  triggerType,
-			Summary:      summary,
-		})
-	}
-	return inputs, f.err
+func (f *fakeApplicationUpdater) PlanApplicationDeployment(_ context.Context, req applications.DeploymentPlanRequest) (applications.DeploymentPlanResult, error) {
+	f.plans = append(f.plans, req)
+	return applications.DeploymentPlanResult{}, f.err
 }
 
 func (r *blockingImageResolver) Resolve(ctx context.Context, _ string) (applications.ImageDigestResult, error) {

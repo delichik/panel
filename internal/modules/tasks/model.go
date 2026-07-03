@@ -57,6 +57,59 @@ type Task struct {
 	FinishedAt          *time.Time `json:"finishedAt"`
 	AllowRunNow         bool       `json:"allowRunNow"`
 	AllowRetry          bool       `json:"allowRetry"`
+	Deployment          *TaskDeploymentProjection `json:"deployment,omitempty"`
+}
+
+type TaskDeploymentProjection struct {
+	Operation *TaskDeploymentOperationProjection `json:"operation,omitempty"`
+	Target    *TaskDeploymentTargetProjection    `json:"target,omitempty"`
+}
+
+type TaskDeploymentOperationProjection struct {
+	ID              string                            `json:"id"`
+	ApplicationID   string                            `json:"applicationId"`
+	ApplicationName string                            `json:"applicationName,omitempty"`
+	Type            string                            `json:"type"`
+	Status          string                            `json:"status"`
+	Trigger         string                            `json:"trigger,omitempty"`
+	Generation      int                               `json:"generation,omitempty"`
+	SpecHash        string                            `json:"specHash,omitempty"`
+	Error           string                            `json:"error,omitempty"`
+	Targets         []TaskDeploymentTargetProjection  `json:"targets,omitempty"`
+	CreatedAt       time.Time                         `json:"createdAt"`
+	StartedAt       *time.Time                        `json:"startedAt,omitempty"`
+	FinishedAt      *time.Time                        `json:"finishedAt,omitempty"`
+	UpdatedAt       time.Time                         `json:"updatedAt"`
+}
+
+type TaskDeploymentTargetProjection struct {
+	ID                string     `json:"id"`
+	OperationID       string     `json:"operationId"`
+	ApplicationID     string     `json:"applicationId"`
+	ApplicationName   string     `json:"applicationName,omitempty"`
+	ServerID          string     `json:"serverId"`
+	ServerName        string     `json:"serverName,omitempty"`
+	Action            string     `json:"action,omitempty"`
+	State             string     `json:"state,omitempty"`
+	Status            string     `json:"status"`
+	Stage             string     `json:"stage,omitempty"`
+	Attempt           int        `json:"attempt,omitempty"`
+	NextRunAt         *time.Time `json:"nextRunAt,omitempty"`
+	ClaimedTaskID     string     `json:"claimedTaskId,omitempty"`
+	ClaimedTaskStatus string     `json:"claimedTaskStatus,omitempty"`
+	InstanceID        string     `json:"instanceId,omitempty"`
+	ContainerName     string     `json:"containerName,omitempty"`
+	ContainerID       string     `json:"containerId,omitempty"`
+	DesiredState      string     `json:"desiredState,omitempty"`
+	DesiredGeneration int        `json:"desiredGeneration,omitempty"`
+	DesiredSpecHash   string     `json:"desiredSpecHash,omitempty"`
+	ErrorCode         string     `json:"errorCode,omitempty"`
+	ErrorMessage      string     `json:"errorMessage,omitempty"`
+	ErrorDetail       string     `json:"errorDetail,omitempty"`
+	CreatedAt         time.Time  `json:"createdAt"`
+	StartedAt         *time.Time `json:"startedAt,omitempty"`
+	FinishedAt        *time.Time `json:"finishedAt,omitempty"`
+	UpdatedAt         time.Time  `json:"updatedAt"`
 }
 
 type Log struct {
@@ -100,6 +153,7 @@ type CreateBatchInput struct {
 	TriggerType   string
 	TriggeredBy   string
 	ExecutionMode string
+	ForceParent   bool
 	Inputs        []CreateInput
 }
 

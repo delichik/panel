@@ -278,7 +278,7 @@ func TestRedeployEnabledApplicationsDeploysEnabledApps(t *testing.T) {
 	}
 }
 
-func TestDeployTaskExecutorEnablesAppDeploysRuntimeAndCompletesTask(t *testing.T) {
+func TestDeployTaskExecutorWithoutLifecycleTargetDoesNotMutateRuntime(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -305,15 +305,8 @@ func TestDeployTaskExecutorEnablesAppDeploysRuntimeAndCompletesTask(t *testing.T
 	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.deploys) != 1 || runtime.deploys[0].ServerID != "srv-a" {
+	if len(runtime.deploys) != 0 {
 		t.Fatalf("deploys = %#v", runtime.deploys)
-	}
-	deployed, err := svc.Get(ctx, app.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !deployed.Enabled {
-		t.Fatalf("expected app to be enabled after deploy task, got %#v", deployed)
 	}
 	storedTask, err := svc.tasks.Get(ctx, task.ID)
 	if err != nil {
@@ -324,7 +317,7 @@ func TestDeployTaskExecutorEnablesAppDeploysRuntimeAndCompletesTask(t *testing.T
 	}
 }
 
-func TestDeploymentTaskInputsSkipSatisfiedTargetsUnlessForced(t *testing.T) {
+func TestPlanApplicationDeploymentSkipsSatisfiedTargetsUnlessForced(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -336,19 +329,124 @@ func TestDeploymentTaskInputsSkipSatisfiedTargetsUnlessForced(t *testing.T) {
 	if err := svc.markRuntimeInstance(ctx, app.ID+"-srv-b", appruntime.DesiredRunning, appruntime.StatusFailed, "", "boom"); err != nil {
 		t.Fatal(err)
 	}
-	inputs, err := svc.DeploymentTaskInputsWithOptions(ctx, app.ID, nil, ReconcileTaskOptions{}, "Syncing application web", "scheduler")
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, TriggerType: "scheduler"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 1 || inputs[0].ServerID != "srv-b" {
-		t.Fatalf("expected only failed target to reconcile, got %#v", inputs)
+	if len(plan.CreatedTargets) != 1 || plan.CreatedTargets[0].ServerID != "srv-b" {
+		t.Fatalf("expected only failed target to reconcile, got %#v", plan)
 	}
-	inputs, err = svc.DeploymentTaskInputsWithOptions(ctx, app.ID, nil, ReconcileTaskOptions{Force: true}, "Syncing application web", "system")
+	plan, err = svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, Force: true, TriggerType: "system"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inputs) != 2 {
-		t.Fatalf("forced redeploy should include both targets, got %#v", inputs)
+	if len(plan.CreatedTargets) != 1 || plan.CreatedTargets[0].ServerID != "srv-a" {
+		t.Fatalf("forced redeploy should include satisfied targets but not duplicate active targets, got %#v", plan)
+	}
+}
+
+func TestPlanApplicationDeploymentDoesNotTreatLegacyActiveTaskAsAuthority(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		Type:         TaskTypeTargetApply,
+		ResourceType: "application",
+		ResourceID:   app.ID,
+		ServerID:     "srv-a",
+		Status:       tasks.StatusRunning,
+		ParamsJSON:   `{"appId":"` + app.ID + `","serverId":"srv-a","action":"apply"}`,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer svc.tasks.FinishExecution(active.ID)
+
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, Force: true, TriggerType: "system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.CreatedTargets) != 2 {
+		t.Fatalf("legacy active tasks must not block durable target planning, got %#v", plan)
+	}
+}
+
+func TestDeployTaskSupersedesStaleDesiredRevision(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx:1\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.Update(ctx, app.ID, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx:2\n", DeploymentMode: DeploymentModeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Generation == app.Generation {
+		t.Fatal("expected application generation to change")
+	}
+	runtime.deploys = nil
+	task, err := svc.tasks.Create(ctx, targetTaskInputForTest(t, plan.CreatedTargets[0], "Syncing application web", "system"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	def, ok := svc.tasks.Registry().Definition(TaskTypeTargetApply)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected target apply executor")
+	}
+	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtime.deploys) != 0 {
+		t.Fatalf("stale task should not deploy runtime, got %#v", runtime.deploys)
+	}
+	targets, err := svc.lifecycleTargets(ctx, plan.CreatedTargets[0].OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].Status != LifecycleTargetStatusSuperseded {
+		t.Fatalf("expected superseded lifecycle target, got %#v", targets)
+	}
+}
+
+func TestDeploymentDispatcherMarksTaskCreateFailure(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "system"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	createErr := errors.New("task insert failed")
+	dispatcher := NewDeploymentDispatcher(svc).(*deploymentDispatcher)
+	if err := dispatcher.markTargetTaskCreateFailed(ctx, plan.CreatedTargets[0].ID, createErr); err != nil {
+		t.Fatal(err)
+	}
+	targets, err := svc.lifecycleTargets(ctx, plan.CreatedTargets[0].OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(targets) != 1 || targets[0].State != LifecycleTargetStateFailedRetryable || !strings.Contains(targets[0].Error, createErr.Error()) {
+		t.Fatalf("expected retryable task-create failure target, got %#v", targets)
+	}
+	if targets[0].ErrorCode != "task_create_failed" {
+		t.Fatalf("expected structured task_create_failed error, got %#v", targets[0])
 	}
 }
 
@@ -949,8 +1047,18 @@ runtimeReady:
 	if failed.ServerID != "srv-c" || failed.Status != appruntime.StatusFailed || failed.LastError == "" {
 		t.Fatalf("failed target not represented: %#v", runtime.Instances)
 	}
-	if runtime.Operation == nil || len(runtime.Operation.Targets) != 3 || runtime.Operation.Status != LifecycleStatusPartiallyDeployed {
+	if runtime.Operation == nil || len(runtime.Operation.Targets) != 3 || runtime.Operation.Status != LifecycleStatusDeploying {
 		t.Fatalf("operation = %#v", runtime.Operation)
+	}
+	var failedTarget LifecycleTarget
+	for _, target := range runtime.Operation.Targets {
+		if target.ServerID == "srv-c" {
+			failedTarget = target
+			break
+		}
+	}
+	if failedTarget.ServerID != "srv-c" || failedTarget.State != LifecycleTargetStateFailedRetryable || failedTarget.NextRunAt == nil {
+		t.Fatalf("retryable failed target not represented: %#v", runtime.Operation.Targets)
 	}
 }
 
@@ -1299,7 +1407,7 @@ func TestUpdateImageMarksNodeImageCacheCurrent(t *testing.T) {
 	}
 }
 
-func TestRestartTaskExecutorRestartsRuntimeAndCompletesTask(t *testing.T) {
+func TestRestartTaskExecutorPlansForcedDeploymentAndCompletesTask(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -1327,12 +1435,11 @@ func TestRestartTaskExecutorRestartsRuntimeAndCompletesTask(t *testing.T) {
 	if !ok || def.Execute == nil {
 		t.Fatal("expected application restart executor")
 	}
-	before := len(runtime.restarts)
 	if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.restarts) != before+1 {
-		t.Fatalf("expected one restart call, got %d before=%d", len(runtime.restarts), before)
+	if len(runtime.restarts) != 0 {
+		t.Fatalf("restart task should plan lifecycle work instead of direct runtime restart, got %d restart calls", len(runtime.restarts))
 	}
 	storedTask, err := svc.tasks.Get(ctx, task.ID)
 	if err != nil {
@@ -1341,9 +1448,16 @@ func TestRestartTaskExecutorRestartsRuntimeAndCompletesTask(t *testing.T) {
 	if storedTask.Status != tasks.StatusCompleted {
 		t.Fatalf("expected completed restart task, got %#v", storedTask)
 	}
+	var targetCount int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_targets WHERE application_id=? AND state IN ('ready','claimed','preparing','applying','verifying','failed_retryable','succeeded')`, app.ID).Scan(&targetCount); err != nil {
+		t.Fatal(err)
+	}
+	if targetCount == 0 {
+		t.Fatal("expected restart task to create lifecycle deployment target")
+	}
 }
 
-func TestRestorePersistentDataRestoresAndRestarts(t *testing.T) {
+func TestRestorePersistentDataRestoresAndPlansForcedDeployment(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -1362,14 +1476,14 @@ func TestRestorePersistentDataRestoresAndRestarts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.TaskID == "" {
-		t.Fatal("expected restart task id")
+	if result.DeploymentID == "" {
+		t.Fatal("expected deployment operation id")
 	}
 	if runtime.restoreApplicationID != app.ID || string(runtime.restoreContent) != "zip" {
 		t.Fatalf("restore application=%q content=%q", runtime.restoreApplicationID, runtime.restoreContent)
 	}
-	if len(runtime.restarts) == 0 {
-		t.Fatal("expected application restart after restore")
+	if len(runtime.restarts) != 0 {
+		t.Fatalf("persistent restore should plan lifecycle work instead of direct runtime restart, got %d restart calls", len(runtime.restarts))
 	}
 }
 
@@ -1474,6 +1588,97 @@ func TestMigrateRejectsExternalMounts(t *testing.T) {
 	}
 }
 
+func TestDecorateDeploymentTasksProjectsLifecycleDiagnostics(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n", DeploymentMode: DeploymentModeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := svc.createLifecycleOperationForServerIDs(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, "", LifecycleTypeDeploy, []string{"srv-a", "srv-b"}, appruntime.DesiredRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetID := lifecycleTargetID(operation.ID, "srv-a")
+	params, err := json.Marshal(deployTaskParams{
+		AppID:                app.ID,
+		ServerID:             "srv-a",
+		LifecycleOperationID: operation.ID,
+		LifecycleTargetID:    targetID,
+		Generation:           app.Generation,
+		SpecHash:             app.SpecHash,
+		Action:               LifecycleTargetActionApply,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	taskNextRunAt := time.Now().UTC().Add(5 * time.Minute)
+	task, err := svc.tasks.Create(ctx, tasks.CreateInput{
+		OperationID:   "task-op-1",
+		Type:          TaskTypeTargetApply,
+		ServerID:      "srv-a",
+		ResourceType:  "application",
+		ResourceID:    app.ID,
+		ParamsJSON:    string(params),
+		Status:        tasks.StatusFailedRetryable,
+		RetryCount:    2,
+		MaxRetries:    5,
+		NextRunAt:     &taskNextRunAt,
+		ExecutionMode: tasks.ExecutionModeSerial,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextRunAt := time.Now().UTC().Add(3 * time.Minute)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?,status=?,stage=?,attempt=?,next_run_at=?,claimed_task_id=?,error=?,error_code=?,error_message=?,error_detail=?,updated_at=?
+		WHERE id=?`,
+		LifecycleTargetStateFailedRetryable,
+		lifecycleStatusForState(LifecycleTargetStateFailedRetryable),
+		"runtime_deploy",
+		3,
+		formatTime(nextRunAt),
+		task.ID,
+		"docker create failed",
+		"docker_create_failed",
+		"create container failed",
+		"agent stderr: invalid mount",
+		formatTime(time.Now().UTC()),
+		targetID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	items := []tasks.Task{task, {ID: "parent", OperationID: "task-op-1", Type: TaskTypeTargetBatch, Status: tasks.StatusRunning, CreatedAt: task.CreatedAt}}
+	if err := svc.DecorateDeploymentTasks(ctx, items); err != nil {
+		t.Fatal(err)
+	}
+	if items[0].Deployment == nil || items[0].Deployment.Operation == nil || items[0].Deployment.Target == nil {
+		t.Fatalf("expected target task projection, got %#v", items[0].Deployment)
+	}
+	target := items[0].Deployment.Target
+	if target.State != LifecycleTargetStateFailedRetryable || target.Stage != "runtime_deploy" || target.Attempt != 3 {
+		t.Fatalf("target diagnostics = %#v", target)
+	}
+	if target.ClaimedTaskID != task.ID || target.ClaimedTaskStatus != tasks.StatusFailedRetryable {
+		t.Fatalf("claimed task projection = %#v", target)
+	}
+	if target.ErrorCode != "docker_create_failed" || target.ErrorMessage != "create container failed" || !strings.Contains(target.ErrorDetail, "invalid mount") {
+		t.Fatalf("target error projection = %#v", target)
+	}
+	if target.NextRunAt == nil {
+		t.Fatalf("expected target next retry time: %#v", target)
+	}
+	if len(items[0].Deployment.Operation.Targets) != 2 {
+		t.Fatalf("operation should include all targets, got %#v", items[0].Deployment.Operation.Targets)
+	}
+	if items[1].Deployment == nil || items[1].Deployment.Operation == nil || items[1].Deployment.Operation.ID != operation.ID {
+		t.Fatalf("expected parent task to inherit operation projection, got %#v", items[1].Deployment)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -1536,17 +1741,27 @@ func (f *fakeApplicationReconcileTrigger) TriggerApplicationReconcile(ctx contex
 	stopServers := stringSlicePayload(payload["stopServers"])
 	inputs := []tasks.CreateInput{}
 	for _, appID := range appIDs {
-		deployInputs, err := f.svc.DeploymentTaskInputsWithOptions(ctx, appID, nil, ReconcileTaskOptions{Purge: purge, Force: force}, "Syncing application "+appID, firstNonEmpty(trigger.Type, "test"))
+		plan, err := f.svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+			ApplicationID: appID,
+			StopServers:   stopServers,
+			Purge:         purge,
+			Force:         force,
+			Manual:        trigger.Manual,
+			TriggerType:   firstNonEmpty(trigger.Type, "test"),
+		})
 		if err != nil {
 			return tasks.Task{}, false, err
 		}
-		inputs = append(inputs, deployInputs...)
-		if len(stopServers) > 0 {
-			stopInputs, err := f.svc.StopTaskInputs(ctx, appID, stopServers, purge, "Stopping application "+appID, firstNonEmpty(trigger.Type, "test"))
+		removeApplicationData := false
+		if app, err := f.svc.Get(ctx, appID); err == nil {
+			removeApplicationData = app.DeletionRequested
+		}
+		for _, target := range plan.CreatedTargets {
+			input, err := targetTaskInputWithRemoveData(target, "Syncing application "+appID, firstNonEmpty(trigger.Type, "test"), removeApplicationData)
 			if err != nil {
 				return tasks.Task{}, false, err
 			}
-			inputs = append(inputs, stopInputs...)
+			inputs = append(inputs, input)
 		}
 	}
 	if len(inputs) == 0 {
@@ -1723,6 +1938,7 @@ type fakeRuntimeClient struct {
 	createEntered        chan struct{}
 	createRelease        chan struct{}
 	createOnce           sync.Once
+	writeHook            func(agentcontract.RuntimeWriteFilesRequest)
 	statusHook           func(instanceID string)
 }
 
@@ -1735,6 +1951,9 @@ func (f fakeReverseProxyReconciler) ReconcileReverseProxy(context.Context) error
 }
 
 func (f *fakeRuntimeClient) RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error {
+	if f.writeHook != nil {
+		f.writeHook(req)
+	}
 	f.writes = append(f.writes, req)
 	return nil
 }

@@ -423,6 +423,45 @@ func TestStartIsIdempotentForActiveExecution(t *testing.T) {
 	}
 }
 
+func TestRetryPreservesTaskParams(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	original, err := svc.Create(ctx, CreateInput{
+		OperationID:   "op-1",
+		Type:          "server_info_collect",
+		ExecutionMode: ExecutionModeSerial,
+		ScheduleKey:   "server-info:srv-1",
+		ServerID:      "srv-1",
+		ResourceType:  "server",
+		ResourceID:    "srv-1",
+		TriggeredBy:   "scheduler",
+		ParamsJSON:    `{"bootstrap":false}`,
+		MetadataJSON:  `{"source":"test"}`,
+		Summary:       "Collecting server information",
+		MaxRetries:    3,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	retry, err := svc.Retry(ctx, original.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry.ParamsJSON != original.ParamsJSON {
+		t.Fatalf("retry should preserve params json, got %q want %q", retry.ParamsJSON, original.ParamsJSON)
+	}
+	if retry.MetadataJSON != original.MetadataJSON || retry.ScheduleKey != original.ScheduleKey || retry.ExecutionMode != original.ExecutionMode {
+		t.Fatalf("retry should preserve execution context, got %#v from %#v", retry, original)
+	}
+	if retry.TriggerType != "retry" || retry.TriggerTaskID != original.ID {
+		t.Fatalf("retry trigger should point at original task, got %#v", retry)
+	}
+	if retry.ParentTaskID != "" || retry.ChildCount != 0 || retry.ChildIndex != 0 {
+		t.Fatalf("retry should not reattach to old batch parent, got %#v", retry)
+	}
+}
+
 func TestFinishExecutionKeepsRunningDatabaseTaskTracked(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()

@@ -8,14 +8,14 @@ import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { tasksApi } from '@/api/tasks';
 import { serversApi } from '@/api/servers';
-import type { ServerDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
+import type { ServerDto, TaskDeploymentOperationProjectionDto, TaskDeploymentTargetProjectionDto, TaskDto, TaskStatus, TaskStepDto } from '@/types/api';
 import { groupTasksByOperation, type TaskOperationGroup } from './_shared/taskOperations';
 
 const route = useRoute();
 const TYPE_FILTER_COMMON = '__common';
 const TYPE_FILTER_ALL = '__all';
 const hiddenByCommonTaskTypes = new Set(['metrics_collect']);
-const { formatDateTime, formatTime, t, translateTaskStage, translateTaskStatus, translateTaskType } = useI18n();
+const { formatDateTime, formatTime, t, translateLifecycleStage, translateTaskStage, translateTaskStatus, translateTaskType } = useI18n();
 const supportedTaskTypes = [
   'application_target_batch',
   'application_target_apply',
@@ -84,6 +84,8 @@ let stepsRequestId = 0;
 const operationGroups = computed(() => groupTasksByOperation(tasks.value));
 const selectedTask = computed(() => tasks.value.find((task) => task.id === selectedTaskId.value) ?? null);
 const selectedOperation = computed(() => operationGroups.value.find((group) => group.operationId === selectedOperationId.value) ?? null);
+const selectedDeploymentOperation = computed(() => deploymentOperation(selectedOperation.value));
+const selectedDeploymentTarget = computed(() => selectedTask.value?.deployment?.target ?? null);
 const taskTypeFilterItems = computed(() => [
   { title: t('taskCenter.commonTypes'), value: TYPE_FILTER_COMMON },
   { title: t('taskCenter.allTypes'), value: TYPE_FILTER_ALL },
@@ -243,8 +245,100 @@ function serverName(serverId?: string | null) {
   return servers.value.find((server) => server.id === serverId)?.name || serverId;
 }
 
+function parseTaskMetadata(task?: TaskDto | null): Record<string, unknown> {
+  if (!task?.metadataJson) return {};
+  try {
+    const parsed = JSON.parse(task.metadataJson);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function taskMetadataString(task: TaskDto | null | undefined, key: string) {
+  const value = parseTaskMetadata(task)[key];
+  return typeof value === 'string' ? value : '';
+}
+
+function taskMetadataNumber(task: TaskDto | null | undefined, key: string) {
+  const value = parseTaskMetadata(task)[key];
+  return typeof value === 'number' ? value : null;
+}
+
+function deploymentActionLabel(action?: string) {
+  if (!action) return t('common.notAvailable');
+  return t(`taskCenter.deploymentActions.${action}`);
+}
+
+function deploymentContext(task: TaskDto) {
+  const operation = task.deployment?.operation;
+  const target = task.deployment?.target;
+  const appName = target?.applicationName || operation?.applicationName || taskMetadataString(task, 'applicationName');
+  const action = target?.action || taskMetadataString(task, 'action');
+  const generation = target?.desiredGeneration ?? operation?.generation ?? taskMetadataNumber(task, 'generation');
+  const specHash = target?.desiredSpecHash || operation?.specHash || taskMetadataString(task, 'specHash');
+  return {
+    appName,
+    action,
+    generation,
+    specHash,
+    operationId: target?.operationId || operation?.id || taskMetadataString(task, 'lifecycleOperationId'),
+    targetId: target?.id || taskMetadataString(task, 'lifecycleTargetId'),
+    state: target?.state || '',
+    stage: target?.stage || '',
+    attempt: target?.attempt ?? 0,
+    nextRunAt: target?.nextRunAt || null,
+    claimedTaskId: target?.claimedTaskId || '',
+    claimedTaskStatus: target?.claimedTaskStatus || '',
+    errorCode: target?.errorCode || '',
+    errorMessage: target?.errorMessage || '',
+    errorDetail: target?.errorDetail || '',
+  };
+}
+
+function deploymentOperation(group?: TaskOperationGroup | null): TaskDeploymentOperationProjectionDto | null {
+  return group?.tasks.find((task) => task.deployment?.operation)?.deployment?.operation ?? null;
+}
+
+function deploymentTargetStatusColor(state?: string | null, status?: string | null) {
+  const value = state || status || '';
+  if (['failed', 'cancelled'].includes(value)) return 'error';
+  if (value === 'failed_retryable') return 'warning';
+  if (['succeeded', 'running', 'deployed'].includes(value)) return 'success';
+  if (['preparing', 'applying', 'stopping', 'purging', 'verifying', 'claimed'].includes(value)) return 'primary';
+  if (['ready', 'planned', 'pending'].includes(value)) return 'info';
+  if (value === 'superseded') return 'default';
+  return 'default';
+}
+
+function deploymentStateLabel(value?: string | null) {
+  if (!value) return t('common.notAvailable');
+  return t(`taskCenter.deploymentTargetStates.${value}`);
+}
+
+function deploymentTargetError(target?: TaskDeploymentTargetProjectionDto | null) {
+  return target?.errorDetail || target?.errorMessage || target?.errorCode || '';
+}
+
+function deploymentTargetReason(target?: TaskDeploymentTargetProjectionDto | null) {
+  if (!target) return '';
+  const state = target.state || target.status;
+  if (target.errorMessage || target.errorCode) return target.errorMessage || target.errorCode || '';
+  if (state === 'failed_retryable' && target.nextRunAt) return t('taskCenter.targetRetryAfterBackoff', { time: formatDateTime(target.nextRunAt) });
+  if (state === 'ready') return t('taskCenter.waitingServerQueue');
+  if (state === 'claimed' && target.claimedTaskId) return t('taskCenter.claimedByTask', { id: shortId(target.claimedTaskId) });
+  if (state === 'superseded') return target.errorDetail || t('taskCenter.supersededByNewerOperation');
+  return '';
+}
+
+function deploymentStageLabel(value?: string | null) {
+  return value ? translateLifecycleStage(value) : t('common.notAvailable');
+}
+
 function operationObjectLabel(group: TaskOperationGroup) {
-  const task = group.tasks.find((item) => item.parentTaskId) ?? group.tasks[0];
+  const task = group.tasks.find((item) => item.parentTaskId && taskMetadataString(item, 'applicationName')) ?? group.tasks.find((item) => item.parentTaskId) ?? group.tasks[0];
+  const appName = task?.deployment?.operation?.applicationName || task?.deployment?.target?.applicationName || taskMetadataString(task, 'applicationName');
+  if (appName) return appName;
   const serverId = task?.nodeId || task?.serverId;
   const server = serverId ? servers.value.find((item) => item.id === serverId) : null;
   if (server) return server.name;
@@ -288,6 +382,13 @@ function operationTaskCount(group?: TaskOperationGroup | null) {
 function taskOrdinalLabel(task: TaskDto) {
   if (isBatchParentTask(task)) return t('taskCenter.operationSummary');
   if (!task.parentTaskId || !task.childCount || task.childCount <= 1) return formatTaskType(task.type);
+  const context = deploymentContext(task);
+  if (context.appName && context.action) {
+    return t('taskCenter.deploymentTargetTitle', {
+      action: deploymentActionLabel(context.action),
+      app: context.appName,
+    });
+  }
   return t('taskCenter.taskOrdinal', { index: task.childIndex || 1, count: task.childCount });
 }
 
@@ -368,6 +469,8 @@ function statusLabel(status: TaskStatus | string) {
 }
 
 function queueReason(task: TaskDto) {
+  const targetReason = deploymentTargetReason(task.deployment?.target);
+  if (targetReason) return targetReason;
   if (task.status === 'scheduled') return task.nextRunAt ? t('taskCenter.waitingScheduledStart') : t('taskCenter.scheduledByPolicy');
   if (task.status === 'failed_retryable') return task.nextRunAt ? t('taskCenter.retryAfterBackoff', { retry: task.retryCount, max: task.maxRetries || '-' }) : t('taskCenter.retryReady');
   if (task.status === 'queued') {
@@ -582,6 +685,41 @@ onMounted(loadTaskCenter);
               {{ queueReason(selectedTask) }}
             </v-alert>
 
+            <div v-if="selectedDeploymentTarget" class="deployment-diagnostics">
+              <div class="deployment-diagnostics__title">
+                <span class="text-subtitle-2 font-weight-bold">{{ t('taskCenter.deploymentTargetDiagnostics') }}</span>
+                <v-chip :color="deploymentTargetStatusColor(selectedDeploymentTarget.state, selectedDeploymentTarget.status)" size="x-small" label>
+                  {{ deploymentStateLabel(selectedDeploymentTarget.state || selectedDeploymentTarget.status) }}
+                </v-chip>
+              </div>
+              <div class="diagnostics-grid">
+                <div>
+                  <span>{{ t('taskCenter.targetStage') }}</span>
+                  <strong>{{ deploymentStageLabel(selectedDeploymentTarget.stage) }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('taskCenter.attempt') }}</span>
+                  <strong>{{ selectedDeploymentTarget.attempt || 0 }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('taskCenter.nextRetry') }}</span>
+                  <strong>{{ selectedDeploymentTarget.nextRunAt ? formatDateTime(selectedDeploymentTarget.nextRunAt) : t('common.notAvailable') }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('taskCenter.claimedTask') }}</span>
+                  <strong>{{ selectedDeploymentTarget.claimedTaskId ? shortId(selectedDeploymentTarget.claimedTaskId) : t('common.notAvailable') }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('taskCenter.errorCode') }}</span>
+                  <strong>{{ selectedDeploymentTarget.errorCode || t('common.notAvailable') }}</strong>
+                </div>
+                <div>
+                  <span>{{ t('taskCenter.targetError') }}</span>
+                  <strong>{{ deploymentTargetError(selectedDeploymentTarget) || t('common.notAvailable') }}</strong>
+                </div>
+              </div>
+            </div>
+
             <div class="action-row">
               <v-btn
                 size="small"
@@ -616,6 +754,55 @@ onMounted(loadTaskCenter);
           </template>
         </v-card>
 
+        <v-card v-if="selectedDeploymentOperation" variant="outlined" class="deployment-targets-panel">
+          <div class="panel-title">
+            <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.deploymentTargets') }}</div>
+            <v-chip :color="deploymentTargetStatusColor(undefined, selectedDeploymentOperation.status)" size="x-small" label>
+              {{ selectedDeploymentOperation.status }}
+            </v-chip>
+          </div>
+          <div class="task-table-wrap">
+            <v-table density="compact" class="task-table deployment-targets-table">
+              <thead>
+                <tr>
+                  <th>{{ t('taskCenter.node') }}</th>
+                  <th>{{ t('taskCenter.deployment') }}</th>
+                  <th>{{ t('taskCenter.targetState') }}</th>
+                  <th>{{ t('taskCenter.targetStage') }}</th>
+                  <th>{{ t('taskCenter.attempt') }}</th>
+                  <th>{{ t('taskCenter.nextRetry') }}</th>
+                  <th>{{ t('taskCenter.claimedTask') }}</th>
+                  <th>{{ t('taskCenter.targetError') }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="target in selectedDeploymentOperation.targets || []" :key="target.id">
+                  <td>{{ target.serverName || serverName(target.serverId) }}</td>
+                  <td>
+                    <div class="font-weight-medium">{{ deploymentActionLabel(target.action) }}</div>
+                    <div v-if="target.desiredGeneration" class="text-caption text-medium-emphasis">
+                      {{ t('taskCenter.generationShort', { generation: target.desiredGeneration }) }}
+                    </div>
+                  </td>
+                  <td>
+                    <v-chip :color="deploymentTargetStatusColor(target.state, target.status)" size="x-small" label>
+                      {{ deploymentStateLabel(target.state || target.status) }}
+                    </v-chip>
+                  </td>
+                  <td>{{ deploymentStageLabel(target.stage) }}</td>
+                  <td class="font-tabular">{{ target.attempt || 0 }}</td>
+                  <td>{{ target.nextRunAt ? formatClock(target.nextRunAt) : t('common.notAvailable') }}</td>
+                  <td class="mono">{{ target.claimedTaskId ? shortId(target.claimedTaskId) : t('common.notAvailable') }}</td>
+                  <td class="queue-reason">{{ deploymentTargetReason(target) || deploymentTargetError(target) || t('common.notAvailable') }}</td>
+                </tr>
+                <tr v-if="!(selectedDeploymentOperation.targets?.length)">
+                  <td colspan="8" class="text-center py-6 text-medium-emphasis">{{ t('taskCenter.noDeploymentTargets') }}</td>
+                </tr>
+              </tbody>
+            </v-table>
+          </div>
+        </v-card>
+
         <v-card variant="outlined" class="task-table-panel">
           <div class="panel-title">
             <div class="text-subtitle-1 font-weight-bold">{{ t('taskCenter.tasksInOperation') }}</div>
@@ -625,6 +812,7 @@ onMounted(loadTaskCenter);
               <thead>
                 <tr>
                   <th>{{ t('taskCenter.task') }}</th>
+                  <th>{{ t('taskCenter.deployment') }}</th>
                   <th>{{ t('taskCenter.node') }}</th>
                   <th>{{ t('taskCenter.status') }}</th>
                   <th>{{ t('taskCenter.progress') }}</th>
@@ -636,7 +824,7 @@ onMounted(loadTaskCenter);
               </thead>
               <tbody>
                 <tr v-if="!(selectedOperation?.tasks.length)">
-                  <td colspan="8" class="text-center py-6 text-medium-emphasis">{{ t('taskCenter.selectOperation') }}</td>
+                  <td colspan="9" class="text-center py-6 text-medium-emphasis">{{ t('taskCenter.selectOperation') }}</td>
                 </tr>
                 <tr
                   v-for="task in selectedOperation?.tasks || []"
@@ -649,6 +837,25 @@ onMounted(loadTaskCenter);
                     <div class="font-weight-medium">{{ taskOrdinalLabel(task) }}</div>
                     <div v-if="task.parentTaskId || isBatchParentTask(task)" class="text-caption text-medium-emphasis">{{ formatTaskType(task.type) }}</div>
                     <div class="text-caption text-medium-emphasis mono">{{ shortId(task.id) }}</div>
+                  </td>
+                  <td>
+                    <div v-if="deploymentContext(task).appName" class="deployment-context">
+                      <div class="font-weight-medium">{{ deploymentContext(task).appName }}</div>
+                      <div class="text-caption text-medium-emphasis">
+                        {{ deploymentActionLabel(deploymentContext(task).action) }}
+                        <span v-if="deploymentContext(task).generation !== null"> / {{ t('taskCenter.generationShort', { generation: deploymentContext(task).generation }) }}</span>
+                      </div>
+                      <div v-if="deploymentContext(task).specHash" class="text-caption text-medium-emphasis mono">
+                        {{ t('taskCenter.specHashShort', { hash: shortId(deploymentContext(task).specHash) }) }}
+                      </div>
+                      <div v-if="deploymentContext(task).state" class="deployment-context__state">
+                        <v-chip :color="deploymentTargetStatusColor(deploymentContext(task).state)" size="x-small" label>
+                          {{ deploymentStateLabel(deploymentContext(task).state) }}
+                        </v-chip>
+                        <span v-if="deploymentContext(task).stage" class="text-caption text-medium-emphasis">{{ deploymentStageLabel(deploymentContext(task).stage) }}</span>
+                      </div>
+                    </div>
+                    <span v-else class="text-medium-emphasis">{{ t('common.notAvailable') }}</span>
                   </td>
                   <td>{{ serverName(task.nodeId || task.serverId) }}</td>
                   <td><v-chip :color="taskStatusColor(task.status)" size="x-small" label>{{ statusLabel(task.status) }}</v-chip></td>
@@ -739,12 +946,26 @@ onMounted(loadTaskCenter);
 
 .main-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 16px;
   min-height: 0;
 }
 
 .operation-item { display: flex; grid-column: 1 / -1; align-items: center; gap: 10px; min-width: 0; }
+
+.deployment-context {
+  min-width: 160px;
+  max-width: 260px;
+  overflow-wrap: anywhere;
+}
+
+.deployment-context__state {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  min-width: 0;
+}
 
 .operation-item__content {
   display: flex;
@@ -808,11 +1029,28 @@ onMounted(loadTaskCenter);
 }
 
 .operation-panel,
+.deployment-targets-panel,
 .task-table-panel {
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+}
+
+.deployment-targets-panel {
+  max-height: 260px;
+}
+
+.deployment-diagnostics {
+  padding-bottom: 14px;
+}
+
+.deployment-diagnostics__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 16px 10px;
 }
 
 .action-row {
@@ -902,6 +1140,7 @@ tr.selected {
   }
 
   .operation-panel,
+  .deployment-targets-panel,
   .task-table-panel {
     overflow: visible;
   }
