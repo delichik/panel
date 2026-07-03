@@ -1416,6 +1416,7 @@ func TestAgentInstallScriptStopsOldProcessesAndChecksPortOwner(t *testing.T) {
 		"pkill -f '^/usr/local/bin/panel-agent($| )'",
 		"journalctl -u panel-agent.service -n 80 --no-pager",
 		"ss -ltnp 'sport = :9786'",
+		"for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do",
 		"continuing with TLS certificate verification",
 	} {
 		if !strings.Contains(script, want) {
