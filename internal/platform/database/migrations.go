@@ -218,8 +218,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation ON application_lifecycle_targets(operation_id, server_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_state_due ON application_lifecycle_targets(state, next_run_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_app_server ON application_lifecycle_targets(application_id, server_id, state)`,
 		`CREATE TABLE IF NOT EXISTS application_instances (
 			id TEXT PRIMARY KEY,
 			application_id TEXT NOT NULL,

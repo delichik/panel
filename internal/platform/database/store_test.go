@@ -229,6 +229,106 @@ func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	}
 }
 
+func TestMigrateAddsLifecycleTargetStateBeforeStateIndexes(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE applications (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 0,
+		spec_yaml TEXT NOT NULL,
+		variables_json TEXT NOT NULL DEFAULT '{}',
+		deployment_mode TEXT NOT NULL DEFAULT 'all',
+		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+		generation INTEGER NOT NULL DEFAULT 1,
+		spec_hash TEXT NOT NULL DEFAULT '',
+		job_id TEXT NOT NULL,
+		namespace TEXT NOT NULL DEFAULT 'default',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE servers (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		host TEXT NOT NULL,
+		port INTEGER NOT NULL,
+		credential_id TEXT NOT NULL,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE application_lifecycle_operations (
+		id TEXT PRIMARY KEY,
+		application_id TEXT NOT NULL,
+		type TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		task_id TEXT NOT NULL DEFAULT '',
+		generation INTEGER NOT NULL DEFAULT 0,
+		spec_hash TEXT NOT NULL DEFAULT '',
+		trigger TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		started_at TEXT,
+		finished_at TEXT,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE application_lifecycle_targets (
+		id TEXT PRIMARY KEY,
+		operation_id TEXT NOT NULL,
+		application_id TEXT NOT NULL,
+		server_id TEXT NOT NULL,
+		status TEXT NOT NULL DEFAULT 'pending',
+		desired_state TEXT NOT NULL DEFAULT 'running',
+		instance_id TEXT NOT NULL DEFAULT '',
+		container_name TEXT NOT NULL DEFAULT '',
+		container_id TEXT NOT NULL DEFAULT '',
+		stage TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		started_at TEXT,
+		finished_at TEXT,
+		updated_at TEXT NOT NULL,
+		UNIQUE(operation_id, server_id)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	columns := tableColumns(t, store.AppDB(), "application_lifecycle_targets")
+	for _, required := range []string{"state", "target_key", "next_run_at", "lease_owner", "claimed_task_id"} {
+		if !columns[required] {
+			t.Fatalf("migrated lifecycle target schema is missing %q", required)
+		}
+	}
+	for _, index := range []string{"idx_application_lifecycle_targets_state_due", "idx_application_lifecycle_targets_app_server"} {
+		if !indexExists(t, store.AppDB(), index) {
+			t.Fatalf("expected migrated lifecycle target index %q", index)
+		}
+	}
+}
+
 func TestMigrateDropsApplicationPersistentPath(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -517,6 +617,19 @@ func tableExists(t *testing.T, db *sql.DB, table string) bool {
 	}
 	if err != nil {
 		t.Fatalf("query table %q: %v", table, err)
+	}
+	return true
+}
+
+func indexExists(t *testing.T, db *sql.DB, index string) bool {
+	t.Helper()
+	var name string
+	err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?`, index).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false
+	}
+	if err != nil {
+		t.Fatalf("query index %q: %v", index, err)
 	}
 	return true
 }
