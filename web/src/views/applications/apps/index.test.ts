@@ -7,7 +7,7 @@ describe('ApplicationsPage', () => {
   it('presents the operational Applications workspace', () => {
     expect(page).toContain("t('applicationsPage.applications')");
     expect(page).toContain('applicationsApi.list');
-    expect(page).toContain('ApplicationEditor');
+    expect(page).not.toContain('ApplicationEditor');
     expect(page).toContain('ApplicationDetail');
     expect(page).toContain('<AppSelectorPanel');
     expect(page).toContain('<AppSelectorItem');
@@ -17,6 +17,8 @@ describe('ApplicationsPage', () => {
     expect(page).not.toContain('enabledCount');
     expect(page).not.toContain('attentionCount');
     expect(page).toContain('mdi-plus');
+    expect(page).toContain("router.push('/applications/apps/create')");
+    expect(page).toContain("router.push(`/applications/apps/${encodeURIComponent(app.id)}/edit`)");
     expect(page).toContain("t('applicationsPage.deleteApplication')");
     expect(page).toContain("runtimeStatus(app) === 'running' && app.imageUpdateAvailable");
     expect(page).toContain("t('applicationsPage.runningWithUpdate')");

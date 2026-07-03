@@ -67,7 +67,7 @@ describe('selector detail workspaces', () => {
     expect(tasksPage).toContain('stepsLoading && steps.length === 0');
 
     expect(applicationEditor).toContain('filesRequestId += 1;');
-    expect(applicationEditor).toContain('requestId !== filesRequestId || props.application?.id !== applicationId || !props.open');
+    expect(applicationEditor).toContain('requestId !== filesRequestId || props.application?.id !== applicationId || !editorVisible.value');
   });
 
   it('uses the shared selector components across left-side selectors', () => {

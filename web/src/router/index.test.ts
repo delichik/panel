@@ -31,6 +31,8 @@ describe('router key asset routes', () => {
     expect(routerSource).toContain("path: 'security/fail2ban', name: 'server-fail2ban'");
     expect(routerSource).toContain("path: 'resources/packages', name: 'system-packages'");
     expect(routerSource).toContain("path: 'applications/apps', name: 'applications'");
+    expect(routerSource).toContain("path: 'applications/apps/create', name: 'application-create'");
+    expect(routerSource).toContain("path: 'applications/apps/:applicationId/edit', name: 'application-edit'");
   });
 });
 

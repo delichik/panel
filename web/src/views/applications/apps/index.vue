@@ -8,14 +8,11 @@ import AppSelectorItem from '@/components/AppSelectorItem.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import ApplicationDetail from './ApplicationDetail.vue';
-import ApplicationEditor from './ApplicationEditor.vue';
 
 const route = useRoute();
 const router = useRouter();
 const applications = ref<ApplicationDto[]>([]);
 const selectedId = ref('');
-const editorOpen = ref(false);
-const editingApplication = ref<ApplicationDto | null>(null);
 const loading = ref(false);
 const actionLoading = ref('');
 const error = ref('');
@@ -78,21 +75,11 @@ async function load() {
 }
 
 function createApplication() {
-  editingApplication.value = null;
-  editorOpen.value = true;
+  void router.push('/applications/apps/create');
 }
 
 function editApplication(app: ApplicationDto) {
-  editingApplication.value = app;
-  editorOpen.value = true;
-}
-
-async function handleSaved(app: ApplicationDto, taskId?: string) {
-  editorOpen.value = false;
-  message.value = app.enabled ? t('applicationsPage.savedAndDeploymentRequested') : t('applicationsPage.saved');
-  lastTaskId.value = taskId || '';
-  await load();
-  selectedId.value = app.id;
+  void router.push(`/applications/apps/${encodeURIComponent(app.id)}/edit`);
 }
 
 function taskRoute(taskId = lastTaskId.value) {
@@ -211,8 +198,6 @@ onMounted(load);
         </v-card>
       </div>
     </div>
-
-    <ApplicationEditor :application="editingApplication" :open="editorOpen" @close="editorOpen = false" @saved="handleSaved" />
 
     <v-dialog v-model="deleteDialog" width="460">
       <v-card class="app-dialog-card">

@@ -11,6 +11,7 @@ import PackageUpdatesPage from '@/views/resources/packages/index.vue';
 import FirewallPage from '@/views/security/firewall/index.vue';
 import Fail2BanPage from '@/views/security/fail2ban/index.vue';
 import ApplicationsPage from '@/views/applications/apps/index.vue';
+import ApplicationCreatePage from '@/views/applications/apps/create.vue';
 import FacilityAppsPage from '@/views/applications/facility-apps/index.vue';
 import ContainersPage from '@/views/resources/containers/index.vue';
 import ImagesPage from '@/views/resources/images/index.vue';
@@ -61,6 +62,8 @@ export const router = createRouter({
         { path: 'resources/networks', name: 'networks', component: NetworksPage, meta: { titleKey: 'routes.networks.title' } },
         { path: 'resources/volumes', name: 'volumes', component: VolumesPage, meta: { titleKey: 'routes.volumes.title' } },
         { path: 'applications/apps', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/apps/create', name: 'application-create', component: ApplicationCreatePage, meta: { titleKey: 'routes.applicationCreate.title' } },
+        { path: 'applications/apps/:applicationId/edit', name: 'application-edit', component: ApplicationCreatePage, meta: { titleKey: 'routes.applicationEdit.title' } },
         { path: 'applications/facility-apps', name: 'facility-apps', component: FacilityAppsPage, meta: { titleKey: 'routes.facilityApps.title' } },
         { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
         { path: 'certificates', redirect: '/certificates/domains' },

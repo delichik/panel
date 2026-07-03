@@ -4,6 +4,12 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/apps/create.vue`、`web/src/router/index.ts`
+  - 应用创建与编辑共用隐藏独立页，新增创建/编辑路由标题和“返回应用”按钮文案，已接入英文与简体中文词条。
+- `web/src/views/applications/apps/ApplicationEditor.vue`
+  - 创建页 AppSpec 新增“可视化 / YAML”互斥模式和 YAML 代码编辑器状态文案，已接入英文与简体中文词条；部署目标、反向代理、变量和文件仍作为 YAML 外的应用级字段展示。
+- `web/src/views/applications/apps/ApplicationEditor.vue`
+  - 创建页编辑器的文件新增/替换入口文案已接入英文与简体中文词条；应用文件编辑保持聚焦对话框，编辑/覆盖时锁定类型。
 - `web/src/views/applications/apps/ApplicationEditor.vue`
   - 应用文件区新增模板编辑、二进制文件替换和文件夹压缩包替换文案，已接入英文与简体中文词条；文件内容和压缩包文件名保持用户原始输入。
 - `web/src/views/tasks/index.vue`
@@ -21,6 +27,8 @@
   - 入口网关应用路由区域新增“打开应用”入口，英文与简体中文词条已接入 `web/src/i18n/index.ts`。
 - `web/src/views/applications/apps/ApplicationEditor.vue`
   - 应用编辑器新增 Docker capability (`capAdd`) 可视化输入，字段标签、提示和添加按钮已接入英文与简体中文词条；保存值为 Docker capability 稳定标识，不翻译。
+- `web/src/views/applications/apps/ApplicationEditor.vue`
+  - 应用编辑器运行时分区新增“Resources / 资源限制”小节文案，Docker capability 可视化文案优化为“Linux capabilities / 容器能力”和“添加能力”，保存值仍为 Docker capability 稳定标识，不翻译。
 - `web/src/views/tasks/index.vue`
   - 任务中心批量父任务新增“操作汇总”行，父任务步骤、日志和错误可直接查看；新增标签已接入英文与简体中文词条。
 - `internal/modules/applications/spec`、`internal/platform/i18n`

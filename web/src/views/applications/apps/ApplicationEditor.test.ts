@@ -11,7 +11,7 @@ describe('ApplicationEditor', () => {
   });
 
   it('blocks the editor while showing save progress stages', () => {
-    expect(editor).toContain(':persistent="saving"');
+    expect(editor).toContain('persistent: saving.value');
     expect(editor).toContain('v-overlay :model-value="saving" contained persistent');
     expect(editor).toContain("t('applicationEditor.saveStepStartingSession')");
     expect(editor).toContain("t('applicationEditor.saveStepDeletingFile'");
@@ -19,6 +19,50 @@ describe('ApplicationEditor', () => {
     expect(editor).toContain("t('applicationEditor.saveStepUploadingArchive'");
     expect(editor).toContain("t('applicationEditor.saveStepCommitApplying')");
     expect(editor).toContain(':disabled="saving" @click="requestClose(false)"');
+  });
+
+  it('can render the same editor inside a full page shell', () => {
+    expect(editor).toContain('embedded?: boolean');
+    expect(editor).toContain("props.embedded ? 'div' : 'v-dialog'");
+    expect(editor).toContain('editor-card--embedded');
+    expect(editor).toContain('editorVisible');
+    expect(editor).toContain('editor-main--embedded');
+    expect(editor).toContain('editor-section-nav');
+    expect(editor).toContain('editorSections');
+    expect(editor).toContain('v-if="!embedded" class="app-dialog-title"');
+    expect(editor).toContain('v-tabs v-if="!embedded"');
+    expect(editor).not.toContain('createEditorTabs');
+  });
+
+  it('uses YAML as an embedded AppSpec replacement mode with a code editor surface', () => {
+    expect(editor).toContain("id: 'application-editor-yaml'");
+    expect(editor).toContain('const embeddedYamlEditing = ref(false)');
+    expect(editor).toContain('function prepareEmbeddedYamlEdit()');
+    expect(editor).toContain('const specEditorMode = computed');
+    expect(editor).toContain('const yamlLineNumbers = computed');
+    expect(editor).toContain('v-btn-toggle :model-value="embeddedSpecMode"');
+    expect(editor).toContain('v-window v-model="specEditorMode"');
+    expect(editor).toContain("embeddedSpecMode.value === 'visual'");
+    expect(editor).toContain(":id=\"embedded ? 'application-editor-yaml' : undefined\"");
+    expect(editor).toContain('class="yaml-code-editor"');
+    expect(editor).toContain('class="yaml-code-gutter"');
+    expect(editor).toContain('class="yaml-code-textarea"');
+    expect(editor).toContain('@focus="prepareEmbeddedYamlEdit"');
+    expect(editor).toContain('@scroll="syncYamlEditorScroll"');
+    expect(editor).not.toContain('v-dialog v-model="yamlDialog"');
+    expect(editor).not.toContain('yaml-inline-input');
+  });
+
+  it('keeps application file edits in a focused dialog', () => {
+    expect(editor).toContain('const fileDialog = ref(false)');
+    expect(editor).toContain('v-dialog v-model="fileDialog" width="720"');
+    expect(editor).toContain("openFileDialog('template')");
+    expect(editor).toContain("openFileDialog('binary')");
+    expect(editor).toContain('fileDialog.value = true');
+    expect(editor).toContain('fileDialog.value = false');
+    expect(editor).toContain('fileKindLocked');
+    expect(editor).toContain("fileForm.intent = 'edit-template'");
+    expect(editor).toContain("fileForm.intent = 'replace-binary'");
   });
 
   it('keeps the editor header and footer without heavy divider lines', () => {

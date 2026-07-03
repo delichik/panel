@@ -20,6 +20,7 @@
 ## 前端入口
 
 - 应用列表：`web/src/views/applications/apps/index.vue`
+- 创建/编辑应用隐藏页：`web/src/views/applications/apps/create.vue`
 - 编辑器：`web/src/views/applications/apps/ApplicationEditor.vue`
 - 详情：`web/src/views/applications/apps/ApplicationDetail.vue`
 - 运行时面板：`web/src/views/applications/apps/ApplicationRuntimePanel.vue`
@@ -77,7 +78,7 @@
 - containers 模块注册的周期协调任务只处理已经观察到新托管 Label 的实例；发现缺失、停止或 generation/spec hash 偏差时，由 `application_reconcile` collector 请求应用 planner 创建或复用对应 app/server 的 target，collector 本身不再产出 `application_target_apply|stop|purge` 输入。显式协调 payload 支持按 `applicationIds`、`serverIds` 过滤；默认同步只为未满足 desired state 的目标规划 target，已经 running 且 generation/spec hash 匹配的成功节点不得因为其他节点失败而重复部署；配置保存、停用、删除、设施应用保存和系统级重部署等 desired state 变更必须使用 `force=true` 绕过退避和满足态过滤，但不能绕过活跃 target 唯一性。设施应用可以通过应用模块的 facility runtime provider 提供每台服务器的 runtime spec；目标拆分、lifecycle、队列和 agent 原子部署步骤仍复用应用目标执行器。collector 收集为空或只完成规划时不创建任务记录。同一应用连续协调失败后必须按应用级指数退避设置下一次运行时间，退避状态保存在 `application_reconcile_states`，自动协调和非强制显式协调必须尊重 `reconcile_next_run_at`；连续 5 轮观测到该应用全部托管实例正常后，才清空协调失败计数。
 - 应用目标任务在任务中心展示为“应用目标应用 / 停止 / 清理”，表示 Panel 已完成一次目标收敛请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用列表接口使用数据库中已缓存的运行时实例状态，并合并最近 lifecycle operation targets 后聚合为 `runtimeStatus`；不得为了左侧列表摘要逐应用、逐节点调用远端 Agent 刷新容器状态。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。左侧 `AppSelectorPanel` 只展示应用名称、运行状态和更新时间，jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在右侧详情。运行中的应用存在镜像更新时，选择器状态 Chip 使用 warning 色并显示“运行中 · 有更新”，其他运行状态保持原有展示。
-- 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；编辑、部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
+- 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；创建应用从左侧选择器进入隐藏独立页 `/applications/apps/create`，编辑应用从详情页进入隐藏独立页 `/applications/apps/:applicationId/edit`，保存或取消后返回普通应用页。创建/编辑页使用编辑器的页面嵌入模式，只保留全局页头标题，主体为一页式可视化表单，左侧提供轻量锚点导航且随右侧内部滚动高亮当前分区，右侧用宽松分组块承载各区并减少横线分隔；运行时分区内部承载镜像、命令、资源限制和环境变量小节，文件分区内部承载自定义变量和应用文件小节，避免字段被拆成与导航不一致的同级大分区；YAML 作为创建/编辑页底部内嵌高级分区纳入锚点导航，用户聚焦或编辑 YAML 后保存以 YAML 为准；部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
 - 应用页面不展示应用总数、已启用和需要关注摘要卡，页面级提示后直接进入主从工作区。
 - 应用右侧详情使用单张满高 outlined 卡片：运行状态和启用状态位于标题下方，操作按钮单独位于头部右侧；可滚动正文按基本信息、镜像更新和运行实例分区。下载包、持久化数据、迁移和删除收进更多菜单，不再把运行时面板渲染为独立并列卡片。
 - 应用停止会更新应用为 disabled 并触发协调，由协调器为现有实例创建 `action=stop` 目标任务；停止必须删除容器以释放端口和容器名，但保留应用托管文件与 persistent 数据。删除应用会设置 `deletion_requested=true` 并触发 `action=purge` 目标任务，由协调清理整个应用运行目录，包含 persistent 数据。业务保存、停止和删除请求不得同步调用 agent runtime stop。
@@ -101,7 +102,7 @@
 - 应用编辑器包含可视化和 YAML 两个标签页。可视化页是单页分区表单：标准短字段使用双列网格，端口映射和挂载行保持全宽重复行，便于阅读密集网络和存储设置。
 - 应用编辑器可视化页必须往返保存 appspec `capAdd` 列表；输入项保存时按 Docker capability 稳定值大写化，不保存翻译文案。
 - 应用编辑器的可视化挂载行主行只放类型、来源、容器路径和操作按钮；权限配置放在默认收起的第二行。第二行展示 Docker 只读挂载开关，以及按类型可用的节点文件权限字段：`file` / `panel_file` / `persistent` 支持 `uid`、`gid`，`file` 支持“可执行”开关，`persistent` 支持任意 `mode`，`panel_file` 不显示 mode。
-- 应用编辑器弹窗在桌面端可使用较宽布局承载密集表单；端口、挂载和反向代理等复杂重复行在中等宽度下必须提前折叠为单列，避免多个字段、说明文本和操作按钮被挤在一行。
+- 应用编辑器支持对话框和页面嵌入两种外壳；普通应用创建和编辑都使用隐藏独立页嵌入同一编辑器主体，详情页编辑不再打开对话框。页面嵌入模式不得重复渲染标题，必须保留分区导航并使用宽松分组块降低密度；YAML 不得作为和基础表单并列的 tab，也不得用弹窗打断创建/编辑页流程，必须作为页面内高级分区编辑。应用文件新增、模板编辑和二进制替换使用编辑器内的聚焦对话框，主表单只保留文件列表、待上传压缩包提示和入口按钮；新增文件可选择模板/二进制类型，编辑模板或覆盖二进制时必须锁定原类型。端口、挂载和反向代理等复杂重复行在中等宽度下必须提前折叠为单列，避免多个字段、说明文本和操作按钮被挤在一行。
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML 编辑；可视化页也要继续提供挂载编辑入口并与 YAML 往返同步。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入 YAML 编辑。
 - YAML 标签页只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须作为两个标签页共享的表单区展示，不能只出现在可视化页。
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`command` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
@@ -132,6 +133,12 @@
 - Replacing a folder archive in the editor treats the workspace path as a directory prefix: existing application files at that path or below it are removed from the save session before the new archive is uploaded.
 - Folder archives support zip, tar, tar.gz, and tgz. The backend validates archive paths so entries cannot escape the application workspace, then expands each entry as `basePath + archive relative path` into `application_files`.
 - Extracted entries keep normal application-file semantics and can be mounted with appspec `mounts.type=file`. This feature does not introduce a new mount type.
+
+## Application Create Editor UX
+
+- The embedded create-application editor exposes AppSpec as a mode switch: visual mode edits runtime, network, and mounts; YAML mode replaces those visual AppSpec blocks for advanced users. Do not render YAML as a separate block that coexists with runtime/network/mounts.
+- Application name, enabled state, deployment targets, reverse proxy rules, custom variables, and application files are application-level fields outside AppSpec YAML. They must remain visible in both visual and YAML AppSpec modes.
+- YAML editing in the create page should use a code-editor-like surface with line numbers, monospace text, internal scrolling, and variable insertion. It must not be a modal and should not appear as an ordinary form textarea.
 
 ## Managed Facility Application Identity
 

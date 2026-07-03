@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
@@ -8,7 +8,7 @@ import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
 import { parseSpecYaml, toSpecYaml } from './appSpecYaml';
 
-const props = defineProps<{ application: ApplicationDto | null; open: boolean }>();
+const props = defineProps<{ application: ApplicationDto | null; open: boolean; embedded?: boolean }>();
 const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
 const { t, translateApplicationFileKind } = useI18n();
 
@@ -54,6 +54,8 @@ const variableRows = ref<VariableForm[]>([]);
 const loading = ref('');
 const saveStep = ref('');
 const error = ref('');
+const embeddedSpecMode = ref<'visual' | 'yaml'>('visual');
+const embeddedYamlEditing = ref(false);
 const servers = ref<ServerDto[]>([]);
 const files = ref<EditorFile[]>([]);
 const pendingArchives = ref<PendingArchive[]>([]);
@@ -61,18 +63,41 @@ const loadingFileId = ref('');
 const templateVariables = ref<ApplicationTemplateVariableDto[]>([]);
 const panelFiles = ref<ApplicationPanelFileDto[]>([]);
 const templateTextarea = ref();
-const yamlTextarea = ref();
+const yamlTextarea = ref<HTMLTextAreaElement | { $el?: HTMLElement } | null>(null);
+const yamlGutter = ref<HTMLElement | null>(null);
+const editorBody = ref<HTMLElement | { $el?: HTMLElement } | null>(null);
+const activeSectionId = ref('application-editor-general');
 let filesRequestId = 0;
+let sectionObserver: IntersectionObserver | null = null;
+let sectionScrollRoot: HTMLElement | null = null;
+let sectionScrollHandler: (() => void) | null = null;
 const fileForm = reactive({
   mode: 'single' as 'single' | 'archive',
+  intent: 'create' as 'create' | 'edit-template' | 'replace-binary',
   path: 'config/app.conf',
   kind: 'template' as ApplicationFileKind,
   template: '',
   file: null as File | File[] | null,
 });
+const fileDialog = ref(false);
 
 const title = computed(() => (props.application ? t('applicationEditor.editTitle', { name: props.application.name }) : t('applicationEditor.createTitle')));
 const saving = computed(() => Boolean(loading.value));
+const editorVisible = computed(() => props.embedded || props.open);
+const editorShell = computed(() => (props.embedded ? 'div' : 'v-dialog'));
+const editorShellProps = computed(() => (props.embedded
+  ? { class: 'embedded-editor-shell' }
+  : { modelValue: props.open, width: 'min(1120px, calc(100vw - 32px))', persistent: saving.value }));
+const editorCardClass = computed(() => ['app-dialog-card', 'editor-card', { 'editor-card--embedded': props.embedded }]);
+const closeIcon = computed(() => (props.embedded ? 'mdi-arrow-left' : 'mdi-close'));
+const specEditorMode = computed<'visual' | 'yaml'>({
+  get: () => (props.embedded ? embeddedSpecMode.value : activeEditorTab.value),
+  set: (mode) => {
+    if (props.embedded) setEmbeddedSpecMode(mode);
+    else activeEditorTab.value = mode;
+  },
+});
+const yamlLineNumbers = computed(() => Array.from({ length: Math.max(1, form.specYaml.split('\n').length) }, (_, index) => index + 1));
 const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name} (${server.host})`,
   value: server.id,
@@ -81,6 +106,27 @@ const proxyTargetTypeOptions = computed(() => [
   { title: t('applicationEditor.targetLocal'), value: 'local' },
   { title: t('applicationEditor.targetContainer'), value: 'container' },
 ]);
+const editorSections = computed(() => {
+  const sections = [
+    { id: 'application-editor-general', title: t('applicationEditor.general'), icon: 'mdi-application-edit-outline' },
+  ];
+  if (props.embedded && embeddedSpecMode.value === 'yaml') {
+    sections.push({ id: 'application-editor-yaml', title: t('applicationEditor.yaml'), icon: 'mdi-code-braces' });
+  } else {
+    sections.push(
+      { id: 'application-editor-runtime', title: t('applicationEditor.runtime'), icon: 'mdi-cube-outline' },
+      { id: 'application-editor-network', title: t('applicationEditor.network'), icon: 'mdi-lan' },
+      { id: 'application-editor-mounts', title: t('applicationEditor.mounts'), icon: 'mdi-folder-sync-outline' },
+    );
+  }
+  sections.push(
+    { id: 'application-editor-deployment', title: t('applicationEditor.deploymentTargets'), icon: 'mdi-server-network' },
+    { id: 'application-editor-proxy', title: t('applicationEditor.reverseProxy'), icon: 'mdi-web' },
+    { id: 'application-editor-files', title: t('applicationEditor.files'), icon: 'mdi-file-tree-outline' },
+  );
+  return sections;
+});
+const fileKindLocked = computed(() => fileForm.intent !== 'create');
 const existingFileAtPath = computed(() => files.value.find((file) => file.path === fileForm.path.trim()));
 const hasFilesUnderBasePath = computed(() => files.value.some((file) => isArchivePathMatch(file.path, fileForm.path.trim())));
 const fileSubmitLabel = computed(() => {
@@ -97,7 +143,7 @@ const {
   pageItems: pagedFiles,
 } = usePagination(files);
 
-watch(() => props.open, (open) => {
+watch(editorVisible, (open) => {
   if (!open) return;
   const app = props.application;
   form.name = app?.name ?? '';
@@ -114,13 +160,25 @@ watch(() => props.open, (open) => {
   variableRows.value = Object.entries(form.variables).map(([key, value]) => ({ key, value }));
   error.value = '';
   activeEditorTab.value = 'visual';
+  embeddedSpecMode.value = 'visual';
+  embeddedYamlEditing.value = false;
+  fileDialog.value = false;
   files.value = [];
   pendingArchives.value = [];
   filesRequestId += 1;
   void loadServers();
   void loadTemplateCatalog();
   if (app) void loadFiles(app.id);
+  void syncSectionObserver();
 }, { immediate: true });
+
+watch(() => props.embedded, () => {
+  void syncSectionObserver();
+});
+
+watch(embeddedSpecMode, () => {
+  void syncSectionObserver();
+});
 
 watch(() => form.name, (name) => {
   if (specForm.name !== name) specForm.name = name;
@@ -300,10 +358,10 @@ async function loadFiles(applicationId: string) {
   const requestId = ++filesRequestId;
   try {
     const result = (await applicationsApi.files(applicationId)).map(toEditorFile);
-    if (requestId !== filesRequestId || props.application?.id !== applicationId || !props.open) return;
+    if (requestId !== filesRequestId || props.application?.id !== applicationId || !editorVisible.value) return;
     files.value = result;
   } catch (err) {
-    if (requestId !== filesRequestId || props.application?.id !== applicationId || !props.open) return;
+    if (requestId !== filesRequestId || props.application?.id !== applicationId || !editorVisible.value) return;
     error.value = err instanceof Error ? err.message : t('applicationEditor.loadFilesFailed');
   }
 }
@@ -340,7 +398,7 @@ function variableItems(target: 'spec' | 'template') {
 
 async function insertVariable(target: 'spec' | 'template', expression: string) {
   const component = target === 'spec' ? yamlTextarea.value : templateTextarea.value;
-  const textarea = component?.$el?.querySelector?.('textarea') as HTMLTextAreaElement | undefined;
+  const textarea = resolveTextarea(component);
   const current = target === 'spec' ? form.specYaml : fileForm.template;
   const start = textarea?.selectionStart ?? current.length;
   const end = textarea?.selectionEnd ?? start;
@@ -348,9 +406,15 @@ async function insertVariable(target: 'spec' | 'template', expression: string) {
   if (target === 'spec') form.specYaml = next;
   else fileForm.template = next;
   await nextTick();
-  const nextTextarea = component?.$el?.querySelector?.('textarea') as HTMLTextAreaElement | undefined;
+  const nextTextarea = resolveTextarea(component);
   nextTextarea?.focus();
   nextTextarea?.setSelectionRange(start + expression.length, start + expression.length);
+}
+
+function resolveTextarea(component: HTMLTextAreaElement | { $el?: HTMLElement } | null | undefined) {
+  if (!component) return undefined;
+  if (component instanceof HTMLTextAreaElement) return component;
+  return component.$el?.querySelector?.('textarea') as HTMLTextAreaElement | undefined;
 }
 
 function toEditorFile(file: ApplicationFileDto): EditorFile {
@@ -367,6 +431,112 @@ function toEditorFile(file: ApplicationFileDto): EditorFile {
 function selectedFile() {
   return Array.isArray(fileForm.file) ? fileForm.file[0] : fileForm.file;
 }
+
+function resetFileForm(kind: ApplicationFileKind = 'template') {
+  fileForm.mode = 'single';
+  fileForm.intent = 'create';
+  fileForm.path = kind === 'template' ? 'config/app.conf' : 'public/app.bin';
+  fileForm.kind = kind;
+  fileForm.template = '';
+  fileForm.file = null;
+}
+
+function openFileDialog(kind: ApplicationFileKind = 'template') {
+  resetFileForm(kind);
+  fileDialog.value = true;
+}
+
+function closeFileDialog() {
+  fileDialog.value = false;
+}
+
+function setEmbeddedSpecMode(mode: 'visual' | 'yaml') {
+  if (embeddedSpecMode.value === mode) return;
+  if (mode === 'yaml') {
+    if (!embeddedYamlEditing.value) applyVisualSpec();
+    embeddedYamlEditing.value = true;
+  } else {
+    loadSpecForm(form.specYaml, form.name);
+    if (!props.application && specForm.name) form.name = specForm.name;
+  }
+  embeddedSpecMode.value = mode;
+}
+
+function onEmbeddedSpecModeUpdate(value: unknown) {
+  if (value === 'visual' || value === 'yaml') setEmbeddedSpecMode(value);
+}
+
+function prepareEmbeddedYamlEdit() {
+  if (!props.embedded) return;
+  if (embeddedYamlEditing.value) return;
+  applyVisualSpec();
+  embeddedYamlEditing.value = true;
+}
+
+function markYamlEdited() {
+  if (!props.embedded) return;
+  embeddedYamlEditing.value = true;
+}
+
+function syncYamlEditorScroll(event: Event) {
+  if (!yamlGutter.value) return;
+  yamlGutter.value.scrollTop = (event.target as HTMLTextAreaElement).scrollTop;
+}
+
+function editorBodyElement() {
+  const target = editorBody.value;
+  if (!target) return null;
+  if (target instanceof HTMLElement) return target;
+  return target.$el ?? null;
+}
+
+function stopSectionObserver() {
+  sectionObserver?.disconnect();
+  sectionObserver = null;
+  if (sectionScrollRoot && sectionScrollHandler) {
+    sectionScrollRoot.removeEventListener('scroll', sectionScrollHandler);
+  }
+  sectionScrollRoot = null;
+  sectionScrollHandler = null;
+}
+
+async function syncSectionObserver() {
+  stopSectionObserver();
+  if (!props.embedded || !editorVisible.value) return;
+  await nextTick();
+  const root = editorBodyElement();
+  if (!root) return;
+  const sections = editorSections.value
+    .map((section) => root.querySelector<HTMLElement>(`#${section.id}`))
+    .filter((section): section is HTMLElement => Boolean(section));
+  if (!sections.length) return;
+  updateActiveSection(root, sections);
+  sectionScrollRoot = root;
+  sectionScrollHandler = () => updateActiveSection(root, sections);
+  root.addEventListener('scroll', sectionScrollHandler, { passive: true });
+  sectionObserver = new IntersectionObserver((entries) => {
+    if (entries.some((entry) => entry.isIntersecting)) updateActiveSection(root, sections);
+  }, {
+    root,
+    rootMargin: '-6% 0px -72% 0px',
+    threshold: [0, 0.2, 0.5],
+  });
+  sections.forEach((section) => sectionObserver?.observe(section));
+}
+
+function updateActiveSection(root: HTMLElement, sections: HTMLElement[]) {
+  const rootTop = root.getBoundingClientRect().top;
+  const anchor = rootTop + 120;
+  let active = sections[0];
+  for (const section of sections) {
+    const rect = section.getBoundingClientRect();
+    if (rect.top <= anchor) active = section;
+    if (rect.top > anchor) break;
+  }
+  activeSectionId.value = active.id;
+}
+
+onBeforeUnmount(stopSectionObserver);
 
 function encodeText(value: string) {
   return bytesToBase64(new TextEncoder().encode(value));
@@ -411,6 +581,7 @@ async function addFile() {
       replacedFiles,
     });
     fileForm.file = null;
+    fileDialog.value = false;
     return;
   }
   const contentBase64 = fileForm.kind === 'template'
@@ -433,6 +604,7 @@ async function addFile() {
   else files.value.push(next);
   fileForm.template = '';
   fileForm.file = null;
+  fileDialog.value = false;
 }
 
 function removeArchive(archive: PendingArchive) {
@@ -452,6 +624,7 @@ function removeFile(file: EditorFile) {
 async function editTemplateFile(file: EditorFile) {
   fileForm.kind = 'template';
   fileForm.mode = 'single';
+  fileForm.intent = 'edit-template';
   fileForm.path = file.path;
   loadingFileId.value = file.id;
   try {
@@ -460,6 +633,7 @@ async function editTemplateFile(file: EditorFile) {
       : await applicationsApi.getFile(props.application.id, file.id);
     fileForm.template = base64ToText(loaded.contentBase64);
     fileForm.file = null;
+    fileDialog.value = true;
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('applicationEditor.loadFileFailed');
   } finally {
@@ -470,8 +644,10 @@ async function editTemplateFile(file: EditorFile) {
 function replaceBinaryFile(file: EditorFile) {
   fileForm.kind = 'binary';
   fileForm.mode = 'single';
+  fileForm.intent = 'replace-binary';
   fileForm.path = file.path;
   fileForm.file = null;
+  fileDialog.value = true;
 }
 
 function sizeLabel(size: number) {
@@ -598,7 +774,8 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function readInput(): ApplicationSaveDto {
-  if (activeEditorTab.value !== 'yaml') applyVisualSpec();
+  const shouldUseVisualSpec = props.embedded ? embeddedSpecMode.value === 'visual' : activeEditorTab.value !== 'yaml';
+  if (shouldUseVisualSpec) applyVisualSpec();
   return {
     name: form.name,
     enabled: form.enabled,
@@ -679,42 +856,65 @@ async function save() {
 </script>
 
 <template>
-  <v-dialog :model-value="open" width="min(1120px, calc(100vw - 32px))" :persistent="saving" @update:model-value="requestClose">
-    <v-card class="app-dialog-card editor-card">
-      <v-card-title class="app-dialog-title">
+  <component :is="editorShell" v-bind="editorShellProps" @update:model-value="requestClose">
+    <v-card :class="editorCardClass">
+      <v-card-title v-if="!embedded" class="app-dialog-title">
         <span class="app-dialog-title-text">{{ title }}</span>
-        <v-btn icon="mdi-close" variant="text" :disabled="saving" @click="requestClose(false)" />
+        <v-btn :icon="closeIcon" variant="text" :aria-label="t('common.cancel')" :disabled="saving" @click="requestClose(false)" />
       </v-card-title>
-      <v-card-text class="app-dialog-body">
+      <v-card-text ref="editorBody" class="app-dialog-body">
         <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-        <div class="editor-main">
-          <v-tabs v-model="activeEditorTab" density="comfortable" class="editor-tabs mb-4">
+        <div class="editor-main" :class="{ 'editor-main--embedded': embedded }">
+          <nav v-if="embedded" class="editor-section-nav" :aria-label="t('applicationEditor.sections')">
+            <a
+              v-for="section in editorSections"
+              :key="section.id"
+              class="editor-section-link"
+              :class="{ 'editor-section-link--active': activeSectionId === section.id }"
+              :href="`#${section.id}`"
+              :aria-current="activeSectionId === section.id ? 'true' : undefined"
+            >
+              <v-icon :icon="section.icon" size="18" />
+              <span>{{ section.title }}</span>
+            </a>
+          </nav>
+          <div class="editor-form-flow">
+          <v-tabs v-if="!embedded" v-model="activeEditorTab" density="comfortable" class="editor-tabs mb-4">
             <v-tab value="visual">{{ t('applicationEditor.general') }}</v-tab>
             <v-tab value="yaml">{{ t('applicationEditor.yaml') }}</v-tab>
           </v-tabs>
 
-          <section class="editor-section">
+          <section id="application-editor-general" class="editor-section">
             <div class="section-title">{{ t('applicationEditor.general') }}</div>
             <div class="field-grid">
               <v-text-field v-model="form.name" :label="t('applicationEditor.applicationName')" density="compact" variant="outlined" :readonly="Boolean(application)" hide-details />
               <v-switch v-model="form.enabled" :label="t('common.enabled')" color="primary" density="compact" hide-details class="switch-field" />
             </div>
-          </section>
-
-          <v-divider class="section-divider" />
-
-          <v-window v-model="activeEditorTab" class="editor-window">
-            <v-window-item value="visual">
-          <section class="editor-section">
-            <div class="section-title">{{ t('applicationEditor.image') }}</div>
-            <div class="field-grid">
-              <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
+            <div v-if="embedded" class="spec-mode-panel">
+              <div class="spec-mode-copy">
+                <div class="spec-mode-title">{{ t('applicationEditor.specMode') }}</div>
+                <div class="spec-mode-hint">{{ t('applicationEditor.specModeHint') }}</div>
+              </div>
+              <v-btn-toggle :model-value="embeddedSpecMode" density="compact" mandatory divided class="spec-mode-toggle" @update:model-value="onEmbeddedSpecModeUpdate">
+                <v-btn value="visual" prepend-icon="mdi-view-dashboard-outline">{{ t('applicationEditor.visualMode') }}</v-btn>
+                <v-btn value="yaml" prepend-icon="mdi-code-braces">{{ t('applicationEditor.yamlMode') }}</v-btn>
+              </v-btn-toggle>
             </div>
           </section>
 
           <v-divider class="section-divider" />
 
-          <section class="editor-section">
+          <v-window v-model="specEditorMode" class="editor-window">
+            <v-window-item value="visual">
+          <section id="application-editor-runtime" class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.runtime') }}</div>
+            <div class="editor-subsection">
+            <div class="section-title">{{ t('applicationEditor.image') }}</div>
+            <div class="field-grid">
+              <v-text-field v-model="specForm.image" :label="t('applicationEditor.image')" density="compact" variant="outlined" />
+            </div>
+            </div>
+            <div class="editor-subsection">
             <div class="section-title">{{ t('applicationEditor.command') }}</div>
             <div v-for="(item, index) in specForm.command" :key="`command-${index}`" class="repeat-row command-row">
               <v-text-field
@@ -728,12 +928,9 @@ async function save() {
               <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.command.length === 1" @click="removeAt(specForm.command, index)" />
             </div>
             <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.command)">{{ t('applicationEditor.addCommandItem') }}</v-btn>
-          </section>
-
-          <v-divider class="section-divider" />
-
-          <section class="editor-section">
-            <div class="section-title">{{ t('applicationEditor.runtime') }}</div>
+            </div>
+            <div class="editor-subsection">
+            <div class="section-title">{{ t('applicationEditor.resources') }}</div>
             <div class="field-grid">
               <v-text-field v-model.number="specForm.cpu" type="number" min="0" :label="t('applicationEditor.cpuMhz')" density="compact" variant="outlined" />
               <v-text-field v-model.number="specForm.memoryMb" type="number" min="0" :label="t('applicationEditor.memoryMb')" density="compact" variant="outlined" />
@@ -752,11 +949,8 @@ async function save() {
               <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.capAdd, index)" />
             </div>
             <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.capAdd)">{{ t('applicationEditor.addCapability') }}</v-btn>
-          </section>
-
-          <v-divider class="section-divider" />
-
-          <section class="editor-section">
+            </div>
+            <div class="editor-subsection">
             <div class="section-title">{{ t('applicationEditor.environment') }}</div>
             <div v-for="(item, index) in specForm.env" :key="index" class="repeat-row env-row">
               <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
@@ -764,11 +958,12 @@ async function save() {
               <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.env, index)" />
             </div>
             <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addEnv">{{ t('common.addVariable') }}</v-btn>
+            </div>
           </section>
 
           <v-divider class="section-divider" />
 
-          <section class="editor-section">
+          <section id="application-editor-network" class="editor-section">
             <div class="section-title">{{ t('applicationEditor.network') }}</div>
             <div class="field-grid">
               <v-select
@@ -805,7 +1000,7 @@ async function save() {
 
           <v-divider class="section-divider" />
 
-          <section class="editor-section">
+          <section id="application-editor-mounts" class="editor-section">
             <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
             <div v-for="(mount, index) in specForm.mounts" :key="index" class="mount-item">
               <div class="repeat-row mount-row">
@@ -876,20 +1071,31 @@ async function save() {
             </v-window-item>
 
             <v-window-item value="yaml" class="editor-yaml-pane">
-          <section class="editor-section">
+          <section :id="embedded ? 'application-editor-yaml' : undefined" class="editor-section editor-yaml-section">
             <div class="section-title">{{ t('applicationEditor.yaml') }}</div>
-            <v-textarea
-              ref="yamlTextarea"
-              v-model="form.specYaml"
-              :label="t('applicationEditor.yamlSpec')"
-              variant="outlined"
-              rows="18"
-              spellcheck="false"
-              class="mono-input"
-            />
+            <div class="yaml-code-editor">
+              <div class="yaml-code-toolbar">
+                <span>{{ t('applicationEditor.yamlSpec') }}</span>
+                <span>{{ t('applicationEditor.lineCount', { count: yamlLineNumbers.length }) }}</span>
+              </div>
+              <div class="yaml-code-body">
+                <pre ref="yamlGutter" class="yaml-code-gutter" aria-hidden="true"><span v-for="line in yamlLineNumbers" :key="line">{{ line }}</span></pre>
+                <textarea
+                  ref="yamlTextarea"
+                  v-model="form.specYaml"
+                  class="yaml-code-textarea"
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  @focus="prepareEmbeddedYamlEdit"
+                  @input="markYamlEdited"
+                  @scroll="syncYamlEditorScroll"
+                />
+              </div>
+            </div>
             <v-menu>
               <template #activator="{ props: menuProps }">
-                <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none mt-2">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none yaml-insert-action" @click="prepareEmbeddedYamlEdit">{{ t('applicationEditor.insertVariable') }}</v-btn>
               </template>
               <v-list density="compact">
                 <v-list-item v-for="item in variableItems('spec')" :key="item.title" :title="item.title" @click="insertVariable('spec', item.value)" />
@@ -901,7 +1107,7 @@ async function save() {
 
           <v-divider class="section-divider" />
 
-          <section class="editor-section">
+          <section id="application-editor-deployment" class="editor-section">
             <div class="section-title">{{ t('applicationEditor.deploymentTargets') }}</div>
             <div class="placement-row">
               <v-select
@@ -932,7 +1138,7 @@ async function save() {
 
           <v-divider class="section-divider" />
 
-          <section class="editor-section">
+          <section id="application-editor-proxy" class="editor-section">
             <div class="section-title">{{ t('applicationEditor.reverseProxy') }}</div>
             <div class="proxy-actions">
               <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyRule">{{ t('common.addProxyRule') }}</v-btn>
@@ -966,7 +1172,9 @@ async function save() {
 
           <v-divider class="section-divider" />
 
-          <section class="editor-section">
+          <section id="application-editor-files" class="editor-section">
+            <div class="section-title">{{ t('applicationEditor.files') }}</div>
+            <div class="editor-subsection">
             <div class="section-title">{{ t('applicationEditor.variables') }}</div>
             <div v-for="(item, index) in variableRows" :key="index" class="repeat-row variable-row">
               <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
@@ -974,61 +1182,15 @@ async function save() {
               <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(variableRows, index)" />
             </div>
             <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none mb-4" @click="addVariable">{{ t('common.addVariable') }}</v-btn>
+            </div>
 
-            <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
-            <div class="file-form">
-              <v-select
-                v-model="fileForm.kind"
-                :items="[
-                  { title: t('applicationEditor.template'), value: 'template' },
-                  { title: t('applicationEditor.binary'), value: 'binary' },
-                ]"
-                item-title="title"
-                item-value="value"
-                :label="t('applicationEditor.kind')"
-                density="compact"
-                variant="outlined"
-                hide-details
-              />
-              <v-text-field v-model="fileForm.path" :label="t('applicationEditor.workspacePath')" density="compact" variant="outlined" hide-details />
-              <v-slide-y-transition>
-                <div v-if="fileForm.kind === 'binary'" class="file-mode-group span-all">
-                  <v-btn-toggle v-model="fileForm.mode" density="compact" mandatory divided class="file-mode-toggle">
-                    <v-btn value="single" prepend-icon="mdi-file-outline">{{ t('applicationEditor.singleFile') }}</v-btn>
-                    <v-btn value="archive" prepend-icon="mdi-folder-zip-outline">{{ t('applicationEditor.folderArchive') }}</v-btn>
-                  </v-btn-toggle>
-                </div>
-              </v-slide-y-transition>
-              <v-textarea
-                v-if="fileForm.kind === 'template'"
-                ref="templateTextarea"
-                v-model="fileForm.template"
-                :label="t('applicationEditor.template')"
-                rows="7"
-                variant="outlined"
-                spellcheck="false"
-                class="mono-input span-all"
-              />
-              <v-menu v-if="fileForm.kind === 'template'">
-                <template #activator="{ props: menuProps }">
-                  <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none file-secondary-action">{{ t('applicationEditor.insertVariable') }}</v-btn>
-                </template>
-                <v-list density="compact">
-                  <v-list-item v-for="item in variableItems('template')" :key="item.title" :title="item.title" @click="insertVariable('template', item.value)" />
-                </v-list>
-              </v-menu>
-              <v-file-input
-                v-else
-                v-model="fileForm.file"
-                :label="fileForm.mode === 'archive' ? t('applicationEditor.folderArchiveFile') : t('applicationEditor.binaryFile')"
-                density="compact"
-                variant="outlined"
-                hide-details
-                class="span-all"
-              />
-              <v-btn color="primary" variant="flat" class="text-none file-primary-action" :disabled="!fileForm.path || (fileForm.mode === 'archive' && !selectedFile()) || (fileForm.mode === 'single' && fileForm.kind === 'binary' && !selectedFile())" @click="addFile">
-                {{ fileSubmitLabel }}
-              </v-btn>
+            <div class="editor-subsection">
+            <div class="files-heading">
+              <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
+              <div class="files-actions">
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-file-code-outline" class="text-none" @click="openFileDialog('template')">{{ t('applicationEditor.addTemplateFile') }}</v-btn>
+                <v-btn size="small" variant="outlined" prepend-icon="mdi-file-upload-outline" class="text-none" @click="openFileDialog('binary')">{{ t('applicationEditor.addBinaryFile') }}</v-btn>
+              </div>
             </div>
             <div v-if="pendingArchives.length" class="pending-archives">
               <div v-for="archive in pendingArchives" :key="archive.id" class="pending-archive">
@@ -1060,15 +1222,95 @@ async function save() {
               </tbody>
             </v-table>
             <AppPagination v-model:page="filePage" v-model:page-size="filePageSize" :total="fileTotal" />
+            </div>
           </section>
+          </div>
         </div>
       </v-card-text>
       <v-card-actions class="app-dialog-actions">
+        <v-spacer v-if="embedded" />
         <v-btn variant="text" class="text-none" :disabled="saving" @click="requestClose(false)">{{ t('common.cancel') }}</v-btn>
         <v-btn color="primary" variant="flat" class="text-none" :loading="saving" :disabled="saving" @click="save()">
           {{ form.enabled ? t('common.saveAndDeploy') : t('common.save') }}
         </v-btn>
       </v-card-actions>
+      <v-dialog v-model="fileDialog" width="720" :persistent="saving">
+        <v-card class="app-dialog-card">
+          <v-card-title class="app-dialog-title">
+            <span class="app-dialog-title-text">{{ t('applicationEditor.applicationFiles') }}</span>
+            <v-btn icon="mdi-close" variant="text" :aria-label="t('common.cancel')" @click="closeFileDialog" />
+          </v-card-title>
+          <v-card-text class="app-dialog-body">
+            <div class="file-form">
+              <v-select
+                v-if="!fileKindLocked"
+                v-model="fileForm.kind"
+                :items="[
+                  { title: t('applicationEditor.template'), value: 'template' },
+                  { title: t('applicationEditor.binary'), value: 'binary' },
+                ]"
+                item-title="title"
+                item-value="value"
+                :label="t('applicationEditor.kind')"
+                density="compact"
+                variant="outlined"
+                hide-details
+              />
+              <v-text-field
+                v-else
+                :model-value="translateApplicationFileKind(fileForm.kind)"
+                :label="t('applicationEditor.kind')"
+                density="compact"
+                variant="outlined"
+                readonly
+                hide-details
+              />
+              <v-text-field v-model="fileForm.path" :label="t('applicationEditor.workspacePath')" density="compact" variant="outlined" hide-details />
+              <v-slide-y-transition>
+                <div v-if="fileForm.kind === 'binary'" class="file-mode-group span-all">
+                  <v-btn-toggle v-model="fileForm.mode" density="compact" mandatory divided class="file-mode-toggle">
+                    <v-btn value="single" prepend-icon="mdi-file-outline">{{ t('applicationEditor.singleFile') }}</v-btn>
+                    <v-btn value="archive" prepend-icon="mdi-folder-zip-outline">{{ t('applicationEditor.folderArchive') }}</v-btn>
+                  </v-btn-toggle>
+                </div>
+              </v-slide-y-transition>
+              <v-textarea
+                v-if="fileForm.kind === 'template'"
+                ref="templateTextarea"
+                v-model="fileForm.template"
+                :label="t('applicationEditor.template')"
+                rows="9"
+                variant="outlined"
+                spellcheck="false"
+                class="mono-input span-all"
+              />
+              <v-menu v-if="fileForm.kind === 'template'">
+                <template #activator="{ props: menuProps }">
+                  <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none file-secondary-action">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                </template>
+                <v-list density="compact">
+                  <v-list-item v-for="item in variableItems('template')" :key="item.title" :title="item.title" @click="insertVariable('template', item.value)" />
+                </v-list>
+              </v-menu>
+              <v-file-input
+                v-else
+                v-model="fileForm.file"
+                :label="fileForm.mode === 'archive' ? t('applicationEditor.folderArchiveFile') : t('applicationEditor.binaryFile')"
+                density="compact"
+                variant="outlined"
+                hide-details
+                class="span-all"
+              />
+            </div>
+          </v-card-text>
+          <v-card-actions class="app-dialog-actions">
+            <v-btn variant="text" class="text-none" @click="closeFileDialog">{{ t('common.cancel') }}</v-btn>
+            <v-btn color="primary" variant="flat" class="text-none" :disabled="!fileForm.path || (fileForm.mode === 'archive' && !selectedFile()) || (fileForm.mode === 'single' && fileForm.kind === 'binary' && !selectedFile())" @click="addFile">
+              {{ fileSubmitLabel }}
+            </v-btn>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
       <v-overlay :model-value="saving" contained persistent scrim="surface" class="editor-save-overlay">
         <div class="editor-save-progress" role="status" aria-live="polite">
           <v-progress-circular indeterminate color="primary" :size="42" :width="4" />
@@ -1077,13 +1319,211 @@ async function save() {
         </div>
       </v-overlay>
     </v-card>
-  </v-dialog>
+  </component>
 </template>
 
 <style scoped>
-.editor-card { max-height: calc(100dvh - 24px); position: relative; overflow: hidden; }
+.editor-card { display: flex; flex-direction: column; max-height: calc(100dvh - 24px); position: relative; overflow: hidden; }
+.embedded-editor-shell { display: flex; flex: 1 1 auto; min-height: 0; min-width: 0; }
+.editor-card--embedded {
+  width: 100%;
+  max-height: none;
+  min-height: 0;
+  border-color: color-mix(in srgb, var(--lp-border), transparent 28%) !important;
+  background:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 88%), transparent 26rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface), transparent 2%), color-mix(in srgb, var(--lp-surface-container), transparent 14%)) !important;
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--lp-background), transparent 24%) !important;
+}
+.editor-card--embedded :deep(.app-dialog-body) {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  scroll-behavior: smooth;
+  padding: 26px clamp(24px, 2.8vw, 42px) 34px !important;
+}
+.editor-card--embedded :deep(.app-dialog-actions) {
+  flex: 0 0 auto;
+  border-top: 1px solid color-mix(in srgb, var(--lp-border), transparent 18%);
+  background: color-mix(in srgb, var(--lp-surface), transparent 4%);
+  box-shadow: 0 -12px 28px color-mix(in srgb, var(--lp-background), transparent 38%);
+}
 .editor-main { min-width: 0; }
+.editor-main--embedded {
+  display: grid;
+  grid-template-columns: 208px minmax(0, 1020px);
+  gap: 26px;
+  align-items: start;
+  justify-content: center;
+}
+.editor-section-nav {
+  position: sticky;
+  top: 4px;
+  display: grid;
+  gap: 6px;
+  align-self: start;
+  max-height: calc(100dvh - 190px);
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 16%);
+  border-radius: var(--lp-radius-md);
+  background: color-mix(in srgb, var(--lp-surface), transparent 8%);
+  box-shadow: var(--lp-shadow-sm);
+  backdrop-filter: blur(10px);
+}
+.editor-section-link {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--lp-radius-sm);
+  color: var(--lp-text-muted);
+  text-decoration: none;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease, transform 180ms ease;
+}
+.editor-section-link :deep(.v-icon) {
+  opacity: 0.8;
+}
+.editor-section-link:hover,
+.editor-section-link:focus-visible {
+  background: color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 90%);
+  color: rgb(var(--v-theme-on-surface));
+  outline: none;
+}
+.editor-section-link--active {
+  border-color: color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 58%);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 82%), transparent 120%),
+    color-mix(in srgb, var(--lp-surface-container), transparent 18%);
+  color: rgb(var(--v-theme-primary));
+  font-weight: 700;
+  box-shadow: inset 3px 0 0 rgb(var(--v-theme-primary));
+}
+.editor-form-flow {
+  min-width: 0;
+  max-width: 1020px;
+}
 .editor-section { min-width: 0; }
+.editor-main--embedded .editor-form-flow {
+  display: grid;
+  gap: 26px;
+  align-content: start;
+}
+.editor-main--embedded .editor-window :deep(.v-window-item--active) {
+  display: grid;
+  gap: 26px;
+  align-content: start;
+}
+.editor-main--embedded .editor-section {
+  scroll-margin-top: 18px;
+  display: grid;
+  gap: 14px;
+  position: relative;
+  overflow: hidden;
+  padding: 24px 24px 26px 28px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 18%);
+  border-radius: var(--lp-radius-md);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 94%), transparent 34%),
+    color-mix(in srgb, var(--lp-surface), transparent 18%);
+  box-shadow: var(--lp-shadow-sm);
+  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+}
+.editor-main--embedded .editor-section::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 54%);
+  opacity: 0.5;
+}
+.editor-main--embedded .editor-section:hover {
+  border-color: color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 66%);
+  box-shadow: 0 14px 34px color-mix(in srgb, var(--lp-background), transparent 46%);
+}
+.editor-main--embedded .editor-section > .v-btn {
+  justify-self: start;
+}
+.editor-main--embedded .editor-section > .v-btn:not(.v-btn--icon) {
+  min-width: 0;
+}
+.editor-subsection {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.editor-main--embedded .editor-subsection {
+  padding: 0 0 18px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 42%);
+}
+.editor-main--embedded .editor-subsection:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.editor-main--embedded .editor-subsection > .v-btn {
+  justify-self: start;
+  min-width: 0;
+}
+.editor-main--embedded .section-divider {
+  display: none;
+}
+.editor-main--embedded .section-title {
+  margin-top: 0;
+  margin-bottom: 2px;
+  color: var(--lp-text);
+  font-size: 1rem;
+  font-weight: 750;
+  text-transform: none;
+}
+.editor-main--embedded .editor-section > .section-title:not(:first-child) {
+  margin-top: 2px;
+  color: var(--lp-text-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.editor-main--embedded .editor-subsection > .section-title {
+  color: var(--lp-text-muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+.spec-mode-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-width: 0;
+  margin-top: 4px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 20%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 34%);
+}
+.spec-mode-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.spec-mode-title {
+  color: var(--lp-text);
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+.spec-mode-hint {
+  color: var(--lp-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+.spec-mode-toggle {
+  flex: 0 0 auto;
+  max-width: 100%;
+}
+.spec-mode-toggle :deep(.v-btn) {
+  min-width: 0;
+}
 .section-divider { margin: 18px 0; }
 .field-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
 .switch-field { min-height: 40px; }
@@ -1091,30 +1531,61 @@ async function save() {
 .span-all { grid-column: 1 / -1; }
 .section-title { margin: 14px 0 8px; }
 .editor-section > .section-title:first-child { margin-top: 0; }
-.repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; }
+.repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; min-width: 0; }
+.editor-main--embedded .repeat-row,
+.editor-main--embedded .mount-item,
+.editor-main--embedded .proxy-rule,
+.editor-main--embedded .pending-archive {
+  border-color: color-mix(in srgb, var(--lp-border), transparent 20%);
+}
 .placement-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
 .ports-row { grid-template-columns: minmax(120px, 1fr) auto minmax(96px, 0.6fr) auto auto minmax(96px, 0.6fr) 40px; }
 .command-row { grid-template-columns: minmax(0, 1fr) 40px; }
 .cap-row { grid-template-columns: minmax(0, 1fr) 40px; }
 .env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
-.mount-item { display: grid; gap: 6px; margin-bottom: 8px; }
+.mount-item {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 32%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 48%);
+}
 .mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) 40px 40px; margin-bottom: 0; }
 .mount-options-row { grid-template-columns: minmax(150px, auto) repeat(3, minmax(110px, 0.5fr)); margin-bottom: 0; padding-left: 158px; }
 .mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .variable-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
-.proxy-rule { border: 1px solid var(--lp-border); border-radius: 8px; padding: 12px; margin-bottom: 12px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
+.proxy-rule {
+  display: grid;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 30%);
+  border-radius: var(--lp-radius-sm);
+  padding: 14px;
+  margin-bottom: 14px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 48%);
+}
 .network-actions,
 .proxy-actions { display: flex; justify-content: flex-start; margin-bottom: 10px; }
+.editor-main--embedded .network-actions,
+.editor-main--embedded .proxy-actions,
+.editor-main--embedded .mount-actions {
+  margin-bottom: 0;
+}
 .network-arrow,
 .network-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .network-arrow { justify-self: center; }
 .network-target-name { font-size: 0.82rem; }
-.proxy-rule-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(150px, 0.65fr) auto 140px 40px; gap: 8px; align-items: center; margin-bottom: 10px; }
+.proxy-rule-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(150px, 0.65fr) auto 140px 40px; gap: 10px; align-items: center; margin-bottom: 0; }
 .proxy-arrow,
 .proxy-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .proxy-arrow { justify-self: center; }
 .proxy-target-name { font-size: 0.82rem; }
-.proxy-path-row { grid-template-columns: minmax(0, 1fr) 130px 40px; }
+.proxy-path-row {
+  grid-template-columns: minmax(0, 1fr) 130px 40px;
+  padding: 8px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--lp-border), transparent 48%);
+}
 .file-form {
   display: grid;
   grid-template-columns: minmax(170px, 0.68fr) minmax(0, 1.32fr);
@@ -1122,7 +1593,7 @@ async function save() {
   align-items: start;
   padding: 12px;
   border: 1px solid var(--lp-border);
-  border-radius: 8px;
+  border-radius: var(--lp-radius-sm);
   background: color-mix(in srgb, var(--lp-surface-container), transparent 36%);
 }
 .file-mode-group {
@@ -1143,8 +1614,100 @@ async function save() {
 .file-row-actions {
   white-space: nowrap;
 }
+.editor-yaml-section {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 91%), transparent 38%),
+    color-mix(in srgb, var(--lp-surface), transparent 14%) !important;
+}
+.yaml-insert-action {
+  justify-self: start;
+}
+.yaml-code-editor {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-log-background), transparent 4%);
+  box-shadow: inset 0 1px 0 color-mix(in srgb, white, transparent 92%);
+}
+.yaml-code-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 36px;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 18%);
+  color: color-mix(in srgb, var(--lp-log-text), transparent 16%);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.76rem;
+}
+.yaml-code-body {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr);
+  min-height: 430px;
+  max-height: min(58dvh, 640px);
+  overflow: hidden;
+}
+.yaml-code-gutter {
+  display: block;
+  min-height: 100%;
+  margin: 0;
+  padding: 14px 10px 14px 0;
+  overflow: hidden;
+  border-right: 1px solid color-mix(in srgb, var(--lp-border), transparent 26%);
+  background: color-mix(in srgb, var(--lp-log-background), black 8%);
+  color: color-mix(in srgb, var(--lp-log-text), transparent 54%);
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.62;
+  text-align: right;
+  user-select: none;
+}
+.yaml-code-gutter span {
+  display: block;
+  height: 1.62em;
+}
+.yaml-code-textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 430px;
+  max-height: min(58dvh, 640px);
+  padding: 14px 16px;
+  border: 0;
+  outline: none;
+  resize: none;
+  overflow: auto;
+  background: transparent;
+  color: var(--lp-log-text);
+  caret-color: rgb(var(--v-theme-primary));
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.62;
+  tab-size: 2;
+  white-space: pre;
+}
+.yaml-code-textarea:focus {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 58%);
+}
+.files-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+.files-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.files-heading .section-title {
+  margin-top: 0;
+}
 .pending-archives { display: grid; gap: 8px; margin-top: 10px; }
-.pending-archive { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--lp-border); border-radius: 8px; }
+.pending-archive { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--lp-border); border-radius: var(--lp-radius-sm); background: color-mix(in srgb, var(--lp-surface), transparent 34%); }
 .min-width-0 { min-width: 0; }
 .editor-save-overlay :deep(.v-overlay__scrim) { opacity: 0.86; }
 .editor-save-overlay :deep(.v-overlay__content) {
@@ -1178,7 +1741,19 @@ async function save() {
 .mono, .mono-input :deep(textarea) { font-size: 0.82rem; }
 .hash-cell { max-width: 180px; }
 @media (max-width: 1180px) {
+  .editor-main--embedded {
+    grid-template-columns: 1fr;
+  }
+  .editor-section-nav {
+    position: static;
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    max-height: none;
+    overflow-x: auto;
+    align-items: center;
+  }
   .field-grid,
+  .spec-mode-panel,
   .mount-row,
   .mount-options-row,
   .ports-row,
@@ -1192,12 +1767,32 @@ async function save() {
   .placement-row {
     grid-template-columns: 1fr;
   }
+  .spec-mode-panel {
+    align-items: stretch;
+    flex-direction: column;
+  }
   .mount-options-row {
     padding-left: 0;
   }
 }
 
 @media (max-width: 760px) {
+  .editor-card--embedded :deep(.app-dialog-body) {
+    padding: 16px !important;
+  }
+  .editor-card--embedded :deep(.app-dialog-actions) {
+    flex-wrap: wrap;
+  }
+  .files-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .files-actions {
+    justify-content: flex-start;
+  }
+  .files-actions .v-btn {
+    flex: 1 1 100%;
+  }
   .mount-actions .v-btn,
   .network-actions .v-btn,
   .proxy-actions .v-btn {
