@@ -675,6 +675,7 @@ export interface ApplicationFileDto {
   contentType: string;
   size: number;
   sha256: string;
+  contentBase64?: string;
   createdAt: string;
   updatedAt: string;
 }

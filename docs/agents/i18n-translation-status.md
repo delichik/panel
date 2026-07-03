@@ -4,6 +4,8 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/apps/ApplicationEditor.vue`
+  - 应用文件区新增模板编辑、二进制文件替换和文件夹压缩包替换文案，已接入英文与简体中文词条；文件内容和压缩包文件名保持用户原始输入。
 - `web/src/views/tasks/index.vue`
   - Task Center deployment target projection labels, target diagnostics, retry/backoff text, claimed-task text, and lifecycle target state labels are wired through `web/src/i18n/index.ts` for English and Simplified Chinese. Docker/Agent diagnostic payloads are displayed as original runtime text and are not translated.
 - `web/src/views/applications/apps/ApplicationEditor.vue`

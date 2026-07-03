@@ -21,6 +21,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("DELETE /api/v1/applications/{id}", auth(http.HandlerFunc(h.Delete)))
 	mux.Handle("GET /api/v1/applications/{id}/files", auth(http.HandlerFunc(h.ListFiles)))
 	mux.Handle("POST /api/v1/applications/{id}/files", auth(http.HandlerFunc(h.SaveFile)))
+	mux.Handle("GET /api/v1/applications/{id}/files/{fileId}", auth(http.HandlerFunc(h.GetFile)))
 	mux.Handle("DELETE /api/v1/applications/{id}/files/{fileId}", auth(http.HandlerFunc(h.DeleteFile)))
 	mux.Handle("GET /api/v1/applications/{id}/package", auth(http.HandlerFunc(h.Package)))
 	mux.Handle("GET /api/v1/applications/{id}/persistent-data", auth(http.HandlerFunc(h.PersistentData)))

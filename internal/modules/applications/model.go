@@ -143,7 +143,8 @@ type ApplicationFile struct {
 	ContentType   string    `json:"contentType"`
 	Size          int64     `json:"size"`
 	SHA256        string    `json:"sha256"`
-	Content       []byte    `json:"content,omitempty"`
+	Content       []byte    `json:"-"`
+	ContentBase64 string    `json:"contentBase64,omitempty"`
 	CreatedAt     time.Time `json:"createdAt"`
 	UpdatedAt     time.Time `json:"updatedAt"`
 }

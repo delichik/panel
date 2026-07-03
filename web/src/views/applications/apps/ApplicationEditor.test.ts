@@ -40,4 +40,22 @@ describe('ApplicationEditor', () => {
     expect(editor).toContain("t('applicationEditor.mountGid')");
     expect(editor).toContain("t('applicationEditor.mountMode')");
   });
+
+  it('supports editing templates and replacing binary uploads', () => {
+    expect(editor).toContain('applicationsApi.getFile(props.application.id, file.id)');
+    expect(editor).toContain("fileForm.kind = 'template'");
+    expect(editor).toContain("fileForm.kind = 'binary'");
+    expect(editor).toContain("fileForm.mode = 'single'");
+    expect(editor).toContain("file.contentBase64 !== undefined");
+    expect(editor).toContain("t('applicationEditor.editTemplateFile')");
+    expect(editor).toContain("t('applicationEditor.replaceBinaryFile')");
+  });
+
+  it('treats folder archives as binary replacements for matching workspace prefixes', () => {
+    expect(editor).toContain("kind: 'binary'");
+    expect(editor).toContain('const replacedFiles = files.value.filter((file) => isArchivePathMatch(file.path, path));');
+    expect(editor).toContain('files.value = files.value.filter((file) => !isArchivePathMatch(file.path, path));');
+    expect(editor).toContain('archive.replacedFiles');
+    expect(editor).toContain("t('applicationEditor.replaceFolderArchive')");
+  });
 });

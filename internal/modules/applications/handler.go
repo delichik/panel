@@ -23,6 +23,7 @@ type applicationService interface {
 	Update(ctx context.Context, id string, in SaveInput) (Application, error)
 	Delete(ctx context.Context, id string) error
 	ListFiles(ctx context.Context, id string) ([]ApplicationFile, error)
+	GetFile(ctx context.Context, id, fileID string) (ApplicationFile, error)
 	SaveFile(ctx context.Context, id string, in FileSaveInput) (ApplicationFile, error)
 	DeleteFile(ctx context.Context, id, fileID string) error
 	BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error)
@@ -134,6 +135,15 @@ func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, files)
+}
+
+func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
+	file, err := h.service.GetFile(r.Context(), applicationIDFromRequest(r), applicationFileIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, file)
 }
 
 func (h *Handler) SaveFile(w http.ResponseWriter, r *http.Request) {

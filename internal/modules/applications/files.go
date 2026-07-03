@@ -23,6 +23,18 @@ func (s *Service) ListFiles(ctx context.Context, appID string) ([]ApplicationFil
 	return s.listFiles(ctx, appID, false)
 }
 
+func (s *Service) GetFile(ctx context.Context, appID, fileID string) (ApplicationFile, error) {
+	if _, err := s.Get(ctx, appID); err != nil {
+		return ApplicationFile{}, err
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at FROM application_files WHERE application_id=? AND id=?`, appID, fileID)
+	file, err := scanApplicationFile(row, true)
+	if err == sql.ErrNoRows {
+		return ApplicationFile{}, panelerr.NotFound("application_file")
+	}
+	return file, err
+}
+
 func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) (ApplicationFile, error) {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
@@ -130,6 +142,9 @@ func scanApplicationFile(row appScanner, includeContent bool) (ApplicationFile, 
 	}
 	file.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	file.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	if includeContent {
+		file.ContentBase64 = base64.StdEncoding.EncodeToString(file.Content)
+	}
 	return file, nil
 }
 

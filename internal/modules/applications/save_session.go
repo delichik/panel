@@ -344,6 +344,10 @@ func (session *saveSession) applicationFiles() ([]ApplicationFile, error) {
 }
 
 func (file *stagedFile) applicationFile(content []byte) ApplicationFile {
+	contentBase64 := ""
+	if content != nil {
+		contentBase64 = base64.StdEncoding.EncodeToString(content)
+	}
 	return ApplicationFile{
 		ID:            file.ID,
 		ApplicationID: file.ApplicationID,
@@ -353,6 +357,7 @@ func (file *stagedFile) applicationFile(content []byte) ApplicationFile {
 		Size:          file.Size,
 		SHA256:        file.SHA256,
 		Content:       content,
+		ContentBase64: contentBase64,
 		CreatedAt:     file.CreatedAt,
 		UpdatedAt:     file.UpdatedAt,
 	}

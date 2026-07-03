@@ -58,6 +58,9 @@ export function createApplicationsApi(client: ApiClient = apiClient) {
     files(applicationId: string) {
       return client.get<ApplicationFileDto[]>(`${applicationPath(applicationId)}/files`);
     },
+    getFile(applicationId: string, fileId: string) {
+      return client.get<ApplicationFileDto>(`${applicationPath(applicationId)}/files/${encodeURIComponent(fileId)}`);
+    },
     saveFile(applicationId: string, input: ApplicationFileSaveDto) {
       return client.post<ApplicationFileDto>(`${applicationPath(applicationId)}/files`, input);
     },

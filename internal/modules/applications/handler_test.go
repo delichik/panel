@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/http"
 )
 
@@ -76,6 +77,11 @@ func TestHandlerApplicationFiles(t *testing.T) {
 	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/files", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list files status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/files/file-1", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get file status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
 	rec = serveTestRoute(handler, http.MethodPost, "/api/v1/applications/app-1/files", bytes.NewBufferString(`{"path":"config/app.conf","kind":"template","contentBase64":"aGVsbG8="}`))
@@ -268,6 +274,16 @@ func (f *fakeApplicationService) Delete(ctx context.Context, id string) error {
 
 func (f *fakeApplicationService) ListFiles(ctx context.Context, id string) ([]ApplicationFile, error) {
 	return f.files, nil
+}
+
+func (f *fakeApplicationService) GetFile(ctx context.Context, id, fileID string) (ApplicationFile, error) {
+	for _, file := range f.files {
+		if file.ID == fileID {
+			file.ContentBase64 = "aGVsbG8="
+			return file, nil
+		}
+	}
+	return ApplicationFile{}, panelerr.NotFound("application_file")
 }
 
 func (f *fakeApplicationService) SaveFile(ctx context.Context, id string, in FileSaveInput) (ApplicationFile, error) {

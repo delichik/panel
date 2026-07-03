@@ -30,7 +30,7 @@
 ## API 范围
 
 - 应用 CRUD：`GET/POST /api/v1/applications`，`GET/PUT/DELETE /api/v1/applications/{id}`
-- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`DELETE /api/v1/applications/{id}/files/{fileId}`
+- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`GET/DELETE /api/v1/applications/{id}/files/{fileId}`
 - 保存会话：`POST /api/v1/application-save-sessions`，`POST /api/v1/application-save-sessions/{id}/files`，`POST /api/v1/application-save-sessions/{id}/files/delete`，`POST /api/v1/application-save-sessions/{id}/commit`
 - 校验和计划：`POST /api/v1/applications/{id}/validate`，`POST /api/v1/applications/{id}/plan`
 - 运行操作：`POST /api/v1/applications/{id}/deploy`，`POST /api/v1/applications/{id}/migrate`，`POST /api/v1/applications/{id}/stop`，`POST /api/v1/applications/{id}/restart`
@@ -60,7 +60,7 @@
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 应用持久化目录不保存为数据库字段；是否启用 persistent 由 appspec 的 `mounts.type=persistent` 派生，详情响应里的 `persistentPath` 只读生成自 `applicationPersistentDir(app.ID)`，保存 DTO 不包含 `persistentPath`。
 - 应用 `reverseProxy` 字段只描述应用希望暴露的域名、路径、目标端口和目标类型，不代表所有部署节点都会启用反向代理。`targetType` 支持 `local` 与 `container`：旧数据或空值按 `local` 处理，代理到目标节点本地端口；`container` 代理到同节点 Application 容器名和目标端口。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖的服务器才会接收该应用在对应服务器上的反向代理配置。
-- 文件内容通过 API 以 base64 承载；应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
+- 文件内容通过 API 以 base64 承载；应用文件列表不返回正文，`GET /api/v1/applications/{id}/files/{fileId}` 按需返回 `contentBase64` 供模板编辑等定向读取使用。应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
 - `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器，YAML 中即使写入 `readOnly: false` 也不得让容器修改这些由 Panel 管理的文件。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
@@ -128,6 +128,8 @@
 ## Application Folder Archives
 
 - Application save sessions support `POST /api/v1/application-save-sessions/{id}/files/archive` for multipart folder archive uploads. This endpoint is used only when the user explicitly chooses the folder archive mode; ordinary single-file uploads continue to use the `/files` JSON/base64 endpoint and must not be unpacked.
+- Folder archive mode is only exposed for binary application files in the editor. Template files always use the single-file template editor and are saved through the ordinary file upload flow.
+- Replacing a folder archive in the editor treats the workspace path as a directory prefix: existing application files at that path or below it are removed from the save session before the new archive is uploaded.
 - Folder archives support zip, tar, tar.gz, and tgz. The backend validates archive paths so entries cannot escape the application workspace, then expands each entry as `basePath + archive relative path` into `application_files`.
 - Extracted entries keep normal application-file semantics and can be mounted with appspec `mounts.type=file`. This feature does not introduce a new mount type.
 

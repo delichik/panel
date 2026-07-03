@@ -32,6 +32,7 @@ interface PendingArchive {
   basePath: string;
   kind: ApplicationFileKind;
   file: File;
+  replacedFiles: EditorFile[];
 }
 
 const form = reactive<ApplicationSaveDto>({ name: '', enabled: false, specYaml: defaultSpec(), variables: {}, deploymentMode: 'all', deploymentServers: [], reverseProxy: [] });
@@ -56,6 +57,7 @@ const error = ref('');
 const servers = ref<ServerDto[]>([]);
 const files = ref<EditorFile[]>([]);
 const pendingArchives = ref<PendingArchive[]>([]);
+const loadingFileId = ref('');
 const templateVariables = ref<ApplicationTemplateVariableDto[]>([]);
 const panelFiles = ref<ApplicationPanelFileDto[]>([]);
 const templateTextarea = ref();
@@ -79,6 +81,15 @@ const proxyTargetTypeOptions = computed(() => [
   { title: t('applicationEditor.targetLocal'), value: 'local' },
   { title: t('applicationEditor.targetContainer'), value: 'container' },
 ]);
+const existingFileAtPath = computed(() => files.value.find((file) => file.path === fileForm.path.trim()));
+const hasFilesUnderBasePath = computed(() => files.value.some((file) => isArchivePathMatch(file.path, fileForm.path.trim())));
+const fileSubmitLabel = computed(() => {
+  if (fileForm.mode === 'archive') {
+    return hasFilesUnderBasePath.value ? t('applicationEditor.replaceFolderArchive') : t('applicationEditor.addFolderArchive');
+  }
+  if (existingFileAtPath.value) return t('applicationEditor.replaceFile');
+  return t('common.addFile');
+});
 const {
   page: filePage,
   pageSize: filePageSize,
@@ -113,6 +124,13 @@ watch(() => props.open, (open) => {
 
 watch(() => form.name, (name) => {
   if (specForm.name !== name) specForm.name = name;
+});
+
+watch(() => fileForm.kind, (kind) => {
+  if (kind === 'template') {
+    fileForm.mode = 'single';
+    fileForm.file = null;
+  }
 });
 
 watch(activeEditorTab, (tab, previous) => {
@@ -364,17 +382,33 @@ function bytesToBase64(bytes: Uint8Array) {
   return btoa(binary);
 }
 
+function base64ToText(value?: string) {
+  if (!value) return '';
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+function isArchivePathMatch(path: string, basePath: string) {
+  const base = basePath.replace(/^\/+|\/+$/g, '');
+  if (!base) return false;
+  return path === base || path.startsWith(`${base}/`);
+}
+
 async function addFile() {
   const path = fileForm.path.trim();
   if (!path) return;
   const picked = selectedFile();
   if (fileForm.mode === 'archive') {
     if (!picked) return;
+    const replacedFiles = files.value.filter((file) => isArchivePathMatch(file.path, path));
+    files.value = files.value.filter((file) => !isArchivePathMatch(file.path, path));
     pendingArchives.value.push({
       id: `archive-${Date.now()}`,
       basePath: path,
-      kind: fileForm.kind,
+      kind: 'binary',
       file: picked,
+      replacedFiles,
     });
     fileForm.file = null;
     return;
@@ -404,11 +438,40 @@ async function addFile() {
 function removeArchive(archive: PendingArchive) {
   const index = pendingArchives.value.findIndex((item) => item.id === archive.id);
   if (index >= 0) pendingArchives.value.splice(index, 1);
+  for (const file of archive.replacedFiles) {
+    if (!files.value.some((item) => item.path === file.path)) files.value.push(file);
+  }
+  files.value.sort((a, b) => a.path.localeCompare(b.path));
 }
 
 function removeFile(file: EditorFile) {
   const index = files.value.findIndex((item) => item.id === file.id && item.path === file.path);
   if (index >= 0) files.value.splice(index, 1);
+}
+
+async function editTemplateFile(file: EditorFile) {
+  fileForm.kind = 'template';
+  fileForm.mode = 'single';
+  fileForm.path = file.path;
+  loadingFileId.value = file.id;
+  try {
+    const loaded = file.contentBase64 !== undefined || !props.application?.id
+      ? file
+      : await applicationsApi.getFile(props.application.id, file.id);
+    fileForm.template = base64ToText(loaded.contentBase64);
+    fileForm.file = null;
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('applicationEditor.loadFileFailed');
+  } finally {
+    loadingFileId.value = '';
+  }
+}
+
+function replaceBinaryFile(file: EditorFile) {
+  fileForm.kind = 'binary';
+  fileForm.mode = 'single';
+  fileForm.path = file.path;
+  fileForm.file = null;
 }
 
 function sizeLabel(size: number) {
@@ -581,7 +644,7 @@ async function save() {
       saveStep.value = t('applicationEditor.saveStepDeletingFile', { current: index + 1, total: filesToDelete.length });
       await applicationsApi.deleteSaveSessionFile(session.id, { path: staged.path });
     }
-    const filesToUpload = files.value.filter((file) => file.contentBase64);
+    const filesToUpload = files.value.filter((file) => file.contentBase64 !== undefined);
     for (let index = 0; index < filesToUpload.length; index += 1) {
       const file = filesToUpload[index];
       saveStep.value = t('applicationEditor.saveStepUploadingFile', { current: index + 1, total: filesToUpload.length });
@@ -914,11 +977,6 @@ async function save() {
 
             <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
             <div class="file-form">
-              <v-btn-toggle v-model="fileForm.mode" density="compact" mandatory divided class="span-all">
-                <v-btn value="single">{{ t('applicationEditor.singleFile') }}</v-btn>
-                <v-btn value="archive">{{ t('applicationEditor.folderArchive') }}</v-btn>
-              </v-btn-toggle>
-              <v-text-field v-model="fileForm.path" :label="t('applicationEditor.workspacePath')" density="compact" variant="outlined" hide-details />
               <v-select
                 v-model="fileForm.kind"
                 :items="[
@@ -932,8 +990,17 @@ async function save() {
                 variant="outlined"
                 hide-details
               />
+              <v-text-field v-model="fileForm.path" :label="t('applicationEditor.workspacePath')" density="compact" variant="outlined" hide-details />
+              <v-slide-y-transition>
+                <div v-if="fileForm.kind === 'binary'" class="file-mode-group span-all">
+                  <v-btn-toggle v-model="fileForm.mode" density="compact" mandatory divided class="file-mode-toggle">
+                    <v-btn value="single" prepend-icon="mdi-file-outline">{{ t('applicationEditor.singleFile') }}</v-btn>
+                    <v-btn value="archive" prepend-icon="mdi-folder-zip-outline">{{ t('applicationEditor.folderArchive') }}</v-btn>
+                  </v-btn-toggle>
+                </div>
+              </v-slide-y-transition>
               <v-textarea
-                v-if="fileForm.mode === 'single' && fileForm.kind === 'template'"
+                v-if="fileForm.kind === 'template'"
                 ref="templateTextarea"
                 v-model="fileForm.template"
                 :label="t('applicationEditor.template')"
@@ -942,9 +1009,9 @@ async function save() {
                 spellcheck="false"
                 class="mono-input span-all"
               />
-              <v-menu v-if="fileForm.mode === 'single' && fileForm.kind === 'template'">
+              <v-menu v-if="fileForm.kind === 'template'">
                 <template #activator="{ props: menuProps }">
-                  <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none span-all">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                  <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none file-secondary-action">{{ t('applicationEditor.insertVariable') }}</v-btn>
                 </template>
                 <v-list density="compact">
                   <v-list-item v-for="item in variableItems('template')" :key="item.title" :title="item.title" @click="insertVariable('template', item.value)" />
@@ -959,17 +1026,20 @@ async function save() {
                 hide-details
                 class="span-all"
               />
-              <v-btn color="primary" variant="flat" class="text-none" :disabled="!fileForm.path || (fileForm.mode === 'archive' && !selectedFile()) || (fileForm.mode === 'single' && fileForm.kind === 'binary' && !selectedFile())" @click="addFile">
-                {{ fileForm.mode === 'archive' ? t('applicationEditor.addFolderArchive') : t('common.addFile') }}
+              <v-btn color="primary" variant="flat" class="text-none file-primary-action" :disabled="!fileForm.path || (fileForm.mode === 'archive' && !selectedFile()) || (fileForm.mode === 'single' && fileForm.kind === 'binary' && !selectedFile())" @click="addFile">
+                {{ fileSubmitLabel }}
               </v-btn>
             </div>
             <div v-if="pendingArchives.length" class="pending-archives">
               <div v-for="archive in pendingArchives" :key="archive.id" class="pending-archive">
                 <div class="min-width-0">
                   <strong class="text-truncate">{{ archive.basePath }}</strong>
-                  <div class="text-caption text-medium-emphasis text-truncate">{{ archive.file.name }} / {{ translateApplicationFileKind(archive.kind) }}</div>
+                  <div class="text-caption text-medium-emphasis text-truncate">
+                    {{ archive.file.name }} / {{ translateApplicationFileKind(archive.kind) }}
+                    <span v-if="archive.replacedFiles.length"> · {{ t('applicationEditor.replacesFileCount', { count: archive.replacedFiles.length }) }}</span>
+                  </div>
                 </div>
-                <v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeArchive(archive)" />
+                <v-btn size="small" icon="mdi-delete" variant="text" color="error" :aria-label="t('common.delete')" @click="removeArchive(archive)" />
               </div>
             </div>
             <v-table density="compact" class="mt-3">
@@ -980,7 +1050,11 @@ async function save() {
                   <td><v-chip size="small" variant="tonal" label>{{ translateApplicationFileKind(file.kind) }}</v-chip></td>
                   <td>{{ sizeLabel(file.size) }}</td>
                   <td class="mono text-truncate hash-cell">{{ file.sha256 }}</td>
-                  <td class="text-right"><v-btn size="small" icon="mdi-delete" variant="text" color="error" @click="removeFile(file)" /></td>
+                  <td class="text-right file-row-actions">
+                    <v-btn v-if="file.kind === 'template'" size="small" icon="mdi-pencil" variant="text" :loading="loadingFileId === file.id" :aria-label="t('applicationEditor.editTemplateFile')" @click="editTemplateFile(file)" />
+                    <v-btn v-else size="small" icon="mdi-upload" variant="text" :aria-label="t('applicationEditor.replaceBinaryFile')" @click="replaceBinaryFile(file)" />
+                    <v-btn size="small" icon="mdi-delete" variant="text" color="error" :aria-label="t('common.delete')" @click="removeFile(file)" />
+                  </td>
                 </tr>
                 <tr v-if="files.length === 0"><td colspan="5" class="text-center text-medium-emphasis py-4">{{ t('applicationEditor.noFiles') }}</td></tr>
               </tbody>
@@ -1041,7 +1115,34 @@ async function save() {
 .proxy-arrow { justify-self: center; }
 .proxy-target-name { font-size: 0.82rem; }
 .proxy-path-row { grid-template-columns: minmax(0, 1fr) 130px 40px; }
-.file-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+.file-form {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.68fr) minmax(0, 1.32fr);
+  gap: 10px;
+  align-items: start;
+  padding: 12px;
+  border: 1px solid var(--lp-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 36%);
+}
+.file-mode-group {
+  display: flex;
+  justify-content: flex-start;
+  min-width: 0;
+}
+.file-mode-toggle {
+  max-width: 100%;
+}
+.file-mode-toggle :deep(.v-btn) {
+  min-width: 0;
+}
+.file-secondary-action,
+.file-primary-action {
+  justify-self: start;
+}
+.file-row-actions {
+  white-space: nowrap;
+}
 .pending-archives { display: grid; gap: 8px; margin-top: 10px; }
 .pending-archive { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--lp-border); border-radius: 8px; }
 .min-width-0 { min-width: 0; }
