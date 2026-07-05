@@ -1,8 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
 import { facilityAppsApi } from '@/api/facilityApps';
 import { serversApi } from '@/api/servers';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
+import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
+import AppSelectorSummaryItem from '@/components/AppSelectorSummaryItem.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import type { FacilityPanelEntryDto, FacilityReverseProxyConfigDto, FacilityStaticAssetDto, FacilityStaticSiteDto, ServerDto } from '@/types/api';
 import { useI18n } from '@/i18n';
@@ -10,7 +14,6 @@ import { useI18n } from '@/i18n';
 type FacilityStaticSiteForm = FacilityStaticSiteDto & { localGroupId: string };
 
 const { t, formatDateTime, translateLifecycleStage, translateRuntimeDesiredState, translateRuntimeStatus } = useI18n();
-const router = useRouter();
 const loading = ref(true);
 const saving = ref(false);
 const reconciling = ref(false);
@@ -31,6 +34,10 @@ const form = reactive({
   image: 'nginx:1.27-alpine',
   panelEntry: { enabled: false, serverId: '', domain: '' } as FacilityPanelEntryDto,
   staticSites: [] as FacilityStaticSiteForm[],
+});
+const routeDialog = reactive({
+  open: false,
+  index: -1,
 });
 let localGroupSequence = 0;
 
@@ -65,23 +72,16 @@ const proxySourceModeOptions = computed(() => [
   { title: t('facilityAppsPage.preserveSource'), value: 'preserve_source' },
   { title: t('facilityAppsPage.hideSource'), value: 'hide_source' },
 ]);
-const applicationRouteSummaries = computed(() => (config.value?.routeSummaries ?? []).filter((item) => item.source === 'application'));
 const panelRouteSummary = computed(() => (config.value?.routeSummaries ?? []).find((item) => item.source === 'system_panel'));
 const lifecycleTargets = computed(() => config.value?.operation?.targets ?? []);
-const applicationRouteGroups = computed(() => {
-  const groups: Array<{ domain: string; httpsStatus: string; items: typeof applicationRouteSummaries.value }> = [];
-  const byDomain = new Map<string, number>();
-  applicationRouteSummaries.value.forEach((item) => {
-    const groupIndex = byDomain.get(item.domain);
-    if (groupIndex === undefined) {
-      byDomain.set(item.domain, groups.length);
-      groups.push({ domain: item.domain, httpsStatus: item.httpsStatus || 'disabled', items: [item] });
-    } else {
-      groups[groupIndex].items.push(item);
-    }
-  });
-  return groups;
-});
+const facilityApplications = computed(() => [
+  {
+    id: 'reverse-proxy',
+    title: t('facilityAppsPage.reverseProxy'),
+    hint: t('facilityAppsPage.reverseProxyHint'),
+    enabled: form.deploymentServers.length > 0,
+  },
+]);
 const staticSiteGroups = computed(() => {
   const groups: Array<{ key: string; domain: string; indexes: number[]; deploymentServers: string[] | null; sites: Array<{ site: FacilityStaticSiteForm; index: number }> }> = [];
   const byGroupId = new Map<string, number>();
@@ -170,11 +170,14 @@ function newStaticSite(domain = '', deploymentServers: string[] = [], localGroup
 }
 
 function addStaticDomain() {
-  form.staticSites.push(newStaticSite());
+  const route = newStaticSite();
+  form.staticSites.push(route);
+  openStaticRouteDialog(form.staticSites.length - 1);
 }
 
 function addStaticRoute(domain: string, deploymentServers: string[], localGroupId: string) {
   form.staticSites.push(newStaticSite(domain, deploymentServers, localGroupId));
+  openStaticRouteDialog(form.staticSites.length - 1);
 }
 
 function updateStaticDomain(indexes: number[], domain: string, localGroupId: string) {
@@ -192,12 +195,15 @@ function updateStaticDomainServers(indexes: number[], serverIds: string[]) {
 
 function removeStaticSite(index: number) {
   form.staticSites.splice(index, 1);
+  if (routeDialog.index === index) closeStaticRouteDialog();
+  else if (routeDialog.index > index) routeDialog.index -= 1;
 }
 
 function removeStaticDomain(indexes: number[]) {
   [...indexes].sort((a, b) => b - a).forEach((index) => {
     form.staticSites.splice(index, 1);
   });
+  closeStaticRouteDialog();
 }
 
 async function save() {
@@ -273,11 +279,6 @@ async function uploadAsset() {
   }
 }
 
-function serverNames(ids: string[] = []) {
-  if (!ids.length) return t('facilityAppsPage.allProxyServers');
-  return ids.map((id) => servers.value.find((server) => server.id === id)?.name ?? id).join(', ');
-}
-
 function domainHttpsStatus(domain: string) {
   const summary = (config.value?.routeSummaries ?? []).find((item) => item.domain === domain);
   return summary?.httpsStatus || 'disabled';
@@ -288,6 +289,16 @@ function routeTypeLabel(site: FacilityStaticSiteDto) {
   if (value === 'redirect') return t('facilityAppsPage.redirect');
   if (value === 'proxy_pass') return t('facilityAppsPage.proxyPass');
   return t('facilityAppsPage.staticContent');
+}
+
+function openStaticRouteDialog(index: number) {
+  routeDialog.index = index;
+  routeDialog.open = true;
+}
+
+function closeStaticRouteDialog() {
+  routeDialog.open = false;
+  routeDialog.index = -1;
 }
 
 function httpsStatusColor(status: string) {
@@ -321,10 +332,9 @@ function httpsStatusLabel(status: string) {
   return t('facilityAppsPage.httpsDisabled');
 }
 
-function openApplications() {
-  router.push({ name: 'applications' });
+function selectFacilityApp(_id: string) {
+  // Reserved for future facility apps; the current page only exposes the entrance gateway.
 }
-
 
 function formatBytes(value: number) {
   if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)} MB`;
@@ -339,44 +349,49 @@ onMounted(load);
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
     <PageLoadingState v-if="loading" />
-    <div v-else class="facility-workspace">
-      <v-card variant="outlined" class="facility-list">
-        <div class="facility-list__header">
-          <div class="text-subtitle-1 font-weight-bold">{{ t('facilityAppsPage.title') }}</div>
-        </div>
-        <div class="facility-list__body">
-          <button type="button" class="facility-app-item facility-app-item--selected">
-            <span>
-              <strong>{{ t('facilityAppsPage.reverseProxy') }}</strong>
-              <span>{{ t('facilityAppsPage.reverseProxyHint') }}</span>
-            </span>
-            <v-chip size="small" color="primary" variant="tonal">
-              {{ form.deploymentServers.length }}
-            </v-chip>
-          </button>
-        </div>
-      </v-card>
+    <AppMasterDetailWorkspace v-else>
+      <template #aside>
+        <AppSelectorPanel
+          class="facility-list"
+          :title="t('facilityAppsPage.title')"
+          :loading="false"
+          :empty="facilityApplications.length === 0"
+          empty-icon="mdi-application-cog-outline"
+          :empty-text="t('facilityAppsPage.noRouteSummaries')"
+        >
+          <AppSelectorSummaryItem
+            v-for="item in facilityApplications"
+            :key="item.id"
+            selected
+            :title="item.title"
+            :subtitle="item.hint"
+            :status="item.enabled ? 'success' : 'grey'"
+            @select="selectFacilityApp(item.id)"
+          />
+        </AppSelectorPanel>
+      </template>
 
       <v-card variant="outlined" class="facility-detail">
-        <div class="app-card-header">
+        <div class="facility-detail__header">
           <div class="min-width-0">
-            <strong>{{ t('facilityAppsPage.reverseProxy') }}</strong>
-            <div class="text-caption text-medium-emphasis text-truncate">
+            <div class="text-h6 font-weight-bold text-truncate">{{ t('facilityAppsPage.reverseProxy') }}</div>
+            <div class="text-body-2 text-medium-emphasis text-truncate">
               {{ enabledServerNames || t('facilityAppsPage.noEnabledServers') }}
             </div>
+            <div class="facility-statuses">
+              <v-chip :color="form.deploymentServers.length ? 'success' : 'grey'" size="small" variant="tonal" label>
+                {{ form.deploymentServers.length ? t('common.enabled') : t('common.disabled') }}
+              </v-chip>
+              <v-chip size="small" variant="tonal" label>{{ t('facilityAppsPage.gatewayNodes') }} {{ form.deploymentServers.length }}</v-chip>
+            </div>
           </div>
-          <div class="facility-actions">
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-refresh" :loading="reconciling" @click="reconcile">
-              {{ t('facilityAppsPage.syncNow') }}
-            </v-btn>
-            <v-btn size="small" color="primary" variant="flat" prepend-icon="mdi-content-save" :loading="saving" @click="save">
-              {{ t('common.save') }}
-            </v-btn>
-          </div>
+          <AppActionGroup context="detail">
+            <AppActionButton icon="mdi-refresh" :label="t('facilityAppsPage.syncNow')" :loading="reconciling" @click="reconcile" />
+            <AppActionButton kind="primary" icon="mdi-content-save" :label="t('common.save')" :loading="saving" @click="save" />
+          </AppActionGroup>
         </div>
-        <v-divider />
         <div class="facility-detail__body">
-          <v-alert v-if="config?.lastError" type="warning" variant="tonal" density="compact">
+          <v-alert v-if="config?.lastError" type="warning" variant="tonal" density="compact" class="facility-alert">
             {{ config.lastError }}
           </v-alert>
           <div class="facility-summary">
@@ -394,150 +409,11 @@ onMounted(load);
             </div>
           </div>
 
-          <section class="facility-section">
-            <div class="section-title">{{ t('facilityAppsPage.deploymentRecords') }}</div>
-            <div v-if="!config?.operation" class="empty-inline">
-              {{ t('facilityAppsPage.noDeploymentRecords') }}
-            </div>
-            <div v-else class="deployment-record">
-              <div class="deployment-record__summary">
-                <v-chip :color="runtimeStatusColor(config.operation.status)" size="small" variant="tonal" label>
-                  {{ translateRuntimeStatus(config.operation.status) }}
-                </v-chip>
-                <span class="text-caption text-medium-emphasis mono">{{ config.operation.id }}</span>
-                <span class="text-caption text-medium-emphasis">
-                  {{ formatDateTime(config.operation.finishedAt || config.operation.updatedAt) }}
-                </span>
-              </div>
-              <div class="deployment-target-table">
-                <v-table density="compact">
-                  <thead>
-                    <tr>
-                      <th>{{ t('applicationRuntime.server') }}</th>
-                      <th>{{ t('common.status') }}</th>
-                      <th>{{ t('applicationRuntime.desired') }}</th>
-                      <th>{{ t('applicationRuntime.stage') }}</th>
-                      <th>{{ t('applicationRuntime.container') }}</th>
-                      <th>{{ t('common.updatedAt') }}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-for="target in lifecycleTargets" :key="target.id">
-                      <td>
-                        <div class="font-weight-medium">{{ target.serverName || target.serverId }}</div>
-                        <div v-if="target.serverName" class="text-caption text-medium-emphasis mono">{{ target.serverId }}</div>
-                      </td>
-                      <td>
-                        <v-chip :color="runtimeStatusColor(target.status)" size="small" variant="tonal" label>
-                          {{ translateRuntimeStatus(target.status) }}
-                        </v-chip>
-                        <div v-if="target.error" class="text-caption text-error">{{ target.error }}</div>
-                      </td>
-                      <td>{{ translateRuntimeDesiredState(target.desiredState) }}</td>
-                      <td>{{ target.stage ? translateLifecycleStage(target.stage) : t('common.notAvailable') }}</td>
-                      <td class="mono">{{ target.containerName || target.instanceId || t('common.notAvailable') }}</td>
-                      <td>{{ formatDateTime(target.finishedAt || target.updatedAt) }}</td>
-                    </tr>
-                    <tr v-if="!lifecycleTargets.length">
-                      <td colspan="6" class="text-center text-medium-emphasis py-4">{{ t('facilityAppsPage.noDeploymentTargets') }}</td>
-                    </tr>
-                  </tbody>
-                </v-table>
-              </div>
-            </div>
-          </section>
-
-          <section class="facility-section">
-            <div class="section-title">{{ t('facilityAppsPage.gatewayNodes') }}</div>
-            <v-select
-              v-model="form.deploymentServers"
-              :items="serverOptions"
-              :label="t('facilityAppsPage.gatewayNodes')"
-              multiple
-              chips
-              closable-chips
-              variant="outlined"
-              density="comfortable"
-              hide-details="auto"
-            />
-            <v-text-field
-              v-model="form.image"
-              :label="t('facilityAppsPage.nginxImage')"
-              variant="outlined"
-              density="comfortable"
-              hide-details="auto"
-            />
-          </section>
-
-          <section class="facility-section">
-            <div class="section-title">{{ t('facilityAppsPage.panelEntry') }}</div>
-            <div class="panel-entry-card">
-              <v-switch
-                v-model="form.panelEntry.enabled"
-                :label="t('facilityAppsPage.enablePanelEntry')"
-                color="primary"
-                hide-details
-              />
-              <div class="panel-entry-grid">
-                <v-select
-                  v-model="form.panelEntry.serverId"
-                  :items="gatewayServerOptions"
-                  :label="t('facilityAppsPage.panelHost')"
-                  variant="outlined"
-                  density="comfortable"
-                  hide-details="auto"
-                  :disabled="!form.panelEntry.enabled"
-                />
-                <v-text-field
-                  v-model="form.panelEntry.domain"
-                  :label="t('facilityAppsPage.panelDomain')"
-                  variant="outlined"
-                  density="comfortable"
-                  hide-details="auto"
-                  :disabled="!form.panelEntry.enabled"
-                />
-                <div class="domain-https-status">
-                  <v-chip
-                    size="small"
-                    :color="httpsStatusColor(panelRouteSummary?.httpsStatus || 'disabled')"
-                    variant="tonal"
-                    label
-                  >
-                    {{ httpsStatusLabel(panelRouteSummary?.httpsStatus || 'disabled') }}
-                  </v-chip>
-                </div>
-              </div>
-              <div class="text-caption text-medium-emphasis">
-                {{ t('facilityAppsPage.panelEntryHint') }}
-              </div>
-            </div>
-          </section>
-
-          <section class="facility-section">
-            <div class="section-title">{{ t('facilityAppsPage.siteContent') }}</div>
-            <div class="asset-upload-row">
-              <v-text-field v-model="uploadForm.name" :label="t('common.name')" variant="outlined" density="compact" hide-details="auto" />
-              <v-select v-model="uploadForm.kind" :items="uploadKindOptions" :label="t('common.type')" variant="outlined" density="compact" hide-details="auto" />
-              <v-file-input v-model="uploadForm.file" :label="uploadForm.kind === 'uploaded_bundle' ? t('facilityAppsPage.bundleFile') : t('facilityAppsPage.singleFile')" variant="outlined" density="compact" hide-details="auto" />
-              <v-btn color="primary" variant="flat" :loading="uploadingAsset" :disabled="!selectedUploadFile()" @click="uploadAsset">
-                {{ t('facilityAppsPage.upload') }}
-              </v-btn>
-            </div>
-            <div v-if="staticAssets.length" class="asset-list">
-              <div v-for="asset in staticAssets" :key="asset.id" class="asset-item">
-                <span class="text-truncate">{{ asset.name }}</span>
-                <v-chip size="small" variant="tonal" label>{{ asset.kind === 'uploaded_bundle' ? t('facilityAppsPage.uploadedBundle') : t('facilityAppsPage.uploadedFile') }}</v-chip>
-                <span class="text-caption text-medium-emphasis">{{ formatBytes(asset.size) }}</span>
-              </div>
-            </div>
-          </section>
-
-          <section class="facility-section">
+          <div class="facility-content-grid">
+          <section class="facility-section facility-section--routes">
             <div class="section-heading">
               <div class="section-title">{{ t('facilityAppsPage.routes') }}</div>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" @click="addStaticDomain">
-                {{ t('facilityAppsPage.addDomain') }}
-              </v-btn>
+              <AppActionButton icon="mdi-plus" :label="t('facilityAppsPage.addDomain')" @click="addStaticDomain" />
             </div>
             <div v-if="!form.staticSites.length" class="empty-inline">
               {{ t('facilityAppsPage.noStaticSites') }}
@@ -575,160 +451,267 @@ onMounted(load);
                     {{ httpsStatusLabel(domainHttpsStatus(group.domain)) }}
                   </v-chip>
                 </div>
-                <div class="static-domain-card__actions">
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" @click="addStaticRoute(group.domain, group.deploymentServers, group.key)">
-                    {{ t('facilityAppsPage.addRoute') }}
-                  </v-btn>
-                  <v-btn icon variant="text" color="error" :aria-label="t('common.remove')" @click="removeStaticDomain(group.indexes)">
-                    <v-icon>mdi-delete-outline</v-icon>
-                  </v-btn>
-                </div>
+                <AppActionButton kind="danger" icon="mdi-delete-outline" :label="t('common.remove')" @click="removeStaticDomain(group.indexes)" />
               </div>
               <div class="static-route-list">
-                <div v-for="{ site, index } in group.sites" :key="index" class="static-route-row">
-                  <div class="static-route-row__main">
-                    <v-text-field v-model="site.path" :label="t('common.path')" variant="outlined" density="compact" hide-details="auto" />
-                    <v-select v-model="site.ruleType" :items="routeTypeOptions" :label="t('facilityAppsPage.ruleType')" variant="outlined" density="compact" hide-details="auto" />
-                    <template v-if="(site.ruleType || 'static') === 'static'">
-                      <v-select v-model="site.sourceType" :items="sourceOptions" :label="t('facilityAppsPage.contentSource')" variant="outlined" density="compact" hide-details="auto" />
-                      <v-text-field v-if="(site.sourceType || 'host_path') === 'host_path'" v-model="site.rootPath" :label="t('facilityAppsPage.serverDirectory')" variant="outlined" density="compact" hide-details="auto" />
-                      <v-select v-else v-model="site.assetId" :items="staticAssetOptions" :label="t('facilityAppsPage.siteContent')" variant="outlined" density="compact" hide-details="auto" />
-                    </template>
-                    <template v-else-if="site.ruleType === 'redirect'">
-                      <v-text-field v-model="site.redirectUrl" :label="t('facilityAppsPage.redirectTarget')" variant="outlined" density="compact" hide-details="auto" />
-                      <v-select v-model="site.redirectCode" :items="redirectCodeOptions" :label="t('facilityAppsPage.redirectCode')" variant="outlined" density="compact" hide-details="auto" />
-                    </template>
-                    <template v-else>
-                      <v-text-field v-model="site.proxyUrl" :label="t('facilityAppsPage.upstreamUrl')" variant="outlined" density="compact" hide-details="auto" />
-                      <v-select v-model="site.proxySourceMode" :items="proxySourceModeOptions" :label="t('facilityAppsPage.requestInfo')" variant="outlined" density="compact" hide-details="auto" />
-                    </template>
+                <div
+                  v-for="{ site, index } in group.sites"
+                  :key="index"
+                  class="static-route-list-row"
+                >
+                  <button type="button" class="static-route-list-row__main" @click="openStaticRouteDialog(index)">
+                    <span class="static-route-path text-truncate">{{ site.path || '/' }}</span>
                     <v-chip size="small" variant="tonal" label>{{ routeTypeLabel(site) }}</v-chip>
-                    <v-btn icon variant="text" color="error" :aria-label="t('common.remove')" @click="removeStaticSite(index)">
-                      <v-icon>mdi-close</v-icon>
-                    </v-btn>
+                    <span class="static-route-target text-truncate">
+                      <template v-if="(site.ruleType || 'static') === 'static'">
+                        {{ (site.sourceType || 'host_path') === 'host_path' ? (site.rootPath || t('facilityAppsPage.serverDirectory')) : (staticAssets.find((asset) => asset.id === site.assetId)?.name || t('facilityAppsPage.siteContent')) }}
+                      </template>
+                      <template v-else-if="site.ruleType === 'redirect'">
+                        {{ site.redirectUrl || t('facilityAppsPage.redirectTarget') }}
+                      </template>
+                      <template v-else>
+                        {{ site.proxyUrl || t('facilityAppsPage.upstreamUrl') }}
+                      </template>
+                    </span>
+                  </button>
+                  <AppActionGroup context="table" class="static-route-list-row__actions">
+                    <AppActionButton icon="mdi-pencil-outline" :label="t('common.edit')" @click="openStaticRouteDialog(index)" />
+                    <AppActionButton kind="danger" icon="mdi-delete-outline" :label="t('common.delete')" @click="removeStaticSite(index)" />
+                  </AppActionGroup>
+                </div>
+              </div>
+              <AppActionGroup context="section" align="start" class="static-domain-card__actions">
+                <AppActionButton icon="mdi-plus" :label="t('facilityAppsPage.addRoute')" @click="addStaticRoute(group.domain, group.deploymentServers, group.key)" />
+              </AppActionGroup>
+            </div>
+          </section>
+
+          <section class="facility-section facility-section--setup">
+            <div class="facility-setup-grid">
+              <div class="facility-setup-card">
+                <div class="section-title">{{ t('facilityAppsPage.gatewayNodes') }}</div>
+                <v-select
+                  v-model="form.deploymentServers"
+                  :items="serverOptions"
+                  :label="t('facilityAppsPage.gatewayNodes')"
+                  multiple
+                  chips
+                  closable-chips
+                  variant="outlined"
+                  density="comfortable"
+                  hide-details="auto"
+                />
+                <v-text-field
+                  v-model="form.image"
+                  :label="t('facilityAppsPage.nginxImage')"
+                  variant="outlined"
+                  density="comfortable"
+                  hide-details="auto"
+                />
+              </div>
+
+              <div class="facility-setup-card">
+                <div class="section-title">{{ t('facilityAppsPage.panelEntry') }}</div>
+                <v-switch
+                  v-model="form.panelEntry.enabled"
+                  :label="t('facilityAppsPage.enablePanelEntry')"
+                  color="primary"
+                  hide-details
+                />
+                <div class="panel-entry-grid">
+                  <v-select
+                    v-model="form.panelEntry.serverId"
+                    :items="gatewayServerOptions"
+                    :label="t('facilityAppsPage.panelHost')"
+                    variant="outlined"
+                    density="comfortable"
+                    hide-details="auto"
+                    :disabled="!form.panelEntry.enabled"
+                  />
+                  <v-text-field
+                    v-model="form.panelEntry.domain"
+                    :label="t('facilityAppsPage.panelDomain')"
+                    variant="outlined"
+                    density="comfortable"
+                    hide-details="auto"
+                    :disabled="!form.panelEntry.enabled"
+                  />
+                  <div class="domain-https-status">
+                    <v-chip
+                      size="small"
+                      :color="httpsStatusColor(panelRouteSummary?.httpsStatus || 'disabled')"
+                      variant="tonal"
+                      label
+                    >
+                      {{ httpsStatusLabel(panelRouteSummary?.httpsStatus || 'disabled') }}
+                    </v-chip>
                   </div>
+                </div>
+                <div class="text-caption text-medium-emphasis">
+                  {{ t('facilityAppsPage.panelEntryHint') }}
                 </div>
               </div>
             </div>
           </section>
 
-          <section class="facility-section">
-            <div class="section-heading">
-              <div class="section-title">{{ t('facilityAppsPage.applicationRoutes') }}</div>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-application-cog-outline" @click="openApplications">
-                {{ t('facilityAppsPage.openApplications') }}
-              </v-btn>
+          <section class="facility-section facility-section--assets">
+            <div class="section-title">{{ t('facilityAppsPage.siteContent') }}</div>
+            <div class="asset-upload-row">
+              <v-text-field v-model="uploadForm.name" :label="t('common.name')" variant="outlined" density="compact" hide-details="auto" />
+              <v-select v-model="uploadForm.kind" :items="uploadKindOptions" :label="t('common.type')" variant="outlined" density="compact" hide-details="auto" />
+              <v-file-input v-model="uploadForm.file" :label="uploadForm.kind === 'uploaded_bundle' ? t('facilityAppsPage.bundleFile') : t('facilityAppsPage.singleFile')" variant="outlined" density="compact" hide-details="auto" />
+              <AppActionButton kind="primary" icon="mdi-upload" :label="t('facilityAppsPage.upload')" :loading="uploadingAsset" :disabled="!selectedUploadFile()" @click="uploadAsset" />
             </div>
-            <div v-if="!applicationRouteGroups.length" class="empty-inline">
-              {{ t('facilityAppsPage.noRouteSummaries') }}
-            </div>
-            <div v-else class="application-route-domain-list">
-              <div v-for="group in applicationRouteGroups" :key="group.domain" class="application-route-domain">
-                <div class="application-route-domain__header">
-                  <strong class="text-truncate">{{ group.domain }}</strong>
-                  <v-chip size="small" :color="httpsStatusColor(group.httpsStatus)" variant="tonal" label>
-                    {{ httpsStatusLabel(group.httpsStatus) }}
-                  </v-chip>
-                </div>
-                <div class="route-summary-list">
-                  <div v-for="item in group.items" :key="`${item.domain}:${item.path}:${item.serverIds.join(',')}`" class="route-summary-item">
-                    <div class="min-width-0">
-                      <strong class="text-truncate">{{ item.path }}</strong>
-                      <span class="text-caption text-medium-emphasis">{{ serverNames(item.serverIds) }}</span>
-                    </div>
-                  </div>
-                </div>
+            <div v-if="staticAssets.length" class="asset-list">
+              <div v-for="asset in staticAssets" :key="asset.id" class="asset-item">
+                <span class="text-truncate">{{ asset.name }}</span>
+                <v-chip size="small" variant="tonal" label>{{ asset.kind === 'uploaded_bundle' ? t('facilityAppsPage.uploadedBundle') : t('facilityAppsPage.uploadedFile') }}</v-chip>
+                <span class="text-caption text-medium-emphasis">{{ formatBytes(asset.size) }}</span>
               </div>
             </div>
           </section>
+
+          <section class="facility-section facility-section--deployment">
+            <div class="section-heading">
+              <div class="min-width-0">
+                <div class="section-title">{{ t('facilityAppsPage.deploymentRecords') }}</div>
+                <div v-if="config?.operation" class="section-subtitle text-truncate mono">{{ config.operation.id }}</div>
+              </div>
+              <v-chip v-if="config?.operation" :color="runtimeStatusColor(config.operation.status)" size="small" variant="tonal" label>
+                {{ translateRuntimeStatus(config.operation.status) }}
+              </v-chip>
+            </div>
+            <div v-if="!config?.operation" class="empty-inline">
+              {{ t('facilityAppsPage.noDeploymentRecords') }}
+            </div>
+            <div v-else class="deployment-record">
+              <div class="deployment-record__updated">
+                {{ formatDateTime(config.operation.finishedAt || config.operation.updatedAt) }}
+              </div>
+              <div v-if="lifecycleTargets.length" class="deployment-target-list">
+                <div v-for="target in lifecycleTargets" :key="target.id" class="deployment-target-row">
+                  <div class="deployment-target-row__top">
+                    <div class="min-width-0">
+                      <div class="font-weight-bold text-truncate">{{ target.serverName || target.serverId }}</div>
+                      <div v-if="target.serverName" class="text-caption text-medium-emphasis mono text-truncate">{{ target.serverId }}</div>
+                    </div>
+                    <v-chip :color="runtimeStatusColor(target.status)" size="small" variant="tonal" label>
+                      {{ translateRuntimeStatus(target.status) }}
+                    </v-chip>
+                  </div>
+                  <div class="deployment-target-row__meta">
+                    <span>{{ translateRuntimeDesiredState(target.desiredState) }}</span>
+                    <span>{{ target.stage ? translateLifecycleStage(target.stage) : t('common.notAvailable') }}</span>
+                    <span class="mono text-truncate">{{ target.containerName || target.instanceId || t('common.notAvailable') }}</span>
+                    <span>{{ formatDateTime(target.finishedAt || target.updatedAt) }}</span>
+                  </div>
+                  <div v-if="target.error" class="text-caption text-error">{{ target.error }}</div>
+                </div>
+              </div>
+              <div v-else class="empty-inline">{{ t('facilityAppsPage.noDeploymentTargets') }}</div>
+            </div>
+          </section>
+
+          </div>
         </div>
       </v-card>
-    </div>
+    </AppMasterDetailWorkspace>
+    <v-dialog v-model="routeDialog.open" width="min(720px, calc(100vw - 32px))">
+      <v-card v-if="routeDialog.index >= 0 && form.staticSites[routeDialog.index]" class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('facilityAppsPage.routes') }}</span>
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="closeStaticRouteDialog" />
+        </v-card-title>
+        <v-card-text class="app-dialog-body">
+          <div class="static-route-dialog-form">
+            <v-text-field v-model="form.staticSites[routeDialog.index].path" :label="t('common.path')" variant="outlined" density="comfortable" hide-details="auto" />
+            <v-select v-model="form.staticSites[routeDialog.index].ruleType" :items="routeTypeOptions" :label="t('facilityAppsPage.ruleType')" variant="outlined" density="comfortable" hide-details="auto" />
+            <template v-if="(form.staticSites[routeDialog.index].ruleType || 'static') === 'static'">
+              <v-select v-model="form.staticSites[routeDialog.index].sourceType" :items="sourceOptions" :label="t('facilityAppsPage.contentSource')" variant="outlined" density="comfortable" hide-details="auto" />
+              <v-text-field v-if="(form.staticSites[routeDialog.index].sourceType || 'host_path') === 'host_path'" v-model="form.staticSites[routeDialog.index].rootPath" :label="t('facilityAppsPage.serverDirectory')" variant="outlined" density="comfortable" hide-details="auto" />
+              <v-select v-else v-model="form.staticSites[routeDialog.index].assetId" :items="staticAssetOptions" :label="t('facilityAppsPage.siteContent')" variant="outlined" density="comfortable" hide-details="auto" />
+            </template>
+            <template v-else-if="form.staticSites[routeDialog.index].ruleType === 'redirect'">
+              <v-text-field v-model="form.staticSites[routeDialog.index].redirectUrl" :label="t('facilityAppsPage.redirectTarget')" variant="outlined" density="comfortable" hide-details="auto" />
+              <v-select v-model="form.staticSites[routeDialog.index].redirectCode" :items="redirectCodeOptions" :label="t('facilityAppsPage.redirectCode')" variant="outlined" density="comfortable" hide-details="auto" />
+            </template>
+            <template v-else>
+              <v-text-field v-model="form.staticSites[routeDialog.index].proxyUrl" :label="t('facilityAppsPage.upstreamUrl')" variant="outlined" density="comfortable" hide-details="auto" />
+              <v-select v-model="form.staticSites[routeDialog.index].proxySourceMode" :items="proxySourceModeOptions" :label="t('facilityAppsPage.requestInfo')" variant="outlined" density="comfortable" hide-details="auto" />
+            </template>
+          </div>
+        </v-card-text>
+        <v-card-actions class="app-dialog-actions">
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="closeStaticRouteDialog" />
+            <AppActionButton kind="primary" :label="t('common.save')" @click="closeStaticRouteDialog" />
+          </AppActionGroup>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
     <v-snackbar v-model="snackbar">{{ message }}</v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.facility-workspace {
-  display: grid;
-  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
-  flex: 1 1 auto;
-  gap: 18px;
-  min-height: 0;
-}
-
 .facility-list,
 .facility-detail {
+  min-width: 0;
   min-height: 0;
   overflow: hidden;
 }
 
-.facility-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.facility-list__header {
-  flex: 0 0 auto;
-  padding: 12px 16px;
-  background: rgb(var(--v-theme-surface-variant));
-}
-
-.facility-list__body,
-.facility-detail__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: auto;
-}
-
-.facility-list__body {
-  padding: 10px;
-}
-
-.facility-app-item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid rgba(var(--v-theme-primary), 0.26);
-  border-radius: 8px;
-  background: rgba(var(--v-theme-primary), 0.06);
-  color: inherit;
-  font: inherit;
-  text-align: left;
-}
-
-.facility-app-item span {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-}
-
-.facility-app-item span span {
-  color: var(--lp-text-muted);
-  font-size: 0.78rem;
-}
-
 .facility-detail {
   display: flex;
   flex-direction: column;
+  border-color: color-mix(in srgb, var(--lp-border), transparent 28%) !important;
+  background:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 90%), transparent 26rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface), transparent 2%), color-mix(in srgb, var(--lp-surface-container), transparent 14%)) !important;
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--lp-background), transparent 24%) !important;
 }
 
-.facility-actions,
 .section-heading {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.facility-detail__body {
+.facility-detail__header {
   display: flex;
-  flex-direction: column;
-  gap: 16px;
-  padding: 16px;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 18%);
+  background: color-mix(in srgb, var(--lp-surface), transparent 8%);
+}
+
+.facility-statuses {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.facility-detail__body {
+  display: grid;
+  flex: 1 1 auto;
+  gap: 22px;
+  align-content: start;
+  justify-content: stretch;
+  min-height: 0;
+  padding: 16px 18px 18px;
+  overflow: auto;
+  scroll-behavior: smooth;
+}
+
+.facility-alert,
+.facility-summary,
+.facility-content-grid {
+  width: 100%;
+  justify-self: stretch;
 }
 
 .facility-summary {
@@ -737,13 +720,22 @@ onMounted(load);
   gap: 10px;
 }
 
+.facility-content-grid {
+  display: grid;
+  gap: 22px;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  min-width: 0;
+}
+
 .facility-summary > div {
   display: grid;
   gap: 4px;
   min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 62%);
 }
 
 .facility-summary span {
@@ -760,28 +752,83 @@ onMounted(load);
 }
 
 .facility-section {
+  position: relative;
   display: grid;
-  gap: 12px;
+  gap: 14px;
+  align-content: start;
+  min-width: 0;
+  overflow: visible;
+  padding: 0 0 22px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 34%);
+}
+
+.facility-section--routes {
+  gap: 18px;
+  padding-bottom: 24px;
+}
+
+.facility-section--setup,
+.facility-section--assets,
+.facility-section--deployment {
+  background: transparent;
+  box-shadow: none;
+}
+
+.facility-section::before {
+  content: none;
+}
+
+.facility-content-grid > .facility-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 
 .deployment-record {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
-.deployment-record__summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+.deployment-record__updated {
+  color: var(--lp-text-muted);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.deployment-target-list {
+  display: grid;
+  gap: 8px;
+}
+
+.deployment-target-row {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 62%);
+}
+
+.deployment-target-row__top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
   align-items: center;
-  min-width: 0;
 }
 
-.deployment-target-table {
+.deployment-target-row__meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 8px;
+  color: var(--lp-text-muted);
+  font-size: 0.74rem;
+}
+
+.deployment-target-row__meta > span {
   min-width: 0;
-  overflow: auto;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .section-heading {
@@ -789,36 +836,57 @@ onMounted(load);
 }
 
 .section-title {
-  font-weight: 700;
+  min-width: 0;
+  font-size: 1rem;
+  font-weight: 750;
+}
+
+.section-subtitle {
+  margin-top: 2px;
+  color: var(--lp-text-muted);
+  font-size: 0.78rem;
 }
 
 .static-domain-card {
   display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
+  gap: 18px;
+  padding: 16px 0 0;
+  border-top: 1px solid color-mix(in srgb, var(--lp-border), transparent 42%);
+  background: transparent;
 }
 
-.panel-entry-card {
+.static-domain-card:first-of-type {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.facility-setup-grid {
   display: grid;
-  gap: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.facility-setup-card {
+  display: grid;
+  gap: 12px;
   padding: 12px;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 62%);
 }
 
 .panel-entry-grid {
   display: grid;
-  grid-template-columns: minmax(220px, 0.9fr) minmax(220px, 1.1fr) auto;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 8px;
   align-items: start;
 }
 
 .static-domain-card__header {
   display: grid;
-  grid-template-columns: minmax(180px, 0.9fr) minmax(220px, 1.1fr) minmax(180px, auto) auto;
-  gap: 8px;
+  grid-template-columns: minmax(220px, 1fr) minmax(260px, 1.25fr) auto 40px;
+  gap: 12px;
   align-items: start;
 }
 
@@ -833,7 +901,9 @@ onMounted(load);
 .static-domain-card__actions {
   display: flex;
   align-items: center;
+  justify-content: flex-start;
   gap: 8px;
+  padding-top: 2px;
 }
 
 .static-route-list {
@@ -841,62 +911,82 @@ onMounted(load);
   gap: 8px;
 }
 
-.static-route-row {
-  padding: 8px;
-  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
-  border-radius: 8px;
+.static-route-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 28%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface), transparent 38%);
 }
 
-.static-route-row__main {
+.static-route-list-row__main {
   display: grid;
-  grid-template-columns: minmax(90px, 0.7fr) minmax(130px, 0.8fr) minmax(150px, 0.9fr) minmax(220px, 1.2fr) auto 40px;
-  gap: 8px;
+  grid-template-columns: minmax(110px, 0.38fr) auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.static-route-list-row__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 42%);
+  outline-offset: 3px;
+  border-radius: var(--lp-radius-sm);
+}
+
+.static-route-path {
+  min-width: 0;
+  font-weight: 760;
+}
+
+.static-route-target {
+  min-width: 0;
+  color: var(--lp-text-muted);
+  font-size: 0.82rem;
+}
+
+.static-route-dialog-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   align-items: start;
+}
+
+.static-route-dialog-form > *:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 
 .asset-upload-row {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) 160px minmax(220px, 1.4fr) auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(150px, 0.8fr) minmax(220px, 1.2fr) auto;
   gap: 8px;
   align-items: start;
 }
 
-.asset-list,
-.route-summary-list,
-.application-route-domain-list {
+.asset-list {
   display: grid;
   gap: 8px;
 }
 
-.application-route-domain {
-  display: grid;
-  gap: 8px;
-  padding: 10px;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
-}
-
-.application-route-domain__header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  align-items: center;
-}
-
-.asset-item,
-.route-summary-item {
+.asset-item {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
   padding: 8px 10px;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
-}
-
-.route-summary-item {
-  grid-template-columns: minmax(0, 1fr) auto;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 66%);
 }
 
 .empty-inline {
@@ -916,37 +1006,53 @@ onMounted(load);
   font-size: 0.78rem;
 }
 
-@media (max-width: 1080px) {
-  .facility-workspace {
+@media (max-width: 1280px) {
+  .static-route-list-row,
+  .static-route-list-row__main,
+  .asset-upload-row {
     grid-template-columns: 1fr;
   }
 }
 
-@media (max-width: 760px) {
-  .facility-workspace {
-    flex: none;
-    min-height: auto;
+@media (max-width: 1080px) {
+  .facility-content-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
+  .facility-setup-grid,
+  .static-domain-card__header {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
   .facility-list,
   .facility-detail,
-  .facility-list__body,
   .facility-detail__body {
     overflow: visible;
   }
 
+  .facility-detail__header,
+  .facility-detail__body {
+    padding: 16px;
+  }
+
+  .facility-section {
+    padding: 0 0 18px;
+  }
+
   .facility-summary,
+  .facility-setup-grid,
   .panel-entry-grid,
   .static-domain-card__header,
-  .static-route-row__main,
+  .static-route-dialog-form,
+  .static-route-list-row,
+  .static-route-list-row__main,
   .asset-upload-row,
-  .asset-item,
-  .application-route-domain__header,
-  .route-summary-item {
+  .asset-item {
     grid-template-columns: 1fr;
   }
 
-  .facility-actions,
   .section-heading,
   .static-domain-card__actions {
     align-items: stretch;

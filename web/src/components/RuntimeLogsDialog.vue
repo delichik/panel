@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
 const props = withDefaults(defineProps<{
@@ -73,7 +75,7 @@ watch(() => [props.open, props.targetKey], ([open]) => {
           <span class="app-dialog-title-text">{{ title }}</span>
           <div v-if="subtitle" class="text-caption text-medium-emphasis text-truncate">{{ subtitle }}</div>
         </div>
-        <v-btn icon="mdi-close" variant="text" :aria-label="t('common.close')" @click="close" />
+        <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="close" />
       </v-card-title>
       <v-divider />
       <v-card-text class="app-dialog-body runtime-logs-body">
@@ -89,9 +91,9 @@ watch(() => [props.open, props.targetKey], ([open]) => {
             variant="outlined"
             hide-details
           />
-          <v-btn color="primary" variant="flat" class="text-none" prepend-icon="mdi-refresh" :disabled="!canLoad" :loading="loading" @click="loadLogs">
-            {{ t('common.refresh') }}
-          </v-btn>
+          <AppActionGroup context="toolbar">
+            <AppActionButton kind="primary" icon="mdi-refresh" :label="t('common.refresh')" :disabled="!canLoad" :loading="loading" @click="loadLogs" />
+          </AppActionGroup>
         </div>
         <div class="log-output-wrap">
           <pre class="log-output">{{ logs || t('applicationLogs.emptyContent') }}</pre>
@@ -100,7 +102,9 @@ watch(() => [props.open, props.targetKey], ([open]) => {
       </v-card-text>
       <v-divider />
       <v-card-actions class="app-dialog-actions">
-        <v-btn variant="text" class="text-none" @click="close">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="dialog">
+          <AppActionButton kind="plain" :label="t('common.close')" @click="close" />
+        </AppActionGroup>
       </v-card-actions>
     </v-card>
   </v-dialog>

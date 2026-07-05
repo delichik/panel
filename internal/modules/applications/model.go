@@ -26,6 +26,10 @@ const (
 	ReverseProxyTargetLocal     = "local"
 	ReverseProxyTargetContainer = "container"
 
+	ApplicationFileKindBinary   = "binary"
+	ApplicationFileKindTemplate = "template"
+	ApplicationFileKindArchive  = "archive"
+
 	LifecycleTypeDeploy      = "deploy"
 	LifecycleTypeRefresh     = "refresh"
 	LifecycleTypeImageUpdate = "image_update"

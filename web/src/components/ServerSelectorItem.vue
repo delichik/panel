@@ -53,14 +53,16 @@ function agentStatusForServer(server: ServerDto) {
 .server-selector-item__name {
   display: block;
   min-width: 0;
-  font-size: 0.9rem;
-  font-weight: 700;
+  font-size: 0.92rem;
+  font-weight: 800;
+  letter-spacing: 0;
 }
 
 .server-selector-item__meta {
   display: block;
-  margin-top: 2px;
+  margin-top: 3px;
   color: var(--lp-text-muted);
   font-size: 0.76rem;
+  font-variant-numeric: tabular-nums;
 }
 </style>

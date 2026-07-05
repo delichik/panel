@@ -640,6 +640,42 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	}
 }
 
+func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
+	svc, runtimeClient, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	archive := testApplicationZipArchive(t, "index.html", "<h1>ok</h1>")
+	session, err := svc.BeginSaveSession(ctx, BeginSaveSessionInput{Save: SaveInput{
+		Name:     "web",
+		Enabled:  true,
+		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: public\n    target: /usr/share/nginx/html\n    readOnly: true\n",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.UploadSaveSessionArchive(ctx, session.ID, FileArchiveInput{
+		BasePath: "public",
+		Kind:     "binary",
+		FileName: "site.zip",
+		Content:  archive,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CommitSaveSession(ctx, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimeClient.deploys) == 0 {
+		t.Fatal("expected deployment")
+	}
+	spec := runtimeClient.deploys[0].Spec
+	if len(spec.Files) != 1 || spec.Files[0].Kind != appruntime.ManagedFileKindArchive || spec.Files[0].Path != "public" || !bytes.Equal(spec.Files[0].Content, archive) {
+		t.Fatalf("files = %#v", spec.Files)
+	}
+	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Source != "public" || spec.Mounts[0].Target != "/usr/share/nginx/html" || !spec.Mounts[0].ReadOnly {
+		t.Fatalf("mounts = %#v", spec.Mounts)
+	}
+}
+
 func TestApplicationFileTemplateRendersPerTargetServerVariables(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

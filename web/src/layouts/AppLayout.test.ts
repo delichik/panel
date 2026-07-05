@@ -39,6 +39,12 @@ describe('AppLayout navigation', () => {
     expect(appLayout).not.toContain('class="text-none logout-btn"');
   });
 
+  it('uses distinct nested values for the applications group and its child item', () => {
+    expect(appLayout).toContain("key: 'applications'");
+    expect(appLayout).toContain("to: '/applications/apps', title: t('layout.nav.applications'), value: 'applications-apps'");
+    expect(appLayout).not.toContain("to: '/applications/apps', title: t('layout.nav.applications'), value: 'applications'");
+  });
+
   it('shows the build channel marker from version metadata', () => {
     expect(appLayout).toContain("versionInfo.value?.channel === 'dev'");
     expect(appLayout).toContain('v-if="isDevChannel"');

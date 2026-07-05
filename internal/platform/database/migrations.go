@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"strings"
 )
 
 func (s *Store) Migrate(ctx context.Context) error {
@@ -144,7 +145,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			application_id TEXT NOT NULL,
 			path TEXT NOT NULL,
-			kind TEXT NOT NULL CHECK(kind IN ('binary','template')),
+			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
 			content_type TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0,
 			sha256 TEXT NOT NULL DEFAULT '',
@@ -465,6 +466,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"reconcile_next_run_at":    "TEXT NOT NULL DEFAULT ''",
 		"reconcile_success_streak": "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
+		return err
+	}
+	if err := s.migrateApplicationFilesArchiveKind(ctx); err != nil {
 		return err
 	}
 	if err := s.migrateApplicationLifecycleTargets(ctx); err != nil {
@@ -797,6 +801,51 @@ func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (s *Store) migrateApplicationFilesArchiveKind(ctx context.Context) error {
+	var sqlText string
+	err := s.appDB.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='application_files'`).Scan(&sqlText)
+	if err == sql.ErrNoRows {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if strings.Contains(sqlText, "'archive'") {
+		return nil
+	}
+	tx, err := s.appDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	statements := []string{
+		`ALTER TABLE application_files RENAME TO application_files_old`,
+		`CREATE TABLE application_files (
+			id TEXT PRIMARY KEY,
+			application_id TEXT NOT NULL,
+			path TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
+			content_type TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0,
+			sha256 TEXT NOT NULL DEFAULT '',
+			content BLOB,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			UNIQUE(application_id, path),
+			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
+		)`,
+		`INSERT INTO application_files(id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at)
+			SELECT id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at FROM application_files_old`,
+		`DROP TABLE application_files_old`,
+	}
+	for _, stmt := range statements {
+		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[string]string) error {

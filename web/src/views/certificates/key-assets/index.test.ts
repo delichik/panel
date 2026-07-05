@@ -7,9 +7,9 @@ const domainCertificatesPage = readFileSync(resolve(__dirname, '../domains/index
 
 describe('KeyAssetsPage', () => {
   it('uses the shared selector-detail workspace and keeps private keys out of inline display', () => {
-    expect(page).toContain('class="asset-workspace"');
+    expect(page).toContain('<AppMasterDetailWorkspace');
     expect(page).toContain('<AppSelectorPanel');
-    expect(page).toContain('<AppSelectorItem');
+    expect(page).toContain('<AppSelectorSummaryItem');
     expect(page).toContain('class="asset-detail-card"');
     expect(page).toContain('icon="mdi-dots-vertical"');
     expect(page).toContain(":title=\"t('keyAssetsPage.importAsset')\"");
@@ -19,7 +19,6 @@ describe('KeyAssetsPage', () => {
     expect(page).toContain(':indeterminate="someSelectableSelected"');
     expect(page).toContain('@update:model-value="toggleSelectAllAssets"');
     expect(page).toContain('class="asset-selector-checkbox"');
-    expect(page).toContain('margin-left: -6px');
     expect(page).toContain("t('keyAssetsPage.tabs.ssh')");
     expect(page).not.toContain("t('keyAssetsPage.privateKeysHiddenHint')");
     expect(page).toContain("keyAssetsApi.preflightImportArchive");
@@ -35,9 +34,9 @@ describe('KeyAssetsPage', () => {
   });
 
   it('uses selector-detail mode for domain certificates too', () => {
-    expect(domainCertificatesPage).toContain('class="certificate-workspace"');
+    expect(domainCertificatesPage).toContain('<AppMasterDetailWorkspace');
     expect(domainCertificatesPage).toContain('<AppSelectorPanel');
-    expect(domainCertificatesPage).toContain('<AppSelectorItem');
+    expect(domainCertificatesPage).toContain('<AppSelectorSummaryItem');
     expect(domainCertificatesPage).toContain('class="certificate-detail"');
   });
 

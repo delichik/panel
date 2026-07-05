@@ -2,13 +2,15 @@
 
 ## 共享选择器组件
 
-`AppSelectorPanel.vue` 是所有主从页面左侧选择器的统一外壳，负责 outlined 满高卡片、标题、紧凑加载态、空状态、内部滚动区和底部分页。标题区不显示数量 Chip；底部分页使用 `AppPagination` 的 `compact` 模式，只保留页码和翻页按钮，避免总数和每页数量选择器挤出左栏。需要在标题区放置全选等控件时使用 `leading` 插槽，使控件相对完整标题块垂直居中。
+`AppSelectorPanel.vue` 是所有主从页面左侧选择器的统一外壳，负责 outlined 满高卡片、标题、紧凑加载态、空状态、内部滚动区和底部分页。外壳使用弱主色渐变和 10px 圆角，标题区使用淡主色横向渐变和底部分隔线。标题区不显示数量 Chip；底部分页使用 `AppPagination` 的 `compact` 模式，只保留页码和翻页按钮，避免总数和每页数量选择器挤出左栏。需要在标题区放置全选等控件时使用 `leading` 插槽，使控件相对完整标题块垂直居中。`actions` 插槽由组件内部使用 `AppActionGroup context="selector"` 包装，调用方只放选择器自身工具位，不在页面里重写标题按钮间距。
 
 `AppSelectorItem.vue` 是统一选择行，默认渲染原生 `button`；存在行尾菜单等嵌套操作时使用 `as="div"`，组件会补充 option 角色、焦点和 Enter/Space 键盘选择行为。业务名称、元数据、状态、菜单或进度通过插槽提供。
 
+`AppSelectorSummaryItem.vue` 是基于 `AppSelectorItem.vue` 的通用摘要选择行，用于“状态点 + 名称 + 副标题 + 行尾状态/操作”的常见结构。应用、设施应用以及后续同结构对象选择器应优先使用它，不要在页面内重复定义 `selector-main`、`selector-name`、`selector-meta` 或状态点样式。行尾 Chip、菜单或进度继续通过默认插槽传入。
+
 `ServerSelectorItem.vue` 在通用选择行之上固定服务器节点页的排版：名称和地址位于左侧，Agent 状态 Chip 位于右侧。服务器节点页与 `ServerSelector.vue` 必须共同使用该组件，确保防火墙、软件包更新、容器、镜像、网络和卷页面的服务器列表完全一致。
 
-服务器节点、服务器资源页、DNS 域名、任务中心操作列表、应用，以及域名证书、自签证书、密钥和设置系统证书页面必须组合这两个组件，不得各自复制面板或选择行 CSS。
+服务器节点、服务器资源页、DNS 域名、任务中心操作列表、应用，以及域名证书、自签证书、密钥和设置系统证书页面必须组合这些选择器组件，不得各自复制面板、摘要行或状态点 CSS。
 
 任务中心的操作选择行采用紧凑摘要：主行显示状态图标、任务名称和状态 Chip，次行只显示“创建时间 · 对象”弱化上下文。对象优先显示服务器名称，否则显示本地化资源类别，不得回退裸资源 ID。操作 ID、任务数量、进度等信息属于详情内容，不在选择行重复展示；任务中心筛选区上方也不额外堆放状态数量摘要。
 
@@ -50,9 +52,9 @@
 - 两列布局：`minmax(0, 1fr) auto`。
 - 内边距约 `11px 12px`。
 - `8px` 圆角。
-- 默认边框透明。
-- 悬浮使用极弱 surface 背景。
-- 选中使用 `rgba(primary, 0.06)` 背景和约 `0.26` 透明度主色边框。
+- 默认使用弱边框和弱表面渐变，不完全透明，确保列表项在深色控制台背景中可辨认。
+- 悬浮使用淡主色横向渐变并轻微右移。
+- 选中使用淡主色横向渐变、约 `0.4` 透明度主色边框和左侧 `3px` 主色状态轨。
 - 主文本约 `0.9rem`、高字重。
 - 元数据约 `0.76rem`、弱文本色。
 - 选择行只负责选择，不放编辑、删除或更多菜单；对象操作统一放在右侧详情标题区。
@@ -61,6 +63,7 @@
 
 ## 主从工作区
 
+- 主从外层统一使用 `AppMasterDetailWorkspace.vue`；左栏放 `AppSelectorPanel` 或 `ServerSelector`，右侧放详情卡、资源表格工作面或 `AppDetailPanel`。
 - 左侧为选择列表，右侧为详情。
 - 桌面左栏约 `300px` 到 `340px`。
 - 中大屏下工作区填满页面剩余高度，工作区和左右栏都设置 `min-height: 0`、隐藏外层溢出。
@@ -68,6 +71,7 @@
 - `1080px` 以下折叠为单列。
 - 未选择时右侧使用 `.empty-detail`。
 - 切换选择不应重置与当前对象无关的页面级筛选。
+- 选择器标题区只放选择器自身工具位，例如新增、更多或全选；编辑、删除、同步、保存等对象操作放在右侧详情标题区或表格行尾。
 
 ## 列表滚动
 
@@ -110,6 +114,7 @@
 
 - `web/src/components/AppSelectorPanel.vue`
 - `web/src/components/AppSelectorItem.vue`
+- `web/src/components/AppSelectorSummaryItem.vue`
 - `web/src/components/ServerSelectorItem.vue`
 - `web/src/components/ServerSelector.vue`
 - `web/src/views/servers/_shared/ServersPageContent.vue`

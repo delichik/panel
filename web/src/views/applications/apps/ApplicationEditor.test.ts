@@ -91,12 +91,12 @@ describe('ApplicationEditor', () => {
     expect(editor).toContain("fileForm.kind = 'binary'");
     expect(editor).toContain("fileForm.mode = 'single'");
     expect(editor).toContain("file.contentBase64 !== undefined");
-    expect(editor).toContain("t('applicationEditor.editTemplateFile')");
+    expect(editor).toContain('@click="editTemplateFile(file)"');
     expect(editor).toContain("t('applicationEditor.replaceBinaryFile')");
   });
 
-  it('treats folder archives as binary replacements for matching workspace prefixes', () => {
-    expect(editor).toContain("kind: 'binary'");
+  it('treats folder archives as archive replacements for matching workspace prefixes', () => {
+    expect(editor).toContain("kind: 'archive'");
     expect(editor).toContain('const replacedFiles = files.value.filter((file) => isArchivePathMatch(file.path, path));');
     expect(editor).toContain('files.value = files.value.filter((file) => !isArchivePathMatch(file.path, path));');
     expect(editor).toContain('archive.replacedFiles');

@@ -9,12 +9,17 @@
   <v-card class="app-dialog-card">
     <v-card-title class="app-dialog-title">
       <span class="app-dialog-title-text">...</span>
-      <v-btn icon="mdi-close" variant="text" ... />
+      <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" ... />
     </v-card-title>
     <v-divider />
     <v-card-text class="app-dialog-body">...</v-card-text>
     <v-divider />
-    <v-card-actions class="app-dialog-actions">...</v-card-actions>
+    <v-card-actions class="app-dialog-actions">
+      <AppActionGroup context="dialog">
+        <AppActionButton kind="plain" :label="t('common.cancel')" ... />
+        <AppActionButton kind="primary" :label="t('common.save')" ... />
+      </AppActionGroup>
+    </v-card-actions>
   </v-card>
 </v-dialog>
 ```
@@ -49,10 +54,11 @@
 
 ## 操作区
 
-- 操作按钮靠右。
-- 取消使用 `variant="text"`。
-- 保存或确认使用 `primary flat`。
-- 删除等危险确认使用 `error flat`。
+- 操作按钮靠右，并使用 `AppActionGroup context="dialog"`。
+- 取消使用 `AppActionButton kind="plain"`。
+- 保存或确认使用 `AppActionButton kind="primary"`。
+- 删除等危险确认使用 `AppActionButton kind="danger-primary"`。
+- 重置、恢复等风险确认使用 `AppActionButton kind="warning-primary"`。
 - 按钮最小宽度约 `92px`。
 - `600px` 以下按钮可纵向排列并占满整行。
 

@@ -9,9 +9,9 @@ describe('ApplicationsPage', () => {
     expect(page).toContain('applicationsApi.list');
     expect(page).not.toContain('ApplicationEditor');
     expect(page).toContain('ApplicationDetail');
+    expect(page).toContain('<AppMasterDetailWorkspace');
     expect(page).toContain('<AppSelectorPanel');
-    expect(page).toContain('<AppSelectorItem');
-    expect(page).toContain('grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr)');
+    expect(page).toContain('<AppSelectorSummaryItem');
     expect(page).toContain('<template #actions>');
     expect(page).not.toContain('class="summary-strip"');
     expect(page).not.toContain('enabledCount');

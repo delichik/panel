@@ -4,8 +4,12 @@ import { useI18n } from '@/i18n';
 import { certificatesApi } from '@/api/certificates';
 import { dnsApi } from '@/api/dns';
 import type { CertificateDto, CertificateIssueInput, CertificateScope, DnsDomainDto } from '@/types/api';
-import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppDetailPanel from '@/components/AppDetailPanel.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
+import AppSelectorSummaryItem from '@/components/AppSelectorSummaryItem.vue';
 import { usePagination } from '@/composables/usePagination';
 
 const certificates = ref<CertificateDto[]>([]);
@@ -165,7 +169,8 @@ onMounted(load);
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <div class="certificate-workspace">
+    <AppMasterDetailWorkspace>
+      <template #aside>
       <AppSelectorPanel
         :title="t('routes.domainCertificates.title')"
         :loading="loading"
@@ -179,31 +184,35 @@ onMounted(load);
         @update:page-size="pageSize = $event"
       >
         <template #actions>
-          <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="t('certificatesPage.issueCertificate')" @click="resetForm" />
+          <AppActionButton kind="tool" icon="mdi-plus" :label="t('certificatesPage.issueCertificate')" @click="resetForm" />
         </template>
-        <AppSelectorItem v-for="row in pagedCertificates" :key="row.id" :selected="row.id === selectedCertificateId" @select="selectedCertificateId = row.id">
-          <span class="selector-copy min-width-0">
-            <span class="selector-name text-truncate">{{ row.name }}</span>
-            <span class="selector-meta text-truncate">{{ row.domains.join(', ') }}</span>
-          </span>
+        <AppSelectorSummaryItem
+          v-for="row in pagedCertificates"
+          :key="row.id"
+          :selected="row.id === selectedCertificateId"
+          :title="row.name"
+          :subtitle="row.domains.join(', ')"
+          :status="false"
+          @select="selectedCertificateId = row.id"
+        >
           <v-chip :color="statusColor(row.status)" size="x-small" label variant="tonal">{{ statusLabel(row.status) }}</v-chip>
-        </AppSelectorItem>
+        </AppSelectorSummaryItem>
       </AppSelectorPanel>
+      </template>
 
-      <v-card variant="outlined" class="certificate-detail">
-        <template v-if="selectedCertificate">
-          <div class="detail-header">
+      <AppDetailPanel class="certificate-detail" :empty="!selectedCertificate" :empty-text="t('certificatesPage.noCertificates')">
+        <template v-if="selectedCertificate" #header>
             <div class="min-width-0">
               <div class="text-h6 font-weight-bold text-truncate">{{ selectedCertificate.name }}</div>
               <div class="text-body-2 text-medium-emphasis">{{ selectedCertificate.prefix }} / {{ selectedCertificate.issuer || 'acme' }}</div>
             </div>
-            <div class="detail-actions">
+            <AppActionGroup context="detail" class="app-detail-actions">
               <v-chip :color="statusColor(selectedCertificate.status)" size="small" label variant="tonal">{{ statusLabel(selectedCertificate.status) }}</v-chip>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-autorenew" :loading="renewingId === selectedCertificate.id" :disabled="selectedCertificate.status !== 'issued'" @click="renewCertificate(selectedCertificate)">{{ t('certificatesPage.renewNow') }}</v-btn>
-              <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteCertificate(selectedCertificate)">{{ t('common.delete') }}</v-btn>
-            </div>
-          </div>
-          <div class="detail-body">
+              <AppActionButton icon="mdi-autorenew" :label="t('certificatesPage.renewNow')" :loading="renewingId === selectedCertificate.id" :disabled="selectedCertificate.status !== 'issued'" @click="renewCertificate(selectedCertificate)" />
+              <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="askDeleteCertificate(selectedCertificate)" />
+            </AppActionGroup>
+        </template>
+        <template v-if="selectedCertificate" #body>
             <div class="detail-grid">
               <div><span>{{ t('certificatesPage.domains') }}</span><strong>{{ selectedCertificate.domains.join(', ') }}</strong></div>
               <div><span>{{ t('certificatesPage.variable') }}</span><strong class="font-mono">certs.{{ selectedCertificate.variableName }}</strong></div>
@@ -211,17 +220,15 @@ onMounted(load);
               <div><span>{{ t('certificatesPage.renewal') }}</span><strong>{{ t('certificatesPage.nextRenewal', { value: formatDate(selectedCertificate.nextRenewAt) }) }}</strong></div>
             </div>
             <v-alert v-if="selectedCertificate.lastError" type="error" variant="tonal" density="compact">{{ selectedCertificate.lastError }}</v-alert>
-          </div>
         </template>
-        <div v-else class="empty-detail text-medium-emphasis">{{ t('certificatesPage.noCertificates') }}</div>
-      </v-card>
-    </div>
+      </AppDetailPanel>
+    </AppMasterDetailWorkspace>
 
     <v-dialog v-model="dialog" width="620">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('certificatesPage.issueCertificateTitle') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="dialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="dialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -269,8 +276,10 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="dialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="issuing" class="text-none" @click="issueCertificate">{{ t('certificatesPage.issue') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="dialog = false" />
+            <AppActionButton kind="primary" :label="t('certificatesPage.issue')" :loading="issuing" @click="issueCertificate" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -279,7 +288,7 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('certificatesPage.deleteCertificate') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="deleteDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="deleteDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body text-body-1">
@@ -287,8 +296,10 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="deleteDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" :loading="deleting" class="text-none" @click="deleteCertificate">{{ t('common.delete') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="deleteDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('common.delete')" :loading="deleting" @click="deleteCertificate" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -296,8 +307,10 @@ onMounted(load);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
-        <v-btn v-if="lastTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton v-if="lastTaskId" kind="snackbar" :label="t('taskCenter.task')" :to="taskRoute()" />
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
@@ -310,19 +323,10 @@ onMounted(load);
   gap: 8px;
 }
 
-.certificate-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); flex: 1 1 auto; gap: 18px; min-height: 0; }
-.certificate-detail { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px; border-bottom: 1px solid var(--lp-border); }
-.detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.detail-body { display: grid; gap: 16px; align-content: start; min-height: 0; padding: 16px; overflow: auto; }
 .detail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .detail-grid > div { display: grid; gap: 4px; min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
-.detail-grid span, .selector-meta { color: var(--lp-text-muted); font-size: 0.76rem; }
+.detail-grid span { color: var(--lp-text-muted); font-size: 0.76rem; }
 .detail-grid strong { overflow-wrap: anywhere; font-size: 0.88rem; }
-.selector-copy, .selector-name, .selector-meta { display: block; min-width: 0; }
-.selector-name { font-size: 0.9rem; font-weight: 700; }
-.selector-meta { margin-top: 2px; }
-.empty-detail { display: grid; flex: 1 1 auto; place-items: center; min-height: 220px; padding: 32px; }
 
 .preview {
   border: 1px solid var(--lp-border);
@@ -330,15 +334,7 @@ onMounted(load);
   background: color-mix(in srgb, var(--lp-surface-muted), transparent 36%);
 }
 
-@media (max-width: 1080px) {
-  .certificate-workspace { grid-template-columns: 1fr; }
-}
-
 @media (max-width: 720px) {
-  .certificate-workspace { flex: none; }
-  .certificate-detail, .detail-body { overflow: visible; }
-  .detail-header { align-items: stretch; flex-direction: column; }
-  .detail-actions { justify-content: flex-start; }
   .detail-grid { grid-template-columns: 1fr; }
 
   .cert-domain-grid {

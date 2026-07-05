@@ -3,9 +3,13 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import { dnsApi } from '@/api/dns';
 import type { DnsDomainDto, DnsDomainInput, DnsRecordDto, DnsRecordInput, DnsRecordType } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppDetailPanel from '@/components/AppDetailPanel.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import AppPagination from '@/components/AppPagination.vue';
-import AppSelectorItem from '@/components/AppSelectorItem.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
+import AppSelectorSummaryItem from '@/components/AppSelectorSummaryItem.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
 
@@ -236,7 +240,8 @@ onMounted(async () => {
   <div class="page-shell dns-workspace">
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <div class="dns-grid">
+    <AppMasterDetailWorkspace>
+      <template #aside>
       <AppSelectorPanel
         class="domain-list-card"
         :title="t('domainsPage.domains')"
@@ -251,51 +256,42 @@ onMounted(async () => {
         @update:page-size="domainPageSize = $event"
       >
         <template #actions>
-          <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="t('domainsPage.addDomain')" @click="resetForm()" />
+          <AppActionButton kind="tool" icon="mdi-plus" :label="t('domainsPage.addDomain')" @click="resetForm()" />
         </template>
-          <AppSelectorItem
+          <AppSelectorSummaryItem
             v-for="domain in pagedDomains"
             :key="domain.id"
             :selected="domain.id === selectedDomainId"
+            :title="domain.name"
+            :subtitle="domain.provider"
+            :status="false"
             @select="selectedDomainId = domain.id"
-          >
-            <span class="min-width-0">
-              <span class="domain-name text-truncate">{{ domain.name }}</span>
-              <span class="domain-meta text-truncate">{{ domain.provider }}</span>
-            </span>
-          </AppSelectorItem>
+          />
       </AppSelectorPanel>
+      </template>
 
       <div class="dns-main">
-        <v-card variant="outlined" class="detail-card">
-          <template v-if="selectedDomain">
-            <div class="app-card-header">
+        <AppDetailPanel class="domain-detail-panel" :empty="!selectedDomain" :empty-text="t('domainsPage.selectDomainHint')">
+          <template v-if="selectedDomain" #header>
               <div class="min-width-0">
                 <div class="text-h6 font-weight-bold text-truncate">{{ selectedDomain.name }}</div>
                 <div class="text-caption text-medium-emphasis">{{ t('domainsPage.updatedAt') }} {{ formatDateTime(selectedDomain.updatedAt) }}</div>
               </div>
-              <div class="domain-detail-actions">
+              <AppActionGroup context="detail" class="app-detail-actions">
                 <v-chip size="small" label color="primary" variant="tonal">{{ selectedDomain.provider }}</v-chip>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="resetForm(selectedDomain)">
-                  {{ t('common.edit') }}
-                </v-btn>
-                <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteDomain(selectedDomain)">
-                  {{ t('common.delete') }}
-                </v-btn>
-              </div>
-            </div>
-            <v-divider />
-            <v-card-text class="domain-detail-grid">
+                <AppActionButton icon="mdi-pencil" :label="t('common.edit')" @click="resetForm(selectedDomain)" />
+                <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="askDeleteDomain(selectedDomain)" />
+              </AppActionGroup>
+          </template>
+          <template v-if="selectedDomain" #body>
+            <div class="domain-detail-grid">
               <div>
                 <div class="detail-label">{{ t('domainsPage.createdAt') }}</div>
                 <div>{{ formatDateTime(selectedDomain.createdAt) }}</div>
               </div>
-            </v-card-text>
+            </div>
           </template>
-          <v-card-text v-else class="empty-detail text-medium-emphasis">
-            {{ t('domainsPage.selectDomainHint') }}
-          </v-card-text>
-        </v-card>
+        </AppDetailPanel>
 
         <v-card variant="outlined" class="records-card">
           <div class="app-card-header records-header">
@@ -303,12 +299,10 @@ onMounted(async () => {
               <div class="text-subtitle-1 font-weight-bold">{{ t('domainsPage.records') }}</div>
               <div class="text-caption text-medium-emphasis">{{ selectedDomain?.name || t('domainsPage.noDomainSelected') }}</div>
             </div>
-            <div class="records-actions">
-              <v-btn icon="mdi-refresh" variant="text" :disabled="!selectedDomain" :loading="recordsLoading" :aria-label="t('common.refresh')" @click="loadRecords" />
-              <v-btn color="primary" prepend-icon="mdi-plus" class="text-none font-weight-bold" :disabled="!selectedDomain" @click="resetRecordForm()">
-                {{ t('domainsPage.addRecord') }}
-              </v-btn>
-            </div>
+            <AppActionGroup context="toolbar" class="records-actions">
+              <AppActionButton icon="mdi-refresh" :label="t('common.refresh')" :disabled="!selectedDomain" :loading="recordsLoading" @click="loadRecords" />
+              <AppActionButton kind="primary" icon="mdi-plus" :label="t('domainsPage.addRecord')" :disabled="!selectedDomain" @click="resetRecordForm()" />
+            </AppActionGroup>
           </div>
           <v-alert v-if="recordsError" type="error" variant="tonal" class="mx-4 mb-3">{{ recordsError }}</v-alert>
           <PageLoadingState v-if="recordsLoading && records.length === 0 && selectedDomain" min-height="220px" />
@@ -341,10 +335,10 @@ onMounted(async () => {
                     </v-chip>
                   </td>
                   <td class="text-right">
-                    <div class="app-table-actions">
-                      <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="resetRecordForm(record)">{{ t('common.edit') }}</v-btn>
-                      <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="askDeleteRecord(record)">{{ t('common.delete') }}</v-btn>
-                    </div>
+                    <AppActionGroup context="table">
+                      <AppActionButton icon="mdi-pencil" :label="t('common.edit')" @click="resetRecordForm(record)" />
+                      <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="askDeleteRecord(record)" />
+                    </AppActionGroup>
                   </td>
                 </tr>
               </tbody>
@@ -353,13 +347,13 @@ onMounted(async () => {
           <AppPagination v-model:page="recordsPage" v-model:page-size="recordsPageSize" :total="recordsTotal" />
         </v-card>
       </div>
-    </div>
+    </AppMasterDetailWorkspace>
 
     <v-dialog v-model="dialog" width="560">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ editing ? t('domainsPage.editDomain') : t('domainsPage.createDomain') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="dialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="dialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -388,10 +382,10 @@ onMounted(async () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="dialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="saving" class="text-none" @click="saveDomain">
-            {{ editing ? t('common.save') : t('common.create') }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="dialog = false" />
+            <AppActionButton kind="primary" :label="editing ? t('common.save') : t('common.create')" :loading="saving" @click="saveDomain" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -400,7 +394,7 @@ onMounted(async () => {
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ editingRecord ? t('domainsPage.editRecord') : t('domainsPage.createRecord') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="recordDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="recordDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -416,10 +410,10 @@ onMounted(async () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="recordDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="recordSaving" class="text-none" @click="saveRecord">
-            {{ editingRecord ? t('common.save') : t('common.create') }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="recordDialog = false" />
+            <AppActionButton kind="primary" :label="editingRecord ? t('common.save') : t('common.create')" :loading="recordSaving" @click="saveRecord" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -428,7 +422,7 @@ onMounted(async () => {
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('domainsPage.deleteDomain') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="deleteDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="deleteDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body text-body-1">
@@ -436,8 +430,10 @@ onMounted(async () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="deleteDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" :loading="deleting" class="text-none" @click="deleteDomain">{{ t('common.delete') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="deleteDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('common.delete')" :loading="deleting" @click="deleteDomain" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -446,7 +442,7 @@ onMounted(async () => {
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('domainsPage.deleteRecord') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="deleteRecordDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="deleteRecordDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body text-body-1">
@@ -454,8 +450,10 @@ onMounted(async () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="deleteRecordDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" :loading="deletingRecord" class="text-none" @click="deleteRecord">{{ t('common.delete') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="deleteRecordDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('common.delete')" :loading="deletingRecord" @click="deleteRecord" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -463,7 +461,9 @@ onMounted(async () => {
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
@@ -475,17 +475,7 @@ onMounted(async () => {
   min-height: 0;
 }
 
-.dns-grid {
-  display: grid;
-  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
-  flex: 1 1 auto;
-  gap: 18px;
-  min-height: 0;
-  align-items: stretch;
-}
-
 .domain-list-card,
-.detail-card,
 .records-card {
   min-height: 0;
   overflow: hidden;
@@ -493,19 +483,6 @@ onMounted(async () => {
 
 .records-header {
   align-items: center;
-}
-
-.domain-name,
-.domain-meta { display: block; }
-.domain-name { font-size: 0.9rem; font-weight: 700; }
-.domain-meta { margin-top: 2px; color: var(--lp-text-muted); font-size: 0.76rem; }
-
-.domain-detail-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .dns-main {
@@ -533,14 +510,6 @@ onMounted(async () => {
   min-height: 112px;
   display: grid;
   place-items: center;
-}
-
-.records-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .record-value {
@@ -572,15 +541,8 @@ onMounted(async () => {
   min-width: 0;
 }
 
-@media (max-width: 1080px) {
-  .dns-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 @media (max-width: 760px) {
-  .dns-workspace,
-  .dns-grid {
+  .dns-workspace {
     flex: none;
   }
 
@@ -589,7 +551,6 @@ onMounted(async () => {
   }
 
   .domain-list-card,
-  .detail-card,
   .records-card {
     overflow: visible;
   }
@@ -601,10 +562,6 @@ onMounted(async () => {
 }
 
 @media (max-width: 640px) {
-  .domain-detail-actions {
-    justify-content: flex-start;
-  }
-
   .domain-detail-grid,
   .record-form-grid {
     grid-template-columns: 1fr;
@@ -613,11 +570,6 @@ onMounted(async () => {
   .records-header {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .records-actions {
-    justify-content: flex-start;
-    width: 100%;
   }
 }
 </style>

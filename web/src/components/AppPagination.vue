@@ -75,8 +75,9 @@ function updatePageSize(value: number) {
   justify-content: flex-end;
   gap: 10px;
   padding: 12px 14px;
-  border-top: 1px solid var(--lp-border);
-  background: color-mix(in srgb, var(--lp-surface-container), transparent 42%);
+  border-top: 1px solid color-mix(in srgb, var(--lp-border), transparent 12%);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 28%), var(--lp-surface));
 }
 
 .app-pagination__total {
@@ -97,12 +98,12 @@ function updatePageSize(value: number) {
 .app-pagination__page {
   display: inline-grid;
   place-items: center;
-  min-width: 32px;
-  height: 32px;
+  min-width: 31px;
+  height: 31px;
   padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: var(--lp-radius-sm);
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 36%);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 38%);
   color: var(--lp-text);
   font: inherit;
   font-size: 0.875rem;
@@ -117,9 +118,9 @@ function updatePageSize(value: number) {
 }
 
 .app-pagination__page--active {
-  border-color: rgba(var(--v-theme-primary), 0.68);
-  background: transparent;
-  color: var(--lp-text);
+  border-color: rgba(var(--v-theme-primary), 0.72);
+  background: rgba(var(--v-theme-primary), 0.16);
+  color: rgb(var(--v-theme-primary));
 }
 
 .app-pagination__page:disabled {

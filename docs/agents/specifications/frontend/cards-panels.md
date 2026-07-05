@@ -41,8 +41,8 @@
 标题区右侧可放：
 
 - 数量 Chip。
-- 新建或刷新按钮。
-- 小型状态或操作集合。
+- 新建或刷新按钮，使用 `AppActionButton`。
+- 小型状态或操作集合，使用 `AppActionGroup`。
 
 `600px` 左右应改为纵向堆叠，按钮可占满宽度。
 
@@ -69,6 +69,7 @@
 
 ## 详情与空详情
 
+- 主从页面右侧标准详情优先使用 `AppDetailPanel.vue`，由组件统一 `outlined` 卡片、固定头部、内部滚动正文、首次加载和空状态。页面只提供 `header`、`body`、`empty` 插槽以及业务网格或操作按钮，不再复制 `.detail-header`、`.detail-body`、空状态和详情卡外壳 CSS。
 - 详情卡通常 `padding: 16px`。
 - 详情头部允许标题、状态与操作并列，窄屏纵向排列。
 - 详情卡使用纵向 flex 或满高布局时，头部、操作区、摘要块和错误 Alert 都是固定高度区，必须 `flex: 0 0 auto`；只有明确的详情正文滚动区吸收剩余高度。
@@ -95,6 +96,7 @@
 ## 源码依据
 
 - `web/src/styles/main.css`
+- `web/src/components/AppDetailPanel.vue`
 - `web/src/views/servers/_shared/ServersPageContent.vue`
 - `web/src/views/applications/apps/index.vue`
 - `web/src/views/dns/domains/index.vue`

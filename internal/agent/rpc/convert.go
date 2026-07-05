@@ -15,6 +15,8 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
+const runtimeManagedArchiveModeSentinel = "__panel_archive__"
+
 func pbTime(t time.Time) *timestamppb.Timestamp {
 	if t.IsZero() {
 		return nil
@@ -245,7 +247,11 @@ func pbSpec(in appruntime.Spec) *agentpb.RuntimeSpec {
 	}
 	files := make([]*agentpb.RuntimeManagedFile, 0, len(in.Files))
 	for _, item := range in.Files {
-		file := &agentpb.RuntimeManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: item.Mode}
+		mode := item.Mode
+		if strings.TrimSpace(item.Kind) == appruntime.ManagedFileKindArchive {
+			mode = runtimeManagedArchiveModeSentinel
+		}
+		file := &agentpb.RuntimeManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: mode}
 		if item.UID != nil {
 			file.Uid = wrapperspb.Int32(int32(*item.UID))
 		}
@@ -306,6 +312,10 @@ func goSpec(in *agentpb.RuntimeSpec) appruntime.Spec {
 			continue
 		}
 		file := appruntime.ManagedFile{Path: item.Path, Content: append([]byte(nil), item.Content...), Mode: item.Mode}
+		if strings.TrimSpace(item.Mode) == runtimeManagedArchiveModeSentinel {
+			file.Kind = appruntime.ManagedFileKindArchive
+			file.Mode = ""
+		}
 		if item.Uid != nil {
 			value := int(item.Uid.Value)
 			file.UID = &value

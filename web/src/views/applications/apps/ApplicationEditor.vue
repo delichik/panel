@@ -4,6 +4,8 @@ import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationPanelFileDto, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ApplicationTemplateVariableDto, ServerDto } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
 import { parseSpecYaml, toSpecYaml } from './appSpecYaml';
@@ -67,13 +69,15 @@ const yamlTextarea = ref<HTMLTextAreaElement | { $el?: HTMLElement } | null>(nul
 const yamlGutter = ref<HTMLElement | null>(null);
 const editorBody = ref<HTMLElement | { $el?: HTMLElement } | null>(null);
 const activeSectionId = ref('application-editor-general');
+const proxyRuleDialog = reactive({ open: false, index: -1 });
+const mountDialog = reactive({ open: false, index: -1 });
 let filesRequestId = 0;
 let sectionObserver: IntersectionObserver | null = null;
 let sectionScrollRoot: HTMLElement | null = null;
 let sectionScrollHandler: (() => void) | null = null;
 const fileForm = reactive({
   mode: 'single' as 'single' | 'archive',
-  intent: 'create' as 'create' | 'edit-template' | 'replace-binary',
+  intent: 'create' as 'create' | 'edit-template' | 'replace-binary' | 'replace-archive',
   path: 'config/app.conf',
   kind: 'template' as ApplicationFileKind,
   template: '',
@@ -106,6 +110,15 @@ const proxyTargetTypeOptions = computed(() => [
   { title: t('applicationEditor.targetLocal'), value: 'local' },
   { title: t('applicationEditor.targetContainer'), value: 'container' },
 ]);
+const mountTypeOptions = computed(() => [
+  { title: t('applicationEditor.dockerVolume'), value: 'volume' },
+  { title: t('applicationEditor.hostPath'), value: 'host' },
+  { title: t('applicationEditor.appFile'), value: 'file' },
+  { title: t('applicationEditor.panelFile'), value: 'panel_file' },
+  { title: t('applicationEditor.persistent'), value: 'persistent' },
+]);
+const currentProxyRule = computed(() => form.reverseProxy?.[proxyRuleDialog.index] ?? null);
+const currentMount = computed(() => specForm.mounts[mountDialog.index] ?? null);
 const editorSections = computed(() => {
   const sections = [
     { id: 'application-editor-general', title: t('applicationEditor.general'), icon: 'mdi-application-edit-outline' },
@@ -158,6 +171,8 @@ watch(editorVisible, (open) => {
   form.name = syncedName;
   specForm.name = syncedName;
   variableRows.value = Object.entries(form.variables).map(([key, value]) => ({ key, value }));
+  closeProxyRuleDialog();
+  closeMountDialog();
   error.value = '';
   activeEditorTab.value = 'visual';
   embeddedSpecMode.value = 'visual';
@@ -274,6 +289,7 @@ function addVariable() {
 
 function addMount(type: MountType = 'volume') {
   specForm.mounts.push({ type, source: defaultMountSource(type), target: '/data', readOnly: mountDefaultsReadOnly(type), uid: null, gid: null, mode: '', expanded: false });
+  openMountDialog(specForm.mounts.length - 1);
 }
 
 function defaultMountSource(type: MountType) {
@@ -323,8 +339,38 @@ function setFileMountExecutable(mount: MountForm, value: boolean | null) {
   mount.mode = value ? '0755' : '';
 }
 
+function removeMount(index: number) {
+  specForm.mounts.splice(index, 1);
+  if (mountDialog.index === index) closeMountDialog();
+  else if (mountDialog.index > index) mountDialog.index -= 1;
+}
+
+function openMountDialog(index: number) {
+  mountDialog.index = index;
+  mountDialog.open = true;
+}
+
+function closeMountDialog() {
+  mountDialog.open = false;
+  mountDialog.index = -1;
+}
+
+function mountTypeLabel(mount: MountForm) {
+  return mountTypeOptions.value.find((item) => item.value === mount.type)?.title ?? t('common.unknown');
+}
+
+function mountSourceLabel(mount: MountForm) {
+  if (mount.type === 'persistent') return mount.source || t('applicationEditor.persistent');
+  return mount.source || t('common.noData');
+}
+
+function mountTargetLabel(mount: MountForm) {
+  return mount.target || '/data';
+}
+
 function addProxyRule() {
   form.reverseProxy = [...(form.reverseProxy ?? []), { domain: '', targetType: 'local', targetPort: 80, paths: [{ path: '/', webSocket: false }] }];
+  openProxyRuleDialog(form.reverseProxy.length - 1);
 }
 
 function addProxyPath(rule: ApplicationReverseProxyRuleDto) {
@@ -333,6 +379,18 @@ function addProxyPath(rule: ApplicationReverseProxyRuleDto) {
 
 function removeProxyRule(index: number) {
   form.reverseProxy = [...(form.reverseProxy ?? [])].filter((_, itemIndex) => itemIndex !== index);
+  if (proxyRuleDialog.index === index) closeProxyRuleDialog();
+  else if (proxyRuleDialog.index > index) proxyRuleDialog.index -= 1;
+}
+
+function openProxyRuleDialog(index: number) {
+  proxyRuleDialog.index = index;
+  proxyRuleDialog.open = true;
+}
+
+function closeProxyRuleDialog() {
+  proxyRuleDialog.open = false;
+  proxyRuleDialog.index = -1;
 }
 
 function removeAt<T>(items: T[], index: number) {
@@ -576,7 +634,7 @@ async function addFile() {
     pendingArchives.value.push({
       id: `archive-${Date.now()}`,
       basePath: path,
-      kind: 'binary',
+      kind: 'archive',
       file: picked,
       replacedFiles,
     });
@@ -645,6 +703,15 @@ function replaceBinaryFile(file: EditorFile) {
   fileForm.kind = 'binary';
   fileForm.mode = 'single';
   fileForm.intent = 'replace-binary';
+  fileForm.path = file.path;
+  fileForm.file = null;
+  fileDialog.value = true;
+}
+
+function replaceArchiveFile(file: EditorFile) {
+  fileForm.kind = 'archive';
+  fileForm.mode = 'archive';
+  fileForm.intent = 'replace-archive';
   fileForm.path = file.path;
   fileForm.file = null;
   fileDialog.value = true;
@@ -860,7 +927,7 @@ async function save() {
     <v-card :class="editorCardClass">
       <v-card-title v-if="!embedded" class="app-dialog-title">
         <span class="app-dialog-title-text">{{ title }}</span>
-        <v-btn :icon="closeIcon" variant="text" :aria-label="t('common.cancel')" :disabled="saving" @click="requestClose(false)" />
+        <AppActionButton kind="tool" :icon="closeIcon" :label="t('common.cancel')" :disabled="saving" @click="requestClose(false)" />
       </v-card-title>
       <v-card-text ref="editorBody" class="app-dialog-body">
         <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
@@ -925,9 +992,11 @@ async function save() {
                 variant="outlined"
                 hide-details="auto"
               />
-              <v-btn icon="mdi-delete" variant="text" color="error" :disabled="specForm.command.length === 1" @click="removeAt(specForm.command, index)" />
+              <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" :disabled="specForm.command.length === 1" @click="removeAt(specForm.command, index)" />
             </div>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.command)">{{ t('applicationEditor.addCommandItem') }}</v-btn>
+            <AppActionGroup context="section" align="start" class="repeat-actions">
+              <AppActionButton icon="mdi-plus" :label="t('applicationEditor.addCommandItem')" @click="addStringItem(specForm.command)" />
+            </AppActionGroup>
             </div>
             <div class="editor-subsection">
             <div class="section-title">{{ t('applicationEditor.resources') }}</div>
@@ -946,18 +1015,22 @@ async function save() {
                 variant="outlined"
                 hide-details="auto"
               />
-              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.capAdd, index)" />
+              <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeAt(specForm.capAdd, index)" />
             </div>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addStringItem(specForm.capAdd)">{{ t('applicationEditor.addCapability') }}</v-btn>
+            <AppActionGroup context="section" align="start" class="repeat-actions">
+              <AppActionButton icon="mdi-plus" :label="t('applicationEditor.addCapability')" @click="addStringItem(specForm.capAdd)" />
+            </AppActionGroup>
             </div>
             <div class="editor-subsection">
             <div class="section-title">{{ t('applicationEditor.environment') }}</div>
             <div v-for="(item, index) in specForm.env" :key="index" class="repeat-row env-row">
               <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
               <v-text-field v-model="item.value" :label="t('common.value')" density="compact" variant="outlined" hide-details />
-              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.env, index)" />
+              <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeAt(specForm.env, index)" />
             </div>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addEnv">{{ t('common.addVariable') }}</v-btn>
+            <AppActionGroup context="section" align="start" class="repeat-actions">
+              <AppActionButton icon="mdi-plus" :label="t('common.addVariable')" @click="addEnv" />
+            </AppActionGroup>
             </div>
           </section>
 
@@ -982,9 +1055,9 @@ async function save() {
 
             <template v-if="specForm.networkMode === 'bridge'">
               <div class="section-title mt-2">{{ t('applicationEditor.ports') }}</div>
-              <div class="network-actions">
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addPort">{{ t('common.addPort') }}</v-btn>
-              </div>
+              <AppActionGroup context="section" align="start" class="network-actions">
+                <AppActionButton icon="mdi-plus" :label="t('common.addPort')" @click="addPort" />
+              </AppActionGroup>
               <div v-for="(port, index) in specForm.ports" :key="index" class="repeat-row ports-row">
                 <v-text-field v-model="port.label" :label="t('applicationEditor.label')" density="compact" variant="outlined" hide-details />
                 <span class="network-target-name">{{ specForm.name || t('applicationEditor.appTargetFallback') }}:</span>
@@ -992,7 +1065,7 @@ async function save() {
                 <v-icon icon="mdi-arrow-right" size="20" class="network-arrow" />
                 <span class="network-target-name">{{ t('applicationEditor.nodeTarget') }}:</span>
                 <v-text-field v-model.number="port.static" type="number" :label="t('applicationEditor.hostPort')" density="compact" variant="outlined" hide-details />
-                <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(specForm.ports, index)" />
+                <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeAt(specForm.ports, index)" />
               </div>
             </template>
 
@@ -1002,70 +1075,28 @@ async function save() {
 
           <section id="application-editor-mounts" class="editor-section">
             <div class="section-title">{{ t('applicationEditor.mounts') }}</div>
-            <div v-for="(mount, index) in specForm.mounts" :key="index" class="mount-item">
-              <div class="repeat-row mount-row">
-                <v-select v-model="mount.type" :items="[
-                  { title: t('applicationEditor.dockerVolume'), value: 'volume' },
-                  { title: t('applicationEditor.hostPath'), value: 'host' },
-                  { title: t('applicationEditor.appFile'), value: 'file' },
-                  { title: t('applicationEditor.panelFile'), value: 'panel_file' },
-                  { title: t('applicationEditor.persistent'), value: 'persistent' },
-                ]" :label="t('applicationEditor.sourceType')" density="compact" variant="outlined" hide-details @update:model-value="updateMountType(mount)" />
-                <v-combobox
-                  v-if="mount.type === 'file'"
-                  v-model="mount.source"
-                  :items="files.map(file => file.path)"
-                  :label="t('applicationEditor.workspaceFile')"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                />
-                <v-select
-                  v-else-if="mount.type === 'panel_file'"
-                  v-model="mount.source"
-                  :items="panelFiles"
-                  item-value="source"
-                  :item-title="item => `${item.name} / ${item.kind}`"
-                  :label="t('applicationEditor.panelFile')"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                />
-                <v-text-field
-                  v-else-if="mount.type === 'persistent'"
-                  v-model="mount.source"
-                  :label="t('applicationEditor.persistentSubpath')"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                />
-                <v-text-field v-else v-model="mount.source" :label="mount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')" density="compact" variant="outlined" hide-details />
-                <v-text-field v-model="mount.target" :label="t('applicationEditor.containerPath')" density="compact" variant="outlined" hide-details />
-                <v-btn :icon="mount.expanded ? 'mdi-chevron-up' : 'mdi-tune-variant'" variant="text" :aria-label="t('applicationEditor.mountOptions')" @click="mount.expanded = !mount.expanded" />
-                <v-btn icon="mdi-delete" variant="text" color="error" :aria-label="t('common.delete')" @click="removeAt(specForm.mounts, index)" />
-              </div>
-              <div v-if="mount.expanded" class="repeat-row mount-options-row">
-                <v-checkbox v-model="mount.readOnly" :label="t('applicationEditor.readOnlyMount')" density="compact" hide-details />
-                <v-text-field v-if="mountSupportsOwnership(mount.type)" v-model.number="mount.uid" type="number" min="0" :label="t('applicationEditor.mountUid')" density="compact" variant="outlined" hide-details />
-                <v-text-field v-if="mountSupportsOwnership(mount.type)" v-model.number="mount.gid" type="number" min="0" :label="t('applicationEditor.mountGid')" density="compact" variant="outlined" hide-details />
-                <v-checkbox
-                  v-if="mountSupportsExecutable(mount.type)"
-                  :model-value="fileMountExecutable(mount)"
-                  :label="t('applicationEditor.executableFile')"
-                  density="compact"
-                  hide-details
-                  @update:model-value="setFileMountExecutable(mount, $event)"
-                />
-                <v-text-field v-else-if="mount.type === 'persistent'" v-model="mount.mode" :label="t('applicationEditor.mountMode')" placeholder="0755" density="compact" variant="outlined" hide-details />
+            <div v-if="specForm.mounts.length" class="mount-list">
+              <div v-for="(mount, index) in specForm.mounts" :key="index" class="mount-list-row">
+                <button type="button" class="mount-list-row__main" @click="openMountDialog(index)">
+                  <span class="mount-type text-truncate">{{ mountTypeLabel(mount) }}</span>
+                  <span class="mount-source text-truncate">{{ mountSourceLabel(mount) }}</span>
+                  <v-icon icon="mdi-arrow-right" size="16" class="mount-arrow" />
+                  <span class="mount-target text-truncate">{{ mountTargetLabel(mount) }}</span>
+                  <v-chip v-if="mount.readOnly" size="small" variant="tonal" label>{{ t('applicationEditor.readOnly') }}</v-chip>
+                </button>
+                <AppActionGroup context="table" class="mount-list-row__actions">
+                  <AppActionButton icon="mdi-pencil" :label="t('common.edit')" @click="openMountDialog(index)" />
+                  <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeMount(index)" />
+                </AppActionGroup>
               </div>
             </div>
-            <div class="mount-actions">
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addMount('volume')">{{ t('applicationEditor.dockerVolume') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-folder" class="text-none" @click="addMount('host')">{{ t('applicationEditor.hostPath') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-file" class="text-none" @click="addMount('file')">{{ t('applicationEditor.appFile') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-shield-key" class="text-none" @click="addMount('panel_file')">{{ t('applicationEditor.panelFile') }}</v-btn>
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-database" class="text-none" @click="addMount('persistent')">{{ t('applicationEditor.persistent') }}</v-btn>
-            </div>
+            <AppActionGroup context="section" align="start" class="mount-actions">
+              <AppActionButton icon="mdi-plus" :label="t('applicationEditor.dockerVolume')" @click="addMount('volume')" />
+              <AppActionButton icon="mdi-folder" :label="t('applicationEditor.hostPath')" @click="addMount('host')" />
+              <AppActionButton icon="mdi-file" :label="t('applicationEditor.appFile')" @click="addMount('file')" />
+              <AppActionButton icon="mdi-shield-key" :label="t('applicationEditor.panelFile')" @click="addMount('panel_file')" />
+              <AppActionButton icon="mdi-database" :label="t('applicationEditor.persistent')" @click="addMount('persistent')" />
+            </AppActionGroup>
           </section>
 
             </v-window-item>
@@ -1095,7 +1126,7 @@ async function save() {
             </div>
             <v-menu>
               <template #activator="{ props: menuProps }">
-                <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none yaml-insert-action" @click="prepareEmbeddedYamlEdit">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                <AppActionButton v-bind="menuProps" icon="mdi-code-braces" :label="t('applicationEditor.insertVariable')" class="yaml-insert-action" @click="prepareEmbeddedYamlEdit" />
               </template>
               <v-list density="compact">
                 <v-list-item v-for="item in variableItems('spec')" :key="item.title" :title="item.title" @click="insertVariable('spec', item.value)" />
@@ -1140,32 +1171,24 @@ async function save() {
 
           <section id="application-editor-proxy" class="editor-section">
             <div class="section-title">{{ t('applicationEditor.reverseProxy') }}</div>
-            <div class="proxy-actions">
-              <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyRule">{{ t('common.addProxyRule') }}</v-btn>
-            </div>
-            <div v-for="(rule, ruleIndex) in form.reverseProxy" :key="ruleIndex" class="proxy-rule">
-              <div class="proxy-rule-header">
-                <v-text-field v-model="rule.domain" :label="t('applicationEditor.domain')" density="compact" variant="outlined" hide-details />
-                <v-icon icon="mdi-arrow-right" size="20" class="proxy-arrow" />
-                <v-select
-                  v-model="rule.targetType"
-                  :items="proxyTargetTypeOptions"
-                  :label="t('applicationEditor.targetDestination')"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                />
-                <span class="proxy-target-name">{{ proxyTargetName(rule) }}:</span>
-                <v-text-field v-model.number="rule.targetPort" type="number" min="1" max="65535" :label="t('applicationEditor.target')" density="compact" variant="outlined" hide-details />
-                <v-btn icon="mdi-delete" variant="text" color="error" @click="removeProxyRule(ruleIndex)" />
-              </div>
-              <div class="proxy-actions">
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addProxyPath(rule)">{{ t('common.addPath') }}</v-btn>
-              </div>
-              <div v-for="(path, pathIndex) in rule.paths" :key="pathIndex" class="repeat-row proxy-path-row">
-                <v-text-field v-model="path.path" :label="t('applicationEditor.path')" density="compact" variant="outlined" hide-details />
-                <v-checkbox v-model="path.webSocket" :label="t('applicationEditor.websocket')" density="compact" hide-details />
-                <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(rule.paths, pathIndex)" />
+            <AppActionGroup context="section" align="start" class="proxy-actions">
+              <AppActionButton icon="mdi-plus" :label="t('common.addProxyRule')" @click="addProxyRule" />
+            </AppActionGroup>
+            <div v-if="form.reverseProxy?.length" class="proxy-rule-list">
+              <div
+                v-for="(rule, ruleIndex) in form.reverseProxy"
+                :key="`proxy-row-${ruleIndex}`"
+                class="proxy-rule-list-row"
+              >
+                <button type="button" class="proxy-rule-list-row__main" @click="openProxyRuleDialog(ruleIndex)">
+                  <span class="proxy-rule-domain text-truncate">{{ rule.domain || t('applicationEditor.domain') }}</span>
+                  <span class="proxy-rule-target text-truncate">{{ proxyTargetName(rule) }}:{{ rule.targetPort || 80 }}</span>
+                  <v-chip size="small" variant="tonal" label>{{ rule.paths.length }} {{ t('common.path') }}</v-chip>
+                </button>
+                <AppActionGroup context="table" class="proxy-rule-list-row__actions">
+                  <AppActionButton icon="mdi-pencil-outline" :label="t('common.edit')" @click="openProxyRuleDialog(ruleIndex)" />
+                  <AppActionButton kind="danger" icon="mdi-delete-outline" :label="t('common.delete')" @click="removeProxyRule(ruleIndex)" />
+                </AppActionGroup>
               </div>
             </div>
           </section>
@@ -1179,18 +1202,20 @@ async function save() {
             <div v-for="(item, index) in variableRows" :key="index" class="repeat-row variable-row">
               <v-text-field v-model="item.key" :label="t('common.key')" density="compact" variant="outlined" hide-details />
               <v-text-field v-model="item.value" :label="t('common.value')" density="compact" variant="outlined" hide-details />
-              <v-btn icon="mdi-delete" variant="text" color="error" @click="removeAt(variableRows, index)" />
+              <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeAt(variableRows, index)" />
             </div>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none mb-4" @click="addVariable">{{ t('common.addVariable') }}</v-btn>
+            <AppActionGroup context="section" align="start" class="repeat-actions mb-4">
+              <AppActionButton icon="mdi-plus" :label="t('common.addVariable')" @click="addVariable" />
+            </AppActionGroup>
             </div>
 
             <div class="editor-subsection">
             <div class="files-heading">
               <div class="section-title">{{ t('applicationEditor.applicationFiles') }}</div>
-              <div class="files-actions">
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-file-code-outline" class="text-none" @click="openFileDialog('template')">{{ t('applicationEditor.addTemplateFile') }}</v-btn>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-file-upload-outline" class="text-none" @click="openFileDialog('binary')">{{ t('applicationEditor.addBinaryFile') }}</v-btn>
-              </div>
+              <AppActionGroup context="section">
+                <AppActionButton icon="mdi-file-code-outline" :label="t('applicationEditor.addTemplateFile')" @click="openFileDialog('template')" />
+                <AppActionButton icon="mdi-file-upload-outline" :label="t('applicationEditor.addBinaryFile')" @click="openFileDialog('binary')" />
+              </AppActionGroup>
             </div>
             <div v-if="pendingArchives.length" class="pending-archives">
               <div v-for="archive in pendingArchives" :key="archive.id" class="pending-archive">
@@ -1201,7 +1226,7 @@ async function save() {
                     <span v-if="archive.replacedFiles.length"> · {{ t('applicationEditor.replacesFileCount', { count: archive.replacedFiles.length }) }}</span>
                   </div>
                 </div>
-                <v-btn size="small" icon="mdi-delete" variant="text" color="error" :aria-label="t('common.delete')" @click="removeArchive(archive)" />
+                <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeArchive(archive)" />
               </div>
             </div>
             <v-table density="compact" class="mt-3">
@@ -1213,9 +1238,12 @@ async function save() {
                   <td>{{ sizeLabel(file.size) }}</td>
                   <td class="mono text-truncate hash-cell">{{ file.sha256 }}</td>
                   <td class="text-right file-row-actions">
-                    <v-btn v-if="file.kind === 'template'" size="small" icon="mdi-pencil" variant="text" :loading="loadingFileId === file.id" :aria-label="t('applicationEditor.editTemplateFile')" @click="editTemplateFile(file)" />
-                    <v-btn v-else size="small" icon="mdi-upload" variant="text" :aria-label="t('applicationEditor.replaceBinaryFile')" @click="replaceBinaryFile(file)" />
-                    <v-btn size="small" icon="mdi-delete" variant="text" color="error" :aria-label="t('common.delete')" @click="removeFile(file)" />
+                    <AppActionGroup context="table">
+                      <AppActionButton v-if="file.kind === 'template'" icon="mdi-pencil" :label="t('common.edit')" :loading="loadingFileId === file.id" @click="editTemplateFile(file)" />
+                      <AppActionButton v-else-if="file.kind === 'archive'" icon="mdi-folder-zip-outline" :label="t('applicationEditor.replaceFolderArchive')" @click="replaceArchiveFile(file)" />
+                      <AppActionButton v-else icon="mdi-upload" :label="t('applicationEditor.replaceBinaryFile')" @click="replaceBinaryFile(file)" />
+                      <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeFile(file)" />
+                    </AppActionGroup>
                   </td>
                 </tr>
                 <tr v-if="files.length === 0"><td colspan="5" class="text-center text-medium-emphasis py-4">{{ t('applicationEditor.noFiles') }}</td></tr>
@@ -1228,17 +1256,16 @@ async function save() {
         </div>
       </v-card-text>
       <v-card-actions class="app-dialog-actions">
-        <v-spacer v-if="embedded" />
-        <v-btn variant="text" class="text-none" :disabled="saving" @click="requestClose(false)">{{ t('common.cancel') }}</v-btn>
-        <v-btn color="primary" variant="flat" class="text-none" :loading="saving" :disabled="saving" @click="save()">
-          {{ form.enabled ? t('common.saveAndDeploy') : t('common.save') }}
-        </v-btn>
+        <AppActionGroup context="dialog">
+          <AppActionButton kind="plain" :label="t('common.cancel')" :disabled="saving" @click="requestClose(false)" />
+          <AppActionButton kind="primary" :label="form.enabled ? t('common.saveAndDeploy') : t('common.save')" :loading="saving" :disabled="saving" @click="save()" />
+        </AppActionGroup>
       </v-card-actions>
       <v-dialog v-model="fileDialog" width="720" :persistent="saving">
         <v-card class="app-dialog-card">
           <v-card-title class="app-dialog-title">
             <span class="app-dialog-title-text">{{ t('applicationEditor.applicationFiles') }}</span>
-            <v-btn icon="mdi-close" variant="text" :aria-label="t('common.cancel')" @click="closeFileDialog" />
+            <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="closeFileDialog" />
           </v-card-title>
           <v-card-text class="app-dialog-body">
             <div class="file-form">
@@ -1286,7 +1313,7 @@ async function save() {
               />
               <v-menu v-if="fileForm.kind === 'template'">
                 <template #activator="{ props: menuProps }">
-                  <v-btn v-bind="menuProps" variant="outlined" prepend-icon="mdi-code-braces" class="text-none file-secondary-action">{{ t('applicationEditor.insertVariable') }}</v-btn>
+                  <AppActionButton v-bind="menuProps" icon="mdi-code-braces" :label="t('applicationEditor.insertVariable')" class="file-secondary-action" />
                 </template>
                 <v-list density="compact">
                   <v-list-item v-for="item in variableItems('template')" :key="item.title" :title="item.title" @click="insertVariable('template', item.value)" />
@@ -1304,10 +1331,125 @@ async function save() {
             </div>
           </v-card-text>
           <v-card-actions class="app-dialog-actions">
-            <v-btn variant="text" class="text-none" @click="closeFileDialog">{{ t('common.cancel') }}</v-btn>
-            <v-btn color="primary" variant="flat" class="text-none" :disabled="!fileForm.path || (fileForm.mode === 'archive' && !selectedFile()) || (fileForm.mode === 'single' && fileForm.kind === 'binary' && !selectedFile())" @click="addFile">
-              {{ fileSubmitLabel }}
-            </v-btn>
+            <AppActionGroup context="dialog">
+              <AppActionButton kind="plain" :label="t('common.cancel')" @click="closeFileDialog" />
+              <AppActionButton kind="primary" :label="fileSubmitLabel" :disabled="!fileForm.path || (fileForm.mode === 'archive' && !selectedFile()) || (fileForm.mode === 'single' && fileForm.kind === 'binary' && !selectedFile())" @click="addFile" />
+            </AppActionGroup>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+      <v-dialog v-model="proxyRuleDialog.open" width="min(760px, calc(100vw - 32px))" :persistent="saving">
+        <v-card v-if="currentProxyRule" class="app-dialog-card">
+          <v-card-title class="app-dialog-title">
+            <span class="app-dialog-title-text">{{ t('applicationEditor.reverseProxy') }}</span>
+            <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="closeProxyRuleDialog" />
+          </v-card-title>
+          <v-card-text class="app-dialog-body">
+            <div class="proxy-rule-dialog-form">
+              <v-text-field v-model="currentProxyRule.domain" :label="t('applicationEditor.domain')" density="comfortable" variant="outlined" hide-details="auto" />
+              <v-select
+                v-model="currentProxyRule.targetType"
+                :items="proxyTargetTypeOptions"
+                :label="t('applicationEditor.targetDestination')"
+                density="comfortable"
+                variant="outlined"
+                hide-details="auto"
+              />
+              <v-text-field v-model.number="currentProxyRule.targetPort" type="number" min="1" max="65535" :label="t('applicationEditor.target')" density="comfortable" variant="outlined" hide-details="auto" />
+            </div>
+            <div class="proxy-dialog-paths">
+              <div class="proxy-dialog-paths__heading">
+                <div class="section-title">{{ t('applicationEditor.path') }}</div>
+                <AppActionButton icon="mdi-plus" :label="t('common.addPath')" @click="addProxyPath(currentProxyRule)" />
+              </div>
+              <div v-for="(path, pathIndex) in currentProxyRule.paths" :key="pathIndex" class="repeat-row proxy-path-row">
+                <v-text-field v-model="path.path" :label="t('applicationEditor.path')" density="compact" variant="outlined" hide-details />
+                <v-checkbox v-model="path.webSocket" :label="t('applicationEditor.websocket')" density="compact" hide-details />
+                <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeAt(currentProxyRule.paths, pathIndex)" />
+              </div>
+            </div>
+          </v-card-text>
+          <v-card-actions class="app-dialog-actions">
+            <AppActionGroup context="dialog">
+              <AppActionButton kind="plain" :label="t('common.cancel')" @click="closeProxyRuleDialog" />
+              <AppActionButton kind="primary" :label="t('common.save')" @click="closeProxyRuleDialog" />
+            </AppActionGroup>
+          </v-card-actions>
+        </v-card>
+      </v-dialog>
+      <v-dialog v-model="mountDialog.open" width="min(760px, calc(100vw - 32px))" :persistent="saving">
+        <v-card v-if="currentMount" class="app-dialog-card">
+          <v-card-title class="app-dialog-title">
+            <span class="app-dialog-title-text">{{ t('applicationEditor.mounts') }}</span>
+            <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="closeMountDialog" />
+          </v-card-title>
+          <v-card-text class="app-dialog-body">
+            <div class="mount-dialog-form">
+              <v-select
+                v-model="currentMount.type"
+                :items="mountTypeOptions"
+                :label="t('applicationEditor.sourceType')"
+                density="comfortable"
+                variant="outlined"
+                hide-details="auto"
+                @update:model-value="updateMountType(currentMount)"
+              />
+              <v-combobox
+                v-if="currentMount.type === 'file'"
+                v-model="currentMount.source"
+                :items="files.map(file => file.path)"
+                :label="t('applicationEditor.workspaceFile')"
+                density="comfortable"
+                variant="outlined"
+                hide-details="auto"
+              />
+              <v-select
+                v-else-if="currentMount.type === 'panel_file'"
+                v-model="currentMount.source"
+                :items="panelFiles"
+                item-value="source"
+                :item-title="item => `${item.name} / ${item.kind}`"
+                :label="t('applicationEditor.panelFile')"
+                density="comfortable"
+                variant="outlined"
+                hide-details="auto"
+              />
+              <v-text-field
+                v-else-if="currentMount.type === 'persistent'"
+                v-model="currentMount.source"
+                :label="t('applicationEditor.persistentSubpath')"
+                density="comfortable"
+                variant="outlined"
+                hide-details="auto"
+              />
+              <v-text-field
+                v-else
+                v-model="currentMount.source"
+                :label="currentMount.type === 'host' ? t('applicationEditor.hostAbsolutePath') : t('applicationEditor.volumeName')"
+                density="comfortable"
+                variant="outlined"
+                hide-details="auto"
+              />
+              <v-text-field v-model="currentMount.target" :label="t('applicationEditor.containerPath')" density="comfortable" variant="outlined" hide-details="auto" />
+              <v-checkbox v-model="currentMount.readOnly" :label="t('applicationEditor.readOnlyMount')" density="comfortable" hide-details class="span-all" />
+              <v-text-field v-if="mountSupportsOwnership(currentMount.type)" v-model.number="currentMount.uid" type="number" min="0" :label="t('applicationEditor.mountUid')" density="comfortable" variant="outlined" hide-details="auto" />
+              <v-text-field v-if="mountSupportsOwnership(currentMount.type)" v-model.number="currentMount.gid" type="number" min="0" :label="t('applicationEditor.mountGid')" density="comfortable" variant="outlined" hide-details="auto" />
+              <v-checkbox
+                v-if="mountSupportsExecutable(currentMount.type)"
+                :model-value="fileMountExecutable(currentMount)"
+                :label="t('applicationEditor.executableFile')"
+                density="comfortable"
+                hide-details
+                @update:model-value="setFileMountExecutable(currentMount, $event)"
+              />
+              <v-text-field v-else-if="currentMount.type === 'persistent'" v-model="currentMount.mode" :label="t('applicationEditor.mountMode')" placeholder="0755" density="comfortable" variant="outlined" hide-details="auto" />
+            </div>
+          </v-card-text>
+          <v-card-actions class="app-dialog-actions">
+            <AppActionGroup context="dialog">
+              <AppActionButton kind="plain" :label="t('common.cancel')" @click="closeMountDialog" />
+              <AppActionButton kind="primary" :label="t('common.save')" @click="closeMountDialog" />
+            </AppActionGroup>
           </v-card-actions>
         </v-card>
       </v-dialog>
@@ -1341,7 +1483,7 @@ async function save() {
   max-height: none;
   overflow: auto;
   scroll-behavior: smooth;
-  padding: 26px clamp(24px, 2.8vw, 42px) 34px !important;
+  padding: 18px !important;
 }
 .editor-card--embedded :deep(.app-dialog-actions) {
   flex: 0 0 auto;
@@ -1352,10 +1494,10 @@ async function save() {
 .editor-main { min-width: 0; }
 .editor-main--embedded {
   display: grid;
-  grid-template-columns: 208px minmax(0, 1020px);
-  gap: 26px;
+  grid-template-columns: 208px minmax(0, 1fr);
+  gap: 18px;
   align-items: start;
-  justify-content: center;
+  justify-content: stretch;
 }
 .editor-section-nav {
   position: sticky;
@@ -1405,17 +1547,17 @@ async function save() {
 }
 .editor-form-flow {
   min-width: 0;
-  max-width: 1020px;
+  width: 100%;
 }
 .editor-section { min-width: 0; }
 .editor-main--embedded .editor-form-flow {
   display: grid;
-  gap: 26px;
+  gap: 22px;
   align-content: start;
 }
 .editor-main--embedded .editor-window :deep(.v-window-item--active) {
   display: grid;
-  gap: 26px;
+  gap: 22px;
   align-content: start;
 }
 .editor-main--embedded .editor-section {
@@ -1423,27 +1565,20 @@ async function save() {
   display: grid;
   gap: 14px;
   position: relative;
-  overflow: hidden;
-  padding: 24px 24px 26px 28px;
-  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 18%);
-  border-radius: var(--lp-radius-md);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 94%), transparent 34%),
-    color-mix(in srgb, var(--lp-surface), transparent 18%);
-  box-shadow: var(--lp-shadow-sm);
-  transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease;
+  overflow: visible;
+  padding: 0 0 22px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 34%);
 }
 .editor-main--embedded .editor-section::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 2px;
-  background: color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 54%);
-  opacity: 0.5;
+  content: none;
 }
 .editor-main--embedded .editor-section:hover {
-  border-color: color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 66%);
-  box-shadow: 0 14px 34px color-mix(in srgb, var(--lp-background), transparent 46%);
+  box-shadow: none;
+}
+.editor-main--embedded .editor-form-flow > .editor-section:last-child,
+.editor-main--embedded .editor-window :deep(.v-window-item--active) > .editor-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 .editor-main--embedded .editor-section > .v-btn {
   justify-self: start;
@@ -1533,40 +1668,131 @@ async function save() {
 .editor-section > .section-title:first-child { margin-top: 0; }
 .repeat-row { display: grid; gap: 8px; align-items: center; margin-bottom: 8px; min-width: 0; }
 .editor-main--embedded .repeat-row,
-.editor-main--embedded .mount-item,
-.editor-main--embedded .proxy-rule,
+.editor-main--embedded .mount-list-row,
 .editor-main--embedded .pending-archive {
   border-color: color-mix(in srgb, var(--lp-border), transparent 20%);
 }
 .placement-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
-.ports-row { grid-template-columns: minmax(120px, 1fr) auto minmax(96px, 0.6fr) auto auto minmax(96px, 0.6fr) 40px; }
-.command-row { grid-template-columns: minmax(0, 1fr) 40px; }
-.cap-row { grid-template-columns: minmax(0, 1fr) 40px; }
-.env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
-.mount-item {
+.ports-row { grid-template-columns: minmax(120px, 1fr) auto minmax(96px, 0.6fr) auto auto minmax(96px, 0.6fr) auto; }
+.command-row { grid-template-columns: minmax(0, 1fr) auto; }
+.cap-row { grid-template-columns: minmax(0, 1fr) auto; }
+.env-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.mount-list {
   display: grid;
   gap: 8px;
-  margin-bottom: 10px;
-  padding: 12px;
-  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 32%);
-  border-radius: var(--lp-radius-sm);
-  background: color-mix(in srgb, var(--lp-surface-container), transparent 48%);
 }
-.mount-row { grid-template-columns: 150px minmax(180px, 1.2fr) minmax(150px, 0.8fr) 40px 40px; margin-bottom: 0; }
-.mount-options-row { grid-template-columns: minmax(150px, auto) repeat(3, minmax(110px, 0.5fr)); margin-bottom: 0; padding-left: 158px; }
-.mount-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
-.variable-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 40px; }
-.proxy-rule {
+.mount-list-row {
   display: grid;
-  gap: 12px;
-  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 30%);
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 28%);
   border-radius: var(--lp-radius-sm);
-  padding: 14px;
-  margin-bottom: 14px;
-  background: color-mix(in srgb, var(--lp-surface-container), transparent 48%);
+  background: color-mix(in srgb, var(--lp-surface), transparent 38%);
+}
+.mount-list-row__main {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.45fr) minmax(160px, 1fr) auto minmax(140px, 0.8fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.mount-list-row__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 42%);
+  outline-offset: 3px;
+  border-radius: var(--lp-radius-sm);
+}
+.mount-type {
+  min-width: 0;
+  font-weight: 760;
+}
+.mount-source,
+.mount-target,
+.mount-arrow {
+  min-width: 0;
+  color: var(--lp-text-muted);
+  font-size: 0.82rem;
+}
+.mount-arrow {
+  justify-self: center;
+}
+.mount-actions { margin-bottom: 12px; }
+.mount-dialog-form {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.58fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+.variable-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+.proxy-rule-list {
+  display: grid;
+  gap: 8px;
+}
+.proxy-rule-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 28%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface), transparent 38%);
+}
+.proxy-rule-list-row__main {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) minmax(120px, 0.45fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.proxy-rule-list-row__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 42%);
+  outline-offset: 3px;
+  border-radius: var(--lp-radius-sm);
+}
+.proxy-rule-domain {
+  min-width: 0;
+  font-weight: 760;
+}
+.proxy-rule-target {
+  min-width: 0;
+  color: var(--lp-text-muted);
+  font-size: 0.82rem;
+}
+.proxy-rule-dialog-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 0.7fr) minmax(140px, 0.45fr);
+  gap: 10px;
+  align-items: start;
+}
+.proxy-dialog-paths {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+.proxy-dialog-paths__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 .network-actions,
-.proxy-actions { display: flex; justify-content: flex-start; margin-bottom: 10px; }
+.proxy-actions { margin-bottom: 10px; }
 .editor-main--embedded .network-actions,
 .editor-main--embedded .proxy-actions,
 .editor-main--embedded .mount-actions {
@@ -1576,13 +1802,12 @@ async function save() {
 .network-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .network-arrow { justify-self: center; }
 .network-target-name { font-size: 0.82rem; }
-.proxy-rule-header { display: grid; grid-template-columns: minmax(220px, 1fr) auto minmax(150px, 0.65fr) auto 140px 40px; gap: 10px; align-items: center; margin-bottom: 0; }
 .proxy-arrow,
 .proxy-target-name { color: var(--lp-text-muted); white-space: nowrap; }
 .proxy-arrow { justify-self: center; }
 .proxy-target-name { font-size: 0.82rem; }
 .proxy-path-row {
-  grid-template-columns: minmax(0, 1fr) 130px 40px;
+  grid-template-columns: minmax(0, 1fr) 130px auto;
   padding: 8px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--lp-border), transparent 48%);
 }
@@ -1615,9 +1840,7 @@ async function save() {
   white-space: nowrap;
 }
 .editor-yaml-section {
-  background:
-    linear-gradient(135deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 91%), transparent 38%),
-    color-mix(in srgb, var(--lp-surface), transparent 14%) !important;
+  background: transparent !important;
 }
 .yaml-insert-action {
   justify-self: start;
@@ -1697,17 +1920,11 @@ async function save() {
   gap: 12px;
   margin-top: 10px;
 }
-.files-actions {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
 .files-heading .section-title {
   margin-top: 0;
 }
 .pending-archives { display: grid; gap: 8px; margin-top: 10px; }
-.pending-archive { display: grid; grid-template-columns: minmax(0, 1fr) 40px; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--lp-border); border-radius: var(--lp-radius-sm); background: color-mix(in srgb, var(--lp-surface), transparent 34%); }
+.pending-archive { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--lp-border); border-radius: var(--lp-radius-sm); background: color-mix(in srgb, var(--lp-surface), transparent 34%); }
 .min-width-0 { min-width: 0; }
 .editor-save-overlay :deep(.v-overlay__scrim) { opacity: 0.86; }
 .editor-save-overlay :deep(.v-overlay__content) {
@@ -1734,8 +1951,7 @@ async function save() {
 .editor-save-step {
   color: var(--lp-text-muted);
 }
-.repeat-row > .v-btn,
-.proxy-rule-header > .v-btn {
+.repeat-row > .v-btn {
   justify-self: end;
 }
 .mono, .mono-input :deep(textarea) { font-size: 0.82rem; }
@@ -1754,14 +1970,17 @@ async function save() {
   }
   .field-grid,
   .spec-mode-panel,
-  .mount-row,
-  .mount-options-row,
+  .mount-list-row,
+  .mount-list-row__main,
+  .mount-dialog-form,
   .ports-row,
   .command-row,
   .cap-row,
   .env-row,
   .variable-row,
-  .proxy-rule-header,
+  .proxy-rule-list-row,
+  .proxy-rule-list-row__main,
+  .proxy-rule-dialog-form,
   .proxy-path-row,
   .file-form,
   .placement-row {
@@ -1770,9 +1989,6 @@ async function save() {
   .spec-mode-panel {
     align-items: stretch;
     flex-direction: column;
-  }
-  .mount-options-row {
-    padding-left: 0;
   }
 }
 
@@ -1786,12 +2002,6 @@ async function save() {
   .files-heading {
     align-items: stretch;
     flex-direction: column;
-  }
-  .files-actions {
-    justify-content: flex-start;
-  }
-  .files-actions .v-btn {
-    flex: 1 1 100%;
   }
   .mount-actions .v-btn,
   .network-actions .v-btn,

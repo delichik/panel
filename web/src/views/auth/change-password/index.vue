@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/i18n';
+import AppActionButton from '@/components/AppActionButton.vue';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -103,16 +104,16 @@ async function submit() {
           {{ error || auth.error }}
         </v-alert>
 
-        <v-btn
-          color="primary"
+        <AppActionButton
+          kind="primary"
+          icon="mdi-key-change"
+          :label="t('changePassword.submit')"
           block
           size="large"
           type="submit"
           :loading="auth.loading"
-          class="text-none font-weight-bold shadow-glow"
-        >
-          {{ t('changePassword.submit') }}
-        </v-btn>
+          class="shadow-glow"
+        />
       </v-form>
     </v-card>
   </main>

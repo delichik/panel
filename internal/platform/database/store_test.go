@@ -104,6 +104,50 @@ func TestMigrateAddsLoadColumnsToLegacyMetricsSchema(t *testing.T) {
 	}
 }
 
+func TestMigrateAllowsArchiveApplicationFilesOnLegacySchema(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE application_files (
+		id TEXT PRIMARY KEY,
+		application_id TEXT NOT NULL,
+		path TEXT NOT NULL,
+		kind TEXT NOT NULL CHECK(kind IN ('binary','template')),
+		content_type TEXT NOT NULL DEFAULT '',
+		size INTEGER NOT NULL DEFAULT 0,
+		sha256 TEXT NOT NULL DEFAULT '',
+		content BLOB,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		UNIQUE(application_id, path)
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,spec_yaml,job_id,created_at,updated_at) VALUES('app-1','web','name: web\nimage: nginx\n','panel-web','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO application_files(id,application_id,path,kind,created_at,updated_at) VALUES('file-1','app-1','public','archive','now','now')`); err != nil {
+		t.Fatalf("archive kind should be accepted after migration: %v", err)
+	}
+}
+
 func TestSQLiteDSNAddsDefaultPragmasToFileURI(t *testing.T) {
 	dsn := sqliteDSN("file:custom.db?cache=shared")
 	if !strings.HasPrefix(dsn, "file:custom.db?") {

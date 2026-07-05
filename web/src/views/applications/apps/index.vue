@@ -4,10 +4,15 @@ import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
-import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
+import AppSelectorSummaryItem from '@/components/AppSelectorSummaryItem.vue';
 import { usePagination } from '@/composables/usePagination';
 import ApplicationDetail from './ApplicationDetail.vue';
+
+type SelectorStatus = 'info' | 'success' | 'warning' | 'error' | 'grey';
 
 const route = useRoute();
 const router = useRouter();
@@ -37,7 +42,7 @@ function actionLabel(action: 'deploy' | 'stop' | 'restart' | 'delete') {
   return t('common.delete');
 }
 
-function statusColor(status?: string) {
+function statusColor(status?: string): SelectorStatus {
   if (status === 'running') return 'success';
   if (status === 'pending') return 'warning';
   if (status === 'failed' || status === 'unknown') return 'error';
@@ -142,11 +147,12 @@ onMounted(load);
     <v-alert v-if="message" type="info" variant="tonal" closable @click:close="message = ''">
       <div class="task-alert">
         <span>{{ message }}</span>
-        <v-btn v-if="lastTaskId" size="small" variant="text" :to="taskRoute()" class="text-none">{{ t('taskCenter.task') }}</v-btn>
+        <AppActionButton v-if="lastTaskId" kind="plain" icon="mdi-clipboard-list-outline" :label="t('taskCenter.task')" :to="taskRoute()" />
       </div>
     </v-alert>
 
-    <div class="applications-workspace">
+    <AppMasterDetailWorkspace>
+      <template #aside>
       <AppSelectorPanel
         class="application-list"
         :title="t('applicationsPage.applications')"
@@ -161,27 +167,29 @@ onMounted(load);
         @update:page-size="pageSize = $event"
       >
         <template #actions>
-          <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="t('applicationsPage.create')" @click="createApplication" />
+          <AppActionButton kind="tool" icon="mdi-plus" :label="t('applicationsPage.create')" @click="createApplication" />
         </template>
-        <AppSelectorItem v-for="app in pagedApplications" :key="app.id" :selected="selectedId === app.id" @select="selectedId = app.id">
-          <span class="application-selector-main min-width-0">
-            <span class="status-dot" :class="statusColor(runtimeStatus(app))" />
-            <span class="application-selector-copy min-width-0">
-              <span class="application-selector-name text-truncate">{{ app.name }}</span>
-              <span class="application-selector-meta text-truncate">{{ formatDateTime(app.updatedAt) }}</span>
-            </span>
-          </span>
+        <AppSelectorSummaryItem
+          v-for="app in pagedApplications"
+          :key="app.id"
+          :selected="selectedId === app.id"
+          :title="app.name"
+          :subtitle="formatDateTime(app.updatedAt)"
+          :status="statusColor(runtimeStatus(app))"
+          @select="selectedId = app.id"
+        >
           <v-chip :color="selectorStatusColor(app)" size="x-small" variant="tonal" label>{{ selectorStatusLabel(app) }}</v-chip>
-        </AppSelectorItem>
+        </AppSelectorSummaryItem>
       </AppSelectorPanel>
+      </template>
 
       <div class="detail-column">
         <ApplicationDetail v-if="selectedApplication" :application="selectedApplication" @changed="replaceApplication">
           <template #actions>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="editApplication(selectedApplication)">{{ t('common.edit') }}</v-btn>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-sync" :loading="actionLoading === `deploy:${selectedApplication.id}`" @click="runAction('deploy', selectedApplication)">{{ t('applicationsPage.sync') }}</v-btn>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-stop-circle-outline" :disabled="!selectedApplication.enabled" :loading="actionLoading === `stop:${selectedApplication.id}`" @click="runAction('stop', selectedApplication)">{{ t('applicationsPage.disable') }}</v-btn>
-            <v-btn size="small" variant="outlined" prepend-icon="mdi-restart" :disabled="!selectedApplication.enabled" :loading="actionLoading === `restart:${selectedApplication.id}`" @click="runAction('restart', selectedApplication)">{{ t('common.restart') }}</v-btn>
+            <AppActionButton icon="mdi-pencil" :label="t('common.edit')" @click="editApplication(selectedApplication)" />
+            <AppActionButton icon="mdi-sync" :label="t('applicationsPage.sync')" :loading="actionLoading === `deploy:${selectedApplication.id}`" @click="runAction('deploy', selectedApplication)" />
+            <AppActionButton icon="mdi-stop-circle-outline" :label="t('applicationsPage.disable')" :disabled="!selectedApplication.enabled" :loading="actionLoading === `stop:${selectedApplication.id}`" @click="runAction('stop', selectedApplication)" />
+            <AppActionButton icon="mdi-restart" :label="t('common.restart')" :disabled="!selectedApplication.enabled" :loading="actionLoading === `restart:${selectedApplication.id}`" @click="runAction('restart', selectedApplication)" />
           </template>
           <template #more-actions>
             <v-list-item
@@ -197,13 +205,13 @@ onMounted(load);
           <div class="text-body-2 text-medium-emphasis">{{ t('applicationsPage.emptyHint') }}</div>
         </v-card>
       </div>
-    </div>
+    </AppMasterDetailWorkspace>
 
     <v-dialog v-model="deleteDialog" width="460">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('applicationsPage.deleteApplication') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="deleteDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="deleteDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -211,16 +219,15 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="deleteDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn
-            color="error"
-            variant="flat"
-            class="text-none"
-            :loading="deletingApplication ? actionLoading === `delete:${deletingApplication.id}` : false"
-            @click="deletingApplication && runAction('delete', deletingApplication)"
-          >
-            {{ t('common.delete') }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="deleteDialog = false" />
+            <AppActionButton
+              kind="danger-primary"
+              :label="t('common.delete')"
+              :loading="deletingApplication ? actionLoading === `delete:${deletingApplication.id}` : false"
+              @click="deletingApplication && runAction('delete', deletingApplication)"
+            />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -228,23 +235,13 @@ onMounted(load);
 </template>
 
 <style scoped>
-.applications-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
 .application-list, .detail-column { min-width: 0; min-height: 0; }
-.application-selector-main { display: flex; align-items: center; gap: 10px; min-width: 0; }
-.application-selector-copy, .application-selector-name, .application-selector-meta { display: block; min-width: 0; }
-.application-selector-name { font-size: 0.9rem; font-weight: 700; }
-.application-selector-meta { margin-top: 2px; color: var(--lp-text-muted); font-size: 0.76rem; }
+.detail-column { display: flex; min-height: 0; overflow: hidden; }
+.detail-column > * { flex: 1 1 auto; min-height: 0; }
 .min-width-0 { min-width: 0; }
 .task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.status-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 999px; background: rgb(var(--v-theme-info)); box-shadow: 0 0 0 4px rgba(var(--v-theme-info), 0.12); }
-.status-dot.success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12); }
-.status-dot.warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14); }
-.status-dot.error { background: rgb(var(--v-theme-error)); box-shadow: 0 0 0 4px rgba(var(--v-theme-error), 0.12); }
-.status-dot.grey { background: rgb(var(--v-theme-on-surface-variant)); box-shadow: 0 0 0 4px rgba(var(--v-theme-on-surface), 0.04); }
-@media (max-width: 1080px) { .applications-workspace { grid-template-columns: 1fr; overflow: auto; } }
-@media (min-width: 761px) { .detail-column { overflow: auto; } }
+@media (min-width: 761px) { .detail-column { overflow: hidden; } }
 @media (max-width: 760px) {
-  .applications-workspace { flex: none; min-height: auto; overflow: visible; }
-  .detail-column { overflow: visible; }
+  .detail-column { display: block; overflow: visible; }
 }
 </style>

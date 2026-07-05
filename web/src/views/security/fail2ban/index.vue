@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import YAML from 'yaml';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppDetailPanel from '@/components/AppDetailPanel.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import ServerSelector from '@/components/ServerSelector.vue';
 import { serversApi } from '@/api/servers';
 import { useI18n } from '@/i18n';
@@ -45,6 +48,8 @@ const fail2banTab = ref<'rules' | 'raw'>('rules');
 const fail2banYaml = ref('');
 const fail2banForm = ref<Fail2BanConfigDto>({ jails: [] });
 const fail2banRawError = ref('');
+const jailDialog = ref(false);
+const jailDialogIndex = ref(-1);
 let stateRequestId = 0;
 
 const selectedServer = computed(() => servers.value.find((server) => server.id === serverId.value) ?? null);
@@ -52,6 +57,7 @@ const hasPrivilege = computed(() => selectedServer.value?.privilege?.privileged 
 const canManageFail2Ban = computed(() => Boolean(selectedServer.value?.reachable && hasPrivilege.value));
 const presetOptions = computed(() => presetJails.map((preset) => ({ value: preset.value, title: t(preset.titleKey) })));
 const isManaged = computed(() => fail2banState.value?.managed === true);
+const currentJail = computed(() => fail2banForm.value.jails[jailDialogIndex.value] ?? null);
 
 function showMessage(text: string, color = 'success', taskId = '') {
   snackbarText.value = text;
@@ -167,11 +173,28 @@ function addJail(preset = 'ssh') {
   fail2banForm.value = { jails: [...fail2banForm.value.jails, jail] };
   ensureUniqueJailName(jail);
   syncRawFromRules();
+  openJailDialog(fail2banForm.value.jails.length - 1);
 }
 
 function removeJail(index: number) {
   fail2banForm.value = { jails: fail2banForm.value.jails.filter((_, itemIndex) => itemIndex !== index) };
+  if (jailDialogIndex.value === index) closeJailDialog();
+  else if (jailDialogIndex.value > index) jailDialogIndex.value -= 1;
   syncRawFromRules();
+}
+
+function openJailDialog(index: number) {
+  jailDialogIndex.value = index;
+  jailDialog.value = true;
+}
+
+function closeJailDialog() {
+  jailDialog.value = false;
+  jailDialogIndex.value = -1;
+}
+
+function jailSummary(jail: Fail2BanJailDto) {
+  return `${jail.port || '-'} / ${jail.maxretry ?? '-'} / ${jail.bantime || '-'}`;
 }
 
 function addOption(jail: Fail2BanJailDto) {
@@ -300,11 +323,19 @@ onMounted(async () => {
   <div class="page-shell">
     <v-alert v-if="error" type="warning" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <div class="security-workspace">
-      <ServerSelector v-model="serverId" :servers="servers" :loading="loadingServers" />
+    <AppMasterDetailWorkspace>
+      <template #aside>
+        <ServerSelector v-model="serverId" :servers="servers" :loading="loadingServers" />
+      </template>
 
-      <v-card v-if="selectedServer" variant="outlined" class="security-panel" :loading="loadingState">
-        <div class="panel-header">
+      <AppDetailPanel
+        class="security-detail"
+        :empty="!selectedServer"
+        :empty-text="t('firewallPage.selectServer')"
+        :loading="!!selectedServer && loadingState && !fail2banState"
+        loading-min-height="280px"
+      >
+        <template v-if="selectedServer" #header>
           <div class="min-width-0">
             <div class="d-flex align-center ga-2 mb-1">
               <v-icon color="primary">mdi-shield-account-outline</v-icon>
@@ -312,182 +343,198 @@ onMounted(async () => {
             </div>
             <div class="text-body-2 text-medium-emphasis">{{ selectedServer.host }}:{{ selectedServer.port }}</div>
           </div>
-          <div class="panel-actions">
+          <AppActionGroup context="detail" class="app-detail-actions">
             <v-chip :color="fail2banStatusColor()" variant="tonal" label>{{ fail2banStatusLabel() }}</v-chip>
-            <v-btn icon="mdi-refresh" variant="outlined" size="small" :aria-label="t('common.refresh')" @click="loadState" />
+            <AppActionButton icon="mdi-refresh" :label="t('common.refresh')" @click="loadState" />
+          </AppActionGroup>
+        </template>
+
+        <template v-if="selectedServer" #body>
+          <section class="security-section">
+            <div class="section-heading">
+              <div>
+                <div class="text-subtitle-1 font-weight-bold">{{ t('firewallPage.fail2banSection') }}</div>
+                <div class="text-caption text-medium-emphasis">{{ t('firewallPage.fail2banSectionSubtitle') }}</div>
+              </div>
+              <AppActionGroup context="section">
+                <AppActionButton icon="mdi-content-save" :label="t('firewallPage.fail2banSaveDraft')" :loading="savingFail2Ban" :disabled="!canManageFail2Ban" @click="saveFail2BanDraft" />
+                <AppActionButton kind="primary" icon="mdi-shield-check" :label="primaryActionLabel()" :loading="applyingFail2Ban" :disabled="!canManageFail2Ban" @click="runPrimaryAction(false)" />
+                <AppActionButton v-if="isManaged" kind="danger" icon="mdi-link-off" :label="t('firewallPage.fail2banRelease')" :loading="releasingFail2Ban" :disabled="!canManageFail2Ban" @click="releaseDialog = true" />
+              </AppActionGroup>
+            </div>
+
+            <v-alert v-if="fail2banState && !fail2banState.managed" type="info" variant="tonal" density="compact" class="mb-3">
+              {{ t('firewallPage.fail2banUnmanagedHint') }}
+            </v-alert>
+
+            <div class="info-grid">
+              <div>
+                <span>{{ t('firewallPage.status') }}</span>
+                <strong>{{ fail2banStatusLabel() }}</strong>
+              </div>
+              <div>
+                <span>{{ t('firewallPage.fail2banManaged') }}</span>
+                <strong>{{ fail2banState?.managed ? t('firewallPage.fail2banManaged') : t('firewallPage.fail2banUnmanagedShort') }}</strong>
+              </div>
+              <div>
+                <span>{{ t('firewallPage.fail2banPanelConfig') }}</span>
+                <strong>{{ fail2banState?.panelConfigPresent ? t('firewallPage.fail2banPanelConfigPresent') : t('firewallPage.fail2banPanelConfigMissing') }}</strong>
+              </div>
+              <div>
+                <span>{{ t('firewallPage.fail2banRunningJails') }}</span>
+                <strong>{{ fail2banState?.jails?.length ?? 0 }}</strong>
+              </div>
+              <div>
+                <span>{{ t('firewallPage.fail2banManagedJails') }}</span>
+                <strong>{{ fail2banForm.jails.length }}</strong>
+              </div>
+            </div>
+
+            <v-tabs v-model="fail2banTab" density="compact" class="mt-4">
+              <v-tab value="rules">{{ t('firewallPage.fail2banUiMode') }}</v-tab>
+              <v-tab value="raw">{{ t('firewallPage.fail2banRawMode') }}</v-tab>
+            </v-tabs>
+
+            <v-window v-model="fail2banTab" class="fail2ban-editor">
+              <v-window-item value="rules">
+                <div class="rules-heading">
+                  <div>
+                    <div class="text-subtitle-2 font-weight-bold">{{ t('firewallPage.fail2banRulesTitle') }}</div>
+                    <div class="text-caption text-medium-emphasis">{{ t('firewallPage.fail2banRulesSubtitle') }}</div>
+                  </div>
+                  <v-menu>
+                    <template #activator="{ props }">
+                      <AppActionButton v-bind="props" icon="mdi-plus" :label="t('firewallPage.fail2banAddJail')" />
+                    </template>
+                    <v-list density="compact">
+                      <v-list-item v-for="preset in presetJails" :key="preset.value" @click="addJail(preset.value)">
+                        <v-list-item-title>{{ t(preset.titleKey) }}</v-list-item-title>
+                      </v-list-item>
+                    </v-list>
+                  </v-menu>
+                </div>
+
+                <div v-if="!fail2banForm.jails.length" class="empty-rules">
+                  <v-icon color="medium-emphasis">mdi-shield-plus-outline</v-icon>
+                  <div class="text-body-2 text-medium-emphasis">{{ t('firewallPage.fail2banNoRules') }}</div>
+                </div>
+
+                <div v-else class="jail-list">
+                  <div v-for="(jail, index) in fail2banForm.jails" :key="`${jail.name}-${index}`" class="jail-list-row">
+                    <button type="button" class="jail-list-row__main" @click="openJailDialog(index)">
+                      <v-chip size="small" :color="jail.enabled ? 'success' : undefined" variant="tonal" label>
+                        {{ jail.enabled ? t('common.enabled') : t('common.disabled') }}
+                      </v-chip>
+                      <span class="jail-name text-truncate">{{ jail.name || t('firewallPage.fail2banRuleName') }}</span>
+                      <span class="jail-preset text-truncate">{{ presetLabel(jail.preset) }}</span>
+                      <span class="jail-summary text-truncate">{{ jailSummary(jail) }}</span>
+                    </button>
+                    <AppActionGroup context="table" class="jail-list-row__actions">
+                      <AppActionButton icon="mdi-pencil" :label="t('common.edit')" @click="openJailDialog(index)" />
+                      <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeJail(index)" />
+                    </AppActionGroup>
+                  </div>
+                </div>
+              </v-window-item>
+
+              <v-window-item value="raw">
+                <v-alert v-if="fail2banRawError" type="error" variant="tonal" density="compact" class="mb-3">{{ fail2banRawError }}</v-alert>
+                <v-textarea v-model="fail2banYaml" :label="t('firewallPage.fail2banRawYaml')" variant="outlined" density="compact" rows="18" class="raw-yaml" spellcheck="false" @blur="parseRawConfig" />
+              </v-window-item>
+            </v-window>
+          </section>
+        </template>
+      </AppDetailPanel>
+    </AppMasterDetailWorkspace>
+
+    <v-dialog v-model="jailDialog" width="min(860px, calc(100vw - 32px))">
+      <v-card v-if="currentJail" class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('firewallPage.fail2banRuleName') }}</span>
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="closeJailDialog" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body">
+          <div class="jail-dialog-form">
+            <v-switch v-model="currentJail.enabled" color="primary" :label="t('common.enabled')" density="comfortable" hide-details class="span-all" @update:model-value="syncRawFromRules" />
+            <v-select v-model="currentJail.preset" :items="presetOptions" :label="t('firewallPage.fail2banPreset')" item-title="title" item-value="value" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="applyPreset(currentJail, String($event))" />
+            <v-text-field v-model="currentJail.name" :label="t('firewallPage.fail2banRuleName')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+            <v-text-field v-model.number="currentJail.maxretry" type="number" :label="t('firewallPage.fail2banMaxRetry')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+            <v-text-field v-model="currentJail.findtime" :label="t('firewallPage.fail2banFindTime')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+            <v-text-field v-model="currentJail.bantime" :label="t('firewallPage.fail2banBanTime')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+            <v-text-field v-model="currentJail.logpath" :label="t('firewallPage.fail2banLogPath')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+            <v-combobox v-model="currentJail.ignoreip" :label="t('firewallPage.fail2banIgnoreIp')" multiple chips closable-chips variant="outlined" density="comfortable" hide-details="auto" class="span-all" @update:model-value="syncRawFromRules" />
           </div>
-        </div>
 
-        <div class="security-panel-body">
-          <PageLoadingState v-if="loadingState && !fail2banState" min-height="280px" />
+          <v-expansion-panels variant="accordion" class="advanced-panels">
+            <v-expansion-panel>
+              <v-expansion-panel-title>{{ t('firewallPage.fail2banOptions') }}</v-expansion-panel-title>
+              <v-expansion-panel-text>
+                <div class="jail-dialog-form">
+                  <v-text-field v-model="currentJail.filter" :label="t('firewallPage.fail2banFilter')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+                  <v-text-field v-model="currentJail.backend" :label="t('firewallPage.fail2banBackend')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+                  <v-text-field v-model="currentJail.port" :label="t('firewallPage.port')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+                  <v-text-field v-model="currentJail.protocol" :label="t('firewallPage.protocol')" variant="outlined" density="comfortable" hide-details="auto" @update:model-value="syncRawFromRules" />
+                  <v-text-field v-model="currentJail.action" :label="t('firewallPage.fail2banAction')" variant="outlined" density="comfortable" hide-details="auto" class="span-all" @update:model-value="syncRawFromRules" />
+                </div>
 
-          <template v-else>
-            <section class="security-section">
-              <div class="section-heading">
-                <div>
-                  <div class="text-subtitle-1 font-weight-bold">{{ t('firewallPage.fail2banSection') }}</div>
-                  <div class="text-caption text-medium-emphasis">{{ t('firewallPage.fail2banSectionSubtitle') }}</div>
-                </div>
-                <div class="panel-actions">
-                  <v-btn variant="outlined" prepend-icon="mdi-content-save" class="text-none" :loading="savingFail2Ban" :disabled="!canManageFail2Ban" @click="saveFail2BanDraft">
-                    {{ t('firewallPage.fail2banSaveDraft') }}
-                  </v-btn>
-                  <v-btn color="primary" variant="flat" prepend-icon="mdi-shield-check" class="text-none" :loading="applyingFail2Ban" :disabled="!canManageFail2Ban" @click="runPrimaryAction(false)">
-                    {{ primaryActionLabel() }}
-                  </v-btn>
-                  <v-btn v-if="isManaged" color="error" variant="text" prepend-icon="mdi-link-off" class="text-none" :loading="releasingFail2Ban" :disabled="!canManageFail2Ban" @click="releaseDialog = true">
-                    {{ t('firewallPage.fail2banRelease') }}
-                  </v-btn>
-                </div>
-              </div>
-
-              <v-alert v-if="fail2banState && !fail2banState.managed" type="info" variant="tonal" density="compact" class="mb-3">
-                {{ t('firewallPage.fail2banUnmanagedHint') }}
-              </v-alert>
-
-              <div class="status-grid">
-                <div>
-                  <span>{{ t('firewallPage.status') }}</span>
-                  <strong>{{ fail2banStatusLabel() }}</strong>
-                </div>
-                <div>
-                  <span>{{ t('firewallPage.fail2banManaged') }}</span>
-                  <strong>{{ fail2banState?.managed ? t('firewallPage.fail2banManaged') : t('firewallPage.fail2banUnmanagedShort') }}</strong>
-                </div>
-                <div>
-                  <span>{{ t('firewallPage.fail2banPanelConfig') }}</span>
-                  <strong>{{ fail2banState?.panelConfigPresent ? t('firewallPage.fail2banPanelConfigPresent') : t('firewallPage.fail2banPanelConfigMissing') }}</strong>
-                </div>
-                <div>
-                  <span>{{ t('firewallPage.fail2banRunningJails') }}</span>
-                  <strong>{{ fail2banState?.jails?.length ?? 0 }}</strong>
-                </div>
-                <div>
-                  <span>{{ t('firewallPage.fail2banManagedJails') }}</span>
-                  <strong>{{ fail2banForm.jails.length }}</strong>
-                </div>
-              </div>
-
-              <v-tabs v-model="fail2banTab" density="compact" class="mt-4">
-                <v-tab value="rules">{{ t('firewallPage.fail2banUiMode') }}</v-tab>
-                <v-tab value="raw">{{ t('firewallPage.fail2banRawMode') }}</v-tab>
-              </v-tabs>
-
-              <v-window v-model="fail2banTab" class="fail2ban-editor">
-                <v-window-item value="rules">
-                  <div class="rules-heading">
-                    <div>
-                      <div class="text-subtitle-2 font-weight-bold">{{ t('firewallPage.fail2banRulesTitle') }}</div>
-                      <div class="text-caption text-medium-emphasis">{{ t('firewallPage.fail2banRulesSubtitle') }}</div>
-                    </div>
-                    <v-menu>
-                      <template #activator="{ props }">
-                        <v-btn v-bind="props" variant="outlined" prepend-icon="mdi-plus" class="text-none">
-                          {{ t('firewallPage.fail2banAddJail') }}
-                        </v-btn>
-                      </template>
-                      <v-list density="compact">
-                        <v-list-item v-for="preset in presetJails" :key="preset.value" @click="addJail(preset.value)">
-                          <v-list-item-title>{{ t(preset.titleKey) }}</v-list-item-title>
-                        </v-list-item>
-                      </v-list>
-                    </v-menu>
+                <div class="option-list">
+                  <div class="option-list-header">
+                    <span>{{ t('firewallPage.fail2banOptions') }}</span>
+                    <AppActionButton icon="mdi-plus" :label="t('firewallPage.fail2banAddOption')" @click="addOption(currentJail)" />
                   </div>
-
-                  <div v-if="!fail2banForm.jails.length" class="empty-rules">
-                    <v-icon color="medium-emphasis">mdi-shield-plus-outline</v-icon>
-                    <div class="text-body-2 text-medium-emphasis">{{ t('firewallPage.fail2banNoRules') }}</div>
+                  <div v-for="[key, value] in optionEntries(currentJail)" :key="key" class="option-row">
+                    <v-text-field :model-value="key" :label="t('common.name')" density="compact" variant="outlined" hide-details @update:model-value="renameOption(currentJail, key, String($event))" />
+                    <v-text-field :model-value="value" :label="t('common.value')" density="compact" variant="outlined" hide-details @update:model-value="currentJail.options = { ...(currentJail.options ?? {}), [key]: String($event) }; syncRawFromRules()" />
+                    <AppActionButton kind="tool" icon="mdi-delete" :label="t('common.delete')" @click="removeOption(currentJail, key)" />
                   </div>
-
-                  <div v-else class="rule-list">
-                    <div v-for="(jail, index) in fail2banForm.jails" :key="`${jail.name}-${index}`" class="rule-panel">
-                      <div class="rule-header">
-                        <div class="min-width-0">
-                          <div class="d-flex align-center ga-2">
-                            <v-switch v-model="jail.enabled" color="primary" density="compact" hide-details @update:model-value="syncRawFromRules" />
-                            <div class="text-subtitle-2 font-weight-bold text-truncate">{{ jail.name || t('firewallPage.fail2banRuleName') }}</div>
-                            <v-chip size="small" variant="tonal" label>{{ presetLabel(jail.preset) }}</v-chip>
-                          </div>
-                        </div>
-                        <v-btn icon="mdi-delete" color="error" variant="text" size="small" :aria-label="t('common.delete')" @click="removeJail(index)" />
-                      </div>
-
-                      <div class="jail-grid">
-                        <v-select v-model="jail.preset" :items="presetOptions" :label="t('firewallPage.fail2banPreset')" item-title="title" item-value="value" variant="outlined" density="compact" @update:model-value="applyPreset(jail, String($event))" />
-                        <v-text-field v-model="jail.name" :label="t('firewallPage.fail2banRuleName')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                        <v-text-field v-model.number="jail.maxretry" type="number" :label="t('firewallPage.fail2banMaxRetry')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                        <v-text-field v-model="jail.findtime" :label="t('firewallPage.fail2banFindTime')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                        <v-text-field v-model="jail.bantime" :label="t('firewallPage.fail2banBanTime')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                        <v-text-field v-model="jail.logpath" :label="t('firewallPage.fail2banLogPath')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                        <v-combobox v-model="jail.ignoreip" :label="t('firewallPage.fail2banIgnoreIp')" multiple chips closable-chips variant="outlined" density="compact" class="span-all" @update:model-value="syncRawFromRules" />
-                      </div>
-
-                      <v-expansion-panels variant="accordion" class="advanced-panels">
-                        <v-expansion-panel>
-                          <v-expansion-panel-title>{{ t('firewallPage.fail2banOptions') }}</v-expansion-panel-title>
-                          <v-expansion-panel-text>
-                            <div class="jail-grid">
-                              <v-text-field v-model="jail.filter" :label="t('firewallPage.fail2banFilter')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                              <v-text-field v-model="jail.backend" :label="t('firewallPage.fail2banBackend')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                              <v-text-field v-model="jail.port" :label="t('firewallPage.port')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                              <v-text-field v-model="jail.protocol" :label="t('firewallPage.protocol')" variant="outlined" density="compact" @update:model-value="syncRawFromRules" />
-                              <v-text-field v-model="jail.action" :label="t('firewallPage.fail2banAction')" variant="outlined" density="compact" class="span-all" @update:model-value="syncRawFromRules" />
-                            </div>
-
-                            <div class="option-list">
-                              <div class="option-list-header">
-                                <span>{{ t('firewallPage.fail2banOptions') }}</span>
-                                <v-btn size="small" variant="outlined" prepend-icon="mdi-plus" class="text-none" @click="addOption(jail)">{{ t('firewallPage.fail2banAddOption') }}</v-btn>
-                              </div>
-                              <div v-for="[key, value] in optionEntries(jail)" :key="key" class="option-row">
-                                <v-text-field :model-value="key" :label="t('common.name')" density="compact" variant="outlined" hide-details @update:model-value="renameOption(jail, key, String($event))" />
-                                <v-text-field :model-value="value" :label="t('common.value')" density="compact" variant="outlined" hide-details @update:model-value="jail.options = { ...(jail.options ?? {}), [key]: String($event) }; syncRawFromRules()" />
-                                <v-btn icon="mdi-close" color="error" variant="text" size="small" :aria-label="t('common.delete')" @click="removeOption(jail, key)" />
-                              </div>
-                            </div>
-                          </v-expansion-panel-text>
-                        </v-expansion-panel>
-                      </v-expansion-panels>
-                    </div>
-                  </div>
-                </v-window-item>
-
-                <v-window-item value="raw">
-                  <v-alert v-if="fail2banRawError" type="error" variant="tonal" density="compact" class="mb-3">{{ fail2banRawError }}</v-alert>
-                  <v-textarea v-model="fail2banYaml" :label="t('firewallPage.fail2banRawYaml')" variant="outlined" density="compact" rows="18" class="raw-yaml" spellcheck="false" @blur="parseRawConfig" />
-                </v-window-item>
-              </v-window>
-            </section>
-          </template>
-        </div>
-      </v-card>
-
-      <v-card v-else variant="outlined" class="empty-panel">
-        <v-icon size="32" color="medium-emphasis">mdi-shield-search</v-icon>
-        <div class="text-body-2 text-medium-emphasis">{{ t('firewallPage.selectServer') }}</div>
-      </v-card>
-    </div>
-
-    <v-dialog v-model="takeoverDialog" max-width="520">
-      <v-card>
-        <v-card-title>{{ t('firewallPage.fail2banTakeoverTitle') }}</v-card-title>
-        <v-card-text>{{ t('firewallPage.fail2banTakeoverConfirm') }}</v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="takeoverDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" :loading="applyingFail2Ban" @click="runPrimaryAction(true)">{{ t('firewallPage.fail2banTakeover') }}</v-btn>
+                </div>
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="closeJailDialog" />
+            <AppActionButton kind="primary" :label="t('common.save')" @click="closeJailDialog" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="releaseDialog" max-width="520">
-      <v-card>
-        <v-card-title>{{ t('firewallPage.fail2banReleaseTitle') }}</v-card-title>
-        <v-card-text>{{ t('firewallPage.fail2banReleaseConfirm') }}</v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="releaseDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" :loading="releasingFail2Ban" @click="releaseFail2Ban">{{ t('firewallPage.fail2banRelease') }}</v-btn>
+    <v-dialog v-model="takeoverDialog" width="520">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('firewallPage.fail2banTakeoverTitle') }}</span>
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="takeoverDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body text-body-1">{{ t('firewallPage.fail2banTakeoverConfirm') }}</v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="takeoverDialog = false" />
+            <AppActionButton kind="primary" :label="t('firewallPage.fail2banTakeover')" :loading="applyingFail2Ban" @click="runPrimaryAction(true)" />
+          </AppActionGroup>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
+
+    <v-dialog v-model="releaseDialog" width="520">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('firewallPage.fail2banReleaseTitle') }}</span>
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="releaseDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body text-body-1">{{ t('firewallPage.fail2banReleaseConfirm') }}</v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="releaseDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('firewallPage.fail2banRelease')" :loading="releasingFail2Ban" @click="releaseFail2Ban" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -495,51 +542,64 @@ onMounted(async () => {
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template #actions>
-        <v-btn v-if="snackbarTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton v-if="snackbarTaskId" kind="snackbar" :label="t('taskCenter.task')" :to="taskRoute()" />
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.security-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
-.security-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px; overflow: hidden; }
-.panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
-.panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.security-panel-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: auto; padding-right: 2px; }
 .security-section { display: flex; flex-direction: column; min-width: 0; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.status-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
-.status-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
-.status-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
-.status-grid strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-size: 0.86rem; }
 .fail2ban-editor { margin-top: 12px; }
 .rules-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.rule-list { display: flex; flex-direction: column; gap: 12px; }
-.rule-panel { border: 1px solid var(--lp-border); border-radius: 8px; padding: 14px; }
-.rule-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 10px; }
-.jail-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; }
+.jail-list { display: grid; gap: 8px; }
+.jail-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 28%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface), transparent 38%);
+}
+.jail-list-row__main {
+  display: grid;
+  grid-template-columns: auto minmax(140px, 0.7fr) minmax(130px, 0.55fr) minmax(160px, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.jail-list-row__main:focus-visible {
+  outline: 2px solid color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 42%);
+  outline-offset: 3px;
+  border-radius: var(--lp-radius-sm);
+}
+.jail-name { min-width: 0; font-weight: 760; }
+.jail-preset,
+.jail-summary { min-width: 0; color: var(--lp-text-muted); font-size: 0.82rem; }
+.jail-dialog-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 12px; align-items: start; }
 .span-all { grid-column: 1 / -1; }
 .advanced-panels { margin-top: 8px; }
 .option-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .option-list-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--lp-text-muted); font-size: 0.78rem; font-weight: 650; }
 .option-row { display: grid; grid-template-columns: minmax(120px, 0.34fr) minmax(0, 1fr) auto; gap: 8px; align-items: center; }
 .raw-yaml { font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace; }
-.empty-panel, .empty-rules { min-height: 220px; display: grid; place-items: center; align-content: center; gap: 10px; padding: 32px; text-align: center; border: 1px dashed var(--lp-border); border-radius: 8px; }
-.empty-panel { min-height: 340px; border-style: solid; }
+.empty-rules { min-height: 220px; display: grid; place-items: center; align-content: center; gap: 10px; padding: 32px; text-align: center; border: 1px dashed var(--lp-border); border-radius: 8px; }
 .min-width-0 { min-width: 0; }
-@media (max-width: 1180px) {
-  .status-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-}
-@media (max-width: 1080px) {
-  .security-workspace { grid-template-columns: 1fr; }
-}
 @media (max-width: 760px) {
-  .panel-header, .section-heading, .rules-heading { flex-direction: column; align-items: stretch; }
-  .status-grid, .jail-grid, .option-row { grid-template-columns: 1fr; }
-  .security-workspace { flex: none; min-height: auto; }
-  .security-panel { overflow: visible; }
-  .security-panel-body { flex: none; overflow: visible; }
+  .section-heading, .rules-heading { flex-direction: column; align-items: stretch; }
+  .jail-list-row, .jail-list-row__main, .jail-dialog-form, .option-row { grid-template-columns: 1fr; }
 }
 </style>

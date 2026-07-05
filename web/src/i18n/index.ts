@@ -491,6 +491,7 @@ const messages = {
       noContainerUpdates: "No container updates.",
       updateBadge: "update",
       errorBadge: "error",
+      moveCard: "Move card",
       editCard: "Edit card",
       createCard: "Add card",
       allServers: "All servers",
@@ -976,6 +977,7 @@ const messages = {
       binary: "binary",
       templateKind: "template",
       binaryKind: "binary",
+      archiveKind: "archive",
       nodeTarget: "node",
       appTargetFallback: "app",
       sourcePathHost: "Host absolute path",
@@ -2077,6 +2079,7 @@ const messages = {
       noContainerUpdates: "暂无容器更新。",
       updateBadge: "可更新",
       errorBadge: "错误",
+      moveCard: "移动卡片",
       editCard: "编辑卡片",
       createCard: "新增卡片",
       allServers: "全部服务器",
@@ -2560,6 +2563,7 @@ const messages = {
       binary: "binary",
       templateKind: "模板",
       binaryKind: "二进制",
+      archiveKind: "压缩包",
       nodeTarget: "节点",
       appTargetFallback: "应用",
       sourcePathHost: "主机绝对路径",
@@ -3331,6 +3335,7 @@ export function translateApplicationFileKind(value?: string | null) {
   const key = {
     template: "applicationEditor.templateKind",
     binary: "applicationEditor.binaryKind",
+    archive: "applicationEditor.archiveKind",
   }[value];
   return key ? lookupWithFallback(key, value) : humanizeEnum(value);
 }

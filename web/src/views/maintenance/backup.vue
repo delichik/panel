@@ -3,6 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { backupsApi } from '@/api/backups';
 import { useI18n } from '@/i18n';
 import type { BackupStatusDto } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 
 const { t, formatDateTime } = useI18n();
 
@@ -143,49 +145,14 @@ onBeforeUnmount(() => {
           density="comfortable"
           hide-details="auto"
         />
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-lock-open-outline"
-          :disabled="!password"
-          :loading="loading"
-          class="text-none font-weight-bold"
-          @click="submitPassword"
-        >
-          {{ t('backupRestore.continueExport') }}
-        </v-btn>
+        <AppActionButton kind="primary" icon="mdi-lock-open-outline" :label="t('backupRestore.continueExport')" :disabled="!password" :loading="loading" @click="submitPassword" />
       </div>
 
-      <div class="maintenance-actions">
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-play"
-          :disabled="!canStart"
-          :loading="loading"
-          class="text-none font-weight-bold"
-          @click="startExport"
-        >
-          {{ t('backupRestore.startPreparedExport') }}
-        </v-btn>
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-download"
-          :disabled="!canDownload"
-          :loading="loading"
-          class="text-none font-weight-bold"
-          @click="downloadBackup"
-        >
-          {{ t('backupRestore.downloadBackup') }}
-        </v-btn>
-        <v-btn
-          variant="text"
-          :disabled="!isFinished"
-          :loading="loading"
-          class="text-none"
-          @click="exitMaintenance"
-        >
-          {{ t('backupRestore.finishExport') }}
-        </v-btn>
-      </div>
+      <AppActionGroup context="page" align="start" mobile-stack class="maintenance-actions">
+        <AppActionButton kind="primary" icon="mdi-play" :label="t('backupRestore.startPreparedExport')" :disabled="!canStart" :loading="loading" @click="startExport" />
+        <AppActionButton icon="mdi-download" :label="t('backupRestore.downloadBackup')" :disabled="!canDownload" :loading="loading" @click="downloadBackup" />
+        <AppActionButton kind="plain" icon="mdi-check-circle-outline" :label="t('backupRestore.finishExport')" :disabled="!isFinished" :loading="loading" @click="exitMaintenance" />
+      </AppActionGroup>
       <v-alert v-if="finished" type="success" variant="tonal" class="mt-4">
         {{ t(status?.restartSupported ? 'backupRestore.restartingAfterExport' : 'backupRestore.restartAfterExport') }}
       </v-alert>
@@ -248,9 +215,6 @@ onBeforeUnmount(() => {
 }
 
 .maintenance-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
   margin-top: 22px;
 }
 

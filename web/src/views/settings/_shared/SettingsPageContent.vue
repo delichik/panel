@@ -6,6 +6,8 @@ import { useAuthStore } from '@/stores/auth';
 import { useSettingsStore } from '@/stores/settings';
 import { systemApi } from '@/api/system';
 import type { LogLevel, RuntimeSettingsDto, RuntimeSettingsUpdate, SystemVersionDto, TokenExpiration } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import {
   buildRuntimeSettingsSectionUpdate,
@@ -236,7 +238,7 @@ onMounted(loadSettings);
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <v-card :loading="loading" variant="outlined" class="settings-surface pa-6">
+    <v-card :loading="loading" variant="outlined" class="settings-surface">
       <PageLoadingState v-if="loading && !settings" min-height="320px" />
 
       <template v-else-if="settings">
@@ -278,17 +280,9 @@ onMounted(loadSettings);
               persistent-hint
             />
 
-            <div class="form-actions">
-              <v-btn
-                color="primary"
-                prepend-icon="mdi-content-save"
-                :loading="sectionSaving.branding"
-                class="text-none font-weight-bold"
-                @click="saveRuntimeSettingsSection('branding')"
-              >
-                {{ t('common.save') }}
-              </v-btn>
-            </div>
+            <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+              <AppActionButton kind="primary" icon="mdi-content-save" :label="t('common.save')" :loading="sectionSaving.branding" @click="saveRuntimeSettingsSection('branding')" />
+            </AppActionGroup>
           </section>
 
           <v-divider class="my-2" />
@@ -383,17 +377,9 @@ onMounted(loadSettings);
               hide-details="auto"
             />
 
-            <div class="form-actions">
-              <v-btn
-                color="primary"
-                prepend-icon="mdi-content-save"
-                :loading="sectionSaving.runtime"
-                class="text-none font-weight-bold"
-                @click="saveRuntimeSettingsSection('runtime')"
-              >
-                {{ t('common.save') }}
-              </v-btn>
-            </div>
+            <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+              <AppActionButton kind="primary" icon="mdi-content-save" :label="t('common.save')" :loading="sectionSaving.runtime" @click="saveRuntimeSettingsSection('runtime')" />
+            </AppActionGroup>
           </section>
         </v-form>
 
@@ -449,11 +435,9 @@ onMounted(loadSettings);
             hide-details="auto"
           />
 
-          <div class="form-actions">
-            <v-btn color="primary" prepend-icon="mdi-account-check" :loading="accountSaving" class="text-none font-weight-bold" @click="saveAccount">
-              {{ t('settingsPage.saveAccount') }}
-            </v-btn>
-          </div>
+          <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+            <AppActionButton kind="primary" icon="mdi-account-check" :label="t('settingsPage.saveAccount')" :loading="accountSaving" @click="saveAccount" />
+          </AppActionGroup>
 
           <v-divider class="my-2" />
 
@@ -475,9 +459,7 @@ onMounted(loadSettings);
             <template #append>
               <v-tooltip :text="t('settingsPage.generateJwtSecret')">
                 <template #activator="{ props }">
-                  <v-btn v-bind="props" icon size="small" variant="text" class="utility-btn" @click="generateJwtSecret">
-                    <v-icon>mdi-dice-5-outline</v-icon>
-                  </v-btn>
+                  <AppActionButton v-bind="props" kind="tool" icon="mdi-dice-5-outline" :label="t('settingsPage.generateJwtSecret')" class="utility-btn" @click="generateJwtSecret" />
                 </template>
               </v-tooltip>
             </template>
@@ -487,11 +469,9 @@ onMounted(loadSettings);
             {{ settings.jwtSecretConfigured ? t('settingsPage.jwtSecretConfigured') : t('settingsPage.jwtSecretNotConfigured') }}
           </div>
 
-          <div class="form-actions">
-            <v-btn color="primary" prepend-icon="mdi-key-change" :loading="jwtSaving" class="text-none font-weight-bold" @click="saveJwtSecret">
-              {{ t('settingsPage.saveJwtSecret') }}
-            </v-btn>
-          </div>
+          <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+            <AppActionButton kind="primary" icon="mdi-key-change" :label="t('settingsPage.saveJwtSecret')" :loading="jwtSaving" @click="saveJwtSecret" />
+          </AppActionGroup>
         </v-form>
 
         <v-form v-else-if="category === 'certificates'" class="settings-form">
@@ -517,17 +497,9 @@ onMounted(loadSettings);
               hide-details="auto"
             />
 
-            <div class="form-actions">
-              <v-btn
-                color="primary"
-                prepend-icon="mdi-content-save"
-                :loading="sectionSaving.certificates"
-                class="text-none font-weight-bold"
-                @click="saveRuntimeSettingsSection('certificates')"
-              >
-                {{ t('common.save') }}
-              </v-btn>
-            </div>
+            <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+              <AppActionButton kind="primary" icon="mdi-content-save" :label="t('common.save')" :loading="sectionSaving.certificates" @click="saveRuntimeSettingsSection('certificates')" />
+            </AppActionGroup>
           </section>
         </v-form>
 
@@ -573,7 +545,9 @@ onMounted(loadSettings);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template #actions>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
@@ -584,18 +558,27 @@ onMounted(loadSettings);
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  align-self: flex-start;
+  width: min(100%, 980px) !important;
   min-height: 0;
-  overflow: auto;
+  padding: 0 !important;
+  overflow: hidden;
   background-color: var(--lp-surface) !important;
   border-color: var(--lp-border) !important;
 }
 
 .settings-header {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 24px;
+  margin: 0;
+  padding: 18px 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 12%);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 97%), transparent 62%),
+    color-mix(in srgb, var(--lp-surface-container), transparent 42%);
 }
 
 .settings-title {
@@ -609,13 +592,24 @@ onMounted(loadSettings);
 
 .settings-form {
   display: grid;
+  flex: 1 1 auto;
   max-width: 560px;
-  gap: 16px;
+  width: 100%;
+  min-height: 0;
+  gap: 18px;
+  padding: 20px;
+  align-content: start;
+  overflow: auto;
 }
 
 .settings-section {
   display: grid;
-  gap: 16px;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 46%);
 }
 
 .settings-form :deep(.v-btn-toggle) {
@@ -630,17 +624,16 @@ onMounted(loadSettings);
 
 .section-title {
   color: var(--lp-text);
-  font-size: 0.96rem;
-  font-weight: 720;
-}
-
-.form-actions {
-  display: flex;
-  justify-content: flex-start;
+  font-size: 0.92rem;
+  font-weight: 780;
 }
 
 .system-table {
+  flex: 1 1 auto;
   max-width: 860px;
+  min-height: 0;
+  padding: 20px;
+  overflow: auto;
 }
 
 .system-label {
@@ -672,8 +665,6 @@ onMounted(loadSettings);
   }
 
   .settings-form,
-  .form-actions,
-  .form-actions .v-btn,
   .settings-form :deep(.v-btn-toggle) {
     width: 100%;
   }

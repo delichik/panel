@@ -3,6 +3,8 @@ import { ref } from 'vue';
 import { backupsApi } from '@/api/backups';
 import { useI18n } from '@/i18n';
 import type { RestorePreflightDto } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 
 const { t, formatDateTime } = useI18n();
 
@@ -75,7 +77,7 @@ async function confirmRestore() {
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <v-card :loading="loading" variant="outlined" class="settings-surface pa-6">
+    <v-card :loading="loading" variant="outlined" class="settings-surface">
       <div class="settings-header">
         <div>
           <div class="text-overline text-medium-emphasis">{{ t('layout.nav.settings') }}</div>
@@ -102,20 +104,10 @@ async function confirmRestore() {
             {{ t('backupRestore.unencryptedWarning') }}
           </v-alert>
 
-          <div class="form-actions">
-            <v-btn
-              color="primary"
-              prepend-icon="mdi-play"
-              :disabled="!canStartExport"
-              class="text-none font-weight-bold"
-              @click="exportDialog = true"
-            >
-              {{ t('backupRestore.startExport') }}
-            </v-btn>
-          </div>
+          <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+            <AppActionButton kind="primary" icon="mdi-play" :label="t('backupRestore.startExport')" :disabled="!canStartExport" @click="exportDialog = true" />
+          </AppActionGroup>
         </section>
-
-        <v-divider class="my-2" />
 
         <section class="settings-section">
           <div class="section-title">{{ t('backupRestore.restoreTitle') }}</div>
@@ -140,18 +132,9 @@ async function confirmRestore() {
             hide-details="auto"
           />
 
-          <div class="form-actions">
-            <v-btn
-              variant="outlined"
-              prepend-icon="mdi-shield-search"
-              :disabled="!restoreFile"
-              :loading="loading"
-              class="text-none font-weight-bold"
-              @click="preflightRestore"
-            >
-              {{ t('backupRestore.preflight') }}
-            </v-btn>
-          </div>
+          <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+            <AppActionButton icon="mdi-shield-search" :label="t('backupRestore.preflight')" :disabled="!restoreFile" :loading="loading" @click="preflightRestore" />
+          </AppActionGroup>
 
           <v-alert v-if="restorePlan" type="info" variant="tonal">
             {{ t('backupRestore.preflightSummary', {
@@ -160,41 +143,45 @@ async function confirmRestore() {
             }) }}
           </v-alert>
 
-          <div class="form-actions">
-            <v-btn
-              color="error"
-              prepend-icon="mdi-alert"
-              :disabled="!restorePlan"
-              class="text-none font-weight-bold"
-              @click="restoreDialog = true"
-            >
-              {{ t('backupRestore.confirmRestore') }}
-            </v-btn>
-          </div>
+          <AppActionGroup context="section" align="start" mobile-stack class="form-actions">
+            <AppActionButton kind="danger" icon="mdi-alert" :label="t('backupRestore.confirmRestore')" :disabled="!restorePlan" @click="restoreDialog = true" />
+          </AppActionGroup>
         </section>
       </v-form>
     </v-card>
 
-    <v-dialog v-model="exportDialog" max-width="520">
-      <v-card>
-        <v-card-title>{{ t('backupRestore.exportConfirmTitle') }}</v-card-title>
-        <v-card-text>{{ t(encryptBackup ? 'backupRestore.exportConfirmEncrypted' : 'backupRestore.exportConfirmUnencrypted') }}</v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="exportDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" :loading="loading" @click="startExport">{{ t('common.confirm') }}</v-btn>
+    <v-dialog v-model="exportDialog" width="520">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('backupRestore.exportConfirmTitle') }}</span>
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="exportDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body text-body-1">{{ t(encryptBackup ? 'backupRestore.exportConfirmEncrypted' : 'backupRestore.exportConfirmUnencrypted') }}</v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="exportDialog = false" />
+            <AppActionButton kind="primary" :label="t('common.confirm')" :loading="loading" @click="startExport" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
 
-    <v-dialog v-model="restoreDialog" max-width="560">
-      <v-card>
-        <v-card-title>{{ t('backupRestore.restoreConfirmTitle') }}</v-card-title>
-        <v-card-text>{{ t('backupRestore.restoreConfirmMessage') }}</v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn variant="text" @click="restoreDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" :loading="loading" @click="confirmRestore">{{ t('backupRestore.confirmOverwrite') }}</v-btn>
+    <v-dialog v-model="restoreDialog" width="560">
+      <v-card class="app-dialog-card">
+        <v-card-title class="app-dialog-title">
+          <span class="app-dialog-title-text">{{ t('backupRestore.restoreConfirmTitle') }}</span>
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.cancel')" @click="restoreDialog = false" />
+        </v-card-title>
+        <v-divider />
+        <v-card-text class="app-dialog-body text-body-1">{{ t('backupRestore.restoreConfirmMessage') }}</v-card-text>
+        <v-divider />
+        <v-card-actions class="app-dialog-actions">
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="restoreDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('backupRestore.confirmOverwrite')" :loading="loading" @click="confirmRestore" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -202,7 +189,9 @@ async function confirmRestore() {
     <v-snackbar v-model="snackbar" color="success" timeout="5000">
       {{ snackbarText }}
       <template #actions>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
@@ -214,7 +203,7 @@ async function confirmRestore() {
   flex: 1 1 auto;
   flex-direction: column;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
   border-color: var(--lp-border) !important;
   background-color: var(--lp-surface) !important;
 }
@@ -222,9 +211,15 @@ async function confirmRestore() {
 .settings-header {
   display: flex;
   align-items: center;
+  flex: 0 0 auto;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 24px;
+  margin: 0;
+  padding: 18px 20px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 12%);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 97%), transparent 62%),
+    color-mix(in srgb, var(--lp-surface-container), transparent 42%);
 }
 
 .settings-title {
@@ -238,13 +233,24 @@ async function confirmRestore() {
 
 .settings-form {
   display: grid;
+  flex: 1 1 auto;
   max-width: 560px;
+  width: 100%;
+  min-height: 0;
   gap: 16px;
+  padding: 20px;
+  align-content: start;
+  overflow: auto;
 }
 
 .settings-section {
   display: grid;
-  gap: 16px;
+  gap: 14px;
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 46%);
 }
 
 .section-title {
@@ -259,14 +265,14 @@ async function confirmRestore() {
   line-height: 1.6;
 }
 
-.form-actions {
-  display: flex;
-  justify-content: flex-start;
-}
-
 @media (max-width: 720px) {
   .settings-surface {
     flex: none;
+    overflow: visible;
+  }
+
+  .settings-form {
+    min-height: auto;
     overflow: visible;
   }
 
@@ -275,9 +281,7 @@ async function confirmRestore() {
     flex-direction: column;
   }
 
-  .settings-form,
-  .form-actions,
-  .form-actions .v-btn {
+  .settings-form {
     width: 100%;
   }
 }

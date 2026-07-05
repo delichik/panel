@@ -5,6 +5,9 @@ import { useI18n } from '@/i18n';
 import { serversApi, type CredentialInput, type ServerInput } from '@/api/servers';
 import { tasksApi } from '@/api/tasks';
 import type { CredentialDto, ServerDto, TaskDto } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
@@ -512,30 +515,24 @@ onMounted(load);
     <v-alert v-if="visiblePageError" type="error" variant="tonal" density="compact">{{ visiblePageError }}</v-alert>
 
     <template v-if="activeTab === 'servers'">
-      <div class="servers-workspace">
-        <AppSelectorPanel
-          class="server-list"
-          :title="t('serversPage.registeredServers')"
-          :loading="loading"
-          :empty="servers.length === 0"
-          empty-icon="mdi-server-off"
-          :empty-text="t('serversPage.noServers')"
-          :page="serverPage"
-          :page-size="serverPageSize"
-          :total="serverTotal"
-          @update:page="serverPage = $event"
-          @update:page-size="serverPageSize = $event"
-        >
-          <template #actions>
-              <v-btn
-                color="primary"
-                icon="mdi-plus"
-                variant="flat"
-                size="small"
-                :aria-label="t('serversPage.addServer')"
-                @click="resetServerForm()"
-              />
-          </template>
+      <AppMasterDetailWorkspace>
+        <template #aside>
+          <AppSelectorPanel
+            class="server-list"
+            :title="t('serversPage.registeredServers')"
+            :loading="loading"
+            :empty="servers.length === 0"
+            empty-icon="mdi-server-off"
+            :empty-text="t('serversPage.noServers')"
+            :page="serverPage"
+            :page-size="serverPageSize"
+            :total="serverTotal"
+            @update:page="serverPage = $event"
+            @update:page-size="serverPageSize = $event"
+          >
+            <template #actions>
+              <AppActionButton kind="tool" icon="mdi-plus" :label="t('serversPage.addServer')" @click="resetServerForm()" />
+            </template>
             <ServerSelectorItem
               v-for="server in pagedServers"
               :key="server.id"
@@ -543,7 +540,8 @@ onMounted(load);
               :selected="selectedServerId === server.id"
               @select="selectedServerId = server.id"
             />
-        </AppSelectorPanel>
+          </AppSelectorPanel>
+        </template>
 
         <div class="detail-column">
           <v-card v-if="selectedServer" variant="outlined" class="detail-card">
@@ -555,22 +553,18 @@ onMounted(load);
                 </div>
                 <div class="text-body-2 text-medium-emphasis">{{ selectedServer.host }}:{{ selectedServer.port }}</div>
               </div>
-              <div class="detail-actions">
-                <v-btn
-                  size="small"
-                  color="warning"
-                  variant="outlined"
-                  prepend-icon="mdi-restart"
-                  class="text-none"
+              <AppActionGroup context="detail">
+                <AppActionButton
+                  kind="warning"
+                  icon="mdi-restart"
+                  :label="t('serversPage.restart')"
                   :loading="restarting[selectedServer.id]"
                   :disabled="!canRestart(selectedServer)"
                   @click="restartServer(selectedServer)"
-                >
-                  {{ t('serversPage.restart') }}
-                </v-btn>
-                <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" class="text-none" @click="resetServerForm(selectedServer)">{{ t('common.edit') }}</v-btn>
-                <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" class="text-none" @click="deleteServer(selectedServer)">{{ t('common.delete') }}</v-btn>
-              </div>
+                />
+                <AppActionButton icon="mdi-pencil" :label="t('common.edit')" @click="resetServerForm(selectedServer)" />
+                <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="deleteServer(selectedServer)" />
+              </AppActionGroup>
             </div>
 
             <v-alert
@@ -608,41 +602,31 @@ onMounted(load);
                 <div class="property-grid">
                   <div>
                     <span>{{ t('serversPage.agent') }}</span>
-                    <div class="ufw-actions">
+                    <AppActionGroup context="inline">
                       <v-chip :color="agentStatusForServer(selectedServer).color" size="small" variant="tonal" label>{{ agentStatusForServer(selectedServer).label }}</v-chip>
-                      <v-btn
+                      <AppActionButton
                         v-if="shouldDeployAgent(selectedServer)"
-                        size="small"
-                        color="primary"
-                        variant="outlined"
-                        prepend-icon="mdi-server-network"
-                        class="text-none"
+                        icon="mdi-server-network"
+                        :label="agentDeployActionLabel(selectedServer)"
                         :loading="agentDeploying[selectedServer.id]"
                         @click="deployAgent(selectedServer)"
-                      >
-                        {{ agentDeployActionLabel(selectedServer) }}
-                      </v-btn>
-                    </div>
+                      />
+                    </AppActionGroup>
                   </div>
                   <div><span>{{ t('serversPage.dockerHost') }}</span><strong>{{ selectedServer.dockerHost || defaultDockerHost }}</strong></div>
                   <div><span>{{ t('serversPage.distro') }}</span><v-chip :color="selectedServer.os?.supported ? 'success' : 'warning'" size="small" variant="tonal" label>{{ selectedServer.os?.prettyName || t('common.unknown') }}</v-chip></div>
                   <div>
                     <span>{{ t('serversPage.ufw') }}</span>
-                    <div class="ufw-actions">
+                    <AppActionGroup context="inline">
                       <v-chip :color="ufwStatusForServer(selectedServer).color" size="small" variant="tonal" label>{{ ufwStatusForServer(selectedServer).label }}</v-chip>
-                      <v-btn
+                      <AppActionButton
                         v-if="canInstallUFW(selectedServer)"
-                        size="small"
-                        color="primary"
-                        variant="outlined"
-                        prepend-icon="mdi-shield-plus"
-                        class="text-none"
+                        icon="mdi-shield-plus"
+                        :label="t('serversPage.installUfw')"
                         :loading="ufwInstalling[selectedServer.id]"
                         @click.stop="installUFW(selectedServer)"
-                      >
-                        {{ t('serversPage.installUfw') }}
-                      </v-btn>
-                    </div>
+                      />
+                    </AppActionGroup>
                   </div>
                   <div><span>{{ t('serversPage.kernelHost') }}</span><strong>{{ traitValue(selectedServer, 'sys.hostname') }}</strong></div>
                   <div><span>{{ t('serversPage.loadAverage') }}</span><strong>{{ selectedServer.loadAverage || t('common.notAvailable') }}</strong></div>
@@ -703,22 +687,14 @@ onMounted(load);
             <div class="text-body-2 text-medium-emphasis">{{ t('serversPage.selectServerHint') }}</div>
           </v-card>
         </div>
-      </div>
+      </AppMasterDetailWorkspace>
     </template>
 
     <PageLoadingState v-else-if="loading && credentialRows.length === 0" min-height="320px" />
 
     <v-card v-else variant="outlined" class="credential-table-card">
       <div class="app-card-header">
-        <v-btn
-          color="primary"
-          prepend-icon="mdi-plus"
-          variant="flat"
-          class="text-none font-weight-bold action-btn"
-          @click="resetCredentialForm()"
-        >
-          {{ t('serversPage.addCredential') }}
-        </v-btn>
+        <AppActionButton kind="primary" icon="mdi-plus" :label="t('serversPage.addCredential')" size="small" class="action-btn" @click="resetCredentialForm()" />
       </div>
       <div class="credential-table-wrap">
         <v-table class="text-left">
@@ -739,10 +715,10 @@ onMounted(load);
               <td>{{ row.username }}</td>
               <td><v-chip size="small" label color="secondary" variant="tonal">{{ row.type }}</v-chip></td>
               <td class="text-right">
-                <div class="app-table-actions">
-                  <v-btn size="small" variant="outlined" prepend-icon="mdi-pencil" @click="editCredential(row)">{{ t('common.edit') }}</v-btn>
-                  <v-btn size="small" color="error" variant="outlined" prepend-icon="mdi-delete" @click="deleteCredential(row)">{{ t('common.delete') }}</v-btn>
-                </div>
+                <AppActionGroup context="table">
+                  <AppActionButton icon="mdi-pencil" :label="t('common.edit')" @click="editCredential(row)" />
+                  <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="deleteCredential(row)" />
+                </AppActionGroup>
               </td>
             </tr>
           </tbody>
@@ -755,14 +731,14 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ editing ? t('serversPage.editServer') : t('serversPage.createServer') }}</span>
-          <v-btn icon="mdi-close" variant="text" :disabled="serverSaving" @click="serverDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" :disabled="serverSaving" @click="serverDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
           <v-form :disabled="serverSaving" @submit.prevent="saveServer">
             <v-alert v-if="credentialRows.length === 0" type="info" variant="tonal" density="compact" class="credential-required-alert mb-3">
               <span>{{ t('serversPage.credentialRequired') }}</span>
-              <v-btn size="small" variant="text" class="text-none" @click="resetCredentialForm">{{ t('serversPage.addCredential') }}</v-btn>
+              <AppActionButton kind="plain" :label="t('serversPage.addCredential')" @click="resetCredentialForm" />
             </v-alert>
             <div class="form-grid">
               <v-text-field v-model="serverForm.name" :label="t('serversPage.name')" variant="outlined" density="comfortable" />
@@ -815,15 +791,17 @@ onMounted(load);
             <v-alert v-if="creatingServerTaskId" type="info" variant="tonal" density="compact" class="mt-3">
               <div class="server-task-alert">
                 <span>{{ t('serversPage.serverInfoTaskRunning') }}</span>
-                <v-btn size="small" variant="text" class="text-none" :to="taskRoute(creatingServerTaskId)">{{ t('taskCenter.task') }}</v-btn>
+                <AppActionButton kind="plain" icon="mdi-clipboard-list-outline" :label="t('taskCenter.task')" :to="taskRoute(creatingServerTaskId)" />
               </div>
             </v-alert>
           </v-form>
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" :disabled="serverSaving" @click="serverDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" :loading="serverSaving" :disabled="serverCredentialMissing || serverDockerHostMissing" @click="saveServer">{{ editing ? t('common.save') : t('common.create') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" :disabled="serverSaving" @click="serverDialog = false" />
+            <AppActionButton kind="primary" :label="editing ? t('common.save') : t('common.create')" :loading="serverSaving" :disabled="serverCredentialMissing || serverDockerHostMissing" @click="saveServer" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -832,7 +810,7 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ editingCredential ? t('serversPage.editCredential') : t('serversPage.createCredential') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="credentialDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="credentialDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -862,8 +840,10 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="credentialDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" @click="saveCredential">{{ editingCredential ? t('common.save') : t('common.create') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="credentialDialog = false" />
+            <AppActionButton kind="primary" :label="editingCredential ? t('common.save') : t('common.create')" @click="saveCredential" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -872,14 +852,16 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ confirmTitle }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="confirmDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="confirmDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body text-body-1">{{ confirmMessage }}</v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="confirmDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" class="text-none" :loading="confirmLoading" @click="executeConfirm">{{ t('common.confirm') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="confirmDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('common.confirm')" :loading="confirmLoading" @click="executeConfirm" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -887,35 +869,34 @@ onMounted(load);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template #actions>
-        <v-btn v-if="snackbarTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton v-if="snackbarTaskId" kind="snackbar" :label="t('taskCenter.task')" :to="taskRoute()" />
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.servers-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
 .server-list, .detail-column { min-width: 0; min-height: 0; }
 .status-dot { flex: 0 0 auto; width: 9px; height: 9px; border-radius: 999px; background: rgb(var(--v-theme-info)); box-shadow: 0 0 0 4px rgba(var(--v-theme-info), 0.12); }
 .status-dot.success { background: rgb(var(--v-theme-success)); box-shadow: 0 0 0 4px rgba(var(--v-theme-success), 0.12); }
 .status-dot.warning { background: rgb(var(--v-theme-warning)); box-shadow: 0 0 0 4px rgba(var(--v-theme-warning), 0.14); }
 .detail-column { display: flex; }
-.detail-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; padding: 16px; overflow: hidden; }
-.detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
-.detail-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.metric-tile { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
+.detail-card { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; padding: 0; overflow: hidden; }
+.detail-header { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 14px; margin: 0; padding: 16px 18px; border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 14%); background: color-mix(in srgb, var(--lp-surface-container), transparent 46%); }
+.metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; padding: 16px 18px 0; }
+.metric-tile { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 48%); }
 .server-detail-alert { flex: 0 0 auto; align-self: stretch; max-width: 100%; min-height: 0; }
 .server-detail-alert :deep(.v-alert__content) { min-width: 0; overflow-wrap: anywhere; line-height: 1.35; }
-.detail-sections { display: grid; gap: 18px; align-content: start; grid-auto-rows: max-content; min-height: 0; overflow: auto; }
+.detail-sections { display: grid; gap: 18px; align-content: start; grid-auto-rows: max-content; min-height: 0; padding: 16px 18px 18px; overflow: auto; }
 .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.property-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
+.property-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--lp-border), transparent 14%); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 58%); }
 .property-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
 .property-grid strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-size: 0.86rem; }
-.ufw-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; flex-wrap: wrap; min-width: 0; }
 .network-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.network-card { min-width: 0; padding: 12px; border: 1px solid var(--lp-border); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 28%); }
+.network-card { min-width: 0; padding: 12px; border: 1px solid color-mix(in srgb, var(--lp-border), transparent 14%); border-radius: 8px; background: color-mix(in srgb, var(--lp-surface-container), transparent 58%); }
 .network-card-title { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
 .network-addresses { display: grid; gap: 7px; }
 .network-address { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -931,11 +912,10 @@ onMounted(load);
 .font-tabular { font-variant-numeric: tabular-nums; }
 .min-width-0 { min-width: 0; }
 @media (min-width: 761px) { .detail-column { min-height: 0; overflow: auto; } }
-@media (max-width: 1080px) { .servers-workspace { grid-template-columns: 1fr; } }
 @media (max-width: 760px) {
   .metric-grid, .property-grid, .network-grid, .form-grid { grid-template-columns: 1fr; max-width: none; }
   .detail-header, .server-task-alert { flex-direction: column; align-items: stretch; }
-  .servers-workspace, .detail-card { flex: none; min-height: auto; }
+  .detail-card { flex: none; min-height: auto; }
   .detail-card, .credential-table-card { overflow: visible; }
   .detail-sections, .credential-table-wrap { overflow: visible; }
   .detail-column { display: block; }

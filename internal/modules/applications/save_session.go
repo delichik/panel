@@ -112,8 +112,8 @@ func (s *Service) UploadSaveSessionArchive(ctx context.Context, sessionID string
 		return nil, err
 	}
 	kind := strings.TrimSpace(in.Kind)
-	if kind != "binary" && kind != "template" {
-		return nil, panelerr.Validation("application_file_kind_invalid", "file kind must be binary or template")
+	if kind != "" && kind != ApplicationFileKindBinary && kind != ApplicationFileKindArchive {
+		return nil, panelerr.Validation("application_file_kind_invalid", "archive upload kind must be binary or archive")
 	}
 	if len(in.Content) == 0 {
 		return nil, panelerr.Validation("application_file_content_invalid", "file content is required")
@@ -122,23 +122,17 @@ func (s *Service) UploadSaveSessionArchive(ctx context.Context, sessionID string
 	if err != nil {
 		return nil, err
 	}
-	items, err := extractApplicationFileArchive(bytes.NewReader(in.Content), int64(len(in.Content)), in.FileName)
+	if basePath == "" {
+		return nil, panelerr.Validation("application_file_path_invalid", "archive path is required")
+	}
+	if _, err := extractApplicationFileArchive(bytes.NewReader(in.Content), int64(len(in.Content)), in.FileName); err != nil {
+		return nil, err
+	}
+	staged, err := s.stageFileBytes(session, basePath, ApplicationFileKindArchive, strings.TrimSpace(in.FileName), in.Content, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
-	files := make([]ApplicationFile, 0, len(items))
-	for _, item := range items {
-		targetPath := item.Name
-		if basePath != "" {
-			targetPath = path.Join(basePath, item.Name)
-		}
-		staged, err := s.stageFileBytes(session, targetPath, kind, "", item.Content, time.Now().UTC())
-		if err != nil {
-			return nil, err
-		}
-		files = append(files, staged.applicationFile(nil))
-	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	files := []ApplicationFile{staged.applicationFile(nil)}
 	_ = ctx
 	return files, nil
 }
@@ -193,7 +187,7 @@ func decodeApplicationFileInput(in FileSaveInput) ([]byte, error) {
 		return nil, err
 	}
 	kind := strings.TrimSpace(in.Kind)
-	if kind != "binary" && kind != "template" {
+	if kind != ApplicationFileKindBinary && kind != ApplicationFileKindTemplate {
 		return nil, panelerr.Validation("application_file_kind_invalid", "file kind must be binary or template")
 	}
 	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(in.ContentBase64))
@@ -236,8 +230,8 @@ func (s *Service) stageFileBytes(session *saveSession, targetPath, kind, content
 		return nil, err
 	}
 	kind = strings.TrimSpace(kind)
-	if kind != "binary" && kind != "template" {
-		return nil, panelerr.Validation("application_file_kind_invalid", "file kind must be binary or template")
+	if kind != ApplicationFileKindBinary && kind != ApplicationFileKindTemplate && kind != ApplicationFileKindArchive {
+		return nil, panelerr.Validation("application_file_kind_invalid", "file kind must be binary, template, or archive")
 	}
 	sum := sha256.Sum256(content)
 	now := time.Now().UTC()
@@ -415,7 +409,10 @@ func extractApplicationFileArchive(reader io.ReaderAt, size int64, filename stri
 func extractApplicationZip(reader *zip.Reader) ([]archivedApplicationFile, error) {
 	out := []archivedApplicationFile{}
 	for _, file := range reader.File {
-		name := cleanApplicationArchivePath(file.Name)
+		name, ok := cleanApplicationArchivePath(file.Name)
+		if !ok {
+			return nil, panelerr.Validation("application_file_archive_invalid", "application file archive is invalid")
+		}
 		if name == "" || file.FileInfo().IsDir() {
 			continue
 		}
@@ -449,7 +446,10 @@ func extractApplicationTar(reader *tar.Reader) ([]archivedApplicationFile, error
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 			continue
 		}
-		name := cleanApplicationArchivePath(header.Name)
+		name, ok := cleanApplicationArchivePath(header.Name)
+		if !ok {
+			return nil, panelerr.Validation("application_file_archive_invalid", "application file archive is invalid")
+		}
 		if name == "" {
 			continue
 		}
@@ -470,14 +470,14 @@ func nonEmptyApplicationArchive(files []archivedApplicationFile) ([]archivedAppl
 	return files, nil
 }
 
-func cleanApplicationArchivePath(value string) string {
+func cleanApplicationArchivePath(value string) (string, bool) {
 	value = strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
 	value = strings.TrimPrefix(value, "/")
 	value = path.Clean(value)
 	if value == "." || strings.HasPrefix(value, "../") || value == ".." {
-		return ""
+		return "", false
 	}
-	return value
+	return value, true
 }
 
 func normalizeApplicationArchiveBasePath(value string) (string, error) {

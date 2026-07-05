@@ -738,7 +738,8 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			if found {
 				drifted = drifted ||
 					container.Labels["panel.application.generation"] != strconv.Itoa(app.Generation) ||
-					container.Labels["panel.application.spec.hash"] != app.SpecHash
+					container.Labels["panel.application.spec.hash"] != app.SpecHash ||
+					container.Labels["panel.application.managed_files.drift"] == "true"
 			}
 			observation := observations[app.ID]
 			observation.app = app

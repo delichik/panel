@@ -4,6 +4,10 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/apps/ApplicationEditor.vue`
+  - 应用文件夹压缩包改为独立 `archive` 文件类型展示和替换，新增文件类型文案 `applicationEditor.archiveKind`，已接入英文与简体中文词条。
+- `web/src/views/overview/index.vue`
+  - 概览卡片拖拽手柄新增本地化无障碍文案 `overviewPage.moveCard`，已接入英文与简体中文词条。
 - `web/src/views/applications/apps/create.vue`、`web/src/router/index.ts`
   - 应用创建与编辑共用隐藏独立页，新增创建/编辑路由标题和“返回应用”按钮文案，已接入英文与简体中文词条。
 - `web/src/views/applications/apps/ApplicationEditor.vue`

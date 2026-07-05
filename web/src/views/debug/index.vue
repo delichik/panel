@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { diagnosticsApi } from '@/api/diagnostics';
 import type { DebugDatabaseSnapshotDto, DebugSnapshotDto } from '@/types/api';
@@ -167,14 +169,10 @@ onBeforeUnmount(() => {
           {{ t('debugPage.collectedAt', { value: formatDateTime(snapshot.collectedAt) }) }}
         </span>
       </div>
-      <div class="page-actions">
-        <v-btn size="small" variant="outlined" :prepend-icon="paused ? 'mdi-play' : 'mdi-pause'" @click="togglePaused">
-          {{ paused ? t('debugPage.resume') : t('debugPage.pause') }}
-        </v-btn>
-        <v-btn size="small" color="primary" variant="flat" prepend-icon="mdi-refresh" :loading="refreshing" @click="loadSnapshot">
-          {{ t('common.refresh') }}
-        </v-btn>
-      </div>
+      <AppActionGroup context="page" class="page-actions">
+        <AppActionButton :icon="paused ? 'mdi-play' : 'mdi-pause'" :label="paused ? t('debugPage.resume') : t('debugPage.pause')" @click="togglePaused" />
+        <AppActionButton kind="primary" icon="mdi-refresh" :label="t('common.refresh')" :loading="refreshing" @click="loadSnapshot" />
+      </AppActionGroup>
     </div>
 
     <v-alert v-if="error" type="error" variant="tonal" density="compact" closable @click:close="error = ''">
@@ -213,11 +211,15 @@ onBeforeUnmount(() => {
 
       <div class="debug-grid">
         <v-card variant="outlined" class="debug-card">
-          <v-card-title>{{ t('debugPage.processRuntime') }}</v-card-title>
+          <div class="app-card-header">
+            <strong>{{ t('debugPage.processRuntime') }}</strong>
+          </div>
           <v-card-text><div class="info-grid"><div v-for="[label, value] in processItems" :key="String(label)"><span>{{ label }}</span><strong>{{ value }}</strong></div></div></v-card-text>
         </v-card>
         <v-card variant="outlined" class="debug-card">
-          <v-card-title>{{ t('debugPage.memoryGc') }}</v-card-title>
+          <div class="app-card-header">
+            <strong>{{ t('debugPage.memoryGc') }}</strong>
+          </div>
           <v-card-text><div class="info-grid"><div v-for="[label, value] in memoryItems" :key="String(label)"><span>{{ label }}</span><strong>{{ value }}</strong></div></div></v-card-text>
         </v-card>
       </div>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
@@ -39,9 +40,9 @@ const emit = defineEmits<{
           <slot name="subtitle" />
         </div>
       </div>
-      <div class="app-selector-panel__header-actions">
+      <AppActionGroup v-if="$slots.actions" context="selector" class="app-selector-panel__header-actions">
         <slot name="actions" />
-      </div>
+      </AppActionGroup>
     </div>
 
     <div class="app-selector-panel__body">
@@ -78,6 +79,10 @@ const emit = defineEmits<{
   min-height: 0;
   height: 100%;
   overflow: hidden;
+  border-radius: 10px !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 98%), transparent 220px),
+    var(--lp-surface) !important;
 }
 
 .app-selector-panel__header {
@@ -87,8 +92,12 @@ const emit = defineEmits<{
   justify-content: space-between;
   gap: 12px;
   min-width: 0;
-  padding: 12px 16px;
-  background: rgb(var(--v-theme-surface-variant));
+  min-height: 64px;
+  padding: 13px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 12%);
+  background:
+    linear-gradient(90deg, rgba(var(--v-theme-primary), 0.07), transparent 78%),
+    color-mix(in srgb, var(--lp-surface-container), transparent 34%);
 }
 
 .app-selector-panel__header-main {
@@ -109,11 +118,14 @@ const emit = defineEmits<{
   gap: 2px;
 }
 
+.app-selector-panel__heading :deep(.text-subtitle-1) {
+  font-size: 0.96rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0;
+}
+
 .app-selector-panel__header-actions {
-  display: flex;
   flex: 0 0 auto;
-  align-items: center;
-  gap: 8px;
 }
 
 .app-selector-panel__body {
@@ -121,7 +133,7 @@ const emit = defineEmits<{
   width: 100%;
   min-width: 0;
   min-height: 0;
-  padding: 10px;
+  padding: 10px 9px;
   overflow: auto;
 }
 
@@ -140,6 +152,9 @@ const emit = defineEmits<{
   gap: 10px;
   min-height: 220px;
   padding: 24px;
+  border: 1px dashed color-mix(in srgb, var(--lp-border), transparent 8%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 30%);
   text-align: center;
 }
 

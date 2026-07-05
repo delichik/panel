@@ -65,6 +65,8 @@
 
 满高表格卡片必须把 `v-table` 放进专用内容体，内容体使用 `flex: 1 1 auto; min-height: 0; overflow: auto`。不要让 `v-table` 直接接在标题和分页之间，否则数据少时分页会停在卡片中间。
 
+服务器资源页如果通过 `ResourcePage.vue` 提供外层右侧卡片，slot 内仍要按同一三段式组织：固定标题/操作区、内部滚动表格正文、可选分页或固定底部操作区。资源页 slot 不再额外套同等级 outlined 卡片，但也不得把裸表格直接贴在 slot 顶部。
+
 ## 响应式
 
 - 不通过固定表格宽度撑开整页。
@@ -91,4 +93,5 @@
 - `web/src/views/tasks/index.vue`
 - `web/src/views/applications/apps/index.vue`
 - `web/src/views/resources/packages/index.vue`
+- `web/src/views/resources/images/index.vue`
 - `web/src/views/certificates/key-assets/index.vue`

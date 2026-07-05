@@ -12,6 +12,9 @@ const (
 	StatusStopped   = "stopped"
 	StatusFailed    = "failed"
 	StatusUnknown   = "unknown"
+
+	ManagedFileKindFile    = "file"
+	ManagedFileKindArchive = "archive"
 )
 
 type Spec struct {
@@ -60,6 +63,7 @@ type Mount struct {
 }
 
 type ManagedFile struct {
+	Kind    string `json:"kind,omitempty"`
 	Path    string `json:"path"`
 	Content []byte `json:"content"`
 	Mode    string `json:"mode,omitempty"`

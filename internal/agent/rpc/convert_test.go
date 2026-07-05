@@ -149,6 +149,7 @@ func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 		},
 		Files: []appruntime.ManagedFile{
 			{Path: "/app/config.yaml", Content: []byte("enabled: true\n"), Mode: "0640", UID: &uid, GID: &gid},
+			{Kind: appruntime.ManagedFileKindArchive, Path: "public", Content: []byte("zip")},
 		},
 		Restart: appruntime.Restart{
 			Policy:          "on-failure",
@@ -176,6 +177,9 @@ func TestRuntimeSpecRoundTripIncludesWrappersFilesCapsAndRestart(t *testing.T) {
 	}
 	if pb.Files[0].Uid == nil || pb.Files[0].Uid.Value != int32(uid) || pb.Files[0].Gid == nil || pb.Files[0].Gid.Value != int32(gid) {
 		t.Fatalf("managed file ownership wrappers were not preserved: %#v", pb.Files[0])
+	}
+	if pb.Files[1].Mode != runtimeManagedArchiveModeSentinel {
+		t.Fatalf("managed archive sentinel was not encoded: %#v", pb.Files[1])
 	}
 
 	got := goSpec(pb)

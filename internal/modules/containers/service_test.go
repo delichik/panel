@@ -350,6 +350,39 @@ func TestForcedExplicitApplicationReconcileIgnoresStoredBackoffTime(t *testing.T
 	}
 }
 
+func TestApplicationReconcilePlansWhenManagedFilesDrift(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
+		State: "running",
+		Labels: map[string]string{
+			"panel.application.managed":             "true",
+			"panel.application.id":                  app.ID,
+			"panel.application.instance.id":         app.ID + "-server-1",
+			"panel.application.generation":          "3",
+			"panel.application.spec.hash":           "hash-3",
+			"panel.application.managed_files.drift": "true",
+		},
+	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
+	}
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || len(updater.plans[0].ServerIDs) != 1 || updater.plans[0].ServerIDs[0] != "server-1" {
+		t.Fatalf("managed file drift plan = %#v", updater.plans)
+	}
+}
+
 func TestApplicationReconcileFailuresClearAfterFiveHealthyObservations(t *testing.T) {
 	svc, _, fakeAgent, store := newContainerizationTestService(t)
 	ctx := context.Background()

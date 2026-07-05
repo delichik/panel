@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import ServerSelector from '@/components/ServerSelector.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
@@ -200,58 +203,54 @@ onBeforeUnmount(stopRefreshPolling);
       {{ t('packagesPage.blockedHint') }}
     </v-alert>
 
-    <div class="package-grid">
-      <ServerSelector v-model="serverId" :servers="servers" :loading="loadingServers" />
+    <AppMasterDetailWorkspace>
+      <template #aside>
+        <ServerSelector v-model="serverId" :servers="servers" :loading="loadingServers" />
+      </template>
 
       <v-card :loading="loadingUpdates" variant="outlined" class="package-panel">
-        <v-card-item class="bg-surface-variant py-3">
-          <div class="package-card-header d-flex justify-space-between align-center">
-            <div class="package-card-title">
-              <v-card-title class="text-subtitle-1 font-weight-bold">{{ currentServer?.name || t('common.selectServer') }}</v-card-title>
-              <v-card-subtitle class="text-caption">
-                {{ t('packagesPage.lastRefreshed') }}: {{ updates?.lastRefreshedAt ? formatDateTime(updates.lastRefreshedAt) : t('common.never') }}
-              </v-card-subtitle>
-            </div>
-            <div class="package-actions">
-              <v-chip v-if="refreshInProgress" size="small" color="info" variant="tonal" prepend-icon="mdi-sync">
-                {{ t('packagesPage.refreshing') }}
-              </v-chip>
-              <v-btn
-                prepend-icon="mdi-refresh"
-                size="small"
-                variant="outlined"
-                :disabled="operationBlocked || refreshInProgress"
-                :loading="refreshInProgress"
-                @click="refreshPackages"
-                class="text-none"
-              >
-                {{ t('common.refresh') }}
-              </v-btn>
-              <v-btn
-                color="primary"
-                prepend-icon="mdi-upload"
-                size="small"
-                variant="flat"
-                :disabled="operationBlocked || selectedPackageNames.length === 0"
-                @click="upgradeSelected"
-                class="text-none"
-              >
-                {{ t('packagesPage.upgradeSelected') }}
-              </v-btn>
-              <v-btn
-                color="error"
-                prepend-icon="mdi-arrow-up-bold-box"
-                size="small"
-                variant="outlined"
-                :disabled="operationBlocked || !updates?.updates.length"
-                @click="confirmUpgradeAllDialog = true"
-                class="text-none"
-              >
-                {{ t('packagesPage.upgradeAll') }}
-              </v-btn>
+        <div class="app-card-header package-card-header">
+          <div class="package-card-title">
+            <div class="text-subtitle-1 font-weight-bold text-truncate">{{ currentServer?.name || t('common.selectServer') }}</div>
+            <div class="text-caption text-medium-emphasis text-truncate">
+              {{ t('packagesPage.lastRefreshed') }}: {{ updates?.lastRefreshedAt ? formatDateTime(updates.lastRefreshedAt) : t('common.never') }}
             </div>
           </div>
-        </v-card-item>
+          <AppActionGroup context="toolbar">
+            <v-chip v-if="refreshInProgress" size="small" color="info" variant="tonal" prepend-icon="mdi-sync">
+              {{ t('packagesPage.refreshing') }}
+            </v-chip>
+            <AppActionButton
+              icon="mdi-refresh"
+              :label="t('common.refresh')"
+              :disabled="operationBlocked || refreshInProgress"
+              :loading="refreshInProgress"
+              @click="refreshPackages"
+            />
+            <AppActionButton
+              kind="primary"
+              icon="mdi-upload"
+              :label="t('packagesPage.upgradeSelected')"
+              :disabled="operationBlocked || selectedPackageNames.length === 0"
+              @click="upgradeSelected"
+            />
+            <v-menu location="bottom end">
+              <template #activator="{ props }">
+                <AppActionButton v-bind="props" kind="tool" icon="mdi-dots-vertical" :label="t('common.more')" />
+              </template>
+              <v-list density="compact">
+                <v-list-item
+                  prepend-icon="mdi-arrow-up-bold-box"
+                  :disabled="operationBlocked || !updates?.updates.length"
+                  class="text-error"
+                  @click="confirmUpgradeAllDialog = true"
+                >
+                  <v-list-item-title>{{ t('packagesPage.upgradeAll') }}</v-list-item-title>
+                </v-list-item>
+              </v-list>
+            </v-menu>
+          </AppActionGroup>
+        </div>
 
         <v-card-text class="package-panel-body pa-4">
           <PageLoadingState v-if="loadingUpdates && !updates" min-height="280px" />
@@ -287,13 +286,13 @@ onBeforeUnmount(stopRefreshPolling);
           <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
         </v-card-text>
       </v-card>
-    </div>
+    </AppMasterDetailWorkspace>
 
     <v-dialog v-model="confirmUpgradeAllDialog" width="460">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('packagesPage.confirmUpgradeAllTitle') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="confirmUpgradeAllDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="confirmUpgradeAllDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -301,8 +300,10 @@ onBeforeUnmount(stopRefreshPolling);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="confirmUpgradeAllDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" class="text-none" @click="upgradeAll">{{ t('packagesPage.upgradeAll') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="confirmUpgradeAllDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('packagesPage.upgradeAll')" @click="upgradeAll" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -311,36 +312,25 @@ onBeforeUnmount(stopRefreshPolling);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template v-slot:actions>
-        <v-btn v-if="lastTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton v-if="lastTaskId" kind="snackbar" :label="t('taskCenter.task')" :to="taskRoute()" />
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.package-grid {
-  display: grid;
-  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
-  flex: 1 1 auto;
-  gap: 18px;
-  min-height: 0;
-  align-items: stretch;
-}
-
 .package-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 12px;
 }
 
 .package-card-title {
   min-width: 0;
-}
-
-.package-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  flex-wrap: wrap;
 }
 
 .package-panel {
@@ -363,14 +353,7 @@ onBeforeUnmount(stopRefreshPolling);
   overflow: auto;
 }
 
-@media (max-width: 1080px) {
-  .package-grid {
-    grid-template-columns: 1fr;
-  }
-}
-
 @media (max-width: 760px) {
-  .package-grid,
   .package-panel-body {
     flex: none;
     min-height: auto;
@@ -388,10 +371,6 @@ onBeforeUnmount(stopRefreshPolling);
   .package-card-header {
     align-items: stretch;
     flex-direction: column;
-  }
-
-  .package-actions {
-    width: 100%;
   }
 }
 </style>

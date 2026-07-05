@@ -35,11 +35,11 @@
 :root[data-theme='dark'] {
   color-scheme: dark;
 
-  --lp-background: #0d100e;
-  --lp-surface: #151a17;
+  --lp-background: #0b0f0d;
+  --lp-surface: #121714;
   --lp-surface-container: #171d1a;
-  --lp-surface-muted: #222a25;
-  --lp-border: #334139;
+  --lp-surface-muted: #202822;
+  --lp-border: #334038;
   --lp-text: #e7ece6;
   --lp-text-muted: #b3beb6;
   --lp-text-subtle: #829188;
@@ -84,9 +84,9 @@ body {
 
 .v-main {
   background:
-    linear-gradient(180deg, rgba(var(--v-theme-primary), 0.045), transparent 260px),
-    linear-gradient(90deg, color-mix(in srgb, var(--lp-border), transparent 72%) 1px, transparent 1px),
-    linear-gradient(180deg, color-mix(in srgb, var(--lp-border), transparent 76%) 1px, transparent 1px),
+    linear-gradient(180deg, rgba(var(--v-theme-primary), 0.035), transparent 260px),
+    linear-gradient(90deg, color-mix(in srgb, var(--lp-border), transparent 78%) 1px, transparent 1px),
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-border), transparent 82%) 1px, transparent 1px),
     var(--lp-background) !important;
   background-size: auto, 44px 44px, 44px 44px, auto !important;
 }
@@ -247,7 +247,9 @@ a {
 .panel {
   border: 1px solid var(--lp-border);
   border-radius: var(--lp-radius-md);
-  background: var(--lp-surface);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 46%), transparent 78%),
+    var(--lp-surface);
   color: var(--lp-text);
   min-height: 0;
   box-shadow: var(--lp-shadow-sm);
@@ -310,19 +312,22 @@ a {
 .v-card {
   border-radius: var(--lp-radius-sm) !important;
   border-color: var(--lp-border) !important;
-  background-color: var(--lp-surface) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 54%), transparent 72%),
+    var(--lp-surface) !important;
   color: var(--lp-text) !important;
   box-shadow: var(--lp-shadow-sm) !important;
   transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease !important;
 }
 
 .v-card:hover {
-  border-color: rgba(var(--v-theme-primary), 0.15) !important;
-  box-shadow: var(--lp-shadow-md) !important;
+  border-color: color-mix(in srgb, rgb(var(--v-theme-primary)), var(--lp-border) 78%) !important;
+  box-shadow: var(--lp-shadow-sm) !important;
 }
 
 .v-btn {
-  border-radius: var(--lp-radius-sm) !important;
+  border-radius: 7px !important;
+  font-weight: 650 !important;
   transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease, transform 0.2s ease !important;
 }
 
@@ -405,14 +410,29 @@ a {
   padding: var(--lp-space-2) var(--lp-space-5) !important;
 }
 
+.app-dialog-actions .app-action-group {
+  width: 100%;
+  justify-content: flex-end;
+}
+
 .app-dialog-actions .v-btn {
   min-width: 92px;
 }
 
 /* Modern chip styling */
 .v-chip {
-  border-radius: 6px !important;
-  font-weight: 500 !important;
+  border-radius: 5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0 !important;
+}
+
+.v-alert {
+  border-radius: var(--lp-radius-sm) !important;
+  border: 1px solid color-mix(in srgb, currentColor, var(--lp-border) 78%) !important;
+}
+
+.v-alert--variant-tonal {
+  background: color-mix(in srgb, currentColor, var(--lp-surface) 88%) !important;
 }
 
 .v-table,
@@ -452,12 +472,20 @@ a {
 
 .v-table td,
 .v-table th {
-  border-bottom-color: color-mix(in srgb, var(--lp-border), transparent 26%) !important;
+  border-bottom-color: color-mix(in srgb, var(--lp-border), transparent 18%) !important;
 }
 
 .v-table td {
   vertical-align: middle;
   overflow-wrap: anywhere;
+}
+
+.v-table tbody tr {
+  transition: background-color 0.16s ease;
+}
+
+.v-table tbody tr:hover {
+  background: color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 96%);
 }
 
 .bg-surface-variant {
@@ -556,6 +584,11 @@ a {
   gap: var(--lp-space-3);
   padding: 14px 16px;
   min-width: 0;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 8%);
+  border-radius: var(--lp-radius-sm);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 97%), transparent 60%),
+    var(--lp-surface);
 }
 
 .summary-icon,
@@ -606,6 +639,8 @@ a {
   padding: var(--lp-space-6);
   border-radius: var(--lp-radius-sm);
   text-align: center;
+  border: 1px dashed color-mix(in srgb, var(--lp-border), transparent 6%);
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 28%);
 }
 
 .app-table-actions {
@@ -696,6 +731,11 @@ a {
     align-items: stretch;
     flex-wrap: wrap;
     padding: var(--lp-space-2) var(--lp-space-4) !important;
+  }
+
+  .app-dialog-actions .app-action-group {
+    align-items: stretch;
+    flex: 1 1 100%;
   }
 
   .app-dialog-actions .v-btn {

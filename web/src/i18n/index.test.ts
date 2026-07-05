@@ -31,6 +31,7 @@ describe('i18n translation helpers', () => {
 
     expect(translateApplicationRestartPolicy('unless-stopped')).toBe('除非手动停止');
     expect(translateApplicationFileKind('binary')).toBe('二进制');
+    expect(translateApplicationFileKind('archive')).toBe('压缩包');
     expect(translateRuntimeStatus('running')).toBe('运行中');
     expect(translateRuntimeDesiredState('stopped')).toBe('停止');
     expect(translateTaskType('key_asset_import')).toBe('密钥资产导入');

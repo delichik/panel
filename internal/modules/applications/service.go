@@ -4215,7 +4215,7 @@ func (s *Service) renderManagedFilesForServer(ctx context.Context, app Applicati
 	out := append([]appruntime.ManagedFile(nil), managed...)
 	for i, item := range out {
 		file, ok := filesByPath[item.Path]
-		if !ok || file.Kind != "template" {
+		if !ok || file.Kind != ApplicationFileKindTemplate {
 			continue
 		}
 		text := string(file.Content)

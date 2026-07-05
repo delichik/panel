@@ -4,6 +4,8 @@ import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ServerDto } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import ApplicationRuntimePanel from './ApplicationRuntimePanel.vue';
 import RuntimeLogsDialog from '@/components/RuntimeLogsDialog.vue';
 
@@ -239,11 +241,11 @@ watch(() => props.application.id, () => {
             <v-chip :color="application.enabled ? 'success' : 'grey'" size="small" variant="tonal" label>{{ application.enabled ? t('common.enabled') : t('common.disabled') }}</v-chip>
           </div>
         </div>
-        <div class="detail-actions">
+        <AppActionGroup context="detail">
           <slot name="actions" />
           <v-menu location="bottom end">
             <template #activator="{ props: menuProps }">
-              <v-btn v-bind="menuProps" icon="mdi-dots-vertical" variant="text" size="small" :aria-label="t('common.more')" />
+              <AppActionButton v-bind="menuProps" kind="tool" icon="mdi-dots-vertical" :label="t('common.more')" />
             </template>
             <v-list density="compact">
               <v-list-item prepend-icon="mdi-package-down" :title="t('applicationDetail.downloadPackage')" :disabled="downloading" @click="downloadPackage" />
@@ -253,14 +255,14 @@ watch(() => props.application.id, () => {
               <slot name="more-actions" />
             </v-list>
           </v-menu>
-        </div>
+        </AppActionGroup>
       </div>
 
       <div class="detail-body">
         <v-alert v-if="message" type="info" variant="tonal" density="compact" closable @click:close="message = ''">
           <div class="task-alert">
             <span>{{ message }}</span>
-            <v-btn v-if="lastTaskId" size="small" variant="text" :to="taskRoute()" class="text-none">{{ t('taskCenter.task') }}</v-btn>
+            <AppActionButton v-if="lastTaskId" kind="plain" icon="mdi-clipboard-list-outline" :label="t('taskCenter.task')" :to="taskRoute()" />
           </div>
         </v-alert>
         <v-alert v-if="error || application.lastError" type="error" variant="tonal" density="compact">
@@ -283,10 +285,10 @@ watch(() => props.application.id, () => {
               <div class="section-title">{{ t('applicationDetail.imageUpdate') }}</div>
               <div class="section-subtitle text-truncate">{{ application.imageReference || t('applicationDetail.imageHint') }}</div>
             </div>
-            <div class="section-actions">
+            <AppActionGroup context="section">
               <v-chip size="small" variant="tonal" :color="imageStatusColor" label>{{ imageStatusLabel }}</v-chip>
-              <v-btn size="small" prepend-icon="mdi-package-up" color="primary" variant="flat" class="text-none" :disabled="!application.enabled || !application.imageUpdateAvailable" :loading="imageAction === 'update'" @click="updateImage">{{ t('applicationDetail.updateImage') }}</v-btn>
-            </div>
+              <AppActionButton kind="primary" icon="mdi-package-up" :label="t('applicationDetail.updateImage')" :disabled="!application.enabled || !application.imageUpdateAvailable" :loading="imageAction === 'update'" @click="updateImage" />
+            </AppActionGroup>
           </div>
           <div class="property-grid property-grid--three">
             <div><span>{{ t('applicationDetail.applied') }}</span><strong class="mono">{{ shortDigest(application.imageDigest) }}</strong></div>
@@ -326,7 +328,7 @@ watch(() => props.application.id, () => {
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ persistentRestoreTitle }}</span>
-          <v-btn icon="mdi-close" variant="text" :aria-label="t('common.close')" @click="restoreDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="restoreDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -344,10 +346,10 @@ watch(() => props.application.id, () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" :disabled="restoringPersistent" @click="restoreDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="warning" variant="flat" class="text-none" :loading="restoringPersistent" :disabled="!selectedRestoreFile" @click="restorePersistentData">
-            {{ persistentRestoreAction }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" :disabled="restoringPersistent" @click="restoreDialog = false" />
+            <AppActionButton kind="warning-primary" :label="persistentRestoreAction" :loading="restoringPersistent" :disabled="!selectedRestoreFile" @click="restorePersistentData" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -356,7 +358,7 @@ watch(() => props.application.id, () => {
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('applicationDetail.migrateApplication') }}</span>
-          <v-btn icon="mdi-close" variant="text" :aria-label="t('common.close')" @click="migrateDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="migrateDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body migrate-dialog-body">
@@ -386,17 +388,16 @@ watch(() => props.application.id, () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" :disabled="migrating" @click="migrateDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn
-            color="primary"
-            variant="flat"
-            class="text-none"
-            :loading="migrating"
-            :disabled="!migrationForm.sourceServerId || !migrationForm.targetServerId || migrationForm.sourceServerId === migrationForm.targetServerId"
-            @click="migrateApplication"
-          >
-            {{ t('applicationDetail.startMigration') }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" :disabled="migrating" @click="migrateDialog = false" />
+            <AppActionButton
+              kind="primary"
+              :label="t('applicationDetail.startMigration')"
+              :loading="migrating"
+              :disabled="!migrationForm.sourceServerId || !migrationForm.targetServerId || migrationForm.sourceServerId === migrationForm.targetServerId"
+              @click="migrateApplication"
+            />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -405,20 +406,76 @@ watch(() => props.application.id, () => {
 
 <style scoped>
 .application-detail { display: flex; min-width: 0; min-height: 0; height: 100%; }
-.detail-card { display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
-.detail-header { display: flex; flex: 0 0 auto; align-items: flex-start; justify-content: space-between; gap: 14px; padding: 16px; border-bottom: 1px solid var(--lp-border); }
-.detail-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.detail-card {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-color: color-mix(in srgb, var(--lp-border), transparent 28%) !important;
+  background:
+    radial-gradient(circle at 18% 0%, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 90%), transparent 26rem),
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface), transparent 2%), color-mix(in srgb, var(--lp-surface-container), transparent 14%)) !important;
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--lp-background), transparent 24%) !important;
+}
+.detail-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px 22px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 18%);
+  background: color-mix(in srgb, var(--lp-surface), transparent 8%);
+}
 .detail-statuses { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
-.detail-body { display: grid; flex: 1 1 auto; gap: 18px; align-content: start; min-height: 0; padding: 16px; overflow: auto; }
-.detail-section { display: grid; gap: 12px; }
+.detail-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 22px;
+  align-items: stretch;
+  min-height: 0;
+  padding: 16px 18px 18px;
+  overflow: auto;
+  scroll-behavior: smooth;
+}
+.detail-body > * {
+  width: 100%;
+}
+.detail-section {
+  flex: 0 0 auto;
+  position: relative;
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  overflow: visible;
+  padding: 0 0 22px;
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 34%);
+}
+.detail-section::before {
+  content: none;
+}
+.detail-section:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.section-title { font-size: 0.92rem; font-weight: 700; }
+.section-title { font-size: 1rem; font-weight: 750; }
 .section-subtitle { margin-top: 2px; color: var(--lp-text-muted); font-size: 0.78rem; }
-.section-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .min-width-0 { min-width: 0; }
 .property-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .property-grid--three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.property-grid > div { display: grid; gap: 4px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
+.property-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 62%);
+}
 .property-grid span { color: var(--lp-text-muted); font-size: 0.76rem; }
 .property-grid strong { min-width: 0; overflow-wrap: anywhere; font-size: 0.86rem; }
 .image-targets { overflow-x: auto; }
@@ -434,14 +491,19 @@ watch(() => props.application.id, () => {
 @media (max-width: 600px) {
   .application-detail { height: auto; }
   .detail-card, .detail-body { overflow: visible; }
+  .detail-header {
+    padding: 16px;
+  }
+  .detail-body {
+    padding: 16px;
+  }
+  .detail-section {
+    padding: 0 0 18px;
+  }
   .detail-header,
   .section-heading {
     align-items: stretch;
     flex-direction: column;
-  }
-  .detail-actions,
-  .section-actions {
-    justify-content: flex-start;
   }
   .property-grid { grid-template-columns: 1fr; }
 }

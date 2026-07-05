@@ -41,7 +41,8 @@
 
 - 服务器列表和共享服务器选择器在桌面端作为内部滚动选择列表使用；列表行必须按内容高度从顶部排列，不能被剩余高度拉伸。
 - 服务器节点页直接进入选择器与详情工作区，不在顶部重复展示服务器数量、可达数量或 Agent 就绪数量摘要。
-- 防火墙、fail2ban、软件包和资源页左侧服务器选择栏复用 `ServerSelector.vue`，不要复制一套不同尺寸的选择行。
+- 服务器节点、防火墙、fail2ban、软件包和资源页主从外层复用 `AppMasterDetailWorkspace.vue`；左侧服务器选择栏复用 `ServerSelector.vue` 或 `AppSelectorPanel` + `ServerSelectorItem`，不要复制一套不同尺寸的选择行或双栏 CSS。
+- 服务器详情、防火墙、fail2ban 和软件包页面的标题区、section 操作和表格行操作使用 `AppActionButton` / `AppActionGroup`。刷新、保存、接管、启用、升级、编辑和删除等对象动作显示为带图标的文字按钮；纯图标只用于更多菜单、选择器工具位和 dialog 关闭。
 - 凭据、软件包和防火墙规则等带分页表格在桌面端必须让表格体吸收剩余高度，分页固定在卡片或面板底部。
 
 ## API 范围

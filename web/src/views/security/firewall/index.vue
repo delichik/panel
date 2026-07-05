@@ -1,7 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import AppPagination from '@/components/AppPagination.vue';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppDetailPanel from '@/components/AppDetailPanel.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import ServerSelector from '@/components/ServerSelector.vue';
 import { serversApi } from '@/api/servers';
 import { useI18n } from '@/i18n';
@@ -185,11 +188,19 @@ onMounted(async () => {
   <div class="page-shell">
     <v-alert v-if="error" type="warning" variant="tonal" class="mb-4">{{ error }}</v-alert>
 
-    <div class="security-workspace">
-      <ServerSelector v-model="serverId" :servers="servers" :loading="loadingServers" />
+    <AppMasterDetailWorkspace>
+      <template #aside>
+        <ServerSelector v-model="serverId" :servers="servers" :loading="loadingServers" />
+      </template>
 
-      <v-card v-if="selectedServer" variant="outlined" class="security-panel" :loading="loadingState">
-        <div class="panel-header">
+      <AppDetailPanel
+        class="security-detail"
+        :empty="!selectedServer"
+        :empty-text="t('firewallPage.selectServer')"
+        :loading="!!selectedServer && loadingState && !state"
+        loading-min-height="280px"
+      >
+        <template v-if="selectedServer" #header>
           <div class="min-width-0">
             <div class="d-flex align-center ga-2 mb-1">
               <v-icon color="primary">mdi-shield-lock-outline</v-icon>
@@ -197,113 +208,100 @@ onMounted(async () => {
             </div>
             <div class="text-body-2 text-medium-emphasis">{{ selectedServer.host }}:{{ selectedServer.port }}</div>
           </div>
-          <div class="panel-actions">
+          <AppActionGroup context="detail" class="app-detail-actions">
             <v-chip :color="statusColor()" variant="tonal" label>{{ statusLabel() }}</v-chip>
-            <v-btn icon="mdi-refresh" variant="outlined" size="small" :aria-label="t('common.refresh')" @click="loadState" />
-          </div>
-        </div>
+            <AppActionButton icon="mdi-refresh" :label="t('common.refresh')" @click="loadState" />
+          </AppActionGroup>
+        </template>
 
-        <div class="security-panel-body">
-          <PageLoadingState v-if="loadingState && !state" min-height="280px" />
-
-          <template v-else>
-            <section class="security-section">
-              <div class="section-heading">
-                <div>
-                  <div class="text-subtitle-1 font-weight-bold">{{ t('firewallPage.ufwSection') }}</div>
-                  <div class="text-caption text-medium-emphasis">{{ t('firewallPage.ufwSectionSubtitle') }}</div>
-                </div>
+        <template v-if="selectedServer" #body>
+          <section class="security-section">
+            <div class="section-heading">
+              <div>
+                <div class="text-subtitle-1 font-weight-bold">{{ t('firewallPage.ufwSection') }}</div>
+                <div class="text-caption text-medium-emphasis">{{ t('firewallPage.ufwSectionSubtitle') }}</div>
               </div>
+            </div>
 
-              <div class="status-grid">
-                <div>
-                  <span>{{ t('firewallPage.status') }}</span>
-                  <strong>{{ statusLabel() }}</strong>
-                </div>
-                <div>
-                  <span>{{ t('firewallPage.defaultPolicy') }}</span>
-                  <strong>{{ state?.defaultPolicy || t('common.notAvailable') }}</strong>
-                </div>
-                <div>
-                  <span>{{ t('firewallPage.privilegedAccess') }}</span>
-                  <v-chip :color="hasPrivilege ? 'success' : 'warning'" size="small" variant="tonal" label>{{ hasPrivilege ? t('common.yes') : t('common.no') }}</v-chip>
-                </div>
-                <div>
-                  <span>{{ t('firewallPage.rules') }}</span>
-                  <strong>{{ state?.rules.length ?? 0 }}</strong>
-                </div>
+            <div class="info-grid">
+              <div>
+                <span>{{ t('firewallPage.status') }}</span>
+                <strong>{{ statusLabel() }}</strong>
               </div>
-
-              <v-alert v-if="state && !state.active" :type="state.installed ? 'warning' : 'info'" variant="tonal" density="compact" class="my-4">
-                <div class="install-row">
-                  <span>{{ state.installed ? t('firewallPage.ufwInactiveHint') : t('firewallPage.ufwMissingEnableHint') }}</span>
-                  <v-btn
-                    color="warning"
-                    variant="flat"
-                    size="small"
-                    prepend-icon="mdi-shield-check"
-                    class="text-none"
-                    :disabled="!selectedServer.reachable || !hasPrivilege || !selectedUfwSupported"
-                    @click="enableDialog = true"
-                  >
-                    {{ t('firewallPage.enableUfw') }}
-                  </v-btn>
-                </div>
-              </v-alert>
-
-              <div class="rule-form">
-                <v-text-field v-model.number="ruleForm.port" type="number" :label="t('firewallPage.port')" density="compact" variant="outlined" hide-details />
-                <v-select v-model="ruleForm.protocol" :items="protocolOptions" :label="t('firewallPage.protocol')" density="compact" variant="outlined" hide-details />
-                <v-text-field v-model="ruleForm.from" :label="t('firewallPage.from')" :placeholder="t('firewallPage.anywhere')" density="compact" variant="outlined" hide-details />
-                <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="text-none" :loading="savingRule" :disabled="!canAddRule" @click="addRule">
-                  {{ t('firewallPage.addRule') }}
-                </v-btn>
+              <div>
+                <span>{{ t('firewallPage.defaultPolicy') }}</span>
+                <strong>{{ state?.defaultPolicy || t('common.notAvailable') }}</strong>
               </div>
-
-              <div class="rule-table-wrap">
-                <v-table class="rule-table">
-                  <thead>
-                    <tr>
-                      <th>{{ t('firewallPage.number') }}</th>
-                      <th>{{ t('firewallPage.to') }}</th>
-                      <th>{{ t('firewallPage.action') }}</th>
-                      <th>{{ t('firewallPage.from') }}</th>
-                      <th class="text-right">{{ t('common.actions') }}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr v-if="!state?.rules.length">
-                      <td colspan="5" class="text-center py-6 text-medium-emphasis">{{ t('firewallPage.noRules') }}</td>
-                    </tr>
-                    <tr v-for="rule in pagedRules" :key="rule.number">
-                      <td class="font-weight-bold">#{{ rule.number }}</td>
-                      <td>{{ rule.to }}</td>
-                      <td><v-chip size="small" color="primary" variant="tonal" label>{{ rule.action }}</v-chip></td>
-                      <td>{{ rule.from }}</td>
-                      <td class="text-right">
-                        <v-btn icon="mdi-delete" size="small" color="error" variant="text" :loading="deletingRule === rule.number" :aria-label="t('common.delete')" @click="askDeleteRule(rule)" />
-                      </td>
-                    </tr>
-                  </tbody>
-                </v-table>
+              <div>
+                <span>{{ t('firewallPage.privilegedAccess') }}</span>
+                <v-chip :color="hasPrivilege ? 'success' : 'warning'" size="small" variant="tonal" label>{{ hasPrivilege ? t('common.yes') : t('common.no') }}</v-chip>
               </div>
-              <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
-            </section>
-          </template>
-        </div>
-      </v-card>
+              <div>
+                <span>{{ t('firewallPage.rules') }}</span>
+                <strong>{{ state?.rules.length ?? 0 }}</strong>
+              </div>
+            </div>
 
-      <v-card v-else variant="outlined" class="empty-panel">
-        <v-icon size="32" color="medium-emphasis">mdi-shield-search</v-icon>
-        <div class="text-body-2 text-medium-emphasis">{{ t('firewallPage.selectServer') }}</div>
-      </v-card>
-    </div>
+            <v-alert v-if="state && !state.active" :type="state.installed ? 'warning' : 'info'" variant="tonal" density="compact" class="my-4">
+              <div class="install-row">
+                <span>{{ state.installed ? t('firewallPage.ufwInactiveHint') : t('firewallPage.ufwMissingEnableHint') }}</span>
+                <AppActionButton
+                  kind="warning-primary"
+                  icon="mdi-shield-check"
+                  :label="t('firewallPage.enableUfw')"
+                  :disabled="!selectedServer.reachable || !hasPrivilege || !selectedUfwSupported"
+                  @click="enableDialog = true"
+                />
+              </div>
+            </v-alert>
+
+            <div class="rule-form">
+              <v-text-field v-model.number="ruleForm.port" type="number" :label="t('firewallPage.port')" density="compact" variant="outlined" hide-details />
+              <v-select v-model="ruleForm.protocol" :items="protocolOptions" :label="t('firewallPage.protocol')" density="compact" variant="outlined" hide-details />
+              <v-text-field v-model="ruleForm.from" :label="t('firewallPage.from')" :placeholder="t('firewallPage.anywhere')" density="compact" variant="outlined" hide-details />
+              <AppActionButton kind="primary" icon="mdi-plus" :label="t('firewallPage.addRule')" :loading="savingRule" :disabled="!canAddRule" @click="addRule" />
+            </div>
+
+            <div class="rule-table-wrap">
+              <v-table class="rule-table">
+                <thead>
+                  <tr>
+                    <th>{{ t('firewallPage.number') }}</th>
+                    <th>{{ t('firewallPage.to') }}</th>
+                    <th>{{ t('firewallPage.action') }}</th>
+                    <th>{{ t('firewallPage.from') }}</th>
+                    <th class="text-right">{{ t('common.actions') }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-if="!state?.rules.length">
+                    <td colspan="5" class="text-center py-6 text-medium-emphasis">{{ t('firewallPage.noRules') }}</td>
+                  </tr>
+                  <tr v-for="rule in pagedRules" :key="rule.number">
+                    <td class="font-weight-bold">#{{ rule.number }}</td>
+                    <td>{{ rule.to }}</td>
+                    <td><v-chip size="small" color="primary" variant="tonal" label>{{ rule.action }}</v-chip></td>
+                    <td>{{ rule.from }}</td>
+                    <td class="text-right">
+                      <AppActionGroup context="table">
+                        <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" :loading="deletingRule === rule.number" @click="askDeleteRule(rule)" />
+                      </AppActionGroup>
+                    </td>
+                  </tr>
+                </tbody>
+              </v-table>
+            </div>
+            <AppPagination v-model:page="page" v-model:page-size="pageSize" :total="total" />
+          </section>
+        </template>
+      </AppDetailPanel>
+    </AppMasterDetailWorkspace>
 
     <v-dialog v-model="confirmDialog" width="420">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('firewallPage.deleteRuleTitle') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="confirmDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="confirmDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body text-body-1">
@@ -311,8 +309,10 @@ onMounted(async () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="confirmDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="error" variant="flat" class="text-none" :loading="deletingRule !== null" @click="deleteRule">{{ t('common.delete') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="confirmDialog = false" />
+            <AppActionButton kind="danger-primary" :label="t('common.delete')" :loading="deletingRule !== null" @click="deleteRule" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -321,7 +321,7 @@ onMounted(async () => {
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('firewallPage.enableTitle') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="enableDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="enableDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body text-body-1">
@@ -329,8 +329,10 @@ onMounted(async () => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="enableDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="warning" variant="flat" class="text-none" :loading="enabling" @click="enableUFW">{{ t('firewallPage.enableUfw') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="enableDialog = false" />
+            <AppActionButton kind="warning-primary" :label="t('firewallPage.enableUfw')" :loading="enabling" @click="enableUFW" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -338,41 +340,26 @@ onMounted(async () => {
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="3000">
       {{ snackbarText }}
       <template #actions>
-        <v-btn v-if="snackbarTaskId" color="white" variant="text" :to="taskRoute()">{{ t('taskCenter.task') }}</v-btn>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        <AppActionGroup context="snackbar">
+          <AppActionButton v-if="snackbarTaskId" kind="snackbar" :label="t('taskCenter.task')" :to="taskRoute()" />
+          <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.security-workspace { display: grid; grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr); gap: 18px; flex: 1 1 auto; min-height: 0; align-items: stretch; }
-.security-panel { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 16px; overflow: hidden; }
-.panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; margin-bottom: 16px; }
-.panel-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.security-panel-body { display: flex; flex: 1 1 auto; flex-direction: column; min-height: 0; overflow: auto; padding-right: 2px; }
 .security-section { display: flex; flex-direction: column; min-width: 0; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.status-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.status-grid > div { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; padding: 10px 12px; border: 1px solid var(--lp-border); border-radius: 8px; }
-.status-grid span { color: var(--lp-text-muted); font-size: 0.78rem; }
-.status-grid strong { min-width: 0; overflow-wrap: anywhere; text-align: right; font-size: 0.86rem; }
 .install-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .rule-form { display: grid; grid-template-columns: minmax(110px, 0.16fr) minmax(130px, 0.18fr) minmax(180px, 1fr) auto; gap: 10px; align-items: center; margin: 16px 0; }
 .rule-table { border: 1px solid var(--lp-border); border-radius: 8px; overflow: hidden; }
 .rule-table-wrap { min-height: 220px; overflow: auto; }
-.empty-panel { min-height: 340px; display: grid; place-items: center; align-content: center; gap: 10px; padding: 32px; text-align: center; }
 .min-width-0 { min-width: 0; }
-@media (max-width: 1080px) {
-  .security-workspace { grid-template-columns: 1fr; }
-  .status-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 @media (max-width: 760px) {
-  .panel-header, .install-row, .section-heading { flex-direction: column; align-items: stretch; }
-  .status-grid, .rule-form { grid-template-columns: 1fr; }
-  .security-workspace { flex: none; min-height: auto; }
-  .security-panel { overflow: visible; }
-  .security-panel-body { flex: none; overflow: visible; }
+  .install-row, .section-heading { flex-direction: column; align-items: stretch; }
+  .rule-form { grid-template-columns: 1fr; }
   .rule-table-wrap { flex: none; overflow-x: auto; overflow-y: visible; }
 }
 </style>

@@ -45,7 +45,7 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 		return ApplicationFile{}, err
 	}
 	kind := strings.TrimSpace(in.Kind)
-	if kind != "binary" && kind != "template" {
+	if kind != ApplicationFileKindBinary && kind != ApplicationFileKindTemplate {
 		return ApplicationFile{}, panelerr.Validation("application_file_kind_invalid", "file kind must be binary or template")
 	}
 	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(in.ContentBase64))
@@ -198,8 +198,13 @@ func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec app
 		if !ok {
 			return appruntime.Spec{}, panelerr.Validation("application_file_mount_missing", "mounted application file "+rel+" does not exist")
 		}
+		if file.Kind == ApplicationFileKindArchive {
+			managed = append(managed, appruntime.ManagedFile{Kind: appruntime.ManagedFileKindArchive, Path: rel, Content: file.Content, UID: cloneInt(mount.UID), GID: cloneInt(mount.GID)})
+			mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: mount.ReadOnly})
+			continue
+		}
 		rendered := file.Content
-		if file.Kind == "template" {
+		if file.Kind == ApplicationFileKindTemplate {
 			text := string(file.Content)
 			if s.renderer != nil {
 				text, err = s.renderer.Render(ctx, text, data)

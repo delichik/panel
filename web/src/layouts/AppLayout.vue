@@ -97,7 +97,7 @@ const navGroups = computed<NavGroup[]>(() => [
     icon: 'mdi-apps',
     title: t('layout.nav.applicationGroup'),
     items: [
-      { to: '/applications/apps', title: t('layout.nav.applications'), value: 'applications' },
+      { to: '/applications/apps', title: t('layout.nav.applications'), value: 'applications-apps' },
       { to: '/applications/facility-apps', title: t('layout.nav.facilityApps'), value: 'facility-apps' },
     ],
   },
@@ -232,9 +232,9 @@ onBeforeUnmount(() => {
 
       <v-list nav class="app-drawer-nav py-4 px-3">
         <template v-for="group in navGroups" :key="group.key">
-          <v-list-group v-if="group.items.length > 1" :value="group.key">
+          <v-list-group v-if="group.items.length > 1" :value="group.key" class="app-nav-group">
             <template #activator="{ props }">
-              <v-list-item v-bind="props" :prepend-icon="group.icon" :title="group.title" />
+              <v-list-item v-bind="props" :prepend-icon="group.icon" :title="group.title" class="app-nav-group__activator" />
             </template>
             <v-list-item
               v-for="item in group.items"
@@ -244,10 +244,10 @@ onBeforeUnmount(() => {
               :title="item.title"
               :value="item.value"
               :disabled="item.disabled"
-              class="pl-8"
+              class="app-nav-child"
             />
           </v-list-group>
-          <v-list-item v-else :to="group.items[0].to" :prepend-icon="group.items[0].icon" :title="group.items[0].title" :value="group.items[0].value" />
+          <v-list-item v-else :to="group.items[0].to" :prepend-icon="group.items[0].icon" :title="group.items[0].title" :value="group.items[0].value" class="app-nav-single" />
         </template>
       </v-list>
     </v-navigation-drawer>
@@ -464,9 +464,11 @@ onBeforeUnmount(() => {
 :deep(.v-navigation-drawer__content) {
   margin: 16px;
   height: calc(100dvh - 32px) !important;
-  border-radius: 8px !important;
+  border-radius: 10px !important;
   border: 1px solid var(--lp-border) !important;
-  background: var(--lp-surface) !important;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 97%), transparent 240px),
+    var(--lp-surface) !important;
   box-shadow: var(--lp-shadow-sm) !important;
   overflow: hidden;
   display: flex;
@@ -482,6 +484,10 @@ onBeforeUnmount(() => {
   min-height: 64px;
   margin-bottom: 14px;
   padding: 12px 16px;
+  border-radius: 10px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 97%), transparent 58%),
+    var(--lp-surface);
 }
 
 .app-header:hover {
@@ -527,9 +533,10 @@ onBeforeUnmount(() => {
   justify-content: flex-end;
   gap: 8px;
   min-height: 40px;
-  padding: 0;
-  border: 0;
-  background: transparent;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 10%);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--lp-surface-container), transparent 42%);
 }
 
 .utility-btn {
@@ -570,25 +577,31 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 72px;
+  height: 76px;
   padding: 0 18px;
-  border-bottom: 1px solid var(--lp-border);
+  border-bottom: 1px solid color-mix(in srgb, var(--lp-border), transparent 8%);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 94%), transparent 72%),
+    color-mix(in srgb, var(--lp-surface-container), transparent 46%);
 }
 
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 38px;
-  height: 38px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, rgba(var(--v-theme-primary), 0.72) 100%);
+  width: 42px;
+  height: 42px;
+  border-radius: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background:
+    linear-gradient(135deg, rgb(var(--v-theme-primary)) 0%, rgba(var(--v-theme-primary), 0.68) 100%);
   color: #ffffff;
   font-weight: 700;
-  box-shadow: 0 2px 8px rgba(var(--v-theme-primary), 0.25);
+  box-shadow: 0 6px 16px rgba(var(--v-theme-primary), 0.18);
 }
 
 .brand-title {
-  font-weight: 700;
+  font-size: 0.96rem;
+  font-weight: 780;
   letter-spacing: 0;
 }
 
@@ -604,6 +617,9 @@ onBeforeUnmount(() => {
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
+  display: grid;
+  align-content: start;
+  gap: 3px;
 }
 
 .task-ticker {
@@ -654,7 +670,7 @@ onBeforeUnmount(() => {
 :deep(.v-list-item) {
   border-radius: 8px !important;
   margin: 2px 0 !important;
-  padding: 8px 12px !important;
+  padding: 9px 12px !important;
   font-size: 0.9rem !important;
   font-weight: 500 !important;
   color: var(--lp-text-muted) !important;
@@ -663,24 +679,67 @@ onBeforeUnmount(() => {
 
 :deep(.v-list-item:hover) {
   color: var(--lp-text) !important;
-  background-color: rgba(var(--v-theme-on-surface), 0.04) !important;
+  background-color: color-mix(in srgb, var(--lp-surface-container), transparent 8%) !important;
 }
 
 :deep(.v-list-item--active) {
-  color: rgb(var(--v-theme-primary)) !important;
-  background-color: rgba(var(--v-theme-primary), 0.06) !important;
-  font-weight: 600 !important;
+  color: var(--lp-text) !important;
+  background:
+    linear-gradient(90deg, rgba(var(--v-theme-primary), 0.11), rgba(var(--v-theme-primary), 0.035)) !important;
+  border: 1px solid rgba(var(--v-theme-primary), 0.22) !important;
+  font-weight: 750 !important;
 }
 
 :deep(.v-list-item--active::before) {
   content: '';
   position: absolute;
   left: 0;
-  top: 10px;
-  bottom: 10px;
+  top: 8px;
+  bottom: 8px;
   width: 3px;
   background-color: rgb(var(--v-theme-primary));
   border-radius: 99px;
+}
+
+:deep(.v-list-item__prepend > .v-icon) {
+  width: 30px;
+  height: 30px;
+  margin-inline-end: 10px !important;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 32%);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--lp-surface-muted), transparent 34%);
+  color: var(--lp-text-muted);
+  opacity: 1;
+}
+
+:deep(.v-list-item--active .v-list-item__prepend > .v-icon) {
+  border-color: rgba(var(--v-theme-primary), 0.26);
+  background: rgba(var(--v-theme-primary), 0.1);
+  color: rgb(var(--v-theme-primary));
+}
+
+:deep(.app-nav-child) {
+  margin-left: 40px !important;
+  padding-left: 12px !important;
+  font-size: 0.84rem !important;
+}
+
+:deep(.app-nav-child .v-list-item__prepend) {
+  display: none !important;
+}
+
+:deep(.app-nav-group .v-list-group__items) {
+  position: relative;
+  margin-left: 15px;
+  padding-left: 8px;
+}
+
+:deep(.app-nav-group .v-list-group__items::before) {
+  content: '';
+  position: absolute;
+  inset: 3px auto 7px 15px;
+  width: 1px;
+  background: color-mix(in srgb, var(--lp-border), transparent 12%);
 }
 
 .min-width-0 {

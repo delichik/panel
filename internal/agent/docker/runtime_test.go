@@ -1,6 +1,8 @@
 package docker
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -175,6 +177,13 @@ func TestPreparePersistentMountsCreatesManagedDirectory(t *testing.T) {
 func TestWriteManagedFilesAppliesFileMode(t *testing.T) {
 	root := t.TempDir()
 	r := &LocalRuntime{root: root}
+	target := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "bin", "start.sh")
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	spec := appruntime.Spec{
 		ApplicationID: "app-1",
 		InstanceID:    "app-1-srv-a",
@@ -188,13 +197,84 @@ func TestWriteManagedFilesAppliesFileMode(t *testing.T) {
 	if err := r.writeManagedFiles(spec); err != nil {
 		t.Fatal(err)
 	}
-	info, err := os.Stat(filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "bin", "start.sh"))
+	info, err := os.Stat(target)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
 		t.Fatalf("mode = %v, want 0755", info.Mode().Perm())
 	}
+}
+
+func TestWriteManagedArchiveKeepsArchiveAndOverwritesExtractedFiles(t *testing.T) {
+	root := t.TempDir()
+	r := &LocalRuntime{root: root}
+	content := testZipArchive(t, map[string]string{"index.html": "<h1>ok</h1>"})
+	spec := appruntime.Spec{
+		ApplicationID: "app-1",
+		InstanceID:    "app-1-srv-a",
+		Files: []appruntime.ManagedFile{{
+			Kind:    appruntime.ManagedFileKindArchive,
+			Path:    "public",
+			Content: content,
+		}},
+	}
+
+	if err := r.writeManagedFiles(spec); err != nil {
+		t.Fatal(err)
+	}
+	archivePath := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "archives", "public.archive")
+	extractedPath := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "public", "index.html")
+	if got, err := os.ReadFile(archivePath); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("archive content = %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(extractedPath); err != nil || string(got) != "<h1>ok</h1>" {
+		t.Fatalf("extracted content = %q err=%v", got, err)
+	}
+	if hash, drifted, err := r.managedFilesDrift("app-1", "app-1-srv-a"); err != nil || hash == "" || drifted {
+		t.Fatalf("managed files should be healthy after write: hash=%q drifted=%v err=%v", hash, drifted, err)
+	}
+
+	if err := os.WriteFile(archivePath, []byte("corrupt"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(extractedPath, []byte("changed"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, drifted, err := r.managedFilesDrift("app-1", "app-1-srv-a"); err != nil || !drifted {
+		t.Fatalf("managed files should drift after node-side changes: drifted=%v err=%v", drifted, err)
+	}
+	if err := r.writeManagedFiles(spec); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(archivePath); err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("rewritten archive content = %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(extractedPath); err != nil || string(got) != "<h1>ok</h1>" {
+		t.Fatalf("restored extracted content = %q err=%v", got, err)
+	}
+	if _, drifted, err := r.managedFilesDrift("app-1", "app-1-srv-a"); err != nil || drifted {
+		t.Fatalf("managed files should be healthy after rewrite: drifted=%v err=%v", drifted, err)
+	}
+}
+
+func testZipArchive(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range files {
+		writer, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
 }
 
 func TestPreparePersistentMountsRejectsEscapedDirectory(t *testing.T) {

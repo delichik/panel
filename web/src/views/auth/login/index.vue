@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { settingsApi } from '@/api/settings';
 import { useAuthStore } from '@/stores/auth';
 import { useI18n } from '@/i18n';
+import AppActionButton from '@/components/AppActionButton.vue';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -84,17 +85,16 @@ async function submit() {
             {{ auth.error }}
           </v-alert>
 
-          <v-btn
-            color="primary"
+          <AppActionButton
+            kind="primary"
+            icon="mdi-login"
+            :label="t('login.submit')"
             block
             size="large"
             type="submit"
             :loading="auth.loading"
-            class="login-submit text-none"
-          >
-            {{ t('login.submit') }}
-            <v-icon icon="mdi-arrow-right" end size="18" />
-          </v-btn>
+            class="login-submit"
+          />
         </v-form>
       </v-card>
     </section>

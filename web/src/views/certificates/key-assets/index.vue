@@ -9,9 +9,12 @@ import type {
   KeyAssetImportConflictStrategy,
   KeyAssetSummaryDto,
 } from '@/types/api';
-import AppSelectorItem from '@/components/AppSelectorItem.vue';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppDetailPanel from '@/components/AppDetailPanel.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import AppSelectorSummaryItem from '@/components/AppSelectorSummaryItem.vue';
 
 type AssetTab = 'ca' | 'tls' | 'ssh';
 type PageMode = 'certificates' | 'keys';
@@ -134,6 +137,7 @@ const confirmState = reactive<ConfirmDialogState>({
   acknowledgeRequired: false,
   acknowledged: false,
 });
+const confirmActionKind = computed<'danger-primary' | 'warning-primary'>(() => (confirmState.color === 'warning' ? 'warning-primary' : 'danger-primary'));
 let confirmAction: (() => Promise<void>) | null = null;
 
 const caAssets = computed(() => items.value.filter((item) => item.type === 'ca_certificate'));
@@ -663,7 +667,8 @@ onMounted(load);
 <template>
   <div class="page-shell">
     <v-alert v-if="error" type="error" variant="tonal" class="mb-4">{{ error }}</v-alert>
-    <div class="asset-workspace">
+    <AppMasterDetailWorkspace>
+      <template #aside>
       <AppSelectorPanel
         :title="selectorTitle"
         :loading="loading"
@@ -685,10 +690,10 @@ onMounted(load);
           </div>
         </template>
         <template #actions>
-          <v-btn icon="mdi-plus" color="primary" variant="flat" size="small" :aria-label="activeTab === 'ca' ? t('keyAssetsPage.createCa') : activeTab === 'tls' ? t('keyAssetsPage.createTls') : t('keyAssetsPage.generateSsh')" @click="openEditor(activeTab, false)" />
+          <AppActionButton kind="tool" icon="mdi-plus" :label="activeTab === 'ca' ? t('keyAssetsPage.createCa') : activeTab === 'tls' ? t('keyAssetsPage.createTls') : t('keyAssetsPage.generateSsh')" @click="openEditor(activeTab, false)" />
           <v-menu location="bottom end">
             <template #activator="{ props: menuProps }">
-              <v-btn v-bind="menuProps" icon="mdi-dots-vertical" variant="text" size="small" :aria-label="t('common.more')" />
+              <AppActionButton v-bind="menuProps" kind="tool" icon="mdi-dots-vertical" :label="t('common.more')" />
             </template>
             <v-list density="compact">
               <v-list-item prepend-icon="mdi-import" :title="t('keyAssetsPage.importAsset')" @click="openEditor(activeTab, true)" />
@@ -697,44 +702,51 @@ onMounted(load);
             </v-list>
           </v-menu>
         </template>
-        <AppSelectorItem v-for="item in selectorAssets" :key="item.key" as="div" :selected="item.key === selectedAssetKey" @select="selectAsset(item)">
-          <span class="asset-selector-content min-width-0">
+        <AppSelectorSummaryItem
+          v-for="item in selectorAssets"
+          :key="item.key"
+          as="div"
+          :selected="item.key === selectedAssetKey"
+          :title="item.user.name"
+          :subtitle="item.user.commonName || item.user.fingerprint"
+          :status="false"
+          @select="selectAsset(item)"
+        >
+          <template #leading>
             <v-checkbox-btn
               class="asset-selector-checkbox"
               :model-value="selectedByTab[item.type].includes(item.user.id)"
               @click.stop
               @update:model-value="toggleSelectionFor(item.type, item.user.id, $event)"
             />
-            <span class="asset-selector-main min-width-0">
-              <span class="asset-selector-title text-truncate">{{ item.user.name }}</span>
-              <span class="asset-selector-meta text-truncate">{{ item.user.commonName || item.user.fingerprint }}</span>
-            </span>
-          </span>
-          <span class="asset-selector-tail">
-            <v-chip size="x-small" variant="tonal">{{ assetTypeLabel(item.user.type) }}</v-chip>
-          </span>
-        </AppSelectorItem>
+          </template>
+          <v-chip size="x-small" variant="tonal">{{ assetTypeLabel(item.user.type) }}</v-chip>
+        </AppSelectorSummaryItem>
       </AppSelectorPanel>
+      </template>
 
-      <v-card variant="outlined" class="asset-detail-card">
-        <PageLoadingState v-if="loading && !selectedAsset" min-height="300px" />
-        <template v-else-if="selectedAsset">
-          <div class="asset-detail-header">
+      <AppDetailPanel
+        class="asset-detail-card"
+        :loading="loading && !selectedAsset"
+        :empty="!selectedAsset"
+        :empty-text="t('keyAssetsPage.noAssets')"
+      >
+        <template v-if="selectedAsset" #header>
             <div class="min-width-0">
               <div class="text-h6 font-weight-bold text-truncate">{{ selectedAsset.user.name }}</div>
               <div class="text-body-2 text-medium-emphasis">{{ assetTypeLabel(selectedAsset.user.type) }}</div>
             </div>
-            <div class="row-actions">
+            <AppActionGroup context="detail" class="app-detail-actions">
               <v-menu>
-                <template #activator="{ props: menuProps }"><v-btn v-bind="menuProps" size="small" variant="outlined" prepend-icon="mdi-download">{{ t('common.download') }}</v-btn></template>
+                <template #activator="{ props: menuProps }"><AppActionButton v-bind="menuProps" icon="mdi-download" :label="t('common.download')" /></template>
                 <v-list density="compact"><v-list-item v-for="kind in selectedAsset.user.downloadKinds" :key="kind" :title="fileKindLabel(kind)" @click="downloadAssetFile(selectedAsset.user, kind)" /></v-list>
               </v-menu>
-              <v-btn v-if="selectedAsset.user.type === 'tls_certificate'" size="small" variant="outlined" :disabled="!selectedAsset.user.canReissue" @click="triggerReissue(selectedAsset.user)">{{ t('keyAssetsPage.reissue') }}</v-btn>
-              <v-btn v-if="selectedAsset.user.type === 'ssh_key_pair'" size="small" variant="outlined" :disabled="!selectedAsset.user.canRegenerate" @click="triggerRegenerate(selectedAsset.user)">{{ t('keyAssetsPage.regenerate') }}</v-btn>
-              <v-btn size="small" color="error" variant="outlined" @click="triggerDelete(selectedAsset.user)">{{ t('common.delete') }}</v-btn>
-            </div>
-          </div>
-          <div class="asset-detail-body">
+              <AppActionButton v-if="selectedAsset.user.type === 'tls_certificate'" icon="mdi-autorenew" :label="t('keyAssetsPage.reissue')" :disabled="!selectedAsset.user.canReissue" @click="triggerReissue(selectedAsset.user)" />
+              <AppActionButton v-if="selectedAsset.user.type === 'ssh_key_pair'" icon="mdi-reload" :label="t('keyAssetsPage.regenerate')" :disabled="!selectedAsset.user.canRegenerate" @click="triggerRegenerate(selectedAsset.user)" />
+              <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="triggerDelete(selectedAsset.user)" />
+            </AppActionGroup>
+        </template>
+        <template v-if="selectedAsset" #body>
             <div class="asset-detail-grid">
               <div><span>{{ t('keyAssetsPage.commonName') }}</span><strong>{{ selectedAsset.user.commonName || t('common.notAvailable') }}</strong></div>
               <div><span>{{ t('common.fingerprint') }}</span><strong class="mono">{{ selectedAsset.user.fingerprint }}</strong></div>
@@ -743,17 +755,15 @@ onMounted(load);
               <div><span>{{ t('keyAssetsPage.references') }}</span><strong>{{ referenceText(selectedAsset.user) }}</strong></div>
               <div v-if="selectedAsset.user.type === 'tls_certificate'"><span>{{ t('keyAssetsPage.dnsNames') }}</span><strong>{{ selectedAsset.user.dnsNames.join(', ') || t('common.notAvailable') }}</strong></div>
             </div>
-          </div>
         </template>
-        <div v-else class="asset-empty-detail text-medium-emphasis">{{ t('keyAssetsPage.noAssets') }}</div>
-      </v-card>
-    </div>
+      </AppDetailPanel>
+    </AppMasterDetailWorkspace>
 
     <v-dialog v-model="editorDialog" max-width="760">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ editorTitle }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="editorDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="editorDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -820,10 +830,10 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="editorDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" :loading="busy === 'editor'" @click="submitEditor">
-            {{ editorImportMode ? t('common.import') : t('common.generate') }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="editorDialog = false" />
+            <AppActionButton kind="primary" :label="editorImportMode ? t('common.import') : t('common.generate')" :loading="busy === 'editor'" @click="submitEditor" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -832,7 +842,7 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('keyAssetsPage.exportTitle') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="exportDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="exportDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -848,10 +858,10 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="exportDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" :loading="busy === 'export'" @click="submitExport">
-            {{ t('common.export') }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="exportDialog = false" />
+            <AppActionButton kind="primary" :label="t('common.export')" :loading="busy === 'export'" @click="submitExport" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -860,7 +870,7 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('keyAssetsPage.archiveImportTitle') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="archiveDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="archiveDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body archive-dialog">
@@ -874,9 +884,7 @@ onMounted(load);
               prepend-icon="mdi-paperclip"
             />
             <v-text-field v-model="archivePassword" type="password" :label="t('keyAssetsPage.archivePassword')" />
-            <v-btn color="primary" variant="outlined" class="text-none" :loading="busy === 'preflight'" :disabled="!archiveFile" @click="runArchivePreflight">
-              {{ t('keyAssetsPage.preflight') }}
-            </v-btn>
+            <AppActionButton icon="mdi-shield-search" :label="t('keyAssetsPage.preflight')" :loading="busy === 'preflight'" :disabled="!archiveFile" @click="runArchivePreflight" />
           </div>
 
           <template v-if="archivePreflight">
@@ -967,17 +975,16 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="archiveDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn
-            color="primary"
-            variant="flat"
-            class="text-none"
-            :disabled="!archivePreflight"
-            :loading="busy === 'execute-import'"
-            @click="executeArchiveImport"
-          >
-            {{ t('keyAssetsPage.executeImport') }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="archiveDialog = false" />
+            <AppActionButton
+              kind="primary"
+              :label="t('keyAssetsPage.executeImport')"
+              :disabled="!archivePreflight"
+              :loading="busy === 'execute-import'"
+              @click="executeArchiveImport"
+            />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -986,7 +993,7 @@ onMounted(load);
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ confirmState.title }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="confirmDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="confirmDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -1003,17 +1010,16 @@ onMounted(load);
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="confirmDialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn
-            :color="confirmState.color"
-            variant="flat"
-            class="text-none"
-            :disabled="confirmState.acknowledgeRequired && !confirmState.acknowledged"
-            :loading="busy === 'confirm'"
-            @click="runConfirmAction"
-          >
-            {{ confirmState.confirmLabel }}
-          </v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="confirmDialog = false" />
+            <AppActionButton
+              :kind="confirmActionKind"
+              :label="confirmState.confirmLabel"
+              :disabled="confirmState.acknowledgeRequired && !confirmState.acknowledged"
+              :loading="busy === 'confirm'"
+              @click="runConfirmAction"
+            />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -1021,54 +1027,23 @@ onMounted(load);
     <v-snackbar v-model="snackbar" :color="snackbarColor" timeout="5000">
       {{ snackbarText }}
       <template #actions>
-        <v-btn v-if="lastTaskId" color="white" variant="text" :to="taskRoute()">{{ t('common.viewTask') }}</v-btn>
-        <v-btn
+        <AppActionGroup context="snackbar">
+        <AppActionButton v-if="lastTaskId" kind="snackbar" :label="t('common.viewTask')" :to="taskRoute()" />
+        <AppActionButton
           v-if="lastExportTaskId"
-          color="white"
-          variant="text"
+          kind="snackbar"
+          :label="t('keyAssetsPage.downloadArchive')"
           :loading="busy === 'download-export'"
           @click="downloadExportArchive"
-        >
-          {{ t('keyAssetsPage.downloadArchive') }}
-        </v-btn>
-        <v-btn color="white" variant="text" @click="snackbar = false">{{ t('common.close') }}</v-btn>
+        />
+        <AppActionButton kind="snackbar" :label="t('common.close')" @click="snackbar = false" />
+        </AppActionGroup>
       </template>
     </v-snackbar>
   </div>
 </template>
 
 <style scoped>
-.asset-workspace {
-  display: grid;
-  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
-  flex: 1 1 auto;
-  gap: 18px;
-  min-height: 0;
-}
-
-.asset-detail-card {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.asset-detail-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 16px;
-  border-bottom: 1px solid var(--lp-border);
-}
-
-.asset-detail-body {
-  min-height: 0;
-  padding: 16px;
-  overflow: auto;
-}
-
 .asset-detail-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1084,21 +1059,14 @@ onMounted(load);
   border-radius: 8px;
 }
 
-.asset-detail-grid span,
-.asset-selector-meta {
+.asset-detail-grid span {
   color: var(--lp-text-muted);
   font-size: 0.76rem;
 }
 
 .asset-detail-grid strong { overflow-wrap: anywhere; font-size: 0.88rem; }
 .asset-selector-summary { min-height: 20px; }
-.asset-selector-content { display: flex; align-items: center; gap: 8px; margin-left: -6px; }
 .asset-selector-checkbox { flex: 0 0 auto; }
-.asset-selector-main, .asset-selector-title, .asset-selector-meta { display: block; min-width: 0; }
-.asset-selector-title { font-size: 0.9rem; font-weight: 700; }
-.asset-selector-meta { margin-top: 2px; }
-.asset-selector-tail { display: flex; align-items: center; gap: 4px; }
-.asset-empty-detail { display: grid; flex: 1 1 auto; place-items: center; min-height: 220px; padding: 32px; }
 
 .table-pane {
   min-height: 0;
@@ -1107,13 +1075,6 @@ onMounted(load);
 
 .checkbox-col {
   width: 44px;
-}
-
-.row-actions {
-  display: inline-flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
 }
 
 .cell-wrap {
@@ -1191,10 +1152,6 @@ onMounted(load);
 }
 
 @media (max-width: 1080px) {
-  .asset-workspace {
-    grid-template-columns: 1fr;
-  }
-
   .archive-inputs,
   .summary-grid {
     grid-template-columns: 1fr;
@@ -1202,22 +1159,10 @@ onMounted(load);
 }
 
 @media (max-width: 720px) {
-  .asset-workspace { flex: none; }
-  .asset-detail-card, .asset-detail-body { overflow: visible; }
-  .asset-detail-header { align-items: stretch; flex-direction: column; }
   .asset-detail-grid { grid-template-columns: 1fr; }
   .table-pane {
     overflow-x: auto;
     overflow-y: visible;
-  }
-
-  .row-actions {
-    display: flex;
-    width: 100%;
-  }
-
-  .row-actions :deep(.v-btn) {
-    flex: 1 1 auto;
   }
 }
 </style>

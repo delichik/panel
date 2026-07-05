@@ -3,6 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { useI18n } from '@/i18n';
 import TaskLogPanel from '@/components/tasks/TaskLogPanel.vue';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
+import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue';
 import AppSelectorItem from '@/components/AppSelectorItem.vue';
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
@@ -588,15 +591,16 @@ onMounted(loadTaskCenter);
         closable-chips
         clearable
       />
-      <div class="filter-actions">
-        <v-btn color="primary" variant="flat" prepend-icon="mdi-magnify" class="text-none" @click="searchTasks">{{ t('taskCenter.search') }}</v-btn>
-        <v-btn variant="outlined" prepend-icon="mdi-filter-remove" class="text-none" @click="clearFilters">{{ t('taskCenter.clear') }}</v-btn>
-      </div>
+      <AppActionGroup context="filter" mobile-stack>
+        <AppActionButton kind="primary" icon="mdi-magnify" :label="t('taskCenter.search')" @click="searchTasks" />
+        <AppActionButton icon="mdi-filter-remove" :label="t('taskCenter.clear')" @click="clearFilters" />
+      </AppActionGroup>
     </v-card>
 
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
 
-    <div class="task-workspace">
+    <AppMasterDetailWorkspace>
+      <template #aside>
       <AppSelectorPanel
         class="operation-panel"
         :title="t('taskCenter.operations')"
@@ -623,9 +627,10 @@ onMounted(loadTaskCenter);
                 <span class="operation-context">{{ formatTime(group.createdAt) }} · {{ operationObjectLabel(group) }}</span>
               </span>
               <v-chip :color="taskStatusColor(group.status)" size="x-small" label>{{ statusLabel(group.status) }}</v-chip>
-            </span>
-          </AppSelectorItem>
+          </span>
+        </AppSelectorItem>
       </AppSelectorPanel>
+      </template>
 
       <section class="main-panel">
         <v-card variant="outlined" class="lifecycle-panel">
@@ -720,37 +725,27 @@ onMounted(loadTaskCenter);
               </div>
             </div>
 
-            <div class="action-row">
-              <v-btn
-                size="small"
-                variant="outlined"
-                prepend-icon="mdi-text-box-search-outline"
+            <AppActionGroup context="section" align="start" class="action-row">
+              <AppActionButton
+                icon="mdi-text-box-search-outline"
+                :label="t('taskCenter.stepsAndLogs')"
                 @click="openDetailsDialog"
-              >
-                {{ t('taskCenter.stepsAndLogs') }}
-              </v-btn>
-              <v-btn
+              />
+              <AppActionButton
                 v-if="canRunNow(selectedTask)"
-                size="small"
-                color="primary"
-                variant="outlined"
-                prepend-icon="mdi-play"
+                icon="mdi-play"
+                :label="t('common.runNow')"
                 :loading="actionLoading === `run:${selectedTask.id}`"
                 @click="runNowTask(selectedTask)"
-              >
-                {{ t('common.runNow') }}
-              </v-btn>
-              <v-btn
+              />
+              <AppActionButton
                 v-if="canRetry(selectedTask)"
-                size="small"
-                variant="outlined"
-                prepend-icon="mdi-reload"
+                icon="mdi-reload"
+                :label="t('common.retry')"
                 :loading="actionLoading === `retry:${selectedTask.id}`"
                 @click="retryTask(selectedTask)"
-              >
-                {{ t('common.retry') }}
-              </v-btn>
-            </div>
+              />
+            </AppActionGroup>
           </template>
         </v-card>
 
@@ -874,13 +869,13 @@ onMounted(loadTaskCenter);
         </v-card>
       </section>
 
-    </div>
+    </AppMasterDetailWorkspace>
 
     <v-dialog v-model="detailsDialog" width="980">
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ t('taskCenter.stepsAndLogs') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="detailsDialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="detailsDialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body task-details-dialog">
@@ -921,33 +916,17 @@ onMounted(loadTaskCenter);
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
   gap: 12px;
   align-items: center;
-  padding: 14px;
-}
-
-.filter-actions {
-  display: flex;
-  gap: 10px;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
-.filter-actions .v-btn {
   flex: 0 0 auto;
-}
-
-.task-workspace {
-  display: grid;
-  grid-template-columns: clamp(300px, 26vw, 340px) minmax(0, 1fr);
-  flex: 1 1 auto;
-  gap: 16px;
-  min-height: 0;
-  align-items: stretch;
+  padding: 14px 16px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 98%), transparent 62%),
+    var(--lp-surface) !important;
 }
 
 .main-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
-  gap: 16px;
+  grid-template-rows: auto minmax(220px, 0.55fr) minmax(0, 1fr);
+  gap: 14px;
   min-height: 0;
 }
 
@@ -1037,6 +1016,14 @@ onMounted(loadTaskCenter);
   overflow: hidden;
 }
 
+.lifecycle-panel,
+.deployment-targets-panel,
+.task-table-panel {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 62%), transparent 74%),
+    var(--lp-surface) !important;
+}
+
 .deployment-targets-panel {
   max-height: 260px;
 }
@@ -1121,7 +1108,6 @@ tr.selected {
   }
 
   .filter-bar,
-  .task-workspace,
   .diagnostics-grid {
     grid-template-columns: 1fr;
   }
@@ -1129,12 +1115,10 @@ tr.selected {
 
 @media (max-width: 760px) {
   .task-center,
-  .task-workspace,
   .task-table-wrap {
     flex: none;
   }
 
-  .task-workspace,
   .main-panel {
     min-height: auto;
   }
@@ -1154,15 +1138,6 @@ tr.selected {
 @media (max-width: 560px) {
   .selected-progress {
     grid-template-columns: 1fr;
-  }
-
-  .filter-actions {
-    justify-content: stretch;
-  }
-
-  .filter-actions .v-btn {
-    flex: 1 1 0;
-    min-width: 0;
   }
 
   .action-row .v-btn {

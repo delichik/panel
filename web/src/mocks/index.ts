@@ -184,8 +184,7 @@ export const mockFetch: typeof fetch = async (input, init = {}) => {
     if (match[2] === 'files/archive') {
       const form = await request.formData();
       const basePath = String(form.get('basePath') || 'public').replace(/^\/+|\/+$/g, '');
-      const kind = String(form.get('kind') || 'binary');
-      return envelope([{ id: nextId('file'), applicationId: '', path: `${basePath || 'public'}/index.html`, kind, contentType: 'text/html', size: 256, sha256: 'sha256:mock-archive', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }]);
+      return envelope([{ id: nextId('file'), applicationId: '', path: basePath || 'public', kind: 'archive', contentType: 'archive', size: 256, sha256: 'sha256:mock-archive', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }]);
     }
     const body = await jsonBody(request);
     return match[2] === 'files/delete' ? new Response(null, { status: 204 }) : envelope({ id: nextId('file'), applicationId: '', path: body.path, kind: body.kind, contentType: body.contentType || 'text/plain', size: 128, sha256: 'sha256:mock', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });

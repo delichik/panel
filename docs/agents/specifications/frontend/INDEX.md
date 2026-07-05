@@ -22,8 +22,8 @@
 | 范围 | 文档 | 主要源码 |
 | --- | --- | --- |
 | 色彩、圆角、间距、排版、阴影、主题与动效 | [foundations.md](foundations.md) | `web/src/main.ts`、`web/src/theme.ts`、`web/src/styles/main.css` |
-| 页面壳、工具栏、摘要区、双栏工作区与响应式 | [page-layout.md](page-layout.md) | `web/src/styles/main.css`、各 feature 页面 |
-| 按钮、图标按钮与操作分级 | [buttons.md](buttons.md) | Vuetify `v-btn`、`web/src/styles/main.css` |
+| 页面壳、工具栏、摘要区、双栏工作区与响应式 | [page-layout.md](page-layout.md) | `web/src/styles/main.css`、`web/src/components/AppMasterDetailWorkspace.vue` |
+| 按钮、图标按钮、操作组与操作分级 | [buttons.md](buttons.md) | `web/src/components/AppActionButton.vue`、`web/src/components/AppActionGroup.vue`、Vuetify `v-btn` |
 | 普通卡片、面板、标题区、摘要卡与信息网格 | [cards-panels.md](cards-panels.md) | Vuetify `v-card`、全局组合类 |
 | 文本框、选择器、文本域、开关、复选框与表单布局 | [forms.md](forms.md) | Vuetify 表单组件、各对话框和设置页 |
 | 数据表格、行操作与窄屏滚动 | [tables.md](tables.md) | Vuetify `v-table`、全局表格覆盖 |
@@ -44,8 +44,13 @@
 | `PageLoadingState.vue` | 多数页面的首次网络加载 | [loading-empty.md](loading-empty.md) |
 | `AppSelectorPanel.vue` | 主从页面左侧选择器外壳 | [selection-lists.md](selection-lists.md) |
 | `AppSelectorItem.vue` | 服务器、域名和任务选择行 | [selection-lists.md](selection-lists.md) |
+| `AppSelectorSummaryItem.vue` | 名称、副标题、状态点和行尾状态的通用选择行 | [selection-lists.md](selection-lists.md) |
 | `ServerSelectorItem.vue` | 所有服务器选择器的统一服务器行 | [selection-lists.md](selection-lists.md) |
 | `ServerSelector.vue` | 防火墙、软件包和全部容器资源页面 | [selection-lists.md](selection-lists.md) |
+| `AppActionButton.vue` | 页面、详情、section、表格行和工具位操作按钮 | [buttons.md](buttons.md) |
+| `AppActionGroup.vue` | 页面、工具栏、详情、表格、section 和筛选操作区 | [buttons.md](buttons.md) |
+| `AppMasterDetailWorkspace.vue` | 主从页面统一双栏工作区和断点 | [page-layout.md](page-layout.md)、[selection-lists.md](selection-lists.md) |
+| `AppDetailPanel.vue` | 主从页面右侧详情卡、固定头部、滚动正文、加载和空状态 | [cards-panels.md](cards-panels.md) |
 | `TaskLogPanel.vue` | 任务详情日志 | [logs.md](logs.md) |
 
 ## 使用要求

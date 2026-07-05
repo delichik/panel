@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import ApplicationEditor from './ApplicationEditor.vue';
 
@@ -62,9 +63,7 @@ onMounted(loadApplication);
 <template>
   <div class="page-shell application-create-page">
     <div class="create-page-toolbar">
-      <v-btn variant="text" prepend-icon="mdi-arrow-left" class="text-none" @click="returnToApplications(application?.id)">
-        {{ t('applicationsPage.backToApplications') }}
-      </v-btn>
+      <AppActionButton kind="plain" icon="mdi-arrow-left" :label="t('applicationsPage.backToApplications')" @click="returnToApplications(application?.id)" />
     </div>
     <v-alert v-if="error" type="error" variant="tonal">{{ error }}</v-alert>
     <PageLoadingState v-else-if="loading" min-height="320px" />

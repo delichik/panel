@@ -8,6 +8,7 @@ function read(relativePath: string) {
 
 describe('selector detail workspaces', () => {
   it('uses the shared selector width across desktop layouts', () => {
+    const workspace = read('../components/AppMasterDetailWorkspace.vue');
     const pages = [
       read('servers/_shared/ServersPageContent.vue'),
       read('resources/packages/index.vue'),
@@ -19,9 +20,10 @@ describe('selector detail workspaces', () => {
     ];
 
     for (const page of pages) {
-      expect(page).toContain('clamp(300px, 26vw, 340px) minmax(0, 1fr)');
-      expect(page).toContain('@media (max-width: 1080px)');
+      expect(page).toContain('<AppMasterDetailWorkspace');
     }
+    expect(workspace).toContain('clamp(300px, 26vw, 340px) minmax(0, 1fr)');
+    expect(workspace).toContain('@media (max-width: 1080px)');
   });
 
   it('clears stale async details and ignores late responses', () => {
@@ -49,7 +51,7 @@ describe('selector detail workspaces', () => {
     expect(domainsPage).toContain('records.value = [];');
     expect(domainsPage).toContain('requestId !== recordsRequestId || selectedDomainId.value !== domain.id');
     expect(domainsPage).toContain('recordsLoading && records.length === 0 && selectedDomain');
-    expect(domainsPage).toContain('class="domain-detail-actions"');
+    expect(domainsPage).toContain('class="app-detail-actions"');
     expect(domainsPage).toContain('@click="resetForm(selectedDomain)"');
     expect(domainsPage).toContain('@click="askDeleteDomain(selectedDomain)"');
     expect(domainsPage).not.toContain('icon="mdi-dots-vertical"');
@@ -77,10 +79,11 @@ describe('selector detail workspaces', () => {
     const domainsPage = read('dns/domains/index.vue');
     const tasksPage = read('tasks/index.vue');
 
-    for (const page of [domainsPage, tasksPage]) {
-      expect(page).toContain('<AppSelectorPanel');
-      expect(page).toContain('<AppSelectorItem');
-    }
+    expect(domainsPage).toContain('<AppSelectorPanel');
+    expect(domainsPage).toContain('<AppSelectorSummaryItem');
+
+    expect(tasksPage).toContain('<AppSelectorPanel');
+    expect(tasksPage).toContain('<AppSelectorItem');
 
     for (const page of [selector, serversPage]) {
       expect(page).toContain('<AppSelectorPanel');
@@ -109,6 +112,21 @@ describe('selector detail workspaces', () => {
     expect(fail2banPage).toContain('<ServerSelector');
     expect(resourcePage).toContain('<ServerSelector');
     for (const page of resourceConsumers) expect(page).toContain('<ResourcePage');
+  });
+
+  it('uses the shared detail panel for security content panes', () => {
+    const firewallPage = read('security/firewall/index.vue');
+    const fail2banPage = read('security/fail2ban/index.vue');
+
+    for (const page of [firewallPage, fail2banPage]) {
+      expect(page).toContain('<AppDetailPanel');
+      expect(page).toContain('class="app-detail-actions"');
+      expect(page).toContain('class="info-grid"');
+      expect(page).not.toContain('security-panel');
+      expect(page).not.toContain('security-panel-body');
+      expect(page).not.toContain('status-grid');
+      expect(page).not.toContain('empty-panel');
+    }
   });
 
   it('clears server resource content and ignores late server responses', () => {

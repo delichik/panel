@@ -665,7 +665,7 @@ export interface ApplicationReverseProxyPathDto {
   webSocket: boolean;
 }
 
-export type ApplicationFileKind = 'binary' | 'template';
+export type ApplicationFileKind = 'binary' | 'template' | 'archive';
 
 export interface ApplicationFileDto {
   id: string;

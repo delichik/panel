@@ -21,6 +21,8 @@ import type {
   OverviewDto,
   OverviewServerDto,
 } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent]);
@@ -360,6 +362,42 @@ function metricCardLabel(card: OverviewCardConfig) {
   return `${card.range} / ${direction}`;
 }
 
+function latestMetricSummaries(card: OverviewCardConfig) {
+  if (!isMetricCard(card)) return [];
+  return resolveCardServers(card)
+    .map((server, index) => {
+      const series = cardDataById.value[card.id]?.metricsByServer[server.id] as MetricsSeriesDto | undefined;
+      const color = palette.value.series[index % palette.value.series.length];
+      const value = latestMetricValue(card, series);
+      return value ? { id: server.id, name: server.name, color, value } : null;
+    })
+    .filter((item): item is { id: string; name: string; color: string; value: string } => Boolean(item));
+}
+
+function latestMetricValue(card: OverviewCardConfig, series: MetricsSeriesDto | undefined) {
+  if (!series) return '';
+  if (card.kind === 'cpu') {
+    const point = series.cpu.at(-1);
+    return point ? formatMetricValue(card.kind, point.usagePercent) : '';
+  }
+  if (card.kind === 'memory') {
+    const point = series.memory.at(-1);
+    return point ? formatMetricValue(card.kind, percent(point.usedBytes, point.totalBytes)) : '';
+  }
+  if (card.kind === 'disk') {
+    const point = series.disk.at(-1);
+    return point ? formatMetricValue(card.kind, percent(point.usedBytes, point.totalBytes)) : '';
+  }
+  if (card.kind === 'network') {
+    const point = series.network.at(-1);
+    if (!point) return '';
+    if (card.networkDirection === 'rx') return formatBytesPerSecond(point.rxBytesPerSecond);
+    if (card.networkDirection === 'tx') return formatBytesPerSecond(point.txBytesPerSecond);
+    return `${formatBytesPerSecond(point.rxBytesPerSecond)} / ${formatBytesPerSecond(point.txBytesPerSecond)}`;
+  }
+  return '';
+}
+
 function openAddDialog(kind?: CardKind) {
   const preset = presetFor(kind ?? 'cpu');
   editingCardId.value = '';
@@ -506,21 +544,18 @@ onBeforeUnmount(() => {
 <template>
   <div class="overview-workspace page-shell">
     <div class="overview-actions-row page-toolbar">
-      <div class="overview-actions">
+      <AppActionGroup context="page" class="overview-actions">
         <template v-if="editMode">
-          <v-btn variant="outlined" prepend-icon="mdi-restore" class="text-none" @click="resetCards">{{ t('overviewPage.reset') }}</v-btn>
-          <v-btn color="primary" variant="flat" prepend-icon="mdi-view-grid-plus" class="text-none font-weight-bold" @click="openAddDialog()">{{ t('overviewPage.addCard') }}</v-btn>
+          <AppActionButton icon="mdi-restore" :label="t('overviewPage.reset')" @click="resetCards" />
+          <AppActionButton kind="primary" icon="mdi-view-grid-plus" :label="t('overviewPage.addCard')" @click="openAddDialog()" />
         </template>
-        <v-btn
-          :color="editMode ? 'primary' : undefined"
-          :variant="editMode ? 'flat' : 'outlined'"
-          :prepend-icon="editMode ? 'mdi-check' : 'mdi-pencil'"
-          class="text-none font-weight-bold"
+        <AppActionButton
+          :kind="editMode ? 'primary' : 'secondary'"
+          :icon="editMode ? 'mdi-check' : 'mdi-pencil'"
+          :label="editMode ? t('common.done') : t('common.edit')"
           @click="toggleEditMode"
-        >
-          {{ editMode ? t('common.done') : t('common.edit') }}
-        </v-btn>
-      </div>
+        />
+      </AppActionGroup>
     </div>
 
     <v-alert v-if="error || saveError" type="error" variant="tonal">{{ error || saveError }}</v-alert>
@@ -533,7 +568,7 @@ onBeforeUnmount(() => {
         <div class="text-subtitle-1 font-weight-bold">{{ t('overviewPage.noServersConnected') }}</div>
         <div class="text-body-2 text-medium-emphasis">{{ t('overviewPage.addServerHint') }}</div>
       </div>
-      <v-btn color="primary" variant="flat" prepend-icon="mdi-plus" class="text-none" @click="router.push('/servers')">{{ t('common.addServer') }}</v-btn>
+      <AppActionButton kind="primary" icon="mdi-plus" :label="t('common.addServer')" @click="router.push('/servers')" />
     </div>
 
     <div v-else class="dashboard-grid">
@@ -566,18 +601,18 @@ onBeforeUnmount(() => {
             </div>
           </div>
           <div v-if="editMode" class="card-tools">
-            <v-btn
+            <AppActionButton
               class="card-drag-handle"
+              kind="tool"
               icon="mdi-drag"
-              variant="text"
-              size="small"
+              :label="t('overviewPage.moveCard')"
               draggable="true"
               @dragstart="startCardDrag(card.id, $event)"
               @dragend="endCardDrag"
             />
             <v-menu location="bottom end">
               <template #activator="{ props }">
-                <v-btn v-bind="props" icon="mdi-dots-vertical" variant="text" size="small" />
+                <AppActionButton v-bind="props" kind="tool" icon="mdi-dots-vertical" :label="t('common.more')" />
               </template>
               <v-list density="compact">
                 <v-list-item prepend-icon="mdi-pencil" :title="t('common.edit')" @click="openEditDialog(card)" />
@@ -587,19 +622,32 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-          <div v-else-if="editMode" class="placeholder-tools">
-            <v-btn
+        <div v-if="isMetricCard(card) && latestMetricSummaries(card).length" class="metric-summary-strip">
+          <div
+            v-for="item in latestMetricSummaries(card)"
+            :key="item.id"
+            class="metric-summary-pill"
+            :style="{ '--metric-color': item.color }"
+          >
+            <span class="metric-summary-dot" />
+            <span class="metric-summary-name text-truncate">{{ item.name }}</span>
+            <strong class="metric-summary-value font-tabular">{{ item.value }}</strong>
+          </div>
+        </div>
+
+          <div v-if="card.kind === 'placeholder' && editMode" class="placeholder-tools">
+            <AppActionButton
               class="card-drag-handle"
+              kind="tool"
               icon="mdi-drag"
-              variant="text"
-              size="small"
+              :label="t('overviewPage.moveCard')"
               draggable="true"
               @dragstart="startCardDrag(card.id, $event)"
               @dragend="endCardDrag"
             />
             <v-menu location="bottom end">
               <template #activator="{ props }">
-                <v-btn v-bind="props" icon="mdi-dots-vertical" variant="text" size="small" />
+                <AppActionButton v-bind="props" kind="tool" icon="mdi-dots-vertical" :label="t('common.more')" />
               </template>
               <v-list density="compact">
                 <v-list-item prepend-icon="mdi-pencil" :title="t('common.edit')" @click="openEditDialog(card)" />
@@ -654,7 +702,7 @@ onBeforeUnmount(() => {
       <v-card class="app-dialog-card">
         <v-card-title class="app-dialog-title">
           <span class="app-dialog-title-text">{{ editingCardId ? t('overviewPage.editCard') : t('overviewPage.createCard') }}</span>
-          <v-btn icon="mdi-close" variant="text" @click="dialog = false" />
+          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="dialog = false" />
         </v-card-title>
         <v-divider />
         <v-card-text class="app-dialog-body">
@@ -712,8 +760,10 @@ onBeforeUnmount(() => {
         </v-card-text>
         <v-divider />
         <v-card-actions class="app-dialog-actions">
-          <v-btn variant="text" class="text-none" @click="dialog = false">{{ t('common.cancel') }}</v-btn>
-          <v-btn color="primary" variant="flat" class="text-none" @click="saveCard">{{ t('common.save') }}</v-btn>
+          <AppActionGroup context="dialog">
+            <AppActionButton kind="plain" :label="t('common.cancel')" @click="dialog = false" />
+            <AppActionButton kind="primary" :label="t('common.save')" @click="saveCard" />
+          </AppActionGroup>
         </v-card-actions>
       </v-card>
     </v-dialog>
@@ -721,32 +771,35 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-.overview-workspace { flex: 1 1 auto; min-height: 0; }
-
-.overview-actions-row {
-  display: flex;
-  justify-content: flex-end;
+.overview-workspace {
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 14px;
 }
 
-.overview-actions {
-  display: flex;
+.overview-actions-row {
   justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
+  min-height: 0;
 }
 
 .dashboard-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
-  grid-auto-rows: 132px;
+  grid-auto-rows: 124px;
   grid-auto-flow: dense;
   flex: 1 1 auto;
-  gap: 16px;
+  gap: 14px;
   min-height: 0;
   align-items: stretch;
   align-content: start;
   overflow: auto;
-  padding-right: 4px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 8%);
+  border-radius: var(--lp-radius-lg);
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 42%), transparent 52%),
+    color-mix(in srgb, var(--lp-surface), transparent 8%);
+  box-shadow: var(--lp-shadow-sm);
 }
 
 .dashboard-card {
@@ -757,19 +810,23 @@ onBeforeUnmount(() => {
   overflow: hidden;
   flex-direction: column;
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 36%), var(--lp-surface) 70%) !important;
+    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 34%), var(--lp-surface) 72%) !important;
+  border-color: color-mix(in srgb, var(--lp-border), transparent 6%) !important;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease !important;
 }
 
 .dashboard-card:hover {
   transform: translateY(-1px);
+  border-color: color-mix(in srgb, rgb(var(--v-theme-primary)), var(--lp-border) 80%) !important;
 }
 
 .card-accent {
   position: absolute;
-  inset: 0 0 auto;
-  height: 3px;
-  opacity: 0.82;
+  inset: 14px auto 14px 0;
+  width: 3px;
+  height: auto;
+  border-radius: 0 99px 99px 0;
+  opacity: 0.92;
 }
 
 .card-accent--primary { background: rgb(var(--v-theme-primary)); }
@@ -786,7 +843,7 @@ onBeforeUnmount(() => {
 
 .dashboard-card--editing {
   border: 1px dashed rgba(var(--v-theme-primary), 0.55) !important;
-  background: color-mix(in srgb, var(--lp-surface), transparent 18%);
+  background: color-mix(in srgb, var(--lp-surface), transparent 12%) !important;
 }
 
 .dashboard-card--placeholder.dashboard-card--editing {
@@ -800,7 +857,7 @@ onBeforeUnmount(() => {
 
 .dashboard-card--drag-over {
   border-color: rgb(var(--v-theme-primary)) !important;
-  background: rgba(var(--v-theme-primary), 0.06);
+  background: rgba(var(--v-theme-primary), 0.06) !important;
 }
 
 .card-tools,
@@ -833,7 +890,7 @@ onBeforeUnmount(() => {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 12px 14px 8px;
+  padding: 13px 14px 8px 16px;
   flex: 0 0 auto;
 }
 
@@ -847,8 +904,8 @@ onBeforeUnmount(() => {
 .card-icon {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 32px;
+  height: 32px;
   border-radius: 8px;
   flex: 0 0 auto;
   transition: transform 0.18s ease;
@@ -863,10 +920,53 @@ onBeforeUnmount(() => {
 .surface-warning { color: rgb(var(--v-theme-warning)); background: rgba(var(--v-theme-warning), 0.12); }
 .surface-info { color: rgb(var(--v-theme-info)); background: rgba(var(--v-theme-info), 0.1); }
 
+.metric-summary-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 0 14px 10px 16px;
+}
+
+.metric-summary-pill {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--metric-color), var(--lp-border) 84%);
+  border-radius: var(--lp-radius-sm);
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--metric-color), transparent 94%), transparent 62%),
+    color-mix(in srgb, var(--lp-surface-container), transparent 40%);
+}
+
+.metric-summary-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--metric-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--metric-color), transparent 90%);
+}
+
+.metric-summary-name {
+  min-width: 0;
+  color: var(--lp-text-muted);
+  font-size: 0.74rem;
+  font-weight: 600;
+}
+
+.metric-summary-value {
+  color: var(--lp-text);
+  font-size: 0.86rem;
+  white-space: nowrap;
+}
+
 .card-body {
   min-height: 0;
   flex: 1 1 auto;
-  padding: 0 14px 14px;
+  padding: 0 14px 14px 16px;
   overflow: auto;
 }
 
@@ -958,11 +1058,6 @@ onBeforeUnmount(() => {
   .dashboard-grid {
     flex: none;
     min-height: auto;
-  }
-
-  .overview-actions,
-  .overview-actions .v-btn {
-    width: 100%;
   }
 
   .dashboard-grid {

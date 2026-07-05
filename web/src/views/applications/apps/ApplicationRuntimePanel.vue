@@ -3,6 +3,8 @@ import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import type { ApplicationDto, ApplicationRuntimeDto, ApplicationRuntimeInstanceDto } from '@/types/api';
+import AppActionButton from '@/components/AppActionButton.vue';
+import AppActionGroup from '@/components/AppActionGroup.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
 import { usePagination } from '@/composables/usePagination';
@@ -77,7 +79,9 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
   <component :is="embedded ? 'section' : 'v-card'" :variant="embedded ? undefined : 'outlined'" :loading="embedded ? undefined : loading" class="runtime-card" :class="{ 'runtime-card--embedded': embedded }">
     <div class="runtime-header">
       <div class="text-subtitle-1 font-weight-bold">{{ t('applicationRuntime.runtime') }}</div>
-      <v-btn size="small" variant="text" icon="mdi-refresh" :title="t('common.refresh')" :loading="loading" @click="loadRuntime" />
+      <AppActionGroup context="section">
+        <AppActionButton icon="mdi-refresh" :label="t('common.refresh')" :loading="loading" @click="loadRuntime" />
+      </AppActionGroup>
     </div>
     <v-alert v-if="error" type="error" variant="tonal" class="mb-3">{{ error }}</v-alert>
     <PageLoadingState v-if="loading && !runtime" min-height="220px" />
@@ -93,16 +97,15 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
         <span class="text-caption text-medium-emphasis mono">{{ runtime.operation.id }}</span>
       </div>
 
-      <v-alert
-        v-for="instance in failedInstances"
-        :key="instance.instanceId"
-        type="warning"
-        variant="tonal"
-        density="compact"
-      >
-        <div class="font-weight-bold">{{ instance.containerName || instance.instanceId }}</div>
-        <div>{{ instance.lastError }}</div>
-      </v-alert>
+      <div v-if="failedInstances.length" class="runtime-issues">
+        <div v-for="instance in failedInstances" :key="instance.instanceId" class="runtime-issue">
+          <v-icon size="18" color="warning">mdi-alert-circle-outline</v-icon>
+          <div class="min-width-0">
+            <div class="font-weight-bold text-truncate">{{ instance.containerName || instance.instanceId }}</div>
+            <div class="text-caption text-medium-emphasis text-truncate">{{ instance.lastError }}</div>
+          </div>
+        </div>
+      </div>
 
       <v-table density="compact">
         <thead>
@@ -134,7 +137,9 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
             <td>{{ instance.stage ? translateLifecycleStage(instance.stage) : t('common.notAvailable') }}</td>
             <td class="text-truncate image-cell">{{ instance.image || t('common.notAvailable') }}</td>
             <td class="text-right">
-              <v-btn size="small" icon="mdi-text-box-search-outline" variant="text" :title="t('applicationRuntime.logs')" :disabled="!instance.instanceId || !instance.containerName" @click="openLogs(instance)" />
+              <AppActionGroup context="table">
+                <AppActionButton icon="mdi-text-box-search-outline" :label="t('applicationRuntime.logs')" :disabled="!instance.instanceId || !instance.containerName" @click="openLogs(instance)" />
+              </AppActionGroup>
             </td>
           </tr>
           <tr v-if="instances.length === 0">
@@ -153,6 +158,22 @@ function openLogs(instance: ApplicationRuntimeInstanceDto) {
 .runtime-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .runtime-stack { display: grid; gap: 12px; }
 .runtime-summary { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.runtime-issues {
+  display: grid;
+  gap: 8px;
+}
+.runtime-issue {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, rgb(var(--v-theme-warning)), var(--lp-border) 72%);
+  border-radius: var(--lp-radius-sm);
+  background: color-mix(in srgb, rgb(var(--v-theme-warning)), var(--lp-surface) 91%);
+}
+.min-width-0 { min-width: 0; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.78rem; }
 .image-cell { max-width: 260px; }
 </style>

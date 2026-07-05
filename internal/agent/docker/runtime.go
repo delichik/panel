@@ -1,10 +1,14 @@
 package docker
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,6 +31,13 @@ import (
 const defaultRuntimeRoot = "/opt/panel/apps"
 const dockerImagePullTimeout = 15 * time.Minute
 const managedBridgeNetwork = "panel-apps"
+const managedFilesManifestPath = "managed-files.json"
+
+const (
+	labelManagedFilesHash  = "panel.application.managed_files.hash"
+	labelManagedFilesDrift = "panel.application.managed_files.drift"
+	labelManagedFilesError = "panel.application.managed_files.error"
+)
 
 type LocalRuntime struct {
 	dockerHost string
@@ -157,7 +169,31 @@ func (r *LocalRuntime) Containers(ctx context.Context) ([]agentcontract.DockerCo
 	if r == nil || r.client == nil {
 		return nil, errors.New("runtime is not configured")
 	}
-	return r.client.listContainers(ctx)
+	items, err := r.client.listContainers(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range items {
+		appID := strings.TrimSpace(items[i].Labels["panel.application.id"])
+		instanceID := strings.TrimSpace(items[i].Labels["panel.application.instance.id"])
+		if items[i].Labels["panel.application.managed"] != "true" || appID == "" || instanceID == "" {
+			continue
+		}
+		if items[i].Labels == nil {
+			items[i].Labels = map[string]string{}
+		}
+		hash, drifted, err := r.managedFilesDrift(appID, instanceID)
+		if hash != "" {
+			items[i].Labels[labelManagedFilesHash] = hash
+		}
+		if drifted {
+			items[i].Labels[labelManagedFilesDrift] = "true"
+		}
+		if err != nil {
+			items[i].Labels[labelManagedFilesError] = err.Error()
+		}
+	}
+	return items, nil
 }
 
 func (r *LocalRuntime) ContainerEvents(ctx context.Context) (<-chan struct{}, <-chan error) {
@@ -391,7 +427,16 @@ func (r *LocalRuntime) DeleteVolume(ctx context.Context, name string) error {
 }
 
 func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
+	manifest := managedFilesManifest{Entries: []managedFileManifestEntry{}}
 	for _, file := range spec.Files {
+		if strings.TrimSpace(file.Kind) == appruntime.ManagedFileKindArchive {
+			entry, err := r.writeManagedArchive(spec, file)
+			if err != nil {
+				return err
+			}
+			manifest.Entries = append(manifest.Entries, entry)
+			continue
+		}
 		target, err := safeRuntimePath(r.root, spec.ApplicationID, spec.InstanceID, "files", file.Path)
 		if err != nil {
 			return err
@@ -406,14 +451,121 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 		if err := os.WriteFile(target, file.Content, mode); err != nil {
 			return err
 		}
+		if err := os.Chmod(target, mode); err != nil {
+			return err
+		}
 		if err := applyOwnership(target, file.UID, file.GID); err != nil {
 			return err
 		}
+		manifest.Entries = append(manifest.Entries, managedFileManifestEntry{
+			Kind:   appruntime.ManagedFileKindFile,
+			Path:   path.Clean(strings.TrimPrefix(file.Path, "/")),
+			SHA256: sha256Hex(file.Content),
+			Mode:   formatFileMode(mode),
+			UID:    cloneInt(file.UID),
+			GID:    cloneInt(file.GID),
+		})
+	}
+	if err := r.writeManagedFilesManifest(spec.ApplicationID, spec.InstanceID, manifest); err != nil {
+		return err
 	}
 	if err := os.MkdirAll(filepath.Join(r.root, spec.ApplicationID, "persistent"), 0o700); err != nil {
 		return err
 	}
 	return r.preparePersistentMounts(spec)
+}
+
+func (r *LocalRuntime) writeManagedArchive(spec appruntime.Spec, file appruntime.ManagedFile) (managedFileManifestEntry, error) {
+	targetDir, err := safeRuntimePath(r.root, spec.ApplicationID, spec.InstanceID, "files", file.Path)
+	if err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	archivePath, err := safeRuntimePath(r.root, spec.ApplicationID, spec.InstanceID, "archives", file.Path+".archive")
+	if err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	entries, err := managedArchiveEntries(file.Content)
+	if err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	expected := sha256Hex(file.Content)
+	current, err := fileSHA256Hex(archivePath)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return managedFileManifestEntry{}, err
+	}
+	if current != expected {
+		if err := os.MkdirAll(filepath.Dir(archivePath), 0o700); err != nil {
+			return managedFileManifestEntry{}, err
+		}
+		if err := os.WriteFile(archivePath, file.Content, 0o600); err != nil {
+			return managedFileManifestEntry{}, err
+		}
+		if err := os.Chmod(archivePath, 0o600); err != nil {
+			return managedFileManifestEntry{}, err
+		}
+		current, err = fileSHA256Hex(archivePath)
+		if err != nil {
+			return managedFileManifestEntry{}, err
+		}
+	}
+	if current != expected {
+		return managedFileManifestEntry{}, fmt.Errorf("managed archive sha256 mismatch for %s", file.Path)
+	}
+	archiveContent, err := os.ReadFile(archivePath)
+	if err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	if sha256Hex(archiveContent) != expected {
+		return managedFileManifestEntry{}, fmt.Errorf("managed archive sha256 mismatch for %s", file.Path)
+	}
+	entries, err = managedArchiveEntries(archiveContent)
+	if err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	if err := os.RemoveAll(targetDir); err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	if err := os.MkdirAll(targetDir, 0o700); err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	for _, entry := range entries {
+		target, err := safeArchiveTarget(targetDir, entry.Name)
+		if err != nil {
+			return managedFileManifestEntry{}, err
+		}
+		if entry.Dir {
+			if err := os.MkdirAll(target, entry.Mode); err != nil {
+				return managedFileManifestEntry{}, err
+			}
+			if err := os.Chmod(target, entry.Mode); err != nil {
+				return managedFileManifestEntry{}, err
+			}
+			if err := applyOwnership(target, file.UID, file.GID); err != nil {
+				return managedFileManifestEntry{}, err
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return managedFileManifestEntry{}, err
+		}
+		if err := os.WriteFile(target, entry.Content, entry.Mode); err != nil {
+			return managedFileManifestEntry{}, err
+		}
+		if err := os.Chmod(target, entry.Mode); err != nil {
+			return managedFileManifestEntry{}, err
+		}
+		if err := applyOwnership(target, file.UID, file.GID); err != nil {
+			return managedFileManifestEntry{}, err
+		}
+	}
+	return managedFileManifestEntry{
+		Kind:     appruntime.ManagedFileKindArchive,
+		Path:     path.Clean(strings.TrimPrefix(file.Path, "/")),
+		SHA256:   expected,
+		TreeHash: managedArchiveTreeHash(entries),
+		UID:      cloneInt(file.UID),
+		GID:      cloneInt(file.GID),
+	}, nil
 }
 
 func (r *LocalRuntime) preparePersistentMounts(spec appruntime.Spec) error {
@@ -473,6 +625,375 @@ func applyOwnership(path string, uidValue, gidValue *int) error {
 		gid = *gidValue
 	}
 	return os.Chown(path, uid, gid)
+}
+
+type managedFilesManifest struct {
+	Entries []managedFileManifestEntry `json:"entries"`
+}
+
+type managedFileManifestEntry struct {
+	Kind     string `json:"kind"`
+	Path     string `json:"path"`
+	SHA256   string `json:"sha256"`
+	Mode     string `json:"mode,omitempty"`
+	TreeHash string `json:"treeHash,omitempty"`
+	UID      *int   `json:"uid,omitempty"`
+	GID      *int   `json:"gid,omitempty"`
+}
+
+func (r *LocalRuntime) writeManagedFilesManifest(appID, instanceID string, manifest managedFilesManifest) error {
+	sort.Slice(manifest.Entries, func(i, j int) bool { return manifest.Entries[i].Path < manifest.Entries[j].Path })
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		return err
+	}
+	target, err := safeRuntimePath(r.root, appID, instanceID, "manifest", managedFilesManifestPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	if err := os.WriteFile(target, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(target, 0o600)
+}
+
+func (r *LocalRuntime) managedFilesDrift(appID, instanceID string) (string, bool, error) {
+	target, err := safeRuntimePath(r.root, appID, instanceID, "manifest", managedFilesManifestPath)
+	if err != nil {
+		return "", false, err
+	}
+	raw, err := os.ReadFile(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", true, err
+	}
+	var manifest managedFilesManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return sha256Hex(raw), true, err
+	}
+	for _, entry := range manifest.Entries {
+		drifted, err := r.managedFileEntryDrift(appID, instanceID, entry)
+		if err != nil || drifted {
+			return sha256Hex(raw), true, err
+		}
+	}
+	return sha256Hex(raw), false, nil
+}
+
+func (r *LocalRuntime) managedFileEntryDrift(appID, instanceID string, entry managedFileManifestEntry) (bool, error) {
+	switch strings.TrimSpace(entry.Kind) {
+	case appruntime.ManagedFileKindArchive:
+		archivePath, err := safeRuntimePath(r.root, appID, instanceID, "archives", entry.Path+".archive")
+		if err != nil {
+			return true, err
+		}
+		got, err := fileSHA256Hex(archivePath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return true, nil
+			}
+			return true, err
+		}
+		if got != entry.SHA256 {
+			return true, nil
+		}
+		targetDir, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
+		if err != nil {
+			return true, err
+		}
+		treeHash, err := directoryTreeHash(targetDir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return true, nil
+			}
+			return true, err
+		}
+		return treeHash != entry.TreeHash, nil
+	default:
+		target, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
+		if err != nil {
+			return true, err
+		}
+		got, err := fileSHA256Hex(target)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return true, nil
+			}
+			return true, err
+		}
+		if got != entry.SHA256 {
+			return true, nil
+		}
+		info, err := os.Stat(target)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return true, nil
+			}
+			return true, err
+		}
+		if entry.Mode != "" && formatFileMode(info.Mode()) != entry.Mode {
+			return true, nil
+		}
+		ownerMatches, err := fileOwnerMatches(info, entry.UID, entry.GID)
+		if err != nil {
+			return true, err
+		}
+		return !ownerMatches, nil
+	}
+}
+
+type managedArchiveEntry struct {
+	Name    string
+	Dir     bool
+	Mode    os.FileMode
+	Content []byte
+}
+
+func managedArchiveEntries(content []byte) ([]managedArchiveEntry, error) {
+	if len(content) == 0 {
+		return nil, errors.New("managed archive content is required")
+	}
+	if looksLikeZip(content) {
+		reader, err := zip.NewReader(bytes.NewReader(content), int64(len(content)))
+		if err != nil {
+			return nil, fmt.Errorf("managed archive zip is invalid: %w", err)
+		}
+		return managedZipEntries(reader)
+	}
+	if gzipReader, err := gzip.NewReader(bytes.NewReader(content)); err == nil {
+		defer gzipReader.Close()
+		return managedTarEntries(tar.NewReader(gzipReader))
+	}
+	if entries, err := managedTarEntries(tar.NewReader(bytes.NewReader(content))); err == nil {
+		return entries, nil
+	}
+	return nil, errors.New("managed archive must be zip, tar, tar.gz, or tgz")
+}
+
+func managedZipEntries(reader *zip.Reader) ([]managedArchiveEntry, error) {
+	out := []managedArchiveEntry{}
+	for _, file := range reader.File {
+		name, ok := cleanManagedArchiveEntryName(file.Name)
+		if !ok {
+			return nil, errors.New("managed archive path must stay inside the archive root")
+		}
+		if name == "" {
+			continue
+		}
+		info := file.FileInfo()
+		if info.IsDir() {
+			out = append(out, managedArchiveEntry{Name: name, Dir: true, Mode: archiveEntryMode(info.Mode(), true)})
+			continue
+		}
+		rc, err := file.Open()
+		if err != nil {
+			return nil, err
+		}
+		content, readErr := io.ReadAll(rc)
+		closeErr := rc.Close()
+		if readErr != nil {
+			return nil, readErr
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		out = append(out, managedArchiveEntry{Name: name, Mode: archiveEntryMode(info.Mode(), false), Content: content})
+	}
+	return nonEmptyManagedArchive(out)
+}
+
+func managedTarEntries(reader *tar.Reader) ([]managedArchiveEntry, error) {
+	out := []managedArchiveEntry{}
+	for {
+		header, err := reader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("managed archive tar is invalid: %w", err)
+		}
+		name, ok := cleanManagedArchiveEntryName(header.Name)
+		if !ok {
+			return nil, errors.New("managed archive path must stay inside the archive root")
+		}
+		if name == "" {
+			continue
+		}
+		switch header.Typeflag {
+		case tar.TypeDir:
+			out = append(out, managedArchiveEntry{Name: name, Dir: true, Mode: archiveEntryMode(header.FileInfo().Mode(), true)})
+		case tar.TypeReg, tar.TypeRegA:
+			content, err := io.ReadAll(reader)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, managedArchiveEntry{Name: name, Mode: archiveEntryMode(header.FileInfo().Mode(), false), Content: content})
+		default:
+			continue
+		}
+	}
+	return nonEmptyManagedArchive(out)
+}
+
+func nonEmptyManagedArchive(entries []managedArchiveEntry) ([]managedArchiveEntry, error) {
+	if len(entries) == 0 {
+		return nil, errors.New("managed archive is empty")
+	}
+	return entries, nil
+}
+
+type treeHashItem struct {
+	Name   string
+	Dir    bool
+	Mode   os.FileMode
+	SHA256 string
+}
+
+func managedArchiveTreeHash(entries []managedArchiveEntry) string {
+	items := map[string]treeHashItem{}
+	for _, entry := range entries {
+		addImplicitTreeDirs(items, entry.Name)
+		item := treeHashItem{Name: entry.Name, Dir: entry.Dir, Mode: entry.Mode.Perm()}
+		if !entry.Dir {
+			item.SHA256 = sha256Hex(entry.Content)
+		}
+		items[entry.Name] = item
+	}
+	return treeHash(items)
+}
+
+func directoryTreeHash(root string) (string, error) {
+	items := map[string]treeHashItem{}
+	err := filepath.WalkDir(root, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if filePath == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filePath)
+		if err != nil {
+			return err
+		}
+		name := filepath.ToSlash(rel)
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		item := treeHashItem{Name: name, Dir: entry.IsDir(), Mode: info.Mode().Perm()}
+		if !entry.IsDir() {
+			sum, err := fileSHA256Hex(filePath)
+			if err != nil {
+				return err
+			}
+			item.SHA256 = sum
+		}
+		items[name] = item
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return treeHash(items), nil
+}
+
+func addImplicitTreeDirs(items map[string]treeHashItem, name string) {
+	dir := path.Dir(name)
+	if dir == "." || dir == "/" {
+		return
+	}
+	parts := strings.Split(dir, "/")
+	current := ""
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if current == "" {
+			current = part
+		} else {
+			current += "/" + part
+		}
+		if _, ok := items[current]; !ok {
+			items[current] = treeHashItem{Name: current, Dir: true, Mode: 0o700}
+		}
+	}
+}
+
+func treeHash(items map[string]treeHashItem) string {
+	names := make([]string, 0, len(items))
+	for name := range items {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	hash := sha256.New()
+	for _, name := range names {
+		item := items[name]
+		_, _ = fmt.Fprintf(hash, "%s\x00%t\x00%04o\x00%s\x00", item.Name, item.Dir, item.Mode.Perm(), item.SHA256)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func cleanManagedArchiveEntryName(value string) (string, bool) {
+	value = strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	value = strings.TrimPrefix(value, "/")
+	cleaned := path.Clean(value)
+	if cleaned == "." {
+		return "", true
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", false
+	}
+	return cleaned, true
+}
+
+func archiveEntryMode(mode os.FileMode, dir bool) os.FileMode {
+	perm := mode.Perm()
+	if perm != 0 {
+		return perm
+	}
+	if dir {
+		return 0o755
+	}
+	return 0o644
+}
+
+func looksLikeZip(content []byte) bool {
+	return len(content) >= 4 && content[0] == 'P' && content[1] == 'K'
+}
+
+func sha256Hex(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+func fileSHA256Hex(filePath string) (string, error) {
+	file, err := os.Open(filePath)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func formatFileMode(mode os.FileMode) string {
+	return fmt.Sprintf("%04o", mode.Perm())
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
 }
 
 func safeRuntimePath(root, appID, instanceID, area, rel string) (string, error) {
