@@ -190,24 +190,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - binary: panel
-            package: ./cmd/panel
-            target_os: linux
+          - target_os: linux
             target_arch: amd64
             artifact_platform: linux-amd64
-          - binary: panel
-            package: ./cmd/panel
-            target_os: linux
-            target_arch: arm64
-            artifact_platform: linux-arm64
-          - binary: panel-init
-            package: ./cmd/panel-init
-            target_os: linux
-            target_arch: amd64
-            artifact_platform: linux-amd64
-          - binary: panel-init
-            package: ./cmd/panel-init
-            target_os: linux
+          - target_os: linux
             target_arch: arm64
             artifact_platform: linux-arm64
 
@@ -221,7 +207,7 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Build ${{ matrix.binary }} for ${{ matrix.target_os }}/${{ matrix.target_arch }}
+      - name: Build panel binaries for ${{ matrix.target_os }}/${{ matrix.target_arch }}
         shell: bash
         env:
           PANEL_VERSION: ${{ needs.generate-version.outputs.version }}
@@ -230,8 +216,6 @@ jobs:
           PANEL_COMMIT: ${{ github.sha }}
           TARGET_OS: ${{ matrix.target_os }}
           TARGET_ARCH: ${{ matrix.target_arch }}
-          TARGET_BINARY: ${{ matrix.binary }}
-          TARGET_PACKAGE: ${{ matrix.package }}
           ARTIFACT_PLATFORM: ${{ matrix.artifact_platform }}
         run: |
           set -euxo pipefail
@@ -248,18 +232,32 @@ jobs:
           }
 
           ldflags="-s -w -X panel/internal/platform/buildinfo.Version=${PANEL_VERSION} -X panel/internal/platform/buildinfo.Channel=${PANEL_CHANNEL} -X panel/internal/platform/buildinfo.Repository=${PANEL_REPOSITORY} -X panel/internal/platform/buildinfo.Commit=${PANEL_COMMIT}"
-          output_dir="/tmp/release-artifacts/${TARGET_BINARY}/${ARTIFACT_PLATFORM}"
-          mkdir -p "${output_dir}"
+          panel_output_dir="/tmp/release-artifacts/panel/${ARTIFACT_PLATFORM}"
+          panel_init_output_dir="/tmp/release-artifacts/panel-init/${ARTIFACT_PLATFORM}"
+          mkdir -p "${panel_output_dir}" "${panel_init_output_dir}"
           CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" go build -trimpath \
             -ldflags="${ldflags}" \
-            -o "${output_dir}/${TARGET_BINARY}" "${TARGET_PACKAGE}"
-          verify_machine "${output_dir}/${TARGET_BINARY}" "${TARGET_ARCH}"
+            -o "${panel_output_dir}/panel" ./cmd/panel
+          verify_machine "${panel_output_dir}/panel" "${TARGET_ARCH}"
 
-      - name: Upload ${{ matrix.binary }} artifact
+          CGO_ENABLED=0 GOOS="${TARGET_OS}" GOARCH="${TARGET_ARCH}" go build -trimpath \
+            -ldflags="${ldflags}" \
+            -o "${panel_init_output_dir}/panel-init" ./cmd/panel-init
+          verify_machine "${panel_init_output_dir}/panel-init" "${TARGET_ARCH}"
+
+      - name: Upload panel artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.binary }}-${{ matrix.artifact_platform }}
-          path: /tmp/release-artifacts/${{ matrix.binary }}/${{ matrix.artifact_platform }}/${{ matrix.binary }}
+          name: panel-${{ matrix.artifact_platform }}
+          path: /tmp/release-artifacts/panel/${{ matrix.artifact_platform }}/panel
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Upload panel-init artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: panel-init-${{ matrix.artifact_platform }}
+          path: /tmp/release-artifacts/panel-init/${{ matrix.artifact_platform }}/panel-init
           if-no-files-found: error
           retention-days: 1
 

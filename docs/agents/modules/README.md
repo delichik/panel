@@ -21,7 +21,7 @@
 | 应用定义、appspec、文件、修订、部署、运行时、日志、镜像更新 | [applications.md](applications.md) |
 | Docker 容器、镜像、网络、卷、设施应用、容器操作队列、镜像检查和 Application 容器协调 | [containerization.md](containerization.md) |
 | DNS 域名、Cloudflare、ACME 证书、证书续签 | [dns-certificates.md](dns-certificates.md) |
-| GitHub Actions、main 自动版本发布、版本注入、容器镜像和 GitHub Release 创建 | [release-workflow.md](release-workflow.md) |
+| GitHub Actions、main/dev 自动版本发布、版本注入、目标平台二进制编译矩阵、容器镜像和 GitHub Release 创建 | [release-workflow.md](release-workflow.md) |
 | 用户可见文案、翻译 key、语言设置、后端错误翻译 | [../i18n-guide.md](../i18n-guide.md)，[../i18n-translation-status.md](../i18n-translation-status.md) |
 
 ## 常见跨模块关系
