@@ -144,6 +144,29 @@ func TestDockerAPIClientCreateContainerSendsCapAdd(t *testing.T) {
 	}
 }
 
+func TestLocalRuntimeStatusReportsMissingWhenContainerNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("method = %s, want GET", r.Method)
+		}
+		if r.URL.Path != "/containers/panel-web/json" {
+			t.Errorf("path = %s, want /containers/panel-web/json", r.URL.Path)
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"No such container"}`))
+	}))
+	defer server.Close()
+
+	r := &LocalRuntime{client: &dockerAPIClient{host: server.URL, client: server.Client()}}
+	status, err := r.Status(context.Background(), "app-1-server-1", "panel-web", "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != appruntime.StatusMissing || status.DesiredState != appruntime.DesiredRunning {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
 func TestPreparePersistentMountsCreatesManagedDirectory(t *testing.T) {
 	root := t.TempDir()
 	appID := "app-1"

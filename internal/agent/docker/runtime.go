@@ -134,7 +134,7 @@ func (r *LocalRuntime) Status(ctx context.Context, instanceID, containerName, se
 				InstanceID:    instanceID,
 				ServerID:      serverID,
 				ContainerName: containerName,
-				Status:        appruntime.StatusStopped,
+				Status:        appruntime.StatusMissing,
 				DesiredState:  appruntime.DesiredRunning,
 				ObservedAt:    now,
 			}, nil

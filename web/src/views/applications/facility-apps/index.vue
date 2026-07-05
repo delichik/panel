@@ -318,6 +318,7 @@ function runtimeStatusColor(status?: string | null) {
     case 'deploying':
     case 'pending':
     case 'preparing':
+    case 'missing':
       return 'warning';
     case 'stopped':
       return 'secondary';

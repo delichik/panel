@@ -61,6 +61,7 @@ function statusColor(status?: string | null) {
       return 'error';
     case 'deploying':
     case 'pending':
+    case 'missing':
       return 'warning';
     case 'stopped':
       return 'secondary';

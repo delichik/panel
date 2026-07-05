@@ -56,7 +56,7 @@ const runtimeStatus = computed(() => props.application.runtimeStatus || (props.a
 
 function runtimeStatusColor(status: string) {
   if (status === 'running') return 'success';
-  if (status === 'pending' || status === 'deploying') return 'warning';
+  if (status === 'pending' || status === 'deploying' || status === 'missing') return 'warning';
   if (status === 'failed' || status === 'unknown') return 'error';
   return 'grey';
 }

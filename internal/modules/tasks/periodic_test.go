@@ -59,6 +59,36 @@ func TestPeriodicRunnerCollectInputsFalseSkipsTaskRecord(t *testing.T) {
 	}
 }
 
+func TestPeriodicRunnerRunsCollectorOnlyDefinition(t *testing.T) {
+	svc := newTestService(t)
+	collectorRuns := 0
+	def := Definition{
+		Type: "periodic_collector_only",
+		Periodic: &Periodic{
+			Interval: time.Minute,
+			CollectInputs: func(context.Context, PeriodicTrigger) (CreateBatchInput, bool, error) {
+				collectorRuns++
+				return CreateBatchInput{}, false, nil
+			},
+		},
+	}
+	svc.MustRegister(def)
+	runner := NewPeriodicRunner(svc)
+
+	runner.run(context.Background(), def)
+
+	if collectorRuns != 1 {
+		t.Fatalf("collector ran %d times, want 1", collectorRuns)
+	}
+	result, err := svc.List(context.Background(), ListFilter{Types: []string{"periodic_collector_only"}, IncludeInternal: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 0 {
+		t.Fatalf("expected no collector-only task record, got %#v", result)
+	}
+}
+
 func TestPeriodicRunnerCollectInputsCreatesSingleTaskInstance(t *testing.T) {
 	svc := newTestService(t)
 	ran := make(chan struct{}, 1)

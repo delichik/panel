@@ -44,7 +44,7 @@ function actionLabel(action: 'deploy' | 'stop' | 'restart' | 'delete') {
 
 function statusColor(status?: string): SelectorStatus {
   if (status === 'running') return 'success';
-  if (status === 'pending') return 'warning';
+  if (status === 'pending' || status === 'missing') return 'warning';
   if (status === 'failed' || status === 'unknown') return 'error';
   if (status === 'stopped') return 'grey';
   return 'info';

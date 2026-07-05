@@ -9,6 +9,7 @@ const (
 	StatusPending   = "pending"
 	StatusDeploying = "deploying"
 	StatusRunning   = "running"
+	StatusMissing   = "missing"
 	StatusStopped   = "stopped"
 	StatusFailed    = "failed"
 	StatusUnknown   = "unknown"

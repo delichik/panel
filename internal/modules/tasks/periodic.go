@@ -78,7 +78,7 @@ func (r *PeriodicRunner) loop(ctx context.Context, def Definition) {
 }
 
 func (r *PeriodicRunner) run(ctx context.Context, def Definition) {
-	if def.Periodic == nil || def.Periodic.CollectInputs == nil || def.Execute == nil {
+	if def.Periodic == nil || def.Periodic.CollectInputs == nil {
 		return
 	}
 	_, _, err := r.manager.TriggerPeriodicNow(ctx, def.Type, PeriodicTrigger{Type: "scheduler"})

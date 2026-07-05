@@ -4762,10 +4762,14 @@ func aggregateRuntimeStatus(enabled bool, instances []appruntime.InstanceStatus)
 		return appruntime.StatusPending
 	}
 	allRunning := true
+	anyMissing := false
 	for _, instance := range instances {
 		switch instance.Status {
 		case appruntime.StatusFailed:
 			return appruntime.StatusFailed
+		case appruntime.StatusMissing:
+			anyMissing = true
+			allRunning = false
 		case appruntime.StatusRunning:
 		default:
 			allRunning = false
@@ -4773,6 +4777,9 @@ func aggregateRuntimeStatus(enabled bool, instances []appruntime.InstanceStatus)
 	}
 	if allRunning {
 		return appruntime.StatusRunning
+	}
+	if anyMissing {
+		return appruntime.StatusMissing
 	}
 	return appruntime.StatusPending
 }

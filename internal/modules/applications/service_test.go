@@ -1212,6 +1212,16 @@ func TestListWithRuntimeUsesCachedRuntimeStatus(t *testing.T) {
 	}
 }
 
+func TestAggregateRuntimeStatusReportsMissingInstance(t *testing.T) {
+	status := aggregateRuntimeStatus(true, []appruntime.InstanceStatus{
+		{Status: appruntime.StatusRunning},
+		{Status: appruntime.StatusMissing},
+	})
+	if status != appruntime.StatusMissing {
+		t.Fatalf("status = %q, want %q", status, appruntime.StatusMissing)
+	}
+}
+
 func TestLogsReadFromRuntimeInstance(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

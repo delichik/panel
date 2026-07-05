@@ -292,6 +292,49 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 	}
 }
 
+func TestAgentReportContainerChangeBypassesBackoffAfterDrift(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
+	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
+		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
+		State: "exited",
+		Labels: map[string]string{
+			"panel.application.managed":     "true",
+			"panel.application.id":          app.ID,
+			"panel.application.instance.id": app.ID + "-server-1",
+			"panel.application.generation":  "3",
+			"panel.application.spec.hash":   "hash-3",
+		},
+	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{
+		Type: "agent_report",
+		Payload: ApplicationReconcileTrigger{
+			ServerIDs: []string{"server-1"},
+			Reason:    "container_change",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
+	}
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || updater.plans[0].ServerIDs[0] != "server-1" || updater.plans[0].Force || updater.plans[0].TriggerType != "agent_report" {
+		t.Fatalf("container change plan = %#v", updater.plans)
+	}
+}
+
 func TestNonForcedExplicitApplicationReconcileRespectsStoredBackoffTime(t *testing.T) {
 	svc, _, _, store := newContainerizationTestService(t)
 	ctx := context.Background()

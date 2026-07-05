@@ -319,7 +319,7 @@ func (m *Manager) TriggerPeriodicNow(ctx context.Context, taskType string, trigg
 	if !ok {
 		return Task{}, false, panelerr.Validation("task_type_unregistered", "Task type is not registered")
 	}
-	if def.Periodic == nil || def.Periodic.CollectInputs == nil || def.Execute == nil {
+	if def.Periodic == nil || def.Periodic.CollectInputs == nil {
 		return Task{}, false, panelerr.Validation("task_periodic_unavailable", "Periodic task trigger is unavailable")
 	}
 	if trigger.Type == "" {
@@ -330,7 +330,11 @@ func (m *Manager) TriggerPeriodicNow(ctx context.Context, taskType string, trigg
 		return Task{}, false, err
 	}
 	if batch.Type == "" {
-		batch.Type = def.Type
+		if def.Execute != nil {
+			batch.Type = def.Type
+		} else if len(batch.Inputs) > 0 {
+			batch.Type = batch.Inputs[0].Type
+		}
 	}
 	if batch.TriggerType == "" {
 		batch.TriggerType = trigger.Type

@@ -678,6 +678,8 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 	if explicit.requiresExplicitTasks() {
 		return nil, s.planExplicitApplicationReconcile(ctx, trigger, explicit)
 	}
+	bypassBackoff := applicationReconcileBypassesBackoff(trigger, explicit)
+	triggerType := firstNonEmpty(trigger.Type, "scheduler")
 	wantedApps := stringSet(explicit.ApplicationIDs)
 	wantedServers := stringSet(explicit.ServerIDs)
 	servers, err := s.servers.List(ctx)
@@ -763,19 +765,23 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 		if err != nil {
 			return nil, err
 		}
-		if nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
+		if !bypassBackoff && nextRunAt != nil && nextRunAt.After(time.Now().UTC()) {
 			continue
 		}
 		_, err = s.apps.PlanApplicationDeployment(ctx, applications.DeploymentPlanRequest{
 			ApplicationID: appID,
 			ServerIDs:     observation.driftedServerIDs,
-			TriggerType:   "scheduler",
+			TriggerType:   triggerType,
 		})
 		if err != nil {
 			return nil, err
 		}
 	}
 	return nil, nil
+}
+
+func applicationReconcileBypassesBackoff(trigger tasks.PeriodicTrigger, payload ApplicationReconcileTrigger) bool {
+	return trigger.Type == "agent_report" && strings.TrimSpace(payload.Reason) == "container_change"
 }
 
 func (s *Service) listApplicationsForReconcile(ctx context.Context) ([]applications.Application, error) {

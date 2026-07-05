@@ -58,6 +58,8 @@
   - Panel access entry backend validation codes are wired through `internal/platform/i18n` for Simplified Chinese.
 - `web/src/views/applications/apps/ApplicationRuntimePanel.vue`
   - 应用运行时新增 lifecycle operation 摘要、部署阶段列、部分部署状态和部署阶段文案，已接入英文与简体中文词条；Agent/Docker 原始错误原因继续保留原文。
+- `web/src/views/applications/apps/ApplicationRuntimePanel.vue`、`web/src/views/applications/apps/index.vue`、`web/src/views/applications/apps/ApplicationDetail.vue`
+  - 应用运行时新增 `missing` 状态，用于展示期望存在但 Docker 中已缺失的托管容器；英文与简体中文词条已接入 `web/src/i18n/index.ts`，稳定值 `missing` 不翻译。
 - `web/src/views/security/fail2ban/index.vue`、`internal/modules/servers/fail2ban.go`
   - fail2ban 页面重构为防护规则默认模式与 YAML 高级模式，新增接管、保存草稿、取消接管、规则模板、Panel 配置状态和确认提示文案，已接入英文与简体中文词条；目标机 `fail2ban-client`、systemd 和命令诊断保持原文。
 - `web/src/views/applications/apps/index.vue`
