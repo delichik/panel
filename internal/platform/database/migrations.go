@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"database/sql"
-	"strings"
 )
 
 func (s *Store) Migrate(ctx context.Context) error {
@@ -429,9 +428,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := s.migrateApplicationLifecycleRowsToLog(ctx); err != nil {
-		return err
-	}
 	if err := s.ensureAppColumns(ctx, "credentials", map[string]string{
 		"name":              "TEXT NOT NULL DEFAULT ''",
 		"type":              "TEXT NOT NULL DEFAULT 'password'",
@@ -468,16 +464,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
-	if err := s.migrateApplicationFilesArchiveKind(ctx); err != nil {
-		return err
-	}
 	if err := s.migrateApplicationLifecycleTargets(ctx); err != nil {
-		return err
-	}
-	if err := s.dropLegacyApplicationLifecycleTables(ctx); err != nil {
-		return err
-	}
-	if err := s.dropAppColumnIfExists(ctx, "applications", "persistent_path"); err != nil {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "facility_app_configs", map[string]string{
@@ -806,158 +793,12 @@ func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) migrateApplicationLifecycleRowsToLog(ctx context.Context) error {
-	for _, table := range []string{"application_lifecycle_operations", "application_lifecycle_targets"} {
-		exists, err := databaseTableExists(ctx, s.appDB, table)
-		if err != nil || !exists {
-			return err
-		}
-		if err := copyRowsIfMissing(ctx, s.appDB, s.logDB, table); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Store) dropLegacyApplicationLifecycleTables(ctx context.Context) error {
-	for _, stmt := range []string{
-		`DROP TABLE IF EXISTS application_lifecycle_targets`,
-		`DROP TABLE IF EXISTS application_lifecycle_operations`,
-	} {
-		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func databaseTableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
-	var name string
-	err := db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
-	if err == sql.ErrNoRows {
-		return false, nil
-	}
-	return err == nil, err
-}
-
-func copyRowsIfMissing(ctx context.Context, src, dst *sql.DB, table string) error {
-	rows, err := src.QueryContext(ctx, `SELECT * FROM `+table)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	columns, err := rows.Columns()
-	if err != nil {
-		return err
-	}
-	if len(columns) == 0 {
-		return nil
-	}
-	placeholders := make([]string, len(columns))
-	for i := range placeholders {
-		placeholders[i] = "?"
-	}
-	insertSQL := `INSERT OR IGNORE INTO ` + table + `(` + strings.Join(columns, ",") + `) VALUES (` + strings.Join(placeholders, ",") + `)`
-	for rows.Next() {
-		values := make([]any, len(columns))
-		targets := make([]any, len(columns))
-		for i := range values {
-			targets[i] = &values[i]
-		}
-		if err := rows.Scan(targets...); err != nil {
-			return err
-		}
-		if _, err := dst.ExecContext(ctx, insertSQL, values...); err != nil {
-			return err
-		}
-	}
-	return rows.Err()
-}
-
-func (s *Store) migrateApplicationFilesArchiveKind(ctx context.Context) error {
-	var sqlText string
-	err := s.appDB.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='application_files'`).Scan(&sqlText)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if strings.Contains(sqlText, "'archive'") {
-		return nil
-	}
-	tx, err := s.appDB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	statements := []string{
-		`ALTER TABLE application_files RENAME TO application_files_old`,
-		`CREATE TABLE application_files (
-			id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			path TEXT NOT NULL,
-			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
-			content_type TEXT NOT NULL DEFAULT '',
-			size INTEGER NOT NULL DEFAULT 0,
-			sha256 TEXT NOT NULL DEFAULT '',
-			content BLOB,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			UNIQUE(application_id, path),
-			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
-		)`,
-		`INSERT INTO application_files(id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at)
-			SELECT id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at FROM application_files_old`,
-		`DROP TABLE application_files_old`,
-	}
-	for _, stmt := range statements {
-		if _, err := tx.ExecContext(ctx, stmt); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
 func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[string]string) error {
 	return ensureColumns(ctx, s.appDB, table, columns)
 }
 
-func (s *Store) dropAppColumnIfExists(ctx context.Context, table, column string) error {
-	return dropColumnIfExists(ctx, s.appDB, table, column)
-}
-
 func (s *Store) ensureLogColumns(ctx context.Context, table string, columns map[string]string) error {
 	return ensureColumns(ctx, s.logDB, table, columns)
-}
-
-func dropColumnIfExists(ctx context.Context, db *sql.DB, table, column string) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	exists := false
-	for rows.Next() {
-		var cid int
-		var name, typ string
-		var notNull, pk int
-		var defaultValue any
-		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
-			return err
-		}
-		if name == column {
-			exists = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-	_, err = db.ExecContext(ctx, `ALTER TABLE `+table+` DROP COLUMN `+column)
-	return err
 }
 
 func ensureColumns(ctx context.Context, db *sql.DB, table string, columns map[string]string) error {

@@ -104,50 +104,6 @@ func TestMigrateAddsLoadColumnsToLegacyMetricsSchema(t *testing.T) {
 	}
 }
 
-func TestMigrateAllowsArchiveApplicationFilesOnLegacySchema(t *testing.T) {
-	dir := t.TempDir()
-	cfg := config.Default()
-	cfg.DataRoot = filepath.Join(dir, "data")
-	cfg.AppDatabase = filepath.Join(dir, "app.db")
-	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.LogDatabase = filepath.Join(dir, "log.db")
-
-	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE application_files (
-		id TEXT PRIMARY KEY,
-		application_id TEXT NOT NULL,
-		path TEXT NOT NULL,
-		kind TEXT NOT NULL CHECK(kind IN ('binary','template')),
-		content_type TEXT NOT NULL DEFAULT '',
-		size INTEGER NOT NULL DEFAULT 0,
-		sha256 TEXT NOT NULL DEFAULT '',
-		content BLOB,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL,
-		UNIQUE(application_id, path)
-	)`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := Open(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,spec_yaml,job_id,created_at,updated_at) VALUES('app-1','web','name: web\nimage: nginx\n','panel-web','now','now')`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.AppDB().Exec(`INSERT INTO application_files(id,application_id,path,kind,created_at,updated_at) VALUES('file-1','app-1','public','archive','now','now')`); err != nil {
-		t.Fatalf("archive kind should be accepted after migration: %v", err)
-	}
-}
-
 func TestSQLiteDSNAddsDefaultPragmasToFileURI(t *testing.T) {
 	dsn := sqliteDSN("file:custom.db?cache=shared")
 	if !strings.HasPrefix(dsn, "file:custom.db?") {
@@ -291,36 +247,8 @@ func TestMigrateAddsLifecycleTargetStateBeforeStateIndexes(t *testing.T) {
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
 
-	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.LogDatabase))
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE applications (
-		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		enabled INTEGER NOT NULL DEFAULT 0,
-		spec_yaml TEXT NOT NULL,
-		variables_json TEXT NOT NULL DEFAULT '{}',
-		deployment_mode TEXT NOT NULL DEFAULT 'all',
-		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
-		generation INTEGER NOT NULL DEFAULT 1,
-		spec_hash TEXT NOT NULL DEFAULT '',
-		job_id TEXT NOT NULL,
-		namespace TEXT NOT NULL DEFAULT 'default',
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	)`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE servers (
-		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		host TEXT NOT NULL,
-		port INTEGER NOT NULL,
-		credential_id TEXT NOT NULL,
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`CREATE TABLE application_lifecycle_operations (
@@ -395,59 +323,6 @@ func TestMigrateAddsLifecycleTargetStateBeforeStateIndexes(t *testing.T) {
 	}
 	if copied != 1 {
 		t.Fatalf("copied lifecycle rows = %d, want 1", copied)
-	}
-	for _, table := range []string{"application_lifecycle_operations", "application_lifecycle_targets"} {
-		if tableExists(t, store.AppDB(), table) {
-			t.Fatalf("legacy lifecycle table %q should be removed from app database", table)
-		}
-	}
-}
-
-func TestMigrateDropsApplicationPersistentPath(t *testing.T) {
-	dir := t.TempDir()
-	cfg := config.Default()
-	cfg.DataRoot = filepath.Join(dir, "data")
-	cfg.AppDatabase = filepath.Join(dir, "app.db")
-	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.LogDatabase = filepath.Join(dir, "log.db")
-
-	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`CREATE TABLE applications (
-		id TEXT PRIMARY KEY,
-		name TEXT NOT NULL,
-		enabled INTEGER NOT NULL DEFAULT 0,
-		spec_yaml TEXT NOT NULL,
-		variables_json TEXT NOT NULL DEFAULT '{}',
-		resolved_variables_json TEXT NOT NULL DEFAULT '{}',
-		persistent_path TEXT NOT NULL DEFAULT '',
-		deployment_mode TEXT NOT NULL DEFAULT 'all',
-		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
-		reverse_proxy_json TEXT NOT NULL DEFAULT '[]',
-		generation INTEGER NOT NULL DEFAULT 1,
-		spec_hash TEXT NOT NULL DEFAULT '',
-		job_id TEXT NOT NULL,
-		namespace TEXT NOT NULL DEFAULT 'default',
-		created_at TEXT NOT NULL,
-		updated_at TEXT NOT NULL
-	)`); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	store, err := Open(cfg)
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	defer store.Close()
-
-	columns := tableColumns(t, store.AppDB(), "applications")
-	if columns["persistent_path"] {
-		t.Fatal("migrated applications schema must not contain persistent_path")
 	}
 }
 

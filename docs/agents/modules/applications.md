@@ -48,6 +48,7 @@
 ## 数据与行为约定
 
 - 主要业务表包括 `applications`、`application_files`、`application_revisions`、`application_instances`，保存在 `Store.AppDB()`；高增长的部署 lifecycle 历史表 `application_lifecycle_operations`、`application_lifecycle_targets` 保存在 `Store.LogDB()`。
+- 当前迁移只维护 LogDB 中 lifecycle 表的字段和索引演进，不再从 AppDB 旧 lifecycle 表复制历史数据，也不再清理 `applications.persistent_path` 或重建旧约束的 `application_files` 表。
 - 应用层采用轻量控制平面模型：`applications` 保存 desired state，`kind=application` 表示普通用户应用，`kind=facility_application` 表示设施应用投影出的隐藏受控应用；`deletion_requested=1` 表示删除期望已提交，普通列表隐藏该应用并由协调器清理运行时资源。业务 HTTP 入口不得直接部署、停止或清理远端容器，只能校验、保存 desired state 并触发 `application_reconcile`。
 - appspec 以 YAML 输入，经 `internal/modules/applications/spec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器并编排运行时步骤，再通过目标机 `panel-agent` 的原子接口写入托管文件、拉取镜像、删除旧容器、创建容器、启动容器和刷新状态。
 - appspec 的 `resources.cpu` 和 `resources.memoryMb` 只有设置为正数时才表示运行时限制；字段缺省或显式为 `0` 都表示不限制，不得在规范化、渲染或部署流程中自动补默认 CPU/内存限制。

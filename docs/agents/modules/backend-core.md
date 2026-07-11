@@ -63,6 +63,7 @@
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。
+- 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、AppDB 中的 `application_lifecycle_operations`/`application_lifecycle_targets`、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。
 - 会被展示的持久化配置只保存稳定 key、kind、value，不保存当前语言下的展示文案。
 
 ## API 变更检查
