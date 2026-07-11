@@ -271,16 +271,17 @@ type OperationResult struct {
 }
 
 type DeploymentPlanRequest struct {
-	ApplicationID       string
-	ServerIDs           []string
-	StopServers         []string
-	Purge               bool
-	Force               bool
-	Manual              bool
-	TriggerType         string
-	TriggerResourceType string
-	TriggerResourceID   string
-	Reason              string
+	ApplicationID        string
+	ServerIDs            []string
+	StopServers          []string
+	Purge                bool
+	Force                bool
+	ObservedRuntimeDrift bool
+	Manual               bool
+	TriggerType          string
+	TriggerResourceType  string
+	TriggerResourceID    string
+	Reason               string
 }
 
 type DeploymentPlanResult struct {

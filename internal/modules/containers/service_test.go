@@ -330,7 +330,7 @@ func TestAgentReportContainerChangeBypassesBackoffAfterDrift(t *testing.T) {
 	if len(inputs) != 0 {
 		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
 	}
-	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || updater.plans[0].ServerIDs[0] != "server-1" || updater.plans[0].Force || updater.plans[0].TriggerType != "agent_report" {
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || updater.plans[0].ServerIDs[0] != "server-1" || updater.plans[0].Force || !updater.plans[0].ObservedRuntimeDrift || updater.plans[0].TriggerType != "agent_report" {
 		t.Fatalf("container change plan = %#v", updater.plans)
 	}
 }
@@ -421,8 +421,33 @@ func TestApplicationReconcilePlansWhenManagedFilesDrift(t *testing.T) {
 	if len(inputs) != 0 {
 		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
 	}
-	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || len(updater.plans[0].ServerIDs) != 1 || updater.plans[0].ServerIDs[0] != "server-1" {
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || len(updater.plans[0].ServerIDs) != 1 || updater.plans[0].ServerIDs[0] != "server-1" || !updater.plans[0].ObservedRuntimeDrift {
 		t.Fatalf("managed file drift plan = %#v", updater.plans)
+	}
+}
+
+func TestApplicationReconcilePlansWhenManagedContainerIsMissing(t *testing.T) {
+	svc, _, _, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
+	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+		VALUES('app-1-server-1','app-1','server-1','now')`); err != nil {
+		t.Fatal(err)
+	}
+	saveReportedContainers(t, svc, "server-1", nil)
+
+	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inputs) != 0 {
+		t.Fatalf("reconcile collector must not create target task inputs, got %#v", inputs)
+	}
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || len(updater.plans[0].ServerIDs) != 1 || updater.plans[0].ServerIDs[0] != "server-1" || !updater.plans[0].ObservedRuntimeDrift {
+		t.Fatalf("missing container plan = %#v", updater.plans)
 	}
 }
 

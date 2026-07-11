@@ -3582,7 +3582,7 @@ func (s *Service) planApplicationDeployment(ctx context.Context, req DeploymentP
 		return DeploymentPlanResult{}, err
 	}
 	targets = filterDeploymentTargets(targets, targetIDs)
-	if !req.Force {
+	if !req.Force && !req.ObservedRuntimeDrift {
 		targets, err = s.filterUnsatisfiedDeploymentTargets(ctx, app, job, targets)
 		if err != nil {
 			return DeploymentPlanResult{}, err

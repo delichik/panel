@@ -3,6 +3,8 @@ package applications
 import (
 	"context"
 	"testing"
+
+	appruntime "panel/internal/modules/applications/runtime"
 )
 
 func TestPlanApplicationDeploymentCreatesReadyTargets(t *testing.T) {
@@ -47,6 +49,56 @@ func TestPlanApplicationDeploymentReusesActiveTarget(t *testing.T) {
 	}
 	if len(second.CreatedTargets) != 0 || len(second.ReusedTargets) != 1 || second.ReusedTargets[0].ID != first.CreatedTargets[0].ID {
 		t.Fatalf("expected second plan to reuse active target, got %#v after %#v", second, first)
+	}
+}
+
+func TestPlanApplicationDeploymentUsesObservedRuntimeDriftOverCachedRunningState(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+	spec := appruntime.Spec{
+		InstanceID:    runtimeInstanceID(app.ID, "srv-a"),
+		ContainerName: runtimeContainerName(app),
+		Generation:    app.Generation,
+		SpecHash:      app.SpecHash,
+	}
+	if err := svc.upsertRuntimeInstance(ctx, app.ID, "srv-a", spec, appruntime.DesiredRunning, appruntime.StatusRunning, "container-srv-a", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	normal, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, TriggerType: "scheduler"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(normal.CreatedTargets) != 0 {
+		t.Fatalf("cached running instance should satisfy a normal plan, got %#v", normal)
+	}
+
+	observed, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID:        app.ID,
+		ServerIDs:            []string{"srv-a"},
+		ObservedRuntimeDrift: true,
+		TriggerType:          "agent_report",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(observed.CreatedTargets) != 1 || observed.CreatedTargets[0].ServerID != "srv-a" {
+		t.Fatalf("observed runtime drift should create an apply target despite cached running state, got %#v", observed)
+	}
+
+	repeated, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID:        app.ID,
+		ServerIDs:            []string{"srv-a"},
+		ObservedRuntimeDrift: true,
+		TriggerType:          "agent_report",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repeated.CreatedTargets) != 0 || len(repeated.ReusedTargets) != 1 || repeated.ReusedTargets[0].ID != observed.CreatedTargets[0].ID {
+		t.Fatalf("repeated observed drift should reuse the active target, got %#v after %#v", repeated, observed)
 	}
 }
 

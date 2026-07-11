@@ -769,9 +769,10 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			continue
 		}
 		_, err = s.apps.PlanApplicationDeployment(ctx, applications.DeploymentPlanRequest{
-			ApplicationID: appID,
-			ServerIDs:     observation.driftedServerIDs,
-			TriggerType:   triggerType,
+			ApplicationID:        appID,
+			ServerIDs:            observation.driftedServerIDs,
+			ObservedRuntimeDrift: true,
+			TriggerType:          triggerType,
 		})
 		if err != nil {
 			return nil, err
