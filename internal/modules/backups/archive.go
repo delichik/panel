@@ -22,9 +22,9 @@ func buildArchive(cfg ArchiveConfig, encrypted bool) ([]byte, Manifest, error) {
 		PanelVersion:  cfg.PanelVersion,
 		CreatedAt:     time.Now().UTC(),
 		Encrypted:     encrypted,
-		Includes:      []string{"dataRoot", "appDatabase", "taskDatabase", "metricsDatabase"},
+		Includes:      []string{"dataRoot", "appDatabase", "logDatabase", "metricsDatabase"},
 		Metadata: map[string]string{
-			"tasks":   "included_history",
+			"log":     "included_history",
 			"metrics": "included_history",
 		},
 	}
@@ -58,7 +58,7 @@ func buildArchive(cfg ArchiveConfig, encrypted bool) ([]byte, Manifest, error) {
 		name string
 	}{
 		{cfg.AppDatabase, "databases/app.db"},
-		{cfg.TaskDatabase, "databases/tasks.db"},
+		{cfg.LogDatabase, "databases/log.db"},
 		{cfg.MetricsDatabase, "databases/metrics.db"},
 	} {
 		if err := addFile(zw, item.path, item.name, &manifest, seen); err != nil {
@@ -225,7 +225,7 @@ func shouldSkipDir(root, path string) bool {
 type ArchiveConfig struct {
 	DataRoot        string
 	AppDatabase     string
-	TaskDatabase    string
+	LogDatabase     string
 	MetricsDatabase string
 	PanelVersion    string
 }

@@ -175,7 +175,7 @@ func newCardTestService(t *testing.T) (*Service, func()) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -194,7 +194,7 @@ func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -206,7 +206,7 @@ func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
 	`, now, now); err != nil {
 		t.Fatalf("insert credential: %v", err)
 	}
-	serverSvc := serverpkg.NewService(store.AppDB(), nil, tasks.NewService(store.TaskDB()), serverpkg.WithMetricsDB(store.MetricsDB()))
+	serverSvc := serverpkg.NewService(store.AppDB(), nil, tasks.NewService(store.LogDB()), serverpkg.WithMetricsDB(store.MetricsDB()))
 	first, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Alpha", Host: "10.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
 	if err != nil {
 		t.Fatalf("create first server: %v", err)

@@ -45,7 +45,7 @@
 - API 统一挂在 `/api/v1/`。`/api/v1/auth/login`、`/api/v1/auth/session` 和只返回登录页标题/说明的 `GET /api/v1/settings/public-branding` 是开放入口，其余 API 经认证中间件保护。业务 API 路由由各模块的 `RegisterRoutes(*http.ServeMux, httpx.Middleware)` 注册，bootstrap 不再维护业务路径 switch。
 - 根路径由后端静态托管 `web/dist`；没有构建前端时返回纯文本后端运行提示。
 - `GET /api/v1/system/version` 返回构建时注入的版本、通道（`release` 或 `dev`）、commit、仓库和缓存的最新版本状态。`internal/modules/systeminfo` 每 6 小时只读检查 GitHub 最新 Release；只有 `release` 通道且版本为三段数字核心版本（可带 `v` 前缀和预发布后缀）时才检查更新。未注入或无效通道按 `dev` 处理，不发起检查，也不提供下载或安装能力。
-- `GET /api/v1/debug/snapshot` 是仅认证用户可访问的只读诊断接口，由 `internal/modules/observability/diagnostics` 提供同一快照时间点的进程、Go runtime 内存/GC、tasks worker 运行状态、注册任务定义能力和 app/task/metrics 三库统计。数据库信息包含连接池、文件/SQLite 页面大小，以及用户表的准确行数、表数据页大小、索引大小、总占用和数据库占比；表级空间通过 SQLite `dbstat` 读取，不可用时只降级空间统计。接口不返回数据库路径、schema SQL、配置值、任务参数或任何业务记录与秘密。
+- `GET /api/v1/debug/snapshot` 是仅认证用户可访问的只读诊断接口，由 `internal/modules/observability/diagnostics` 提供同一快照时间点的进程、Go runtime 内存/GC、tasks worker 运行状态、注册任务定义能力和 app/log/metrics 三库统计。数据库信息包含连接池、文件/SQLite 页面大小，以及用户表的准确行数、表数据页大小、索引大小、总占用和数据库占比；表级空间通过 SQLite `dbstat` 读取，不可用时只降级空间统计。接口不返回数据库路径、schema SQL、配置值、任务参数或任何业务记录与秘密。
 - 全量备份与还原由 `internal/modules/backups` 提供。正常运行期的备份导出只写 pending export 并通过 `panel_init` 本地监听请求进入维护模式；真正归档在 `--maintenance-mode backup_export` 的下一次子进程启动早期由 `ExportApp` 执行。`cmd/panel/main.go` 不能仅因 pending 文件存在进入维护逻辑，必须同时收到 `--maintenance-mode backup_export` 或 `--maintenance-mode restore`；命中维护作业时只启动对应维护 HTTP 服务，不打开正常业务数据库、不装配业务模块、不启动后台 worker。备份导出完成后提供下载并要求重启回 normal；恢复成功后删除 pending 文件并要求重启回 normal。
 - 运行时设置从数据库读取，并以配置文件、环境变量和内置默认值作为基础。登录页自定义标题和说明分别使用 `branding.loginTitle`、`branding.loginSubtitle` 键持久化；进程日志等级使用 `log.level` 键持久化，默认 `info`，更新 `/api/v1/settings/runtime` 后立即调整 zap `AtomicLevel`；旧数据库启动时由默认设置写入流程自动补齐空值。
 - 后端进程日志统一使用 `internal/platform/logging` 的 zap JSON logger，输出路径固定为 `stdout`。启动、关闭、后台服务和 HTTP 请求日志保持英文消息，不进入多语言翻译；成功和重定向 HTTP 完成日志使用 debug，4xx 使用 warn，5xx 使用 error。
@@ -58,8 +58,8 @@
 
 ## 数据库约定
 
-- 应用数据在 `Store.AppDB()`，任务数据在 `Store.TaskDB()`，指标数据在 `Store.MetricsDB()`；不要把任务表或指标表误建到应用数据库。
-- 数据库路径配置包括 `appDatabase`、`taskDatabase`、`metricsDatabase`，环境变量分别是 `PANEL_APP_DATABASE`、`PANEL_TASK_DATABASE`、`PANEL_METRICS_DATABASE`，三者必须指向不同文件。
+- 应用业务数据在 `Store.AppDB()`，任务、任务日志和应用 lifecycle 历史在 `Store.LogDB()`，指标数据在 `Store.MetricsDB()`；不要把 log 表或指标表误建到应用数据库。
+- 数据库路径配置包括 `appDatabase`、`logDatabase`、`metricsDatabase`，环境变量分别是 `PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、`PANEL_METRICS_DATABASE`，三者必须指向不同文件。旧 `taskDatabase` 配置、`PANEL_TASK_DATABASE` 环境变量和默认 `data/db/tasks.db` 文件仅作为升级兼容入口，启动时会迁移到 `data/db/log.db`。
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。

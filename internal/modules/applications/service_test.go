@@ -1495,7 +1495,7 @@ func TestRestartTaskExecutorPlansForcedDeploymentAndCompletesTask(t *testing.T) 
 		t.Fatalf("expected completed restart task, got %#v", storedTask)
 	}
 	var targetCount int
-	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_targets WHERE application_id=? AND state IN ('ready','claimed','preparing','applying','verifying','failed_retryable','succeeded')`, app.ID).Scan(&targetCount); err != nil {
+	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_targets WHERE application_id=? AND state IN ('ready','claimed','preparing','applying','verifying','failed_retryable','succeeded')`, app.ID).Scan(&targetCount); err != nil {
 		t.Fatal(err)
 	}
 	if targetCount == 0 {
@@ -1678,7 +1678,7 @@ func TestDecorateDeploymentTasksProjectsLifecycleDiagnostics(t *testing.T) {
 		t.Fatal(err)
 	}
 	nextRunAt := time.Now().UTC().Add(3 * time.Minute)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,status=?,stage=?,attempt=?,next_run_at=?,claimed_task_id=?,error=?,error_code=?,error_message=?,error_detail=?,updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateFailedRetryable,
@@ -1732,7 +1732,7 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -1755,13 +1755,13 @@ func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProv
 			t.Fatal(err)
 		}
 	}
-	taskSvc := tasks.NewService(store.TaskDB())
-	svc := NewService(store.AppDB(), runtime, taskSvc, Config{
+	taskSvc := tasks.NewService(store.LogDB())
+	svc := NewServiceWithOptions(store.AppDB(), runtime, taskSvc, Config{
 		Namespace:      "apps",
 		Region:         "global",
 		Datacenter:     "dc1",
 		SaveSessionDir: filepath.Join(dir, "sessions"),
-	})
+	}, WithLogDB(store.LogDB()))
 	svc.RegisterTasks(taskSvc)
 	svc.SetServerProvider(servers)
 	svc.SetApplicationReconcileTrigger(&fakeApplicationReconcileTrigger{svc: svc, tasks: taskSvc})

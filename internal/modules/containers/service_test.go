@@ -172,7 +172,7 @@ func TestContainerActionRunsSynchronouslyWithoutRefreshTask(t *testing.T) {
 		t.Fatalf("expected synchronous container action before return, got %#v", actions)
 	}
 	var operationTasks int
-	if err := store.TaskDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&operationTasks); err != nil {
+	if err := store.LogDB().QueryRow(`SELECT COUNT(*) FROM tasks`).Scan(&operationTasks); err != nil {
 		t.Fatal(err)
 	}
 	if operationTasks != 0 {
@@ -578,13 +578,13 @@ func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fa
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	fakeAgent := &fakeContainerizationAgent{}
 	svc := NewService(store.AppDB(), fakeServerProvider{server.Server{
 		ID:        "server-1",

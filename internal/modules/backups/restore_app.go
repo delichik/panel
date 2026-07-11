@@ -173,20 +173,24 @@ func (a *RestoreApp) applyStaged(ctx context.Context, staging string) error {
 		return err
 	}
 	for _, item := range []struct {
-		src string
-		dst string
+		srcs []string
+		dst  string
 	}{
-		{filepath.Join(staging, "databases", "app.db"), a.cfg.AppDatabase},
-		{filepath.Join(staging, "databases", "tasks.db"), a.cfg.TaskDatabase},
-		{filepath.Join(staging, "databases", "metrics.db"), a.cfg.MetricsDatabase},
+		{[]string{filepath.Join(staging, "databases", "app.db")}, a.cfg.AppDatabase},
+		{[]string{filepath.Join(staging, "databases", "log.db"), filepath.Join(staging, "databases", "tasks.db")}, a.cfg.LogDatabase},
+		{[]string{filepath.Join(staging, "databases", "metrics.db")}, a.cfg.MetricsDatabase},
 	} {
-		if _, err := os.Stat(item.src); err == nil {
+		for _, src := range item.srcs {
+			if _, err := os.Stat(src); err != nil {
+				continue
+			}
 			if err := os.MkdirAll(filepath.Dir(item.dst), 0700); err != nil {
 				return err
 			}
-			if err := copyFile(item.src, item.dst, 0600); err != nil {
+			if err := copyFile(src, item.dst, 0600); err != nil {
 				return err
 			}
+			break
 		}
 	}
 	return nil

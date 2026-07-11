@@ -160,7 +160,7 @@ func deploymentReferenceFromTask(task tasks.Task) deploymentTaskReference {
 }
 
 func (s *Service) lifecycleOperationByID(ctx context.Context, operationID string) (LifecycleOperation, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
+	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
 		FROM application_lifecycle_operations WHERE id=?`, operationID)
 	op, err := scanLifecycleOperation(row)
 	if err != nil {
@@ -177,7 +177,7 @@ func (s *Service) lifecycleOperationByID(ctx context.Context, operationID string
 func (s *Service) lifecycleTargetsByClaimedTaskIDs(ctx context.Context, taskIDs []string) (map[string]LifecycleTarget, error) {
 	out := map[string]LifecycleTarget{}
 	for _, taskID := range taskIDs {
-		row := s.db.QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
+		row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
 			FROM application_lifecycle_targets WHERE claimed_task_id=? ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1`, taskID)
 		target, err := scanLifecycleTarget(row)
 		if err == sql.ErrNoRows {

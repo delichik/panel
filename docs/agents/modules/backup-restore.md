@@ -16,11 +16,11 @@
 
 ## 行为约定
 
-- 备份是全实例导出，默认包含 `dataRoot`、app/task/metrics 三个 SQLite 数据库、密钥资产主密钥文件和必要元数据。`tasks` 与 `metrics` 属于低价值历史，但全量包默认包含它们。
+- 备份是全实例导出，默认包含 `dataRoot`、app/log/metrics 三个 SQLite 数据库、密钥资产主密钥文件和必要元数据。`log` 与 `metrics` 属于低价值历史，但全量包默认包含它们；恢复旧归档时仍兼容 `databases/tasks.db`。
 - 备份密码可选；前端默认启用加密，关闭加密时必须提示归档可恢复整套 Panel 身份。
 - 正常运行期点击导出只写入 `data/tmp/backup-export-pending/pending.json`，再通过 `panel_init` 随机本地监听请求下一次子进程以 `--maintenance-mode backup_export` 启动；不会在业务运行时复制 SQLite 或归档数据。加密导出的密码不写入 pending 文件，启动期维护页会要求用户输入密码后再继续。
 - 只有同时存在 pending export 且启动参数为 `--maintenance-mode backup_export` 时，Panel 才进入备份导出维护模式；pending 文件本身不能触发维护逻辑。`ExportApp` 启动时只短暂打开 `app.db` 读取管理员用户名和 bcrypt 密码哈希，随后立即关闭连接；维护态登录和会话校验只使用内存中的哈希与 token。
-- 导出维护页必须先登录。未加密导出在登录后由用户点击开始；加密导出在登录后输入备份密码并开始。真正开始导出后，`ExportApp` 会短暂打开 app/task/metrics SQLite 执行 WAL checkpoint，立即关闭连接，再归档稳定文件。
+- 导出维护页必须先登录。未加密导出在登录后由用户点击开始；加密导出在登录后输入备份密码并开始。真正开始导出后，`ExportApp` 会短暂打开 app/log/metrics SQLite 执行 WAL checkpoint，立即关闭连接，再归档稳定文件。
 - 导出维护页通过 `GET /api/v1/backups/export/current` 展示阶段、进度、开始时间、备份创建时间、是否加密和安全错误摘要；导出完成后通过下载接口取得归档，再通过退出维护接口清理 pending 标记并发送 `normal` 重启信号，让 `panel_init` 回到正常业务服务。
 - 还原上传只做预检和 pending 标记，再通过 `panel_init` 随机本地监听请求下一次子进程以 `--maintenance-mode restore` 启动；不在正常运行期覆盖数据。pending 文件位于 `data/tmp/restore-pending/`。
 - 只有同时存在 pending restore 且启动参数为 `--maintenance-mode restore` 时，Panel 才进入恢复模式 HTTP 页面；pending 文件本身不能触发维护逻辑。未加密归档自动执行；加密归档在恢复页要求重新输入密码。

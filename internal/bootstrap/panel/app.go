@@ -61,7 +61,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	certBridge := &applicationCertificateBridge{}
 	containerBridge := &applicationContainerBridge{}
 	credSvc := credential.NewService(store.AppDB(), secretStore)
@@ -118,6 +118,7 @@ func New(cfg config.Config) (*App, error) {
 		applications.WithBuiltinVariableResolver(variableRegistry),
 		applications.WithInternalFileProvider(internalFileRegistry),
 		applications.WithContainerOperationQueue(containerBridge),
+		applications.WithLogDB(store.LogDB()),
 	)
 	certBridge.apps = applicationSvc
 	containerBridge.apps = applicationSvc
@@ -163,7 +164,7 @@ func New(cfg config.Config) (*App, error) {
 	diagnosticsSvc := diagnostics.NewServiceWithTaskRuntime(
 		taskWorker,
 		diagnostics.DatabaseSource{Name: "app", DB: store.AppDB(), Path: cfg.AppDatabase},
-		diagnostics.DatabaseSource{Name: "task", DB: store.TaskDB(), Path: cfg.TaskDatabase},
+		diagnostics.DatabaseSource{Name: "log", DB: store.LogDB(), Path: cfg.LogDatabase},
 		diagnostics.DatabaseSource{Name: "metrics", DB: store.MetricsDB(), Path: cfg.MetricsDatabase},
 	)
 
@@ -177,7 +178,7 @@ func New(cfg config.Config) (*App, error) {
 	backupSvc := backups.NewService(backups.ArchiveConfig{
 		DataRoot:        cfg.DataRoot,
 		AppDatabase:     cfg.AppDatabase,
-		TaskDatabase:    cfg.TaskDatabase,
+		LogDatabase:     cfg.LogDatabase,
 		MetricsDatabase: cfg.MetricsDatabase,
 		PanelVersion:    systemSvc.Version().Version,
 	})

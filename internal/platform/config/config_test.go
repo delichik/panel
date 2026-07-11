@@ -15,8 +15,11 @@ func TestDefaultConfigValidAndSplitDatabases(t *testing.T) {
 	if cfg.AppDatabase == cfg.MetricsDatabase {
 		t.Fatal("app and metrics databases must be separate")
 	}
-	if cfg.AppDatabase == cfg.TaskDatabase || cfg.TaskDatabase == cfg.MetricsDatabase {
-		t.Fatal("task database must be separate from app and metrics databases")
+	if cfg.AppDatabase == cfg.LogDatabase || cfg.LogDatabase == cfg.MetricsDatabase {
+		t.Fatal("log database must be separate from app and metrics databases")
+	}
+	if filepath.Base(cfg.LogDatabase) != "log.db" {
+		t.Fatalf("default log database = %q, want log.db", cfg.LogDatabase)
 	}
 }
 
@@ -78,6 +81,37 @@ func TestLoadCertificateConfig(t *testing.T) {
 	}
 	if cfg.Certificates.Email != "admin@example.com" || cfg.Certificates.DNSPropagationDelaySeconds != 10 {
 		t.Fatalf("certificate config = %#v", cfg.Certificates)
+	}
+}
+
+func TestLoadLogDatabaseConfigAndLegacyTaskDatabase(t *testing.T) {
+	dir := t.TempDir()
+	for name, field := range map[string]string{
+		"new":    `"logDatabase": "data/db/custom-log.db"`,
+		"legacy": `"taskDatabase": "data/db/legacy-tasks.db"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(dir, name+".json")
+			raw := `{
+				"listenAddress": "127.0.0.1:8080",
+				"adminUsername": "admin",
+				"jwtSecret": "secret-jwt-value",
+				"dataRoot": "data",
+				"appDatabase": "data/db/app.db",
+				` + field + `,
+				"metricsDatabase": "data/db/metrics.db"
+			}`
+			if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(cfg.LogDatabase, dir) {
+				t.Fatalf("log database should be relative to config dir, got %q", cfg.LogDatabase)
+			}
+		})
 	}
 }
 

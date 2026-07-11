@@ -399,7 +399,7 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -408,7 +408,7 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	svc := NewService(store.AppDB(), cfg, secrets, taskSvc)
 	svc.RegisterTasks(taskSvc)
 	return svc, store, func() { _ = store.Close() }

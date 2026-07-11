@@ -61,6 +61,7 @@ type AgentErrorHandler interface {
 
 type Service struct {
 	db               *sql.DB
+	logDB            *sql.DB
 	runtimeClient    AgentRuntimeClient
 	servers          ServerProvider
 	agentErrors      AgentErrorHandler
@@ -189,6 +190,14 @@ func WithDeploymentDispatcher(dispatcher DeploymentDispatcher) Option {
 	return func(s *Service) { s.deployment = dispatcher }
 }
 
+func WithLogDB(db *sql.DB) Option {
+	return func(s *Service) {
+		if db != nil {
+			s.logDB = db
+		}
+	}
+}
+
 func WithFacilityRuntimeProvider(provider FacilityRuntimeProvider) Option {
 	return func(s *Service) { s.facilityRuntime = provider }
 }
@@ -207,6 +216,13 @@ func (s *Service) SetDeploymentDispatcher(dispatcher DeploymentDispatcher) {
 
 func (s *Service) SetFacilityRuntimeProvider(provider FacilityRuntimeProvider) {
 	s.facilityRuntime = provider
+}
+
+func (s *Service) lifecycleDB() *sql.DB {
+	if s.logDB != nil {
+		return s.logDB
+	}
+	return s.db
 }
 
 func NewServiceWithOptions(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Service, cfg Config, opts ...Option) *Service {
@@ -1319,7 +1335,7 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 }
 
 func (s *Service) latestLifecycleOperation(ctx context.Context, appID string) (LifecycleOperation, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
+	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
 		FROM application_lifecycle_operations WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, appID)
 	op, err := scanLifecycleOperation(row)
 	if err == sql.ErrNoRows {
@@ -1337,7 +1353,7 @@ func (s *Service) latestLifecycleOperation(ctx context.Context, appID string) (L
 }
 
 func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]LifecycleTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
+	rows, err := s.lifecycleDB().QueryContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
 		FROM application_lifecycle_targets WHERE operation_id=? ORDER BY server_id ASC`, operationID)
 	if err != nil {
 		return nil, err
@@ -1360,7 +1376,7 @@ func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]L
 }
 
 func (s *Service) lifecycleTargetByID(ctx context.Context, targetID string) (LifecycleTarget, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
+	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
 		FROM application_lifecycle_targets WHERE id=?`, targetID)
 	return scanLifecycleTarget(row)
 }
@@ -2443,7 +2459,7 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 		StartedAt:     &now,
 		UpdatedAt:     now,
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
+	_, err := s.lifecycleDB().ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		operation.ID, operation.ApplicationID, operation.Type, operation.Status, operation.TaskID, operation.Generation, operation.SpecHash, operation.Trigger, operation.Error, formatTime(operation.CreatedAt), nullableTime(operation.StartedAt), nil, formatTime(operation.UpdatedAt))
 	if err != nil {
@@ -2464,7 +2480,7 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			instanceID = instance.ID
 			containerName = instance.ContainerName
 		}
-		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
+		_, err := s.lifecycleDB().ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			targetID, operation.ID, app.ID, serverID, action, state, status, targetKey, desiredState, spec.Generation, spec.SpecHash, priority, 0, "", "", "", "", instanceID, containerName, "", "", "", "", "", "", formatTime(now), nil, nil, formatTime(now))
 		if err != nil {
@@ -2552,7 +2568,7 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 			LifecycleTargetStateStopping,
 			LifecycleTargetStatePurging)
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+where, args...)
+	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+where, args...)
 	if err != nil {
 		return err
 	}
@@ -2582,10 +2598,10 @@ func (s *Service) failLifecycleTargetExecution(ctx context.Context, targetID, st
 	finishedAt := any(formatTime(now))
 	if retryable {
 		state = LifecycleTargetStateFailedRetryable
-		nextRunAt = formatTime(now.Add(lifecycleExecutionRetryDelay(ctx, s.db, targetID)))
+		nextRunAt = formatTime(now.Add(lifecycleExecutionRetryDelay(ctx, s.lifecycleDB(), targetID)))
 		finishedAt = nil
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			stage=?,
@@ -2734,7 +2750,7 @@ func (s *Service) verifyLifecycleTargetNow(ctx context.Context, targetID string)
 		}
 	}
 	now := formatTime(time.Now().UTC())
-	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			stage=?,
@@ -2770,12 +2786,12 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 	if cause != nil {
 		errText = cause.Error()
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?, error=?, finished_at=?, updated_at=? WHERE id=?`, status, errText, now, now, operationID)
+	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?, error=?, finished_at=?, updated_at=? WHERE id=?`, status, errText, now, now, operationID)
 	return err
 }
 
 func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, operationID string) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT server_id,state,error FROM application_lifecycle_targets WHERE operation_id=?`, operationID)
+	rows, err := s.lifecycleDB().QueryContext(ctx, `SELECT server_id,state,error FROM application_lifecycle_targets WHERE operation_id=?`, operationID)
 	if err != nil {
 		return err
 	}
@@ -2949,7 +2965,7 @@ func (s *Service) supersedeLifecycleTargetForTask(ctx context.Context, task task
 
 func (s *Service) supersedeLifecycleTargetIfActive(ctx context.Context, targetID, message string) error {
 	now := formatTime(time.Now().UTC())
-	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?, status=?, error=?, error_code=CASE WHEN error_code='' THEN ? ELSE error_code END,
 			error_message=CASE WHEN error_message='' THEN ? ELSE error_message END,
 			error_detail=CASE WHEN error_detail='' THEN ? ELSE error_detail END,
@@ -2981,7 +2997,7 @@ func targetTaskFailureMessage(task tasks.Task, cause error) string {
 
 func (s *Service) failLifecycleTargetIfActive(ctx context.Context, targetID, message string) (bool, error) {
 	now := formatTime(time.Now().UTC())
-	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?, status=?, error=?,
 			error_code=CASE WHEN error_code='' THEN ? ELSE error_code END,
 			error_message=CASE WHEN error_message='' THEN ? ELSE error_message END,
@@ -3231,7 +3247,7 @@ func (s *Service) renewLifecycleTargetTaskLease(ctx context.Context, targetID, t
 		return nil
 	}
 	now := time.Now().UTC()
-	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET lease_expires_at=?,
 			updated_at=?
 		WHERE id=?
@@ -3693,7 +3709,7 @@ func (s *Service) planTargetActions(ctx context.Context, app Application, spec a
 }
 
 func (s *Service) activeLifecycleTarget(ctx context.Context, appID, serverID string) (LifecycleTarget, bool, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
+	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
 		FROM application_lifecycle_targets
 		WHERE target_key=?
 		  AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')
@@ -3864,7 +3880,7 @@ func (s *Service) triggerApplicationReconcileTask(ctx context.Context, appID, tr
 
 func (s *Service) deploymentOperationError(ctx context.Context, operationID string) error {
 	var status, errText string
-	err := s.db.QueryRowContext(ctx, `SELECT status,error FROM application_lifecycle_operations WHERE id=?`, operationID).Scan(&status, &errText)
+	err := s.lifecycleDB().QueryRowContext(ctx, `SELECT status,error FROM application_lifecycle_operations WHERE id=?`, operationID).Scan(&status, &errText)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -3945,7 +3961,7 @@ func (s *Service) ensureLifecycleTargetClaimedForTask(ctx context.Context, task 
 	default:
 		return false, nil
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			lease_owner=?,

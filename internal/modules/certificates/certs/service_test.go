@@ -319,7 +319,7 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -327,7 +327,7 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at) VALUES('dnsdom_1','example.com','cloudflare','{}','','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	secrets, err := secretstore.Open(cfg, store.AppDB())
 	if err != nil {
 		t.Fatal(err)

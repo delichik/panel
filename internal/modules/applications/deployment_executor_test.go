@@ -75,7 +75,7 @@ func TestRunDeployTaskSkipsTargetClaimedByAnotherWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetID := plan.CreatedTargets[0].ID
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?, status=?, lease_owner=?, lease_expires_at=?, claimed_task_id=?, updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateClaimed,
@@ -174,7 +174,7 @@ func TestLifecycleTargetFailureDoesNotOverwriteTerminalTarget(t *testing.T) {
 	}
 	targetID := plan.CreatedTargets[0].ID
 	now := formatTime(time.Now().UTC())
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,status=?,attempt=?,next_run_at='',finished_at=?,updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateSucceeded,
@@ -213,7 +213,7 @@ func TestTargetTaskFailureDoesNotOverwriteRetryableTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	nextRunAt := time.Now().UTC().Add(time.Minute)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,status=?,attempt=?,next_run_at=?,error_code=?,updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateFailedRetryable,
@@ -249,7 +249,7 @@ func TestTaskFallbackClaimRespectsRetryBackoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetID := plan.CreatedTargets[0].ID
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,status=?,next_run_at=?,updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateFailedRetryable,
@@ -294,7 +294,7 @@ func TestTaskFallbackRejectsExpiredLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?, status=?, lease_owner=?, lease_expires_at=?, claimed_task_id=?, updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateClaimed,
@@ -331,7 +331,7 @@ type leaseStealingQueue struct {
 }
 
 func (q leaseStealingQueue) Execute(ctx context.Context, serverID string, run func(context.Context) error) error {
-	_, err := q.svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	_, err := q.svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET lease_owner=?, claimed_task_id=?, lease_expires_at=?, updated_at=?
 		WHERE id=?`,
 		"other-worker",

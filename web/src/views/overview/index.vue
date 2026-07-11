@@ -362,42 +362,6 @@ function metricCardLabel(card: OverviewCardConfig) {
   return `${card.range} / ${direction}`;
 }
 
-function latestMetricSummaries(card: OverviewCardConfig) {
-  if (!isMetricCard(card)) return [];
-  return resolveCardServers(card)
-    .map((server, index) => {
-      const series = cardDataById.value[card.id]?.metricsByServer[server.id] as MetricsSeriesDto | undefined;
-      const color = palette.value.series[index % palette.value.series.length];
-      const value = latestMetricValue(card, series);
-      return value ? { id: server.id, name: server.name, color, value } : null;
-    })
-    .filter((item): item is { id: string; name: string; color: string; value: string } => Boolean(item));
-}
-
-function latestMetricValue(card: OverviewCardConfig, series: MetricsSeriesDto | undefined) {
-  if (!series) return '';
-  if (card.kind === 'cpu') {
-    const point = series.cpu.at(-1);
-    return point ? formatMetricValue(card.kind, point.usagePercent) : '';
-  }
-  if (card.kind === 'memory') {
-    const point = series.memory.at(-1);
-    return point ? formatMetricValue(card.kind, percent(point.usedBytes, point.totalBytes)) : '';
-  }
-  if (card.kind === 'disk') {
-    const point = series.disk.at(-1);
-    return point ? formatMetricValue(card.kind, percent(point.usedBytes, point.totalBytes)) : '';
-  }
-  if (card.kind === 'network') {
-    const point = series.network.at(-1);
-    if (!point) return '';
-    if (card.networkDirection === 'rx') return formatBytesPerSecond(point.rxBytesPerSecond);
-    if (card.networkDirection === 'tx') return formatBytesPerSecond(point.txBytesPerSecond);
-    return `${formatBytesPerSecond(point.rxBytesPerSecond)} / ${formatBytesPerSecond(point.txBytesPerSecond)}`;
-  }
-  return '';
-}
-
 function openAddDialog(kind?: CardKind) {
   const preset = presetFor(kind ?? 'cpu');
   editingCardId.value = '';
@@ -619,19 +583,6 @@ onBeforeUnmount(() => {
                 <v-list-item prepend-icon="mdi-delete" :title="t('common.remove')" class="text-error" @click="removeCard(card.id)" />
               </v-list>
             </v-menu>
-          </div>
-        </div>
-
-        <div v-if="isMetricCard(card) && latestMetricSummaries(card).length" class="metric-summary-strip">
-          <div
-            v-for="item in latestMetricSummaries(card)"
-            :key="item.id"
-            class="metric-summary-pill"
-            :style="{ '--metric-color': item.color }"
-          >
-            <span class="metric-summary-dot" />
-            <span class="metric-summary-name text-truncate">{{ item.name }}</span>
-            <strong class="metric-summary-value font-tabular">{{ item.value }}</strong>
           </div>
         </div>
 
@@ -919,49 +870,6 @@ onBeforeUnmount(() => {
 .surface-success { color: rgb(var(--v-theme-success)); background: rgba(var(--v-theme-success), 0.1); }
 .surface-warning { color: rgb(var(--v-theme-warning)); background: rgba(var(--v-theme-warning), 0.12); }
 .surface-info { color: rgb(var(--v-theme-info)); background: rgba(var(--v-theme-info), 0.1); }
-
-.metric-summary-strip {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
-  gap: 8px;
-  flex: 0 0 auto;
-  padding: 0 14px 10px 16px;
-}
-
-.metric-summary-pill {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid color-mix(in srgb, var(--metric-color), var(--lp-border) 84%);
-  border-radius: var(--lp-radius-sm);
-  background:
-    linear-gradient(90deg, color-mix(in srgb, var(--metric-color), transparent 94%), transparent 62%),
-    color-mix(in srgb, var(--lp-surface-container), transparent 40%);
-}
-
-.metric-summary-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: var(--metric-color);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--metric-color), transparent 90%);
-}
-
-.metric-summary-name {
-  min-width: 0;
-  color: var(--lp-text-muted);
-  font-size: 0.74rem;
-  font-weight: 600;
-}
-
-.metric-summary-value {
-  color: var(--lp-text);
-  font-size: 0.86rem;
-  white-space: nowrap;
-}
 
 .card-body {
   min-height: 0;

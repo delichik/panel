@@ -166,59 +166,6 @@ func (s *Store) Migrate(ctx context.Context) error {
 			UNIQUE(application_id, generation),
 			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
 		)`,
-		`CREATE TABLE IF NOT EXISTS application_lifecycle_operations (
-			id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			type TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			task_id TEXT NOT NULL DEFAULT '',
-			generation INTEGER NOT NULL DEFAULT 0,
-			spec_hash TEXT NOT NULL DEFAULT '',
-			trigger TEXT NOT NULL DEFAULT '',
-			error TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_operations_app_created ON application_lifecycle_operations(application_id, created_at)`,
-		`CREATE TABLE IF NOT EXISTS application_lifecycle_targets (
-			id TEXT PRIMARY KEY,
-			operation_id TEXT NOT NULL,
-			application_id TEXT NOT NULL,
-			server_id TEXT NOT NULL,
-			action TEXT NOT NULL DEFAULT 'apply',
-			state TEXT NOT NULL DEFAULT 'planned',
-			status TEXT NOT NULL DEFAULT 'pending',
-			target_key TEXT NOT NULL DEFAULT '',
-			desired_state TEXT NOT NULL DEFAULT 'running',
-			desired_generation INTEGER NOT NULL DEFAULT 0,
-			desired_spec_hash TEXT NOT NULL DEFAULT '',
-			priority INTEGER NOT NULL DEFAULT 0,
-			attempt INTEGER NOT NULL DEFAULT 0,
-			next_run_at TEXT NOT NULL DEFAULT '',
-			lease_owner TEXT NOT NULL DEFAULT '',
-			lease_expires_at TEXT NOT NULL DEFAULT '',
-			claimed_task_id TEXT NOT NULL DEFAULT '',
-			instance_id TEXT NOT NULL DEFAULT '',
-			container_name TEXT NOT NULL DEFAULT '',
-			container_id TEXT NOT NULL DEFAULT '',
-			stage TEXT NOT NULL DEFAULT '',
-			error TEXT NOT NULL DEFAULT '',
-			error_code TEXT NOT NULL DEFAULT '',
-			error_message TEXT NOT NULL DEFAULT '',
-			error_detail TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT,
-			updated_at TEXT NOT NULL,
-			UNIQUE(operation_id, server_id),
-			FOREIGN KEY(operation_id) REFERENCES application_lifecycle_operations(id) ON DELETE CASCADE,
-			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation ON application_lifecycle_targets(operation_id, server_id)`,
 		`CREATE TABLE IF NOT EXISTS application_instances (
 			id TEXT PRIMARY KEY,
 			application_id TEXT NOT NULL,
@@ -423,14 +370,67 @@ func (s *Store) Migrate(ctx context.Context) error {
 			line TEXT NOT NULL,
 			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
 		)`,
+		`CREATE TABLE IF NOT EXISTS application_lifecycle_operations (
+			id TEXT PRIMARY KEY,
+			application_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			task_id TEXT NOT NULL DEFAULT '',
+			generation INTEGER NOT NULL DEFAULT 0,
+			spec_hash TEXT NOT NULL DEFAULT '',
+			trigger TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT,
+			updated_at TEXT NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_operations_app_created ON application_lifecycle_operations(application_id, created_at)`,
+		`CREATE TABLE IF NOT EXISTS application_lifecycle_targets (
+			id TEXT PRIMARY KEY,
+			operation_id TEXT NOT NULL,
+			application_id TEXT NOT NULL,
+			server_id TEXT NOT NULL,
+			action TEXT NOT NULL DEFAULT 'apply',
+			state TEXT NOT NULL DEFAULT 'planned',
+			status TEXT NOT NULL DEFAULT 'pending',
+			target_key TEXT NOT NULL DEFAULT '',
+			desired_state TEXT NOT NULL DEFAULT 'running',
+			desired_generation INTEGER NOT NULL DEFAULT 0,
+			desired_spec_hash TEXT NOT NULL DEFAULT '',
+			priority INTEGER NOT NULL DEFAULT 0,
+			attempt INTEGER NOT NULL DEFAULT 0,
+			next_run_at TEXT NOT NULL DEFAULT '',
+			lease_owner TEXT NOT NULL DEFAULT '',
+			lease_expires_at TEXT NOT NULL DEFAULT '',
+			claimed_task_id TEXT NOT NULL DEFAULT '',
+			instance_id TEXT NOT NULL DEFAULT '',
+			container_name TEXT NOT NULL DEFAULT '',
+			container_id TEXT NOT NULL DEFAULT '',
+			stage TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			error_code TEXT NOT NULL DEFAULT '',
+			error_message TEXT NOT NULL DEFAULT '',
+			error_detail TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			started_at TEXT,
+			finished_at TEXT,
+			updated_at TEXT NOT NULL,
+			UNIQUE(operation_id, server_id),
+			FOREIGN KEY(operation_id) REFERENCES application_lifecycle_operations(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation ON application_lifecycle_targets(operation_id, server_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(type,status)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_status ON tasks(concurrency_key,status)`,
 		`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id,child_index)`,
 	}
 	for _, stmt := range task {
-		if _, err := s.taskDB.ExecContext(ctx, stmt); err != nil {
+		if _, err := s.logDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
+	}
+	if err := s.migrateApplicationLifecycleRowsToLog(ctx); err != nil {
+		return err
 	}
 	if err := s.ensureAppColumns(ctx, "credentials", map[string]string{
 		"name":              "TEXT NOT NULL DEFAULT ''",
@@ -472,6 +472,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.migrateApplicationLifecycleTargets(ctx); err != nil {
+		return err
+	}
+	if err := s.dropLegacyApplicationLifecycleTables(ctx); err != nil {
 		return err
 	}
 	if err := s.dropAppColumnIfExists(ctx, "applications", "persistent_path"); err != nil {
@@ -590,7 +593,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 }
 
 func (s *Store) resetLegacyTaskTables(ctx context.Context) error {
-	rows, err := s.taskDB.QueryContext(ctx, `PRAGMA table_info(tasks)`)
+	rows, err := s.logDB.QueryContext(ctx, `PRAGMA table_info(tasks)`)
 	if err != nil {
 		return err
 	}
@@ -639,7 +642,7 @@ func (s *Store) dropTaskTables(ctx context.Context) error {
 		`DROP TABLE IF EXISTS task_steps`,
 		`DROP TABLE IF EXISTS tasks`,
 	} {
-		if _, err := s.taskDB.ExecContext(ctx, stmt); err != nil {
+		if _, err := s.logDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -707,7 +710,7 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 }
 
 func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
-	if err := s.ensureAppColumns(ctx, "application_lifecycle_targets", map[string]string{
+	if err := s.ensureLogColumns(ctx, "application_lifecycle_targets", map[string]string{
 		"action":             "TEXT NOT NULL DEFAULT 'apply'",
 		"state":              "TEXT NOT NULL DEFAULT 'planned'",
 		"target_key":         "TEXT NOT NULL DEFAULT ''",
@@ -796,11 +799,79 @@ func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
 			ON application_lifecycle_targets(operation_id, server_id)`,
 	}
 	for _, stmt := range statements {
+		if _, err := s.logDB.ExecContext(ctx, stmt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateApplicationLifecycleRowsToLog(ctx context.Context) error {
+	for _, table := range []string{"application_lifecycle_operations", "application_lifecycle_targets"} {
+		exists, err := databaseTableExists(ctx, s.appDB, table)
+		if err != nil || !exists {
+			return err
+		}
+		if err := copyRowsIfMissing(ctx, s.appDB, s.logDB, table); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) dropLegacyApplicationLifecycleTables(ctx context.Context) error {
+	for _, stmt := range []string{
+		`DROP TABLE IF EXISTS application_lifecycle_targets`,
+		`DROP TABLE IF EXISTS application_lifecycle_operations`,
+	} {
 		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func databaseTableExists(ctx context.Context, db *sql.DB, table string) (bool, error) {
+	var name string
+	err := db.QueryRowContext(ctx, `SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func copyRowsIfMissing(ctx context.Context, src, dst *sql.DB, table string) error {
+	rows, err := src.QueryContext(ctx, `SELECT * FROM `+table)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+	if len(columns) == 0 {
+		return nil
+	}
+	placeholders := make([]string, len(columns))
+	for i := range placeholders {
+		placeholders[i] = "?"
+	}
+	insertSQL := `INSERT OR IGNORE INTO ` + table + `(` + strings.Join(columns, ",") + `) VALUES (` + strings.Join(placeholders, ",") + `)`
+	for rows.Next() {
+		values := make([]any, len(columns))
+		targets := make([]any, len(columns))
+		for i := range values {
+			targets[i] = &values[i]
+		}
+		if err := rows.Scan(targets...); err != nil {
+			return err
+		}
+		if _, err := dst.ExecContext(ctx, insertSQL, values...); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Store) migrateApplicationFilesArchiveKind(ctx context.Context) error {
@@ -856,8 +927,8 @@ func (s *Store) dropAppColumnIfExists(ctx context.Context, table, column string)
 	return dropColumnIfExists(ctx, s.appDB, table, column)
 }
 
-func (s *Store) ensureTaskColumns(ctx context.Context, table string, columns map[string]string) error {
-	return ensureColumns(ctx, s.taskDB, table, columns)
+func (s *Store) ensureLogColumns(ctx context.Context, table string, columns map[string]string) error {
+	return ensureColumns(ctx, s.logDB, table, columns)
 }
 
 func dropColumnIfExists(ctx context.Context, db *sql.DB, table, column string) error {

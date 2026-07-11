@@ -626,10 +626,10 @@ func (s *Service) failConnectivityTask(ctx context.Context, task tasks.Task, srv
 		return
 	}
 	_ = s.tasks.AppendLog(ctx, task.ID, "system", "server creation rolled back because initial information collection failed")
-	_ = s.tasks.Fail(ctx, task.ID, err)
 	if rollbackErr := s.rollbackInitialServer(ctx, srv.ID); rollbackErr != nil {
 		_ = s.tasks.AppendLog(ctx, task.ID, "stderr", "failed to roll back server creation: "+rollbackErr.Error())
 	}
+	_ = s.tasks.Fail(ctx, task.ID, err)
 }
 
 func serverInfoBootstrap(task tasks.Task) bool {

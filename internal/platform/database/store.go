@@ -16,12 +16,15 @@ import (
 
 type Store struct {
 	appDB     *sql.DB
-	taskDB    *sql.DB
+	logDB     *sql.DB
 	metricsDB *sql.DB
 }
 
 func Open(cfg config.Config) (*Store, error) {
-	for _, p := range []string{cfg.AppDatabase, cfg.TaskDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
+	if err := migrateLegacyLogDatabasePath(cfg.LogDatabase); err != nil {
+		return nil, err
+	}
+	for _, p := range []string{cfg.AppDatabase, cfg.LogDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
 		dir := p
 		if filepath.Ext(p) != "" {
 			dir = filepath.Dir(p)
@@ -34,26 +37,64 @@ func Open(cfg config.Config) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	taskDB, err := sql.Open("sqlite", sqliteDSN(cfg.TaskDatabase))
+	logDB, err := sql.Open("sqlite", sqliteDSN(cfg.LogDatabase))
 	if err != nil {
 		_ = appDB.Close()
 		return nil, err
 	}
 	metricsDB, err := sql.Open("sqlite", sqliteDSN(cfg.MetricsDatabase))
 	if err != nil {
-		_ = taskDB.Close()
+		_ = logDB.Close()
 		_ = appDB.Close()
 		return nil, err
 	}
 	configureDB(appDB)
-	configureDB(taskDB)
+	configureDB(logDB)
 	configureDB(metricsDB)
-	s := &Store{appDB: appDB, taskDB: taskDB, metricsDB: metricsDB}
+	s := &Store{appDB: appDB, logDB: logDB, metricsDB: metricsDB}
 	if err := s.Migrate(context.Background()); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
+}
+
+func migrateLegacyLogDatabasePath(logPath string) error {
+	if strings.TrimSpace(logPath) == "" || strings.HasPrefix(filepath.ToSlash(logPath), "file:") {
+		return nil
+	}
+	if filepath.Base(logPath) != "log.db" {
+		return nil
+	}
+	legacyPath := filepath.Join(filepath.Dir(logPath), "tasks.db")
+	if _, err := os.Stat(logPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if _, err := os.Stat(legacyPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if err := os.Rename(legacyPath, logPath); err != nil {
+		return err
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		oldSidecar := legacyPath + suffix
+		newSidecar := logPath + suffix
+		if _, err := os.Stat(oldSidecar); err == nil {
+			if _, statErr := os.Stat(newSidecar); os.IsNotExist(statErr) {
+				if renameErr := os.Rename(oldSidecar, newSidecar); renameErr != nil {
+					return renameErr
+				}
+			}
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func sqliteDSN(path string) string {
@@ -98,7 +139,7 @@ func configureDB(db *sql.DB) {
 }
 
 func (s *Store) AppDB() *sql.DB     { return s.appDB }
-func (s *Store) TaskDB() *sql.DB    { return s.taskDB }
+func (s *Store) LogDB() *sql.DB     { return s.logDB }
 func (s *Store) MetricsDB() *sql.DB { return s.metricsDB }
 
 func (s *Store) Close() error {
@@ -109,8 +150,8 @@ func (s *Store) Close() error {
 	if s.appDB != nil {
 		err = s.appDB.Close()
 	}
-	if s.taskDB != nil {
-		if e := s.taskDB.Close(); err == nil {
+	if s.logDB != nil {
+		if e := s.logDB.Close(); err == nil {
 			err = e
 		}
 	}

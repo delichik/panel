@@ -26,11 +26,11 @@
 
 ## 数据与行为约定
 
-- 任务数据使用独立 SQLite 数据库 `Store.TaskDB()`，默认文件是 `data/db/tasks.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
+- 任务与操作历史使用独立 SQLite 日志数据库 `Store.LogDB()`，默认文件是 `data/db/log.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。应用部署 lifecycle 的 `application_lifecycle_operations` 和 `application_lifecycle_targets` 也保存在该库中。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
 - 当前 alpha 阶段任务历史不是稳定持久化契约；注册式任务系统重构会重建 `tasks`、`task_steps` 和 `task_logs`，旧任务中心历史可直接丢弃，但业务数据库和指标数据库不得受影响。
 - 任务系统建模使用“操作 + 任务”两层语义：操作是由用户、调度器、系统恢复或其他业务因素发起的一次聚合意图，使用同一个 `operation_id` 追踪；任务是操作中的具体执行对象，必须包含本次执行所需变量，例如目标服务器、资源 ID、参数 JSON、触发来源和资源类型。
 - 业务动作只要可能拆成多个变量不同的执行对象，就应优先按一个操作拆多个任务建模，而不是把所有目标藏进单个任务的 metadata 或业务私有 target 表。典型例子：一次应用协调面向服务器 A 和 B，应创建一个操作聚合，并在该操作下创建“应用目标应用 A”和“应用目标应用 B”两个私有目标任务。
-- 私有业务表可以继续记录领域状态，例如应用 lifecycle operation/target、镜像检查缓存或证书签发详情；但这些表不能取代任务系统里的执行对象。任务中心需要能通过 `operation_id`、父子任务字段和任务参数看见操作拆分后的具体任务。
+- 私有业务表可以继续记录领域状态，例如镜像检查缓存或证书签发详情；应用 lifecycle operation/target 属于高增长操作历史，必须保存在 `Store.LogDB()`。这些表不能取代任务系统里的执行对象。任务中心需要能通过 `operation_id`、父子任务字段和任务参数看见操作拆分后的具体任务。
 - 单目标动作使用 `tasks.Manager.Create` 或封装入口创建单个任务；多目标或多变量动作使用 `tasks.Manager.CreateBatch` / `CreateBatchAndRun` 创建父任务和子任务，子任务可以使用各自注册任务类型，但必须共享同一 `operation_id`，并把每个目标自己的变量写入对应 `CreateInput`。
 - 注册方负责通过任务定义、并发策略和业务封装入口约束该任务类型是否允许异步/并行执行：允许并行时批量输入可使用 `ExecutionModeParallel`，否则必须使用 `ExecutionModeSerial` 或单任务执行。调用方不得绕开注册定义，把不允许并行的任务强行拆成并行 goroutine；普通 `Execute` 返回 `nil` 表示该任务执行已完成或已由 executor 写入终态，不能只启动后台 goroutine 后返回成功，否则 manager 会按成功自动完成任务。后续如果新增显式异步能力字段，也必须由注册方声明并同步任务中心展示。
 - `internal/modules/tasks` 只提供任务框架能力，不维护业务任务类型清单、业务 executor 或业务周期输入。业务任务类型必须由拥有该任务的业务模块在自己的 `RegisterTasks` 入口注册；生产装配由 `internal/bootstrap/panel/app.go` 的集中任务注册阶段统一调用各模块入口。
@@ -117,4 +117,4 @@
 - `application_restart` is a replayable planning task, not a direct runtime restart executor. It forces application deployment planning and completes after lifecycle targets are created or reused; remote runtime mutation still happens only through dispatcher-created `application_target_apply|stop|purge` task anchors.
 - Application target task metadata should include stable deployment context (`applicationId`, `applicationName`, `serverId`, `action`, `generation`, `specHash`, `lifecycleOperationId`, `lifecycleTargetId`) so Task Center can display the deployment object and target state without parsing logs.
 - The tasks HTTP handler supports a `DeploymentProjectionProvider` hook. Production wiring sets the applications service as that provider, so `GET /api/v1/tasks` and `GET /api/v1/tasks/{id}` may include `task.deployment.operation` and `task.deployment.target` for application lifecycle tasks. Task Center must prefer this structured projection over legacy metadata and use it to show operation targets, target state/stage, backoff retry time, claimed task/log anchor, and original Docker/Agent error diagnostics.
-- Business modules that create domain lifecycle rows before task rows must provide their own compensation path for task creation failures. The generic task manager cannot roll back lifecycle rows stored in another database.
+- Business modules that create domain lifecycle rows before task rows must provide their own compensation path for task creation failures. The generic task manager cannot roll back domain lifecycle rows or infer their retry state.

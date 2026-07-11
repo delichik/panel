@@ -18,13 +18,13 @@ func newTestService(t *testing.T) *Service {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	svc := NewService(store.TaskDB())
+	svc := NewService(store.LogDB())
 	for _, def := range []Definition{
 		{Type: "test", ConcurrencyPolicy: ConcurrencyParallelAllowed},
 		{Type: "sample_task", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},

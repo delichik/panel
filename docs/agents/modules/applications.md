@@ -47,12 +47,12 @@
 
 ## 数据与行为约定
 
-- 主要表包括 `applications`、`application_files`、`application_revisions`、`application_lifecycle_operations`、`application_lifecycle_targets`、`application_instances`。
+- 主要业务表包括 `applications`、`application_files`、`application_revisions`、`application_instances`，保存在 `Store.AppDB()`；高增长的部署 lifecycle 历史表 `application_lifecycle_operations`、`application_lifecycle_targets` 保存在 `Store.LogDB()`。
 - 应用层采用轻量控制平面模型：`applications` 保存 desired state，`kind=application` 表示普通用户应用，`kind=facility_application` 表示设施应用投影出的隐藏受控应用；`deletion_requested=1` 表示删除期望已提交，普通列表隐藏该应用并由协调器清理运行时资源。业务 HTTP 入口不得直接部署、停止或清理远端容器，只能校验、保存 desired state 并触发 `application_reconcile`。
 - appspec 以 YAML 输入，经 `internal/modules/applications/spec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器并编排运行时步骤，再通过目标机 `panel-agent` 的原子接口写入托管文件、拉取镜像、删除旧容器、创建容器、启动容器和刷新状态。
 - appspec 的 `resources.cpu` 和 `resources.memoryMb` 只有设置为正数时才表示运行时限制；字段缺省或显式为 `0` 都表示不限制，不得在规范化、渲染或部署流程中自动补默认 CPU/内存限制。
 - appspec 支持 `capAdd` 字符串数组，对应 Docker `--cap-add` / `HostConfig.CapAdd`；规范化时去空、去重并转为大写。`capAdd` 只在用户显式配置时下发，可与 `privileged: true` 并存，当前不提供 `capDrop`。
-- `application_lifecycle_operations` 记录一次应用生命周期意图，当前用于部署类流程，保存应用、任务、generation、spec hash、操作类型、整体状态和错误；`application_lifecycle_targets` 是应用/服务器冲突域的持久目标状态表，按服务器记录 `action`、`state`、`target_key`、目标 revision、退避、租约、任务日志锚点、阶段、实例 ID、容器信息和结构化错误。旧 `status` 字段暂时保留为 `state` 的兼容投影，旧读者不得再把它作为新状态机事实来源。选中 3 台服务器时必须先落 3 条 target，即使某台在 agent 校验、模板渲染或容器创建前失败，也必须在运行时视图中显示为 failed/pending，不得只展示已经创建过 `application_instances` 的服务器。
+- `application_lifecycle_operations` 记录一次应用生命周期意图，当前用于部署类流程，保存应用、任务、generation、spec hash、操作类型、整体状态和错误；`application_lifecycle_targets` 是应用/服务器冲突域的持久目标状态表，按服务器记录 `action`、`state`、`target_key`、目标 revision、退避、租约、任务日志锚点、阶段、实例 ID、容器信息和结构化错误。两张表位于 `Store.LogDB()`，对 application/server/task 使用稳定 ID 软引用，不依赖跨库外键。旧 `status` 字段暂时保留为 `state` 的兼容投影，旧读者不得再把它作为新状态机事实来源。选中 3 台服务器时必须先落 3 条 target，即使某台在 agent 校验、模板渲染或容器创建前失败，也必须在运行时视图中显示为 failed/pending，不得只展示已经创建过 `application_instances` 的服务器。
 - `application_instances` 是 Panel 的当前运行时事实表，按 `application_id + server_id` 记录实例、容器名、容器 ID、期望状态、最近状态、渲染后的 runtime spec 和部署 generation；它不再承担“本次部署目标清单”的职责。
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。尚未部署的 `persistent` 应用允许先向选定服务器导入 zip，agent 会创建并覆盖 Panel 托管的 persistent 目录，导入完成后不触发重启，用于从 compose 等外部运行方式迁移数据后再首次启动。
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID，并依赖数据库外键级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
@@ -144,7 +144,7 @@
 
 ## Managed Facility Application Identity
 
-- Facility applications can reserve hidden application identities for lifecycle records. The reverse proxy facility app uses `facility-reverse-proxy`; it exists so `application_lifecycle_operations` and `application_lifecycle_targets` keep their normal foreign-key and query semantics.
+- Facility applications can reserve hidden application identities for lifecycle records. The reverse proxy facility app uses `facility-reverse-proxy`; it exists so `application_lifecycle_operations` and `application_lifecycle_targets` keep normal application ID query semantics even though lifecycle rows live in `Store.LogDB()` and use soft references.
 - `applications.Service.List` and normal application pages must filter this identity out. Facility pages should read their own config endpoint and render the embedded lifecycle operation instead of exposing the managed identity as a user-editable application.
 
 ## Deployment Coordination Ownership

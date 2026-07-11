@@ -24,7 +24,7 @@ func TestMetricsSaveQueryCleanup(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -71,7 +71,7 @@ func TestCollectRequiresAgent(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -86,7 +86,7 @@ func TestCollectRequiresAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &collectMetricsExecutor{stdout: "bad"}
-	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.TaskDB()))
+	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.LogDB()))
 	svc := NewService(store.MetricsDB(), serverSvc, exec)
 
 	if err := svc.CollectAt(context.Background(), "srv", time.Now().UTC()); err == nil {
@@ -103,7 +103,7 @@ func TestCollectUsesAgentWhenConfigured(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -119,7 +119,7 @@ func TestCollectUsesAgentWhenConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &collectMetricsExecutor{stdout: "bad"}
-	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.TaskDB()))
+	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.LogDB()))
 	agentClient := &fakeAgentClient{snapshot: linux.MetricsSnapshot{CPUUsagePercent: 12, MemoryTotalBytes: 100, Status: linux.SystemStatus{Hostname: "agent-host", Load1: 1.1, Load5: 0.8, Load15: 0.5}}}
 	svc := NewService(store.MetricsDB(), serverSvc, exec)
 	svc.SetAgentClient(agentClient)
@@ -155,7 +155,7 @@ func TestCollectFailsWhenConfiguredAgentFails(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestCollectFailsWhenConfiguredAgentFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &collectMetricsExecutor{stdout: "100 40\n8000 2000\n100000 50000\n1000000000 10 20\n2000000000 20 30\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3"}
-	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.TaskDB()))
+	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.LogDB()))
 	svc := NewService(store.MetricsDB(), serverSvc, exec)
 	svc.SetAgentClient(&fakeAgentClient{err: errors.New("agent down")})
 
@@ -196,7 +196,7 @@ func TestCollectMarksAgentCertificateTimeError(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -211,7 +211,7 @@ func TestCollectMarksAgentCertificateTimeError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.TaskDB()))
+	serverSvc := server.NewService(store.AppDB(), nil, tasks.NewService(store.LogDB()))
 	svc := NewService(store.MetricsDB(), serverSvc, &collectMetricsExecutor{})
 	svc.SetAgentClient(&fakeAgentClient{err: x509.CertificateInvalidError{Reason: x509.Expired}})
 

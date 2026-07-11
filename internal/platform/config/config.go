@@ -19,10 +19,24 @@ type Config struct {
 	JWTSecret                   string     `json:"jwtSecret"`
 	DataRoot                    string     `json:"dataRoot"`
 	AppDatabase                 string     `json:"appDatabase"`
-	TaskDatabase                string     `json:"taskDatabase"`
+	LogDatabase                 string     `json:"logDatabase"`
 	MetricsDatabase             string     `json:"metricsDatabase"`
 	RemoteCommandTimeoutSeconds int        `json:"remoteCommandTimeoutSeconds"`
 	Certificates                CertConfig `json:"certificates"`
+}
+
+type rawConfig struct {
+	ListenAddress               string      `json:"listenAddress"`
+	AdminUsername               string      `json:"adminUsername"`
+	AdminPasswordHash           string      `json:"adminPasswordHash"`
+	JWTSecret                   string      `json:"jwtSecret"`
+	DataRoot                    string      `json:"dataRoot"`
+	AppDatabase                 string      `json:"appDatabase"`
+	LogDatabase                 string      `json:"logDatabase"`
+	LegacyTaskDatabase          string      `json:"taskDatabase"`
+	MetricsDatabase             string      `json:"metricsDatabase"`
+	RemoteCommandTimeoutSeconds *int        `json:"remoteCommandTimeoutSeconds"`
+	Certificates                *CertConfig `json:"certificates"`
 }
 
 type CertConfig struct {
@@ -49,7 +63,7 @@ func Default() Config {
 		JWTSecret:                   "change-me-panel-jwt-secret",
 		DataRoot:                    "data",
 		AppDatabase:                 filepath.Join("data", "db", "app.db"),
-		TaskDatabase:                filepath.Join("data", "db", "tasks.db"),
+		LogDatabase:                 filepath.Join("data", "db", "log.db"),
 		MetricsDatabase:             filepath.Join("data", "db", "metrics.db"),
 		RemoteCommandTimeoutSeconds: 30,
 		Certificates: CertConfig{
@@ -74,9 +88,11 @@ func Load(path string) (Config, error) {
 		baseDir = filepath.Dir(absPath)
 		decoder := json.NewDecoder(bytes.NewReader(b))
 		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&cfg); err != nil {
+		var raw rawConfig
+		if err := decoder.Decode(&raw); err != nil {
 			return Config{}, err
 		}
+		applyRawConfig(&cfg, raw)
 	}
 	applyCertificateDefaults(&cfg)
 	applyEnv(&cfg)
@@ -95,7 +111,7 @@ func applyPathBase(cfg *Config, baseDir string) {
 	}
 	cfg.DataRoot = absolutizePath(baseDir, cfg.DataRoot)
 	cfg.AppDatabase = absolutizePath(baseDir, cfg.AppDatabase)
-	cfg.TaskDatabase = absolutizePath(baseDir, cfg.TaskDatabase)
+	cfg.LogDatabase = absolutizePath(baseDir, cfg.LogDatabase)
 	cfg.MetricsDatabase = absolutizePath(baseDir, cfg.MetricsDatabase)
 }
 
@@ -128,9 +144,45 @@ func applyEnv(cfg *Config) {
 	setString("PANEL_LISTEN_ADDRESS", &cfg.ListenAddress)
 	setString("PANEL_DATA_ROOT", &cfg.DataRoot)
 	setString("PANEL_APP_DATABASE", &cfg.AppDatabase)
-	setString("PANEL_TASK_DATABASE", &cfg.TaskDatabase)
+	setString("PANEL_LOG_DATABASE", &cfg.LogDatabase)
+	setString("PANEL_TASK_DATABASE", &cfg.LogDatabase)
 	setString("PANEL_METRICS_DATABASE", &cfg.MetricsDatabase)
 	setString("PANEL_CERT_ACME_DIRECTORY_URL", &cfg.Certificates.ACMEDirectoryURL)
+}
+
+func applyRawConfig(cfg *Config, raw rawConfig) {
+	if raw.ListenAddress != "" {
+		cfg.ListenAddress = raw.ListenAddress
+	}
+	if raw.AdminUsername != "" {
+		cfg.AdminUsername = raw.AdminUsername
+	}
+	if raw.AdminPasswordHash != "" {
+		cfg.AdminPasswordHash = raw.AdminPasswordHash
+	}
+	if raw.JWTSecret != "" {
+		cfg.JWTSecret = raw.JWTSecret
+	}
+	if raw.DataRoot != "" {
+		cfg.DataRoot = raw.DataRoot
+	}
+	if raw.AppDatabase != "" {
+		cfg.AppDatabase = raw.AppDatabase
+	}
+	if raw.LogDatabase != "" {
+		cfg.LogDatabase = raw.LogDatabase
+	} else if raw.LegacyTaskDatabase != "" {
+		cfg.LogDatabase = raw.LegacyTaskDatabase
+	}
+	if raw.MetricsDatabase != "" {
+		cfg.MetricsDatabase = raw.MetricsDatabase
+	}
+	if raw.RemoteCommandTimeoutSeconds != nil {
+		cfg.RemoteCommandTimeoutSeconds = *raw.RemoteCommandTimeoutSeconds
+	}
+	if raw.Certificates != nil {
+		cfg.Certificates = *raw.Certificates
+	}
 }
 
 func (c Config) Validate() error {
@@ -146,17 +198,17 @@ func (c Config) Validate() error {
 	if len(c.JWTSecret) < 16 {
 		return errors.New("jwt secret must be at least 16 characters")
 	}
-	if c.DataRoot == "" || c.AppDatabase == "" || c.TaskDatabase == "" || c.MetricsDatabase == "" {
+	if c.DataRoot == "" || c.AppDatabase == "" || c.LogDatabase == "" || c.MetricsDatabase == "" {
 		return errors.New("data root and database paths are required")
 	}
 	if c.AppDatabase == c.MetricsDatabase {
 		return errors.New("app database and metrics database must be different")
 	}
-	if c.AppDatabase == c.TaskDatabase {
-		return errors.New("app database and task database must be different")
+	if c.AppDatabase == c.LogDatabase {
+		return errors.New("app database and log database must be different")
 	}
-	if c.TaskDatabase == c.MetricsDatabase {
-		return errors.New("task database and metrics database must be different")
+	if c.LogDatabase == c.MetricsDatabase {
+		return errors.New("log database and metrics database must be different")
 	}
 	if c.RemoteCommandTimeoutSeconds < 1 {
 		return errors.New("remote command timeout must be positive")

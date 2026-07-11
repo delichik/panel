@@ -24,7 +24,7 @@ func TestDeploymentDispatcherClaimExecuteIsConditional(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetID := lifecycleTargetID(operation.ID, "srv-a")
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,updated_at=? WHERE id=?`,
 		LifecycleTargetStateReady, lifecycleStatusForState(LifecycleTargetStateReady), formatTime(time.Now().UTC()), targetID); err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +57,7 @@ func TestDeploymentDispatcherClaimExecuteIsConditional(t *testing.T) {
 func TestDeploymentDispatcherStartReturnsRecoveryError(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
-	if err := svc.db.Close(); err != nil {
+	if err := svc.lifecycleDB().Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -128,11 +128,11 @@ func TestDeploymentDispatcherRecoverRequeuesDurableTargets(t *testing.T) {
 	now := time.Now().UTC()
 	readyID := lifecycleTargetID(operation.ID, "srv-a")
 	verifyID := lifecycleTargetID(operation.ID, "srv-b")
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,updated_at=? WHERE id=?`,
 		LifecycleTargetStatePlanned, lifecycleStatusForState(LifecycleTargetStatePlanned), formatTime(now), readyID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,lease_owner='',lease_expires_at='',updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,lease_owner='',lease_expires_at='',updated_at=? WHERE id=?`,
 		LifecycleTargetStateVerifying, lifecycleStatusForState(LifecycleTargetStateVerifying), formatTime(now), verifyID); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestDeploymentDispatcherRecoverRequeuesDurableTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	terminalID := lifecycleTargetID(terminalOperation.ID, "srv-a")
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,finished_at=?,updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,finished_at=?,updated_at=? WHERE id=?`,
 		LifecycleTargetStateSucceeded, lifecycleStatusForState(LifecycleTargetStateSucceeded), formatTime(now), formatTime(now), terminalID); err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestDeploymentDispatcherRecoverExpiredLeaseSchedulesRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetID := lifecycleTargetID(operation.ID, "srv-a")
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,status=?,stage=?,lease_owner=?,lease_expires_at=?,claimed_task_id=?,updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateApplying,
@@ -233,7 +233,7 @@ func TestDeploymentDispatcherCreateTaskFailureMarksRetryable(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetID := lifecycleTargetID(operation.ID, "srv-a")
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,action=?,updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,action=?,updated_at=? WHERE id=?`,
 		LifecycleTargetStateReady, lifecycleStatusForState(LifecycleTargetStateReady), LifecycleTargetActionApply, formatTime(time.Now().UTC()), targetID); err != nil {
 		t.Fatal(err)
 	}
@@ -243,7 +243,7 @@ func TestDeploymentDispatcherCreateTaskFailureMarksRetryable(t *testing.T) {
 	if _, ok, err := dispatcher.claimExecuteTarget(ctx, targetID); err != nil || ok {
 		t.Fatalf("expected unavailable task service to leave target unclaimed without panic, ok=%v err=%v", ok, err)
 	}
-	svc.tasks = tasks.NewService(svc.db)
+	svc.tasks = tasks.NewService(svc.lifecycleDB())
 	if _, _, err := dispatcher.claimExecuteTarget(ctx, targetID); err == nil {
 		t.Fatal("expected unregistered task type to fail task creation")
 	}
@@ -258,7 +258,7 @@ func TestDeploymentDispatcherCreateTaskFailureMarksRetryable(t *testing.T) {
 		t.Fatalf("expected task creation failure to record retry backoff, got %#v", target)
 	}
 	svc.RegisterTasks(svc.tasks)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET next_run_at=? WHERE id=?`, formatTime(time.Now().UTC().Add(-time.Second)), targetID); err != nil {
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET next_run_at=? WHERE id=?`, formatTime(time.Now().UTC().Add(-time.Second)), targetID); err != nil {
 		t.Fatal(err)
 	}
 	if err := dispatcher.Recover(ctx); err != nil {
@@ -291,7 +291,7 @@ func TestDeploymentDispatcherClaimVerifyIsConditional(t *testing.T) {
 		t.Fatal(err)
 	}
 	targetID := lifecycleTargetID(operation.ID, "srv-a")
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,updated_at=? WHERE id=?`,
 		LifecycleTargetStateVerifying, lifecycleStatusForState(LifecycleTargetStateVerifying), formatTime(time.Now().UTC()), targetID); err != nil {
 		t.Fatal(err)
 	}
@@ -333,7 +333,7 @@ func TestDeploymentDispatcherVerifierAndAggregatorConvergeTargetAndOperation(t *
 		t.Fatal(err)
 	}
 	now := formatTime(time.Now().UTC())
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
 		SET state=?,status=?,stage=?,claimed_task_id=?,lease_owner='',lease_expires_at='',updated_at=?
 		WHERE id=?`,
 		LifecycleTargetStateVerifying,
@@ -364,7 +364,7 @@ func TestDeploymentDispatcherVerifierAndAggregatorConvergeTargetAndOperation(t *
 		t.Fatal(err)
 	}
 	var status string
-	if err := svc.db.QueryRowContext(ctx, `SELECT status FROM application_lifecycle_operations WHERE id=?`, operation.ID).Scan(&status); err != nil {
+	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT status FROM application_lifecycle_operations WHERE id=?`, operation.ID).Scan(&status); err != nil {
 		t.Fatal(err)
 	}
 	if status != LifecycleStatusDeployed {
@@ -386,11 +386,11 @@ func TestDeploymentAggregatorKeepsRetryableTargetsActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := formatTime(time.Now().UTC())
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,finished_at=?,updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,finished_at=?,updated_at=? WHERE id=?`,
 		LifecycleTargetStateSucceeded, lifecycleStatusForState(LifecycleTargetStateSucceeded), now, now, lifecycleTargetID(operation.ID, "srv-a")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,error=?,next_run_at=?,updated_at=? WHERE id=?`,
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET state=?,status=?,error=?,next_run_at=?,updated_at=? WHERE id=?`,
 		LifecycleTargetStateFailedRetryable, lifecycleStatusForState(LifecycleTargetStateFailedRetryable), "temporary failure", formatTime(time.Now().UTC().Add(time.Minute)), now, lifecycleTargetID(operation.ID, "srv-b")); err != nil {
 		t.Fatal(err)
 	}
@@ -401,7 +401,7 @@ func TestDeploymentAggregatorKeepsRetryableTargetsActive(t *testing.T) {
 	}
 	var status string
 	var finishedAt sql.NullString
-	if err := svc.db.QueryRowContext(ctx, `SELECT status,finished_at FROM application_lifecycle_operations WHERE id=?`, operation.ID).Scan(&status, &finishedAt); err != nil {
+	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT status,finished_at FROM application_lifecycle_operations WHERE id=?`, operation.ID).Scan(&status, &finishedAt); err != nil {
 		t.Fatal(err)
 	}
 	if status != LifecycleStatusDeploying || finishedAt.Valid {

@@ -16,9 +16,9 @@ func TestBackupArchiveRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	appDB := filepath.Join(dataRoot, "db", "app.db")
-	taskDB := filepath.Join(dataRoot, "db", "tasks.db")
+	logDB := filepath.Join(dataRoot, "db", "log.db")
 	metricsDB := filepath.Join(dataRoot, "db", "metrics.db")
-	for _, path := range []string{appDB, taskDB, metricsDB} {
+	for _, path := range []string{appDB, logDB, metricsDB} {
 		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 			t.Fatal(err)
 		}
@@ -30,7 +30,7 @@ func TestBackupArchiveRoundTrip(t *testing.T) {
 	raw, manifest, err := buildArchive(ArchiveConfig{
 		DataRoot:        dataRoot,
 		AppDatabase:     appDB,
-		TaskDatabase:    taskDB,
+		LogDatabase:    logDB,
 		MetricsDatabase: metricsDB,
 		PanelVersion:    "test",
 	}, false)

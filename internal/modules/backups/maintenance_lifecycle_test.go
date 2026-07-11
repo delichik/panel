@@ -263,7 +263,7 @@ func maintenanceTestConfig(t *testing.T) config.Config {
 	return config.Config{
 		DataRoot:        filepath.Join(root, "data"),
 		AppDatabase:     filepath.Join(root, "db", "app.db"),
-		TaskDatabase:    filepath.Join(root, "db", "tasks.db"),
+		LogDatabase:    filepath.Join(root, "db", "log.db"),
 		MetricsDatabase: filepath.Join(root, "db", "metrics.db"),
 	}
 }

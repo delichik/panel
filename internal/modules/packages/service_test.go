@@ -24,7 +24,7 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	}
 	credSvc := credential.NewService(store.AppDB(), secrets)
 	cred, _ := credSvc.Create(ctx, credential.CreateRequest{Name: "c", Type: credential.TypePassword, Username: "du", Password: "secret"})
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	srv, _ := serverSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
@@ -54,7 +54,7 @@ func TestPackageServiceAcceptsRootPrivilegeWithoutSudo(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,7 @@ func TestPackageServiceAcceptsRootPrivilegeWithoutSudo(t *testing.T) {
 	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'root','cred','debian','12',1,0,'root','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
 	srv, err := svc.ensurePackageAllowed(context.Background(), "srv", true)
@@ -84,7 +84,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
@@ -115,7 +115,7 @@ func TestRefreshRecordsTask(t *testing.T) {
 	waitForPackageRefresh(t, svc, "srv")
 
 	var count int
-	if err := store.TaskDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
+	if err := store.LogDB().QueryRow(`SELECT COUNT(*) FROM tasks WHERE type='package_refresh'`).Scan(&count); err != nil {
 		t.Fatal(err)
 	}
 	if count != 1 {
@@ -146,7 +146,7 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
@@ -201,7 +201,7 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -216,7 +216,7 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	exec := &aptPackageExecutor{stdout: "Listing...\nopenssl/jammy-updates 3.0.2-0ubuntu1 amd64 [upgradable from: 3.0.1-0ubuntu1]\n"}
-	taskSvc := tasks.NewService(store.TaskDB())
+	taskSvc := tasks.NewService(store.LogDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	svc := NewService(store.AppDB(), serverSvc, exec, taskSvc)
@@ -249,7 +249,7 @@ func TestReplaceUpdates(t *testing.T) {
 	cfg.DataRoot = filepath.Join(dir, "data")
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
-	cfg.TaskDatabase = filepath.Join(dir, "tasks.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
 	store, err := storage.Open(cfg)
 	if err != nil {
 		t.Fatal(err)

@@ -63,6 +63,7 @@
   - 页面顶部只保留卡片编辑操作，不展示独立的 signal 摘要区。
   - 顶部编辑操作使用共享 action 组件；卡片拖拽和更多菜单属于工具位，必须使用 `AppActionButton kind="tool"` 并提供本地化 label。
   - 卡片区使用单一满高仪表盘工作面承载可配置卡片，工作面内部滚动；单张卡片只用弱表面、边框和左侧状态轨表达类型，不再使用强装饰顶部色条。
+  - 指标卡片不在图表上方展示独立的 per-server 当前值摘要条；当前值通过图表 tooltip 查看，卡片内空间优先留给曲线和图例。
   - 卡片布局通过 `web/src/api/overview.ts` 的 `GET/PUT /api/v1/overview/cards` 从数据库读取和保存，不使用 localStorage。
   - 指标卡片数据通过 `GET /api/v1/overview/cards/{cardId}/data` 按卡片 ID 拉取，由后端展开该卡片的服务器范围并返回 `metricsByServer`，前端不再按服务器逐个请求指标。
   - 新增、编辑、删除和重置后保存完整布局；拖拽时只更新本地顺序，在拖拽结束时保存一次。
