@@ -102,4 +102,27 @@ describe('ApplicationEditor', () => {
     expect(editor).toContain('archive.replacedFiles');
     expect(editor).toContain("t('applicationEditor.replaceFolderArchive')");
   });
+
+  it('keeps reverse proxy dialog edits isolated until the dialog is saved', () => {
+    expect(editor).toContain('draft: null as ApplicationReverseProxyRuleDto | null');
+    expect(editor).toContain('proxyRuleDialog.draft = structuredClone(form.reverseProxy?.[index] ?? null);');
+    expect(editor).toContain('const next = structuredClone(proxyRuleDialog.draft);');
+    expect(editor).toContain('form.reverseProxy = [...(form.reverseProxy ?? []), next];');
+    expect(editor).toContain('proxyRuleDialog.draft = null;');
+    expect(editor).toContain('@click="saveProxyRuleDialog"');
+    expect(editor).toContain('@click="closeProxyRuleDialog"');
+  });
+
+  it('clones and saves every structured path option', () => {
+    expect(editor).toContain("gzipMode: path.options?.gzipMode || 'inherit'");
+    expect(editor).toContain('clientMaxBodySizeMb: path.options?.clientMaxBodySizeMb || 0');
+    expect(editor).toContain('connectTimeoutSeconds: path.options?.connectTimeoutSeconds || 0');
+    expect(editor).toContain('readTimeoutSeconds: path.options?.readTimeoutSeconds || 0');
+    expect(editor).toContain('sendTimeoutSeconds: path.options?.sendTimeoutSeconds || 0');
+    expect(editor).toContain("bufferingMode: path.options?.bufferingMode || 'inherit'");
+    expect(editor).toContain("webSocketMode: path.options?.webSocketMode || (path.webSocket ? 'on' : 'off')");
+    expect(editor).toContain('requestHeaders: (path.options?.requestHeaders ?? [])');
+    expect(editor).toContain('responseHeaders: (path.options?.responseHeaders ?? [])');
+    expect(editor).toContain('<RoutePathAdvancedFields v-model="path.options" proxy gzip />');
+  });
 });

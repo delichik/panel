@@ -13,6 +13,7 @@ import Fail2BanPage from '@/views/security/fail2ban/index.vue';
 import ApplicationsPage from '@/views/applications/apps/index.vue';
 import ApplicationCreatePage from '@/views/applications/apps/create.vue';
 import FacilityAppsPage from '@/views/applications/facility-apps/index.vue';
+import FacilityReverseProxyConfigPage from '@/views/applications/facility-apps/config.vue';
 import ContainersPage from '@/views/resources/containers/index.vue';
 import ImagesPage from '@/views/resources/images/index.vue';
 import NetworksPage from '@/views/resources/networks/index.vue';
@@ -65,6 +66,7 @@ export const router = createRouter({
         { path: 'applications/apps/create', name: 'application-create', component: ApplicationCreatePage, meta: { titleKey: 'routes.applicationCreate.title' } },
         { path: 'applications/apps/:applicationId/edit', name: 'application-edit', component: ApplicationCreatePage, meta: { titleKey: 'routes.applicationEdit.title' } },
         { path: 'applications/facility-apps', name: 'facility-apps', component: FacilityAppsPage, meta: { titleKey: 'routes.facilityApps.title' } },
+        { path: 'applications/facility-apps/reverse-proxy/config', name: 'facility-reverse-proxy-config', component: FacilityReverseProxyConfigPage, meta: { titleKey: 'routes.facilityReverseProxyConfig.title' } },
         { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
         { path: 'certificates', redirect: '/certificates/domains' },
         { path: 'certificates/domains', name: 'certificates-domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },

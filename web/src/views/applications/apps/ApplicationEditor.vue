@@ -6,6 +6,7 @@ import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationPanelFileDto, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ApplicationTemplateVariableDto, ServerDto } from '@/types/api';
 import AppActionButton from '@/components/AppActionButton.vue';
 import AppActionGroup from '@/components/AppActionGroup.vue';
+import RoutePathAdvancedFields from '@/components/RoutePathAdvancedFields.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
 import { parseSpecYaml, toSpecYaml } from './appSpecYaml';
@@ -69,7 +70,7 @@ const yamlTextarea = ref<HTMLTextAreaElement | { $el?: HTMLElement } | null>(nul
 const yamlGutter = ref<HTMLElement | null>(null);
 const editorBody = ref<HTMLElement | { $el?: HTMLElement } | null>(null);
 const activeSectionId = ref('application-editor-general');
-const proxyRuleDialog = reactive({ open: false, index: -1 });
+const proxyRuleDialog = reactive({ open: false, index: -1, draft: null as ApplicationReverseProxyRuleDto | null });
 const mountDialog = reactive({ open: false, index: -1 });
 let filesRequestId = 0;
 let sectionObserver: IntersectionObserver | null = null;
@@ -117,7 +118,7 @@ const mountTypeOptions = computed(() => [
   { title: t('applicationEditor.panelFile'), value: 'panel_file' },
   { title: t('applicationEditor.persistent'), value: 'persistent' },
 ]);
-const currentProxyRule = computed(() => form.reverseProxy?.[proxyRuleDialog.index] ?? null);
+const currentProxyRule = computed(() => proxyRuleDialog.draft);
 const currentMount = computed(() => specForm.mounts[mountDialog.index] ?? null);
 const editorSections = computed(() => {
   const sections = [
@@ -369,12 +370,13 @@ function mountTargetLabel(mount: MountForm) {
 }
 
 function addProxyRule() {
-  form.reverseProxy = [...(form.reverseProxy ?? []), { domain: '', targetType: 'local', targetPort: 80, paths: [{ path: '/', webSocket: false }] }];
-  openProxyRuleDialog(form.reverseProxy.length - 1);
+  proxyRuleDialog.index = -1;
+  proxyRuleDialog.draft = { domain: '', targetType: 'local', targetPort: 80, paths: [{ path: '/', webSocket: false, options: { gzipMode: 'inherit', bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] } }] };
+  proxyRuleDialog.open = true;
 }
 
 function addProxyPath(rule: ApplicationReverseProxyRuleDto) {
-  rule.paths.push({ path: '/', webSocket: false });
+  rule.paths.push({ path: '/', webSocket: false, options: { gzipMode: 'inherit', bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] } });
 }
 
 function removeProxyRule(index: number) {
@@ -385,12 +387,25 @@ function removeProxyRule(index: number) {
 
 function openProxyRuleDialog(index: number) {
   proxyRuleDialog.index = index;
+  proxyRuleDialog.draft = structuredClone(form.reverseProxy?.[index] ?? null);
   proxyRuleDialog.open = true;
 }
 
 function closeProxyRuleDialog() {
   proxyRuleDialog.open = false;
   proxyRuleDialog.index = -1;
+  proxyRuleDialog.draft = null;
+}
+
+function saveProxyRuleDialog() {
+  if (!proxyRuleDialog.draft) return;
+  const next = structuredClone(proxyRuleDialog.draft);
+  if (proxyRuleDialog.index >= 0) {
+    form.reverseProxy = [...(form.reverseProxy ?? [])].map((rule, index) => (index === proxyRuleDialog.index ? next : rule));
+  } else {
+    form.reverseProxy = [...(form.reverseProxy ?? []), next];
+  }
+  closeProxyRuleDialog();
 }
 
 function removeAt<T>(items: T[], index: number) {
@@ -402,7 +417,21 @@ function cloneReverseProxy(rules: ApplicationReverseProxyRuleDto[]) {
     domain: rule.domain,
     targetType: rule.targetType === 'container' ? 'container' : 'local',
     targetPort: rule.targetPort,
-    paths: rule.paths?.map((path) => ({ path: path.path, webSocket: path.webSocket })) ?? [{ path: '/', webSocket: false }],
+    paths: rule.paths?.map((path) => ({
+      path: path.path,
+      webSocket: path.webSocket,
+      options: {
+        gzipMode: path.options?.gzipMode || 'inherit',
+        clientMaxBodySizeMb: path.options?.clientMaxBodySizeMb || 0,
+        connectTimeoutSeconds: path.options?.connectTimeoutSeconds || 0,
+        readTimeoutSeconds: path.options?.readTimeoutSeconds || 0,
+        sendTimeoutSeconds: path.options?.sendTimeoutSeconds || 0,
+        bufferingMode: path.options?.bufferingMode || 'inherit',
+        webSocketMode: path.options?.webSocketMode || (path.webSocket ? 'on' : 'off'),
+        requestHeaders: (path.options?.requestHeaders ?? []).map((header) => ({ ...header })),
+        responseHeaders: (path.options?.responseHeaders ?? []).map((header) => ({ ...header })),
+      },
+    })) ?? [{ path: '/', webSocket: false, options: { gzipMode: 'inherit', bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] } }],
   }));
 }
 
@@ -860,7 +889,15 @@ function readInput(): ApplicationSaveDto {
         targetPort: Number(rule.targetPort || 0),
         paths: (rule.paths ?? [])
           .filter((path) => path.path.trim())
-          .map((path) => ({ path: path.path.trim(), webSocket: Boolean(path.webSocket) })),
+          .map((path) => ({
+            path: path.path.trim(),
+            webSocket: (path.options?.webSocketMode || (path.webSocket ? 'on' : 'off')) !== 'off',
+            options: {
+              ...path.options,
+              requestHeaders: (path.options?.requestHeaders ?? []).filter((header) => header.name.trim()).map((header) => ({ name: header.name.trim(), value: header.value })),
+              responseHeaders: (path.options?.responseHeaders ?? []).filter((header) => header.name.trim()).map((header) => ({ name: header.name.trim(), value: header.value })),
+            },
+          })),
       })),
   };
 }
@@ -1362,17 +1399,19 @@ async function save() {
                 <div class="section-title">{{ t('applicationEditor.path') }}</div>
                 <AppActionButton icon="mdi-plus" :label="t('common.addPath')" @click="addProxyPath(currentProxyRule)" />
               </div>
-              <div v-for="(path, pathIndex) in currentProxyRule.paths" :key="pathIndex" class="repeat-row proxy-path-row">
-                <v-text-field v-model="path.path" :label="t('applicationEditor.path')" density="compact" variant="outlined" hide-details />
-                <v-checkbox v-model="path.webSocket" :label="t('applicationEditor.websocket')" density="compact" hide-details />
-                <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeAt(currentProxyRule.paths, pathIndex)" />
+              <div v-for="(path, pathIndex) in currentProxyRule.paths" :key="pathIndex" class="proxy-path-editor">
+                <div class="repeat-row proxy-path-row">
+                  <v-text-field v-model="path.path" :label="t('applicationEditor.path')" density="compact" variant="outlined" hide-details />
+                  <AppActionButton kind="danger" icon="mdi-delete" :label="t('common.delete')" @click="removeAt(currentProxyRule.paths, pathIndex)" />
+                </div>
+                <RoutePathAdvancedFields v-model="path.options" proxy gzip />
               </div>
             </div>
           </v-card-text>
           <v-card-actions class="app-dialog-actions">
             <AppActionGroup context="dialog">
               <AppActionButton kind="plain" :label="t('common.cancel')" @click="closeProxyRuleDialog" />
-              <AppActionButton kind="primary" :label="t('common.save')" @click="closeProxyRuleDialog" />
+              <AppActionButton kind="primary" :label="t('common.save')" @click="saveProxyRuleDialog" />
             </AppActionGroup>
           </v-card-actions>
         </v-card>
@@ -1807,10 +1846,11 @@ async function save() {
 .proxy-arrow { justify-self: center; }
 .proxy-target-name { font-size: 0.82rem; }
 .proxy-path-row {
-  grid-template-columns: minmax(0, 1fr) 130px auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   padding: 8px 0 0;
   border-top: 1px solid color-mix(in srgb, var(--lp-border), transparent 48%);
 }
+.proxy-path-editor { display: grid; gap: 10px; }
 .file-form {
   display: grid;
   grid-template-columns: minmax(170px, 0.68fr) minmax(0, 1.32fr);

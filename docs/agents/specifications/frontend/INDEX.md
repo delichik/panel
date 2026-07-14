@@ -51,6 +51,7 @@
 | `AppActionGroup.vue` | 页面、工具栏、详情、表格、section 和筛选操作区 | [buttons.md](buttons.md) |
 | `AppMasterDetailWorkspace.vue` | 主从页面统一双栏工作区和断点 | [page-layout.md](page-layout.md)、[selection-lists.md](selection-lists.md) |
 | `AppDetailPanel.vue` | 主从页面右侧详情卡、固定头部、滚动正文、加载和空状态 | [cards-panels.md](cards-panels.md) |
+| `RoutePathAdvancedFields.vue` | 设施 Path 与普通应用代理 Path 的结构化高级字段 | [forms.md](forms.md)、[dialogs.md](dialogs.md) |
 | `TaskLogPanel.vue` | 任务详情日志 | [logs.md](logs.md) |
 
 ## 使用要求

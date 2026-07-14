@@ -25,3 +25,17 @@ func TestTranslateLocaleUsesCodeSpecificPrefix(t *testing.T) {
 		t.Fatalf("translation = %q", got)
 	}
 }
+
+func TestTranslateLocaleCoversReverseProxyFacilityValidation(t *testing.T) {
+	tests := map[string]string{
+		"facility_domain_servers_required":              "每个域名必须至少选择一个入口节点",
+		"facility_upstream_domain_application_conflict": "上游模式域名由反向代理设施独占，不能与普通应用共用",
+		"facility_reverse_proxy_config_changed":         "反向代理设施配置已被其他操作修改，请重新加载后再保存",
+		"reverse_proxy_header_name_invalid":             "自定义 Header 名称无效",
+	}
+	for code, want := range tests {
+		if got := TranslateLocale(LocaleSimplifiedChinese, code, "fallback"); got != want {
+			t.Fatalf("translation for %s = %q, want %q", code, got, want)
+		}
+	}
+}

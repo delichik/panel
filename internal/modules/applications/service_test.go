@@ -1933,6 +1933,56 @@ func TestNormalizeReverseProxyRulesTargetType(t *testing.T) {
 	}
 }
 
+func TestRenderReverseProxyConfigDisablesCacheAndWritesAdvancedPathOptions(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	app := Application{
+		ID:   "app-proxy-options",
+		Name: "proxy-options",
+		ReverseProxy: []ReverseProxyRule{{
+			Domain:     "app.example.test",
+			TargetType: ReverseProxyTargetLocal,
+			TargetPort: 8080,
+			Paths: []ReverseProxyPath{{
+				Path: "/api",
+				Options: HTTPRouteOptions{
+					GzipMode:              HTTPRouteModeOff,
+					ClientMaxBodySizeMB:   10,
+					ConnectTimeoutSeconds: 5,
+					ReadTimeoutSeconds:    60,
+					SendTimeoutSeconds:    30,
+					BufferingMode:         HTTPRouteModeOn,
+					WebSocketMode:         HTTPRouteWebSocketAuto,
+					RequestHeaders:        []HTTPHeader{{Name: "X-App-Request", Value: "proxy"}},
+					ResponseHeaders:       []HTTPHeader{{Name: "X-App-Response", Value: "ready"}},
+				},
+			}},
+		}},
+	}
+
+	_, config, err := svc.renderReverseProxyConfig(context.Background(), app, nil)
+	if err != nil {
+		t.Fatalf("render reverse proxy config: %v", err)
+	}
+	for _, want := range []string{
+		"proxy_cache off;",
+		"gzip off;",
+		"client_max_body_size 10m;",
+		"proxy_connect_timeout 5s;",
+		"proxy_read_timeout 60s;",
+		"proxy_send_timeout 30s;",
+		"proxy_buffering on;",
+		`proxy_set_header X-App-Request "proxy";`,
+		"proxy_hide_header X-App-Response;",
+		`add_header X-App-Response "ready" always;`,
+		"proxy_set_header Upgrade $http_upgrade;",
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("application proxy config missing %q:\n%s", want, config)
+		}
+	}
+}
+
 func insertApplicationTestServer(t *testing.T, svc *Service, srv server.Server) {
 	t.Helper()
 	traits, _ := json.Marshal(srv.Traits)

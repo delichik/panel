@@ -188,6 +188,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			image TEXT NOT NULL DEFAULT '',
 			panel_entry_json TEXT NOT NULL DEFAULT '{}',
 			static_sites_json TEXT NOT NULL DEFAULT '[]',
+			domain_policies_json TEXT NOT NULL DEFAULT '[]',
 			last_error TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
@@ -472,6 +473,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"image":                      "TEXT NOT NULL DEFAULT ''",
 		"panel_entry_json":           "TEXT NOT NULL DEFAULT '{}'",
 		"static_sites_json":          "TEXT NOT NULL DEFAULT '[]'",
+		"domain_policies_json":       "TEXT NOT NULL DEFAULT '[]'",
 		"last_error":                 "TEXT NOT NULL DEFAULT ''",
 		"updated_at":                 "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {

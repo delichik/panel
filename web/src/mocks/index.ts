@@ -3,10 +3,12 @@ import { createMockState, mockEarlier } from './data';
 
 let state = createMockState();
 let sequence = 100;
+let facilitySaveSessions: Record<string, { assets: any[] }> = {};
 
 export function resetMockApi() {
   state = createMockState();
   sequence = 100;
+  facilitySaveSessions = {};
 }
 
 export function isMockApiEnabled() {
@@ -157,6 +159,8 @@ export const mockFetch: typeof fetch = async (input, init = {}) => {
       ...state.facilityReverseProxy,
       deploymentServers: Array.isArray(body.deploymentServers) ? body.deploymentServers : [],
       image: String(body.image || 'nginx:1.27-alpine'),
+      panelEntry: (body.panelEntry as typeof state.facilityReverseProxy.panelEntry | undefined) ?? { enabled: false, serverId: '', domain: '' },
+      domainPolicies: Array.isArray(body.domainPolicies) ? body.domainPolicies : [],
       staticSites: Array.isArray(body.staticSites) ? body.staticSites : [],
       enabledServers: Array.isArray(body.deploymentServers) ? body.deploymentServers : [],
       routeSummaries: Array.isArray(body.staticSites) ? body.staticSites.map((site: any) => ({ domain: site.domain, path: site.path || '/', source: 'static_site', serverIds: site.deploymentServers?.length ? site.deploymentServers : body.deploymentServers ?? [], httpsStatus: 'disabled' })) : [],
@@ -166,6 +170,42 @@ export const mockFetch: typeof fetch = async (input, init = {}) => {
     return envelope(state.facilityReverseProxy);
   }
   if (path === '/facility-apps/reverse-proxy/reconcile' && method === 'POST') return envelope({ config: state.facilityReverseProxy });
+  if (path === '/facility-apps/reverse-proxy/save-sessions' && method === 'POST') {
+    const id = nextId('facility-save');
+    facilitySaveSessions[id] = { assets: [...(state.facilityReverseProxy.staticAssets ?? [])].map((asset: any) => ({ ...asset })) };
+    return envelope({ id, expiresAt: new Date(Date.now() + 30 * 60_000).toISOString(), assets: facilitySaveSessions[id].assets }, 201);
+  }
+  match = path.match(/^\/facility-apps\/reverse-proxy\/save-sessions\/([^/]+)$/);
+  if (match && method === 'DELETE') { delete facilitySaveSessions[match[1]]; return new Response(null, { status: 204 }); }
+  match = path.match(/^\/facility-apps\/reverse-proxy\/save-sessions\/([^/]+)\/assets$/);
+  if (match && method === 'POST') {
+    const form = await request.formData();
+    const file = form.get('file') as File | null;
+    const session = facilitySaveSessions[match[1]];
+    const nowText = new Date().toISOString();
+    const assetId = String(form.get('assetId') || nextId('facility_static'));
+    const asset = { id: assetId, name: String(form.get('name') || file?.name || 'Static asset'), kind: String(form.get('kind') || 'uploaded_file'), filename: file?.name || 'asset.bin', size: file?.size || 0, sha256: 'sha256:mock-static-session', createdAt: nowText, updatedAt: nowText };
+    session.assets = [asset, ...session.assets.filter((item: any) => item.id !== assetId)];
+    return envelope(asset, 201);
+  }
+  match = path.match(/^\/facility-apps\/reverse-proxy\/save-sessions\/([^/]+)\/assets\/delete$/);
+  if (match && method === 'POST') { const body = await jsonBody(request); facilitySaveSessions[match[1]].assets = facilitySaveSessions[match[1]].assets.filter((asset: any) => asset.id !== body.assetId); return new Response(null, { status: 204 }); }
+  match = path.match(/^\/facility-apps\/reverse-proxy\/save-sessions\/([^/]+)\/commit$/);
+  if (match && method === 'POST') {
+    const body = await jsonBody(request);
+    const save = body.save as Record<string, any>;
+    state.facilityReverseProxy = {
+      ...state.facilityReverseProxy,
+      ...save,
+      staticAssets: facilitySaveSessions[match[1]].assets,
+      enabledServers: Array.isArray(save.deploymentServers) ? save.deploymentServers : [],
+      routeSummaries: Array.isArray(save.staticSites) ? save.staticSites.map((site: any) => ({ domain: site.domain, path: site.path || '/', source: 'static_site', serverIds: site.deploymentServers ?? [], httpsStatus: 'disabled' })) : [],
+      routes: Array.isArray(save.staticSites) ? save.staticSites.length : 0,
+      updatedAt: new Date().toISOString(),
+    } as typeof state.facilityReverseProxy;
+    delete facilitySaveSessions[match[1]];
+    return envelope({ config: state.facilityReverseProxy, applyRequested: true });
+  }
   if (path === '/facility-apps/reverse-proxy/static-assets' && method === 'GET') return envelope(state.facilityReverseProxy.staticAssets ?? []);
   if (path === '/facility-apps/reverse-proxy/static-assets' && method === 'POST') {
     const form = await request.formData();

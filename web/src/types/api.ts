@@ -537,6 +537,7 @@ export interface FacilityReverseProxyConfigDto {
   image: string;
   panelEntry: FacilityPanelEntryDto;
   staticSites: FacilityStaticSiteDto[];
+  domainPolicies: FacilityDomainPolicyDto[];
   staticAssets?: FacilityStaticAssetDto[];
   routeSummaries?: FacilityRouteSummaryDto[];
   operation?: ApplicationLifecycleOperationDto;
@@ -551,6 +552,15 @@ export interface FacilityReverseProxySaveDto {
   image: string;
   panelEntry: FacilityPanelEntryDto;
   staticSites: FacilityStaticSiteDto[];
+  domainPolicies: FacilityDomainPolicyDto[];
+}
+
+export interface FacilityDomainPolicyDto {
+  domain: string;
+  entryServerIds: string[];
+  upstreamMode: boolean;
+  strategy?: 'round_robin' | 'primary_backup' | 'ip_hash' | string;
+  primaryServerId?: string;
 }
 
 export interface FacilityPanelEntryDto {
@@ -571,6 +581,7 @@ export interface FacilityStaticSiteDto {
   proxyUrl?: string;
   proxySourceMode?: 'preserve_source' | 'hide_source' | string;
   deploymentServers?: string[];
+  options?: HTTPRouteOptionsDto;
 }
 
 export interface FacilityStaticAssetDto {
@@ -593,10 +604,23 @@ export interface FacilityRouteSummaryDto {
   certificateId?: string;
   certificateName?: string;
   matchedDomains?: string[];
+  applicationId?: string;
+  applicationName?: string;
 }
 
 export interface FacilityReverseProxyOperationDto {
   config: FacilityReverseProxyConfigDto;
+}
+
+export interface FacilitySaveSessionDto {
+  id: string;
+  expiresAt: string;
+  assets: FacilityStaticAssetDto[];
+}
+
+export interface FacilitySaveSessionCommitDto {
+  config: FacilityReverseProxyConfigDto;
+  applyRequested: boolean;
 }
 
 export interface ApplicationDto {
@@ -663,6 +687,24 @@ export interface ApplicationReverseProxyRuleDto {
 export interface ApplicationReverseProxyPathDto {
   path: string;
   webSocket: boolean;
+  options?: HTTPRouteOptionsDto;
+}
+
+export interface HTTPHeaderDto {
+  name: string;
+  value: string;
+}
+
+export interface HTTPRouteOptionsDto {
+  gzipMode?: 'inherit' | 'on' | 'off' | string;
+  clientMaxBodySizeMb?: number;
+  connectTimeoutSeconds?: number;
+  readTimeoutSeconds?: number;
+  sendTimeoutSeconds?: number;
+  bufferingMode?: 'inherit' | 'on' | 'off' | string;
+  webSocketMode?: 'auto' | 'on' | 'off' | string;
+  requestHeaders?: HTTPHeaderDto[];
+  responseHeaders?: HTTPHeaderDto[];
 }
 
 export type ApplicationFileKind = 'binary' | 'template' | 'archive';

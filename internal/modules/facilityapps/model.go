@@ -31,6 +31,10 @@ const (
 	ProxySourcePreserve = "preserve_source"
 	ProxySourceHide     = "hide_source"
 
+	DomainStrategyRoundRobin    = "round_robin"
+	DomainStrategyPrimaryBackup = "primary_backup"
+	DomainStrategyIPHash        = "ip_hash"
+
 	HTTPSDomainCertificate = "domain_certificate"
 	HTTPSSelfSigned        = "self_signed_certificate"
 	HTTPSDisabled          = "disabled"
@@ -42,6 +46,7 @@ type ReverseProxyConfig struct {
 	Image             string                           `json:"image"`
 	PanelEntry        PanelEntry                       `json:"panelEntry"`
 	StaticSites       []StaticSite                     `json:"staticSites"`
+	DomainPolicies    []DomainPolicy                   `json:"domainPolicies"`
 	StaticAssets      []StaticAsset                    `json:"staticAssets"`
 	RouteSummaries    []RouteSummary                   `json:"routeSummaries"`
 	Operation         *applications.LifecycleOperation `json:"operation,omitempty"`
@@ -52,10 +57,11 @@ type ReverseProxyConfig struct {
 }
 
 type ReverseProxySaveInput struct {
-	DeploymentServers []string     `json:"deploymentServers"`
-	Image             string       `json:"image"`
-	PanelEntry        PanelEntry   `json:"panelEntry"`
-	StaticSites       []StaticSite `json:"staticSites"`
+	DeploymentServers []string       `json:"deploymentServers"`
+	Image             string         `json:"image"`
+	PanelEntry        PanelEntry     `json:"panelEntry"`
+	StaticSites       []StaticSite   `json:"staticSites"`
+	DomainPolicies    []DomainPolicy `json:"domainPolicies"`
 }
 
 type PanelEntry struct {
@@ -65,17 +71,26 @@ type PanelEntry struct {
 }
 
 type StaticSite struct {
-	Domain            string   `json:"domain"`
-	Path              string   `json:"path"`
-	RuleType          string   `json:"ruleType,omitempty"`
-	RootPath          string   `json:"rootPath,omitempty"`
-	SourceType        string   `json:"sourceType"`
-	AssetID           string   `json:"assetId,omitempty"`
-	RedirectURL       string   `json:"redirectUrl,omitempty"`
-	RedirectCode      int      `json:"redirectCode,omitempty"`
-	ProxyURL          string   `json:"proxyUrl,omitempty"`
-	ProxySourceMode   string   `json:"proxySourceMode,omitempty"`
-	DeploymentServers []string `json:"deploymentServers,omitempty"`
+	Domain            string                        `json:"domain"`
+	Path              string                        `json:"path"`
+	RuleType          string                        `json:"ruleType,omitempty"`
+	RootPath          string                        `json:"rootPath,omitempty"`
+	SourceType        string                        `json:"sourceType"`
+	AssetID           string                        `json:"assetId,omitempty"`
+	RedirectURL       string                        `json:"redirectUrl,omitempty"`
+	RedirectCode      int                           `json:"redirectCode,omitempty"`
+	ProxyURL          string                        `json:"proxyUrl,omitempty"`
+	ProxySourceMode   string                        `json:"proxySourceMode,omitempty"`
+	DeploymentServers []string                      `json:"deploymentServers,omitempty"`
+	Options           applications.HTTPRouteOptions `json:"options,omitempty"`
+}
+
+type DomainPolicy struct {
+	Domain          string   `json:"domain"`
+	EntryServerIDs  []string `json:"entryServerIds"`
+	UpstreamMode    bool     `json:"upstreamMode"`
+	Strategy        string   `json:"strategy,omitempty"`
+	PrimaryServerID string   `json:"primaryServerId,omitempty"`
 }
 
 type StaticAsset struct {
@@ -90,6 +105,7 @@ type StaticAsset struct {
 }
 
 type StaticAssetUploadInput struct {
+	AssetID  string
 	Name     string
 	Kind     string
 	FileName string
@@ -106,8 +122,33 @@ type RouteSummary struct {
 	CertificateID   string   `json:"certificateId,omitempty"`
 	CertificateName string   `json:"certificateName,omitempty"`
 	MatchedDomains  []string `json:"matchedDomains,omitempty"`
+	ApplicationID   string   `json:"applicationId,omitempty"`
+	ApplicationName string   `json:"applicationName,omitempty"`
 }
 
 type ReconcileResult struct {
 	Config ReverseProxyConfig `json:"config"`
+}
+
+type BeginSaveSessionInput struct {
+	BaseUpdatedAt time.Time `json:"baseUpdatedAt"`
+}
+
+type CommitSaveSessionInput struct {
+	Save ReverseProxySaveInput `json:"save"`
+}
+
+type StaticAssetDeleteInput struct {
+	AssetID string `json:"assetId"`
+}
+
+type SaveSessionResult struct {
+	ID        string        `json:"id"`
+	ExpiresAt time.Time     `json:"expiresAt"`
+	Assets    []StaticAsset `json:"assets"`
+}
+
+type SaveSessionCommitResult struct {
+	Config         ReverseProxyConfig `json:"config"`
+	ApplyRequested bool               `json:"applyRequested"`
 }

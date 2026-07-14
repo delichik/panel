@@ -44,3 +44,14 @@ describe('hidden debug route', () => {
     expect(layoutSource).not.toContain("to: '/debug'");
   });
 });
+
+describe('facility reverse proxy configuration route', () => {
+  it('registers the dedicated page without adding another navigation item', () => {
+    expect(routerSource).toContain("import FacilityReverseProxyConfigPage from '@/views/applications/facility-apps/config.vue'");
+    expect(routerSource).toContain("path: 'applications/facility-apps/reverse-proxy/config'");
+    expect(routerSource).toContain("name: 'facility-reverse-proxy-config'");
+    expect(routerSource).toContain("titleKey: 'routes.facilityReverseProxyConfig.title'");
+    const layoutSource = readFileSync(resolve(__dirname, '../layouts/AppLayout.vue'), 'utf8');
+    expect(layoutSource).not.toContain('/applications/facility-apps/reverse-proxy/config');
+  });
+});

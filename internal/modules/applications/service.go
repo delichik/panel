@@ -4910,7 +4910,7 @@ func normalizeDeploymentTargets(mode string, servers []string, persistentPath st
 func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, error) {
 	out := make([]ReverseProxyRule, 0, len(rules))
 	for _, rule := range rules {
-		domain := strings.TrimSpace(rule.Domain)
+		domain := strings.ToLower(strings.TrimSpace(rule.Domain))
 		if domain == "" {
 			continue
 		}
@@ -4922,6 +4922,7 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 			return nil, panelerr.Validation("application_reverse_proxy_target_port_invalid", "reverse proxy target port must be between 1 and 65535")
 		}
 		paths := make([]ReverseProxyPath, 0, len(rule.Paths))
+		pathKeys := map[string]struct{}{}
 		for _, item := range rule.Paths {
 			proxyPath := strings.TrimSpace(item.Path)
 			if proxyPath == "" {
@@ -4930,10 +4931,23 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 			if !strings.HasPrefix(proxyPath, "/") {
 				return nil, panelerr.Validation("application_reverse_proxy_path_invalid", "reverse proxy path must start with /")
 			}
-			paths = append(paths, ReverseProxyPath{Path: proxyPath, WebSocket: item.WebSocket})
+			if _, ok := pathKeys[proxyPath]; ok {
+				return nil, panelerr.Validation("application_reverse_proxy_path_duplicate", "reverse proxy path is duplicated")
+			}
+			pathKeys[proxyPath] = struct{}{}
+			defaultWebSocketMode := HTTPRouteModeOff
+			if item.WebSocket {
+				defaultWebSocketMode = HTTPRouteModeOn
+			}
+			options, err := NormalizeHTTPRouteOptions(item.Options, true, true, defaultWebSocketMode)
+			if err != nil {
+				return nil, err
+			}
+			paths = append(paths, ReverseProxyPath{Path: proxyPath, WebSocket: options.WebSocketMode != HTTPRouteModeOff, Options: options})
 		}
 		if len(paths) == 0 {
-			paths = append(paths, ReverseProxyPath{Path: "/"})
+			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
+			paths = append(paths, ReverseProxyPath{Path: "/", Options: options})
 		}
 		out = append(out, ReverseProxyRule{
 			Domain:     domain,
@@ -4963,7 +4977,7 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 		if err != nil {
 			return nil, err
 		}
-		domain = strings.TrimSpace(domain)
+		domain = strings.ToLower(strings.TrimSpace(domain))
 		if domain == "" {
 			continue
 		}
@@ -4971,6 +4985,7 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 			return nil, panelerr.Validation("application_reverse_proxy_domain_invalid", "reverse proxy domain is invalid")
 		}
 		paths := make([]ReverseProxyPath, 0, len(rule.Paths))
+		pathKeys := map[string]struct{}{}
 		for _, item := range rule.Paths {
 			proxyPath, err := s.renderTemplate(ctx, strings.TrimSpace(item.Path), data)
 			if err != nil {
@@ -4983,10 +4998,23 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 			if !strings.HasPrefix(proxyPath, "/") || !validNginxPath(proxyPath) {
 				return nil, panelerr.Validation("application_reverse_proxy_path_invalid", "reverse proxy path must start with /")
 			}
-			paths = append(paths, ReverseProxyPath{Path: proxyPath, WebSocket: item.WebSocket})
+			if _, ok := pathKeys[proxyPath]; ok {
+				return nil, panelerr.Validation("application_reverse_proxy_path_duplicate", "reverse proxy path is duplicated")
+			}
+			pathKeys[proxyPath] = struct{}{}
+			defaultWebSocketMode := HTTPRouteModeOff
+			if item.WebSocket {
+				defaultWebSocketMode = HTTPRouteModeOn
+			}
+			options, err := NormalizeHTTPRouteOptions(item.Options, true, true, defaultWebSocketMode)
+			if err != nil {
+				return nil, err
+			}
+			paths = append(paths, ReverseProxyPath{Path: proxyPath, WebSocket: options.WebSocketMode != HTTPRouteModeOff, Options: options})
 		}
 		if len(paths) == 0 {
-			paths = append(paths, ReverseProxyPath{Path: "/"})
+			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
+			paths = append(paths, ReverseProxyPath{Path: "/", Options: options})
 		}
 		out = append(out, ReverseProxyRule{Domain: domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, Paths: paths})
 	}
@@ -5031,11 +5059,8 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 			b.WriteString("        proxy_set_header X-Real-IP $remote_addr;\n")
 			b.WriteString("        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
 			b.WriteString("        proxy_set_header X-Forwarded-Proto $scheme;\n")
-			if proxyPath.WebSocket {
-				b.WriteString("        proxy_http_version 1.1;\n")
-				b.WriteString("        proxy_set_header Upgrade $http_upgrade;\n")
-				b.WriteString("        proxy_set_header Connection $connection_upgrade;\n")
-			}
+			WriteNginxHTTPRouteOptions(&b, proxyPath.Options, "        ", true)
+			WriteNginxWebSocketOptions(&b, proxyPath.Options.WebSocketMode, "        ")
 			b.WriteString("    }\n")
 		}
 		b.WriteString("}\n")
@@ -5083,7 +5108,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 		for _, rule := range rules {
 			paths := make([]ReverseProxyPath, 0, len(rule.Paths))
 			for _, item := range rule.Paths {
-				paths = append(paths, ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket})
+				paths = append(paths, ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket, Options: item.Options})
 			}
 			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), Paths: paths})
 		}

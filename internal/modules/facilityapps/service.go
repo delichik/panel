@@ -7,9 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
@@ -69,6 +71,10 @@ type Service struct {
 	agentErrors  AgentErrorHandler
 	queue        ContainerOperationQueue
 	reconciler   ApplicationReconcileTrigger
+	sessionMu    sync.Mutex
+	saveSessions map[string]*facilitySaveSession
+	cleanupOnce  sync.Once
+	sessionDir   string
 }
 
 type Option func(*Service)
@@ -90,13 +96,15 @@ func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option
 }
 
 func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, apps ApplicationProvider, opts ...Option) *Service {
-	s := &Service{db: db, agent: agent, servers: servers, apps: apps}
+	s := &Service{db: db, agent: agent, servers: servers, apps: apps, saveSessions: map[string]*facilitySaveSession{}}
 	if handler, ok := servers.(AgentErrorHandler); ok {
 		s.agentErrors = handler
 	}
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.sessionDir = filepath.Join(s.dataRoot, "tmp", "facility-reverse-proxy-save-sessions")
+	s.startSaveSessionCleanup()
 	return s
 }
 
@@ -130,6 +138,9 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	}
 	next, err := normalizeInput(in)
 	if err != nil {
+		return ReverseProxyConfig{}, err
+	}
+	if err := s.validateRouteConflicts(ctx, next); err != nil {
 		return ReverseProxyConfig{}, err
 	}
 	if err := s.saveConfig(ctx, next); err != nil {
@@ -254,7 +265,9 @@ func (s *Service) routeCount(ctx context.Context, serverIDs []string) int {
 	count := 0
 	for _, items := range routes {
 		for _, app := range items {
-			count += len(app.Routes)
+			for _, route := range app.Routes {
+				count += len(route.Paths)
+			}
 		}
 	}
 	return count
@@ -349,12 +362,25 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 	files := []appruntime.ManagedFile{}
 	certFiles := map[string]struct{}{}
 	hosts := map[string]*proxyHost{}
+	cfg.DomainPolicies = normalizeStoredDomainPolicies(cfg.DomainPolicies, cfg.StaticSites, cfg.DeploymentServers)
+	policies := domainPolicyMap(cfg.DomainPolicies)
 	localUpstreamHost := "127.0.0.1"
 	if applicationRoutesNeedContainerNetwork(apps) {
 		localUpstreamHost = proxyBridgeLocalHost
 	}
+	for _, policy := range cfg.DomainPolicies {
+		if !policy.UpstreamMode || containsString(policy.EntryServerIDs, serverID) {
+			continue
+		}
+		relay, err := s.buildProxyRelay(ctx, policy)
+		if err != nil {
+			return "", nil, nil, err
+		}
+		hostForDomain(hosts, policy.Domain).Relay = relay
+	}
 	for i, site := range cfg.StaticSites {
-		if !staticSiteTargetsServer(site, serverID) {
+		policy, ok := policies[site.Domain]
+		if !ok || !containsString(policy.EntryServerIDs, serverID) {
 			continue
 		}
 		domain := sanitizeNginxToken(site.Domain)
@@ -370,6 +396,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 			RedirectCode:    normalizedRedirectCode(site.RedirectCode),
 			ProxyURL:        site.ProxyURL,
 			ProxySourceMode: normalizedProxySourceMode(site.ProxySourceMode),
+			Options:         site.Options,
 		}
 		if route.RuleType == StaticRuleStatic {
 			mountTarget := proxyStaticMountRoot + "/" + strconv.Itoa(i)
@@ -395,6 +422,9 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 				return "", nil, nil, panelerr.Conflict("facility_panel_entry_route_conflict", "Panel entry domain conflicts with an application route")
 			}
 			host := hostForDomain(hosts, domain)
+			if host.Relay != nil {
+				return "", nil, nil, panelerr.Conflict("facility_upstream_domain_application_conflict", "Upstream-mode facility domain conflicts with an application route")
+			}
 			host.Proxy = append(host.Proxy, route)
 		}
 	}
@@ -402,6 +432,9 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		domain := sanitizeNginxToken(cfg.PanelEntry.Domain)
 		if domain != "" {
 			host := hostForDomain(hosts, domain)
+			if host.Relay != nil {
+				return "", nil, nil, panelerr.Conflict("facility_panel_entry_upstream_domain_conflict", "Panel entry domain conflicts with an upstream-mode facility domain")
+			}
 			host.Facility = append(host.Facility, proxyFacilityRoute{
 				Path:            "/",
 				RuleType:        StaticRuleProxyPass,
@@ -420,9 +453,12 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		cert := bestCertificate(domain, certificates)
 		appendCertificateFiles(cert, &files, certFiles)
 		var domainConfig strings.Builder
-		writeProxyServer(&domainConfig, domain, host, nil, false, localUpstreamHost)
+		if host.Relay != nil {
+			writeRelayUpstream(&domainConfig, host.Relay, cert != nil)
+		}
+		writeProxyServer(&domainConfig, domain, host, nil, cert, false, localUpstreamHost)
 		if cert != nil {
-			writeProxyServer(&domainConfig, domain, host, cert, true, localUpstreamHost)
+			writeProxyServer(&domainConfig, domain, host, cert, cert, true, localUpstreamHost)
 		}
 		appendManagedFile(&files, appruntime.ManagedFile{Path: nginxDomainConfigPath(domain), Content: []byte(domainConfig.String()), Mode: "0644"})
 	}
@@ -517,6 +553,7 @@ func nginxDomainConfigName(domain string) string {
 type proxyHost struct {
 	Facility []proxyFacilityRoute
 	Proxy    []applications.ReverseProxyRoute
+	Relay    *proxyRelay
 }
 
 type proxyFacilityRoute struct {
@@ -528,6 +565,19 @@ type proxyFacilityRoute struct {
 	RedirectCode    int
 	ProxyURL        string
 	ProxySourceMode string
+	Options         applications.HTTPRouteOptions
+}
+
+type proxyRelay struct {
+	Name            string
+	Strategy        string
+	PrimaryServerID string
+	Servers         []proxyRelayServer
+}
+
+type proxyRelayServer struct {
+	ID   string
+	Host string
 }
 
 type staticMountAsset struct {
@@ -585,7 +635,7 @@ func appendManagedFile(files *[]appruntime.ManagedFile, file appruntime.ManagedF
 	*files = append(*files, file)
 }
 
-func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, cert *proxycert.Certificate, https bool, localUpstreamHost string) {
+func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, serverCert, relayCert *proxycert.Certificate, https bool, localUpstreamHost string) {
 	b.WriteString("\n    server {\n")
 	if https {
 		b.WriteString("        listen 443 ssl;\n")
@@ -594,10 +644,15 @@ func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, cert *
 		b.WriteString("        listen 80;\n")
 	}
 	b.WriteString("        server_name " + domain + ";\n")
-	if cert != nil {
-		b.WriteString("        ssl_certificate " + certPath(cert.ID, "certificate") + ";\n")
-		b.WriteString("        ssl_certificate_key " + certPath(cert.ID, "private-key") + ";\n")
+	if serverCert != nil {
+		b.WriteString("        ssl_certificate " + certPath(serverCert.ID, "certificate") + ";\n")
+		b.WriteString("        ssl_certificate_key " + certPath(serverCert.ID, "private-key") + ";\n")
 		b.WriteString("        add_header Alt-Svc 'h3=\":443\"; ma=86400' always;\n")
+	}
+	if host.Relay != nil {
+		writeRelayLocation(b, domain, host.Relay, relayCert)
+		b.WriteString("    }\n")
+		return
 	}
 	facilityRoutes := append([]proxyFacilityRoute(nil), host.Facility...)
 	sort.SliceStable(facilityRoutes, func(i, j int) bool {
@@ -628,21 +683,23 @@ func firstNonEmptyPath(paths []applications.ReverseProxyPath) string {
 func writeFacilityLocation(b *strings.Builder, route proxyFacilityRoute, https bool) {
 	switch route.RuleType {
 	case StaticRuleRedirect:
-		writeRedirectLocation(b, route.Path, route.RedirectURL, route.RedirectCode)
+		writeRedirectLocation(b, route.Path, route.RedirectURL, route.RedirectCode, route.Options)
 	case StaticRuleProxyPass:
-		writeFacilityProxyLocation(b, route.Path, route.ProxyURL, route.ProxySourceMode, https)
+		writeFacilityProxyLocation(b, route.Path, route.ProxyURL, route.ProxySourceMode, https, route.Options)
 	default:
 		if route.Asset != nil {
-			writeStaticLocation(b, route.Path, route.MountTarget, *route.Asset)
+			writeStaticLocation(b, route.Path, route.MountTarget, *route.Asset, route.Options)
 		}
 	}
 }
 
-func writeStaticLocation(b *strings.Builder, pathValue, mountTarget string, asset staticMountAsset) {
+func writeStaticLocation(b *strings.Builder, pathValue, mountTarget string, asset staticMountAsset, options applications.HTTPRouteOptions) {
 	pathValue = sanitizeNginxPath(pathValue)
+	options, _ = applications.NormalizeHTTPRouteOptions(options, false, true, applications.HTTPRouteModeOff)
 	if asset.Kind == StaticSourceUploadedFile {
 		b.WriteString("        location = " + pathValue + " {\n")
 		b.WriteString("            alias " + strings.TrimRight(mountTarget, "/") + "/" + sanitizeNginxPathSegment(asset.Filename) + ";\n")
+		applications.WriteNginxHTTPRouteOptions(b, options, "            ", false)
 		b.WriteString("        }\n")
 		return
 	}
@@ -656,19 +713,23 @@ func writeStaticLocation(b *strings.Builder, pathValue, mountTarget string, asse
 	b.WriteString("        location " + pathValue + " {\n")
 	b.WriteString("            alias " + target + ";\n")
 	b.WriteString("            index index.html;\n")
+	applications.WriteNginxHTTPRouteOptions(b, options, "            ", false)
 	b.WriteString("        }\n")
 }
 
-func writeRedirectLocation(b *strings.Builder, pathValue, target string, code int) {
+func writeRedirectLocation(b *strings.Builder, pathValue, target string, code int, options applications.HTTPRouteOptions) {
 	pathValue = sanitizeNginxPath(pathValue)
 	code = normalizedRedirectCode(code)
+	options, _ = applications.NormalizeHTTPRouteOptions(options, false, false, applications.HTTPRouteModeOff)
 	b.WriteString("        location " + pathValue + " {\n")
+	applications.WriteNginxHTTPRouteOptions(b, options, "            ", false)
 	b.WriteString("            return " + strconv.Itoa(code) + " " + target + ";\n")
 	b.WriteString("        }\n")
 }
 
-func writeFacilityProxyLocation(b *strings.Builder, pathValue, target, sourceMode string, https bool) {
+func writeFacilityProxyLocation(b *strings.Builder, pathValue, target, sourceMode string, https bool, options applications.HTTPRouteOptions) {
 	pathValue = sanitizeNginxPath(pathValue)
+	options, _ = applications.NormalizeHTTPRouteOptions(options, true, true, applications.HTTPRouteWebSocketAuto)
 	b.WriteString("        location " + pathValue + " {\n")
 	b.WriteString("            proxy_pass " + target + ";\n")
 	if normalizedProxySourceMode(sourceMode) == ProxySourceHide {
@@ -686,15 +747,19 @@ func writeFacilityProxyLocation(b *strings.Builder, pathValue, target, sourceMod
 			b.WriteString("            proxy_set_header X-Forwarded-Proto $scheme;\n")
 		}
 	}
-	b.WriteString("            proxy_http_version 1.1;\n")
-	b.WriteString("            proxy_set_header Upgrade $http_upgrade;\n")
-	b.WriteString("            proxy_set_header Connection $connection_upgrade;\n")
+	applications.WriteNginxHTTPRouteOptions(b, options, "            ", true)
+	applications.WriteNginxWebSocketOptions(b, options.WebSocketMode, "            ")
 	b.WriteString("        }\n")
 }
 
 func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRoute, https bool, localUpstreamHost string) {
 	for _, routePath := range route.Paths {
 		pathValue := sanitizeNginxPath(firstNonEmpty(routePath.Path, "/"))
+		defaultWebSocketMode := applications.HTTPRouteModeOff
+		if routePath.WebSocket {
+			defaultWebSocketMode = applications.HTTPRouteModeOn
+		}
+		options, _ := applications.NormalizeHTTPRouteOptions(routePath.Options, true, true, defaultWebSocketMode)
 		b.WriteString("        location " + pathValue + " {\n")
 		b.WriteString("            proxy_pass " + applicationProxyUpstream(route, localUpstreamHost) + ";\n")
 		b.WriteString("            proxy_set_header Host $host;\n")
@@ -705,13 +770,62 @@ func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRout
 		} else {
 			b.WriteString("            proxy_set_header X-Forwarded-Proto $scheme;\n")
 		}
-		if routePath.WebSocket {
-			b.WriteString("            proxy_http_version 1.1;\n")
-			b.WriteString("            proxy_set_header Upgrade $http_upgrade;\n")
-			b.WriteString("            proxy_set_header Connection $connection_upgrade;\n")
-		}
+		applications.WriteNginxHTTPRouteOptions(b, options, "            ", true)
+		applications.WriteNginxWebSocketOptions(b, options.WebSocketMode, "            ")
 		b.WriteString("        }\n")
 	}
+}
+
+func writeRelayUpstream(b *strings.Builder, relay *proxyRelay, tls bool) {
+	port := 80
+	if tls {
+		port = 443
+	}
+	b.WriteString("\n    upstream " + relay.Name + " {\n")
+	if relay.Strategy == DomainStrategyIPHash {
+		b.WriteString("        ip_hash;\n")
+	}
+	for _, item := range relay.Servers {
+		backup := ""
+		if relay.Strategy == DomainStrategyPrimaryBackup && item.ID != relay.PrimaryServerID {
+			backup = " backup"
+		}
+		b.WriteString("        server " + nginxUpstreamAddress(item.Host, port) + " max_fails=3 fail_timeout=30s" + backup + ";\n")
+	}
+	b.WriteString("    }\n")
+}
+
+func writeRelayLocation(b *strings.Builder, domain string, relay *proxyRelay, cert *proxycert.Certificate) {
+	scheme := "http"
+	if cert != nil {
+		scheme = "https"
+	}
+	b.WriteString("        location / {\n")
+	b.WriteString("            proxy_pass " + scheme + "://" + relay.Name + ";\n")
+	b.WriteString("            proxy_set_header Host $host;\n")
+	b.WriteString("            proxy_set_header X-Real-IP $remote_addr;\n")
+	b.WriteString("            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
+	b.WriteString("            proxy_set_header X-Forwarded-Proto $scheme;\n")
+	b.WriteString("            proxy_redirect off;\n")
+	options, _ := applications.NormalizeHTTPRouteOptions(applications.HTTPRouteOptions{}, true, true, applications.HTTPRouteWebSocketAuto)
+	applications.WriteNginxHTTPRouteOptions(b, options, "            ", true)
+	applications.WriteNginxWebSocketOptions(b, options.WebSocketMode, "            ")
+	if cert != nil {
+		b.WriteString("            proxy_ssl_server_name on;\n")
+		b.WriteString("            proxy_ssl_name " + domain + ";\n")
+		b.WriteString("            proxy_ssl_trusted_certificate " + certPath(cert.ID, "certificate") + ";\n")
+		b.WriteString("            proxy_ssl_verify on;\n")
+		b.WriteString("            proxy_ssl_verify_depth 4;\n")
+	}
+	b.WriteString("        }\n")
+}
+
+func nginxUpstreamAddress(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if strings.Contains(host, ":") && !strings.HasPrefix(host, "[") {
+		host = "[" + host + "]"
+	}
+	return host + ":" + strconv.Itoa(port)
 }
 
 func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstreamHost string) string {
@@ -729,12 +843,11 @@ func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstrea
 }
 
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
-	cfg := ReverseProxyConfig{ID: ReverseProxyID, Image: defaultProxyImage, DeploymentServers: []string{}, StaticSites: []StaticSite{}}
-	row := s.db.QueryRowContext(ctx, `SELECT deployment_server_ids_json,image,panel_entry_json,static_sites_json,last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID)
-	var serversRaw, panelRaw, staticRaw, updated string
-	if err := row.Scan(&serversRaw, &cfg.Image, &panelRaw, &staticRaw, &cfg.LastError, &updated); err != nil {
+	cfg := ReverseProxyConfig{ID: ReverseProxyID, Image: defaultProxyImage, DeploymentServers: []string{}, StaticSites: []StaticSite{}, DomainPolicies: []DomainPolicy{}}
+	row := s.db.QueryRowContext(ctx, `SELECT deployment_server_ids_json,image,panel_entry_json,static_sites_json,domain_policies_json,last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID)
+	var serversRaw, panelRaw, staticRaw, policiesRaw, updated string
+	if err := row.Scan(&serversRaw, &cfg.Image, &panelRaw, &staticRaw, &policiesRaw, &cfg.LastError, &updated); err != nil {
 		if err == sql.ErrNoRows {
-			cfg.UpdatedAt = time.Now().UTC()
 			return cfg, nil
 		}
 		return ReverseProxyConfig{}, err
@@ -742,6 +855,7 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	_ = json.Unmarshal([]byte(serversRaw), &cfg.DeploymentServers)
 	_ = json.Unmarshal([]byte(panelRaw), &cfg.PanelEntry)
 	_ = json.Unmarshal([]byte(staticRaw), &cfg.StaticSites)
+	_ = json.Unmarshal([]byte(policiesRaw), &cfg.DomainPolicies)
 	if cfg.DeploymentServers == nil {
 		cfg.DeploymentServers = []string{}
 	}
@@ -750,10 +864,27 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 		cfg.StaticSites = []StaticSite{}
 	}
 	for i := range cfg.StaticSites {
+		cfg.StaticSites[i].Domain = strings.ToLower(strings.TrimSpace(cfg.StaticSites[i].Domain))
 		cfg.StaticSites[i].RuleType = normalizedStaticRuleType(cfg.StaticSites[i].RuleType)
 		cfg.StaticSites[i].SourceType = normalizedStaticSourceType(cfg.StaticSites[i].SourceType)
 		cfg.StaticSites[i].ProxySourceMode = normalizedProxySourceMode(cfg.StaticSites[i].ProxySourceMode)
 		cfg.StaticSites[i].DeploymentServers = uniqueSorted(cfg.StaticSites[i].DeploymentServers)
+		proxyRoute := cfg.StaticSites[i].RuleType == StaticRuleProxyPass
+		gzipRoute := cfg.StaticSites[i].RuleType == StaticRuleStatic || proxyRoute
+		defaultWebSocketMode := applications.HTTPRouteModeOff
+		if proxyRoute {
+			defaultWebSocketMode = applications.HTTPRouteWebSocketAuto
+		}
+		if options, err := applications.NormalizeHTTPRouteOptions(cfg.StaticSites[i].Options, proxyRoute, gzipRoute, defaultWebSocketMode); err == nil {
+			cfg.StaticSites[i].Options = options
+		}
+	}
+	cfg.DomainPolicies = normalizeStoredDomainPolicies(cfg.DomainPolicies, cfg.StaticSites, cfg.DeploymentServers)
+	policyMap := domainPolicyMap(cfg.DomainPolicies)
+	for i := range cfg.StaticSites {
+		if policy, ok := policyMap[cfg.StaticSites[i].Domain]; ok {
+			cfg.StaticSites[i].DeploymentServers = append([]string(nil), policy.EntryServerIDs...)
+		}
 	}
 	if cfg.Image == "" {
 		cfg.Image = defaultProxyImage
@@ -775,11 +906,15 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 	if err != nil {
 		return err
 	}
+	policiesRaw, err := json.Marshal(cfg.DomainPolicies)
+	if err != nil {
+		return err
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,panel_entry_json,static_sites_json,last_error,updated_at)
-		VALUES(?,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,image=excluded.image,panel_entry_json=excluded.panel_entry_json,static_sites_json=excluded.static_sites_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
-		ReverseProxyID, string(serversRaw), cfg.Image, string(panelRaw), string(staticRaw), cfg.LastError, now)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,panel_entry_json,static_sites_json,domain_policies_json,last_error,updated_at)
+		VALUES(?,?,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,image=excluded.image,panel_entry_json=excluded.panel_entry_json,static_sites_json=excluded.static_sites_json,domain_policies_json=excluded.domain_policies_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
+		ReverseProxyID, string(serversRaw), cfg.Image, string(panelRaw), string(staticRaw), string(policiesRaw), cfg.LastError, now)
 	return err
 }
 
@@ -1018,10 +1153,42 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 	for _, serverID := range servers {
 		serverSet[serverID] = struct{}{}
 	}
+	providedPolicies := map[string]DomainPolicy{}
+	for _, item := range in.DomainPolicies {
+		domain := strings.ToLower(strings.TrimSpace(item.Domain))
+		if domain == "" || !validNginxToken(domain) {
+			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_invalid", "Reverse proxy domain is invalid")
+		}
+		if _, exists := providedPolicies[domain]; exists {
+			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_duplicate", "Reverse proxy domain is duplicated")
+		}
+		entryServers := uniqueSorted(item.EntryServerIDs)
+		if len(entryServers) == 0 {
+			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_servers_required", "Reverse proxy domain requires at least one gateway node")
+		}
+		for _, serverID := range entryServers {
+			if _, ok := serverSet[serverID]; !ok {
+				return ReverseProxyConfig{}, panelerr.Validation("facility_domain_server_invalid", "Reverse proxy domain gateway node must be selected for reverse proxy deployment")
+			}
+		}
+		strategy := normalizedDomainStrategy(item.Strategy)
+		if strategy == "" {
+			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_strategy_invalid", "Reverse proxy domain upstream strategy is invalid")
+		}
+		primaryServerID := strings.TrimSpace(item.PrimaryServerID)
+		if item.UpstreamMode && strategy == DomainStrategyPrimaryBackup {
+			if primaryServerID == "" || !containsString(entryServers, primaryServerID) {
+				return ReverseProxyConfig{}, panelerr.Validation("facility_domain_primary_server_invalid", "Primary upstream server must be selected for this domain")
+			}
+		} else {
+			primaryServerID = ""
+		}
+		providedPolicies[domain] = DomainPolicy{Domain: domain, EntryServerIDs: entryServers, UpstreamMode: item.UpstreamMode, Strategy: strategy, PrimaryServerID: primaryServerID}
+	}
 	sites := make([]StaticSite, 0, len(in.StaticSites))
-	routeKeys := map[string]struct{}{}
+	domainServerSets := map[string]map[string]struct{}{}
 	for _, site := range in.StaticSites {
-		domain := strings.TrimSpace(site.Domain)
+		domain := strings.ToLower(strings.TrimSpace(site.Domain))
 		ruleType := normalizedStaticRuleType(site.RuleType)
 		sourceType := normalizedStaticSourceType(site.SourceType)
 		root := strings.TrimSpace(site.RootPath)
@@ -1086,23 +1253,250 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 			return ReverseProxyConfig{}, panelerr.Validation("facility_static_site_path_invalid", "Static site path must start with /")
 		}
 		siteServers := uniqueSorted(site.DeploymentServers)
+		if _, ok := providedPolicies[domain]; !ok {
+			set := domainServerSets[domain]
+			if set == nil {
+				set = map[string]struct{}{}
+				domainServerSets[domain] = set
+			}
+			for _, serverID := range siteServers {
+				set[serverID] = struct{}{}
+			}
+		}
 		for _, serverID := range siteServers {
 			if _, ok := serverSet[serverID]; !ok {
 				return ReverseProxyConfig{}, panelerr.Validation("facility_static_site_server_invalid", "Static site server must be selected for reverse proxy deployment")
 			}
 		}
-		routeKey := domain + "\x00" + pathValue + "\x00" + strings.Join(siteServers, ",")
+		proxyRoute := ruleType == StaticRuleProxyPass
+		gzipRoute := ruleType == StaticRuleStatic || proxyRoute
+		defaultWebSocketMode := applications.HTTPRouteModeOff
+		if proxyRoute {
+			defaultWebSocketMode = applications.HTTPRouteWebSocketAuto
+		}
+		options, err := applications.NormalizeHTTPRouteOptions(site.Options, proxyRoute, gzipRoute, defaultWebSocketMode)
+		if err != nil {
+			return ReverseProxyConfig{}, err
+		}
+		sites = append(sites, StaticSite{Domain: domain, Path: pathValue, RuleType: ruleType, RootPath: root, SourceType: sourceType, AssetID: assetID, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, DeploymentServers: siteServers, Options: options})
+	}
+	policies := make([]DomainPolicy, 0, len(providedPolicies)+len(domainServerSets))
+	for domain, policy := range providedPolicies {
+		if !staticSitesContainDomain(sites, domain) {
+			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_without_routes", "Reverse proxy domain requires at least one route")
+		}
+		policies = append(policies, policy)
+	}
+	for domain, set := range domainServerSets {
+		entryServers := sortedSetValues(set)
+		if len(entryServers) == 0 {
+			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_servers_required", "Reverse proxy domain requires at least one gateway node")
+		}
+		policies = append(policies, DomainPolicy{Domain: domain, EntryServerIDs: entryServers, Strategy: DomainStrategyRoundRobin})
+	}
+	sort.Slice(policies, func(i, j int) bool { return policies[i].Domain < policies[j].Domain })
+	policyMap := domainPolicyMap(policies)
+	routeKeys := map[string]struct{}{}
+	for i := range sites {
+		policy := policyMap[sites[i].Domain]
+		sites[i].DeploymentServers = append([]string(nil), policy.EntryServerIDs...)
+		routeKey := sites[i].Domain + "\x00" + sites[i].Path
 		if _, ok := routeKeys[routeKey]; ok {
 			return ReverseProxyConfig{}, panelerr.Validation("facility_static_site_path_duplicate", "Reverse proxy route path is duplicated for this domain")
 		}
 		routeKeys[routeKey] = struct{}{}
-		sites = append(sites, StaticSite{Domain: domain, Path: pathValue, RuleType: ruleType, RootPath: root, SourceType: sourceType, AssetID: assetID, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, DeploymentServers: siteServers})
 	}
 	panelEntry, err := normalizePanelEntry(in.PanelEntry, serverSet, sites)
 	if err != nil {
 		return ReverseProxyConfig{}, err
 	}
-	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, Image: image, PanelEntry: panelEntry, StaticSites: sites}, nil
+	if panelEntry.Enabled {
+		if policy, ok := policyMap[panelEntry.Domain]; ok && policy.UpstreamMode {
+			return ReverseProxyConfig{}, panelerr.Conflict("facility_panel_entry_upstream_domain_conflict", "Panel entry domain conflicts with an upstream-mode facility domain")
+		}
+	}
+	return ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: servers, Image: image, PanelEntry: panelEntry, StaticSites: sites, DomainPolicies: policies}, nil
+}
+
+func (s *Service) buildProxyRelay(ctx context.Context, policy DomainPolicy) (*proxyRelay, error) {
+	if s.servers == nil {
+		return nil, panelerr.Validation("facility_domain_server_invalid", "Reverse proxy server provider is unavailable")
+	}
+	relay := &proxyRelay{Name: "panel_domain_" + nginxDomainConfigName(policy.Domain), Strategy: normalizedDomainStrategy(policy.Strategy), PrimaryServerID: policy.PrimaryServerID}
+	for _, serverID := range policy.EntryServerIDs {
+		srv, err := s.servers.Get(ctx, serverID)
+		if err != nil {
+			return nil, err
+		}
+		host := strings.TrimSpace(srv.Host)
+		if host == "" {
+			return nil, panelerr.Validation("facility_domain_server_host_invalid", "Upstream server host is invalid")
+		}
+		relay.Servers = append(relay.Servers, proxyRelayServer{ID: serverID, Host: host})
+	}
+	return relay, nil
+}
+
+func normalizedDomainStrategy(value string) string {
+	switch strings.TrimSpace(value) {
+	case "", DomainStrategyRoundRobin:
+		return DomainStrategyRoundRobin
+	case DomainStrategyPrimaryBackup:
+		return DomainStrategyPrimaryBackup
+	case DomainStrategyIPHash:
+		return DomainStrategyIPHash
+	default:
+		return ""
+	}
+}
+
+func normalizeStoredDomainPolicies(policies []DomainPolicy, sites []StaticSite, deploymentServers []string) []DomainPolicy {
+	provided := map[string]DomainPolicy{}
+	for _, item := range policies {
+		domain := strings.ToLower(strings.TrimSpace(item.Domain))
+		if domain == "" {
+			continue
+		}
+		entryServers := uniqueSorted(item.EntryServerIDs)
+		if len(entryServers) == 0 {
+			entryServers = append([]string(nil), deploymentServers...)
+		}
+		strategy := normalizedDomainStrategy(item.Strategy)
+		if strategy == "" {
+			strategy = DomainStrategyRoundRobin
+		}
+		provided[domain] = DomainPolicy{Domain: domain, EntryServerIDs: entryServers, UpstreamMode: item.UpstreamMode, Strategy: strategy, PrimaryServerID: strings.TrimSpace(item.PrimaryServerID)}
+	}
+	sets := map[string]map[string]struct{}{}
+	for _, site := range sites {
+		domain := strings.ToLower(strings.TrimSpace(site.Domain))
+		if domain == "" {
+			continue
+		}
+		if _, ok := provided[domain]; ok {
+			continue
+		}
+		servers := uniqueSorted(site.DeploymentServers)
+		if len(servers) == 0 {
+			servers = append([]string(nil), deploymentServers...)
+		}
+		set := sets[domain]
+		if set == nil {
+			set = map[string]struct{}{}
+			sets[domain] = set
+		}
+		for _, serverID := range servers {
+			set[serverID] = struct{}{}
+		}
+	}
+	for domain, set := range sets {
+		provided[domain] = DomainPolicy{Domain: domain, EntryServerIDs: sortedSetValues(set), Strategy: DomainStrategyRoundRobin}
+	}
+	out := make([]DomainPolicy, 0, len(provided))
+	for _, policy := range provided {
+		out = append(out, policy)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Domain < out[j].Domain })
+	return out
+}
+
+func domainPolicyMap(items []DomainPolicy) map[string]DomainPolicy {
+	out := map[string]DomainPolicy{}
+	for _, item := range items {
+		out[strings.ToLower(strings.TrimSpace(item.Domain))] = item
+	}
+	return out
+}
+
+func staticSitesContainDomain(items []StaticSite, domain string) bool {
+	for _, item := range items {
+		if item.Domain == domain {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) validateRouteConflicts(ctx context.Context, cfg ReverseProxyConfig) error {
+	occupancy := map[string]string{}
+	policies := domainPolicyMap(cfg.DomainPolicies)
+	upstreamDomains := map[string]struct{}{}
+	for _, policy := range cfg.DomainPolicies {
+		if policy.UpstreamMode {
+			upstreamDomains[policy.Domain] = struct{}{}
+		}
+	}
+	for _, site := range cfg.StaticSites {
+		policy := policies[site.Domain]
+		serverIDs := policy.EntryServerIDs
+		if policy.UpstreamMode {
+			serverIDs = cfg.DeploymentServers
+		}
+		for _, serverID := range serverIDs {
+			key := routeConflictKey(serverID, site.Domain, firstNonEmpty(site.Path, "/"))
+			if owner, ok := occupancy[key]; ok {
+				return panelerr.Conflict("facility_route_conflict", "Reverse proxy route conflicts with "+owner)
+			}
+			occupancy[key] = "facility route"
+		}
+	}
+	if cfg.PanelEntry.Enabled {
+		key := routeConflictKey(cfg.PanelEntry.ServerID, cfg.PanelEntry.Domain, "/")
+		if owner, ok := occupancy[key]; ok {
+			return panelerr.Conflict("facility_panel_entry_route_conflict", "Panel entry route conflicts with "+owner)
+		}
+		occupancy[key] = "Panel entry"
+	}
+	if s.apps == nil {
+		return nil
+	}
+	apps, err := s.apps.ApplicationReverseProxyConfigs(ctx)
+	if err != nil {
+		return err
+	}
+	for _, app := range apps {
+		for _, route := range app.Routes {
+			domain := strings.ToLower(strings.TrimSpace(route.Domain))
+			if _, ok := upstreamDomains[domain]; ok {
+				return panelerr.Conflict("facility_upstream_domain_application_conflict", "Upstream-mode facility domain conflicts with application "+app.ApplicationName)
+			}
+			for _, serverID := range cfg.DeploymentServers {
+				if !appTargetsServer(app, serverID) {
+					continue
+				}
+				for _, routePath := range route.Paths {
+					key := routeConflictKey(serverID, domain, firstNonEmpty(routePath.Path, "/"))
+					if owner, ok := occupancy[key]; ok {
+						return panelerr.Conflict("facility_route_conflict", "Application route conflicts with "+owner)
+					}
+					occupancy[key] = "application " + app.ApplicationName
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func routeConflictKey(serverID, domain, pathValue string) string {
+	return strings.TrimSpace(serverID) + "\x00" + strings.ToLower(strings.TrimSpace(domain)) + "\x00" + sanitizeNginxPath(firstNonEmpty(pathValue, "/"))
+}
+
+func sortedSetValues(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for value := range set {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsString(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePanelEntry(in PanelEntry, serverSet map[string]struct{}, sites []StaticSite) (PanelEntry, error) {
@@ -1379,6 +1773,7 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([
 		return nil, err
 	}
 	out := []RouteSummary{}
+	policies := domainPolicyMap(cfg.DomainPolicies)
 	for _, site := range cfg.StaticSites {
 		domain := strings.TrimSpace(site.Domain)
 		pathValue := firstNonEmpty(site.Path, "/")
@@ -1386,8 +1781,11 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([
 			continue
 		}
 		serverIDs := site.DeploymentServers
-		if len(serverIDs) == 0 {
-			serverIDs = cfg.DeploymentServers
+		if policy, ok := policies[domain]; ok {
+			serverIDs = policy.EntryServerIDs
+			if policy.UpstreamMode {
+				serverIDs = cfg.DeploymentServers
+			}
 		}
 		out = append(out, routeSummary(domain, pathValue, "static_site", serverIDs, certificates))
 	}
@@ -1398,7 +1796,10 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([
 		for _, app := range apps {
 			for _, route := range app.Routes {
 				for _, routePath := range route.Paths {
-					out = append(out, routeSummary(route.Domain, firstNonEmpty(routePath.Path, "/"), "application", []string{serverID}, certificates))
+					summary := routeSummary(route.Domain, firstNonEmpty(routePath.Path, "/"), "application", []string{serverID}, certificates)
+					summary.ApplicationID = app.ApplicationID
+					summary.ApplicationName = app.ApplicationName
+					out = append(out, summary)
 				}
 			}
 		}
@@ -1509,6 +1910,7 @@ func facilityConfigHash(cfg ReverseProxyConfig) string {
 		"deploymentServers": cfg.DeploymentServers,
 		"panelEntry":        cfg.PanelEntry,
 		"staticSites":       cfg.StaticSites,
+		"domainPolicies":    cfg.DomainPolicies,
 	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])

@@ -25,6 +25,10 @@ const (
 
 	ReverseProxyTargetLocal     = "local"
 	ReverseProxyTargetContainer = "container"
+	HTTPRouteModeInherit        = "inherit"
+	HTTPRouteModeOn             = "on"
+	HTTPRouteModeOff            = "off"
+	HTTPRouteWebSocketAuto      = "auto"
 
 	ApplicationFileKindBinary   = "binary"
 	ApplicationFileKindTemplate = "template"
@@ -118,8 +122,26 @@ type ReverseProxyRule struct {
 }
 
 type ReverseProxyPath struct {
-	Path      string `json:"path"`
-	WebSocket bool   `json:"webSocket"`
+	Path      string           `json:"path"`
+	WebSocket bool             `json:"webSocket"`
+	Options   HTTPRouteOptions `json:"options,omitempty"`
+}
+
+type HTTPHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type HTTPRouteOptions struct {
+	GzipMode              string       `json:"gzipMode,omitempty"`
+	ClientMaxBodySizeMB   int          `json:"clientMaxBodySizeMb,omitempty"`
+	ConnectTimeoutSeconds int          `json:"connectTimeoutSeconds,omitempty"`
+	ReadTimeoutSeconds    int          `json:"readTimeoutSeconds,omitempty"`
+	SendTimeoutSeconds    int          `json:"sendTimeoutSeconds,omitempty"`
+	BufferingMode         string       `json:"bufferingMode,omitempty"`
+	WebSocketMode         string       `json:"webSocketMode,omitempty"`
+	RequestHeaders        []HTTPHeader `json:"requestHeaders,omitempty"`
+	ResponseHeaders       []HTTPHeader `json:"responseHeaders,omitempty"`
 }
 
 type ApplicationReverseProxyConfig struct {

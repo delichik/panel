@@ -146,6 +146,36 @@ describe('frontend Mock API', () => {
     expect(preflight.requiresDangerConfirm).toBe(true);
   });
 
+  it('commits facility reverse proxy drafts through the Mock save session', async () => {
+    const session = await data('/facility-apps/reverse-proxy/save-sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ baseUpdatedAt: '2026-07-14T10:00:00Z' }),
+    });
+    const upload = new FormData();
+    upload.set('name', 'Draft home');
+    upload.set('kind', 'uploaded_file');
+    upload.set('file', new File(['home'], 'index.html'));
+    const asset = await data(`/facility-apps/reverse-proxy/save-sessions/${session.id}/assets`, { method: 'POST', body: upload });
+    const committed = await data(`/facility-apps/reverse-proxy/save-sessions/${session.id}/commit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        save: {
+          deploymentServers: ['srv-edge'],
+          image: 'nginx:1.27-alpine',
+          panelEntry: { enabled: false, serverId: '', domain: '' },
+          domainPolicies: [{ domain: 'draft.example.test', entryServerIds: ['srv-edge'], upstreamMode: false, strategy: 'round_robin', primaryServerId: '' }],
+          staticSites: [{ domain: 'draft.example.test', path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetId: asset.id, deploymentServers: ['srv-edge'] }],
+        },
+      }),
+    });
+
+    expect(committed.applyRequested).toBe(true);
+    expect(committed.config.staticAssets).toContainEqual(expect.objectContaining({ id: asset.id }));
+    expect(committed.config.domainPolicies[0].entryServerIds).toEqual(['srv-edge']);
+  });
+
   it('returns a structured error for an unimplemented route', async () => {
     const response = await request('/not-implemented');
     const body = await response.json();

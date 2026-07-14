@@ -4,6 +4,10 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/facility-apps/index.vue`、`config.vue`、`RoutePathAdvancedFields.vue`、`internal/platform/i18n`
+  - 入口网关只读详情、独立反向代理配置页、未保存提示、保存会话阶段、域名入口节点/上游策略、删除确认和 Path 高级字段已接入英文与简体中文词条。
+  - 新增设施域名、上游域名独占、配置并发冲突和 `reverse_proxy_*` 高级字段校验错误码的简体中文翻译；服务器地址、域名、Path、Header 名称和值以及 Nginx/Agent 原始诊断保持用户原始内容。
+
 - `web/src/views/applications/apps/ApplicationEditor.vue`
   - 应用文件夹压缩包改为独立 `archive` 文件类型展示和替换，新增文件类型文案 `applicationEditor.archiveKind`，已接入英文与简体中文词条。
 - `web/src/views/overview/index.vue`

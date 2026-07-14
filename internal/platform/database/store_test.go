@@ -412,6 +412,55 @@ func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
 	}
 }
 
+func TestMigrateAddsFacilityDomainPoliciesColumn(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE facility_app_configs (
+		id TEXT PRIMARY KEY,
+		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+		image TEXT NOT NULL DEFAULT '',
+		panel_entry_json TEXT NOT NULL DEFAULT '{}',
+		static_sites_json TEXT NOT NULL DEFAULT '[]',
+		last_error TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL DEFAULT ''
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,panel_entry_json,static_sites_json,last_error,updated_at)
+		VALUES('reverse_proxy','["srv-edge"]','nginx:legacy','{}','[{"domain":"legacy.example.test","path":"/"}]','','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer store.Close()
+	columns := tableColumns(t, store.AppDB(), "facility_app_configs")
+	if !columns["domain_policies_json"] {
+		t.Fatal("migrated facility_app_configs is missing domain_policies_json")
+	}
+	var policies, sites string
+	if err := store.AppDB().QueryRow(`SELECT domain_policies_json,static_sites_json FROM facility_app_configs WHERE id='reverse_proxy'`).Scan(&policies, &sites); err != nil {
+		t.Fatal(err)
+	}
+	if policies != "[]" || !strings.Contains(sites, "legacy.example.test") {
+		t.Fatalf("migrated facility config policies=%q sites=%q", policies, sites)
+	}
+}
+
 func TestMigratePreservesPasswordlessSudoAsPrivilegeMode(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

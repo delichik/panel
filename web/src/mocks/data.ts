@@ -69,11 +69,13 @@ export const initialMockState = {
     id: 'reverse_proxy',
     deploymentServers: ['srv-edge'],
     image: 'nginx:1.27-alpine',
+    panelEntry: { enabled: false, serverId: '', domain: '' },
+    domainPolicies: [{ domain: 'static.example.test', entryServerIds: ['srv-edge'], upstreamMode: false, strategy: 'round_robin', primaryServerId: '' }],
     staticSites: [
-      { domain: 'static.example.test', path: '/', ruleType: 'static', rootPath: '/srv/panel/static/example', sourceType: 'host_path', deploymentServers: [] },
-      { domain: 'static.example.test', path: '/docs', ruleType: 'static', assetId: 'facility_static_demo', sourceType: 'uploaded_bundle', deploymentServers: [] },
-      { domain: 'static.example.test', path: '/old', ruleType: 'redirect', redirectUrl: 'https://static.example.test/docs', redirectCode: 301, deploymentServers: [] },
-      { domain: 'static.example.test', path: '/legacy-api', ruleType: 'proxy_pass', proxyUrl: 'http://10.20.0.11:18080', proxySourceMode: 'hide_source', deploymentServers: [] },
+      { domain: 'static.example.test', path: '/', ruleType: 'static', rootPath: '/srv/panel/static/example', sourceType: 'host_path', deploymentServers: ['srv-edge'], options: { gzipMode: 'inherit', responseHeaders: [] } },
+      { domain: 'static.example.test', path: '/docs', ruleType: 'static', assetId: 'facility_static_demo', sourceType: 'uploaded_bundle', deploymentServers: ['srv-edge'], options: { gzipMode: 'on', responseHeaders: [] } },
+      { domain: 'static.example.test', path: '/old', ruleType: 'redirect', redirectUrl: 'https://static.example.test/docs', redirectCode: 301, deploymentServers: ['srv-edge'], options: { responseHeaders: [] } },
+      { domain: 'static.example.test', path: '/legacy-api', ruleType: 'proxy_pass', proxyUrl: 'http://10.20.0.11:18080', proxySourceMode: 'hide_source', deploymentServers: ['srv-edge'], options: { gzipMode: 'inherit', bufferingMode: 'inherit', webSocketMode: 'auto', requestHeaders: [], responseHeaders: [] } },
     ],
     staticAssets: [{ id: 'facility_static_demo', name: 'Landing bundle', kind: 'uploaded_bundle', filename: 'landing.zip', size: 4096, sha256: 'sha256:mock-static', createdAt: now, updatedAt: now }],
     routeSummaries: [
