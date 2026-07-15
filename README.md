@@ -23,7 +23,7 @@ The project is built for people who run their own servers and for humans sharing
 
 ## Status
 
-Panel is currently alpha software. It already has useful workflows, but you should expect changes in configuration, database migrations, and UI behavior as the project grows. Use it first on development or non-critical servers, and keep backups of the `data` directory if you run it for real work.
+Panel is currently alpha software. It already has useful workflows, but you should expect changes in configuration, database migrations, and UI behavior as the project grows. Use it first on development or non-critical servers, and keep backups of the Panel data volume if you run it for real work.
 
 ## Supported Target Systems
 
@@ -49,71 +49,67 @@ Notes:
 - Package maintenance uses APT.
 - Application runtime requires panel-agent on target servers and a reachable Docker Engine endpoint. The default Docker host is `unix:///var/run/docker.sock`.
 
-## Quick Start
+## Get Started
+
+Panel deployment is container-only for end users:
+
+- [Deploy Panel with Docker Compose or Docker](docs/deployment.md)
+- [Follow the first-use and application deployment guide](docs/user-guide.md)
+
+The deployment guide covers persistent storage, first login, HTTPS, backup, upgrades, and troubleshooting. The user guide walks through credentials, servers, panel-agent, Docker health, the first application, domains, certificates, tasks, and daily maintenance.
+
+## Development
+
+The commands below are for working on Panel from source. They are not required for a normal deployment.
 
 ### Requirements
-
-Install these on the machine where you develop or run Panel:
 
 - Go 1.25+
 - Node.js 22+
 - npm
 - [Task](https://taskfile.dev/)
 
-Docker is optional for containerized deployment.
+Docker is only required when building or testing the production container image.
 
-### 1. Install Web Dependencies
+### Run From Source
+
+Install web dependencies:
 
 ```bash
 npm --prefix web ci
 ```
 
-If you are working without a lockfile-aware flow, `npm --prefix web install` also works.
-
-### 2. Create a Config File
+Copy the example configuration:
 
 ```bash
 cp config.example.json config.json
-```
-
-Then point Panel at it:
-
-```bash
 export PANEL_CONFIG=./config.json
 ```
 
 PowerShell:
 
 ```powershell
+Copy-Item config.example.json config.json
 $env:PANEL_CONFIG = ".\config.json"
 ```
 
-Default local login:
-
-- Username: `admin`
-- Password: `admin`
-
-Panel requires a password change on first use and rotates the JWT signing secret automatically when the password is changed.
-
-### 3. Start the Backend
+Start the backend:
 
 ```bash
 task run:backend
 ```
 
-The backend listens on `127.0.0.1:8080` by default.
-
-### 4. Start the Web UI
-
-Open another terminal:
+Open another terminal and start the web development server:
 
 ```bash
 task run:web
 ```
 
-Open `http://127.0.0.1:5173`. During development, Vite proxies `/api` requests to the backend.
+Open `http://127.0.0.1:5173`. Vite proxies `/api` requests to the backend.
 
-## Configuration
+The local development login is `admin/admin`. Panel requires a password change on first use.
+
+### Development Configuration
 
 Panel loads configuration in this order:
 
@@ -131,8 +127,6 @@ Common config values:
 | `metricsDatabase` | Metrics SQLite database | `data/db/metrics.db` |
 | `certificates.acmeDirectoryUrl` | ACME directory URL | Let's Encrypt production |
 
-Administrator username/password, JWT secret, remote command timeout, certificate email, and certificate DNS propagation delay are stored in the application database and configured from **Settings** in the UI.
-
 Supported environment variables:
 
 - `PANEL_CONFIG`
@@ -141,38 +135,11 @@ Supported environment variables:
 - `PANEL_APP_DATABASE`
 - `PANEL_METRICS_DATABASE`
 - `PANEL_CERT_ACME_DIRECTORY_URL`
+- `PANEL_WEB_PROXY_TARGET` for the development web proxy
 
-Runtime settings such as language, token expiration, metrics retention, security settings, and certificate defaults can be adjusted from the UI.
+Administrator credentials, the JWT secret, command timeout, certificate email, language, token expiration, metrics retention, security settings, and certificate defaults are stored in the application database and managed from **Settings**.
 
-Development-only web proxy variable:
-
-- `PANEL_WEB_PROXY_TARGET`
-
-## Docker
-
-Build the image:
-
-```bash
-docker build -t panel .
-```
-
-Run it:
-
-```bash
-docker run --rm -p 8080:8080 -v panel-data:/app/data panel
-```
-
-Container defaults:
-
-- Listens on `0.0.0.0:8080`.
-- Stores data in `/app/data`.
-- Serves the built web UI from the backend.
-
-For persistent deployments, mount or back up the data volume. Security settings, including the JWT secret, are stored there.
-
-## Development
-
-Useful commands:
+### Commands
 
 ```bash
 task run:backend
@@ -184,7 +151,7 @@ task build:web
 task build
 ```
 
-Project layout:
+### Project Layout
 
 ```text
 cmd/panel              backend entry point

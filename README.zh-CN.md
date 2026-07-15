@@ -23,7 +23,7 @@ Panel 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规
 
 ## 当前状态
 
-Panel 目前仍处于 alpha 阶段。它已经具备一些可用工作流，但配置、数据库迁移和界面行为仍可能随着项目发展而变化。建议先在开发环境或非关键服务器上试用；如果用于真实工作，请备份 `data` 目录。
+Panel 目前仍处于 alpha 阶段。它已经具备一些可用工作流，但配置、数据库迁移和界面行为仍可能随着项目发展而变化。建议先在开发环境或非关键服务器上试用；如果用于真实工作，请备份 Panel 数据卷。
 
 ## 支持的目标系统
 
@@ -49,75 +49,67 @@ Panel 的系统支持范围是显式列出的，后续会逐步扩展。
 - 软件包维护基于 APT。
 - 应用运行时要求目标服务器部署 panel-agent，并能访问 Docker Engine 端点。默认 Docker host 为 `unix:///var/run/docker.sock`。
 
-## 快速开始
+## 开始使用
+
+普通用户只通过容器部署 Panel：
+
+- [使用 Docker Compose 或 Docker 部署 Panel](docs/deployment.zh-CN.md)
+- [按照首次使用和应用部署说明完成配置](docs/user-guide.zh-CN.md)
+
+部署说明包含持久化、首次登录、HTTPS、备份、升级和常见问题；使用说明按照凭据、服务器、panel-agent、Docker 状态、第一个应用、域名证书、任务和日常维护的顺序介绍。
+
+## 开发
+
+以下内容用于从源码开发 Panel，普通部署不需要这些工具或命令。
 
 ### 环境要求
-
-在开发或运行 Panel 的机器上安装：
 
 - Go 1.25+
 - Node.js 22+
 - npm
 - [Task](https://taskfile.dev/)
 
-Docker 只在需要容器化部署时使用。
+只有构建或测试生产容器镜像时才需要 Docker。
 
-### 1. 安装前端依赖
+### 从源码运行
+
+安装前端依赖：
 
 ```bash
 npm --prefix web ci
 ```
 
-如果你没有使用锁文件流程，也可以执行：
-
-```bash
-npm --prefix web install
-```
-
-### 2. 创建配置文件
+复制示例配置：
 
 ```bash
 cp config.example.json config.json
-```
-
-然后指定配置文件路径：
-
-```bash
 export PANEL_CONFIG=./config.json
 ```
 
-PowerShell:
+PowerShell：
 
 ```powershell
+Copy-Item config.example.json config.json
 $env:PANEL_CONFIG = ".\config.json"
 ```
 
-默认本地登录账号：
-
-- 用户名：`admin`
-- 密码：`admin`
-
-Panel 首次使用时会要求修改密码，并在密码修改后自动轮换 JWT 签名密钥。
-
-### 3. 启动后端
+启动后端：
 
 ```bash
 task run:backend
 ```
 
-后端默认监听 `127.0.0.1:8080`。
-
-### 4. 启动前端界面
-
-另开一个终端：
+另开一个终端启动前端开发服务器：
 
 ```bash
 task run:web
 ```
 
-访问 `http://127.0.0.1:5173`。开发模式下，Vite 会把 `/api` 请求代理到后端。
+访问 `http://127.0.0.1:5173`。Vite 会把 `/api` 请求代理到后端。
 
-## 配置
+本地开发账号为 `admin/admin`，首次使用仍会要求修改密码。
+
+### 开发配置
 
 Panel 按以下顺序加载配置：
 
@@ -135,8 +127,6 @@ Panel 按以下顺序加载配置：
 | `metricsDatabase` | 指标 SQLite 数据库 | `data/db/metrics.db` |
 | `certificates.acmeDirectoryUrl` | ACME 目录地址 | Let's Encrypt 正式环境 |
 
-管理员用户名和密码、JWT 密钥、远程命令超时、证书邮箱和证书 DNS 生效等待时间，会保存在应用数据库中，并在界面的 **设置** 中配置。
-
 支持的环境变量：
 
 - `PANEL_CONFIG`
@@ -145,38 +135,11 @@ Panel 按以下顺序加载配置：
 - `PANEL_APP_DATABASE`
 - `PANEL_METRICS_DATABASE`
 - `PANEL_CERT_ACME_DIRECTORY_URL`
+- `PANEL_WEB_PROXY_TARGET`，仅用于前端开发代理
 
-语言、登录令牌有效期、指标保留时间、安全设置和证书默认值等运行时设置，可以在界面中调整。
+管理员账号、JWT 密钥、远程命令超时、证书邮箱、语言、Token 有效期、指标保留、安全设置和证书默认值保存在应用数据库中，并通过界面的 **设置** 管理。
 
-仅开发前端代理使用的环境变量：
-
-- `PANEL_WEB_PROXY_TARGET`
-
-## Docker
-
-构建镜像：
-
-```bash
-docker build -t panel .
-```
-
-运行容器：
-
-```bash
-docker run --rm -p 8080:8080 -v panel-data:/app/data panel
-```
-
-容器默认行为：
-
-- 监听 `0.0.0.0:8080`。
-- 将数据保存在 `/app/data`。
-- 由后端直接托管构建后的前端页面。
-
-如果用于长期运行，请挂载或备份数据卷。包括 JWT 密钥在内的安全设置会保存在数据卷中。
-
-## 开发
-
-常用命令：
+### 常用命令
 
 ```bash
 task run:backend
@@ -188,7 +151,7 @@ task build:web
 task build
 ```
 
-目录结构：
+### 目录结构
 
 ```text
 cmd/panel              后端入口
