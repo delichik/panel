@@ -72,6 +72,7 @@ type Service struct {
 	builtinResolver  BuiltinVariableResolver
 	internalFiles    InternalFileProvider
 	proxyReconciler  ReverseProxyReconciler
+	proxyPolicy      ReverseProxyPolicyProvider
 	reconcileTrigger ApplicationReconcileTrigger
 	deployment       DeploymentDispatcher
 	imageResolver    ImageDigestResolver
@@ -115,6 +116,10 @@ type PackageResult struct {
 
 type ReverseProxyReconciler interface {
 	ReconcileReverseProxy(ctx context.Context) error
+}
+
+type ReverseProxyPolicyProvider interface {
+	ValidateApplicationReverseProxy(ctx context.Context, applicationID, deploymentMode string, deploymentServers []string, rules []ReverseProxyRule) error
 }
 
 type ApplicationReconcileTrigger interface {
@@ -204,6 +209,10 @@ func WithFacilityRuntimeProvider(provider FacilityRuntimeProvider) Option {
 
 func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
 	s.proxyReconciler = reconciler
+}
+
+func (s *Service) SetReverseProxyPolicyProvider(provider ReverseProxyPolicyProvider) {
+	s.proxyPolicy = provider
 }
 
 func (s *Service) SetApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) {
@@ -1732,6 +1741,11 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	resolvedReverseProxy, err := s.renderReverseProxyRules(ctx, reverseProxy, data)
 	if err != nil {
 		return preparedApplication{}, err
+	}
+	if s.proxyPolicy != nil {
+		if err := s.proxyPolicy.ValidateApplicationReverseProxy(ctx, appID, deploymentMode, deploymentServers, resolvedReverseProxy); err != nil {
+			return preparedApplication{}, err
+		}
 	}
 	hash, err := applicationHash(spec, variables, deploymentMode, deploymentServers, resolvedReverseProxy, files, data)
 	if err != nil {
@@ -4921,6 +4935,11 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		if rule.TargetPort <= 0 || rule.TargetPort > 65535 {
 			return nil, panelerr.Validation("application_reverse_proxy_target_port_invalid", "reverse proxy target port must be between 1 and 65535")
 		}
+		originServerIDs := uniqueSortedStrings(rule.OriginServerIDs)
+		anyAccess, err := NormalizeAnyAccessConfig(rule.AnyAccess, originServerIDs)
+		if err != nil {
+			return nil, err
+		}
 		paths := make([]ReverseProxyPath, 0, len(rule.Paths))
 		pathKeys := map[string]struct{}{}
 		for _, item := range rule.Paths {
@@ -4950,10 +4969,12 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 			paths = append(paths, ReverseProxyPath{Path: "/", Options: options})
 		}
 		out = append(out, ReverseProxyRule{
-			Domain:     domain,
-			TargetType: targetType,
-			TargetPort: rule.TargetPort,
-			Paths:      paths,
+			Domain:          domain,
+			TargetType:      targetType,
+			TargetPort:      rule.TargetPort,
+			OriginServerIDs: originServerIDs,
+			AnyAccess:       anyAccess,
+			Paths:           paths,
 		})
 	}
 	return out, nil
@@ -4983,6 +5004,11 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 		}
 		if !validNginxToken(domain) {
 			return nil, panelerr.Validation("application_reverse_proxy_domain_invalid", "reverse proxy domain is invalid")
+		}
+		originServerIDs := uniqueSortedStrings(rule.OriginServerIDs)
+		anyAccess, err := NormalizeAnyAccessConfig(rule.AnyAccess, originServerIDs)
+		if err != nil {
+			return nil, err
 		}
 		paths := make([]ReverseProxyPath, 0, len(rule.Paths))
 		pathKeys := map[string]struct{}{}
@@ -5016,7 +5042,7 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 			options, _ := NormalizeHTTPRouteOptions(HTTPRouteOptions{}, true, true, HTTPRouteModeOff)
 			paths = append(paths, ReverseProxyPath{Path: "/", Options: options})
 		}
-		out = append(out, ReverseProxyRule{Domain: domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, Paths: paths})
+		out = append(out, ReverseProxyRule{Domain: domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, OriginServerIDs: originServerIDs, AnyAccess: anyAccess, Paths: paths})
 	}
 	return out, nil
 }
@@ -5110,7 +5136,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 			for _, item := range rule.Paths {
 				paths = append(paths, ReverseProxyPath{Path: item.Path, WebSocket: item.WebSocket, Options: item.Options})
 			}
-			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), Paths: paths})
+			routes = append(routes, ReverseProxyRoute{Domain: rule.Domain, TargetType: normalizeReverseProxyTargetType(rule.TargetType), TargetPort: rule.TargetPort, TargetContainer: runtimeContainerName(app), OriginServerIDs: append([]string(nil), rule.OriginServerIDs...), AnyAccess: rule.AnyAccess, Paths: paths})
 		}
 		out = append(out, ApplicationReverseProxyConfig{
 			ApplicationID:     app.ID,

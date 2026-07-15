@@ -14,10 +14,8 @@ describe('facilityAppsApi', () => {
     const api = createFacilityAppsApi(new ApiClient({ baseUrl: '/api/v1', fetcher }));
     const save = {
       deploymentServers: ['srv-edge'],
-      image: 'nginx:1.27-alpine',
       panelEntry: { enabled: false, serverId: '', domain: '' },
-      staticSites: [],
-      domainPolicies: [],
+      domains: [],
     };
 
     await api.beginSaveSession('2026-07-14T10:00:00Z');

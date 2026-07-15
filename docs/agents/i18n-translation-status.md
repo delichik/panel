@@ -4,6 +4,10 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/apps/ApplicationEditor.vue`、`ApplicationDetail.vue`、`facility-apps/index.vue`、`config.vue`、`internal/platform/i18n`
+  - AnyAccess、全局网关节点、源站节点、转发节点、流量分配策略、主源站，以及设施/应用路由只读详情和 Path 高级摘要已补齐英文与简体中文词条。
+  - 新增源站有效性、AnyAccess 策略、主源站和全局域名所有权错误码的简体中文翻译；稳定枚举值和用户输入的域名、Path、Header、地址保持原值。
+
 - `web/src/views/applications/facility-apps/index.vue`、`config.vue`、`RoutePathAdvancedFields.vue`、`internal/platform/i18n`
   - 入口网关只读详情、独立反向代理配置页、未保存提示、保存会话阶段、域名入口节点/上游策略、删除确认和 Path 高级字段已接入英文与简体中文词条。
   - 新增设施域名、上游域名独占、配置并发冲突和 `reverse_proxy_*` 高级字段校验错误码的简体中文翻译；服务器地址、域名、Path、Header 名称和值以及 Nginx/Agent 原始诊断保持用户原始内容。

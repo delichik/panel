@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { reactive } from 'vue';
+import { cloneReverseProxyRule } from './reverseProxyDraft';
 
 const editor = readFileSync(resolve(__dirname, 'ApplicationEditor.vue'), 'utf8');
+const reverseProxyDraft = readFileSync(resolve(__dirname, 'reverseProxyDraft.ts'), 'utf8');
 
 describe('ApplicationEditor', () => {
   it('commits the save session without calling the deploy endpoint', () => {
@@ -103,10 +106,26 @@ describe('ApplicationEditor', () => {
     expect(editor).toContain("t('applicationEditor.replaceFolderArchive')");
   });
 
-  it('keeps reverse proxy dialog edits isolated until the dialog is saved', () => {
+  it('clones a reactive reverse proxy rule into an isolated dialog draft', () => {
+    const rule = reactive({
+      domain: 'app.example.test',
+      targetType: 'local',
+      targetPort: 8080,
+      originServerIds: ['srv-a'],
+      anyAccess: { enabled: true, strategy: 'primary_backup', primaryOriginServerId: 'srv-a' },
+      paths: [{ path: '/', webSocket: false, options: { requestHeaders: [{ name: 'X-Test', value: 'one' }], responseHeaders: [] } }],
+    });
+    const draft = cloneReverseProxyRule(rule);
+    draft.domain = 'changed.example.test';
+    draft.originServerIds.push('srv-b');
+    draft.paths[0].options!.requestHeaders![0].value = 'two';
+    expect(rule.domain).toBe('app.example.test');
+    expect(rule.originServerIds).toEqual(['srv-a']);
+    expect(rule.paths[0].options.requestHeaders[0].value).toBe('one');
     expect(editor).toContain('draft: null as ApplicationReverseProxyRuleDto | null');
-    expect(editor).toContain('proxyRuleDialog.draft = structuredClone(form.reverseProxy?.[index] ?? null);');
-    expect(editor).toContain('const next = structuredClone(proxyRuleDialog.draft);');
+    expect(editor).toContain('cloneReverseProxyRule(rule)');
+    expect(editor).toContain('cloneReverseProxyRule(proxyRuleDialog.draft)');
+    expect(editor).not.toContain('structuredClone(form.reverseProxy');
     expect(editor).toContain('form.reverseProxy = [...(form.reverseProxy ?? []), next];');
     expect(editor).toContain('proxyRuleDialog.draft = null;');
     expect(editor).toContain('@click="saveProxyRuleDialog"');
@@ -114,15 +133,15 @@ describe('ApplicationEditor', () => {
   });
 
   it('clones and saves every structured path option', () => {
-    expect(editor).toContain("gzipMode: path.options?.gzipMode || 'inherit'");
-    expect(editor).toContain('clientMaxBodySizeMb: path.options?.clientMaxBodySizeMb || 0');
-    expect(editor).toContain('connectTimeoutSeconds: path.options?.connectTimeoutSeconds || 0');
-    expect(editor).toContain('readTimeoutSeconds: path.options?.readTimeoutSeconds || 0');
-    expect(editor).toContain('sendTimeoutSeconds: path.options?.sendTimeoutSeconds || 0');
-    expect(editor).toContain("bufferingMode: path.options?.bufferingMode || 'inherit'");
-    expect(editor).toContain("webSocketMode: path.options?.webSocketMode || (path.webSocket ? 'on' : 'off')");
-    expect(editor).toContain('requestHeaders: (path.options?.requestHeaders ?? [])');
-    expect(editor).toContain('responseHeaders: (path.options?.responseHeaders ?? [])');
+    expect(reverseProxyDraft).toContain("gzipMode: path.options?.gzipMode || 'inherit'");
+    expect(reverseProxyDraft).toContain('clientMaxBodySizeMb: path.options?.clientMaxBodySizeMb || 0');
+    expect(reverseProxyDraft).toContain('connectTimeoutSeconds: path.options?.connectTimeoutSeconds || 0');
+    expect(reverseProxyDraft).toContain('readTimeoutSeconds: path.options?.readTimeoutSeconds || 0');
+    expect(reverseProxyDraft).toContain('sendTimeoutSeconds: path.options?.sendTimeoutSeconds || 0');
+    expect(reverseProxyDraft).toContain("bufferingMode: path.options?.bufferingMode || 'inherit'");
+    expect(reverseProxyDraft).toContain("webSocketMode: path.options?.webSocketMode || (path.webSocket ? 'on' : 'off')");
+    expect(reverseProxyDraft).toContain('requestHeaders: (path.options?.requestHeaders ?? [])');
+    expect(reverseProxyDraft).toContain('responseHeaders: (path.options?.responseHeaders ?? [])');
     expect(editor).toContain('<RoutePathAdvancedFields v-model="path.options" proxy gzip />');
   });
 });

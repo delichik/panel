@@ -163,17 +163,15 @@ describe('frontend Mock API', () => {
       body: JSON.stringify({
         save: {
           deploymentServers: ['srv-edge'],
-          image: 'nginx:1.27-alpine',
           panelEntry: { enabled: false, serverId: '', domain: '' },
-          domainPolicies: [{ domain: 'draft.example.test', entryServerIds: ['srv-edge'], upstreamMode: false, strategy: 'round_robin', primaryServerId: '' }],
-          staticSites: [{ domain: 'draft.example.test', path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetId: asset.id, deploymentServers: ['srv-edge'] }],
+          domains: [{ domain: 'draft.example.test', originServerIds: ['srv-edge'], anyAccess: { enabled: false, strategy: 'round_robin', primaryOriginServerId: '' }, paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetId: asset.id }] }],
         },
       }),
     });
 
     expect(committed.applyRequested).toBe(true);
     expect(committed.config.staticAssets).toContainEqual(expect.objectContaining({ id: asset.id }));
-    expect(committed.config.domainPolicies[0].entryServerIds).toEqual(['srv-edge']);
+    expect(committed.config.domains[0].originServerIds).toEqual(['srv-edge']);
   });
 
   it('returns a structured error for an unimplemented route', async () => {

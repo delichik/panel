@@ -96,11 +96,17 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 
 ## 设施应用反向代理静态站点与 TLS
 
+- `facility_app_configs` 只持久化 `deployment_server_ids_json`、`panel_entry_json` 和 `domains_json`。`domains_json` 按域名保存 `originServerIds`、`anyAccess` 与嵌套 Path；旧 `image`、`static_sites_json`、`domain_policies_json` 在启动迁移中一次性转换并通过 SQLite 重建表删除。
+- 设施入口网关镜像固定为 `nginx:1.28-alpine`，API 和前端不提供镜像设置。
+- 每个设施域名至少选择一个源站节点，且源站必须属于全局网关节点。AnyAccess 关闭时只有源站节点开放域名；开启时其他全局网关作为转发节点，按轮询、主备或客户端 IP 哈希连接源站入口网关。
+- 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。
+- 手工代理、应用代理、Panel 入口和 AnyAccess 转发均明确生成 `proxy_cache off;`；Panel 不管理客户端缓存 Header。
+
 - `facility_static_assets` 保存设施应用上传的静态资产元数据，文件内容存放在 `<dataRoot>/facility-apps/static-assets/<assetId>/content`。上传时必须指定 `uploaded_file` 或 `uploaded_bundle`：普通文件永远不解压；只有指定为文件夹包时才解压 zip、tar、tar.gz 或 tgz。
-- 入口网关路径规则保存在现有 `staticSites` 列表中，旧数据未写 `ruleType` 时按 `static` 处理。`ruleType` 支持 `static`、`redirect`、`proxy_pass`。
+- 入口网关路径规则保存在 `domains[].paths` 中。`ruleType` 支持 `static`、`redirect`、`proxy_pass`。
 - `static` 规则的 `sourceType` 支持 `host_path`、`uploaded_file`、`uploaded_bundle`。`host_path` 继续把目标节点本地目录只读 bind mount 到 nginx；上传来源通过 agent managed files 下发到节点并只读挂载。
 - `redirect` 规则写入 nginx `return`，支持 301、302、307、308；`proxy_pass` 规则写入手工 upstream URL，并通过 `proxySourceMode` 控制是否透传源请求信息。
-- 前端按域名设置入口节点，并同步到该域名下全部路径规则的 `deploymentServers`。每个域名至少选择一台，且只能从设施全局网关节点中选择；空选择是无效新配置。旧存储数据的空节点继承仅在读取兼容迁移中处理。
+- 前端按域名设置源站节点，Path 不再单独保存节点字段。每个域名至少选择一台源站，且只能从设施全局网关节点中选择。
 - 反向代理部署时自动读取证书服务的 `ReverseProxyCertificates` 聚合结果。域名证书优先；没有匹配域名证书时使用匹配的用户域自签 TLS 证书；都没有时只生成 80 端口，不生成 443。
 - `GET /api/v1/facility-apps/reverse-proxy` 返回 `routeSummaries`，供前端按域名汇总 HTTPS 状态：`domain_certificate`、`self_signed_certificate` 或 `disabled`。nginx 生成逻辑必须与该摘要使用同一套证书匹配规则；UI 不应把 HTTPS 状态展示成路径属性。
 - 静态资产 API 挂在 `/api/v1/facility-apps/reverse-proxy/static-assets`，支持兼容列表、multipart 上传和删除；新配置页不即时调用持久化上传/删除，而是随设施保存会话一起提交。被最终配置引用但不在会话资产集合中的资产会使提交失败。
@@ -110,8 +116,8 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - The reverse proxy facility app is presented in the frontend as an entrance gateway. Deployment servers are called gateway nodes in this context because selecting them means those nodes listen on 80/443 and process application routes plus static sites.
 - The entrance gateway owns the Panel access entry. `panelEntry` is a system route, not a normal static site row: when enabled, the selected gateway node proxies the configured domain at `/` to the local Panel service at `http://127.0.0.1:8080`. The selected Panel host must also be one of the gateway nodes, and the Panel entry cannot share the same domain plus root path with a static route.
 - The facility detail page is read-only. It uses `AppDetailPanel`, exposes only immediate sync and the link to the dedicated reverse-proxy configuration route, and must not render editable gateway, domain, path, Panel-entry, or asset controls.
-- Entrance gateway routes are edited on the hidden full-page route `/applications/facility-apps/reverse-proxy/config` as domain groups with multiple path routes under each domain. The API persists the flat `staticSites` list plus authoritative `domainPolicies`; the UI groups them by a stable local group ID so editing a domain value cannot change Vue identity.
-- Gateway node selection is edited at domain level and is written to every path route under that domain. A path row does not expose its own node selector. Domain entry nodes are required and are chosen only from the current global gateway nodes.
+- Entrance gateway routes are edited on the hidden full-page route `/applications/facility-apps/reverse-proxy/config` as `domains` with nested paths. The configuration page contains only editable facility settings; application routes remain read-only on the facility detail page.
+- Origin selection and AnyAccess are edited at domain level. A path row does not expose its own node selector. Origins are required and are chosen only from the current global gateway nodes.
 - Each path route can be static content, a redirect, or a manual proxy_pass. The route row displays route-specific fields only; HTTPS status belongs to the domain group header because certificates are matched by domain, not by path.
 - A static route points at either a target-node server directory, one uploaded file, or an uploaded folder archive. Server directories and uploaded folder archives are treated as directory trees, so one route path can serve multiple files below that path.
 - The user must not configure or see the nginx container mount target. The backend chooses internal read-only mount targets for bind mounts and managed-file assets during reconciliation.

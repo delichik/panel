@@ -534,12 +534,11 @@ export interface PackageRefreshDto {
 export interface FacilityReverseProxyConfigDto {
   id: string;
   deploymentServers: string[];
-  image: string;
   panelEntry: FacilityPanelEntryDto;
-  staticSites: FacilityStaticSiteDto[];
-  domainPolicies: FacilityDomainPolicyDto[];
+  domains: FacilityRouteDomainDto[];
   staticAssets?: FacilityStaticAssetDto[];
   routeSummaries?: FacilityRouteSummaryDto[];
+  applicationRoutes?: ApplicationReverseProxyConfigDto[];
   operation?: ApplicationLifecycleOperationDto;
   lastError?: string;
   updatedAt: string;
@@ -549,18 +548,21 @@ export interface FacilityReverseProxyConfigDto {
 
 export interface FacilityReverseProxySaveDto {
   deploymentServers: string[];
-  image: string;
   panelEntry: FacilityPanelEntryDto;
-  staticSites: FacilityStaticSiteDto[];
-  domainPolicies: FacilityDomainPolicyDto[];
+  domains: FacilityRouteDomainDto[];
 }
 
-export interface FacilityDomainPolicyDto {
+export interface AnyAccessConfigDto {
+  enabled: boolean;
+  strategy: 'round_robin' | 'primary_backup' | 'ip_hash' | string;
+  primaryOriginServerId?: string;
+}
+
+export interface FacilityRouteDomainDto {
   domain: string;
-  entryServerIds: string[];
-  upstreamMode: boolean;
-  strategy?: 'round_robin' | 'primary_backup' | 'ip_hash' | string;
-  primaryServerId?: string;
+  originServerIds: string[];
+  anyAccess: AnyAccessConfigDto;
+  paths: FacilityRoutePathDto[];
 }
 
 export interface FacilityPanelEntryDto {
@@ -569,8 +571,7 @@ export interface FacilityPanelEntryDto {
   domain?: string;
 }
 
-export interface FacilityStaticSiteDto {
-  domain: string;
+export interface FacilityRoutePathDto {
   path: string;
   ruleType?: 'static' | 'redirect' | 'proxy_pass' | string;
   rootPath?: string;
@@ -580,7 +581,6 @@ export interface FacilityStaticSiteDto {
   redirectCode?: number;
   proxyUrl?: string;
   proxySourceMode?: 'preserve_source' | 'hide_source' | string;
-  deploymentServers?: string[];
   options?: HTTPRouteOptionsDto;
 }
 
@@ -598,7 +598,7 @@ export interface FacilityStaticAssetDto {
 export interface FacilityRouteSummaryDto {
   domain: string;
   path: string;
-  source: 'application' | 'static_site' | 'system_panel' | string;
+  source: 'application' | 'facility' | 'system_panel' | string;
   serverIds: string[];
   httpsStatus: 'domain_certificate' | 'self_signed_certificate' | 'disabled' | string;
   certificateId?: string;
@@ -681,7 +681,18 @@ export interface ApplicationReverseProxyRuleDto {
   domain: string;
   targetType?: 'local' | 'container' | string;
   targetPort: number;
+  originServerIds: string[];
+  anyAccess: AnyAccessConfigDto;
   paths: ApplicationReverseProxyPathDto[];
+}
+
+export interface ApplicationReverseProxyConfigDto {
+  applicationId: string;
+  applicationName: string;
+  jobId: string;
+  deploymentMode: string;
+  deploymentServers: string[];
+  routes: Array<ApplicationReverseProxyRuleDto & { targetContainer?: string }>;
 }
 
 export interface ApplicationReverseProxyPathDto {

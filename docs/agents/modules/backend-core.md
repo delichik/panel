@@ -62,6 +62,7 @@
 - 数据库路径配置包括 `appDatabase`、`logDatabase`、`metricsDatabase`，环境变量分别是 `PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、`PANEL_METRICS_DATABASE`，三者必须指向不同文件。旧 `taskDatabase` 配置、`PANEL_TASK_DATABASE` 环境变量和默认 `data/db/tasks.db` 文件仅作为升级兼容入口，启动时会迁移到 `data/db/log.db`。
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
+- 入口网关设施配置表 `facility_app_configs` 使用 `domains_json` 保存域名、源站、AnyAccess 和嵌套 Path。升级旧库时迁移会转换旧设施字段与应用 `reverse_proxy_json`，先检查设施、应用和 Panel 入口的域名所有权冲突，再重建设施表删除旧镜像、静态站点和域名策略列；迁移完成后业务代码不保留旧 JSON 字段兼容。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。
 - 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、AppDB 中的 `application_lifecycle_operations`/`application_lifecycle_targets`、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。
 - 会被展示的持久化配置只保存稳定 key、kind、value，不保存当前语言下的展示文案。

@@ -2,6 +2,7 @@
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
+import { facilityAppsApi } from '@/api/facilityApps';
 import { serversApi } from '@/api/servers';
 import type { ApplicationDto, ApplicationFileDto, ApplicationFileKind, ApplicationPanelFileDto, ApplicationReverseProxyRuleDto, ApplicationSaveDto, ApplicationTemplateVariableDto, ServerDto } from '@/types/api';
 import AppActionButton from '@/components/AppActionButton.vue';
@@ -10,6 +11,7 @@ import RoutePathAdvancedFields from '@/components/RoutePathAdvancedFields.vue';
 import AppPagination from '@/components/AppPagination.vue';
 import { usePagination } from '@/composables/usePagination';
 import { parseSpecYaml, toSpecYaml } from './appSpecYaml';
+import { cloneReverseProxyRule } from './reverseProxyDraft';
 
 const props = defineProps<{ application: ApplicationDto | null; open: boolean; embedded?: boolean }>();
 const emit = defineEmits<{ close: []; saved: [ApplicationDto, string?] }>();
@@ -60,6 +62,7 @@ const error = ref('');
 const embeddedSpecMode = ref<'visual' | 'yaml'>('visual');
 const embeddedYamlEditing = ref(false);
 const servers = ref<ServerDto[]>([]);
+const globalGatewayServerIds = ref<string[]>([]);
 const files = ref<EditorFile[]>([]);
 const pendingArchives = ref<PendingArchive[]>([]);
 const loadingFileId = ref('');
@@ -107,6 +110,17 @@ const serverOptions = computed(() => servers.value.map((server) => ({
   title: `${server.name} (${server.host})`,
   value: server.id,
 })));
+const validOriginServerOptions = computed(() => {
+  const gatewayIds = new Set(globalGatewayServerIds.value);
+  const deploymentIds = new Set(form.deploymentServers ?? []);
+  return serverOptions.value.filter((option) => gatewayIds.has(option.value)
+    && (form.deploymentMode !== 'selected' || deploymentIds.has(option.value)));
+});
+const anyAccessStrategyOptions = computed(() => [
+  { title: t('applicationEditor.roundRobin'), value: 'round_robin' },
+  { title: t('applicationEditor.primaryBackup'), value: 'primary_backup' },
+  { title: t('applicationEditor.ipHash'), value: 'ip_hash' },
+]);
 const proxyTargetTypeOptions = computed(() => [
   { title: t('applicationEditor.targetLocal'), value: 'local' },
   { title: t('applicationEditor.targetContainer'), value: 'container' },
@@ -119,6 +133,10 @@ const mountTypeOptions = computed(() => [
   { title: t('applicationEditor.persistent'), value: 'persistent' },
 ]);
 const currentProxyRule = computed(() => proxyRuleDialog.draft);
+const currentPrimaryOriginOptions = computed(() => {
+  const selected = new Set(currentProxyRule.value?.originServerIds ?? []);
+  return validOriginServerOptions.value.filter((item) => selected.has(item.value));
+});
 const currentMount = computed(() => specForm.mounts[mountDialog.index] ?? null);
 const editorSections = computed(() => {
   const sections = [
@@ -198,6 +216,16 @@ watch(embeddedSpecMode, () => {
 
 watch(() => form.name, (name) => {
   if (specForm.name !== name) specForm.name = name;
+});
+
+watch(validOriginServerOptions, (options) => {
+  const allowed = new Set(options.map((item) => item.value));
+  for (const rule of form.reverseProxy ?? []) {
+    rule.originServerIds = (rule.originServerIds ?? []).filter((id) => allowed.has(id));
+    if (rule.anyAccess.primaryOriginServerId && !rule.originServerIds.includes(rule.anyAccess.primaryOriginServerId)) {
+      rule.anyAccess.primaryOriginServerId = '';
+    }
+  }
 });
 
 watch(() => fileForm.kind, (kind) => {
@@ -371,7 +399,7 @@ function mountTargetLabel(mount: MountForm) {
 
 function addProxyRule() {
   proxyRuleDialog.index = -1;
-  proxyRuleDialog.draft = { domain: '', targetType: 'local', targetPort: 80, paths: [{ path: '/', webSocket: false, options: { gzipMode: 'inherit', bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] } }] };
+  proxyRuleDialog.draft = { domain: '', targetType: 'local', targetPort: 80, originServerIds: validOriginServerOptions.value.map((item) => item.value), anyAccess: { enabled: false, strategy: 'round_robin', primaryOriginServerId: '' }, paths: [{ path: '/', webSocket: false, options: { gzipMode: 'inherit', bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] } }] };
   proxyRuleDialog.open = true;
 }
 
@@ -387,7 +415,8 @@ function removeProxyRule(index: number) {
 
 function openProxyRuleDialog(index: number) {
   proxyRuleDialog.index = index;
-  proxyRuleDialog.draft = structuredClone(form.reverseProxy?.[index] ?? null);
+  const rule = form.reverseProxy?.[index];
+  proxyRuleDialog.draft = rule ? cloneReverseProxyRule(rule) : null;
   proxyRuleDialog.open = true;
 }
 
@@ -399,7 +428,7 @@ function closeProxyRuleDialog() {
 
 function saveProxyRuleDialog() {
   if (!proxyRuleDialog.draft) return;
-  const next = structuredClone(proxyRuleDialog.draft);
+  const next = cloneReverseProxyRule(proxyRuleDialog.draft);
   if (proxyRuleDialog.index >= 0) {
     form.reverseProxy = [...(form.reverseProxy ?? [])].map((rule, index) => (index === proxyRuleDialog.index ? next : rule));
   } else {
@@ -413,26 +442,16 @@ function removeAt<T>(items: T[], index: number) {
 }
 
 function cloneReverseProxy(rules: ApplicationReverseProxyRuleDto[]) {
-  return rules.map((rule) => ({
-    domain: rule.domain,
-    targetType: rule.targetType === 'container' ? 'container' : 'local',
-    targetPort: rule.targetPort,
-    paths: rule.paths?.map((path) => ({
-      path: path.path,
-      webSocket: path.webSocket,
-      options: {
-        gzipMode: path.options?.gzipMode || 'inherit',
-        clientMaxBodySizeMb: path.options?.clientMaxBodySizeMb || 0,
-        connectTimeoutSeconds: path.options?.connectTimeoutSeconds || 0,
-        readTimeoutSeconds: path.options?.readTimeoutSeconds || 0,
-        sendTimeoutSeconds: path.options?.sendTimeoutSeconds || 0,
-        bufferingMode: path.options?.bufferingMode || 'inherit',
-        webSocketMode: path.options?.webSocketMode || (path.webSocket ? 'on' : 'off'),
-        requestHeaders: (path.options?.requestHeaders ?? []).map((header) => ({ ...header })),
-        responseHeaders: (path.options?.responseHeaders ?? []).map((header) => ({ ...header })),
-      },
-    })) ?? [{ path: '/', webSocket: false, options: { gzipMode: 'inherit', bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] } }],
-  }));
+	return rules.map(cloneReverseProxyRule);
+}
+
+function anyAccessStrategyLabel(rule: ApplicationReverseProxyRuleDto) {
+  if (!rule.anyAccess.enabled) return t('applicationEditor.anyAccessOff');
+  return anyAccessStrategyOptions.value.find((item) => item.value === rule.anyAccess.strategy)?.title ?? rule.anyAccess.strategy;
+}
+
+function originServerNames(ids: string[]) {
+  return ids.map((id) => servers.value.find((server) => server.id === id)?.name ?? id).join(', ');
 }
 
 function proxyTargetName(rule: ApplicationReverseProxyRuleDto) {
@@ -455,9 +474,12 @@ async function loadFiles(applicationId: string) {
 
 async function loadServers() {
   try {
-    servers.value = await serversApi.listServers();
+    const [serverItems, facility] = await Promise.all([serversApi.listServers(), facilityAppsApi.reverseProxy()]);
+    servers.value = serverItems;
+    globalGatewayServerIds.value = [...(facility.deploymentServers ?? [])];
   } catch {
     servers.value = [];
+    globalGatewayServerIds.value = [];
   }
 }
 
@@ -887,6 +909,14 @@ function readInput(): ApplicationSaveDto {
         domain: rule.domain.trim(),
         targetType: rule.targetType === 'container' ? 'container' : 'local',
         targetPort: Number(rule.targetPort || 0),
+        originServerIds: [...(rule.originServerIds ?? [])],
+        anyAccess: {
+          enabled: Boolean(rule.anyAccess?.enabled),
+          strategy: rule.anyAccess?.strategy || 'round_robin',
+          primaryOriginServerId: rule.anyAccess?.enabled && rule.anyAccess?.strategy === 'primary_backup'
+            ? (rule.anyAccess.primaryOriginServerId || '')
+            : '',
+        },
         paths: (rule.paths ?? [])
           .filter((path) => path.path.trim())
           .map((path) => ({
@@ -1218,8 +1248,11 @@ async function save() {
                 class="proxy-rule-list-row"
               >
                 <button type="button" class="proxy-rule-list-row__main" @click="openProxyRuleDialog(ruleIndex)">
-                  <span class="proxy-rule-domain text-truncate">{{ rule.domain || t('applicationEditor.domain') }}</span>
-                  <span class="proxy-rule-target text-truncate">{{ proxyTargetName(rule) }}:{{ rule.targetPort || 80 }}</span>
+                  <span class="proxy-rule-copy min-width-0">
+                    <span class="proxy-rule-domain text-truncate">{{ rule.domain || t('applicationEditor.domain') }}</span>
+                    <span class="proxy-rule-target text-truncate">{{ proxyTargetName(rule) }}:{{ rule.targetPort || 80 }} · {{ originServerNames(rule.originServerIds) || t('common.notAvailable') }}</span>
+                    <span class="proxy-rule-target text-truncate">AnyAccess · {{ anyAccessStrategyLabel(rule) }}</span>
+                  </span>
                   <v-chip size="small" variant="tonal" label>{{ rule.paths.length }} {{ t('common.path') }}</v-chip>
                 </button>
                 <AppActionGroup context="table" class="proxy-rule-list-row__actions">
@@ -1393,6 +1426,42 @@ async function save() {
                 hide-details="auto"
               />
               <v-text-field v-model.number="currentProxyRule.targetPort" type="number" min="1" max="65535" :label="t('applicationEditor.target')" density="comfortable" variant="outlined" hide-details="auto" />
+              <v-select
+                v-model="currentProxyRule.originServerIds"
+                :items="validOriginServerOptions"
+                item-title="title"
+                item-value="value"
+                :label="t('applicationEditor.originServers')"
+                :hint="t('applicationEditor.originServersHint')"
+                persistent-hint
+                multiple
+                chips
+                closable-chips
+                density="comfortable"
+                variant="outlined"
+                class="span-all"
+              />
+              <v-switch v-model="currentProxyRule.anyAccess.enabled" label="AnyAccess" :hint="t('applicationEditor.anyAccessHint')" persistent-hint color="primary" class="span-all" />
+              <v-select
+                v-if="currentProxyRule.anyAccess.enabled"
+                v-model="currentProxyRule.anyAccess.strategy"
+                :items="anyAccessStrategyOptions"
+                item-title="title"
+                item-value="value"
+                :label="t('applicationEditor.trafficStrategy')"
+                density="comfortable"
+                variant="outlined"
+              />
+              <v-select
+                v-if="currentProxyRule.anyAccess.enabled && currentProxyRule.anyAccess.strategy === 'primary_backup'"
+                v-model="currentProxyRule.anyAccess.primaryOriginServerId"
+                :items="currentPrimaryOriginOptions"
+                item-title="title"
+                item-value="value"
+                :label="t('applicationEditor.primaryOrigin')"
+                density="comfortable"
+                variant="outlined"
+              />
             </div>
             <div class="proxy-dialog-paths">
               <div class="proxy-dialog-paths__heading">
@@ -1788,7 +1857,7 @@ async function save() {
 }
 .proxy-rule-list-row__main {
   display: grid;
-  grid-template-columns: minmax(150px, 1fr) minmax(120px, 0.45fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
   min-width: 0;
@@ -1799,6 +1868,7 @@ async function save() {
   text-align: left;
   cursor: pointer;
 }
+.proxy-rule-copy { display: grid; gap: 3px; }
 .proxy-rule-list-row__main:focus-visible {
   outline: 2px solid color-mix(in srgb, rgb(var(--v-theme-primary)), transparent 42%);
   outline-offset: 3px;
@@ -1819,6 +1889,7 @@ async function save() {
   gap: 10px;
   align-items: start;
 }
+.proxy-rule-dialog-form .span-all { grid-column: 1 / -1; }
 .proxy-dialog-paths {
   display: grid;
   gap: 10px;

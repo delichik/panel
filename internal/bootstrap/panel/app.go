@@ -150,6 +150,7 @@ func New(cfg config.Config) (*App, error) {
 	)
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
+	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)
 	applicationSvc.SetFacilityRuntimeProvider(facilitySvc)
 	if err := applicationSvc.ReconcileInterruptedLifecycleTasks(context.Background()); err != nil {
 		_ = store.Close()

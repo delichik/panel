@@ -10,7 +10,7 @@ import AppMasterDetailWorkspace from '@/components/AppMasterDetailWorkspace.vue'
 import AppSelectorPanel from '@/components/AppSelectorPanel.vue';
 import AppSelectorSummaryItem from '@/components/AppSelectorSummaryItem.vue';
 import PageLoadingState from '@/components/PageLoadingState.vue';
-import type { FacilityReverseProxyConfigDto, FacilityRouteSummaryDto, ServerDto } from '@/types/api';
+import type { FacilityReverseProxyConfigDto, FacilityRouteDomainDto, HTTPRouteOptionsDto, ServerDto } from '@/types/api';
 import { useI18n } from '@/i18n';
 
 const router = useRouter();
@@ -27,20 +27,7 @@ const enabledServerNames = computed(() => (config.value?.deploymentServers ?? []
   .map((id) => servers.value.find((server) => server.id === id)?.name ?? id)
   .join(', '));
 const lifecycleTargets = computed(() => config.value?.operation?.targets ?? []);
-const routeGroups = computed(() => {
-  const groups = new Map<string, FacilityRouteSummaryDto[]>();
-  for (const route of config.value?.routeSummaries ?? []) {
-    const items = groups.get(route.domain) ?? [];
-    const existing = items.find((item) => item.path === route.path && item.source === route.source && item.applicationId === route.applicationId);
-    if (existing) {
-      existing.serverIds = [...new Set([...existing.serverIds, ...route.serverIds])].sort();
-    } else {
-      items.push({ ...route, serverIds: [...route.serverIds] });
-    }
-    groups.set(route.domain, items);
-  }
-  return [...groups.entries()].map(([domain, routes]) => ({ domain, routes })).sort((a, b) => a.domain.localeCompare(b.domain));
-});
+const applicationRoutes = computed(() => config.value?.applicationRoutes ?? []);
 
 async function load() {
   loading.value = true;
@@ -87,10 +74,19 @@ function runtimeStatusColor(status?: string | null) {
   return 'secondary';
 }
 
-function routeSourceLabel(route: FacilityRouteSummaryDto) {
-  if (route.source === 'application') return route.applicationName || t('facilityAppsPage.applicationRoute');
-  if (route.source === 'system_panel') return t('facilityAppsPage.panelEntry');
-  return t('facilityAppsPage.facilityRoute');
+function serverNames(ids: string[]) {
+  return ids.filter(Boolean).map((id) => servers.value.find((server) => server.id === id)?.name ?? id).join(', ') || t('common.notAvailable');
+}
+
+function strategyLabel(domain: FacilityRouteDomainDto) {
+  if (!domain.anyAccess.enabled) return t('facilityAppsPage.anyAccessDisabled');
+  if (domain.anyAccess.strategy === 'primary_backup') return t('facilityAppsPage.primaryBackup');
+  if (domain.anyAccess.strategy === 'ip_hash') return t('facilityAppsPage.ipHash');
+  return t('facilityAppsPage.roundRobin');
+}
+
+function optionsSummary(options?: HTTPRouteOptionsDto) {
+  return `${t('facilityAppsPage.gzip')}: ${options?.gzipMode || 'inherit'} · ${t('facilityAppsPage.bodyLimit')}: ${options?.clientMaxBodySizeMb || 0} MB · ${t('facilityAppsPage.timeouts')}: ${options?.connectTimeoutSeconds || 0}/${options?.readTimeoutSeconds || 0}/${options?.sendTimeoutSeconds || 0}s · ${t('facilityAppsPage.buffering')}: ${options?.bufferingMode || 'inherit'} · WebSocket: ${options?.webSocketMode || 'off'} · ${t('facilityAppsPage.headers')}: ${options?.requestHeaders?.length || 0}/${options?.responseHeaders?.length || 0}`;
 }
 
 onMounted(load);
@@ -147,21 +143,30 @@ onMounted(load);
           </div>
 
           <section class="detail-section">
-            <div class="section-title">{{ t('facilityAppsPage.routeOverview') }}</div>
-            <div v-if="!routeGroups.length" class="empty-inline">{{ t('facilityAppsPage.noRouteSummaries') }}</div>
-            <div v-for="group in routeGroups" :key="group.domain" class="route-domain-summary">
-              <div class="route-domain-summary__title">{{ group.domain }}</div>
-              <div v-for="route in group.routes" :key="`${route.source}:${route.applicationId || ''}:${route.path}`" class="route-summary-row">
-                <span class="mono">{{ route.path }}</span>
-                <v-chip size="small" variant="tonal" label>{{ routeSourceLabel(route) }}</v-chip>
-                <span class="text-caption text-medium-emphasis">{{ route.serverIds.length }} {{ t('facilityAppsPage.gatewayNodes') }}</span>
-                <AppActionButton
-                  v-if="route.source === 'application' && route.applicationId"
-                  kind="plain"
-                  icon="mdi-open-in-new"
-                  :label="t('facilityAppsPage.openApplication')"
-                  @click="openApplication(route.applicationId)"
-                />
+            <div class="section-title">{{ t('facilityAppsPage.facilityRoutes') }}</div>
+            <div v-if="!config?.domains?.length && !config?.panelEntry?.enabled" class="empty-inline">{{ t('facilityAppsPage.noFacilityRoutes') }}</div>
+            <div v-for="domain in config?.domains ?? []" :key="domain.domain" class="route-domain-summary">
+              <div class="route-domain-summary__heading">
+                <div><div class="route-domain-summary__title">{{ domain.domain }}</div><div class="text-caption text-medium-emphasis">{{ t('facilityAppsPage.originServers') }}: {{ serverNames(domain.originServerIds) }} · AnyAccess: {{ strategyLabel(domain) }}</div></div>
+                <v-chip size="small" variant="tonal" :color="domain.anyAccess.enabled ? 'primary' : undefined" label>AnyAccess</v-chip>
+              </div>
+              <div v-for="path in domain.paths" :key="path.path" class="route-detail-row">
+                <strong class="mono">{{ path.path }}</strong>
+                <span>{{ path.ruleType }}</span>
+                <small>{{ optionsSummary(path.options) }}</small>
+              </div>
+            </div>
+            <div v-if="config?.panelEntry?.enabled" class="route-domain-summary"><div class="route-domain-summary__title">{{ config.panelEntry.domain }}</div><div class="text-caption text-medium-emphasis">{{ t('facilityAppsPage.panelEntry') }} · {{ serverNames([config.panelEntry.serverId || '']) }}</div></div>
+          </section>
+
+          <section class="detail-section">
+            <div class="section-title">{{ t('facilityAppsPage.applicationRoutes') }}</div>
+            <div v-if="!applicationRoutes.length" class="empty-inline">{{ t('facilityAppsPage.noApplicationRoutes') }}</div>
+            <div v-for="application in applicationRoutes" :key="application.applicationId" class="application-route-group">
+              <div class="route-domain-summary__heading"><div><strong>{{ application.applicationName }}</strong><div class="text-caption text-medium-emphasis">{{ application.jobId }}</div></div><AppActionButton kind="plain" icon="mdi-open-in-new" :label="t('facilityAppsPage.openApplication')" @click="openApplication(application.applicationId)" /></div>
+              <div v-for="route in application.routes" :key="route.domain" class="route-domain-summary">
+                <div class="route-domain-summary__heading"><div><div class="route-domain-summary__title">{{ route.domain }}</div><div class="text-caption text-medium-emphasis">{{ route.targetType }}:{{ route.targetPort }} · {{ t('facilityAppsPage.originServers') }}: {{ serverNames(route.originServerIds) }}</div></div><v-chip size="small" variant="tonal" :color="route.anyAccess.enabled ? 'primary' : undefined" label>AnyAccess · {{ strategyLabel(route) }}</v-chip></div>
+                <div v-for="path in route.paths" :key="path.path" class="route-detail-row"><strong class="mono">{{ path.path }}</strong><small>{{ optionsSummary(path.options) }}</small></div>
               </div>
             </div>
           </section>
@@ -205,6 +210,10 @@ onMounted(load);
 .section-title { font-weight: 700; }
 .route-domain-summary { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--lp-border), transparent 35%); }
 .route-domain-summary__title { font-weight: 700; }
+.route-domain-summary__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.route-detail-row { display: grid; gap: 4px; padding: 8px 10px; border-radius: var(--lp-radius-sm); background: color-mix(in srgb, var(--lp-surface-container), transparent 48%); }
+.route-detail-row small { color: rgb(var(--v-theme-on-surface-variant)); overflow-wrap: anywhere; }
+.application-route-group { display: grid; gap: 10px; padding: 12px; border: 1px solid color-mix(in srgb, var(--lp-border), transparent 30%); border-radius: var(--lp-radius-sm); }
 .route-summary-row { display: grid; grid-template-columns: minmax(90px, .7fr) auto minmax(110px, 1fr) auto; align-items: center; gap: 10px; min-width: 0; padding: 8px 10px; border-radius: var(--lp-radius-sm); background: color-mix(in srgb, var(--lp-surface-container), transparent 48%); }
 .deployment-target-list { display: grid; gap: 8px; }
 .deployment-target-row { display: grid; gap: 6px; padding: 10px 12px; border-radius: var(--lp-radius-sm); background: color-mix(in srgb, var(--lp-surface-container), transparent 45%); }

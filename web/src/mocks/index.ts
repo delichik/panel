@@ -158,13 +158,11 @@ export const mockFetch: typeof fetch = async (input, init = {}) => {
     state.facilityReverseProxy = {
       ...state.facilityReverseProxy,
       deploymentServers: Array.isArray(body.deploymentServers) ? body.deploymentServers : [],
-      image: String(body.image || 'nginx:1.27-alpine'),
       panelEntry: (body.panelEntry as typeof state.facilityReverseProxy.panelEntry | undefined) ?? { enabled: false, serverId: '', domain: '' },
-      domainPolicies: Array.isArray(body.domainPolicies) ? body.domainPolicies : [],
-      staticSites: Array.isArray(body.staticSites) ? body.staticSites : [],
+      domains: Array.isArray(body.domains) ? body.domains : [],
       enabledServers: Array.isArray(body.deploymentServers) ? body.deploymentServers : [],
-      routeSummaries: Array.isArray(body.staticSites) ? body.staticSites.map((site: any) => ({ domain: site.domain, path: site.path || '/', source: 'static_site', serverIds: site.deploymentServers?.length ? site.deploymentServers : body.deploymentServers ?? [], httpsStatus: 'disabled' })) : [],
-      routes: Array.isArray(body.staticSites) ? body.staticSites.length : 0,
+      routeSummaries: Array.isArray(body.domains) ? body.domains.flatMap((domain: any) => (domain.paths ?? []).map((route: any) => ({ domain: domain.domain, path: route.path || '/', source: 'facility', serverIds: domain.anyAccess?.enabled ? body.deploymentServers ?? [] : domain.originServerIds ?? [], httpsStatus: 'disabled' }))) : [],
+      routes: Array.isArray(body.domains) ? body.domains.reduce((count: number, domain: any) => count + (domain.paths?.length ?? 0), 0) : 0,
       updatedAt: new Date().toISOString(),
     };
     return envelope(state.facilityReverseProxy);
@@ -199,8 +197,8 @@ export const mockFetch: typeof fetch = async (input, init = {}) => {
       ...save,
       staticAssets: facilitySaveSessions[match[1]].assets,
       enabledServers: Array.isArray(save.deploymentServers) ? save.deploymentServers : [],
-      routeSummaries: Array.isArray(save.staticSites) ? save.staticSites.map((site: any) => ({ domain: site.domain, path: site.path || '/', source: 'static_site', serverIds: site.deploymentServers ?? [], httpsStatus: 'disabled' })) : [],
-      routes: Array.isArray(save.staticSites) ? save.staticSites.length : 0,
+      routeSummaries: Array.isArray(save.domains) ? save.domains.flatMap((domain: any) => (domain.paths ?? []).map((route: any) => ({ domain: domain.domain, path: route.path || '/', source: 'facility', serverIds: domain.anyAccess?.enabled ? save.deploymentServers ?? [] : domain.originServerIds ?? [], httpsStatus: 'disabled' }))) : [],
+      routes: Array.isArray(save.domains) ? save.domains.reduce((count: number, domain: any) => count + (domain.paths?.length ?? 0), 0) : 0,
       updatedAt: new Date().toISOString(),
     } as typeof state.facilityReverseProxy;
     delete facilitySaveSessions[match[1]];

@@ -3,7 +3,7 @@ import { computed, ref, watch } from 'vue';
 import { useI18n } from '@/i18n';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
-import type { ApplicationDto, ServerDto } from '@/types/api';
+import type { ApplicationDto, ApplicationReverseProxyRuleDto, HTTPRouteOptionsDto, ServerDto } from '@/types/api';
 import AppActionButton from '@/components/AppActionButton.vue';
 import AppActionGroup from '@/components/AppActionGroup.vue';
 import ApplicationRuntimePanel from './ApplicationRuntimePanel.vue';
@@ -81,6 +81,28 @@ function imageTargetStatusColor(updateAvailable: boolean, lastError?: string) {
 function imageTargetStatusLabel(updateAvailable: boolean, lastError?: string) {
   if (lastError) return t('applicationDetail.checkFailedStatus');
   return updateAvailable ? t('applicationDetail.updateAvailable') : t('applicationDetail.upToDate');
+}
+
+function originNames(ids: string[]) {
+  return ids.filter(Boolean).map((id) => servers.value.find((server) => server.id === id)?.name ?? id).join(', ') || t('common.notAvailable');
+}
+
+function trafficStrategyLabel(rule: ApplicationReverseProxyRuleDto) {
+  if (!rule.anyAccess?.enabled) return t('applicationDetail.anyAccessDisabled');
+  if (rule.anyAccess.strategy === 'primary_backup') return t('applicationDetail.primaryBackup');
+  if (rule.anyAccess.strategy === 'ip_hash') return t('applicationDetail.ipHash');
+  return t('applicationDetail.roundRobin');
+}
+
+function routeOptionsSummary(options?: HTTPRouteOptionsDto) {
+  return [
+    `${t('applicationDetail.gzip')}: ${options?.gzipMode || 'inherit'}`,
+    `${t('applicationDetail.bodyLimit')}: ${options?.clientMaxBodySizeMb ? `${options.clientMaxBodySizeMb} MB` : t('common.notAvailable')}`,
+    `${t('applicationDetail.timeouts')}: ${options?.connectTimeoutSeconds || 0}/${options?.readTimeoutSeconds || 0}/${options?.sendTimeoutSeconds || 0}s`,
+    `${t('applicationDetail.buffering')}: ${options?.bufferingMode || 'inherit'}`,
+    `WebSocket: ${options?.webSocketMode || 'off'}`,
+    `${t('applicationDetail.headers')}: ${(options?.requestHeaders?.length || 0)}/${(options?.responseHeaders?.length || 0)}`,
+  ].join(' · ');
 }
 
 async function downloadPackage() {
@@ -226,7 +248,8 @@ watch(() => props.application.id, () => {
   logsDialog.value = false;
   message.value = '';
   lastTaskId.value = '';
-});
+  void loadServersForMigration();
+}, { immediate: true });
 </script>
 
 <template>
@@ -310,6 +333,32 @@ watch(() => props.application.id, () => {
             </v-table>
           </div>
           <v-alert v-if="application.imageLastError" type="warning" variant="tonal" density="compact">{{ application.imageLastError }}</v-alert>
+        </section>
+
+        <section v-if="application.reverseProxy?.length" class="detail-section">
+          <div class="section-title">{{ t('applicationDetail.reverseProxyRoutes') }}</div>
+          <div class="proxy-route-list">
+            <div v-for="(rule, ruleIndex) in application.reverseProxy" :key="`${rule.domain}-${ruleIndex}`" class="proxy-route-item">
+              <div class="proxy-route-heading">
+                <div class="min-width-0">
+                  <strong class="proxy-route-domain">{{ rule.domain }}</strong>
+                  <div class="section-subtitle">{{ rule.targetType === 'container' ? t('applicationEditor.targetContainer') : t('applicationEditor.targetLocal') }}:{{ rule.targetPort }}</div>
+                </div>
+                <v-chip size="small" variant="tonal" :color="rule.anyAccess?.enabled ? 'primary' : undefined" label>AnyAccess</v-chip>
+              </div>
+              <div class="property-grid">
+                <div><span>{{ t('applicationDetail.originServers') }}</span><strong>{{ originNames(rule.originServerIds || []) }}</strong></div>
+                <div><span>{{ t('applicationDetail.trafficStrategy') }}</span><strong>{{ trafficStrategyLabel(rule) }}</strong></div>
+                <div v-if="rule.anyAccess?.enabled && rule.anyAccess.strategy === 'primary_backup'"><span>{{ t('applicationDetail.primaryOrigin') }}</span><strong>{{ originNames([rule.anyAccess.primaryOriginServerId || '']) }}</strong></div>
+              </div>
+              <div class="proxy-path-list">
+                <div v-for="(path, pathIndex) in rule.paths" :key="`${path.path}-${pathIndex}`" class="proxy-path-item">
+                  <strong class="mono">{{ path.path || '/' }}</strong>
+                  <span>{{ routeOptionsSummary(path.options) }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
 
         <ApplicationRuntimePanel embedded :application="application" @logs="selectLogs" />
@@ -479,6 +528,12 @@ watch(() => props.application.id, () => {
 .property-grid span { color: var(--lp-text-muted); font-size: 0.76rem; }
 .property-grid strong { min-width: 0; overflow-wrap: anywhere; font-size: 0.86rem; }
 .image-targets { overflow-x: auto; }
+.proxy-route-list, .proxy-path-list { display: grid; gap: 10px; }
+.proxy-route-item { display: grid; gap: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--lp-border), transparent 28%); border-radius: var(--lp-radius-sm); background: color-mix(in srgb, var(--lp-surface), transparent 38%); }
+.proxy-route-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.proxy-route-domain { overflow-wrap: anywhere; }
+.proxy-path-item { display: grid; gap: 4px; padding: 9px 10px; border-radius: 6px; background: color-mix(in srgb, var(--lp-surface-container), transparent 62%); }
+.proxy-path-item span { color: var(--lp-text-muted); font-size: 0.78rem; overflow-wrap: anywhere; }
 .image-target-table { min-width: 680px; background: transparent; }
 .image-target-table :deep(td) { vertical-align: middle; }
 .task-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; }

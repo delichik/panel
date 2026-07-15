@@ -15,25 +15,27 @@ describe('facility apps page', () => {
     expect(detailSource).not.toContain('saveReverseProxy(');
   });
 
-  it('keeps static domain group keys independent from the editable domain value', () => {
-    expect(configSource).toContain('const byGroupId = new Map<string, number>();');
-    expect(configSource).toContain('const key = site.localGroupId;');
-    expect(configSource).not.toContain('const key = domain || site.localGroupId;');
+  it('uses the same section-navigation settings skeleton as the application editor', () => {
+    expect(configSource).toContain('class="editor-section-nav"');
+    expect(configSource).toContain('class="settings-flow"');
+    expect(configSource).toContain('scrollToSection(section.id)');
+    expect(configSource).toContain('IntersectionObserver');
+    expect(configSource).not.toContain('nginxImage');
   });
 
-  it('uses an explicit baseline and validates domain gateway nodes before opening a save session', () => {
+  it('uses an explicit baseline and validates origin servers before opening a save session', () => {
     expect(configSource).toContain("baselinePayload.value = JSON.stringify(savePayload())");
-    expect(configSource).toContain('const validationError = validateSavePayload(payload);');
-    expect(configSource.indexOf('const validationError = validateSavePayload(payload);')).toBeLessThan(configSource.indexOf('facilityAppsApi.beginSaveSession'));
+    expect(configSource).toContain('const validation = validatePayload(payload);');
+    expect(configSource.indexOf('const validation = validatePayload(payload);')).toBeLessThan(configSource.indexOf('facilityAppsApi.beginSaveSession'));
     expect(configSource).toContain(':items="gatewayServerOptions"');
-    expect(configSource).toContain("if (!policy.entryServerIds.length) return t('facilityAppsPage.selectDomainGatewayNodes')");
+    expect(configSource).toContain("if (!domain.originServerIds.length) return t('facilityAppsPage.originServersRequired')");
   });
 
   it('keeps path dialog edits isolated until save', () => {
-    expect(configSource).toContain('routeDialog.draft = structuredClone(form.staticSites[index]);');
-    expect(configSource).toContain('routeDialog.draft = structuredClone(route);');
-    expect(configSource).toContain('const draft = structuredClone(routeDialog.draft);');
-    expect(configSource).toContain('routeDialog.draft = null;');
+    expect(configSource).toContain('pathDialog.draft = pathIndex >= 0 ? clonePath(');
+    expect(configSource).toContain('const next = clonePath(pathDialog.draft);');
+    expect(configSource).toContain('pathDialog.draft = null;');
+    expect(configSource).not.toContain('structuredClone');
     expect(configSource).toContain('<RoutePathAdvancedFields');
   });
 

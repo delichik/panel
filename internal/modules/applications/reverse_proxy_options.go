@@ -1,6 +1,7 @@
 package applications
 
 import (
+	"sort"
 	"strconv"
 	"strings"
 
@@ -8,6 +9,62 @@ import (
 )
 
 const maxHTTPRouteHeaders = 32
+
+const (
+	AnyAccessStrategyRoundRobin    = "round_robin"
+	AnyAccessStrategyPrimaryBackup = "primary_backup"
+	AnyAccessStrategyIPHash        = "ip_hash"
+)
+
+func NormalizeAnyAccessConfig(in AnyAccessConfig, originServerIDs []string) (AnyAccessConfig, error) {
+	origins := uniqueSortedStrings(originServerIDs)
+	if len(origins) == 0 {
+		return AnyAccessConfig{}, panelerr.Validation("reverse_proxy_origin_servers_required", "Reverse proxy route requires at least one origin server")
+	}
+	strategy := strings.TrimSpace(in.Strategy)
+	if strategy == "" {
+		strategy = AnyAccessStrategyRoundRobin
+	}
+	if strategy != AnyAccessStrategyRoundRobin && strategy != AnyAccessStrategyPrimaryBackup && strategy != AnyAccessStrategyIPHash {
+		return AnyAccessConfig{}, panelerr.Validation("reverse_proxy_any_access_strategy_invalid", "AnyAccess traffic strategy is invalid")
+	}
+	primary := strings.TrimSpace(in.PrimaryOriginServerID)
+	if in.Enabled && strategy == AnyAccessStrategyPrimaryBackup {
+		if primary == "" || !containsStringValue(origins, primary) {
+			return AnyAccessConfig{}, panelerr.Validation("reverse_proxy_any_access_primary_origin_invalid", "AnyAccess primary origin server is invalid")
+		}
+	} else {
+		primary = ""
+	}
+	return AnyAccessConfig{Enabled: in.Enabled, Strategy: strategy, PrimaryOriginServerID: primary}, nil
+}
+
+func uniqueSortedStrings(items []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			continue
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containsStringValue(items []string, value string) bool {
+	for _, item := range items {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
 
 func NormalizeHTTPRouteOptions(in HTTPRouteOptions, proxy, gzip bool, defaultWebSocketMode string) (HTTPRouteOptions, error) {
 	out := HTTPRouteOptions{

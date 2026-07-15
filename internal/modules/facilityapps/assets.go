@@ -124,9 +124,11 @@ func (s *Service) staticAssetInUse(ctx context.Context, assetID string) (bool, e
 	if err != nil {
 		return false, err
 	}
-	for _, site := range cfg.StaticSites {
-		if site.AssetID == assetID {
-			return true, nil
+	for _, domain := range cfg.Domains {
+		for _, routePath := range domain.Paths {
+			if routePath.AssetID == assetID {
+				return true, nil
+			}
 		}
 	}
 	return false, nil

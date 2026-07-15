@@ -115,10 +115,18 @@ type ImageUpdateTarget struct {
 }
 
 type ReverseProxyRule struct {
-	Domain     string             `json:"domain"`
-	TargetType string             `json:"targetType,omitempty"`
-	TargetPort int                `json:"targetPort"`
-	Paths      []ReverseProxyPath `json:"paths"`
+	Domain          string             `json:"domain"`
+	TargetType      string             `json:"targetType,omitempty"`
+	TargetPort      int                `json:"targetPort"`
+	OriginServerIDs []string           `json:"originServerIds"`
+	AnyAccess       AnyAccessConfig    `json:"anyAccess"`
+	Paths           []ReverseProxyPath `json:"paths"`
+}
+
+type AnyAccessConfig struct {
+	Enabled               bool   `json:"enabled"`
+	Strategy              string `json:"strategy"`
+	PrimaryOriginServerID string `json:"primaryOriginServerId,omitempty"`
 }
 
 type ReverseProxyPath struct {
@@ -158,6 +166,8 @@ type ReverseProxyRoute struct {
 	TargetType      string             `json:"targetType,omitempty"`
 	TargetPort      int                `json:"targetPort"`
 	TargetContainer string             `json:"targetContainer,omitempty"`
+	OriginServerIDs []string           `json:"originServerIds"`
+	AnyAccess       AnyAccessConfig    `json:"anyAccess"`
 	Paths           []ReverseProxyPath `json:"paths"`
 }
 

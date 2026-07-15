@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"strings"
@@ -8,6 +9,62 @@ import (
 
 	"panel/internal/platform/config"
 )
+
+func TestMigrateReverseProxyConfigurationUpdatesApplicationOrigins(t *testing.T) {
+	db := openLegacyReverseProxyMigrationDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO facility_app_configs VALUES('reverse_proxy','["srv-a","srv-b"]','nginx:legacy','{}','[]','[]','','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO applications VALUES('app-1','website','application','selected','["srv-b"]','[{"domain":"app.example.test","targetType":"local","targetPort":8080,"paths":[{"path":"/"}]}]')`); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{appDB: db}
+	if err := store.migrateReverseProxyConfiguration(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT reverse_proxy_json FROM applications WHERE id='app-1'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(raw, `"originServerIds":["srv-b"]`) || !strings.Contains(raw, `"anyAccess":{"enabled":false,"strategy":"round_robin"}`) {
+		t.Fatalf("migrated application proxy = %s", raw)
+	}
+}
+
+func TestMigrateReverseProxyConfigurationRejectsDomainOwnerConflict(t *testing.T) {
+	db := openLegacyReverseProxyMigrationDB(t)
+	defer db.Close()
+	if _, err := db.Exec(`INSERT INTO facility_app_configs VALUES('reverse_proxy','["srv-a"]','nginx:legacy','{}','[{"domain":"shared.example.test","path":"/","ruleType":"redirect","redirectUrl":"https://target.example.test","deploymentServers":["srv-a"]}]','[]','','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO applications VALUES('app-1','website','application','selected','["srv-a"]','[{"domain":"shared.example.test","targetType":"local","targetPort":8080,"paths":[{"path":"/"}]}]')`); err != nil {
+		t.Fatal(err)
+	}
+	store := &Store{appDB: db}
+	err := store.migrateReverseProxyConfiguration(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "owned by both") {
+		t.Fatalf("conflict error = %v", err)
+	}
+}
+
+func openLegacyReverseProxyMigrationDB(t *testing.T) *sql.DB {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(filepath.Join(t.TempDir(), "migration.db")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`CREATE TABLE facility_app_configs(id TEXT PRIMARY KEY,deployment_server_ids_json TEXT NOT NULL,image TEXT NOT NULL,panel_entry_json TEXT NOT NULL,static_sites_json TEXT NOT NULL,domain_policies_json TEXT NOT NULL,last_error TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+		`CREATE TABLE applications(id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,deployment_mode TEXT NOT NULL,deployment_server_ids_json TEXT NOT NULL,reverse_proxy_json TEXT NOT NULL)`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return db
+}
 
 func TestOpenCreatesSeparateSchemas(t *testing.T) {
 	dir := t.TempDir()
@@ -412,7 +469,7 @@ func TestMigrateNormalizesLegacyNullDefaults(t *testing.T) {
 	}
 }
 
-func TestMigrateAddsFacilityDomainPoliciesColumn(t *testing.T) {
+func TestMigrateRebuildsLegacyFacilityRoutesAsDomains(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()
 	cfg.DataRoot = filepath.Join(dir, "data")
@@ -449,15 +506,15 @@ func TestMigrateAddsFacilityDomainPoliciesColumn(t *testing.T) {
 	}
 	defer store.Close()
 	columns := tableColumns(t, store.AppDB(), "facility_app_configs")
-	if !columns["domain_policies_json"] {
-		t.Fatal("migrated facility_app_configs is missing domain_policies_json")
+	if !columns["domains_json"] || columns["domain_policies_json"] || columns["static_sites_json"] || columns["image"] {
+		t.Fatalf("unexpected migrated facility columns: %#v", columns)
 	}
-	var policies, sites string
-	if err := store.AppDB().QueryRow(`SELECT domain_policies_json,static_sites_json FROM facility_app_configs WHERE id='reverse_proxy'`).Scan(&policies, &sites); err != nil {
+	var domains string
+	if err := store.AppDB().QueryRow(`SELECT domains_json FROM facility_app_configs WHERE id='reverse_proxy'`).Scan(&domains); err != nil {
 		t.Fatal(err)
 	}
-	if policies != "[]" || !strings.Contains(sites, "legacy.example.test") {
-		t.Fatalf("migrated facility config policies=%q sites=%q", policies, sites)
+	if !strings.Contains(domains, `"domain":"legacy.example.test"`) || !strings.Contains(domains, `"originServerIds":["srv-edge"]`) || !strings.Contains(domains, `"paths":[`) {
+		t.Fatalf("migrated facility domains=%q", domains)
 	}
 }
 

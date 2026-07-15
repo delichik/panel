@@ -29,7 +29,7 @@
 - 页面按菜单层级组织在 `web/src/views/` 下；每个菜单页面使用独立目录和 `index.vue` 入口。旧路径兼容重定向不保留重复导航入口。
 - 仅在同一菜单组内复用的实现放在对应 `web/src/views/<group>/_shared/`；跨页面共享组件继续放在 `web/src/components/`。
 - 全局布局在 `web/src/layouts/AppLayout.vue`；侧边导航列表必须在抽屉内部独立滚动。
-- 全局页头根据系统版本 API 返回的构建通道展示环境标识；`dev` 通道在标题旁显示紧凑 DEV Chip，正式通道不显示。
+- 全局页头根据系统版本 API 返回的构建通道展示环境标识；`dev` 通道在标题旁显示紧凑 DEV Chip，正式通道不显示。fail2ban 侧边导航同样只在 `dev` 通道显示，正式通道仍保留可直接访问的路由。
 - 全局主题偏好只保存在当前浏览器，由 `web/src/theme.ts` 管理；支持自动跟随系统、手动浅色/深色，以及明暗共用或分别选择内置主题预设。旧 `linux-panel-theme` 值会迁移为对应手动模式。
 - 页头只展示主题和账户图标入口；用户名与退出登录操作收纳在账户菜单中，不在页头常驻展示。
 - 路由标题使用 `meta.titleKey`，不要在路由元信息里写用户可见文案。
@@ -76,6 +76,7 @@
   - 防火墙：`web/src/views/security/firewall/index.vue`
     - 页面只管理 UFW 规则和启用流程。
   - fail2ban：`web/src/views/security/fail2ban/index.vue`
+    - 侧边导航入口仅在系统版本 API 返回 `dev` 构建通道时显示；正式通道不展示入口，但认证路由仍保留，可通过直接地址访问。
     - 页面以防护规则列表作为默认模式，正文只展示 jail 摘要行、启用状态和编辑/删除动作；SSH、Nginx、Apache、Postfix、Dovecot 和自定义模板只负责生成 jail 初值，完整 jail 字段和高级 options 进入标准 dialog 编辑。结构化 YAML 是高级模式，使用 Panel 的 `jails` 结构并可与规则列表双向转换，不是目标机原始 fail2ban 配置文件。未接管时保存只落 Panel 草稿，接管/启用和取消接管通过独立动作触发任务。
 - 资源菜单组：
   - 软件包：`web/src/views/resources/packages/index.vue`
@@ -172,9 +173,10 @@
 
 - Facility app details use a single-column working flow on medium and large screens. Do not add a right rail for deployment records, route summaries, or secondary status because route editing needs the horizontal room.
 - The facility app selector only identifies facility apps. Do not put gateway nodes, route counts, static asset counts, or other configuration metrics in the selector item.
-- Entrance gateway routes are the primary editor surface and should appear before supporting gateway, Panel entry, asset, and deployment sections. Use a domain-group editor: domain and gateway-node controls stay in the group header, routes are shown as a compact list with edit/delete actions, and editing opens a dialog with route-specific fields for static content, redirects, or manual proxy targets. Do not expand route forms inline below the list.
+- The entrance-gateway configuration page follows the application editor skeleton: left section navigation and one right-side internal scroll surface containing Basic settings, Facility routes, Panel entry, and Static assets. It must not show the fixed nginx image or read-only application routes.
+- Use a domain-group editor: domain, origin nodes, AnyAccess, traffic strategy, and primary origin are edited in a domain dialog; paths are shown as compact summaries and edited in a separate dialog. Do not expand full route forms inline below the list.
 - Application-family work surfaces should not stack cards inside cards. Keep the outer detail/editor card as the only framed surface; internal facility sections, domain groups, deployment records, and normal application detail sections should read as unframed body sections or lightweight rows.
-- Application route summaries are not part of the facility app editor flow; they are maintained in normal application reverse proxy settings and should not compete with facility route editing.
+- Facility detail splits Facility routes and Application routes into two read-only lists. Both lists show origins, AnyAccess/strategy, and complete Path option summaries; only application rows link to the owning application.
 - Normal application reverse proxy rules use the same interaction model: page body shows a compact rule list with edit/delete actions, and the full rule form including paths is edited in a dialog.
 
 ## Security UI

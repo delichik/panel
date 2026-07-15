@@ -1916,8 +1916,8 @@ func readyServer(id string) server.Server {
 
 func TestNormalizeReverseProxyRulesTargetType(t *testing.T) {
 	rules, err := normalizeReverseProxyRules([]ReverseProxyRule{
-		{Domain: "local.example.test", TargetPort: 8080, Paths: []ReverseProxyPath{{Path: "/"}}},
-		{Domain: "container.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 80, Paths: []ReverseProxyPath{{Path: "/app"}}},
+		{Domain: "local.example.test", TargetPort: 8080, OriginServerIDs: []string{"srv-a"}, AnyAccess: AnyAccessConfig{Strategy: AnyAccessStrategyRoundRobin}, Paths: []ReverseProxyPath{{Path: "/"}}},
+		{Domain: "container.example.test", TargetType: ReverseProxyTargetContainer, TargetPort: 80, OriginServerIDs: []string{"srv-a"}, AnyAccess: AnyAccessConfig{Strategy: AnyAccessStrategyRoundRobin}, Paths: []ReverseProxyPath{{Path: "/app"}}},
 	})
 	if err != nil {
 		t.Fatalf("normalize reverse proxy: %v", err)
@@ -1928,7 +1928,7 @@ func TestNormalizeReverseProxyRulesTargetType(t *testing.T) {
 	if rules[1].TargetType != ReverseProxyTargetContainer {
 		t.Fatalf("container target type = %q", rules[1].TargetType)
 	}
-	if _, err := normalizeReverseProxyRules([]ReverseProxyRule{{Domain: "bad.example.test", TargetType: "remote", TargetPort: 80}}); err == nil {
+	if _, err := normalizeReverseProxyRules([]ReverseProxyRule{{Domain: "bad.example.test", TargetType: "remote", TargetPort: 80, OriginServerIDs: []string{"srv-a"}}}); err == nil {
 		t.Fatal("expected invalid target type error")
 	}
 }
@@ -1940,9 +1940,11 @@ func TestRenderReverseProxyConfigDisablesCacheAndWritesAdvancedPathOptions(t *te
 		ID:   "app-proxy-options",
 		Name: "proxy-options",
 		ReverseProxy: []ReverseProxyRule{{
-			Domain:     "app.example.test",
-			TargetType: ReverseProxyTargetLocal,
-			TargetPort: 8080,
+			Domain:          "app.example.test",
+			TargetType:      ReverseProxyTargetLocal,
+			TargetPort:      8080,
+			OriginServerIDs: []string{"srv-a"},
+			AnyAccess:       AnyAccessConfig{Strategy: AnyAccessStrategyRoundRobin},
 			Paths: []ReverseProxyPath{{
 				Path: "/api",
 				Options: HTTPRouteOptions{

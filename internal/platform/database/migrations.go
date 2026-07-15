@@ -3,6 +3,10 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
+	"sort"
+	"strings"
 )
 
 func (s *Store) Migrate(ctx context.Context) error {
@@ -185,10 +189,8 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS facility_app_configs (
 			id TEXT PRIMARY KEY,
 			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
-			image TEXT NOT NULL DEFAULT '',
 			panel_entry_json TEXT NOT NULL DEFAULT '{}',
-			static_sites_json TEXT NOT NULL DEFAULT '[]',
-			domain_policies_json TEXT NOT NULL DEFAULT '[]',
+			domains_json TEXT NOT NULL DEFAULT '[]',
 			last_error TEXT NOT NULL DEFAULT '',
 			updated_at TEXT NOT NULL
 		)`,
@@ -468,12 +470,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err := s.migrateApplicationLifecycleTargets(ctx); err != nil {
 		return err
 	}
+	if err := s.migrateReverseProxyConfiguration(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureAppColumns(ctx, "facility_app_configs", map[string]string{
 		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
-		"image":                      "TEXT NOT NULL DEFAULT ''",
 		"panel_entry_json":           "TEXT NOT NULL DEFAULT '{}'",
-		"static_sites_json":          "TEXT NOT NULL DEFAULT '[]'",
-		"domain_policies_json":       "TEXT NOT NULL DEFAULT '[]'",
+		"domains_json":               "TEXT NOT NULL DEFAULT '[]'",
 		"last_error":                 "TEXT NOT NULL DEFAULT ''",
 		"updated_at":                 "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
@@ -797,6 +800,361 @@ func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
 
 func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[string]string) error {
 	return ensureColumns(ctx, s.appDB, table, columns)
+}
+
+type legacyFacilityRoutePath struct {
+	Domain            string         `json:"domain"`
+	Path              string         `json:"path"`
+	RuleType          string         `json:"ruleType,omitempty"`
+	RootPath          string         `json:"rootPath,omitempty"`
+	SourceType        string         `json:"sourceType"`
+	AssetID           string         `json:"assetId,omitempty"`
+	RedirectURL       string         `json:"redirectUrl,omitempty"`
+	RedirectCode      int            `json:"redirectCode,omitempty"`
+	ProxyURL          string         `json:"proxyUrl,omitempty"`
+	ProxySourceMode   string         `json:"proxySourceMode,omitempty"`
+	DeploymentServers []string       `json:"deploymentServers,omitempty"`
+	Options           map[string]any `json:"options,omitempty"`
+}
+
+type legacyFacilityDomainPolicy struct {
+	Domain          string   `json:"domain"`
+	EntryServerIDs  []string `json:"entryServerIds"`
+	UpstreamMode    bool     `json:"upstreamMode"`
+	Strategy        string   `json:"strategy"`
+	PrimaryServerID string   `json:"primaryServerId"`
+}
+
+type migratedFacilityDomain struct {
+	Domain          string                    `json:"domain"`
+	OriginServerIDs []string                  `json:"originServerIds"`
+	AnyAccess       migratedAnyAccess         `json:"anyAccess"`
+	Paths           []legacyFacilityRoutePath `json:"paths"`
+}
+
+type migratedAnyAccess struct {
+	Enabled               bool   `json:"enabled"`
+	Strategy              string `json:"strategy"`
+	PrimaryOriginServerID string `json:"primaryOriginServerId,omitempty"`
+}
+
+func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
+	columns, err := databaseTableColumns(ctx, s.appDB, "facility_app_configs")
+	if err != nil {
+		return err
+	}
+	if !columns["image"] && !columns["static_sites_json"] && !columns["domain_policies_json"] {
+		return nil
+	}
+	tx, err := s.appDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	type facilityRow struct {
+		ID, ServersRaw, PanelRaw, StaticRaw, PoliciesRaw, LastError, UpdatedAt string
+		Domains                                                                []migratedFacilityDomain
+	}
+	staticColumn := `'[]'`
+	if columns["static_sites_json"] {
+		staticColumn = "static_sites_json"
+	}
+	policiesColumn := `'[]'`
+	if columns["domain_policies_json"] {
+		policiesColumn = "domain_policies_json"
+	}
+	rows, err := tx.QueryContext(ctx, fmt.Sprintf(`SELECT id,deployment_server_ids_json,panel_entry_json,%s,%s,last_error,updated_at FROM facility_app_configs`, staticColumn, policiesColumn))
+	if err != nil {
+		return err
+	}
+	facilities := []facilityRow{}
+	globalGateways := []string{}
+	owners := map[string]string{}
+	for rows.Next() {
+		var row facilityRow
+		if err := rows.Scan(&row.ID, &row.ServersRaw, &row.PanelRaw, &row.StaticRaw, &row.PoliciesRaw, &row.LastError, &row.UpdatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		var gateways []string
+		_ = json.Unmarshal([]byte(row.ServersRaw), &gateways)
+		gateways = uniqueSortedDatabaseStrings(gateways)
+		if row.ID == "reverse_proxy" {
+			globalGateways = gateways
+		}
+		var sites []legacyFacilityRoutePath
+		var policies []legacyFacilityDomainPolicy
+		_ = json.Unmarshal([]byte(row.StaticRaw), &sites)
+		_ = json.Unmarshal([]byte(row.PoliciesRaw), &policies)
+		policyByDomain := map[string]legacyFacilityDomainPolicy{}
+		for _, policy := range policies {
+			domain := normalizeProxyDomain(policy.Domain)
+			if domain != "" {
+				policyByDomain[domain] = policy
+			}
+		}
+		domainIndex := map[string]int{}
+		originSets := map[string]map[string]struct{}{}
+		for _, site := range sites {
+			domain := normalizeProxyDomain(site.Domain)
+			if domain == "" {
+				continue
+			}
+			index, exists := domainIndex[domain]
+			if !exists {
+				origins := uniqueSortedDatabaseStrings(policyByDomain[domain].EntryServerIDs)
+				if len(origins) == 0 {
+					origins = uniqueSortedDatabaseStrings(site.DeploymentServers)
+				}
+				if len(origins) == 0 {
+					origins = append([]string(nil), gateways...)
+				}
+				policy := policyByDomain[domain]
+				strategy := normalizeMigratedStrategy(policy.Strategy)
+				primary := strings.TrimSpace(policy.PrimaryServerID)
+				if !policy.UpstreamMode || strategy != "primary_backup" {
+					primary = ""
+				}
+				row.Domains = append(row.Domains, migratedFacilityDomain{Domain: domain, OriginServerIDs: origins, AnyAccess: migratedAnyAccess{Enabled: policy.UpstreamMode, Strategy: strategy, PrimaryOriginServerID: primary}, Paths: []legacyFacilityRoutePath{}})
+				index = len(row.Domains) - 1
+				domainIndex[domain] = index
+				originSets[domain] = stringSet(origins)
+			}
+			for _, id := range site.DeploymentServers {
+				id = strings.TrimSpace(id)
+				if id != "" && len(policyByDomain[domain].EntryServerIDs) == 0 {
+					originSets[domain][id] = struct{}{}
+				}
+			}
+			site.Domain = ""
+			site.DeploymentServers = nil
+			row.Domains[index].Paths = append(row.Domains[index].Paths, site)
+		}
+		for domain, index := range domainIndex {
+			row.Domains[index].OriginServerIDs = sortedDatabaseSet(originSets[domain])
+			if len(row.Domains[index].OriginServerIDs) == 0 {
+				rows.Close()
+				return fmt.Errorf("reverse proxy migration: facility domain %q has no valid origin server", domain)
+			}
+			if err := reserveProxyDomain(owners, domain, "facility route"); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		var panel map[string]any
+		if json.Unmarshal([]byte(row.PanelRaw), &panel) == nil && boolJSONValue(panel["enabled"]) {
+			if err := reserveProxyDomain(owners, normalizeProxyDomain(stringJSONValue(panel["domain"])), "Panel entry"); err != nil {
+				rows.Close()
+				return err
+			}
+		}
+		sort.Slice(row.Domains, func(i, j int) bool { return row.Domains[i].Domain < row.Domains[j].Domain })
+		facilities = append(facilities, row)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+
+	appRows, err := tx.QueryContext(ctx, `SELECT id,name,deployment_mode,deployment_server_ids_json,reverse_proxy_json FROM applications WHERE kind <> 'facility'`)
+	if err != nil {
+		return err
+	}
+	type appUpdate struct{ ID, Raw string }
+	updates := []appUpdate{}
+	for appRows.Next() {
+		var appID, appName, mode, deploymentsRaw, proxyRaw string
+		if err := appRows.Scan(&appID, &appName, &mode, &deploymentsRaw, &proxyRaw); err != nil {
+			appRows.Close()
+			return err
+		}
+		var rules []map[string]any
+		if err := json.Unmarshal([]byte(proxyRaw), &rules); err != nil {
+			appRows.Close()
+			return fmt.Errorf("reverse proxy migration: application %q has invalid proxy configuration: %w", appName, err)
+		}
+		var deployments []string
+		_ = json.Unmarshal([]byte(deploymentsRaw), &deployments)
+		validOrigins := globalGateways
+		if strings.TrimSpace(mode) == "selected" {
+			validOrigins = intersectDatabaseStrings(globalGateways, deployments)
+		}
+		merged := []map[string]any{}
+		byDomain := map[string]int{}
+		for _, rule := range rules {
+			domain := normalizeProxyDomain(stringJSONValue(rule["domain"]))
+			if domain == "" {
+				continue
+			}
+			owner := "application " + appName
+			if err := reserveProxyDomain(owners, domain, owner); err != nil {
+				if existing, ok := byDomain[domain]; !ok || !strings.Contains(err.Error(), owner) {
+					appRows.Close()
+					return err
+				} else if !sameMigratedProxyTarget(merged[existing], rule) {
+					appRows.Close()
+					return fmt.Errorf("reverse proxy migration: application %q has multiple targets for domain %q", appName, domain)
+				}
+			}
+			origins := stringSliceJSONValue(rule["originServerIds"])
+			if len(origins) == 0 {
+				origins = append([]string(nil), validOrigins...)
+			}
+			origins = intersectDatabaseStrings(globalGateways, origins)
+			if len(origins) == 0 {
+				appRows.Close()
+				return fmt.Errorf("reverse proxy migration: application %q domain %q has no valid origin server", appName, domain)
+			}
+			rule["domain"] = domain
+			rule["originServerIds"] = origins
+			if _, ok := rule["anyAccess"]; !ok {
+				rule["anyAccess"] = map[string]any{"enabled": false, "strategy": "round_robin"}
+			}
+			delete(rule, "entryServerIds")
+			delete(rule, "upstreamMode")
+			delete(rule, "strategy")
+			delete(rule, "primaryServerId")
+			if index, exists := byDomain[domain]; exists {
+				merged[index]["paths"] = append(anySliceJSONValue(merged[index]["paths"]), anySliceJSONValue(rule["paths"])...)
+				continue
+			}
+			byDomain[domain] = len(merged)
+			merged = append(merged, rule)
+		}
+		raw, err := json.Marshal(merged)
+		if err != nil {
+			appRows.Close()
+			return err
+		}
+		updates = append(updates, appUpdate{ID: appID, Raw: string(raw)})
+	}
+	if err := appRows.Close(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE applications SET reverse_proxy_json=? WHERE id=?`, update.Raw, update.ID); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE facility_app_configs_new (
+		id TEXT PRIMARY KEY,
+		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+		panel_entry_json TEXT NOT NULL DEFAULT '{}',
+		domains_json TEXT NOT NULL DEFAULT '[]',
+		last_error TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	for _, row := range facilities {
+		domainsRaw, err := json.Marshal(row.Domains)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs_new(id,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,?,?,?,?,?)`, row.ID, row.ServersRaw, row.PanelRaw, string(domainsRaw), row.LastError, row.UpdatedAt); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE facility_app_configs`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE facility_app_configs_new RENAME TO facility_app_configs`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func databaseTableColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]bool{}
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	return out, rows.Err()
+}
+
+func reserveProxyDomain(owners map[string]string, domain, owner string) error {
+	if domain == "" {
+		return nil
+	}
+	if existing, ok := owners[domain]; ok {
+		return fmt.Errorf("reverse proxy migration: domain %q is owned by both %s and %s", domain, existing, owner)
+	}
+	owners[domain] = owner
+	return nil
+}
+
+func normalizeProxyDomain(value string) string { return strings.ToLower(strings.TrimSpace(value)) }
+
+func normalizeMigratedStrategy(value string) string {
+	switch strings.TrimSpace(value) {
+	case "primary_backup", "ip_hash":
+		return strings.TrimSpace(value)
+	default:
+		return "round_robin"
+	}
+}
+
+func uniqueSortedDatabaseStrings(values []string) []string {
+	return sortedDatabaseSet(stringSet(values))
+}
+
+func stringSet(values []string) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			out[value] = struct{}{}
+		}
+	}
+	return out
+}
+
+func sortedDatabaseSet(values map[string]struct{}) []string {
+	out := make([]string, 0, len(values))
+	for value := range values {
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func intersectDatabaseStrings(left, right []string) []string {
+	rightSet := stringSet(right)
+	out := []string{}
+	for _, value := range uniqueSortedDatabaseStrings(left) {
+		if _, ok := rightSet[value]; ok {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func stringJSONValue(value any) string  { text, _ := value.(string); return text }
+func boolJSONValue(value any) bool      { flag, _ := value.(bool); return flag }
+func anySliceJSONValue(value any) []any { items, _ := value.([]any); return items }
+func stringSliceJSONValue(value any) []string {
+	items := anySliceJSONValue(value)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func sameMigratedProxyTarget(left, right map[string]any) bool {
+	return stringJSONValue(left["targetType"]) == stringJSONValue(right["targetType"]) && fmt.Sprint(left["targetPort"]) == fmt.Sprint(right["targetPort"])
 }
 
 func (s *Store) ensureLogColumns(ctx context.Context, table string, columns map[string]string) error {

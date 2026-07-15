@@ -306,16 +306,18 @@ func (session *facilitySaveSession) result() SaveSessionResult {
 }
 
 func validateSessionAssetReferences(cfg ReverseProxyConfig, assets map[string]*stagedFacilityAsset) error {
-	for _, site := range cfg.StaticSites {
-		if site.SourceType != StaticSourceUploadedFile && site.SourceType != StaticSourceUploadedBundle {
-			continue
-		}
-		staged := assets[site.AssetID]
-		if staged == nil {
-			return panelerr.Validation("facility_static_site_asset_required", "Static site asset is required")
-		}
-		if staged.Asset.Kind != site.SourceType {
-			return panelerr.Validation("facility_static_site_asset_kind_invalid", "Static site asset kind does not match its source")
+	for _, domain := range cfg.Domains {
+		for _, routePath := range domain.Paths {
+			if routePath.SourceType != StaticSourceUploadedFile && routePath.SourceType != StaticSourceUploadedBundle {
+				continue
+			}
+			staged := assets[routePath.AssetID]
+			if staged == nil {
+				return panelerr.Validation("facility_static_site_asset_required", "Static site asset is required")
+			}
+			if staged.Asset.Kind != routePath.SourceType {
+				return panelerr.Validation("facility_static_site_asset_kind_invalid", "Static site asset kind does not match its source")
+			}
 		}
 	}
 	return nil
@@ -408,17 +410,13 @@ func saveConfigTx(ctx context.Context, tx *sql.Tx, cfg ReverseProxyConfig) error
 	if err != nil {
 		return err
 	}
-	staticRaw, err := json.Marshal(cfg.StaticSites)
-	if err != nil {
-		return err
-	}
-	policiesRaw, err := json.Marshal(cfg.DomainPolicies)
+	domainsRaw, err := json.Marshal(cfg.Domains)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,image,panel_entry_json,static_sites_json,domain_policies_json,last_error,updated_at)
-		VALUES(?,?,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,image=excluded.image,panel_entry_json=excluded.panel_entry_json,static_sites_json=excluded.static_sites_json,domain_policies_json=excluded.domain_policies_json,last_error=excluded.last_error,updated_at=excluded.updated_at`, ReverseProxyID, string(serversRaw), cfg.Image, string(panelRaw), string(staticRaw), string(policiesRaw), cfg.LastError, now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,last_error=excluded.last_error,updated_at=excluded.updated_at`, ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now)
 	return err
 }

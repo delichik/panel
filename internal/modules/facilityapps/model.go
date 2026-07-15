@@ -8,7 +8,7 @@ import (
 
 const (
 	ReverseProxyID        = "reverse_proxy"
-	defaultProxyImage     = "nginx:1.27-alpine"
+	supportedProxyImage   = "nginx:1.28-alpine"
 	defaultPanelUpstream  = "http://127.0.0.1:8080"
 	proxyApplicationID    = "facility-reverse-proxy"
 	proxyInstancePrefix   = "facility-reverse-proxy-"
@@ -31,37 +31,30 @@ const (
 	ProxySourcePreserve = "preserve_source"
 	ProxySourceHide     = "hide_source"
 
-	DomainStrategyRoundRobin    = "round_robin"
-	DomainStrategyPrimaryBackup = "primary_backup"
-	DomainStrategyIPHash        = "ip_hash"
-
 	HTTPSDomainCertificate = "domain_certificate"
 	HTTPSSelfSigned        = "self_signed_certificate"
 	HTTPSDisabled          = "disabled"
 )
 
 type ReverseProxyConfig struct {
-	ID                string                           `json:"id"`
-	DeploymentServers []string                         `json:"deploymentServers"`
-	Image             string                           `json:"image"`
-	PanelEntry        PanelEntry                       `json:"panelEntry"`
-	StaticSites       []StaticSite                     `json:"staticSites"`
-	DomainPolicies    []DomainPolicy                   `json:"domainPolicies"`
-	StaticAssets      []StaticAsset                    `json:"staticAssets"`
-	RouteSummaries    []RouteSummary                   `json:"routeSummaries"`
-	Operation         *applications.LifecycleOperation `json:"operation,omitempty"`
-	LastError         string                           `json:"lastError,omitempty"`
-	UpdatedAt         time.Time                        `json:"updatedAt"`
-	Routes            int                              `json:"routes"`
-	EnabledServers    []string                         `json:"enabledServers"`
+	ID                string                                       `json:"id"`
+	DeploymentServers []string                                     `json:"deploymentServers"`
+	PanelEntry        PanelEntry                                   `json:"panelEntry"`
+	Domains           []FacilityRouteDomain                        `json:"domains"`
+	StaticAssets      []StaticAsset                                `json:"staticAssets"`
+	RouteSummaries    []RouteSummary                               `json:"routeSummaries"`
+	ApplicationRoutes []applications.ApplicationReverseProxyConfig `json:"applicationRoutes"`
+	Operation         *applications.LifecycleOperation             `json:"operation,omitempty"`
+	LastError         string                                       `json:"lastError,omitempty"`
+	UpdatedAt         time.Time                                    `json:"updatedAt"`
+	Routes            int                                          `json:"routes"`
+	EnabledServers    []string                                     `json:"enabledServers"`
 }
 
 type ReverseProxySaveInput struct {
-	DeploymentServers []string       `json:"deploymentServers"`
-	Image             string         `json:"image"`
-	PanelEntry        PanelEntry     `json:"panelEntry"`
-	StaticSites       []StaticSite   `json:"staticSites"`
-	DomainPolicies    []DomainPolicy `json:"domainPolicies"`
+	DeploymentServers []string              `json:"deploymentServers"`
+	PanelEntry        PanelEntry            `json:"panelEntry"`
+	Domains           []FacilityRouteDomain `json:"domains"`
 }
 
 type PanelEntry struct {
@@ -70,27 +63,24 @@ type PanelEntry struct {
 	Domain   string `json:"domain,omitempty"`
 }
 
-type StaticSite struct {
-	Domain            string                        `json:"domain"`
-	Path              string                        `json:"path"`
-	RuleType          string                        `json:"ruleType,omitempty"`
-	RootPath          string                        `json:"rootPath,omitempty"`
-	SourceType        string                        `json:"sourceType"`
-	AssetID           string                        `json:"assetId,omitempty"`
-	RedirectURL       string                        `json:"redirectUrl,omitempty"`
-	RedirectCode      int                           `json:"redirectCode,omitempty"`
-	ProxyURL          string                        `json:"proxyUrl,omitempty"`
-	ProxySourceMode   string                        `json:"proxySourceMode,omitempty"`
-	DeploymentServers []string                      `json:"deploymentServers,omitempty"`
-	Options           applications.HTTPRouteOptions `json:"options,omitempty"`
+type FacilityRouteDomain struct {
+	Domain          string                       `json:"domain"`
+	OriginServerIDs []string                     `json:"originServerIds"`
+	AnyAccess       applications.AnyAccessConfig `json:"anyAccess"`
+	Paths           []FacilityRoutePath          `json:"paths"`
 }
 
-type DomainPolicy struct {
-	Domain          string   `json:"domain"`
-	EntryServerIDs  []string `json:"entryServerIds"`
-	UpstreamMode    bool     `json:"upstreamMode"`
-	Strategy        string   `json:"strategy,omitempty"`
-	PrimaryServerID string   `json:"primaryServerId,omitempty"`
+type FacilityRoutePath struct {
+	Path            string                        `json:"path"`
+	RuleType        string                        `json:"ruleType,omitempty"`
+	RootPath        string                        `json:"rootPath,omitempty"`
+	SourceType      string                        `json:"sourceType"`
+	AssetID         string                        `json:"assetId,omitempty"`
+	RedirectURL     string                        `json:"redirectUrl,omitempty"`
+	RedirectCode    int                           `json:"redirectCode,omitempty"`
+	ProxyURL        string                        `json:"proxyUrl,omitempty"`
+	ProxySourceMode string                        `json:"proxySourceMode,omitempty"`
+	Options         applications.HTTPRouteOptions `json:"options,omitempty"`
 }
 
 type StaticAsset struct {
