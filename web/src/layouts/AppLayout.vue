@@ -22,6 +22,7 @@ interface NavItem {
   title: string;
   value: string;
   disabled?: boolean;
+  devOnly?: boolean;
 }
 
 interface NavGroup {
@@ -77,7 +78,7 @@ const navGroups = computed<NavGroup[]>(() => [
     title: t('layout.nav.security'),
     items: [
       { to: '/security/firewall', title: t('layout.nav.firewall'), value: 'server-firewall' },
-      { to: '/security/fail2ban', title: t('layout.nav.fail2ban'), value: 'server-fail2ban' },
+      { to: '/security/fail2ban', title: t('layout.nav.fail2ban'), value: 'server-fail2ban', devOnly: true },
     ],
   },
   {
@@ -236,16 +237,17 @@ onBeforeUnmount(() => {
             <template #activator="{ props }">
               <v-list-item v-bind="props" :prepend-icon="group.icon" :title="group.title" class="app-nav-group__activator" />
             </template>
-            <v-list-item
-              v-for="item in group.items"
-              :key="item.value"
-              :to="item.to"
-              :prepend-icon="item.icon"
-              :title="item.title"
-              :value="item.value"
-              :disabled="item.disabled"
-              class="app-nav-child"
-            />
+            <template v-for="item in group.items" :key="item.value">
+              <v-list-item
+                v-if="!item.devOnly || isDevChannel"
+                :to="item.to"
+                :prepend-icon="item.icon"
+                :title="item.title"
+                :value="item.value"
+                :disabled="item.disabled"
+                class="app-nav-child"
+              />
+            </template>
           </v-list-group>
           <v-list-item v-else :to="group.items[0].to" :prepend-icon="group.items[0].icon" :title="group.items[0].title" :value="group.items[0].value" class="app-nav-single" />
         </template>

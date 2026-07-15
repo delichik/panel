@@ -52,6 +52,12 @@ describe('AppLayout navigation', () => {
     expect(appLayout).toContain("t('layout.developmentChannelDetail'");
   });
 
+  it('shows the fail2ban navigation item only on dev builds', () => {
+    expect(appLayout).toContain('devOnly?: boolean;');
+    expect(appLayout).toContain("to: '/security/fail2ban', title: t('layout.nav.fail2ban'), value: 'server-fail2ban', devOnly: true");
+    expect(appLayout).toContain('v-if="!item.devOnly || isDevChannel"');
+  });
+
   it('does not expose DNS record management in the navigation', () => {
     expect(appLayout).not.toContain("layout.nav.records");
     expect(appLayout).not.toContain("value: 'dns-records'");
