@@ -2056,6 +2056,10 @@ func (f *fakeRuntimeClient) RuntimeWriteFiles(ctx context.Context, baseURL strin
 	return nil
 }
 
+func (f *fakeRuntimeClient) RuntimeReload(context.Context, string, agentcontract.RuntimeReloadRequest) (agentcontract.RuntimeReloadResponse, error) {
+	return agentcontract.RuntimeReloadResponse{Phase: "unsupported", Error: "reload is not configured"}, nil
+}
+
 func (f *fakeRuntimeClient) DockerImagePull(ctx context.Context, baseURL, reference string) error {
 	f.pulls = append(f.pulls, reference)
 	return nil

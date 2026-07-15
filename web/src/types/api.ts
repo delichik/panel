@@ -534,6 +534,7 @@ export interface PackageRefreshDto {
 export interface FacilityReverseProxyConfigDto {
   id: string;
   deploymentServers: string[];
+  panelHostServerId?: string;
   panelEntry: FacilityPanelEntryDto;
   domains: FacilityRouteDomainDto[];
   staticAssets?: FacilityStaticAssetDto[];

@@ -33,7 +33,7 @@ services:
     container_name: panel
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - panel-data:/app/data
 
@@ -56,7 +56,15 @@ docker compose ps
 docker compose logs --tail=100 panel
 ```
 
-在浏览器访问 `http://<Panel主机地址>:8080`。
+启动后，先确认 Panel 域名已经指向当前宿主机，并通过 SSH 在宿主机执行：
+
+```bash
+docker exec -it panel /app/panel setup
+```
+
+按提示输入宿主机 SSH 地址、端口、用户、凭据和 Panel 域名。Panel 会从容器通过 SSH 纳管当前宿主机、安装 Agent、将其登记为唯一 Panel 宿主节点，并部署 Panel 自身的 Nginx 入口。setup 成功后访问命令输出的 `http://<Panel域名>`。
+
+setup 可重复执行；Agent 或入口部署失败时，再次执行会从已保存的阶段继续。SSH 密码和私钥口令通过交互输入，不应写入命令参数。
 
 默认账号：
 
@@ -79,7 +87,7 @@ docker volume create panel-data
 docker run -d \
   --name panel \
   --restart unless-stopped \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -v panel-data:/app/data \
   ghcr.io/delichik/panel:latest
 ```
@@ -91,7 +99,7 @@ docker ps --filter name=panel
 docker logs --tail=100 panel
 ```
 
-访问 `http://<Panel主机地址>:8080`，使用 `admin/admin` 登录，并按提示修改密码。
+运行 `docker exec -it panel /app/panel setup` 完成宿主节点和 Panel 入口初始化，再使用 `admin/admin` 登录命令输出的域名，并按提示修改密码。
 
 ## 数据持久化
 
@@ -167,7 +175,7 @@ docker start panel
 
 ## 网络与 HTTPS
 
-本文示例把 Panel 的 `8080` 端口发布到主机的所有网络接口，适合可信内网使用。不要在没有 HTTPS 和访问控制的情况下直接暴露到公网。
+本文示例只把 Panel 的 `8080` 端口发布到宿主机回环地址。Panel 自身的公网入口由 `panel setup` 纳管宿主机后部署的入口网关提供，不需要公开裸露的 8080 端口。
 
 如果反向代理运行在同一台主机，可以只绑定本机回环地址：
 

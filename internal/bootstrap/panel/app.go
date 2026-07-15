@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"panel/internal/modules/containers"
 	"panel/internal/modules/facilityapps"
 	"panel/internal/modules/identity"
+	"panel/internal/modules/installation"
 	"panel/internal/modules/keyassets"
 	"panel/internal/modules/observability/diagnostics"
 	"panel/internal/modules/observability/metrics"
@@ -46,6 +48,7 @@ type App struct {
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
 	deployments    applications.DeploymentDispatcher
+	control        *installation.ControlServer
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -62,6 +65,7 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	taskSvc := tasks.NewService(store.LogDB())
+	installationSvc := installation.NewService(store.AppDB())
 	certBridge := &applicationCertificateBridge{}
 	containerBridge := &applicationContainerBridge{}
 	credSvc := credential.NewService(store.AppDB(), secretStore)
@@ -110,6 +114,7 @@ func New(cfg config.Config) (*App, error) {
 		server.WithAgentTLSAssets(agentTLS),
 		server.WithAgentTLSProvider(keyAssetSvc),
 		server.WithMetricsDB(store.MetricsDB()),
+		server.WithPanelHostGuard(installationSvc),
 	)
 	applicationSvc := applications.NewServiceWithOptions(store.AppDB(), agentClient, taskSvc, applications.Config{
 		SaveSessionDir: applicationSaveSessionDir(cfg),
@@ -147,6 +152,7 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithDataRoot(cfg.DataRoot),
 		facilityapps.WithCertificateProvider(certSvc),
 		facilityapps.WithApplicationReconcileTrigger(containerSvc),
+		facilityapps.WithPanelHostProvider(installationSvc),
 	)
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
@@ -206,6 +212,21 @@ func New(cfg config.Config) (*App, error) {
 	taskWorker.Start(context.Background())
 	metricsCleanup.Start(context.Background())
 	reportCollector.Start(context.Background())
+	var controlServer *installation.ControlServer
+	if goruntime.GOOS != "windows" {
+		setupSvc := installation.NewSetupService(installationSvc, credSvc, serverSvc, taskSvc, facilitySvc)
+		controlServer, err = installation.StartControlServer(cfg.DataRoot, setupSvc)
+		if err != nil {
+			taskWorker.Stop()
+			metricsCleanup.Stop()
+			reportCollector.Stop()
+			systemSvc.Close()
+			_ = deploymentDispatcher.Stop(context.Background())
+			_ = store.Close()
+			return nil, err
+		}
+		a.control = controlServer
+	}
 	logging.L().Info("background services started")
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetDeploymentProjectionProvider(applicationSvc)
@@ -215,6 +236,9 @@ func New(cfg config.Config) (*App, error) {
 }
 
 func (a *App) Close() error {
+	if a.control != nil {
+		_ = a.control.Close()
+	}
 	if a.tasks != nil {
 		a.tasks.Stop()
 	}

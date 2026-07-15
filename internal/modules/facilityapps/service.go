@@ -61,6 +61,10 @@ type CertificateProvider interface {
 	ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error)
 }
 
+type PanelHostProvider interface {
+	HostServerID(ctx context.Context) (string, error)
+}
+
 type Service struct {
 	db           *sql.DB
 	dataRoot     string
@@ -71,6 +75,7 @@ type Service struct {
 	agentErrors  AgentErrorHandler
 	queue        ContainerOperationQueue
 	reconciler   ApplicationReconcileTrigger
+	panelHost    PanelHostProvider
 	sessionMu    sync.Mutex
 	saveSessions map[string]*facilitySaveSession
 	cleanupOnce  sync.Once
@@ -93,6 +98,10 @@ func WithCertificateProvider(provider CertificateProvider) Option {
 
 func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option {
 	return func(s *Service) { s.reconciler = trigger }
+}
+
+func WithPanelHostProvider(provider PanelHostProvider) Option {
+	return func(s *Service) { s.panelHost = provider }
 }
 
 func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, apps ApplicationProvider, opts ...Option) *Service {
@@ -119,6 +128,9 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 	cfg.Routes += s.routeCount(ctx, cfg.DeploymentServers)
 	if cfg.PanelEntry.Enabled {
 		cfg.Routes++
+	}
+	if s.panelHost != nil {
+		cfg.PanelHostServerID, _ = s.panelHost.HostServerID(ctx)
 	}
 	cfg.EnabledServers = append([]string(nil), cfg.DeploymentServers...)
 	assets, err := s.ListStaticAssets(ctx)
@@ -148,6 +160,9 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err != nil {
 		return ReverseProxyConfig{}, err
 	}
+	if err := s.validatePanelHost(ctx, next); err != nil {
+		return ReverseProxyConfig{}, err
+	}
 	if err := s.validateRouteConflicts(ctx, next); err != nil {
 		return ReverseProxyConfig{}, err
 	}
@@ -161,6 +176,23 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 		_ = s.setLastError(ctx, err.Error())
 	}
 	return s.GetReverseProxy(ctx)
+}
+
+func (s *Service) validatePanelHost(ctx context.Context, cfg ReverseProxyConfig) error {
+	if !cfg.PanelEntry.Enabled || s.panelHost == nil {
+		return nil
+	}
+	hostServerID, err := s.panelHost.HostServerID(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(hostServerID) == "" {
+		return panelerr.Validation("panel_host_server_required", "Panel host server must be configured before enabling the Panel entry")
+	}
+	if cfg.PanelEntry.ServerID != hostServerID {
+		return panelerr.Validation("facility_panel_entry_host_required", "Panel entry must use the configured Panel host server")
+	}
+	return nil
 }
 
 func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []string) error {
@@ -302,6 +334,25 @@ func (s *Service) RuntimeSpecForServer(ctx context.Context, app applications.App
 	return spec, true, nil
 }
 
+func (s *Service) PlanRuntimeUpdate(_ context.Context, app applications.Application, _ server.Server, _, desired appruntime.Spec) appruntime.UpdatePlan {
+	if app.ID != proxyApplicationID {
+		return appruntime.UpdatePlan{Mode: appruntime.UpdateModeRecreate, Reason: "facility does not support reload"}
+	}
+	for _, file := range desired.Files {
+		if strings.TrimSpace(file.Kind) == appruntime.ManagedFileKindArchive {
+			return appruntime.UpdatePlan{Mode: appruntime.UpdateModeRecreate, Reason: "managed archive requires recreation"}
+		}
+	}
+	return appruntime.UpdatePlan{
+		Mode:   appruntime.UpdateModeReload,
+		Reason: "nginx configuration supports reload",
+		Strategy: &appruntime.ReloadStrategy{
+			ValidateCommand: []string{"nginx", "-t", "-c", "/etc/nginx/nginx.conf"},
+			ReloadCommand:   []string{"nginx", "-s", "reload"},
+		},
+	}
+}
+
 func (s *Service) triggerReverseProxyReconcile(ctx context.Context, triggerType string, stopServers []string) error {
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
@@ -395,9 +446,7 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 	if managedFilesContainPrefix(files, "certs/") {
 		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: "certs", Target: proxyTLSMountRoot, ReadOnly: true})
 	}
-	if managedFilesContainPrefix(files, proxyConfigDir+"/") {
-		mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: proxyConfigDir, Target: proxyContainerConfDir, ReadOnly: true})
-	}
+	mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: proxyConfigRoot, Target: proxyContainerRoot, ReadOnly: true})
 	return appruntime.Spec{
 		ID:            proxyApplicationID,
 		ApplicationID: proxyApplicationID,
@@ -407,9 +456,7 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 		Image:         supportedProxyImage,
 		Ports:         ports,
 		NetworkMode:   networkMode,
-		Mounts: append([]appruntime.Mount{
-			{Type: "managed_file", Source: proxyConfigPath, Target: proxyContainerConf, ReadOnly: true},
-		}, mounts...),
+		Mounts:     mounts,
 		Files:      append([]appruntime.ManagedFile{{Path: proxyConfigPath, Content: []byte(nginx), Mode: "0644"}}, files...),
 		Restart:    appruntime.Restart{Policy: "no"},
 		Generation: 1,
@@ -516,7 +563,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 			host.Facility = append(host.Facility, proxyFacilityRoute{
 				Path:            "/",
 				RuleType:        StaticRuleProxyPass,
-				ProxyURL:        defaultPanelUpstream,
+				ProxyURL:        "http://" + localUpstreamHost + ":8080",
 				ProxySourceMode: ProxySourcePreserve,
 			})
 		}

@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	goruntime "runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,11 +33,16 @@ const defaultRuntimeRoot = "/opt/panel/apps"
 const dockerImagePullTimeout = 15 * time.Minute
 const managedBridgeNetwork = "panel-apps"
 const managedFilesManifestPath = "managed-files.json"
+const appliedStatePath = "applied-state.json"
+const maxRuntimeCommandOutput = 1024 * 1024
 
 const (
 	labelManagedFilesHash  = "panel.application.managed_files.hash"
 	labelManagedFilesDrift = "panel.application.managed_files.drift"
 	labelManagedFilesError = "panel.application.managed_files.error"
+	labelGeneration        = "panel.application.generation"
+	labelSpecHash          = "panel.application.spec.hash"
+	labelApplyMode         = "panel.application.apply.mode"
 )
 
 type LocalRuntime struct {
@@ -191,6 +197,11 @@ func (r *LocalRuntime) Containers(ctx context.Context) ([]agentcontract.DockerCo
 		}
 		if err != nil {
 			items[i].Labels[labelManagedFilesError] = err.Error()
+		}
+		if state, err := r.readAppliedState(appID, instanceID); err == nil && state.matches(items[i]) {
+			items[i].Labels[labelGeneration] = strconv.Itoa(state.Generation)
+			items[i].Labels[labelSpecHash] = state.SpecHash
+			items[i].Labels[labelApplyMode] = state.ApplyMode
 		}
 	}
 	return items, nil
@@ -383,6 +394,65 @@ func (r *LocalRuntime) WriteManagedFiles(ctx context.Context, spec appruntime.Sp
 	return r.writeManagedFiles(spec)
 }
 
+func (r *LocalRuntime) Reload(ctx context.Context, req agentcontract.RuntimeReloadRequest) (agentcontract.RuntimeReloadResponse, error) {
+	if r == nil || r.client == nil {
+		return agentcontract.RuntimeReloadResponse{}, errors.New("runtime is not configured")
+	}
+	if len(req.ValidateCommand) == 0 || len(req.ReloadCommand) == 0 {
+		return agentcontract.RuntimeReloadResponse{Phase: "unsupported", Error: "reload commands are required"}, nil
+	}
+	for _, file := range req.Spec.Files {
+		if strings.TrimSpace(file.Kind) == appruntime.ManagedFileKindArchive {
+			return agentcontract.RuntimeReloadResponse{Phase: "unsupported", Error: "managed archives require container recreation"}, nil
+		}
+	}
+	containerName := firstNonEmpty(req.ContainerName, req.Spec.ContainerName, containerNameForInstance(req.Spec.InstanceID))
+	inspect, err := r.client.inspectContainer(ctx, containerName)
+	if err != nil {
+		return agentcontract.RuntimeReloadResponse{}, err
+	}
+	if !inspect.State.Running {
+		return agentcontract.RuntimeReloadResponse{Phase: "unsupported", Error: "container is not running"}, nil
+	}
+	snapshot, err := r.snapshotManagedFiles(req.Spec.ApplicationID, req.Spec.InstanceID)
+	if err != nil {
+		return agentcontract.RuntimeReloadResponse{}, err
+	}
+	if err := r.writeManagedFiles(req.Spec); err != nil {
+		_ = r.restoreManagedFiles(req.Spec.ApplicationID, req.Spec.InstanceID, snapshot)
+		return agentcontract.RuntimeReloadResponse{}, err
+	}
+	validation, err := r.client.execContainer(ctx, containerName, req.ValidateCommand)
+	if err != nil {
+		_ = r.restoreManagedFiles(req.Spec.ApplicationID, req.Spec.InstanceID, snapshot)
+		return agentcontract.RuntimeReloadResponse{}, err
+	}
+	if validation.ExitCode != 0 {
+		if restoreErr := r.restoreManagedFiles(req.Spec.ApplicationID, req.Spec.InstanceID, snapshot); restoreErr != nil {
+			return agentcontract.RuntimeReloadResponse{}, fmt.Errorf("restore managed files after validation failure: %w", restoreErr)
+		}
+		return agentcontract.RuntimeReloadResponse{Phase: "validate", ExitCode: validation.ExitCode, Output: validation.Output, Error: "reload validation failed"}, nil
+	}
+	reloaded, err := r.client.execContainer(ctx, containerName, req.ReloadCommand)
+	if err != nil {
+		return agentcontract.RuntimeReloadResponse{}, err
+	}
+	if reloaded.ExitCode != 0 {
+		return agentcontract.RuntimeReloadResponse{Phase: "reload", ExitCode: reloaded.ExitCode, Output: reloaded.Output, Error: "reload command failed"}, nil
+	}
+	current, err := r.client.inspectContainer(ctx, containerName)
+	if err != nil {
+		return agentcontract.RuntimeReloadResponse{}, err
+	}
+	if !current.State.Running || current.ID != inspect.ID {
+		return agentcontract.RuntimeReloadResponse{Phase: "verify", Error: "container changed or stopped during reload"}, nil
+	}
+	if err := r.writeAppliedState(req.Spec, current.ID, "reload"); err != nil {
+		return agentcontract.RuntimeReloadResponse{}, err
+	}
+	return agentcontract.RuntimeReloadResponse{Reloaded: true, Phase: "complete", ExitCode: 0, Output: reloaded.Output}, nil
+}
+
 func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec) (string, error) {
 	if r == nil || r.client == nil {
 		return "", errors.New("runtime is not configured")
@@ -399,7 +469,15 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 	if err := r.client.ensureManagedNetwork(ctx, dockerNetworkMode(spec.NetworkMode)); err != nil {
 		return "", err
 	}
-	return r.client.createContainer(ctx, spec)
+	id, err := r.client.createContainer(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	if err := r.writeAppliedState(spec, id, "recreate"); err != nil {
+		_ = r.client.removeContainer(ctx, id, true)
+		return "", err
+	}
+	return id, nil
 }
 
 func (r *LocalRuntime) Images(ctx context.Context) ([]agentcontract.DockerImage, error) {
@@ -427,6 +505,10 @@ func (r *LocalRuntime) DeleteVolume(ctx context.Context, name string) error {
 }
 
 func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
+	previous, err := r.readManagedFilesManifest(spec.ApplicationID, spec.InstanceID)
+	if err != nil {
+		return err
+	}
 	manifest := managedFilesManifest{Entries: []managedFileManifestEntry{}}
 	for _, file := range spec.Files {
 		if strings.TrimSpace(file.Kind) == appruntime.ManagedFileKindArchive {
@@ -448,7 +530,7 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(target, file.Content, mode); err != nil {
+		if err := writeFileAtomic(target, file.Content, mode); err != nil {
 			return err
 		}
 		if err := os.Chmod(target, mode); err != nil {
@@ -466,6 +548,9 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 			GID:    cloneInt(file.GID),
 		})
 	}
+	if err := r.removeStaleManagedFiles(spec.ApplicationID, spec.InstanceID, previous, manifest); err != nil {
+		return err
+	}
 	if err := r.writeManagedFilesManifest(spec.ApplicationID, spec.InstanceID, manifest); err != nil {
 		return err
 	}
@@ -473,6 +558,37 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 		return err
 	}
 	return r.preparePersistentMounts(spec)
+}
+
+func writeFileAtomic(target string, content []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(target), ".panel-write-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(content); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if goruntime.GOOS == "windows" {
+		_ = os.Remove(target)
+	}
+	return os.Rename(tmpName, target)
 }
 
 func (r *LocalRuntime) writeManagedArchive(spec appruntime.Spec, file appruntime.ManagedFile) (managedFileManifestEntry, error) {
@@ -641,6 +757,134 @@ type managedFileManifestEntry struct {
 	GID      *int   `json:"gid,omitempty"`
 }
 
+type managedFilesSnapshot struct {
+	Manifest managedFilesManifest
+	Files    map[string][]byte
+}
+
+func (r *LocalRuntime) readManagedFilesManifest(appID, instanceID string) (managedFilesManifest, error) {
+	target, err := safeRuntimePath(r.root, appID, instanceID, "manifest", managedFilesManifestPath)
+	if err != nil {
+		return managedFilesManifest{}, err
+	}
+	raw, err := os.ReadFile(target)
+	if errors.Is(err, os.ErrNotExist) {
+		return managedFilesManifest{Entries: []managedFileManifestEntry{}}, nil
+	}
+	if err != nil {
+		return managedFilesManifest{}, err
+	}
+	var manifest managedFilesManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		return managedFilesManifest{}, err
+	}
+	if manifest.Entries == nil {
+		manifest.Entries = []managedFileManifestEntry{}
+	}
+	return manifest, nil
+}
+
+func (r *LocalRuntime) removeStaleManagedFiles(appID, instanceID string, previous, next managedFilesManifest) error {
+	wanted := map[string]struct{}{}
+	for _, entry := range next.Entries {
+		wanted[entry.Kind+"\x00"+entry.Path] = struct{}{}
+	}
+	for _, entry := range previous.Entries {
+		if _, ok := wanted[entry.Kind+"\x00"+entry.Path]; ok {
+			continue
+		}
+		if strings.TrimSpace(entry.Kind) == appruntime.ManagedFileKindArchive {
+			targetDir, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
+			if err != nil {
+				return err
+			}
+			archivePath, err := safeRuntimePath(r.root, appID, instanceID, "archives", entry.Path+".archive")
+			if err != nil {
+				return err
+			}
+			if err := os.RemoveAll(targetDir); err != nil {
+				return err
+			}
+			if err := os.Remove(archivePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			continue
+		}
+		target, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
+		if err != nil {
+			return err
+		}
+		if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		removeEmptyParents(filepath.Dir(target), filepath.Join(r.root, appID, "instances", instanceID, "files"))
+	}
+	return nil
+}
+
+func removeEmptyParents(dir, stop string) {
+	stop = filepath.Clean(stop)
+	for current := filepath.Clean(dir); current != stop && strings.HasPrefix(current, stop+string(os.PathSeparator)); current = filepath.Dir(current) {
+		if err := os.Remove(current); err != nil {
+			return
+		}
+	}
+}
+
+func (r *LocalRuntime) snapshotManagedFiles(appID, instanceID string) (managedFilesSnapshot, error) {
+	manifest, err := r.readManagedFilesManifest(appID, instanceID)
+	if err != nil {
+		return managedFilesSnapshot{}, err
+	}
+	snapshot := managedFilesSnapshot{Manifest: manifest, Files: map[string][]byte{}}
+	for _, entry := range manifest.Entries {
+		if strings.TrimSpace(entry.Kind) == appruntime.ManagedFileKindArchive {
+			return managedFilesSnapshot{}, errors.New("managed archives cannot be snapshotted for reload")
+		}
+		target, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
+		if err != nil {
+			return managedFilesSnapshot{}, err
+		}
+		content, err := os.ReadFile(target)
+		if err != nil {
+			return managedFilesSnapshot{}, err
+		}
+		snapshot.Files[entry.Path] = content
+	}
+	return snapshot, nil
+}
+
+func (r *LocalRuntime) restoreManagedFiles(appID, instanceID string, snapshot managedFilesSnapshot) error {
+	current, err := r.readManagedFilesManifest(appID, instanceID)
+	if err != nil {
+		return err
+	}
+	if err := r.removeStaleManagedFiles(appID, instanceID, current, snapshot.Manifest); err != nil {
+		return err
+	}
+	for _, entry := range snapshot.Manifest.Entries {
+		content, ok := snapshot.Files[entry.Path]
+		if !ok {
+			return fmt.Errorf("managed file snapshot is missing %s", entry.Path)
+		}
+		target, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
+		if err != nil {
+			return err
+		}
+		mode, err := managedFileMode(entry.Mode)
+		if err != nil {
+			return err
+		}
+		if err := writeFileAtomic(target, content, mode); err != nil {
+			return err
+		}
+		if err := applyOwnership(target, entry.UID, entry.GID); err != nil {
+			return err
+		}
+	}
+	return r.writeManagedFilesManifest(appID, instanceID, snapshot.Manifest)
+}
+
 func (r *LocalRuntime) writeManagedFilesManifest(appID, instanceID string, manifest managedFilesManifest) error {
 	sort.Slice(manifest.Entries, func(i, j int) bool { return manifest.Entries[i].Path < manifest.Entries[j].Path })
 	raw, err := json.Marshal(manifest)
@@ -654,10 +898,66 @@ func (r *LocalRuntime) writeManagedFilesManifest(appID, instanceID string, manif
 	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(target, raw, 0o600); err != nil {
+	if err := writeFileAtomic(target, raw, 0o600); err != nil {
 		return err
 	}
 	return os.Chmod(target, 0o600)
+}
+
+type appliedState struct {
+	ContainerID   string `json:"containerId"`
+	ContainerName string `json:"containerName"`
+	Generation    int    `json:"generation"`
+	SpecHash      string `json:"specHash"`
+	ApplyMode     string `json:"applyMode"`
+	AppliedAt     string `json:"appliedAt"`
+}
+
+func (s appliedState) matches(container agentcontract.DockerContainer) bool {
+	if strings.TrimSpace(s.ContainerID) != "" && s.ContainerID != container.ID {
+		return false
+	}
+	if strings.TrimSpace(s.ContainerName) == "" {
+		return true
+	}
+	for _, name := range container.Names {
+		if strings.TrimPrefix(name, "/") == s.ContainerName {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *LocalRuntime) writeAppliedState(spec appruntime.Spec, containerID, applyMode string) error {
+	state := appliedState{
+		ContainerID: containerID, ContainerName: spec.ContainerName, Generation: spec.Generation,
+		SpecHash: spec.SpecHash, ApplyMode: applyMode, AppliedAt: time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	target, err := safeRuntimePath(r.root, spec.ApplicationID, spec.InstanceID, "state", appliedStatePath)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomic(target, raw, 0o600)
+}
+
+func (r *LocalRuntime) readAppliedState(appID, instanceID string) (appliedState, error) {
+	target, err := safeRuntimePath(r.root, appID, instanceID, "state", appliedStatePath)
+	if err != nil {
+		return appliedState{}, err
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil {
+		return appliedState{}, err
+	}
+	var state appliedState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return appliedState{}, err
+	}
+	return state, nil
 }
 
 func (r *LocalRuntime) managedFilesDrift(appID, instanceID string) (string, bool, error) {
@@ -1346,6 +1646,89 @@ func (c *dockerAPIClient) inspectContainer(ctx context.Context, name string) (do
 	}
 	var out dockerInspectResponse
 	return out, json.NewDecoder(res.Body).Decode(&out)
+}
+
+type dockerExecResult struct {
+	ExitCode int
+	Output   string
+}
+
+func (c *dockerAPIClient) execContainer(ctx context.Context, containerName string, command []string) (dockerExecResult, error) {
+	if len(command) == 0 {
+		return dockerExecResult{}, errors.New("container command is required")
+	}
+	createBody, _ := json.Marshal(map[string]any{
+		"AttachStdout": true,
+		"AttachStderr": true,
+		"Tty":          true,
+		"Cmd":          command,
+	})
+	req, err := c.newRequest(ctx, http.MethodPost, "/containers/"+url.PathEscape(containerName)+"/exec", bytes.NewReader(createBody))
+	if err != nil {
+		return dockerExecResult{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.client.Do(req)
+	if err != nil {
+		return dockerExecResult{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerExecResult{}, dockerError(res, "create container exec")
+	}
+	var created struct {
+		ID string `json:"Id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		return dockerExecResult{}, err
+	}
+	if strings.TrimSpace(created.ID) == "" {
+		return dockerExecResult{}, errors.New("docker exec id is empty")
+	}
+	startBody, _ := json.Marshal(map[string]any{"Detach": false, "Tty": true})
+	startReq, err := c.newRequest(ctx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", bytes.NewReader(startBody))
+	if err != nil {
+		return dockerExecResult{}, err
+	}
+	startReq.Header.Set("Content-Type", "application/json")
+	startRes, err := c.client.Do(startReq)
+	if err != nil {
+		return dockerExecResult{}, err
+	}
+	defer startRes.Body.Close()
+	if startRes.StatusCode < 200 || startRes.StatusCode >= 300 {
+		return dockerExecResult{}, dockerError(startRes, "start container exec")
+	}
+	output, err := io.ReadAll(io.LimitReader(startRes.Body, maxRuntimeCommandOutput+1))
+	if err != nil {
+		return dockerExecResult{}, err
+	}
+	if len(output) > maxRuntimeCommandOutput {
+		return dockerExecResult{}, errors.New("container command output exceeds limit")
+	}
+	inspectReq, err := c.newRequest(ctx, http.MethodGet, "/exec/"+url.PathEscape(created.ID)+"/json", nil)
+	if err != nil {
+		return dockerExecResult{}, err
+	}
+	inspectRes, err := c.client.Do(inspectReq)
+	if err != nil {
+		return dockerExecResult{}, err
+	}
+	defer inspectRes.Body.Close()
+	if inspectRes.StatusCode < 200 || inspectRes.StatusCode >= 300 {
+		return dockerExecResult{}, dockerError(inspectRes, "inspect container exec")
+	}
+	var inspected struct {
+		Running  bool `json:"Running"`
+		ExitCode int  `json:"ExitCode"`
+	}
+	if err := json.NewDecoder(inspectRes.Body).Decode(&inspected); err != nil {
+		return dockerExecResult{}, err
+	}
+	if inspected.Running {
+		return dockerExecResult{}, errors.New("container command is still running")
+	}
+	return dockerExecResult{ExitCode: inspected.ExitCode, Output: string(output)}, nil
 }
 
 func (c *dockerAPIClient) containerLogs(ctx context.Context, name string, tail int) (string, error) {

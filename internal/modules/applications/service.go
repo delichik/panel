@@ -14,6 +14,7 @@ import (
 	"math/rand/v2"
 	"path"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ type Config struct {
 
 type AgentRuntimeClient interface {
 	RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error
+	RuntimeReload(ctx context.Context, baseURL string, req agentcontract.RuntimeReloadRequest) (agentcontract.RuntimeReloadResponse, error)
 	RuntimeCreateContainer(ctx context.Context, baseURL string, req agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error)
 	RuntimeStop(ctx context.Context, baseURL string, req agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error)
 	RuntimeStatus(ctx context.Context, baseURL, instanceID, containerName string) (agentcontract.RuntimeStatusResponse, error)
@@ -136,6 +138,10 @@ type ContainerOperationQueue interface {
 
 type FacilityRuntimeProvider interface {
 	RuntimeSpecForServer(ctx context.Context, app Application, srv server.Server) (appruntime.Spec, bool, error)
+}
+
+type FacilityRuntimeUpdatePlanner interface {
+	PlanRuntimeUpdate(ctx context.Context, app Application, srv server.Server, current, desired appruntime.Spec) appruntime.UpdatePlan
 }
 
 func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Service, cfg Config) *Service {
@@ -1934,9 +1940,11 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
 		return err
 	}
+	previous := appruntime.Instance{}
 	previousContainerName := ""
-	if previous, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID); err == nil {
-		previousContainerName = previous.ContainerName
+	if current, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID); err == nil {
+		previous = current
+		previousContainerName = current.ContainerName
 	}
 	if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
 		_ = s.failLifecycleTargetExecution(ctx, targetID, "prepare_instance", "render_failed", err, false)
@@ -1954,6 +1962,17 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 		return s.withLifecycleTargetLeaseHeartbeat(runCtx, targetID, taskID, func(runCtx context.Context) error {
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
 				return err
+			}
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "plan_update", OwnerTaskID: taskID}); err != nil {
+				return err
+			}
+			reloaded, reloadResult, reloadErr := s.tryRuntimeReload(runCtx, taskID, targetName, baseURL, app, target, previous, instanceSpec)
+			if reloadErr != nil {
+				return reloadErr
+			}
+			if reloaded {
+				result = reloadResult
+				return nil
 			}
 			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "write_files", OwnerTaskID: taskID}); err != nil {
 				return err
@@ -2235,9 +2254,11 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 			}
 			continue
 		}
+		previous := appruntime.Instance{}
 		previousContainerName := ""
-		if previous, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID); err == nil {
-			previousContainerName = previous.ContainerName
+		if current, err := s.runtimeInstanceForServer(ctx, app.ID, target.ID); err == nil {
+			previous = current
+			previousContainerName = current.ContainerName
 		}
 		if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusFailed, Stage: "prepare_instance", InstanceID: instanceSpec.InstanceID, ContainerName: instanceSpec.ContainerName, Error: err.Error(), Finished: true})
@@ -2254,6 +2275,15 @@ func (s *Service) deployRuntimeSpecTargets(ctx context.Context, taskID string, a
 		err = s.executeContainerOperation(ctx, target.ID, func(runCtx context.Context) error {
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, leaseTaskID); err != nil {
 				return err
+			}
+			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "plan_update"})
+			reloaded, reloadResult, reloadErr := s.tryRuntimeReload(runCtx, taskID, targetName, baseURL, app, target, previous, instanceSpec)
+			if reloadErr != nil {
+				return reloadErr
+			}
+			if reloaded {
+				result = reloadResult
+				return nil
 			}
 			_ = s.updateLifecycleTarget(ctx, targetID, lifecycleTargetUpdate{Status: LifecycleTargetStatusDeploying, Stage: "write_files"})
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
@@ -3114,6 +3144,64 @@ func (s *Service) runRuntimeDeployStep(ctx context.Context, taskID, targetName, 
 		return fmt.Errorf("%s failed: %w", step, err)
 	}
 	return nil
+}
+
+func (s *Service) tryRuntimeReload(ctx context.Context, taskID, targetName, baseURL string, app Application, target server.Server, current appruntime.Instance, desired appruntime.Spec) (bool, agentcontract.RuntimeInstanceResponse, error) {
+	planner, ok := s.facilityRuntime.(FacilityRuntimeUpdatePlanner)
+	if !ok || current.ID == "" || current.Status != appruntime.StatusRunning {
+		return false, agentcontract.RuntimeInstanceResponse{}, nil
+	}
+	plan := planner.PlanRuntimeUpdate(ctx, app, target, current.RuntimeSpec, desired)
+	if plan.Mode != appruntime.UpdateModeReload || plan.Strategy == nil || len(plan.Strategy.ValidateCommand) == 0 || len(plan.Strategy.ReloadCommand) == 0 {
+		return false, agentcontract.RuntimeInstanceResponse{}, nil
+	}
+	if !runtimeReloadStructureEqual(current.RuntimeSpec, desired) {
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "recreating "+desired.ContainerName+" on "+targetName+" because container structure changed")
+		}
+		return false, agentcontract.RuntimeInstanceResponse{}, nil
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.AppendLog(ctx, taskID, "system", "reloading "+desired.ContainerName+" on "+targetName)
+	}
+	response, err := s.runtimeClient.RuntimeReload(ctx, baseURL, agentcontract.RuntimeReloadRequest{
+		Spec: desired, ContainerName: desired.ContainerName,
+		ValidateCommand: append([]string(nil), plan.Strategy.ValidateCommand...),
+		ReloadCommand:   append([]string(nil), plan.Strategy.ReloadCommand...),
+	})
+	if err != nil {
+		if s.tasks != nil && taskID != "" {
+			_ = s.tasks.AppendLog(ctx, taskID, "stderr", "reload request failed; falling back to recreation: "+err.Error())
+		}
+		return false, agentcontract.RuntimeInstanceResponse{}, nil
+	}
+	if response.Reloaded {
+		return true, agentcontract.RuntimeInstanceResponse{
+			InstanceID: desired.InstanceID, ContainerName: desired.ContainerName, ContainerID: current.ContainerID,
+			Status: appruntime.StatusRunning, ObservedAt: time.Now().UTC(),
+		}, nil
+	}
+	message := firstNonEmpty(strings.TrimSpace(response.Error), "runtime reload failed")
+	if strings.TrimSpace(response.Output) != "" {
+		message += ": " + strings.TrimSpace(response.Output)
+	}
+	if response.Phase == "validate" {
+		return false, agentcontract.RuntimeInstanceResponse{}, deploymentStageError{stage: "validate_reload", code: "reload_validation_failed", retryable: false, err: errors.New(message)}
+	}
+	if s.tasks != nil && taskID != "" {
+		_ = s.tasks.AppendLog(ctx, taskID, "stderr", message+"; falling back to recreation")
+	}
+	return false, agentcontract.RuntimeInstanceResponse{}, nil
+}
+
+func runtimeReloadStructureEqual(current, desired appruntime.Spec) bool {
+	current.Files = nil
+	desired.Files = nil
+	current.Generation = 0
+	desired.Generation = 0
+	current.SpecHash = ""
+	desired.SpecHash = ""
+	return reflect.DeepEqual(current, desired)
 }
 
 type runtimeDeploymentFailure struct {

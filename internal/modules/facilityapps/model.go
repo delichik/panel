@@ -9,14 +9,13 @@ import (
 const (
 	ReverseProxyID        = "reverse_proxy"
 	supportedProxyImage   = "nginx:1.28-alpine"
-	defaultPanelUpstream  = "http://127.0.0.1:8080"
 	proxyApplicationID    = "facility-reverse-proxy"
 	proxyInstancePrefix   = "facility-reverse-proxy-"
 	proxyContainerName    = "panel-facility-reverse-proxy"
-	proxyConfigPath       = "nginx.conf"
-	proxyContainerConf    = "/etc/nginx/nginx.conf"
-	proxyConfigDir        = "conf.d"
-	proxyContainerConfDir = "/etc/nginx/conf.d"
+	proxyConfigRoot       = "nginx"
+	proxyConfigPath       = "nginx/nginx.conf"
+	proxyContainerRoot    = "/etc/nginx"
+	proxyConfigDir        = "nginx/conf.d"
 	proxyStaticMountRoot  = "/srv/panel-static"
 	proxyTLSMountRoot     = "/etc/nginx/panel-certs"
 
@@ -39,6 +38,7 @@ const (
 type ReverseProxyConfig struct {
 	ID                string                                       `json:"id"`
 	DeploymentServers []string                                     `json:"deploymentServers"`
+	PanelHostServerID string                                       `json:"panelHostServerId,omitempty"`
 	PanelEntry        PanelEntry                                   `json:"panelEntry"`
 	Domains           []FacilityRouteDomain                        `json:"domains"`
 	StaticAssets      []StaticAsset                                `json:"staticAssets"`

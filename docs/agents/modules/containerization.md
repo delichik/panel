@@ -31,13 +31,15 @@
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
-设施应用 API 挂在 `/api/v1/facility-apps/reverse-proxy`，支持读取、兼容保存和手动同步。配置页使用设施保存会话：`POST /save-sessions` 创建会话，`POST /save-sessions/{id}/assets` 暂存新增或替换资产，`POST /save-sessions/{id}/assets/delete` 标记删除，`POST /save-sessions/{id}/commit` 原子提交完整配置和资产，`DELETE /save-sessions/{id}` 放弃。会话 30 分钟过期、每 5 分钟清理；提交用创建时的 `updatedAt` 检测并发覆盖。成功提交会更新本地配置和隐藏应用 desired state，然后触发 `application_reconcile` 协调 `facility-reverse-proxy`；实际重建当前部署服务器上的 `panel-facility-reverse-proxy` Nginx 容器、停止从部署服务器列表移除的节点，均由协调任务异步执行。
+设施应用 API 挂在 `/api/v1/facility-apps/reverse-proxy`，支持读取、兼容保存和手动同步。配置页使用设施保存会话：`POST /save-sessions` 创建会话，`POST /save-sessions/{id}/assets` 暂存新增或替换资产，`POST /save-sessions/{id}/assets/delete` 标记删除，`POST /save-sessions/{id}/commit` 原子提交完整配置和资产，`DELETE /save-sessions/{id}` 放弃。会话 30 分钟过期、每 5 分钟清理；提交用创建时的 `updatedAt` 检测并发覆盖。成功提交会更新本地配置和隐藏应用 desired state，然后触发 `application_reconcile` 协调 `facility-reverse-proxy`；协调任务根据设施 update planner 对每个节点选择 reload 或 recreate，并停止从部署服务器列表移除的节点。
 
 ## 设施应用
 
 - 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；`domain_policies_json` 保存域名入口节点、上游模式、调度策略和主节点。Path 高级选项继续保存在 `static_sites_json` 的 `options` 中。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
-- 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、删除旧容器、创建容器并启动；不得新增 agent 侧胖反向代理接口。
+- 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
+- Nginx 全套配置使用一个 managed directory 挂载到 `/etc/nginx`，不能把主配置作为单文件 bind mount；否则宿主机原子 rename 后运行容器仍可能引用旧 inode。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可注册 `nginx -t`/`nginx -s reload`，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
 - 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。
+- Panel 入口同样遵循入口容器网络模式：host network 使用 `127.0.0.1:8080`，`panel-apps` bridge 使用 `host.docker.internal:8080`。不得在 bridge 模式继续把 Panel upstream 指向入口容器自身的回环地址。
 - 静态站点配置保存域名、路径和宿主机根目录；部署时作为只读 bind mount 挂入 nginx 容器。
 - 应用里的 `reverseProxy` 规则只会被下发到反向代理设施应用覆盖的服务器；未指定为设施应用部署目标的服务器忽略这些规则。
 - 每个设施域名必须显式选择至少一台入口节点，且入口节点必须属于设施全局网关节点；新保存请求不得把空选择解释为全部节点。读取旧配置时，旧 `deploymentServers` 为空仍按当时全部全局网关节点展开，多个旧 Path 使用不同节点集合时取并集，避免迁移缩小已有访问范围。
@@ -114,7 +116,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 ## Entrance Gateway UI And Static Content
 
 - The reverse proxy facility app is presented in the frontend as an entrance gateway. Deployment servers are called gateway nodes in this context because selecting them means those nodes listen on 80/443 and process application routes plus static sites.
-- The entrance gateway owns the Panel access entry. `panelEntry` is a system route, not a normal static site row: when enabled, the selected gateway node proxies the configured domain at `/` to the local Panel service at `http://127.0.0.1:8080`. The selected Panel host must also be one of the gateway nodes, and the Panel entry cannot share the same domain plus root path with a static route.
+- The entrance gateway owns the Panel access entry. `panelEntry` is a system route, not a normal static site row: it is locked to the singleton Panel host registered by `panel setup`, and that host must remain a global gateway node. Host-network gateways use `127.0.0.1:8080`; bridge-network gateways use `host.docker.internal:8080`.
 - The facility detail page is read-only. It uses `AppDetailPanel`, exposes only immediate sync and the link to the dedicated reverse-proxy configuration route, and must not render editable gateway, domain, path, Panel-entry, or asset controls.
 - Entrance gateway routes are edited on the hidden full-page route `/applications/facility-apps/reverse-proxy/config` as `domains` with nested paths. The configuration page contains only editable facility settings; application routes remain read-only on the facility detail page.
 - Origin selection and AnyAccess are edited at domain level. A path row does not expose its own node selector. Origins are required and are chosen only from the current global gateway nodes.
@@ -126,6 +128,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - The facility app selector remains scalable and only identifies the facility app. Metrics, route summaries and deployment records belong in the read-only detail workspace. The dedicated configuration page is one full-height work surface with internal body scrolling; it keeps all changes in a local draft and performs a single Save and apply operation.
 - Facility actions follow the shared operation model: immediate sync and entering configuration live in the read-only detail header; the configuration page owns its Save and apply action. Domain/path/asset deletion requires a standard confirmation dialog. Path editing uses an independent dialog draft, and saving is blocked by a persistent progress overlay while assets and configuration are committed through the save session.
 - Uploaded site content is distributed through agent managed files and mounted read-only into the nginx container. Server directories still use read-only bind mounts from the target node.
+- Agent managed files use full desired-set synchronization: ordinary files are written to temporary siblings and renamed, the manifest is committed last, and files managed by the previous manifest but absent from the new manifest are removed. Files that never belonged to a Panel manifest are preserved. This applies to both reload and recreate.
 - Facility reverse proxy deployment maintains a hidden managed application identity with id `facility-reverse-proxy` for application lifecycle deployment record queries. The facility configuration remains in `facility_app_configs`, the managed identity is filtered out of normal application lists, and each save/reconcile writes the latest `application_lifecycle_operations` plus per-node `application_lifecycle_targets` in `Store.LogDB()` shown on the facility app page.
  
 ## Agent Report Cache

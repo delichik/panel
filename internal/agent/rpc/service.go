@@ -255,6 +255,25 @@ func (h *Handler) RuntimeWriteFiles(ctx context.Context, req *agentpb.RuntimeWri
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }
 
+func (h *Handler) RuntimeReload(ctx context.Context, req *agentpb.RuntimeReloadRequest) (*agentpb.RuntimeReloadResponse, error) {
+	if err := h.requireRuntime(); err != nil {
+		return nil, err
+	}
+	result, err := h.runtime.Reload(ctx, agentcontract.RuntimeReloadRequest{
+		Spec:            goSpec(req.Spec),
+		ContainerName:   req.ContainerName,
+		ValidateCommand: append([]string(nil), req.ValidateCommand...),
+		ReloadCommand:   append([]string(nil), req.ReloadCommand...),
+	})
+	return &agentpb.RuntimeReloadResponse{
+		Reloaded: result.Reloaded,
+		Phase:    result.Phase,
+		ExitCode: int32(result.ExitCode),
+		Output:   result.Output,
+		Error:    result.Error,
+	}, remoteError(err)
+}
+
 func (h *Handler) RuntimeCreateContainer(ctx context.Context, req *agentpb.RuntimeCreateContainerRequest) (*agentpb.RuntimeCreateContainerResponse, error) {
 	if err := h.requireRuntime(); err != nil {
 		return nil, err

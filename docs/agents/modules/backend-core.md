@@ -5,6 +5,7 @@
 - Container runtime starts `cmd/panel-init/main.go`; local development may still run `cmd/panel/main.go` directly.
 - `panel_init` starts a random local `127.0.0.1:0` restart listener, generates a random restart token, starts the child Panel process with `--init-restart-url`, `--init-restart-token`, and `--maintenance-mode`, and exits when the child exits without a restart request.
 - Backup/restore restart requests POST the next mode to the local `panel_init` listener, asking it to restart Panel with `--maintenance-mode backup_export`, `restore`, or `normal`.
+- Normal Panel startup also creates `<dataRoot>/run/panel-control.sock` on Linux with owner-only permissions. `panel setup` uses this local socket to ask the already-running process to perform the fixed Panel-host bootstrap workflow; the CLI must not open the databases or duplicate business-service assembly.
 - `cmd/panel/main.go` must not enter backup/restore maintenance mode from pending files alone; the maintenance mode argument is the required gate.
 
 ## Agent Report Stream
@@ -63,6 +64,7 @@
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
 - 入口网关设施配置表 `facility_app_configs` 使用 `domains_json` 保存域名、源站、AnyAccess 和嵌套 Path。升级旧库时迁移会转换旧设施字段与应用 `reverse_proxy_json`，先检查设施、应用和 Panel 入口的域名所有权冲突，再重建设施表删除旧镜像、静态站点和域名策略列；迁移完成后业务代码不保留旧 JSON 字段兼容。
+- `panel_installation` 是固定 `default` 记录的单例安装状态，使用服务器外键保存待初始化节点和唯一 Panel 宿主节点。宿主节点不能通过普通服务器删除流程移除；Panel 入口启用时必须绑定该节点。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。
 - 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、AppDB 中的 `application_lifecycle_operations`/`application_lifecycle_targets`、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。
 - 会被展示的持久化配置只保存稳定 key、kind、value，不保存当前语言下的展示文案。

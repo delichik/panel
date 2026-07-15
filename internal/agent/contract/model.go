@@ -44,7 +44,7 @@ const (
 
 var (
 	Version              = buildinfo.NormalizedVersion()
-	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
+	RequiredCapabilities = []string{"health", "os-release", "system-traits", "metrics-snapshot", "packages-list", "packages-upgrade", "ufw-status", "ufw-write", "fail2ban-status", "fail2ban-write", "fail2ban-release", "system-restart", "runtime-write-files", "runtime-reload", "runtime-create-container", "runtime-status", "runtime-logs", "runtime-persistent-archive", "runtime-stop", "runtime-restart", "runtime-container-name", "docker-containers", "docker-container-logs", "docker-images", "docker-networks", "docker-volumes"}
 )
 
 type Client interface {
@@ -205,6 +205,21 @@ type Fail2BanApplyRequest struct {
 
 type RuntimeWriteFilesRequest struct {
 	Spec appruntime.Spec `json:"spec"`
+}
+
+type RuntimeReloadRequest struct {
+	Spec            appruntime.Spec `json:"spec"`
+	ContainerName   string          `json:"containerName"`
+	ValidateCommand []string        `json:"validateCommand"`
+	ReloadCommand   []string        `json:"reloadCommand"`
+}
+
+type RuntimeReloadResponse struct {
+	Reloaded bool   `json:"reloaded"`
+	Phase    string `json:"phase"`
+	ExitCode int    `json:"exitCode"`
+	Output   string `json:"output,omitempty"`
+	Error    string `json:"error,omitempty"`
 }
 
 type RuntimeCreateContainerRequest struct {

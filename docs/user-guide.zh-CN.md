@@ -29,6 +29,8 @@ Panel 不需要把目标服务器的 Docker Socket 挂载到 Panel 容器。Pane
 
 ## 1. 首次登录
 
+推荐先在 Panel 宿主机执行 `docker exec -it panel /app/panel setup`。该命令通过 SSH 将当前宿主机纳管、安装 Agent、登记唯一 Panel 宿主节点，并部署 Panel 自身的域名入口。完成后使用命令输出的 URL 登录。
+
 打开 Panel 地址，使用初始账号登录：
 
 - 用户名：`admin`

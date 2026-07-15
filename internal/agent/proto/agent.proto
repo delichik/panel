@@ -34,6 +34,7 @@ service AgentService {
   rpc DockerVolumes(Empty) returns (DockerVolumesResponse);
   rpc DockerVolumeDelete(DockerVolumeDeleteRequest) returns (OKResponse);
   rpc RuntimeWriteFiles(RuntimeWriteFilesRequest) returns (OKResponse);
+  rpc RuntimeReload(RuntimeReloadRequest) returns (RuntimeReloadResponse);
   rpc RuntimeCreateContainer(RuntimeCreateContainerRequest) returns (RuntimeCreateContainerResponse);
   rpc RuntimeStop(RuntimeStopRequest) returns (RuntimeInstanceResponse);
   rpc RuntimeRestart(RuntimeRestartRequest) returns (RuntimeInstanceResponse);
@@ -297,6 +298,21 @@ message RuntimeCheck {
 
 message RuntimeWriteFilesRequest {
   RuntimeSpec spec = 1;
+}
+
+message RuntimeReloadRequest {
+  RuntimeSpec spec = 1;
+  string container_name = 2;
+  repeated string validate_command = 3;
+  repeated string reload_command = 4;
+}
+
+message RuntimeReloadResponse {
+  bool reloaded = 1;
+  string phase = 2;
+  int32 exit_code = 3;
+  string output = 4;
+  string error = 5;
 }
 
 message RuntimeCreateContainerRequest {

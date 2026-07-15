@@ -48,6 +48,7 @@ const sections = computed(() => [
 ]);
 const serverOptions = computed(() => servers.value.map((server) => ({ title: `${server.name} (${server.host})`, value: server.id })));
 const gatewayServerOptions = computed(() => serverOptions.value.filter((item) => form.deploymentServers.includes(item.value)));
+const panelHostServerId = computed(() => config.value?.panelHostServerId || '');
 const staticAssetOptions = computed(() => staticAssets.value.map((asset) => ({ title: `${asset.name} (${asset.filename})`, value: asset.id })));
 const routeTypeOptions = computed(() => [
   { title: t('facilityAppsPage.staticContent'), value: 'static' },
@@ -129,7 +130,7 @@ async function load() {
 function applyConfig(next: FacilityReverseProxyConfigDto) {
   config.value = next;
   form.deploymentServers = [...(next.deploymentServers ?? [])];
-  form.panelEntry = { enabled: Boolean(next.panelEntry?.enabled), serverId: next.panelEntry?.serverId || '', domain: next.panelEntry?.domain || '' };
+  form.panelEntry = { enabled: Boolean(next.panelEntry?.enabled), serverId: next.panelHostServerId || next.panelEntry?.serverId || '', domain: next.panelEntry?.domain || '' };
   form.domains = (next.domains ?? []).map(cloneDomain);
   staticAssets.value = next.staticAssets ?? staticAssets.value;
   pendingAssetUploads.value = [];
@@ -140,7 +141,7 @@ function applyConfig(next: FacilityReverseProxyConfigDto) {
 function savePayload(): FacilityReverseProxySaveDto {
   return {
     deploymentServers: [...form.deploymentServers],
-    panelEntry: { enabled: Boolean(form.panelEntry.enabled), serverId: form.panelEntry.serverId || '', domain: (form.panelEntry.domain || '').trim().toLowerCase() },
+    panelEntry: { enabled: Boolean(form.panelEntry.enabled), serverId: form.panelEntry.enabled ? panelHostServerId.value : '', domain: (form.panelEntry.domain || '').trim().toLowerCase() },
     domains: form.domains.map((domain) => ({
       ...cloneDomain(domain),
       domain: domain.domain.trim().toLowerCase(),
@@ -154,6 +155,8 @@ function savePayload(): FacilityReverseProxySaveDto {
 
 function validatePayload(payload: FacilityReverseProxySaveDto) {
   const gateways = new Set(payload.deploymentServers);
+  if (payload.panelEntry.enabled && !panelHostServerId.value) return t('facilityAppsPage.panelHostSetupRequired');
+  if (payload.panelEntry.enabled && !gateways.has(panelHostServerId.value)) return t('facilityAppsPage.panelHostGatewayRequired');
   for (const domain of payload.domains) {
     if (!domain.domain) return t('facilityAppsPage.domainRequired');
     if (!domain.originServerIds.length) return t('facilityAppsPage.originServersRequired');
@@ -202,13 +205,14 @@ async function save() {
 }
 
 function updateGatewayServers(ids: string[]) {
+  if (form.panelEntry.enabled && panelHostServerId.value && !ids.includes(panelHostServerId.value)) ids = [...ids, panelHostServerId.value];
   const allowed = new Set(ids);
   form.deploymentServers = [...ids];
   for (const domain of form.domains) {
     domain.originServerIds = domain.originServerIds.filter((id) => allowed.has(id));
     if (domain.anyAccess.primaryOriginServerId && !domain.originServerIds.includes(domain.anyAccess.primaryOriginServerId)) domain.anyAccess.primaryOriginServerId = '';
   }
-  if (form.panelEntry.serverId && !allowed.has(form.panelEntry.serverId)) form.panelEntry.serverId = '';
+  form.panelEntry.serverId = form.panelEntry.enabled ? panelHostServerId.value : '';
 }
 
 function openDomainDialog(index = -1) {
@@ -352,9 +356,10 @@ onBeforeRouteLeave(() => { if (saving.value) return false; if (!dirty.value) ret
 
               <section id="facility-settings-panel" class="editor-section">
                 <div><div class="section-title">{{ t('facilityAppsPage.panelEntry') }}</div><div class="section-hint">{{ t('facilityAppsPage.panelEntryHint') }}</div></div>
-                <v-switch v-model="form.panelEntry.enabled" :label="t('facilityAppsPage.enablePanelEntry')" color="primary" />
+                <v-switch v-model="form.panelEntry.enabled" :label="t('facilityAppsPage.enablePanelEntry')" color="primary" :disabled="!panelHostServerId" @update:model-value="form.panelEntry.serverId = panelHostServerId" />
+                <v-alert v-if="!panelHostServerId" type="info" variant="tonal" density="compact">{{ t('facilityAppsPage.panelHostSetupRequired') }}</v-alert>
                 <div v-if="form.panelEntry.enabled" class="field-grid">
-                  <v-select v-model="form.panelEntry.serverId" :items="gatewayServerOptions" item-title="title" item-value="value" :label="t('facilityAppsPage.globalGatewayNode')" variant="outlined" density="comfortable" />
+                  <v-select v-model="form.panelEntry.serverId" :items="gatewayServerOptions" item-title="title" item-value="value" :label="t('facilityAppsPage.panelHostNode')" variant="outlined" density="comfortable" disabled />
                   <v-text-field v-model="form.panelEntry.domain" :label="t('facilityAppsPage.domain')" variant="outlined" density="comfortable" />
                 </div>
               </section>

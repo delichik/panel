@@ -45,6 +45,7 @@ const (
 	AgentService_DockerVolumes_FullMethodName            = "/panel.agent.v1.AgentService/DockerVolumes"
 	AgentService_DockerVolumeDelete_FullMethodName       = "/panel.agent.v1.AgentService/DockerVolumeDelete"
 	AgentService_RuntimeWriteFiles_FullMethodName        = "/panel.agent.v1.AgentService/RuntimeWriteFiles"
+	AgentService_RuntimeReload_FullMethodName            = "/panel.agent.v1.AgentService/RuntimeReload"
 	AgentService_RuntimeCreateContainer_FullMethodName   = "/panel.agent.v1.AgentService/RuntimeCreateContainer"
 	AgentService_RuntimeStop_FullMethodName              = "/panel.agent.v1.AgentService/RuntimeStop"
 	AgentService_RuntimeRestart_FullMethodName           = "/panel.agent.v1.AgentService/RuntimeRestart"
@@ -84,6 +85,7 @@ type AgentServiceClient interface {
 	DockerVolumes(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*DockerVolumesResponse, error)
 	DockerVolumeDelete(ctx context.Context, in *DockerVolumeDeleteRequest, opts ...grpc.CallOption) (*OKResponse, error)
 	RuntimeWriteFiles(ctx context.Context, in *RuntimeWriteFilesRequest, opts ...grpc.CallOption) (*OKResponse, error)
+	RuntimeReload(ctx context.Context, in *RuntimeReloadRequest, opts ...grpc.CallOption) (*RuntimeReloadResponse, error)
 	RuntimeCreateContainer(ctx context.Context, in *RuntimeCreateContainerRequest, opts ...grpc.CallOption) (*RuntimeCreateContainerResponse, error)
 	RuntimeStop(ctx context.Context, in *RuntimeStopRequest, opts ...grpc.CallOption) (*RuntimeInstanceResponse, error)
 	RuntimeRestart(ctx context.Context, in *RuntimeRestartRequest, opts ...grpc.CallOption) (*RuntimeInstanceResponse, error)
@@ -361,6 +363,16 @@ func (c *agentServiceClient) RuntimeWriteFiles(ctx context.Context, in *RuntimeW
 	return out, nil
 }
 
+func (c *agentServiceClient) RuntimeReload(ctx context.Context, in *RuntimeReloadRequest, opts ...grpc.CallOption) (*RuntimeReloadResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RuntimeReloadResponse)
+	err := c.cc.Invoke(ctx, AgentService_RuntimeReload_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *agentServiceClient) RuntimeCreateContainer(ctx context.Context, in *RuntimeCreateContainerRequest, opts ...grpc.CallOption) (*RuntimeCreateContainerResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(RuntimeCreateContainerResponse)
@@ -461,6 +473,7 @@ type AgentServiceServer interface {
 	DockerVolumes(context.Context, *Empty) (*DockerVolumesResponse, error)
 	DockerVolumeDelete(context.Context, *DockerVolumeDeleteRequest) (*OKResponse, error)
 	RuntimeWriteFiles(context.Context, *RuntimeWriteFilesRequest) (*OKResponse, error)
+	RuntimeReload(context.Context, *RuntimeReloadRequest) (*RuntimeReloadResponse, error)
 	RuntimeCreateContainer(context.Context, *RuntimeCreateContainerRequest) (*RuntimeCreateContainerResponse, error)
 	RuntimeStop(context.Context, *RuntimeStopRequest) (*RuntimeInstanceResponse, error)
 	RuntimeRestart(context.Context, *RuntimeRestartRequest) (*RuntimeInstanceResponse, error)
@@ -555,6 +568,9 @@ func (UnimplementedAgentServiceServer) DockerVolumeDelete(context.Context, *Dock
 }
 func (UnimplementedAgentServiceServer) RuntimeWriteFiles(context.Context, *RuntimeWriteFilesRequest) (*OKResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RuntimeWriteFiles not implemented")
+}
+func (UnimplementedAgentServiceServer) RuntimeReload(context.Context, *RuntimeReloadRequest) (*RuntimeReloadResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method RuntimeReload not implemented")
 }
 func (UnimplementedAgentServiceServer) RuntimeCreateContainer(context.Context, *RuntimeCreateContainerRequest) (*RuntimeCreateContainerResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RuntimeCreateContainer not implemented")
@@ -1066,6 +1082,24 @@ func _AgentService_RuntimeWriteFiles_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AgentService_RuntimeReload_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RuntimeReloadRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AgentServiceServer).RuntimeReload(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AgentService_RuntimeReload_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AgentServiceServer).RuntimeReload(ctx, req.(*RuntimeReloadRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _AgentService_RuntimeCreateContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RuntimeCreateContainerRequest)
 	if err := dec(in); err != nil {
@@ -1302,6 +1336,10 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RuntimeWriteFiles",
 			Handler:    _AgentService_RuntimeWriteFiles_Handler,
+		},
+		{
+			MethodName: "RuntimeReload",
+			Handler:    _AgentService_RuntimeReload_Handler,
 		},
 		{
 			MethodName: "RuntimeCreateContainer",

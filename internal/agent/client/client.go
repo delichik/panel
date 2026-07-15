@@ -222,6 +222,27 @@ func (c *GRPCClient) RuntimeWriteFiles(ctx context.Context, endpoint string, req
 	return err
 }
 
+func (c *GRPCClient) RuntimeReload(ctx context.Context, endpoint string, req agentcontract.RuntimeReloadRequest) (agentcontract.RuntimeReloadResponse, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeReloadResponse, error) {
+		return client.RuntimeReload(ctx, &agentpb.RuntimeReloadRequest{
+			Spec:            agentrpc.PBSpec(req.Spec),
+			ContainerName:   req.ContainerName,
+			ValidateCommand: append([]string(nil), req.ValidateCommand...),
+			ReloadCommand:   append([]string(nil), req.ReloadCommand...),
+		})
+	})
+	if out == nil {
+		out = &agentpb.RuntimeReloadResponse{}
+	}
+	return agentcontract.RuntimeReloadResponse{
+		Reloaded: out.Reloaded,
+		Phase:    out.Phase,
+		ExitCode: int(out.ExitCode),
+		Output:   out.Output,
+		Error:    out.Error,
+	}, err
+}
+
 func (c *GRPCClient) RuntimeCreateContainer(ctx context.Context, endpoint string, req agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
 	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.RuntimeCreateContainerResponse, error) {
 		return client.RuntimeCreateContainer(ctx, &agentpb.RuntimeCreateContainerRequest{ServerId: req.ServerID, Spec: agentrpc.PBSpec(req.Spec)})

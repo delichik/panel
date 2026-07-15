@@ -23,6 +23,9 @@ type maintenanceApplication interface {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		os.Exit(runSetupCLI(os.Args[2:]))
+	}
 	maintenanceMode := flag.String("maintenance-mode", backups.MaintenanceModeNormal, "startup maintenance mode")
 	initRestartURL := flag.String("init-restart-url", "", "local panel_init restart URL")
 	initRestartToken := flag.String("init-restart-token", "", "local panel_init restart token")

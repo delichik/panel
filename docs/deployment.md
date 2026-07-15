@@ -33,7 +33,7 @@ services:
     container_name: panel
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - panel-data:/app/data
 
@@ -56,7 +56,15 @@ docker compose ps
 docker compose logs --tail=100 panel
 ```
 
-Open `http://<panel-host>:8080` in a browser.
+After startup, make sure the Panel domain points to this host, then run on the host over SSH:
+
+```bash
+docker exec -it panel /app/panel setup
+```
+
+Enter the host SSH address, port, user, credential, and Panel domain. Panel connects back to the host over SSH, enrolls it, installs the Agent, records it as the singleton Panel host, and deploys Panel's own Nginx entrance. When setup completes, open the reported `http://<panel-domain>` URL.
+
+Setup is resumable. If Agent or entrance deployment fails, run the command again to continue from the saved stage. Passwords and private-key passphrases are read interactively and should not be passed as command arguments.
 
 Default account:
 
@@ -79,7 +87,7 @@ Start Panel:
 docker run -d \
   --name panel \
   --restart unless-stopped \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -v panel-data:/app/data \
   ghcr.io/delichik/panel:latest
 ```
@@ -91,7 +99,7 @@ docker ps --filter name=panel
 docker logs --tail=100 panel
 ```
 
-Open `http://<panel-host>:8080`, sign in with `admin/admin`, and change the password when prompted.
+Run `docker exec -it panel /app/panel setup`, then sign in to the reported domain with `admin/admin` and change the password when prompted.
 
 ## Data Persistence
 
@@ -167,7 +175,7 @@ docker start panel
 
 ## Network and HTTPS
 
-The examples publish Panel on all host interfaces at port `8080`. This is convenient on a trusted private network, but it should not be exposed directly to the public internet without HTTPS and access controls.
+The examples publish Panel port `8080` only on the host loopback interface. The public Panel entrance is deployed by the entrance gateway after `panel setup`; the raw Panel port does not need to be exposed publicly.
 
 For a reverse proxy running on the same host, you can bind Panel to loopback instead:
 

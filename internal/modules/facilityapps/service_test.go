@@ -112,6 +112,44 @@ func TestProxySpecUsesFixedSupportedImage(t *testing.T) {
 	}
 }
 
+func TestProxySpecMountsNginxConfigurationDirectory(t *testing.T) {
+	svc := &Service{}
+	spec, err := svc.proxySpec(context.Background(), "srv-a", ReverseProxyConfig{}, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mount := range spec.Mounts {
+		if mount.Source == proxyConfigRoot && mount.Target == proxyContainerRoot && mount.ReadOnly {
+			return
+		}
+	}
+	t.Fatalf("nginx directory mount missing: %#v", spec.Mounts)
+}
+
+func TestPanelEntryUsesHostGatewayInBridgeMode(t *testing.T) {
+	svc := &Service{}
+	cfg := ReverseProxyConfig{PanelEntry: PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"}}
+	apps := []applications.ApplicationReverseProxyConfig{{Routes: []applications.ReverseProxyRoute{{
+		Domain: "app.example.test", TargetType: applications.ReverseProxyTargetContainer, TargetContainer: "panel-app", TargetPort: 8080,
+		OriginServerIDs: []string{"srv-a"}, Paths: []applications.ReverseProxyPath{{Path: "/"}},
+	}}}}
+	_, _, files, err := svc.renderNginxConfig(context.Background(), "srv-a", cfg, apps, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := managedConfigText(files); !strings.Contains(text, "proxy_pass http://host.docker.internal:8080") {
+		t.Fatalf("Panel bridge upstream missing:\n%s", text)
+	}
+}
+
+func TestReverseProxyFacilityPlansReload(t *testing.T) {
+	svc := &Service{}
+	plan := svc.PlanRuntimeUpdate(context.Background(), applications.Application{ID: proxyApplicationID}, server.Server{}, appruntime.Spec{}, appruntime.Spec{})
+	if plan.Mode != appruntime.UpdateModeReload || plan.Strategy == nil || len(plan.Strategy.ValidateCommand) == 0 || len(plan.Strategy.ReloadCommand) == 0 {
+		t.Fatalf("reload plan = %#v", plan)
+	}
+}
+
 func managedConfigText(files []appruntime.ManagedFile) string {
 	var out strings.Builder
 	for _, file := range files {

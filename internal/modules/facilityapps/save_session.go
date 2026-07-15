@@ -174,6 +174,9 @@ func (s *Service) CommitSaveSession(ctx context.Context, sessionID string, in Co
 	if err != nil {
 		return SaveSessionCommitResult{}, err
 	}
+	if err := s.validatePanelHost(ctx, next); err != nil {
+		return SaveSessionCommitResult{}, err
+	}
 	if err := validateSessionAssetReferences(next, session.Assets); err != nil {
 		return SaveSessionCommitResult{}, err
 	}

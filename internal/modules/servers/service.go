@@ -63,6 +63,11 @@ type Service struct {
 	agentTLS  *agentsecurity.TLSAssets
 	agentKeys agentTLSProvider
 	tasks     *tasks.Service
+	hostGuard PanelHostGuard
+}
+
+type PanelHostGuard interface {
+	IsHostServer(ctx context.Context, serverID string) (bool, error)
 }
 
 type agentTLSProvider interface {
@@ -88,6 +93,10 @@ func WithAgentTLSAssets(assets *agentsecurity.TLSAssets) Option {
 
 func WithAgentTLSProvider(provider agentTLSProvider) Option {
 	return func(s *Service) { s.agentKeys = provider }
+}
+
+func WithPanelHostGuard(guard PanelHostGuard) Option {
+	return func(s *Service) { s.hostGuard = guard }
 }
 
 func NewService(db *sql.DB, exec sshx.RemoteExecutor, taskSvc *tasks.Service, opts ...Option) *Service {

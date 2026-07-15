@@ -53,6 +53,17 @@ func (s *Store) Migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL,
 			FOREIGN KEY(credential_id) REFERENCES credentials(id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS panel_installation (
+			id TEXT PRIMARY KEY CHECK(id = 'default'),
+			host_server_id TEXT UNIQUE,
+			pending_server_id TEXT UNIQUE,
+			stage TEXT NOT NULL DEFAULT '',
+			last_error TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY(host_server_id) REFERENCES servers(id),
+			FOREIGN KEY(pending_server_id) REFERENCES servers(id) ON DELETE SET NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS package_updates (
 			server_id TEXT NOT NULL,
 			name TEXT NOT NULL,

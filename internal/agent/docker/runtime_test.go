@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 	"runtime"
 	"testing"
 
+	agentcontract "panel/internal/agent/contract"
 	appruntime "panel/internal/modules/applications/runtime"
 )
 
@@ -107,6 +109,43 @@ func TestDockerAPIClientCreateContainerOmitsRestartPolicy(t *testing.T) {
 	}
 	if _, ok := hostConfig["RestartPolicy"]; ok {
 		t.Fatalf("RestartPolicy was sent in create payload: %#v", hostConfig["RestartPolicy"])
+	}
+}
+
+func TestWriteManagedFilesRemovesStaleManagedFiles(t *testing.T) {
+	runtime := &LocalRuntime{root: t.TempDir()}
+	spec := appruntime.Spec{ApplicationID: "app", InstanceID: "instance", Files: []appruntime.ManagedFile{
+		{Path: "nginx/nginx.conf", Content: []byte("first"), Mode: "0644"},
+		{Path: "nginx/conf.d/old.conf", Content: []byte("old"), Mode: "0644"},
+	}}
+	if err := runtime.writeManagedFiles(spec); err != nil {
+		t.Fatal(err)
+	}
+	spec.Files = []appruntime.ManagedFile{{Path: "nginx/nginx.conf", Content: []byte("second"), Mode: "0644"}}
+	if err := runtime.writeManagedFiles(spec); err != nil {
+		t.Fatal(err)
+	}
+	oldPath, err := safeRuntimePath(runtime.root, "app", "instance", "files", "nginx/conf.d/old.conf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(oldPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stale managed file still exists: %v", err)
+	}
+	mainPath, _ := safeRuntimePath(runtime.root, "app", "instance", "files", "nginx/nginx.conf")
+	content, err := os.ReadFile(mainPath)
+	if err != nil || string(content) != "second" {
+		t.Fatalf("managed file = %q, %v", content, err)
+	}
+}
+
+func TestAppliedStateMatchesContainerIdentity(t *testing.T) {
+	state := appliedState{ContainerID: "container-1", ContainerName: "panel-nginx", Generation: 2, SpecHash: "hash"}
+	if !state.matches(agentcontract.DockerContainer{ID: "container-1", Names: []string{"/panel-nginx"}}) {
+		t.Fatal("matching applied state was rejected")
+	}
+	if state.matches(agentcontract.DockerContainer{ID: "container-2", Names: []string{"/panel-nginx"}}) {
+		t.Fatal("applied state from another container was accepted")
 	}
 }
 

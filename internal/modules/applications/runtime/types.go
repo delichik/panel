@@ -16,7 +16,21 @@ const (
 
 	ManagedFileKindFile    = "file"
 	ManagedFileKindArchive = "archive"
+
+	UpdateModeReload   = "reload"
+	UpdateModeRecreate = "recreate"
 )
+
+type ReloadStrategy struct {
+	ValidateCommand []string `json:"validateCommand,omitempty"`
+	ReloadCommand   []string `json:"reloadCommand,omitempty"`
+}
+
+type UpdatePlan struct {
+	Mode     string          `json:"mode"`
+	Reason   string          `json:"reason,omitempty"`
+	Strategy *ReloadStrategy `json:"strategy,omitempty"`
+}
 
 type Spec struct {
 	ID            string            `json:"id"`
