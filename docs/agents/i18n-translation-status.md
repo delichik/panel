@@ -7,6 +7,25 @@
 
 ## 最近已补齐
 
+- `web/src/views/credentials/_v2/`、`web/src/views/firewall/_v2/`、`web/src/views/packages/_v2/`
+  - 隔离 Credentials/Firewall/Packages V2 页面的列表筛选、状态、空状态、添加/编辑/删除确认、规则和软件包操作、任务中心入口已接入英文与简体中文；服务器名、IP、软件包名、版本、仓库、用户备注和引用对象名称保持实例原值。
+
+- `web/src/views/servers/_v2/`
+  - Servers V2 的列表筛选、连接/Agent/系统状态、详情分区、编辑、凭据加载/空状态、候选连接探测安全原因、初始化、Agent/重启/UFW 安装操作、Panel host 限制和删除影响已补齐英文与简体中文；服务器名、地址、接口名、用户备注与仅供内部诊断的 probe `diagnostic` 保持原值，其中内部诊断不得直接展示。
+
+- `web/src/views/overview/_v2/`
+  - Overview V2 的页面状态、卡片类型、局部失败、stale、布局保存/冲突、命名尺寸、键盘移动播报、紧凑图例按钮触发的当前值 tooltip、RX/TX 数据表和编辑操作已补齐英文与简体中文；SVG 图形保持纯视觉，服务器名、主机地址、软件包/应用名称与版本等实例数据保持原值。
+
+- `web/src/app/v2/AppShellV2.vue`、`web/tests/foundation/harness/ProductShellHarness.vue`
+  - 隔离产品壳的领域导航、主题/账户入口、任务 ticker、更新提示、服务器示例页和可访问名称已接入英文与简体中文；版本、用户名、节点名称、IP 地址等稳定或实例数据保持原值。
+
+- `web/src/views/maintenance/_v2/`
+  - 备份导出与还原维护页的内嵌登录、会话过期、离线/stale、状态协议失败、进度播报、版本/加密信息、下载/退出、重试与危险清除确认均已补齐英文和简体中文。
+  - 稳定 phase 继续复用 `backupRestore.phases.*`；后端安全错误摘要、版本和归档元数据保持原值。
+
+- `web/src/views/auth/_v2/`
+  - 新普通登录与强制改密隔离页的品牌、密码显示/隐藏、表单总错误、提交失败及“认证成功但下一页无法打开”的安全继续提示已接入英文与简体中文；只有页面白名单内的字段错误展示后端安全消息，未知字段降级为本地化总错误。
+
 - `web/src/views/applications/apps/ApplicationEditor.vue`、`ApplicationDetail.vue`、`facility-apps/index.vue`、`config.vue`、`internal/platform/i18n`
   - AnyAccess、全局网关节点、源站节点、转发节点、流量分配策略、主源站，以及设施/应用路由只读详情和 Path 高级摘要已补齐英文与简体中文词条。
   - 新增源站有效性、AnyAccess 策略、主源站和全局域名所有权错误码的简体中文翻译；稳定枚举值和用户输入的域名、Path、Header、地址保持原值。
@@ -139,6 +158,10 @@
 - Cloudflare / ACME 返回的 provider 诊断文本。
 - SSH / 远程执行 / sudo 命令输出和超时诊断。
 - 镜像仓库或容器运行时返回的错误文本。
+
+## 恢复维护过渡页
+
+- `internal/modules/backups/restore_app.go` 中的内嵌恢复维护页已补上维护登录和 session 过期处理，以保证 Vue 重构切换前恢复流程仍可安全使用；该过渡页当前只提供英文。最终 `/maintenance/restore` Vue SPA 必须把 auth、phase、capability、结构化错误和按钮文案接入 `web/src/i18n/index.ts` 的英文与简体中文词条后再移除内嵌页。
 
 ## 后端翻译仍为部分覆盖
 

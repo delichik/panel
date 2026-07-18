@@ -34,6 +34,12 @@
 - 防火墙页面：`web/src/views/security/firewall/index.vue`
 - fail2ban 页面：`web/src/views/security/fail2ban/index.vue`
 - 概览页面：`web/src/views/overview/index.vue`
+- 隔离概览 V2：`web/src/views/overview/_v2/`；使用聚合 dashboard typed client、卡片局部状态与版本化布局模型，G4 前由固定 fixture 注入，不代表后端聚合接口已经上线。
+- 隔离服务器 V2：`web/src/views/servers/_v2/`；使用 `ResourcePage`、注入式 typed API 和固定 fixture，不接正式路由或真实后端。
+- 隔离凭据 V2：`web/src/views/credentials/_v2/`；使用 `DataPage`、注入式 `CredentialResourceApi` 和固定 fixture，不接正式路由或真实后端。
+- 隔离防火墙 V2：`web/src/views/firewall/_v2/`；使用 `ResourcePage` 服务器上下文、注入式 `FirewallResourceApi` 和固定 fixture，不接正式路由或真实后端。
+- 隔离软件包 V2：`web/src/views/packages/_v2/`；使用 `ResourcePage` 服务器上下文、注入式 `PackageResourceApi` 和固定 fixture，不接正式路由或真实后端。
+- 隔离 V2 服务器上下文选择行：`web/src/views/_v2/ServerContextList.vue`；Firewall/Packages V2 共用它来保持选择器视觉与 Servers V2 接近，避免每页复制一套临时服务器列表样式。
 - API：`web/src/api/servers.ts`、`web/src/api/packages.ts`、`web/src/api/overview.ts`
 - 类型：`web/src/types/api.ts`
 
@@ -59,13 +65,26 @@
 - 概览：`GET /api/v1/overview`
 - 概览卡片布局：`GET/PUT /api/v1/overview/cards`
 - 概览卡片数据：`GET /api/v1/overview/cards/{cardId}/data`
+- 概览 V2 目标契约：`GET /api/v1/overview/dashboard` 聚合布局、服务器选项与逐卡结果；`PUT /api/v1/overview/cards` 目标请求包含 `baseVersion`。当前只完成前端类型与隔离 fixture，后端适配在后续契约集成阶段实施。
 
 ## 数据与行为约定
+
+- Servers V2 mutation 只组装白名单用户字段并在 normalize 后剔除 `sys.*`、`agent.*` 与空 key；probe 和保存语义分离，候选 SSH 或 Docker Host 变化会使 probe 失效。Probe 失败只按稳定 `failureReason` 映射本地化安全文案，后端原始 `diagnostic` 不得直接渲染。
+- 详情切换立即清空旧详情并以 generation/AbortController 忽略迟到响应；列表成功刷新后必须同步重取仍选中的详情，避免继续使用旧 version/capability。Panel host 删除在入口、确认提交和 fixture API 三层拒绝；删除提交同时携带 `serverId + expectedVersion + previewToken`，fixture token 也编码服务器与版本。accepted/running 初始化、Agent、重启和 UFW 安装只显示为进行中并链接任务中心。
+- 重启和 Agent 操作确认捕获服务器 ID/version，提交时重新核对当前详情、最新 capability 和 active operation；操作期间禁止重复提交或取消，旧目标失败不得污染新选择。列表只在相同 query 刷新失败时保留旧行并标 stale，新筛选失败必须显示对应加载错误。
+- 编辑器的凭据选项具有独立 loading/error/empty 状态；加载失败必须提供重试与前往凭据管理，成功但为空必须解释创建前置条件，保存和 probe 不得陷入无说明的必填失败。
+- 隔离 `ServerResourceApi` 定义列表、详情、凭据选项、候选 probe、创建/版本化更新、连接测试、Agent/重启/UFW 安装操作和删除 impact；当前 16 个固定 fixture 不访问网络，正式 API 尚未实现这份契约。
+- 隔离 `CredentialResourceApi` 定义凭据列表、创建、编辑、删除影响预览和删除提交；secret 只提交非空草稿值，编辑时空值代表后端保留既有 secret。列表筛选包含搜索、认证方式和引用状态，删除预览必须返回引用清单与 preview token。
+- 隔离 `FirewallResourceApi` 定义服务器列表、单服务器 UFW 详情、安装、启用、添加规则和删除规则。页面只在防火墙场景展示服务器上下文列；受保护端口规则在 UI 中禁删，后端正式接入时仍必须重复校验。
+- 隔离 `PackageResourceApi` 定义服务器列表、按查询读取更新、刷新元数据、升级全部或指定软件包。页面将刷新/升级视为任务型操作，只展示 accepted/running 状态和任务中心入口，不承诺请求返回时已经完成升级。
+- Firewall/Packages V2 的服务器绑定操作放在右侧详情头，不放在全局 PageHeader。右侧正文使用分区标题、`dl` 信息网格和单一表格工作区，避免和 Servers V2 形成完全不同的卡片化结构。
+- 正式接入前的阻断项：后端更新不得再用请求 traits 整体覆盖已探测的 `sys.*`、`agent.*`；保存与连接测试必须分离，不能出现配置已经持久化但响应宣称保存失败；列表/详情需要 typed capability、资源版本和删除 preview token。
+- 本阶段验证仅限 `task test:web:unit`、`task test:web:component`、`task build:web`。按用户要求未执行浏览器、Playwright、E2E、a11y 或 visual 检查，中大屏真实滚动和断点验收留待恢复浏览器检查后完成。
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
 - 服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。
 - `service.go` 保留服务器运维、探测和 UFW 等流程；服务器资源 CRUD 放在 `registry.go`，Agent 部署和健康检查分别放在 `agent_deployment.go` 与 `agent_health.go`，fail2ban 配置放在 `fail2ban.go`，新增代码不要重新揉回主 service 文件。
-- 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。
+- 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。修剪应用部署节点属于应用配置变化，必须在同一删除事务中递增对应应用的 `version` 和配置 `updated_at`。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
 - fail2ban 配置按服务器保存到应用数据库 `fail2ban_configs`，其中 `managed` 表示 Panel 是否接管目标机 fail2ban。前端默认展示“防护规则”列表，结构化 YAML 是高级编辑模式；YAML 是 Panel 自己的 `jails` 结构，不是直接写入目标机的原始 fail2ban 配置。`PUT /fail2ban` 只保存 Panel 草稿，不写目标机；`POST /fail2ban/enable` 在未安装时安装 fail2ban 并自动接管，在已安装未接管时必须由前端传入确认后才接管；接管后通过兼容 Agent 渲染为 `/etc/fail2ban/jail.d/panel.local`，目标机用 `fail2ban-client -t` 校验通过后才重启或 reload 服务，成功后 Panel 才把 `managed` 置为 true。`POST /fail2ban/release` 删除 Panel 生成配置并把 `managed` 置为 false，不导入或恢复用户原始 fail2ban 文件。
 - 新增服务器响应可携带 `initialTaskId` 指向首次 bootstrap 探测任务。该任务只通过 SSH 读取发行版、CPU 架构并检查非交互特权能力；在架构信息成功落库前失败时必须标记任务失败并删除刚创建的服务器记录，让用户回到表单修正 SSH 信息。

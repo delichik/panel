@@ -7,6 +7,18 @@ import (
 )
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
+	mux.Handle("POST /api/v1/application-edit-sessions", auth(http.HandlerFunc(h.BeginEditSession)))
+	mux.Handle("GET /api/v1/application-edit-sessions/recoverable", auth(http.HandlerFunc(h.RecoverableEditSessions)))
+	mux.Handle("GET /api/v1/application-edit-sessions/{id}", auth(http.HandlerFunc(h.GetEditSession)))
+	mux.Handle("PATCH /api/v1/application-edit-sessions/{id}/draft", auth(http.HandlerFunc(h.PatchEditSession)))
+	mux.Handle("PUT /api/v1/application-edit-sessions/{id}/files/{fileKey}", auth(http.HandlerFunc(h.PutEditSessionFile)))
+	mux.Handle("POST /api/v1/application-edit-sessions/{id}/archives", auth(http.HandlerFunc(h.UploadEditSessionArchive)))
+	mux.Handle("DELETE /api/v1/application-edit-sessions/{id}/files/{fileKey}", auth(http.HandlerFunc(h.DeleteEditSessionFile)))
+	mux.Handle("POST /api/v1/application-edit-sessions/{id}/validate", auth(http.HandlerFunc(h.ValidateEditSession)))
+	mux.Handle("POST /api/v1/application-edit-sessions/{id}/preview", auth(http.HandlerFunc(h.PreviewEditSession)))
+	mux.Handle("POST /api/v1/application-edit-sessions/{id}/commit", auth(http.HandlerFunc(h.CommitEditSession)))
+	mux.Handle("DELETE /api/v1/application-edit-sessions/{id}", auth(http.HandlerFunc(h.DiscardEditSession)))
+
 	mux.Handle("POST /api/v1/application-save-sessions", auth(http.HandlerFunc(h.BeginSaveSession)))
 	mux.Handle("POST /api/v1/application-save-sessions/{id}/files", auth(http.HandlerFunc(h.UploadSaveSessionFile)))
 	mux.Handle("POST /api/v1/application-save-sessions/{id}/files/archive", auth(http.HandlerFunc(h.UploadSaveSessionArchive)))

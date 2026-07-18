@@ -83,6 +83,7 @@ type Service struct {
 	sessionMu        sync.Mutex
 	saveSessions     map[string]*saveSession
 	cleanupOnce      sync.Once
+	editCleanupOnce  sync.Once
 }
 
 type ApplicationRuntime = Runtime
@@ -159,6 +160,7 @@ func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Ser
 	}
 	s := &Service{db: db, runtimeClient: runtimeClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), builtinResolver: NewApplicationVariableRegistry(), imageResolver: NewRegistryImageResolver(), saveSessions: map[string]*saveSession{}}
 	s.startSaveSessionCleanup()
+	s.startEditSessionCleanup()
 	return s
 }
 
@@ -382,7 +384,10 @@ func (s *Service) Create(ctx context.Context, in SaveInput) (Application, error)
 }
 
 func (s *Service) createWithFiles(ctx context.Context, in SaveInput, files []ApplicationFile) (Application, error) {
-	appID := id.New("app")
+	return s.createWithFilesID(ctx, id.New("app"), in, files)
+}
+
+func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveInput, files []ApplicationFile) (Application, error) {
 	files = normalizeApplicationFilesForSave(appID, files, time.Now().UTC())
 	prepared, err := s.prepare(ctx, in, 1, appID)
 	if err != nil {
@@ -459,11 +464,27 @@ func (s *Service) Update(ctx context.Context, appID string, in SaveInput) (Appli
 }
 
 func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInput, files []ApplicationFile) (Application, error) {
+	return s.updateWithFilesVersioned(ctx, appID, 0, false, in, files)
+}
+
+func (s *Service) updateWithFilesIfVersion(ctx context.Context, appID string, expectedVersion int, in SaveInput, files []ApplicationFile) (Application, error) {
+	return s.updateWithFilesVersioned(ctx, appID, expectedVersion, true, in, files)
+}
+
+func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, expectedVersion int, enforceVersion bool, in SaveInput, files []ApplicationFile) (Application, error) {
 	current, err := s.Get(ctx, appID)
 	if err != nil {
 		return Application{}, err
 	}
+	if enforceVersion && current.Version != expectedVersion {
+		return Application{}, resourceVersionConflict(expectedVersion, current.Version)
+	}
+	var currentFiles []ApplicationFile
 	if files != nil {
+		currentFiles, err = s.listFiles(ctx, appID, false)
+		if err != nil {
+			return Application{}, err
+		}
 		files = normalizeApplicationFilesForSave(appID, files, time.Now().UTC())
 	}
 	generation := current.Generation
@@ -508,6 +529,10 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 	app.JobID = prepared.job.ID
 	app.Namespace = s.currentConfig().Namespace
 	app.UpdatedAt = time.Now().UTC()
+	configurationChanged := !applicationUserConfigurationEqual(current, app)
+	if files != nil && !applicationFileSetsMatch(currentFiles, files) {
+		configurationChanged = true
+	}
 	shouldDeploy := app.Enabled && (!current.Enabled || prepared.hash != current.SpecHash)
 	shouldStop := current.Enabled && !app.Enabled
 	if shouldDeploy {
@@ -521,8 +546,12 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 		prepared.job = job
 	}
 	if files == nil {
-		if err := s.updateApplication(ctx, app); err != nil {
-			return Application{}, applicationSaveError(err)
+		if configurationChanged {
+			if err := s.updateApplication(ctx, app); err != nil {
+				return Application{}, applicationSaveError(err)
+			}
+		} else if err := s.updateApplicationDerived(ctx, app); err != nil {
+			return Application{}, err
 		}
 		if prepared.hash != current.SpecHash {
 			if err := s.insertRevision(ctx, app, prepared.job); err != nil {
@@ -539,7 +568,7 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 		}
 		return s.Get(ctx, app.ID)
 	}
-	if err := s.commitApplicationState(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash); err != nil {
+	if err := s.commitApplicationStateVersioned(ctx, app, files, prepared.job, false, prepared.hash != current.SpecHash, expectedVersion, enforceVersion, configurationChanged); err != nil {
 		return Application{}, applicationSaveError(err)
 	}
 	if shouldDeploy || shouldStop {
@@ -551,6 +580,19 @@ func (s *Service) updateWithFiles(ctx context.Context, appID string, in SaveInpu
 		return Application{}, err
 	}
 	return s.Get(ctx, app.ID)
+}
+
+func applicationUserConfigurationEqual(left, right Application) bool {
+	leftRaw, err1 := json.Marshal(saveInputFromApplication(left))
+	rightRaw, err2 := json.Marshal(saveInputFromApplication(right))
+	return err1 == nil && err2 == nil && string(leftRaw) == string(rightRaw)
+}
+
+func resourceVersionConflict(expected, current int) error {
+	return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "application changed while editing"), map[string]any{
+		"expectedVersion": strconv.Itoa(expected),
+		"currentVersion":  strconv.Itoa(current),
+	})
 }
 
 func (s *Service) Delete(ctx context.Context, appID string) error {
@@ -665,7 +707,7 @@ func (s *Service) checkImageUpdate(ctx context.Context, appID string) (Applicati
 	if resolveErr != nil {
 		app.ImageLastError = resolveErr.Error()
 		app.UpdatedAt = time.Now().UTC()
-		if err := s.updateApplication(ctx, app); err != nil {
+		if err := s.updateApplicationDerived(ctx, app); err != nil {
 			return Application{}, err
 		}
 		return s.Get(ctx, app.ID)
@@ -677,7 +719,7 @@ func (s *Service) checkImageUpdate(ctx context.Context, appID string) (Applicati
 	app.ImageUpdateAvailable = app.ImageDigest != "" && result.Digest != "" && app.ImageDigest != result.Digest
 	app.ImageLastError = ""
 	app.UpdatedAt = time.Now().UTC()
-	if err := s.updateApplication(ctx, app); err != nil {
+	if err := s.updateApplicationDerived(ctx, app); err != nil {
 		return Application{}, err
 	}
 	return s.Get(ctx, app.ID)
@@ -748,7 +790,7 @@ func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Applica
 		app.ImageCheckedAt = &checkedAt
 		app.ImageLastError = err.Error()
 		app.UpdatedAt = time.Now().UTC()
-		_ = s.updateApplication(ctx, app)
+		_ = s.updateApplicationDerived(ctx, app)
 		return Application{}, appruntime.Spec{}, err
 	}
 	app.Generation++
@@ -1176,7 +1218,7 @@ func (s *Service) prepareChangedApplicationRefresh(ctx context.Context, app Appl
 		return false, Application{}, appruntime.Spec{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
 	refreshed.UpdatedAt = time.Now().UTC()
-	if err := s.updateApplication(ctx, refreshed); err != nil {
+	if err := s.updateApplicationDerived(ctx, refreshed); err != nil {
 		return false, Application{}, appruntime.Spec{}, err
 	}
 	return true, refreshed, spec, nil
@@ -3399,8 +3441,8 @@ func (s *Service) insertApplication(ctx context.Context, app Application) error 
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,version,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		app.ID, 1, applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
 	return err
 }
 
@@ -3421,12 +3463,34 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE applications SET kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+	_, err = s.db.ExecContext(ctx, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
 		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
+// updateApplicationDerived persists renderer, image-inspection, and runtime
+// snapshot data without changing the user configuration resource version or
+// its updated_at timestamp. It deliberately excludes user-owned fields so a
+// background refresh cannot overwrite a concurrent edit.
+func (s *Service) updateApplicationDerived(ctx context.Context, app Application) error {
+	return updateApplicationDerivedWithExec(ctx, s.db, app)
+}
+
+func updateApplicationDerivedWithExec(ctx context.Context, exec sqlExec, app Application) error {
+	resolved, err := json.Marshal(app.ResolvedVariables)
+	if err != nil {
+		return err
+	}
+	_, err = exec.ExecContext(ctx, `UPDATE applications SET resolved_variables_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=? WHERE id=?`,
+		string(resolved), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, app.ID)
+	return err
+}
+
 func (s *Service) commitApplicationState(ctx context.Context, app Application, files []ApplicationFile, job appruntime.Spec, insertApp bool, insertRevision bool) error {
+	return s.commitApplicationStateVersioned(ctx, app, files, job, insertApp, insertRevision, 0, false, true)
+}
+
+func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Application, files []ApplicationFile, job appruntime.Spec, insertApp bool, insertRevision bool, expectedVersion int, enforceVersion bool, configurationChanged bool) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -3436,11 +3500,32 @@ func (s *Service) commitApplicationState(ctx context.Context, app Application, f
 		if err := s.insertApplicationWithExec(ctx, tx, app); err != nil {
 			return err
 		}
-	} else if err := s.updateApplicationWithExec(ctx, tx, app); err != nil {
-		return err
+	} else if configurationChanged {
+		if enforceVersion {
+			if err := s.updateApplicationWithExecIfVersion(ctx, tx, app, expectedVersion); err != nil {
+				return err
+			}
+		} else if err := s.updateApplicationWithExec(ctx, tx, app); err != nil {
+			return err
+		}
+	} else if enforceVersion {
+		var currentVersion int
+		if err := tx.QueryRowContext(ctx, `SELECT version FROM applications WHERE id=?`, app.ID).Scan(&currentVersion); err != nil {
+			return err
+		}
+		if currentVersion != expectedVersion {
+			return resourceVersionConflict(expectedVersion, currentVersion)
+		}
 	}
-	if err := replaceApplicationFiles(ctx, tx, app.ID, files); err != nil {
-		return err
+	if !insertApp && !configurationChanged {
+		if err := updateApplicationDerivedWithExec(ctx, tx, app); err != nil {
+			return err
+		}
+	}
+	if configurationChanged {
+		if err := replaceApplicationFiles(ctx, tx, app.ID, files); err != nil {
+			return err
+		}
 	}
 	if insertRevision {
 		if err := insertRevisionWithExec(ctx, tx, app, job); err != nil {
@@ -3448,6 +3533,42 @@ func (s *Service) commitApplicationState(ctx context.Context, app Application, f
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *sql.Tx, app Application, expectedVersion int) error {
+	variables, err := json.Marshal(app.Variables)
+	if err != nil {
+		return err
+	}
+	resolved, err := json.Marshal(app.ResolvedVariables)
+	if err != nil {
+		return err
+	}
+	deploymentServers, err := json.Marshal(app.DeploymentServers)
+	if err != nil {
+		return err
+	}
+	reverseProxy, err := json.Marshal(app.ReverseProxy)
+	if err != nil {
+		return err
+	}
+	result, err := exec.ExecContext(ctx, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		var currentVersion int
+		if scanErr := exec.QueryRowContext(ctx, `SELECT version FROM applications WHERE id=?`, app.ID).Scan(&currentVersion); scanErr != nil {
+			currentVersion = expectedVersion + 1
+		}
+		return resourceVersionConflict(expectedVersion, currentVersion)
+	}
+	return nil
 }
 
 func (s *Service) insertApplicationWithExec(ctx context.Context, exec sqlExec, app Application) error {
@@ -3467,8 +3588,8 @@ func (s *Service) insertApplicationWithExec(ctx context.Context, exec sqlExec, a
 	if err != nil {
 		return err
 	}
-	_, err = exec.ExecContext(ctx, `INSERT INTO applications(id,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
+	_, err = exec.ExecContext(ctx, `INSERT INTO applications(id,version,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		app.ID, 1, applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
 	return err
 }
 
@@ -3489,7 +3610,7 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec sqlExec, a
 	if err != nil {
 		return err
 	}
-	_, err = exec.ExecContext(ctx, `UPDATE applications SET kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+	_, err = exec.ExecContext(ctx, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
 		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
@@ -5286,7 +5407,7 @@ func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error 
 		return applicationValidationError(issues)
 	}
 	current.UpdatedAt = time.Now().UTC()
-	if err := s.updateApplication(ctx, current); err != nil {
+	if err := s.updateApplicationDerived(ctx, current); err != nil {
 		return err
 	}
 	if err := s.triggerApplicationReconcile(ctx, current, job, "application_change", "Syncing application "+current.Name); err != nil {
@@ -5341,7 +5462,7 @@ func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Applic
 	app.JobID = prepared.job.ID
 	app.Namespace = s.currentConfig().Namespace
 	app.UpdatedAt = time.Now().UTC()
-	if err := s.updateApplication(ctx, app); err != nil {
+	if err := s.updateApplicationDerived(ctx, app); err != nil {
 		return Application{}, err
 	}
 	if changed {
@@ -5592,7 +5713,7 @@ type sqlExec interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
-const applicationColumns = `id,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at`
+const applicationColumns = `id,version,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at`
 
 func scanApplication(row appScanner) (Application, error) {
 	var app Application
@@ -5600,7 +5721,7 @@ func scanApplication(row appScanner) (Application, error) {
 	var variables, resolvedVariables, deploymentServers, reverseProxy string
 	var createdAt, updatedAt string
 	var imageCheckedAt sql.NullString
-	if err := row.Scan(&app.ID, &app.Kind, &app.Name, &enabled, &deletionRequested, &app.SpecYAML, &variables, &resolvedVariables, &app.DeploymentMode, &deploymentServers, &reverseProxy, &app.Generation, &app.SpecHash, &app.ImageReference, &app.ImageDigest, &app.ImageLatestDigest, &imageCheckedAt, &imageUpdateAvailable, &app.ImageLastError, &app.JobID, &app.Namespace, &app.LastEvalID, &app.LastDeploymentID, &app.LastError, &createdAt, &updatedAt); err != nil {
+	if err := row.Scan(&app.ID, &app.Version, &app.Kind, &app.Name, &enabled, &deletionRequested, &app.SpecYAML, &variables, &resolvedVariables, &app.DeploymentMode, &deploymentServers, &reverseProxy, &app.Generation, &app.SpecHash, &app.ImageReference, &app.ImageDigest, &app.ImageLatestDigest, &imageCheckedAt, &imageUpdateAvailable, &app.ImageLastError, &app.JobID, &app.Namespace, &app.LastEvalID, &app.LastDeploymentID, &app.LastError, &createdAt, &updatedAt); err != nil {
 		return Application{}, err
 	}
 	app.Kind = applicationKind(app.Kind)

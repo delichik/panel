@@ -22,6 +22,7 @@ type facilitySaveSession struct {
 	ID            string
 	Dir           string
 	BaseUpdatedAt time.Time
+	BaseVersion   int
 	Assets        map[string]*stagedFacilityAsset
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
@@ -34,6 +35,8 @@ type stagedFacilityAsset struct {
 }
 
 func (s *Service) BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error) {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	current, err := s.loadConfig(ctx)
 	if err != nil {
 		return SaveSessionResult{}, err
@@ -51,6 +54,7 @@ func (s *Service) BeginSaveSession(ctx context.Context, in BeginSaveSessionInput
 		ID:            id.New("frpsave"),
 		Dir:           filepath.Join(s.sessionDir, id.New("session")),
 		BaseUpdatedAt: baseUpdatedAt,
+		BaseVersion:   current.Version,
 		Assets:        map[string]*stagedFacilityAsset{},
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -70,6 +74,8 @@ func (s *Service) BeginSaveSession(ctx context.Context, in BeginSaveSessionInput
 }
 
 func (s *Service) UploadSaveSessionAsset(ctx context.Context, sessionID string, in StaticAssetUploadInput) (StaticAsset, error) {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	session, err := s.getSaveSession(sessionID)
 	if err != nil {
 		return StaticAsset{}, err
@@ -132,6 +138,8 @@ func (s *Service) UploadSaveSessionAsset(ctx context.Context, sessionID string, 
 }
 
 func (s *Service) DeleteSaveSessionAsset(ctx context.Context, sessionID string, in StaticAssetDeleteInput) error {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	session, err := s.getSaveSession(sessionID)
 	if err != nil {
 		return err
@@ -159,6 +167,8 @@ func (s *Service) DeleteSaveSessionAsset(ctx context.Context, sessionID string, 
 }
 
 func (s *Service) CommitSaveSession(ctx context.Context, sessionID string, in CommitSaveSessionInput) (SaveSessionCommitResult, error) {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	session, err := s.getSaveSession(sessionID)
 	if err != nil {
 		return SaveSessionCommitResult{}, err
@@ -166,9 +176,6 @@ func (s *Service) CommitSaveSession(ctx context.Context, sessionID string, in Co
 	current, err := s.loadConfig(ctx)
 	if err != nil {
 		return SaveSessionCommitResult{}, err
-	}
-	if !sameConfigVersion(current.UpdatedAt, session.BaseUpdatedAt) {
-		return SaveSessionCommitResult{}, panelerr.Conflict("facility_reverse_proxy_config_changed", "Reverse proxy configuration changed while editing")
 	}
 	next, err := normalizeInput(in.Save)
 	if err != nil {
@@ -197,7 +204,7 @@ func (s *Service) CommitSaveSession(ctx context.Context, sessionID string, in Co
 		rollbackFiles()
 		return SaveSessionCommitResult{}, err
 	}
-	if err := saveConfigTx(ctx, tx, next); err != nil {
+	if err := saveConfigTxIfVersion(ctx, tx, next, session.BaseVersion); err != nil {
 		_ = tx.Rollback()
 		rollbackFiles()
 		return SaveSessionCommitResult{}, err
@@ -223,6 +230,8 @@ func (s *Service) CommitSaveSession(ctx context.Context, sessionID string, in Co
 }
 
 func (s *Service) DiscardSaveSession(sessionID string) {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	s.discardSaveSession(sessionID)
 }
 
@@ -267,6 +276,8 @@ func (s *Service) startSaveSessionCleanup() {
 }
 
 func (s *Service) cleanupExpiredSaveSessions(now time.Time) {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	expired := []*facilitySaveSession{}
 	s.sessionMu.Lock()
 	for key, session := range s.saveSessions {
@@ -418,8 +429,37 @@ func saveConfigTx(ctx context.Context, tx *sql.Tx, cfg ReverseProxyConfig) error
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
-		VALUES(?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,last_error=excluded.last_error,updated_at=excluded.updated_at`, ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now)
+	_, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
+		VALUES(?,1,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,last_error=excluded.last_error,updated_at=excluded.updated_at`, ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now)
 	return err
+}
+
+func saveConfigTxIfVersion(ctx context.Context, tx *sql.Tx, cfg ReverseProxyConfig, expectedVersion int) error {
+	serversRaw, err := json.Marshal(cfg.DeploymentServers)
+	if err != nil {
+		return err
+	}
+	panelRaw, err := json.Marshal(cfg.PanelEntry)
+	if err != nil {
+		return err
+	}
+	domainsRaw, err := json.Marshal(cfg.Domains)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	var result sql.Result
+	if expectedVersion == 0 {
+		result, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,1,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now)
+	} else {
+		result, err = tx.ExecContext(ctx, `UPDATE facility_app_configs SET version=version+1,deployment_server_ids_json=?,panel_entry_json=?,domains_json=?,last_error=?,updated_at=? WHERE id=? AND version=?`, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now, ReverseProxyID, expectedVersion)
+	}
+	if err != nil {
+		return err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing")
+	}
+	return nil
 }

@@ -51,6 +51,20 @@ type applicationRuntimeListService interface {
 	ListWithRuntime(ctx context.Context) ([]Application, error)
 }
 
+type applicationEditSessionService interface {
+	BeginEditSession(context.Context, string, BeginEditSessionInput) (ApplicationEditSession, error)
+	RecoverableEditSessions(context.Context, string, string, string) ([]ApplicationEditSession, error)
+	GetEditSession(context.Context, string, string) (ApplicationEditSession, error)
+	PatchEditSession(context.Context, string, string, PatchEditSessionInput) (ApplicationEditSession, error)
+	PutEditSessionFile(context.Context, string, string, string, string, EditSessionFileInput) (ApplicationEditSession, error)
+	UploadEditSessionArchive(context.Context, string, string, string, EditSessionArchiveInput) (ApplicationEditSession, error)
+	DeleteEditSessionFile(context.Context, string, string, string, string, EditSessionMutationInput) (ApplicationEditSession, error)
+	ValidateEditSession(context.Context, string, string, int) (EditSessionValidationResult, error)
+	PreviewEditSession(context.Context, string, string, int) (EditSessionPreviewResult, error)
+	CommitEditSession(context.Context, string, string, string, CommitEditSessionInput) (EditCommitResult, error)
+	DiscardEditSession(context.Context, string, string) error
+}
+
 func (h *Handler) TemplateCatalog(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.TemplateCatalog(r.Context())
 	if err != nil {
@@ -66,6 +80,238 @@ type Handler struct {
 
 func NewHandler(service applicationService) *Handler {
 	return &Handler{service: service}
+}
+
+func (h *Handler) editSessions() (applicationEditSessionService, error) {
+	service, ok := h.service.(applicationEditSessionService)
+	if !ok {
+		return nil, panelerr.New(http.StatusNotImplemented, "application_edit_sessions_unavailable", "Application edit sessions are not available")
+	}
+	return service, nil
+}
+
+func editSessionOwner(ctx context.Context) string {
+	// Panel currently has one administrator principal. The username is editable,
+	// so it cannot be used as durable edit-session ownership identity.
+	return applicationEditSessionOwner
+}
+
+func (h *Handler) BeginEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in BeginEditSessionInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := service.BeginEditSession(r.Context(), editSessionOwner(r.Context()), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) RecoverableEditSessions(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	result, err := service.RecoverableEditSessions(r.Context(), editSessionOwner(r.Context()), r.URL.Query().Get("applicationId"), r.URL.Query().Get("clientDraftKey"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) GetEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	result, err := service.GetEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) PatchEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in PatchEditSessionInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := service.PatchEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) PutEditSessionFile(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in EditSessionFileInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.PutEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")), key, in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) UploadEditSessionArchive(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes)
+	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(file)
+	if err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read archive upload"))
+		return
+	}
+	revision, _ := strconv.Atoi(r.FormValue("revision"))
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.UploadEditSessionArchive(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), key, EditSessionArchiveInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), FileKey: r.FormValue("fileKey"), BasePath: r.FormValue("basePath"), Kind: r.FormValue("kind"), FileName: header.Filename, Content: content})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) DeleteEditSessionFile(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in EditSessionMutationInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.DeleteEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")), key, in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ValidateEditSession(w http.ResponseWriter, r *http.Request) {
+	h.handleEditSessionRevisionAction(w, r, "validate")
+}
+
+func (h *Handler) PreviewEditSession(w http.ResponseWriter, r *http.Request) {
+	h.handleEditSessionRevisionAction(w, r, "preview")
+}
+
+func (h *Handler) handleEditSessionRevisionAction(w http.ResponseWriter, r *http.Request, action string) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in struct {
+		Revision int `json:"revision"`
+	}
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	if action == "validate" {
+		result, err := service.ValidateEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), in.Revision)
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, result)
+		return
+	}
+	result, err := service.PreviewEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), in.Revision)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) CommitEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var in CommitEditSessionInput
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.CommitEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), key, in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) DiscardEditSession(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if err := service.DiscardEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r)); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.NoContent(w)
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
@@ -413,6 +659,19 @@ func applicationFileIDFromRequest(r *http.Request) string {
 
 func saveSessionIDFromRequest(r *http.Request) string {
 	return strings.TrimSpace(r.PathValue("id"))
+}
+
+func editSessionIDFromRequest(r *http.Request) string {
+	return strings.TrimSpace(r.PathValue("id"))
+}
+
+func editIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
+	key := strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+	if key == "" {
+		httpx.Error(w, panelerr.Validation("idempotency_key_required", "Idempotency-Key header is required"))
+		return "", false
+	}
+	return key, true
 }
 
 func safeDownloadName(name string) string {

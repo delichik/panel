@@ -49,7 +49,7 @@ func main() {
 		Handler() http.Handler
 		Close() error
 	}
-	if *maintenanceMode == backups.MaintenanceModeRestore && backups.PendingRestoreExists(cfg.DataRoot) {
+	if backups.RestoreRecoveryRequired(cfg.DataRoot) || *maintenanceMode == backups.MaintenanceModeRestore && backups.PendingRestoreExists(cfg.DataRoot) {
 		logger.Warn("pending restore detected; starting restore mode")
 		application, err = backups.NewRestoreApp(cfg)
 	} else if *maintenanceMode == backups.MaintenanceModeExport && backups.PendingExportExists(cfg.DataRoot) {

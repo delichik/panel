@@ -11,6 +11,14 @@
 
 功能页不得重复实现这些全局元素。
 
+### V2 隔离适配层
+
+- G4 前的产品级外壳由 `web/src/app/v2/AppShellV2.vue` 组合 `AppShell`、`AppNavigation`、`AppHeader` 与 `UiMenu`，不得修改正式 `AppLayout.vue` 或正式 router。
+- 适配层输入必须是纯 typed model：稳定 route ID/title、领域导航、build/update、活跃任务、用户名及本地化 labels；输出只有 navigate/logout/偏好更新事件，不直接读取 router、Pinia、API client 或业务 store。
+- 导航条目支持 `hidden` 与 `devOnly`。hidden 永不展示；devOnly 只有在 build channel 明确为 `dev` 时展示。过滤后为空的分组不渲染。
+- Header 不接收页面业务动作。版本、DEV、更新提示、任务 ticker、主题与账户属于全局状态；新增服务器、保存、刷新、筛选等仍放页面模板内部。
+- 产品预览通过 `task run:web:testv2` 打开，根页面和 `?fixture=product-shell` 都展示该适配层；其余 fixture 继续验证基础模板。
+
 ## 侧边导航
 
 - 桌面宽度 `280px`。
@@ -28,8 +36,9 @@
 - 一级分组应有图标；二级入口在需要视觉区分时可配置图标。
 - 标题来自 i18n，不在导航配置中写固定用户可见文案。
 - 路由当前项由 Vuetify active 状态表达。
+- 仅开发通道开放的导航项使用 `devOnly` 元数据，并根据系统版本 API 的 `channel` 过滤；版本信息未加载或加载失败时默认隐藏。隐藏导航不等于禁用路由。
 - “服务器”一级分组只包含节点和凭据等基础服务器管理入口。
-- “安全”一级分组排列在“服务器”之后，包含防火墙和 fail2ban；防火墙只管理 UFW，fail2ban 使用独立页面。
+- “安全”一级分组排列在“服务器”之后，包含防火墙和 fail2ban；防火墙只管理 UFW，fail2ban 使用独立页面且导航入口仅在 `dev` 构建通道显示。
 - “资源”一级分组包含软件包、容器、镜像、网络和卷。
 - “应用”一级分组包含应用和设施应用。
 - 旧 `/servers/firewall`、`/servers/packages` 与 `/containerization/*` 地址只作重定向，不保留重复导航入口。
@@ -65,8 +74,8 @@
 
 ## 品牌标识
 
-- 当前标识为 `LP` 字母块。
-- `38px` 方形、`8px` 圆角、主色渐变。
+- 旧正式布局仍使用 `LP` 字母块；隔离 V2 使用 `P` 图标块 + `Panel` 品牌名，最终图形 Logo 仍未冻结。
+- V2 标识为 `30px` 方形小圆角弱主色表面，折叠后只保留图标块。
 - 品牌名称和副标题来自 i18n。
 - 登录页可使用放大版本，但保持相同主色和字母标识语言。
 

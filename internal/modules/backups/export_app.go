@@ -19,13 +19,15 @@ import (
 )
 
 type ExportApp struct {
-	cfg       config.Config
-	mux       *http.ServeMux
-	listener  maintenanceListener
-	mu        sync.RWMutex
-	status    Status
-	restarter Restarter
-	auth      *maintenanceAuth
+	cfg        config.Config
+	mux        *http.ServeMux
+	listener   maintenanceListener
+	mu         sync.RWMutex
+	status     Status
+	restarter  Restarter
+	auth       *maintenanceAuth
+	operations map[string]maintenanceOperation
+	runFn      func(context.Context, string)
 }
 
 func PendingExportExists(dataRoot string) bool {
@@ -35,16 +37,21 @@ func PendingExportExists(dataRoot string) bool {
 
 func NewExportApp(cfg config.Config) (*ExportApp, error) {
 	restarter := NewPanelInitRestarter(cfg.DataRoot)
-	auth, err := newMaintenanceAuth(context.Background(), cfg.AppDatabase)
+	auth, err := newMaintenanceAuth(context.Background(), maintenanceAuthExport, cfg.AppDatabase, maintenanceCredential{
+		Username: cfg.AdminUsername, PasswordHash: cfg.AdminPasswordHash,
+	})
 	if err != nil {
 		return nil, err
 	}
 	app := &ExportApp{
-		cfg:       cfg,
-		mux:       http.NewServeMux(),
-		restarter: restarter,
-		auth:      auth,
+		cfg:        cfg,
+		mux:        http.NewServeMux(),
+		restarter:  restarter,
+		auth:       auth,
+		operations: make(map[string]maintenanceOperation),
 		status: Status{
+			SchemaVersion:    MaintenanceStatusSchemaVersion,
+			Revision:         1,
 			Mode:             ModeBackupExporting,
 			Phase:            PhaseReady,
 			Progress:         10,
@@ -55,7 +62,7 @@ func NewExportApp(cfg config.Config) (*ExportApp, error) {
 	app.routes()
 	marker, err := readPendingExport(cfg.DataRoot)
 	if err != nil {
-		app.fail("Unable to read pending backup export marker")
+		app.fail("backup_pending_unavailable", "Unable to read pending backup export marker", false)
 		return app, nil
 	}
 	app.setExportID(marker.ExportID)
@@ -90,27 +97,79 @@ func (a *ExportApp) routes() {
 }
 
 func (a *ExportApp) startAPI(w http.ResponseWriter, r *http.Request) {
-	status := a.currentStatus()
-	if status.Phase != PhaseReady {
+	var req MaintenanceCommandRequest
+	if !decodeOptionalCommand(w, r, &req) {
+		return
+	}
+	operationID, ok := commandOperationID(w, r, req.ClientOperationID)
+	if !ok {
+		return
+	}
+	a.mu.Lock()
+	if a.operations == nil {
+		a.operations = make(map[string]maintenanceOperation)
+	}
+	if record, replay, mismatch := operationReplay(a.operations, operationID, "start"); replay {
+		a.mu.Unlock()
+		if mismatch {
+			httpx.JSON(w, http.StatusConflict, a.currentStatus())
+			return
+		}
+		httpx.JSON(w, record.HTTPStatus, record.Status)
+		return
+	}
+	if !revisionMatches(a.status, req.ExpectedRevision) || a.status.Phase != PhaseReady {
+		status := prepareStatus(a.status)
+		a.mu.Unlock()
 		httpx.JSON(w, http.StatusConflict, status)
 		return
 	}
-	go a.run(context.Background(), "")
-	httpx.JSON(w, http.StatusAccepted, a.currentStatus())
+	transitionStatus(&a.status, PhaseCheckpointing, 20, "", "", false)
+	accepted := prepareStatus(a.status)
+	if operationID != "" {
+		a.operations[operationID] = maintenanceOperation{Command: "start", HTTPStatus: http.StatusAccepted, Status: accepted}
+	}
+	a.mu.Unlock()
+	go a.runCommand(context.Background(), "")
+	httpx.JSON(w, http.StatusAccepted, accepted)
 }
 
 func (a *ExportApp) passwordAPI(w http.ResponseWriter, r *http.Request) {
-	status := a.currentStatus()
-	if status.Phase != PhasePassword {
-		httpx.JSON(w, http.StatusConflict, status)
-		return
-	}
 	var req RestorePasswordRequest
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	go a.run(context.Background(), req.Password)
-	httpx.JSON(w, http.StatusAccepted, a.currentStatus())
+	operationID, ok := commandOperationID(w, r, req.ClientOperationID)
+	if !ok {
+		return
+	}
+	a.mu.Lock()
+	if a.operations == nil {
+		a.operations = make(map[string]maintenanceOperation)
+	}
+	if record, replay, mismatch := operationReplay(a.operations, operationID, "password"); replay {
+		a.mu.Unlock()
+		if mismatch {
+			httpx.JSON(w, http.StatusConflict, a.currentStatus())
+			return
+		}
+		httpx.JSON(w, record.HTTPStatus, record.Status)
+		return
+	}
+	if !revisionMatches(a.status, req.ExpectedRevision) || a.status.Phase != PhasePassword {
+		status := prepareStatus(a.status)
+		a.mu.Unlock()
+		httpx.JSON(w, http.StatusConflict, status)
+		return
+	}
+	transitionStatus(&a.status, PhaseCheckpointing, 20, "", "", false)
+	accepted := prepareStatus(a.status)
+	if operationID != "" {
+		a.operations[operationID] = maintenanceOperation{Command: "password", HTTPStatus: http.StatusAccepted, Status: accepted}
+	}
+	a.mu.Unlock()
+	go a.runCommand(context.Background(), req.Password)
+	httpx.JSON(w, http.StatusAccepted, accepted)
 }
 
 func (a *ExportApp) statusAPI(w http.ResponseWriter, r *http.Request) {
@@ -154,25 +213,24 @@ func (a *ExportApp) cleanupTemporaryFiles(status Status) {
 func (a *ExportApp) run(ctx context.Context, password string) {
 	marker, err := readPendingExport(a.cfg.DataRoot)
 	if err != nil {
-		a.fail("Unable to read pending backup export marker")
+		a.fail("backup_pending_unavailable", "Unable to read pending backup export marker", false)
 		return
 	}
 	a.setExportID(marker.ExportID)
-	a.set(PhaseCheckpointing, 20, "")
 	if err := checkpointSQLiteFiles(ctx, a.cfg.AppDatabase, a.cfg.LogDatabase, a.cfg.MetricsDatabase); err != nil {
-		a.fail("Unable to checkpoint databases")
+		a.fail("backup_checkpoint_failed", "Unable to checkpoint databases", false)
 		return
 	}
 	a.set(PhaseArchiving, 45, "")
 	plain, manifest, err := buildArchive(ArchiveConfig{
 		DataRoot:        a.cfg.DataRoot,
 		AppDatabase:     a.cfg.AppDatabase,
-		LogDatabase:    a.cfg.LogDatabase,
+		LogDatabase:     a.cfg.LogDatabase,
 		MetricsDatabase: a.cfg.MetricsDatabase,
 		PanelVersion:    buildinfo.Version,
 	}, marker.Encrypt)
 	if err != nil {
-		a.fail("Unable to build backup archive")
+		a.fail("backup_archive_failed", "Unable to build backup archive", false)
 		return
 	}
 	raw := plain
@@ -180,27 +238,33 @@ func (a *ExportApp) run(ctx context.Context, password string) {
 		a.set(PhaseEncrypting, 75, "")
 		raw, err = encryptBytes(plain, password)
 		if err != nil {
-			a.fail("Unable to encrypt backup archive")
+			a.fail("backup_encrypt_failed", "Unable to encrypt backup archive", false)
 			return
 		}
 	}
 	dir := filepath.Join(a.cfg.DataRoot, "tmp", "backups")
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		a.fail("Unable to prepare backup storage")
+		a.fail("backup_storage_failed", "Unable to prepare backup storage", false)
 		return
 	}
 	if err := os.WriteFile(filepath.Join(dir, marker.ExportID+".panel-backup"), raw, 0600); err != nil {
-		a.fail("Unable to store backup archive")
+		a.fail("backup_storage_failed", "Unable to store backup archive", false)
 		return
 	}
 	_ = os.RemoveAll(exportPendingDir(a.cfg.DataRoot))
 	a.mu.Lock()
-	a.status.Phase = PhaseCompleted
-	a.status.Progress = 100
-	a.status.FinishedAt = time.Now().UTC()
+	transitionStatus(&a.status, PhaseCompleted, 100, "", "", false)
 	a.status.DownloadAvailable = true
 	a.status.Manifest = &manifest
 	a.mu.Unlock()
+}
+
+func (a *ExportApp) runCommand(ctx context.Context, password string) {
+	if a.runFn != nil {
+		a.runFn(ctx, password)
+		return
+	}
+	a.run(ctx, password)
 }
 
 func checkpointSQLiteFiles(ctx context.Context, paths ...string) error {
@@ -229,28 +293,29 @@ func checkpointSQLiteFiles(ctx context.Context, paths ...string) error {
 func (a *ExportApp) currentStatus() Status {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
-	return a.status
+	return prepareStatus(a.status)
 }
 
-func (a *ExportApp) set(phase string, progress int, message string) {
+func (a *ExportApp) set(phase MaintenancePhase, progress int, message string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.status.Phase = phase
-	a.status.Progress = progress
-	a.status.Error = message
-	if phase == PhaseCompleted || phase == PhaseFailed {
-		a.status.FinishedAt = time.Now().UTC()
-	}
+	transitionStatus(&a.status, phase, progress, "backup_operation_failed", message, phase == PhaseFailed)
 }
 
 func (a *ExportApp) setExportID(exportID string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if a.status.ExportID == exportID {
+		return
+	}
 	a.status.ExportID = exportID
+	a.status.Revision++
 }
 
-func (a *ExportApp) fail(message string) {
-	a.set(PhaseFailed, 100, message)
+func (a *ExportApp) fail(code, message string, retryable bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	transitionStatus(&a.status, PhaseFailed, 100, code, message, retryable)
 }
 
 func (a *ExportApp) static(w http.ResponseWriter, r *http.Request) {

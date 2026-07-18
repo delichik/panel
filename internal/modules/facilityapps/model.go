@@ -7,17 +7,17 @@ import (
 )
 
 const (
-	ReverseProxyID        = "reverse_proxy"
-	supportedProxyImage   = "nginx:1.28-alpine"
-	proxyApplicationID    = "facility-reverse-proxy"
-	proxyInstancePrefix   = "facility-reverse-proxy-"
-	proxyContainerName    = "panel-facility-reverse-proxy"
-	proxyConfigRoot       = "nginx"
-	proxyConfigPath       = "nginx/nginx.conf"
-	proxyContainerRoot    = "/etc/nginx"
-	proxyConfigDir        = "nginx/conf.d"
-	proxyStaticMountRoot  = "/srv/panel-static"
-	proxyTLSMountRoot     = "/etc/nginx/panel-certs"
+	ReverseProxyID       = "reverse_proxy"
+	supportedProxyImage  = "nginx:1.28-alpine"
+	proxyApplicationID   = "facility-reverse-proxy"
+	proxyInstancePrefix  = "facility-reverse-proxy-"
+	proxyContainerName   = "panel-facility-reverse-proxy"
+	proxyConfigRoot      = "nginx"
+	proxyConfigPath      = "nginx/nginx.conf"
+	proxyContainerRoot   = "/etc/nginx"
+	proxyConfigDir       = "nginx/conf.d"
+	proxyStaticMountRoot = "/srv/panel-static"
+	proxyTLSMountRoot    = "/etc/nginx/panel-certs"
 
 	StaticSourceHostPath       = "host_path"
 	StaticSourceUploadedFile   = "uploaded_file"
@@ -37,6 +37,7 @@ const (
 
 type ReverseProxyConfig struct {
 	ID                string                                       `json:"id"`
+	Version           int                                          `json:"version"`
 	DeploymentServers []string                                     `json:"deploymentServers"`
 	PanelHostServerID string                                       `json:"panelHostServerId,omitempty"`
 	PanelEntry        PanelEntry                                   `json:"panelEntry"`
@@ -141,4 +142,93 @@ type SaveSessionResult struct {
 type SaveSessionCommitResult struct {
 	Config         ReverseProxyConfig `json:"config"`
 	ApplyRequested bool               `json:"applyRequested"`
+}
+
+const (
+	FacilityEditSessionActive     = "active"
+	FacilityEditSessionCommitting = "committing"
+	FacilityEditSessionCommitted  = "committed"
+	FacilityEditSessionConflict   = "conflict"
+	FacilityEditSessionDiscarded  = "discarded"
+	FacilityEditSessionExpired    = "expired"
+)
+
+type FacilityEditAsset struct {
+	AssetKey      string    `json:"assetKey"`
+	SourceAssetID string    `json:"sourceAssetId,omitempty"`
+	Name          string    `json:"name"`
+	Kind          string    `json:"kind"`
+	Filename      string    `json:"filename"`
+	Size          int64     `json:"size"`
+	SHA256        string    `json:"sha256"`
+	CreatedAt     time.Time `json:"createdAt"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+}
+
+type FacilityEditSession struct {
+	ID                  string                       `json:"id"`
+	ClientDraftKey      string                       `json:"clientDraftKey,omitempty"`
+	State               string                       `json:"state"`
+	BaseResourceVersion applications.ResourceVersion `json:"baseResourceVersion"`
+	Draft               ReverseProxySaveInput        `json:"draft"`
+	Revision            int                          `json:"revision"`
+	Assets              []FacilityEditAsset          `json:"assets"`
+	PreviewToken        *applications.PreviewToken   `json:"previewToken,omitempty"`
+	IdleExpiresAt       time.Time                    `json:"idleExpiresAt"`
+	AbsoluteExpiresAt   time.Time                    `json:"absoluteExpiresAt"`
+	CreatedAt           time.Time                    `json:"createdAt"`
+	UpdatedAt           time.Time                    `json:"updatedAt"`
+	CommittedAt         *time.Time                   `json:"committedAt,omitempty"`
+	CommitResult        *FacilityEditCommitResult    `json:"commitResult,omitempty"`
+}
+
+type BeginFacilityEditSessionInput struct {
+	ClientDraftKey string                 `json:"clientDraftKey,omitempty"`
+	Draft          *ReverseProxySaveInput `json:"draft,omitempty"`
+}
+
+type PatchFacilityEditSessionInput struct {
+	Revision            int                   `json:"revision"`
+	BaseResourceVersion string                `json:"baseResourceVersion,omitempty"`
+	Draft               ReverseProxySaveInput `json:"draft"`
+}
+
+type FacilityEditAssetInput struct {
+	Revision          int
+	ClientOperationID string
+	Name              string
+	Kind              string
+	FileName          string
+	Content           []byte
+}
+
+type FacilityEditMutationInput struct {
+	Revision          int    `json:"revision"`
+	ClientOperationID string `json:"clientOperationId"`
+}
+
+type FacilityEditValidationResult struct {
+	Valid       bool                      `json:"valid"`
+	Revision    int                       `json:"revision"`
+	Diagnostics []applications.Diagnostic `json:"diagnostics"`
+}
+
+type FacilityEditPreviewResult struct {
+	Revision    int                       `json:"revision"`
+	Diagnostics []applications.Diagnostic `json:"diagnostics"`
+	Token       applications.PreviewToken `json:"token"`
+	ExpiresAt   time.Time                 `json:"expiresAt"`
+}
+
+type CommitFacilityEditSessionInput struct {
+	Revision            int    `json:"revision"`
+	BaseResourceVersion string `json:"baseResourceVersion"`
+	PreviewToken        string `json:"previewToken"`
+}
+
+type FacilityEditCommitResult struct {
+	Config          ReverseProxyConfig           `json:"config"`
+	ResourceVersion applications.ResourceVersion `json:"resourceVersion"`
+	ApplyRequested  bool                         `json:"applyRequested"`
+	Diagnostics     []applications.Diagnostic    `json:"diagnostics,omitempty"`
 }

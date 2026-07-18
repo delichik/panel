@@ -2,8 +2,10 @@ package backups
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -19,8 +21,13 @@ var (
 )
 
 type Service struct {
-	cfg       ArchiveConfig
-	restarter Restarter
+	cfg                ArchiveConfig
+	restarter          Restarter
+	restorePublishHook func(string) error
+}
+
+func withRestorePublishHook(hook func(string) error) Option {
+	return func(s *Service) { s.restorePublishHook = hook }
 }
 
 type Option func(*Service)
@@ -108,24 +115,24 @@ func (s *Service) SavePendingRestore(uploadedPath, password string) (RestoreConf
 		return RestoreConfirmResponse{}, mapArchiveError(err)
 	}
 	manifest.Encrypted = isEncryptedBackup(raw)
-	dir := pendingDir(s.cfg.DataRoot)
-	if err := os.MkdirAll(dir, 0700); err != nil {
+	credential, err := readMaintenanceCredential(context.Background(), s.cfg.AppDatabase)
+	if err != nil {
 		return RestoreConfirmResponse{}, err
 	}
 	archiveName := "backup.panel-backup"
-	if err := os.WriteFile(filepath.Join(dir, archiveName), raw, 0600); err != nil {
-		return RestoreConfirmResponse{}, err
-	}
 	marker := pendingRestore{
 		ArchiveFilename: archiveName,
+		ArchiveSHA256:   fmt.Sprintf("%x", sha256.Sum256(raw)),
+		ArchiveSize:     int64(len(raw)),
 		CreatedAt:       time.Now().UTC(),
 		Manifest:        manifest,
+		MaintenanceAuth: &credential,
 	}
 	markerBytes, err := json.MarshalIndent(marker, "", "  ")
 	if err != nil {
 		return RestoreConfirmResponse{}, err
 	}
-	if err := os.WriteFile(filepath.Join(dir, "pending.json"), markerBytes, 0600); err != nil {
+	if err := publishPendingRestore(s.cfg.DataRoot, archiveName, raw, markerBytes, s.restorePublishHook); err != nil {
 		return RestoreConfirmResponse{}, err
 	}
 	restartSupported := s.restarter.Supported()

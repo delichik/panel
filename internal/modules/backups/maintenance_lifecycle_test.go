@@ -36,9 +36,11 @@ func TestRestoreMaintenanceEncryptedPendingRequiresPasswordAndKeepsWrongPassword
 	if !initial.Manifest.CreatedAt.Equal(manifest.CreatedAt) {
 		t.Fatalf("manifest createdAt = %s, want %s", initial.Manifest.CreatedAt, manifest.CreatedAt)
 	}
+	token := loginMaintenance(t, app.Handler(), "admin", "password")
 
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/restore/password", bytes.NewBufferString(`{"password":"wrong-password"}`))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
 	app.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusAccepted {
@@ -69,11 +71,14 @@ func TestRestoreClearPendingDeletesMarkerAndRequestsNormalRestart(t *testing.T) 
 			Phase:            PhasePassword,
 			RestartSupported: true,
 		},
+		auth: testMaintenanceAuth(t, maintenanceAuthRestore),
 	}
 	app.routes()
 
 	rec := httptest.NewRecorder()
-	app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/restore/clear-pending", nil))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/restore/clear-pending", nil)
+	req.Header.Set("Authorization", "Bearer "+testMaintenanceToken(app.auth))
+	app.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected clear-pending success, got %d", rec.Code)
@@ -103,11 +108,14 @@ func TestRestoreClearPendingFallsBackWhenRestartUnsupported(t *testing.T) {
 			Phase:            PhasePassword,
 			RestartSupported: false,
 		},
+		auth: testMaintenanceAuth(t, maintenanceAuthRestore),
 	}
 	app.routes()
 
 	rec := httptest.NewRecorder()
-	app.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/restore/clear-pending", nil))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/restore/clear-pending", nil)
+	req.Header.Set("Authorization", "Bearer "+testMaintenanceToken(app.auth))
+	app.Handler().ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected clear-pending success without restart support, got %d", rec.Code)
@@ -260,12 +268,61 @@ func TestExportDownloadOnlyAllowedForCompletedMatchingExport(t *testing.T) {
 func maintenanceTestConfig(t *testing.T) config.Config {
 	t.Helper()
 	root := t.TempDir()
-	return config.Config{
-		DataRoot:        filepath.Join(root, "data"),
-		AppDatabase:     filepath.Join(root, "db", "app.db"),
-		LogDatabase:    filepath.Join(root, "db", "log.db"),
-		MetricsDatabase: filepath.Join(root, "db", "metrics.db"),
+	hash, err := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
 	}
+	return config.Config{
+		AdminUsername:     "admin",
+		AdminPasswordHash: string(hash),
+		DataRoot:          filepath.Join(root, "data"),
+		AppDatabase:       filepath.Join(root, "db", "app.db"),
+		LogDatabase:       filepath.Join(root, "db", "log.db"),
+		MetricsDatabase:   filepath.Join(root, "db", "metrics.db"),
+	}
+}
+
+func testMaintenanceAuth(t *testing.T, authContext maintenanceAuthContext) *maintenanceAuth {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte("password"), bcrypt.MinCost)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := newMaintenanceAuthWithCredential(authContext, maintenanceCredential{Username: "admin", PasswordHash: string(hash)})
+	testMaintenanceToken(auth)
+	return auth
+}
+
+func testMaintenanceToken(auth *maintenanceAuth) string {
+	const tokenBody = "test-maintenance-token"
+	token := maintenanceTokenPrefix(auth.context) + tokenBody
+	auth.mu.Lock()
+	auth.sessions[token] = maintenanceSession{username: auth.username, expiresAt: auth.now().Add(time.Hour)}
+	auth.mu.Unlock()
+	return token
+}
+
+func loginMaintenance(t *testing.T, handler http.Handler, username, password string) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewBufferString(`{"username":"`+username+`","password":"`+password+`"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("maintenance login status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	var envelope struct {
+		Data struct {
+			Token string `json:"token"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if envelope.Data.Token == "" {
+		t.Fatal("maintenance login returned empty token")
+	}
+	return envelope.Data.Token
 }
 
 func writeEncryptedPendingRestore(t *testing.T, dataRoot, password string) Manifest {

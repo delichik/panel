@@ -128,6 +128,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS idx_container_observations_server_sample ON container_observations(server_id, sample_at)`,
 		`CREATE TABLE IF NOT EXISTS applications (
 			id TEXT PRIMARY KEY,
+			version INTEGER NOT NULL DEFAULT 1,
 			kind TEXT NOT NULL DEFAULT 'application',
 			name TEXT NOT NULL,
 			enabled INTEGER NOT NULL DEFAULT 0,
@@ -154,6 +155,60 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			UNIQUE(name)
+		)`,
+		`CREATE TABLE IF NOT EXISTS application_edit_sessions (
+			id TEXT PRIMARY KEY,
+			application_id TEXT NOT NULL DEFAULT '',
+			owner_id TEXT NOT NULL,
+			client_draft_key TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			base_resource_version INTEGER NOT NULL DEFAULT 0,
+			base_resource_updated_at TEXT NOT NULL DEFAULT '',
+			draft_json TEXT NOT NULL DEFAULT '{}',
+			revision INTEGER NOT NULL DEFAULT 1,
+			preview_token TEXT NOT NULL DEFAULT '',
+			preview_revision INTEGER NOT NULL DEFAULT 0,
+			preview_expires_at TEXT NOT NULL DEFAULT '',
+			commit_lease_owner TEXT NOT NULL DEFAULT '',
+			commit_lease_expires_at TEXT NOT NULL DEFAULT '',
+			commit_idempotency_key TEXT NOT NULL DEFAULT '',
+			commit_application_id TEXT NOT NULL DEFAULT '',
+			commit_result_json TEXT NOT NULL DEFAULT '',
+			conflict_json TEXT NOT NULL DEFAULT '',
+			idle_expires_at TEXT NOT NULL,
+			absolute_expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			committed_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_edit_sessions_recoverable ON application_edit_sessions(owner_id,application_id,state,updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_application_edit_sessions_expiry ON application_edit_sessions(state,idle_expires_at,absolute_expires_at)`,
+		`CREATE TABLE IF NOT EXISTS application_edit_session_files (
+			session_id TEXT NOT NULL,
+			file_key TEXT NOT NULL,
+			path TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
+			content_type TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0,
+			sha256 TEXT NOT NULL DEFAULT '',
+			blob_path TEXT NOT NULL,
+			state TEXT NOT NULL DEFAULT 'ready',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(session_id,file_key),
+			UNIQUE(session_id,path),
+			FOREIGN KEY(session_id) REFERENCES application_edit_sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS application_edit_session_operations (
+			session_id TEXT NOT NULL,
+			client_operation_id TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL,
+			result_json TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(session_id,client_operation_id),
+			UNIQUE(session_id,idempotency_key),
+			FOREIGN KEY(session_id) REFERENCES application_edit_sessions(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS application_files (
 			id TEXT PRIMARY KEY,
@@ -199,6 +254,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		)`,
 		`CREATE TABLE IF NOT EXISTS facility_app_configs (
 			id TEXT PRIMARY KEY,
+			version INTEGER NOT NULL DEFAULT 1,
 			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
 			panel_entry_json TEXT NOT NULL DEFAULT '{}',
 			domains_json TEXT NOT NULL DEFAULT '[]',
@@ -214,6 +270,59 @@ func (s *Store) Migrate(ctx context.Context) error {
 			sha256 TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS facility_edit_sessions (
+			id TEXT PRIMARY KEY,
+			owner_id TEXT NOT NULL,
+			client_draft_key TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL,
+			base_resource_version INTEGER NOT NULL DEFAULT 0,
+			draft_json TEXT NOT NULL DEFAULT '{}',
+			revision INTEGER NOT NULL DEFAULT 1,
+			preview_token TEXT NOT NULL DEFAULT '',
+			preview_revision INTEGER NOT NULL DEFAULT 0,
+			preview_expires_at TEXT NOT NULL DEFAULT '',
+			commit_lease_owner TEXT NOT NULL DEFAULT '',
+			commit_lease_expires_at TEXT NOT NULL DEFAULT '',
+			commit_idempotency_key TEXT NOT NULL DEFAULT '',
+			commit_result_json TEXT NOT NULL DEFAULT '',
+			manifest_path TEXT NOT NULL DEFAULT '',
+			conflict_json TEXT NOT NULL DEFAULT '',
+			idle_expires_at TEXT NOT NULL,
+			absolute_expires_at TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			committed_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_facility_edit_sessions_recoverable ON facility_edit_sessions(owner_id,client_draft_key,state,updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_facility_edit_sessions_expiry ON facility_edit_sessions(state,idle_expires_at,absolute_expires_at)`,
+		`CREATE TABLE IF NOT EXISTS facility_edit_session_assets (
+			session_id TEXT NOT NULL,
+			asset_key TEXT NOT NULL,
+			source_asset_id TEXT NOT NULL DEFAULT '',
+			name TEXT NOT NULL,
+			kind TEXT NOT NULL CHECK(kind IN ('uploaded_file','uploaded_bundle')),
+			filename TEXT NOT NULL DEFAULT '',
+			size INTEGER NOT NULL DEFAULT 0,
+			sha256 TEXT NOT NULL DEFAULT '',
+			content_sha256 TEXT NOT NULL DEFAULT '',
+			blob_dir TEXT NOT NULL DEFAULT '',
+			state TEXT NOT NULL DEFAULT 'ready',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			PRIMARY KEY(session_id,asset_key),
+			FOREIGN KEY(session_id) REFERENCES facility_edit_sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS facility_edit_session_operations (
+			session_id TEXT NOT NULL,
+			client_operation_id TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL,
+			request_hash TEXT NOT NULL,
+			result_json TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			PRIMARY KEY(session_id,client_operation_id),
+			UNIQUE(session_id,idempotency_key),
+			FOREIGN KEY(session_id) REFERENCES facility_edit_sessions(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS dns_domains (
 			id TEXT PRIMARY KEY,
@@ -456,6 +565,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "applications", map[string]string{
+		"version":                    "INTEGER NOT NULL DEFAULT 1",
 		"kind":                       "TEXT NOT NULL DEFAULT 'application'",
 		"deletion_requested":         "INTEGER NOT NULL DEFAULT 0",
 		"resolved_variables_json":    "TEXT NOT NULL DEFAULT '{}'",
@@ -468,6 +578,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"image_checked_at":           "TEXT",
 		"image_update_available":     "INTEGER NOT NULL DEFAULT 0",
 		"image_last_error":           "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "application_edit_sessions", map[string]string{
+		"base_resource_updated_at": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
@@ -485,6 +600,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "facility_app_configs", map[string]string{
+		"version":                    "INTEGER NOT NULL DEFAULT 1",
 		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
 		"panel_entry_json":           "TEXT NOT NULL DEFAULT '{}'",
 		"domains_json":               "TEXT NOT NULL DEFAULT '[]'",
@@ -501,6 +617,11 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"sha256":     "TEXT NOT NULL DEFAULT ''",
 		"created_at": "TEXT NOT NULL DEFAULT ''",
 		"updated_at": "TEXT NOT NULL DEFAULT ''",
+	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "facility_edit_session_assets", map[string]string{
+		"content_sha256": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
@@ -1049,6 +1170,7 @@ func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
 	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE facility_app_configs_new (
 		id TEXT PRIMARY KEY,
+		version INTEGER NOT NULL DEFAULT 1,
 		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
 		panel_entry_json TEXT NOT NULL DEFAULT '{}',
 		domains_json TEXT NOT NULL DEFAULT '[]',
@@ -1062,7 +1184,7 @@ func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs_new(id,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,?,?,?,?,?)`, row.ID, row.ServersRaw, row.PanelRaw, string(domainsRaw), row.LastError, row.UpdatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs_new(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,?,?,?,?,?,?)`, row.ID, 1, row.ServersRaw, row.PanelRaw, string(domainsRaw), row.LastError, row.UpdatedAt); err != nil {
 			return err
 		}
 	}

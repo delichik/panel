@@ -176,7 +176,7 @@ func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sq
 		return err
 	}
 	for _, item := range updates {
-		if _, err := tx.ExecContext(ctx, `UPDATE applications SET deployment_server_ids_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.id); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE applications SET version=version+1,deployment_server_ids_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.id); err != nil {
 			return err
 		}
 	}

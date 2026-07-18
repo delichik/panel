@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -20,11 +21,20 @@ import (
 
 const maintenanceSessionTTL = 2 * time.Hour
 
+type maintenanceAuthContext string
+
+const (
+	maintenanceAuthExport  maintenanceAuthContext = "backup_export"
+	maintenanceAuthRestore maintenanceAuthContext = "restore"
+)
+
 type maintenanceAuth struct {
 	username     string
 	passwordHash string
 	mu           sync.RWMutex
 	sessions     map[string]maintenanceSession
+	context      maintenanceAuthContext
+	now          func() time.Time
 }
 
 type maintenanceSession struct {
@@ -32,10 +42,13 @@ type maintenanceSession struct {
 	expiresAt time.Time
 }
 
-func newMaintenanceAuth(ctx context.Context, appDatabase string) (*maintenanceAuth, error) {
+func readMaintenanceCredential(ctx context.Context, appDatabase string) (maintenanceCredential, error) {
+	if strings.TrimSpace(appDatabase) == "" {
+		return maintenanceCredential{}, errors.New("app database path is empty")
+	}
 	db, err := sql.Open("sqlite", sqliteFileDSN(appDatabase))
 	if err != nil {
-		return nil, err
+		return maintenanceCredential{}, err
 	}
 	defer db.Close()
 
@@ -46,13 +59,54 @@ func newMaintenanceAuth(ctx context.Context, appDatabase string) (*maintenanceAu
 		FROM auth_accounts
 		WHERE id=?
 	`, "admin").Scan(&username, &passwordHash); err != nil {
+		return maintenanceCredential{}, err
+	}
+	return maintenanceCredential{Username: username, PasswordHash: passwordHash}, nil
+}
+
+func newMaintenanceAuth(ctx context.Context, authContext maintenanceAuthContext, appDatabase string, fallbacks ...maintenanceCredential) (*maintenanceAuth, error) {
+	credential, err := readMaintenanceCredential(ctx, appDatabase)
+	if err != nil || !validMaintenanceCredential(credential) {
+		for _, fallback := range fallbacks {
+			if trustedMaintenanceFallback(fallback) {
+				credential = fallback
+				err = nil
+				break
+			}
+		}
+	}
+	if err != nil {
 		return nil, err
 	}
+	if !validMaintenanceCredential(credential) {
+		return nil, errors.New("maintenance credential is invalid")
+	}
+	return newMaintenanceAuthWithCredential(authContext, credential), nil
+}
+
+func trustedMaintenanceFallback(credential maintenanceCredential) bool {
+	if !validMaintenanceCredential(credential) {
+		return false
+	}
+	return credential.Username != "admin" || bcrypt.CompareHashAndPassword([]byte(credential.PasswordHash), []byte("admin")) != nil
+}
+
+func newMaintenanceAuthWithCredential(authContext maintenanceAuthContext, credential maintenanceCredential) *maintenanceAuth {
 	return &maintenanceAuth{
-		username:     username,
-		passwordHash: passwordHash,
+		username:     credential.Username,
+		passwordHash: credential.PasswordHash,
 		sessions:     make(map[string]maintenanceSession),
-	}, nil
+		context:      authContext,
+		now:          func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func validMaintenanceCredential(credential maintenanceCredential) bool {
+	if strings.TrimSpace(credential.Username) == "" || strings.TrimSpace(credential.PasswordHash) == "" {
+		return false
+	}
+	_, err := bcrypt.Cost([]byte(credential.PasswordHash))
+	return err == nil
 }
 
 func (a *maintenanceAuth) loginAPI(w http.ResponseWriter, r *http.Request) {
@@ -67,12 +121,12 @@ func (a *maintenanceAuth) loginAPI(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.Unauthorized("Authentication failed"))
 		return
 	}
-	token, err := randomMaintenanceToken()
+	token, err := randomMaintenanceToken(a.context)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-	session := maintenanceSession{username: a.username, expiresAt: time.Now().UTC().Add(maintenanceSessionTTL)}
+	session := maintenanceSession{username: a.username, expiresAt: a.now().Add(maintenanceSessionTTL)}
 	a.mu.Lock()
 	a.sessions[token] = session
 	a.mu.Unlock()
@@ -119,7 +173,7 @@ func (a *maintenanceAuth) validate(token string) (maintenanceSession, bool) {
 	if !ok {
 		return maintenanceSession{}, false
 	}
-	if time.Now().UTC().After(session.expiresAt) {
+	if !strings.HasPrefix(token, maintenanceTokenPrefix(a.context)) || !a.now().Before(session.expiresAt) {
 		a.mu.Lock()
 		delete(a.sessions, token)
 		a.mu.Unlock()
@@ -134,6 +188,8 @@ func (a *maintenanceAuth) sessionPayload(token string, session maintenanceSessio
 		"token":                  token,
 		"username":               session.username,
 		"passwordChangeRequired": false,
+		"authContext":            string(a.context),
+		"expiresAt":              session.expiresAt,
 	}
 }
 
@@ -146,12 +202,19 @@ func bearerToken(r *http.Request) string {
 	return header[len(bearerPrefix):]
 }
 
-func randomMaintenanceToken() (string, error) {
+func randomMaintenanceToken(authContext maintenanceAuthContext) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+	return maintenanceTokenPrefix(authContext) + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func maintenanceTokenPrefix(authContext maintenanceAuthContext) string {
+	if authContext == maintenanceAuthRestore {
+		return "mr_"
+	}
+	return "me_"
 }
 
 func sqliteFileDSN(path string) string {

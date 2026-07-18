@@ -66,20 +66,25 @@ type PanelHostProvider interface {
 }
 
 type Service struct {
-	db           *sql.DB
-	dataRoot     string
-	agent        AgentRuntimeClient
-	servers      ServerProvider
-	apps         ApplicationProvider
-	certificates CertificateProvider
-	agentErrors  AgentErrorHandler
-	queue        ContainerOperationQueue
-	reconciler   ApplicationReconcileTrigger
-	panelHost    PanelHostProvider
-	sessionMu    sync.Mutex
-	saveSessions map[string]*facilitySaveSession
-	cleanupOnce  sync.Once
-	sessionDir   string
+	db              *sql.DB
+	dataRoot        string
+	agent           AgentRuntimeClient
+	servers         ServerProvider
+	apps            ApplicationProvider
+	certificates    CertificateProvider
+	agentErrors     AgentErrorHandler
+	queue           ContainerOperationQueue
+	reconciler      ApplicationReconcileTrigger
+	panelHost       PanelHostProvider
+	sessionMu       sync.Mutex
+	saveSessions    map[string]*facilitySaveSession
+	cleanupOnce     sync.Once
+	sessionDir      string
+	editCleanupOnce sync.Once
+	editSessionDir  string
+	editCommitMu    sync.Mutex
+	// beforeFacilityEditRevisionBump is a deterministic test synchronization point.
+	beforeFacilityEditRevisionBump func()
 }
 
 type Option func(*Service)
@@ -113,7 +118,10 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 		opt(s)
 	}
 	s.sessionDir = filepath.Join(s.dataRoot, "tmp", "facility-reverse-proxy-save-sessions")
+	s.editSessionDir = filepath.Join(s.dataRoot, "tmp", "facility-reverse-proxy-edit-sessions")
+	s.recoverFacilityEditSessions(context.Background())
 	s.startSaveSessionCleanup()
+	s.startFacilityEditSessionCleanup()
 	return s
 }
 
@@ -152,6 +160,8 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 }
 
 func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput) (ReverseProxyConfig, error) {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	previous, err := s.loadConfig(ctx)
 	if err != nil {
 		return ReverseProxyConfig{}, err
@@ -179,8 +189,11 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 }
 
 func (s *Service) validatePanelHost(ctx context.Context, cfg ReverseProxyConfig) error {
-	if !cfg.PanelEntry.Enabled || s.panelHost == nil {
+	if !cfg.PanelEntry.Enabled {
 		return nil
+	}
+	if s.panelHost == nil {
+		return panelerr.Validation("panel_host_provider_unavailable", "Panel host registration is unavailable")
 	}
 	hostServerID, err := s.panelHost.HostServerID(ctx)
 	if err != nil {
@@ -456,11 +469,11 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 		Image:         supportedProxyImage,
 		Ports:         ports,
 		NetworkMode:   networkMode,
-		Mounts:     mounts,
-		Files:      append([]appruntime.ManagedFile{{Path: proxyConfigPath, Content: []byte(nginx), Mode: "0644"}}, files...),
-		Restart:    appruntime.Restart{Policy: "no"},
-		Generation: 1,
-		SpecHash:   hash,
+		Mounts:        mounts,
+		Files:         append([]appruntime.ManagedFile{{Path: proxyConfigPath, Content: []byte(nginx), Mode: "0644"}}, files...),
+		Restart:       appruntime.Restart{Policy: "no"},
+		Generation:    1,
+		SpecHash:      hash,
 	}, nil
 }
 
@@ -969,9 +982,9 @@ func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstrea
 
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: []string{}, Domains: []FacilityRouteDomain{}}
-	row := s.db.QueryRowContext(ctx, `SELECT deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID)
+	row := s.db.QueryRowContext(ctx, `SELECT version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID)
 	var serversRaw, panelRaw, domainsRaw, updated string
-	if err := row.Scan(&serversRaw, &panelRaw, &domainsRaw, &cfg.LastError, &updated); err != nil {
+	if err := row.Scan(&cfg.Version, &serversRaw, &panelRaw, &domainsRaw, &cfg.LastError, &updated); err != nil {
 		if err == sql.ErrNoRows {
 			return cfg, nil
 		}
@@ -1030,9 +1043,9 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
-		VALUES(?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
+	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
+		VALUES(?,1,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
 		ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now)
 	return err
 }

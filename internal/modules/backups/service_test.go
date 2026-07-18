@@ -10,7 +10,9 @@ import (
 func TestStartExportSchedulesContainerRestart(t *testing.T) {
 	dir := t.TempDir()
 	restarter := &fakeRestarter{supported: true}
-	svc := NewService(ArchiveConfig{DataRoot: dir}, WithRestarter(restarter))
+	appDatabase := filepath.Join(dir, "db", "app.db")
+	writeMaintenanceAdmin(t, appDatabase)
+	svc := NewService(ArchiveConfig{DataRoot: dir, AppDatabase: appDatabase}, WithRestarter(restarter))
 
 	resp, err := svc.StartExport(context.Background(), ExportRequest{Encrypt: true})
 	if err != nil {
@@ -49,6 +51,8 @@ func TestStartExportDoesNotScheduleRestartWhenUnsupported(t *testing.T) {
 
 func TestSavePendingRestoreSchedulesContainerRestart(t *testing.T) {
 	dir := t.TempDir()
+	appDatabase := filepath.Join(dir, "db", "app.db")
+	writeMaintenanceAdmin(t, appDatabase)
 	archive := filepath.Join(dir, "backup.panel-backup")
 	sourceRoot := t.TempDir()
 	if err := os.MkdirAll(sourceRoot, 0700); err != nil {
@@ -65,7 +69,7 @@ func TestSavePendingRestoreSchedulesContainerRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	restarter := &fakeRestarter{supported: true}
-	svc := NewService(ArchiveConfig{DataRoot: dir}, WithRestarter(restarter))
+	svc := NewService(ArchiveConfig{DataRoot: dir, AppDatabase: appDatabase}, WithRestarter(restarter))
 
 	resp, err := svc.SavePendingRestore(archive, "")
 	if err != nil {
@@ -79,6 +83,13 @@ func TestSavePendingRestoreSchedulesContainerRestart(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(pendingDir(dir), "pending.json")); err != nil {
 		t.Fatalf("expected pending restore marker: %v", err)
+	}
+	marker, err := readPending(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if marker.MaintenanceAuth == nil || marker.MaintenanceAuth.Username != "admin" || marker.MaintenanceAuth.PasswordHash == "" {
+		t.Fatalf("expected restore pending to contain maintenance credential snapshot, got %+v", marker.MaintenanceAuth)
 	}
 }
 

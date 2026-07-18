@@ -73,6 +73,7 @@ const (
 
 type Application struct {
 	ID                   string              `json:"id"`
+	Version              int                 `json:"version"`
 	Kind                 string              `json:"kind"`
 	Name                 string              `json:"name"`
 	Enabled              bool                `json:"enabled"`
@@ -213,6 +214,127 @@ type SaveSessionResult struct {
 	ApplicationID string            `json:"applicationId,omitempty"`
 	ExpiresAt     time.Time         `json:"expiresAt"`
 	Files         []ApplicationFile `json:"files"`
+}
+
+const (
+	EditSessionStateActive     = "active"
+	EditSessionStateValidating = "validating"
+	EditSessionStatePreviewing = "previewing"
+	EditSessionStateCommitting = "committing"
+	EditSessionStateCommitted  = "committed"
+	EditSessionStateConflict   = "conflict"
+	EditSessionStateDiscarded  = "discarded"
+	EditSessionStateExpired    = "expired"
+)
+
+type ResourceVersion struct {
+	Value     string    `json:"value"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type Diagnostic struct {
+	Code     string         `json:"code"`
+	Severity string         `json:"severity"`
+	Field    string         `json:"field,omitempty"`
+	Message  string         `json:"message"`
+	Details  map[string]any `json:"details,omitempty"`
+}
+
+type PreviewToken struct {
+	Value          string `json:"value"`
+	Action         string `json:"action"`
+	SubjectVersion string `json:"subjectVersion"`
+}
+
+type EditSessionFile struct {
+	FileKey     string    `json:"fileKey"`
+	Path        string    `json:"path"`
+	Kind        string    `json:"kind"`
+	ContentType string    `json:"contentType"`
+	Size        int64     `json:"size"`
+	SHA256      string    `json:"sha256"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
+type ApplicationEditSession struct {
+	ID                  string            `json:"id"`
+	ApplicationID       string            `json:"applicationId,omitempty"`
+	ClientDraftKey      string            `json:"clientDraftKey,omitempty"`
+	State               string            `json:"state"`
+	BaseResourceVersion ResourceVersion   `json:"baseResourceVersion"`
+	Draft               SaveInput         `json:"draft"`
+	Revision            int               `json:"revision"`
+	Files               []EditSessionFile `json:"files"`
+	PreviewToken        *PreviewToken     `json:"previewToken,omitempty"`
+	IdleExpiresAt       time.Time         `json:"idleExpiresAt"`
+	AbsoluteExpiresAt   time.Time         `json:"absoluteExpiresAt"`
+	CreatedAt           time.Time         `json:"createdAt"`
+	UpdatedAt           time.Time         `json:"updatedAt"`
+	CommittedAt         *time.Time        `json:"committedAt,omitempty"`
+	CommitResult        *EditCommitResult `json:"commitResult,omitempty"`
+}
+
+type BeginEditSessionInput struct {
+	ApplicationID  string     `json:"applicationId,omitempty"`
+	ClientDraftKey string     `json:"clientDraftKey,omitempty"`
+	Draft          *SaveInput `json:"draft,omitempty"`
+}
+
+type PatchEditSessionInput struct {
+	Revision int       `json:"revision"`
+	Draft    SaveInput `json:"draft"`
+}
+
+type EditSessionFileInput struct {
+	Revision          int    `json:"revision"`
+	ClientOperationID string `json:"clientOperationId"`
+	Path              string `json:"path"`
+	Kind              string `json:"kind"`
+	ContentType       string `json:"contentType"`
+	ContentBase64     string `json:"contentBase64"`
+}
+
+type EditSessionArchiveInput struct {
+	Revision          int
+	ClientOperationID string
+	FileKey           string
+	BasePath          string
+	Kind              string
+	FileName          string
+	Content           []byte
+}
+
+type EditSessionMutationInput struct {
+	Revision          int    `json:"revision"`
+	ClientOperationID string `json:"clientOperationId"`
+}
+
+type EditSessionValidationResult struct {
+	Valid       bool         `json:"valid"`
+	Revision    int          `json:"revision"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
+}
+
+type EditSessionPreviewResult struct {
+	Revision    int          `json:"revision"`
+	Diagnostics []Diagnostic `json:"diagnostics"`
+	Token       PreviewToken `json:"token"`
+	ExpiresAt   time.Time    `json:"expiresAt"`
+}
+
+type CommitEditSessionInput struct {
+	Revision                 int      `json:"revision"`
+	BaseResourceVersion      string   `json:"baseResourceVersion"`
+	PreviewToken             string   `json:"previewToken"`
+	ConfirmedDiagnosticCodes []string `json:"confirmedDiagnosticCodes,omitempty"`
+}
+
+type EditCommitResult struct {
+	Application     Application     `json:"application"`
+	ResourceVersion ResourceVersion `json:"resourceVersion"`
+	ApplyRequested  bool            `json:"applyRequested"`
+	Diagnostics     []Diagnostic    `json:"diagnostics,omitempty"`
 }
 
 type ApplicationRevision struct {

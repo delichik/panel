@@ -66,11 +66,29 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO application_files(id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at)
+	if existing, existingErr := s.getFileByPath(ctx, appID, targetPath, false); existingErr == nil && existing.Kind == file.Kind && existing.ContentType == file.ContentType && existing.Size == file.Size && existing.SHA256 == file.SHA256 {
+		return existing, nil
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return ApplicationFile{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	_, err = tx.ExecContext(ctx, `INSERT INTO application_files(id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(application_id,path) DO UPDATE SET kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,content=excluded.content,updated_at=excluded.updated_at`,
 		file.ID, file.ApplicationID, file.Path, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt))
 	if err != nil {
+		return ApplicationFile{}, err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
+	if err != nil {
+		return ApplicationFile{}, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return ApplicationFile{}, resourceVersionConflict(app.Version, app.Version+1)
+	}
+	if err := tx.Commit(); err != nil {
 		return ApplicationFile{}, err
 	}
 	if err := s.redeployIfEnabled(ctx, app); err != nil {
@@ -84,12 +102,28 @@ func (s *Service) DeleteFile(ctx context.Context, appID, fileID string) error {
 	if err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM application_files WHERE application_id=? AND id=?`, appID, fileID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.ExecContext(ctx, `DELETE FROM application_files WHERE application_id=? AND id=?`, appID, fileID)
 	if err != nil {
 		return err
 	}
 	if rows, _ := res.RowsAffected(); rows == 0 {
 		return panelerr.NotFound("application_file")
+	}
+	now := time.Now().UTC()
+	res, err = tx.ExecContext(ctx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
+	if err != nil {
+		return err
+	}
+	if affected, _ := res.RowsAffected(); affected != 1 {
+		return resourceVersionConflict(app.Version, app.Version+1)
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	return s.redeployIfEnabled(ctx, app)
 }

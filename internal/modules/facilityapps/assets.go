@@ -22,6 +22,13 @@ import (
 	id "panel/internal/platform/identity"
 )
 
+const (
+	facilityAssetArchiveMaxFiles     = 10000
+	facilityAssetArchiveMaxDepth     = 32
+	facilityAssetArchiveMaxExtracted = int64(256 << 20)
+	facilityAssetArchiveMaxRatio     = int64(100)
+)
+
 func (s *Service) ListStaticAssets(ctx context.Context) ([]StaticAsset, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,name,kind,filename,size,sha256,created_at,updated_at FROM facility_static_assets ORDER BY created_at DESC`)
 	if err != nil {
@@ -40,6 +47,8 @@ func (s *Service) ListStaticAssets(ctx context.Context) ([]StaticAsset, error) {
 }
 
 func (s *Service) UploadStaticAsset(ctx context.Context, in StaticAssetUploadInput) (StaticAsset, error) {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		name = strings.TrimSpace(in.FileName)
@@ -97,6 +106,8 @@ func (s *Service) UploadStaticAsset(ctx context.Context, in StaticAssetUploadInp
 }
 
 func (s *Service) DeleteStaticAsset(ctx context.Context, assetID string) error {
+	s.editCommitMu.Lock()
+	defer s.editCommitMu.Unlock()
 	assetID = strings.TrimSpace(assetID)
 	if assetID == "" {
 		return panelerr.NotFound("static asset")
@@ -108,12 +119,23 @@ func (s *Service) DeleteStaticAsset(ctx context.Context, assetID string) error {
 	if used {
 		return panelerr.Conflict("facility_static_asset_in_use", "Static asset is still used by reverse proxy")
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM facility_static_assets WHERE id=?`, assetID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM facility_static_assets WHERE id=?`, assetID)
 	if err != nil {
 		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return panelerr.NotFound("static asset")
+	}
+	if err := bumpFacilityConfigVersionTx(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
 	_ = os.RemoveAll(s.staticAssetDir(assetID))
 	return nil
@@ -180,8 +202,25 @@ type appruntimeFile struct {
 }
 
 func (s *Service) insertStaticAsset(ctx context.Context, asset StaticAsset) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
 		asset.ID, asset.Name, asset.Kind, asset.Filename, asset.Size, asset.SHA256, formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt))
+	if err != nil {
+		return err
+	}
+	if err := bumpFacilityConfigVersionTx(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func bumpFacilityConfigVersionTx(ctx context.Context, tx *sql.Tx) error {
+	now := formatTime(time.Now().UTC())
+	_, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,1,'[]','{}','[]','',?) ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,updated_at=excluded.updated_at`, ReverseProxyID, now)
 	return err
 }
 
@@ -221,7 +260,7 @@ func extractStaticBundle(reader io.ReaderAt, size int64, filename, target string
 		if err != nil {
 			return panelerr.Validation("facility_static_asset_archive_invalid", "Static asset archive is invalid")
 		}
-		return extractZip(zr, target)
+		return extractZip(zr, target, size)
 	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
 		section := io.NewSectionReader(reader, 0, size)
 		gz, err := gzip.NewReader(section)
@@ -229,16 +268,17 @@ func extractStaticBundle(reader io.ReaderAt, size int64, filename, target string
 			return panelerr.Validation("facility_static_asset_archive_invalid", "Static asset archive is invalid")
 		}
 		defer gz.Close()
-		return extractTar(tar.NewReader(gz), target)
+		return extractTar(tar.NewReader(gz), target, size)
 	case strings.HasSuffix(lower, ".tar"):
-		return extractTar(tar.NewReader(io.NewSectionReader(reader, 0, size)), target)
+		return extractTar(tar.NewReader(io.NewSectionReader(reader, 0, size)), target, size)
 	default:
 		return panelerr.Validation("facility_static_asset_archive_invalid", "Folder uploads must use zip, tar, tar.gz, or tgz")
 	}
 }
 
-func extractZip(reader *zip.Reader, target string) error {
+func extractZip(reader *zip.Reader, target string, compressedSize int64) error {
 	count := 0
+	var extracted int64
 	for _, file := range reader.File {
 		name := cleanArchivePath(file.Name)
 		if name == "" {
@@ -246,6 +286,14 @@ func extractZip(reader *zip.Reader, target string) error {
 		}
 		if file.FileInfo().IsDir() {
 			continue
+		}
+		if file.UncompressedSize64 > uint64(facilityAssetArchiveMaxExtracted) {
+			return panelerr.Validation("facility_static_asset_archive_limits_exceeded", "Static asset archive exceeds file count, depth, extracted size, or compression ratio limits")
+		}
+		count++
+		extracted += int64(file.UncompressedSize64)
+		if err := validateFacilityArchiveLimits(name, count, extracted, compressedSize); err != nil {
+			return err
 		}
 		rc, err := file.Open()
 		if err != nil {
@@ -258,7 +306,6 @@ func extractZip(reader *zip.Reader, target string) error {
 		if err := rc.Close(); err != nil {
 			return err
 		}
-		count++
 	}
 	if count == 0 {
 		return panelerr.Validation("facility_static_asset_archive_empty", "Static asset archive is empty")
@@ -266,8 +313,9 @@ func extractZip(reader *zip.Reader, target string) error {
 	return nil
 }
 
-func extractTar(reader *tar.Reader, target string) error {
+func extractTar(reader *tar.Reader, target string, compressedSize int64) error {
 	count := 0
+	var extracted int64
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
@@ -279,17 +327,32 @@ func extractTar(reader *tar.Reader, target string) error {
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 			continue
 		}
+		if header.Size < 0 {
+			return panelerr.Validation("facility_static_asset_archive_limits_exceeded", "Static asset archive exceeds file count, depth, extracted size, or compression ratio limits")
+		}
 		name := cleanArchivePath(header.Name)
 		if name == "" {
 			continue
 		}
+		count++
+		extracted += header.Size
+		if err := validateFacilityArchiveLimits(name, count, extracted, compressedSize); err != nil {
+			return err
+		}
 		if err := writeArchiveFile(target, name, reader); err != nil {
 			return err
 		}
-		count++
 	}
 	if count == 0 {
 		return panelerr.Validation("facility_static_asset_archive_empty", "Static asset archive is empty")
+	}
+	return nil
+}
+
+func validateFacilityArchiveLimits(name string, count int, extracted, compressed int64) error {
+	depth := strings.Count(strings.Trim(name, "/"), "/") + 1
+	if count > facilityAssetArchiveMaxFiles || depth > facilityAssetArchiveMaxDepth || extracted > facilityAssetArchiveMaxExtracted || (compressed > 0 && extracted > compressed*facilityAssetArchiveMaxRatio && extracted > 1<<20) {
+		return panelerr.Validation("facility_static_asset_archive_limits_exceeded", "Static asset archive exceeds file count, depth, extracted size, or compression ratio limits")
 	}
 	return nil
 }

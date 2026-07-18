@@ -31,11 +31,21 @@
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
-设施应用 API 挂在 `/api/v1/facility-apps/reverse-proxy`，支持读取、兼容保存和手动同步。配置页使用设施保存会话：`POST /save-sessions` 创建会话，`POST /save-sessions/{id}/assets` 暂存新增或替换资产，`POST /save-sessions/{id}/assets/delete` 标记删除，`POST /save-sessions/{id}/commit` 原子提交完整配置和资产，`DELETE /save-sessions/{id}` 放弃。会话 30 分钟过期、每 5 分钟清理；提交用创建时的 `updatedAt` 检测并发覆盖。成功提交会更新本地配置和隐藏应用 desired state，然后触发 `application_reconcile` 协调 `facility-reverse-proxy`；协调任务根据设施 update planner 对每个节点选择 reload 或 recreate，并停止从部署服务器列表移除的节点。
+设施应用 API 挂在 `/api/v1/facility-apps/reverse-proxy`，支持读取、兼容保存和手动同步。旧 `/save-sessions` 会话继续兼容已有前端：30 分钟过期并使用创建时的 `updatedAt` 检测并发覆盖。新事务编辑器使用持久 `/edit-sessions` API：创建、recoverable 查询、详情、draft patch、按稳定 `assetKey` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。`facility_app_configs.version` 是配置并发版本，commit 在替换资产 metadata 的同一 AppDB 事务中执行 CAS。
+
+持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetKey` 引用资产，commit manifest 决定最终 asset ID 并在写数据库前统一改写。删除仍被 route 引用的资产、移除仍被 origin/AnyAccess primary/Panel Entry 使用的 gateway、或把 Panel Entry 绑定到非 setup Panel host 都是阻断诊断，服务端不得静默修剪。
+
+所有会修改正式设施配置或正式静态资产的旧、新入口共享同一单资源提交锁：直接 `PUT /reverse-proxy`、旧 save-session commit、直接静态资产上传/删除和新 edit-session commit 不得交错文件 rename 或数据库写。旧 save-session 在锁内使用创建时的 config version 做事务 CAS。新会话冲突后可通过 draft PATCH 携带当前 `baseResourceVersion` 执行 rebase；rebase 保留 session assets、更新 base version、清除 conflict 后允许重新 preview/commit。
+
+设施资产的数据库 metadata 和 dataRoot 目录通过可恢复 commit manifest 协调：先记录目标、backup、blob 和 base version，再移动旧/新目录，然后在单一事务中替换资产、CAS 保存配置并递增 version。启动或 commit lease 过期时会读取 manifest；DB 未提交则回滚目录并恢复会话，DB 已提交或可由 version+配置精确确认则只完成收尾并标记 committed，不重复写配置。配置提交与 `application_reconcile` 请求分离；协调器不可用时 commit 仍返回 committed，并携带 `facility_apply_request_failed` warning。
+
+commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_asset_id` 的正式 content 目录，并与 session 创建/上传时记录的 `content_sha256` 比较；缺失或漂移会阻断 commit。恢复只在 config version 精确等于 `base+1` 且配置及全部资产 ID/sha256 匹配 manifest 时认定 DB 已提交。恢复会实际重新请求 traits 同步和 application reconcile；失败时 `applyRequested=false` 并返回 warning，不能把“已恢复配置”谎报成“已请求应用”。commit、recovery 和 cleanup 使用同一资源锁，长文件阶段续期 commit lease；活跃 lease 即使超过普通 TTL 也保护 workspace。
+
+上传 handler 使用 64 MiB request 上限并清理 multipart 临时文件。bundle 解包限制最多 10000 个文件、32 层路径、256 MiB 解包总量和 100 倍压缩比。当前版本明确暂缓独立 heartbeat API、每管理员/全局草稿配额、`confirmedDiagnosticCodes` warning 确认协议、commit/recovery 专用结构化日志和 recoverable 会话摘要投影；客户端可通过现有 draft/asset mutation、validate 和 preview 延长 idle TTL，GET 只执行 TTL/lease 状态检查，recoverable 暂时返回完整会话 DTO，阻断错误仍不能绕过。
 
 ## 设施应用
 
-- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；`domain_policies_json` 保存域名入口节点、上游模式、调度策略和主节点。Path 高级选项继续保存在 `static_sites_json` 的 `options` 中。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
+- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；当前持久字段为 `version`、`deployment_server_ids_json`、`panel_entry_json`、`domains_json`、错误和更新时间，旧 `domain_policies_json/static_sites_json` 已由迁移转换删除。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
 - 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
 - Nginx 全套配置使用一个 managed directory 挂载到 `/etc/nginx`，不能把主配置作为单文件 bind mount；否则宿主机原子 rename 后运行容器仍可能引用旧 inode。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可注册 `nginx -t`/`nginx -s reload`，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
 - 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。

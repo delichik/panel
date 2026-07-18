@@ -35,6 +35,9 @@
 | 列表分页 | [pagination.md](pagination.md) | `AppPagination.vue`、`usePagination.ts` |
 | 可选择列表、主从布局和服务器选择器 | [selection-lists.md](selection-lists.md) | `ServerSelector.vue`、服务器与域名页面 |
 | 任务与运行日志 | [logs.md](logs.md) | `TaskLogPanel.vue`、`RuntimeLogsDialog.vue` |
+| 新前端固定 Token、主题 V2 与隔离规则 | [foundation-v2.md](foundation-v2.md) | `web/src/design/` |
+| 新前端 `Ui*` 基础组件契约 | [ui-components-v2.md](ui-components-v2.md) | `web/src/components/ui/` |
+| 新前端 G1 unit/component/E2E/a11y/visual 工具链 | [testing-v2.md](testing-v2.md) | `web/tests/`、`web/playwright.config.ts`、`web/vitest.*.config.ts` |
 
 ## 共享组件清单
 

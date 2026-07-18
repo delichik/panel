@@ -215,11 +215,15 @@ func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
 		t.Fatalf("expected metrics to be removed, got %d", metricCount)
 	}
 	var rawTargets string
-	if err := store.AppDB().QueryRow(`SELECT deployment_server_ids_json FROM applications WHERE id='app_1'`).Scan(&rawTargets); err != nil {
+	var appVersion int
+	if err := store.AppDB().QueryRow(`SELECT deployment_server_ids_json,version FROM applications WHERE id='app_1'`).Scan(&rawTargets, &appVersion); err != nil {
 		t.Fatal(err)
 	}
 	if rawTargets != `["srv_other"]` {
 		t.Fatalf("expected application target to be pruned, got %s", rawTargets)
+	}
+	if appVersion != 2 {
+		t.Fatalf("expected application version to increment after target pruning, got %d", appVersion)
 	}
 	var rawCards string
 	if err := store.AppDB().QueryRow(`SELECT cards_json FROM overview_card_configurations WHERE id='default'`).Scan(&rawCards); err != nil {

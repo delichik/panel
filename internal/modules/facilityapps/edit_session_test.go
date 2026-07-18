@@ -1,0 +1,727 @@
+package facilityapps
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"panel/internal/modules/servers"
+	"panel/internal/modules/tasks"
+	"panel/internal/platform/config"
+	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
+)
+
+func TestFacilityEditSessionConcurrentCommitUsesConfigVersionCAS(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	drafts := []ReverseProxySaveInput{{}, {DeploymentServers: []string{"srv-a"}}}
+	type candidateSpec struct {
+		session FacilityEditSession
+		preview FacilityEditPreviewResult
+	}
+	candidates := make([]candidateSpec, 2)
+	for index := range drafts {
+		session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &drafts[index]})
+		if err != nil {
+			t.Fatal(err)
+		}
+		preview, err := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidates[index] = candidateSpec{session: session, preview: preview}
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for index, item := range candidates {
+		wg.Add(1)
+		go func(index int, candidate candidateSpec) {
+			defer wg.Done()
+			<-start
+			_, err := svc.CommitFacilityEditSession(ctx, candidate.session.ID, "commit-"+string(rune('a'+index)), CommitFacilityEditSessionInput{Revision: candidate.session.Revision, BaseResourceVersion: candidate.session.BaseResourceVersion.Value, PreviewToken: candidate.preview.Token.Value})
+			errs <- err
+		}(index, item)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	successes, conflicts := 0, 0
+	for err := range errs {
+		if err == nil {
+			successes++
+		} else if facilityPanelErrorCode(err) == "resource_version_conflict" {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected commit error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+}
+
+func TestFacilityEditSessionApplyFailureRemainsCommitted(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.CommitFacilityEditSession(ctx, session.ID, "commit", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ApplyRequested || len(result.Diagnostics) == 0 || result.Diagnostics[0].Code != "facility_apply_request_failed" {
+		t.Fatalf("result = %#v", result)
+	}
+	stored, err := svc.GetFacilityEditSession(ctx, session.ID)
+	if err != nil || stored.State != FacilityEditSessionCommitted {
+		t.Fatalf("session=%#v err=%v", stored, err)
+	}
+}
+
+func TestFacilityEditSessionDeletedReferencedAssetIsBlocking(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	draft := ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}, Domains: []FacilityRouteDomain{{Domain: "example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleStatic, SourceType: StaticSourceUploadedFile, AssetID: "asset-main"}}}}}
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &draft})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-main", "asset-put", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "asset-put", Name: "main", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.DeleteFacilityEditAsset(ctx, session.ID, "asset-main", "asset-delete", FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "asset-delete"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validation, err := svc.ValidateFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validation.Valid || len(validation.Diagnostics) == 0 || validation.Diagnostics[0].Code != "facility_static_asset_referenced_after_delete" {
+		t.Fatalf("validation = %#v", validation)
+	}
+}
+
+func TestFacilityEditSessionRestartRollsBackFilesBeforeDBCommit(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-new", "asset-put", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "asset-put", Name: "new", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ := svc.loadFacilityEditSession(ctx, session.ID)
+	manifest, err := svc.prepareFacilityCommitManifest(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(svc.facilityEditPath(session.ID), "commit-manifest.json")
+	if err := writeFacilityManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	lease := "lost"
+	if _, err := store.AppDB().Exec(`UPDATE facility_edit_sessions SET state=?,commit_lease_owner=?,commit_lease_expires_at=?,manifest_path=? WHERE id=?`, FacilityEditSessionCommitting, lease, formatTime(time.Now().Add(-time.Minute)), manifestPath, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.moveFacilityManifestFiles(&manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.FilesMoved = true
+	if err := writeFacilityManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{}}, nil, WithDataRoot(svc.dataRoot))
+	recovered, err := restarted.GetFacilityEditSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State != FacilityEditSessionActive {
+		t.Fatalf("state = %q", recovered.State)
+	}
+	var blobDir string
+	if err := store.AppDB().QueryRow(`SELECT blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key='asset-new'`, session.ID).Scan(&blobDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(blobDir); err != nil {
+		t.Fatalf("staged blob was not restored: %v", err)
+	}
+}
+
+func TestFacilityEditSessionRestartFinishesDBCommittedManifest(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-new", "asset-put", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "asset-put", Name: "new", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _ := svc.loadFacilityEditSession(ctx, session.ID)
+	manifest, err := svc.prepareFacilityCommitManifest(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(svc.facilityEditPath(session.ID), "commit-manifest.json")
+	if err := writeFacilityManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	lease := "lost"
+	if _, err := store.AppDB().Exec(`UPDATE facility_edit_sessions SET state=?,commit_lease_owner=?,commit_lease_expires_at=?,manifest_path=? WHERE id=?`, FacilityEditSessionCommitting, lease, formatTime(time.Now().Add(-time.Minute)), manifestPath, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.moveFacilityManifestFiles(&manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.FilesMoved = true
+	if err := writeFacilityManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.commitFacilityManifestDB(ctx, manifest); err != nil {
+		t.Fatal(err)
+	}
+	restarted := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{}}, nil, WithDataRoot(svc.dataRoot))
+	recovered, err := restarted.GetFacilityEditSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.State != FacilityEditSessionCommitted || recovered.CommitResult == nil {
+		t.Fatalf("recovered = %#v", recovered)
+	}
+	if recovered.CommitResult.ApplyRequested || len(recovered.CommitResult.Diagnostics) < 2 || recovered.CommitResult.Diagnostics[1].Code != "facility_apply_request_failed" {
+		t.Fatalf("recovery apply result = %#v", recovered.CommitResult)
+	}
+	if _, err := os.Stat(restarted.staticAssetDir(manifest.Assets[0].FinalID)); err != nil {
+		t.Fatalf("committed asset missing: %v", err)
+	}
+}
+
+func TestFacilityEditSessionRebasePreservesAssetsAndCanCommit(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	firstDraft := ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}}
+	secondDraft := ReverseProxySaveInput{DeploymentServers: []string{"srv-b"}}
+	first, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &firstDraft})
+	second, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &secondDraft})
+	second, err := svc.PutFacilityEditAsset(ctx, second.ID, "asset-draft", "put", FacilityEditAssetInput{Revision: second.Revision, ClientOperationID: "put", Name: "draft", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("asset")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPreview, _ := svc.PreviewFacilityEditSession(ctx, first.ID, first.Revision)
+	if _, err := svc.CommitFacilityEditSession(ctx, first.ID, "first", CommitFacilityEditSessionInput{Revision: first.Revision, BaseResourceVersion: first.BaseResourceVersion.Value, PreviewToken: firstPreview.Token.Value}); err != nil {
+		t.Fatal(err)
+	}
+	secondPreview, _ := svc.PreviewFacilityEditSession(ctx, second.ID, second.Revision)
+	_, err = svc.CommitFacilityEditSession(ctx, second.ID, "second", CommitFacilityEditSessionInput{Revision: second.Revision, BaseResourceVersion: second.BaseResourceVersion.Value, PreviewToken: secondPreview.Token.Value})
+	assertFacilityPanelError(t, err, "resource_version_conflict")
+	current, _ := svc.loadConfig(ctx)
+	rebased, err := svc.PatchFacilityEditSession(ctx, second.ID, PatchFacilityEditSessionInput{Revision: second.Revision, BaseResourceVersion: strconv.Itoa(current.Version), Draft: secondDraft})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rebased.Assets) != 1 || rebased.Assets[0].AssetKey != "asset-draft" {
+		t.Fatalf("rebase lost assets: %#v", rebased.Assets)
+	}
+	preview, _ := svc.PreviewFacilityEditSession(ctx, rebased.ID, rebased.Revision)
+	if _, err := svc.CommitFacilityEditSession(ctx, rebased.ID, "second-rebased", CommitFacilityEditSessionInput{Revision: rebased.Revision, BaseResourceVersion: rebased.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFacilityEditSessionRejectsCorruptedBlobBeforeCommit(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	session, err := svc.PutFacilityEditAsset(ctx, session.ID, "asset", "put", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "put", Name: "asset", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("original")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var blobDir string
+	if err := store.AppDB().QueryRow(`SELECT blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key='asset'`, session.ID).Scan(&blobDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blobDir, "content", "a.txt"), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preview, _ := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+	_, err = svc.CommitFacilityEditSession(ctx, session.ID, "commit", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value})
+	assertFacilityPanelError(t, err, "facility_asset_hash_mismatch")
+	stored, _ := svc.GetFacilityEditSession(ctx, session.ID)
+	if stored.State != FacilityEditSessionActive {
+		t.Fatalf("state = %q", stored.State)
+	}
+}
+
+func TestFacilityEditSessionRejectsCorruptedSourceAssetBeforeCommit(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	asset, err := svc.UploadStaticAsset(ctx, StaticAssetUploadInput{Name: "source", Kind: StaticSourceUploadedFile, FileName: "source.txt", Content: []byte("original")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(svc.staticAssetContentDir(asset.ID), "source.txt"), []byte("tampered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	preview, _ := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+	_, err = svc.CommitFacilityEditSession(ctx, session.ID, "commit-source", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value})
+	assertFacilityPanelError(t, err, "facility_asset_hash_mismatch")
+}
+
+func TestFacilityEditSessionTTLAndLiveCommitLease(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	expired, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	old := formatTime(time.Now().UTC().Add(-time.Hour))
+	_, _ = store.AppDB().Exec(`UPDATE facility_edit_sessions SET idle_expires_at=?,absolute_expires_at=? WHERE id=?`, old, old, expired.ID)
+	got, err := svc.GetFacilityEditSession(ctx, expired.ID)
+	if err != nil || got.State != FacilityEditSessionExpired {
+		t.Fatalf("expired session=%#v err=%v", got, err)
+	}
+	live, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	future := formatTime(time.Now().UTC().Add(time.Hour))
+	_, _ = store.AppDB().Exec(`UPDATE facility_edit_sessions SET state=?,idle_expires_at=?,absolute_expires_at=?,commit_lease_owner='live',commit_lease_expires_at=? WHERE id=?`, FacilityEditSessionCommitting, old, old, future, live.ID)
+	svc.cleanupFacilityEditSessions(time.Now().UTC())
+	got, err = svc.GetFacilityEditSession(ctx, live.ID)
+	if err != nil || got.State != FacilityEditSessionCommitting {
+		t.Fatalf("live commit session=%#v err=%v", got, err)
+	}
+}
+
+func TestFacilityLegacyAndPersistentCommitsSerialize(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	legacy, err := svc.BeginSaveSession(ctx, BeginSaveSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft := ReverseProxySaveInput{DeploymentServers: []string{"srv-new"}}
+	persistent, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &draft})
+	preview, _ := svc.PreviewFacilityEditSession(ctx, persistent.ID, persistent.Revision)
+	errs := make(chan error, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		_, err := svc.CommitSaveSession(ctx, legacy.ID, CommitSaveSessionInput{Save: ReverseProxySaveInput{DeploymentServers: []string{"srv-old"}}})
+		errs <- err
+	}()
+	go func() {
+		<-start
+		_, err := svc.CommitFacilityEditSession(ctx, persistent.ID, "persistent", CommitFacilityEditSessionInput{Revision: persistent.Revision, BaseResourceVersion: persistent.BaseResourceVersion.Value, PreviewToken: preview.Token.Value})
+		errs <- err
+	}()
+	close(start)
+	successes, conflicts := 0, 0
+	for i := 0; i < 2; i++ {
+		err := <-errs
+		if err == nil {
+			successes++
+		} else if facilityPanelErrorCode(err) == "resource_version_conflict" || facilityPanelErrorCode(err) == "facility_reverse_proxy_config_changed" {
+			conflicts++
+		} else {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("successes=%d conflicts=%d", successes, conflicts)
+	}
+}
+
+func TestFacilityDeleteMissingAssetIsIdempotentOperation(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, _ := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	input := FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "delete-missing"}
+	first, err := svc.DeleteFacilityEditAsset(ctx, session.ID, "missing", "delete-key", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.DeleteFacilityEditAsset(ctx, session.ID, "missing", "delete-key", input)
+	if err != nil || second.Revision != first.Revision {
+		t.Fatalf("second=%#v err=%v", second, err)
+	}
+}
+
+func TestFacilityLegacyUploadAndCommitRemainFileMetadataConsistent(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginSaveSession(ctx, BeginSaveSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type uploadResult struct {
+		asset StaticAsset
+		err   error
+	}
+	uploaded := make(chan uploadResult, 1)
+	committed := make(chan error, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		asset, uploadErr := svc.UploadSaveSessionAsset(ctx, session.ID, StaticAssetUploadInput{Name: "concurrent", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")})
+		uploaded <- uploadResult{asset: asset, err: uploadErr}
+	}()
+	go func() {
+		<-start
+		_, commitErr := svc.CommitSaveSession(ctx, session.ID, CommitSaveSessionInput{Save: ReverseProxySaveInput{}})
+		committed <- commitErr
+	}()
+	close(start)
+	upload := <-uploaded
+	if err := <-committed; err != nil {
+		t.Fatal(err)
+	}
+	if upload.err == nil {
+		var count int
+		if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM facility_static_assets WHERE id=?`, upload.asset.ID).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != 1 {
+			t.Fatalf("successful concurrent upload missing metadata: count=%d", count)
+		}
+		if _, err := os.Stat(svc.staticAssetContentDir(upload.asset.ID)); err != nil {
+			t.Fatalf("successful concurrent upload missing files: %v", err)
+		}
+		return
+	}
+	if facilityPanelErrorCode(upload.err) != "not_found" {
+		t.Fatalf("unexpected upload error: %v", upload.err)
+	}
+	var count int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM facility_static_assets`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("commit-first outcome persisted an incomplete upload: count=%d", count)
+	}
+}
+
+func TestFacilityLegacyDeleteAndCommitRemainFileMetadataConsistent(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	asset, err := svc.UploadStaticAsset(ctx, StaticAssetUploadInput{Name: "existing", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := svc.BeginSaveSession(ctx, BeginSaveSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteErrs := make(chan error, 1)
+	commitErrs := make(chan error, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		deleteErrs <- svc.DeleteSaveSessionAsset(ctx, session.ID, StaticAssetDeleteInput{AssetID: asset.ID})
+	}()
+	go func() {
+		<-start
+		_, commitErr := svc.CommitSaveSession(ctx, session.ID, CommitSaveSessionInput{Save: ReverseProxySaveInput{}})
+		commitErrs <- commitErr
+	}()
+	close(start)
+	deleteErr := <-deleteErrs
+	if err := <-commitErrs; err != nil {
+		t.Fatal(err)
+	}
+	if deleteErr != nil && facilityPanelErrorCode(deleteErr) != "not_found" {
+		t.Fatalf("unexpected delete error: %v", deleteErr)
+	}
+	var count int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM facility_static_assets WHERE id=?`, asset.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	_, statErr := os.Stat(svc.staticAssetDir(asset.ID))
+	filesExist := statErr == nil
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatal(statErr)
+	}
+	if (count == 1) != filesExist {
+		t.Fatalf("metadata/files diverged: metadata=%d filesExist=%v deleteErr=%v", count, filesExist, deleteErr)
+	}
+}
+
+func TestFacilityEditPutAndCleanupSerializeWorkspaceOwnership(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Now().UTC()
+	if _, err := store.AppDB().Exec(`UPDATE facility_edit_sessions SET idle_expires_at=?,absolute_expires_at=? WHERE id=?`, formatTime(base.Add(30*time.Second)), formatTime(base.Add(time.Hour)), session.ID); err != nil {
+		t.Fatal(err)
+	}
+	type putResult struct {
+		session FacilityEditSession
+		err     error
+	}
+	putResults := make(chan putResult, 1)
+	cleanupDone := make(chan struct{}, 1)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		updated, putErr := svc.PutFacilityEditAsset(ctx, session.ID, "asset", "put-key", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "put-op", Name: "asset", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("hello")})
+		putResults <- putResult{session: updated, err: putErr}
+	}()
+	go func() {
+		<-start
+		svc.cleanupFacilityEditSessions(base.Add(time.Minute))
+		cleanupDone <- struct{}{}
+	}()
+	close(start)
+	put := <-putResults
+	<-cleanupDone
+	if put.err != nil {
+		var state string
+		if err := store.AppDB().QueryRow(`SELECT state FROM facility_edit_sessions WHERE id=?`, session.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		if state != FacilityEditSessionExpired {
+			t.Fatalf("cleanup-first outcome state=%q err=%v", state, put.err)
+		}
+		return
+	}
+	if len(put.session.Assets) != 1 {
+		t.Fatalf("successful put lost asset metadata: %#v", put.session.Assets)
+	}
+	var blobDir string
+	if err := store.AppDB().QueryRow(`SELECT blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key='asset'`, session.ID).Scan(&blobDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(blobDir, "content", "a.txt")); err != nil {
+		t.Fatalf("successful put lost workspace content: %v", err)
+	}
+}
+
+func TestFacilityValidateAndPreviewDoNotReviveExpiredSessions(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	for _, action := range []string{"validate", "preview"} {
+		t.Run(action, func(t *testing.T) {
+			session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			past := formatTime(time.Now().UTC().Add(-time.Minute))
+			if _, err := store.AppDB().Exec(`UPDATE facility_edit_sessions SET idle_expires_at=?,absolute_expires_at=? WHERE id=?`, past, past, session.ID); err != nil {
+				t.Fatal(err)
+			}
+			if action == "validate" {
+				_, err = svc.ValidateFacilityEditSession(ctx, session.ID, session.Revision)
+			} else {
+				_, err = svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+			}
+			if err == nil {
+				t.Fatal("expired session was revived")
+			}
+			var state string
+			if err := store.AppDB().QueryRow(`SELECT state FROM facility_edit_sessions WHERE id=?`, session.ID).Scan(&state); err != nil {
+				t.Fatal(err)
+			}
+			if state != FacilityEditSessionExpired {
+				t.Fatalf("state=%q", state)
+			}
+		})
+	}
+}
+
+func TestFacilityAssetMutationsCannotCrossIdleDeadline(t *testing.T) {
+	for _, action := range []string{"put", "delete"} {
+		t.Run(action, func(t *testing.T) {
+			svc, store, closeStore := newFacilityEditTestService(t)
+			defer closeStore()
+			ctx := context.Background()
+			session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if action == "delete" {
+				session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset", "seed-key", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "seed-op", Name: "asset", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("seed")})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			deadline := time.Now().UTC().Add(300 * time.Millisecond)
+			if _, err := store.AppDB().Exec(`UPDATE facility_edit_sessions SET idle_expires_at=? WHERE id=?`, formatTime(deadline), session.ID); err != nil {
+				t.Fatal(err)
+			}
+			reached := make(chan struct{})
+			release := make(chan struct{})
+			svc.beforeFacilityEditRevisionBump = func() {
+				close(reached)
+				<-release
+			}
+			errResult := make(chan error, 1)
+			go func() {
+				if action == "put" {
+					_, mutationErr := svc.PutFacilityEditAsset(ctx, session.ID, "asset", "put-deadline-key", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "put-deadline-op", Name: "asset", Kind: StaticSourceUploadedFile, FileName: "a.txt", Content: []byte("hello")})
+					errResult <- mutationErr
+					return
+				}
+				_, mutationErr := svc.DeleteFacilityEditAsset(ctx, session.ID, "asset", "delete-deadline-key", FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "delete-deadline-op"})
+				errResult <- mutationErr
+			}()
+			<-reached
+			if wait := time.Until(deadline) + 20*time.Millisecond; wait > 0 {
+				time.Sleep(wait)
+			}
+			close(release)
+			assertFacilityPanelError(t, <-errResult, "edit_session_revision_conflict")
+			svc.beforeFacilityEditRevisionBump = nil
+			var revision int
+			if err := store.AppDB().QueryRow(`SELECT revision FROM facility_edit_sessions WHERE id=?`, session.ID).Scan(&revision); err != nil {
+				t.Fatal(err)
+			}
+			if revision != session.Revision {
+				t.Fatalf("revision advanced across idle deadline: got=%d want=%d", revision, session.Revision)
+			}
+			var assetCount int
+			if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM facility_edit_session_assets WHERE session_id=? AND asset_key='asset'`, session.ID).Scan(&assetCount); err != nil {
+				t.Fatal(err)
+			}
+			wantAssets := 0
+			if action == "delete" {
+				wantAssets = 1
+			}
+			if assetCount != wantAssets {
+				t.Fatalf("asset mutation persisted across idle deadline: got=%d want=%d", assetCount, wantAssets)
+			}
+		})
+	}
+}
+
+func TestFacilityCommitRecoversExpiredLeaseBeforeRetry(t *testing.T) {
+	svc, store, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	past := formatTime(time.Now().UTC().Add(-time.Minute))
+	if _, err := store.AppDB().Exec(`UPDATE facility_edit_sessions SET state=?,commit_lease_owner='stale',commit_lease_expires_at=?,manifest_path='' WHERE id=?`, FacilityEditSessionCommitting, past, session.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CommitFacilityEditSession(ctx, session.ID, "retry", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestFacilityAssetDirectoryHashFramesEntries(t *testing.T) {
+	first := t.TempDir()
+	second := t.TempDir()
+	if err := os.WriteFile(filepath.Join(first, "a"), []byte("b"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(first, "c"), []byte("d"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "a"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(second, "bc"), []byte("d"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	firstHash, err := hashFacilityAssetDirectory(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondHash, err := hashFacilityAssetDirectory(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firstHash == secondHash {
+		t.Fatal("directory hash did not frame file boundaries")
+	}
+}
+
+func TestFacilityArchiveLimitsRejectCountDepthSizeAndRatio(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		path       string
+		count      int
+		extracted  int64
+		compressed int64
+	}{
+		{name: "count", path: "a", count: facilityAssetArchiveMaxFiles + 1, extracted: 1, compressed: 1},
+		{name: "depth", path: strings.Repeat("a/", facilityAssetArchiveMaxDepth) + "x", count: 1, extracted: 1, compressed: 1},
+		{name: "size", path: "a", count: 1, extracted: facilityAssetArchiveMaxExtracted + 1, compressed: facilityAssetArchiveMaxExtracted},
+		{name: "ratio", path: "a", count: 1, extracted: 2 << 20, compressed: 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertFacilityPanelError(t, validateFacilityArchiveLimits(tc.path, tc.count, tc.extracted, tc.compressed), "facility_static_asset_archive_limits_exceeded")
+		})
+	}
+}
+
+type successfulFacilityReconciler struct{}
+
+func (successfulFacilityReconciler) TriggerApplicationReconcile(context.Context, tasks.PeriodicTrigger) (tasks.Task, bool, error) {
+	return tasks.Task{ID: "operation"}, true, nil
+}
+
+func newFacilityEditTestService(t *testing.T) (*Service, *storage.Store, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{}}, nil, WithDataRoot(cfg.DataRoot))
+	return svc, store, func() { _ = store.Close() }
+}
+
+func assertFacilityPanelError(t *testing.T, err error, code string) {
+	t.Helper()
+	var target *panelerr.Error
+	if !errors.As(err, &target) || target.Code != code {
+		t.Fatalf("error=%v want=%s", err, code)
+	}
+}
