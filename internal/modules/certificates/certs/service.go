@@ -138,11 +138,7 @@ func (s *Service) QueueIssue(ctx context.Context, in IssueRequest) (IssueResult,
 	if err := s.insert(ctx, cert); err != nil {
 		return IssueResult{}, err
 	}
-	taskID, err := s.recordTask(ctx, TaskTypeIssue, cert, tasks.StatusQueued, "Issue certificate for "+cert.Domain)
-	if err != nil {
-		return IssueResult{}, err
-	}
-	cert, err = s.Get(ctx, cert.ID)
+	taskID, err := s.recordAndRunTask(ctx, TaskTypeIssue, cert, "Issue certificate for "+cert.Domain)
 	if err != nil {
 		return IssueResult{}, err
 	}
@@ -747,6 +743,24 @@ func (s *Service) recordTask(ctx context.Context, taskType string, cert Certific
 		ResourceType: "certificate",
 		ResourceID:   cert.ID,
 		Status:       status,
+		MetadataJSON: certTaskMetadataJSON(cert),
+		Summary:      summary,
+	}, tasks.Trigger{Type: "system"})
+	if err != nil {
+		return "", err
+	}
+	return task.ID, nil
+}
+
+func (s *Service) recordAndRunTask(ctx context.Context, taskType string, cert Certificate, summary string) (string, error) {
+	if s.tasks == nil {
+		return "", nil
+	}
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
+		Type:         taskType,
+		ResourceType: "certificate",
+		ResourceID:   cert.ID,
+		Status:       tasks.StatusQueued,
 		MetadataJSON: certTaskMetadataJSON(cert),
 		Summary:      summary,
 	}, tasks.Trigger{Type: "system"})

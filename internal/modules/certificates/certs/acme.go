@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -29,6 +30,11 @@ type ACMEProvider struct {
 	accountEmail     string
 	dns              DNSChallengeProvider
 	propagationDelay time.Duration
+}
+
+type acmeAccountClient interface {
+	Register(context.Context, *acme.Account, func(string) bool) (*acme.Account, error)
+	GetReg(context.Context, string) (*acme.Account, error)
 }
 
 func NewACMEProvider(cfg config.Config, dns DNSChallengeProvider, httpClient *http.Client) (Provider, error) {
@@ -68,7 +74,7 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 		account.Contact = []string{"mailto:" + p.accountEmail}
 	}
 	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_account", Message: "Registering ACME account"})
-	if _, err := p.client.Register(ctx, account, acme.AcceptTOS); err != nil {
+	if _, err := ensureACMEAccount(ctx, p.client, account); err != nil {
 		return Bundle{}, panelerr.BadGateway("acme_register_failed", "ACME account registration failed: "+err.Error())
 	}
 	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_account", Message: "ACME account is ready"})
@@ -159,6 +165,17 @@ func (p *ACMEProvider) Issue(ctx context.Context, req Request) (Bundle, error) {
 	}
 	emitACMEProgress(ctx, req, ACMEProgress{Stage: "acme_finalize", Message: "ACME certificate bundle received", Metadata: map[string]any{"certificateCount": len(certsDER)}})
 	return Bundle{CertificatePEM: certPEM, CAChainPEM: chainPEM, PrivateKeyPEM: keyPEM}, nil
+}
+
+func ensureACMEAccount(ctx context.Context, client acmeAccountClient, account *acme.Account) (*acme.Account, error) {
+	registered, err := client.Register(ctx, account, acme.AcceptTOS)
+	if err == nil {
+		return registered, nil
+	}
+	if !errors.Is(err, acme.ErrAccountAlreadyExists) {
+		return nil, err
+	}
+	return client.GetReg(ctx, "")
 }
 
 func emitACMEProgress(ctx context.Context, req Request, event ACMEProgress) {

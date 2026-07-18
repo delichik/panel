@@ -41,16 +41,7 @@ func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *te
 	if !equalStrings(result.Certificate.Domains, want) {
 		t.Fatalf("stored domains=%#v want %#v", result.Certificate.Domains, want)
 	}
-	if len(fake.last.Domains) != 0 {
-		t.Fatalf("provider should not be called before background task runs")
-	}
-	task, err := svc.tasks.Get(context.Background(), result.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.RunIssueTask(tasks.TaskContext{Context: context.Background(), Task: task, Service: svc.tasks}); err != nil {
-		t.Fatal(err)
-	}
+	waitCertificateTaskTerminal(t, svc.tasks, result.TaskID)
 	issued, err := svc.Get(context.Background(), result.Certificate.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -81,17 +72,13 @@ func TestIssuedCertificatesExposeApplicationInternalFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := svc.tasks.Get(ctx, issuedResult.TaskID)
+	waitCertificateTaskTerminal(t, svc.tasks, issuedResult.TaskID)
+	fake.err = errors.New("provider unavailable")
+	unavailableResult, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "api"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.RunIssueTask(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
-		t.Fatal(err)
-	}
-	pendingResult, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "api"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	waitCertificateTaskTerminal(t, svc.tasks, unavailableResult.TaskID)
 
 	catalog, err := svc.InternalFileCatalog(ctx)
 	if err != nil {
@@ -100,8 +87,8 @@ func TestIssuedCertificatesExposeApplicationInternalFiles(t *testing.T) {
 	foundCert := false
 	foundKey := false
 	for _, item := range catalog {
-		if item.ResourceID == pendingResult.Certificate.ID {
-			t.Fatalf("pending certificate exposed as application internal file: %#v", item)
+		if item.ResourceID == unavailableResult.Certificate.ID {
+			t.Fatalf("unissued certificate exposed as application internal file: %#v", item)
 		}
 		if item.Source == "certificate:"+issuedResult.Certificate.ID+":certificate" {
 			foundCert = true
@@ -129,8 +116,8 @@ func TestIssuedCertificatesExposeApplicationInternalFiles(t *testing.T) {
 	if string(keyPEM) != string(fake.bundle.PrivateKeyPEM) || info.Mode != "0600" || info.Size == 0 {
 		t.Fatalf("private key internal file mismatch info=%#v", info)
 	}
-	if _, _, err := svc.OpenInternalFile(ctx, "certificate:"+pendingResult.Certificate.ID+":certificate"); err == nil {
-		t.Fatal("expected pending certificate internal file read to be rejected")
+	if _, _, err := svc.OpenInternalFile(ctx, "certificate:"+unavailableResult.Certificate.ID+":certificate"); err == nil {
+		t.Fatal("expected unissued certificate internal file read to be rejected")
 	}
 	if _, err := svc.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_cert_file','cert file app',0,?,'{}','{}','all','[]','[]',1,'hash','job','default','now','now')`,
 		"name: cert-file\nimage: nginx\nmounts:\n  - type: panel_file\n    source: certificate:"+issuedResult.Certificate.ID+":private_key\n    target: /etc/ssl/private/key.pem\n"); err != nil {
@@ -203,16 +190,13 @@ func TestReverseProxyCertificatesReturnsOnlyIssuedPEM(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := svc.tasks.Get(ctx, result.TaskID)
+	waitCertificateTaskTerminal(t, svc.tasks, result.TaskID)
+	fake.err = errors.New("provider unavailable")
+	unavailable, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "api"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.RunIssueTask(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.Issue(ctx, IssueRequest{DomainID: "dnsdom_1", Prefix: "api"}); err != nil {
-		t.Fatal(err)
-	}
+	waitCertificateTaskTerminal(t, svc.tasks, unavailable.TaskID)
 
 	certs, err := svc.ReverseProxyCertificates(ctx)
 	if err != nil {
@@ -248,13 +232,7 @@ func TestRenewFailureRecordsLastErrorAndTask(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task, err := svc.tasks.Get(ctx, result.TaskID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := svc.RunIssueTask(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
-		t.Fatal(err)
-	}
+	waitCertificateTaskTerminal(t, svc.tasks, result.TaskID)
 	fake.err = errors.New("renew failed")
 
 	if err := svc.Renew(ctx, result.Certificate.ID); err == nil {
@@ -338,6 +316,28 @@ func newTestService(t *testing.T) (*Service, *fakeProvider, func()) {
 	svc := NewServiceWithProvider(store.AppDB(), cfg, fake, taskSvc, WithKeyAssetProvider(keyAssetSvc))
 	svc.RegisterTasks(taskSvc)
 	return svc, fake, func() { _ = store.Close() }
+}
+
+func waitCertificateTaskTerminal(t *testing.T, taskSvc *tasks.Service, taskID string) tasks.Task {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := taskSvc.Get(context.Background(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch task.Status {
+		case tasks.StatusCompleted, tasks.StatusFailed, tasks.StatusFailedRetryable, tasks.StatusBlocked, tasks.StatusCancelled:
+			return task
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	task, err := taskSvc.Get(context.Background(), taskID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("task did not reach terminal status: %#v", task)
+	return tasks.Task{}
 }
 
 type fakeApplicationRefresher struct {
