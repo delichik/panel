@@ -1,75 +1,61 @@
-import { apiClient, type ApiClient } from './client';
+import { ApiError, apiClient, authHeaders } from './client';
+import { fetchDownload, type DownloadResult } from './download';
 import type {
-  KeyAssetCaGenerateInput,
-  KeyAssetDetailDto,
-  KeyAssetExportDto,
-  KeyAssetExportInput,
-  KeyAssetFileKind,
-  KeyAssetImportExecuteDto,
-  KeyAssetImportExecuteInput,
-  KeyAssetImportInput,
-  KeyAssetImportPreflightDto,
-  KeyAssetMutationDto,
-  KeyAssetSshGenerateInput,
-  KeyAssetSummaryDto,
-  KeyAssetTlsGenerateInput,
+  CreateCaAssetInput,
+  CreateTlsAssetInput,
+  ExportKeyAssetsInput,
+  ExportKeyAssetsResult,
+  GenerateSshAssetInput,
+  ImportExecuteInput,
+  ImportExecuteResult,
+  ImportKeyAssetInput,
+  ImportPreflightDto,
+  KeyAssetDto,
+  KeyAssetMutationResult,
   SystemCertificateDto,
-} from '@/types/api';
+  SystemCertificateResetResult,
+} from '@/types/keyAssets';
 
-export function createKeyAssetsApi(client: ApiClient = apiClient) {
-  return {
-    list() {
-      return client.get<KeyAssetSummaryDto[]>('/key-assets');
-    },
-    listSystemCertificates() {
-      return client.get<SystemCertificateDto[]>('/key-assets/system');
-    },
-    resetSystemCertificate(certificateId: string) {
-      return client.post<{ taskId: string }>(`/key-assets/system/${encodeURIComponent(certificateId)}/reset`);
-    },
-    get(assetId: string) {
-      return client.get<KeyAssetDetailDto>(`/key-assets/${assetId}`);
-    },
-    createCa(input: KeyAssetCaGenerateInput) {
-      return client.post<KeyAssetMutationDto>('/key-assets/ca', input);
-    },
-    createTls(input: KeyAssetTlsGenerateInput) {
-      return client.post<KeyAssetMutationDto>('/key-assets/tls', input);
-    },
-    generateSsh(input: KeyAssetSshGenerateInput) {
-      return client.post<KeyAssetMutationDto>('/key-assets/ssh/generate', input);
-    },
-    importAsset(input: KeyAssetImportInput) {
-      return client.post<KeyAssetMutationDto>('/key-assets/import', input);
-    },
-    reissue(assetId: string) {
-      return client.post<KeyAssetMutationDto>(`/key-assets/${assetId}/reissue`);
-    },
-    regenerate(assetId: string) {
-      return client.post<KeyAssetMutationDto>(`/key-assets/${assetId}/regenerate`);
-    },
-    downloadFile(assetId: string, kind: KeyAssetFileKind) {
-      return client.download(`/key-assets/${assetId}/files/${kind}`);
-    },
-    delete(assetId: string) {
-      return client.delete(`/key-assets/${assetId}`);
-    },
-    exportSelected(input: KeyAssetExportInput) {
-      return client.post<KeyAssetExportDto>('/key-assets/exports', input);
-    },
-    downloadExport(taskId: string) {
-      return client.download(`/key-assets/exports/${taskId}/download`);
-    },
-    preflightImportArchive(file: File, password: string) {
-      const formData = new FormData();
-      formData.set('file', file);
-      formData.set('password', password);
-      return client.postForm<KeyAssetImportPreflightDto>('/key-assets/imports/preflight', formData);
-    },
-    executeImport(planId: string, input: KeyAssetImportExecuteInput) {
-      return client.post<KeyAssetImportExecuteDto>(`/key-assets/imports/${planId}/execute`, input);
-    },
-  };
+export const keyAssetsApi = {
+  list: () => apiClient.get<KeyAssetDto[]>('/key-assets'),
+  get: (id: string) => apiClient.get<KeyAssetDto>(`/key-assets/${encodeURIComponent(id)}`),
+  createCa: (input: CreateCaAssetInput) => apiClient.post<KeyAssetMutationResult>('/key-assets/ca', input),
+  createTls: (input: CreateTlsAssetInput) => apiClient.post<KeyAssetMutationResult>('/key-assets/tls', input),
+  generateSsh: (input: GenerateSshAssetInput) => apiClient.post<KeyAssetMutationResult>('/key-assets/ssh/generate', input),
+  importOne: (input: ImportKeyAssetInput) => apiClient.post<KeyAssetMutationResult>('/key-assets/import', input),
+  reissue: (id: string) => apiClient.post<KeyAssetMutationResult>(`/key-assets/${encodeURIComponent(id)}/reissue`),
+  regenerate: (id: string) => apiClient.post<KeyAssetMutationResult>(`/key-assets/${encodeURIComponent(id)}/regenerate`),
+  delete: (id: string) => apiClient.delete<void>(`/key-assets/${encodeURIComponent(id)}`),
+  createExport: (input: ExportKeyAssetsInput) => apiClient.post<ExportKeyAssetsResult>('/key-assets/exports', input),
+  preflightImport: async (file: File, password: string) => {
+    const data = new FormData();
+    data.set('file', file);
+    data.set('password', password);
+    const response = await fetch('/api/v1/key-assets/imports/preflight', {
+      method: 'POST',
+      headers: authHeaders({ Accept: 'application/json' }),
+      body: data,
+    });
+    const envelope = await response.json().catch((error: unknown) => {
+      throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
+    }) as { data?: ImportPreflightDto; error?: { code?: string; message?: string; details?: unknown } };
+    if (!response.ok || envelope.error) {
+      throw new ApiError(envelope.error?.message ?? `Request failed with status ${response.status}.`, response.status, envelope.error?.code ?? 'api_error', envelope.error?.details);
+    }
+    if (!envelope.data) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
+    return envelope.data;
+  },
+  executeImport: (planId: string, input: ImportExecuteInput) => apiClient.post<ImportExecuteResult>(`/key-assets/imports/${encodeURIComponent(planId)}/execute`, input),
+  systemCertificates: () => apiClient.get<SystemCertificateDto[]>('/key-assets/system'),
+  resetSystemCertificate: (id: string) => apiClient.post<SystemCertificateResetResult>(`/key-assets/system/${encodeURIComponent(id)}/reset`),
+  downloadFile: (assetId: string, kind: string): Promise<DownloadResult> => fetchDownload(keyAssetFileUrl(assetId, kind), {}, `${assetId}-${kind}.pem`),
+  downloadExport: (taskId: string): Promise<DownloadResult> => fetchDownload(keyAssetExportUrl(taskId), {}, `${taskId}.panel-key-assets`),
+};
+
+export function keyAssetFileUrl(assetId: string, kind: string) {
+  return `/api/v1/key-assets/${encodeURIComponent(assetId)}/files/${encodeURIComponent(kind)}`;
 }
 
-export const keyAssetsApi = createKeyAssetsApi();
+export function keyAssetExportUrl(taskId: string) {
+  return `/api/v1/key-assets/exports/${encodeURIComponent(taskId)}/download`;
+}

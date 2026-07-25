@@ -1,0 +1,483 @@
+<script setup lang="ts">
+import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
+import { Box, Boxes, Container, Database, DownloadCloud, FileText, Package, Play, RefreshCcw, Router, Search, Square, Trash2 } from '@lucide/vue';
+import { containersApi } from '@/api/containers';
+import { packagesApi } from '@/api/packages';
+import { serversApi } from '@/api/servers';
+import Badge from '@/components/ui/Badge.vue';
+import Button from '@/components/ui/Button.vue';
+import Dialog from '@/components/ui/Dialog.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import Input from '@/components/ui/Input.vue';
+import Tabs from '@/components/ui/Tabs.vue';
+import Textarea from '@/components/ui/Textarea.vue';
+import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
+import ConsolePage from '@/components/templates/ConsolePage.vue';
+import { useI18n } from '@/i18n';
+import type { ServerDto } from '@/types/servers';
+import type { ContainerDto, ImageDto, ImageList, NetworkDto, PackageUpdateList, VolumeDto } from '@/types/resources';
+import {
+  canMaintainPackages,
+  canUseDockerResources,
+  containerActionDisabled,
+  containerTone,
+  dockerBlockReason,
+  filterPackages,
+  imageLabel,
+  imageTone,
+  packageBlockReason,
+  resourceTabFromPath,
+  selectedPackageNames,
+  volumeTone,
+  type ResourceTab,
+} from './model';
+
+const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
+
+const servers = ref<ServerDto[]>([]);
+const selectedId = ref(String(route.query.server ?? ''));
+const activeTab = ref<ResourceTab>(resourceTabFromPath(route.path));
+const search = ref(String(route.query.search ?? ''));
+const loadingServers = ref(false);
+const loadingResource = ref(false);
+const error = ref('');
+const actionError = ref('');
+const feedback = ref('');
+const pending = ref('');
+
+const packageList = ref<PackageUpdateList | null>(null);
+const packageSelection = reactive<Record<string, boolean>>({});
+const containers = ref<ContainerDto[]>([]);
+const images = ref<ImageList | null>(null);
+const networks = ref<NetworkDto[]>([]);
+const volumes = ref<VolumeDto[]>([]);
+const logsDialog = ref(false);
+const logsText = ref('');
+const logsTitle = ref('');
+const pullDialog = ref(false);
+const confirmDialog = ref(false);
+const confirmTarget = ref<{ kind: 'container' | 'image' | 'image-prune' | 'volume' | 'volume-prune' | 'network'; id?: string; label?: string } | null>(null);
+const pullForm = reactive({ reference: 'nginx:1.28-alpine' });
+
+const selectedServer = computed(() => servers.value.find((item) => item.id === selectedId.value) ?? null);
+const serverContextOptions = computed(() => servers.value.map((server) => {
+  const packagesReady = canMaintainPackages(server);
+  const dockerReady = canUseDockerResources(server);
+  return {
+    id: server.id,
+    name: server.name,
+    description: server.host,
+    status: packagesReady || dockerReady ? 'online' : server.reachable ? 'warning' : 'offline',
+    statusLabel: dockerReady ? 'Docker' : packagesReady ? 'APT' : t(server.reachable ? 'resourcesPage.limited' : 'resourcesPage.blockUnreachable'),
+    statusTone: dockerReady || packagesReady ? 'success' as const : server.reachable ? 'warning' as const : 'danger' as const,
+    capabilities: [
+      packagesReady ? 'APT' : '',
+      dockerReady ? 'Docker' : '',
+    ].filter(Boolean),
+    disabledReason: server.reachable ? '' : t('resourcesPage.blockUnreachable'),
+  };
+}));
+const tabs = computed(() => [
+  { label: t('routes.packages.title'), value: 'packages' },
+  { label: t('routes.containers.title'), value: 'containers' },
+  { label: t('routes.images.title'), value: 'images' },
+  { label: t('routes.networks.title'), value: 'networks' },
+  { label: t('routes.volumes.title'), value: 'volumes' },
+]);
+const packageRows = computed(() => filterPackages(packageList.value?.updates ?? [], search.value));
+const selectedPackages = computed(() => selectedPackageNames(packageSelection));
+const imageUpgradeIds = computed(() => Array.from(new Set((images.value?.items ?? []).filter((item) => item.updateAvailable && item.upgradeable).flatMap((item) => item.applicationIds))));
+
+watch(activeTab, (value) => {
+  const target = `/resources/${value}`;
+  if (route.path !== target) void router.replace({ path: target, query: route.query });
+  void loadResource();
+});
+
+watch(selectedId, (value) => {
+  void router.replace({ query: { ...route.query, server: value || undefined } });
+  void loadResource();
+});
+
+watch(search, (value) => {
+  void router.replace({ query: { ...route.query, search: value || undefined } });
+});
+
+async function loadServers() {
+  loadingServers.value = true;
+  error.value = '';
+  try {
+    servers.value = await serversApi.list();
+    if (!servers.value.some((item) => item.id === selectedId.value)) selectedId.value = servers.value[0]?.id ?? '';
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('resourcesPage.loadServersFailed');
+  } finally {
+    loadingServers.value = false;
+  }
+}
+
+async function loadResource() {
+  const server = selectedServer.value;
+  if (!server) return;
+  loadingResource.value = true;
+  actionError.value = '';
+  try {
+    if (activeTab.value === 'packages') {
+      packageList.value = await packagesApi.updates(server.id);
+      Object.keys(packageSelection).forEach((key) => delete packageSelection[key]);
+    }
+    if (activeTab.value === 'containers') containers.value = await containersApi.containers(server.id);
+    if (activeTab.value === 'images') images.value = await containersApi.images(server.id);
+    if (activeTab.value === 'networks') networks.value = await containersApi.networks(server.id);
+    if (activeTab.value === 'volumes') volumes.value = await containersApi.volumes(server.id);
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
+    if (activeTab.value === 'packages') packageList.value = null;
+    if (activeTab.value === 'containers') containers.value = [];
+    if (activeTab.value === 'images') images.value = null;
+    if (activeTab.value === 'networks') networks.value = [];
+    if (activeTab.value === 'volumes') volumes.value = [];
+  } finally {
+    loadingResource.value = false;
+  }
+}
+
+async function refreshCurrent() {
+  const server = selectedServer.value;
+  if (!server) return;
+  await run('refresh', async () => {
+    if (activeTab.value === 'packages') {
+      const result = await packagesApi.refresh(server.id);
+      feedback.value = result.taskId ? t('resourcesPage.taskAccepted', { taskId: result.taskId }) : t('resourcesPage.refreshing');
+    } else if (activeTab.value === 'images') {
+      const accepted = await containersApi.refreshImages(server.id);
+      feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+    } else {
+      await loadResource();
+      feedback.value = t('resourcesPage.refreshed');
+    }
+  });
+}
+
+async function upgradeSelectedPackages() {
+  if (!selectedServer.value || !selectedPackages.value.length) return;
+  await run('upgrade-selected', async () => {
+    const accepted = await packagesApi.upgradeSelected(selectedServer.value!.id, selectedPackages.value);
+    feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+    await loadResource();
+  });
+}
+
+async function upgradeAllPackages() {
+  if (!selectedServer.value) return;
+  await run('upgrade-all', async () => {
+    const accepted = await packagesApi.upgradeAll(selectedServer.value!.id);
+    feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+    await loadResource();
+  });
+}
+
+async function containerAction(container: ContainerDto, action: 'start' | 'stop' | 'restart') {
+  if (!selectedServer.value || containerActionDisabled(container, action)) return;
+  await run(`${action}-${container.id}`, async () => {
+    await containersApi.containerAction(selectedServer.value!.id, container.id, action);
+    feedback.value = t('resourcesPage.operationCompleted');
+    await loadResource();
+  });
+}
+
+async function openLogs(container: ContainerDto) {
+  if (!selectedServer.value) return;
+  await run(`logs-${container.id}`, async () => {
+    const result = await containersApi.containerLogs(selectedServer.value!.id, container.id, 500);
+    logsTitle.value = containerName(container);
+    logsText.value = result.logs;
+    logsDialog.value = true;
+  });
+}
+
+function confirm(kind: NonNullable<typeof confirmTarget.value>['kind'], id?: string, label?: string) {
+  confirmTarget.value = { kind, id, label };
+  confirmDialog.value = true;
+}
+
+async function confirmDanger() {
+  const server = selectedServer.value;
+  const target = confirmTarget.value;
+  if (!server || !target) return;
+  await run(`confirm-${target.kind}`, async () => {
+    if (target.kind === 'container' && target.id) await containersApi.deleteContainer(server.id, target.id);
+    if (target.kind === 'image' && target.id) await containersApi.deleteImage(server.id, target.id);
+    if (target.kind === 'image-prune') await containersApi.deleteUnusedImages(server.id);
+    if (target.kind === 'volume' && target.id) await containersApi.deleteVolume(server.id, target.id);
+    if (target.kind === 'volume-prune') await containersApi.deleteUnusedVolumes(server.id);
+    feedback.value = t('resourcesPage.operationCompleted');
+    confirmDialog.value = false;
+    await loadResource();
+  });
+}
+
+async function pullImage() {
+  if (!selectedServer.value || !pullForm.reference.trim()) return;
+  await run('pull-image', async () => {
+    await containersApi.pullImage(selectedServer.value!.id, pullForm.reference);
+    feedback.value = t('resourcesPage.imagePulled');
+    pullDialog.value = false;
+    await loadResource();
+  });
+}
+
+async function upgradeImages(selected: boolean) {
+  await run(selected ? 'upgrade-images-selected' : 'upgrade-images-all', async () => {
+    const accepted = selected ? await containersApi.upgradeSelectedImages(imageUpgradeIds.value) : await containersApi.upgradeAllImages();
+    feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+  });
+}
+
+async function run(operation: string, action: () => Promise<void>) {
+  pending.value = operation;
+  actionError.value = '';
+  feedback.value = '';
+  try {
+    await action();
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+  } finally {
+    pending.value = '';
+  }
+}
+
+function containerName(container: ContainerDto) {
+  return (container.names[0] || container.id).replace(/^\//, '');
+}
+
+function formatBytes(value?: number) {
+  if (!value) return '0 B';
+  const units = ['B', 'KiB', 'MiB', 'GiB'];
+  let amount = value;
+  let index = 0;
+  while (amount >= 1024 && index < units.length - 1) {
+    amount /= 1024;
+    index += 1;
+  }
+  return `${amount.toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+onMounted(async () => {
+  await loadServers();
+  await loadResource();
+});
+</script>
+
+<template>
+  <ConsolePage :title="t('routes.resources.title')" :description="t('routes.resources.description')">
+    <template #actions>
+      <Button size="sm" :loading="loadingServers || loadingResource || pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('common.refresh') }}</Button>
+    </template>
+
+    <div class="grid h-full min-h-[640px] grid-cols-[320px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
+      <aside class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+        <div class="border-b border-border p-4">
+          <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('resourcesPage.serverContext') }}</h2>
+          <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('resourcesPage.selectServerHint') }}</p>
+        </div>
+        <div class="grid grid-cols-2 gap-2 border-b border-border p-4 text-center text-xs">
+          <div class="rounded-xl border border-border bg-background p-3">
+            <strong class="block text-lg text-foreground">{{ servers.filter(canMaintainPackages).length }}</strong>
+            <span class="text-muted-foreground">{{ t('resourcesPage.packageReady') }}</span>
+          </div>
+          <div class="rounded-xl border border-border bg-background p-3">
+            <strong class="block text-lg text-foreground">{{ servers.filter(canUseDockerResources).length }}</strong>
+            <span class="text-muted-foreground">{{ t('resourcesPage.dockerReady') }}</span>
+          </div>
+        </div>
+        <div class="min-h-0 overflow-auto p-3">
+          <ServerContextSelector
+            v-model="selectedId"
+            :servers="serverContextOptions"
+            :label="t('resourcesPage.serverContext')"
+            :disabled="loadingServers"
+          />
+        </div>
+      </aside>
+
+      <main class="grid min-h-0">
+        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
+        <EmptyState v-else-if="!selectedServer" :title="t('resourcesPage.selectServer')" :description="t('resourcesPage.selectServerHint')" />
+        <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-lg:grid">
+            <div>
+              <div class="flex flex-wrap items-center gap-2">
+                <h2 class="m-0 text-xl font-semibold text-foreground">{{ selectedServer.name }}</h2>
+                <Badge :tone="canMaintainPackages(selectedServer) ? 'success' : 'warning'">APT</Badge>
+                <Badge :tone="canUseDockerResources(selectedServer) ? 'success' : 'warning'">Docker</Badge>
+              </div>
+              <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedServer.host }} · {{ selectedServer.dockerHost || t('common.notAvailable') }}</p>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <Button v-if="activeTab === 'packages'" size="sm" variant="primary" :disabled="!selectedPackages.length || !canMaintainPackages(selectedServer)" :loading="pending === 'upgrade-selected'" @click="upgradeSelectedPackages"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
+              <Button v-if="activeTab === 'images'" size="sm" variant="primary" :disabled="!canUseDockerResources(selectedServer)" @click="pullDialog = true"><DownloadCloud />{{ t('resourcesPage.pullImage') }}</Button>
+            </div>
+          </header>
+
+          <div v-if="feedback || actionError || (activeTab === 'packages' && packageBlockReason(selectedServer)) || (activeTab !== 'packages' && dockerBlockReason(selectedServer))" class="grid gap-2 border-b border-border p-4">
+            <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
+            <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+            <div v-if="activeTab === 'packages' && packageBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(packageBlockReason(selectedServer)) }}</div>
+            <div v-if="activeTab !== 'packages' && dockerBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(dockerBlockReason(selectedServer)) }}</div>
+          </div>
+
+          <Tabs v-model="activeTab" class="min-h-0 p-5" :tabs="tabs">
+            <section v-if="activeTab === 'packages'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background">
+              <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
+                <label class="relative block w-full max-w-sm">
+                  <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
+                  <Input v-model="search" class="pl-9" :placeholder="t('resourcesPage.searchPackages')" />
+                </label>
+                <div class="flex flex-wrap gap-2">
+                  <Button size="sm" :disabled="!canMaintainPackages(selectedServer)" :loading="pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('resourcesPage.refreshMetadata') }}</Button>
+                  <Button size="sm" :disabled="!canMaintainPackages(selectedServer) || !packageList?.updates.length" :loading="pending === 'upgrade-all'" @click="upgradeAllPackages"><Package />{{ t('resourcesPage.upgradeAll') }}</Button>
+                </div>
+              </div>
+              <div class="min-h-0 overflow-auto p-3">
+                <EmptyState v-if="!packageRows.length" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />
+                <label v-for="item in packageRows" v-else :key="item.name" class="mb-2 grid grid-cols-[auto_minmax(0,1fr)_minmax(160px,auto)] items-center gap-3 rounded-xl border border-border p-3">
+                  <input v-model="packageSelection[item.name]" type="checkbox" :disabled="!canMaintainPackages(selectedServer)" />
+                  <span class="min-w-0">
+                    <strong class="block truncate text-sm text-foreground">{{ item.name }}</strong>
+                    <span class="block truncate text-xs text-muted-foreground">{{ item.source }}</span>
+                  </span>
+                  <span class="text-right text-xs text-muted-foreground">{{ item.installedVersion }} -> <strong class="text-foreground">{{ item.candidateVersion }}</strong></span>
+                </label>
+              </div>
+              <footer class="flex items-center justify-between border-t border-border p-3 text-sm text-muted-foreground">
+                <span>{{ t('resourcesPage.lastRefresh') }}: {{ packageList?.lastRefreshedAt || t('common.never') }}</span>
+                <span>{{ selectedPackages.length }} {{ t('resourcesPage.selectedCount') }}</span>
+              </footer>
+            </section>
+
+            <section v-else-if="activeTab === 'containers'" class="grid min-h-0 grid-cols-3 gap-3 max-2xl:grid-cols-2 max-lg:grid-cols-1">
+              <EmptyState v-if="!containers.length" :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
+              <article v-for="item in containers" v-else :key="item.id" class="grid min-h-[220px] grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background">
+                <header class="border-b border-border p-4">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <h3 class="m-0 truncate text-sm font-semibold">{{ containerName(item) }}</h3>
+                      <p class="m-0 mt-1 truncate text-xs text-muted-foreground">{{ item.image }}</p>
+                    </div>
+                    <Badge :tone="containerTone(item)">{{ item.managed ? t('resourcesPage.managed') : item.state }}</Badge>
+                  </div>
+                </header>
+                <div class="min-h-0 overflow-auto p-4 text-sm text-muted-foreground">
+                  <p class="m-0">{{ item.status }}</p>
+                  <p class="m-0 mt-2 truncate">{{ item.ports.map((port) => `${port.publicPort || port.privatePort}:${port.privatePort}/${port.type}`).join(', ') || t('common.notAvailable') }}</p>
+                  <p v-if="item.managed" class="mt-3 rounded-xl border border-info-border bg-info-bg p-2 text-xs text-info">{{ t('resourcesPage.managedContainerBlocked') }}</p>
+                </div>
+                <footer class="flex flex-wrap gap-2 border-t border-border p-3">
+                  <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'start'))" :loading="pending === `start-${item.id}`" @click="containerAction(item, 'start')"><Play />{{ t('resourcesPage.start') }}</Button>
+                  <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'stop'))" :loading="pending === `stop-${item.id}`" @click="containerAction(item, 'stop')"><Square />{{ t('resourcesPage.stop') }}</Button>
+                  <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'restart'))" :loading="pending === `restart-${item.id}`" @click="containerAction(item, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</Button>
+                  <Button size="sm" @click="openLogs(item)"><FileText />{{ t('resourcesPage.logs') }}</Button>
+                  <Button size="sm" variant="danger" :disabled="Boolean(containerActionDisabled(item, 'delete'))" @click="confirm('container', item.id, containerName(item))"><Trash2 />{{ t('common.delete') }}</Button>
+                </footer>
+              </article>
+            </section>
+
+            <section v-else-if="activeTab === 'images'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
+                <div class="flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ images?.lastRefreshedAt || t('common.never') }}</div>
+                <div class="flex flex-wrap gap-2">
+                  <Button size="sm" :disabled="!imageUpgradeIds.length" :loading="pending === 'upgrade-images-selected'" @click="upgradeImages(true)">{{ t('resourcesPage.upgradeApplications') }}</Button>
+                  <Button size="sm" :loading="pending === 'upgrade-images-all'" @click="upgradeImages(false)">{{ t('resourcesPage.upgradeAllApplications') }}</Button>
+                  <Button size="sm" variant="danger" @click="confirm('image-prune')"><Trash2 />{{ t('resourcesPage.pruneUnused') }}</Button>
+                </div>
+              </div>
+              <div class="min-h-0 overflow-auto p-3">
+                <EmptyState v-if="!images?.items.length" :title="t('resourcesPage.noImages')" :description="t('resourcesPage.noImagesHint')" />
+                <div v-for="item in images?.items" v-else :key="item.id" class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-border p-3">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <strong class="truncate text-sm text-foreground">{{ imageLabel(item) }}</strong>
+                      <Badge :tone="imageTone(item)">{{ item.updateAvailable ? t('resourcesPage.updateAvailable') : item.inUse ? t('resourcesPage.inUse') : t('resourcesPage.unused') }}</Badge>
+                    </div>
+                    <p class="m-0 mt-1 truncate text-xs text-muted-foreground">{{ item.id }} · {{ formatBytes(item.size) }}</p>
+                    <p v-if="item.lastError" class="m-0 mt-1 text-xs text-warning">{{ item.lastError }}</p>
+                  </div>
+                  <Button size="sm" variant="danger" :disabled="item.inUse" @click="confirm('image', item.id, imageLabel(item))"><Trash2 />{{ t('common.delete') }}</Button>
+                </div>
+              </div>
+            </section>
+
+            <section v-else-if="activeTab === 'networks'" class="grid min-h-0 grid-cols-[minmax(0,1fr)_300px] gap-4 max-xl:grid-cols-1">
+              <div class="min-h-0 overflow-auto rounded-2xl border border-border bg-background p-3">
+                <EmptyState v-if="!networks.length" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')" />
+                <article v-for="item in networks" v-else :key="item.id" class="mb-2 rounded-xl border border-border p-4">
+                  <div class="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 class="m-0 text-sm font-semibold">{{ item.name }}</h3>
+                      <p class="m-0 mt-1 text-xs text-muted-foreground">{{ item.driver }} / {{ item.scope }}</p>
+                    </div>
+                    <Badge :tone="item.internal ? 'warning' : item.labels?.['panel.managed'] ? 'success' : 'neutral'">{{ item.internal ? t('resourcesPage.internal') : item.labels?.['panel.managed'] ? t('resourcesPage.managed') : t('resourcesPage.external') }}</Badge>
+                  </div>
+                </article>
+              </div>
+              <aside class="rounded-2xl border border-info-border bg-info-bg p-4 text-sm text-info">
+                <Router class="mb-3 size-5" />
+                <h3 class="m-0 text-sm font-semibold">{{ t('resourcesPage.networkReadonly') }}</h3>
+                <p class="m-0 mt-2">{{ t('resourcesPage.networkDeleteUnavailable') }}</p>
+                <Button class="mt-3 w-full" disabled variant="danger" @click="confirm('network')"><Trash2 />{{ t('common.delete') }}</Button>
+              </aside>
+            </section>
+
+            <section v-else class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
+              <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
+                <div class="flex items-center gap-2 text-sm text-muted-foreground"><Database class="size-4" />{{ t('resourcesPage.volumeSafety') }}</div>
+                <Button size="sm" variant="danger" @click="confirm('volume-prune')"><Trash2 />{{ t('resourcesPage.pruneUnusedVolumes') }}</Button>
+              </div>
+              <div class="min-h-0 overflow-auto p-3">
+                <EmptyState v-if="!volumes.length" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')" />
+                <div v-for="item in volumes" v-else :key="item.name" class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-border p-3">
+                  <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                      <strong class="truncate text-sm text-foreground">{{ item.name }}</strong>
+                      <Badge :tone="volumeTone(item)">{{ item.inUse ? t('resourcesPage.inUse') : t('resourcesPage.unused') }}</Badge>
+                    </div>
+                    <p class="m-0 mt-1 truncate text-xs text-muted-foreground">{{ item.mountpoint }}</p>
+                    <p class="m-0 mt-1 text-xs text-muted-foreground">{{ item.containerCount }} {{ t('resourcesPage.containersAttached') }} · {{ formatBytes(item.usageData?.size) }}</p>
+                  </div>
+                  <Button size="sm" variant="danger" :disabled="item.inUse" @click="confirm('volume', item.name, item.name)"><Trash2 />{{ t('common.delete') }}</Button>
+                </div>
+              </div>
+            </section>
+          </Tabs>
+        </article>
+      </main>
+    </div>
+
+    <Dialog v-model:open="logsDialog" :title="logsTitle" :description="t('resourcesPage.logsDescription')" :close-label="t('common.close')">
+      <pre class="max-h-[520px] overflow-auto rounded-xl border border-border bg-muted p-3 text-xs leading-5 text-foreground">{{ logsText }}</pre>
+      <template #footer>
+        <Button @click="logsDialog = false">{{ t('common.close') }}</Button>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:open="pullDialog" :title="t('resourcesPage.pullImage')" :description="t('resourcesPage.pullImageDescription')" :close-label="t('common.close')">
+      <label class="grid gap-1 text-sm">{{ t('resourcesPage.imageReference') }}<Input v-model="pullForm.reference" /></label>
+      <template #footer>
+        <Button @click="pullDialog = false">{{ t('common.cancel') }}</Button>
+        <Button variant="primary" :loading="pending === 'pull-image'" :disabled="!pullForm.reference.trim()" @click="pullImage"><DownloadCloud />{{ t('resourcesPage.pullImage') }}</Button>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:open="confirmDialog" :title="t('resourcesPage.confirmDanger')" :description="confirmTarget?.label || t('resourcesPage.confirmDangerDescription')" :close-label="t('common.close')">
+      <div class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.confirmDangerImpact') }}</div>
+      <template #footer>
+        <Button @click="confirmDialog = false">{{ t('common.cancel') }}</Button>
+        <Button variant="danger" :loading="pending.startsWith('confirm-')" @click="confirmDanger"><Trash2 />{{ t('common.delete') }}</Button>
+      </template>
+    </Dialog>
+  </ConsolePage>
+</template>

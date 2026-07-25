@@ -1,39 +1,22 @@
 import { apiClient } from './client';
 import type {
-  CertificateDto,
-  CertificateIssueDto,
-  CertificateIssueInput,
-  SelfSignedCAInput,
+  DomainCertificateDto,
+  IssueCertificateInput,
+  IssueCertificateResult,
+  RenewCertificateResult,
+  SelfSignedCaInput,
   SelfSignedCertificateDto,
   SelfSignedLeafInput,
-} from '@/types/api';
+} from '@/types/certificates';
 
 export const certificatesApi = {
-  list() {
-    return apiClient.get<CertificateDto[]>('/certificates');
-  },
-  issue(input: CertificateIssueInput) {
-    return apiClient.post<CertificateIssueDto>('/certificates', input);
-  },
-  delete(certificateId: string) {
-    return apiClient.delete(`/certificates/${certificateId}`);
-  },
-  renew(certificateId: string) {
-    return apiClient.post<{ renewed: boolean }>(`/certificates/${certificateId}/renew`);
-  },
-  listSelfSigned() {
-    return apiClient.get<SelfSignedCertificateDto[]>('/self-signed-certificates');
-  },
-  createCA(input: SelfSignedCAInput) {
-    return apiClient.post<SelfSignedCertificateDto>('/self-signed-cas', input);
-  },
-  createSelfSigned(input: SelfSignedLeafInput) {
-    return apiClient.post<SelfSignedCertificateDto>('/self-signed-certificates', input);
-  },
-  renewSelfSigned(certificateId: string) {
-    return apiClient.post<SelfSignedCertificateDto>(`/self-signed-certificates/${certificateId}/renew`);
-  },
-  deleteSelfSigned(certificateId: string) {
-    return apiClient.delete(`/self-signed-certificates/${certificateId}`);
-  },
+  list: () => apiClient.get<DomainCertificateDto[]>('/certificates'),
+  issue: (input: IssueCertificateInput) => apiClient.post<IssueCertificateResult>('/certificates', input),
+  renew: (id: string) => apiClient.post<RenewCertificateResult>(`/certificates/${encodeURIComponent(id)}/renew`),
+  delete: (id: string) => apiClient.delete<void>(`/certificates/${encodeURIComponent(id)}`),
+  listSelfSigned: () => apiClient.get<SelfSignedCertificateDto[]>('/self-signed-certificates'),
+  createSelfSignedCa: (input: SelfSignedCaInput) => apiClient.post<SelfSignedCertificateDto>('/self-signed-cas', input),
+  createSelfSignedLeaf: (input: SelfSignedLeafInput) => apiClient.post<SelfSignedCertificateDto>('/self-signed-certificates', input),
+  renewSelfSigned: (id: string) => apiClient.post<SelfSignedCertificateDto>(`/self-signed-certificates/${encodeURIComponent(id)}/renew`),
+  deleteSelfSigned: (id: string) => apiClient.delete<void>(`/self-signed-certificates/${encodeURIComponent(id)}`),
 };

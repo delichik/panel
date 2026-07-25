@@ -1,11 +1,90 @@
 # 多语言翻译状态
 
-- `web/src/views/applications/facility-apps/config.vue`
+- `web/src/views/applications/index.vue`
   - Panel 入口固定使用 setup 登记的宿主节点，缺少宿主节点及尝试移出全局网关时的英文与简体中文提示已补齐。
 
 本文档记录当前多语言实现仍未完成翻译的区域。后续每次处理多语言相关任务时，都应同步更新。
 
 ## 最近已补齐
+
+- `web/src/views/certificates/index.vue`
+  - 域名证书申请弹窗改为多前缀输入，前缀标签、占位示例和每行一个前缀提示已接入英文与简体中文词条；域名、前缀值、变量名和后端诊断保持用户原始输入。
+
+- `web/src/views/auth/LoginPage.vue`、`web/src/router/index.ts`
+  - 普通登录新增强制改密闭环：`passwordChangeRequired` session 会停留在登录页，通过 `/api/v1/auth/account` 提交当前密码、用户名和新密码后再进入控制台；相关表单、校验和失败提示已接入英文与简体中文词条。
+
+- `web/src/views/settings/index.vue`、`web/src/api/keyAssets.ts`
+  - 设置页安全分区新增 JWT 密钥重置入口，系统证书分区改为接入 `/api/v1/key-assets/system` 和 `/api/v1/key-assets/system/{id}/reset` 的真实后端能力；证书名称、类型、状态、指纹、有效期、重置确认与任务接受反馈已接入英文与简体中文词条。证书 ID、服务器名、指纹和 task ID 保持后端原值。
+
+- `web/src/views/auth/LoginPage.vue`、`web/src/stores/session.ts`、`web/src/views/settings/index.vue`、`web/src/views/servers/index.vue`
+  - 普通认证已接入真实 `/api/v1/auth/login|logout|session|account|jwt-secret` Bearer token 链路；设置页系统分区展示 `/api/v1/system/version` 版本与更新状态；服务器详情展示 `/api/v1/servers/{id}/metrics` 最新 CPU、内存、磁盘、网络和负载指标。新增登录失败、强制改密、系统版本、更新状态、服务器指标失败与网络收发文案已接入英文与简体中文；token、版本号、通道名、服务器 ID 和后端诊断保持实例原值。
+
+- `web/src/views/auth/LoginPage.vue`、`web/src/stores/session.ts`
+  - 普通登录改为真实 `/api/v1/auth/login|session|logout` 链路后，登录失败和强制改密提示已补齐英文与简体中文；用户名、后端错误详情和 branding 配置保持实例原值。
+
+- `web/src/views/applications/index.vue`
+  - 应用创建/编辑器重做为顶部步骤工作区，新增配置模式、YAML source/源码模式、Identity/Runtime source/Networking/Storage/Deployment/Files/Assets 面板、源码同步/应用提示、源码暂存校验和空状态文案，已接入英文与简体中文词条；应用名、镜像引用、服务器 ID、域名、Path、文件路径和后端诊断保持实例原值。
+
+- `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`
+  - 页面接入统一 `SearchInput`、`PaginationBar`、`EditorSectionRail`、`ServerMultiPicker`、`FileUploadButton`、`DownloadButton`、`StatusBadge` 后，新增公共文案 `common.clearSearch`、`common.complete`、`common.error` 以及应用服务器选项说明已补齐英文与简体中文；服务器 ID、任务状态原始值和上传文件名保持实例原值。
+
+- `web/src/views/applications/index.vue`、`web/src/api/facilityApps.ts`
+  - 设施应用目录/详情/配置三层信息架构、入口代理设施卡片、设施分类、设施状态和未知设施不可用空态已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；`facilityKind`、服务器 ID、域名、Path、后端诊断和操作状态保持实例原值。
+
+- `web/src/views/applications/`、`web/src/api/applications.ts`、`web/src/api/facilityApps.ts`
+  - 应用持久化数据下载/恢复、应用编辑会话压缩包上传、设施入口静态资产上传，以及对应成功反馈和能力说明已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；上传文件名、归档内容和后端任务 ID 保持原值。
+
+- `web/src/views/tasks/index.vue`
+  - 任务列表分页控件、上一页/下一页和分页摘要已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；任务 ID、操作 ID 和后端日志保持原始文本。
+
+- `web/src/views/applications/`（应用/设施编辑体验专项）
+  - 应用创建/编辑器的分区导航、完成度、结构化变量/环境/端口/挂载/反向代理对话框、YAML 同步/应用、保存阶段、创建检查与变更摘要文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条。
+  - 设施入口网关配置的网关节点、域名组、Path 类型、静态资产引用、Panel 入口、变更摘要、校验错误和对话框文案已接入英文与简体中文词条；应用名、服务器 ID、域名、Path、镜像引用、后端诊断和日志正文保持实例原值。
+
+- `web/src/views/tasks/`、`web/src/views/settings/`、`web/src/views/maintenance/`、`web/src/views/debug/`（v4 阶段 7 任务 + 设置 + 维护 + 诊断页面族）
+  - 任务操作组、状态筛选、步骤/日志/错误、重试/立即运行，设置分区保存、备份导出、还原预检/确认，维护登录、阶段、能力按钮、下载入口，以及诊断 Runtime/Tasks/Database tab、暂停/恢复和 stale 快照提示已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；任务类型、数据库表名、日志正文和后端原始诊断保持实例原值。
+
+- `web/src/views/dns/`、`web/src/views/certificates/`（v4 阶段 6 DNS + 证书 + 密钥资产页面族）
+  - DNS 域名、Cloudflare Provider 状态、DNS 记录 CRUD、域名证书签发/续签/删除、自签证书生成/重签/删除、密钥资产生成/导入/导出/下载/批量导入预检/执行和冲突反馈文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；域名、证书名、指纹、任务 ID、Cloudflare/ACME/密钥归档原始诊断保持实例原值。
+
+- `web/src/views/security/`、`web/src/views/resources/`（v4 阶段 4A 安全 + 资源页面族）
+  - UFW、Fail2Ban、软件包、容器、镜像、网络和卷工作台的页面标题、状态、空态、确认对话框、日志弹窗、权限/Agent 阻断、任务提交和操作反馈文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；服务器名、容器名、镜像引用、卷路径、Docker/Agent/Fail2Ban/UFW 原始诊断和日志正文保持实例原值。
+
+- `web/src/views/applications/`（v4 阶段 5 应用 + 设施应用页面族）
+  - 应用列表/详情、运行时节点实例、镜像更新、日志、同步/停用/删除确认、隐藏创建/编辑 EditorPage、durable edit-session、文件对话框、校验/预览/提交反馈、设施入口网关只读页和配置页文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；应用名、镜像引用、域名、Path、服务器 ID、后端诊断和日志正文保持实例原值。
+
+- `web/src/views/overview/`、`web/src/views/servers/`、`web/src/views/credentials/`（v4 阶段 3 页面族）
+  - 概览 Dashboard 编辑/保存布局、6 列整数网格、拖动/缩放/添加/删除/单卡编辑、卡片范围/网络流量方向/服务器多选、服务器数量、单卡失败状态、风险队列、快捷入口，服务器主从详情、添加/编辑/探测/测试/删除/Agent/UFW 操作，SSH 凭据 vault、secret 留空不更新、引用影响与引用服务器测试文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；图表 tooltip 中的服务器名、服务器主机、任务 ID、SSH/Agent 原始诊断保持实例原值。
+
+- `web/src/components/shell/`、`web/src/components/ui/`、`web/src/views/auth/LoginPage.vue`
+  - 2026-07-21 v4 基础设施移除 Naive UI 后，AppShell、主题/语言/账户入口、自有 UI 基础反馈、登录页、页面族独立入口占位和模板名称已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；示例业务对象名、服务器名和后端原始诊断保持实例原值。
+
+- `web/src/components/shell/`、`web/src/views/overview/`、`web/src/views/operations/`、`web/src/views/auth/LoginPage.vue`
+  - 2026-07-21 当前 v3 交付版本的 AppShell、导航、主题/语言/账户入口、概览 Dashboard、主要页面族共享数据工作台、登录页、Mock 操作反馈和状态/摘要文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；Mock 示例对象名、服务器名、应用名、域名、镜像引用和任务 ID 保持实例原值。
+
+- `web/src/components/shell/`、`web/src/views/overview/`、`web/src/views/console/`、`web/src/views/auth/LoginPage.vue`
+  - 2026-07-21 重建后的控制台 shell、导航、主题/语言入口、概览和通用工作台页面已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；示例对象名、服务器名、应用名、域名和运行时诊断保持实例原值。
+
+- `web/src/views/resources/`（v3 容器资源页面族）
+  - 容器、镜像、网络、卷四个资源页的 PageHeader 说明、服务器选择器、表格列、空态、确认对话框、日志弹窗、镜像拉取/刷新/升级、未使用资源清理和托管容器禁用提示已接入英文与简体中文词条；服务器名、容器名、镜像引用、卷路径、Docker/registry 原始诊断和日志正文保持原值。
+
+- `web/src/views/applications/`（v3 应用 + 设施应用页面族，子阶段 5c/5d）
+  - 普通应用创建/编辑隐藏页、durable edit-session 状态条、恢复草稿、离开保护、保存并应用校验/预览/提交反馈、文件/挂载/反代对话框，以及设施应用只读详情与入口网关配置页新增文案已接入英文与简体中文词条；应用名、服务器名、域名、Path、Header、后端诊断和用户文件路径保持原值。
+
+- `web/src/views/applications/`（v3 应用列表页面族，子阶段 5b）
+  - 列表页搜索/空态/分页、`运行中 · 有更新` 复合状态、详情四区（状态/镜像更新/反代路由/运行时）、停用与删除确认（删除带容器/反代路由/持久化数据影响说明）、迁移与持久化恢复/导入对话框、运行时日志弹窗、任务类操作"查看任务"反馈均已接入英文与简体中文词条；应用名、服务器名、digest、域名、后端原始错误保持原值。
+
+- `web/src/views/security/`、`web/src/views/packages/`（v3 安全防护 + 软件包页面族）
+  - 安全防护页页内 tabs（防火墙 / fail2ban）、防火墙状态摘要与启用确认（区分安装/启用并提示 SSH 端口）、添加规则 dialog 端口校验、删除规则/jail 确认、fail2ban 状态行与草稿保存时间、接管/释放确认、YAML 形状校验提示、软件包页搜索与筛选空态、批量选中栏、准入阻断 warning 均已接入英文与简体中文词条；服务器名、jail 名、软件包名与版本、后端原始错误保持原值。
+
+- `web/src/views/servers/`（v3 服务器 + SSH 凭据页面族）
+  - 页内 tabs（节点 / SSH 凭据）、搜索与空态、详情四区（状态/系统/运行时/访问）、Agent 与 UFW 状态、初始化中进度态、测试连接与 probe 结果、添加/编辑服务器与凭据对话框（secret 留空 = 不更新）、删除影响说明、凭据引用预检与 409 `credential_in_use` 兜底、任务类操作"查看任务"反馈均已接入英文与简体中文词条；服务器名、主机地址、接口地址、后端原始错误与备注保持原值。
+
+- `web/src/views/overview/`（v3 概览页面族）
+  - 概览 Dashboard 的页面说明、"卡片设置"对话框（显示开关、时间范围、网络方向、服务器范围、恢复默认）、卡片四态（partial/unavailable/empty）文案、单卡重试、保存成功与乐观锁冲突提示、无服务器空态 CTA 均已接入英文与简体中文词条；issue code、服务器名、软件包/应用名与版本等实例数据保持原值。
+
+- `web/src/views/auth/`、`web/src/views/maintenance/BackupMaintenancePage.vue`（v3 认证页面族）
+  - 登录/修改密码的必填校验、强制改密标题、新密码与当前密码相同提示、改密成功反馈，以及备份维护页的维护登录卡、n-steps 步骤名、各阶段上下文文案均已接入英文与简体中文；后端返回的字段级错误消息与安全错误摘要保持原值。
 
 - `web/src/views/credentials/_v2/`、`web/src/views/firewall/_v2/`、`web/src/views/packages/_v2/`
   - 隔离 Credentials/Firewall/Packages V2 页面的列表筛选、状态、空状态、添加/编辑/删除确认、规则和软件包操作、任务中心入口已接入英文与简体中文；服务器名、IP、软件包名、版本、仓库、用户备注和引用对象名称保持实例原值。

@@ -1,18 +1,20 @@
 import { apiClient } from './client';
-import type { PackageRefreshDto, PackageUpdatesDto } from '@/types/api';
-import type { TaskCreatedDto } from './servers';
+import type { OperationAccepted } from '@/types/servers';
+import type { PackageUpdateList, RefreshResult } from '@/types/resources';
+
+const base = (serverId: string) => `/servers/${encodeURIComponent(serverId)}/packages`;
 
 export const packagesApi = {
-  listUpdates(serverId: string) {
-    return apiClient.get<PackageUpdatesDto>(`/servers/${serverId}/packages/updates`);
+  updates(serverId: string) {
+    return apiClient.get<PackageUpdateList>(`${base(serverId)}/updates`);
   },
   refresh(serverId: string) {
-    return apiClient.post<PackageRefreshDto>(`/servers/${serverId}/packages/refresh`);
+    return apiClient.post<RefreshResult>(`${base(serverId)}/refresh`);
   },
   upgradeSelected(serverId: string, packages: string[]) {
-    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/packages/upgrade-selected`, { packages });
+    return apiClient.post<OperationAccepted>(`${base(serverId)}/upgrade-selected`, { packages });
   },
   upgradeAll(serverId: string) {
-    return apiClient.post<TaskCreatedDto>(`/servers/${serverId}/packages/upgrade-all`);
+    return apiClient.post<OperationAccepted>(`${base(serverId)}/upgrade-all`);
   },
 };

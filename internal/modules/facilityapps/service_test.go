@@ -8,6 +8,7 @@ import (
 
 	"panel/internal/modules/applications"
 	appruntime "panel/internal/modules/applications/runtime"
+	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/servers"
 )
 
@@ -29,6 +30,22 @@ func TestNormalizeInputUsesDomainOriginsAndAnyAccess(t *testing.T) {
 	}
 	if !cfg.Domains[0].AnyAccess.Enabled || cfg.Domains[0].AnyAccess.PrimaryOriginServerID != "srv-a" {
 		t.Fatalf("any access = %#v", cfg.Domains[0].AnyAccess)
+	}
+}
+
+func TestBestCertificateWildcardMatchesOnlyOneLabel(t *testing.T) {
+	certs := []proxycert.Certificate{{
+		ID:      "wildcard",
+		Domains: []string{"*.test.com"},
+	}}
+	if cert := bestCertificate("a.test.com", certs); cert == nil || cert.ID != "wildcard" {
+		t.Fatalf("expected wildcard certificate for one-label subdomain, got %#v", cert)
+	}
+	if cert := bestCertificate("test.com", certs); cert != nil {
+		t.Fatalf("expected root domain not to match wildcard certificate, got %#v", cert)
+	}
+	if cert := bestCertificate("a.b.test.com", certs); cert != nil {
+		t.Fatalf("expected multi-label subdomain not to match wildcard certificate, got %#v", cert)
 	}
 }
 

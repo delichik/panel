@@ -63,6 +63,52 @@ func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *te
 	}
 }
 
+func TestIssueMultiplePrefixesExpandsDomainsAndKeepsLegacyScopeCompatible(t *testing.T) {
+	svc, fake, closeStore := newTestService(t)
+	defer closeStore()
+
+	result, err := svc.Issue(context.Background(), IssueRequest{DomainID: "dnsdom_1", Prefixes: []string{"@", "api", "*", "*.api", "api"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"example.com", "api.example.com", "*.example.com", "*.api.example.com"}
+	if result.Certificate.Scope != ScopePrefixes || result.Certificate.Prefix != "@,api,*,*.api" {
+		t.Fatalf("certificate = %#v", result.Certificate)
+	}
+	if !equalStrings(result.Certificate.Domains, want) {
+		t.Fatalf("stored domains=%#v want %#v", result.Certificate.Domains, want)
+	}
+	waitCertificateTaskTerminal(t, svc.tasks, result.TaskID)
+	if !equalStrings(fake.last.Domains, want) {
+		t.Fatalf("provider domains=%#v want %#v", fake.last.Domains, want)
+	}
+
+	legacy, err := svc.Issue(context.Background(), IssueRequest{DomainID: "dnsdom_1", Prefix: "@", Scope: ScopeWildcard, VariableName: "legacy_example_com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Certificate.Scope != ScopeWildcard || !equalStrings(legacy.Certificate.Domains, []string{"example.com", "*.example.com"}) {
+		t.Fatalf("legacy wildcard certificate = %#v", legacy.Certificate)
+	}
+}
+
+func TestCertificateDomainMatchesWildcardOnlyOneLabel(t *testing.T) {
+	tests := []struct {
+		pattern string
+		domain  string
+		want    bool
+	}{
+		{pattern: "*.test.com", domain: "a.test.com", want: true},
+		{pattern: "*.test.com", domain: "test.com", want: false},
+		{pattern: "*.test.com", domain: "a.b.test.com", want: false},
+	}
+	for _, tt := range tests {
+		if got := certificateDomainMatches(tt.pattern, tt.domain); got != tt.want {
+			t.Fatalf("certificateDomainMatches(%q, %q)=%v want %v", tt.pattern, tt.domain, got, tt.want)
+		}
+	}
+}
+
 func TestIssuedCertificatesExposeApplicationInternalFiles(t *testing.T) {
 	svc, fake, closeStore := newTestService(t)
 	defer closeStore()

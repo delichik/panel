@@ -1698,8 +1698,8 @@ func certificateDomainMatches(pattern, domain string) bool {
 		return true
 	}
 	if strings.HasPrefix(pattern, "*.") {
-		suffix := strings.TrimPrefix(pattern, "*")
-		return strings.HasSuffix(domain, suffix) && domain != strings.TrimPrefix(suffix, ".")
+		base := strings.TrimPrefix(pattern, "*.")
+		return strings.HasSuffix(domain, "."+base) && strings.Count(domain, ".") == strings.Count(base, ".")+1
 	}
 	return false
 }

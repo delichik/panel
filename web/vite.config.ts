@@ -1,11 +1,12 @@
 import { fileURLToPath, URL } from 'node:url';
 import vue from '@vitejs/plugin-vue';
 import { defineConfig } from 'vite';
+import tailwindcss from '@tailwindcss/vite';
 
 const backendProxyTarget = process.env.PANEL_WEB_PROXY_TARGET ?? 'http://127.0.0.1:8080';
 
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), tailwindcss()],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

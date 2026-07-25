@@ -1,51 +1,150 @@
-import { apiClient, type ApiClient } from './client';
-import type { FacilityReverseProxyConfigDto, FacilityReverseProxyOperationDto, FacilityReverseProxySaveDto, FacilitySaveSessionCommitDto, FacilitySaveSessionDto, FacilityStaticAssetDto } from '@/types/api';
+import { apiClient } from './client';
+import { ApiError, type ApiEnvelope, authHeaders } from './client';
+import type {
+  FacilityEditCommitResult,
+  FacilityEditPreviewResult,
+  FacilityEditSession,
+  FacilityEditValidationResult,
+  FacilityAppDetail,
+  FacilityAppKind,
+  FacilityAppSummary,
+  ReverseProxyConfig,
+  ReverseProxySaveInput,
+} from '@/types/facilityApps';
 
-export function createFacilityAppsApi(client: ApiClient) {
+function id(value: string) {
+  return encodeURIComponent(value);
+}
+
+function key() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function reverseProxySummary(config: ReverseProxyConfig): FacilityAppSummary {
   return {
-  reverseProxy() {
-    return client.get<FacilityReverseProxyConfigDto>('/facility-apps/reverse-proxy');
-  },
-  saveReverseProxy(input: FacilityReverseProxySaveDto) {
-    return client.put<FacilityReverseProxyConfigDto>('/facility-apps/reverse-proxy', input);
-  },
-  reconcileReverseProxy() {
-    return client.post<FacilityReverseProxyOperationDto>('/facility-apps/reverse-proxy/reconcile');
-  },
-  staticAssets() {
-    return client.get<FacilityStaticAssetDto[]>('/facility-apps/reverse-proxy/static-assets');
-  },
-  uploadStaticAsset(input: { name: string; kind: string; file: File }) {
-    const form = new FormData();
-    form.set('name', input.name);
-    form.set('kind', input.kind);
-    form.set('file', input.file);
-    return client.postForm<FacilityStaticAssetDto>('/facility-apps/reverse-proxy/static-assets', form);
-  },
-  deleteStaticAsset(assetId: string) {
-    return client.delete(`/facility-apps/reverse-proxy/static-assets/${encodeURIComponent(assetId)}`);
-  },
-  beginSaveSession(baseUpdatedAt: string) {
-    return client.post<FacilitySaveSessionDto>('/facility-apps/reverse-proxy/save-sessions', { baseUpdatedAt });
-  },
-  uploadSaveSessionAsset(sessionId: string, input: { assetId?: string; name: string; kind: string; file: File }) {
-    const form = new FormData();
-    if (input.assetId) form.set('assetId', input.assetId);
-    form.set('name', input.name);
-    form.set('kind', input.kind);
-    form.set('file', input.file);
-    return client.postForm<FacilityStaticAssetDto>(`/facility-apps/reverse-proxy/save-sessions/${encodeURIComponent(sessionId)}/assets`, form);
-  },
-  deleteSaveSessionAsset(sessionId: string, assetId: string) {
-    return client.post(`/facility-apps/reverse-proxy/save-sessions/${encodeURIComponent(sessionId)}/assets/delete`, { assetId });
-  },
-  commitSaveSession(sessionId: string, input: FacilityReverseProxySaveDto) {
-    return client.post<FacilitySaveSessionCommitDto>(`/facility-apps/reverse-proxy/save-sessions/${encodeURIComponent(sessionId)}/commit`, { save: input });
-  },
-  discardSaveSession(sessionId: string) {
-    return client.delete(`/facility-apps/reverse-proxy/save-sessions/${encodeURIComponent(sessionId)}`);
-  },
+    kind: 'reverse-proxy',
+    titleKey: 'applicationsPage.entranceProxyFacility',
+    descriptionKey: 'applicationsPage.entranceProxyFacilityDescription',
+    categoryKey: 'applicationsPage.facilityCategoryTraffic',
+    status: config.lastError ? 'degraded' : 'available',
+    metrics: {
+      deploymentServers: config.deploymentServers.length,
+      routes: config.routes,
+      staticAssets: config.staticAssets.length,
+      applicationRoutes: config.applicationRoutes.length,
+    },
+    updatedAt: config.updatedAt,
+    operationStatus: config.operation?.status,
+    lastError: config.lastError,
   };
 }
 
-export const facilityAppsApi = createFacilityAppsApi(apiClient);
+function assertSupported(kind: string): asserts kind is FacilityAppKind {
+  if (kind !== 'reverse-proxy') {
+    throw new ApiError(`Unsupported facility app kind: ${kind}.`, 404, 'facility_app_kind_unsupported');
+  }
+}
+
+async function deleteJson<T>(path: string, body: unknown, idempotencyKey = key()): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    method: 'DELETE',
+    headers: authHeaders({ Accept: 'application/json', 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey }),
+    body: JSON.stringify(body),
+  });
+  if (response.status === 204) return undefined as T;
+  const envelope = await response.json().catch((error: unknown) => {
+    throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
+  }) as ApiEnvelope<T>;
+  if (!response.ok || envelope.error) {
+    const payload = envelope.error ?? {};
+    throw new ApiError(payload.message ?? `Request failed with status ${response.status}.`, response.status, payload.code ?? 'api_error', payload.details);
+  }
+  if (!('data' in envelope)) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
+  return envelope.data as T;
+}
+
+async function multipartJson<T>(method: string, path: string, form: FormData, idempotencyKey = key()): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    method,
+    headers: authHeaders({ Accept: 'application/json', 'Idempotency-Key': idempotencyKey }),
+    body: form,
+  });
+  const envelope = await response.json().catch((error: unknown) => {
+    throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
+  }) as ApiEnvelope<T>;
+  if (!response.ok || envelope.error) {
+    const payload = envelope.error ?? {};
+    throw new ApiError(payload.message ?? `Request failed with status ${response.status}.`, response.status, payload.code ?? 'api_error', payload.details);
+  }
+  if (!('data' in envelope)) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
+  return envelope.data as T;
+}
+
+export const facilityAppsApi = {
+  async listFacilities() {
+    const config = await apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy');
+    return [reverseProxySummary(config)];
+  },
+  async getFacility(kind: string): Promise<FacilityAppDetail> {
+    assertSupported(kind);
+    const config = await apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy');
+    return { kind, summary: reverseProxySummary(config), reverseProxy: config };
+  },
+  async reconcileFacility(kind: string) {
+    assertSupported(kind);
+    const result = await apiClient.post<{ config: ReverseProxyConfig }>('/facility-apps/reverse-proxy/reconcile');
+    return { ...result, facility: { kind, summary: reverseProxySummary(result.config), reverseProxy: result.config } };
+  },
+  beginFacilityEdit(kind: string, draft?: ReverseProxySaveInput) {
+    assertSupported(kind);
+    return apiClient.post<FacilityEditSession>('/facility-apps/reverse-proxy/edit-sessions', {
+      clientDraftKey: 'facility:reverse-proxy',
+      draft,
+    });
+  },
+  recoverableFacilityEditSessions(kind: string) {
+    assertSupported(kind);
+    return apiClient.get<FacilityEditSession[]>('/facility-apps/reverse-proxy/edit-sessions/recoverable?clientDraftKey=facility%3Areverse-proxy');
+  },
+  patchFacilityEdit(kind: string, sessionId: string, revision: number, baseResourceVersion: string, draft: ReverseProxySaveInput) {
+    assertSupported(kind);
+    return apiClient.patch<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/draft`, { revision, baseResourceVersion, draft });
+  },
+  validateFacilityEdit(kind: string, sessionId: string, revision: number) {
+    assertSupported(kind);
+    return apiClient.post<FacilityEditValidationResult>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/validate`, { revision });
+  },
+  previewFacilityEdit(kind: string, sessionId: string, revision: number) {
+    assertSupported(kind);
+    return apiClient.post<FacilityEditPreviewResult>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/preview`, { revision });
+  },
+  commitFacilityEdit(kind: string, session: FacilityEditSession, preview: FacilityEditPreviewResult) {
+    assertSupported(kind);
+    return apiClient.post<FacilityEditCommitResult>(`/facility-apps/reverse-proxy/edit-sessions/${id(session.id)}/commit`, {
+      revision: session.revision,
+      baseResourceVersion: session.baseResourceVersion.value,
+      previewToken: preview.token.value,
+    }, { headers: { 'Idempotency-Key': key() } });
+  },
+  putFacilityEditAsset(kind: string, sessionId: string, assetKey: string, revision: number, input: { file: File; name: string; kind: string }) {
+    assertSupported(kind);
+    const form = new FormData();
+    form.set('file', input.file);
+    form.set('revision', String(revision));
+    form.set('clientOperationId', key());
+    form.set('name', input.name);
+    form.set('kind', input.kind);
+    return multipartJson<FacilityEditSession>('PUT', `/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetKey)}`, form);
+  },
+  deleteFacilityEditAsset(kind: string, sessionId: string, assetKey: string, revision: number) {
+    assertSupported(kind);
+    return deleteJson<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetKey)}`, {
+      revision,
+      clientOperationId: key(),
+    });
+  },
+  discardFacilityEdit(kind: string, sessionId: string) {
+    assertSupported(kind);
+    return apiClient.delete<void>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}`);
+  },
+};

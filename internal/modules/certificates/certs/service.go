@@ -597,10 +597,8 @@ func certificateDomainMatches(pattern, domain string) bool {
 		return true
 	}
 	if strings.HasPrefix(pattern, "*.") {
-		suffix := strings.TrimPrefix(pattern, "*")
-		if strings.HasSuffix(domain, suffix) && domain != strings.TrimPrefix(suffix, ".") {
-			return true
-		}
+		base := strings.TrimPrefix(pattern, "*.")
+		return strings.HasSuffix(domain, "."+base) && strings.Count(domain, ".") == strings.Count(base, ".")+1
 	}
 	return false
 }
@@ -807,21 +805,25 @@ type preparedIssueRequest struct {
 }
 
 func prepareIssueRequest(in IssueRequest, managedDomain string) (preparedIssueRequest, error) {
-	prefix := normalizePrefix(in.Prefix)
-	domain := joinDomain(prefix, managedDomain)
-	if !domainPattern.MatchString(domain) {
-		return preparedIssueRequest{}, panelerr.Validation("certificate_domain_invalid", "Domain must be a valid DNS name")
+	prefixes := normalizedIssuePrefixes(in)
+	domains, err := domainsFromPrefixes(prefixes, managedDomain)
+	if err != nil {
+		return preparedIssueRequest{}, err
 	}
-	scope := strings.TrimSpace(in.Scope)
-	if scope == "" {
-		scope = ScopeSingle
-	}
-	if scope != ScopeSingle && scope != ScopeWildcard {
-		return preparedIssueRequest{}, panelerr.Validation("certificate_scope_invalid", "Certificate scope must be single or wildcard")
-	}
-	domains := []string{domain}
-	if scope == ScopeWildcard {
-		domains = []string{domain, "*." + domain}
+	domain := primaryIssueDomain(domains)
+	prefix := strings.Join(prefixes, ",")
+	scope := ScopePrefixes
+	if len(in.Prefixes) == 0 {
+		scope = strings.TrimSpace(in.Scope)
+		if scope == "" {
+			scope = ScopeSingle
+		}
+		if scope != ScopeSingle && scope != ScopeWildcard {
+			return preparedIssueRequest{}, panelerr.Validation("certificate_scope_invalid", "Certificate request scope is invalid")
+		}
+		if scope == ScopeWildcard {
+			domains = []string{domain, "*." + domain}
+		}
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
@@ -837,14 +839,45 @@ func prepareIssueRequest(in IssueRequest, managedDomain string) (preparedIssueRe
 	return preparedIssueRequest{Name: name, Domain: domain, Prefix: prefix, Scope: scope, Domains: domains, VariableName: variableName}, nil
 }
 
+func normalizedIssuePrefixes(in IssueRequest) []string {
+	if len(in.Prefixes) == 0 {
+		return []string{normalizePrefix(in.Prefix)}
+	}
+	prefixes := []string{}
+	seen := map[string]bool{}
+	for _, raw := range in.Prefixes {
+		prefix := normalizePrefix(raw)
+		if seen[prefix] {
+			continue
+		}
+		seen[prefix] = true
+		prefixes = append(prefixes, prefix)
+	}
+	if len(prefixes) == 0 {
+		return []string{"@"}
+	}
+	return prefixes
+}
+
 func normalizePrefix(prefix string) string {
 	prefix = strings.ToLower(strings.TrimSpace(prefix))
-	prefix = strings.TrimPrefix(prefix, "*.")
 	prefix = strings.TrimSuffix(prefix, ".")
 	if prefix == "" {
 		return "@"
 	}
 	return prefix
+}
+
+func domainsFromPrefixes(prefixes []string, managedDomain string) ([]string, error) {
+	domains := make([]string, 0, len(prefixes))
+	for _, prefix := range prefixes {
+		domain := joinDomain(prefix, managedDomain)
+		if !validCertificateDomain(domain) {
+			return nil, panelerr.Validation("certificate_domain_invalid", "Domain must be a valid DNS name")
+		}
+		domains = append(domains, domain)
+	}
+	return domains, nil
 }
 
 func joinDomain(prefix, managedDomain string) string {
@@ -853,6 +886,23 @@ func joinDomain(prefix, managedDomain string) string {
 		return managedDomain
 	}
 	return prefix + "." + managedDomain
+}
+
+func primaryIssueDomain(domains []string) string {
+	if len(domains) == 0 {
+		return ""
+	}
+	return strings.TrimPrefix(domains[0], "*.")
+}
+
+func validCertificateDomain(domain string) bool {
+	if strings.Contains(domain, "*") {
+		if !strings.HasPrefix(domain, "*.") || strings.Count(domain, "*") != 1 {
+			return false
+		}
+		return domainPattern.MatchString(strings.TrimPrefix(domain, "*."))
+	}
+	return domainPattern.MatchString(domain)
 }
 
 func defaultVariableName(domain string) string {

@@ -1,986 +1,712 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { useTheme } from 'vuetify';
-import VChart from 'vue-echarts';
-import { use } from 'echarts/core';
-import { CanvasRenderer } from 'echarts/renderers';
-import { LineChart } from 'echarts/charts';
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
-import { useI18n } from '@/i18n';
+import { Activity, AlertTriangle, BarChart3, Boxes, Check, Grip, Gauge, Pencil, Plus, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
 import { overviewApi } from '@/api/overview';
-import { applicationsApi } from '@/api/applications';
-import type {
-  ApplicationDto,
-  MetricsRange,
-  MetricsSeriesDto,
-  OverviewCardDataDto,
-  OverviewCardDto,
-  OverviewCardKind,
-  OverviewCardNetworkDirection,
-  OverviewDto,
-  OverviewServerDto,
-} from '@/types/api';
-import AppActionButton from '@/components/AppActionButton.vue';
-import AppActionGroup from '@/components/AppActionGroup.vue';
-import PageLoadingState from '@/components/PageLoadingState.vue';
+import Badge from '@/components/ui/Badge.vue';
+import Button from '@/components/ui/Button.vue';
+import Dialog from '@/components/ui/Dialog.vue';
+import EmptyState from '@/components/ui/EmptyState.vue';
+import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
+import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
+import ConsolePage from '@/components/templates/ConsolePage.vue';
+import { useI18n } from '@/i18n';
+import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries } from '@/types/overview';
+import { cardHasData, createOverviewCard, defaultOverviewCards, overviewRisks, summarizeOverview } from './model';
 
-use([CanvasRenderer, LineChart, GridComponent, TooltipComponent, LegendComponent]);
+const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue'));
 
-type CardKind = OverviewCardKind;
-type NetworkDirection = OverviewCardNetworkDirection;
-type OverviewCardConfig = OverviewCardDto;
-
-interface CardPreset {
-  kind: CardKind;
-  icon: string;
-  color: string;
-  category: 'metric' | 'message';
-  width: number;
-  height: number;
-}
-
+const { t } = useI18n();
 const router = useRouter();
-const theme = useTheme();
-const { t, formatDateTime } = useI18n();
-const isDark = computed(() => theme.global.current.value.dark);
-
-const cardPresets: CardPreset[] = [
-  { kind: 'cpu', icon: 'mdi-cpu-64-bit', color: 'primary', category: 'metric', width: 3, height: 2 },
-  { kind: 'memory', icon: 'mdi-memory', color: 'success', category: 'metric', width: 3, height: 2 },
-  { kind: 'disk', icon: 'mdi-harddisk', color: 'warning', category: 'metric', width: 3, height: 2 },
-  { kind: 'network', icon: 'mdi-lan', color: 'info', category: 'metric', width: 3, height: 2 },
-  { kind: 'packageUpdates', icon: 'mdi-package-variant-plus', color: 'warning', category: 'message', width: 3, height: 2 },
-  { kind: 'containerUpdates', icon: 'mdi-docker', color: 'primary', category: 'message', width: 3, height: 2 },
-  { kind: 'placeholder', icon: 'mdi-border-none-variant', color: 'secondary', category: 'message', width: 3, height: 2 },
-];
-
-const rangeItems = computed<Array<{ title: string; value: MetricsRange }>>(() => [
-  { title: '1h', value: '1h' },
-  { title: '6h', value: '6h' },
-  { title: '1d', value: '1d' },
-  { title: '7d', value: '7d' },
-]);
-
-const networkDirectionItems = computed<Array<{ title: string; value: NetworkDirection }>>(() => [
-  { title: t('overviewPage.rxTx'), value: 'both' },
-  { title: t('overviewPage.rx'), value: 'rx' },
-  { title: t('overviewPage.tx'), value: 'tx' },
-]);
 
 const overview = ref<OverviewDto>({ servers: [] });
-const applications = ref<ApplicationDto[]>([]);
-const cards = ref<OverviewCardConfig[]>([]);
-const cardDataById = ref<Record<string, OverviewCardDataDto | null>>({});
+const cards = ref<OverviewCardConfiguration[]>([]);
+const persistedCardIds = ref<Set<string>>(new Set());
+const cardLoading = ref<Record<string, boolean>>({});
+const cardErrors = ref<Record<string, string>>({});
+const cardValues = ref<Record<string, string>>({});
+const cardData = ref<Record<string, OverviewCardData>>({});
 const loading = ref(false);
-const error = ref('');
+const pageError = ref('');
 const saveError = ref('');
-const dialog = ref(false);
-const editingCardId = ref('');
 const editMode = ref(false);
-const draggingCardId = ref('');
-const dragOverCardId = ref('');
-let refreshTimer: number | undefined;
-let saveQueue = Promise.resolve();
-let cardsLoaded = false;
+const cardEditorOpen = ref(false);
+const editingCardId = ref<string | null>(null);
+const saving = ref(false);
+const newCardKind = ref<OverviewCardKind>('cpu');
+const draggingCardId = ref<string | null>(null);
+const dragPreviewTargetId = ref<string | null>(null);
+const overviewGrid = ref<HTMLElement | null>(null);
+const resizeState = ref<{
+  cardId: string;
+  startX: number;
+  startY: number;
+  startWidth: number;
+  startHeight: number;
+  columnWidth: number;
+  rowHeight: number;
+} | null>(null);
 
-const form = reactive({
-  kind: 'cpu' as CardKind,
-  width: 3,
-  height: 2,
-  range: '1h' as MetricsRange,
-  networkDirection: 'both' as NetworkDirection,
-  serverIds: [] as string[],
-});
-
-const palette = computed(() => ({
-  text: isDark.value ? '#b3beb6' : '#5f6f68',
-  grid: isDark.value ? 'rgba(179, 190, 182, 0.16)' : 'rgba(95, 111, 104, 0.16)',
-  tooltipBackground: isDark.value ? '#151a17' : '#ffffff',
-  tooltipBorder: isDark.value ? 'rgba(179, 190, 182, 0.22)' : 'rgba(95, 111, 104, 0.18)',
-  tooltipText: isDark.value ? '#e7ece6' : '#1f2724',
-  series: isDark.value
-    ? ['#2dd4bf', '#4ade80', '#f59e0b', '#60a5fa', '#fb7185', '#a78bfa']
-    : ['#0f766e', '#16a34a', '#b45309', '#2563eb', '#dc2626', '#7c3aed'],
-}));
-
+const summary = computed(() => summarizeOverview(overview.value));
+const risks = computed(() => overviewRisks(overview.value.servers));
+const editingCard = computed(() => cards.value.find((card) => card.id === editingCardId.value));
 const serverOptions = computed(() => overview.value.servers.map((server) => ({
-  title: `${server.name} (${server.host})`,
-  value: server.id,
+  id: server.id,
+  name: server.name,
+  description: server.host,
+  status: server.reachable ? 'reachable' : 'unreachable',
 })));
 
-const presetItems = computed(() => cardPresets.map((preset) => ({
-  ...preset,
-  title: cardTitle(preset.kind),
-})));
+const kindOptions = computed(() => [
+  { value: 'cpu', label: t('overviewPage.cardCpu') },
+  { value: 'memory', label: t('overviewPage.cardMemory') },
+  { value: 'disk', label: t('overviewPage.cardDisk') },
+  { value: 'network', label: t('overviewPage.cardNetwork') },
+  { value: 'packageUpdates', label: t('overviewPage.cardPackages') },
+  { value: 'containerUpdates', label: t('overviewPage.cardContainers') },
+]);
 
-function defaultCards(): OverviewCardConfig[] {
-  return [
-    createCard('cpu', 3, 2, '1h'),
-    createCard('memory', 3, 2, '1h'),
-    createCard('disk', 3, 2, '6h'),
-    createCard('network', 3, 2, '1h'),
-    createCard('packageUpdates', 3, 2, '1d'),
-    createCard('containerUpdates', 3, 2, '1d'),
-  ];
-}
+const rangeOptions = [
+  { value: '1h', label: '1h' },
+  { value: '6h', label: '6h' },
+  { value: '1d', label: '1d' },
+  { value: '7d', label: '7d' },
+];
 
-function createCard(kind: CardKind, width?: number, height?: number, range: MetricsRange = '1h'): OverviewCardConfig {
-  const preset = presetFor(kind);
-  return {
-    id: newId(),
-    kind,
-    width: width ?? preset.width,
-    height: height ?? preset.height,
-    range,
-    networkDirection: 'both',
-    serverIds: [],
-  };
-}
+const directionOptions = computed(() => [
+  { value: 'both', label: t('overviewPage.rxTx') },
+  { value: 'rx', label: t('overviewPage.rx') },
+  { value: 'tx', label: t('overviewPage.tx') },
+]);
+const widthOptions = computed(() => Array.from({ length: 6 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
+const heightOptions = computed(() => Array.from({ length: 4 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
 
-function newId() {
-  return `card-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function presetFor(kind: CardKind) {
-  return cardPresets.find((preset) => preset.kind === kind) ?? cardPresets[0];
-}
-
-function cardTitle(kind: CardKind) {
-  return t(`overviewPage.${kind}`);
-}
-
-function isMetricCard(card: OverviewCardConfig) {
-  return presetFor(card.kind).category === 'metric';
-}
-
-function normalizeNetworkDirection(value: unknown): NetworkDirection {
-  return value === 'rx' || value === 'tx' || value === 'both' ? value : 'both';
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
-}
-
-function resolveCardServers(card: OverviewCardConfig) {
-  const selected = new Set(card.serverIds);
-  return overview.value.servers.filter((server) => selected.size === 0 || selected.has(server.id));
-}
-
-function resolveCardServerIds(card: OverviewCardConfig) {
-  return resolveCardServers(card).map((server) => server.id);
-}
-
-async function loadData() {
+async function load() {
   loading.value = true;
+  pageError.value = '';
   try {
-    const cardRequest = cardsLoaded ? Promise.resolve(null) : overviewApi.getCards();
-    const [nextOverview, nextApplications, cardConfiguration] = await Promise.all([
-      overviewApi.getOverview(),
-      applicationsApi.list(),
-      cardRequest,
-    ]);
+    const [nextOverview, nextCards] = await Promise.all([overviewApi.getOverview(), overviewApi.getCards()]);
     overview.value = nextOverview;
-    applications.value = nextApplications;
-    if (cardConfiguration) {
-      cards.value = cardConfiguration.cards;
-      cardsLoaded = true;
-    }
-    error.value = '';
-    await loadCardMetrics();
+    cards.value = nextCards.cards.map(normalizeCardSize);
+    persistedCardIds.value = new Set(cards.value.map((card) => card.id));
+    await Promise.all(cards.value.map((card) => loadCard(card.id)));
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('overviewPage.loadFailed');
+    pageError.value = err instanceof Error ? err.message : t('common.loadFailed');
   } finally {
     loading.value = false;
   }
 }
 
-async function loadCardMetrics() {
-  const metricCards = cards.value.filter(isMetricCard);
-  const activeCardIds = new Set(metricCards.map((card) => card.id));
-  cardDataById.value = Object.fromEntries(Object.entries(cardDataById.value).filter(([cardId]) => activeCardIds.has(cardId)));
-  await Promise.all(metricCards.map(async (card) => {
-    try {
-      cardDataById.value[card.id] = await overviewApi.getCardData(card.id);
-    } catch {
-      cardDataById.value[card.id] = null;
-    }
-  }));
-}
-
-function persistCards() {
-  const snapshot = cards.value.map((card) => ({ ...card, serverIds: [...card.serverIds] }));
-  saveQueue = saveQueue.then(async () => {
-    try {
-      await overviewApi.updateCards({ cards: snapshot });
-      saveError.value = '';
-    } catch (err) {
-      saveError.value = err instanceof Error ? err.message : t('overviewPage.saveFailed');
-    }
-  });
-  return saveQueue;
-}
-
-function chartOption(card: OverviewCardConfig) {
-  const servers = resolveCardServers(card);
-  const series = servers.flatMap((server, index) => metricSeriesForCard(card, server, index));
-  return {
-    color: palette.value.series,
-    tooltip: {
-      trigger: 'axis',
-      appendToBody: true,
-      backgroundColor: palette.value.tooltipBackground,
-      borderColor: palette.value.tooltipBorder,
-      textStyle: { color: palette.value.tooltipText },
-      valueFormatter: (value: number) => formatMetricValue(card.kind, value),
-    },
-    legend: {
-      top: 0,
-      type: 'scroll',
-      textStyle: { color: palette.value.text, fontSize: 11 },
-    },
-    grid: { left: 46, right: 20, top: 36, bottom: 28 },
-    xAxis: {
-      type: 'time',
-      axisLabel: {
-        color: palette.value.text,
-        fontSize: 11,
-        hideOverlap: true,
-        showMinLabel: false,
-        showMaxLabel: false,
-      },
-      axisLine: { lineStyle: { color: palette.value.grid } },
-    },
-    yAxis: {
-      type: 'value',
-      axisLabel: {
-        color: palette.value.text,
-        fontSize: 11,
-        formatter: (value: number) => formatAxisValue(card.kind, value),
-      },
-      splitLine: { lineStyle: { color: palette.value.grid } },
-    },
-    series,
-  };
-}
-
-function metricSeriesForCard(card: OverviewCardConfig, server: OverviewServerDto, index: number) {
-  const series = cardDataById.value[card.id]?.metricsByServer[server.id] as MetricsSeriesDto | undefined;
-  const color = palette.value.series[index % palette.value.series.length];
-  if (!series) return [];
-  if (card.kind === 'cpu') return [lineSeries(server.name, color, series.cpu.map((point) => [point.time, point.usagePercent]))];
-  if (card.kind === 'memory') return [lineSeries(server.name, color, series.memory.map((point) => [point.time, percent(point.usedBytes, point.totalBytes)]))];
-  if (card.kind === 'disk') return [lineSeries(server.name, color, series.disk.map((point) => [point.time, percent(point.usedBytes, point.totalBytes)]))];
-  if (card.kind === 'network') {
-    const items = [];
-    if (card.networkDirection === 'rx' || card.networkDirection === 'both') {
-      items.push(lineSeries(`${server.name} RX`, color, series.network.map((point) => [point.time, point.rxBytesPerSecond])));
-    }
-    if (card.networkDirection === 'tx' || card.networkDirection === 'both') {
-      items.push(lineSeries(`${server.name} TX`, color, series.network.map((point) => [point.time, point.txBytesPerSecond]), card.networkDirection === 'both' ? 'dashed' : 'solid'));
-    }
-    return items;
+async function loadCard(cardId: string) {
+  const card = cards.value.find((item) => item.id === cardId);
+  const nextErrors = { ...cardErrors.value };
+  delete nextErrors[cardId];
+  cardErrors.value = nextErrors;
+  if (!card || !persistedCardIds.value.has(cardId) || card.kind === 'packageUpdates' || card.kind === 'containerUpdates' || card.kind === 'placeholder') {
+    const nextData = { ...cardData.value };
+    delete nextData[cardId];
+    cardData.value = nextData;
+    cardValues.value = { ...cardValues.value, [cardId]: derivedCardValue(card) };
+    return;
   }
-  return [];
-}
-
-function lineSeries(name: string, color: string, data: Array<[string, number]>, type: 'solid' | 'dashed' = 'solid') {
-  return {
-    name,
-    type: 'line',
-    smooth: true,
-    symbol: 'none',
-    data,
-    lineStyle: { color, type, width: 2 },
-  };
-}
-
-function percent(used: number, total: number) {
-  return total > 0 ? Math.round((used / total) * 1000) / 10 : 0;
-}
-
-function formatAxisValue(kind: CardKind, value: number) {
-  return kind === 'network' ? formatBytesPerSecond(value) : `${Number(value).toFixed(0)}%`;
-}
-
-function formatMetricValue(kind: CardKind, value: number) {
-  return kind === 'network' ? formatBytesPerSecond(value) : `${Number(value).toFixed(1)}%`;
-}
-
-function formatBytesPerSecond(bytesPerSecond: number): string {
-  if (!Number.isFinite(bytesPerSecond) || bytesPerSecond === 0) return '0 B/s';
-  const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
-  const index = Math.min(Math.floor(Math.log(bytesPerSecond) / Math.log(1024)), sizes.length - 1);
-  return `${(bytesPerSecond / Math.pow(1024, index)).toFixed(1)} ${sizes[index]}`;
-}
-
-function packageRows(card: OverviewCardConfig) {
-  return packageRowsForServers(resolveCardServers(card));
-}
-
-function packageRowsForServers(servers: OverviewServerDto[]) {
-  return servers
-    .filter((server) => server.packageUpdateCount > 0)
-    .sort((a, b) => b.packageUpdateCount - a.packageUpdateCount);
-}
-
-function containerRows(card: OverviewCardConfig) {
-  return containerRowsForServers(resolveCardServerIds(card));
-}
-
-function containerRowsForServers(serverIds: string[]) {
-  const selected = new Set(serverIds);
-  return applications.value.filter((app) => {
-  if (!app.imageUpdateAvailable && !app.imageLastError) return false;
-    const targets = applicationServerIds(app);
-    return selected.size === 0 || targets.some((serverId) => selected.has(serverId));
-  });
-}
-
-function applicationServerIds(app: ApplicationDto) {
-  if (app.deploymentMode === 'selected') return app.deploymentServers ?? [];
-  return overview.value.servers.map((server) => server.id);
-}
-
-function targetLabel(app: ApplicationDto) {
-  if (app.deploymentMode !== 'selected') return t('overviewPage.allServers');
-  const ids = new Set(app.deploymentServers ?? []);
-  const names = overview.value.servers.filter((server) => ids.has(server.id)).map((server) => server.name);
-  return names.length ? names.join(', ') : t('overviewPage.noSelectedServers');
-}
-
-function cardServerLabel(card: OverviewCardConfig) {
-  const servers = resolveCardServers(card);
-  if (card.serverIds.length === 0) return t('overviewPage.allServers');
-  if (servers.length === 0) return t('overviewPage.noServers');
-  return t('overviewPage.serverCount', { count: servers.length });
-}
-
-function metricCardLabel(card: OverviewCardConfig) {
-  if (card.kind !== 'network') return card.range;
-  const direction = networkDirectionItems.value.find((item) => item.value === card.networkDirection)?.title ?? t('overviewPage.rxTx');
-  return `${card.range} / ${direction}`;
-}
-
-function openAddDialog(kind?: CardKind) {
-  const preset = presetFor(kind ?? 'cpu');
-  editingCardId.value = '';
-  Object.assign(form, {
-    kind: preset.kind,
-    width: preset.width,
-    height: preset.height,
-    range: '1h' as MetricsRange,
-    networkDirection: 'both' as NetworkDirection,
-    serverIds: [],
-  });
-  dialog.value = true;
-}
-
-function openEditDialog(card: OverviewCardConfig) {
-  editingCardId.value = card.id;
-  Object.assign(form, {
-    kind: card.kind,
-    width: card.width,
-    height: card.height,
-    range: card.range,
-    networkDirection: normalizeNetworkDirection(card.networkDirection),
-    serverIds: [...card.serverIds],
-  });
-  dialog.value = true;
-}
-
-function saveCard() {
-  const next: OverviewCardConfig = {
-    id: editingCardId.value || newId(),
-    kind: form.kind,
-    width: clamp(form.width, 1, 6),
-    height: clamp(form.height, 1, 4),
-    range: form.range,
-    networkDirection: normalizeNetworkDirection(form.networkDirection),
-    serverIds: [...form.serverIds],
-  };
-  if (editingCardId.value) {
-    cards.value = cards.value.map((card) => card.id === editingCardId.value ? next : card);
-  } else {
-    cards.value = [...cards.value, next];
+  cardLoading.value = { ...cardLoading.value, [cardId]: true };
+  try {
+    const data = await overviewApi.getCardData(cardId);
+    cardData.value = { ...cardData.value, [cardId]: data };
+    cardValues.value = { ...cardValues.value, [cardId]: metricValue(card, data) };
+    if (!cardHasData(card, data)) cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardEmpty') };
+  } catch (err) {
+    cardErrors.value = { ...cardErrors.value, [cardId]: err instanceof Error ? err.message : t('overviewPage.cardFailed') };
+  } finally {
+    const nextLoading = { ...cardLoading.value };
+    delete nextLoading[cardId];
+    cardLoading.value = nextLoading;
   }
-  dialog.value = false;
-  void loadCardMetrics();
-  void persistCards();
+}
+
+function updateCardRange(card: OverviewCardConfiguration, range: string) {
+  card.range = range as OverviewCardRange;
+  void loadCard(card.id);
+}
+
+function addCard() {
+  const next = createOverviewCard(newCardKind.value, '1h', defaultWidth(newCardKind.value), defaultHeight(newCardKind.value));
+  cards.value = [...cards.value, next];
+  void loadCard(next.id);
 }
 
 function removeCard(cardId: string) {
   cards.value = cards.value.filter((card) => card.id !== cardId);
-  void loadCardMetrics();
-  void persistCards();
+  if (editingCardId.value === cardId) closeCardEditor();
 }
 
 function resetCards() {
-  cards.value = defaultCards();
-  void loadCardMetrics();
-  void persistCards();
+  cards.value = defaultOverviewCards();
+  cardErrors.value = {};
+  cardData.value = {};
+  cardValues.value = Object.fromEntries(cards.value.map((card) => [card.id, derivedCardValue(card)]));
 }
 
-function toggleEditMode() {
-  editMode.value = !editMode.value;
-  if (!editMode.value) {
-    draggingCardId.value = '';
-    dragOverCardId.value = '';
+async function saveCards() {
+  saving.value = true;
+  saveError.value = '';
+  try {
+    const visibleCards = cards.value.map(normalizeCardSize);
+    const saved = await overviewApi.updateCards({ cards: visibleCards });
+    cards.value = saved.cards.map(normalizeCardSize);
+    persistedCardIds.value = new Set(cards.value.map((card) => card.id));
+    editMode.value = false;
+    closeCardEditor();
+    await Promise.all(cards.value.map((card) => loadCard(card.id)));
+  } catch (err) {
+    saveError.value = err instanceof Error ? err.message : t('overviewPage.saveFailed');
+  } finally {
+    saving.value = false;
   }
 }
 
-function startCardDrag(cardId: string, event: DragEvent) {
+function toggleEditMode() {
+  saveError.value = '';
+  if (!editMode.value) {
+    editMode.value = true;
+    return;
+  }
+  void saveCards();
+}
+
+function openCardEditor(cardId: string) {
+  editingCardId.value = cardId;
+  cardEditorOpen.value = true;
+}
+
+function closeCardEditor() {
+  cardEditorOpen.value = false;
+  editingCardId.value = null;
+}
+
+function onCardDragStart(cardId: string, event: DragEvent) {
   if (!editMode.value) return;
   draggingCardId.value = cardId;
+  dragPreviewTargetId.value = cardId;
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'move';
     event.dataTransfer.setData('text/plain', cardId);
   }
 }
 
-function handleCardDragOver(cardId: string, event: DragEvent) {
-  if (!editMode.value || !draggingCardId.value || draggingCardId.value === cardId) return;
-  event.preventDefault();
-  dragOverCardId.value = cardId;
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
-  reorderCard(draggingCardId.value, cardId, shouldInsertAfter(event));
+function onCardDragEnd() {
+  draggingCardId.value = null;
+  dragPreviewTargetId.value = null;
 }
 
-function dropCard(cardId: string, event: DragEvent) {
+function onCardDragOver(targetCardId: string, event: DragEvent) {
+  if (!editMode.value || !draggingCardId.value) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  if (dragPreviewTargetId.value === targetCardId || draggingCardId.value === targetCardId) return;
+  const fromIndex = cards.value.findIndex((card) => card.id === draggingCardId.value);
+  const toIndex = cards.value.findIndex((card) => card.id === targetCardId);
+  if (fromIndex < 0 || toIndex < 0) return;
+  const next = [...cards.value];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  cards.value = next;
+  dragPreviewTargetId.value = targetCardId;
+}
+
+function onCardDrop() {
+  draggingCardId.value = null;
+  dragPreviewTargetId.value = null;
+}
+
+function startResize(card: OverviewCardConfiguration, event: PointerEvent) {
   if (!editMode.value) return;
   event.preventDefault();
-  const sourceId = draggingCardId.value || event.dataTransfer?.getData('text/plain') || '';
-  reorderCard(sourceId, cardId, shouldInsertAfter(event));
-  endCardDrag();
+  event.stopPropagation();
+  const grid = overviewGrid.value;
+  if (!grid) return;
+  const styles = window.getComputedStyle(grid);
+  const columns = styles.gridTemplateColumns.split(' ').filter(Boolean).length || 6;
+  const gap = Number.parseFloat(styles.columnGap || '0') || 0;
+  const rowHeight = Number.parseFloat(styles.gridAutoRows || '112') || 112;
+  const columnWidth = (grid.clientWidth - gap * Math.max(0, columns - 1)) / columns + gap;
+  resizeState.value = {
+    cardId: card.id,
+    startX: event.clientX,
+    startY: event.clientY,
+    startWidth: card.width,
+    startHeight: card.height,
+    columnWidth,
+    rowHeight,
+  };
+  window.addEventListener('pointermove', onResizeMove);
+  window.addEventListener('pointerup', stopResize, { once: true });
 }
 
-function endCardDrag() {
-  const shouldPersist = Boolean(draggingCardId.value);
-  draggingCardId.value = '';
-  dragOverCardId.value = '';
-  if (shouldPersist) void persistCards();
+function onResizeMove(event: PointerEvent) {
+  const state = resizeState.value;
+  if (!state) return;
+  const card = cards.value.find((item) => item.id === state.cardId);
+  if (!card) return;
+  card.width = clampInteger(state.startWidth + Math.round((event.clientX - state.startX) / state.columnWidth), 1, 6);
+  card.height = clampInteger(state.startHeight + Math.round((event.clientY - state.startY) / state.rowHeight), 1, 4);
 }
 
-function shouldInsertAfter(event: DragEvent) {
-  const element = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-  if (!element) return false;
-  const rect = element.getBoundingClientRect();
-  const xRatio = (event.clientX - rect.left) / rect.width;
-  const yRatio = (event.clientY - rect.top) / rect.height;
-  if (yRatio < 0.35) return false;
-  if (yRatio > 0.65) return true;
-  return xRatio > 0.5;
+function stopResize() {
+  window.removeEventListener('pointermove', onResizeMove);
+  resizeState.value = null;
 }
 
-function reorderCard(sourceId: string, targetId: string, insertAfter = false) {
-  if (!sourceId || sourceId === targetId) return;
-  const next = [...cards.value];
-  const sourceIndex = next.findIndex((card) => card.id === sourceId);
-  const targetIndex = next.findIndex((card) => card.id === targetId);
-  if (sourceIndex < 0 || targetIndex < 0) return;
-  const currentInsertAfter = sourceIndex > targetIndex;
-  if (Math.abs(sourceIndex - targetIndex) === 1 && currentInsertAfter === insertAfter) return;
-  const [movingCard] = next.splice(sourceIndex, 1);
-  const nextTargetIndex = next.findIndex((card) => card.id === targetId);
-  const insertIndex = nextTargetIndex + (insertAfter ? 1 : 0);
-  if (sourceIndex === insertIndex || sourceIndex + 1 === insertIndex) return;
-  next.splice(insertIndex, 0, movingCard);
-  cards.value = next;
+function cardTitle(card: OverviewCardConfiguration) {
+  return t(`overviewPage.card.${card.kind}`);
 }
 
-function cardStyle(card: OverviewCardConfig) {
+function cardIcon(kind: OverviewCardKind) {
+  if (kind === 'cpu') return Gauge;
+  if (kind === 'memory') return Activity;
+  if (kind === 'disk') return BarChart3;
+  if (kind === 'network') return Boxes;
+  return AlertTriangle;
+}
+
+function cardTone(card: OverviewCardConfiguration) {
+  if (cardErrors.value[card.id]) return 'danger' as const;
+  if (card.kind === 'packageUpdates' && summary.value.updates > 0) return 'warning' as const;
+  return 'neutral' as const;
+}
+
+function derivedCardValue(card?: OverviewCardConfiguration) {
+  if (!card) return '-';
+  if (card.kind === 'packageUpdates') return String(summary.value.updates);
+  if (card.kind === 'containerUpdates') return String(overview.value.servers.filter((server) => !server.metricsFresh).length);
+  return '-';
+}
+
+function metricValue(card: OverviewCardConfiguration, data: Awaited<ReturnType<typeof overviewApi.getCardData>>) {
+  const latest = metricSeries(card, data).at(-1);
+  if (latest === undefined) return '-';
+  if (card.kind === 'network') return formatBytes(latest);
+  if (card.kind === 'cpu' || card.kind === 'memory' || card.kind === 'disk') return `${Math.round(latest)}%`;
+  return derivedCardValue(card);
+}
+
+function cardSecondaryValue(card: OverviewCardConfiguration) {
+  const data = cardData.value[card.id];
+  if (!data || card.kind === 'packageUpdates' || card.kind === 'containerUpdates') return card.serverIds.length ? t('overviewPage.selectedServers') : t('overviewPage.allServers');
+  const values = metricSeries(card, data);
+  if (!values.length) return t('common.notAvailable');
+  const max = Math.max(...values);
+  if (card.kind === 'network') return t('overviewPage.cardPeakValue', { value: formatBytes(max) });
+  return t('overviewPage.cardPeakValue', { value: `${Math.round(max)}%` });
+}
+
+function cardMeta(card: OverviewCardConfiguration) {
+  const size = `${card.width}x${card.height}`;
+  const scope = card.serverIds.length
+    ? t('overviewPage.selectedServerCount', { count: card.serverIds.length })
+    : t('overviewPage.allServerCount', { count: overview.value.servers.length });
+  return `${size} / ${card.range} / ${scope}`;
+}
+
+function shouldShowChart(card: OverviewCardConfiguration) {
+  return card.width >= 2 && card.height >= 2 && !['packageUpdates', 'containerUpdates', 'placeholder'].includes(card.kind);
+}
+
+function isMetricCard(card: OverviewCardConfiguration) {
+  return !['packageUpdates', 'containerUpdates', 'placeholder'].includes(card.kind);
+}
+
+function shouldShowDetail(card: OverviewCardConfiguration) {
+  return card.width >= 3 || card.height >= 3;
+}
+
+function metricSeries(card: OverviewCardConfiguration, data?: OverviewCardData) {
+  const seriesByServer = Object.values(data?.metricsByServer ?? {}).map((series) => metricValues(card, series)).filter((series) => series.length > 0);
+  const maxLength = Math.max(0, ...seriesByServer.map((series) => series.length));
+  return Array.from({ length: maxLength }, (_, index) => {
+    const values = seriesByServer.map((series) => series[index]).filter((value) => value !== undefined);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  });
+}
+
+function metricValues(card: OverviewCardConfiguration, series: OverviewMetricsSeries) {
+  if (card.kind === 'cpu') return (series.cpu ?? []).map((point) => point.usagePercent ?? 0);
+  if (card.kind === 'memory') return (series.memory ?? []).map(percentUsed);
+  if (card.kind === 'disk') return (series.disk ?? []).map(percentUsed);
+  if (card.kind === 'network') {
+    return (series.network ?? []).map((point) => {
+      if (card.networkDirection === 'rx') return point.rxBytesPerSecond ?? 0;
+      if (card.networkDirection === 'tx') return point.txBytesPerSecond ?? 0;
+      return (point.rxBytesPerSecond ?? 0) + (point.txBytesPerSecond ?? 0);
+    });
+  }
+  return [];
+}
+
+function cardChartSeries(card: OverviewCardConfiguration) {
+  const data = cardData.value[card.id];
+  return Object.entries(data?.metricsByServer ?? {}).map(([serverId, series]) => ({
+    id: serverId,
+    name: overview.value.servers.find((server) => server.id === serverId)?.name ?? serverId,
+    values: metricValues(card, series),
+  })).filter((series) => series.values.length > 0);
+}
+
+function cardChartLabels(card: OverviewCardConfiguration) {
+  const data = cardData.value[card.id];
+  const first = Object.values(data?.metricsByServer ?? {})[0];
+  if (!first) return [];
+  if (card.kind === 'cpu') return (first.cpu ?? []).map((point) => point.time);
+  if (card.kind === 'memory') return (first.memory ?? []).map((point) => point.time);
+  if (card.kind === 'disk') return (first.disk ?? []).map((point) => point.time);
+  if (card.kind === 'network') return (first.network ?? []).map((point) => point.time);
+  return [];
+}
+
+function cardChartValueKind(card: OverviewCardConfiguration) {
+  return card.kind === 'network' ? 'bytes' as const : 'percent' as const;
+}
+
+function percentUsed(point: OverviewMetricPoint) {
+  return point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0;
+}
+
+function normalizeCardSize(card: OverviewCardConfiguration): OverviewCardConfiguration {
   return {
-    gridColumn: `span ${clamp(card.width, 1, 6)}`,
-    gridRow: `span ${clamp(card.height, 1, 4)}`,
+    ...card,
+    width: clampInteger(card.width, 1, 6),
+    height: clampInteger(card.height, 1, 4),
+    serverIds: [...card.serverIds],
   };
 }
 
-onMounted(async () => {
-  await loadData();
-  refreshTimer = window.setInterval(loadData, 15000);
-});
+function clampInteger(value: number, min: number, max: number) {
+  const next = Number.isFinite(value) ? Math.round(value) : min;
+  return Math.min(max, Math.max(min, next));
+}
 
-onBeforeUnmount(() => {
-  if (refreshTimer) window.clearInterval(refreshTimer);
-});
+function updateCardWidth(card: OverviewCardConfiguration, value: string) {
+  card.width = clampInteger(Number(value), 1, 6);
+}
+
+function updateCardHeight(card: OverviewCardConfiguration, value: string) {
+  card.height = clampInteger(Number(value), 1, 4);
+}
+
+function updateCardKind(card: OverviewCardConfiguration, value: string) {
+  card.kind = value as OverviewCardKind;
+  card.width = defaultWidth(card.kind);
+  card.height = defaultHeight(card.kind);
+  void loadCard(card.id);
+}
+
+function defaultWidth(kind: OverviewCardKind) {
+  if (kind === 'network') return 6;
+  if (kind === 'packageUpdates' || kind === 'containerUpdates') return 2;
+  return 3;
+}
+
+function defaultHeight(kind: OverviewCardKind) {
+  if (kind === 'packageUpdates' || kind === 'containerUpdates') return 1;
+  return 2;
+}
+
+function formatBytes(value: number) {
+  if (!value) return '0 B/s';
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB/s`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB/s`;
+}
+
+onMounted(load);
+onBeforeUnmount(stopResize);
 </script>
 
 <template>
-  <div class="overview-workspace page-shell">
-    <div class="overview-actions-row page-toolbar">
-      <AppActionGroup context="page" class="overview-actions">
-        <template v-if="editMode">
-          <AppActionButton icon="mdi-restore" :label="t('overviewPage.reset')" @click="resetCards" />
-          <AppActionButton kind="primary" icon="mdi-view-grid-plus" :label="t('overviewPage.addCard')" @click="openAddDialog()" />
-        </template>
-        <AppActionButton
-          :kind="editMode ? 'primary' : 'secondary'"
-          :icon="editMode ? 'mdi-check' : 'mdi-pencil'"
-          :label="editMode ? t('common.done') : t('common.edit')"
-          @click="toggleEditMode"
-        />
-      </AppActionGroup>
-    </div>
+  <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
+    <template #actions>
+      <Button size="sm" :loading="loading" @click="load">
+        <RefreshCcw />
+        {{ t('common.refresh') }}
+      </Button>
+      <Button size="sm" variant="primary" :loading="saving" @click="toggleEditMode">
+        <Check v-if="editMode" />
+        <Pencil v-else />
+        {{ editMode ? t('overviewPage.saveDashboard') : t('overviewPage.editDashboard') }}
+      </Button>
+    </template>
 
-    <v-alert v-if="error || saveError" type="error" variant="tonal">{{ error || saveError }}</v-alert>
+    <div class="overview-layout grid h-full min-h-0 min-w-0 gap-4 overflow-hidden max-xl:overflow-x-hidden max-xl:overflow-y-auto">
+      <main class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
+        <div v-if="pageError" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
+          {{ pageError }}
+        </div>
 
-    <PageLoadingState v-if="loading && overview.servers.length === 0" min-height="360px" />
+        <section class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
+          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.healthSummary') }}</span>
+            <strong class="mt-2 block text-2xl text-foreground">{{ summary.reachable }}/{{ summary.total }}</strong>
+            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.reachableHosts') }}</p>
+          </article>
+          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.capacitySummary') }}</span>
+            <strong class="mt-2 block text-2xl text-foreground">{{ summary.fresh }}/{{ summary.total }}</strong>
+            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.freshMetrics') }}</p>
+          </article>
+          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.taskSummary') }}</span>
+            <strong class="mt-2 block text-2xl text-foreground">{{ summary.updates }}</strong>
+            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.pendingUpdates') }}</p>
+          </article>
+          <article class="motion-card rounded-2xl border border-border bg-card p-4">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.securitySummary') }}</span>
+            <strong class="mt-2 block text-2xl text-foreground">{{ summary.supported }}/{{ summary.total }}</strong>
+            <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('overviewPage.supportedHosts') }}</p>
+          </article>
+        </section>
 
-    <div v-else-if="overview.servers.length === 0" class="empty-state">
-      <v-icon size="44" color="primary">mdi-server-network-off</v-icon>
-      <div>
-        <div class="text-subtitle-1 font-weight-bold">{{ t('overviewPage.noServersConnected') }}</div>
-        <div class="text-body-2 text-medium-emphasis">{{ t('overviewPage.addServerHint') }}</div>
-      </div>
-      <AppActionButton kind="primary" icon="mdi-plus" :label="t('common.addServer')" @click="router.push('/servers')" />
-    </div>
-
-    <div v-else class="dashboard-grid">
-      <v-card
-        v-for="card in cards"
-        :key="card.id"
-        class="dashboard-card"
-        :class="{
-          'dashboard-card--placeholder': card.kind === 'placeholder',
-          'dashboard-card--editing': editMode,
-          'dashboard-card--dragging': draggingCardId === card.id,
-          'dashboard-card--drag-over': dragOverCardId === card.id,
-        }"
-        variant="outlined"
-        :style="cardStyle(card)"
-        @dragover="handleCardDragOver(card.id, $event)"
-        @drop="dropCard(card.id, $event)"
-      >
-        <span v-if="card.kind !== 'placeholder'" class="card-accent" :class="`card-accent--${presetFor(card.kind).color}`" />
-        <div v-if="card.kind !== 'placeholder'" class="card-header">
-          <div class="card-title">
-            <span class="card-icon" :class="`surface-${presetFor(card.kind).color}`">
-              <v-icon size="18">{{ presetFor(card.kind).icon }}</v-icon>
-            </span>
-            <div class="min-width-0">
-              <div class="text-subtitle-2 font-weight-bold text-truncate">{{ cardTitle(card.kind) }}</div>
-              <div class="text-caption text-medium-emphasis text-truncate">
-                {{ cardServerLabel(card) }}<template v-if="isMetricCard(card)"> / {{ metricCardLabel(card) }}</template>
+        <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-card p-4">
+          <div v-if="loading && cards.length === 0" class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr))]">
+            <Skeleton v-for="item in 6" :key="item" class="h-40" />
+          </div>
+          <EmptyState v-else-if="overview.servers.length === 0" :title="t('overviewPage.noServersConnected')" :description="t('overviewPage.addServerHint')">
+            <template #actions>
+              <Button variant="primary" @click="router.push('/servers')">
+                <Server />
+                {{ t('overviewPage.addServer') }}
+              </Button>
+            </template>
+          </EmptyState>
+          <div v-else-if="editMode" class="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 max-sm:grid-cols-1">
+            <Select v-model="newCardKind" :options="kindOptions" />
+            <Button @click="addCard"><Plus />{{ t('overviewPage.addCard') }}</Button>
+            <Button variant="ghost" @click="resetCards">{{ t('overviewPage.resetCards') }}</Button>
+          </div>
+          <div v-if="saveError" class="mb-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ saveError }}</div>
+          <div v-if="overview.servers.length > 0" ref="overviewGrid" class="overview-card-grid grid min-w-0 gap-3" :class="editMode ? 'is-editing' : undefined">
+            <article
+              v-for="card in cards"
+              :key="card.id"
+              class="motion-card overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background p-4"
+              :class="[
+                card.kind === 'placeholder' ? 'border-dashed bg-muted/30' : '',
+                editMode ? 'cursor-move ring-1 ring-primary/20' : '',
+                draggingCardId === card.id ? 'opacity-45' : '',
+                dragPreviewTargetId === card.id && draggingCardId !== card.id ? 'border-primary ring-2 ring-primary/30' : '',
+              ]"
+              :style="{ '--overview-card-w': String(card.width), '--overview-card-w-tablet': String(Math.min(card.width, 3)), '--overview-card-h': String(card.height) }"
+              :draggable="editMode"
+              @dragstart="onCardDragStart(card.id, $event)"
+              @dragend="onCardDragEnd"
+              @dragover="onCardDragOver(card.id, $event)"
+              @drop.prevent="onCardDrop"
+            >
+              <div v-if="editMode" class="absolute right-3 top-3 z-10 flex items-center gap-1 rounded-xl border border-border bg-popover/95 p-1 shadow-sm">
+                <button type="button" class="grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('overviewPage.moveCard')">
+                  <Grip class="size-4" aria-hidden="true" />
+                </button>
+                <button type="button" class="grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('overviewPage.editCard')" @click.stop="openCardEditor(card.id)">
+                  <Pencil class="size-4" aria-hidden="true" />
+                </button>
+                <button type="button" class="grid size-7 place-items-center rounded-lg text-danger hover:bg-danger-bg" :title="t('overviewPage.deleteCard')" @click.stop="removeCard(card.id)">
+                  <Trash2 class="size-4" aria-hidden="true" />
+                </button>
               </div>
+              <div class="flex items-start justify-between gap-3">
+                <div class="flex min-w-0 items-center gap-3">
+                  <span class="grid size-9 place-items-center rounded-xl border border-border bg-muted text-muted-foreground">
+                    <component :is="cardIcon(card.kind)" class="size-4" aria-hidden="true" />
+                  </span>
+                  <div class="min-w-0">
+                    <h3 class="m-0 truncate text-sm font-semibold text-foreground">{{ cardTitle(card) }}</h3>
+                    <p class="m-0 mt-1 text-xs text-muted-foreground">{{ cardMeta(card) }}</p>
+                  </div>
+                </div>
+                <Badge v-if="!editMode" :tone="cardTone(card)">{{ cardErrors[card.id] ? t('overviewPage.partial') : t('overviewPage.live') }}</Badge>
+              </div>
+              <div class="overview-card-body grid min-h-0 gap-3 overflow-hidden" :class="shouldShowChart(card) ? 'is-chart-primary' : 'is-value-primary'">
+                <span v-if="cardLoading[card.id]" class="text-sm text-muted-foreground">{{ t('overviewPage.loadingCard') }}</span>
+                <span v-else-if="cardErrors[card.id]" class="line-clamp-2 text-sm leading-6 text-danger">{{ cardErrors[card.id] }}</span>
+                <template v-else>
+                  <div v-if="shouldShowChart(card) && cardChartSeries(card).length" class="overview-chart-stage min-h-0 min-w-0">
+                    <MetricLineChart
+                      :labels="cardChartLabels(card)"
+                      :series="cardChartSeries(card)"
+                      :value-kind="cardChartValueKind(card)"
+                    />
+                  </div>
+                  <div class="overview-card-value min-w-0" :class="shouldShowChart(card) ? 'is-supporting' : 'is-primary'">
+                    <span v-if="shouldShowChart(card)" class="text-xs font-medium uppercase text-muted-foreground">{{ t('overviewPage.live') }}</span>
+                    <strong class="block truncate text-foreground" :class="shouldShowChart(card) ? 'text-lg' : card.width <= 1 ? 'text-2xl' : 'text-3xl'">{{ cardValues[card.id] || derivedCardValue(card) }}</strong>
+                    <span v-if="shouldShowDetail(card) || (isMetricCard(card) && shouldShowChart(card))" class="block truncate text-xs text-muted-foreground">{{ cardSecondaryValue(card) }}</span>
+                  </div>
+                </template>
+              </div>
+              <button
+                v-if="editMode"
+                type="button"
+                class="absolute bottom-2 right-2 grid size-8 touch-none place-items-center rounded-xl border border-border bg-popover text-muted-foreground shadow-sm hover:bg-accent hover:text-foreground"
+                :title="t('overviewPage.resizeCard')"
+                @pointerdown="startResize(card, $event)"
+              >
+                <Grip class="size-4 rotate-45" aria-hidden="true" />
+              </button>
+            </article>
+          </div>
+        </section>
+      </main>
+
+      <aside class="min-h-0 min-w-0 overflow-hidden xl:sticky xl:top-0">
+        <div class="grid content-start gap-4">
+          <section class="min-w-0 rounded-2xl border border-border bg-card p-4">
+            <div class="mb-3 flex items-center justify-between">
+              <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.riskQueue') }}</h2>
+              <Badge :tone="risks.some((item) => item.tone === 'danger') ? 'danger' : risks.length ? 'warning' : 'success'">{{ risks.length }}</Badge>
             </div>
-          </div>
-          <div v-if="editMode" class="card-tools">
-            <AppActionButton
-              class="card-drag-handle"
-              kind="tool"
-              icon="mdi-drag"
-              :label="t('overviewPage.moveCard')"
-              draggable="true"
-              @dragstart="startCardDrag(card.id, $event)"
-              @dragend="endCardDrag"
-            />
-            <v-menu location="bottom end">
-              <template #activator="{ props }">
-                <AppActionButton v-bind="props" kind="tool" icon="mdi-dots-vertical" :label="t('common.more')" />
-              </template>
-              <v-list density="compact">
-                <v-list-item prepend-icon="mdi-pencil" :title="t('common.edit')" @click="openEditDialog(card)" />
-                <v-list-item prepend-icon="mdi-delete" :title="t('common.remove')" class="text-error" @click="removeCard(card.id)" />
-              </v-list>
-            </v-menu>
-          </div>
-        </div>
-
-          <div v-if="card.kind === 'placeholder' && editMode" class="placeholder-tools">
-            <AppActionButton
-              class="card-drag-handle"
-              kind="tool"
-              icon="mdi-drag"
-              :label="t('overviewPage.moveCard')"
-              draggable="true"
-              @dragstart="startCardDrag(card.id, $event)"
-              @dragend="endCardDrag"
-            />
-            <v-menu location="bottom end">
-              <template #activator="{ props }">
-                <AppActionButton v-bind="props" kind="tool" icon="mdi-dots-vertical" :label="t('common.more')" />
-              </template>
-              <v-list density="compact">
-                <v-list-item prepend-icon="mdi-pencil" :title="t('common.edit')" @click="openEditDialog(card)" />
-                <v-list-item prepend-icon="mdi-delete" :title="t('common.remove')" class="text-error" @click="removeCard(card.id)" />
-              </v-list>
-            </v-menu>
-          </div>
-
-        <div v-if="isMetricCard(card)" class="card-body chart-body">
-          <VChart class="chart" :option="chartOption(card)" autoresize />
-        </div>
-
-        <div v-else-if="card.kind === 'packageUpdates'" class="card-body message-list">
-          <div
-            v-for="server in packageRows(card)"
-            :key="server.id"
-            class="message-row"
-            @click="router.push('/resources/packages')"
-          >
-            <div>
-              <div class="font-weight-bold text-body-2">{{ server.name }}</div>
-              <div class="text-caption text-medium-emphasis">{{ t('overviewPage.lastChecked', { value: server.lastPackageRefreshAt ? formatDateTime(server.lastPackageRefreshAt) : t('common.never') }) }}</div>
+            <div v-if="risks.length" class="grid gap-2">
+              <button v-for="risk in risks" :key="risk.id" type="button" class="motion-list-item grid min-w-0 rounded-xl border border-border bg-background p-3 text-left hover:bg-accent" @click="router.push(risk.to)">
+                <div class="flex min-w-0 items-center justify-between gap-2">
+                  <strong class="truncate text-sm text-foreground">{{ risk.title }}</strong>
+                  <Badge class="shrink-0" :tone="risk.tone">{{ t(`overviewPage.risk.${risk.tone}`) }}</Badge>
+                </div>
+                <span class="mt-1 min-w-0 break-words text-xs leading-5 text-muted-foreground">{{ t(risk.description) }}</span>
+              </button>
             </div>
-            <v-chip color="warning" size="small" variant="tonal" label>{{ server.packageUpdateCount }}</v-chip>
-          </div>
-          <div v-if="packageRows(card).length === 0" class="empty-card-text">{{ t('overviewPage.noPackageUpdates') }}</div>
-        </div>
+            <p v-else class="m-0 text-sm text-muted-foreground">{{ t('overviewPage.noRisks') }}</p>
+          </section>
 
-        <div v-else-if="card.kind === 'containerUpdates'" class="card-body message-list">
-          <div
-            v-for="app in containerRows(card)"
-            :key="app.id"
-            class="message-row"
-            @click="router.push({ path: '/applications', query: { application: app.id } })"
-          >
-            <div class="min-width-0">
-              <div class="font-weight-bold text-body-2 text-truncate">{{ app.name }}</div>
-              <div class="text-caption text-medium-emphasis text-truncate">{{ targetLabel(app) }}</div>
+          <section class="min-w-0 rounded-2xl border border-border bg-card p-4">
+            <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.quickEntry') }}</h2>
+            <div class="mt-3 grid min-w-0 grid-cols-2 gap-2">
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Server class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.servers.title') }}</span></Button>
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/credentials')"><ShieldCheck class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.credentials.title') }}</span></Button>
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/resources/packages')"><Boxes class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.packages.title') }}</span></Button>
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/tasks')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.tasks.title') }}</span></Button>
             </div>
-            <v-chip :color="app.imageLastError ? 'error' : 'warning'" size="small" variant="tonal" label>
-              {{ app.imageLastError ? t('overviewPage.errorBadge') : t('overviewPage.updateBadge') }}
-            </v-chip>
-          </div>
-          <div v-if="containerRows(card).length === 0" class="empty-card-text">{{ t('overviewPage.noContainerUpdates') }}</div>
+          </section>
         </div>
-
-        <div v-else class="placeholder-card-body"></div>
-      </v-card>
+      </aside>
     </div>
 
-    <v-dialog v-model="dialog" width="640">
-      <v-card class="app-dialog-card">
-        <v-card-title class="app-dialog-title">
-          <span class="app-dialog-title-text">{{ editingCardId ? t('overviewPage.editCard') : t('overviewPage.createCard') }}</span>
-          <AppActionButton kind="tool" icon="mdi-close" :label="t('common.close')" @click="dialog = false" />
-        </v-card-title>
-        <v-divider />
-        <v-card-text class="app-dialog-body">
-          <v-select
-            v-model="form.kind"
-            :items="presetItems"
-            item-title="title"
-            item-value="kind"
-            :label="t('common.preset')"
-            variant="outlined"
-            density="comfortable"
-            class="mb-3"
-          />
-          <div class="size-grid mb-3">
-            <v-text-field v-model.number="form.width" type="number" :label="t('common.width')" min="1" max="6" variant="outlined" density="comfortable" hide-details />
-            <v-text-field v-model.number="form.height" type="number" :label="t('common.height')" min="1" max="4" variant="outlined" density="comfortable" hide-details />
+    <Dialog v-model:open="cardEditorOpen" :title="t('overviewPage.editCard')" :description="t('overviewPage.cardEditDescription')" :close-label="t('common.close')">
+      <div v-if="editingCard" class="grid gap-3">
+        <label class="grid gap-1">
+          <span class="text-xs font-medium text-muted-foreground">{{ t('common.type') }}</span>
+          <Select :model-value="editingCard.kind" :options="kindOptions" @update:model-value="updateCardKind(editingCard, $event)" />
+        </label>
+        <div class="grid grid-cols-2 gap-2">
+          <label class="grid gap-1">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardWidth') }}</span>
+            <Select :model-value="String(editingCard.width)" :options="widthOptions" @update:model-value="updateCardWidth(editingCard, $event)" />
+          </label>
+          <label class="grid gap-1">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardHeight') }}</span>
+            <Select :model-value="String(editingCard.height)" :options="heightOptions" @update:model-value="updateCardHeight(editingCard, $event)" />
+          </label>
+        </div>
+        <div class="grid gap-2" :class="editingCard.kind === 'network' ? 'grid-cols-2' : 'grid-cols-1'">
+          <label class="grid gap-1">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardRange') }}</span>
+            <Select :model-value="editingCard.range" :options="rangeOptions" @update:model-value="updateCardRange(editingCard, $event)" />
+          </label>
+          <label v-if="editingCard.kind === 'network'" class="grid gap-1">
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardDirection') }}</span>
+            <Select :model-value="editingCard.networkDirection" :options="directionOptions" @update:model-value="editingCard.networkDirection = $event as any" />
+          </label>
+        </div>
+        <div class="grid gap-2">
+          <div>
+            <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.cardServers') }}</span>
+            <p class="m-0 mt-1 text-xs leading-5 text-muted-foreground">{{ t('overviewPage.cardServersHint') }}</p>
           </div>
-          <v-select
-            v-if="presetFor(form.kind).category === 'metric'"
-            v-model="form.range"
-            :items="rangeItems"
-            :label="t('common.range')"
-            variant="outlined"
-            density="comfortable"
-            class="mb-3"
-          />
-          <div v-if="form.kind === 'network'" class="mb-3">
-            <div class="text-caption text-medium-emphasis mb-2">{{ t('common.traffic') }}</div>
-            <v-btn-toggle v-model="form.networkDirection" mandatory divided density="comfortable" class="traffic-toggle">
-              <v-btn
-                v-for="item in networkDirectionItems"
-                :key="item.value"
-                :value="item.value"
-                class="text-none"
-              >
-                {{ item.title }}
-              </v-btn>
-            </v-btn-toggle>
-          </div>
-          <v-select
-            v-if="form.kind !== 'placeholder'"
-            v-model="form.serverIds"
-            :items="serverOptions"
-            :label="t('serversPage.servers')"
-            :placeholder="t('overviewPage.allServers')"
-            variant="outlined"
-            density="comfortable"
-            multiple
-            chips
-            closable-chips
-            clearable
-            :hint="t('overviewPage.leaveEmptyServers')"
-            persistent-hint
-          />
-        </v-card-text>
-        <v-divider />
-        <v-card-actions class="app-dialog-actions">
-          <AppActionGroup context="dialog">
-            <AppActionButton kind="plain" :label="t('common.cancel')" @click="dialog = false" />
-            <AppActionButton kind="primary" :label="t('common.save')" @click="saveCard" />
-          </AppActionGroup>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-  </div>
+          <ServerMultiPicker v-model="editingCard.serverIds" :servers="serverOptions" :label="t('overviewPage.cardServers')" />
+        </div>
+      </div>
+      <template #footer>
+        <Button variant="secondary" @click="closeCardEditor">{{ t('common.close') }}</Button>
+      </template>
+    </Dialog>
+  </ConsolePage>
 </template>
 
 <style scoped>
-.overview-workspace {
-  flex: 1 1 auto;
-  min-height: 0;
-  gap: 14px;
+.overview-layout {
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.overview-actions-row {
-  justify-content: flex-end;
-  min-height: 0;
-}
-
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  grid-auto-rows: 124px;
+.overview-card-grid {
+  container-type: inline-size;
   grid-auto-flow: dense;
-  flex: 1 1 auto;
-  gap: 14px;
-  min-height: 0;
-  align-items: stretch;
-  align-content: start;
-  overflow: auto;
-  padding: 16px;
-  border: 1px solid color-mix(in srgb, var(--lp-border), transparent 8%);
-  border-radius: var(--lp-radius-lg);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 42%), transparent 52%),
-    color-mix(in srgb, var(--lp-surface), transparent 8%);
-  box-shadow: var(--lp-shadow-sm);
+  grid-auto-rows: 112px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
 }
 
-.dashboard-card {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  flex-direction: column;
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 34%), var(--lp-surface) 72%) !important;
-  border-color: color-mix(in srgb, var(--lp-border), transparent 6%) !important;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease !important;
+.overview-card {
+  grid-column: span var(--overview-card-w);
+  grid-row: span var(--overview-card-h);
 }
 
-.dashboard-card:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, rgb(var(--v-theme-primary)), var(--lp-border) 80%) !important;
+.overview-card-body.is-chart-primary {
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-content: stretch;
 }
 
-.card-accent {
-  position: absolute;
-  inset: 14px auto 14px 0;
-  width: 3px;
-  height: auto;
-  border-radius: 0 99px 99px 0;
-  opacity: 0.92;
+.overview-card-body.is-value-primary {
+  align-content: center;
 }
 
-.card-accent--primary { background: rgb(var(--v-theme-primary)); }
-.card-accent--success { background: rgb(var(--v-theme-success)); }
-.card-accent--warning { background: rgb(var(--v-theme-warning)); }
-.card-accent--info { background: rgb(var(--v-theme-info)); }
-.card-accent--secondary { background: rgb(var(--v-theme-secondary)); }
-
-.dashboard-card--placeholder {
-  background: transparent !important;
-  border-color: transparent !important;
-  box-shadow: none !important;
+.overview-chart-stage {
+  min-height: 96px;
 }
 
-.dashboard-card--editing {
-  border: 1px dashed rgba(var(--v-theme-primary), 0.55) !important;
-  background: color-mix(in srgb, var(--lp-surface), transparent 12%) !important;
-}
-
-.dashboard-card--placeholder.dashboard-card--editing {
-  background: transparent !important;
-}
-
-.dashboard-card--dragging {
-  opacity: 0.48;
-  transform: scale(0.99);
-}
-
-.dashboard-card--drag-over {
-  border-color: rgb(var(--v-theme-primary)) !important;
-  background: rgba(var(--v-theme-primary), 0.06) !important;
-}
-
-.card-tools,
-.placeholder-tools {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.placeholder-tools {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-}
-
-.card-drag-handle {
-  cursor: grab;
-}
-
-.card-drag-handle:active {
-  cursor: grabbing;
-}
-
-.placeholder-card-body {
-  flex: 1 1 auto;
-}
-
-.card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 13px 14px 8px 16px;
-  flex: 0 0 auto;
-}
-
-.card-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
-.card-icon {
+.overview-card-value.is-supporting {
   display: grid;
-  place-items: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 8px;
-  flex: 0 0 auto;
-  transition: transform 0.18s ease;
-}
-
-.dashboard-card:hover .card-icon {
-  transform: translateY(-1px);
-}
-
-.surface-primary { color: rgb(var(--v-theme-primary)); background: rgba(var(--v-theme-primary), 0.1); }
-.surface-success { color: rgb(var(--v-theme-success)); background: rgba(var(--v-theme-success), 0.1); }
-.surface-warning { color: rgb(var(--v-theme-warning)); background: rgba(var(--v-theme-warning), 0.12); }
-.surface-info { color: rgb(var(--v-theme-info)); background: rgba(var(--v-theme-info), 0.1); }
-
-.card-body {
-  min-height: 0;
-  flex: 1 1 auto;
-  padding: 0 14px 14px 16px;
-  overflow: auto;
-}
-
-.chart-body {
-  display: flex;
-  flex-direction: column;
-}
-
-.chart {
-  width: 100%;
-  min-height: 0;
-  flex: 1 1 auto;
-}
-
-.message-list {
-  display: grid;
-  align-content: start;
+  grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr);
+  align-items: baseline;
   gap: 8px;
 }
 
-.message-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  padding: 10px;
-  border: 1px solid var(--lp-border);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--lp-surface-container), transparent 30%);
-  cursor: pointer;
-  transition: background-color 0.16s ease, border-color 0.16s ease, transform 0.16s ease;
+.overview-card-value.is-supporting strong {
+  line-height: 1.1;
 }
 
-.message-row:hover {
-  border-color: rgba(var(--v-theme-primary), 0.24);
-  background: rgba(var(--v-theme-primary), 0.05);
-  transform: translateX(2px);
-}
-
-.empty-card-text {
-  display: grid;
-  place-items: center;
-  min-height: 84px;
-  color: var(--lp-text-muted);
-  font-size: 0.88rem;
-}
-
-.empty-state {
-  flex: 1 1 auto;
-  min-height: 360px;
-  border: 1px solid var(--lp-border);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--lp-surface-container), transparent 24%), var(--lp-surface));
-  box-shadow: var(--lp-shadow-sm);
-}
-
-.size-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.traffic-toggle {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  width: 100%;
-}
-
-.min-width-0 {
+.overview-card-value.is-supporting span:last-child {
   min-width: 0;
 }
 
-@media (max-width: 1180px) {
-  .overview-actions-row {
-    grid-template-columns: 1fr;
-  }
+.overview-card-value.is-primary {
+  display: block;
+}
 
-  .dashboard-grid {
+@media (max-width: 1024px) {
+  .overview-card-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
-  .dashboard-card {
-    grid-column: span 3 !important;
+  .overview-card {
+    grid-column: span var(--overview-card-w-tablet);
   }
 }
 
-@media (max-width: 760px) {
-  .overview-workspace,
-  .dashboard-grid {
-    flex: none;
-    min-height: auto;
+@media (min-width: 1280px) {
+  .overview-layout {
+    grid-template-columns: minmax(0, 1fr) minmax(220px, min(28%, 320px));
   }
+}
 
-  .dashboard-grid {
+@media (max-width: 640px) {
+  .overview-card-grid {
+    grid-auto-rows: 108px;
     grid-template-columns: 1fr;
-    grid-auto-rows: 150px;
-    overflow: visible;
-    padding-right: 0;
   }
 
-  .dashboard-card {
-    grid-column: span 1 !important;
+  .overview-card {
+    grid-column: span 1;
   }
 
-  .size-grid {
-    grid-template-columns: 1fr;
+  .overview-card-value.is-supporting {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2px;
   }
 }
 </style>

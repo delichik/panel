@@ -11,18 +11,18 @@
 - Agent Docker Engine API：`internal/agent/docker/`；Agent gRPC service：`internal/agent/rpc/`
 - Application 运行时：`internal/modules/applications/service.go`
 - 周期任务：`internal/modules/containers/tasks.go`，由 `internal/modules/tasks/` 内部 worker 驱动
-- 前端资源页面：`web/src/views/resources/`
-- 前端设施应用页面：`web/src/views/applications/facility-apps/`
+- 前端资源页面（v4 阶段 4A）：`web/src/views/resources/index.vue`，纯函数在 `web/src/views/resources/model.ts`，API 在 `web/src/api/containers.ts` 与 `web/src/api/packages.ts`。
+- 前端设施应用页面：`web/src/views/applications/index.vue` 的 `/applications/facility-apps` 目录、`/:facilityKind` 详情和 `/:facilityKind/config` 配置三层 renderer。
 - 前端 API：`web/src/api/containerization.ts`、`web/src/api/facilityApps.ts`
 
 ## 页面与 API
 
 菜单上容器相关能力拆分为“资源”和“应用”两个一级分组：资源包含容器、镜像、网络和卷；应用包含普通应用和设施应用。容器、镜像、网络、卷使用左侧服务器选择器和右侧内部滚动列表。
 
-资源页右侧内容应统一为表格工作面：主从外层由 `ResourcePage.vue` 复用 `AppMasterDetailWorkspace.vue`，当前服务器上下文头由 `ResourcePage.vue` 提供，slot 内先渲染固定高度标题/操作区，再用内部滚动的表格正文承载 `v-table`。容器、镜像、网络和卷必须保持同一结构，不要把裸 `v-table` 直接放进资源页 slot，也不要把多个主操作和危险批量操作全部挤在标题右侧；保留主要动作，次要或危险批量动作收进更多菜单，并用标准 `app-dialog-*` 对话框确认。标题、批量菜单和行操作使用 `AppActionButton` / `AppActionGroup`，行尾操作不得退回纯图标删除。
+资源页为服务器上下文资源维护台，外层左侧选择服务器、右侧为内部滚动工作区。软件包、容器、镜像、网络和卷可以复用同一个资源上下文，但必须保持不同的信息架构和操作闭环，不得退回同质通用列表。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
 
-- 设施应用页面当前管理内置“反向代理”设施应用。只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。
-- 容器支持查询、查看日志、启动、停止、重启、删除；表格行操作沿用统一的 `app-table-actions` 或 `AppActionGroup context="table"` 操作组，日志入口与其他行操作使用带图标的小型文字按钮。
+- 设施应用页面必须先呈现设施目录；内置“反向代理”只是当前唯一设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。
+- 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
 - 网络只读。
 - 卷支持查询、单个删除和批量删除未使用卷，必须展示使用状态；批量删除执行时需重新查询使用状态，只删除执行瞬间仍未使用的卷。
@@ -127,8 +127,8 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 
 - The reverse proxy facility app is presented in the frontend as an entrance gateway. Deployment servers are called gateway nodes in this context because selecting them means those nodes listen on 80/443 and process application routes plus static sites.
 - The entrance gateway owns the Panel access entry. `panelEntry` is a system route, not a normal static site row: it is locked to the singleton Panel host registered by `panel setup`, and that host must remain a global gateway node. Host-network gateways use `127.0.0.1:8080`; bridge-network gateways use `host.docker.internal:8080`.
-- The facility detail page is read-only. It uses `AppDetailPanel`, exposes only immediate sync and the link to the dedicated reverse-proxy configuration route, and must not render editable gateway, domain, path, Panel-entry, or asset controls.
-- Entrance gateway routes are edited on the hidden full-page route `/applications/facility-apps/reverse-proxy/config` as `domains` with nested paths. The configuration page contains only editable facility settings; application routes remain read-only on the facility detail page.
+- The facility catalog page lists facility apps first. The reverse-proxy facility detail page is read-only, exposes immediate sync and the link to `/applications/facility-apps/reverse-proxy/config`, and must not render editable gateway, domain, path, Panel-entry, or asset controls.
+- Entrance gateway routes are edited on the facility configuration route `/applications/facility-apps/:facilityKind/config` with `facilityKind=reverse-proxy` as `domains` with nested paths. The configuration page contains only editable facility settings; application routes remain read-only on the facility detail page.
 - Origin selection and AnyAccess are edited at domain level. A path row does not expose its own node selector. Origins are required and are chosen only from the current global gateway nodes.
 - Each path route can be static content, a redirect, or a manual proxy_pass. The route row displays route-specific fields only; HTTPS status belongs to the domain group header because certificates are matched by domain, not by path.
 - A static route points at either a target-node server directory, one uploaded file, or an uploaded folder archive. Server directories and uploaded folder archives are treated as directory trees, so one route path can serve multiple files below that path.

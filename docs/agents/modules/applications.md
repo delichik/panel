@@ -19,14 +19,12 @@
 
 ## 前端入口
 
-- 应用列表：`web/src/views/applications/apps/index.vue`
-- 创建/编辑应用隐藏页：`web/src/views/applications/apps/create.vue`
-- 编辑器：`web/src/views/applications/apps/ApplicationEditor.vue`
-- 详情：`web/src/views/applications/apps/ApplicationDetail.vue`
-- 运行时面板：`web/src/views/applications/apps/ApplicationRuntimePanel.vue`
-- 日志弹窗：`web/src/components/RuntimeLogsDialog.vue`
+- 应用 + 设施应用页面族（v4 阶段 5）：`web/src/views/applications/index.vue`
+- 页面派生逻辑和草稿校验：`web/src/views/applications/model.ts`
 - API：`web/src/api/applications.ts`
-- 类型：`web/src/types/api.ts`
+- 设施应用 API：`web/src/api/facilityApps.ts`
+- 类型：`web/src/types/applications.ts`、`web/src/types/facilityApps.ts`
+- Mock：`web/src/mocks/applications.ts`，由 `web/src/mocks/browser.ts` 挂载同名正式路径。
 
 ## API 范围
 
@@ -40,6 +38,7 @@
 - 打包：`GET /api/v1/applications/{id}/package`
 - 持久化数据：`GET /api/v1/applications/{id}/persistent-data` 下载，`POST /api/v1/applications/{id}/persistent-data` 上传 zip 覆盖并重启
 - 模板目录：`GET /api/v1/application-template-catalog`
+- 前端 v4 应用页已将持久化数据下载接为 blob 下载，将恢复接为 multipart 上传；应用 edit-session 文件夹归档上传走 `POST /api/v1/application-edit-sessions/{id}/archives`，设施入口静态资产上传走 `PUT /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetKey}`。
 
 ## 校验错误
 
@@ -105,16 +104,19 @@
 - `ApplicationEditor.vue` 的可视化编辑只维护 appspec `command` 有序数组。每一行是一个 argv 项，编辑器不得按空格拆分用户输入。
 - `command` 表示完整容器命令数组，包含可执行文件、flag 和参数值；运行时写入 Docker `Cmd`，不得翻译成 `Entrypoint`。
 - 后端 appspec 校验允许多个非空 `command` 项，空 command 项会正规化为未设置，避免不填写 command 时阻塞保存。
-- 应用编辑器包含可视化和 YAML 两个标签页。可视化页是单页分区表单：标准短字段使用双列网格，端口映射保持全宽重复行，复杂挂载目标和反向代理规则使用摘要列表承载，便于阅读密集网络和存储设置。
+- 应用编辑器使用隐藏独立 `EditorPage`：顶部步骤工作区展示身份、运行时来源、网络、存储、部署、文件/资产的完成度/错误，主体展示当前配置意图面板，右侧 sticky 摘要展示创建检查、变更数量、会话状态和诊断。创建页强调名称、镜像、端口的最短发布路径；编辑页强调当前运行状态和变更摘要。
+- 应用编辑器的可视化草稿必须是结构化数据，不得把变量、环境变量、部署服务器、端口、挂载或反向代理规则压成 JSON/多行文本作为主要交互。复杂重复项使用“摘要列表 + 新增/编辑对话框 + 删除确认”，对话框内使用独立克隆草稿，取消不得污染主草稿。
 - 应用反向代理规则对话框必须通过明确 DTO 克隆函数创建独立草稿，不能对 Vue reactive Proxy 直接调用 `structuredClone`；只有点击保存才替换 `form.reverseProxy` 中对应规则，新建或编辑后取消不得留下空规则、空 Path 或高级选项修改。每个 Path 的高级字段复用 `RoutePathAdvancedFields.vue`。
 - 应用反向代理规则使用 `originServerIds` 和 `anyAccess`。源站候选必须同时属于应用部署节点和设施全局网关节点；后端保存时重新校验。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
 - 应用反向代理域名在设施路由、其他应用代理规则和 Panel 入口之间全局唯一；同一规则下可配置多个 Path，不允许通过多个所有者共享域名。
 - 应用详情的“反向代理路由”分区只读展示源站、AnyAccess、流量策略、主源站和每个 Path 的高级设置。
 - 应用编辑器可视化页必须往返保存 appspec `capAdd` 列表；输入项保存时按 Docker capability 稳定值大写化，不保存翻译文案。
 - 应用编辑器的可视化挂载区在页面正文只展示挂载摘要列表：类型、来源、容器路径、只读状态以及编辑/删除动作。新增或编辑挂载必须打开对话框承载完整字段，包含 Docker 只读挂载开关，以及按类型可用的节点文件权限字段：`file` / `panel_file` / `persistent` 支持 `uid`、`gid`，`file` 支持“可执行”开关，`persistent` 支持任意 `mode`，`panel_file` 不显示 mode。
-- 应用编辑器支持对话框和页面嵌入两种外壳；普通应用创建和编辑都使用隐藏独立页嵌入同一编辑器主体，详情页编辑不再打开对话框。页面嵌入模式不得重复渲染标题，必须保留分区导航；中大屏下编辑表单列使用 `minmax(0, 1fr)` 吃满右侧剩余宽度，不为整张表单设置固定最大宽度。嵌入模式的右侧分区是单一工作面内的正文分段，不得在外层编辑卡片内再为每个分区加同等级边框、圆角、阴影或渐变背景。YAML 不得作为和基础表单并列的 tab，也不得用弹窗打断创建/编辑页流程，必须作为页面内高级分区编辑。应用文件新增、模板编辑和二进制替换使用编辑器内的聚焦对话框，主表单只保留文件列表、待上传压缩包提示和入口按钮；新增文件可选择模板/二进制类型，编辑模板或覆盖二进制时必须锁定原类型。端口、挂载和反向代理等复杂重复行在中等宽度下必须提前折叠为单列，避免多个字段、说明文本和操作按钮被挤在一行。
-- `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML 编辑；可视化页也要继续提供挂载编辑入口并与 YAML 往返同步。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入 YAML 编辑。
-- YAML 标签页只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须作为两个标签页共享的表单区展示，不能只出现在可视化页。
+- 普通应用创建和编辑都使用隐藏独立页，不再从详情页打开编辑对话框。页面级滚动必须限制在编辑正文内部；中大屏下外层容器填满全局页头外剩余视口。应用文件新增、模板编辑和二进制替换使用编辑器内的聚焦对话框，主表单只保留文件列表和入口按钮；新增文件可选择模板/二进制类型，编辑模板或覆盖二进制时必须锁定原类型。端口、挂载、反向代理、变量等复杂重复行在中等宽度下折叠为单列，避免字段、说明和操作按钮挤压。
+- 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询 recoverable 草稿，首次修改后懒创建会话；草稿 patch 和文件操作串行携带 revision。保存主流程为本地校验 → 服务端 validate → preview → commit，提交期间禁用离开和重复提交；commit 成功只表示配置保存并请求应用，部署完成仍通过任务中心和运行时区观察。
+- v3 编辑页有路由离开和浏览器关闭保护；离开默认保留可恢复草稿，取消按钮会显式 discard 当前会话后返回列表。
+- `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML source 编辑；结构化页也要继续提供挂载编辑入口并与源码往返同步。源码视图不是第二个高级配置区，只能提供“重新生成源码”和“应用到草稿”两个同步动作；校验失败要定位到源码视图。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入源码编辑。
+- YAML source 只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须留在结构化面板与保存输入中，不能只出现在 YAML source 内。
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`command` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
 - 应用同步由 planner 创建 lifecycle operation 与 per-server target；HTTP 同步入口只启用应用并触发协调。deployment dispatcher 在 target 被条件 claim 后创建私有 `application_target_apply|stop|purge` 任务作为执行和日志锚点，不再由 collector 创建 `application_target_batch` 父任务或目标子任务。每个目标任务只能处理一个应用在一个服务器上的一个动作，并使用 `application:target:<appId>:<serverId>` 的 `ConcurrencyResourceQueue` key；同一 app/server 的 apply、stop、purge 是否可创建由 lifecycle target planner 决定，任务队列只负责执行期串行。planner 先创建 lifecycle operation 和 `ready` target，并由 dispatcher 把 lifecycle operation/target ID 写入目标任务参数；目标任务只更新自己的 target，aggregation worker 负责把聚合状态收敛为 deployed、failed 或 partially_deployed。Agent 返回“already has requested state”这类已达到目标状态的 stop/purge 响应时必须按幂等成功处理，不能把该目标标为失败并进入下一轮协调。
 - `application_refresh` 和 `application_image_update` executor 自身已经占用应用生命周期并发 key；在任务框架支持“当前生命周期任务完成后触发协调”前，这两个 executor 仍可在任务内部直接执行 runtime apply，以避免在 executor 内创建同应用目标任务被并发准入阻塞。HTTP 保存、同步、停用、删除和设施应用保存不得使用该例外。
@@ -146,9 +148,11 @@
 
 ## Application Create Editor UX
 
-- The embedded create-application editor exposes AppSpec as a mode switch: visual mode edits runtime, network, and mounts; YAML mode replaces those visual AppSpec blocks for advanced users. Do not render YAML as a separate block that coexists with runtime/network/mounts.
-- Application name, enabled state, deployment targets, reverse proxy rules, custom variables, and application files are application-level fields outside AppSpec YAML. They must remain visible in both visual and YAML AppSpec modes.
-- YAML editing in the create page should use a code-editor-like surface with line numbers, monospace text, internal scrolling, and variable insertion. It must not be a modal and should not appear as an ordinary form textarea.
+- The application create/edit workspace uses a top step rail and intent panels instead of the old left section list. The structured panels are Identity, Runtime source, Networking, Storage, Deployment, and Files/Assets.
+- AppSpec has exactly one source editor, labelled `YAML source` / `源码`. Do not reintroduce separate `Advanced YAML` and `YAML` entry points. Source editing is an alternate view of the same draft: structured edits regenerate source, and manual source edits must be applied back to the structured draft before commit.
+- Structured editing must remain complete. Image, command, env, ports, mounts, reverse proxy, deployment targets, and session files cannot be hidden behind YAML-only editing.
+- Application name, enabled state, deployment targets, reverse proxy rules, custom variables, and application files are application-level fields outside AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
+- The editor must preserve local validation, patch draft, validate, preview, commit, dirty guard, and recoverable session behavior. File mutations still use application edit-session file/archive endpoints.
 
 ## Durable Application Edit Sessions
 
@@ -162,6 +166,10 @@
 - Validation refreshes the session idle TTL. Periodic cleanup acts as the recovery worker for expired commit leases even when no client performs a session GET, removes expired/terminal workspaces, and cleans abandoned `.partial` files, unreferenced blobs, and workspace directories that no longer have a database session row. Orphan candidates require at least one hour of staleness; a workspace without a database row is removed only when both the directory and every contained file are stale, because directory timestamps alone cannot distinguish an abandoned workspace from `BeginEditSession` or an upload that has not committed its database row yet. A live commit lease always protects its workspace.
 - Configuration persistence and apply/reconcile dispatch are separate outcomes. If application rows/files were committed but lifecycle or reverse-proxy dispatch fails, the session is finalized as `committed` with an `application_apply_request_failed` warning. Commit recovery verifies the exact persisted draft and file set before finalizing. If persistence is observable through the reserved create ID or a newer application version but later changes prevent exact verification, recovery moves the session to `conflict` with `commit_outcome_ambiguous`; it must never reset such a session to `active` or create/apply it twice.
 - Facility reverse-proxy editing uses its own `facility_edit_sessions`, asset, operation, manifest, and config-version contract documented in `containerization.md`; it must not reuse application edit-session rows or expose the hidden `facility-reverse-proxy` application as the editable resource. Both commit adapters separate durable configuration success from the later application reconcile request.
+- 前端设施应用必须按目录/详情/配置三层建模：`/applications/facility-apps` 展示 `FacilityAppSummary[]` 设施目录，`/applications/facility-apps/:facilityKind` 展示设施详情，`/applications/facility-apps/:facilityKind/config` 展示设施自己的配置 renderer。入口代理只是当前唯一 `facilityKind=reverse-proxy` 的设施项；新增设施类型时应新增 summary/detail/config renderer，而不是把设施应用菜单改成某个设施的详情页。
+- 前端 `facilityAppsApi` 对页面暴露 `listFacilities`、`getFacility`、`reconcileFacility`、`beginFacilityEdit` 等域语义，内部 adapter 才映射到当前 `/api/v1/facility-apps/reverse-proxy` 后端路径。页面不得直接以 reverse-proxy 方法承担“设施应用”目录语义；未知 `facilityKind` 应显示本地化不可用空态。
+- 前端入口代理设施配置页必须是独立编辑工作区：左侧展示网关节点、域名组、Panel 入口、静态资产分区和域名列表，中间按域名/Path/Panel/资产分区编辑，右侧 sticky 摘要展示新增、修改、删除数量与诊断。域名、Path、静态资产和 Panel 入口不得合并成 JSON 大文本框。
+- 设施域名和 Path 编辑使用“列表 + 对话框”模式：域名对话框编辑域名和源站节点，Path 对话框按 `static` / `redirect` / `proxy_pass` 展示不同字段；复杂项取消时不得污染主草稿。保存仍走 `/api/v1/facility-apps/reverse-proxy/edit-sessions/*` 的 patch、validate、preview、commit 路径，不新增 mock-only endpoint。
 
 ## Managed Facility Application Identity
 

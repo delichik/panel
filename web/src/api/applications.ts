@@ -1,133 +1,157 @@
-import { apiClient, type ApiClient } from './client';
+import { apiClient } from './client';
+import { ApiError, type ApiEnvelope, authHeaders } from './client';
+import { fetchDownload, type DownloadResult } from './download';
 import type {
   ApplicationDto,
-  ApplicationFileDeleteDto,
-  ApplicationFileDto,
-  ApplicationFileSaveDto,
-  ApplicationLogsDto,
-  ApplicationOperationDto,
-  ApplicationPlanDto,
-  ApplicationRuntimeDto,
-  ApplicationSaveDto,
-  ApplicationSaveSessionBeginDto,
-  ApplicationSaveSessionDto,
-  ApplicationTemplateCatalogDto,
-  ApplicationValidationDto,
-} from '@/types/api';
+  ApplicationEditCommitResult,
+  ApplicationEditPreviewResult,
+  ApplicationEditSession,
+  ApplicationEditValidationResult,
+  ApplicationRuntime,
+  ApplicationSaveInput,
+  LogResult,
+  OperationResult,
+} from '@/types/applications';
 
-export interface ApplicationLogsInput {
-  instanceId: string;
-  containerName?: string;
-  type?: string;
-  tail?: number;
+function id(value: string) {
+  return encodeURIComponent(value);
 }
 
-function applicationPath(applicationId: string) {
-  return `/applications/${encodeURIComponent(applicationId)}`;
+function key() {
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
-function logsPath(applicationId: string, input: ApplicationLogsInput) {
-  const params = new URLSearchParams();
-  params.set('instanceId', input.instanceId);
-  if (input.containerName) params.set('containerName', input.containerName);
-  if (input.type) params.set('type', input.type);
-  if (input.tail) params.set('tail', String(input.tail));
-  return `${applicationPath(applicationId)}/logs?${params.toString()}`;
+async function deleteJson<T>(path: string, body: unknown, idempotencyKey = key()): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    method: 'DELETE',
+    headers: authHeaders({ Accept: 'application/json', 'Content-Type': 'application/json', 'Idempotency-Key': idempotencyKey }),
+    body: JSON.stringify(body),
+  });
+  if (response.status === 204) return undefined as T;
+  const envelope = await response.json().catch((error: unknown) => {
+    throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
+  }) as ApiEnvelope<T>;
+  if (!response.ok || envelope.error) {
+    const payload = envelope.error ?? {};
+    throw new ApiError(payload.message ?? `Request failed with status ${response.status}.`, response.status, payload.code ?? 'api_error', payload.details);
+  }
+  if (!('data' in envelope)) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
+  return envelope.data as T;
 }
 
-export function createApplicationsApi(client: ApiClient = apiClient) {
-  return {
-    list() {
-      return client.get<ApplicationDto[]>('/applications');
-    },
-    templateCatalog() {
-      return client.get<ApplicationTemplateCatalogDto>('/application-template-catalog');
-    },
-    create(input: ApplicationSaveDto) {
-      return client.post<ApplicationDto>('/applications', input);
-    },
-    get(applicationId: string) {
-      return client.get<ApplicationDto>(applicationPath(applicationId));
-    },
-    update(applicationId: string, input: ApplicationSaveDto) {
-      return client.put<ApplicationDto>(applicationPath(applicationId), input);
-    },
-    delete(applicationId: string) {
-      return client.delete(applicationPath(applicationId));
-    },
-    files(applicationId: string) {
-      return client.get<ApplicationFileDto[]>(`${applicationPath(applicationId)}/files`);
-    },
-    getFile(applicationId: string, fileId: string) {
-      return client.get<ApplicationFileDto>(`${applicationPath(applicationId)}/files/${encodeURIComponent(fileId)}`);
-    },
-    saveFile(applicationId: string, input: ApplicationFileSaveDto) {
-      return client.post<ApplicationFileDto>(`${applicationPath(applicationId)}/files`, input);
-    },
-    deleteFile(applicationId: string, fileId: string) {
-      return client.delete(`${applicationPath(applicationId)}/files/${encodeURIComponent(fileId)}`);
-    },
-    beginSaveSession(input: ApplicationSaveSessionBeginDto) {
-      return client.post<ApplicationSaveSessionDto>('/application-save-sessions', input);
-    },
-    uploadSaveSessionFile(sessionId: string, input: ApplicationFileSaveDto) {
-      return client.post<ApplicationFileDto>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files`, input);
-    },
-    uploadSaveSessionArchive(sessionId: string, input: { basePath: string; kind: string; file: File }) {
-      const form = new FormData();
-      form.set('basePath', input.basePath);
-      form.set('kind', input.kind);
-      form.set('file', input.file);
-      return client.postForm<ApplicationFileDto[]>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files/archive`, form);
-    },
-    deleteSaveSessionFile(sessionId: string, input: ApplicationFileDeleteDto) {
-      return client.post<void>(`/application-save-sessions/${encodeURIComponent(sessionId)}/files/delete`, input);
-    },
-    commitSaveSession(sessionId: string) {
-      return client.post<ApplicationDto>(`/application-save-sessions/${encodeURIComponent(sessionId)}/commit`);
-    },
-    package(applicationId: string) {
-      return client.download(`${applicationPath(applicationId)}/package`);
-    },
-    persistentData(applicationId: string) {
-      return client.download(`${applicationPath(applicationId)}/persistent-data`);
-    },
-    restorePersistentData(applicationId: string, file: File) {
-      const form = new FormData();
-      form.set('file', file);
-      return client.postForm<ApplicationOperationDto>(`${applicationPath(applicationId)}/persistent-data`, form);
-    },
-    validate(applicationId: string) {
-      return client.post<ApplicationValidationDto>(`${applicationPath(applicationId)}/validate`);
-    },
-    plan(applicationId: string) {
-      return client.post<ApplicationPlanDto>(`${applicationPath(applicationId)}/plan`);
-    },
-    checkImage(applicationId: string) {
-      return client.post<ApplicationDto>(`${applicationPath(applicationId)}/image/check`);
-    },
-    updateImage(applicationId: string) {
-      return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/image/update`);
-    },
-    deploy(applicationId: string) {
-      return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/deploy`);
-    },
-    migrate(applicationId: string, sourceServerId: string, targetServerId: string) {
-      return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/migrate`, { sourceServerId, targetServerId });
-    },
-    stop(applicationId: string) {
-      return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/stop`);
-    },
-    restart(applicationId: string) {
-      return client.post<ApplicationOperationDto>(`${applicationPath(applicationId)}/restart`);
-    },
-    runtime(applicationId: string) {
-      return client.get<ApplicationRuntimeDto>(`${applicationPath(applicationId)}/runtime`);
-    },
-    logs(applicationId: string, input: ApplicationLogsInput) {
-      return client.get<ApplicationLogsDto>(logsPath(applicationId, input));
-    },
-  };
+async function multipartJson<T>(path: string, form: FormData, idempotencyKey = key()): Promise<T> {
+  const response = await fetch(`/api/v1${path}`, {
+    method: 'POST',
+    headers: authHeaders({ Accept: 'application/json', 'Idempotency-Key': idempotencyKey }),
+    body: form,
+  });
+  const envelope = await response.json().catch((error: unknown) => {
+    throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
+  }) as ApiEnvelope<T>;
+  if (!response.ok || envelope.error) {
+    const payload = envelope.error ?? {};
+    throw new ApiError(payload.message ?? `Request failed with status ${response.status}.`, response.status, payload.code ?? 'api_error', payload.details);
+  }
+  if (!('data' in envelope)) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
+  return envelope.data as T;
 }
 
-export const applicationsApi = createApplicationsApi();
+export const applicationsApi = {
+  list() {
+    return apiClient.get<ApplicationDto[]>('/applications');
+  },
+  get(applicationId: string) {
+    return apiClient.get<ApplicationDto>(`/applications/${id(applicationId)}`);
+  },
+  delete(applicationId: string) {
+    return apiClient.delete<void>(`/applications/${id(applicationId)}`);
+  },
+  checkImage(applicationId: string) {
+    return apiClient.post<ApplicationDto>(`/applications/${id(applicationId)}/image/check`);
+  },
+  updateImage(applicationId: string) {
+    return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/image/update`);
+  },
+  deploy(applicationId: string) {
+    return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/deploy`);
+  },
+  stop(applicationId: string, purge = false) {
+    return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/stop${purge ? '?purge=true' : ''}`);
+  },
+  restart(applicationId: string) {
+    return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/restart`);
+  },
+  runtime(applicationId: string) {
+    return apiClient.get<ApplicationRuntime>(`/applications/${id(applicationId)}/runtime`);
+  },
+  logs(applicationId: string, params: { instanceId?: string; containerName?: string; type?: string; tail?: number } = {}) {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([name, value]) => {
+      if (value !== undefined && value !== '') query.set(name, String(value));
+    });
+    return apiClient.get<LogResult>(`/applications/${id(applicationId)}/logs${query.size ? `?${query}` : ''}`);
+  },
+  downloadPersistentData(applicationId: string): Promise<DownloadResult> {
+    return fetchDownload(`/api/v1/applications/${id(applicationId)}/persistent-data`, {}, `${applicationId}-persistent.zip`);
+  },
+  restorePersistentData(applicationId: string, file: File) {
+    const form = new FormData();
+    form.set('file', file);
+    return multipartJson<OperationResult>(`/applications/${id(applicationId)}/persistent-data`, form);
+  },
+  beginEditSession(applicationId?: string, draft?: ApplicationSaveInput) {
+    return apiClient.post<ApplicationEditSession>('/application-edit-sessions', {
+      applicationId,
+      clientDraftKey: applicationId ? `application:${applicationId}` : 'application:create',
+      draft,
+    });
+  },
+  recoverableEditSessions(applicationId?: string) {
+    const query = new URLSearchParams();
+    query.set('clientDraftKey', applicationId ? `application:${applicationId}` : 'application:create');
+    if (applicationId) query.set('applicationId', applicationId);
+    return apiClient.get<ApplicationEditSession[]>(`/application-edit-sessions/recoverable?${query}`);
+  },
+  patchEditSession(sessionId: string, revision: number, draft: ApplicationSaveInput) {
+    return apiClient.patch<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/draft`, { revision, draft });
+  },
+  putEditSessionFile(sessionId: string, fileKey: string, revision: number, input: { path: string; kind: string; contentType: string; contentBase64: string }) {
+    return apiClient.put<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}`, {
+      revision,
+      clientOperationId: key(),
+      ...input,
+    }, { headers: { 'Idempotency-Key': key() } });
+  },
+  uploadEditSessionArchive(sessionId: string, revision: number, input: { file: File; fileKey: string; basePath: string; kind: string }) {
+    const form = new FormData();
+    form.set('file', input.file);
+    form.set('revision', String(revision));
+    form.set('clientOperationId', key());
+    form.set('fileKey', input.fileKey);
+    form.set('basePath', input.basePath);
+    form.set('kind', input.kind);
+    return multipartJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/archives`, form);
+  },
+  deleteEditSessionFile(sessionId: string, fileKey: string, revision: number) {
+    return deleteJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}`, {
+      revision,
+      clientOperationId: key(),
+    });
+  },
+  validateEditSession(sessionId: string, revision: number) {
+    return apiClient.post<ApplicationEditValidationResult>(`/application-edit-sessions/${id(sessionId)}/validate`, { revision });
+  },
+  previewEditSession(sessionId: string, revision: number) {
+    return apiClient.post<ApplicationEditPreviewResult>(`/application-edit-sessions/${id(sessionId)}/preview`, { revision });
+  },
+  commitEditSession(session: ApplicationEditSession, preview: ApplicationEditPreviewResult) {
+    return apiClient.post<ApplicationEditCommitResult>(`/application-edit-sessions/${id(session.id)}/commit`, {
+      revision: session.revision,
+      baseResourceVersion: session.baseResourceVersion.value,
+      previewToken: preview.token.value,
+    }, { headers: { 'Idempotency-Key': key() } });
+  },
+  discardEditSession(sessionId: string) {
+    return apiClient.delete<void>(`/application-edit-sessions/${id(sessionId)}`);
+  },
+};

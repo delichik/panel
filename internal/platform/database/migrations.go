@@ -339,7 +339,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			domain_id TEXT NOT NULL DEFAULT '',
 			domain TEXT NOT NULL,
 			prefix TEXT NOT NULL DEFAULT '@',
-			scope TEXT NOT NULL CHECK(scope IN ('single','wildcard')),
+			scope TEXT NOT NULL CHECK(scope IN ('single','wildcard','prefixes')),
 			domains_json TEXT NOT NULL DEFAULT '[]',
 			variable_name TEXT NOT NULL UNIQUE,
 			certificate_path TEXT NOT NULL,
@@ -670,6 +670,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"auto_renew":    "INTEGER NOT NULL DEFAULT 1",
 		"next_renew_at": "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
+		return err
+	}
+	if err := s.migrateCertificateScopeConstraint(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "dns_domains", map[string]string{
@@ -1192,6 +1195,63 @@ func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, `ALTER TABLE facility_app_configs_new RENAME TO facility_app_configs`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) migrateCertificateScopeConstraint(ctx context.Context) error {
+	var createSQL string
+	if err := s.appDB.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='certificates'`).Scan(&createSQL); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if strings.Contains(createSQL, "'prefixes'") {
+		return nil
+	}
+	if _, err := s.appDB.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+		return err
+	}
+	defer s.appDB.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
+	tx, err := s.appDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE certificates_new (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		domain_id TEXT NOT NULL DEFAULT '',
+		domain TEXT NOT NULL,
+		prefix TEXT NOT NULL DEFAULT '@',
+		scope TEXT NOT NULL CHECK(scope IN ('single','wildcard','prefixes')),
+		domains_json TEXT NOT NULL DEFAULT '[]',
+		variable_name TEXT NOT NULL UNIQUE,
+		certificate_path TEXT NOT NULL,
+		private_key_path TEXT NOT NULL,
+		issuer TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		last_error TEXT NOT NULL DEFAULT '',
+		auto_renew INTEGER NOT NULL DEFAULT 1,
+		next_renew_at TEXT NOT NULL DEFAULT '',
+		not_before TEXT NOT NULL DEFAULT '',
+		not_after TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL,
+		FOREIGN KEY(domain_id) REFERENCES dns_domains(id)
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO certificates_new(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at)
+		SELECT id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at FROM certificates`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE certificates`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE certificates_new RENAME TO certificates`); err != nil {
 		return err
 	}
 	return tx.Commit()

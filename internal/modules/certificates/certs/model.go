@@ -5,6 +5,7 @@ import "time"
 const (
 	ScopeSingle   = "single"
 	ScopeWildcard = "wildcard"
+	ScopePrefixes = "prefixes"
 
 	StatusPending = "pending"
 	StatusIssuing = "issuing"
@@ -69,11 +70,12 @@ type SelfSignedLeafRequest struct {
 }
 
 type IssueRequest struct {
-	Name         string `json:"name"`
-	DomainID     string `json:"domainId"`
-	Prefix       string `json:"prefix"`
-	Scope        string `json:"scope"`
-	VariableName string `json:"variableName"`
+	Name         string   `json:"name"`
+	DomainID     string   `json:"domainId"`
+	Prefix       string   `json:"prefix"`
+	Prefixes     []string `json:"prefixes"`
+	Scope        string   `json:"scope"`
+	VariableName string   `json:"variableName"`
 }
 
 type IssueResult struct {

@@ -1,119 +1,76 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { useAuthStore } from '@/stores/auth';
-import { useSettingsStore } from '@/stores/settings';
-import AppLayout from '@/layouts/AppLayout.vue';
-import ChangePasswordPage from '@/views/auth/change-password/index.vue';
-import LoginPage from '@/views/auth/login/index.vue';
+import AppShell from '@/components/shell/AppShell.vue';
 import OverviewPage from '@/views/overview/index.vue';
-import ServerNodePage from '@/views/servers/node/index.vue';
-import ServerCredentialsPage from '@/views/servers/credentials/index.vue';
-import PackageUpdatesPage from '@/views/resources/packages/index.vue';
-import FirewallPage from '@/views/security/firewall/index.vue';
-import Fail2BanPage from '@/views/security/fail2ban/index.vue';
-import ApplicationsPage from '@/views/applications/apps/index.vue';
-import ApplicationCreatePage from '@/views/applications/apps/create.vue';
-import FacilityAppsPage from '@/views/applications/facility-apps/index.vue';
-import FacilityReverseProxyConfigPage from '@/views/applications/facility-apps/config.vue';
-import ContainersPage from '@/views/resources/containers/index.vue';
-import ImagesPage from '@/views/resources/images/index.vue';
-import NetworksPage from '@/views/resources/networks/index.vue';
-import VolumesPage from '@/views/resources/volumes/index.vue';
-import CertificatesPage from '@/views/certificates/domains/index.vue';
-import SelfSignedCertificatesPage from '@/views/certificates/self-signed/index.vue';
-import KeysPage from '@/views/certificates/keys/index.vue';
-import DomainsPage from '@/views/dns/domains/index.vue';
-import TaskCenterPage from '@/views/tasks/index.vue';
-import SettingsGeneralPage from '@/views/settings/general/index.vue';
-import SettingsSecurityPage from '@/views/settings/security/index.vue';
-import SettingsCertificatesPage from '@/views/settings/certificates/index.vue';
-import SettingsSystemPage from '@/views/settings/system/index.vue';
-import SettingsSystemCertificatesPage from '@/views/settings/system-certificates/index.vue';
-import SettingsBackupsPage from '@/views/settings/backups/index.vue';
-import BackupMaintenancePage from '@/views/maintenance/backup.vue';
+import ServersPage from '@/views/servers/index.vue';
+import CredentialsPage from '@/views/credentials/index.vue';
+import SecurityPage from '@/views/security/index.vue';
+import ResourcesPage from '@/views/resources/index.vue';
+import ApplicationsPage from '@/views/applications/index.vue';
+import DnsPage from '@/views/dns/index.vue';
+import CertificatesPage from '@/views/certificates/index.vue';
+import TasksPage from '@/views/tasks/index.vue';
+import SettingsPage from '@/views/settings/index.vue';
+import MaintenancePage from '@/views/maintenance/index.vue';
 import DebugPage from '@/views/debug/index.vue';
+import LoginPage from '@/views/auth/LoginPage.vue';
+import { useSessionStore } from '@/stores/session';
 
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: '/login', name: 'login', component: LoginPage, meta: { public: true } },
-    { path: '/maintenance/backup', name: 'maintenance-backup', component: BackupMaintenancePage, meta: { requiresAuth: true, maintenance: true, titleKey: 'routes.maintenanceBackup.title' } },
-    { path: '/change-password', name: 'change-password', component: ChangePasswordPage, meta: { requiresAuth: true, allowPasswordChange: true } },
+    { path: '/login', component: LoginPage, meta: { titleKey: 'routes.login.title', public: true } },
+    { path: '/maintenance/backup', component: MaintenancePage, meta: { titleKey: 'routes.maintenance.title', public: true } },
     {
       path: '/',
-      component: AppLayout,
-      meta: { requiresAuth: true },
+      component: AppShell,
       children: [
         { path: '', redirect: '/overview' },
-        { path: 'overview', name: 'overview', component: OverviewPage, meta: { titleKey: 'routes.overview.title' } },
-        { path: 'servers', name: 'servers', component: ServerNodePage, meta: { titleKey: 'routes.servers.title' } },
-        { path: 'credentials', name: 'credentials', component: ServerCredentialsPage, meta: { titleKey: 'routes.credentials.title' } },
-        { path: 'servers/firewall', redirect: '/security/firewall' },
-        { path: 'servers/packages', redirect: '/resources/packages' },
-        { path: 'containerization/applications', redirect: '/applications/apps' },
-        { path: 'containerization/facility-apps', redirect: '/applications/facility-apps' },
-        { path: 'containerization/containers', redirect: '/resources/containers' },
-        { path: 'containerization/images', redirect: '/resources/images' },
-        { path: 'containerization/networks', redirect: '/resources/networks' },
-        { path: 'containerization/volumes', redirect: '/resources/volumes' },
-        { path: 'security/firewall', name: 'server-firewall', component: FirewallPage, meta: { titleKey: 'routes.firewall.title' } },
-        { path: 'security/fail2ban', name: 'server-fail2ban', component: Fail2BanPage, meta: { titleKey: 'routes.fail2ban.title' } },
-        { path: 'resources/packages', name: 'system-packages', component: PackageUpdatesPage, meta: { titleKey: 'routes.systemPackages.title' } },
-        { path: 'resources/containers', name: 'containers', component: ContainersPage, meta: { titleKey: 'routes.containers.title' } },
-        { path: 'resources/images', name: 'images', component: ImagesPage, meta: { titleKey: 'routes.images.title' } },
-        { path: 'resources/networks', name: 'networks', component: NetworksPage, meta: { titleKey: 'routes.networks.title' } },
-        { path: 'resources/volumes', name: 'volumes', component: VolumesPage, meta: { titleKey: 'routes.volumes.title' } },
-        { path: 'applications/apps', name: 'applications', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
-        { path: 'applications/apps/create', name: 'application-create', component: ApplicationCreatePage, meta: { titleKey: 'routes.applicationCreate.title' } },
-        { path: 'applications/apps/:applicationId/edit', name: 'application-edit', component: ApplicationCreatePage, meta: { titleKey: 'routes.applicationEdit.title' } },
-        { path: 'applications/facility-apps', name: 'facility-apps', component: FacilityAppsPage, meta: { titleKey: 'routes.facilityApps.title' } },
-        { path: 'applications/facility-apps/reverse-proxy/config', name: 'facility-reverse-proxy-config', component: FacilityReverseProxyConfigPage, meta: { titleKey: 'routes.facilityReverseProxyConfig.title' } },
-        { path: 'dns/domains', name: 'dns-domains', component: DomainsPage, meta: { titleKey: 'routes.domains.title' } },
-        { path: 'certificates', redirect: '/certificates/domains' },
-        { path: 'certificates/domains', name: 'certificates-domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
-        { path: 'certificates/self-signed', name: 'certificates-self-signed', component: SelfSignedCertificatesPage, meta: { titleKey: 'routes.selfSignedCertificates.title' } },
-        { path: 'certificates/keys', name: 'certificates-keys', component: KeysPage, meta: { titleKey: 'routes.keys.title' } },
-        { path: 'tasks', name: 'tasks', component: TaskCenterPage, meta: { titleKey: 'routes.tasks.title' } },
+        { path: 'overview', component: OverviewPage, meta: { titleKey: 'routes.overview.title' } },
+        { path: 'servers', component: ServersPage, meta: { titleKey: 'routes.servers.title' } },
+        { path: 'credentials', component: CredentialsPage, meta: { titleKey: 'routes.credentials.title' } },
+        { path: 'security', redirect: '/security/firewall' },
+        { path: 'security/firewall', component: SecurityPage, meta: { titleKey: 'routes.security.title' } },
+        { path: 'security/fail2ban', component: SecurityPage, meta: { titleKey: 'routes.security.title' } },
+        { path: 'resources', redirect: '/resources/packages' },
+        { path: 'resources/packages', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
+        { path: 'resources/containers', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
+        { path: 'resources/images', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
+        { path: 'resources/networks', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
+        { path: 'resources/volumes', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
+        { path: 'applications', redirect: '/applications/apps' },
+        { path: 'applications/apps', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/apps/create', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/apps/:applicationId/edit', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/facility-apps', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/facility-apps/:facilityKind/config', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/facility-apps/:facilityKind', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'dns/domains', component: DnsPage, meta: { titleKey: 'routes.dns.title' } },
+        { path: 'certificates/domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'certificates/self-signed', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'certificates/keys', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'tasks', component: TasksPage, meta: { titleKey: 'routes.tasks.title' } },
         { path: 'settings', redirect: '/settings/general' },
-        { path: 'settings/general', name: 'settings-general', component: SettingsGeneralPage, meta: { titleKey: 'routes.settingsGeneral.title', settingsCategory: 'general' } },
-        { path: 'settings/security', name: 'settings-security', component: SettingsSecurityPage, meta: { titleKey: 'routes.settingsSecurity.title', settingsCategory: 'security' } },
-        { path: 'settings/certificates', name: 'settings-certificates', component: SettingsCertificatesPage, meta: { titleKey: 'routes.settingsCertificates.title', settingsCategory: 'certificates' } },
-        { path: 'settings/system-certificates', name: 'settings-system-certificates', component: SettingsSystemCertificatesPage, meta: { titleKey: 'routes.settingsSystemCertificates.title' } },
-        { path: 'settings/system', name: 'settings-system', component: SettingsSystemPage, meta: { titleKey: 'routes.settingsSystem.title', settingsCategory: 'system' } },
-        { path: 'settings/backups', name: 'settings-backups', component: SettingsBackupsPage, meta: { titleKey: 'routes.settingsBackups.title' } },
-        { path: 'debug', name: 'debug', component: DebugPage, meta: { titleKey: 'routes.debug.title' } },
+        { path: 'settings/general', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/security', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/certificates', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/system-certificates', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/system', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
+        { path: 'settings/backups', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
+        { path: 'debug', component: DebugPage, meta: { titleKey: 'routes.debug.title' } },
       ],
     },
+    { path: '/:pathMatch(.*)*', redirect: '/overview' },
   ],
 });
 
 router.beforeEach(async (to) => {
-  const auth = useAuthStore();
-  const settings = useSettingsStore();
-  if (!auth.checked) {
-    await auth.restoreSession();
+  const session = useSessionStore();
+  if (!session.ready) await session.restore();
+  if (to.meta.public) {
+    if (to.path === '/login' && session.authenticated && !session.passwordChangeRequired) return '/overview';
+    return true;
   }
-  if (auth.authenticated && !auth.passwordChangeRequired && !to.meta.maintenance) {
-    try {
-      await settings.loadRuntime();
-    } catch {
-      // The settings page surfaces runtime load errors explicitly.
-    }
-  }
-  if (to.meta.public && auth.authenticated) {
-    const redirect = typeof to.query.redirect === 'string' ? to.query.redirect : '';
-    if (redirect.startsWith('/maintenance/')) {
-      return redirect;
-    }
-    return auth.passwordChangeRequired ? '/change-password' : '/overview';
-  }
-  if (!to.meta.public && !auth.authenticated) {
-    return { path: '/login', query: { redirect: to.fullPath } };
-  }
-  if (auth.authenticated && auth.passwordChangeRequired && !to.meta.allowPasswordChange && !to.meta.maintenance) {
-    return { path: '/change-password', query: { redirect: to.fullPath } };
-  }
-  if (to.name === 'change-password' && auth.authenticated && !auth.passwordChangeRequired) {
-    return '/overview';
-  }
+  if (!session.authenticated) return { path: '/login', query: { redirect: to.fullPath } };
+  if (session.passwordChangeRequired) return { path: '/login', query: { redirect: to.fullPath } };
   return true;
 });

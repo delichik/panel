@@ -11,10 +11,10 @@
 - 证书服务与 handler：`internal/modules/certificates/certs/`
 - ACME 集成：`internal/modules/certificates/certs/acme.go`
 - 周期续签：`internal/modules/certificates/certs/tasks.go` 注册周期输入，由 `internal/modules/tasks/` 内部 worker 驱动
-- 前端 DNS 页面：`web/src/views/dns/domains/index.vue`
-- 域名证书页面：`web/src/views/certificates/domains/index.vue`
-- API：`web/src/api/dns.ts`、`web/src/api/certificates.ts`
-- 类型：`web/src/types/api.ts`
+- 前端 DNS 页面：`web/src/views/dns/index.vue`
+- 域名证书、自签证书与密钥资产页面：`web/src/views/certificates/index.vue`
+- API：`web/src/api/dns.ts`、`web/src/api/certificates.ts`、`web/src/api/keyAssets.ts`
+- 类型：`web/src/types/dns.ts`、`web/src/types/certificates.ts`、`web/src/types/keyAssets.ts`
 
 ## API 范围
 
@@ -23,7 +23,8 @@
 - 域名证书：`GET/POST /api/v1/certificates`，`DELETE /api/v1/certificates/{id}`
 - 立即续签：`POST /api/v1/certificates/{id}/renew`
 - Agent 系统内置证书由服务器模块提供：`GET /api/v1/key-assets/system`，重置使用 `POST /api/v1/key-assets/system/{id}/reset`
-- 统一密钥资产：`/api/v1/key-assets`
+- 自签证书：`GET/POST /api/v1/self-signed-certificates`，`POST /api/v1/self-signed-cas`，`POST /api/v1/self-signed-certificates/{id}/renew`，`DELETE /api/v1/self-signed-certificates/{id}`
+- 统一密钥资产：`GET /api/v1/key-assets`，`GET /api/v1/key-assets/{id}`，`POST /api/v1/key-assets/ca|tls|ssh/generate|import|exports`，`POST /api/v1/key-assets/imports/preflight`，`POST /api/v1/key-assets/imports/{planId}/execute`，`POST /api/v1/key-assets/{id}/reissue|regenerate`，`DELETE /api/v1/key-assets/{id}`，下载路径 `/api/v1/key-assets/{id}/files/{kind}` 与 `/api/v1/key-assets/exports/{taskId}/download`
 
 ## Cloudflare 认证
 
@@ -51,14 +52,15 @@
 
 - ACME 使用 DNS-01 challenge；challenge 创建后，无论后续步骤成功或失败都必须尝试清理。
 - ACME 账户私钥持久化在数据目录中并跨签发复用；使用同一密钥注册时如果 ACME 服务端返回账户已存在，必须通过 `GetReg` 恢复现有账户后继续创建订单，不能把正常的账户复用当作签发失败。
-- 通配符证书展开所需域名集合，签发成功后保存证书路径、私钥路径、有效期和续签时间。
+- 证书签发按用户提交的前缀列表生成 SAN：`@` 表示根域名，普通前缀追加到托管域名前，`*` 或 `*.name` 只覆盖对应位置下一层标签；签发成功后保存证书路径、私钥路径、有效期和续签时间。
 - 已签发的域名 HTTPS 证书通过应用侧内部文件 registry 注册为 `certificate:<cert-id>:certificate|private_key`，可被应用 `panel_file` 挂载；未签发证书不进入目录，也不能读取。
 - 续签或重新签发成功后重新部署受影响应用并同步反向代理；普通应用刷新和反向代理协调必须分别尝试，某个应用刷新失败不能阻断入口网关证书更新尝试。失败时保留上一份可用文件。
 - 签发、失败和续签记录任务日志；ACME 执行过程通过任务日志和步骤 metadata 展示账号、订单、DNS-01 challenge、授权等待、清理和 finalize 阶段；自动续期失败写入证书 `lastError`。
 - 证书签发接口先持久化任务并返回 `taskId`，同时主动交给任务 manager 异步执行；后台 worker 只负责进程恢复和兜底唤醒，正常签发不得依赖轮询才开始运行。
 - 自签证书页面只管理用户 CA/TLS。系统内置 CA/TLS 位于独立的“设置 → 系统证书”页面，使用左侧选择器和右侧详情，仅提供查看状态与允许的重置操作。
-- 域名证书、自签证书、密钥和设置系统证书页面统一使用 `AppMasterDetailWorkspace` 主从工作区：左侧 `AppSelectorPanel` 选择对象，普通对象行使用 `AppSelectorSummaryItem` 统一名称、副标题、状态点和行尾 Chip，右侧使用 `AppDetailPanel` 展示详情、加载和空状态；不得使用整页表格，也不得在页面内复制选择行标题/副标题/状态点或详情头部/正文 CSS。
-- 自签证书和密钥的新增/生成是选择器标题区主操作；导入资产、导入归档和导出所选统一收纳进“更多”菜单。
+- v4 前端不再使用旧 `AppMasterDetailWorkspace`/`AppSelectorPanel` 组件名；使用 `ConsolePage` 与自有 primitives 组合主从工作台，并保持桌面内部滚动。
+- 域名证书、自签证书和密钥资产必须通过路由子页呈现不同工作流，不能退回通用 `CollectionPage` 或同一参数化列表。
+- 自签证书和密钥的新增/生成是页面主操作或详情区操作；导入资产、导出和批量导入预检必须明确展示任务/冲突反馈，真实 API 不存在的能力必须禁用并说明，不能用 Mock 伪装成功。
 
 ## 验证
 

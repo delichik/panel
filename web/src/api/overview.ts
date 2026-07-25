@@ -1,21 +1,17 @@
-import { ApiClient, apiClient } from './client';
-import type { OverviewCardConfigurationDto, OverviewCardDataDto, OverviewDto } from '@/types/api';
+import { apiGet, apiPut } from './client';
+import type { OverviewCardConfigurationSet, OverviewCardData, OverviewDto } from '@/types/overview';
 
-export function createOverviewApi(client: ApiClient) {
-  return {
-    getOverview() {
-      return client.get<OverviewDto>('/overview');
-    },
-    getCards() {
-      return client.get<OverviewCardConfigurationDto>('/overview/cards');
-    },
-    updateCards(configuration: OverviewCardConfigurationDto) {
-      return client.put<OverviewCardConfigurationDto>('/overview/cards', configuration);
-    },
-    getCardData(cardId: string) {
-      return client.get<OverviewCardDataDto>(`/overview/cards/${encodeURIComponent(cardId)}/data`);
-    },
-  };
-}
-
-export const overviewApi = createOverviewApi(apiClient);
+export const overviewApi = {
+  getOverview() {
+    return apiGet<OverviewDto>('/overview');
+  },
+  getCards() {
+    return apiGet<OverviewCardConfigurationSet>('/overview/cards');
+  },
+  updateCards(input: OverviewCardConfigurationSet) {
+    return apiPut<OverviewCardConfigurationSet>('/overview/cards', input);
+  },
+  getCardData(cardId: string) {
+    return apiGet<OverviewCardData>(`/overview/cards/${encodeURIComponent(cardId)}/data`);
+  },
+};

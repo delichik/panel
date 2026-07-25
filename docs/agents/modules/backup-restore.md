@@ -12,7 +12,7 @@
 - 前端 API：`web/src/api/backups.ts`
 - 前端类型：`web/src/types/api.ts`
 - 设置页入口：`web/src/views/settings/backups/index.vue`
-- 导出维护页：`web/src/views/maintenance/backup.vue`
+- 导出维护页：`web/src/views/maintenance/BackupMaintenancePage.vue`（v3 重写：AuthCardLayout + n-steps 步骤流，维护会话登录卡走 `backupMaintenanceSession`，维护 API 走 `backupMaintenanceApi`）
 
 ## 行为约定
 
@@ -22,6 +22,7 @@
 - 只有同时存在 pending export 且启动参数为 `--maintenance-mode backup_export` 时，Panel 才进入备份导出维护模式；pending 文件本身不能触发维护逻辑。`ExportApp` 启动时只短暂打开 `app.db` 读取管理员用户名和 bcrypt 密码哈希，随后立即关闭连接；维护态登录和会话校验只使用内存中的哈希与 token。若数据库不可读，可回退到 Panel 配置中的管理员验证材料，但绝不开放匿名维护 API。
 - 导出维护页必须先登录。未加密导出在登录后由用户点击开始；加密导出在登录后输入备份密码并开始。真正开始导出后，`ExportApp` 会短暂打开 app/log/metrics SQLite 执行 WAL checkpoint，立即关闭连接，再归档稳定文件。
 - 导出维护页通过 `GET /api/v1/backups/export/current` 展示阶段、进度、开始时间、备份创建时间、是否加密和安全错误摘要；导出完成后通过下载接口取得归档，再通过退出维护接口清理 pending 标记并发送 `normal` 重启信号，让 `panel_init` 回到正常业务服务。
+- 前端导出归档下载必须使用带 export maintenance token 的 blob 请求，不能用裸 `<a>` 访问下载 URL；导出和还原维护页分别持有独立 token，不能互相复用。
 - 还原上传只做预检和 pending 标记，再通过 `panel_init` 随机本地监听请求下一次子进程以 `--maintenance-mode restore` 启动；不在正常运行期覆盖数据。pending 文件位于 `data/tmp/restore-pending/`。确认恢复时会把当前管理员用户名和 bcrypt 哈希作为 `0600` pending 维护认证快照写入，使恢复进程即使无法读取损坏的 `app.db` 也仍能验证管理员密码；该快照不进入 API 响应或备份归档。
 - 只有同时存在 pending restore 且启动参数为 `--maintenance-mode restore` 时，Panel 才进入恢复模式 HTTP 页面；pending 文件本身不能触发维护逻辑。未加密归档自动执行；加密归档在恢复页要求重新输入密码。恢复页静态入口可公开以承载登录界面，但 restore status 和所有恢复命令必须先取得 restore maintenance token。
 - 还原是覆盖式操作，不自动保留旧数据。真正清空目标数据只在归档解密、解包和 manifest/path 校验通过后执行。
@@ -48,7 +49,7 @@
 
 维护模式的页面兜底不得处理 `/api/` 路径；未注册 API 必须返回 JSON 错误响应，避免前端 API client 收到 HTTP 200 的 HTML 页面。
 
-恢复模式仅注册最小 API。它与导出维护模式分别维护独立内存 session；restore token 使用独立上下文，不能用于 export API，export token 和普通运行态 token 也不能用于 restore API：
+恢复模式仅注册最小 API。它与导出维护模式分别维护独立内存 session；restore token 使用独立上下文，不能用于 export API，export token 和普通运行态 token 也不能用于 restore API。前端 token 存储也必须分离为 export/restore 两个 sessionStorage key：
 
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/session`

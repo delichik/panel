@@ -261,6 +261,64 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 }
 
+func TestMigrateAllowsCertificatePrefixesScope(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE certificates (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		domain_id TEXT NOT NULL DEFAULT '',
+		domain TEXT NOT NULL,
+		prefix TEXT NOT NULL DEFAULT '@',
+		scope TEXT NOT NULL CHECK(scope IN ('single','wildcard')),
+		domains_json TEXT NOT NULL DEFAULT '[]',
+		variable_name TEXT NOT NULL UNIQUE,
+		certificate_path TEXT NOT NULL,
+		private_key_path TEXT NOT NULL,
+		issuer TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL DEFAULT 'pending',
+		last_error TEXT NOT NULL DEFAULT '',
+		auto_renew INTEGER NOT NULL DEFAULT 1,
+		next_renew_at TEXT NOT NULL DEFAULT '',
+		not_before TEXT NOT NULL DEFAULT '',
+		not_after TEXT NOT NULL DEFAULT '',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO certificates(id,name,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,created_at,updated_at)
+		VALUES('cert_legacy','Legacy','example.com','@','single','["example.com"]','legacy_cert','','','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer store.Close()
+	if _, err := store.AppDB().Exec(`INSERT INTO dns_domains(id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at)
+		VALUES('dnsdom_1','example.com','cloudflare','{}','secret','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO certificates(id,name,domain,domain_id,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,created_at,updated_at)
+		VALUES('cert_prefixes','Prefixes','example.com','dnsdom_1', '@,api','prefixes','["example.com","api.example.com"]','prefix_cert','','','now','now')`); err != nil {
+		t.Fatalf("migrated certificates scope constraint rejected prefixes: %v", err)
+	}
+}
+
 func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

@@ -28,28 +28,23 @@
 
 ## 前端入口
 
-- 服务器与凭据页面：`web/src/views/servers/_shared/ServersPageContent.vue`
-- 服务器选择器：`web/src/components/ServerSelector.vue`
-- 软件包页面：`web/src/views/resources/packages/index.vue`
-- 防火墙页面：`web/src/views/security/firewall/index.vue`
-- fail2ban 页面：`web/src/views/security/fail2ban/index.vue`
-- 概览页面：`web/src/views/overview/index.vue`
-- 隔离概览 V2：`web/src/views/overview/_v2/`；使用聚合 dashboard typed client、卡片局部状态与版本化布局模型，G4 前由固定 fixture 注入，不代表后端聚合接口已经上线。
-- 隔离服务器 V2：`web/src/views/servers/_v2/`；使用 `ResourcePage`、注入式 typed API 和固定 fixture，不接正式路由或真实后端。
-- 隔离凭据 V2：`web/src/views/credentials/_v2/`；使用 `DataPage`、注入式 `CredentialResourceApi` 和固定 fixture，不接正式路由或真实后端。
-- 隔离防火墙 V2：`web/src/views/firewall/_v2/`；使用 `ResourcePage` 服务器上下文、注入式 `FirewallResourceApi` 和固定 fixture，不接正式路由或真实后端。
-- 隔离软件包 V2：`web/src/views/packages/_v2/`；使用 `ResourcePage` 服务器上下文、注入式 `PackageResourceApi` 和固定 fixture，不接正式路由或真实后端。
-- 隔离 V2 服务器上下文选择行：`web/src/views/_v2/ServerContextList.vue`；Firewall/Packages V2 共用它来保持选择器视觉与 Servers V2 接近，避免每页复制一套临时服务器列表样式。
-- API：`web/src/api/servers.ts`、`web/src/api/packages.ts`、`web/src/api/overview.ts`
+- 服务器 + SSH 凭据页面（v3）：`web/src/views/servers/ServersPage.vue`；`/servers` 与 `/credentials` 为同一页面的两个 tab，tab 与路由 name 同步（`serversTabs.ts`）。
+- 节点 tab（MasterDetailPage：搜索 + 列表 + 分页 / 四区详情）：`web/src/views/servers/ServersNodesView.vue`、`ServerDetail.vue`。
+- 添加/编辑对话框：`ServerFormDialog.vue`（含 `POST /servers/probe` 测试连接与无凭据时就地添加入口）、`CredentialFormDialog.vue`（按类型裁剪字段，secret 留空 = 不更新）。
+- 凭据 tab 表格：`CredentialsView.vue`（删除前客户端引用预检 + 409 `credential_in_use` 兜底）。
+- 纯函数逻辑：`serverTraits.ts`（traits/网卡解析、Agent/UFW 状态判定）、`serverProbe.ts`（probe 结果映射）、`serverInitPolling.ts`（创建后初始化轮询状态机）、`credentialUsage.ts`（引用预检）、`useTaskMessage.ts`（任务反馈 + "查看任务"跳转）。
+- 安全防护页（v4 阶段 4A）：`web/src/views/security/index.vue`；`/security/firewall` 与 `/security/fail2ban` 为同一页面的两个 tab，共享左侧服务器选择器和 URL `server` query。UFW 右侧为规则/状态矩阵、添加规则、删除规则、启用/安装确认；Fail2Ban 右侧为托管状态、检测到的 jail、预设、可视草稿、YAML 高级模式、保存草稿、应用/安装/释放接管确认。纯函数在 `web/src/views/security/model.ts`。
+- 软件包页（v4 阶段 4A）：软件包维护并入 `web/src/views/resources/index.vue` 的 Packages tab，支持服务器选择、客户端搜索、刷新 metadata、升级已选/全部和 root/免密 sudo 准入阻断。纯函数在 `web/src/views/resources/model.ts`。
+- 概览页面（v4）：`web/src/views/overview/index.vue`；概览卡片布局使用 6 列整数网格，卡片配置中的 `width`/`height` 分别对应 1x1 方格跨度，宽度上限 6、高度上限 4；浏览态只展示指标内容，编辑态支持带实时顺序预览的拖动重排、拖拽缩放、添加/删除和单卡属性编辑。卡片可通过 `serverIds` 选择一台或多台服务器，空数组表示全部服务器；卡片元信息显示服务器数量，多服务器指标通过 ECharts 独立 series 和悬停 tooltip 标识服务器与数值，tooltip 挂到 body 并使用 Panel popover token，不能受卡片 `overflow` 裁切；`networkDirection` 只在网络卡片编辑时展示。保存时继续通过 `PUT /api/v1/overview/cards` 持久化有序卡片配置；容器、镜像、网络、卷等资源页面由 `web/src/views/resources/index.vue` 承载独立 tab。
+- API：`web/src/api/servers.ts`、`web/src/api/security.ts`、`web/src/api/packages.ts`、`web/src/api/containers.ts`、`web/src/api/overview.ts`
 - 类型：`web/src/types/api.ts`
 
 ## 前端布局约定
 
-- 服务器列表和共享服务器选择器在桌面端作为内部滚动选择列表使用；列表行必须按内容高度从顶部排列，不能被剩余高度拉伸。
-- 服务器节点页直接进入选择器与详情工作区，不在顶部重复展示服务器数量、可达数量或 Agent 就绪数量摘要。
-- 服务器节点、防火墙、fail2ban、软件包和资源页主从外层复用 `AppMasterDetailWorkspace.vue`；左侧服务器选择栏复用 `ServerSelector.vue` 或 `AppSelectorPanel` + `ServerSelectorItem`，不要复制一套不同尺寸的选择行或双栏 CSS。
-- 服务器详情、防火墙、fail2ban 和软件包页面的标题区、section 操作和表格行操作使用 `AppActionButton` / `AppActionGroup`。刷新、保存、接管、启用、升级、编辑和删除等对象动作显示为带图标的文字按钮；纯图标只用于更多菜单、选择器工具位和 dialog 关闭。
-- 凭据、软件包和防火墙规则等带分页表格在桌面端必须让表格体吸收剩余高度，分页固定在卡片或面板底部。
+- 节点 tab 使用 MasterDetailPage 模板：左列固定 280px，搜索为客户端过滤（name/host）并同步进 URL query `q`，初始化中的服务器显示"初始化中"进度态；右列详情分头部（可达性 + 操作组 + 错误横幅，`agent.last_error` 优先）与状态 / 系统 / 运行时 / 访问四区。
+- 凭据 tab 使用 ListPage 模板：表格体内部滚动，分页固定底部并同步进 URL query `page`。
+- 创建服务器保存成功即关对话框：新记录插入列表顶部，前端轮询 `initialTaskId`（1.5s × 90 上限）到终态；成功刷新数据，失败显示原因与"服务器记录已回滚"提示。
+- 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈用 n-message + "查看任务"跳 `/tasks?task=<id>`，只承诺任务已提交；Agent 部署、重启、删除必须确认，删除确认需说明影响。
 
 ## API 范围
 
@@ -69,17 +64,11 @@
 
 ## 数据与行为约定
 
-- Servers V2 mutation 只组装白名单用户字段并在 normalize 后剔除 `sys.*`、`agent.*` 与空 key；probe 和保存语义分离，候选 SSH 或 Docker Host 变化会使 probe 失效。Probe 失败只按稳定 `failureReason` 映射本地化安全文案，后端原始 `diagnostic` 不得直接渲染。
-- 详情切换立即清空旧详情并以 generation/AbortController 忽略迟到响应；列表成功刷新后必须同步重取仍选中的详情，避免继续使用旧 version/capability。Panel host 删除在入口、确认提交和 fixture API 三层拒绝；删除提交同时携带 `serverId + expectedVersion + previewToken`，fixture token 也编码服务器与版本。accepted/running 初始化、Agent、重启和 UFW 安装只显示为进行中并链接任务中心。
-- 重启和 Agent 操作确认捕获服务器 ID/version，提交时重新核对当前详情、最新 capability 和 active operation；操作期间禁止重复提交或取消，旧目标失败不得污染新选择。列表只在相同 query 刷新失败时保留旧行并标 stale，新筛选失败必须显示对应加载错误。
-- 编辑器的凭据选项具有独立 loading/error/empty 状态；加载失败必须提供重试与前往凭据管理，成功但为空必须解释创建前置条件，保存和 probe 不得陷入无说明的必填失败。
-- 隔离 `ServerResourceApi` 定义列表、详情、凭据选项、候选 probe、创建/版本化更新、连接测试、Agent/重启/UFW 安装操作和删除 impact；当前 16 个固定 fixture 不访问网络，正式 API 尚未实现这份契约。
-- 隔离 `CredentialResourceApi` 定义凭据列表、创建、编辑、删除影响预览和删除提交；secret 只提交非空草稿值，编辑时空值代表后端保留既有 secret。列表筛选包含搜索、认证方式和引用状态，删除预览必须返回引用清单与 preview token。
-- 隔离 `FirewallResourceApi` 定义服务器列表、单服务器 UFW 详情、安装、启用、添加规则和删除规则。页面只在防火墙场景展示服务器上下文列；受保护端口规则在 UI 中禁删，后端正式接入时仍必须重复校验。
-- 隔离 `PackageResourceApi` 定义服务器列表、按查询读取更新、刷新元数据、升级全部或指定软件包。页面将刷新/升级视为任务型操作，只展示 accepted/running 状态和任务中心入口，不承诺请求返回时已经完成升级。
-- Firewall/Packages V2 的服务器绑定操作放在右侧详情头，不放在全局 PageHeader。右侧正文使用分区标题、`dl` 信息网格和单一表格工作区，避免和 Servers V2 形成完全不同的卡片化结构。
-- 正式接入前的阻断项：后端更新不得再用请求 traits 整体覆盖已探测的 `sys.*`、`agent.*`；保存与连接测试必须分离，不能出现配置已经持久化但响应宣称保存失败；列表/详情需要 typed capability、资源版本和删除 preview token。
-- 本阶段验证仅限 `task test:web:unit`、`task test:web:component`、`task build:web`。按用户要求未执行浏览器、Playwright、E2E、a11y 或 visual 检查，中大屏真实滚动和断点验收留待恢复浏览器检查后完成。
+- v3 页面经 `web/src/api/servers.ts` typed client 接真实后端；保存与 probe 语义分离（`POST /servers/probe` 只在添加/编辑对话框内预检，不落库）。
+- 详情错误横幅 `agent.last_error` 优先于 `lastError`；`sys.*` traits 只读展示不进编辑表单，自定义 traits 以 `custom.*` 前缀提交。
+- 凭据 secret 只提交非空值，编辑时留空代表保留既有 secret；删除前用已加载服务器列表做引用预检并列出引用服务器，后端 409 `credential_in_use` 兜底。
+- 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中并链接任务中心（`/tasks?task=<id>`），不承诺请求返回时已完成。
+- 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
 - 服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。

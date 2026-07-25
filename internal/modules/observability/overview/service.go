@@ -265,21 +265,21 @@ func validRange(value string) bool {
 
 func defaultCards() []CardConfiguration {
 	return []CardConfiguration{
-		newDefaultCard("card-default-cpu", CardKindCPU, "1h"),
-		newDefaultCard("card-default-memory", CardKindMemory, "1h"),
-		newDefaultCard("card-default-disk", CardKindDisk, "6h"),
-		newDefaultCard("card-default-network", CardKindNetwork, "1h"),
-		newDefaultCard("card-default-package-updates", CardKindPackageUpdates, "1d"),
-		newDefaultCard("card-default-container-updates", CardKindContainerUpdates, "1d"),
+		newDefaultCard("card-default-cpu", CardKindCPU, "1h", 3, 2),
+		newDefaultCard("card-default-memory", CardKindMemory, "1h", 3, 2),
+		newDefaultCard("card-default-disk", CardKindDisk, "6h", 2, 2),
+		newDefaultCard("card-default-network", CardKindNetwork, "1h", 6, 2),
+		newDefaultCard("card-default-package-updates", CardKindPackageUpdates, "1d", 2, 1),
+		newDefaultCard("card-default-container-updates", CardKindContainerUpdates, "1d", 2, 1),
 	}
 }
 
-func newDefaultCard(id string, kind CardKind, metricRange string) CardConfiguration {
+func newDefaultCard(id string, kind CardKind, metricRange string, width int, height int) CardConfiguration {
 	return CardConfiguration{
 		ID:               id,
 		Kind:             kind,
-		Width:            3,
-		Height:           2,
+		Width:            width,
+		Height:           height,
 		Range:            metricRange,
 		NetworkDirection: "both",
 		ServerIDs:        []string{},

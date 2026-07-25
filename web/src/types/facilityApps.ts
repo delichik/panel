@@ -1,0 +1,156 @@
+import type { AnyAccessConfig, ApplicationEditPreviewResult, ApplicationRuntime, Diagnostic, HttpRouteOptions, LifecycleOperation, PreviewToken, ResourceVersion } from './applications';
+
+export type StaticSourceType = 'host_path' | 'uploaded_file' | 'uploaded_bundle';
+export type StaticRuleType = 'static' | 'redirect' | 'proxy_pass';
+export type FacilityAppKind = 'reverse-proxy';
+
+export type FacilityAppStatus = 'available' | 'degraded' | 'unavailable';
+
+export interface FacilityAppSummary {
+  kind: FacilityAppKind;
+  titleKey: string;
+  descriptionKey: string;
+  categoryKey: string;
+  status: FacilityAppStatus;
+  metrics: {
+    deploymentServers: number;
+    routes: number;
+    staticAssets: number;
+    applicationRoutes: number;
+  };
+  updatedAt?: string;
+  operationStatus?: string;
+  lastError?: string;
+}
+
+export interface FacilityAppDetail {
+  kind: FacilityAppKind;
+  summary: FacilityAppSummary;
+  reverseProxy?: ReverseProxyConfig;
+}
+
+export interface PanelEntry {
+  enabled: boolean;
+  serverId?: string;
+  domain?: string;
+}
+
+export interface FacilityRoutePath {
+  path: string;
+  ruleType?: StaticRuleType | string;
+  rootPath?: string;
+  sourceType: StaticSourceType | string;
+  assetId?: string;
+  redirectUrl?: string;
+  redirectCode?: number;
+  proxyUrl?: string;
+  proxySourceMode?: string;
+  options?: HttpRouteOptions;
+}
+
+export interface FacilityRouteDomain {
+  domain: string;
+  originServerIds: string[];
+  anyAccess: AnyAccessConfig;
+  paths: FacilityRoutePath[];
+}
+
+export interface StaticAsset {
+  id: string;
+  name: string;
+  kind: string;
+  filename: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RouteSummary {
+  domain: string;
+  path: string;
+  source: string;
+  serverIds: string[];
+  httpsStatus: string;
+  certificateId?: string;
+  certificateName?: string;
+  matchedDomains?: string[];
+  applicationId?: string;
+  applicationName?: string;
+}
+
+export interface ApplicationRouteSummary {
+  applicationId: string;
+  applicationName: string;
+  deploymentMode: string;
+  deploymentServers: string[];
+  routes: Array<{ domain: string; targetPort: number; originServerIds: string[]; paths: Array<{ path: string }> }>;
+}
+
+export interface ReverseProxyConfig {
+  id: string;
+  version: number;
+  deploymentServers: string[];
+  panelHostServerId?: string;
+  panelEntry: PanelEntry;
+  domains: FacilityRouteDomain[];
+  staticAssets: StaticAsset[];
+  routeSummaries: RouteSummary[];
+  applicationRoutes: ApplicationRouteSummary[];
+  operation?: LifecycleOperation;
+  runtime?: ApplicationRuntime;
+  lastError?: string;
+  updatedAt: string;
+  routes: number;
+  enabledServers: string[];
+}
+
+export interface ReverseProxySaveInput {
+  deploymentServers: string[];
+  panelEntry: PanelEntry;
+  domains: FacilityRouteDomain[];
+}
+
+export interface FacilityEditAsset {
+  assetKey: string;
+  sourceAssetId?: string;
+  name: string;
+  kind: string;
+  filename: string;
+  size: number;
+  sha256: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FacilityEditSession {
+  id: string;
+  clientDraftKey?: string;
+  state: string;
+  baseResourceVersion: ResourceVersion;
+  draft: ReverseProxySaveInput;
+  revision: number;
+  assets: FacilityEditAsset[];
+  previewToken?: PreviewToken;
+  idleExpiresAt: string;
+  absoluteExpiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+  committedAt?: string;
+  commitResult?: FacilityEditCommitResult;
+}
+
+export interface FacilityEditValidationResult {
+  valid: boolean;
+  revision: number;
+  diagnostics: Diagnostic[];
+}
+
+export type FacilityEditPreviewResult = ApplicationEditPreviewResult;
+
+export interface FacilityEditCommitResult {
+  config: ReverseProxyConfig;
+  resourceVersion: ResourceVersion;
+  applyRequested: boolean;
+  diagnostics?: Diagnostic[];
+}
