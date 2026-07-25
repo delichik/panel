@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math/rand/v2"
 	"path"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/applications/runtime"
 	"panel/internal/modules/applications/spec"
+	"panel/internal/modules/runtimeevents"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
@@ -80,6 +82,7 @@ type Service struct {
 	imageResolver    ImageDigestResolver
 	operationQueue   ContainerOperationQueue
 	facilityRuntime  FacilityRuntimeProvider
+	events           *runtimeevents.Service
 	sessionMu        sync.Mutex
 	saveSessions     map[string]*saveSession
 	cleanupOnce      sync.Once
@@ -211,6 +214,10 @@ func WithLogDB(db *sql.DB) Option {
 	}
 }
 
+func WithRuntimeEvents(events *runtimeevents.Service) Option {
+	return func(s *Service) { s.events = events }
+}
+
 func WithFacilityRuntimeProvider(provider FacilityRuntimeProvider) Option {
 	return func(s *Service) { s.facilityRuntime = provider }
 }
@@ -236,6 +243,13 @@ func (s *Service) SetFacilityRuntimeProvider(provider FacilityRuntimeProvider) {
 }
 
 func (s *Service) lifecycleDB() *sql.DB {
+	if s.logDB != nil {
+		return s.logDB
+	}
+	return s.db
+}
+
+func (s *Service) revisionDB() *sql.DB {
 	if s.logDB != nil {
 		return s.logDB
 	}
@@ -432,9 +446,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 		if err := s.insertApplication(ctx, app); err != nil {
 			return Application{}, applicationSaveError(err)
 		}
-		if err := s.insertRevision(ctx, app, prepared.job); err != nil {
-			return Application{}, err
-		}
+		s.insertRevisionBestEffort(ctx, app, prepared.job)
 		if app.Enabled {
 			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
 				return Application{}, err
@@ -554,9 +566,7 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 			return Application{}, err
 		}
 		if prepared.hash != current.SpecHash {
-			if err := s.insertRevision(ctx, app, prepared.job); err != nil {
-				return Application{}, err
-			}
+			s.insertRevisionBestEffort(ctx, app, prepared.job)
 		}
 		if shouldDeploy || shouldStop {
 			if err := s.triggerApplicationReconcile(ctx, app, prepared.job, "application_save", "Syncing application "+app.Name); err != nil {
@@ -818,9 +828,7 @@ func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Applica
 	if err := s.updateApplication(ctx, app); err != nil {
 		return Application{}, appruntime.Spec{}, err
 	}
-	if err := s.insertRevision(ctx, app, job); err != nil {
-		return Application{}, appruntime.Spec{}, err
-	}
+	s.insertRevisionBestEffort(ctx, app, job)
 	return app, job, nil
 }
 
@@ -1105,9 +1113,7 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 		return OperationResult{}, applicationSaveError(err)
 	}
 	if prepared.hash != app.SpecHash {
-		if err := s.insertRevision(ctx, migrated, job); err != nil {
-			return OperationResult{}, err
-		}
+		s.insertRevisionBestEffort(ctx, migrated, job)
 	}
 	task, err := s.triggerApplicationReconcileTask(ctx, migrated.ID, "application_migrate", map[string]any{
 		"applicationIds": []string{migrated.ID},
@@ -2552,6 +2558,19 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 		return LifecycleOperation{}, err
 	}
 	serverIDs = uniqueStringItems(serverIDs)
+	actionForOperation := firstNonEmpty(opts.Action, lifecycleActionForDesiredState(firstNonEmpty(opts.DesiredState, appruntime.DesiredRunning)))
+	if err := s.writeApplicationOperationEvent(ctx, runtimeevents.EventApplicationOperationCreated, operation, app, LifecycleTarget{}, runtimeevents.ApplicationOperationInput{
+		ApplicationID:           app.ID,
+		ApplicationNameSnapshot: app.Name,
+		Action:                  actionForOperation,
+		Source:                  operation.Trigger,
+		TriggeredBy:             operation.Trigger,
+		Status:                  "running",
+		StartedAt:               operation.StartedAt,
+		TargetTotal:             len(serverIDs),
+	}); err != nil {
+		return LifecycleOperation{}, err
+	}
 	for _, serverID := range serverIDs {
 		targetID := lifecycleTargetID(operation.ID, serverID)
 		instanceID := runtimeInstanceID(app.ID, serverID)
@@ -2570,6 +2589,27 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			targetID, operation.ID, app.ID, serverID, action, state, status, targetKey, desiredState, spec.Generation, spec.SpecHash, priority, 0, "", "", "", "", instanceID, containerName, "", "", "", "", "", "", formatTime(now), nil, nil, formatTime(now))
 		if err != nil {
+			return LifecycleOperation{}, err
+		}
+		target := LifecycleTarget{
+			ID:                targetID,
+			OperationID:       operation.ID,
+			ApplicationID:     app.ID,
+			ServerID:          serverID,
+			Action:            action,
+			State:             state,
+			Status:            status,
+			TargetKey:         targetKey,
+			DesiredState:      desiredState,
+			DesiredGeneration: spec.Generation,
+			DesiredSpecHash:   spec.SpecHash,
+			Priority:          priority,
+			InstanceID:        instanceID,
+			ContainerName:     containerName,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+		if err := s.writeApplicationTargetEvent(ctx, runtimeevents.EventApplicationOperationTargetQueued, operation, app, target, "Application target queued", runtimeevents.SeverityInfo); err != nil {
 			return LifecycleOperation{}, err
 		}
 	}
@@ -2718,6 +2758,20 @@ func (s *Service) failLifecycleTargetExecution(ctx context.Context, targetID, st
 		return err
 	}
 	_, err = res.RowsAffected()
+	if err == nil {
+		latest, getErr := s.lifecycleTargetByID(ctx, targetID)
+		if getErr == nil {
+			if op, opErr := s.lifecycleOperationByID(ctx, latest.OperationID); opErr == nil {
+				if app, appErr := s.Get(ctx, latest.ApplicationID); appErr == nil {
+					severity := runtimeevents.SeverityError
+					if retryable {
+						severity = runtimeevents.SeverityWarning
+					}
+					err = s.writeApplicationTargetEvent(ctx, runtimeevents.EventApplicationOperationTargetFailed, op, app, latest, "Application target failed", severity)
+				}
+			}
+		}
+	}
 	return err
 }
 
@@ -2863,6 +2917,16 @@ func (s *Service) verifyLifecycleTargetNow(ctx context.Context, targetID string)
 		return err
 	}
 	_, err = res.RowsAffected()
+	if err == nil {
+		latest, getErr := s.lifecycleTargetByID(ctx, target.ID)
+		if getErr == nil {
+			if op, opErr := s.lifecycleOperationByID(ctx, latest.OperationID); opErr == nil {
+				if app, appErr := s.Get(ctx, latest.ApplicationID); appErr == nil {
+					err = s.writeApplicationTargetEvent(ctx, runtimeevents.EventApplicationOperationTargetSucceeded, op, app, latest, "Application target succeeded", runtimeevents.SeverityInfo)
+				}
+			}
+		}
+	}
 	return err
 }
 
@@ -2873,7 +2937,45 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 		errText = cause.Error()
 	}
 	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?, error=?, finished_at=?, updated_at=? WHERE id=?`, status, errText, now, now, operationID)
-	return err
+	if err != nil {
+		return err
+	}
+	op, getErr := s.lifecycleOperationByID(ctx, operationID)
+	if getErr != nil {
+		return nil
+	}
+	app, appErr := s.Get(ctx, op.ApplicationID)
+	if appErr != nil {
+		return nil
+	}
+	eventType := runtimeevents.EventApplicationOperationCompleted
+	severity := runtimeevents.SeverityInfo
+	projectedStatus := "succeeded"
+	if status == LifecycleStatusFailed || status == LifecycleStatusPartiallyDeployed {
+		eventType = runtimeevents.EventApplicationOperationFailed
+		severity = runtimeevents.SeverityError
+		projectedStatus = "failed"
+		if status == LifecycleStatusPartiallyDeployed {
+			projectedStatus = "partial_failed"
+		}
+	}
+	if status == LifecycleStatusSuperseded {
+		projectedStatus = "cancelled"
+	}
+	return s.writeApplicationOperationEvent(ctx, eventType, op, app, LifecycleTarget{}, runtimeevents.ApplicationOperationInput{
+		ApplicationID:           app.ID,
+		ApplicationNameSnapshot: app.Name,
+		Action:                  lifecycleOperationAction(op),
+		Source:                  op.Trigger,
+		TriggeredBy:             op.Trigger,
+		Status:                  projectedStatus,
+		StartedAt:               op.StartedAt,
+		FinishedAt:              op.FinishedAt,
+		TargetTotal:             len(op.Targets),
+		TargetSucceeded:         countLifecycleTargets(op.Targets, LifecycleTargetStateSucceeded),
+		TargetFailed:            countLifecycleTargets(op.Targets, LifecycleTargetStateFailed, LifecycleTargetStateCancelled),
+		FailureSummary:          errText,
+	}, severity)
 }
 
 func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, operationID string) error {
@@ -2923,6 +3025,158 @@ func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, oper
 		status = LifecycleStatusFailed
 	}
 	return s.finishLifecycleOperation(ctx, operationID, status, runtimeDeploymentError(total, failures))
+}
+
+func (s *Service) writeApplicationOperationEvent(ctx context.Context, eventType string, op LifecycleOperation, app Application, target LifecycleTarget, projection runtimeevents.ApplicationOperationInput, severityOpt ...string) error {
+	if s == nil || s.events == nil {
+		return nil
+	}
+	severity := runtimeevents.SeverityInfo
+	if len(severityOpt) > 0 && strings.TrimSpace(severityOpt[0]) != "" {
+		severity = severityOpt[0]
+	}
+	if projection.ApplicationID == "" {
+		projection.ApplicationID = app.ID
+	}
+	if projection.ApplicationNameSnapshot == "" {
+		projection.ApplicationNameSnapshot = app.Name
+	}
+	if projection.Action == "" {
+		projection.Action = lifecycleOperationAction(op)
+	}
+	if projection.Source == "" {
+		projection.Source = firstNonEmpty(op.Trigger, "system")
+	}
+	if projection.Status == "" {
+		projection.Status = "running"
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"applicationId": app.ID,
+		"operationId":   op.ID,
+		"targetId":      target.ID,
+		"action":        projection.Action,
+		"status":        projection.Status,
+	})
+	taskRefs, _ := json.Marshal(nonEmptyStrings(op.TaskID))
+	targetRefs, _ := json.Marshal(lifecycleTargetIDs(op.Targets, target.ID))
+	detail := &runtimeevents.EventDetailInput{
+		PayloadJSON:    string(payload),
+		Error:          firstNonEmpty(target.Error, op.Error, projection.FailureSummary),
+		TaskRefsJSON:   string(taskRefs),
+		TargetRefsJSON: string(targetRefs),
+	}
+	_, _, err := s.events.Write(ctx, runtimeevents.WriteEventInput{
+		EventType:    eventType,
+		Category:     runtimeevents.CategoryApplication,
+		SubjectType:  "application",
+		SubjectID:    app.ID,
+		OperationID:  op.ID,
+		Severity:     severity,
+		Source:       projection.Source,
+		SourceModule: "applications",
+		SourceType:   "application_lifecycle_operation",
+		SourceID:     op.ID,
+		DedupeKey:    "application_operation:" + op.ID + ":" + eventType + ":" + target.ID,
+		Summary:      applicationOperationSummary(eventType, app, target),
+		Detail:       detail,
+		Application:  &projection,
+	})
+	return err
+}
+
+func (s *Service) writeApplicationTargetEvent(ctx context.Context, eventType string, op LifecycleOperation, app Application, target LifecycleTarget, summary, severity string) error {
+	status := "running"
+	switch eventType {
+	case runtimeevents.EventApplicationOperationTargetQueued:
+		status = "queued"
+	case runtimeevents.EventApplicationOperationTargetFailed:
+		status = "failed"
+	case runtimeevents.EventApplicationOperationTargetSucceeded:
+		status = "running"
+	}
+	return s.writeApplicationOperationEvent(ctx, eventType, op, app, target, runtimeevents.ApplicationOperationInput{
+		ApplicationID:           app.ID,
+		ApplicationNameSnapshot: app.Name,
+		Action:                  firstNonEmpty(target.Action, lifecycleOperationAction(op)),
+		Source:                  firstNonEmpty(op.Trigger, "system"),
+		TriggeredBy:             op.Trigger,
+		Status:                  status,
+		StartedAt:               op.StartedAt,
+		TargetTotal:             len(op.Targets),
+		TargetSucceeded:         countLifecycleTargets(op.Targets, LifecycleTargetStateSucceeded),
+		TargetFailed:            countLifecycleTargets(op.Targets, LifecycleTargetStateFailed, LifecycleTargetStateCancelled),
+		FailureSummary:          firstNonEmpty(target.ErrorMessage, target.Error),
+	}, severity)
+}
+
+func lifecycleOperationAction(op LifecycleOperation) string {
+	for _, target := range op.Targets {
+		if strings.TrimSpace(target.Action) != "" {
+			return target.Action
+		}
+	}
+	switch op.Type {
+	case LifecycleTypeDeploy:
+		return LifecycleTargetActionApply
+	default:
+		return op.Type
+	}
+}
+
+func countLifecycleTargets(targets []LifecycleTarget, states ...string) int {
+	wanted := stringBoolSet(states)
+	count := 0
+	for _, target := range targets {
+		if wanted[target.State] {
+			count++
+		}
+	}
+	return count
+}
+
+func lifecycleTargetIDs(targets []LifecycleTarget, extra string) []string {
+	out := []string{}
+	seen := map[string]struct{}{}
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		if _, ok := seen[value]; ok {
+			return
+		}
+		seen[value] = struct{}{}
+		out = append(out, value)
+	}
+	add(extra)
+	for _, target := range targets {
+		add(target.ID)
+	}
+	return out
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := []string{}
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			out = append(out, strings.TrimSpace(value))
+		}
+	}
+	return out
+}
+
+func applicationOperationSummary(eventType string, app Application, target LifecycleTarget) string {
+	if target.ID != "" {
+		return firstNonEmpty(target.Action, "application") + " target " + target.ServerID
+	}
+	switch eventType {
+	case runtimeevents.EventApplicationOperationFailed:
+		return "Application operation failed: " + app.Name
+	case runtimeevents.EventApplicationOperationCompleted:
+		return "Application operation completed: " + app.Name
+	default:
+		return "Application operation created: " + app.Name
+	}
 }
 
 func (s *Service) ReconcileInterruptedLifecycleTasks(ctx context.Context) error {
@@ -3527,12 +3781,13 @@ func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Appli
 			return err
 		}
 	}
-	if insertRevision {
-		if err := insertRevisionWithExec(ctx, tx, app, job); err != nil {
-			return err
-		}
+	if err := tx.Commit(); err != nil {
+		return err
 	}
-	return tx.Commit()
+	if insertRevision {
+		s.insertRevisionBestEffort(ctx, app, job)
+	}
+	return nil
 }
 
 func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *sql.Tx, app Application, expectedVersion int) error {
@@ -3616,7 +3871,13 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec sqlExec, a
 }
 
 func (s *Service) insertRevision(ctx context.Context, app Application, job appruntime.Spec) error {
-	return insertRevisionWithExec(ctx, s.db, app, job)
+	return insertRevisionWithExec(ctx, s.revisionDB(), app, job)
+}
+
+func (s *Service) insertRevisionBestEffort(ctx context.Context, app Application, job appruntime.Spec) {
+	if err := s.insertRevision(ctx, app, job); err != nil {
+		log.Printf("application revision record failed app_id=%s generation=%d: %v", app.ID, app.Generation, err)
+	}
 }
 
 func insertRevisionWithExec(ctx context.Context, exec sqlExec, app Application, job appruntime.Spec) error {
@@ -5473,9 +5734,7 @@ func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Applic
 		if len(issues) > 0 {
 			revisionJob = prepared.job
 		}
-		if err := s.insertRevision(ctx, app, revisionJob); err != nil {
-			return Application{}, err
-		}
+		s.insertRevisionBestEffort(ctx, app, revisionJob)
 	}
 	return app, nil
 }

@@ -581,7 +581,7 @@ onBeforeUnmount(stopResize);
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/servers')"><Server class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.servers.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/credentials')"><ShieldCheck class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.credentials.title') }}</span></Button>
               <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/resources/packages')"><Boxes class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.packages.title') }}</span></Button>
-              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/tasks')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.tasks.title') }}</span></Button>
+              <Button class="w-full min-w-0 overflow-hidden px-2" variant="secondary" @click="router.push('/application-operations')"><Activity class="shrink-0" /><span class="min-w-0 truncate">{{ t('routes.applicationOperations.title') }}</span></Button>
             </div>
           </section>
         </div>

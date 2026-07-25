@@ -392,6 +392,50 @@ func TestRefreshApplicationsAttemptsReverseProxyWhenEnabledRedeployFails(t *test
 	}
 }
 
+func TestExportRecordsUseLogDBAndExpiredCleanupRemovesFile(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Export Root", CommonName: "export.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := svc.CreateExport(ctx, ExportRequest{AssetIDs: []string{ca.ID}, Password: "very-secret-12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var filePath string
+	if err := store.LogDB().QueryRow(`SELECT file_path FROM key_asset_exports WHERE task_id=?`, exported.TaskID).Scan(&filePath); err != nil {
+		t.Fatalf("expected export record in log db: %v", err)
+	}
+	var appDBFilePath string
+	if err := store.AppDB().QueryRow(`SELECT file_path FROM key_asset_exports WHERE task_id=?`, exported.TaskID).Scan(&appDBFilePath); err == nil {
+		t.Fatal("expected key_asset_exports to be absent from app db")
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatalf("expected export file: %v", err)
+	}
+
+	expiredAt := formatTime(time.Now().UTC().Add(-time.Minute))
+	if _, err := store.LogDB().Exec(`UPDATE key_asset_exports SET expires_at=? WHERE task_id=?`, expiredAt, exported.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	svc.cleanupExpiredExports(ctx, time.Now().UTC())
+
+	var count int
+	if err := store.LogDB().QueryRow(`SELECT COUNT(*) FROM key_asset_exports WHERE task_id=?`, exported.TaskID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expired export rows = %d, want 0", count)
+	}
+	if _, err := os.Stat(filePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expected export file removed, stat err=%v", err)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 	t.Helper()
 	dir := t.TempDir()
@@ -409,7 +453,7 @@ func newTestService(t *testing.T) (*Service, *storage.Store, func()) {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())
-	svc := NewService(store.AppDB(), cfg, secrets, taskSvc)
+	svc := NewService(store.AppDB(), cfg, secrets, taskSvc, WithLogDB(store.LogDB()))
 	svc.RegisterTasks(taskSvc)
 	return svc, store, func() { _ = store.Close() }
 }

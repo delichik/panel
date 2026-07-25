@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, Boxes, Code2, Globe2, HardDrive, History, Layers3, Network, PackageCheck, Plus, RefreshCw, RefreshCcw, Rocket, Save, Server, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
+import { AlertTriangle, Boxes, ClipboardList, Code2, Globe2, HardDrive, History, Layers3, Network, PackageCheck, Plus, RefreshCw, RefreshCcw, Rocket, Save, Server, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
 import { applicationsApi } from '@/api/applications';
 import { saveBlobDownload } from '@/api/download';
 import { facilityAppsApi } from '@/api/facilityApps';
@@ -845,6 +845,7 @@ onBeforeUnmount(() => {
                   <div class="mt-3 grid gap-2">
                     <Button :loading="pending === 'image-check'" @click="runOperation('image-check', () => applicationsApi.checkImage(selectedApplication.id), 'applicationsPage.imageChecked')"><RefreshCcw />{{ t('applicationsPage.checkImage') }}</Button>
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
+                    <Button @click="router.push({ path: '/application-operations', query: { applicationId: selectedApplication.id } })"><ClipboardList />{{ t('applicationsPage.operationRecords') }}</Button>
                     <Button @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
                   </div>

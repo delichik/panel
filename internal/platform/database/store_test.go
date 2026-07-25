@@ -196,17 +196,17 @@ func TestFreshSchemaUsesApplicationTables(t *testing.T) {
 	}
 	defer store.Close()
 
-	for _, table := range []string{"applications", "application_files", "application_revisions", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states"} {
+	for _, table := range []string{"applications", "application_files", "auth_state", "overview_card_configurations", "image_updates", "image_refreshes", "application_reconcile_states"} {
 		if !tableExists(t, store.AppDB(), table) {
 			t.Fatalf("expected table %q to exist", table)
 		}
 	}
-	for _, table := range []string{"tasks", "task_steps", "task_logs", "application_lifecycle_operations", "application_lifecycle_targets"} {
+	for _, table := range []string{"tasks", "task_steps", "task_logs", "application_revisions", "application_lifecycle_operations", "application_lifecycle_targets", "key_asset_exports"} {
 		if !tableExists(t, store.LogDB(), table) {
 			t.Fatalf("expected log table %q to exist", table)
 		}
 	}
-	for _, table := range []string{"application_lifecycle_operations", "application_lifecycle_targets"} {
+	for _, table := range []string{"application_revisions", "application_lifecycle_operations", "application_lifecycle_targets", "key_asset_exports"} {
 		if tableExists(t, store.AppDB(), table) {
 			t.Fatalf("fresh app schema must not contain log table %q", table)
 		}

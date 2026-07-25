@@ -92,6 +92,7 @@ const toneMaps: Record<Domain, Record<string, Tone>> = {
     completed: 'success',
     warning: 'warning',
     needs_attention: 'warning',
+    partial_failed: 'warning',
     failed: 'danger',
     blocked: 'danger',
     cancelled: 'neutral',

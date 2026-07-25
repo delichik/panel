@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"panel/internal/modules/runtimeevents"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -139,6 +140,14 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	}
 	if err := tx.Commit(); err != nil {
 		return Task{}, nil, false, err
+	}
+	if err := m.service.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, parent, parent.Summary, runtimeevents.SeverityInfo, nil); err != nil {
+		return Task{}, nil, false, err
+	}
+	for _, child := range children {
+		if err := m.service.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, child, child.Summary, runtimeevents.SeverityInfo, nil); err != nil {
+			return Task{}, nil, false, err
+		}
 	}
 	return parent, children, true, nil
 }

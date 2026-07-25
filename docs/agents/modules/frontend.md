@@ -45,6 +45,8 @@
 - `web/src/views/applications/`
 - `web/src/views/dns/`
 - `web/src/views/certificates/`
+- `web/src/views/application-operations/`
+- `web/src/views/system-events/`
 - `web/src/views/tasks/`
 - `web/src/views/settings/`
 - `web/src/views/auth/`
@@ -94,11 +96,21 @@
 
 `web/src/views/tasks/`、`web/src/views/settings/`、`web/src/views/maintenance/`、`web/src/views/debug/` 已替换阶段占位：
 
+- 旧任务中心 `/tasks` 保留兼容路由，但不再作为产品导航入口。新的产品入口是“应用”一级菜单下的 `/application-operations` 操作记录与 `/system-events`：应用详情和概览快捷入口应跳转到操作记录，系统诊断事件通过系统事件页展示。
 - 任务中心按 `operationId` 聚合，左侧保留操作组搜索、状态筛选和 URL query 恢复，右侧展示具体任务、步骤、日志、错误、重试和立即运行。正式 API 使用 `/api/v1/tasks`、`/api/v1/tasks/{id}`、`/logs`、`/steps`、`/retry`、`/run-now`。
 - 设置页按 Runtime、安全、证书、系统、系统证书、备份还原分区独立保存，不提供全局保存。正式 API 使用 `/api/v1/settings/runtime`、`/api/v1/settings/server-variables`、`/api/v1/auth/jwt-secret`、`/api/v1/system/version`、`/api/v1/key-assets/system`、`/api/v1/key-assets/system/{id}/reset`、`/api/v1/backups/export`、`/api/v1/backups/restore/preflight`、`/api/v1/backups/restore/confirm`；系统版本只读展示，不和 Runtime 设置保存混在一起。由于 `/settings/runtime` 后端仍接收完整 runtime payload，前端保存某个分区时必须以已加载的 runtime 当前值为基底，只合入当前分区表单，避免提交其他分区尚未保存的脏值。系统证书分区展示 Panel 侧 Agent CA、Panel Agent client 证书以及服务器上报的 Agent 服务端证书，重置操作通过后台任务执行。
 - 维护页是独立 shell，不走全局 AppShell；导出和还原维护 token 分别保存在 `sessionStorage.panel.maintenance.export.token` 与 `sessionStorage.panel.maintenance.restore.token`，二者和普通登录 session 隔离。正式 API 使用维护模式下的 `/api/v1/auth/*`、`/api/v1/backups/export/current|start|password|exit|{id}/download`、`/api/v1/restore/status|password|retry|clear-pending`；导出归档下载通过带 Authorization header 的 blob 请求完成。
 - 诊断页使用 Runtime / Tasks / Database tabs，支持暂停/恢复轮询和手动刷新；刷新失败时保留上一份可用快照。正式 API 使用 `/api/v1/debug/snapshot`。
 - Mock 模式覆盖同名正式路径，包含正常、失败、长日志、维护中、保存冲突、诊断失败保留旧快照和任务中心多页分页样本；未实现路径继续返回 `mock_route_not_found`。
+
+### 运行事件：操作记录 + 系统事件
+
+`web/src/views/application-operations/` 与 `web/src/views/system-events/` 是统一运行事件能力的两个前端页面族：
+
+- 操作记录读取 `/api/v1/application-operations`，主体是应用 operation 投影，支持按应用 ID、来源和状态筛选。详情可用时打开详情弹窗展示 targets 和 events；详情已清理时详情按钮禁用并显示清理提示。
+- 系统事件读取 `/api/v1/system-events`，主体是诊断事件，支持按关联对象 ID、级别和类别筛选。页面只展示后端提供的事件类型与类别，不假设独立 alert 服务。
+- 两个页面均使用 `ListPage`、`SearchInput`、`Select`、`Table`、`PaginationBar`、`StatusBadge` 和 `Dialog`，保持桌面内部滚动，不恢复页面级滚动。
+- Mock 模式覆盖同名正式路径，包含详情可用、详情已清理、分页和筛选样本。
 
 ### 阶段 6：DNS + 证书 + 密钥资产
 

@@ -15,6 +15,8 @@
 - API：`web/src/api/tasks.ts`
 - 类型：`web/src/types/api.ts`
 
+> `/tasks` 旧路由仅保留兼容，不再作为产品导航入口。新的应用工作记录入口是 `/application-operations`，系统诊断事件入口是 `/system-events`；不要把新运行事件能力接回旧任务中心。
+
 ## API 范围
 
 - `GET /api/v1/tasks`
@@ -106,6 +108,12 @@
 - Container status refresh no longer drives application reconciliation by pulling every compatible agent. Reconciliation uses cached reported observations and asks the application planner to create or reuse lifecycle targets for drifted app/server pairs; it does not create `application_target_*` task inputs itself.
 - Runtime report intervals are pushed to agents through Panel-initiated report streams, so changing settings must not require creating or retrying task records.
 - The agent report stream is a watcher of an agent-side shared collector hub. Task scheduling must not add separate metrics or Docker polling loops for the same data path.
+
+## Runtime Events
+
+- `tasks.Service` may be wired with `runtimeevents.Service` by production bootstrap. When present, task create/start/complete/fail/retry/cancel and task log reference events are written as `category=system` runtime events.
+- Runtime events do not replace the task tables or old task APIs. `/tasks` remains compatibility UI only and must not become the new application operation entry.
+- Task log events store log references and summaries only; do not copy full task log bodies into runtime event details.
 
 ## Application Deployment Coordination
 

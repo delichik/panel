@@ -44,7 +44,7 @@
 - 节点 tab 使用 MasterDetailPage 模板：左列固定 280px，搜索为客户端过滤（name/host）并同步进 URL query `q`，初始化中的服务器显示"初始化中"进度态；右列详情分头部（可达性 + 操作组 + 错误横幅，`agent.last_error` 优先）与状态 / 系统 / 运行时 / 访问四区。
 - 凭据 tab 使用 ListPage 模板：表格体内部滚动，分页固定底部并同步进 URL query `page`。
 - 创建服务器保存成功即关对话框：新记录插入列表顶部，前端轮询 `initialTaskId`（1.5s × 90 上限）到终态；成功刷新数据，失败显示原因与"服务器记录已回滚"提示。
-- 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈用 n-message + "查看任务"跳 `/tasks?task=<id>`，只承诺任务已提交；Agent 部署、重启、删除必须确认，删除确认需说明影响。
+- 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈只承诺任务已提交；旧 `/tasks` 兼容路由不再作为产品入口，后续诊断应优先通过系统事件或后端提供的任务引用查看。
 
 ## API 范围
 
@@ -67,7 +67,7 @@
 - v3 页面经 `web/src/api/servers.ts` typed client 接真实后端；保存与 probe 语义分离（`POST /servers/probe` 只在添加/编辑对话框内预检，不落库）。
 - 详情错误横幅 `agent.last_error` 优先于 `lastError`；`sys.*` traits 只读展示不进编辑表单，自定义 traits 以 `custom.*` 前缀提交。
 - 凭据 secret 只提交非空值，编辑时留空代表保留既有 secret；删除前用已加载服务器列表做引用预检并列出引用服务器，后端 409 `credential_in_use` 兜底。
-- 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中并链接任务中心（`/tasks?task=<id>`），不承诺请求返回时已完成。
+- 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；新诊断入口应使用系统事件或后端返回的稳定任务引用，不能新增 `/tasks?task=<id>` 产品链接。
 - 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。

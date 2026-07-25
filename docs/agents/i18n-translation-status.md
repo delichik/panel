@@ -1,8 +1,16 @@
 # 多语言翻译状态
 
+- `web/src/views/application-operations/index.vue`、`web/src/views/system-events/index.vue`、`web/src/components/shell/navModel.ts`、`web/src/views/applications/index.vue`、`web/src/views/certificates/index.vue`
+  - “操作记录”导航位于“应用”一级菜单最后一个，路由仍保留 `/application-operations`；操作记录和系统事件的路由、筛选、分页、空态、状态、详情弹窗和“详情已清理”提示已接入英文与简体中文词条；证书详情旧任务中心提示改为系统事件语义；应用 ID、操作 ID、事件类型、日志引用和后端诊断摘要保持运行时原值。
+
+- `web/src/views/application-operations/index.vue`、`web/src/views/system-events/index.vue`、`web/src/i18n/index.ts`
+  - 系统事件列表、系统事件详情标题和操作记录详情事件线的 runtime event type 已通过 `runtimeEventTypes.*` 接入英文与简体中文展示文案；筛选参数和后端 `eventType` 稳定 key 仍保持原值，未知事件类型回退显示原始 key。
+
 - `web/src/views/applications/index.vue`
   - Panel 入口固定使用 setup 登记的宿主节点，缺少宿主节点及尝试移出全局网关时的英文与简体中文提示已补齐。
 
+- `web/src/views/application-operations/index.vue`, `web/src/views/system-events/index.vue`, `web/src/views/settings/index.vue`
+  - Runtime event contract fixes use `applicationNameSnapshot`, `eventType`, `partial_failed`, canonical system event categories, and runtime event retention settings; new user-visible labels and validation text are wired through English and Simplified Chinese frontend i18n entries.
 本文档记录当前多语言实现仍未完成翻译的区域。后续每次处理多语言相关任务时，都应同步更新。
 
 ## 最近已补齐

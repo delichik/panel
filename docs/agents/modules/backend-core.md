@@ -59,7 +59,7 @@
 
 ## 数据库约定
 
-- 应用业务数据在 `Store.AppDB()`，任务、任务日志和应用 lifecycle 历史在 `Store.LogDB()`，指标数据在 `Store.MetricsDB()`；不要把 log 表或指标表误建到应用数据库。
+- 应用业务数据在 `Store.AppDB()`，任务、任务日志、应用 revision 记录、密钥资产导出记录和应用 lifecycle 历史在 `Store.LogDB()`，指标数据在 `Store.MetricsDB()`；不要把 log 表或指标表误建到应用数据库。`application_revisions` 与 `key_asset_exports` 从 AppDB 移出后不迁移旧数据，也不读取旧 AppDB 表兼容。
 - 数据库路径配置包括 `appDatabase`、`logDatabase`、`metricsDatabase`，环境变量分别是 `PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、`PANEL_METRICS_DATABASE`，三者必须指向不同文件。旧 `taskDatabase` 配置、`PANEL_TASK_DATABASE` 环境变量和默认 `data/db/tasks.db` 文件仅作为升级兼容入口，启动时会迁移到 `data/db/log.db`。
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
@@ -86,10 +86,16 @@
 
 修改启动装配、配置项、运行时设置、进程日志、认证流程、API 路由、构建版本信息、数据库表/字段、错误响应结构、维护状态或恢复模式启动行为时，必须更新本文档或模块索引。
 
+## 运行事件装配
+
+- 统一运行事件模块位于 `internal/modules/runtimeevents/`，生产装配在 `internal/bootstrap/panel/app.go` 中创建服务、注册 `/api/v1/application-operations` 与 `/api/v1/system-events` 路由，并启动独立清理 worker。
+- `runtime_events`、`runtime_event_details` 和 `application_operation_records` 属于高增长运行历史，必须保存在 `Store.LogDB()`；`runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 作为 runtime settings 保存在 `Store.AppDB()`。
+- 记录保留时间必须大于或等于详情保留时间。清理 worker 先清详情并标记详情不可用，再删除过期摘要和应用操作投影。
+
 ## 密钥资产启动与存储
 
 - `bootstrap/panel.New` 必须在证书、应用和 tasks 内部 worker 启动前初始化 `internal/platform/secrets`、迁移 DNS provider 凭据、初始化 `internal/modules/keyassets` 并完成旧自签证书迁移。
-- `key_assets` 保存统一密钥与证书元数据和密文私钥；`key_asset_export_artifacts` 保存短期批量导出下载信息。
+- `key_assets` 保存统一密钥与证书元数据和密文私钥；`key_asset_exports` 位于 `Store.LogDB()`，保存短期批量导出下载信息，沿用 30 分钟 `expires_at` 语义并由密钥资产服务清理过期记录和归档文件。旧 AppDB 中的导出记录不迁移、不读取兼容。
 - `credentials.secret_ciphertext` 使用同一 `secretstore` 保存 SSH 密码、私钥和私钥口令的加密 JSON；新凭据不得把秘密写入独立文件或旧明文字段。
 - 主密钥优先读取 `PANEL_KEY_ASSETS_MASTER_KEY`，否则读取 `<dataRoot>/secrets/key-assets-master.key`；首次无资产时自动生成文件并使用 `0600` 权限。
 - 数据库存在加密资产、DNS 凭据或 SSH 凭据但主密钥缺失、格式错误或环境变量与文件不一致时，Panel 必须拒绝启动，不能生成新密钥覆盖。

@@ -31,5 +31,6 @@
 ## 当前接入记录
 
 - `web/src/views/tasks/index.vue`：任务搜索、分页和任务状态已接入 `SearchInput`、`PaginationBar`、`StatusBadge`。
+- `web/src/views/application-operations/index.vue` 与 `web/src/views/system-events/index.vue`：运行事件列表筛选、分页、状态和详情可用性提示已接入 `SearchInput`、`Select`、`PaginationBar`、`StatusBadge`、`Tooltip` 与 `Dialog`。
 - `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施编辑分区导航、部署/网关/源站服务器多选、持久化数据下载/恢复、应用归档上传和设施静态资产上传已接入统一 primitives/patterns。
 - `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector`，页面不得再在同一上下文区域叠加 Select 下拉。

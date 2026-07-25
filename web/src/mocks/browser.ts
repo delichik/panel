@@ -96,6 +96,7 @@ import {
   mockVolumes,
 } from './resources';
 import { mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
+import { applicationOperationDetail, mockApplicationOperations, mockSystemEvents, systemEventDetail } from './runtimeEvents';
 import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugSnapshot } from './debug';
@@ -640,6 +641,52 @@ export function installMockApi() {
     if (taskOperationMatch && method(init) === 'POST') {
       const result = taskOperationMatch[2] === 'retry' ? retryTask(decodeURIComponent(taskOperationMatch[1])) : runTaskNow(decodeURIComponent(taskOperationMatch[1]));
       return result ? json(result, 202) : error('task_operation_unavailable', 'Task operation is unavailable for this task.', 422);
+    }
+
+    if (url.pathname === '/api/v1/application-operations' && method(init) === 'GET') {
+      const applicationId = url.searchParams.get('applicationId') || '';
+      const status = url.searchParams.get('status') || '';
+      const source = url.searchParams.get('source') || '';
+      const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+      const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('pageSize') || 20)));
+      let items = mockApplicationOperations;
+      if (applicationId) items = items.filter((item) => item.applicationId.includes(applicationId));
+      if (status) items = items.filter((item) => item.status === status);
+      if (source) items = items.filter((item) => item.source === source);
+      const total = items.length;
+      const start = (page - 1) * pageSize;
+      return json({ items: items.slice(start, start + pageSize), total, page, pageSize });
+    }
+    const applicationOperationMatch = url.pathname.match(/^\/api\/v1\/application-operations\/([^/]+)$/);
+    if (applicationOperationMatch && method(init) === 'GET') {
+      const found = applicationOperationDetail(decodeURIComponent(applicationOperationMatch[1]));
+      return found ? json(found) : error('application_operation_detail_unavailable', 'Application operation detail is unavailable.', 404);
+    }
+
+    if (url.pathname === '/api/v1/system-events' && method(init) === 'GET') {
+      const subjectId = url.searchParams.get('subjectId') || '';
+      const eventType = url.searchParams.get('eventType') || '';
+      const severity = url.searchParams.get('severity') || '';
+      const category = url.searchParams.get('category') || '';
+      const from = url.searchParams.get('from') || '';
+      const to = url.searchParams.get('to') || '';
+      const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+      const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('pageSize') || 20)));
+      let items = mockSystemEvents;
+      if (subjectId) items = items.filter((item) => (item.subjectId || '').includes(subjectId));
+      if (eventType) items = items.filter((item) => item.eventType.includes(eventType));
+      if (severity) items = items.filter((item) => item.severity === severity);
+      if (category) items = items.filter((item) => item.category === category);
+      if (from) items = items.filter((item) => item.occurredAt >= from);
+      if (to) items = items.filter((item) => item.occurredAt <= to);
+      const total = items.length;
+      const start = (page - 1) * pageSize;
+      return json({ items: items.slice(start, start + pageSize), total, page, pageSize });
+    }
+    const systemEventMatch = url.pathname.match(/^\/api\/v1\/system-events\/([^/]+)$/);
+    if (systemEventMatch && method(init) === 'GET') {
+      const found = systemEventDetail(decodeURIComponent(systemEventMatch[1]));
+      return found ? json(found) : error('system_event_detail_unavailable', 'System event detail is unavailable.', 404);
     }
 
     if (url.pathname === '/api/v1/settings/runtime' && method(init) === 'GET') {

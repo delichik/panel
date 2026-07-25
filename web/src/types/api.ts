@@ -47,6 +47,8 @@ export type CollectionKind =
   | 'certificates'
   | 'selfSigned'
   | 'keys'
+  | 'applicationOperations'
+  | 'systemEvents'
   | 'tasks'
   | 'settings'
   | 'debug';

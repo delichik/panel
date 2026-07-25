@@ -25,6 +25,7 @@
 - 设施应用 API：`web/src/api/facilityApps.ts`
 - 类型：`web/src/types/applications.ts`、`web/src/types/facilityApps.ts`
 - Mock：`web/src/mocks/applications.ts`，由 `web/src/mocks/browser.ts` 挂载同名正式路径。
+- 操作记录入口：应用详情跳转 `/application-operations?applicationId=<id>`，由统一运行事件投影展示用户操作和系统协调记录。
 
 ## API 范围
 
@@ -46,7 +47,7 @@
 
 ## 数据与行为约定
 
-- 主要业务表包括 `applications`、`application_files`、`application_revisions`、`application_instances`，保存在 `Store.AppDB()`；高增长的部署 lifecycle 历史表 `application_lifecycle_operations`、`application_lifecycle_targets` 保存在 `Store.LogDB()`。
+- 主要业务表包括 `applications`、`application_files`、`application_instances`，保存在 `Store.AppDB()`；应用配置修订记录 `application_revisions` 和高增长的部署 lifecycle 历史表 `application_lifecycle_operations`、`application_lifecycle_targets` 保存在 `Store.LogDB()`。`application_revisions` 从 AppDB 移出后不迁移旧历史，也不读取旧 AppDB 表兼容。
 - 当前迁移只维护 LogDB 中 lifecycle 表的字段和索引演进，不再从 AppDB 旧 lifecycle 表复制历史数据，也不再清理 `applications.persistent_path` 或重建旧约束的 `application_files` 表。
 - 应用层采用轻量控制平面模型：`applications` 保存 desired state，`kind=application` 表示普通用户应用，`kind=facility_application` 表示设施应用投影出的隐藏受控应用；`deletion_requested=1` 表示删除期望已提交，普通列表隐藏该应用并由协调器清理运行时资源。业务 HTTP 入口不得直接部署、停止或清理远端容器，只能校验、保存 desired state 并触发 `application_reconcile`。
 - appspec 以 YAML 输入，经 `internal/modules/applications/spec/` 校验并渲染为 `appruntime.Spec`；部署时由 Panel 选择目标服务器并编排运行时步骤，再通过目标机 `panel-agent` 的原子接口写入托管文件、拉取镜像、删除旧容器、创建容器、启动容器和刷新状态。
@@ -159,7 +160,7 @@
 - The durable editor API consists of `POST /api/v1/application-edit-sessions`, `GET /api/v1/application-edit-sessions/recoverable`, `GET /api/v1/application-edit-sessions/{id}`, `PATCH /draft`, `PUT /files/{fileKey}`, `POST /archives`, `DELETE /files/{fileKey}`, `POST /validate`, `POST /preview`, `POST /commit`, and `DELETE /api/v1/application-edit-sessions/{id}`. File mutations require both a client operation ID and an idempotency key; commit requires the current session revision, base resource version, preview token, and idempotency key.
 - Application edit sessions are owned by the stable single-administrator principal, not by the editable administrator username. Renaming the account must not hide or orphan recoverable drafts.
 - `baseResourceVersion` is a snapshot of the application configuration version and its configuration `updated_at` value when the session starts. Session reads must never replace the base timestamp with the application's current timestamp.
-- Updating an application with configuration identical to the persisted user-owned fields and file set is a no-op for `version`; commit performs the base-version comparison as a CAS inside the same transaction that replaces application files and inserts the application revision. A losing concurrent edit receives `resource_version_conflict`, and none of its application/file/revision changes persist.
+- Updating an application with configuration identical to the persisted user-owned fields and file set is a no-op for `version`; commit performs the base-version comparison as a CAS inside the same AppDB transaction that updates the application row and replaces application files. Application revisions are LogDB history records written after the AppDB state commits on a best-effort basis; a revision write failure must be logged but must not negate the saved application state or make the API report the save as failed. A losing concurrent edit receives `resource_version_conflict`, and none of its AppDB application/file changes persist.
 - Application `version` and configuration `updated_at` change only for user-owned configuration mutations, including application-file create, content replacement, and deletion. Saving an identical application definition or identical file is a no-op. Image inspection, resolved-variable refresh, renderer snapshots, and other derived/runtime refreshes persist through the derived update path and must not create edit conflicts or overwrite concurrent user fields.
 - Every file upload/replacement writes a new immutable session blob before the database transaction. Revision, idempotency, path, or database conflicts delete the new blob and preserve the previously referenced blob; after the row transaction commits, the replaced blob is removed.
 - Cleanup and expiry logic must never expire or remove the workspace of a `committing` session. An expired commit lease is resolved by commit recovery before ordinary cleanup can act on the session.
@@ -194,3 +195,9 @@
 - Retryable lifecycle failures persist exponential backoff with bounded jitter on `next_run_at`; fallback task execution must not claim `planned` targets or `failed_retryable` targets directly. Successful or superseded targets reset retry lineage fields and release leases.
 - Dispatcher startup must recover durable target state before accepting queue work. Expired leases before remote mutation return to `ready`; expired leases after mutation phases move to `failed_retryable` with `lease_lost`, increment `attempt`, and persist a future `next_run_at` so they do not remain active blockers forever.
 - Application restart is not a direct Agent/Docker restart path. HTTP restart and `application_restart` task execution force a planner pass that creates or reuses apply lifecycle targets; the dispatcher then owns target task creation and runtime mutation. Persistent data restore may write the uploaded archive through the Agent persistent-data API, but any post-restore application start/restart must force lifecycle planning rather than calling runtime restart directly.
+
+## Operation Records
+
+- Application lifecycle writes into the unified runtime event system when operation rows are created, targets are queued/claimed/succeeded/failed, and operation aggregation reaches completed or failed states.
+- `application_operation_records` is a projection for the “操作记录” page and application-detail operation entry. It summarizes lifecycle operation status, target counts, latest event time and detail availability; it must not become the durable deployment state machine.
+- Application operation details may expire before the operation summary. When runtime event details are pruned, the projection keeps its summary and sets `detail_available=false`.

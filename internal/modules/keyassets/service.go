@@ -36,6 +36,7 @@ type applicationRefresher interface {
 
 type Service struct {
 	db           *sql.DB
+	logDB        *sql.DB
 	cfg          config.Config
 	secrets      *secretstore.Store
 	tasks        *tasks.Service
@@ -45,6 +46,7 @@ type Service struct {
 
 	planMu      sync.Mutex
 	importPlans map[string]*importPlan
+	cleanupOnce sync.Once
 }
 
 type storedAsset struct {
@@ -67,6 +69,14 @@ func WithApplicationRefresher(refresher applicationRefresher) Option {
 	return func(s *Service) { s.applications = refresher }
 }
 
+func WithLogDB(db *sql.DB) Option {
+	return func(s *Service) {
+		if db != nil {
+			s.logDB = db
+		}
+	}
+}
+
 func NewService(db *sql.DB, cfg config.Config, secrets *secretstore.Store, taskSvc *tasks.Service, opts ...Option) *Service {
 	tmpRoot := filepath.Join(cfg.DataRoot, "tmp", "key-assets")
 	s := &Service{
@@ -81,7 +91,16 @@ func NewService(db *sql.DB, cfg config.Config, secrets *secretstore.Store, taskS
 	for _, opt := range opts {
 		opt(s)
 	}
+	s.cleanupExpiredExports(context.Background(), time.Now().UTC())
+	s.startExportCleanup()
 	return s
+}
+
+func (s *Service) exportDB() *sql.DB {
+	if s.logDB != nil {
+		return s.logDB
+	}
+	return s.db
 }
 
 func (s *Service) EnsureLegacySelfSignedMigrated(ctx context.Context) error {
@@ -828,7 +847,7 @@ func (s *Service) CreateExport(ctx context.Context, in ExportRequest) (ExportRes
 	}
 	now := time.Now().UTC()
 	expiresAt := now.Add(30 * time.Minute)
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO key_asset_exports(task_id,filename,file_path,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?)
+	if _, err := s.exportDB().ExecContext(ctx, `INSERT INTO key_asset_exports(task_id,filename,file_path,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?)
 		ON CONFLICT(task_id) DO UPDATE SET filename=excluded.filename,file_path=excluded.file_path,expires_at=excluded.expires_at,updated_at=excluded.updated_at`,
 		taskID, filename, filePath, formatTime(expiresAt), formatTime(now), formatTime(now)); err != nil {
 		_ = fail(err)
@@ -854,14 +873,14 @@ func (s *Service) DownloadExport(ctx context.Context, taskID string) ([]byte, st
 		}
 	}
 	var filename, filePath, expiresAtRaw string
-	if err := s.db.QueryRowContext(ctx, `SELECT filename,file_path,expires_at FROM key_asset_exports WHERE task_id=?`, taskID).Scan(&filename, &filePath, &expiresAtRaw); err != nil {
+	if err := s.exportDB().QueryRowContext(ctx, `SELECT filename,file_path,expires_at FROM key_asset_exports WHERE task_id=?`, taskID).Scan(&filename, &filePath, &expiresAtRaw); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, "", panelerr.NotFound("key_asset_export")
 		}
 		return nil, "", err
 	}
 	if expiresAt := parseTime(expiresAtRaw); !expiresAt.IsZero() && time.Now().UTC().After(expiresAt) {
-		_, _ = s.db.ExecContext(ctx, `DELETE FROM key_asset_exports WHERE task_id=?`, taskID)
+		_, _ = s.exportDB().ExecContext(ctx, `DELETE FROM key_asset_exports WHERE task_id=?`, taskID)
 		_ = os.Remove(filePath)
 		return nil, "", panelerr.NotFound("key_asset_export")
 	}
@@ -873,6 +892,51 @@ func (s *Service) DownloadExport(ctx context.Context, taskID string) ([]byte, st
 		return nil, "", err
 	}
 	return content, filename, nil
+}
+
+func (s *Service) startExportCleanup() {
+	s.cleanupOnce.Do(func() {
+		go func() {
+			ticker := time.NewTicker(5 * time.Minute)
+			defer ticker.Stop()
+			for range ticker.C {
+				s.cleanupExpiredExports(context.Background(), time.Now().UTC())
+			}
+		}()
+	})
+}
+
+func (s *Service) cleanupExpiredExports(ctx context.Context, now time.Time) {
+	rows, err := s.exportDB().QueryContext(ctx, `SELECT task_id,file_path FROM key_asset_exports WHERE expires_at<>'' AND expires_at<=?`, formatTime(now))
+	if err != nil {
+		return
+	}
+
+	expired := map[string]string{}
+	for rows.Next() {
+		var taskID, filePath string
+		if err := rows.Scan(&taskID, &filePath); err != nil {
+			_ = rows.Close()
+			return
+		}
+		expired[taskID] = filePath
+	}
+	if err := rows.Close(); err != nil {
+		return
+	}
+	if rows.Err() != nil {
+		return
+	}
+	if len(expired) == 0 {
+		return
+	}
+
+	for taskID, filePath := range expired {
+		if _, err := s.exportDB().ExecContext(ctx, `DELETE FROM key_asset_exports WHERE task_id=? AND expires_at<=?`, taskID, formatTime(now)); err != nil {
+			continue
+		}
+		_ = os.Remove(filePath)
+	}
 }
 
 func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest) (ImportPreflightResult, error) {

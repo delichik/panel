@@ -49,6 +49,9 @@ const form = reactive({
   metricsCollectionIntervalSeconds: '60',
   containerReportIntervalSeconds: '5',
   cleanupSchedule: 'daily',
+  runtimeEventRetentionDays: '30',
+  runtimeEventDetailRetentionDays: '7',
+  runtimeEventCleanupSchedule: 'daily',
   tokenExpiration: '1d',
   language: 'zh-CN',
   logLevel: 'info',
@@ -78,6 +81,11 @@ const tokenOptions = computed(() => ['10m', '1h', '1d', '5d', '30d', 'never'].ma
 const languageOptions = computed(() => [{ label: t('settingsPage.language.en'), value: 'en' }, { label: t('settingsPage.language.zh'), value: 'zh-CN' }]);
 const logOptions = computed(() => ['debug', 'info', 'warn', 'error'].map((value) => ({ label: value, value })));
 const jwtSecretValid = computed(() => form.jwtSecret.trim().length >= 16);
+const runtimeEventRetentionValid = computed(() => {
+  const retention = Number(form.runtimeEventRetentionDays);
+  const detailRetention = Number(form.runtimeEventDetailRetentionDays);
+  return Number.isFinite(retention) && Number.isFinite(detailRetention) && retention >= detailRetention;
+});
 
 watch(() => route.path, (path) => {
   activeSection.value = sectionFromPath(path);
@@ -106,6 +114,9 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
     metricsCollectionIntervalSeconds: String(settings.metricsCollectionIntervalSeconds),
     containerReportIntervalSeconds: String(settings.containerReportIntervalSeconds),
     cleanupSchedule: settings.cleanupSchedule,
+    runtimeEventRetentionDays: String(settings.runtimeEventRetentionDays),
+    runtimeEventDetailRetentionDays: String(settings.runtimeEventDetailRetentionDays),
+    runtimeEventCleanupSchedule: settings.runtimeEventCleanupSchedule,
     tokenExpiration: settings.tokenExpiration,
     language: settings.language,
     logLevel: settings.logLevel,
@@ -145,6 +156,10 @@ async function resetSystemCertificate() {
 
 async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'system') {
   if (!runtime.value) return;
+  if (kind === 'runtime' && !runtimeEventRetentionValid.value) {
+    actionError.value = t('settingsPage.runtimeEventRetentionValidation');
+    return;
+  }
   await run(`save-${kind}`, async () => {
     runtime.value = await settingsApi.updateRuntime(buildRuntimeUpdate(kind));
     hydrate(runtime.value, serverVariables.value);
@@ -209,6 +224,9 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
     metricsCollectionIntervalSeconds: current.metricsCollectionIntervalSeconds,
     containerReportIntervalSeconds: current.containerReportIntervalSeconds,
     cleanupSchedule: current.cleanupSchedule,
+    runtimeEventRetentionDays: current.runtimeEventRetentionDays,
+    runtimeEventDetailRetentionDays: current.runtimeEventDetailRetentionDays,
+    runtimeEventCleanupSchedule: current.runtimeEventCleanupSchedule,
     tokenExpiration: current.tokenExpiration,
     language: current.language,
     logLevel: current.logLevel,
@@ -221,6 +239,9 @@ function buildRuntimeUpdate(kind: 'runtime' | 'security' | 'certificates' | 'sys
     update.metricsCollectionIntervalSeconds = numberField(form.metricsCollectionIntervalSeconds, current.metricsCollectionIntervalSeconds);
     update.containerReportIntervalSeconds = numberField(form.containerReportIntervalSeconds, current.containerReportIntervalSeconds);
     update.cleanupSchedule = form.cleanupSchedule;
+    update.runtimeEventRetentionDays = numberField(form.runtimeEventRetentionDays, current.runtimeEventRetentionDays);
+    update.runtimeEventDetailRetentionDays = numberField(form.runtimeEventDetailRetentionDays, current.runtimeEventDetailRetentionDays);
+    update.runtimeEventCleanupSchedule = form.runtimeEventCleanupSchedule;
     update.language = form.language;
     update.logLevel = form.logLevel;
   }
@@ -327,10 +348,14 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsInterval') }}<Input v-model="form.metricsCollectionIntervalSeconds" type="number" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.containerInterval') }}<Input v-model="form.containerReportIntervalSeconds" type="number" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.cleanupSchedule') }}<Select v-model="form.cleanupSchedule" :options="cleanupOptions" /></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventRetention') }}<Input v-model="form.runtimeEventRetentionDays" type="number" min="1" /></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventDetailRetention') }}<Input v-model="form.runtimeEventDetailRetentionDays" type="number" min="1" /></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventCleanupSchedule') }}<Select v-model="form.runtimeEventCleanupSchedule" :options="cleanupOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.language') }}<Select v-model="form.language" :options="languageOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.logLevel') }}<Select v-model="form.logLevel" :options="logOptions" /></label>
           </div>
-          <Button class="w-fit" variant="primary" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+          <p v-if="!runtimeEventRetentionValid" class="m-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ t('settingsPage.runtimeEventRetentionValidation') }}</p>
+          <Button class="w-fit" variant="primary" :disabled="!runtimeEventRetentionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
         <section v-else-if="activeSection === 'security'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">

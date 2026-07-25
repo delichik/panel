@@ -8,6 +8,8 @@ import ResourcesPage from '@/views/resources/index.vue';
 import ApplicationsPage from '@/views/applications/index.vue';
 import DnsPage from '@/views/dns/index.vue';
 import CertificatesPage from '@/views/certificates/index.vue';
+import ApplicationOperationsPage from '@/views/application-operations/index.vue';
+import SystemEventsPage from '@/views/system-events/index.vue';
 import TasksPage from '@/views/tasks/index.vue';
 import SettingsPage from '@/views/settings/index.vue';
 import MaintenancePage from '@/views/maintenance/index.vue';
@@ -48,6 +50,8 @@ export const router = createRouter({
         { path: 'certificates/domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
         { path: 'certificates/self-signed', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
         { path: 'certificates/keys', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
+        { path: 'application-operations', component: ApplicationOperationsPage, meta: { titleKey: 'routes.applicationOperations.title' } },
+        { path: 'system-events', component: SystemEventsPage, meta: { titleKey: 'routes.systemEvents.title' } },
         { path: 'tasks', component: TasksPage, meta: { titleKey: 'routes.tasks.title' } },
         { path: 'settings', redirect: '/settings/general' },
         { path: 'settings/general', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },

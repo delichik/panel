@@ -19,6 +19,7 @@
 | Vue 页面、API client、Pinia store、路由、样式和前端测试 | [frontend.md](frontend.md) |
 | 服务器、SSH 凭据、系统探测、UFW、概览指标、APT 软件包 | [servers.md](servers.md) |
 | 后台任务、任务步骤、任务日志、重试、手动运行、周期调度 | [tasks-scheduler.md](tasks-scheduler.md) |
+| 统一运行事件、操作记录、系统事件、详情保留状态 | [runtime-events.md](runtime-events.md) |
 | 应用定义、appspec、文件、修订、部署、运行时、日志、镜像更新 | [applications.md](applications.md) |
 | Docker 容器、镜像、网络、卷、设施应用、容器操作队列、镜像检查和 Application 容器协调 | [containerization.md](containerization.md) |
 | DNS 域名、Cloudflare、ACME 证书、证书续签 | [dns-certificates.md](dns-certificates.md) |

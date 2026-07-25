@@ -24,6 +24,7 @@ import (
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/observability/overview"
 	"panel/internal/modules/packages"
+	"panel/internal/modules/runtimeevents"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/servers/credential"
 	"panel/internal/modules/settings"
@@ -45,6 +46,7 @@ type App struct {
 	auth           *auth.Service
 	tasks          *tasks.Worker
 	metricsCleanup *metrics.CleanupWorker
+	eventCleanup   *runtimeevents.CleanupWorker
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
 	deployments    applications.DeploymentDispatcher
@@ -65,6 +67,8 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	taskSvc := tasks.NewService(store.LogDB())
+	eventSvc := runtimeevents.NewService(store.LogDB())
+	taskSvc.SetRuntimeEvents(eventSvc)
 	installationSvc := installation.NewService(store.AppDB())
 	certBridge := &applicationCertificateBridge{}
 	containerBridge := &applicationContainerBridge{}
@@ -74,6 +78,7 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	keyAssetSvc := keyassets.NewService(store.AppDB(), cfg, secretStore, taskSvc,
+		keyassets.WithLogDB(store.LogDB()),
 		keyassets.WithApplicationRefresher(certBridge),
 	)
 	if err := keyAssetSvc.EnsureLegacySelfSignedMigrated(context.Background()); err != nil {
@@ -124,6 +129,7 @@ func New(cfg config.Config) (*App, error) {
 		applications.WithInternalFileProvider(internalFileRegistry),
 		applications.WithContainerOperationQueue(containerBridge),
 		applications.WithLogDB(store.LogDB()),
+		applications.WithRuntimeEvents(eventSvc),
 	)
 	certBridge.apps = applicationSvc
 	containerBridge.apps = applicationSvc
@@ -182,6 +188,14 @@ func New(cfg config.Config) (*App, error) {
 			Schedule:      runtime.CleanupSchedule,
 		}
 	})
+	eventCleanup := runtimeevents.NewCleanupWorker(eventSvc, func() runtimeevents.CleanupSettings {
+		runtime := settingsSvc.Runtime()
+		return runtimeevents.CleanupSettings{
+			RetentionDays:       runtime.RuntimeEventRetentionDays,
+			DetailRetentionDays: runtime.RuntimeEventDetailRetentionDays,
+			Schedule:            runtime.RuntimeEventCleanupSchedule,
+		}
+	})
 	backupSvc := backups.NewService(backups.ArchiveConfig{
 		DataRoot:        cfg.DataRoot,
 		AppDatabase:     cfg.AppDatabase,
@@ -197,6 +211,7 @@ func New(cfg config.Config) (*App, error) {
 		auth:           authSvc,
 		tasks:          taskWorker,
 		metricsCleanup: metricsCleanup,
+		eventCleanup:   eventCleanup,
 		system:         systemSvc,
 		agentReports:   reportCollector,
 		deployments:    deploymentDispatcher,
@@ -211,6 +226,7 @@ func New(cfg config.Config) (*App, error) {
 	}
 	taskWorker.Start(context.Background())
 	metricsCleanup.Start(context.Background())
+	eventCleanup.Start(context.Background())
 	reportCollector.Start(context.Background())
 	var controlServer *installation.ControlServer
 	if goruntime.GOOS != "windows" {
@@ -219,6 +235,7 @@ func New(cfg config.Config) (*App, error) {
 		if err != nil {
 			taskWorker.Stop()
 			metricsCleanup.Stop()
+			eventCleanup.Stop()
 			reportCollector.Stop()
 			systemSvc.Close()
 			_ = deploymentDispatcher.Stop(context.Background())
@@ -230,7 +247,7 @@ func New(cfg config.Config) (*App, error) {
 	logging.L().Info("background services started")
 	taskHandler := tasks.NewHandler(taskSvc, taskWorker)
 	taskHandler.SetDeploymentProjectionProvider(applicationSvc)
-	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
+	a.routes(auth.NewHandler(authSvc), credential.NewHandler(credSvc), dns.NewHandler(dnsSvc), certs.NewHandler(certSvc), keyassets.NewHandler(keyAssetSvc), server.NewHandler(serverSvc), taskHandler, metrics.NewHandler(metricsSvc), packages.NewHandler(packageSvc), runtimeevents.NewHandler(eventSvc), applications.NewHandler(applicationSvc), containerization.NewHandler(containerSvc), facilityapps.NewHandler(facilitySvc), overview.NewHandler(overviewSvc), settings.NewHandler(settingsSvc), systeminfo.NewHandler(systemSvc), diagnostics.NewHandler(diagnosticsSvc), backups.NewHandler(backupSvc))
 	logging.L().Info("application initialized")
 	return a, nil
 }
@@ -244,6 +261,9 @@ func (a *App) Close() error {
 	}
 	if a.metricsCleanup != nil {
 		a.metricsCleanup.Stop()
+	}
+	if a.eventCleanup != nil {
+		a.eventCleanup.Stop()
 	}
 	if a.system != nil {
 		a.system.Close()
@@ -277,7 +297,7 @@ func applicationSaveSessionDir(cfg config.Config) string {
 	return filepath.Join(cfg.DataRoot, "tmp", "application-save-sessions")
 }
 
-func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
+func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.Handler, certH *certs.Handler, keyAssetH *keyassets.Handler, serverH *server.Handler, taskH *tasks.Handler, metricsH *metrics.Handler, packageH *packages.Handler, eventH *runtimeevents.Handler, applicationH *applications.Handler, containerH *containerization.Handler, facilityH *facilityapps.Handler, overviewH *overview.Handler, settingsH *settings.Handler, systemH *systeminfo.Handler, diagnosticsH *diagnostics.Handler, backupH *backups.Handler) {
 	a.mux.HandleFunc("POST /api/v1/auth/login", authH.Login)
 	a.mux.Handle("POST /api/v1/auth/logout", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.Logout)))
 	a.mux.Handle("POST /api/v1/auth/account", a.auth.RequireAuthAllowPasswordChange(http.HandlerFunc(authH.UpdateAccount)))
@@ -293,6 +313,7 @@ func (a *App) routes(authH *auth.Handler, credH *credential.Handler, dnsH *dns.H
 	keyAssetH.RegisterRoutes(a.mux, authenticated)
 	serverH.RegisterRoutes(a.mux, authenticated)
 	metricsH.RegisterRoutes(a.mux, authenticated)
+	eventH.RegisterRoutes(a.mux, authenticated)
 	packageH.RegisterRoutes(a.mux, authenticated)
 	containerH.RegisterRoutes(a.mux, authenticated)
 	facilityH.RegisterRoutes(a.mux, authenticated)
