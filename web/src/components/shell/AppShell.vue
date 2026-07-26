@@ -48,7 +48,7 @@ async function signOut() {
           <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
         </div>
       </div>
-      <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" aria-label="Main">
+      <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
         <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
           <div v-if="!collapsed" class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
           <div v-else-if="group.key !== navGroups[0]?.key" class="mx-2 my-3 h-px bg-border" />
@@ -122,7 +122,7 @@ async function signOut() {
               <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
             </div>
           </div>
-          <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" aria-label="Main">
+          <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
             <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
               <div class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
               <RouterLink

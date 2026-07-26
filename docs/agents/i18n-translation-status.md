@@ -1,5 +1,8 @@
 # 多语言翻译状态
 
+- `web/src/components/ui/Dialog.vue`、`web/src/components/ui/ToastProvider.vue`、`web/src/components/shell/AppShell.vue`
+  - 对话框关闭、Toast 关闭和主导航区域的可访问名称已接入英文与简体中文词条。
+
 - `web/src/views/application-operations/index.vue`、`web/src/views/system-events/index.vue`、`web/src/components/shell/navModel.ts`、`web/src/views/applications/index.vue`、`web/src/views/certificates/index.vue`
   - “操作记录”导航位于“应用”一级菜单最后一个，路由仍保留 `/application-operations`；操作记录和系统事件的路由、筛选、分页、空态、状态、详情弹窗和“详情已清理”提示已接入英文与简体中文词条；证书详情旧任务中心提示改为系统事件语义；应用 ID、操作 ID、事件类型、日志引用和后端诊断摘要保持运行时原值。
 

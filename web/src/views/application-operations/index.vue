@@ -15,6 +15,7 @@ import Tooltip from '@/components/ui/Tooltip.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import { translateRuntimeEventType, useI18n } from '@/i18n';
 import type { ApplicationOperationDetailDto, ApplicationOperationDto } from '@/types/applicationOperations';
+import { createLatestRequestGuard, normalizePage } from '@/views/_shared/requestState';
 
 type OperationRow = ApplicationOperationDto & Record<string, unknown>;
 
@@ -24,7 +25,7 @@ const router = useRouter();
 
 const rows = ref<ApplicationOperationDto[]>([]);
 const total = ref(0);
-const page = ref(Math.max(1, Number(route.query.page || 1)));
+const page = ref(normalizePage(route.query.page));
 const pageSize = 20;
 const search = ref(String(route.query.applicationId || ''));
 const status = ref(String(route.query.status || ''));
@@ -34,6 +35,8 @@ const detailLoading = ref(false);
 const error = ref('');
 const detail = ref<ApplicationOperationDetailDto | null>(null);
 const detailOpen = ref(false);
+const listRequests = createLatestRequestGuard();
+const detailRequests = createLatestRequestGuard();
 
 const columns = computed<Array<{ key: keyof OperationRow & string; label: string; align?: 'left' | 'right' }>>(() => [
   { key: 'applicationNameSnapshot', label: t('applicationOperationsPage.column.application') },
@@ -62,7 +65,17 @@ const sourceOptions = computed(() => [
   { label: t('applicationOperationsPage.source.scheduler'), value: 'scheduler' },
 ]);
 
-watch([search, status, source, page], () => {
+watch([search, status, source], () => {
+  if (page.value !== 1) {
+    page.value = 1;
+    return;
+  }
+  syncQueryAndLoad();
+});
+
+watch(page, syncQueryAndLoad);
+
+function syncQueryAndLoad() {
   void router.replace({
     query: {
       ...route.query,
@@ -73,13 +86,10 @@ watch([search, status, source, page], () => {
     },
   });
   void load();
-});
-
-watch([search, status, source], () => {
-  page.value = 1;
-});
+}
 
 async function load() {
+  const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   try {
@@ -90,30 +100,36 @@ async function load() {
       page: page.value,
       pageSize,
     });
+    if (!listRequests.isCurrent(requestId)) return;
     rows.value = result.items;
     total.value = result.total;
     if (result.page && result.page !== page.value) page.value = result.page;
   } catch (err) {
+    if (!listRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('applicationOperationsPage.loadFailed');
     rows.value = [];
     total.value = 0;
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) loading.value = false;
   }
 }
 
 async function openDetail(row: ApplicationOperationDto) {
   if (!row.detailAvailable) return;
+  const requestId = detailRequests.begin();
   detailLoading.value = true;
   detailOpen.value = true;
   detail.value = null;
   try {
-    detail.value = await applicationOperationsApi.get(row.operationId);
+    const result = await applicationOperationsApi.get(row.operationId);
+    if (!detailRequests.isCurrent(requestId)) return;
+    detail.value = result;
   } catch (err) {
+    if (!detailRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('applicationOperationsPage.detailLoadFailed');
     detailOpen.value = false;
   } finally {
-    detailLoading.value = false;
+    if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
   }
 }
 

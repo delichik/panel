@@ -22,6 +22,7 @@ const emit = defineEmits<{
 const attrs = useAttrs();
 const root = ref<HTMLElement | null>(null);
 const button = ref<HTMLButtonElement | null>(null);
+const listbox = ref<HTMLElement | null>(null);
 const open = ref(false);
 const activeIndex = ref(-1);
 const id = useId();
@@ -32,6 +33,7 @@ const enabledOptions = computed(() => props.options.filter((option) => !option.d
 const isDisabled = computed(() => props.disabled);
 const activeOption = computed(() => props.options[activeIndex.value]);
 const activeOptionId = computed(() => (open.value && activeOption.value ? `${id}-option-${activeIndex.value}` : undefined));
+const listboxStyle = ref<Record<string, string>>({});
 
 const rootClasses = computed(() => cn('relative w-full min-w-0', attrs.class as string));
 const buttonClasses = computed(() => cn(
@@ -79,7 +81,7 @@ function scrollActiveIntoView() {
   nextTick(() => {
     if (activeIndex.value < 0) return;
     const item = document.getElementById(`${id}-option-${activeIndex.value}`);
-    item?.scrollIntoView({ block: 'nearest' });
+    if (typeof item?.scrollIntoView === 'function') item.scrollIntoView({ block: 'nearest' });
   });
 }
 
@@ -88,6 +90,7 @@ function openList() {
   open.value = true;
   activeIndex.value = currentOrFirstEnabledIndex();
   scrollActiveIntoView();
+  nextTick(updateListboxPosition);
 }
 
 function closeList({ restoreFocus = false } = {}) {
@@ -157,15 +160,43 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function onDocumentPointerDown(event: PointerEvent) {
-  if (root.value && !root.value.contains(event.target as Node)) closeList();
+  const target = event.target as Node;
+  if (root.value && !root.value.contains(target) && !listbox.value?.contains(target)) closeList();
+}
+
+function updateListboxPosition() {
+  if (!open.value || !button.value) return;
+  const rect = button.value.getBoundingClientRect();
+  const gap = 8;
+  const viewportPadding = 16;
+  const availableBelow = window.innerHeight - rect.bottom - gap - viewportPadding;
+  const availableAbove = rect.top - gap - viewportPadding;
+  const placeAbove = availableBelow < 160 && availableAbove > availableBelow;
+  const maxHeight = Math.max(96, Math.min(256, placeAbove ? availableAbove : availableBelow));
+  listboxStyle.value = {
+    position: 'fixed',
+    left: `${rect.left}px`,
+    top: placeAbove ? 'auto' : `${rect.bottom + gap}px`,
+    bottom: placeAbove ? `${window.innerHeight - rect.top + gap}px` : 'auto',
+    width: `${rect.width}px`,
+    maxHeight: `${maxHeight}px`,
+  };
 }
 
 watch(() => props.modelValue, () => {
   if (open.value) activeIndex.value = currentOrFirstEnabledIndex();
 });
 
-onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown));
-onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPointerDown));
+onMounted(() => {
+  document.addEventListener('pointerdown', onDocumentPointerDown);
+  window.addEventListener('resize', updateListboxPosition);
+  window.addEventListener('scroll', updateListboxPosition, true);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', onDocumentPointerDown);
+  window.removeEventListener('resize', updateListboxPosition);
+  window.removeEventListener('scroll', updateListboxPosition, true);
+});
 </script>
 
 <template>
@@ -205,14 +236,17 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
       <ChevronDown class="size-4 shrink-0 text-muted-foreground transition-transform duration-150 ease-out" :class="open ? 'rotate-180' : undefined" aria-hidden="true" />
     </button>
 
-    <div
-      v-if="open"
-      :id="`${id}-listbox`"
-      class="motion-popover absolute left-0 right-0 z-50 mt-2 max-h-64 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
-      role="listbox"
-      :aria-labelledby="attrs.id as string | undefined"
-      @keydown="onKeydown"
-    >
+    <Teleport to="body">
+      <div
+        v-if="open"
+        :id="`${id}-listbox`"
+        ref="listbox"
+        class="motion-popover z-50 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+        :style="listboxStyle"
+        role="listbox"
+        :aria-labelledby="attrs.id as string | undefined"
+        @keydown="onKeydown"
+      >
       <button
         v-for="(option, index) in options"
         :id="`${id}-option-${index}`"
@@ -232,6 +266,7 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPoin
         <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
         <Check v-if="modelValue === option.value" class="size-4 shrink-0 text-foreground" aria-hidden="true" />
       </button>
-    </div>
+      </div>
+    </Teleport>
   </div>
 </template>

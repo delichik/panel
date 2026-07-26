@@ -15,6 +15,7 @@ import Tooltip from '@/components/ui/Tooltip.vue';
 import ListPage from '@/components/templates/ListPage.vue';
 import { translateRuntimeEventType, useI18n } from '@/i18n';
 import type { SystemEventDetailDto, SystemEventDto } from '@/types/systemEvents';
+import { createLatestRequestGuard, normalizePage } from '@/views/_shared/requestState';
 
 type EventRow = SystemEventDto & Record<string, unknown>;
 
@@ -24,7 +25,7 @@ const router = useRouter();
 
 const rows = ref<SystemEventDto[]>([]);
 const total = ref(0);
-const page = ref(Math.max(1, Number(route.query.page || 1)));
+const page = ref(normalizePage(route.query.page));
 const pageSize = 20;
 const subjectId = ref(String(route.query.subjectId || ''));
 const eventType = ref(String(route.query.eventType || ''));
@@ -35,6 +36,8 @@ const detailLoading = ref(false);
 const error = ref('');
 const detail = ref<SystemEventDetailDto | null>(null);
 const detailOpen = ref(false);
+const listRequests = createLatestRequestGuard();
+const detailRequests = createLatestRequestGuard();
 
 const columns = computed<Array<{ key: keyof EventRow & string; label: string; align?: 'left' | 'right' }>>(() => [
   { key: 'occurredAt', label: t('systemEventsPage.column.time') },
@@ -64,7 +67,17 @@ const categoryOptions = computed(() => [
   { label: t('systemEventsPage.category.system'), value: 'system' },
 ]);
 
-watch([subjectId, eventType, severity, category, page], () => {
+watch([subjectId, eventType, severity, category], () => {
+  if (page.value !== 1) {
+    page.value = 1;
+    return;
+  }
+  syncQueryAndLoad();
+});
+
+watch(page, syncQueryAndLoad);
+
+function syncQueryAndLoad() {
   void router.replace({
     query: {
       ...route.query,
@@ -76,13 +89,10 @@ watch([subjectId, eventType, severity, category, page], () => {
     },
   });
   void load();
-});
-
-watch([subjectId, eventType, severity, category], () => {
-  page.value = 1;
-});
+}
 
 async function load() {
+  const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   try {
@@ -94,30 +104,36 @@ async function load() {
       page: page.value,
       pageSize,
     });
+    if (!listRequests.isCurrent(requestId)) return;
     rows.value = result.items;
     total.value = result.total;
     if (result.page && result.page !== page.value) page.value = result.page;
   } catch (err) {
+    if (!listRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('systemEventsPage.loadFailed');
     rows.value = [];
     total.value = 0;
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) loading.value = false;
   }
 }
 
 async function openDetail(row: SystemEventDto) {
   if (!row.detailAvailable) return;
+  const requestId = detailRequests.begin();
   detailLoading.value = true;
   detailOpen.value = true;
   detail.value = null;
   try {
-    detail.value = await systemEventsApi.get(row.id);
+    const result = await systemEventsApi.get(row.id);
+    if (!detailRequests.isCurrent(requestId)) return;
+    detail.value = result;
   } catch (err) {
+    if (!detailRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('systemEventsPage.detailLoadFailed');
     detailOpen.value = false;
   } finally {
-    detailLoading.value = false;
+    if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
   }
 }
 

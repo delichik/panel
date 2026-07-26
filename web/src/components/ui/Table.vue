@@ -24,17 +24,16 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
 </script>
 
 <template>
-  <div class="overflow-hidden rounded-xl border border-border">
-    <div class="max-h-full overflow-auto">
-      <table class="w-full border-collapse text-sm" :aria-busy="loading ? 'true' : undefined" :aria-label="loading && loadingLabel ? loadingLabel : undefined">
-        <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase text-muted-foreground">
+  <div class="min-h-0 overflow-auto rounded-xl border border-border">
+    <table class="w-full border-collapse text-sm" :aria-busy="loading ? 'true' : undefined" :aria-label="loading && loadingLabel ? loadingLabel : undefined">
+      <thead class="sticky top-0 z-10 bg-muted text-xs font-semibold uppercase text-muted-foreground">
           <tr>
             <th v-for="column in columns" :key="column.key" class="border-b border-border px-3 py-2" :class="column.align === 'right' ? 'text-right' : 'text-left'">
               {{ column.label }}
             </th>
           </tr>
-        </thead>
-        <tbody class="divide-y divide-border bg-background">
+      </thead>
+      <tbody class="divide-y divide-border bg-background">
           <template v-if="loading && !rows.length">
             <tr v-for="rowIndex in loadingRows" :key="`loading-${rowIndex}`">
               <td v-for="(column, columnIndex) in columns" :key="column.key" class="px-3 py-3">
@@ -49,8 +48,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
               </slot>
             </td>
           </tr>
-        </tbody>
-      </table>
-    </div>
+      </tbody>
+    </table>
   </div>
 </template>

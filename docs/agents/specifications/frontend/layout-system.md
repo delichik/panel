@@ -26,6 +26,13 @@ AppShell
 - 源码：`web/src/components/shell/PageHeader.vue`。
 - 统一结构：标题、说明、可选 actions、可选 breadcrumb。
 - actions 区主操作至多一个，其余操作用次要按钮或 Dropdown。
+- 中窄屏下标题区与 actions 区上下堆叠，actions 可换行，不得裁切关键操作。
+
+## Table
+
+- 源码：`web/src/components/ui/Table.vue`。
+- `Table` 根容器自身承担滚动；页面可通过 `h-*` / `max-h-*` 约束高度，表头在该滚动区内 sticky。
+- 根容器保留圆角和边框，不得在外层限高后再依赖内层百分比高度建立滚动区。
 
 ## 页面模板
 

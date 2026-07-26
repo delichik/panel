@@ -45,6 +45,7 @@ const messages: Record<Locale, Messages> = {
     'state.critical': 'Critical',
     'state.unknown': 'Unknown',
     'layout.alpha': 'alpha',
+    'layout.main': 'Main navigation',
     'layout.nav.collapse': 'Toggle navigation',
     'layout.nav.overview': 'Overview',
     'layout.nav.assets': 'Assets',
@@ -965,6 +966,7 @@ const messages: Record<Locale, Messages> = {
     'state.critical': '严重',
     'state.unknown': '未知',
     'layout.alpha': 'alpha',
+    'layout.main': '主导航',
     'layout.nav.collapse': '折叠导航',
     'layout.nav.overview': '概览',
     'layout.nav.assets': '资产',
@@ -2430,14 +2432,14 @@ Object.assign(messages['zh-CN'], {
   'debugPage.healthyDatabases': '健康数据库',
 });
 
-const state = reactive({ locale: (localStorage.getItem('panel.locale') as Locale) || 'zh-CN' });
+const state = reactive({ locale: (globalThis.localStorage?.getItem('panel.locale') as Locale) || 'zh-CN' });
 
 export function useI18n() {
   const locale = computed(() => state.locale);
 
   function setLocale(next: Locale) {
     state.locale = next;
-    localStorage.setItem('panel.locale', next);
+    globalThis.localStorage?.setItem('panel.locale', next);
   }
 
   function t(key: string, params?: Record<string, string | number>) {

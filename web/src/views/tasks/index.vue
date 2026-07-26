@@ -16,6 +16,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { TaskDto, TaskLog, TaskOperationGroup, TaskStep } from '@/types/tasks';
+import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { groupTasksByOperation } from './model';
 
 const { t } = useI18n();
@@ -42,6 +43,9 @@ const actionError = ref('');
 const feedback = ref('');
 const pending = ref('');
 let timer: number | undefined;
+let listInFlight = false;
+const listRequests = createLatestRequestGuard();
+const detailRequests = createLatestRequestGuard();
 
 const groups = computed(() => {
   const term = search.value.trim().toLowerCase();
@@ -66,9 +70,12 @@ watch([statusFilter, search, page, selectedOperationId, selectedTaskId], () => {
 });
 
 watch(statusFilter, async () => {
-  page.value = 1;
   selectedOperationId.value = '';
   selectedTaskId.value = '';
+  if (page.value !== 1) {
+    page.value = 1;
+    return;
+  }
   await load();
 });
 
@@ -84,38 +91,63 @@ watch(selectedGroup, (group) => {
   if (!group.tasks.some((task) => task.id === selectedTaskId.value)) selectedTaskId.value = group.tasks[0]?.id ?? '';
 });
 
-watch(selectedTask, async (task) => {
-  if (task) await loadDetail(task.id, true);
+watch(() => selectedTask.value?.id, async (taskId) => {
+  detailRequests.invalidate();
+  steps.value = [];
+  logs.value = [];
+  logCursor.value = 0;
+  actionError.value = '';
+  if (taskId) await loadDetail(taskId, true);
 });
 
 async function load(silent = false) {
+  if (silent && listInFlight) return;
+  const requestId = listRequests.begin();
+  const previousTaskId = selectedTask.value?.id;
+  listInFlight = true;
   if (!silent) loading.value = true;
   error.value = '';
   try {
     const result = await tasksApi.list({ operationPage: true, status: statusFilter.value === 'all' ? undefined : statusFilter.value, page: page.value, pageSize });
+    if (!listRequests.isCurrent(requestId)) return;
     tasks.value = result.items;
     totalTasks.value = result.total;
     if (page.value !== result.page) page.value = result.page;
     if (!selectedOperationId.value && groups.value.length) selectedOperationId.value = groups.value[0].operationId;
+    const currentTaskId = selectedTask.value?.id;
+    if (previousTaskId && currentTaskId === previousTaskId) void loadDetail(currentTaskId, false);
   } catch (err) {
+    if (!listRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('tasksPage.loadFailed');
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) {
+      listInFlight = false;
+      loading.value = false;
+    }
   }
 }
 
 async function loadDetail(taskId: string, resetLogs = false) {
+  const requestId = detailRequests.begin();
+  const cursor = resetLogs ? 0 : logCursor.value;
+  if (resetLogs) {
+    steps.value = [];
+    logs.value = [];
+    logCursor.value = 0;
+  }
   detailLoading.value = true;
   actionError.value = '';
   try {
-    const [nextSteps, nextLogs] = await Promise.all([tasksApi.steps(taskId), tasksApi.logs(taskId, resetLogs ? 0 : logCursor.value)]);
+    const [nextSteps, nextLogs] = await Promise.all([tasksApi.steps(taskId), tasksApi.logs(taskId, cursor)]);
+    if (!detailRequests.isCurrent(requestId) || selectedTask.value?.id !== taskId) return;
     steps.value = nextSteps;
     logs.value = resetLogs ? nextLogs.logs : [...logs.value, ...nextLogs.logs];
     logCursor.value = nextLogs.nextCursor;
   } catch (err) {
+    if (!detailRequests.isCurrent(requestId) || selectedTask.value?.id !== taskId) return;
     actionError.value = err instanceof Error ? err.message : t('tasksPage.detailLoadFailed');
   } finally {
-    detailLoading.value = false;
+    if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
   }
 }
 
@@ -145,7 +177,11 @@ onMounted(async () => {
   await load();
   startPolling();
 });
-onBeforeUnmount(() => window.clearInterval(timer));
+onBeforeUnmount(() => {
+  window.clearInterval(timer);
+  listRequests.invalidate();
+  detailRequests.invalidate();
+});
 </script>
 
 <template>

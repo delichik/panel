@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { provide, ref } from 'vue';
+import { useI18n } from '@/i18n';
 import { toastKey, type ToastPayload, type ToastRecord } from './toast';
 
+const { t } = useI18n();
 let nextId = 1;
 const toasts = ref<ToastRecord[]>([]);
 
@@ -45,7 +47,7 @@ provide(toastKey, { push, remove });
             <strong class="block text-foreground">{{ toast.title }}</strong>
             <p v-if="toast.description" class="m-0 mt-1 text-muted-foreground">{{ toast.description }}</p>
           </div>
-          <button type="button" class="motion-icon-control text-muted-foreground hover:text-foreground" aria-label="Dismiss" @click="remove(toast.id)">x</button>
+          <button type="button" class="motion-icon-control text-muted-foreground hover:text-foreground" :aria-label="t('common.close')" @click="remove(toast.id)">x</button>
         </div>
       </section>
     </TransitionGroup>
