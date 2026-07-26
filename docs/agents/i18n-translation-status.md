@@ -15,6 +15,9 @@
 
 ## 最近已补齐
 
+- `web/src/components/shell/navModel.ts`、`web/src/router/index.ts`、`web/src/views/resources/index.vue`、`web/src/views/security/index.vue`、`web/src/views/applications/index.vue`
+  - 导航调整为一级“资产”分组，资源下展开软件包、容器、镜像、网络、卷和防火墙，并在 dev 构建显示 Fail2Ban；诊断从菜单隐藏但保留 `/debug` 直达；资源、防火墙、应用和设施应用顶层互切 tabs 已移除。新增导航分组文案 `layout.nav.assets` 已补齐英文与简体中文；既有页面标题文案复用原 routes 词条。
+
 - `web/src/views/certificates/index.vue`
   - 域名证书申请弹窗改为多前缀输入，前缀标签、占位示例和每行一个前缀提示已接入英文与简体中文词条；域名、前缀值、变量名和后端诊断保持用户原始输入。
 

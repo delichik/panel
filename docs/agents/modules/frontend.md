@@ -77,8 +77,8 @@
 
 `web/src/views/security/` 与 `web/src/views/resources/` 已替换阶段占位：
 
-- 安全页是服务器上下文工作台：`/security/firewall` 与 `/security/fail2ban` 共享左侧服务器选择，但右侧分别使用 UFW 规则/状态矩阵和 Fail2Ban 草稿/YAML/接管工作面。正式 API 使用 `/api/v1/servers/{id}/ufw`、`/ufw/rules`、`/ufw/enable`、`/ufw/install`、`/fail2ban`、`/fail2ban/enable`、`/fail2ban/release`、`/fail2ban/install`。
-- 资源页是服务器上下文资源维护台：软件包、容器、镜像、网络、卷五个 tab 结构和操作不同。软件包接 `/api/v1/servers/{id}/packages/*`；容器、镜像、网络、卷接 `/api/v1/servers/{id}/containers|images|networks|volumes` 及资源操作路径；镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。
+- 防火墙与 Fail2Ban 归入“资源”一级菜单。`/resources/firewall` 使用 UFW 规则/状态矩阵；`/resources/fail2ban` 仅 dev 构建可直达和展示，非 dev 访问会跳回 `/resources/firewall`。旧 `/security/*` 只保留重定向。正式 API 使用 `/api/v1/servers/{id}/ufw`、`/ufw/rules`、`/ufw/enable`、`/ufw/install`、`/fail2ban`、`/fail2ban/enable`、`/fail2ban/release`、`/fail2ban/install`。
+- 资源页是服务器上下文资源维护台：软件包、容器、镜像、网络、卷是 `/resources/packages|containers|images|networks|volumes` 独立路由页面，不使用页内 tabs。软件包接 `/api/v1/servers/{id}/packages/*`；容器、镜像、网络、卷接 `/api/v1/servers/{id}/containers|images|networks|volumes` 及资源操作路径；镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。
 - 网络资源当前后端只提供列表接口，页面只读展示拓扑并禁用删除，不使用 Mock 伪装不存在的能力。
 - Mock 模式覆盖同名正式路径，包含正常、空、错误、权限不足、Agent 不兼容、不可达、长日志和危险确认状态；未实现路径继续返回 `mock_route_not_found`。
 
@@ -86,9 +86,9 @@
 
 `web/src/views/applications/` 已替换阶段占位：
 
-- 普通应用页是独立控制面：左侧应用选择与镜像/实例摘要，右侧展示状态、镜像更新、反向代理路由、运行时节点实例、日志入口、同步、停用、删除和持久化数据操作。正式 API 使用 `/api/v1/applications`、`/api/v1/applications/{id}/runtime`、`/logs`、`/deploy`、`/stop`、`/image/check`、`/image/update`、`GET/POST /persistent-data` 和 `DELETE /api/v1/applications/{id}`；持久化下载走 blob 下载，上传走 multipart restore。
+- 普通应用页 `/applications/apps` 是独立控制面，不再通过应用/设施应用顶层 tabs 互切。左侧应用选择与镜像/实例摘要，右侧展示状态、镜像更新、反向代理路由、运行时节点实例、日志入口、同步、停用、删除和持久化数据操作。正式 API 使用 `/api/v1/applications`、`/api/v1/applications/{id}/runtime`、`/logs`、`/deploy`、`/stop`、`/image/check`、`/image/update`、`GET/POST /persistent-data` 和 `DELETE /api/v1/applications/{id}`；持久化下载走 blob 下载，上传走 multipart restore。
 - 创建/编辑应用走隐藏路由 `/applications/apps/create` 与 `/applications/apps/:applicationId/edit`，使用 `EditorPage` 与 `/api/v1/application-edit-sessions` durable 会话；编辑器是分层 header + responsive step grid + 主体意图面板 + 摘要区，不得恢复旧式左侧一串 section、中间传统表单、右侧摘要的布局。宽屏可保留右侧 sticky 摘要；中屏必须让摘要下移、步骤变成稳定多列 grid；窄屏必须单列组织模式切换、步骤、字段和摘要，禁止横向裁切。结构化配置分为身份、运行时来源、网络、存储、部署、文件/资产；变量、环境变量、端口、挂载、反向代理和文件使用摘要列表 + 对话框，不再以 JSON/多行文本作为主要交互。AppSpec 只有一个“YAML source / 源码”视图，作为同一草稿的互斥模式；不存在“高级 YAML”和“YAML”双入口。流程为本地校验、patch draft、validate、preview、commit。普通文件新增/替换/删除走 edit-session 文件接口，文件夹压缩包走 `POST /api/v1/application-edit-sessions/{id}/archives` multipart，并保留 revision、client operation id 和 idempotency key。
-- 设施应用页不暴露隐藏 `facility-reverse-proxy` 应用，前端信息架构必须保持三层：`/applications/facility-apps` 是设施目录，`/applications/facility-apps/:facilityKind` 是设施详情，`/applications/facility-apps/:facilityKind/config` 是设施配置。当前唯一内置设施是 `reverse-proxy`，但页面、类型和 API adapter 不得把“设施应用”整体等同为入口代理；未知 `facilityKind` 在本页显示本地化不可用空态，不跳转 overview。
+- 设施应用页 `/applications/facility-apps` 是独立入口，不再通过应用/设施应用顶层 tabs 互切，也不暴露隐藏 `facility-reverse-proxy` 应用。前端信息架构必须保持三层：`/applications/facility-apps` 是设施目录，`/applications/facility-apps/:facilityKind` 是设施详情，`/applications/facility-apps/:facilityKind/config` 是设施配置。当前唯一内置设施是 `reverse-proxy`，但页面、类型和 API adapter 不得把“设施应用”整体等同为入口代理；未知 `facilityKind` 在本页显示本地化不可用空态，不跳转 overview。
 - 反向代理设施详情读取 `/api/v1/facility-apps/reverse-proxy`，展示网关节点、路由摘要、静态资产、应用路由、Panel 入口和当前 lifecycle operation。配置页走 `/api/v1/facility-apps/reverse-proxy/edit-sessions`，使用独立配置工作区：左侧分区与域名列表，中间按网关节点、域名/Path、Panel 入口、静态资产分区编辑，右侧 sticky 变更摘要；域名和 Path 用列表 + 对话框，不再要求用户编辑 domain groups JSON。静态资产新增/替换使用 `PUT /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetKey}` multipart。
 - Mock 模式覆盖同名正式路径，包含持久化数据 zip 下载/恢复、应用 archive 上传、设施静态资产上传/删除、正常应用、空/删除后状态、保存冲突、部署中、日志错误和长配置诊断；未实现路径继续返回 `mock_route_not_found`。
 
@@ -96,7 +96,7 @@
 
 `web/src/views/tasks/`、`web/src/views/settings/`、`web/src/views/maintenance/`、`web/src/views/debug/` 已替换阶段占位：
 
-- 旧任务中心 `/tasks` 保留兼容路由，但不再作为产品导航入口。新的产品入口是“应用”一级菜单下的 `/application-operations` 操作记录与 `/system-events`：应用详情和概览快捷入口应跳转到操作记录，系统诊断事件通过系统事件页展示。
+- 旧任务中心 `/tasks` 保留兼容路由，但不再作为产品导航入口；诊断页 `/debug` 也保留直达但不显示在菜单中。新的产品入口是“应用”一级菜单下的 `/application-operations` 操作记录与 `/system-events`：应用详情和概览快捷入口应跳转到操作记录，系统诊断事件通过系统事件页展示。
 - 任务中心按 `operationId` 聚合，左侧保留操作组搜索、状态筛选和 URL query 恢复，右侧展示具体任务、步骤、日志、错误、重试和立即运行。正式 API 使用 `/api/v1/tasks`、`/api/v1/tasks/{id}`、`/logs`、`/steps`、`/retry`、`/run-now`。
 - 设置页按 Runtime、安全、证书、系统、系统证书、备份还原分区独立保存，不提供全局保存。正式 API 使用 `/api/v1/settings/runtime`、`/api/v1/settings/server-variables`、`/api/v1/auth/jwt-secret`、`/api/v1/system/version`、`/api/v1/key-assets/system`、`/api/v1/key-assets/system/{id}/reset`、`/api/v1/backups/export`、`/api/v1/backups/restore/preflight`、`/api/v1/backups/restore/confirm`；系统版本只读展示，不和 Runtime 设置保存混在一起。由于 `/settings/runtime` 后端仍接收完整 runtime payload，前端保存某个分区时必须以已加载的 runtime 当前值为基底，只合入当前分区表单，避免提交其他分区尚未保存的脏值。系统证书分区展示 Panel 侧 Agent CA、Panel Agent client 证书以及服务器上报的 Agent 服务端证书，重置操作通过后台任务执行。
 - 维护页是独立 shell，不走全局 AppShell；导出和还原维护 token 分别保存在 `sessionStorage.panel.maintenance.export.token` 与 `sessionStorage.panel.maintenance.restore.token`，二者和普通登录 session 隔离。正式 API 使用维护模式下的 `/api/v1/auth/*`、`/api/v1/backups/export/current|start|password|exit|{id}/download`、`/api/v1/restore/status|password|retry|clear-pending`；导出归档下载通过带 Authorization header 的 blob 请求完成。

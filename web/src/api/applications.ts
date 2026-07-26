@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { ApiError, type ApiEnvelope, authHeaders } from './client';
+import { ApiError, type ApiEnvelope, authHeaders, type ApiRequestOptions } from './client';
 import { fetchDownload, type DownloadResult } from './download';
 import type {
   ApplicationDto,
@@ -57,11 +57,11 @@ async function multipartJson<T>(path: string, form: FormData, idempotencyKey = k
 }
 
 export const applicationsApi = {
-  list() {
-    return apiClient.get<ApplicationDto[]>('/applications');
+  list(options?: ApiRequestOptions) {
+    return apiClient.get<ApplicationDto[]>('/applications', options);
   },
-  get(applicationId: string) {
-    return apiClient.get<ApplicationDto>(`/applications/${id(applicationId)}`);
+  get(applicationId: string, options?: ApiRequestOptions) {
+    return apiClient.get<ApplicationDto>(`/applications/${id(applicationId)}`, options);
   },
   delete(applicationId: string) {
     return apiClient.delete<void>(`/applications/${id(applicationId)}`);
@@ -81,8 +81,8 @@ export const applicationsApi = {
   restart(applicationId: string) {
     return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/restart`);
   },
-  runtime(applicationId: string) {
-    return apiClient.get<ApplicationRuntime>(`/applications/${id(applicationId)}/runtime`);
+  runtime(applicationId: string, options?: ApiRequestOptions) {
+    return apiClient.get<ApplicationRuntime>(`/applications/${id(applicationId)}/runtime`, options);
   },
   logs(applicationId: string, params: { instanceId?: string; containerName?: string; type?: string; tail?: number } = {}) {
     const query = new URLSearchParams();
@@ -106,11 +106,11 @@ export const applicationsApi = {
       draft,
     });
   },
-  recoverableEditSessions(applicationId?: string) {
+  recoverableEditSessions(applicationId?: string, options?: ApiRequestOptions) {
     const query = new URLSearchParams();
     query.set('clientDraftKey', applicationId ? `application:${applicationId}` : 'application:create');
     if (applicationId) query.set('applicationId', applicationId);
-    return apiClient.get<ApplicationEditSession[]>(`/application-edit-sessions/recoverable?${query}`);
+    return apiClient.get<ApplicationEditSession[]>(`/application-edit-sessions/recoverable?${query}`, options);
   },
   patchEditSession(sessionId: string, revision: number, draft: ApplicationSaveInput) {
     return apiClient.patch<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/draft`, { revision, draft });

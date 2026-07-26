@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { apiClient, type ApiRequestOptions } from './client';
 import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 
 export interface MetricsPoint {
@@ -46,8 +46,8 @@ export interface AgentCertificateBundle {
 }
 
 export const serversApi = {
-  list() {
-    return apiClient.get<ServerDto[]>('/servers');
+  list(options?: ApiRequestOptions) {
+    return apiClient.get<ServerDto[]>('/servers', options);
   },
   create(input: ServerSaveInput) {
     return apiClient.post<ServerDto>('/servers', input);
@@ -73,8 +73,8 @@ export const serversApi = {
   issueAgentCertificate(id: string) {
     return apiClient.post<AgentCertificateBundle>(`/servers/${encodeURIComponent(id)}/agent/certificate`);
   },
-  metrics(id: string, range: ServerMetricsRange = '1h') {
-    return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`);
+  metrics(id: string, range: ServerMetricsRange = '1h', options?: ApiRequestOptions) {
+    return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`, options);
   },
   installUfw(id: string) {
     return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/ufw/install`);

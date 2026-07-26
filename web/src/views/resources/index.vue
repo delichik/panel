@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Box, Boxes, Container, Database, DownloadCloud, FileText, Package, Play, RefreshCcw, Router, Search, Square, Trash2 } from '@lucide/vue';
 import { containersApi } from '@/api/containers';
@@ -10,7 +10,6 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
-import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -37,9 +36,15 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
+const resourceTabs: ResourceTab[] = ['packages', 'containers', 'images', 'networks', 'volumes'];
+let serversController: AbortController | null = null;
+let resourceController: AbortController | null = null;
+let serversRequestId = 0;
+let resourceRequestId = 0;
+
 const servers = ref<ServerDto[]>([]);
 const selectedId = ref(String(route.query.server ?? ''));
-const activeTab = ref<ResourceTab>(resourceTabFromPath(route.path));
+const activeTab = computed<ResourceTab>(() => resourceTabFromPath(route.path));
 const search = ref(String(route.query.search ?? ''));
 const loadingServers = ref(false);
 const loadingResource = ref(false);
@@ -80,21 +85,14 @@ const serverContextOptions = computed(() => servers.value.map((server) => {
     disabledReason: server.reachable ? '' : t('resourcesPage.blockUnreachable'),
   };
 }));
-const tabs = computed(() => [
-  { label: t('routes.packages.title'), value: 'packages' },
-  { label: t('routes.containers.title'), value: 'containers' },
-  { label: t('routes.images.title'), value: 'images' },
-  { label: t('routes.networks.title'), value: 'networks' },
-  { label: t('routes.volumes.title'), value: 'volumes' },
-]);
+const resourceTitleKey = computed(() => `routes.${activeTab.value}.title`);
+const resourceDescriptionKey = computed(() => `routes.${activeTab.value}.description`);
 const packageRows = computed(() => filterPackages(packageList.value?.updates ?? [], search.value));
 const selectedPackages = computed(() => selectedPackageNames(packageSelection));
 const imageUpgradeIds = computed(() => Array.from(new Set((images.value?.items ?? []).filter((item) => item.updateAvailable && item.upgradeable).flatMap((item) => item.applicationIds))));
 
-watch(activeTab, (value) => {
-  const target = `/resources/${value}`;
-  if (route.path !== target) void router.replace({ path: target, query: route.query });
-  clearResource(value);
+watch(() => route.path, () => {
+  clearAllResources();
   void loadResource();
 });
 
@@ -109,41 +107,80 @@ watch(search, (value) => {
 });
 
 async function loadServers() {
+  serversController?.abort();
+  const requestId = ++serversRequestId;
+  const controller = new AbortController();
+  serversController = controller;
   loadingServers.value = true;
   error.value = '';
   try {
-    servers.value = await serversApi.list();
-    if (!servers.value.some((item) => item.id === selectedId.value)) selectedId.value = servers.value[0]?.id ?? '';
+    const nextServers = await serversApi.list({ signal: controller.signal });
+    if (requestId !== serversRequestId) return;
+    servers.value = nextServers;
+    if (!servers.value.some((item) => item.id === selectedId.value)) {
+      selectedId.value = servers.value[0]?.id ?? '';
+      if (!selectedId.value) {
+        clearAllResources();
+        resourceController?.abort();
+        resourceRequestId += 1;
+        loadingResource.value = false;
+      }
+    }
   } catch (err) {
+    if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('resourcesPage.loadServersFailed');
   } finally {
-    loadingServers.value = false;
+    if (requestId === serversRequestId) loadingServers.value = false;
   }
 }
 
 async function loadResource() {
+  resourceController?.abort();
+  const requestId = ++resourceRequestId;
   const server = selectedServer.value;
-  if (!server) return;
+  if (!server) {
+    loadingResource.value = false;
+    clearAllResources();
+    return;
+  }
+  const controller = new AbortController();
+  resourceController = controller;
+  const tab = activeTab.value;
   loadingResource.value = true;
   actionError.value = '';
   try {
-    if (activeTab.value === 'packages') {
-      packageList.value = await packagesApi.updates(server.id);
+    if (tab === 'packages') {
+      const updates = await packagesApi.updates(server.id, { signal: controller.signal });
+      if (requestId !== resourceRequestId || tab !== activeTab.value) return;
+      packageList.value = updates;
       Object.keys(packageSelection).forEach((key) => delete packageSelection[key]);
     }
-    if (activeTab.value === 'containers') containers.value = await containersApi.containers(server.id);
-    if (activeTab.value === 'images') images.value = await containersApi.images(server.id);
-    if (activeTab.value === 'networks') networks.value = await containersApi.networks(server.id);
-    if (activeTab.value === 'volumes') volumes.value = await containersApi.volumes(server.id);
+    if (tab === 'containers') {
+      const result = await containersApi.containers(server.id, { signal: controller.signal });
+      if (requestId !== resourceRequestId || tab !== activeTab.value) return;
+      containers.value = result;
+    }
+    if (tab === 'images') {
+      const result = await containersApi.images(server.id, { signal: controller.signal });
+      if (requestId !== resourceRequestId || tab !== activeTab.value) return;
+      images.value = result;
+    }
+    if (tab === 'networks') {
+      const result = await containersApi.networks(server.id, { signal: controller.signal });
+      if (requestId !== resourceRequestId || tab !== activeTab.value) return;
+      networks.value = result;
+    }
+    if (tab === 'volumes') {
+      const result = await containersApi.volumes(server.id, { signal: controller.signal });
+      if (requestId !== resourceRequestId || tab !== activeTab.value) return;
+      volumes.value = result;
+    }
   } catch (err) {
+    if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
-    if (activeTab.value === 'packages') packageList.value = null;
-    if (activeTab.value === 'containers') containers.value = [];
-    if (activeTab.value === 'images') images.value = null;
-    if (activeTab.value === 'networks') networks.value = [];
-    if (activeTab.value === 'volumes') volumes.value = [];
+    clearResource(tab);
   } finally {
-    loadingResource.value = false;
+    if (requestId === resourceRequestId) loadingResource.value = false;
   }
 }
 
@@ -159,7 +196,7 @@ function clearResource(tab: ResourceTab) {
 }
 
 function clearAllResources() {
-  tabs.value.forEach((tab) => clearResource(tab.value as ResourceTab));
+  resourceTabs.forEach((tab) => clearResource(tab));
 }
 
 async function refreshCurrent() {
@@ -283,14 +320,23 @@ function formatBytes(value?: number) {
   return `${amount.toFixed(index ? 1 : 0)} ${units[index]}`;
 }
 
+function isAbortError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
+}
+
 onMounted(async () => {
   await loadServers();
   await loadResource();
 });
+
+onBeforeUnmount(() => {
+  serversController?.abort();
+  resourceController?.abort();
+});
 </script>
 
 <template>
-  <ConsolePage :title="t('routes.resources.title')" :description="t('routes.resources.description')">
+  <ConsolePage :title="t(resourceTitleKey)" :description="t(resourceDescriptionKey)">
     <template #actions>
       <Button size="sm" :loading="loadingServers || loadingResource || pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
@@ -348,7 +394,7 @@ onMounted(async () => {
             <div v-if="activeTab !== 'packages' && dockerBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(dockerBlockReason(selectedServer)) }}</div>
           </div>
 
-          <Tabs v-model="activeTab" class="min-h-0 p-5" :tabs="tabs">
+          <div class="min-h-0 p-5">
             <section v-if="activeTab === 'packages'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background">
               <div class="flex flex-wrap items-center justify-between gap-3 border-b border-border p-4">
                 <label class="relative block w-full max-w-sm">
@@ -519,7 +565,7 @@ onMounted(async () => {
                 </div>
               </div>
             </section>
-          </Tabs>
+          </div>
         </article>
       </main>
     </div>

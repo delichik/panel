@@ -19,7 +19,7 @@
 
 ## 前端入口
 
-- 应用 + 设施应用页面族（v4 阶段 5）：`web/src/views/applications/index.vue`
+- 应用 + 设施应用页面族（v4 阶段 5）：`web/src/views/applications/index.vue`；`/applications/apps` 与 `/applications/facility-apps` 是菜单中的独立入口，不使用顶层互切 tabs。
 - 页面派生逻辑和草稿校验：`web/src/views/applications/model.ts`
 - API：`web/src/api/applications.ts`
 - 设施应用 API：`web/src/api/facilityApps.ts`

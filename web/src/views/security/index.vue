@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, FileCode2, LockKeyhole, Plus, RefreshCcw, Save, Shield, ShieldCheck, ShieldOff, Trash2, UnlockKeyhole } from '@lucide/vue';
 import { securityApi } from '@/api/security';
@@ -10,7 +10,6 @@ import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
-import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -23,9 +22,14 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
+let serversController: AbortController | null = null;
+let panelController: AbortController | null = null;
+let serversRequestId = 0;
+let panelRequestId = 0;
+
 const servers = ref<ServerDto[]>([]);
 const selectedId = ref(String(route.query.server ?? ''));
-const activeTab = ref(route.path.includes('/fail2ban') ? 'fail2ban' : 'ufw');
+const activeTab = computed<'ufw' | 'fail2ban'>(() => route.path.includes('/fail2ban') ? 'fail2ban' : 'ufw');
 const loadingServers = ref(false);
 const loadingPanel = ref(false);
 const error = ref('');
@@ -66,10 +70,11 @@ const serverContextOptions = computed(() => servers.value.map((server) => {
 const selectedServerState = computed(() => selectedServer.value ? serverOptionState(selectedServer.value) : null);
 const ruleValidation = computed(() => validateUfwRule({ port: Number(ruleForm.port), protocol: ruleForm.protocol, from: ruleForm.from }));
 const hasYamlChanges = computed(() => fail2banState.value ? yamlDraft.value.trim() !== fail2banState.value.configYaml.trim() : false);
+const pageTitleKey = computed(() => activeTab.value === 'fail2ban' ? 'routes.fail2ban.title' : 'routes.firewall.title');
+const pageDescriptionKey = computed(() => activeTab.value === 'fail2ban' ? 'routes.fail2ban.description' : 'routes.firewall.description');
+const runtimeJails = computed(() => fail2banState.value?.jails ?? []);
 
-watch(activeTab, (value) => {
-  const target = value === 'fail2ban' ? '/security/fail2ban' : '/security/firewall';
-  if (route.path !== target) void router.replace({ path: target, query: route.query });
+watch(() => route.path, () => {
   void loadPanel({ clear: true });
 });
 
@@ -83,23 +88,47 @@ watch(yamlMode, (enabled) => {
 });
 
 async function loadServers() {
+  serversController?.abort();
+  const requestId = ++serversRequestId;
+  const controller = new AbortController();
+  serversController = controller;
   loadingServers.value = true;
   error.value = '';
   try {
-    servers.value = await serversApi.list();
-    if (!servers.value.some((item) => item.id === selectedId.value)) selectedId.value = servers.value[0]?.id ?? '';
+    const nextServers = await serversApi.list({ signal: controller.signal });
+    if (requestId !== serversRequestId) return;
+    servers.value = nextServers;
+    if (!servers.value.some((item) => item.id === selectedId.value)) {
+      selectedId.value = servers.value[0]?.id ?? '';
+      if (!selectedId.value) {
+        clearPanelState();
+        panelController?.abort();
+        panelRequestId += 1;
+        loadingPanel.value = false;
+      }
+    }
   } catch (err) {
+    if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('securityPage.loadServersFailed');
   } finally {
-    loadingServers.value = false;
+    if (requestId === serversRequestId) loadingServers.value = false;
   }
 }
 
 async function loadPanel(options: { clear?: boolean } = {}) {
+  panelController?.abort();
+  const requestId = ++panelRequestId;
   const server = selectedServer.value;
-  if (!server) return;
+  if (!server) {
+    loadingPanel.value = false;
+    if (options.clear) clearPanelState();
+    return;
+  }
+  const controller = new AbortController();
+  panelController = controller;
+  const tab = activeTab.value;
   if (options.clear) {
-    if (activeTab.value === 'ufw') ufwState.value = null;
+    if (tab === 'ufw') ufwState.value = null;
     else {
       fail2banState.value = null;
       yamlDraft.value = '';
@@ -109,20 +138,33 @@ async function loadPanel(options: { clear?: boolean } = {}) {
   loadingPanel.value = true;
   actionError.value = '';
   try {
-    if (activeTab.value === 'ufw') {
-      ufwState.value = await securityApi.ufwState(server.id);
+    if (tab === 'ufw') {
+      const result = await securityApi.ufwState(server.id, { signal: controller.signal });
+      if (requestId !== panelRequestId || tab !== activeTab.value) return;
+      ufwState.value = result;
     } else {
-      fail2banState.value = await securityApi.fail2BanState(server.id);
+      const result = await securityApi.fail2BanState(server.id, { signal: controller.signal });
+      if (requestId !== panelRequestId || tab !== activeTab.value) return;
+      fail2banState.value = result;
       yamlDraft.value = fail2banState.value.configYaml;
-      jailDrafts.value = fail2banState.value.config.jails.length ? [...fail2banState.value.config.jails] : parseSimpleJailsFromYaml(fail2banState.value.configYaml);
+      const configJails = fail2banState.value.config.jails ?? [];
+      jailDrafts.value = configJails.length ? [...configJails] : parseSimpleJailsFromYaml(fail2banState.value.configYaml);
     }
   } catch (err) {
+    if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('securityPage.loadPanelFailed');
-    if (activeTab.value === 'ufw') ufwState.value = null;
+    if (tab === 'ufw') ufwState.value = null;
     else fail2banState.value = null;
   } finally {
-    loadingPanel.value = false;
+    if (requestId === panelRequestId) loadingPanel.value = false;
   }
+}
+
+function clearPanelState() {
+  ufwState.value = null;
+  fail2banState.value = null;
+  yamlDraft.value = '';
+  jailDrafts.value = [];
 }
 
 function openRuleDialog() {
@@ -181,7 +223,7 @@ async function saveFail2BanDraft() {
   await run('save-fail2ban', async () => {
     fail2banState.value = await securityApi.saveFail2Ban(selectedServer.value!.id, yamlDraft.value);
     yamlDraft.value = fail2banState.value.configYaml;
-    jailDrafts.value = fail2banState.value.config.jails;
+    jailDrafts.value = fail2banState.value.config.jails ?? [];
     feedback.value = t('securityPage.draftSaved');
   });
 }
@@ -226,14 +268,23 @@ function confirmTitle() {
   return t('securityPage.enableFirewall');
 }
 
+function isAbortError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
+}
+
 onMounted(async () => {
   await loadServers();
   await loadPanel({ clear: true });
 });
+
+onBeforeUnmount(() => {
+  serversController?.abort();
+  panelController?.abort();
+});
 </script>
 
 <template>
-  <ConsolePage :title="t('routes.security.title')" :description="t('routes.security.description')">
+  <ConsolePage :title="t(pageTitleKey)" :description="t(pageDescriptionKey)">
     <template #actions>
       <Button size="sm" :loading="loadingServers || loadingPanel" @click="loadServers"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
@@ -292,7 +343,7 @@ onMounted(async () => {
             <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
           </div>
 
-          <Tabs v-model="activeTab" class="min-h-0 p-5" :tabs="[{ label: t('routes.firewall.title'), value: 'ufw' }, { label: t('routes.fail2ban.title'), value: 'fail2ban' }]">
+          <div class="min-h-0 p-5">
             <div v-if="activeTab === 'ufw'" class="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
               <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
                 <div class="flex items-center justify-between gap-3 border-b border-border p-4">
@@ -420,8 +471,8 @@ onMounted(async () => {
                 <section class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold">{{ t('securityPage.detectedJails') }}</h3>
                   <div class="mt-3 flex flex-wrap gap-2">
-                    <Badge v-for="jail in fail2banState?.jails" :key="jail" tone="info">{{ jail }}</Badge>
-                    <span v-if="!fail2banState?.jails.length" class="text-sm text-muted-foreground">{{ t('securityPage.noRuntimeJails') }}</span>
+                    <Badge v-for="jail in runtimeJails" :key="jail" tone="info">{{ jail }}</Badge>
+                    <span v-if="!runtimeJails.length" class="text-sm text-muted-foreground">{{ t('securityPage.noRuntimeJails') }}</span>
                   </div>
                 </section>
                 <section class="rounded-2xl border border-warning-border bg-warning-bg p-4 text-sm text-warning">
@@ -437,7 +488,7 @@ onMounted(async () => {
                 </section>
               </aside>
             </div>
-          </Tabs>
+          </div>
         </article>
       </main>
     </div>

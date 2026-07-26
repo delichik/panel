@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
+import type { RouteLocationGeneric } from 'vue-router';
 import AppShell from '@/components/shell/AppShell.vue';
 import OverviewPage from '@/views/overview/index.vue';
 import ServersPage from '@/views/servers/index.vue';
@@ -17,6 +18,13 @@ import DebugPage from '@/views/debug/index.vue';
 import LoginPage from '@/views/auth/LoginPage.vue';
 import { useSessionStore } from '@/stores/session';
 
+const fail2BanRoute = import.meta.env.DEV
+  ? { path: 'resources/fail2ban', component: SecurityPage, meta: { titleKey: 'routes.fail2ban.title' } }
+  : { path: 'resources/fail2ban', redirect: (to: RouteLocationGeneric) => ({ path: '/resources/firewall', query: to.query }) };
+
+const redirectToFirewall = (to: RouteLocationGeneric) => ({ path: '/resources/firewall', query: to.query });
+const redirectToFail2Ban = (to: RouteLocationGeneric) => ({ path: import.meta.env.DEV ? '/resources/fail2ban' : '/resources/firewall', query: to.query });
+
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
@@ -30,22 +38,24 @@ export const router = createRouter({
         { path: 'overview', component: OverviewPage, meta: { titleKey: 'routes.overview.title' } },
         { path: 'servers', component: ServersPage, meta: { titleKey: 'routes.servers.title' } },
         { path: 'credentials', component: CredentialsPage, meta: { titleKey: 'routes.credentials.title' } },
-        { path: 'security', redirect: '/security/firewall' },
-        { path: 'security/firewall', component: SecurityPage, meta: { titleKey: 'routes.security.title' } },
-        { path: 'security/fail2ban', component: SecurityPage, meta: { titleKey: 'routes.security.title' } },
+        { path: 'security', redirect: redirectToFirewall },
+        { path: 'security/firewall', redirect: redirectToFirewall },
+        { path: 'security/fail2ban', redirect: redirectToFail2Ban },
         { path: 'resources', redirect: '/resources/packages' },
-        { path: 'resources/packages', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
-        { path: 'resources/containers', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
-        { path: 'resources/images', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
-        { path: 'resources/networks', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
-        { path: 'resources/volumes', component: ResourcesPage, meta: { titleKey: 'routes.resources.title' } },
+        { path: 'resources/packages', component: ResourcesPage, meta: { titleKey: 'routes.packages.title' } },
+        { path: 'resources/containers', component: ResourcesPage, meta: { titleKey: 'routes.containers.title' } },
+        { path: 'resources/images', component: ResourcesPage, meta: { titleKey: 'routes.images.title' } },
+        { path: 'resources/networks', component: ResourcesPage, meta: { titleKey: 'routes.networks.title' } },
+        { path: 'resources/volumes', component: ResourcesPage, meta: { titleKey: 'routes.volumes.title' } },
+        { path: 'resources/firewall', component: SecurityPage, meta: { titleKey: 'routes.firewall.title' } },
+        fail2BanRoute,
         { path: 'applications', redirect: '/applications/apps' },
         { path: 'applications/apps', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
         { path: 'applications/apps/create', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
         { path: 'applications/apps/:applicationId/edit', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
-        { path: 'applications/facility-apps', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
-        { path: 'applications/facility-apps/:facilityKind/config', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
-        { path: 'applications/facility-apps/:facilityKind', component: ApplicationsPage, meta: { titleKey: 'routes.applications.title' } },
+        { path: 'applications/facility-apps', component: ApplicationsPage, meta: { titleKey: 'routes.facilityApps.title' } },
+        { path: 'applications/facility-apps/:facilityKind/config', component: ApplicationsPage, meta: { titleKey: 'routes.facilityApps.title' } },
+        { path: 'applications/facility-apps/:facilityKind', component: ApplicationsPage, meta: { titleKey: 'routes.facilityApps.title' } },
         { path: 'dns/domains', component: DnsPage, meta: { titleKey: 'routes.dns.title' } },
         { path: 'certificates/domains', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },
         { path: 'certificates/self-signed', component: CertificatesPage, meta: { titleKey: 'routes.certificates.title' } },

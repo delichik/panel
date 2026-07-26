@@ -68,9 +68,15 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 
+let pageLoadController: AbortController | null = null;
+let runtimeController: AbortController | null = null;
+let editorQueryController: AbortController | null = null;
+let pageLoadRequestId = 0;
+let runtimeRequestId = 0;
+let editorQueryRequestId = 0;
+
 const applications = ref<ApplicationDto[]>([]);
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
-const runtimeRequests = new Set<string>();
 const facilities = ref<FacilityAppSummary[]>([]);
 const facility = ref<ReverseProxyConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
@@ -116,10 +122,6 @@ const fileForm = reactive({ path: '', kind: 'template', contentType: 'text/plain
 
 const mode = computed(() => routeMode(route.path, route.params));
 const facilityKind = computed(() => String(route.params.facilityKind ?? ''));
-const applicationFamilyTab = computed({
-  get: () => (mode.value === 'facilityCatalog' || mode.value === 'facilityDetail' || mode.value === 'facilityConfig' ? 'facility' : 'apps'),
-  set: (value: string) => { void router.push(value === 'facility' ? '/applications/facility-apps' : '/applications/apps'); },
-});
 const isAppEditor = computed(() => mode.value === 'create' || mode.value === 'edit');
 const isCreateMode = computed(() => mode.value === 'create');
 const currentFacilitySummary = computed(() => facilities.value.find((item) => item.kind === facilityKind.value) ?? null);
@@ -248,6 +250,8 @@ watch(selectedId, async (value) => {
 });
 
 watch(() => route.path, async () => {
+  cancelRuntimeLoad();
+  cancelEditorQuery();
   actionError.value = '';
   feedback.value = '';
   await load();
@@ -268,58 +272,92 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
 }
 
 async function load() {
-  if (mode.value === 'apps' || isAppEditor.value) {
-    await loadApplications();
+  const currentMode = mode.value;
+  if (currentMode !== 'apps') cancelRuntimeLoad();
+  if (currentMode === 'apps') {
+    await loadApplications({ loadSelectedRuntime: true });
     return;
   }
-  if (mode.value === 'facilityCatalog' || mode.value === 'facilityDetail' || mode.value === 'facilityConfig') {
+  if (isAppEditor.value) {
+    await loadApplications({ loadSelectedRuntime: false });
+    return;
+  }
+  if (currentMode === 'facilityCatalog' || currentMode === 'facilityDetail' || currentMode === 'facilityConfig') {
     await loadFacilityData();
   }
 }
 
-async function loadApplications() {
+async function loadApplications(options: { loadSelectedRuntime?: boolean } = {}) {
+  pageLoadController?.abort();
+  const requestId = ++pageLoadRequestId;
+  const controller = new AbortController();
+  pageLoadController = controller;
+  const modeAtStart = mode.value;
   loading.value = true;
   error.value = '';
   try {
-    const apps = await applicationsApi.list();
+    const apps = await applicationsApi.list({ signal: controller.signal });
+    if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
     applications.value = apps;
     selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : apps[0]?.id ?? '';
-    void loadRuntime(selectedId.value);
+    if (options.loadSelectedRuntime) void loadRuntime(selectedId.value);
   } catch (err) {
+    if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
   } finally {
-    loading.value = false;
+    if (requestId === pageLoadRequestId) loading.value = false;
   }
 }
 
 async function loadFacilityData() {
+  pageLoadController?.abort();
+  const requestId = ++pageLoadRequestId;
+  const controller = new AbortController();
+  pageLoadController = controller;
+  const modeAtStart = mode.value;
   loading.value = true;
   error.value = '';
   try {
-    const facilityList = await facilityAppsApi.listFacilities();
+    const facilityList = await facilityAppsApi.listFacilities({ signal: controller.signal });
+    if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
     const primaryFacilityKind = facilityList.find((item) => item.kind === facilityKind.value)?.kind ?? facilityList[0]?.kind;
-    const primaryFacility = primaryFacilityKind ? await facilityAppsApi.getFacility(primaryFacilityKind) : null;
+    const primaryFacility = primaryFacilityKind ? await facilityAppsApi.getFacility(primaryFacilityKind, { signal: controller.signal }) : null;
+    if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
     facilities.value = primaryFacility ? facilityList.map((item) => item.kind === primaryFacility.kind ? primaryFacility.summary : item) : facilityList;
     facility.value = primaryFacility?.reverseProxy ?? null;
     facilitiesLoaded.value = true;
   } catch (err) {
+    if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
   } finally {
-    loading.value = false;
+    if (requestId === pageLoadRequestId) loading.value = false;
   }
 }
 
 async function loadRuntime(applicationId: string) {
-  if (!applicationId || runtimeRequests.has(applicationId)) return;
-  runtimeRequests.add(applicationId);
+  runtimeController?.abort();
+  const requestId = ++runtimeRequestId;
+  const modeAtStart = mode.value;
+  if (!applicationId) {
+    detailLoading.value = false;
+    return;
+  }
+  if (modeAtStart !== 'apps') {
+    detailLoading.value = false;
+    return;
+  }
+  const controller = new AbortController();
+  runtimeController = controller;
   detailLoading.value = true;
   try {
-    runtimes.value = { ...runtimes.value, [applicationId]: await applicationsApi.runtime(applicationId) };
+    const runtime = await applicationsApi.runtime(applicationId, { signal: controller.signal });
+    if (requestId !== runtimeRequestId || mode.value !== modeAtStart || applicationId !== selectedId.value) return;
+    runtimes.value = { ...runtimes.value, [applicationId]: runtime };
   } catch (err) {
+    if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable');
   } finally {
-    runtimeRequests.delete(applicationId);
-    detailLoading.value = runtimeRequests.size > 0;
+    if (requestId === runtimeRequestId) detailLoading.value = false;
   }
 }
 
@@ -400,7 +438,13 @@ async function restorePersistentData(fileOrFiles: File | File[]) {
 
 async function startApplicationEditor() {
   const appId = String(route.params.applicationId ?? '');
+  editorQueryController?.abort();
+  const requestId = ++editorQueryRequestId;
+  const controller = new AbortController();
+  editorQueryController = controller;
+  const modeAtStart = mode.value;
   await ensureApplicationsLoaded();
+  if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
   const app = appId ? applications.value.find((item) => item.id === appId) : null;
   Object.assign(appDraft, draftFromApplication(app));
   diagnostics.value = [];
@@ -410,10 +454,13 @@ async function startApplicationEditor() {
   activeAppSection.value = isCreateMode.value ? 'identity' : 'runtime';
   editorMode.value = 'configure';
   try {
-    const recovered = await applicationsApi.recoverableEditSessions(appId || undefined);
+    const recovered = await applicationsApi.recoverableEditSessions(appId || undefined, { signal: controller.signal });
+    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
     editSession.value = recovered[0] ?? await applicationsApi.beginEditSession(appId || undefined, saveInputFromDraft(appDraft));
+    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
     Object.assign(appDraft, draftFromApplication({ ...(app ?? emptyApplication()), ...editSession.value.draft }));
   } catch (err) {
+    if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
   }
 }
@@ -459,7 +506,14 @@ async function commitApplication() {
 }
 
 async function startFacilityEditor() {
+  editorQueryController?.abort();
+  const requestId = ++editorQueryRequestId;
+  const controller = new AbortController();
+  editorQueryController = controller;
+  const modeAtStart = mode.value;
+  const kindAtStart = facilityKind.value;
   await ensureFacilityLoaded();
+  if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
   if (!currentFacilitySummary.value) return;
   Object.assign(facilityDraft, facilityDraftFromConfig(facility.value));
   facilityDiagnostics.value = [];
@@ -468,10 +522,13 @@ async function startFacilityEditor() {
   isDirty.value = false;
   activeFacilitySection.value = 'gateways';
   try {
-    const recovered = await facilityAppsApi.recoverableFacilityEditSessions(facilityKind.value);
+    const recovered = await facilityAppsApi.recoverableFacilityEditSessions(kindAtStart, { signal: controller.signal });
+    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
     facilitySession.value = recovered[0] ?? await facilityAppsApi.beginFacilityEdit(facilityKind.value, facilitySaveInputFromDraft(facilityDraft));
+    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
     Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, panelEntry: facilitySession.value.draft.panelEntry, domains: facilitySession.value.draft.domains }));
   } catch (err) {
+    if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
   }
 }
@@ -532,7 +589,7 @@ async function runEditorAction(action: () => Promise<void>, name = 'editor') {
 }
 
 async function ensureApplicationsLoaded() {
-  if (!applications.value.length) await loadApplications();
+  if (!applications.value.length) await loadApplications({ loadSelectedRuntime: false });
 }
 
 async function ensureFacilityLoaded() {
@@ -767,6 +824,21 @@ function emptyFacility(): ReverseProxyConfig {
   return { id: 'reverse_proxy', version: 0, deploymentServers: [], panelEntry: { enabled: false }, domains: [], staticAssets: [], routeSummaries: [], applicationRoutes: [], updatedAt: '', routes: 0, enabledServers: [] };
 }
 
+function isAbortError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
+}
+
+function cancelRuntimeLoad() {
+  runtimeController?.abort();
+  runtimeRequestId += 1;
+  detailLoading.value = false;
+}
+
+function cancelEditorQuery() {
+  editorQueryController?.abort();
+  editorQueryRequestId += 1;
+}
+
 onMounted(async () => {
   window.addEventListener('beforeunload', handleBeforeUnload);
   await load();
@@ -776,6 +848,9 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload);
+  pageLoadController?.abort();
+  cancelRuntimeLoad();
+  cancelEditorQuery();
 });
 </script>
 
@@ -786,7 +861,6 @@ onBeforeUnmount(() => {
       <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('applicationsPage.createApplication') }}</Button>
     </template>
 
-    <Tabs v-model="applicationFamilyTab" :tabs="[{ label: t('routes.applications.title'), value: 'apps' }, { label: t('routes.facilityApps.title'), value: 'facility' }]">
     <div class="grid h-full min-h-[660px] grid-cols-[370px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
       <aside class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
@@ -930,14 +1004,12 @@ onBeforeUnmount(() => {
         </article>
       </main>
     </div>
-    </Tabs>
   </ConsolePage>
 
   <ConsolePage v-else-if="mode === 'facilityCatalog'" :title="t('routes.facilityApps.title')" :description="t('routes.facilityApps.description')">
     <template #actions>
       <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
-    <Tabs v-model="applicationFamilyTab" :tabs="[{ label: t('routes.applications.title'), value: 'apps' }, { label: t('routes.facilityApps.title'), value: 'facility' }]">
     <div class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
         <div class="mb-4">
@@ -1000,7 +1072,6 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </div>
-    </Tabs>
   </ConsolePage>
 
   <ConsolePage v-else-if="mode === 'facilityDetail'" :title="currentFacilitySummary ? t(currentFacilitySummary.titleKey) : t('applicationsPage.facilityUnavailable')" :description="currentFacilitySummary ? t(currentFacilitySummary.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })">
@@ -1010,7 +1081,6 @@ onBeforeUnmount(() => {
       <Button v-if="currentFacilitySummary" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => facilityAppsApi.reconcileFacility(facilityKind), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
       <Button v-if="currentFacilitySummary" size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${facilityKind}/config`)"><Wrench />{{ t('common.configure') }}</Button>
     </template>
-    <Tabs v-model="applicationFamilyTab" :tabs="[{ label: t('routes.applications.title'), value: 'apps' }, { label: t('routes.facilityApps.title'), value: 'facility' }]">
     <div class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
         <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
@@ -1043,16 +1113,13 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </div>
-    </Tabs>
   </ConsolePage>
 
   <ConsolePage v-else-if="isUnsupportedFacilityRoute" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })">
     <template #actions>
       <Button size="sm" @click="router.push('/applications/facility-apps')">{{ t('routes.facilityApps.title') }}</Button>
     </template>
-    <Tabs v-model="applicationFamilyTab" :tabs="[{ label: t('routes.applications.title'), value: 'apps' }, { label: t('routes.facilityApps.title'), value: 'facility' }]">
       <EmptyState :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
-    </Tabs>
   </ConsolePage>
 
   <ConsolePage v-else-if="isAppEditor || isFacilityEditor" :title="isFacilityEditor ? t('applicationsPage.gatewayEditor') : (isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor'))" :description="isFacilityEditor ? t('applicationsPage.gatewayEditorDescription') : t('applicationsPage.applicationEditorDescription')">

@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { ApiError, type ApiEnvelope, authHeaders } from './client';
+import { ApiError, type ApiEnvelope, authHeaders, type ApiRequestOptions } from './client';
 import type {
   FacilityEditCommitResult,
   FacilityEditPreviewResult,
@@ -81,13 +81,13 @@ async function multipartJson<T>(method: string, path: string, form: FormData, id
 }
 
 export const facilityAppsApi = {
-  async listFacilities() {
-    const config = await apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy');
+  async listFacilities(options?: ApiRequestOptions) {
+    const config = await apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy', options);
     return [reverseProxySummary(config)];
   },
-  async getFacility(kind: string): Promise<FacilityAppDetail> {
+  async getFacility(kind: string, options?: ApiRequestOptions): Promise<FacilityAppDetail> {
     assertSupported(kind);
-    const config = await apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy');
+    const config = await apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy', options);
     return { kind, summary: reverseProxySummary(config), reverseProxy: config };
   },
   async reconcileFacility(kind: string) {
@@ -102,9 +102,9 @@ export const facilityAppsApi = {
       draft,
     });
   },
-  recoverableFacilityEditSessions(kind: string) {
+  recoverableFacilityEditSessions(kind: string, options?: ApiRequestOptions) {
     assertSupported(kind);
-    return apiClient.get<FacilityEditSession[]>('/facility-apps/reverse-proxy/edit-sessions/recoverable?clientDraftKey=facility%3Areverse-proxy');
+    return apiClient.get<FacilityEditSession[]>('/facility-apps/reverse-proxy/edit-sessions/recoverable?clientDraftKey=facility%3Areverse-proxy', options);
   },
   patchFacilityEdit(kind: string, sessionId: string, revision: number, baseResourceVersion: string, draft: ReverseProxySaveInput) {
     assertSupported(kind);
