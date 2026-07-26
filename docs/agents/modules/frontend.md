@@ -16,6 +16,7 @@
 - 自有 UI primitives：`web/src/components/ui/`
 - 外壳与导航：`web/src/components/shell/`
 - 页面模板：`web/src/components/templates/`
+- 一级对象选择工作台统一使用 `web/src/components/templates/MasterDetailLayout.vue`：`xl` 及以上左侧选择区固定 `360px`，较窄宽度折叠为单列；组件只负责双栏几何和溢出保护，业务页面继续负责面板视觉与内部滚动。当前接入 servers、credentials、applications、certificates、dns、tasks、security、resources；settings 导航、applications 设施编辑 rail、tasks 内层列表和 AppShell 导航保持各自布局。
 - 路由：`web/src/router/index.ts`
 - API client：`web/src/api/client.ts`
 - Session 基座：`web/src/stores/session.ts`

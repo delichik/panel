@@ -22,6 +22,7 @@ import EditorSectionRail from '@/components/patterns/EditorSectionRail.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, Diagnostic, ReverseProxyRule } from '@/types/applications';
 import type { FacilityAppSummary, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig } from '@/types/facilityApps';
@@ -861,8 +862,9 @@ onBeforeUnmount(() => {
       <Button size="sm" variant="primary" @click="router.push('/applications/apps/create')"><Plus />{{ t('applicationsPage.createApplication') }}</Button>
     </template>
 
-    <div class="grid h-full min-h-[660px] grid-cols-[370px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
-      <aside class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+    <MasterDetailLayout class="h-full min-h-[660px]">
+      <template #master>
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
@@ -894,8 +896,10 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </aside>
+      </template>
 
-      <main class="grid min-h-0">
+      <template #detail>
+      <main class="grid min-h-0 min-w-0">
         <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
         <article v-else-if="loading && !applications.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="border-b border-border p-5">
@@ -1003,7 +1007,8 @@ onBeforeUnmount(() => {
           </div>
         </article>
       </main>
-    </div>
+      </template>
+    </MasterDetailLayout>
   </ConsolePage>
 
   <ConsolePage v-else-if="mode === 'facilityCatalog'" :title="t('routes.facilityApps.title')" :description="t('routes.facilityApps.description')">

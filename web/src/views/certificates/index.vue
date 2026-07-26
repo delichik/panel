@@ -16,6 +16,7 @@ import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { DomainCertificateDto, SelfSignedCertificateDto } from '@/types/certificates';
 import type { DnsDomainDto } from '@/types/dns';
@@ -384,8 +385,9 @@ function onFile(event: Event) {
         <Button :variant="mode === 'keys' ? 'primary' : 'ghost'" @click="switchMode('/certificates/keys')">{{ t('routes.keys.title') }}</Button>
       </nav>
 
-      <div class="grid min-h-0 grid-cols-[360px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
-        <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-2">
+      <MasterDetailLayout class="min-h-0">
+        <template #master>
+        <aside class="min-h-0 min-w-0 overflow-auto rounded-2xl border border-border bg-card p-2">
           <div v-if="loading && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>
@@ -409,8 +411,10 @@ function onFile(event: Event) {
             </button>
           </template>
         </aside>
+        </template>
 
-        <main class="grid min-h-0 overflow-hidden rounded-2xl border border-border bg-card">
+        <template #detail>
+        <main class="grid min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-card">
           <section v-if="error || feedback" class="border-b border-border p-4">
             <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
@@ -493,7 +497,8 @@ function onFile(event: Event) {
             </div>
           </article>
         </main>
-      </div>
+        </template>
+      </MasterDetailLayout>
     </div>
 
     <Dialog :open="dialog === 'issue'" :title="editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">

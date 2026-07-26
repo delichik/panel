@@ -12,6 +12,7 @@ import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { CredentialDto, CredentialInput, CredentialType } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
@@ -153,8 +154,9 @@ onMounted(load);
       <Button size="sm" variant="primary" @click="openCreate"><Plus />{{ t('credentialsPage.addCredential') }}</Button>
     </template>
 
-    <div class="grid h-full min-h-[640px] grid-cols-[360px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
-      <aside class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+    <MasterDetailLayout class="h-full min-h-[640px]">
+      <template #master>
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <label class="relative block">
             <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
@@ -185,8 +187,10 @@ onMounted(load);
           </button>
         </div>
       </aside>
+      </template>
 
-      <main class="grid min-h-0">
+      <template #detail>
+      <main class="grid min-h-0 min-w-0">
         <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
         <EmptyState v-else-if="!selectedCredential" :title="t('credentialsPage.selectCredential')" :description="t('credentialsPage.selectCredentialHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
@@ -239,7 +243,8 @@ onMounted(load);
           </div>
         </article>
       </main>
-    </div>
+      </template>
+    </MasterDetailLayout>
 
     <Dialog v-model:open="dialogOpen" :title="editing ? t('credentialsPage.editCredential') : t('credentialsPage.createCredential')" :description="editing ? t('credentialsPage.editDescription') : t('credentialsPage.createDescription')" :close-label="t('common.close')">
       <div class="grid gap-4">

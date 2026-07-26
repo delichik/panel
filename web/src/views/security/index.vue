@@ -13,6 +13,7 @@ import Select from '@/components/ui/Select.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { Fail2BanJail, Fail2BanState, UfwRule, UfwState } from '@/types/security';
@@ -289,8 +290,9 @@ onBeforeUnmount(() => {
       <Button size="sm" :loading="loadingServers || loadingPanel" @click="loadServers"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
-    <div class="grid h-full min-h-[640px] grid-cols-[320px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
-      <aside class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+    <MasterDetailLayout class="h-full min-h-[640px]">
+      <template #master>
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('securityPage.serverContext') }}</h2>
           <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('securityPage.selectServerHint') }}</p>
@@ -319,8 +321,10 @@ onBeforeUnmount(() => {
           />
         </div>
       </aside>
+      </template>
 
-      <main class="grid min-h-0">
+      <template #detail>
+      <main class="grid min-h-0 min-w-0">
         <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
         <EmptyState v-else-if="!selectedServer" :title="t('securityPage.selectServer')" :description="t('securityPage.selectServerHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
@@ -491,7 +495,8 @@ onBeforeUnmount(() => {
           </div>
         </article>
       </main>
-    </div>
+      </template>
+    </MasterDetailLayout>
 
     <Dialog v-model:open="ruleDialog" :title="t('securityPage.addRule')" :description="t('securityPage.addRuleDescription')" :close-label="t('common.close')">
       <div class="grid gap-3">

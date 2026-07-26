@@ -13,6 +13,7 @@ import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { TaskDto, TaskLog, TaskOperationGroup, TaskStep } from '@/types/tasks';
 import { groupTasksByOperation } from './model';
@@ -154,7 +155,8 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <Button size="sm" :variant="polling ? 'secondary' : 'primary'" @click="polling = !polling">{{ polling ? t('tasksPage.pausePolling') : t('tasksPage.resumePolling') }}</Button>
     </template>
 
-    <div class="grid h-full min-h-[640px] min-w-0 grid-cols-[minmax(0,360px)_minmax(0,1fr)] gap-4 overflow-x-hidden max-xl:grid-cols-1">
+    <MasterDetailLayout class="h-full min-h-[640px]">
+      <template #master>
       <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-card">
         <div class="grid min-w-0 gap-3 border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('tasksPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
@@ -180,7 +182,9 @@ onBeforeUnmount(() => window.clearInterval(timer));
           </template>
         </PaginationBar>
       </aside>
+      </template>
 
+      <template #detail>
       <main class="grid min-h-0 min-w-0 overflow-hidden">
         <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
         <EmptyState v-else-if="!selectedGroup" :title="t('tasksPage.selectOperation')" :description="t('tasksPage.selectOperationHint')" />
@@ -224,6 +228,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
           </div>
         </article>
       </main>
-    </div>
+      </template>
+    </MasterDetailLayout>
   </ConsolePage>
 </template>

@@ -11,6 +11,7 @@ import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto, DnsRecordDto } from '@/types/dns';
 import { domainTone, normalizeRecordName } from './model';
@@ -196,8 +197,9 @@ async function deleteRecord() {
       <Button size="sm" variant="primary" @click="openCreateDomain"><Plus />{{ t('dnsPage.addDomain') }}</Button>
     </template>
 
-    <div class="grid h-full min-h-[640px] grid-cols-[360px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
-      <aside class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+    <MasterDetailLayout class="h-full min-h-[640px]">
+      <template #master>
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <label class="relative block">
             <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
@@ -237,8 +239,10 @@ async function deleteRecord() {
           </button>
         </div>
       </aside>
+      </template>
 
-      <main class="grid min-h-0">
+      <template #detail>
+      <main class="grid min-h-0 min-w-0">
         <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
         <EmptyState v-else-if="!selectedDomain" :title="t('dnsPage.selectDomain')" :description="t('dnsPage.selectDomainHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
@@ -291,7 +295,8 @@ async function deleteRecord() {
           </section>
         </article>
       </main>
-    </div>
+      </template>
+    </MasterDetailLayout>
 
     <Dialog v-model:open="domainDialog" :title="editingDomain ? t('dnsPage.editDomain') : t('dnsPage.addDomain')" :description="t('dnsPage.domainFormHint')" :close-label="t('common.close')">
       <div class="grid gap-3">
