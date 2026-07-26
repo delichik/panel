@@ -12,12 +12,31 @@ export interface DebugSnapshot {
     cgoCallCount: number;
   };
   memory: Record<string, number | string | null>;
-  tasks: {
-    runningExecutions?: number;
-    registeredTypes?: number;
-    [key: string]: unknown;
-  };
+  tasks: DebugTaskRuntime;
   databases: DebugDatabase[];
+}
+
+export interface DebugTaskRuntime {
+  workerRunning?: boolean;
+  registeredTypes?: number;
+  executableTypes?: number;
+  periodicTypes?: number;
+  runningExecutions?: number;
+  definitions?: DebugTaskDefinition[];
+  [key: string]: unknown;
+}
+
+export interface DebugTaskDefinition {
+  type: string;
+  hidden: boolean;
+  executable: boolean;
+  periodic: boolean;
+  allowRunNow: boolean;
+  allowRetry: boolean;
+  defaultMaxRetries: number;
+  concurrencyPolicy: string;
+  staleQueuedAfterSeconds: number;
+  periodicIntervalSeconds: number;
 }
 
 export interface DebugDatabase {

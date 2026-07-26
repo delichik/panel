@@ -5,11 +5,12 @@ import { debugApi } from '@/api/debug';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import WorkspacePage from '@/components/templates/WorkspacePage.vue';
 import { useI18n } from '@/i18n';
-import type { DebugDatabase, DebugSnapshot } from '@/types/debug';
+import type { DebugDatabase, DebugSnapshot, DebugTaskDefinition } from '@/types/debug';
 
 const { t } = useI18n();
 
@@ -21,6 +22,18 @@ const paused = ref(false);
 const error = ref('');
 let timer: number | undefined;
 
+type TaskMetricRow = { key: string; label: string; value: string };
+type TaskDefinitionRow = {
+  type: string;
+  kind: string;
+  actions: string;
+  concurrencyPolicy: string;
+  defaultMaxRetries: number;
+  staleQueuedAfter: string;
+  periodicInterval: string;
+};
+
+const taskMetricOrder = ['workerRunning', 'registeredTypes', 'executableTypes', 'periodicTypes', 'runningExecutions'];
 const view = computed(() => snapshot.value ?? lastGoodSnapshot.value);
 const stale = computed(() => Boolean(error.value && lastGoodSnapshot.value));
 const tabs = computed(() => [
@@ -28,6 +41,32 @@ const tabs = computed(() => [
   { label: t('debugPage.tasks'), value: 'tasks' },
   { label: t('debugPage.database'), value: 'database' },
 ]);
+const taskDefinitionColumns = computed<Array<{ key: keyof TaskDefinitionRow & string; label: string; align?: 'left' | 'right' }>>(() => [
+  { key: 'type', label: t('common.type') },
+  { key: 'kind', label: t('debugPage.kind') },
+  { key: 'actions', label: t('debugPage.actionsColumn') },
+  { key: 'concurrencyPolicy', label: t('debugPage.concurrencyPolicy') },
+  { key: 'defaultMaxRetries', label: t('debugPage.maxRetries'), align: 'right' },
+  { key: 'staleQueuedAfter', label: t('debugPage.staleQueuedAfter'), align: 'right' },
+  { key: 'periodicInterval', label: t('debugPage.periodicInterval'), align: 'right' },
+]);
+const taskMetricRows = computed<TaskMetricRow[]>(() => {
+  const tasks = view.value?.tasks;
+  if (!tasks) return [];
+  const entries = Object.entries(tasks).filter((entry): entry is [string, string | number | boolean | null | undefined] => entry[0] !== 'definitions' && isScalarDiagnosticValue(entry[1]));
+  return entries
+    .sort(([left], [right]) => taskMetricSortIndex(left) - taskMetricSortIndex(right) || left.localeCompare(right))
+    .map(([key, value]) => ({ key, label: taskMetricLabel(key), value: formatDiagnosticValue(value) }));
+});
+const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => (view.value?.tasks.definitions ?? []).map((definition) => ({
+  type: definition.type,
+  kind: formatTaskKind(definition),
+  actions: formatTaskActions(definition),
+  concurrencyPolicy: definition.concurrencyPolicy || t('common.notAvailable'),
+  defaultMaxRetries: definition.defaultMaxRetries,
+  staleQueuedAfter: formatSeconds(definition.staleQueuedAfterSeconds),
+  periodicInterval: definition.periodic ? formatSeconds(definition.periodicIntervalSeconds) : t('common.notAvailable'),
+})));
 const databaseTotals = computed(() => {
   const dbs = view.value?.databases ?? [];
   return {
@@ -36,6 +75,43 @@ const databaseTotals = computed(() => {
     used: dbs.reduce((sum, item) => sum + (item.usedBytes || 0), 0),
   };
 });
+
+function isScalarDiagnosticValue(value: unknown): value is string | number | boolean | null | undefined {
+  return value == null || ['string', 'number', 'boolean'].includes(typeof value);
+}
+
+function taskMetricSortIndex(key: string) {
+  const index = taskMetricOrder.indexOf(key);
+  return index === -1 ? Number.MAX_SAFE_INTEGER : index;
+}
+
+function taskMetricLabel(key: string) {
+  const label = t(`debugPage.metric.${key}`);
+  return label === `debugPage.metric.${key}` ? key : label;
+}
+
+function formatDiagnosticValue(value: string | number | boolean | null | undefined) {
+  if (typeof value === 'boolean') return value ? t('debugPage.yes') : t('debugPage.no');
+  if (value == null || value === '') return t('common.notAvailable');
+  return String(value);
+}
+
+function formatTaskKind(definition: DebugTaskDefinition) {
+  const flags = [
+    definition.executable ? t('debugPage.executable') : '',
+    definition.periodic ? t('debugPage.periodic') : '',
+    definition.hidden ? t('debugPage.hidden') : '',
+  ].filter(Boolean);
+  return flags.length ? flags.join(' / ') : t('common.notAvailable');
+}
+
+function formatTaskActions(definition: DebugTaskDefinition) {
+  const actions = [
+    definition.allowRunNow ? t('common.runNow') : '',
+    definition.allowRetry ? t('common.retry') : '',
+  ].filter(Boolean);
+  return actions.length ? actions.join(' / ') : t('common.notAvailable');
+}
 
 async function load() {
   loading.value = true;
@@ -62,6 +138,14 @@ function formatBytes(value?: number) {
     index += 1;
   }
   return `${size.toFixed(index ? 1 : 0)} ${units[index]}`;
+}
+
+function formatSeconds(value?: number) {
+  if (!value || value < 0) return t('common.notAvailable');
+  if (value < 60) return `${value}s`;
+  if (value < 3600) return `${Math.round(value / 60)}m`;
+  if (value < 86400) return `${Math.round(value / 3600)}h`;
+  return `${Math.round(value / 86400)}d`;
 }
 
 function dbTone(db: DebugDatabase) {
@@ -123,10 +207,15 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </section>
 
         <section v-else-if="activeTab === 'tasks'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div class="rounded-2xl border border-border bg-card p-5">
+          <div class="min-w-0 rounded-2xl border border-border bg-card p-5">
             <h3>{{ t('debugPage.taskRuntime') }}</h3>
             <div class="mt-4 grid grid-cols-3 gap-3 max-md:grid-cols-1">
-              <div v-for="(value, key) in view.tasks" :key="key" class="rounded-xl border border-border bg-background p-3"><span>{{ key }}</span><strong>{{ String(value) }}</strong></div>
+              <div v-for="metric in taskMetricRows" :key="metric.key" class="rounded-xl border border-border bg-background p-3"><span>{{ metric.label }}</span><strong>{{ metric.value }}</strong></div>
+            </div>
+            <div class="mt-6 min-w-0">
+              <h3>{{ t('debugPage.taskDefinitions') }}</h3>
+              <Table v-if="taskDefinitionRows.length" class="mt-4 max-h-96" :columns="taskDefinitionColumns" :rows="taskDefinitionRows" row-key="type" />
+              <p v-else class="mt-3 text-sm text-muted-foreground">{{ t('debugPage.noTaskDefinitions') }}</p>
             </div>
           </div>
           <aside class="rounded-2xl border border-border bg-card p-5">

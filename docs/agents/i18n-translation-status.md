@@ -50,7 +50,7 @@
   - 设施入口网关配置的网关节点、域名组、Path 类型、静态资产引用、Panel 入口、变更摘要、校验错误和对话框文案已接入英文与简体中文词条；应用名、服务器 ID、域名、Path、镜像引用、后端诊断和日志正文保持实例原值。
 
 - `web/src/views/tasks/`、`web/src/views/settings/`、`web/src/views/maintenance/`、`web/src/views/debug/`（v4 阶段 7 任务 + 设置 + 维护 + 诊断页面族）
-  - 任务操作组、状态筛选、步骤/日志/错误、重试/立即运行，设置分区保存、备份导出、还原预检/确认，维护登录、阶段、能力按钮、下载入口，以及诊断 Runtime/Tasks/Database tab、暂停/恢复和 stale 快照提示已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；任务类型、数据库表名、日志正文和后端原始诊断保持实例原值。
+  - 任务操作组、状态筛选、步骤/日志/错误、重试/立即运行，设置分区保存、备份导出、还原预检/确认，维护登录、阶段、能力按钮、下载入口，以及诊断 Runtime/Tasks/Database tab、暂停/恢复、stale 快照提示、任务运行时指标和任务定义表格列名已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；任务类型、并发策略、数据库表名、日志正文和后端原始诊断保持实例原值。
 
 - `web/src/views/dns/`、`web/src/views/certificates/`（v4 阶段 6 DNS + 证书 + 密钥资产页面族）
   - DNS 域名、Cloudflare Provider 状态、DNS 记录 CRUD、域名证书签发/续签/删除、自签证书生成/重签/删除、密钥资产生成/导入/导出/下载/批量导入预检/执行和冲突反馈文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；域名、证书名、指纹、任务 ID、Cloudflare/ACME/密钥归档原始诊断保持实例原值。
