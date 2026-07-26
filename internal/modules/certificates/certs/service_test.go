@@ -54,7 +54,7 @@ func TestIssueWildcardCertificateExpandsDomainsAndRegistersBuiltinVariable(t *te
 		t.Fatal(err)
 	}
 	certsMap := vars["certs"].(map[string]any)
-	certVar := certsMap["example_com"].(map[string]any)
+	certVar := certsMap[result.Certificate.ID].(map[string]any)
 	if certVar["certificatePem"] == "" || certVar["privateKeyPem"] == "" {
 		t.Fatalf("certificate variable missing PEM values: %#v", certVar)
 	}
@@ -83,7 +83,7 @@ func TestIssueMultiplePrefixesExpandsDomainsAndKeepsLegacyScopeCompatible(t *tes
 		t.Fatalf("provider domains=%#v want %#v", fake.last.Domains, want)
 	}
 
-	legacy, err := svc.Issue(context.Background(), IssueRequest{DomainID: "dnsdom_1", Prefix: "@", Scope: ScopeWildcard, VariableName: "legacy_example_com"})
+	legacy, err := svc.Issue(context.Background(), IssueRequest{DomainID: "dnsdom_1", Prefix: "@", Scope: ScopeWildcard})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,13 +259,16 @@ func TestReverseProxyCertificatesReturnsOnlyIssuedPEM(t *testing.T) {
 	}
 }
 
-func TestIssueRejectsInvalidVariableName(t *testing.T) {
+func TestIssueUsesCertificateIDForBuiltinVariable(t *testing.T) {
 	svc, _, closeStore := newTestService(t)
 	defer closeStore()
 
-	_, err := svc.Issue(context.Background(), IssueRequest{DomainID: "dnsdom_1", Prefix: "@", VariableName: "bad-name"})
-	if err == nil {
-		t.Fatal("expected invalid variable name error")
+	result, err := svc.Issue(context.Background(), IssueRequest{DomainID: "dnsdom_1", Prefix: "api"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Certificate.VariableName != result.Certificate.ID {
+		t.Fatalf("variable name = %q want certificate id %q", result.Certificate.VariableName, result.Certificate.ID)
 	}
 }
 

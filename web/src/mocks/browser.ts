@@ -16,6 +16,7 @@ import {
   mockKeyAssets,
   mockSelfSigned,
   mutateAsset,
+  reissueCertificate,
   renewCertificate,
   renewSelfSigned,
   saveRecord,
@@ -370,6 +371,10 @@ export function installMockApi() {
       return result ? json(result, 201) : error('dns_domain_not_found', 'DNS domain was not found.', 404);
     }
     const certOperationMatch = url.pathname.match(/^\/api\/v1\/certificates\/([^/]+)(?:\/renew)?$/);
+    if (certOperationMatch && method(init) === 'PUT') {
+      const result = reissueCertificate(decodeURIComponent(certOperationMatch[1]), await body(init));
+      return result ? json(result, 202) : error('certificate_not_found', 'Certificate was not found.', 404);
+    }
     if (certOperationMatch && method(init) === 'POST' && url.pathname.endsWith('/renew')) {
       return renewCertificate(decodeURIComponent(certOperationMatch[1])) ? json({ renewed: true }, 202) : error('certificate_not_found', 'Certificate was not found.', 404);
     }

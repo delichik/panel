@@ -12,6 +12,8 @@ import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
+import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useI18n } from '@/i18n';
@@ -36,21 +38,24 @@ const dialog = ref<'issue' | 'self-ca' | 'self-leaf' | 'asset-ca' | 'asset-tls' 
 const confirmDelete = ref(false);
 const saving = ref(false);
 const importPlan = ref<ImportPreflightDto | null>(null);
+const editingCertificateId = ref('');
 
 const mode = computed(() => route.path.includes('/self-signed') ? 'self' : route.path.includes('/keys') ? 'keys' : 'domains');
 const title = computed(() => mode.value === 'self' ? t('routes.selfSigned.title') : mode.value === 'keys' ? t('routes.keys.title') : t('routes.certificates.title'));
 const description = computed(() => mode.value === 'self' ? t('routes.selfSigned.description') : mode.value === 'keys' ? t('routes.keys.description') : t('routes.certificates.description'));
 const selectedCert = computed(() => certs.value.find((item) => item.id === selectedId.value) ?? null);
 const selectedSelf = computed(() => selfSigned.value.find((item) => item.id === selectedId.value) ?? null);
-const selectedAsset = computed(() => assets.value.find((item) => item.id === selectedId.value) ?? null);
-const caAssets = computed(() => assets.value.filter((item) => item.type === 'ca_certificate').map((item) => ({ label: item.name, value: item.id })));
+const userAssets = computed(() => assets.value.filter((item) => !isSystemManagedAsset(item)));
+const selectedAsset = computed(() => userAssets.value.find((item) => item.id === selectedId.value) ?? null);
+const caAssets = computed(() => userAssets.value.filter((item) => item.type === 'ca_certificate').map((item) => ({ label: item.name, value: item.id })));
 const selfCas = computed(() => selfSigned.value.filter((item) => item.kind === 'ca').map((item) => ({ label: item.name, value: item.id })));
 const domainOptions = computed(() => domains.value.map((item) => ({ label: item.name, value: item.id })));
-
-const issueForm = reactive({ name: '', domainId: '', prefixes: '@', variableName: '' });
-const selfForm = reactive({ name: '', caId: '', commonName: '', dnsNames: '', ipAddresses: '', years: '5', days: '90' });
-const assetForm = reactive({ type: 'ssh_key_pair' as KeyAssetType, name: '', parentAssetId: '', commonName: '', dnsNames: '', ipAddresses: '', algorithm: 'ed25519', keySize: '2048', validityDays: '365', comment: '', certificatePem: '', privateKeyPem: '', publicKey: '', password: '' });
+const issueForm = reactive({ name: '', domainId: '', includeRoot: true, includeWildcard: false, subdomains: [''] });
+const selfForm = reactive({ name: '', caId: '', commonName: '', dnsNames: [''], ipAddresses: [''], years: '5', days: '90' });
+const assetForm = reactive({ type: 'ssh_key_pair' as KeyAssetType, name: '', parentAssetId: '', commonName: '', dnsNames: [''], ipAddresses: [''], algorithm: 'ed25519', keySize: '2048', validityDays: '365', comment: '', certificatePem: '', privateKeyPem: '', publicKey: '', password: '' });
 const importFile = ref<File | null>(null);
+const selectedIssueDomainName = computed(() => domains.value.find((item) => item.id === issueForm.domainId)?.name ?? '');
+const issueCoverage = computed(() => issuePrefixes().map((prefix) => prefixToDomain(prefix, selectedIssueDomainName.value)).filter(Boolean));
 
 const algorithmOptions = [{ label: 'ed25519', value: 'ed25519' }, { label: 'rsa', value: 'rsa' }];
 const assetTypeOptions = [
@@ -71,11 +76,12 @@ async function load() {
       certificatesApi.listSelfSigned(),
       keyAssetsApi.list(),
     ]);
-    domains.value = nextDomains;
-    certs.value = nextCerts;
-    selfSigned.value = nextSelf;
-    assets.value = nextAssets;
-    const list = mode.value === 'self' ? nextSelf : mode.value === 'keys' ? nextAssets : nextCerts;
+    domains.value = Array.isArray(nextDomains) ? nextDomains : [];
+    certs.value = (Array.isArray(nextCerts) ? nextCerts : []).map(normalizeDomainCertificate);
+    selfSigned.value = (Array.isArray(nextSelf) ? nextSelf : []).map(normalizeSelfSignedCertificate);
+    assets.value = (Array.isArray(nextAssets) ? nextAssets : []).map(normalizeKeyAsset);
+    const visibleAssets = assets.value.filter((item) => !isSystemManagedAsset(item));
+    const list = mode.value === 'self' ? selfSigned.value : mode.value === 'keys' ? visibleAssets : certs.value;
     selectedId.value = list.some((item) => item.id === selectedId.value) ? selectedId.value : list[0]?.id ?? '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('certificatesPage.loadFailed');
@@ -90,17 +96,24 @@ function switchMode(path: string) {
 }
 
 function openIssue() {
-  Object.assign(issueForm, { name: '', domainId: domains.value[0]?.id ?? '', prefixes: '@', variableName: '' });
+  resetIssueForm();
+  dialog.value = 'issue';
+}
+
+function openReissue(cert: DomainCertificateDto) {
+  resetIssueForm(cert);
   dialog.value = 'issue';
 }
 
 async function issueCertificate() {
   saving.value = true;
   try {
-    const prefixes = lines(issueForm.prefixes);
-    const result = await certificatesApi.issue({ name: issueForm.name, domainId: issueForm.domainId, prefixes: prefixes.length ? prefixes : ['@'], variableName: issueForm.variableName });
+    const prefixes = issuePrefixes();
+    const input = { name: issueForm.name, domainId: issueForm.domainId, prefixes: prefixes.length ? prefixes : ['@'] };
+    const result = editingCertificateId.value ? await certificatesApi.reissue(editingCertificateId.value, input) : await certificatesApi.issue(input);
     feedback.value = result.taskId ? t('certificatesPage.issueTask', { taskId: result.taskId }) : t('certificatesPage.issued');
     selectedId.value = result.certificate.id;
+    editingCertificateId.value = '';
     dialog.value = '';
     await load();
   } catch (err) {
@@ -119,7 +132,7 @@ async function renewCertificate(cert: DomainCertificateDto) {
 }
 
 function openSelf(kind: 'self-ca' | 'self-leaf') {
-  Object.assign(selfForm, { name: '', caId: selfCas.value[0]?.value ?? '', commonName: '', dnsNames: '', ipAddresses: '', years: '5', days: '90' });
+  Object.assign(selfForm, { name: '', caId: selfCas.value[0]?.value ?? '', commonName: '', dnsNames: [''], ipAddresses: [''], years: '5', days: '90' });
   dialog.value = kind;
 }
 
@@ -128,7 +141,7 @@ async function saveSelf() {
   try {
     const saved = dialog.value === 'self-ca'
       ? await certificatesApi.createSelfSignedCa({ name: selfForm.name, commonName: selfForm.commonName, years: Number(selfForm.years) || 5 })
-      : await certificatesApi.createSelfSignedLeaf({ name: selfForm.name, caId: selfForm.caId, commonName: selfForm.commonName, dnsNames: lines(selfForm.dnsNames), ipAddresses: lines(selfForm.ipAddresses), days: Number(selfForm.days) || 90 });
+      : await certificatesApi.createSelfSignedLeaf({ name: selfForm.name, caId: selfForm.caId, commonName: selfForm.commonName, dnsNames: cleanEntries(selfForm.dnsNames), ipAddresses: cleanEntries(selfForm.ipAddresses), days: Number(selfForm.days) || 90 });
     selectedId.value = saved.id;
     feedback.value = t('certificatesPage.selfSaved');
     dialog.value = '';
@@ -150,7 +163,7 @@ async function renewSelf(cert: SelfSignedCertificateDto) {
 }
 
 function openAsset(next: typeof dialog.value) {
-  Object.assign(assetForm, { type: 'ssh_key_pair', name: '', parentAssetId: caAssets.value[0]?.value ?? '', commonName: '', dnsNames: '', ipAddresses: '', algorithm: 'ed25519', keySize: '2048', validityDays: '365', comment: '', certificatePem: '', privateKeyPem: '', publicKey: '', password: '' });
+  Object.assign(assetForm, { type: 'ssh_key_pair', name: '', parentAssetId: caAssets.value[0]?.value ?? '', commonName: '', dnsNames: [''], ipAddresses: [''], algorithm: 'ed25519', keySize: '2048', validityDays: '365', comment: '', certificatePem: '', privateKeyPem: '', publicKey: '', password: '' });
   importPlan.value = null;
   importFile.value = null;
   dialog.value = next;
@@ -161,7 +174,7 @@ async function saveAsset() {
   try {
     let result;
     if (dialog.value === 'asset-ca') result = await keyAssetsApi.createCa({ name: assetForm.name, commonName: assetForm.commonName, algorithm: assetForm.algorithm as 'ed25519' | 'rsa', keySize: Number(assetForm.keySize) || 0, years: 0, validityDays: Number(assetForm.validityDays) || 365 });
-    if (dialog.value === 'asset-tls') result = await keyAssetsApi.createTls({ name: assetForm.name, parentAssetId: assetForm.parentAssetId, caId: assetForm.parentAssetId, commonName: assetForm.commonName, algorithm: assetForm.algorithm as 'ed25519' | 'rsa', keySize: Number(assetForm.keySize) || 0, dnsNames: lines(assetForm.dnsNames), ipAddresses: lines(assetForm.ipAddresses), days: 0, validityDays: Number(assetForm.validityDays) || 365 });
+    if (dialog.value === 'asset-tls') result = await keyAssetsApi.createTls({ name: assetForm.name, parentAssetId: assetForm.parentAssetId, caId: assetForm.parentAssetId, commonName: assetForm.commonName, algorithm: assetForm.algorithm as 'ed25519' | 'rsa', keySize: Number(assetForm.keySize) || 0, dnsNames: cleanEntries(assetForm.dnsNames), ipAddresses: cleanEntries(assetForm.ipAddresses), days: 0, validityDays: Number(assetForm.validityDays) || 365 });
     if (dialog.value === 'asset-ssh') result = await keyAssetsApi.generateSsh({ name: assetForm.name, algorithm: assetForm.algorithm as 'ed25519' | 'rsa', keySize: Number(assetForm.keySize) || 0, comment: assetForm.comment });
     if (dialog.value === 'asset-import') result = await keyAssetsApi.importOne({ type: assetForm.type, name: assetForm.name, parentAssetId: assetForm.parentAssetId, commonName: assetForm.commonName, algorithm: assetForm.algorithm, keySize: Number(assetForm.keySize) || 0, certificatePem: assetForm.certificatePem, privateKeyPem: assetForm.privateKeyPem, publicKey: assetForm.publicKey });
     selectedId.value = result?.asset?.id ?? selectedId.value;
@@ -185,7 +198,7 @@ async function reissueAsset(asset: KeyAssetDto) {
 
 async function createExport() {
   await run(async () => {
-    const result = await keyAssetsApi.createExport({ assetIds: selectedAsset.value ? [selectedAsset.value.id] : assets.value.map((item) => item.id), password: assetForm.password });
+    const result = await keyAssetsApi.createExport({ assetIds: selectedAsset.value ? [selectedAsset.value.id] : userAssets.value.map((item) => item.id), password: assetForm.password });
     feedback.value = t('certificatesPage.exportTask', { taskId: result.taskId });
     saveBlobDownload(await keyAssetsApi.downloadExport(result.taskId));
     dialog.value = '';
@@ -239,8 +252,115 @@ async function run(action: () => Promise<void>) {
   }
 }
 
-function lines(raw: string) {
-  return raw.split('\n').map((line) => line.trim()).filter(Boolean);
+function resetIssueForm(cert?: DomainCertificateDto) {
+  const prefixes = cert ? prefixesFromCertificate(cert) : ['@'];
+  Object.assign(issueForm, {
+    name: cert?.name ?? '',
+    domainId: cert?.domainId || domains.value[0]?.id || '',
+    includeRoot: prefixes.includes('@'),
+    includeWildcard: prefixes.includes('*'),
+    subdomains: prefixes.filter((prefix) => prefix !== '@' && prefix !== '*'),
+  });
+  if (!issueForm.subdomains.length) issueForm.subdomains = [''];
+  editingCertificateId.value = cert?.id ?? '';
+}
+
+function normalizeDomainCertificate(cert: DomainCertificateDto): DomainCertificateDto {
+  return { ...cert, domains: safeStringArray((cert as { domains?: unknown }).domains) };
+}
+
+function normalizeSelfSignedCertificate(cert: SelfSignedCertificateDto): SelfSignedCertificateDto {
+  return {
+    ...cert,
+    dnsNames: safeStringArray((cert as { dnsNames?: unknown }).dnsNames),
+    ipAddresses: safeStringArray((cert as { ipAddresses?: unknown }).ipAddresses),
+  };
+}
+
+function normalizeKeyAsset(asset: KeyAssetDto): KeyAssetDto {
+  return {
+    ...asset,
+    dnsNames: safeStringArray((asset as { dnsNames?: unknown }).dnsNames),
+    ipAddresses: safeStringArray((asset as { ipAddresses?: unknown }).ipAddresses),
+    downloadKinds: safeStringArray((asset as { downloadKinds?: unknown }).downloadKinds),
+    references: Array.isArray(asset.references) ? asset.references : [],
+    childCount: Number(asset.childCount) || 0,
+    referenceCount: Number(asset.referenceCount) || 0,
+  };
+}
+
+function safeStringArray(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : [];
+}
+
+function isSystemManagedAsset(asset: KeyAssetDto) {
+  const metadata = asset.metadata ?? {};
+  return metadata.systemManaged === true || metadata.systemManaged === 'true' || metadata.systemScope === 'agent_tls';
+}
+
+function issuePrefixes() {
+  const prefixes: string[] = [];
+  if (issueForm.includeRoot) prefixes.push('@');
+  if (issueForm.includeWildcard) prefixes.push('*');
+  for (const value of cleanEntries(issueForm.subdomains)) {
+    const prefix = prefixFromInput(value);
+    if (prefix) prefixes.push(prefix);
+  }
+  return uniqueStrings(prefixes.length ? prefixes : ['@']);
+}
+
+function prefixesFromCertificate(cert: DomainCertificateDto) {
+  const stored = safeStringArray(String(cert.prefix || '').split(','));
+  if (stored.length) return stored;
+  return safeStringArray(cert.domains.map((domain) => prefixFromCoveredDomain(domain, cert.domain)));
+}
+
+function prefixFromInput(raw: string) {
+  const value = raw.trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+  const domain = selectedIssueDomainName.value.toLowerCase();
+  if (!value) return '';
+  if (domain && value === domain) return '@';
+  if (domain && value.endsWith(`.${domain}`)) return value.slice(0, -(domain.length + 1));
+  return value;
+}
+
+function prefixFromCoveredDomain(raw: string, managedDomain: string) {
+  const value = raw.trim().toLowerCase();
+  const domain = managedDomain.trim().toLowerCase();
+  if (!value || !domain) return '';
+  if (value === domain) return '@';
+  if (value === `*.${domain}`) return '*';
+  if (value.endsWith(`.${domain}`)) return value.slice(0, -(domain.length + 1));
+  return value;
+}
+
+function prefixToDomain(prefix: string, domain: string) {
+  if (!domain) return prefix;
+  if (prefix === '@') return domain;
+  if (prefix === '*') return `*.${domain}`;
+  return `${prefix}.${domain}`;
+}
+
+function cleanEntries(entries: string[]) {
+  return entries.flatMap((entry) => entry.split(/[\n,]+/)).map((entry) => entry.trim()).filter(Boolean);
+}
+
+function uniqueStrings(values: string[]) {
+  return values.filter((value, index) => values.indexOf(value) === index);
+}
+
+function displayEntries(entries: string[]) {
+  const next = cleanEntries(entries);
+  return next.length ? next.join(', ') : t('common.notAvailable');
+}
+
+function addEntry(entries: string[]) {
+  entries.push('');
+}
+
+function removeEntry(entries: string[], index: number) {
+  entries.splice(index, 1);
+  if (!entries.length) entries.push('');
 }
 
 function onFile(event: Event) {
@@ -266,23 +386,28 @@ function onFile(event: Event) {
 
       <div class="grid min-h-0 grid-cols-[360px_minmax(0,1fr)] gap-4 max-xl:grid-cols-1">
         <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-2">
-          <EmptyState v-if="mode === 'domains' && !certs.length" :title="t('certificatesPage.noCertificates')" :description="t('certificatesPage.noCertificatesHint')" />
-          <button v-for="cert in mode === 'domains' ? certs : []" :key="cert.id" type="button" class="mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-background' : 'border-transparent'" @click="selectedId = cert.id">
-            <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="certificateTone(cert)">{{ t(certificateState(cert)) }}</Badge></div>
-            <span class="truncate text-xs text-muted-foreground">{{ cert.domains.join(', ') }}</span>
-          </button>
+          <div v-if="loading && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" class="grid gap-2">
+            <Skeleton v-for="item in 6" :key="item" class="h-16" />
+          </div>
+          <template v-else>
+            <EmptyState v-if="mode === 'domains' && !certs.length" :title="t('certificatesPage.noCertificates')" :description="t('certificatesPage.noCertificatesHint')" />
+            <button v-for="cert in mode === 'domains' ? certs : []" :key="cert.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === cert.id ? 'true' : undefined" @click="selectedId = cert.id">
+              <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="certificateTone(cert)">{{ t(certificateState(cert)) }}</Badge></div>
+              <span class="truncate text-xs text-muted-foreground">{{ cert.domains.join(', ') }}</span>
+            </button>
 
-          <EmptyState v-if="mode === 'self' && !selfSigned.length" :title="t('certificatesPage.noSelf')" :description="t('certificatesPage.noSelfHint')" />
-          <button v-for="cert in mode === 'self' ? selfSigned : []" :key="cert.id" type="button" class="mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-background' : 'border-transparent'" @click="selectedId = cert.id">
-            <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="selfSignedTone(cert)">{{ cert.kind }}</Badge></div>
-            <span class="truncate text-xs text-muted-foreground">{{ cert.commonName }}</span>
-          </button>
+            <EmptyState v-if="mode === 'self' && !selfSigned.length" :title="t('certificatesPage.noSelf')" :description="t('certificatesPage.noSelfHint')" />
+            <button v-for="cert in mode === 'self' ? selfSigned : []" :key="cert.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === cert.id ? 'true' : undefined" @click="selectedId = cert.id">
+              <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="selfSignedTone(cert)">{{ cert.kind }}</Badge></div>
+              <span class="truncate text-xs text-muted-foreground">{{ cert.commonName }}</span>
+            </button>
 
-          <EmptyState v-if="mode === 'keys' && !assets.length" :title="t('certificatesPage.noAssets')" :description="t('certificatesPage.noAssetsHint')" />
-          <button v-for="asset in mode === 'keys' ? assets : []" :key="asset.id" type="button" class="mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === asset.id ? 'border-border-strong bg-background' : 'border-transparent'" @click="selectedId = asset.id">
-            <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ asset.name }}</strong><Badge :tone="assetTone(asset)">{{ asset.type }}</Badge></div>
-            <span class="truncate text-xs text-muted-foreground">{{ asset.fingerprint || t('common.notAvailable') }}</span>
-          </button>
+            <EmptyState v-if="mode === 'keys' && !userAssets.length" :title="t('certificatesPage.noAssets')" :description="t('certificatesPage.noAssetsHint')" />
+            <button v-for="asset in mode === 'keys' ? userAssets : []" :key="asset.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === asset.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === asset.id ? 'true' : undefined" @click="selectedId = asset.id">
+              <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ asset.name }}</strong><Badge :tone="assetTone(asset)">{{ asset.type }}</Badge></div>
+              <span class="truncate text-xs text-muted-foreground">{{ asset.fingerprint || t('common.notAvailable') }}</span>
+            </button>
+          </template>
         </aside>
 
         <main class="grid min-h-0 overflow-hidden rounded-2xl border border-border bg-card">
@@ -294,8 +419,9 @@ function onFile(event: Event) {
           <EmptyState v-if="mode === 'domains' && !selectedCert" :title="t('certificatesPage.selectCertificate')" :description="t('certificatesPage.selectCertificateHint')" />
           <article v-else-if="mode === 'domains' && selectedCert" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header class="flex items-start justify-between gap-3 border-b border-border p-5 max-md:grid">
-              <div><h2 class="m-0 text-xl font-semibold">{{ selectedCert.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedCert.variableName }} / {{ selectedCert.issuer }}</p></div>
+              <div><h2 class="m-0 text-xl font-semibold">{{ selectedCert.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedCert.domain }} / {{ selectedCert.issuer }}</p></div>
               <div class="flex flex-wrap gap-2">
+                <Button size="sm" @click="openReissue(selectedCert)"><RotateCcw />{{ t('certificatesPage.adjustReissue') }}</Button>
                 <Button size="sm" @click="renewCertificate(selectedCert)"><RotateCcw />{{ t('certificatesPage.renew') }}</Button>
                 <Button size="sm" variant="danger" @click="confirmDelete = true"><Trash2 />{{ t('common.delete') }}</Button>
               </div>
@@ -331,7 +457,7 @@ function onFile(event: Event) {
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('common.type') }}</div><strong>{{ selectedSelf.kind }}</strong></div>
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedSelf.fingerprint }}</strong></div>
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ selectedSelf.notAfter }}</strong></div>
-                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">DNS</div><strong>{{ selectedSelf.dnsNames.join(', ') || t('common.notAvailable') }}</strong></div>
+                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.dnsNames') }}</div><strong>{{ displayEntries(selectedSelf.dnsNames) }}</strong></div>
               </div>
             </div>
           </article>
@@ -370,13 +496,32 @@ function onFile(event: Event) {
       </div>
     </div>
 
-    <Dialog :open="dialog === 'issue'" :title="t('certificatesPage.issue')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
-      <div class="grid gap-3"><label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="issueForm.name" /></label><label class="grid gap-1 text-sm">{{ t('routes.dns.title') }}<Select v-model="issueForm.domainId" :options="domainOptions" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.prefixes') }}<Textarea v-model="issueForm.prefixes" :placeholder="t('certificatesPage.prefixesPlaceholder')" /><span class="text-xs text-muted-foreground">{{ t('certificatesPage.prefixesHint') }}</span></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.variableName') }}<Input v-model="issueForm.variableName" /></label></div>
-      <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!issueForm.name || !issueForm.domainId" @click="issueCertificate">{{ t('certificatesPage.issue') }}</Button></template>
+    <Dialog :open="dialog === 'issue'" :title="editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
+      <div class="grid gap-4">
+        <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="issueForm.name" /></label>
+        <label class="grid gap-1 text-sm">{{ t('routes.dns.title') }}<Select v-model="issueForm.domainId" :options="domainOptions" /></label>
+        <section class="grid gap-3 rounded-xl border border-border p-3">
+          <label class="flex items-center justify-between gap-3 text-sm">{{ t('certificatesPage.rootDomain') }}<Switch v-model="issueForm.includeRoot" :label="t('certificatesPage.rootDomain')" /></label>
+          <label class="flex items-center justify-between gap-3 text-sm">{{ t('certificatesPage.wildcardDomain') }}<Switch v-model="issueForm.includeWildcard" :label="t('certificatesPage.wildcardDomain')" /></label>
+          <div class="grid gap-2">
+            <div class="text-sm font-medium">{{ t('certificatesPage.subdomains') }}</div>
+            <div v-for="(_, index) in issueForm.subdomains" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+              <Input v-model="issueForm.subdomains[index]" :placeholder="t('certificatesPage.subdomainPlaceholder')" />
+              <Button size="sm" variant="ghost" @click="removeEntry(issueForm.subdomains, index)"><Trash2 />{{ t('common.delete') }}</Button>
+            </div>
+            <Button size="sm" @click="addEntry(issueForm.subdomains)"><Plus />{{ t('certificatesPage.addSubdomain') }}</Button>
+          </div>
+        </section>
+        <section class="rounded-xl border border-border bg-background p-3">
+          <div class="text-sm font-medium">{{ t('certificatesPage.coveragePreview') }}</div>
+          <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="domain in issueCoverage" :key="domain" tone="info">{{ domain }}</Badge></div>
+        </section>
+      </div>
+      <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!issueForm.name || !issueForm.domainId" @click="issueCertificate">{{ editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue') }}</Button></template>
     </Dialog>
 
     <Dialog :open="dialog === 'self-ca' || dialog === 'self-leaf'" :title="dialog === 'self-ca' ? t('certificatesPage.generateCa') : t('certificatesPage.generateLeaf')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
-      <div class="grid gap-3"><label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="selfForm.name" /></label><label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">CA<Select v-model="selfForm.caId" :options="selfCas" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="selfForm.commonName" /></label><label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">DNS<Textarea v-model="selfForm.dnsNames" /></label><label v-if="dialog === 'self-ca'" class="grid gap-1 text-sm">{{ t('certificatesPage.years') }}<Input v-model="selfForm.years" type="number" /></label><label v-else class="grid gap-1 text-sm">{{ t('certificatesPage.days') }}<Input v-model="selfForm.days" type="number" /></label></div>
+      <div class="grid gap-3"><label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="selfForm.name" /></label><label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">CA<Select v-model="selfForm.caId" :options="selfCas" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="selfForm.commonName" /></label><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div><div v-for="(_, index) in selfForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.dnsNames)"><Plus />{{ t('certificatesPage.addDnsName') }}</Button></div><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.ipAddresses') }}</div><div v-for="(_, index) in selfForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button></div><label v-if="dialog === 'self-ca'" class="grid gap-1 text-sm">{{ t('certificatesPage.years') }}<Input v-model="selfForm.years" type="number" /></label><label v-else class="grid gap-1 text-sm">{{ t('certificatesPage.days') }}<Input v-model="selfForm.days" type="number" /></label></div>
       <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfForm.name || !selfForm.commonName" @click="saveSelf">{{ t('common.create') }}</Button></template>
     </Dialog>
 
@@ -388,7 +533,16 @@ function onFile(event: Event) {
         <label v-if="dialog !== 'asset-ssh'" class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="assetForm.commonName" /></label>
         <label class="grid gap-1 text-sm">{{ t('certificatesPage.algorithm') }}<Select v-model="assetForm.algorithm" :options="algorithmOptions" /></label>
         <label v-if="assetForm.algorithm === 'rsa'" class="grid gap-1 text-sm">{{ t('certificatesPage.keySize') }}<Input v-model="assetForm.keySize" type="number" /></label>
-        <label v-if="dialog === 'asset-tls'" class="grid gap-1 text-sm">DNS<Textarea v-model="assetForm.dnsNames" /></label>
+        <div v-if="dialog === 'asset-tls'" class="grid gap-2">
+          <div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div>
+          <div v-for="(_, index) in assetForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="assetForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(assetForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div>
+          <Button size="sm" @click="addEntry(assetForm.dnsNames)"><Plus />{{ t('certificatesPage.addDnsName') }}</Button>
+        </div>
+        <div v-if="dialog === 'asset-tls'" class="grid gap-2">
+          <div class="text-sm font-medium">{{ t('certificatesPage.ipAddresses') }}</div>
+          <div v-for="(_, index) in assetForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="assetForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(assetForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div>
+          <Button size="sm" @click="addEntry(assetForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button>
+        </div>
         <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('certificatesPage.privateKeyPem') }}<Textarea v-model="assetForm.privateKeyPem" /></label>
         <label v-if="dialog === 'asset-import' && assetForm.type !== 'ssh_key_pair'" class="grid gap-1 text-sm">{{ t('certificatesPage.certificatePem') }}<Textarea v-model="assetForm.certificatePem" /></label>
       </div>

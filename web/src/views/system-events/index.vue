@@ -164,7 +164,7 @@ onMounted(load);
 
     <div class="grid min-h-full gap-3">
       <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
-      <Table v-if="rows.length" :columns="columns" :rows="rows as EventRow[]" row-key="id">
+      <Table v-if="rows.length || loading" :columns="columns" :rows="rows as EventRow[]" row-key="id" :loading="loading" :loading-label="t('systemEventsPage.loading')">
         <template #occurredAt="{ row }">{{ formatDateTime(row.occurredAt) }}</template>
         <template #severity="{ row }"><StatusBadge :status="row.severity" :tone="row.severity === 'error' || row.severity === 'critical' ? 'danger' : row.severity === 'warning' ? 'warning' : 'info'" :label="severityLabel(row.severity)" /></template>
         <template #eventType="{ row }">
@@ -183,7 +183,7 @@ onMounted(load);
           <Button v-else size="sm" :loading="detailLoading" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
         </template>
       </Table>
-      <EmptyState v-else :title="t('systemEventsPage.empty')" :description="loading ? t('systemEventsPage.loading') : t('systemEventsPage.emptyHint')" />
+      <EmptyState v-else :title="t('systemEventsPage.empty')" :description="t('systemEventsPage.emptyHint')" />
     </div>
 
     <template #pagination>

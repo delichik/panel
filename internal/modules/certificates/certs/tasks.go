@@ -20,6 +20,12 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Execute:     s.RunIssueTask,
 		},
 		{
+			Type:        TaskTypeReissue,
+			AllowRunNow: true,
+			AllowRetry:  true,
+			Execute:     s.RunIssueTask,
+		},
+		{
 			Type:              TaskTypeRenew,
 			Summary:           "Renewing due certificates",
 			AllowRetry:        true,

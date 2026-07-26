@@ -70,12 +70,14 @@ const router = useRouter();
 
 const applications = ref<ApplicationDto[]>([]);
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
+const runtimeRequests = new Set<string>();
 const facilities = ref<FacilityAppSummary[]>([]);
 const facility = ref<ReverseProxyConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
 const search = ref(String(route.query.search ?? ''));
 const loading = ref(false);
 const detailLoading = ref(false);
+const facilitiesLoaded = ref(false);
 const error = ref('');
 const feedback = ref('');
 const actionError = ref('');
@@ -121,8 +123,8 @@ const applicationFamilyTab = computed({
 const isAppEditor = computed(() => mode.value === 'create' || mode.value === 'edit');
 const isCreateMode = computed(() => mode.value === 'create');
 const currentFacilitySummary = computed(() => facilities.value.find((item) => item.kind === facilityKind.value) ?? null);
-const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && Boolean(currentFacilitySummary.value));
-const isUnsupportedFacilityRoute = computed(() => (mode.value === 'facilityDetail' || mode.value === 'facilityConfig') && !currentFacilitySummary.value);
+const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && facilitiesLoaded.value && Boolean(currentFacilitySummary.value));
+const isUnsupportedFacilityRoute = computed(() => (mode.value === 'facilityDetail' || mode.value === 'facilityConfig') && facilitiesLoaded.value && !currentFacilitySummary.value);
 const currentApplication = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
 const selectedApplication = computed(() => currentApplication.value ?? emptyApplication());
 const currentRuntime = computed(() => selectedId.value ? runtimes.value[selectedId.value] : null);
@@ -248,6 +250,7 @@ watch(selectedId, async (value) => {
 watch(() => route.path, async () => {
   actionError.value = '';
   feedback.value = '';
+  await load();
   if (isAppEditor.value) await startApplicationEditor();
   if (isFacilityEditor.value) await startFacilityEditor();
 });
@@ -265,20 +268,40 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
 }
 
 async function load() {
+  if (mode.value === 'apps' || isAppEditor.value) {
+    await loadApplications();
+    return;
+  }
+  if (mode.value === 'facilityCatalog' || mode.value === 'facilityDetail' || mode.value === 'facilityConfig') {
+    await loadFacilityData();
+  }
+}
+
+async function loadApplications() {
   loading.value = true;
   error.value = '';
   try {
-    const [apps, facilityList] = await Promise.all([
-      applicationsApi.list(),
-      facilityAppsApi.listFacilities(),
-    ]);
+    const apps = await applicationsApi.list();
+    applications.value = apps;
+    selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : apps[0]?.id ?? '';
+    void loadRuntime(selectedId.value);
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadFacilityData() {
+  loading.value = true;
+  error.value = '';
+  try {
+    const facilityList = await facilityAppsApi.listFacilities();
     const primaryFacilityKind = facilityList.find((item) => item.kind === facilityKind.value)?.kind ?? facilityList[0]?.kind;
     const primaryFacility = primaryFacilityKind ? await facilityAppsApi.getFacility(primaryFacilityKind) : null;
-    applications.value = apps;
-    facilities.value = facilityList;
+    facilities.value = primaryFacility ? facilityList.map((item) => item.kind === primaryFacility.kind ? primaryFacility.summary : item) : facilityList;
     facility.value = primaryFacility?.reverseProxy ?? null;
-    selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : apps[0]?.id ?? '';
-    await Promise.all(apps.slice(0, 4).map((app) => loadRuntime(app.id).catch(() => undefined)));
+    facilitiesLoaded.value = true;
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
   } finally {
@@ -287,13 +310,15 @@ async function load() {
 }
 
 async function loadRuntime(applicationId: string) {
-  if (!applicationId) return;
+  if (!applicationId || runtimeRequests.has(applicationId)) return;
+  runtimeRequests.add(applicationId);
   detailLoading.value = true;
   try {
     runtimes.value = { ...runtimes.value, [applicationId]: await applicationsApi.runtime(applicationId) };
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable');
   } finally {
+    runtimeRequests.delete(applicationId);
     detailLoading.value = false;
   }
 }
@@ -507,11 +532,11 @@ async function runEditorAction(action: () => Promise<void>, name = 'editor') {
 }
 
 async function ensureApplicationsLoaded() {
-  if (!applications.value.length) await load();
+  if (!applications.value.length) await loadApplications();
 }
 
 async function ensureFacilityLoaded() {
-  if (!facilities.value.length || !facility.value) await load();
+  if (!facilitiesLoaded.value || !facility.value) await loadFacilityData();
 }
 
 function markDirty() {
@@ -768,8 +793,21 @@ onBeforeUnmount(() => {
           <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
         <div class="min-h-0 overflow-auto p-2">
-          <EmptyState v-if="!appRows.length" :title="t('applicationsPage.emptyApplications')" :description="t('applicationsPage.emptyApplicationsHint')" />
-          <button v-for="row in appRows" v-else :key="row.app.id" type="button" class="mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent" :class="selectedId === row.app.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'" @click="selectedId = row.app.id">
+          <div v-if="loading && !applications.length" class="grid gap-2" aria-hidden="true">
+            <div v-for="item in 7" :key="item" class="grid gap-2 rounded-xl border border-border bg-background p-3">
+              <div class="flex items-center justify-between gap-2">
+                <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
+                <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
+              </div>
+              <div class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
+              <div class="flex gap-1.5">
+                <div class="motion-skeleton h-5 w-20 rounded-full bg-muted animate-pulse" />
+                <div class="motion-skeleton h-5 w-24 rounded-full bg-muted animate-pulse" />
+              </div>
+            </div>
+          </div>
+          <EmptyState v-else-if="!appRows.length" :title="t('applicationsPage.emptyApplications')" :description="t('applicationsPage.emptyApplicationsHint')" />
+          <button v-for="row in appRows" v-else :key="row.app.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent" :class="selectedId === row.app.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'" @click="selectedId = row.app.id">
             <div class="flex items-center justify-between gap-2">
               <strong class="truncate text-sm text-foreground">{{ row.app.name }}</strong>
               <StatusBadge :status="applicationStatus(row.app, runtimes[row.app.id])" :tone="statusTone(applicationStatus(row.app, runtimes[row.app.id]))" :label="t(`applicationsPage.status.${applicationStatus(row.app, runtimes[row.app.id])}`)" />
@@ -785,6 +823,25 @@ onBeforeUnmount(() => {
 
       <main class="grid min-h-0">
         <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
+        <article v-else-if="loading && !applications.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <header class="border-b border-border p-5">
+            <div class="motion-skeleton h-7 w-48 rounded bg-muted animate-pulse" />
+            <div class="motion-skeleton mt-3 h-4 w-80 max-w-full rounded bg-muted animate-pulse" />
+          </header>
+          <div class="min-h-0 overflow-auto p-5">
+            <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div class="grid gap-4">
+                <div class="grid grid-cols-3 gap-3 max-md:grid-cols-1">
+                  <div v-for="item in 3" :key="item" class="motion-skeleton h-24 rounded-2xl bg-muted animate-pulse" />
+                </div>
+                <div class="motion-skeleton h-72 rounded-2xl bg-muted animate-pulse" />
+              </div>
+              <aside class="grid content-start gap-3">
+                <div v-for="item in 2" :key="item" class="motion-skeleton h-44 rounded-2xl bg-muted animate-pulse" />
+              </aside>
+            </div>
+          </div>
+        </article>
         <EmptyState v-else-if="!currentApplication" :title="t('applicationsPage.selectApplication')" :description="t('applicationsPage.selectApplicationHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
@@ -823,7 +880,16 @@ onBeforeUnmount(() => {
                           <span v-if="instance.error" class="text-danger">{{ instance.error }}</span>
                         </div>
                       </div>
-                      <EmptyState v-else :title="t('applicationsPage.noRuntime')" :description="detailLoading ? t('applicationsPage.runtimeLoading') : t('applicationsPage.noRuntimeHint')" />
+                      <div v-else-if="detailLoading && !currentRuntime" class="mt-3 grid gap-2" aria-hidden="true">
+                        <div v-for="item in 4" :key="item" class="grid gap-2 rounded-xl border border-border p-3">
+                          <div class="flex items-center justify-between gap-2">
+                            <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
+                            <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
+                          </div>
+                          <div class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
+                        </div>
+                      </div>
+                      <EmptyState v-else :title="t('applicationsPage.noRuntime')" :description="t('applicationsPage.noRuntimeHint')" />
                     </div>
                   </section>
                   <section v-else-if="appTab === 'routes'" class="grid gap-3">
@@ -879,30 +945,50 @@ onBeforeUnmount(() => {
           <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.facilityCatalogHint') }}</p>
         </div>
         <div class="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr))]">
-          <article v-for="item in facilities" :key="item.kind" class="grid gap-4 rounded-2xl border border-border bg-background p-4">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <div class="flex flex-wrap items-center gap-2">
-                  <h3 class="m-0 text-base font-semibold text-foreground">{{ t(item.titleKey) }}</h3>
-                  <Badge tone="info">{{ t(item.categoryKey) }}</Badge>
+          <template v-if="loading && !facilities.length">
+            <article v-for="item in 4" :key="item" class="grid gap-4 rounded-2xl border border-border bg-background p-4" aria-hidden="true">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0 flex-1">
+                  <div class="motion-skeleton h-5 w-40 rounded bg-muted animate-pulse" />
+                  <div class="motion-skeleton mt-3 h-4 w-full rounded bg-muted animate-pulse" />
+                  <div class="motion-skeleton mt-2 h-4 w-2/3 rounded bg-muted animate-pulse" />
                 </div>
-                <p class="m-0 mt-2 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
+                <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
               </div>
-              <StatusBadge :status="item.status" :tone="item.status === 'degraded' ? 'danger' : 'success'" :label="t(`applicationsPage.facilityStatus.${item.status}`)" />
-            </div>
-            <div class="grid grid-cols-4 gap-2 text-sm max-lg:grid-cols-2 max-sm:grid-cols-1">
-              <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ item.metrics.deploymentServers }}</strong></div>
-              <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.gatewayRoutes') }}</span><strong>{{ item.metrics.routes }}</strong></div>
-              <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.staticAssets') }}</span><strong>{{ item.metrics.staticAssets }}</strong></div>
-              <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.applicationRoutes') }}</span><strong>{{ item.metrics.applicationRoutes }}</strong></div>
-            </div>
-            <div class="flex flex-wrap gap-2">
-              <Button size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${item.kind}`)">{{ t('common.view') }}</Button>
-              <Button size="sm" @click="runOperation(`facility-reconcile-${item.kind}`, () => facilityAppsApi.reconcileFacility(item.kind), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
-              <Button size="sm" @click="router.push(`/applications/facility-apps/${item.kind}/config`)"><Wrench />{{ t('common.configure') }}</Button>
-            </div>
-          </article>
-          <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
+              <div class="grid grid-cols-4 gap-2 max-lg:grid-cols-2 max-sm:grid-cols-1">
+                <div v-for="metric in 4" :key="metric" class="motion-skeleton h-20 rounded-xl bg-muted animate-pulse" />
+              </div>
+              <div class="flex gap-2">
+                <div v-for="button in 3" :key="button" class="motion-skeleton h-8 w-24 rounded bg-muted animate-pulse" />
+              </div>
+            </article>
+          </template>
+          <template v-else>
+            <article v-for="item in facilities" :key="item.kind" class="motion-list-item grid gap-4 rounded-2xl border border-border bg-background p-4">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <h3 class="m-0 text-base font-semibold text-foreground">{{ t(item.titleKey) }}</h3>
+                    <Badge tone="info">{{ t(item.categoryKey) }}</Badge>
+                  </div>
+                  <p class="m-0 mt-2 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
+                </div>
+                <StatusBadge :status="item.status" :tone="item.status === 'degraded' ? 'danger' : 'success'" :label="t(`applicationsPage.facilityStatus.${item.status}`)" />
+              </div>
+              <div class="grid grid-cols-4 gap-2 text-sm max-lg:grid-cols-2 max-sm:grid-cols-1">
+                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ item.metrics.deploymentServers }}</strong></div>
+                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.gatewayRoutes') }}</span><strong>{{ item.metrics.routes }}</strong></div>
+                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.staticAssets') }}</span><strong>{{ item.metrics.staticAssets }}</strong></div>
+                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.applicationRoutes') }}</span><strong>{{ item.metrics.applicationRoutes }}</strong></div>
+              </div>
+              <div class="flex flex-wrap gap-2">
+                <Button size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${item.kind}`)">{{ t('common.view') }}</Button>
+                <Button size="sm" @click="runOperation(`facility-reconcile-${item.kind}`, () => facilityAppsApi.reconcileFacility(item.kind), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+                <Button size="sm" @click="router.push(`/applications/facility-apps/${item.kind}/config`)"><Wrench />{{ t('common.configure') }}</Button>
+              </div>
+            </article>
+            <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
+          </template>
         </div>
       </section>
       <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">

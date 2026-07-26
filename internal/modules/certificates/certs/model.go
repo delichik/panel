@@ -13,6 +13,7 @@ const (
 	StatusFailed  = "failed"
 
 	TaskTypeIssue           = "certificate_issue"
+	TaskTypeReissue         = "certificate_reissue"
 	TaskTypeRenew           = "certificate_renew"
 	TaskTypeSelfSignedRenew = "certificate_self_signed_renew"
 )
@@ -25,7 +26,7 @@ type Certificate struct {
 	Prefix          string    `json:"prefix"`
 	Scope           string    `json:"scope"`
 	Domains         []string  `json:"domains"`
-	VariableName    string    `json:"variableName"`
+	VariableName    string    `json:"-"`
 	CertificatePath string    `json:"certificatePath"`
 	PrivateKeyPath  string    `json:"privateKeyPath"`
 	Issuer          string    `json:"issuer"`
@@ -70,12 +71,11 @@ type SelfSignedLeafRequest struct {
 }
 
 type IssueRequest struct {
-	Name         string   `json:"name"`
-	DomainID     string   `json:"domainId"`
-	Prefix       string   `json:"prefix"`
-	Prefixes     []string `json:"prefixes"`
-	Scope        string   `json:"scope"`
-	VariableName string   `json:"variableName"`
+	Name     string   `json:"name"`
+	DomainID string   `json:"domainId"`
+	Prefix   string   `json:"prefix"`
+	Prefixes []string `json:"prefixes"`
+	Scope    string   `json:"scope"`
 }
 
 type IssueResult struct {

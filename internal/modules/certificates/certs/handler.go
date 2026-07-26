@@ -11,6 +11,7 @@ import (
 type certificateService interface {
 	List(ctx context.Context) ([]Certificate, error)
 	Issue(ctx context.Context, in IssueRequest) (IssueResult, error)
+	Reissue(ctx context.Context, certID string, in IssueRequest) (IssueResult, error)
 	Delete(ctx context.Context, certID string) error
 	Renew(ctx context.Context, certID string) error
 	ListSelfSigned(ctx context.Context) ([]SelfSignedCertificate, error)
@@ -108,6 +109,19 @@ func (h *Handler) Issue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, result)
+}
+
+func (h *Handler) Reissue(w http.ResponseWriter, r *http.Request) {
+	var in IssueRequest
+	if !httpx.Decode(w, r, &in) {
+		return
+	}
+	result, err := h.service.Reissue(r.Context(), certificateIDFromRequest(r), in)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, result)
 }
 
 func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {

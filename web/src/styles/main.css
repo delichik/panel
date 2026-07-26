@@ -208,6 +208,11 @@ button:disabled { cursor: not-allowed; }
   animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
 }
 
+.motion-list-item,
+.motion-table-row {
+  animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
+}
+
 .motion-overlay {
   animation: panel-motion-fade var(--panel-motion-duration-fast) var(--panel-motion-ease-standard) both;
 }

@@ -11,7 +11,6 @@ const baseCert: DomainCertificateDto = {
   prefix: '',
   scope: 'single',
   domains: ['example.com'],
-  variableName: 'CERT',
   certificatePath: '',
   privateKeyPath: '',
   issuer: 'letsencrypt',

@@ -158,7 +158,7 @@ describe('domain mock routes', () => {
 
     const response = await fetch('/api/v1/certificates', {
       method: 'POST',
-      body: JSON.stringify({ name: 'new cert', domainId: 'domain-example', prefix: 'new', scope: 'single', variableName: 'NEW_CERT' }),
+      body: JSON.stringify({ name: 'new cert', domainId: 'domain-example', prefix: 'new', scope: 'single' }),
     });
     const envelope = await response.json();
     expect(response.status).toBe(201);

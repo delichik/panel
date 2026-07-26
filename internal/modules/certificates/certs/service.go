@@ -25,8 +25,7 @@ import (
 )
 
 var (
-	domainPattern       = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
-	variableNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	domainPattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$`)
 )
 
 type Service struct {
@@ -103,6 +102,40 @@ func (s *Service) Issue(ctx context.Context, in IssueRequest) (IssueResult, erro
 	return s.QueueIssue(ctx, in)
 }
 
+func (s *Service) Reissue(ctx context.Context, certID string, in IssueRequest) (IssueResult, error) {
+	cert, err := s.Get(ctx, certID)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	domainID := strings.TrimSpace(in.DomainID)
+	if domainID == "" {
+		domainID = cert.DomainID
+	}
+	resolved, err := s.resolveDomain(ctx, domainID)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	in.DomainID = resolved.ID
+	prepared, err := prepareIssueRequest(in, resolved.Name)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	next := cert
+	next.Name = prepared.Name
+	next.DomainID = resolved.ID
+	next.Domain = prepared.Domain
+	next.Prefix = prepared.Prefix
+	next.Scope = prepared.Scope
+	next.Domains = prepared.Domains
+	next.LastError = ""
+	next.UpdatedAt = time.Now().UTC()
+	taskID, err := s.recordAndRunTask(ctx, TaskTypeReissue, next, "Reissuing certificate for "+next.Domain)
+	if err != nil {
+		return IssueResult{}, err
+	}
+	return IssueResult{Certificate: next, TaskID: taskID}, nil
+}
+
 func (s *Service) QueueIssue(ctx context.Context, in IssueRequest) (IssueResult, error) {
 	resolved, err := s.resolveDomain(ctx, in.DomainID)
 	if err != nil {
@@ -114,15 +147,16 @@ func (s *Service) QueueIssue(ctx context.Context, in IssueRequest) (IssueResult,
 	}
 
 	now := time.Now().UTC()
+	certID := id.New("cert")
 	cert := Certificate{
-		ID:           id.New("cert"),
+		ID:           certID,
 		Name:         prepared.Name,
 		DomainID:     resolved.ID,
 		Domain:       prepared.Domain,
 		Prefix:       prepared.Prefix,
 		Scope:        prepared.Scope,
 		Domains:      prepared.Domains,
-		VariableName: prepared.VariableName,
+		VariableName: certID,
 		Issuer:       s.issuer,
 		Status:       StatusPending,
 		AutoRenew:    true,
@@ -162,10 +196,20 @@ func (s *Service) RunIssueTask(tc tasks.TaskContext) error {
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return err
 	}
-	if cert.Status == StatusIssued {
+	cert, reissue, err := certificateFromIssueTask(task, cert)
+	if err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return err
+	}
+	if cert.Status == StatusIssued && !reissue {
 		return s.tasks.Complete(ctx, task.ID, "Certificate already issued for "+cert.Domain)
 	}
-	if err := s.updateStatus(ctx, cert.ID, StatusIssuing, ""); err != nil {
+	if !reissue {
+		if err := s.updateStatus(ctx, cert.ID, StatusIssuing, ""); err != nil {
+			_ = s.tasks.Fail(ctx, task.ID, err)
+			return err
+		}
+	} else if err := s.updateLastError(ctx, cert.ID, ""); err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return err
 	}
@@ -173,11 +217,11 @@ func (s *Service) RunIssueTask(tc tasks.TaskContext) error {
 		return err
 	}
 	if err := s.issueIntoCertificate(ctx, cert, task.ID); err != nil {
-		_ = s.updateStatus(ctx, cert.ID, StatusFailed, err.Error())
-		_ = s.tasks.Fail(ctx, task.ID, err)
-		return err
-	}
-	if err := s.updateStatus(ctx, cert.ID, StatusIssued, ""); err != nil {
+		if reissue {
+			_ = s.updateLastError(ctx, cert.ID, err.Error())
+		} else {
+			_ = s.updateStatus(ctx, cert.ID, StatusFailed, err.Error())
+		}
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return err
 	}
@@ -204,16 +248,25 @@ func (s *Service) issueIntoCertificate(ctx context.Context, cert Certificate, ta
 	if err := validateBundle(bundle); err != nil {
 		return err
 	}
-	if err := os.WriteFile(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), 0600); err != nil {
-		return err
-	}
-	if err := os.WriteFile(cert.PrivateKeyPath, bundle.PrivateKeyPEM, 0600); err != nil {
+	if err := writeCertificateFiles(cert.CertificatePath, append(bundle.CertificatePEM, bundle.CAChainPEM...), cert.PrivateKeyPath, bundle.PrivateKeyPEM); err != nil {
 		return err
 	}
 	cert.NotBefore, cert.NotAfter = certificateValidity(bundle.CertificatePEM)
 	cert.NextRenewAt = nextRenewAt(cert.NotAfter)
+	cert.LastError = ""
+	cert.Status = StatusIssued
 	cert.UpdatedAt = time.Now().UTC()
-	return s.updateRenewal(ctx, cert)
+	return s.updateIssuedCertificate(ctx, cert)
+}
+
+func writeCertificateFiles(certificatePath string, certificatePEM []byte, privateKeyPath string, privateKeyPEM []byte) error {
+	if fileExists(certificatePath) || fileExists(privateKeyPath) {
+		return replaceCertificateFiles(certificatePath, certificatePEM, privateKeyPath, privateKeyPEM)
+	}
+	if err := os.WriteFile(certificatePath, certificatePEM, 0600); err != nil {
+		return err
+	}
+	return os.WriteFile(privateKeyPath, privateKeyPEM, 0600)
 }
 
 func (s *Service) RenewTask(tc tasks.TaskContext) error {
@@ -320,19 +373,27 @@ func replaceCertificateFiles(certificatePath string, certificatePEM []byte, priv
 	keyBackup := privateKeyPath + ".previous"
 	_ = os.Remove(certBackup)
 	_ = os.Remove(keyBackup)
-	if err := os.Rename(certificatePath, certBackup); err != nil && !os.IsNotExist(err) {
-		return err
+	certBackedUp := false
+	if err := os.Rename(certificatePath, certBackup); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		certBackedUp = true
 	}
-	certBackedUp := true
 	defer func() {
 		if certBackedUp {
 			_ = os.Rename(certBackup, certificatePath)
 		}
 	}()
-	if err := os.Rename(privateKeyPath, keyBackup); err != nil && !os.IsNotExist(err) {
-		return err
+	keyBackedUp := false
+	if err := os.Rename(privateKeyPath, keyBackup); err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+	} else {
+		keyBackedUp = true
 	}
-	keyBackedUp := true
 	defer func() {
 		if keyBackedUp {
 			_ = os.Rename(keyBackup, privateKeyPath)
@@ -350,6 +411,11 @@ func replaceCertificateFiles(certificatePath string, certificatePEM []byte, priv
 	_ = os.Remove(certBackup)
 	_ = os.Remove(keyBackup)
 	return nil
+}
+
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func writeCertificateTemp(target string, content []byte) (string, error) {
@@ -511,12 +577,16 @@ func (s *Service) ApplicationVariables(ctx context.Context, render applications.
 		if err != nil {
 			return nil, err
 		}
-		certVars[cert.VariableName] = map[string]any{
+		certVar := map[string]any{
 			"certificatePem":  string(certPEM),
 			"privateKeyPem":   string(keyPEM),
 			"certificate_pem": string(certPEM),
 			"private_key_pem": string(keyPEM),
 			"domains":         append([]string(nil), cert.Domains...),
+		}
+		certVars[cert.ID] = certVar
+		if legacyKey := strings.TrimSpace(cert.VariableName); legacyKey != "" && legacyKey != cert.ID {
+			certVars[legacyKey] = certVar
 		}
 	}
 	return certVars, nil
@@ -567,6 +637,9 @@ func (s *Service) certificateInUse(ctx context.Context, certID string, domains [
 			return false, err
 		}
 		if certID != "" && strings.Contains(spec, "certificate:"+certID+":") {
+			return true, nil
+		}
+		if certID != "" && strings.Contains(spec, ".certs."+certID) {
 			return true, nil
 		}
 		if variableName != "" && strings.Contains(spec, ".certs."+variableName) {
@@ -653,6 +726,16 @@ func (s *Service) insert(ctx context.Context, cert Certificate) error {
 func (s *Service) updateRenewal(ctx context.Context, cert Certificate) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET not_before=?,not_after=?,next_renew_at=?,last_error=?,updated_at=? WHERE id=?`,
 		formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatOptionalTime(cert.NextRenewAt), cert.LastError, formatTime(cert.UpdatedAt), cert.ID)
+	return err
+}
+
+func (s *Service) updateIssuedCertificate(ctx context.Context, cert Certificate) error {
+	domains, err := json.Marshal(cert.Domains)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE certificates SET name=?,domain_id=?,domain=?,prefix=?,scope=?,domains_json=?,variable_name=?,issuer=?,status=?,last_error=?,next_renew_at=?,not_before=?,not_after=?,updated_at=? WHERE id=?`,
+		cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.Issuer, cert.Status, cert.LastError, formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.UpdatedAt), cert.ID)
 	return err
 }
 
@@ -771,7 +854,11 @@ func (s *Service) recordAndRunTask(ctx context.Context, taskType string, cert Ce
 func certTaskMetadataJSON(cert Certificate) string {
 	data, err := json.Marshal(map[string]any{
 		"certificateId": cert.ID,
+		"name":          cert.Name,
+		"domainId":      cert.DomainID,
 		"domain":        cert.Domain,
+		"prefix":        cert.Prefix,
+		"scope":         cert.Scope,
 		"domains":       cert.Domains,
 		"issuer":        cert.Issuer,
 	})
@@ -779,6 +866,34 @@ func certTaskMetadataJSON(cert Certificate) string {
 		return "{}"
 	}
 	return string(data)
+}
+
+func certificateFromIssueTask(task tasks.Task, cert Certificate) (Certificate, bool, error) {
+	if task.Type != TaskTypeReissue {
+		return cert, false, nil
+	}
+	var metadata struct {
+		Name     string   `json:"name"`
+		DomainID string   `json:"domainId"`
+		Domain   string   `json:"domain"`
+		Prefix   string   `json:"prefix"`
+		Scope    string   `json:"scope"`
+		Domains  []string `json:"domains"`
+		Issuer   string   `json:"issuer"`
+	}
+	if err := json.Unmarshal([]byte(task.MetadataJSON), &metadata); err != nil {
+		return Certificate{}, true, err
+	}
+	cert.Name = firstNonEmpty(strings.TrimSpace(metadata.Name), cert.Name)
+	cert.DomainID = firstNonEmpty(strings.TrimSpace(metadata.DomainID), cert.DomainID)
+	cert.Domain = firstNonEmpty(strings.TrimSpace(metadata.Domain), cert.Domain)
+	cert.Prefix = strings.TrimSpace(metadata.Prefix)
+	cert.Scope = firstNonEmpty(strings.TrimSpace(metadata.Scope), cert.Scope)
+	if len(metadata.Domains) > 0 {
+		cert.Domains = append([]string(nil), metadata.Domains...)
+	}
+	cert.Issuer = firstNonEmpty(strings.TrimSpace(metadata.Issuer), cert.Issuer)
+	return cert, true, nil
 }
 
 func (s *Service) refreshApplications(ctx context.Context) error {
@@ -796,12 +911,11 @@ func (s *Service) refreshApplications(ctx context.Context) error {
 }
 
 type preparedIssueRequest struct {
-	Name         string
-	Domain       string
-	Prefix       string
-	Scope        string
-	Domains      []string
-	VariableName string
+	Name    string
+	Domain  string
+	Prefix  string
+	Scope   string
+	Domains []string
 }
 
 func prepareIssueRequest(in IssueRequest, managedDomain string) (preparedIssueRequest, error) {
@@ -829,14 +943,7 @@ func prepareIssueRequest(in IssueRequest, managedDomain string) (preparedIssueRe
 	if name == "" {
 		name = domain
 	}
-	variableName := strings.TrimSpace(in.VariableName)
-	if variableName == "" {
-		variableName = defaultVariableName(domain)
-	}
-	if !variableNamePattern.MatchString(variableName) {
-		return preparedIssueRequest{}, panelerr.Validation("certificate_variable_invalid", "Variable name must start with a letter or underscore and contain only letters, digits, or underscores")
-	}
-	return preparedIssueRequest{Name: name, Domain: domain, Prefix: prefix, Scope: scope, Domains: domains, VariableName: variableName}, nil
+	return preparedIssueRequest{Name: name, Domain: domain, Prefix: prefix, Scope: scope, Domains: domains}, nil
 }
 
 func normalizedIssuePrefixes(in IssueRequest) []string {
@@ -903,11 +1010,6 @@ func validCertificateDomain(domain string) bool {
 		return domainPattern.MatchString(strings.TrimPrefix(domain, "*."))
 	}
 	return domainPattern.MatchString(domain)
-}
-
-func defaultVariableName(domain string) string {
-	replacer := strings.NewReplacer(".", "_", "-", "_")
-	return replacer.Replace(domain)
 }
 
 func validateBundle(bundle Bundle) error {

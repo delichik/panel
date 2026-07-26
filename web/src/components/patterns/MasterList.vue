@@ -7,16 +7,26 @@ withDefaults(defineProps<{
   emptyTitle: string;
   emptyDescription?: string;
   ariaLabel?: string;
+  loading?: boolean;
+  loadingRows?: number;
 }>(), {
   selectedId: '',
+  loading: false,
+  loadingRows: 6,
 });
 
 defineEmits<{ select: [item: T] }>();
 </script>
 
 <template>
-  <section class="grid min-h-0 grid-rows-[minmax(0,1fr)]" :aria-label="ariaLabel">
-    <EmptyState v-if="items.length === 0" :title="emptyTitle" :description="emptyDescription">
+  <section class="grid min-h-0 grid-rows-[minmax(0,1fr)]" :aria-label="ariaLabel" :aria-busy="loading ? 'true' : undefined">
+    <div v-if="loading && items.length === 0" class="min-h-0 overflow-auto rounded-xl border border-border bg-background" aria-hidden="true">
+      <div v-for="item in loadingRows" :key="item" class="grid gap-2 border-b border-border p-3 last:border-b-0">
+        <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
+        <div class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
+      </div>
+    </div>
+    <EmptyState v-else-if="items.length === 0" :title="emptyTitle" :description="emptyDescription">
       <template v-if="$slots.emptyActions" #actions>
         <slot name="emptyActions" />
       </template>

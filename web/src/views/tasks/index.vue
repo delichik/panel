@@ -9,6 +9,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -160,8 +161,11 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <label class="grid gap-1 text-xs text-muted-foreground">{{ t('tasksPage.statusFilter') }}<Select v-model="statusFilter" :options="statusOptions" /></label>
         </div>
         <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-2">
-          <EmptyState v-if="!groups.length" :title="t('tasksPage.empty')" :description="t('tasksPage.emptyHint')" />
-          <button v-for="group in groups" v-else :key="group.operationId" type="button" class="mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left hover:bg-accent" :class="selectedOperationId === group.operationId ? 'border-border-strong bg-background' : 'border-transparent'" @click="selectedOperationId = group.operationId">
+          <div v-if="loading && !groups.length" class="grid gap-2">
+            <Skeleton v-for="item in 6" :key="item" class="h-20" />
+          </div>
+          <EmptyState v-else-if="!groups.length" :title="t('tasksPage.empty')" :description="t('tasksPage.emptyHint')" />
+          <button v-for="group in groups" v-else :key="group.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left hover:bg-accent" :class="selectedOperationId === group.operationId ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedOperationId === group.operationId ? 'true' : undefined" @click="selectedOperationId = group.operationId">
             <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1">
               <strong class="min-w-0 truncate text-sm text-foreground">{{ group.title }}</strong>
               <StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="group.status" domain="task" :label="t(`tasksPage.status.${group.status}`)" />
@@ -198,7 +202,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
           <div class="grid min-h-0 min-w-0 grid-cols-[minmax(0,280px)_minmax(0,1fr)] gap-4 overflow-hidden p-4 max-lg:grid-cols-1">
             <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
               <h3 class="m-0 mb-3 flex min-w-0 items-center gap-2 text-sm font-semibold"><ListFilter class="size-4 shrink-0" /><span class="min-w-0 truncate">{{ t('tasksPage.executionItems') }}</span></h3>
-              <button v-for="task in selectedGroup.tasks" :key="task.id" type="button" class="mb-2 grid w-full min-w-0 gap-1 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedTaskId === task.id ? 'border-border-strong bg-card' : 'border-border'" @click="selectedTaskId = task.id">
+              <button v-for="task in selectedGroup.tasks" :key="task.id" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-1 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedTaskId === task.id ? 'border-border-strong bg-card' : 'border-border'" :aria-current="selectedTaskId === task.id ? 'true' : undefined" @click="selectedTaskId = task.id">
                 <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ task.id }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" /></div>
                 <span class="min-w-0 truncate text-xs text-muted-foreground">{{ task.summary }}</span>
               </button>

@@ -70,12 +70,12 @@ const hasYamlChanges = computed(() => fail2banState.value ? yamlDraft.value.trim
 watch(activeTab, (value) => {
   const target = value === 'fail2ban' ? '/security/fail2ban' : '/security/firewall';
   if (route.path !== target) void router.replace({ path: target, query: route.query });
-  void loadPanel();
+  void loadPanel({ clear: true });
 });
 
 watch(selectedId, (value) => {
   void router.replace({ query: { ...route.query, server: value || undefined } });
-  void loadPanel();
+  void loadPanel({ clear: true });
 });
 
 watch(yamlMode, (enabled) => {
@@ -95,9 +95,17 @@ async function loadServers() {
   }
 }
 
-async function loadPanel() {
+async function loadPanel(options: { clear?: boolean } = {}) {
   const server = selectedServer.value;
   if (!server) return;
+  if (options.clear) {
+    if (activeTab.value === 'ufw') ufwState.value = null;
+    else {
+      fail2banState.value = null;
+      yamlDraft.value = '';
+      jailDrafts.value = [];
+    }
+  }
   loadingPanel.value = true;
   actionError.value = '';
   try {
@@ -220,7 +228,7 @@ function confirmTitle() {
 
 onMounted(async () => {
   await loadServers();
-  await loadPanel();
+  await loadPanel({ clear: true });
 });
 </script>
 
@@ -255,6 +263,7 @@ onMounted(async () => {
             v-model="selectedId"
             :servers="serverContextOptions"
             :label="t('securityPage.serverContext')"
+            :loading="loadingServers"
             :disabled="loadingServers"
           />
         </div>
@@ -297,7 +306,17 @@ onMounted(async () => {
                   <Badge :tone="ufwTone(ufwState)">{{ ufwState?.status || t('state.unknown') }}</Badge>
                 </div>
                 <div class="min-h-0 overflow-auto p-3">
-                  <EmptyState v-if="!ufwState?.rules.length" :title="t('securityPage.noRules')" :description="t('securityPage.noRulesHint')" />
+                  <div v-if="loadingPanel && !ufwState" class="grid gap-2" aria-hidden="true">
+                    <div v-for="item in 6" :key="item" class="grid grid-cols-[56px_minmax(0,1fr)_80px] items-center gap-3 rounded-xl border border-border p-3">
+                      <div class="motion-skeleton h-4 w-8 rounded bg-muted animate-pulse" />
+                      <div>
+                        <div class="motion-skeleton h-4 w-40 rounded bg-muted animate-pulse" />
+                        <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
+                      </div>
+                      <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
+                    </div>
+                  </div>
+                  <EmptyState v-else-if="!ufwState?.rules.length" :title="t('securityPage.noRules')" :description="t('securityPage.noRulesHint')" />
                   <div v-for="rule in ufwState?.rules" v-else :key="rule.number" class="mb-2 grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border p-3">
                     <span class="text-xs font-semibold text-muted-foreground">#{{ rule.number }}</span>
                     <div class="min-w-0">
@@ -351,7 +370,21 @@ onMounted(async () => {
                 <div class="min-h-0 overflow-auto p-4">
                   <Textarea v-if="yamlMode" v-model="yamlDraft" class="min-h-[420px] font-mono text-xs" />
                   <div v-else class="grid gap-3">
-                    <EmptyState v-if="!jailDrafts.length" :title="t('securityPage.noJails')" :description="t('securityPage.noJailsHint')" />
+                    <div v-if="loadingPanel && !fail2banState" class="grid gap-3" aria-hidden="true">
+                      <div v-for="item in 4" :key="item" class="grid gap-3 rounded-xl border border-border p-4">
+                        <div class="flex items-start justify-between gap-3">
+                          <div class="min-w-0 flex-1">
+                            <div class="motion-skeleton h-4 w-32 rounded bg-muted animate-pulse" />
+                            <div class="motion-skeleton mt-2 h-3 w-64 max-w-full rounded bg-muted animate-pulse" />
+                          </div>
+                          <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
+                        </div>
+                        <div class="grid grid-cols-4 gap-3 max-lg:grid-cols-2">
+                          <div v-for="line in 4" :key="line" class="motion-skeleton h-8 rounded bg-muted animate-pulse" />
+                        </div>
+                      </div>
+                    </div>
+                    <EmptyState v-else-if="!jailDrafts.length" :title="t('securityPage.noJails')" :description="t('securityPage.noJailsHint')" />
                     <article v-for="jail in jailDrafts" v-else :key="jail.name" class="grid gap-3 rounded-xl border border-border p-4">
                       <div class="flex items-start justify-between gap-3">
                         <div>

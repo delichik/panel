@@ -9,6 +9,7 @@ import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto, DnsRecordDto } from '@/types/dns';
@@ -214,14 +215,18 @@ async function deleteRecord() {
           </div>
         </div>
         <div class="min-h-0 overflow-auto p-2">
-          <EmptyState v-if="!loadingDomains && !filteredDomains.length" :title="t('dnsPage.noDomains')" :description="t('dnsPage.noDomainsHint')" />
+          <div v-if="loadingDomains && !domains.length" class="grid gap-2">
+            <Skeleton v-for="item in 6" :key="item" class="h-16" />
+          </div>
+          <EmptyState v-else-if="!filteredDomains.length" :title="t('dnsPage.noDomains')" :description="t('dnsPage.noDomainsHint')" />
           <button
             v-for="domain in filteredDomains"
             v-else
             :key="domain.id"
             type="button"
-            class="mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
+            class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
             :class="selectedId === domain.id ? 'border-border-strong bg-background' : 'border-transparent'"
+            :aria-current="selectedId === domain.id ? 'true' : undefined"
             @click="selectedId = domain.id"
           >
             <div class="flex items-center justify-between gap-2">

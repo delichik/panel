@@ -12,6 +12,7 @@ import type {
 export const certificatesApi = {
   list: () => apiClient.get<DomainCertificateDto[]>('/certificates'),
   issue: (input: IssueCertificateInput) => apiClient.post<IssueCertificateResult>('/certificates', input),
+  reissue: (id: string, input: IssueCertificateInput) => apiClient.put<IssueCertificateResult>(`/certificates/${encodeURIComponent(id)}`, input),
   renew: (id: string) => apiClient.post<RenewCertificateResult>(`/certificates/${encodeURIComponent(id)}/renew`),
   delete: (id: string) => apiClient.delete<void>(`/certificates/${encodeURIComponent(id)}`),
   listSelfSigned: () => apiClient.get<SelfSignedCertificateDto[]>('/self-signed-certificates'),

@@ -158,7 +158,7 @@ onMounted(load);
 
     <div class="grid min-h-full gap-3">
       <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
-      <Table v-if="rows.length" :columns="columns" :rows="rows as OperationRow[]" row-key="operationId">
+      <Table v-if="rows.length || loading" :columns="columns" :rows="rows as OperationRow[]" row-key="operationId" :loading="loading" :loading-label="t('applicationOperationsPage.loading')">
         <template #applicationNameSnapshot="{ row }">
           <div class="grid min-w-0 gap-1">
             <strong class="truncate text-foreground">{{ row.applicationNameSnapshot || t('common.notAvailable') }}</strong>
@@ -177,7 +177,7 @@ onMounted(load);
           <Button v-else size="sm" :loading="detailLoading" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
         </template>
       </Table>
-      <EmptyState v-else :title="t('applicationOperationsPage.empty')" :description="loading ? t('applicationOperationsPage.loading') : t('applicationOperationsPage.emptyHint')" />
+      <EmptyState v-else :title="t('applicationOperationsPage.empty')" :description="t('applicationOperationsPage.emptyHint')" />
     </div>
 
     <template #pagination>

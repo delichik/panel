@@ -94,11 +94,13 @@ const imageUpgradeIds = computed(() => Array.from(new Set((images.value?.items ?
 watch(activeTab, (value) => {
   const target = `/resources/${value}`;
   if (route.path !== target) void router.replace({ path: target, query: route.query });
+  clearResource(value);
   void loadResource();
 });
 
 watch(selectedId, (value) => {
   void router.replace({ query: { ...route.query, server: value || undefined } });
+  clearAllResources();
   void loadResource();
 });
 
@@ -143,6 +145,21 @@ async function loadResource() {
   } finally {
     loadingResource.value = false;
   }
+}
+
+function clearResource(tab: ResourceTab) {
+  if (tab === 'packages') {
+    packageList.value = null;
+    Object.keys(packageSelection).forEach((key) => delete packageSelection[key]);
+  }
+  if (tab === 'containers') containers.value = [];
+  if (tab === 'images') images.value = null;
+  if (tab === 'networks') networks.value = [];
+  if (tab === 'volumes') volumes.value = [];
+}
+
+function clearAllResources() {
+  tabs.value.forEach((tab) => clearResource(tab.value as ResourceTab));
 }
 
 async function refreshCurrent() {
@@ -299,6 +316,7 @@ onMounted(async () => {
             v-model="selectedId"
             :servers="serverContextOptions"
             :label="t('resourcesPage.serverContext')"
+            :loading="loadingServers"
             :disabled="loadingServers"
           />
         </div>
@@ -343,7 +361,17 @@ onMounted(async () => {
                 </div>
               </div>
               <div class="min-h-0 overflow-auto p-3">
-                <EmptyState v-if="!packageRows.length" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />
+                <div v-if="loadingResource && !packageList" class="grid gap-2" aria-hidden="true">
+                  <div v-for="item in 8" :key="item" class="grid grid-cols-[auto_minmax(0,1fr)_minmax(160px,auto)] items-center gap-3 rounded-xl border border-border p-3">
+                    <div class="motion-skeleton size-4 rounded bg-muted animate-pulse" />
+                    <div class="min-w-0">
+                      <div class="motion-skeleton h-4 w-40 rounded bg-muted animate-pulse" />
+                      <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
+                    </div>
+                    <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
+                  </div>
+                </div>
+                <EmptyState v-else-if="!packageRows.length" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />
                 <label v-for="item in packageRows" v-else :key="item.name" class="mb-2 grid grid-cols-[auto_minmax(0,1fr)_minmax(160px,auto)] items-center gap-3 rounded-xl border border-border p-3">
                   <input v-model="packageSelection[item.name]" type="checkbox" :disabled="!canMaintainPackages(selectedServer)" />
                   <span class="min-w-0">
@@ -360,7 +388,22 @@ onMounted(async () => {
             </section>
 
             <section v-else-if="activeTab === 'containers'" class="grid min-h-0 grid-cols-3 gap-3 max-2xl:grid-cols-2 max-lg:grid-cols-1">
-              <EmptyState v-if="!containers.length" :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
+              <template v-if="loadingResource && !containers.length">
+                <article v-for="item in 6" :key="item" class="grid min-h-[220px] grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background" aria-hidden="true">
+                  <header class="border-b border-border p-4">
+                    <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
+                    <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
+                  </header>
+                  <div class="p-4">
+                    <div class="motion-skeleton h-4 w-full rounded bg-muted animate-pulse" />
+                    <div class="motion-skeleton mt-3 h-4 w-2/3 rounded bg-muted animate-pulse" />
+                  </div>
+                  <footer class="flex gap-2 border-t border-border p-3">
+                    <div v-for="button in 3" :key="button" class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
+                  </footer>
+                </article>
+              </template>
+              <EmptyState v-else-if="!containers.length" :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
               <article v-for="item in containers" v-else :key="item.id" class="grid min-h-[220px] grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background">
                 <header class="border-b border-border p-4">
                   <div class="flex items-start justify-between gap-3">
@@ -396,7 +439,16 @@ onMounted(async () => {
                 </div>
               </div>
               <div class="min-h-0 overflow-auto p-3">
-                <EmptyState v-if="!images?.items.length" :title="t('resourcesPage.noImages')" :description="t('resourcesPage.noImagesHint')" />
+                <div v-if="loadingResource && !images" class="grid gap-2" aria-hidden="true">
+                  <div v-for="item in 8" :key="item" class="grid grid-cols-[minmax(0,1fr)_80px] gap-3 rounded-xl border border-border p-3">
+                    <div class="min-w-0">
+                      <div class="motion-skeleton h-4 w-48 rounded bg-muted animate-pulse" />
+                      <div class="motion-skeleton mt-2 h-3 w-72 max-w-full rounded bg-muted animate-pulse" />
+                    </div>
+                    <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
+                  </div>
+                </div>
+                <EmptyState v-else-if="!images?.items.length" :title="t('resourcesPage.noImages')" :description="t('resourcesPage.noImagesHint')" />
                 <div v-for="item in images?.items" v-else :key="item.id" class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-border p-3">
                   <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
@@ -413,7 +465,13 @@ onMounted(async () => {
 
             <section v-else-if="activeTab === 'networks'" class="grid min-h-0 grid-cols-[minmax(0,1fr)_300px] gap-4 max-xl:grid-cols-1">
               <div class="min-h-0 overflow-auto rounded-2xl border border-border bg-background p-3">
-                <EmptyState v-if="!networks.length" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')" />
+                <div v-if="loadingResource && !networks.length" class="grid gap-2" aria-hidden="true">
+                  <article v-for="item in 6" :key="item" class="rounded-xl border border-border p-4">
+                    <div class="motion-skeleton h-4 w-40 rounded bg-muted animate-pulse" />
+                    <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
+                  </article>
+                </div>
+                <EmptyState v-else-if="!networks.length" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')" />
                 <article v-for="item in networks" v-else :key="item.id" class="mb-2 rounded-xl border border-border p-4">
                   <div class="flex items-start justify-between gap-3">
                     <div>
@@ -438,7 +496,16 @@ onMounted(async () => {
                 <Button size="sm" variant="danger" @click="confirm('volume-prune')"><Trash2 />{{ t('resourcesPage.pruneUnusedVolumes') }}</Button>
               </div>
               <div class="min-h-0 overflow-auto p-3">
-                <EmptyState v-if="!volumes.length" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')" />
+                <div v-if="loadingResource && !volumes.length" class="grid gap-2" aria-hidden="true">
+                  <div v-for="item in 8" :key="item" class="grid grid-cols-[minmax(0,1fr)_80px] gap-3 rounded-xl border border-border p-3">
+                    <div class="min-w-0">
+                      <div class="motion-skeleton h-4 w-44 rounded bg-muted animate-pulse" />
+                      <div class="motion-skeleton mt-2 h-3 w-72 max-w-full rounded bg-muted animate-pulse" />
+                    </div>
+                    <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
+                  </div>
+                </div>
+                <EmptyState v-else-if="!volumes.length" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')" />
                 <div v-for="item in volumes" v-else :key="item.name" class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-border p-3">
                   <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">

@@ -59,7 +59,6 @@ export const mockDomainCertificates = [
     prefix: '',
     scope: 'wildcard',
     domains: ['example.com', '*.example.com'],
-    variableName: 'EXAMPLE_COM_TLS',
     certificatePath: '/data/certificates/cert-wildcard-example/fullchain.pem',
     privateKeyPath: '/data/certificates/cert-wildcard-example/privkey.pem',
     issuer: 'letsencrypt',
@@ -79,7 +78,6 @@ export const mockDomainCertificates = [
     prefix: 'api',
     scope: 'single',
     domains: ['api.example.com'],
-    variableName: 'API_TLS',
     certificatePath: '',
     privateKeyPath: '',
     issuer: 'letsencrypt',
@@ -100,7 +98,6 @@ export const mockDomainCertificates = [
     prefix: '',
     scope: 'single',
     domains: ['shop.example.test'],
-    variableName: 'SHOP_TLS',
     certificatePath: '/data/certificates/cert-shop/fullchain.pem',
     privateKeyPath: '/data/certificates/cert-shop/privkey.pem',
     issuer: 'letsencrypt',
@@ -120,7 +117,6 @@ export const mockDomainCertificates = [
     prefix: '',
     scope: 'single',
     domains: ['api.example.test'],
-    variableName: 'API_TLS',
     certificatePath: '',
     privateKeyPath: '',
     issuer: 'letsencrypt',
@@ -140,7 +136,6 @@ export const mockDomainCertificates = [
     prefix: '',
     scope: 'single',
     domains: ['downloads.example.test'],
-    variableName: 'DOWNLOADS_TLS',
     certificatePath: '',
     privateKeyPath: '',
     issuer: 'letsencrypt',
@@ -160,7 +155,6 @@ export const mockDomainCertificates = [
     prefix: '',
     scope: 'single',
     domains: ['very-long-customer-facing-domain-name-for-layout-validation.example.test'],
-    variableName: 'LONG_CUSTOMER_TLS',
     certificatePath: '/data/certificates/cert-long/fullchain.pem',
     privateKeyPath: '/data/certificates/cert-long/privkey.pem',
     issuer: 'letsencrypt',
@@ -254,15 +248,15 @@ export function issueCertificate(input: IssueCertificateInput) {
   }).filter((item, index, items) => items.indexOf(item) === index);
   const coveredDomains = normalizedPrefixes.map((prefix) => prefix === '@' ? domain.name : `${prefix}.${domain.name}`);
   const domains = input.scope === 'wildcard' && !input.prefixes?.length ? [domain.name, `*.${domain.name}`] : coveredDomains;
+  const certId = `cert-${Date.now()}`;
   const cert = {
-    id: `cert-${Date.now()}`,
+    id: certId,
     name: input.name,
     domainId: input.domainId,
     domain: domain.name,
     prefix: normalizedPrefixes.join(','),
     scope: input.prefixes?.length ? 'prefixes' : (input.scope ?? 'single'),
     domains,
-    variableName: input.variableName,
     certificatePath: '',
     privateKeyPath: '',
     issuer: 'letsencrypt',
@@ -285,6 +279,29 @@ export function renewCertificate(id: string) {
   cert.lastError = '';
   cert.updatedAt = now;
   return true;
+}
+
+export function reissueCertificate(id: string, input: IssueCertificateInput) {
+  const cert = mockDomainCertificates.find((item) => item.id === id);
+  const domain = mockDnsDomains.find((item) => item.id === input.domainId);
+  if (!cert || !domain) return null;
+  const prefixes = input.prefixes?.length ? input.prefixes : [input.prefix ?? '@'];
+  const normalizedPrefixes = prefixes.map((item) => {
+    const prefix = item.trim().toLowerCase().replace(/\.$/, '');
+    return prefix || '@';
+  }).filter((item, index, items) => items.indexOf(item) === index);
+  Object.assign(cert, {
+    name: input.name || domain.name,
+    domainId: input.domainId,
+    domain: domain.name,
+    prefix: normalizedPrefixes.join(','),
+    scope: input.prefixes?.length ? 'prefixes' : (input.scope ?? 'single'),
+    domains: normalizedPrefixes.map((prefix) => prefix === '@' ? domain.name : `${prefix}.${domain.name}`),
+    status: 'issuing',
+    lastError: '',
+    updatedAt: now,
+  });
+  return { certificate: cert, taskId: `task-cert-${Date.now()}` };
 }
 
 export function deleteCertificate(id: string) {

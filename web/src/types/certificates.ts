@@ -9,7 +9,6 @@ export interface DomainCertificateDto {
   prefix: string;
   scope: CertificateScope | string;
   domains: string[];
-  variableName: string;
   certificatePath: string;
   privateKeyPath: string;
   issuer: string;
@@ -29,7 +28,6 @@ export interface IssueCertificateInput {
   prefixes?: string[];
   prefix?: string;
   scope?: CertificateScope;
-  variableName: string;
 }
 
 export interface IssueCertificateResult {

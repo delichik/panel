@@ -28,6 +28,7 @@ const selectedId = ref('');
 const search = ref(String(route.query.search ?? ''));
 const loading = ref(false);
 const error = ref('');
+const credentialError = ref('');
 const feedback = ref('');
 const actionError = ref('');
 const serverDialog = ref(false);
@@ -95,14 +96,27 @@ watch(selectedId, () => {
 async function load() {
   loading.value = true;
   error.value = '';
+  credentialError.value = '';
   try {
-    const [nextServers, nextCredentials] = await Promise.all([serversApi.list(), credentialsApi.list()]);
-    servers.value = nextServers;
-    credentials.value = nextCredentials;
-    const queryServer = String(route.query.server ?? '');
-    selectedId.value = nextServers.some((item) => item.id === queryServer) ? queryServer : selectedId.value || nextServers[0]?.id || '';
-  } catch (err) {
-    error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
+    const [serversResult, credentialsResult] = await Promise.allSettled([serversApi.list(), credentialsApi.list()]);
+    if (serversResult.status === 'fulfilled') {
+      const nextServers = serversResult.value;
+      servers.value = nextServers;
+      const queryServer = String(route.query.server ?? '');
+      selectedId.value = nextServers.some((item) => item.id === queryServer)
+        ? queryServer
+        : nextServers.some((item) => item.id === selectedId.value)
+          ? selectedId.value
+          : nextServers[0]?.id || '';
+    } else {
+      error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
+    }
+    if (credentialsResult.status === 'fulfilled') {
+      credentials.value = credentialsResult.value;
+    } else {
+      credentials.value = [];
+      credentialError.value = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed');
+    }
   } finally {
     loading.value = false;
   }
@@ -289,6 +303,8 @@ function bytes(value?: number) {
 function bytesPerSecond(value?: number) {
   return typeof value === 'number' ? `${bytes(value)}/s` : t('common.notAvailable');
 }
+
+onMounted(load);
 </script>
 
 <template>
@@ -307,15 +323,18 @@ function bytesPerSecond(value?: number) {
           </label>
         </div>
         <div class="min-h-0 overflow-auto p-2">
-          <Skeleton v-if="loading && !servers.length" class="h-24" />
+          <div v-if="loading && !servers.length" class="grid gap-2">
+            <Skeleton v-for="item in 6" :key="item" class="h-20" />
+          </div>
           <EmptyState v-else-if="!filteredServers.length" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
           <button
             v-for="server in filteredServers"
             v-else
             :key="server.id"
             type="button"
-            class="mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent"
+            class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
             :class="selectedId === server.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'"
+            :aria-current="selectedId === server.id ? 'true' : undefined"
             @click="selectedId = server.id; router.replace({ query: { ...route.query, server: server.id } })"
           >
             <div class="flex items-center justify-between gap-2">
@@ -333,6 +352,27 @@ function bytesPerSecond(value?: number) {
 
       <main class="grid min-h-0">
         <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
+        <article v-else-if="loading && !servers.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <header class="border-b border-border p-5">
+            <Skeleton class="h-7 w-48" />
+            <Skeleton class="mt-3 h-4 w-72 max-w-full" />
+          </header>
+          <div class="min-h-0 overflow-auto p-5">
+            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+              <div class="grid gap-4">
+                <section v-for="item in 3" :key="item" class="rounded-2xl border border-border bg-background p-4">
+                  <Skeleton class="h-4 w-32" />
+                  <div class="mt-4 grid grid-cols-2 gap-3 max-md:grid-cols-1">
+                    <Skeleton v-for="line in 4" :key="line" class="h-10" />
+                  </div>
+                </section>
+              </div>
+              <aside class="grid content-start gap-3">
+                <Skeleton v-for="item in 2" :key="item" class="h-36" />
+              </aside>
+            </div>
+          </div>
+        </article>
         <EmptyState v-else-if="!selectedServer" :title="t('serversPage.selectServer')" :description="t('serversPage.selectServerHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
@@ -351,9 +391,10 @@ function bytesPerSecond(value?: number) {
             </div>
           </header>
 
-          <div v-if="feedback || actionError || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
+          <div v-if="feedback || actionError || credentialError || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
             <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+            <div v-if="credentialError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('serversPage.credentialsLoadFailed') }} {{ credentialError }}</div>
             <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
           </div>
 

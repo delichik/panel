@@ -9,6 +9,7 @@ import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useI18n } from '@/i18n';
@@ -161,14 +162,18 @@ onMounted(load);
           </label>
         </div>
         <div class="min-h-0 overflow-auto p-2">
-          <EmptyState v-if="!filteredCredentials.length" :title="t('credentialsPage.noCredentials')" :description="t('credentialsPage.noCredentialsHint')" />
+          <div v-if="loading && !credentials.length" class="grid gap-2">
+            <Skeleton v-for="item in 6" :key="item" class="h-20" />
+          </div>
+          <EmptyState v-else-if="!filteredCredentials.length" :title="t('credentialsPage.noCredentials')" :description="t('credentialsPage.noCredentialsHint')" />
           <button
             v-for="credential in filteredCredentials"
             v-else
             :key="credential.id"
             type="button"
-            class="mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent"
+            class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent"
             :class="selectedId === credential.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'"
+            :aria-current="selectedId === credential.id ? 'true' : undefined"
             @click="selectedId = credential.id"
           >
             <div class="flex items-center justify-between gap-2">
