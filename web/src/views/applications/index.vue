@@ -319,7 +319,7 @@ async function loadRuntime(applicationId: string) {
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable');
   } finally {
     runtimeRequests.delete(applicationId);
-    detailLoading.value = false;
+    detailLoading.value = runtimeRequests.size > 0;
   }
 }
 
