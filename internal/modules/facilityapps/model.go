@@ -17,7 +17,7 @@ const (
 	proxyContainerRoot   = "/etc/nginx"
 	proxyConfigDir       = "nginx/conf.d"
 	proxyStaticMountRoot = "/srv/panel-static"
-	proxyTLSMountRoot    = "/etc/nginx/panel-certs"
+	proxyTLSMountRoot    = "/etc/panel-certs"
 
 	StaticSourceHostPath       = "host_path"
 	StaticSourceUploadedFile   = "uploaded_file"

@@ -47,7 +47,7 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 
 - 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；当前持久字段为 `version`、`deployment_server_ids_json`、`panel_entry_json`、`domains_json`、错误和更新时间，旧 `domain_policies_json/static_sites_json` 已由迁移转换删除。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
 - 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
-- Nginx 全套配置使用一个 managed directory 挂载到 `/etc/nginx`，不能把主配置作为单文件 bind mount；否则宿主机原子 rename 后运行容器仍可能引用旧 inode。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可注册 `nginx -t`/`nginx -s reload`，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
+- Nginx 全套配置使用一个 managed directory 挂载到 `/etc/nginx`，不能把主配置作为单文件 bind mount；否则宿主机原子 rename 后运行容器仍可能引用旧 inode。证书 managed directory 必须独立只读挂载到 `/etc/panel-certs`，禁止在只读 `/etc/nginx` 挂载内创建嵌套挂载。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可注册 `nginx -t`/`nginx -s reload`，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
 - 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。
 - Panel 入口同样遵循入口容器网络模式：host network 使用 `127.0.0.1:8080`，`panel-apps` bridge 使用 `host.docker.internal:8080`。不得在 bridge 模式继续把 Panel upstream 指向入口容器自身的回环地址。
 - 静态站点配置保存域名、路径和宿主机根目录；部署时作为只读 bind mount 挂入 nginx 容器。

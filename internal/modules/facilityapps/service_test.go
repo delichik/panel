@@ -135,12 +135,94 @@ func TestProxySpecMountsNginxConfigurationDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	foundNginxMount := false
 	for _, mount := range spec.Mounts {
 		if mount.Source == proxyConfigRoot && mount.Target == proxyContainerRoot && mount.ReadOnly {
-			return
+			foundNginxMount = true
+		}
+		if mount.Source == "certs" || mount.Target == proxyTLSMountRoot {
+			t.Fatalf("certificate mount must not be present without TLS certificates: %#v", spec.Mounts)
 		}
 	}
-	t.Fatalf("nginx directory mount missing: %#v", spec.Mounts)
+	if !foundNginxMount {
+		t.Fatalf("nginx directory mount missing: %#v", spec.Mounts)
+	}
+}
+
+func TestProxySpecMountsTLSCertificatesOutsideNginxDirectory(t *testing.T) {
+	svc := &Service{}
+	cfg := ReverseProxyConfig{Domains: []FacilityRouteDomain{{
+		Domain:          "example.test",
+		OriginServerIDs: []string{"srv-a"},
+		Paths: []FacilityRoutePath{{
+			Path:        "/",
+			RuleType:    StaticRuleRedirect,
+			RedirectURL: "https://target.example.test",
+		}},
+	}}}
+	certificates := []proxycert.Certificate{{
+		ID:             "example-cert",
+		Domains:        []string{"example.test"},
+		CertificatePEM: "certificate",
+		PrivateKeyPEM:  "private-key",
+	}}
+
+	spec, err := svc.proxySpec(context.Background(), "srv-a", cfg, nil, certificates)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantMounts := map[string]string{
+		proxyConfigRoot: proxyContainerRoot,
+		"certs":         proxyTLSMountRoot,
+	}
+	for source, target := range wantMounts {
+		found := false
+		for _, mount := range spec.Mounts {
+			if mount.Source == source && mount.Target == target && mount.ReadOnly {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("read-only mount %q -> %q missing: %#v", source, target, spec.Mounts)
+		}
+	}
+	for _, mount := range spec.Mounts {
+		if mount.Target == "/etc/nginx/panel-certs" {
+			t.Fatalf("nested certificate mount still present: %#v", spec.Mounts)
+		}
+	}
+
+	config := managedConfigText(spec.Files)
+	for _, want := range []string{
+		"ssl_certificate /etc/panel-certs/example-cert/certificate.pem;",
+		"ssl_certificate_key /etc/panel-certs/example-cert/private-key.pem;",
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("nginx config missing %q:\n%s", want, config)
+		}
+	}
+	if strings.Contains(config, "/etc/nginx/panel-certs") {
+		t.Fatalf("nginx config still references nested certificate path:\n%s", config)
+	}
+
+	wantModes := map[string]string{
+		"certs/example-cert/certificate.pem": "0644",
+		"certs/example-cert/private-key.pem": "0600",
+	}
+	for path, mode := range wantModes {
+		found := false
+		for _, file := range spec.Files {
+			if file.Path == path && file.Mode == mode {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("managed certificate file %q with mode %q missing: %#v", path, mode, spec.Files)
+		}
+	}
 }
 
 func TestPanelEntryUsesHostGatewayInBridgeMode(t *testing.T) {
