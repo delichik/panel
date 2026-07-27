@@ -122,6 +122,16 @@ export interface ApplicationFile {
   updatedAt: string;
 }
 
+export interface ApplicationEditSessionFileContent {
+  fileKey: string;
+  path: string;
+  kind: FileKind | string;
+  contentType: string;
+  size: number;
+  sha256: string;
+  contentBase64: string;
+}
+
 export interface ResourceVersion {
   value: string;
   updatedAt: string;

@@ -63,6 +63,82 @@ func TestApplicationEditSessionPersistsAndRecovers(t *testing.T) {
 	}
 }
 
+func TestApplicationEditSessionReadsFileWithoutChangingRevision(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{Draft: &SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-config", "file-read-1", EditSessionFileInput{
+		Revision: session.Revision, ClientOperationID: "file-read-1", Path: "config/app.conf", Kind: ApplicationFileKindTemplate,
+		ContentType: "text/plain", ContentBase64: base64.StdEncoding.EncodeToString([]byte("hello {{ name }}\n")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-empty", "file-read-empty", EditSessionFileInput{
+		Revision: session.Revision, ClientOperationID: "file-read-empty", Path: "config/empty.conf", Kind: ApplicationFileKindTemplate,
+		ContentType: "text/plain", ContentBase64: base64.StdEncoding.EncodeToString(nil),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	revision := session.Revision
+	file, err := svc.GetEditSessionFile(ctx, "admin", session.ID, "file-config")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if file.ContentBase64 != base64.StdEncoding.EncodeToString([]byte("hello {{ name }}\n")) || file.Path != "config/app.conf" || file.Kind != ApplicationFileKindTemplate {
+		t.Fatalf("file = %#v", file)
+	}
+	refreshed, err := svc.GetEditSession(ctx, "admin", session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refreshed.Revision != revision {
+		t.Fatalf("read changed revision: before=%d after=%d", revision, refreshed.Revision)
+	}
+	empty, err := svc.GetEditSessionFile(ctx, "admin", session.ID, "file-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if empty.ContentBase64 != "" || empty.Size != 0 {
+		t.Fatalf("empty file = %#v", empty)
+	}
+	_, err = svc.GetEditSessionFile(ctx, "other-owner", session.ID, "file-config")
+	assertPanelErrorCode(t, err, "not_found")
+}
+
+func TestApplicationEditSessionReadRejectsBlobMetadataMismatch(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{Draft: &SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-config", "file-integrity-1", EditSessionFileInput{
+		Revision: session.Revision, ClientOperationID: "file-integrity-1", Path: "config/app.conf", Kind: ApplicationFileKindTemplate,
+		ContentBase64: base64.StdEncoding.EncodeToString([]byte("content")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := session.Files[0]
+	if _, err := svc.db.Exec(`UPDATE application_edit_session_files SET size=? WHERE session_id=? AND file_key=?`, file.Size+1, session.ID, file.FileKey); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.GetEditSessionFile(ctx, "admin", session.ID, file.FileKey)
+	assertPanelErrorCode(t, err, "application_edit_file_size_mismatch")
+	if _, err := svc.db.Exec(`UPDATE application_edit_session_files SET size=?,sha256=? WHERE session_id=? AND file_key=?`, file.Size, "invalid", session.ID, file.FileKey); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.GetEditSessionFile(ctx, "admin", session.ID, file.FileKey)
+	assertPanelErrorCode(t, err, "application_edit_file_hash_mismatch")
+}
+
 func TestApplicationEditSessionRevisionAndIdempotency(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()

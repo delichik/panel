@@ -311,7 +311,7 @@ export function beginAppSession(applicationId?: string): ApplicationEditSession 
       reverseProxy: app?.reverseProxy ?? [],
     },
     revision: 1,
-    files: [{ fileKey: 'file-env', path: 'config/env.template', kind: 'template', contentType: 'text/plain', size: 128, sha256: 'sha-env', createdAt: now, updatedAt: now }],
+    files: [{ fileKey: 'file-env', path: 'config/env.template', kind: 'template', contentType: 'text/plain', size: 12, sha256: 'sha-env', contentBase64: 'SE9TVD17eyBob3N0IH19Cg==', createdAt: now, updatedAt: now }],
     idleExpiresAt: '2026-07-22T08:00:00.000Z',
     absoluteExpiresAt: '2026-07-28T08:00:00.000Z',
     createdAt: now,
@@ -334,11 +334,16 @@ export function patchAppSession(id: string, draft: ApplicationEditSession['draft
   return session;
 }
 
+export function getAppFile(id: string, fileKey: string) {
+  const file = appSessions.get(id)?.files.find((item) => item.fileKey === fileKey);
+  return file ? { ...file, contentBase64: file.contentBase64 ?? '' } : null;
+}
+
 export function putAppFile(id: string, fileKey: string, input: { path: string; kind: string; contentType: string; contentBase64: string }) {
   const session = appSessions.get(id);
   if (!session) return null;
   session.files = session.files.filter((file) => file.fileKey !== fileKey);
-  session.files.push({ fileKey, path: input.path, kind: input.kind, contentType: input.contentType, size: input.contentBase64.length, sha256: `sha-${fileKey}`, createdAt: now, updatedAt: now });
+  session.files.push({ fileKey, path: input.path, kind: input.kind, contentType: input.contentType, size: input.contentBase64.length, sha256: `sha-${fileKey}`, contentBase64: input.contentBase64, createdAt: now, updatedAt: now });
   session.revision += 1;
   return session;
 }

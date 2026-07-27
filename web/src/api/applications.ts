@@ -6,6 +6,7 @@ import type {
   ApplicationEditCommitResult,
   ApplicationEditPreviewResult,
   ApplicationEditSession,
+  ApplicationEditSessionFileContent,
   ApplicationEditValidationResult,
   ApplicationRuntime,
   ApplicationSaveInput,
@@ -120,6 +121,9 @@ export const applicationsApi = {
   },
   patchEditSession(sessionId: string, revision: number, draft: ApplicationSaveInput) {
     return apiClient.patch<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/draft`, { revision, draft });
+  },
+  getEditSessionFile(sessionId: string, fileKey: string) {
+    return apiClient.get<ApplicationEditSessionFileContent>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}`);
   },
   putEditSessionFile(sessionId: string, fileKey: string, revision: number, input: { path: string; kind: string; contentType: string; contentBase64: string }) {
     return apiClient.put<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}`, {

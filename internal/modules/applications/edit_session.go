@@ -200,6 +200,34 @@ func (s *Service) PutEditSessionFile(ctx context.Context, owner, sessionID, file
 	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, pathValue, kind, in.ContentType, content)
 }
 
+func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, fileKey string) (EditSessionFileContent, error) {
+	record, err := s.loadEditSession(ctx, normalizeEditOwner(owner), sessionID)
+	if err != nil {
+		return EditSessionFileContent{}, err
+	}
+	if record.State != EditSessionStateActive && record.State != EditSessionStateConflict {
+		return EditSessionFileContent{}, panelerr.Conflict("application_edit_session_state_invalid", "application edit session is not editable")
+	}
+
+	var result EditSessionFileContent
+	var blobPath string
+	err = s.db.QueryRowContext(ctx, `SELECT file_key,path,kind,content_type,size,sha256,blob_path FROM application_edit_session_files WHERE session_id=? AND file_key=? AND state='ready'`, record.ID, strings.TrimSpace(fileKey)).Scan(
+		&result.FileKey, &result.Path, &result.Kind, &result.ContentType, &result.Size, &result.SHA256, &blobPath,
+	)
+	if err == sql.ErrNoRows {
+		return EditSessionFileContent{}, panelerr.NotFound("application_edit_session_file")
+	}
+	if err != nil {
+		return EditSessionFileContent{}, err
+	}
+	content, err := readEditSessionBlob(result.FileKey, blobPath, result.Size, result.SHA256)
+	if err != nil {
+		return EditSessionFileContent{}, err
+	}
+	result.ContentBase64 = base64.StdEncoding.EncodeToString(content)
+	return result, nil
+}
+
 func (s *Service) UploadEditSessionArchive(ctx context.Context, owner, sessionID, idempotencyKey string, in EditSessionArchiveInput) (ApplicationEditSession, error) {
 	if strings.TrimSpace(in.ClientOperationID) == "" || strings.TrimSpace(in.FileKey) == "" {
 		return ApplicationEditSession{}, panelerr.Validation("application_edit_operation_invalid", "fileKey and clientOperationId are required")
@@ -555,18 +583,29 @@ func (s *Service) editSessionApplicationFiles(ctx context.Context, sessionID, ap
 			return nil, err
 		}
 		file.ApplicationID = applicationID
-		file.Content, err = os.ReadFile(blobPath)
+		file.Content, err = readEditSessionBlob(file.ID, blobPath, file.Size, file.SHA256)
 		if err != nil {
-			return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_missing", "application edit session file is missing"), map[string]any{"fileKey": file.ID})
-		}
-		sum := sha256.Sum256(file.Content)
-		if hex.EncodeToString(sum[:]) != file.SHA256 {
-			return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_hash_mismatch", "application edit session file hash does not match"), map[string]any{"fileKey": file.ID})
+			return nil, err
 		}
 		file.CreatedAt, file.UpdatedAt = parseEditTime(createdAt), parseEditTime(updatedAt)
 		files = append(files, file)
 	}
 	return files, rows.Err()
+}
+
+func readEditSessionBlob(fileKey, blobPath string, expectedSize int64, expectedHash string) ([]byte, error) {
+	content, err := os.ReadFile(blobPath)
+	if err != nil {
+		return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_missing", "application edit session file is missing"), map[string]any{"fileKey": fileKey})
+	}
+	if int64(len(content)) != expectedSize {
+		return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_size_mismatch", "application edit session file size does not match"), map[string]any{"fileKey": fileKey})
+	}
+	sum := sha256.Sum256(content)
+	if hex.EncodeToString(sum[:]) != expectedHash {
+		return nil, panelerr.WithDetails(panelerr.Conflict("application_edit_file_hash_mismatch", "application edit session file hash does not match"), map[string]any{"fileKey": fileKey})
+	}
+	return content, nil
 }
 
 func (s *Service) validateEditDraft(ctx context.Context, record editSessionRecord, files []ApplicationFile) ([]Diagnostic, error) {

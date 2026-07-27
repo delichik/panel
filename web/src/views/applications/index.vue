@@ -7,6 +7,7 @@ import { saveBlobDownload } from '@/api/download';
 import { facilityAppsApi } from '@/api/facilityApps';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import CodeEditor from '@/components/ui/CodeEditor.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -65,6 +66,8 @@ import {
   type PortRow,
   type SaveStage,
 } from './model';
+import { inferTemplateLanguage, type TemplateLanguage } from './templateLanguage';
+import { isSameFileDialogContext, type FileDialogContext } from './fileDialogContext';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -78,6 +81,7 @@ let pageLoadRequestId = 0;
 let runtimeRequestId = 0;
 let applicationDetailRequestId = 0;
 let editorQueryRequestId = 0;
+let fileLoadRequestId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applications = ref<ApplicationSummaryDto[]>([]);
@@ -108,6 +112,11 @@ const activeAppSection = ref('identity');
 const activeFacilitySection = ref('gateways');
 const fileDialog = ref(false);
 const fileEditing = ref<ApplicationFile | null>(null);
+const fileLoading = ref(false);
+const fileLoadError = ref('');
+const fileLanguage = ref<TemplateLanguage>('plain');
+const fileLanguageManual = ref(false);
+const fileDialogKey = ref('');
 const diagnostics = ref<Diagnostic[]>([]);
 const preview = ref<ApplicationEditPreviewResult | null>(null);
 const editSession = ref<ApplicationEditSession | null>(null);
@@ -203,6 +212,12 @@ const assetOptions = computed(() => [
   ...(facilitySession.value?.assets ?? []).map((asset) => ({ value: asset.assetKey, label: `${asset.name} / ${asset.filename}` })),
 ]);
 const fileKindOptions = computed(() => [{ label: t('applicationsPage.fileKindTemplate'), value: 'template' }, { label: t('applicationsPage.fileKindBinary'), value: 'binary' }]);
+const fileLanguageOptions = computed(() => (['plain', 'yaml', 'json', 'shell', 'nginx', 'properties', 'dockerfile'] as TemplateLanguage[]).map((value) => ({
+  value,
+  label: t(`applicationsPage.templateLanguage.${value}`),
+})));
+const existingBinaryFile = computed(() => Boolean(fileEditing.value && fileForm.kind !== 'template'));
+const fileSaveDisabled = computed(() => fileLoading.value || Boolean(fileLoadError.value) || !fileForm.path.trim() || existingBinaryFile.value);
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['host_path', 'uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
@@ -214,6 +229,10 @@ const proxyPathWebSocket = computed({
 const facilityRedirectCode = computed({
   get: () => String(facilityPathDraft.redirectCode ?? 302),
   set: (value: string) => { facilityPathDraft.redirectCode = Number(value); },
+});
+
+watch([() => fileForm.path, () => fileForm.contentType], () => {
+  if (fileDialog.value && !fileLanguageManual.value) fileLanguage.value = inferTemplateLanguage(fileForm.path, fileForm.contentType);
 });
 const appDeploymentServersModel = computed({
   get: () => appDraft.deploymentServers,
@@ -818,30 +837,82 @@ function removeAt<T>(items: T[], index: number, domain: 'app' | 'facility' = 'ap
   else markDirty();
 }
 
-function openFileDialog(file?: ApplicationFile) {
+function decodeBase64Utf8(value: string) {
+  const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+  return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+}
+
+function encodeBase64Utf8(value: string) {
+  const bytes = new TextEncoder().encode(value);
+  let binary = '';
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function selectFileLanguage(value: string) {
+  fileLanguage.value = value as TemplateLanguage;
+  fileLanguageManual.value = true;
+}
+
+async function openFileDialog(file?: ApplicationFile) {
+  const requestId = ++fileLoadRequestId;
+  fileDialogKey.value = file?.fileKey || file?.id || `file-${Date.now()}`;
   fileEditing.value = file ?? null;
+  fileLoadError.value = '';
+  fileLoading.value = Boolean(file && file.kind === 'template');
+  fileLanguageManual.value = false;
   Object.assign(fileForm, {
     path: file?.path ?? 'config/app.conf',
     kind: file?.kind ?? 'template',
     contentType: file?.contentType ?? 'text/plain',
     content: '',
   });
+  fileLanguage.value = inferTemplateLanguage(fileForm.path, fileForm.contentType);
   fileDialog.value = true;
+  if (!file || file.kind !== 'template' || !editSession.value) return;
+  try {
+    const key = file.fileKey || file.id || '';
+    const loaded = await applicationsApi.getEditSessionFile(editSession.value.id, key);
+    if (requestId !== fileLoadRequestId || fileEditing.value !== file || !fileDialog.value) return;
+    fileForm.content = decodeBase64Utf8(loaded.contentBase64);
+  } catch (err) {
+    if (requestId !== fileLoadRequestId) return;
+    fileLoadError.value = err instanceof Error ? err.message : t('applicationsPage.fileLoadFailed');
+  } finally {
+    if (requestId === fileLoadRequestId) fileLoading.value = false;
+  }
+}
+
+function currentFileDialogContext(): FileDialogContext {
+  return { generation: fileLoadRequestId, fileKey: fileDialogKey.value };
 }
 
 async function saveFile() {
-  if (!editSession.value || !fileForm.path.trim() || !fileForm.content.trim()) return;
-  await runEditorAction(async () => {
-    const key = fileEditing.value?.fileKey || fileEditing.value?.id || `file-${Date.now()}`;
-    editSession.value = await applicationsApi.putEditSessionFile(editSession.value!.id, key, editSession.value!.revision, {
+  if (!editSession.value || fileSaveDisabled.value) return;
+  const context = currentFileDialogContext();
+  const sessionId = editSession.value.id;
+  const revision = editSession.value.revision;
+  const input = {
       path: fileForm.path,
       kind: fileForm.kind,
       contentType: fileForm.contentType,
-      contentBase64: btoa(unescape(encodeURIComponent(fileForm.content))),
-    });
+      contentBase64: encodeBase64Utf8(fileForm.content),
+  };
+  pending.value = 'editor';
+  saveStage.value = 'editor' as SaveStage;
+  actionError.value = '';
+  try {
+    editSession.value = await applicationsApi.putEditSessionFile(sessionId, context.fileKey, revision, input);
     markDirty();
-    fileDialog.value = false;
-  });
+    if (isSameFileDialogContext(context, currentFileDialogContext())) fileDialog.value = false;
+  } catch (err) {
+    if (isSameFileDialogContext(context, currentFileDialogContext())) {
+      actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    }
+  } finally {
+    pending.value = '';
+    saveStage.value = 'idle';
+  }
 }
 
 async function uploadArchive(fileOrFiles: File | File[]) {
@@ -1297,7 +1368,7 @@ onBeforeUnmount(() => {
                   <FileUploadButton size="sm" accept=".zip,application/zip" :loading="pending === 'editor'" :disabled="!editSession" :label="t('applicationsPage.uploadArchive')" @change="uploadArchive" />
                 </div>
               </div>
-              <div v-for="file in editSession?.files || []" :key="file.fileKey || file.id" class="item-row"><div><strong>{{ file.path }}</strong><span>{{ file.kind }} / {{ file.size }} bytes</span></div><div class="row-actions"><Button size="sm" @click="openFileDialog(file)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="ask('file-delete', file.fileKey || file.id || '')">{{ t('common.delete') }}</Button></div></div>
+              <div v-for="file in editSession?.files || []" :key="file.fileKey || file.id" class="item-row"><div><strong>{{ file.path }}</strong><span>{{ file.kind }} / {{ file.size }} bytes</span></div><div class="row-actions"><Button v-if="file.kind === 'template'" size="sm" @click="openFileDialog(file)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="ask('file-delete', file.fileKey || file.id || '')">{{ t('common.delete') }}</Button></div></div>
               <EmptyState v-if="!(editSession?.files || []).length" :title="t('applicationsPage.noFiles')" :description="t('applicationsPage.noFilesHint')" />
             </section>
           </div>
@@ -1491,16 +1562,25 @@ onBeforeUnmount(() => {
     </template>
   </Dialog>
 
-  <Dialog v-model:open="fileDialog" :title="fileEditing ? t('applicationsPage.editFile') : t('applicationsPage.addFile')" :close-label="t('common.close')">
-    <div class="grid gap-3">
-      <label class="field">{{ t('applicationsPage.filePath') }}<Input v-model="fileForm.path" /></label>
-      <label class="field">{{ t('applicationsPage.fileKind') }}<Select v-model="fileForm.kind" :options="fileKindOptions" /></label>
-      <label class="field">{{ t('applicationsPage.contentType') }}<Input v-model="fileForm.contentType" /></label>
-      <label class="field">{{ t('applicationsPage.fileContent') }}<Textarea v-model="fileForm.content" class="min-h-[220px] font-mono" /></label>
+  <Dialog v-model:open="fileDialog" size="large" :title="fileEditing ? t('applicationsPage.editFile') : t('applicationsPage.addFile')" :close-label="t('common.close')">
+    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+      <div class="grid gap-3 md:grid-cols-2">
+        <label class="field">{{ t('applicationsPage.filePath') }}<Input v-model="fileForm.path" /></label>
+        <label class="field">{{ t('applicationsPage.fileKind') }}<Select v-model="fileForm.kind" :options="fileKindOptions" :disabled="Boolean(fileEditing)" /></label>
+        <label class="field">{{ t('applicationsPage.contentType') }}<Input v-model="fileForm.contentType" /></label>
+        <label v-if="fileForm.kind === 'template'" class="field">{{ t('applicationsPage.highlightLanguage') }}<Select :model-value="fileLanguage" :options="fileLanguageOptions" @update:model-value="selectFileLanguage" /></label>
+      </div>
+      <div class="min-h-0">
+        <div v-if="fileLoading" class="grid h-full place-items-center text-sm text-muted-foreground">{{ t('applicationsPage.fileLoading') }}</div>
+        <div v-else-if="fileLoadError" class="rounded-md border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ t('applicationsPage.fileLoadFailed') }} {{ fileLoadError }}</div>
+        <div v-else-if="existingBinaryFile" class="rounded-md border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('applicationsPage.binaryEditUnavailable') }}</div>
+        <CodeEditor v-else-if="fileForm.kind === 'template'" v-model="fileForm.content" :language="fileLanguage" :editor-label="t('applicationsPage.fileContent')" />
+        <label v-else class="field h-full">{{ t('applicationsPage.fileContent') }}<Textarea v-model="fileForm.content" class="min-h-[320px] flex-1 font-mono" /></label>
+      </div>
     </div>
     <template #footer>
       <Button variant="secondary" @click="fileDialog = false">{{ t('common.cancel') }}</Button>
-      <Button variant="primary" :loading="pending === 'editor'" @click="saveFile">{{ t('common.save') }}</Button>
+      <Button variant="primary" :loading="pending === 'editor'" :disabled="fileSaveDisabled" @click="saveFile">{{ t('common.save') }}</Button>
     </template>
   </Dialog>
 

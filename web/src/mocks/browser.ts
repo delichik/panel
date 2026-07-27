@@ -56,6 +56,7 @@ import {
   deleteFacilityAsset,
   facilityDiagnostics,
   facilitySession,
+  getAppFile,
   mockApplicationSummaries,
   mockApplications,
   mockFacility,
@@ -526,6 +527,10 @@ export function installMockApi() {
       return session ? json(session) : error('application_edit_session_not_found', 'Application edit session was not found.', 404);
     }
     const appSessionFileMatch = url.pathname.match(/^\/api\/v1\/application-edit-sessions\/([^/]+)\/files\/([^/]+)$/);
+    if (appSessionFileMatch && method(init) === 'GET') {
+      const file = getAppFile(decodeURIComponent(appSessionFileMatch[1]), decodeURIComponent(appSessionFileMatch[2]));
+      return file ? json(file) : error('application_edit_session_file_not_found', 'Application edit session file was not found.', 404);
+    }
     if (appSessionFileMatch && method(init) === 'PUT') {
       const session = putAppFile(decodeURIComponent(appSessionFileMatch[1]), decodeURIComponent(appSessionFileMatch[2]), await body<{ path: string; kind: string; contentType: string; contentBase64: string }>(init));
       return session ? json(session) : error('application_edit_session_not_found', 'Application edit session was not found.', 404);

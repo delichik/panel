@@ -11,6 +11,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/application-edit-sessions/recoverable", auth(http.HandlerFunc(h.RecoverableEditSessions)))
 	mux.Handle("GET /api/v1/application-edit-sessions/{id}", auth(http.HandlerFunc(h.GetEditSession)))
 	mux.Handle("PATCH /api/v1/application-edit-sessions/{id}/draft", auth(http.HandlerFunc(h.PatchEditSession)))
+	mux.Handle("GET /api/v1/application-edit-sessions/{id}/files/{fileKey}", auth(http.HandlerFunc(h.GetEditSessionFile)))
 	mux.Handle("PUT /api/v1/application-edit-sessions/{id}/files/{fileKey}", auth(http.HandlerFunc(h.PutEditSessionFile)))
 	mux.Handle("POST /api/v1/application-edit-sessions/{id}/archives", auth(http.HandlerFunc(h.UploadEditSessionArchive)))
 	mux.Handle("DELETE /api/v1/application-edit-sessions/{id}/files/{fileKey}", auth(http.HandlerFunc(h.DeleteEditSessionFile)))
