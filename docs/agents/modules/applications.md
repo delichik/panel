@@ -158,6 +158,7 @@
 
 - The application create/edit workspace uses a top step rail and intent panels instead of the old left section list. The structured panels are Identity, Runtime source, Networking, Storage, Deployment, and Files/Assets.
 - AppSpec has exactly one source editor, labelled `YAML source` / `源码`. Do not reintroduce separate `Advanced YAML` and `YAML` entry points. Source editing is an alternate view of the same draft: structured edits regenerate source, and manual source edits must be applied back to the structured draft before commit.
+- The AppSpec source view uses the shared CodeMirror editor with YAML highlighting, line numbers, undo history, and editor-internal scrolling. Editing marks the source dirty immediately but must not automatically apply, format, or save it; synchronization with the structured draft remains explicit.
 - Structured editing must remain complete. Image, command, env, ports, mounts, reverse proxy, deployment targets, and session files cannot be hidden behind YAML-only editing.
 - Application name, enabled state, deployment targets, reverse proxy rules, custom variables, and application files are application-level fields outside AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
 - The editor must preserve local validation, patch draft, validate, preview, commit, dirty guard, and recoverable session behavior. File mutations still use application edit-session file/archive endpoints.

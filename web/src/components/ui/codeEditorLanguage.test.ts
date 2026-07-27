@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { inferTemplateLanguage } from './templateLanguage';
+import { inferCodeEditorLanguage } from './codeEditorLanguage';
 
-describe('inferTemplateLanguage', () => {
+describe('inferCodeEditorLanguage', () => {
   it.each([
     ['config/app.yaml', '', 'yaml'],
     ['config/app', 'application/json', 'json'],
@@ -11,6 +11,6 @@ describe('inferTemplateLanguage', () => {
     ['Dockerfile.production', '', 'dockerfile'],
     ['README', 'text/plain', 'plain'],
   ])('infers %s', (path, contentType, expected) => {
-    expect(inferTemplateLanguage(path, contentType)).toBe(expected);
+    expect(inferCodeEditorLanguage(path, contentType)).toBe(expected);
   });
 });

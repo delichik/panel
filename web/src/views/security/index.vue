@@ -6,11 +6,11 @@ import { securityApi } from '@/api/security';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import CodeEditor from '@/components/ui/CodeEditor.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
-import Textarea from '@/components/ui/Textarea.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
@@ -422,8 +422,8 @@ onBeforeUnmount(() => {
                   </div>
                   <Button size="sm" @click="yamlMode = !yamlMode"><FileCode2 />{{ yamlMode ? t('securityPage.visualMode') : t('securityPage.yamlMode') }}</Button>
                 </div>
-                <div class="min-h-0 overflow-auto p-4">
-                  <Textarea v-if="yamlMode" v-model="yamlDraft" class="min-h-[420px] font-mono text-xs" />
+                <div class="min-h-0 p-4" :class="yamlMode ? 'overflow-hidden' : 'overflow-auto'">
+                  <CodeEditor v-if="yamlMode" v-model="yamlDraft" language="yaml" :editor-label="t('securityPage.yamlMode')" />
                   <div v-else class="grid gap-3">
                     <div v-if="loadingPanel && !fail2banState" class="grid gap-3" aria-hidden="true">
                       <div v-for="item in 4" :key="item" class="grid gap-3 rounded-xl border border-border p-4">

@@ -1383,7 +1383,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('applicationsPage.sourceGuardHint') }}</div>
-              <Textarea v-model="appDraft.specYaml" class="min-h-[520px] font-mono" :invalid="Boolean(appErrors.specYaml)" @input="markSpecDirty" />
+              <CodeEditor v-model="appDraft.specYaml" language="yaml" size="large" :editor-label="t('applicationsPage.specYaml')" :invalid="Boolean(appErrors.specYaml)" @update:model-value="markSpecDirty" />
             </section>
           </div>
         </section>
