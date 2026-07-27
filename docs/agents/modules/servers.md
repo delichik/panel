@@ -34,9 +34,9 @@
 
 ## 前端入口
 
-- 服务器 + SSH 凭据页面（v3）：`web/src/views/servers/ServersPage.vue`；`/servers` 与 `/credentials` 为同一页面的两个 tab，tab 与路由 name 同步（`serversTabs.ts`）。
+- 服务器页面位于 `web/src/views/servers/index.vue`，SSH 凭据独立页面位于 `web/src/views/credentials/index.vue`；分别通过 `/servers` 与 `/credentials` 进入，不共享页面内 tab。
 - 节点 tab（MasterDetailPage：搜索 + 列表 + 分页 / 四区详情）：`web/src/views/servers/ServersNodesView.vue`、`ServerDetail.vue`。
-- 添加/编辑对话框：`ServerFormDialog.vue`（含 `POST /servers/probe` 测试连接与无凭据时就地添加入口）、`CredentialFormDialog.vue`（按类型裁剪字段，secret 留空 = 不更新）。
+- 服务器添加/编辑由 `web/src/views/servers/index.vue` 内的表单对话框承载（含 `POST /servers/probe`）；凭据添加/编辑由 `web/src/views/credentials/index.vue` 内的表单对话框承载。凭据按 password/private_key 类型裁剪字段，编辑时 secret 留空 = 不更新；私钥类型使用 large Dialog 和共享 plain CodeMirror，password 类型仍使用普通输入与默认 Dialog。
 - 凭据 tab 表格：`CredentialsView.vue`（删除前客户端引用预检 + 409 `credential_in_use` 兜底）。
 - 纯函数逻辑：`serverTraits.ts`（traits/网卡解析、Agent/UFW 状态判定）、`serverProbe.ts`（probe 结果映射）、`serverInitPolling.ts`（创建后初始化轮询状态机）、`credentialUsage.ts`（引用预检）、`useTaskMessage.ts`（任务反馈 + "查看任务"跳转）。
 - 防火墙与 Fail2Ban 页面（v4 阶段 4A）：`web/src/views/security/index.vue`；`/resources/firewall` 与 dev-only `/resources/fail2ban` 共享服务器选择器和 URL `server` query，但作为资源菜单下的独立页面呈现，不使用页内 tabs。旧 `/security/*` 只保留重定向。UFW 右侧为规则/状态矩阵、添加规则、删除规则、启用/安装确认；Fail2Ban 右侧为托管状态、检测到的 jail、预设、可视草稿、使用共享 CodeMirror 的 YAML 高级模式、保存草稿、应用/安装/释放接管确认。YAML 编辑仅更新草稿，仍需显式保存或启用，不自动格式化；纯函数和 `parseSimpleJailsFromYaml` 边界保持在 `web/src/views/security/model.ts`。

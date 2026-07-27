@@ -18,6 +18,9 @@
 
 ## 最近已补齐
 
+- `web/src/views/credentials/index.vue`、`web/src/views/certificates/index.vue`
+  - SSH 私钥凭据和密钥资产导入弹窗改用共享材料编辑器，编辑器可访问名称及 CA/TLS 材料 tab 复用既有英文与简体中文词条；私钥、证书正文和后端错误保持用户或运行时原值。
+
 - `web/src/views/applications/index.vue`、`web/src/components/ui/CodeEditor.vue`
   - 应用模板文件弹出编辑器的高亮语言选项、正文加载状态、加载失败保护和二进制不可文本编辑提示已接入英文与简体中文词条；文件路径、MIME 和正文保持用户原始值。
 

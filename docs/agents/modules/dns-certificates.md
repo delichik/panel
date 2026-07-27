@@ -69,6 +69,7 @@
 - v4 前端不再使用旧 `AppMasterDetailWorkspace`/`AppSelectorPanel` 组件名；使用 `ConsolePage` 与自有 primitives 组合主从工作台，并保持桌面内部滚动。
 - 域名证书、自签证书和密钥资产必须通过路由子页呈现不同工作流，不能退回通用 `CollectionPage` 或同一参数化列表。
 - 自签证书和密钥的新增/生成是页面主操作或详情区操作；导入资产、导出和批量导入预检必须明确展示任务/冲突反馈，真实 API 不存在的能力必须禁用并说明，不能用 Mock 伪装成功。
+- 单个密钥资产导入使用 large Dialog：SSH 只编辑私钥材料，CA/TLS 通过私钥/证书 tab 切换并且只挂载当前 plain CodeMirror。tab 只属于本地展示状态，不进入导入 DTO；材料不会自动格式化或保存，导入失败必须在弹窗内可见并保留正文。
 
 ## 验证
 

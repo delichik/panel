@@ -8,6 +8,7 @@ import { keyAssetsApi } from '@/api/keyAssets';
 import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import CodeEditor from '@/components/ui/CodeEditor.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
@@ -15,13 +16,14 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
-import Textarea from '@/components/ui/Textarea.vue';
+import Tabs from '@/components/ui/Tabs.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { DomainCertificateDto, SelfSignedCertificateDto } from '@/types/certificates';
 import type { DnsDomainDto } from '@/types/dns';
 import type { ImportPreflightDto, KeyAssetDto, KeyAssetType } from '@/types/keyAssets';
+import { assetImportHasCertificate, initialAssetImportMaterialTab, type AssetImportMaterialTab } from './assetImportEditor';
 import { assetTone, certificateState, certificateTone, selfSignedTone } from './model';
 
 const { t } = useI18n();
@@ -35,6 +37,7 @@ const assets = ref<KeyAssetDto[]>([]);
 const selectedId = ref('');
 const loading = ref(false);
 const error = ref('');
+const assetActionError = ref('');
 const feedback = ref('');
 const dialog = ref<'issue' | 'self-ca' | 'self-leaf' | 'asset-ca' | 'asset-tls' | 'asset-ssh' | 'asset-import' | 'asset-export' | 'asset-preflight' | ''>('');
 const confirmDelete = ref(false);
@@ -58,6 +61,7 @@ const domainOptions = computed(() => domains.value.map((item) => ({ label: item.
 const issueForm = reactive({ name: '', domainId: '', includeRoot: true, includeWildcard: false, subdomains: [''] });
 const selfForm = reactive({ name: '', caId: '', commonName: '', dnsNames: [''], ipAddresses: [''], years: '5', days: '90' });
 const assetForm = reactive({ type: 'ssh_key_pair' as KeyAssetType, name: '', parentAssetId: '', commonName: '', dnsNames: [''], ipAddresses: [''], algorithm: 'ed25519', keySize: '2048', validityDays: '365', comment: '', certificatePem: '', privateKeyPem: '', publicKey: '', password: '' });
+const assetImportMaterialTab = ref<AssetImportMaterialTab>(initialAssetImportMaterialTab());
 const importFile = ref<File | null>(null);
 const selectedIssueDomainName = computed(() => domains.value.find((item) => item.id === issueForm.domainId)?.name ?? '');
 const issueCoverage = computed(() => issuePrefixes().map((prefix) => prefixToDomain(prefix, selectedIssueDomainName.value)).filter(Boolean));
@@ -68,6 +72,10 @@ const assetTypeOptions = [
   { label: t('certificatesPage.assetTls'), value: 'tls_certificate' },
   { label: t('certificatesPage.assetSsh'), value: 'ssh_key_pair' },
 ];
+const assetImportMaterialTabs = computed(() => [
+  { label: t('certificatesPage.privateKeyPem'), value: 'privateKey' },
+  { label: t('certificatesPage.certificatePem'), value: 'certificate' },
+]);
 
 onMounted(load);
 watch(page, () => { void load(); });
@@ -174,10 +182,14 @@ function openAsset(next: typeof dialog.value) {
   Object.assign(assetForm, { type: 'ssh_key_pair', name: '', parentAssetId: caAssets.value[0]?.value ?? '', commonName: '', dnsNames: [''], ipAddresses: [''], algorithm: 'ed25519', keySize: '2048', validityDays: '365', comment: '', certificatePem: '', privateKeyPem: '', publicKey: '', password: '' });
   importPlan.value = null;
   importFile.value = null;
+  assetActionError.value = '';
+  assetImportMaterialTab.value = initialAssetImportMaterialTab();
   dialog.value = next;
 }
 
 async function saveAsset() {
+  const assetDialog = dialog.value;
+  if (assetDialog === 'asset-import') assetActionError.value = '';
   saving.value = true;
   try {
     let result;
@@ -190,7 +202,9 @@ async function saveAsset() {
     dialog.value = '';
     await load();
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    const message = err instanceof Error ? err.message : t('common.operationFailed');
+    if (assetDialog === 'asset-import') assetActionError.value = message;
+    else error.value = message;
   } finally {
     saving.value = false;
   }
@@ -540,14 +554,33 @@ function onFile(event: Event) {
       <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfForm.name || !selfForm.commonName" @click="saveSelf">{{ t('common.create') }}</Button></template>
     </Dialog>
 
-    <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
-      <div class="grid gap-3">
-        <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="assetForm.type" :options="assetTypeOptions" /></label>
-        <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="assetForm.name" /></label>
-        <label v-if="dialog === 'asset-tls' || (dialog === 'asset-import' && assetForm.type === 'tls_certificate')" class="grid gap-1 text-sm">CA<Select v-model="assetForm.parentAssetId" :options="caAssets" /></label>
-        <label v-if="dialog !== 'asset-ssh'" class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="assetForm.commonName" /></label>
-        <label class="grid gap-1 text-sm">{{ t('certificatesPage.algorithm') }}<Select v-model="assetForm.algorithm" :options="algorithmOptions" /></label>
-        <label v-if="assetForm.algorithm === 'rsa'" class="grid gap-1 text-sm">{{ t('certificatesPage.keySize') }}<Input v-model="assetForm.keySize" type="number" /></label>
+    <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :size="dialog === 'asset-import' ? 'large' : 'default'" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
+      <div class="grid gap-3" :class="dialog === 'asset-import' ? 'h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]' : ''">
+        <div :class="dialog === 'asset-import' ? 'grid gap-3 md:grid-cols-2' : 'contents'">
+          <div v-if="dialog === 'asset-import' && assetActionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger md:col-span-2">{{ assetActionError }}</div>
+          <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="assetForm.type" :options="assetTypeOptions" /></label>
+          <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="assetForm.name" /></label>
+          <label v-if="dialog === 'asset-tls' || (dialog === 'asset-import' && assetForm.type === 'tls_certificate')" class="grid gap-1 text-sm">CA<Select v-model="assetForm.parentAssetId" :options="caAssets" /></label>
+          <label v-if="dialog !== 'asset-ssh'" class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="assetForm.commonName" /></label>
+          <label class="grid gap-1 text-sm">{{ t('certificatesPage.algorithm') }}<Select v-model="assetForm.algorithm" :options="algorithmOptions" /></label>
+          <label v-if="assetForm.algorithm === 'rsa'" class="grid gap-1 text-sm">{{ t('certificatesPage.keySize') }}<Input v-model="assetForm.keySize" type="number" /></label>
+        </div>
+        <div v-if="dialog === 'asset-import'" class="min-h-0">
+          <label v-if="!assetImportHasCertificate(assetForm.type)" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+            {{ t('certificatesPage.privateKeyPem') }}
+            <CodeEditor v-model="assetForm.privateKeyPem" language="plain" :editor-label="t('certificatesPage.privateKeyPem')" />
+          </label>
+          <Tabs v-else v-model="assetImportMaterialTab" class="h-full" :tabs="assetImportMaterialTabs">
+            <label v-if="assetImportMaterialTab === 'privateKey'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+              {{ t('certificatesPage.privateKeyPem') }}
+              <CodeEditor v-model="assetForm.privateKeyPem" language="plain" :editor-label="t('certificatesPage.privateKeyPem')" />
+            </label>
+            <label v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+              {{ t('certificatesPage.certificatePem') }}
+              <CodeEditor v-model="assetForm.certificatePem" language="plain" :editor-label="t('certificatesPage.certificatePem')" />
+            </label>
+          </Tabs>
+        </div>
         <div v-if="dialog === 'asset-tls'" class="grid gap-2">
           <div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div>
           <div v-for="(_, index) in assetForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="assetForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(assetForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div>
@@ -558,8 +591,6 @@ function onFile(event: Event) {
           <div v-for="(_, index) in assetForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="assetForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(assetForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div>
           <Button size="sm" @click="addEntry(assetForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button>
         </div>
-        <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('certificatesPage.privateKeyPem') }}<Textarea v-model="assetForm.privateKeyPem" /></label>
-        <label v-if="dialog === 'asset-import' && assetForm.type !== 'ssh_key_pair'" class="grid gap-1 text-sm">{{ t('certificatesPage.certificatePem') }}<Textarea v-model="assetForm.certificatePem" /></label>
       </div>
       <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!assetForm.name" @click="saveAsset">{{ t('common.save') }}</Button></template>
     </Dialog>

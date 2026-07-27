@@ -8,6 +8,11 @@ describe('credential model', () => {
       type: 'password',
       username: 'root',
     });
+    expect(secretPayload({ name: 'deploy', type: 'private_key', username: 'root', password: 'hidden', privateKey: '', passphrase: '' }, true)).toEqual({
+      name: 'deploy',
+      type: 'private_key',
+      username: 'root',
+    });
   });
 
   it('requires a secret when creating credentials', () => {

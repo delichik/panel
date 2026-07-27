@@ -5,6 +5,7 @@ import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import CodeEditor from '@/components/ui/CodeEditor.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
@@ -12,7 +13,6 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
-import Textarea from '@/components/ui/Textarea.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -55,6 +55,10 @@ const selectedCredential = computed(() => credentials.value.find((item) => item.
 const references = computed(() => selectedCredential.value ? credentialReferences(selectedCredential.value.id, servers.value) : []);
 const deleteReferences = computed(() => deleteTarget.value ? credentialReferences(deleteTarget.value.id, servers.value) : []);
 const validation = computed(() => validateCredentialInput(form, Boolean(editing.value)));
+const privateKeyModel = computed({
+  get: () => form.privateKey ?? '',
+  set: (value: string) => { form.privateKey = value; },
+});
 const typeOptions = computed(() => [
   { value: 'password', label: t('credentialsPage.password') },
   { value: 'private_key', label: t('credentialsPage.privateKey') },
@@ -249,26 +253,36 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
       </template>
     </MasterDetailLayout>
 
-    <Dialog v-model:open="dialogOpen" :title="editing ? t('credentialsPage.editCredential') : t('credentialsPage.createCredential')" :description="editing ? t('credentialsPage.editDescription') : t('credentialsPage.createDescription')" :close-label="t('common.close')">
-      <div class="grid gap-4">
+    <Dialog v-model:open="dialogOpen" :size="form.type === 'private_key' ? 'large' : 'default'" :title="editing ? t('credentialsPage.editCredential') : t('credentialsPage.createCredential')" :description="editing ? t('credentialsPage.editDescription') : t('credentialsPage.createDescription')" :close-label="t('common.close')">
+      <div v-if="form.type === 'password'" class="grid gap-4">
         <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
         <label class="grid gap-1 text-sm">{{ t('credentialsPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
         <label class="grid gap-1 text-sm">{{ t('credentialsPage.type') }}<Select v-model="form.type" :options="typeOptions" /></label>
         <label class="grid gap-1 text-sm">{{ t('credentialsPage.username') }}<Input v-model="form.username" :invalid="Boolean(validation.username)" /></label>
-        <label v-if="form.type === 'password'" class="grid gap-1 text-sm">
+        <label class="grid gap-1 text-sm">
           {{ t('credentialsPage.password') }}
           <Input v-model="form.password" type="password" :placeholder="editing ? t('credentialsPage.leaveSecretBlank') : ''" :invalid="Boolean(validation.password)" />
         </label>
-        <template v-else>
-          <label class="grid gap-1 text-sm">
-            {{ t('credentialsPage.privateKey') }}
-            <Textarea v-model="form.privateKey" class="font-mono" :placeholder="editing ? t('credentialsPage.leaveSecretBlank') : t('credentialsPage.privateKeyPlaceholder')" :invalid="Boolean(validation.privateKey)" />
-          </label>
-          <label class="grid gap-1 text-sm">{{ t('credentialsPage.passphrase') }}<Input v-model="form.passphrase" type="password" /></label>
-        </template>
         <div v-if="editing" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('credentialsPage.blankSecretKeepsCurrent') }}</div>
         <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
           {{ t(Object.values(validation)[0] || 'credentialsPage.validationGeneric') }}
+        </div>
+      </div>
+      <div v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
+        <div class="grid gap-3 md:grid-cols-2">
+          <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger md:col-span-2">{{ actionError }}</div>
+          <label class="grid gap-1 text-sm">{{ t('credentialsPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
+          <label class="grid gap-1 text-sm">{{ t('credentialsPage.type') }}<Select v-model="form.type" :options="typeOptions" /></label>
+          <label class="grid gap-1 text-sm">{{ t('credentialsPage.username') }}<Input v-model="form.username" :invalid="Boolean(validation.username)" /></label>
+          <label class="grid gap-1 text-sm">{{ t('credentialsPage.passphrase') }}<Input v-model="form.passphrase" type="password" /></label>
+        </div>
+        <label class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+          {{ t('credentialsPage.privateKey') }}
+          <CodeEditor v-model="privateKeyModel" language="plain" :editor-label="t('credentialsPage.privateKey')" :invalid="Boolean(validation.privateKey)" />
+        </label>
+        <div class="grid gap-2">
+          <div v-if="editing" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('credentialsPage.blankSecretKeepsCurrent') }}</div>
+          <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(Object.values(validation)[0] || 'credentialsPage.validationGeneric') }}</div>
         </div>
       </div>
       <template #footer>

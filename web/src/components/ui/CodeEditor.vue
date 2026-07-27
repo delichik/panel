@@ -22,7 +22,7 @@ let editor: EditorView | null = null;
 const externalModelValueSync = Annotation.define<boolean>();
 
 const theme = EditorView.theme({
-  '&': { height: '100%', minHeight: '18rem', backgroundColor: 'var(--panel-bg)', color: 'var(--panel-text)' },
+  '&': { height: '100%', minHeight: '0', backgroundColor: 'var(--panel-bg)', color: 'var(--panel-text)' },
   '&.cm-focused': { outline: '2px solid var(--panel-ring)', outlineOffset: '-2px' },
   '.cm-scroller': { overflow: 'auto', fontFamily: 'var(--font-mono, ui-monospace, monospace)', lineHeight: '1.55' },
   '.cm-content': { padding: '0.75rem 0' },
