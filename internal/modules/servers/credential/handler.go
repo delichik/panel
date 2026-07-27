@@ -16,7 +16,12 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	creds, err := h.service.List(r.Context())
+	page, pageSize, err := httpx.ParseListPage(r, "q")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	creds, err := h.service.ListPage(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
 	if err != nil {
 		httpx.Error(w, err)
 		return

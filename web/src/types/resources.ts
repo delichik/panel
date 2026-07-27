@@ -62,11 +62,17 @@ export interface ContainerLogs {
 }
 
 export interface ImageList {
-  serverId: string;
+  serverId?: string;
   items: ImageDto[];
+  observedAt?: string | null;
   lastRefreshedAt?: string | null;
+  stale?: boolean;
   refreshing: boolean;
+  refreshTaskId?: string;
+  lastRefreshError?: string;
 }
+
+export interface SnapshotList<T> { items: T[]; observedAt?: string | null; stale: boolean; refreshing: boolean; refreshTaskId?: string; lastRefreshError?: string }
 
 export interface ImageDto {
   id: string;

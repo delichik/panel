@@ -2,16 +2,50 @@ package certs
 
 import (
 	"context"
-
 	"panel/internal/modules/keyassets"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 )
+
+type keyAssetSummaryProvider interface {
+	ListSummaries(context.Context) ([]keyassets.Asset, error)
+}
+
+type keyAssetSummaryPageProvider interface {
+	ListSummaryPageByTypes(context.Context, int, int, string, []string) (httpx.ListPage[keyassets.Asset], error)
+}
+
+func (s *Service) ListSelfSignedPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[SelfSignedCertificate], error) {
+	provider, ok := s.keyAssets.(keyAssetSummaryPageProvider)
+	if !ok {
+		return httpx.ListPage[SelfSignedCertificate]{}, panelerr.BadGateway("key_asset_type_invalid", "Key asset summary service is unavailable")
+	}
+	assets, err := provider.ListSummaryPageByTypes(ctx, page, pageSize, query, []string{keyassets.TypeCACertificate, keyassets.TypeTLSCertificate})
+	if err != nil {
+		return httpx.ListPage[SelfSignedCertificate]{}, err
+	}
+	items := make([]SelfSignedCertificate, 0, len(assets.Items))
+	for _, asset := range assets.Items {
+		kind := "leaf"
+		if asset.Type == keyassets.TypeCACertificate {
+			kind = "ca"
+		}
+		items = append(items, mapSelfSigned(asset, kind))
+	}
+	return httpx.ListPage[SelfSignedCertificate]{Items: items, Total: assets.Total, Page: assets.Page, PageSize: assets.PageSize}, nil
+}
 
 func (s *Service) ListSelfSigned(ctx context.Context) ([]SelfSignedCertificate, error) {
 	if s.keyAssets == nil {
 		return nil, panelerr.BadGateway("key_asset_type_invalid", "Key asset service is unavailable")
 	}
-	assets, err := s.keyAssets.List(ctx)
+	var assets []keyassets.Asset
+	var err error
+	if summaries, ok := s.keyAssets.(keyAssetSummaryProvider); ok {
+		assets, err = summaries.ListSummaries(ctx)
+	} else {
+		assets, err = s.keyAssets.List(ctx)
+	}
 	if err != nil {
 		return nil, err
 	}

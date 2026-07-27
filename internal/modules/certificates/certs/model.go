@@ -40,6 +40,25 @@ type Certificate struct {
 	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
+type CertificateSummary struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	DomainID    string    `json:"domainId"`
+	Domain      string    `json:"domain"`
+	Prefix      string    `json:"prefix"`
+	Scope       string    `json:"scope"`
+	Domains     []string  `json:"domains"`
+	Issuer      string    `json:"issuer"`
+	Status      string    `json:"status"`
+	LastError   string    `json:"lastError,omitempty"`
+	AutoRenew   bool      `json:"autoRenew"`
+	NextRenewAt time.Time `json:"nextRenewAt,omitempty"`
+	NotBefore   time.Time `json:"notBefore,omitempty"`
+	NotAfter    time.Time `json:"notAfter,omitempty"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
+}
+
 type SelfSignedCertificate struct {
 	ID          string    `json:"id"`
 	ParentCAID  string    `json:"parentCaId,omitempty"`

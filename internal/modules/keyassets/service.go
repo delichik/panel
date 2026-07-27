@@ -25,6 +25,7 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 	"panel/internal/platform/secrets"
 )
@@ -291,6 +292,145 @@ func (s *Service) List(ctx context.Context) ([]Asset, error) {
 		assets = append(assets, decorateAsset(stored.Asset, references[stored.ID], childCounts[stored.ID]))
 	}
 	return assets, nil
+}
+
+func (s *Service) ListSummaries(ctx context.Context) ([]Asset, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
+		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets ORDER BY type,name,id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	assets := []Asset{}
+	for rows.Next() {
+		var asset Asset
+		var dnsRaw, ipRaw, notBefore, notAfter, createdAt, updatedAt string
+		var hasPublic int
+		if err := rows.Scan(&asset.ID, &asset.Type, &asset.Name, &asset.ParentAssetID, &asset.Algorithm, &asset.KeySize, &asset.CommonName, &dnsRaw, &ipRaw, &asset.Fingerprint, &hasPublic, &notBefore, &notAfter, &createdAt, &updatedAt); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(dnsRaw), &asset.DNSNames)
+		_ = json.Unmarshal([]byte(ipRaw), &asset.IPAddresses)
+		if asset.DNSNames == nil {
+			asset.DNSNames = []string{}
+		}
+		if asset.IPAddresses == nil {
+			asset.IPAddresses = []string{}
+		}
+		if hasPublic == 1 {
+			asset.PublicKey = "present"
+		}
+		asset.NotBefore, _ = time.Parse(time.RFC3339Nano, notBefore)
+		asset.NotAfter, _ = time.Parse(time.RFC3339Nano, notAfter)
+		asset.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		asset.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		assets = append(assets, asset)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	counts, err := s.childCounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range assets {
+		assets[i] = decorateAsset(assets[i], nil, counts[assets[i].ID])
+	}
+	return assets, nil
+}
+
+func (s *Service) ListSummaryPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[Asset], error) {
+	return s.listSummaryPage(ctx, page, pageSize, query, nil)
+}
+
+func (s *Service) ListSummaryPageByTypes(ctx context.Context, page, pageSize int, query string, types []string) (httpx.ListPage[Asset], error) {
+	return s.listSummaryPage(ctx, page, pageSize, query, types)
+}
+
+func (s *Service) listSummaryPage(ctx context.Context, page, pageSize int, query string, types []string) (httpx.ListPage[Asset], error) {
+	filter := "1=1"
+	args := []any{}
+	if len(types) > 0 {
+		filter += " AND type IN (" + strings.TrimSuffix(strings.Repeat("?,", len(types)), ",") + ")"
+		for _, assetType := range types {
+			args = append(args, assetType)
+		}
+	}
+	if query != "" {
+		filter += " AND (name LIKE ? ESCAPE '\\' OR common_name LIKE ? ESCAPE '\\' OR fingerprint LIKE ? ESCAPE '\\')"
+		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		args = append(args, term, term, term)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM key_assets WHERE `+filter, args...).Scan(&total); err != nil {
+		return httpx.ListPage[Asset]{}, err
+	}
+	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
+		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets WHERE `+filter+` ORDER BY type,name,id LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return httpx.ListPage[Asset]{}, err
+	}
+	defer rows.Close()
+	items := []Asset{}
+	for rows.Next() {
+		var asset Asset
+		var dnsRaw, ipRaw, notBefore, notAfter, createdAt, updatedAt string
+		var hasPublic int
+		if err := rows.Scan(&asset.ID, &asset.Type, &asset.Name, &asset.ParentAssetID, &asset.Algorithm, &asset.KeySize, &asset.CommonName, &dnsRaw, &ipRaw, &asset.Fingerprint, &hasPublic, &notBefore, &notAfter, &createdAt, &updatedAt); err != nil {
+			return httpx.ListPage[Asset]{}, err
+		}
+		_ = json.Unmarshal([]byte(dnsRaw), &asset.DNSNames)
+		_ = json.Unmarshal([]byte(ipRaw), &asset.IPAddresses)
+		if asset.DNSNames == nil {
+			asset.DNSNames = []string{}
+		}
+		if asset.IPAddresses == nil {
+			asset.IPAddresses = []string{}
+		}
+		if hasPublic == 1 {
+			asset.PublicKey = "present"
+		}
+		asset.NotBefore, _ = time.Parse(time.RFC3339Nano, notBefore)
+		asset.NotAfter, _ = time.Parse(time.RFC3339Nano, notAfter)
+		asset.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		asset.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		items = append(items, asset)
+	}
+	if err := rows.Err(); err != nil {
+		return httpx.ListPage[Asset]{}, err
+	}
+	if len(items) > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(items)), ",")
+		ids := make([]any, len(items))
+		for i := range items {
+			ids[i] = items[i].ID
+		}
+		countRows, err := s.db.QueryContext(ctx, `SELECT parent_asset_id,COUNT(*) FROM key_assets WHERE parent_asset_id IN (`+placeholders+`) GROUP BY parent_asset_id`, ids...)
+		if err != nil {
+			return httpx.ListPage[Asset]{}, err
+		}
+		counts := map[string]int{}
+		for countRows.Next() {
+			var id string
+			var count int
+			if err := countRows.Scan(&id, &count); err != nil {
+				countRows.Close()
+				return httpx.ListPage[Asset]{}, err
+			}
+			counts[id] = count
+		}
+		if err := countRows.Close(); err != nil {
+			return httpx.ListPage[Asset]{}, err
+		}
+		if err := countRows.Err(); err != nil {
+			return httpx.ListPage[Asset]{}, err
+		}
+		for i := range items {
+			items[i] = decorateAsset(items[i], nil, counts[items[i].ID])
+		}
+	}
+	return httpx.ListPage[Asset]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Service) Get(ctx context.Context, assetID string) (Asset, error) {

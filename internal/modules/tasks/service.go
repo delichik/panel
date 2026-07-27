@@ -621,6 +621,14 @@ func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
 }
 
 func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, error) {
+	return s.list(ctx, filter, taskColumns)
+}
+
+func (s *Service) ListSummaries(ctx context.Context, filter ListFilter) (ListResult, error) {
+	return s.list(ctx, filter, taskListColumns)
+}
+
+func (s *Service) list(ctx context.Context, filter ListFilter, columns string) (ListResult, error) {
 	if filter.Limit <= 0 || filter.Limit > 200 {
 		filter.Limit = 50
 	}
@@ -660,14 +668,14 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 		where = ` WHERE ` + strings.Join(conditions, ` AND `)
 	}
 	if filter.OperationPage {
-		return s.listOperationPage(ctx, filter, where, args)
+		return s.listOperationPage(ctx, filter, where, args, columns)
 	}
 	countQuery := `SELECT COUNT(*) FROM tasks` + where
 	var total int
 	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
 		return ListResult{}, err
 	}
-	query := `SELECT ` + taskColumns + ` FROM tasks` + where + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
+	query := `SELECT ` + columns + ` FROM tasks` + where + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
 	args = append(args, filter.Limit, filter.Offset)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
@@ -688,7 +696,7 @@ func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, erro
 	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 }
 
-func (s *Service) listOperationPage(ctx context.Context, filter ListFilter, where string, args []any) (ListResult, error) {
+func (s *Service) listOperationPage(ctx context.Context, filter ListFilter, where string, args []any, columns string) (ListResult, error) {
 	const operationKey = `COALESCE(NULLIF(operation_id,''), id)`
 	countQuery := `SELECT COUNT(DISTINCT ` + operationKey + `) FROM tasks` + where
 	var total int
@@ -721,7 +729,7 @@ func (s *Service) listOperationPage(ctx context.Context, filter ListFilter, wher
 
 	itemArgs := append([]any{}, args...)
 	itemArgs = append(itemArgs, stringArgs(keys)...)
-	query := `SELECT ` + taskColumns + ` FROM tasks` + where
+	query := `SELECT ` + columns + ` FROM tasks` + where
 	if where == "" {
 		query += ` WHERE `
 	} else {
@@ -1101,6 +1109,7 @@ func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Tas
 type scanner interface{ Scan(dest ...any) error }
 
 const taskColumns = `id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,params_json,metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
+const taskListColumns = `id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,'' AS params_json,'' AS metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
 
 func scanTask(row scanner) (Task, error) {
 	var t Task

@@ -46,6 +46,42 @@ func TestCreateDisabledAppStoresRowAndDoesNotDeployRuntime(t *testing.T) {
 	}
 }
 
+func TestListSummariesDoesNotLoadApplicationDetails(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:     "web",
+		Enabled:  false,
+		SpecYAML: "name: web\nimage: nginx\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET enabled=1,spec_yaml=?,variables_json=?,reverse_proxy_json=?,image_update_available=1 WHERE id=?`,
+		"not: [valid", "not-json", "not-json", app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, "instance-1", app.ID, "srv-a", "panel-web", "container-1", "running", appruntime.StatusRunning, "not-json", 1, "", now, now); err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := svc.ListSummaries(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries := page.Items
+	if len(summaries) != 1 || page.Total != 1 {
+		t.Fatalf("summaries = %#v", page)
+	}
+	if summaries[0].ID != app.ID || summaries[0].RuntimeStatus != appruntime.StatusRunning || !summaries[0].ImageUpdateAvailable {
+		t.Fatalf("summary = %#v", summaries[0])
+	}
+}
+
 func TestCreateEnabledAppDeploysToAgentRuntime(t *testing.T) {
 	svc, runtime, _, closeStore := newTestService(t)
 	defer closeStore()

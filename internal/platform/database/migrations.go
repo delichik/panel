@@ -118,6 +118,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			container_id TEXT NOT NULL,
 			sample_at TEXT NOT NULL,
 			container_json TEXT NOT NULL,
+			summary_json TEXT NOT NULL DEFAULT '{}',
 			managed INTEGER NOT NULL DEFAULT 0,
 			application_id TEXT NOT NULL DEFAULT '',
 			instance_id TEXT NOT NULL DEFAULT '',
@@ -126,6 +127,21 @@ func (s *Store) Migrate(ctx context.Context) error {
 			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_container_observations_server_sample ON container_observations(server_id, sample_at)`,
+		`CREATE TABLE IF NOT EXISTS docker_resource_snapshots (
+			server_id TEXT NOT NULL,
+			resource_type TEXT NOT NULL,
+			items_json TEXT NOT NULL DEFAULT '[]',
+			observed_at TEXT NOT NULL,
+			PRIMARY KEY(server_id, resource_type),
+			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
+		)`,
+		`CREATE TABLE IF NOT EXISTS dns_record_snapshots (
+			domain_id TEXT PRIMARY KEY,
+			records_json TEXT NOT NULL DEFAULT '[]',
+			observed_at TEXT NOT NULL,
+			last_error TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY(domain_id) REFERENCES dns_domains(id) ON DELETE CASCADE
+		)`,
 		`CREATE TABLE IF NOT EXISTS applications (
 			id TEXT PRIMARY KEY,
 			version INTEGER NOT NULL DEFAULT 1,
@@ -648,6 +664,14 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"reconcile_next_run_at":    "TEXT NOT NULL DEFAULT ''",
 		"reconcile_success_streak": "INTEGER NOT NULL DEFAULT 0",
 	}); err != nil {
+		return err
+	}
+	if err := s.ensureAppColumns(ctx, "container_observations", map[string]string{
+		"summary_json": "TEXT NOT NULL DEFAULT '{}'",
+	}); err != nil {
+		return err
+	}
+	if _, err := s.appDB.ExecContext(ctx, `UPDATE container_observations SET summary_json=container_json WHERE summary_json='' OR summary_json='{}'`); err != nil {
 		return err
 	}
 	if err := s.migrateApplicationLifecycleTargets(ctx); err != nil {

@@ -1,5 +1,5 @@
 import YAML from 'yaml';
-import type { ApplicationDto, ApplicationRuntime, ApplicationSaveInput, Diagnostic, HttpRouteOptions, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
+import type { ApplicationDto, ApplicationRuntime, ApplicationSaveInput, ApplicationSummaryDto, Diagnostic, HttpRouteOptions, ReverseProxyPath, ReverseProxyRule } from '@/types/applications';
 import type { FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, ReverseProxySaveInput, StaticRuleType, StaticSourceType } from '@/types/facilityApps';
 
 export type AppMode = 'apps' | 'create' | 'edit' | 'facilityCatalog' | 'facilityDetail' | 'facilityConfig';
@@ -84,7 +84,7 @@ export function routeMode(path: string, params: Record<string, unknown>): AppMod
   return 'apps';
 }
 
-export function applicationStatus(app: ApplicationDto, runtime?: ApplicationRuntime | null) {
+export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
   const status = runtime?.status || app.runtimeStatus;
   if (!app.enabled) return 'disabled';
   if (status === 'deploying' || status === 'pending') return 'deploying';

@@ -27,12 +27,6 @@ function reverseProxySummary(config: ReverseProxyConfig): FacilityAppSummary {
     descriptionKey: 'applicationsPage.entranceProxyFacilityDescription',
     categoryKey: 'applicationsPage.facilityCategoryTraffic',
     status: config.lastError ? 'degraded' : 'available',
-    metrics: {
-      deploymentServers: config.deploymentServers.length,
-      routes: config.routes,
-      staticAssets: config.staticAssets.length,
-      applicationRoutes: config.applicationRoutes.length,
-    },
     updatedAt: config.updatedAt,
     operationStatus: config.operation?.status,
     lastError: config.lastError,
@@ -81,9 +75,8 @@ async function multipartJson<T>(method: string, path: string, form: FormData, id
 }
 
 export const facilityAppsApi = {
-  async listFacilities(options?: ApiRequestOptions) {
-    const config = await apiClient.get<ReverseProxyConfig>('/facility-apps/reverse-proxy', options);
-    return [reverseProxySummary(config)];
+  listFacilities(options?: ApiRequestOptions) {
+    return apiClient.get<FacilityAppSummary[]>('/facility-apps', options);
   },
   async getFacility(kind: string, options?: ApiRequestOptions): Promise<FacilityAppDetail> {
     assertSupported(kind);

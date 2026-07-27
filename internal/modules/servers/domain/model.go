@@ -30,6 +30,20 @@ type Server struct {
 	UpdatedAt     time.Time         `json:"updatedAt"`
 }
 
+type ServerSummary struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Host          string            `json:"host"`
+	Port          int               `json:"port"`
+	Traits        map[string]string `json:"traits"`
+	Sudo          SudoState         `json:"sudo"`
+	Privilege     PrivilegeState    `json:"privilege"`
+	Reachable     bool              `json:"reachable"`
+	LastCheckedAt *time.Time        `json:"lastCheckedAt"`
+	LastError     string            `json:"lastError,omitempty"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+}
+
 type ArchitectureInfo struct {
 	OS         string `json:"os"`
 	Arch       string `json:"arch"`

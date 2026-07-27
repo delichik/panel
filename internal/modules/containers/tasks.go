@@ -32,6 +32,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 			AllowRetry: true,
 			Execute:    s.RunVolumeRefreshTask,
 		},
+		{Type: TaskNetworkRefresh, AllowRetry: true, Execute: s.RunNetworkRefreshTask},
 		{
 			Type:              TaskApplicationReconcile,
 			ConcurrencyPolicy: tasks.ConcurrencyCustomKey,
@@ -71,8 +72,23 @@ func (s *Service) RunVolumeRefreshTask(tc tasks.TaskContext) error {
 	ctx, task := tc.Context, tc.Task
 	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
 	return s.runSimpleRefreshTask(ctx, task, serverID, "Volumes refreshed", func(runCtx context.Context, baseURL string) error {
-		_, err := s.agent.DockerVolumes(runCtx, baseURL)
-		return err
+		items, err := s.agent.DockerVolumes(runCtx, baseURL)
+		if err != nil {
+			return err
+		}
+		return s.replaceResourceSnapshot(runCtx, serverID, "volumes", items)
+	})
+}
+
+func (s *Service) RunNetworkRefreshTask(tc tasks.TaskContext) error {
+	ctx, task := tc.Context, tc.Task
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	return s.runSimpleRefreshTask(ctx, task, serverID, "Networks refreshed", func(runCtx context.Context, baseURL string) error {
+		items, err := s.agent.DockerNetworks(runCtx, baseURL)
+		if err != nil {
+			return err
+		}
+		return s.replaceResourceSnapshot(runCtx, serverID, "networks", items)
 	})
 }
 

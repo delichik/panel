@@ -6,6 +6,7 @@ import (
 )
 
 type Server = domain.Server
+type ServerSummary = domain.ServerSummary
 type ArchitectureInfo = domain.ArchitectureInfo
 type SudoState = domain.SudoState
 type PrivilegeState = domain.PrivilegeState

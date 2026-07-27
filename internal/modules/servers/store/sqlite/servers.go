@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"panel/internal/modules/servers/domain"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 )
 
 type ServerRepository struct {
@@ -40,6 +42,88 @@ func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSummary, error) {
+	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
+		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
+		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
+		FROM servers ORDER BY created_at DESC,id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []domain.ServerSummary{}
+	for rows.Next() {
+		var item domain.ServerSummary
+		var reachable, sudo int
+		var lastChecked sql.NullString
+		var updatedAt, agentEnabled, agentStatus, ufwSupported, ufwInstalled string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+			return nil, err
+		}
+		item.Reachable = reachable == 1
+		item.Sudo.Passwordless = sudo == 1
+		item.Privilege.Privileged = item.Privilege.Mode == "root" || item.Privilege.Mode == "passwordless_sudo"
+		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
+		if lastChecked.Valid {
+			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
+			if !parsed.IsZero() {
+				item.LastCheckedAt = &parsed
+			}
+		}
+		item.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[domain.ServerSummary], error) {
+	filter := "1=1"
+	args := []any{}
+	if query != "" {
+		filter = "(name LIKE ? ESCAPE '\\' OR host LIKE ? ESCAPE '\\')"
+		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		args = append(args, term, term)
+	}
+	var total int
+	if err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE `+filter, args...).Scan(&total); err != nil {
+		return httpx.ListPage[domain.ServerSummary]{}, err
+	}
+	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
+		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
+		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
+		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return httpx.ListPage[domain.ServerSummary]{}, err
+	}
+	defer rows.Close()
+	items := []domain.ServerSummary{}
+	for rows.Next() {
+		var item domain.ServerSummary
+		var reachable, sudo int
+		var lastChecked sql.NullString
+		var updatedAt, agentEnabled, agentStatus, ufwSupported, ufwInstalled string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+			return httpx.ListPage[domain.ServerSummary]{}, err
+		}
+		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
+		item.Privilege.Privileged = item.Privilege.Mode == "root" || item.Privilege.Mode == "passwordless_sudo"
+		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
+		if lastChecked.Valid {
+			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
+			if !parsed.IsZero() {
+				item.LastCheckedAt = &parsed
+			}
+		}
+		item.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return httpx.ListPage[domain.ServerSummary]{}, err
+	}
+	return httpx.ListPage[domain.ServerSummary]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (r *ServerRepository) Get(ctx context.Context, serverID string) (domain.Server, error) {

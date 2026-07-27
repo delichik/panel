@@ -7,6 +7,7 @@ import (
 )
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
+	mux.Handle("GET /api/v1/facility-apps", auth(http.HandlerFunc(h.List)))
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy", auth(http.HandlerFunc(h.ReverseProxy)))
 	mux.Handle("PUT /api/v1/facility-apps/reverse-proxy", auth(http.HandlerFunc(h.SaveReverseProxy)))
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/reconcile", auth(http.HandlerFunc(h.ReconcileReverseProxy)))

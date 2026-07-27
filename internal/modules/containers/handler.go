@@ -98,6 +98,16 @@ func (h *Handler) Networks(w http.ResponseWriter, r *http.Request) {
 	write(w, http.StatusOK, items, err)
 }
 
+func (h *Handler) RefreshNetworks(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.RefreshNetworks(r.Context(), serverIDFromRequest(r), "user", "")
+	writeTask(w, task.ID, err)
+}
+
+func (h *Handler) RefreshVolumes(w http.ResponseWriter, r *http.Request) {
+	task, err := h.service.RefreshVolumes(r.Context(), serverIDFromRequest(r), "user", "")
+	writeTask(w, task.ID, err)
+}
+
 func (h *Handler) Volumes(w http.ResponseWriter, r *http.Request) {
 	items, err := h.service.Volumes(r.Context(), serverIDFromRequest(r))
 	write(w, http.StatusOK, items, err)

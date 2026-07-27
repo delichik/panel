@@ -1,5 +1,11 @@
 # 应用模块
 
+## List API Contract
+
+- `GET /api/v1/applications` returns `ListPage<ApplicationSummary>` and accepts only `page`, `pageSize`, and `q`.
+- The summary query reads list columns only, limits runtime aggregation to current-page IDs, and never parses application YAML/JSON or contacts nodes and registries.
+- Complete application and runtime data is loaded by separate ID-based endpoints.
+
 ## 适用场景
 
 修改应用创建、编辑、appspec、变量解析、应用文件、保存会话、修订、部署、停止、重启、日志、运行时状态、镜像更新或应用反向代理字段时，先读本文档。
@@ -29,7 +35,7 @@
 
 ## API 范围
 
-- 应用 CRUD：`GET/POST /api/v1/applications`，`GET/PUT/DELETE /api/v1/applications/{id}`
+- 应用 CRUD：`GET /api/v1/applications` 返回 `ApplicationSummary[]` 轻量列表，`POST /api/v1/applications` 和 `GET/PUT/DELETE /api/v1/applications/{id}` 保持完整应用详情/写入语义。
 - 应用文件：`GET/POST /api/v1/applications/{id}/files`，`GET/DELETE /api/v1/applications/{id}/files/{fileId}`
 - 保存会话：`POST /api/v1/application-save-sessions`，`POST /api/v1/application-save-sessions/{id}/files`，`POST /api/v1/application-save-sessions/{id}/files/delete`，`POST /api/v1/application-save-sessions/{id}/commit`
 - 校验和计划：`POST /api/v1/applications/{id}/validate`，`POST /api/v1/applications/{id}/plan`
@@ -81,7 +87,7 @@
 - 设施 runtime provider 可额外实现逐次更新规划。默认和未知结果均为 recreate；只有设施为当前新旧 spec 明确返回 reload strategy，且应用层确认镜像、命令、环境、网络、端口、挂载、权限、资源和 restart 等容器结构完全一致时，才调用 Agent `RuntimeReload`。validate 失败保留旧容器并使 target 失败；reload 或 reload 后状态确认失败时在同一服务器操作队列内回退现有 recreate 流程。
 - Docker labels 在创建后不可修改。Agent 在 recreate 或 reload 成功后写入实例 `applied-state.json`，容器报告仅在 container ID/name 匹配时用动态 generation/spec hash 覆盖静态 labels，避免成功 reload 后被协调器误判为旧版本。
 - 应用目标任务在任务中心展示为“应用目标应用 / 停止 / 清理”，表示 Panel 已完成一次目标收敛请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
-- 应用列表接口使用数据库中已缓存的运行时实例状态，并合并最近 lifecycle operation targets 后聚合为 `runtimeStatus`；不得为了左侧列表摘要逐应用、逐节点调用远端 Agent 刷新容器状态。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。左侧 `AppSelectorPanel` 只展示应用名称、运行状态和更新时间，jobId、namespace、generation、lastEval、specHash、persistentPath 等诊断字段放在右侧详情。运行中的应用存在镜像更新时，选择器状态 Chip 使用 warning 色并显示“运行中 · 有更新”，其他运行状态保持原有展示。
+- 应用列表接口使用 `ApplicationSummary[]`，只包含首屏必要字段：`id`、`name`、`enabled`、`imageReference`、`jobId`、`namespace`、`runtimeStatus`、`imageUpdateAvailable`、`lastError`、`updatedAt`。列表必须走专用摘要查询，只读取摘要列，并用固定数量的本地批量查询合并运行时实例状态和最近 lifecycle operation targets；不得调用完整应用 scanner、解析 appspec/YAML/配置 JSON，也不得逐应用、逐实例或逐节点查询。`specYaml`、`variables`、`reverseProxy`、`deploymentServers`、`persistentPath`、`imageUpdateTargets`、`specHash`、`generation`、`lastEvalId`、`lastDeploymentId` 等详情/诊断字段只从 `GET /api/v1/applications/{id}` 获取。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。
 - 普通应用页首屏只加载应用列表必要数据，不加载设施接口，也不预拉多个应用的 runtime；当前选中应用的 runtime 在列表可用后异步按需加载。设施目录、详情和配置页进入对应模式时再加载设施数据；直达设施 URL 必须先加载设施目录后再判断是否支持该 `facilityKind`。
 - 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；右侧详情正文必须横向填满剩余工作区，不得再用固定 `1020px`、`1080px` 等最大宽度把内容收成居中窄列。创建应用从左侧选择器进入隐藏独立页 `/applications/apps/create`，编辑应用从详情页进入隐藏独立页 `/applications/apps/:applicationId/edit`，保存或取消后返回普通应用页。创建/编辑页使用编辑器的页面嵌入模式，只保留全局页头标题，主体为一页式可视化表单，左侧提供轻量锚点导航且随右侧内部滚动高亮当前分区，右侧分区横向填满编辑工作面；运行时分区内部承载镜像、命令、资源限制和环境变量小节，文件分区内部承载自定义变量和应用文件小节，避免字段被拆成与导航不一致的同级大分区；YAML 作为创建/编辑页底部内嵌高级分区纳入锚点导航，用户聚焦或编辑 YAML 后保存以 YAML 为准；部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
 - 应用、设施应用、创建/编辑应用中的操作入口必须复用 `AppActionButton` 和 `AppActionGroup`：详情级编辑、同步、停用、重启等位于详情标题区；挂载、反向代理、文件和路由摘要行的编辑/删除位于行尾并使用带文字的小按钮；完整编辑表单进入标准 dialog，避免在页面正文下方展开一组容易误解的操作区。
@@ -168,7 +174,7 @@
 - Validation refreshes the session idle TTL. Periodic cleanup acts as the recovery worker for expired commit leases even when no client performs a session GET, removes expired/terminal workspaces, and cleans abandoned `.partial` files, unreferenced blobs, and workspace directories that no longer have a database session row. Orphan candidates require at least one hour of staleness; a workspace without a database row is removed only when both the directory and every contained file are stale, because directory timestamps alone cannot distinguish an abandoned workspace from `BeginEditSession` or an upload that has not committed its database row yet. A live commit lease always protects its workspace.
 - Configuration persistence and apply/reconcile dispatch are separate outcomes. If application rows/files were committed but lifecycle or reverse-proxy dispatch fails, the session is finalized as `committed` with an `application_apply_request_failed` warning. Commit recovery verifies the exact persisted draft and file set before finalizing. If persistence is observable through the reserved create ID or a newer application version but later changes prevent exact verification, recovery moves the session to `conflict` with `commit_outcome_ambiguous`; it must never reset such a session to `active` or create/apply it twice.
 - Facility reverse-proxy editing uses its own `facility_edit_sessions`, asset, operation, manifest, and config-version contract documented in `containerization.md`; it must not reuse application edit-session rows or expose the hidden `facility-reverse-proxy` application as the editable resource. Both commit adapters separate durable configuration success from the later application reconcile request.
-- 前端设施应用必须按目录/详情/配置三层建模：`/applications/facility-apps` 展示 `FacilityAppSummary[]` 设施目录，`/applications/facility-apps/:facilityKind` 展示设施详情，`/applications/facility-apps/:facilityKind/config` 展示设施自己的配置 renderer。入口代理只是当前唯一 `facilityKind=reverse-proxy` 的设施项；新增设施类型时应新增 summary/detail/config renderer，而不是把设施应用菜单改成某个设施的详情页。
+- 前端设施应用必须按目录/详情/配置三层建模：`/applications/facility-apps` 通过 `GET /api/v1/facility-apps` 展示 `FacilityAppSummary[]` 设施目录，summary 只包含设施身份、健康状态、更新时间、最近 operation 状态和错误，不包含网关、路由、静态资产或应用路由计数；这些统计只在 `/applications/facility-apps/:facilityKind` 详情按需加载。设施目录后端不得调用完整 `GetReverseProxy` 路径。`/applications/facility-apps/:facilityKind/config` 展示设施自己的配置 renderer。入口代理只是当前唯一 `facilityKind=reverse-proxy` 的设施项；新增设施类型时应新增 summary/detail/config renderer，而不是把设施应用菜单改成某个设施的详情页。
 - 前端 `facilityAppsApi` 对页面暴露 `listFacilities`、`getFacility`、`reconcileFacility`、`beginFacilityEdit` 等域语义，内部 adapter 才映射到当前 `/api/v1/facility-apps/reverse-proxy` 后端路径。页面不得直接以 reverse-proxy 方法承担“设施应用”目录语义；未知 `facilityKind` 应显示本地化不可用空态。
 - 前端入口代理设施配置页必须是独立编辑工作区：左侧展示网关节点、域名组、Panel 入口、静态资产分区和域名列表，中间按域名/Path/Panel/资产分区编辑，右侧 sticky 摘要展示新增、修改、删除数量与诊断。域名、Path、静态资产和 Panel 入口不得合并成 JSON 大文本框。
 - 设施域名和 Path 编辑使用“列表 + 对话框”模式：域名对话框编辑域名和源站节点，Path 对话框按 `static` / `redirect` / `proxy_pass` 展示不同字段；复杂项取消时不得污染主草稿。保存仍走 `/api/v1/facility-apps/reverse-proxy/edit-sessions/*` 的 patch、validate、preview、commit 路径，不新增 mock-only endpoint。

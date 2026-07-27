@@ -193,8 +193,30 @@ type Handler struct {
 	service service
 }
 
+type facilitySummaryListService interface {
+	ListSummaries(context.Context) ([]FacilityAppSummary, error)
+}
+
 func NewHandler(service service) *Handler {
 	return &Handler{service: service}
+}
+
+func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	if summaryList, ok := h.service.(facilitySummaryListService); ok {
+		summaries, err := summaryList.ListSummaries(r.Context())
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, summaries)
+		return
+	}
+	config, err := h.service.GetReverseProxy(r.Context())
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, []FacilityAppSummary{facilitySummaryFromReverseProxy(config)})
 }
 
 func (h *Handler) ReverseProxy(w http.ResponseWriter, r *http.Request) {
@@ -204,6 +226,27 @@ func (h *Handler) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
+}
+
+func facilitySummaryFromReverseProxy(config ReverseProxyConfig) FacilityAppSummary {
+	status := "available"
+	if config.LastError != "" {
+		status = "degraded"
+	}
+	operationStatus := ""
+	if config.Operation != nil {
+		operationStatus = config.Operation.Status
+	}
+	return FacilityAppSummary{
+		Kind:            "reverse-proxy",
+		TitleKey:        "applicationsPage.entranceProxyFacility",
+		DescriptionKey:  "applicationsPage.entranceProxyFacilityDescription",
+		CategoryKey:     "applicationsPage.facilityCategoryTraffic",
+		Status:          status,
+		UpdatedAt:       config.UpdatedAt,
+		OperationStatus: operationStatus,
+		LastError:       config.LastError,
+	}
 }
 
 func (h *Handler) SaveReverseProxy(w http.ResponseWriter, r *http.Request) {

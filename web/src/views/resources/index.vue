@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router';
 import { Box, Boxes, Container, Database, DownloadCloud, FileText, Package, Play, RefreshCcw, Router, Search, Square, Trash2 } from '@lucide/vue';
 import { containersApi } from '@/api/containers';
+import { waitForTask } from '@/api/taskWait';
 import { packagesApi } from '@/api/packages';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
@@ -159,7 +160,7 @@ async function loadResource() {
     if (tab === 'containers') {
       const result = await containersApi.containers(server.id, { signal: controller.signal });
       if (requestId !== resourceRequestId || tab !== activeTab.value) return;
-      containers.value = result;
+      containers.value = result.items;
     }
     if (tab === 'images') {
       const result = await containersApi.images(server.id, { signal: controller.signal });
@@ -169,12 +170,12 @@ async function loadResource() {
     if (tab === 'networks') {
       const result = await containersApi.networks(server.id, { signal: controller.signal });
       if (requestId !== resourceRequestId || tab !== activeTab.value) return;
-      networks.value = result;
+      networks.value = result.items;
     }
     if (tab === 'volumes') {
       const result = await containersApi.volumes(server.id, { signal: controller.signal });
       if (requestId !== resourceRequestId || tab !== activeTab.value) return;
-      volumes.value = result;
+      volumes.value = result.items;
     }
   } catch (err) {
     if (isAbortError(err)) return;
@@ -207,13 +208,24 @@ async function refreshCurrent() {
     if (activeTab.value === 'packages') {
       const result = await packagesApi.refresh(server.id);
       feedback.value = result.taskId ? t('resourcesPage.taskAccepted', { taskId: result.taskId }) : t('resourcesPage.refreshing');
+      if (result.taskId) await waitForTask(result.taskId);
     } else if (activeTab.value === 'images') {
       const accepted = await containersApi.refreshImages(server.id);
       feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+      await waitForTask(accepted.taskId);
+    } else if (activeTab.value === 'networks') {
+      const accepted = await containersApi.refreshNetworks(server.id);
+      feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+      await waitForTask(accepted.taskId);
+    } else if (activeTab.value === 'volumes') {
+      const accepted = await containersApi.refreshVolumes(server.id);
+      feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+      await waitForTask(accepted.taskId);
     } else {
       await loadResource();
       feedback.value = t('resourcesPage.refreshed');
     }
+    await loadResource();
   });
 }
 
@@ -481,7 +493,7 @@ onBeforeUnmount(() => {
 
             <section v-else-if="activeTab === 'images'" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
-                <div class="flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ images?.lastRefreshedAt || t('common.never') }}</div>
+                <div class="flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ images?.observedAt || t('common.never') }}</div>
                 <div class="flex flex-wrap gap-2">
                   <Button size="sm" :disabled="!imageUpgradeIds.length" :loading="pending === 'upgrade-images-selected'" @click="upgradeImages(true)">{{ t('resourcesPage.upgradeApplications') }}</Button>
                   <Button size="sm" :loading="pending === 'upgrade-images-all'" @click="upgradeImages(false)">{{ t('resourcesPage.upgradeAllApplications') }}</Button>

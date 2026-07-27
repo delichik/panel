@@ -37,28 +37,21 @@ func (h *Handler) SetDeploymentProjectionProvider(provider DeploymentProjectionP
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if pageSize > 0 {
-		limit = pageSize
+	page, pageSize, err := httpx.ParseListPage(r, "status", "serverId", "type", "includeInternal", "commonOnly", "operationId", "operationPage")
+	if err != nil {
+		httpx.Error(w, err)
+		return
 	}
-	if page <= 0 {
-		page = 1
-	}
-	if limit <= 0 {
-		limit = 50
-	}
-	offset := (page - 1) * limit
-	tasks, err := h.service.List(r.Context(), ListFilter{
+	offset := (page - 1) * pageSize
+	tasks, err := h.service.ListSummaries(r.Context(), ListFilter{
 		Statuses:         queryList(r, "status"),
 		ServerID:         r.URL.Query().Get("serverId"),
 		Types:            queryList(r, "type"),
-		IncludeInternal:  truthyQuery(r, "includeInternal") || truthyQuery(r, "include_internal"),
-		ExcludeScheduled: truthyQuery(r, "commonOnly") || truthyQuery(r, "common_only"),
-		OperationID:      r.URL.Query().Get("operation_id"),
-		OperationPage:    truthyQuery(r, "operationPage") || truthyQuery(r, "operation_page"),
-		Limit:            limit,
+		IncludeInternal:  truthyQuery(r, "includeInternal"),
+		ExcludeScheduled: truthyQuery(r, "commonOnly"),
+		OperationID:      r.URL.Query().Get("operationId"),
+		OperationPage:    truthyQuery(r, "operationPage"),
+		Limit:            pageSize,
 		Offset:           offset,
 	})
 	if err != nil {
@@ -66,10 +59,6 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.decorateList(&tasks)
-	if err := h.decorateDeploymentTasks(r.Context(), tasks.Items); err != nil {
-		httpx.Error(w, err)
-		return
-	}
 	httpx.JSON(w, http.StatusOK, tasks)
 }
 

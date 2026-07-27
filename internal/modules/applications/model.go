@@ -104,6 +104,19 @@ type Application struct {
 	UpdatedAt            time.Time           `json:"updatedAt"`
 }
 
+type ApplicationSummary struct {
+	ID                   string    `json:"id"`
+	Name                 string    `json:"name"`
+	Enabled              bool      `json:"enabled"`
+	ImageReference       string    `json:"imageReference,omitempty"`
+	JobID                string    `json:"jobId"`
+	Namespace            string    `json:"namespace"`
+	RuntimeStatus        string    `json:"runtimeStatus,omitempty"`
+	ImageUpdateAvailable bool      `json:"imageUpdateAvailable"`
+	LastError            string    `json:"lastError,omitempty"`
+	UpdatedAt            time.Time `json:"updatedAt"`
+}
+
 type ImageUpdateTarget struct {
 	ServerID        string     `json:"serverId"`
 	ServerName      string     `json:"serverName,omitempty"`

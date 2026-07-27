@@ -147,7 +147,7 @@ func New(cfg config.Config) (*App, error) {
 		_ = store.Close()
 		return nil, err
 	}
-	dnsSvc := dns.NewService(store.AppDB(), secretStore)
+	dnsSvc := dns.NewService(store.AppDB(), secretStore, taskSvc)
 	certSvc := certs.NewService(store.AppDB(), cfg, dnsSvc, taskSvc,
 		certs.WithConfigProvider(settingsSvc.ApplyToConfig),
 		certs.WithKeyAssetProvider(keyAssetSvc),

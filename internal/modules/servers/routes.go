@@ -10,6 +10,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/servers", auth(http.HandlerFunc(h.List)))
 	mux.Handle("POST /api/v1/servers", auth(http.HandlerFunc(h.Create)))
 	mux.Handle("POST /api/v1/servers/probe", auth(http.HandlerFunc(h.Probe)))
+	mux.Handle("GET /api/v1/servers/{id}", auth(http.HandlerFunc(h.Get)))
 	mux.Handle("PUT /api/v1/servers/{id}", auth(http.HandlerFunc(h.Update)))
 	mux.Handle("DELETE /api/v1/servers/{id}", auth(http.HandlerFunc(h.Delete)))
 	mux.Handle("POST /api/v1/servers/{id}/test", auth(http.HandlerFunc(h.Test)))

@@ -1,5 +1,6 @@
 import { apiClient, type ApiRequestOptions } from './client';
 import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
+import type { ListPage } from '@/types/pagination';
 
 export interface MetricsPoint {
   time: string;
@@ -47,7 +48,15 @@ export interface AgentCertificateBundle {
 
 export const serversApi = {
   list(options?: ApiRequestOptions) {
-    return apiClient.get<ServerDto[]>('/servers', options);
+    return apiClient.get<ListPage<ServerDto>>('/servers?pageSize=200', options).then((result) => result.items);
+  },
+  listPage(params: { page?: number; pageSize?: number; q?: string } = {}, options?: ApiRequestOptions) {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([name, value]) => { if (value !== undefined && value !== '') query.set(name, String(value)); });
+    return apiClient.get<ListPage<ServerDto>>(`/servers${query.size ? `?${query}` : ''}`, options);
+  },
+  get(id: string, options?: ApiRequestOptions) {
+    return apiClient.get<ServerDto>(`/servers/${encodeURIComponent(id)}`, options);
   },
   create(input: ServerSaveInput) {
     return apiClient.post<ServerDto>('/servers', input);

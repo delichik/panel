@@ -52,6 +52,17 @@ type ReverseProxyConfig struct {
 	EnabledServers    []string                                     `json:"enabledServers"`
 }
 
+type FacilityAppSummary struct {
+	Kind            string    `json:"kind"`
+	TitleKey        string    `json:"titleKey"`
+	DescriptionKey  string    `json:"descriptionKey"`
+	CategoryKey     string    `json:"categoryKey"`
+	Status          string    `json:"status"`
+	UpdatedAt       time.Time `json:"updatedAt"`
+	OperationStatus string    `json:"operationStatus,omitempty"`
+	LastError       string    `json:"lastError,omitempty"`
+}
+
 type ReverseProxySaveInput struct {
 	DeploymentServers []string              `json:"deploymentServers"`
 	PanelEntry        PanelEntry            `json:"panelEntry"`

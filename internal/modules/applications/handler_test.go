@@ -15,7 +15,7 @@ import (
 )
 
 func TestHandlerListApplications(t *testing.T) {
-	fake := &fakeApplicationService{apps: []Application{{ID: "app-1", Name: "web"}}}
+	fake := &fakeApplicationService{apps: []Application{{ID: "app-1", Name: "web", SpecYAML: "name: web\n", DeploymentServers: []string{"srv-1"}, ReverseProxy: []ReverseProxyRule{{Domain: "example.test"}}, JobID: "panel-web", Namespace: "default"}}}
 	handler := NewHandler(fake)
 
 	rec := httptest.NewRecorder()
@@ -30,12 +30,15 @@ func TestHandlerListApplications(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(env.Data)
-	var apps []Application
+	var apps []ApplicationSummary
 	if err := json.Unmarshal(raw, &apps); err != nil {
 		t.Fatal(err)
 	}
-	if len(apps) != 1 || apps[0].ID != "app-1" {
+	if len(apps) != 1 || apps[0].ID != "app-1" || apps[0].JobID != "panel-web" {
 		t.Fatalf("apps = %#v", apps)
+	}
+	if bytes.Contains(raw, []byte("specYaml")) || bytes.Contains(raw, []byte("deploymentServers")) || bytes.Contains(raw, []byte("reverseProxy")) {
+		t.Fatalf("summary leaked detail fields: %s", raw)
 	}
 }
 

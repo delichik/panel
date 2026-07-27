@@ -51,6 +51,10 @@ type applicationRuntimeListService interface {
 	ListWithRuntime(ctx context.Context) ([]Application, error)
 }
 
+type applicationSummaryListService interface {
+	ListSummaries(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[ApplicationSummary], error)
+}
+
 type applicationEditSessionService interface {
 	BeginEditSession(context.Context, string, BeginEditSessionInput) (ApplicationEditSession, error)
 	RecoverableEditSessions(context.Context, string, string, string) ([]ApplicationEditSession, error)
@@ -315,6 +319,20 @@ func (h *Handler) DiscardEditSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
+	if summaryList, ok := h.service.(applicationSummaryListService); ok {
+		page, pageSize, err := httpx.ParseListPage(r, "q")
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		summaries, err := summaryList.ListSummaries(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, summaries)
+		return
+	}
 	var (
 		apps []Application
 		err  error
@@ -328,7 +346,26 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, apps)
+	summaries := make([]ApplicationSummary, 0, len(apps))
+	for _, app := range apps {
+		summaries = append(summaries, applicationSummaryFromApplication(app))
+	}
+	httpx.JSON(w, http.StatusOK, summaries)
+}
+
+func applicationSummaryFromApplication(app Application) ApplicationSummary {
+	return ApplicationSummary{
+		ID:                   app.ID,
+		Name:                 app.Name,
+		Enabled:              app.Enabled,
+		ImageReference:       app.ImageReference,
+		JobID:                app.JobID,
+		Namespace:            app.Namespace,
+		RuntimeStatus:        app.RuntimeStatus,
+		ImageUpdateAvailable: app.ImageUpdateAvailable,
+		LastError:            app.LastError,
+		UpdatedAt:            app.UpdatedAt,
+	}
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {

@@ -1,13 +1,16 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { CheckCircle2, Cloud, Plus, RefreshCcw, Search, ShieldAlert, Trash2 } from '@lucide/vue';
+import { CheckCircle2, Cloud, Plus, RefreshCcw, ShieldAlert, Trash2 } from '@lucide/vue';
 import { dnsApi } from '@/api/dns';
+import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
+import PaginationBar from '@/components/ui/PaginationBar.vue';
+import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -24,6 +27,10 @@ const domains = ref<DnsDomainDto[]>([]);
 const records = ref<DnsRecordDto[]>([]);
 const selectedId = ref('');
 const search = ref(String(route.query.search ?? ''));
+const page = ref(1);
+const pageSize = 50;
+const totalDomains = ref(0);
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const loadingDomains = ref(false);
 const loadingRecords = ref(false);
 const error = ref('');
@@ -44,18 +51,16 @@ const domainForm = reactive({ name: '', provider: 'cloudflare', apiToken: '' });
 const recordForm = reactive({ type: 'A', name: '@', value: '', ttl: '300', proxied: 'true' });
 
 const selectedDomain = computed(() => domains.value.find((item) => item.id === selectedId.value) ?? null);
-const filteredDomains = computed(() => {
-  const term = search.value.trim().toLowerCase();
-  if (!term) return domains.value;
-  return domains.value.filter((item) => [item.name, item.provider].some((value) => value.toLowerCase().includes(term)));
-});
 const recordTypeOptions = ['A', 'AAAA', 'CNAME', 'TXT', 'MX'].map((value) => ({ label: value, value }));
 const providerOptions = [{ label: 'Cloudflare', value: 'cloudflare' }];
 const booleanOptions = [{ label: t('dnsPage.proxied'), value: 'true' }, { label: t('dnsPage.dnsOnly'), value: 'false' }];
 
 watch(search, (value) => {
   void router.replace({ query: { ...route.query, search: value || undefined } });
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { if (page.value !== 1) page.value = 1; else void loadDomains(); }, 250);
 });
+watch(page, () => { void loadDomains(); });
 
 watch(selectedId, (id, _old, onCleanup) => {
   void router.replace({ query: { ...route.query, domain: id || undefined } });
@@ -73,7 +78,9 @@ async function loadDomains() {
   loadingDomains.value = true;
   error.value = '';
   try {
-    domains.value = await dnsApi.listDomains();
+    const result = await dnsApi.listDomainPage({ page: page.value, pageSize, q: search.value.trim() || undefined });
+    domains.value = result.items;
+    totalDomains.value = result.total;
     const queryDomain = String(route.query.domain ?? '');
     selectedId.value = domains.value.some((item) => item.id === queryDomain) ? queryDomain : selectedId.value || domains.value[0]?.id || '';
   } catch (err) {
@@ -83,12 +90,14 @@ async function loadDomains() {
   }
 }
 
+onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
+
 async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
   if (!domainId) return;
   loadingRecords.value = true;
   recordsError.value = '';
   try {
-    records.value = await dnsApi.listRecords(domainId, signal);
+    records.value = (await dnsApi.listRecords(domainId, signal)).items;
     providerErrorDomainId.value = '';
   } catch (err) {
     if (signal?.aborted) return;
@@ -96,6 +105,22 @@ async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
     providerErrorDomainId.value = domainId;
   } finally {
     if (!signal?.aborted) loadingRecords.value = false;
+  }
+}
+
+async function syncRecords() {
+  if (!selectedId.value) return;
+  loadingRecords.value = true;
+  recordsError.value = '';
+  try {
+    const result = await dnsApi.refreshRecords(selectedId.value);
+    feedback.value = t('resourcesPage.taskAccepted', { taskId: result.taskId });
+    await waitForTask(result.taskId);
+    await loadRecords(selectedId.value);
+  } catch (err) {
+    recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
+  } finally {
+    loadingRecords.value = false;
   }
 }
 
@@ -199,12 +224,9 @@ async function deleteRecord() {
 
     <MasterDetailLayout class="h-full min-h-[640px]">
       <template #master>
-      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
-          <label class="relative block">
-            <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-            <Input v-model="search" class="pl-9" :placeholder="t('dnsPage.searchDomains')" />
-          </label>
+          <SearchInput v-model="search" clearable :placeholder="t('dnsPage.searchDomains')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
         <div class="grid grid-cols-2 gap-2 border-b border-border p-4 text-sm">
           <div class="rounded-xl border border-border bg-background p-3">
@@ -213,16 +235,16 @@ async function deleteRecord() {
           </div>
           <div class="rounded-xl border border-border bg-background p-3">
             <div class="text-xs text-muted-foreground">{{ t('dnsPage.zones') }}</div>
-            <strong class="mt-1 block text-foreground">{{ domains.length }}</strong>
+            <strong class="mt-1 block text-foreground">{{ totalDomains }}</strong>
           </div>
         </div>
         <div class="min-h-0 overflow-auto p-2">
           <div v-if="loadingDomains && !domains.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>
-          <EmptyState v-else-if="!filteredDomains.length" :title="t('dnsPage.noDomains')" :description="t('dnsPage.noDomainsHint')" />
+          <EmptyState v-else-if="!domains.length" :title="t('dnsPage.noDomains')" :description="t('dnsPage.noDomainsHint')" />
           <button
-            v-for="domain in filteredDomains"
+            v-for="domain in domains"
             v-else
             :key="domain.id"
             type="button"
@@ -238,6 +260,7 @@ async function deleteRecord() {
             <span class="truncate text-xs text-muted-foreground">{{ t('dnsPage.updatedAt') }} {{ domain.updatedAt }}</span>
           </button>
         </div>
+        <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="totalDomains" :loading="loadingDomains" :previous-label="t('common.previous')" :next-label="t('common.next')" />
       </aside>
       </template>
 
@@ -255,7 +278,7 @@ async function deleteRecord() {
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('dnsPage.cloudflareNoAccount') }}</p>
             </div>
             <div class="flex flex-wrap justify-end gap-2">
-              <Button size="sm" :loading="loadingRecords" @click="loadRecords()"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
+              <Button size="sm" :loading="loadingRecords" @click="syncRecords"><Cloud />{{ t('dnsPage.syncRecords') }}</Button>
               <Button size="sm" @click="openEditDomain(selectedDomain)">{{ t('common.edit') }}</Button>
               <Button size="sm" variant="danger" @click="deleteTarget = selectedDomain; deleteDialog = true"><Trash2 />{{ t('common.delete') }}</Button>
             </div>

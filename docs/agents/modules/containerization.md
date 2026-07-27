@@ -1,5 +1,11 @@
 # 容器化资源管理
 
+## List And Snapshot Contracts
+
+- Container list reads deserialize `container_observations.summary_json`, not full `container_json`. Reports persist both forms and migration backfills old observations.
+- Container, image, network, and volume GET responses use `items`, `observedAt`, `stale`, `refreshing`, optional `refreshTaskId`, and optional `lastRefreshError`.
+- Image, network, and volume refreshes are async task POSTs. Resource GET handlers never contact the Agent, and the frontend reloads snapshots after successful task completion.
+
 ## 适用场景
 
 修改 Docker 容器、镜像、网络、卷资源页，设施应用、Application 托管 Label，每服务器容器操作队列，镜像更新检查或容器协调监控时，先读本文档。
@@ -31,7 +37,7 @@
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
-设施应用 API 挂在 `/api/v1/facility-apps/reverse-proxy`，支持读取、兼容保存和手动同步。旧 `/save-sessions` 会话继续兼容已有前端：30 分钟过期并使用创建时的 `updatedAt` 检测并发覆盖。新事务编辑器使用持久 `/edit-sessions` API：创建、recoverable 查询、详情、draft patch、按稳定 `assetKey` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。`facility_app_configs.version` 是配置并发版本，commit 在替换资产 metadata 的同一 AppDB 事务中执行 CAS。
+设施应用目录 API 为 `GET /api/v1/facility-apps`，返回固定小目录 `FacilityAppSummary[]`，只包含目录身份、健康状态、更新时间、最近 operation 状态和错误。目录查询不得构建反向代理详情，也不得加载网关、路由、静态资产、应用路由或证书数据；这些统计只由反向代理设施详情 API `/api/v1/facility-apps/reverse-proxy` 按需读取。详情接口继续支持读取完整配置、兼容保存和手动同步。旧 `/save-sessions` 会话继续兼容已有前端：30 分钟过期并使用创建时的 `updatedAt` 检测并发覆盖。新事务编辑器使用持久 `/edit-sessions` API：创建、recoverable 查询、详情、draft patch、按稳定 `assetKey` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。`facility_app_configs.version` 是配置并发版本，commit 在替换资产 metadata 的同一 AppDB 事务中执行 CAS。
 
 持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetKey` 引用资产，commit manifest 决定最终 asset ID 并在写数据库前统一改写。删除仍被 route 引用的资产、移除仍被 origin/AnyAccess primary/Panel Entry 使用的 gateway、或把 Panel Entry 绑定到非 setup Panel host 都是阻断诊断，服务端不得静默修剪。
 
@@ -84,7 +90,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - Application 部署、停止、重启也共享同一服务器队列，但保留 Application 自身任务记录；Application 部署由 Panel 编排写文件、拉镜像、删旧容器、创建、启动和状态刷新等原子 agent/Docker 调用，不使用 agent 侧胖部署接口。
 - 设施应用保存和手动同步不直接执行远端 Docker 操作；它们通过 `TriggerPeriodicNow(application_reconcile)` 立即触发指定应用协调，目标应用为隐藏身份 `facility-reverse-proxy`。协调 collector 会请求应用 planner 为设施部署节点创建或复用 apply target，并为从部署服务器列表移除的节点创建 stop/purge target；`application_target_apply|stop|purge` 任务只能由 deployment dispatcher 在 claim target 后创建为执行日志锚点。执行时仍共享同一服务器队列，并写入 `application_lifecycle_operations` / `application_lifecycle_targets` 作为设施应用部署记录。没有任何域名路由时，0 个全局网关节点是合法设施配置，表示不部署新的反向代理，只停止/清理已有实例；一旦存在域名路由，每个域名仍必须显式选择至少一台入口节点。设施模块只能提供配置校验和 runtime spec provider，不得在缺少协调器时 fallback 到直接 agent/Docker 部署。
 - 刷新任务按任务类型、服务器和资源复用活跃任务；Agent 操作按目标状态幂等。
-- 容器、镜像、网络、卷查询和队列操作遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理；当前容器化任务或请求仍按原始 agent 错误失败。
+- 容器、镜像、网络、卷的 GET 列表只读取本地快照，不得同步调用 Agent。容器使用 `container_observations`；镜像、网络和卷使用 `docker_resource_snapshots`。镜像、网络、卷刷新分别通过 `image_refresh`、`network_refresh`、`volume_refresh` 任务访问 Agent 并原子替换快照；首次尚无快照时 GET 返回空集合。刷新任务遇到 agent mTLS server 证书过期或尚未生效时，必须交给服务器模块标记 Agent 状态并按受限自动重装策略处理。
 - 镜像和卷的“删除未使用”是 Panel 侧同步批量操作，通过现有 Agent 单项删除接口逐项执行；执行瞬间仍在使用的资源会跳过，删除失败会使当前请求失败。
 - containers 模块注册的周期任务每 5 秒收集容器协调输入，由 tasks 内部 worker 驱动；5 秒只是采集频率，不是失败重试间隔。`application_reconcile` 是 collector-only 周期入口，不注册固定失败的 executor，也不向任务中心暴露 run-now/retry；被动扫描只有已经观察到托管 Label 并写入 `application_reconcile_states` 的实例会持续协调；应用或设施配置变更等外部事件可以通过 `PeriodicTrigger` payload 指定 application ID 立即触发一次 `application_reconcile` collector，不依赖 Label 已被观察。
 - 监控发现容器缺失、停止、generation/spec hash 偏差或 managed file manifest 与已部署 runtime spec 不一致时，`application_reconcile` collector 只负责收集需要处理的应用与服务器，应用服务必须先通过 `PlanApplicationDeployment` 用 `application_lifecycle_targets.target_key = application:<appId>:server:<serverId>` 的活跃 target 守卫过滤、复用或 supersede；collector 不得把本轮新建 target 转换为 `application_target_apply|stop|purge` 输入。collector 发起规划时必须把 Agent 已确认的漂移节点作为精确目标，并携带内部 observed runtime drift 语义，使 planner 跳过这些节点在 `application_instances` 中可能滞后的 running 缓存；普通非漂移规划仍执行满足态过滤，observed runtime drift 也不得扩大到同一应用的健康节点或替代用户/系统 `force` 语义。manifest 漂移包含期望文件缺失、sha256 不匹配、mode 不匹配，以及已显式配置 uid/gid 的属主不匹配；额外文件不触发漂移。显式触发的协调 payload 可传 `applicationIds`、`serverIds`、`force`、`stopServers` 和 `purge`：未强制时这些字段只限制观测范围并跳过已经满足 desired state 的目标；`force=true` 用于配置保存、停用、删除、设施应用保存和系统级重部署等 desired state 变更，会绕过退避和满足态过滤，但不能绕过活跃 target 唯一性。协调恢复必须通过应用服务生成 lifecycle target，并由 dispatcher 负责目标级任务与错误记录；自动协调和非强制显式协调只使用 `application_reconcile_states.reconcile_failures` 这一套连续失败计数器计算指数退避，并把等待时间写入 `reconcile_next_run_at`。任务自身不再维护另一套自动 retry 计数；未到 `reconcile_next_run_at`、collector 结果为空或只完成规划时不创建任务记录。连续 5 轮观测到该应用全部托管实例正常后，才清空失败计数和下次运行时间。不得调用手动部署入口异步再创建一组“用户部署”任务，否则会绕过退避并造成重复部署。

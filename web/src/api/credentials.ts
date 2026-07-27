@@ -1,9 +1,15 @@
 import { apiClient } from './client';
 import type { CredentialDto, CredentialInput } from '@/types/credentials';
+import type { ListPage } from '@/types/pagination';
 
 export const credentialsApi = {
   list() {
-    return apiClient.get<CredentialDto[]>('/credentials');
+    return apiClient.get<ListPage<CredentialDto>>('/credentials?pageSize=200').then((result) => result.items);
+  },
+  listPage(params: { page?: number; pageSize?: number; q?: string } = {}) {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([name, value]) => { if (value !== undefined && value !== '') query.set(name, String(value)); });
+    return apiClient.get<ListPage<CredentialDto>>(`/credentials${query.size ? `?${query}` : ''}`);
   },
   create(input: CredentialInput) {
     return apiClient.post<CredentialDto>('/credentials', input);

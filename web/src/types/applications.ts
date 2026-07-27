@@ -85,6 +85,19 @@ export interface ApplicationDto {
   updatedAt: string;
 }
 
+export interface ApplicationSummaryDto {
+  id: string;
+  name: string;
+  enabled: boolean;
+  imageReference?: string;
+  jobId: string;
+  namespace: string;
+  runtimeStatus?: string;
+  imageUpdateAvailable: boolean;
+  lastError?: string;
+  updatedAt: string;
+}
+
 export interface ApplicationSaveInput {
   name: string;
   enabled: boolean;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
-import { Cable, KeyRound, LockKeyhole, Plus, RefreshCcw, Search, Trash2, Wrench } from '@lucide/vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { Cable, KeyRound, LockKeyhole, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
@@ -8,6 +8,8 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
+import PaginationBar from '@/components/ui/PaginationBar.vue';
+import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Textarea from '@/components/ui/Textarea.vue';
@@ -25,6 +27,10 @@ const credentials = ref<CredentialDto[]>([]);
 const servers = ref<ServerDto[]>([]);
 const selectedId = ref('');
 const search = ref('');
+const page = ref(1);
+const pageSize = 50;
+const total = ref(0);
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const loading = ref(false);
 const error = ref('');
 const actionError = ref('');
@@ -46,11 +52,6 @@ const form = reactive<CredentialInput>({
 });
 
 const selectedCredential = computed(() => credentials.value.find((item) => item.id === selectedId.value) ?? null);
-const filteredCredentials = computed(() => {
-  const term = search.value.trim().toLowerCase();
-  if (!term) return credentials.value;
-  return credentials.value.filter((item) => [item.name, item.username, item.type].some((value) => value.toLowerCase().includes(term)));
-});
 const references = computed(() => selectedCredential.value ? credentialReferences(selectedCredential.value.id, servers.value) : []);
 const deleteReferences = computed(() => deleteTarget.value ? credentialReferences(deleteTarget.value.id, servers.value) : []);
 const validation = computed(() => validateCredentialInput(form, Boolean(editing.value)));
@@ -63,10 +64,11 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const [nextCredentials, nextServers] = await Promise.all([credentialsApi.list(), serversApi.list()]);
-    credentials.value = nextCredentials;
+    const [nextCredentials, nextServers] = await Promise.all([credentialsApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }), serversApi.list()]);
+    credentials.value = nextCredentials.items;
+    total.value = nextCredentials.total;
     servers.value = nextServers;
-    selectedId.value = selectedId.value && nextCredentials.some((item) => item.id === selectedId.value) ? selectedId.value : nextCredentials[0]?.id || '';
+    selectedId.value = selectedId.value && nextCredentials.items.some((item) => item.id === selectedId.value) ? selectedId.value : nextCredentials.items[0]?.id || '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('credentialsPage.loadFailed');
   } finally {
@@ -144,7 +146,10 @@ function typeTone(type: CredentialType) {
   return type === 'private_key' ? 'info' : 'warning';
 }
 
+watch(search, () => { if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(() => { if (page.value !== 1) page.value = 1; else void load(); }, 250); });
+watch(page, () => { void load(); });
 onMounted(load);
+onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 </script>
 
 <template>
@@ -156,20 +161,17 @@ onMounted(load);
 
     <MasterDetailLayout class="h-full min-h-[640px]">
       <template #master>
-      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
-          <label class="relative block">
-            <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-            <Input v-model="search" class="pl-9" :placeholder="t('credentialsPage.searchPlaceholder')" />
-          </label>
+          <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
         <div class="min-h-0 overflow-auto p-2">
           <div v-if="loading && !credentials.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
-          <EmptyState v-else-if="!filteredCredentials.length" :title="t('credentialsPage.noCredentials')" :description="t('credentialsPage.noCredentialsHint')" />
+          <EmptyState v-else-if="!credentials.length" :title="t('credentialsPage.noCredentials')" :description="t('credentialsPage.noCredentialsHint')" />
           <button
-            v-for="credential in filteredCredentials"
+            v-for="credential in credentials"
             v-else
             :key="credential.id"
             type="button"
@@ -186,6 +188,7 @@ onMounted(load);
             <span class="text-xs text-muted-foreground">{{ t('credentialsPage.referenceCount', { count: credentialReferences(credential.id, servers).length }) }}</span>
           </button>
         </div>
+        <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
       </aside>
       </template>
 

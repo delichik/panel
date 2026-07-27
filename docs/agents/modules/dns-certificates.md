@@ -1,5 +1,12 @@
 # DNS 与证书模块
 
+## List And Snapshot Contracts
+
+- Domain certificates, self-signed certificates, and key assets return `ListPage` responses. List rows omit private material, file paths, metadata, and reference detail.
+- DNS record GET reads `dns_record_snapshots` only and returns `items`, `observedAt`, `stale`, `refreshing`, optional `refreshTaskId`, and optional `lastRefreshError`; it never calls a DNS provider.
+- Record refresh is an async POST returning `202` and `taskId`; the frontend waits for completion and reloads the snapshot.
+- `GET /api/v1/dns/domains` is a paginated local summary query with optional `q`; provider credentials and provider access checks are excluded from the list path.
+
 ## 适用场景
 
 修改 DNS 域名管理、Cloudflare 集成、ACME 签发、证书存储、自动续签、证书变量或应用与反向代理证书联动时，先读本文档。
@@ -47,6 +54,7 @@
 - 切换域名时立即清空旧记录并展示加载状态，只接受当前域名请求的响应。
 - 域名左侧选择行只负责切换域名；编辑和删除操作放在右侧已选域名详情标题区，不在选择行中显示更多菜单。
 - 前端 DNS 记录表和证书列表在桌面端作为满高表格卡片展示；表格体独立滚动并吸收剩余高度，分页固定在卡片底部。域名/证书详情操作和记录行操作使用 `AppActionButton` / `AppActionGroup`；记录行编辑、删除使用带文字的小按钮，刷新和新增记录位于记录标题区。
+- `GET /api/v1/dns/domains/{domainId}/records` 只读取 `dns_record_snapshots`，不得同步访问 DNS Provider。`POST .../records/refresh` 创建 `dns_records_refresh` 任务并异步替换快照；首次未刷新返回空数组。记录创建、更新、删除仍同步调用 Provider，成功后重建本地快照。
 
 ## 证书行为
 

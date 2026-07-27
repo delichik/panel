@@ -1,5 +1,11 @@
 # 服务器、凭据、指标与软件包
 
+## List API Contract
+
+- `GET /api/v1/servers` returns `ListPage<ServerSummary>` and accepts only `page`, `pageSize`, and `q`.
+- List rows exclude credentials, notes, variables, full traits, operating-system detail, and metrics. `GET /api/v1/servers/{id}` owns the complete view.
+- `GET /api/v1/credentials` follows the same `ListPage` and strict `page`/`pageSize`/`q` contract and never selects encrypted secret columns.
+
 ## 适用场景
 
 修改 SSH 凭据、服务器登记、Docker host 配置、agent 部署、连通性测试、系统探测、sudo 检查、UFW、fail2ban、概览指标采集、APT 软件包刷新或升级时，先读本文档。
@@ -71,7 +77,7 @@
 - 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
-- 服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。
+- `GET /api/v1/servers` 只返回服务器摘要：身份、地址、可达状态以及列表展示所需的 Agent/UFW/权限信号；不得读取完整 traits、variables、notes、凭据、Docker 配置、完整 OS/架构或逐服务器指标。`GET /api/v1/servers/{id}` 按需返回完整详情，前端选择或编辑服务器时使用详情接口。服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。
 - `service.go` 保留服务器运维、探测和 UFW 等流程；服务器资源 CRUD 放在 `registry.go`，Agent 部署和健康检查分别放在 `agent_deployment.go` 与 `agent_health.go`，fail2ban 配置放在 `fail2ban.go`，新增代码不要重新揉回主 service 文件。
 - 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。修剪应用部署节点属于应用配置变化，必须在同一删除事务中递增对应应用的 `version` 和配置 `updated_at`。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。

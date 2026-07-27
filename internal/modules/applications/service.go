@@ -29,6 +29,7 @@ import (
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 	"panel/internal/platform/templating"
 )
@@ -342,6 +343,111 @@ func (s *Service) List(ctx context.Context) ([]Application, error) {
 		apps[i] = app
 	}
 	return apps, nil
+}
+
+// ListSummaries is the list-specific read path. It intentionally avoids the
+// application detail scanner and enriches runtime state with a fixed number of
+// local queries.
+func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[ApplicationSummary], error) {
+	filter := "kind<>? AND deletion_requested=0"
+	args := []any{ApplicationKindFacility}
+	if query != "" {
+		filter += " AND (name LIKE ? ESCAPE '\\' OR image_reference LIKE ? ESCAPE '\\' OR namespace LIKE ? ESCAPE '\\')"
+		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		args = append(args, term, term, term)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM applications WHERE `+filter, args...).Scan(&total); err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,enabled,image_reference,image_update_available,job_id,namespace,last_error,updated_at
+		FROM applications WHERE `+filter+` ORDER BY name ASC,id ASC LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	defer rows.Close()
+
+	summaries := []ApplicationSummary{}
+	byID := map[string]int{}
+	for rows.Next() {
+		var summary ApplicationSummary
+		var enabled, imageUpdateAvailable int
+		var updatedAt string
+		if err := rows.Scan(&summary.ID, &summary.Name, &enabled, &summary.ImageReference, &imageUpdateAvailable, &summary.JobID, &summary.Namespace, &summary.LastError, &updatedAt); err != nil {
+			return httpx.ListPage[ApplicationSummary]{}, err
+		}
+		summary.Enabled = enabled == 1
+		summary.ImageUpdateAvailable = imageUpdateAvailable == 1
+		summary.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		byID[summary.ID] = len(summaries)
+		summaries = append(summaries, summary)
+	}
+	if err := rows.Err(); err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	if len(summaries) == 0 {
+		return httpx.ListPage[ApplicationSummary]{Items: summaries, Total: total, Page: page, PageSize: pageSize}, nil
+	}
+
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(summaries)), ",")
+	pageIDs := make([]any, 0, len(summaries))
+	for _, summary := range summaries {
+		pageIDs = append(pageIDs, summary.ID)
+	}
+	statuses := make(map[string][]appruntime.InstanceStatus, len(summaries))
+	instanceRows, err := s.db.QueryContext(ctx, `SELECT application_id,status FROM application_instances WHERE application_id IN (`+placeholders+`)`, pageIDs...)
+	if err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	for instanceRows.Next() {
+		var appID, status string
+		if err := instanceRows.Scan(&appID, &status); err != nil {
+			instanceRows.Close()
+			return httpx.ListPage[ApplicationSummary]{}, err
+		}
+		statuses[appID] = append(statuses[appID], appruntime.InstanceStatus{Status: status})
+	}
+	if err := instanceRows.Close(); err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	if err := instanceRows.Err(); err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+
+	lifecycleRows, err := s.lifecycleDB().QueryContext(ctx, `WITH latest AS (
+		SELECT id,application_id,ROW_NUMBER() OVER (PARTITION BY application_id ORDER BY created_at DESC,id DESC) AS row_num
+		FROM application_lifecycle_operations
+		WHERE application_id IN (`+placeholders+`)
+	)
+	SELECT latest.application_id,target.status
+	FROM latest
+	JOIN application_lifecycle_targets target ON target.operation_id=latest.id
+	WHERE latest.row_num=1`, pageIDs...)
+	if err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	for lifecycleRows.Next() {
+		var appID, status string
+		if err := lifecycleRows.Scan(&appID, &status); err != nil {
+			lifecycleRows.Close()
+			return httpx.ListPage[ApplicationSummary]{}, err
+		}
+		if _, ok := byID[appID]; ok {
+			statuses[appID] = append(statuses[appID], appruntime.InstanceStatus{Status: runtimeStatusFromLifecycleTarget(status)})
+		}
+	}
+	if err := lifecycleRows.Close(); err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+	if err := lifecycleRows.Err(); err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
+
+	for i := range summaries {
+		summaries[i].RuntimeStatus = aggregateRuntimeStatus(summaries[i].Enabled, statuses[summaries[i].ID])
+	}
+	return httpx.ListPage[ApplicationSummary]{Items: summaries, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Service) ListWithRuntime(ctx context.Context) ([]Application, error) {

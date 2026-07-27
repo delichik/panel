@@ -159,6 +159,36 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 	return cfg, nil
 }
 
+// ListSummaries returns the fixed facility catalog without constructing the
+// reverse-proxy detail model.
+func (s *Service) ListSummaries(ctx context.Context) ([]FacilityAppSummary, error) {
+	summary := FacilityAppSummary{
+		Kind:           "reverse-proxy",
+		TitleKey:       "applicationsPage.entranceProxyFacility",
+		DescriptionKey: "applicationsPage.entranceProxyFacilityDescription",
+		CategoryKey:    "applicationsPage.facilityCategoryTraffic",
+		Status:         "available",
+	}
+	var updatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID).
+		Scan(&summary.LastError, &updatedAt)
+	if err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	if updatedAt != "" {
+		summary.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	}
+	if summary.LastError != "" {
+		summary.Status = "degraded"
+	}
+	if err := s.db.QueryRowContext(ctx, `SELECT status FROM application_lifecycle_operations
+		WHERE application_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, proxyApplicationID).
+		Scan(&summary.OperationStatus); err != nil && err != sql.ErrNoRows {
+		return nil, err
+	}
+	return []FacilityAppSummary{summary}, nil
+}
+
 func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 	s.editCommitMu.Lock()
 	defer s.editCommitMu.Unlock()

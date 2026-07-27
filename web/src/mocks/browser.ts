@@ -56,8 +56,10 @@ import {
   deleteFacilityAsset,
   facilityDiagnostics,
   facilitySession,
+  mockApplicationSummaries,
   mockApplications,
   mockFacility,
+  mockFacilitySummaries,
   patchAppSession,
   patchFacilitySession,
   putAppFile,
@@ -458,7 +460,7 @@ export function installMockApi() {
       return result ? json(result, 202) : error('key_asset_not_found', 'Key asset was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/applications' && method(init) === 'GET') return json(mockApplications);
+    if (url.pathname === '/api/v1/applications' && method(init) === 'GET') return json(mockApplicationSummaries());
     const appMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)$/);
     if (appMatch && method(init) === 'GET') {
       const found = mockApplications.find((item) => item.id === decodeURIComponent(appMatch[1]));
@@ -564,6 +566,7 @@ export function installMockApi() {
       }
     }
 
+    if (url.pathname === '/api/v1/facility-apps' && method(init) === 'GET') return json(mockFacilitySummaries());
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy' && method(init) === 'GET') return json(mockFacility);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/reconcile' && method(init) === 'POST') return json({ config: mockFacility }, 202);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/edit-sessions/recoverable') return json([]);
@@ -618,7 +621,7 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/tasks' && method(init) === 'GET') {
       const status = url.searchParams.get('status') || '';
       const type = url.searchParams.get('type') || '';
-      const operationId = url.searchParams.get('operation_id') || '';
+      const operationId = url.searchParams.get('operationId') || '';
       const page = Math.max(1, Number(url.searchParams.get('page') || 1));
       const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('pageSize') || url.searchParams.get('limit') || 50)));
       let items = mockTasks;

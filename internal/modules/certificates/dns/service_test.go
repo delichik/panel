@@ -81,6 +81,9 @@ func TestRecordOperationsUseResolvedCloudflareProvider(t *testing.T) {
 		}
 		return fake
 	}
+	if err := svc.refreshRecords(context.Background(), domain.ID); err != nil {
+		t.Fatal(err)
+	}
 
 	records, err := svc.ListRecords(context.Background(), domain.ID)
 	if err != nil {

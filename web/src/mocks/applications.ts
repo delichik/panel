@@ -1,6 +1,6 @@
 import type { ApiEnvelope } from '@/types/api';
-import type { ApplicationDto, ApplicationEditSession, ApplicationRuntime, Diagnostic, LogResult, OperationResult } from '@/types/applications';
-import type { FacilityEditSession, ReverseProxyConfig } from '@/types/facilityApps';
+import type { ApplicationDto, ApplicationEditSession, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
+import type { FacilityAppSummary, FacilityEditSession, ReverseProxyConfig } from '@/types/facilityApps';
 
 const now = '2026-07-21T08:00:00.000Z';
 
@@ -236,6 +236,34 @@ export let mockFacility: ReverseProxyConfig = {
   routes: 7,
   enabledServers: ['srv-edge-sgp', 'srv-api-hkg', 'srv-api-hkg-02'],
 };
+
+export function mockApplicationSummaries(): ApplicationSummaryDto[] {
+  return mockApplications.map((app) => ({
+    id: app.id,
+    name: app.name,
+    enabled: app.enabled,
+    imageReference: app.imageReference,
+    jobId: app.jobId,
+    namespace: app.namespace,
+    runtimeStatus: app.runtimeStatus,
+    imageUpdateAvailable: app.imageUpdateAvailable,
+    lastError: app.lastError,
+    updatedAt: app.updatedAt,
+  }));
+}
+
+export function mockFacilitySummaries(): FacilityAppSummary[] {
+  return [{
+    kind: 'reverse-proxy',
+    titleKey: 'applicationsPage.entranceProxyFacility',
+    descriptionKey: 'applicationsPage.entranceProxyFacilityDescription',
+    categoryKey: 'applicationsPage.facilityCategoryTraffic',
+    status: mockFacility.lastError ? 'degraded' : 'available',
+    updatedAt: mockFacility.updatedAt,
+    operationStatus: mockFacility.operation?.status,
+    lastError: mockFacility.lastError,
+  }];
+}
 
 const appSessions = new Map<string, ApplicationEditSession>();
 const facilitySessions = new Map<string, FacilityEditSession>();

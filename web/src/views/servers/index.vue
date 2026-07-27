@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, Cable, PlayCircle, Plus, RefreshCcw, Search, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
+import { AlertTriangle, Cable, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi, type ServerMetricsSeries } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
@@ -9,6 +9,8 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
+import PaginationBar from '@/components/ui/PaginationBar.vue';
+import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Textarea from '@/components/ui/Textarea.vue';
@@ -24,9 +26,14 @@ const route = useRoute();
 const router = useRouter();
 
 const servers = ref<ServerDto[]>([]);
+const serverDetails = ref<Record<string, ServerDto>>({});
 const credentials = ref<CredentialDto[]>([]);
 const selectedId = ref('');
 const search = ref(String(route.query.search ?? ''));
+const page = ref(1);
+const pageSize = 50;
+const totalServers = ref(0);
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const loading = ref(false);
 const error = ref('');
 const credentialError = ref('');
@@ -56,12 +63,7 @@ const form = reactive({
   notes: '',
 });
 
-const selectedServer = computed(() => servers.value.find((item) => item.id === selectedId.value) ?? null);
-const filteredServers = computed(() => {
-  const term = search.value.trim().toLowerCase();
-  if (!term) return servers.value;
-  return servers.value.filter((server) => [server.name, server.host, server.os?.prettyName, server.traits?.['agent.status']].some((value) => String(value ?? '').toLowerCase().includes(term)));
-});
+const selectedServer = computed(() => serverDetails.value[selectedId.value] ?? servers.value.find((item) => item.id === selectedId.value) ?? null);
 
 const credentialOptions = computed(() => credentials.value.map((item) => ({ label: `${item.name} / ${item.username}`, value: item.id })));
 const formPayload = computed<ServerSaveInput>(() => ({
@@ -89,19 +91,38 @@ const latestMetrics = computed(() => {
 
 watch(search, (value) => {
   void router.replace({ query: { ...route.query, search: value || undefined } });
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    if (page.value !== 1) page.value = 1;
+    else void loadServers();
+  }, 250);
 });
+watch(page, () => { void loadServers(); });
 watch(selectedId, () => {
+  void loadServerDetail();
   void loadMetrics();
 });
+
+async function loadServerDetail() {
+  const id = selectedId.value;
+  if (!id || serverDetails.value[id]) return;
+  try {
+    const detail = await serversApi.get(id);
+    serverDetails.value = { ...serverDetails.value, [id]: detail };
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
+  }
+}
 
 async function load() {
   loading.value = true;
   error.value = '';
   credentialError.value = '';
   try {
-    const [serversResult, credentialsResult] = await Promise.allSettled([serversApi.list(), credentialsApi.list()]);
+    const [serversResult, credentialsResult] = await Promise.allSettled([serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }), credentialsApi.list()]);
     if (serversResult.status === 'fulfilled') {
-      const nextServers = serversResult.value;
+      const nextServers = serversResult.value.items;
+      totalServers.value = serversResult.value.total;
       servers.value = nextServers;
       const queryServer = String(route.query.server ?? '');
       selectedId.value = nextServers.some((item) => item.id === queryServer)
@@ -118,6 +139,21 @@ async function load() {
       credentials.value = [];
       credentialError.value = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed');
     }
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function loadServers() {
+  loading.value = true;
+  error.value = '';
+  try {
+    const result = await serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined });
+    servers.value = result.items;
+    totalServers.value = result.total;
+    selectedId.value = result.items.some((item) => item.id === selectedId.value) ? selectedId.value : result.items[0]?.id ?? '';
+  } catch (err) {
+    error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -154,7 +190,10 @@ function openCreate() {
   serverDialog.value = true;
 }
 
-function openEdit(server: ServerDto) {
+async function openEdit(server: ServerDto) {
+  const detail = serverDetails.value[server.id] ?? await serversApi.get(server.id);
+  serverDetails.value = { ...serverDetails.value, [server.id]: detail };
+  server = detail;
   editing.value = server;
   probeResult.value = null;
   Object.assign(form, {
@@ -306,6 +345,7 @@ function bytesPerSecond(value?: number) {
 }
 
 onMounted(load);
+onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 </script>
 
 <template>
@@ -317,20 +357,17 @@ onMounted(load);
 
     <MasterDetailLayout class="h-full min-h-[640px]">
       <template #master>
-      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
-          <label class="relative block">
-            <Search class="pointer-events-none absolute left-3 top-2.5 size-4 text-muted-foreground" />
-            <Input v-model="search" class="pl-9" :placeholder="t('serversPage.searchPlaceholder')" />
-          </label>
+          <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
         <div class="min-h-0 overflow-auto p-2">
           <div v-if="loading && !servers.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
-          <EmptyState v-else-if="!filteredServers.length" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
+          <EmptyState v-else-if="!servers.length" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
           <button
-            v-for="server in filteredServers"
+            v-for="server in servers"
             v-else
             :key="server.id"
             type="button"
@@ -350,6 +387,7 @@ onMounted(load);
             </div>
           </button>
         </div>
+        <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="totalServers" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
       </aside>
       </template>
 

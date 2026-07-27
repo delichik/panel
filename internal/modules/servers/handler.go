@@ -17,12 +17,26 @@ func NewHandler(service *Service) *Handler {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	servers, err := h.service.List(r.Context())
+	page, pageSize, err := httpx.ParseListPage(r, "q")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	servers, err := h.service.ListSummaryPage(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
 	httpx.JSON(w, http.StatusOK, servers)
+}
+
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	server, err := h.service.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, server)
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {

@@ -156,7 +156,7 @@ func TestHandlerRetryRejectsNonFailedTask(t *testing.T) {
 	}
 }
 
-func TestHandlerDecoratesDeploymentProjectionOnGetAndList(t *testing.T) {
+func TestHandlerDecoratesDeploymentProjectionOnlyOnGet(t *testing.T) {
 	svc := newTestService(t)
 	svc.MustRegister(Definition{Type: "application_target_apply", ConcurrencyPolicy: ConcurrencyParallelAllowed})
 	task, err := svc.Create(context.Background(), CreateInput{Type: "application_target_apply", ServerID: "srv-1", ResourceType: "application", ResourceID: "app-1"})
@@ -202,8 +202,8 @@ func TestHandlerDecoratesDeploymentProjectionOnGetAndList(t *testing.T) {
 	if err := json.Unmarshal(rawList, &result); err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) == 0 || result.Items[0].Deployment == nil || result.Items[0].Deployment.Operation == nil {
-		t.Fatalf("expected deployment projection on list response, got %#v", result.Items)
+	if len(result.Items) == 0 || result.Items[0].Deployment != nil || result.Items[0].ParamsJSON != "" || result.Items[0].MetadataJSON != "" {
+		t.Fatalf("expected lightweight list response, got %#v", result.Items)
 	}
 }
 

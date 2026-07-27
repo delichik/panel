@@ -33,3 +33,12 @@ export interface DnsRecordInput {
   ttl: number;
   proxied?: boolean;
 }
+
+export interface DnsRecordSnapshot {
+  items: DnsRecordDto[];
+  observedAt?: string | null;
+  stale: boolean;
+  refreshing: boolean;
+  refreshTaskId?: string;
+  lastRefreshError?: string;
+}

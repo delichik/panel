@@ -1,5 +1,9 @@
 # 任务与调度
 
+## List Query Contract
+
+- List endpoints accept camelCase parameters only. Shared validation rejects unknown parameters, `limit`, snake_case aliases, invalid pages, and invalid timestamps with HTTP 400.
+
 ## 适用场景
 
 修改后台任务、任务注册、任务状态、步骤、日志、重试、手动运行、周期任务、软件包调度、证书续签调度或应用运行任务时，先读本文档。
@@ -128,3 +132,6 @@
 - Application target task metadata should include stable deployment context (`applicationId`, `applicationName`, `serverId`, `action`, `generation`, `specHash`, `lifecycleOperationId`, `lifecycleTargetId`) so Task Center can display the deployment object and target state without parsing logs.
 - The tasks HTTP handler supports a `DeploymentProjectionProvider` hook. Production wiring sets the applications service as that provider, so `GET /api/v1/tasks` and `GET /api/v1/tasks/{id}` may include `task.deployment.operation` and `task.deployment.target` for application lifecycle tasks. Task Center must prefer this structured projection over legacy metadata and use it to show operation targets, target state/stage, backoff retry time, claimed task/log anchor, and original Docker/Agent error diagnostics.
 - Business modules that create domain lifecycle rows before task rows must provide their own compensation path for task creation failures. The generic task manager cannot roll back domain lifecycle rows or infer their retry state.
+## 列表读取约束
+
+`GET /api/v1/tasks` 保持分页响应，但必须使用列表专用查询，以空投影代替 `params_json` 和 `metadata_json`，也不得逐任务拼接 deployment operation/target；完整任务和 deployment projection 仅由 `GET /api/v1/tasks/{id}` 返回。内部协调与恢复代码继续使用完整 `Service.List`，HTTP handler 使用 `ListSummaries`，不得混用这两个读取边界。

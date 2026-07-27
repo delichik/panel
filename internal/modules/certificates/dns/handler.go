@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"panel/internal/modules/tasks"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/http"
 )
 
@@ -19,6 +21,14 @@ type domainService interface {
 	DeleteRecord(ctx context.Context, domainID, recordID string) error
 }
 
+type recordRefreshService interface {
+	RefreshRecords(context.Context, string) (tasks.Task, error)
+}
+
+type recordSnapshotService interface {
+	ListRecordSnapshot(context.Context, string) (RecordSnapshot, error)
+}
+
 type Handler struct {
 	service domainService
 }
@@ -28,7 +38,19 @@ func NewHandler(service domainService) *Handler {
 }
 
 func (h *Handler) ListDomains(w http.ResponseWriter, r *http.Request) {
-	domains, err := h.service.ListDomains(r.Context())
+	page, pageSize, err := httpx.ParseListPage(r, "q")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	service, ok := h.service.(interface {
+		ListDomainPage(context.Context, int, int, string) (httpx.ListPage[Domain], error)
+	})
+	if !ok {
+		httpx.Error(w, panelerr.BadGateway("domain_list_unavailable", "Domain summary list is unavailable"))
+		return
+	}
+	domains, err := service.ListDomainPage(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -71,12 +93,35 @@ func (h *Handler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListRecords(w http.ResponseWriter, r *http.Request) {
+	if snapshots, ok := h.service.(recordSnapshotService); ok {
+		result, err := snapshots.ListRecordSnapshot(r.Context(), domainIDFromRequest(r))
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, result)
+		return
+	}
 	records, err := h.service.ListRecords(r.Context(), domainIDFromRequest(r))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
 	httpx.JSON(w, http.StatusOK, records)
+}
+
+func (h *Handler) RefreshRecords(w http.ResponseWriter, r *http.Request) {
+	service, ok := h.service.(recordRefreshService)
+	if !ok {
+		httpx.Error(w, panelerr.Validation("task_service_unavailable", "DNS record refresh is unavailable"))
+		return
+	}
+	task, err := service.RefreshRecords(r.Context(), domainIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusAccepted, map[string]string{"taskId": task.ID})
 }
 
 func (h *Handler) CreateRecord(w http.ResponseWriter, r *http.Request) {

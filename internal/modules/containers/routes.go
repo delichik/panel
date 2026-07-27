@@ -21,7 +21,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("POST /api/v1/images/upgrade-all", auth(http.HandlerFunc(h.UpgradeAll)))
 
 	mux.Handle("GET /api/v1/servers/{serverId}/networks", auth(http.HandlerFunc(h.Networks)))
+	mux.Handle("POST /api/v1/servers/{serverId}/networks/refresh", auth(http.HandlerFunc(h.RefreshNetworks)))
 	mux.Handle("GET /api/v1/servers/{serverId}/volumes", auth(http.HandlerFunc(h.Volumes)))
+	mux.Handle("POST /api/v1/servers/{serverId}/volumes/refresh", auth(http.HandlerFunc(h.RefreshVolumes)))
 	mux.Handle("POST /api/v1/servers/{serverId}/volumes/delete-unused", auth(http.HandlerFunc(h.DeleteUnusedVolumes)))
 	mux.Handle("DELETE /api/v1/servers/{serverId}/volumes/{resourceId}", auth(http.HandlerFunc(h.DeleteVolume)))
 }

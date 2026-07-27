@@ -13,6 +13,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import Input from '@/components/ui/Input.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
+import PaginationBar from '@/components/ui/PaginationBar.vue';
 import Select from '@/components/ui/Select.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Switch from '@/components/ui/Switch.vue';
@@ -24,7 +25,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
-import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, Diagnostic, ReverseProxyRule } from '@/types/applications';
+import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule } from '@/types/applications';
 import type { FacilityAppSummary, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig } from '@/types/facilityApps';
 import {
   applicationSections,
@@ -71,17 +72,24 @@ const router = useRouter();
 
 let pageLoadController: AbortController | null = null;
 let runtimeController: AbortController | null = null;
+let applicationDetailController: AbortController | null = null;
 let editorQueryController: AbortController | null = null;
 let pageLoadRequestId = 0;
 let runtimeRequestId = 0;
+let applicationDetailRequestId = 0;
 let editorQueryRequestId = 0;
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
-const applications = ref<ApplicationDto[]>([]);
+const applications = ref<ApplicationSummaryDto[]>([]);
+const applicationDetails = ref<Record<string, ApplicationDto>>({});
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
 const facilities = ref<FacilityAppSummary[]>([]);
 const facility = ref<ReverseProxyConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
 const search = ref(String(route.query.search ?? ''));
+const page = ref(1);
+const pageSize = 50;
+const totalApplications = ref(0);
 const loading = ref(false);
 const detailLoading = ref(false);
 const facilitiesLoaded = ref(false);
@@ -128,10 +136,11 @@ const isCreateMode = computed(() => mode.value === 'create');
 const currentFacilitySummary = computed(() => facilities.value.find((item) => item.kind === facilityKind.value) ?? null);
 const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && facilitiesLoaded.value && Boolean(currentFacilitySummary.value));
 const isUnsupportedFacilityRoute = computed(() => (mode.value === 'facilityDetail' || mode.value === 'facilityConfig') && facilitiesLoaded.value && !currentFacilitySummary.value);
-const currentApplication = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
-const selectedApplication = computed(() => currentApplication.value ?? emptyApplication());
+const currentApplicationSummary = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
+const currentApplication = computed(() => selectedId.value ? applicationDetails.value[selectedId.value] ?? null : null);
+const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
 const currentRuntime = computed(() => selectedId.value ? runtimes.value[selectedId.value] : null);
-const appStatus = computed(() => currentApplication.value ? applicationStatus(currentApplication.value, currentRuntime.value) : 'unknown');
+const appStatus = computed(() => currentApplicationSummary.value ? applicationStatus(selectedApplication.value, currentRuntime.value) : 'unknown');
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const facilityDraft = reactive<FacilityDraftUi>(facilityDraftFromConfig());
 const appErrors = computed(() => validateApplicationDraft(appDraft));
@@ -142,17 +151,12 @@ const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentA
 const facilityDiff = computed(() => diffFacility(facility.value, facilityDraft));
 const hasBlockingAppDiagnostics = computed(() => hasBlockingDiagnostic(diagnostics.value));
 const hasBlockingFacilityDiagnostics = computed(() => hasBlockingDiagnostic(facilityDiagnostics.value));
-const appRows = computed(() => filteredApplications.value.map((app) => ({ app, routes: routeSummary(app), summary: runtimeSummary(runtimes.value[app.id]) })));
-const filteredApplications = computed(() => {
-  const term = search.value.trim().toLowerCase();
-  if (!term) return applications.value;
-  return applications.value.filter((app) => [app.name, app.imageReference, app.namespace, app.runtimeStatus].some((value) => String(value ?? '').toLowerCase().includes(term)));
-});
+const appRows = computed(() => applications.value.map((app) => ({ app, routes: routeSummary(applicationDetails.value[app.id] ?? emptyApplication()), summary: runtimeSummary(runtimes.value[app.id]) })));
 const facilityConfigSummary = computed(() => ({
-  gateways: currentFacilitySummary.value?.metrics.deploymentServers ?? facility.value?.deploymentServers.length ?? 0,
-  routes: currentFacilitySummary.value?.metrics.routes ?? facility.value?.routes ?? 0,
-  assets: currentFacilitySummary.value?.metrics.staticAssets ?? facility.value?.staticAssets.length ?? 0,
-  appRoutes: currentFacilitySummary.value?.metrics.applicationRoutes ?? facility.value?.applicationRoutes.length ?? 0,
+  gateways: facility.value?.deploymentServers.length ?? 0,
+  routes: facility.value?.routes ?? 0,
+  assets: facility.value?.staticAssets.length ?? 0,
+  appRoutes: facility.value?.applicationRoutes.length ?? 0,
 }));
 const appWorkspacePanels = computed(() => [
   { id: 'identity', label: t('applicationsPage.panelIdentity'), description: t('applicationsPage.panelIdentityHint'), icon: PackageCheck },
@@ -188,7 +192,8 @@ const facilityRailSections = computed(() => facilitySectionNav.value.map((sectio
 })));
 const serverOptions = computed(() => {
   const ids = new Set<string>();
-  applications.value.forEach((app) => app.deploymentServers.forEach((id) => ids.add(id)));
+  Object.values(applicationDetails.value).forEach((app) => app.deploymentServers.forEach((id) => ids.add(id)));
+  appDraft.deploymentServers.forEach((id) => ids.add(id));
   facility.value?.deploymentServers.forEach((id) => ids.add(id));
   facility.value?.enabledServers.forEach((id) => ids.add(id));
   return Array.from(ids).map((id) => ({ id, label: id, name: id, description: t('applicationsPage.serverOptionDescription', { id }) }));
@@ -241,17 +246,28 @@ const facilityDomainOriginServersModel = computed({
 
 watch(search, (value) => {
   void router.replace({ query: { ...route.query, search: value || undefined } });
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    page.value = 1;
+    if (mode.value === 'apps') void loadApplications({ loadSelectedRuntime: true });
+  }, 250);
+});
+
+watch(page, () => {
+  if (mode.value === 'apps') void loadApplications({ loadSelectedRuntime: true });
 });
 
 watch(selectedId, async (value) => {
   if (value) {
     await router.replace({ query: { ...route.query, application: value } });
+    void loadApplicationDetail(value);
     await loadRuntime(value);
   }
 });
 
 watch(() => route.path, async () => {
   cancelRuntimeLoad();
+  cancelApplicationDetailLoad();
   cancelEditorQuery();
   actionError.value = '';
   feedback.value = '';
@@ -274,7 +290,10 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
 
 async function load() {
   const currentMode = mode.value;
-  if (currentMode !== 'apps') cancelRuntimeLoad();
+  if (currentMode !== 'apps') {
+    cancelRuntimeLoad();
+    cancelApplicationDetailLoad();
+  }
   if (currentMode === 'apps') {
     await loadApplications({ loadSelectedRuntime: true });
     return;
@@ -297,11 +316,18 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
   loading.value = true;
   error.value = '';
   try {
-    const apps = await applicationsApi.list({ signal: controller.signal });
+    const result = await applicationsApi.list({ page: page.value, pageSize, q: search.value.trim() || undefined }, { signal: controller.signal });
     if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
+    const apps = result.items;
     applications.value = apps;
+    totalApplications.value = result.total;
+    const appIds = new Set(apps.map((item) => item.id));
+    applicationDetails.value = Object.fromEntries(Object.entries(applicationDetails.value).filter(([id]) => appIds.has(id)));
     selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : apps[0]?.id ?? '';
-    if (options.loadSelectedRuntime) void loadRuntime(selectedId.value);
+    if (options.loadSelectedRuntime) {
+      void loadApplicationDetail(selectedId.value);
+      void loadRuntime(selectedId.value);
+    }
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
@@ -321,6 +347,12 @@ async function loadFacilityData() {
   try {
     const facilityList = await facilityAppsApi.listFacilities({ signal: controller.signal });
     if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
+    if (modeAtStart === 'facilityCatalog') {
+      facilities.value = facilityList;
+      facility.value = null;
+      facilitiesLoaded.value = true;
+      return;
+    }
     const primaryFacilityKind = facilityList.find((item) => item.kind === facilityKind.value)?.kind ?? facilityList[0]?.kind;
     const primaryFacility = primaryFacilityKind ? await facilityAppsApi.getFacility(primaryFacilityKind, { signal: controller.signal }) : null;
     if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
@@ -332,6 +364,33 @@ async function loadFacilityData() {
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
+  }
+}
+
+async function loadApplicationDetail(applicationId: string) {
+  applicationDetailController?.abort();
+  const requestId = ++applicationDetailRequestId;
+  const modeAtStart = mode.value;
+  if (!applicationId) {
+    detailLoading.value = false;
+    return;
+  }
+  if (modeAtStart !== 'apps') {
+    detailLoading.value = false;
+    return;
+  }
+  const controller = new AbortController();
+  applicationDetailController = controller;
+  detailLoading.value = true;
+  try {
+    const app = await applicationsApi.get(applicationId, { signal: controller.signal });
+    if (requestId !== applicationDetailRequestId || mode.value !== modeAtStart || applicationId !== selectedId.value) return;
+    applicationDetails.value = { ...applicationDetails.value, [applicationId]: app };
+  } catch (err) {
+    if (isAbortError(err)) return;
+    actionError.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
+  } finally {
+    if (requestId === applicationDetailRequestId) detailLoading.value = false;
   }
 }
 
@@ -414,8 +473,8 @@ async function confirmAction() {
     confirmOpen.value = false;
     return;
   }
-  const app = currentApplication.value;
-  if (!app) return;
+  const app = selectedApplication.value;
+  if (!currentApplicationSummary.value) return;
   if (confirmKind.value === 'delete') {
     await runOperation('delete', () => applicationsApi.delete(app.id), 'applicationsPage.deleted');
   } else {
@@ -433,8 +492,8 @@ async function downloadPersistentData(app: ApplicationDto) {
 
 async function restorePersistentData(fileOrFiles: File | File[]) {
   const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
-  if (!file || !currentApplication.value) return;
-  await runOperation('persistent-restore', () => applicationsApi.restorePersistentData(currentApplication.value!.id, file), 'applicationsPage.restoreAccepted');
+  if (!file || !currentApplicationSummary.value) return;
+  await runOperation('persistent-restore', () => applicationsApi.restorePersistentData(selectedApplication.value.id, file), 'applicationsPage.restoreAccepted');
 }
 
 async function startApplicationEditor() {
@@ -446,7 +505,13 @@ async function startApplicationEditor() {
   const modeAtStart = mode.value;
   await ensureApplicationsLoaded();
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
-  const app = appId ? applications.value.find((item) => item.id === appId) : null;
+  let app: ApplicationDto | null = null;
+  if (appId) {
+    selectedId.value = appId;
+    app = applicationDetails.value[appId] ?? await applicationsApi.get(appId, { signal: controller.signal });
+    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
+    applicationDetails.value = { ...applicationDetails.value, [appId]: app };
+  }
   Object.assign(appDraft, draftFromApplication(app));
   diagnostics.value = [];
   preview.value = null;
@@ -821,6 +886,23 @@ function emptyApplication(): ApplicationDto {
   return { id: '', version: 0, kind: 'application', name: '', enabled: true, specYaml: '', variables: {}, deploymentMode: 'all', deploymentServers: [], reverseProxy: [], generation: 0, specHash: '', imageUpdateAvailable: false, jobId: '', namespace: '', createdAt: '', updatedAt: '' };
 }
 
+function applicationFromSummary(app?: ApplicationSummaryDto | null): ApplicationDto | null {
+  if (!app) return null;
+  return {
+    ...emptyApplication(),
+    id: app.id,
+    name: app.name,
+    enabled: app.enabled,
+    imageReference: app.imageReference,
+    imageUpdateAvailable: app.imageUpdateAvailable,
+    jobId: app.jobId,
+    namespace: app.namespace,
+    runtimeStatus: app.runtimeStatus,
+    lastError: app.lastError,
+    updatedAt: app.updatedAt,
+  };
+}
+
 function emptyFacility(): ReverseProxyConfig {
   return { id: 'reverse_proxy', version: 0, deploymentServers: [], panelEntry: { enabled: false }, domains: [], staticAssets: [], routeSummaries: [], applicationRoutes: [], updatedAt: '', routes: 0, enabledServers: [] };
 }
@@ -832,6 +914,12 @@ function isAbortError(error: unknown) {
 function cancelRuntimeLoad() {
   runtimeController?.abort();
   runtimeRequestId += 1;
+  detailLoading.value = false;
+}
+
+function cancelApplicationDetailLoad() {
+  applicationDetailController?.abort();
+  applicationDetailRequestId += 1;
   detailLoading.value = false;
 }
 
@@ -848,9 +936,11 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
   window.removeEventListener('beforeunload', handleBeforeUnload);
   pageLoadController?.abort();
   cancelRuntimeLoad();
+  cancelApplicationDetailLoad();
   cancelEditorQuery();
 });
 </script>
@@ -864,7 +954,7 @@ onBeforeUnmount(() => {
 
     <MasterDetailLayout class="h-full min-h-[660px]">
       <template #master>
-      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-card">
+      <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-card">
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
@@ -895,6 +985,7 @@ onBeforeUnmount(() => {
             </div>
           </button>
         </div>
+        <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="totalApplications" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
       </aside>
       </template>
 
@@ -920,7 +1011,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
         </article>
-        <EmptyState v-else-if="!currentApplication" :title="t('applicationsPage.selectApplication')" :description="t('applicationsPage.selectApplicationHint')" />
+        <EmptyState v-else-if="!currentApplicationSummary" :title="t('applicationsPage.selectApplication')" :description="t('applicationsPage.selectApplicationHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div class="min-w-0">
@@ -1032,9 +1123,6 @@ onBeforeUnmount(() => {
                 </div>
                 <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
               </div>
-              <div class="grid grid-cols-4 gap-2 max-lg:grid-cols-2 max-sm:grid-cols-1">
-                <div v-for="metric in 4" :key="metric" class="motion-skeleton h-20 rounded-xl bg-muted animate-pulse" />
-              </div>
               <div class="flex gap-2">
                 <div v-for="button in 3" :key="button" class="motion-skeleton h-8 w-24 rounded bg-muted animate-pulse" />
               </div>
@@ -1051,12 +1139,6 @@ onBeforeUnmount(() => {
                   <p class="m-0 mt-2 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
                 </div>
                 <StatusBadge :status="item.status" :tone="item.status === 'degraded' ? 'danger' : 'success'" :label="t(`applicationsPage.facilityStatus.${item.status}`)" />
-              </div>
-              <div class="grid grid-cols-4 gap-2 text-sm max-lg:grid-cols-2 max-sm:grid-cols-1">
-                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ item.metrics.deploymentServers }}</strong></div>
-                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.gatewayRoutes') }}</span><strong>{{ item.metrics.routes }}</strong></div>
-                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.staticAssets') }}</span><strong>{{ item.metrics.staticAssets }}</strong></div>
-                <div class="rounded-xl border border-border p-3"><span>{{ t('applicationsPage.applicationRoutes') }}</span><strong>{{ item.metrics.applicationRoutes }}</strong></div>
               </div>
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${item.kind}`)">{{ t('common.view') }}</Button>

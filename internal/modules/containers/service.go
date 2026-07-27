@@ -33,6 +33,7 @@ const (
 	TaskVolumeDelete         = "volume_delete"
 	TaskVolumeDeleteUnused   = "volume_delete_unused"
 	TaskVolumeRefresh        = "volume_refresh"
+	TaskNetworkRefresh       = "network_refresh"
 	TaskApplicationReconcile = "application_reconcile"
 )
 
@@ -81,6 +82,18 @@ type Container struct {
 	InstanceID    string `json:"instanceId,omitempty"`
 }
 
+type ContainerSummary struct {
+	ID            string                     `json:"id"`
+	Names         []string                   `json:"names"`
+	Image         string                     `json:"image"`
+	State         string                     `json:"state"`
+	Status        string                     `json:"status"`
+	Ports         []agentcontract.DockerPort `json:"ports"`
+	Managed       bool                       `json:"managed"`
+	ApplicationID string                     `json:"applicationId,omitempty"`
+	InstanceID    string                     `json:"instanceId,omitempty"`
+}
+
 type ContainerLogs struct {
 	ContainerID string `json:"containerId"`
 	Logs        string `json:"logs"`
@@ -100,12 +113,16 @@ type Image struct {
 	Upgradeable     bool       `json:"upgradeable"`
 }
 
-type ImageList struct {
-	ServerID        string     `json:"serverId"`
-	Items           []Image    `json:"items"`
-	LastRefreshedAt *time.Time `json:"lastRefreshedAt,omitempty"`
-	Refreshing      bool       `json:"refreshing"`
+type SnapshotList[T any] struct {
+	Items            []T        `json:"items"`
+	ObservedAt       *time.Time `json:"observedAt,omitempty"`
+	Stale            bool       `json:"stale"`
+	Refreshing       bool       `json:"refreshing"`
+	RefreshTaskID    string     `json:"refreshTaskId,omitempty"`
+	LastRefreshError string     `json:"lastRefreshError,omitempty"`
 }
+
+type ImageList = SnapshotList[Image]
 
 type OperationResult struct {
 	RefreshTaskID string `json:"refreshTaskId,omitempty"`
@@ -159,20 +176,15 @@ func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, tas
 	return s
 }
 
-func (s *Service) Containers(ctx context.Context, serverID string) ([]Container, error) {
+func (s *Service) Containers(ctx context.Context, serverID string) (SnapshotList[ContainerSummary], error) {
 	if _, _, err := s.readyServer(ctx, serverID); err != nil {
-		return nil, err
+		return SnapshotList[ContainerSummary]{}, err
 	}
-	items, _, err := s.reportedContainers(ctx, serverID)
+	items, observedAt, err := s.reportedContainerSummaries(ctx, serverID)
 	if err != nil {
-		return nil, err
+		return SnapshotList[ContainerSummary]{}, err
 	}
-	out := make([]Container, 0, len(items))
-	for _, item := range items {
-		appID, instanceID, managed := managedLabels(item.Labels)
-		out = append(out, Container{DockerContainer: item, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
-	}
-	return out, nil
+	return SnapshotList[ContainerSummary]{Items: items, ObservedAt: observedAt, Stale: observedAt == nil}, nil
 }
 
 func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, sampleAt time.Time, items []agentcontract.DockerContainer) error {
@@ -202,8 +214,12 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO container_observations(server_id,container_id,sample_at,container_json,managed,application_id,instance_id,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
-			serverID, item.ID, sampleAt.Format(time.RFC3339Nano), string(raw), boolInt(managed), appID, instanceID, now); err != nil {
+		summaryRaw, err := json.Marshal(ContainerSummary{ID: item.ID, Names: item.Names, Image: item.Image, State: item.State, Status: item.Status, Ports: item.Ports, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO container_observations(server_id,container_id,sample_at,container_json,summary_json,managed,application_id,instance_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			serverID, item.ID, sampleAt.Format(time.RFC3339Nano), string(raw), string(summaryRaw), boolInt(managed), appID, instanceID, now); err != nil {
 			return err
 		}
 		if managed {
@@ -215,6 +231,40 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 		}
 	}
 	return tx.Commit()
+}
+
+func (s *Service) reportedContainerSummaries(ctx context.Context, serverID string) ([]ContainerSummary, *time.Time, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT summary_json,container_json,sample_at FROM container_observations WHERE server_id=? ORDER BY container_id`, serverID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	items := []ContainerSummary{}
+	var latest time.Time
+	for rows.Next() {
+		var raw, legacyRaw, sampleRaw string
+		if err := rows.Scan(&raw, &legacyRaw, &sampleRaw); err != nil {
+			return nil, nil, err
+		}
+		if raw == "" || raw == "{}" {
+			raw = legacyRaw
+		}
+		var item ContainerSummary
+		if err := json.Unmarshal([]byte(raw), &item); err != nil {
+			return nil, nil, err
+		}
+		if sampleAt, err := time.Parse(time.RFC3339Nano, sampleRaw); err == nil && sampleAt.After(latest) {
+			latest = sampleAt
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if latest.IsZero() {
+		return items, nil, nil
+	}
+	return items, &latest, nil
 }
 
 func (s *Service) reportedContainers(ctx context.Context, serverID string) ([]agentcontract.DockerContainer, *time.Time, error) {
@@ -323,18 +373,13 @@ func (s *Service) ensureContainerActionAllowed(ctx context.Context, serverID, co
 }
 
 func (s *Service) Images(ctx context.Context, serverID string) (ImageList, error) {
-	srv, baseURL, err := s.readyServer(ctx, serverID)
+	var images []agentcontract.DockerImage
+	observedAt, err := s.resourceSnapshot(ctx, serverID, "images", &images)
 	if err != nil {
 		return ImageList{}, err
 	}
-	images, err := s.agent.DockerImages(ctx, baseURL)
+	containers, _, err := s.reportedContainers(ctx, serverID)
 	if err != nil {
-		_ = s.handleAgentError(ctx, srv, err)
-		return ImageList{}, err
-	}
-	containers, err := s.agent.DockerContainers(ctx, baseURL)
-	if err != nil {
-		_ = s.handleAgentError(ctx, srv, err)
 		return ImageList{}, err
 	}
 	imageApps := map[string]map[string]struct{}{}
@@ -375,7 +420,13 @@ func (s *Service) Images(ctx context.Context, serverID string) (ImageList, error
 		}
 		out = append(out, item)
 	}
-	return ImageList{ServerID: serverID, Items: out, LastRefreshedAt: refreshedAt, Refreshing: s.isRefreshing(serverID)}, nil
+	if refreshedAt == nil {
+		refreshedAt = observedAt
+	}
+	if refreshedAt == nil {
+		refreshedAt = observedAt
+	}
+	return ImageList{Items: out, ObservedAt: refreshedAt, Stale: refreshedAt == nil, Refreshing: s.isRefreshing(serverID)}, nil
 }
 
 func (s *Service) PullImage(ctx context.Context, serverID, reference string) (OperationResult, error) {
@@ -469,28 +520,16 @@ func (s *Service) DeleteUnusedImages(ctx context.Context, serverID string) (Oper
 	return s.refreshOperationResult(ctx, serverID, "images")
 }
 
-func (s *Service) Networks(ctx context.Context, serverID string) ([]agentcontract.DockerNetwork, error) {
-	srv, baseURL, err := s.readyServer(ctx, serverID)
-	if err != nil {
-		return nil, err
-	}
-	items, err := s.agent.DockerNetworks(ctx, baseURL)
-	if err != nil {
-		_ = s.handleAgentError(ctx, srv, err)
-	}
-	return items, err
+func (s *Service) Networks(ctx context.Context, serverID string) (SnapshotList[agentcontract.DockerNetwork], error) {
+	items := []agentcontract.DockerNetwork{}
+	observedAt, err := s.resourceSnapshot(ctx, serverID, "networks", &items)
+	return SnapshotList[agentcontract.DockerNetwork]{Items: items, ObservedAt: observedAt, Stale: observedAt == nil, Refreshing: s.isRefreshing(serverID)}, err
 }
 
-func (s *Service) Volumes(ctx context.Context, serverID string) ([]agentcontract.DockerVolume, error) {
-	srv, baseURL, err := s.readyServer(ctx, serverID)
-	if err != nil {
-		return nil, err
-	}
-	items, err := s.agent.DockerVolumes(ctx, baseURL)
-	if err != nil {
-		_ = s.handleAgentError(ctx, srv, err)
-	}
-	return items, err
+func (s *Service) Volumes(ctx context.Context, serverID string) (SnapshotList[agentcontract.DockerVolume], error) {
+	items := []agentcontract.DockerVolume{}
+	observedAt, err := s.resourceSnapshot(ctx, serverID, "volumes", &items)
+	return SnapshotList[agentcontract.DockerVolume]{Items: items, ObservedAt: observedAt, Stale: observedAt == nil, Refreshing: s.isRefreshing(serverID)}, err
 }
 
 func (s *Service) DeleteVolume(ctx context.Context, serverID, name string) (OperationResult, error) {
@@ -556,8 +595,21 @@ func (s *Service) DeleteUnusedVolumes(ctx context.Context, serverID string) (Ope
 
 func (s *Service) RefreshVolumes(ctx context.Context, serverID, triggerType, operationID string) (tasks.Task, error) {
 	return s.startSimpleResourceRefresh(ctx, serverID, TaskVolumeRefresh, triggerType, operationID, "Refreshing volumes", "Volumes refreshed", func(runCtx context.Context, baseURL string) error {
-		_, err := s.agent.DockerVolumes(runCtx, baseURL)
-		return err
+		items, err := s.agent.DockerVolumes(runCtx, baseURL)
+		if err != nil {
+			return err
+		}
+		return s.replaceResourceSnapshot(runCtx, serverID, "volumes", items)
+	})
+}
+
+func (s *Service) RefreshNetworks(ctx context.Context, serverID, triggerType, operationID string) (tasks.Task, error) {
+	return s.startSimpleResourceRefresh(ctx, serverID, TaskNetworkRefresh, triggerType, operationID, "Refreshing networks", "Networks refreshed", func(runCtx context.Context, baseURL string) error {
+		items, err := s.agent.DockerNetworks(runCtx, baseURL)
+		if err != nil {
+			return err
+		}
+		return s.replaceResourceSnapshot(runCtx, serverID, "networks", items)
 	})
 }
 
@@ -1160,7 +1212,44 @@ func (s *Service) runImageRefresh(ctx context.Context, task tasks.Task, serverID
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return
 	}
+	if err = s.replaceResourceSnapshot(ctx, serverID, "images", images); err != nil {
+		_ = s.tasks.Fail(ctx, task.ID, err)
+		return
+	}
 	_ = s.tasks.Complete(ctx, task.ID, "Image updates refreshed")
+}
+
+func (s *Service) replaceResourceSnapshot(ctx context.Context, serverID, resourceType string, items any) error {
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO docker_resource_snapshots(server_id,resource_type,items_json,observed_at) VALUES(?,?,?,?)
+		ON CONFLICT(server_id,resource_type) DO UPDATE SET items_json=excluded.items_json,observed_at=excluded.observed_at`,
+		serverID, resourceType, string(raw), time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *Service) resourceSnapshot(ctx context.Context, serverID, resourceType string, out any) (*time.Time, error) {
+	if _, _, err := s.readyServer(ctx, serverID); err != nil {
+		return nil, err
+	}
+	var raw, observedRaw string
+	err := s.db.QueryRowContext(ctx, `SELECT items_json,observed_at FROM docker_resource_snapshots WHERE server_id=? AND resource_type=?`, serverID, resourceType).Scan(&raw, &observedRaw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal([]byte(raw), out); err != nil {
+		return nil, err
+	}
+	observed, err := time.Parse(time.RFC3339Nano, observedRaw)
+	if err != nil {
+		return nil, nil
+	}
+	return &observed, nil
 }
 
 func (s *Service) runApplicationUpdates(task tasks.Task, applicationIDs []string) {

@@ -12,12 +12,6 @@ export interface FacilityAppSummary {
   descriptionKey: string;
   categoryKey: string;
   status: FacilityAppStatus;
-  metrics: {
-    deploymentServers: number;
-    routes: number;
-    staticAssets: number;
-    applicationRoutes: number;
-  };
   updatedAt?: string;
   operationStatus?: string;
   lastError?: string;

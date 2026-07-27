@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Download, FileArchive, KeyRound, Plus, RefreshCcw, RotateCcw, Trash2 } from '@lucide/vue';
 import { certificatesApi } from '@/api/certificates';
@@ -11,6 +11,7 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
+import PaginationBar from '@/components/ui/PaginationBar.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
@@ -40,6 +41,9 @@ const confirmDelete = ref(false);
 const saving = ref(false);
 const importPlan = ref<ImportPreflightDto | null>(null);
 const editingCertificateId = ref('');
+const page = ref(1);
+const pageSize = 50;
+const total = ref(0);
 
 const mode = computed(() => route.path.includes('/self-signed') ? 'self' : route.path.includes('/keys') ? 'keys' : 'domains');
 const title = computed(() => mode.value === 'self' ? t('routes.selfSigned.title') : mode.value === 'keys' ? t('routes.keys.title') : t('routes.certificates.title'));
@@ -66,6 +70,7 @@ const assetTypeOptions = [
 ];
 
 onMounted(load);
+watch(page, () => { void load(); });
 
 async function load() {
   loading.value = true;
@@ -73,14 +78,15 @@ async function load() {
   try {
     const [nextDomains, nextCerts, nextSelf, nextAssets] = await Promise.all([
       dnsApi.listDomains(),
-      certificatesApi.list(),
-      certificatesApi.listSelfSigned(),
-      keyAssetsApi.list(),
+      certificatesApi.list({ page: page.value, pageSize }),
+      certificatesApi.listSelfSignedPage({ page: page.value, pageSize }),
+      keyAssetsApi.listPage({ page: page.value, pageSize }),
     ]);
     domains.value = Array.isArray(nextDomains) ? nextDomains : [];
-    certs.value = (Array.isArray(nextCerts) ? nextCerts : []).map(normalizeDomainCertificate);
-    selfSigned.value = (Array.isArray(nextSelf) ? nextSelf : []).map(normalizeSelfSignedCertificate);
-    assets.value = (Array.isArray(nextAssets) ? nextAssets : []).map(normalizeKeyAsset);
+    certs.value = nextCerts.items.map(normalizeDomainCertificate);
+    selfSigned.value = nextSelf.items.map(normalizeSelfSignedCertificate);
+    assets.value = nextAssets.items.map(normalizeKeyAsset);
+    total.value = mode.value === 'self' ? nextSelf.total : mode.value === 'keys' ? nextAssets.total : nextCerts.total;
     const visibleAssets = assets.value.filter((item) => !isSystemManagedAsset(item));
     const list = mode.value === 'self' ? selfSigned.value : mode.value === 'keys' ? visibleAssets : certs.value;
     selectedId.value = list.some((item) => item.id === selectedId.value) ? selectedId.value : list[0]?.id ?? '';
@@ -93,7 +99,8 @@ async function load() {
 
 function switchMode(path: string) {
   selectedId.value = '';
-  void router.push(path).then(load);
+  page.value = 1;
+  void router.push(path).then(() => { if (page.value === 1) void load(); });
 }
 
 function openIssue() {
@@ -387,7 +394,8 @@ function onFile(event: Event) {
 
       <MasterDetailLayout class="min-h-0">
         <template #master>
-        <aside class="min-h-0 min-w-0 overflow-auto rounded-2xl border border-border bg-card p-2">
+        <aside class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-card">
+          <div class="min-h-0 overflow-auto p-2">
           <div v-if="loading && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>
@@ -410,6 +418,8 @@ function onFile(event: Event) {
               <span class="truncate text-xs text-muted-foreground">{{ asset.fingerprint || t('common.notAvailable') }}</span>
             </button>
           </template>
+          </div>
+          <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
         </aside>
         </template>
 

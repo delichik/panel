@@ -34,6 +34,11 @@ type service interface {
 	ExecuteImport(ctx context.Context, planID string, in ImportExecuteRequest) (ImportExecuteResult, error)
 }
 
+type summaryListService interface {
+	ListSummaries(context.Context) ([]Asset, error)
+	ListSummaryPage(context.Context, int, int, string) (httpx.ListPage[Asset], error)
+}
+
 type Handler struct {
 	service service
 }
@@ -46,30 +51,28 @@ type assetReferenceDTO struct {
 }
 
 type assetSummaryDTO struct {
-	ID             string              `json:"id"`
-	Type           string              `json:"type"`
-	Name           string              `json:"name"`
-	ParentAssetID  string              `json:"parentAssetId,omitempty"`
-	Algorithm      string              `json:"algorithm,omitempty"`
-	KeySize        int                 `json:"keySize,omitempty"`
-	CommonName     string              `json:"commonName,omitempty"`
-	DNSNames       []string            `json:"dnsNames"`
-	IPAddresses    []string            `json:"ipAddresses"`
-	Fingerprint    string              `json:"fingerprint"`
-	NotBefore      *time.Time          `json:"notBefore,omitempty"`
-	NotAfter       *time.Time          `json:"notAfter,omitempty"`
-	HasCertificate bool                `json:"hasCertificate"`
-	HasPrivateKey  bool                `json:"hasPrivateKey"`
-	HasPublicKey   bool                `json:"hasPublicKey"`
-	DownloadKinds  []string            `json:"downloadKinds"`
-	ChildCount     int                 `json:"childCount"`
-	ReferenceCount int                 `json:"referenceCount"`
-	References     []assetReferenceDTO `json:"references"`
-	CanReissue     bool                `json:"canReissue"`
-	CanRegenerate  bool                `json:"canRegenerate"`
-	CanDelete      bool                `json:"canDelete"`
-	CreatedAt      time.Time           `json:"createdAt"`
-	UpdatedAt      time.Time           `json:"updatedAt"`
+	ID             string     `json:"id"`
+	Type           string     `json:"type"`
+	Name           string     `json:"name"`
+	ParentAssetID  string     `json:"parentAssetId,omitempty"`
+	Algorithm      string     `json:"algorithm,omitempty"`
+	KeySize        int        `json:"keySize,omitempty"`
+	CommonName     string     `json:"commonName,omitempty"`
+	DNSNames       []string   `json:"dnsNames"`
+	IPAddresses    []string   `json:"ipAddresses"`
+	Fingerprint    string     `json:"fingerprint"`
+	NotBefore      *time.Time `json:"notBefore,omitempty"`
+	NotAfter       *time.Time `json:"notAfter,omitempty"`
+	HasCertificate bool       `json:"hasCertificate"`
+	HasPrivateKey  bool       `json:"hasPrivateKey"`
+	HasPublicKey   bool       `json:"hasPublicKey"`
+	DownloadKinds  []string   `json:"downloadKinds"`
+	ChildCount     int        `json:"childCount"`
+	CanReissue     bool       `json:"canReissue"`
+	CanRegenerate  bool       `json:"canRegenerate"`
+	CanDelete      bool       `json:"canDelete"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	UpdatedAt      time.Time  `json:"updatedAt"`
 }
 
 type assetDetailDTO struct {
@@ -129,16 +132,28 @@ func NewHandler(service service) *Handler {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.List(r.Context())
+	page, pageSize, err := httpx.ParseListPage(r, "q")
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	items := make([]assetSummaryDTO, 0, len(result))
-	for _, asset := range result {
+	var result httpx.ListPage[Asset]
+	if summaries, ok := h.service.(summaryListService); ok {
+		result, err = summaries.ListSummaryPage(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
+	} else {
+		items, listErr := h.service.List(r.Context())
+		err = listErr
+		result = httpx.ListPage[Asset]{Items: items, Total: len(items), Page: 1, PageSize: len(items)}
+	}
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	items := make([]assetSummaryDTO, 0, len(result.Items))
+	for _, asset := range result.Items {
 		items = append(items, toAssetSummaryDTO(asset))
 	}
-	httpx.JSON(w, http.StatusOK, items)
+	httpx.JSON(w, http.StatusOK, httpx.ListPage[assetSummaryDTO]{Items: items, Total: result.Total, Page: result.Page, PageSize: result.PageSize})
 }
 
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
@@ -334,7 +349,6 @@ func writeMutation(w http.ResponseWriter, status int, asset Asset, taskID, opera
 }
 
 func toAssetSummaryDTO(asset Asset) assetSummaryDTO {
-	references := referencesForAsset(asset)
 	return assetSummaryDTO{
 		ID:             asset.ID,
 		Type:           asset.Type,
@@ -353,8 +367,6 @@ func toAssetSummaryDTO(asset Asset) assetSummaryDTO {
 		HasPublicKey:   strings.TrimSpace(asset.PublicKey) != "",
 		DownloadKinds:  append([]string(nil), asset.FileKinds...),
 		ChildCount:     asset.ChildCount,
-		ReferenceCount: len(references),
-		References:     references,
 		CanReissue:     asset.CanReissue,
 		CanRegenerate:  asset.CanRegenerate,
 		CanDelete:      !asset.InUse && !asset.HasChildren,

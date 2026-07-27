@@ -9,9 +9,11 @@ import type {
   ApplicationEditValidationResult,
   ApplicationRuntime,
   ApplicationSaveInput,
+  ApplicationSummaryDto,
   LogResult,
   OperationResult,
 } from '@/types/applications';
+import type { ListPage } from '@/types/pagination';
 
 function id(value: string) {
   return encodeURIComponent(value);
@@ -57,8 +59,12 @@ async function multipartJson<T>(path: string, form: FormData, idempotencyKey = k
 }
 
 export const applicationsApi = {
-  list(options?: ApiRequestOptions) {
-    return apiClient.get<ApplicationDto[]>('/applications', options);
+  list(params: { page?: number; pageSize?: number; q?: string } = {}, options?: ApiRequestOptions) {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([name, value]) => {
+      if (value !== undefined && value !== '') query.set(name, String(value));
+    });
+    return apiClient.get<ListPage<ApplicationSummaryDto>>(`/applications${query.size ? `?${query}` : ''}`, options);
   },
   get(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationDto>(`/applications/${id(applicationId)}`, options);

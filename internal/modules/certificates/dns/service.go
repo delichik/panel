@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 	"panel/internal/platform/secrets"
 )
@@ -21,12 +23,20 @@ type Service struct {
 	db              *sql.DB
 	secrets         *secretstore.Store
 	providerFactory func(domain ResolvedDomain) Provider
+	tasks           *tasks.Service
 }
 
-func NewService(db *sql.DB, secrets *secretstore.Store) *Service {
-	return &Service{db: db, secrets: secrets, providerFactory: func(domain ResolvedDomain) Provider {
+func NewService(db *sql.DB, secrets *secretstore.Store, taskServices ...*tasks.Service) *Service {
+	s := &Service{db: db, secrets: secrets, providerFactory: func(domain ResolvedDomain) Provider {
 		return NewCloudflareProvider(domain.APIToken, http.DefaultClient)
 	}}
+	if len(taskServices) > 0 {
+		s.tasks = taskServices[0]
+	}
+	if s.tasks != nil {
+		s.tasks.MustRegister(tasks.Definition{Type: "dns_records_refresh", AllowRetry: true, Execute: s.RunRecordsRefreshTask})
+	}
+	return s
 }
 
 func (s *Service) ListDomains(ctx context.Context) ([]Domain, error) {
@@ -44,6 +54,38 @@ func (s *Service) ListDomains(ctx context.Context) ([]Domain, error) {
 		out = append(out, domain)
 	}
 	return out, rows.Err()
+}
+
+func (s *Service) ListDomainPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[Domain], error) {
+	filter := "1=1"
+	args := []any{}
+	if query != "" {
+		filter = "name LIKE ? ESCAPE '\\'"
+		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		args = append(args, term)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dns_domains WHERE `+filter, args...).Scan(&total); err != nil {
+		return httpx.ListPage[Domain]{}, err
+	}
+	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,provider,created_at,updated_at FROM dns_domains WHERE `+filter+` ORDER BY name ASC,id ASC LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return httpx.ListPage[Domain]{}, err
+	}
+	defer rows.Close()
+	items := []Domain{}
+	for rows.Next() {
+		item, err := scanDomain(rows)
+		if err != nil {
+			return httpx.ListPage[Domain]{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return httpx.ListPage[Domain]{}, err
+	}
+	return httpx.ListPage[Domain]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Service) CreateDomain(ctx context.Context, in SaveDomainRequest) (Domain, error) {
@@ -130,11 +172,98 @@ func (s *Service) DeleteDomain(ctx context.Context, domainID string) error {
 }
 
 func (s *Service) ListRecords(ctx context.Context, domainID string) ([]Record, error) {
-	domain, provider, err := s.resolveProvider(ctx, domainID)
+	if _, err := s.GetDomain(ctx, domainID); err != nil {
+		return nil, err
+	}
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT records_json FROM dns_record_snapshots WHERE domain_id=?`, domainID).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return []Record{}, nil
+	}
 	if err != nil {
 		return nil, err
 	}
-	return provider.ListRecords(ctx, domain.Name)
+	items := []Record{}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (s *Service) ListRecordSnapshot(ctx context.Context, domainID string) (RecordSnapshot, error) {
+	if _, err := s.GetDomain(ctx, domainID); err != nil {
+		return RecordSnapshot{}, err
+	}
+	var raw, observedRaw, lastError string
+	err := s.db.QueryRowContext(ctx, `SELECT records_json,observed_at,last_error FROM dns_record_snapshots WHERE domain_id=?`, domainID).Scan(&raw, &observedRaw, &lastError)
+	if err == sql.ErrNoRows {
+		return RecordSnapshot{Items: []Record{}, Stale: true}, nil
+	}
+	if err != nil {
+		return RecordSnapshot{}, err
+	}
+	items := []Record{}
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return RecordSnapshot{}, err
+	}
+	observed, err := time.Parse(time.RFC3339Nano, observedRaw)
+	if err != nil {
+		return RecordSnapshot{Items: items, Stale: true, LastRefreshError: lastError}, nil
+	}
+	return RecordSnapshot{Items: items, ObservedAt: &observed, LastRefreshError: lastError}, nil
+}
+
+func (s *Service) RefreshRecords(ctx context.Context, domainID string) (tasks.Task, error) {
+	if s.tasks == nil {
+		return tasks.Task{}, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
+	}
+	if _, err := s.GetDomain(ctx, domainID); err != nil {
+		return tasks.Task{}, err
+	}
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{Type: "dns_records_refresh", ResourceType: "dns_domain", ResourceID: domainID, TriggerType: "user", Summary: "Refreshing DNS records"}, tasks.Trigger{Type: "user"})
+	if err != nil || !created {
+		return task, err
+	}
+	if err := s.tasks.Start(ctx, task.ID); err != nil {
+		return tasks.Task{}, err
+	}
+	go func() {
+		runCtx := s.tasks.ExecutionContext(task.ID)
+		defer s.tasks.FinishExecution(task.ID)
+		if err := s.refreshRecords(runCtx, domainID); err != nil {
+			_ = s.tasks.Fail(runCtx, task.ID, err)
+			return
+		}
+		_ = s.tasks.Complete(runCtx, task.ID, "DNS records refreshed")
+	}()
+	return task, nil
+}
+
+func (s *Service) RunRecordsRefreshTask(tc tasks.TaskContext) error {
+	if err := s.tasks.Start(tc.Context, tc.Task.ID); err != nil {
+		return err
+	}
+	if err := s.refreshRecords(tc.Context, tc.Task.ResourceID); err != nil {
+		return err
+	}
+	return s.tasks.Complete(tc.Context, tc.Task.ID, "DNS records refreshed")
+}
+
+func (s *Service) refreshRecords(ctx context.Context, domainID string) error {
+	domain, provider, err := s.resolveProvider(ctx, domainID)
+	if err != nil {
+		return err
+	}
+	items, err := provider.ListRecords(ctx, domain.Name)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO dns_record_snapshots(domain_id,records_json,observed_at,last_error) VALUES(?,?,?,'') ON CONFLICT(domain_id) DO UPDATE SET records_json=excluded.records_json,observed_at=excluded.observed_at,last_error=''`, domainID, string(raw), formatTime(time.Now().UTC()))
+	return err
 }
 
 func (s *Service) CreateRecord(ctx context.Context, domainID string, in RecordInput) (Record, error) {
@@ -146,7 +275,11 @@ func (s *Service) CreateRecord(ctx context.Context, domainID string, in RecordIn
 	if err != nil {
 		return Record{}, err
 	}
-	return provider.CreateRecord(ctx, domain.Name, record)
+	created, err := provider.CreateRecord(ctx, domain.Name, record)
+	if err == nil {
+		_ = s.refreshRecords(ctx, domainID)
+	}
+	return created, err
 }
 
 func (s *Service) UpdateRecord(ctx context.Context, domainID, recordID string, in RecordInput) (Record, error) {
@@ -161,7 +294,11 @@ func (s *Service) UpdateRecord(ctx context.Context, domainID, recordID string, i
 	if err != nil {
 		return Record{}, err
 	}
-	return provider.UpdateRecord(ctx, domain.Name, recordID, record)
+	updated, err := provider.UpdateRecord(ctx, domain.Name, recordID, record)
+	if err == nil {
+		_ = s.refreshRecords(ctx, domainID)
+	}
+	return updated, err
 }
 
 func (s *Service) DeleteRecord(ctx context.Context, domainID, recordID string) error {
@@ -172,7 +309,11 @@ func (s *Service) DeleteRecord(ctx context.Context, domainID, recordID string) e
 	if strings.TrimSpace(recordID) == "" {
 		return panelerr.Validation("dns_record_id_required", "DNS record ID is required")
 	}
-	return provider.DeleteRecord(ctx, domain.Name, recordID)
+	err = provider.DeleteRecord(ctx, domain.Name, recordID)
+	if err == nil {
+		_ = s.refreshRecords(ctx, domainID)
+	}
+	return err
 }
 
 func (s *Service) GetDomain(ctx context.Context, domainID string) (Domain, error) {

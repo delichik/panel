@@ -2,9 +2,9 @@ package runtimeevents
 
 import (
 	"net/http"
-	"strconv"
 	"time"
 
+	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 )
 
@@ -24,7 +24,12 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth func(http.Handler) htt
 }
 
 func (h *Handler) ListApplicationOperations(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.ListApplicationOperations(r.Context(), listFilterFromRequest(r))
+	filter, err := listFilterFromRequest(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	result, err := h.service.ListApplicationOperations(r.Context(), filter)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -42,7 +47,12 @@ func (h *Handler) GetApplicationOperation(w http.ResponseWriter, r *http.Request
 }
 
 func (h *Handler) ListSystemEvents(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.ListSystemEvents(r.Context(), listFilterFromRequest(r))
+	filter, err := listFilterFromRequest(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	result, err := h.service.ListSystemEvents(r.Context(), filter)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -59,18 +69,19 @@ func (h *Handler) GetSystemEvent(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, detail)
 }
 
-func listFilterFromRequest(r *http.Request) ListFilter {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	if pageSize > 0 {
-		limit = pageSize
+func listFilterFromRequest(r *http.Request) (ListFilter, error) {
+	allowed := []string{"applicationId", "action", "category", "subjectType", "subjectId", "source", "status", "severity", "eventType", "from", "to"}
+	page, pageSize, err := httpx.ParseListPage(r, allowed...)
+	if err != nil {
+		return ListFilter{}, err
 	}
-	if page <= 0 {
-		page = 1
+	from, err := parseQueryTime(r.URL.Query().Get("from"))
+	if err != nil {
+		return ListFilter{}, err
 	}
-	if limit <= 0 {
-		limit = 50
+	to, err := parseQueryTime(r.URL.Query().Get("to"))
+	if err != nil {
+		return ListFilter{}, err
 	}
 	return ListFilter{
 		ApplicationID: r.URL.Query().Get("applicationId"),
@@ -82,20 +93,17 @@ func listFilterFromRequest(r *http.Request) ListFilter {
 		Status:        r.URL.Query().Get("status"),
 		Severity:      r.URL.Query().Get("severity"),
 		EventType:     r.URL.Query().Get("eventType"),
-		From:          parseQueryTime(r.URL.Query().Get("from")),
-		To:            parseQueryTime(r.URL.Query().Get("to")),
-		Limit:         limit,
-		Offset:        (page - 1) * limit,
-	}
+		From:          from, To: to, Limit: pageSize, Offset: (page - 1) * pageSize,
+	}, nil
 }
 
-func parseQueryTime(value string) *time.Time {
+func parseQueryTime(value string) (*time.Time, error) {
 	if value == "" {
-		return nil
+		return nil, nil
 	}
 	t, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return nil
+		return nil, panelerr.BadRequest("time_invalid", "from and to must use RFC3339 format")
 	}
-	return &t
+	return &t, nil
 }

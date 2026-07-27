@@ -9,6 +9,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 )
 
@@ -251,6 +252,14 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 		out[i].LoadAverage = s.latestLoadAverage(ctx, out[i].ID)
 	}
 	return out, nil
+}
+
+func (s *Service) ListSummaries(ctx context.Context) ([]ServerSummary, error) {
+	return s.repo.ListSummaries(ctx)
+}
+
+func (s *Service) ListSummaryPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[ServerSummary], error) {
+	return s.repo.ListSummaryPage(ctx, page, pageSize, query)
 }
 
 func (s *Service) Get(ctx context.Context, serverID string) (Server, error) {

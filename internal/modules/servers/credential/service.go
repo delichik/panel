@@ -9,6 +9,7 @@ import (
 	"time"
 
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 	"panel/internal/platform/secrets"
 )
@@ -62,6 +63,38 @@ func (s *Service) List(ctx context.Context) ([]Credential, error) {
 		out = append(out, c)
 	}
 	return out, rows.Err()
+}
+
+func (s *Service) ListPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[Credential], error) {
+	filter := "1=1"
+	args := []any{}
+	if query != "" {
+		filter = "(name LIKE ? ESCAPE '\\' OR username LIKE ? ESCAPE '\\')"
+		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		args = append(args, term, term)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM credentials WHERE `+filter, args...).Scan(&total); err != nil {
+		return httpx.ListPage[Credential]{}, err
+	}
+	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,username,created_at,updated_at FROM credentials WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return httpx.ListPage[Credential]{}, err
+	}
+	defer rows.Close()
+	items := []Credential{}
+	for rows.Next() {
+		item, err := scanCredential(rows)
+		if err != nil {
+			return httpx.ListPage[Credential]{}, err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return httpx.ListPage[Credential]{}, err
+	}
+	return httpx.ListPage[Credential]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Service) Update(ctx context.Context, credentialID string, req UpdateRequest) (Credential, error) {

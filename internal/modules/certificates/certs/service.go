@@ -21,6 +21,7 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 )
 
@@ -461,6 +462,45 @@ func (s *Service) List(ctx context.Context) ([]Certificate, error) {
 		out = append(out, cert)
 	}
 	return out, rows.Err()
+}
+
+func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[CertificateSummary], error) {
+	filter := "1=1"
+	args := []any{}
+	if query != "" {
+		filter = "(name LIKE ? ESCAPE '\\' OR domain LIKE ? ESCAPE '\\')"
+		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		args = append(args, term, term)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificates WHERE `+filter, args...).Scan(&total); err != nil {
+		return httpx.ListPage[CertificateSummary]{}, err
+	}
+	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,domain_id,domain,prefix,scope,domains_json,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at FROM certificates WHERE `+filter+` ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, listArgs...)
+	if err != nil {
+		return httpx.ListPage[CertificateSummary]{}, err
+	}
+	defer rows.Close()
+	items := []CertificateSummary{}
+	for rows.Next() {
+		var item CertificateSummary
+		var domains string
+		var autoRenew int
+		var nextRenewAt, notBefore, notAfter, createdAt, updatedAt string
+		if err := rows.Scan(&item.ID, &item.Name, &item.DomainID, &item.Domain, &item.Prefix, &item.Scope, &domains, &item.Issuer, &item.Status, &item.LastError, &autoRenew, &nextRenewAt, &notBefore, &notAfter, &createdAt, &updatedAt); err != nil {
+			return httpx.ListPage[CertificateSummary]{}, err
+		}
+		_ = json.Unmarshal([]byte(domains), &item.Domains)
+		item.AutoRenew = autoRenew == 1
+		item.NextRenewAt, item.NotBefore, item.NotAfter = parseTime(nextRenewAt), parseTime(notBefore), parseTime(notAfter)
+		item.CreatedAt, item.UpdatedAt = parseTime(createdAt), parseTime(updatedAt)
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return httpx.ListPage[CertificateSummary]{}, err
+	}
+	return httpx.ListPage[CertificateSummary]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Service) Get(ctx context.Context, certID string) (Certificate, error) {

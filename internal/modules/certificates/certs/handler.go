@@ -10,11 +10,14 @@ import (
 
 type certificateService interface {
 	List(ctx context.Context) ([]Certificate, error)
+	ListSummaries(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[CertificateSummary], error)
+	Get(ctx context.Context, certID string) (Certificate, error)
 	Issue(ctx context.Context, in IssueRequest) (IssueResult, error)
 	Reissue(ctx context.Context, certID string, in IssueRequest) (IssueResult, error)
 	Delete(ctx context.Context, certID string) error
 	Renew(ctx context.Context, certID string) error
 	ListSelfSigned(ctx context.Context) ([]SelfSignedCertificate, error)
+	ListSelfSignedPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[SelfSignedCertificate], error)
 	CreateSelfSignedCA(ctx context.Context, in SelfSignedCARequest) (SelfSignedCertificate, error)
 	CreateSelfSignedLeaf(ctx context.Context, in SelfSignedLeafRequest) (SelfSignedCertificate, error)
 	RenewSelfSignedLeaf(ctx context.Context, certID string) (SelfSignedCertificate, error)
@@ -30,7 +33,12 @@ func (h *Handler) Renew(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListSelfSigned(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.ListSelfSigned(r.Context())
+	page, pageSize, err := httpx.ParseListPage(r, "q")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	result, err := h.service.ListSelfSignedPage(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -90,12 +98,26 @@ func NewHandler(service certificateService) *Handler {
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	certs, err := h.service.List(r.Context())
+	page, pageSize, err := httpx.ParseListPage(r, "q")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	certs, err := h.service.ListSummaries(r.Context(), page, pageSize, strings.TrimSpace(r.URL.Query().Get("q")))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
 	httpx.JSON(w, http.StatusOK, certs)
+}
+
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	cert, err := h.service.Get(r.Context(), certificateIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, cert)
 }
 
 func (h *Handler) Issue(w http.ResponseWriter, r *http.Request) {
