@@ -229,7 +229,8 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 		VALUES('app-1-server-1','app-1','server-1','now',1,?)`, time.Now().UTC().Add(30*time.Second).Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	svc.apps = &fakeApplicationUpdater{apps: []applications.Application{app}}
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
 	fakeAgent.containers = []agentcontract.DockerContainer{{
 		ID:    "container-1",
 		State: "exited",
@@ -250,6 +251,9 @@ func TestApplicationReconcileUsesBackoffAfterFailures(t *testing.T) {
 	if len(inputs) != 0 {
 		t.Fatalf("expected reconcile to wait for shared backoff, got %#v", inputs)
 	}
+	if len(updater.plans) != 0 {
+		t.Fatalf("expected reconcile planner to wait for shared backoff, got %#v", updater.plans)
+	}
 }
 
 func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
@@ -257,7 +261,8 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 	ctx := context.Background()
 	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
 	insertReconcileFixtureRows(t, store, app)
-	svc.apps = &fakeApplicationUpdater{apps: []applications.Application{app}}
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
 	nextRunAt := time.Now().UTC().Add(5 * time.Minute).Truncate(time.Second)
 	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at,reconcile_failures,reconcile_next_run_at)
 		VALUES('app-1-server-1','app-1','server-1','now',4,?)`, nextRunAt.Format(time.RFC3339Nano)); err != nil {
@@ -282,6 +287,9 @@ func TestApplicationReconcileSkipsUntilStoredBackoffTime(t *testing.T) {
 	}
 	if len(inputs) != 0 {
 		t.Fatalf("expected no reconcile input before stored backoff time, got %#v", inputs)
+	}
+	if len(updater.plans) != 0 {
+		t.Fatalf("expected no reconcile plan before stored backoff time, got %#v", updater.plans)
 	}
 	var storedNextRunAt string
 	if err := store.AppDB().QueryRow(`SELECT reconcile_next_run_at FROM application_reconcile_states WHERE application_id='app-1'`).Scan(&storedNextRunAt); err != nil {
@@ -433,10 +441,6 @@ func TestApplicationReconcilePlansWhenManagedContainerIsMissing(t *testing.T) {
 	insertReconcileFixtureRows(t, store, app)
 	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
 	svc.apps = updater
-	if _, err := store.AppDB().Exec(`INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
-		VALUES('app-1-server-1','app-1','server-1','now')`); err != nil {
-		t.Fatal(err)
-	}
 	saveReportedContainers(t, svc, "server-1", nil)
 
 	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
@@ -448,6 +452,100 @@ func TestApplicationReconcilePlansWhenManagedContainerIsMissing(t *testing.T) {
 	}
 	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || len(updater.plans[0].ServerIDs) != 1 || updater.plans[0].ServerIDs[0] != "server-1" || !updater.plans[0].ObservedRuntimeDrift {
 		t.Fatalf("missing container plan = %#v", updater.plans)
+	}
+}
+
+func TestApplicationReconcilePlansWhenManagedContainerIsCreatedWithoutReconcileState(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
+		State: "created",
+		Labels: map[string]string{
+			"panel.application.managed":     "true",
+			"panel.application.id":          app.ID,
+			"panel.application.instance.id": app.ID + "-server-1",
+			"panel.application.generation":  "3",
+			"panel.application.spec.hash":   "hash-3",
+		},
+	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+
+	if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(updater.plans) != 1 || len(updater.plans[0].ServerIDs) != 1 || updater.plans[0].ServerIDs[0] != "server-1" {
+		t.Fatalf("created container plan = %#v", updater.plans)
+	}
+}
+
+func TestApplicationReconcileDoesNotPlanHealthyContainerWithoutReconcileState(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	app := applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3"}
+	insertReconcileFixtureRows(t, store, app)
+	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
+	svc.apps = updater
+	fakeAgent.containers = []agentcontract.DockerContainer{{
+		ID:    "container-1",
+		State: "running",
+		Labels: map[string]string{
+			"panel.application.managed":     "true",
+			"panel.application.id":          app.ID,
+			"panel.application.instance.id": app.ID + "-server-1",
+			"panel.application.generation":  "3",
+			"panel.application.spec.hash":   "hash-3",
+		},
+	}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+
+	if _, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(updater.plans) != 0 {
+		t.Fatalf("healthy container should not plan, got %#v", updater.plans)
+	}
+}
+
+func TestApplicationReconcileSkipsInstanceOutsideCurrentDesiredState(t *testing.T) {
+	tests := []struct {
+		name         string
+		app          applications.Application
+		desiredState string
+	}{
+		{
+			name:         "desired stopped",
+			app:          applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3", DeploymentMode: applications.DeploymentModeAll},
+			desiredState: "stopped",
+		},
+		{
+			name:         "removed selected server",
+			app:          applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 3, SpecHash: "hash-3", DeploymentMode: applications.DeploymentModeSelected, DeploymentServers: []string{}},
+			desiredState: "running",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, _, _, store := newContainerizationTestService(t)
+			insertReconcileFixtureRows(t, store, tt.app)
+			if _, err := store.AppDB().Exec(`UPDATE application_instances SET desired_state=? WHERE application_id=?`, tt.desiredState, tt.app.ID); err != nil {
+				t.Fatal(err)
+			}
+			updater := &fakeApplicationUpdater{apps: []applications.Application{tt.app}}
+			svc.apps = updater
+			saveReportedContainers(t, svc, "server-1", nil)
+
+			if _, err := svc.CollectApplicationReconcileTasks(context.Background(), "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
+				t.Fatal(err)
+			}
+			if len(updater.plans) != 0 {
+				t.Fatalf("instance outside desired state should not plan, got %#v", updater.plans)
+			}
+		})
 	}
 }
 
@@ -543,6 +641,10 @@ func insertReconcileFixtureRows(t *testing.T, store *storage.Store, app applicat
 	}
 	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		app.ID, app.Name, boolInt(app.Enabled), "name: web\nimage: nginx\n", "{}", "{}", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,status,runtime_spec_json,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?)`, app.ID+"-server-1", app.ID, "server-1", "panel-web", "running", "running", "{}", "now", "now"); err != nil {
 		t.Fatal(err)
 	}
 }

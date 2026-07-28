@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -766,25 +767,33 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			}
 			observed[instanceID] = container
 		}
-		rows, err := s.db.QueryContext(ctx, `SELECT instance_id,application_id FROM application_reconcile_states WHERE server_id=?`, srv.ID)
+		rows, err := s.db.QueryContext(ctx, `SELECT id,application_id FROM application_instances WHERE server_id=? AND desired_state='running'`, srv.ID)
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("query desired application instances for server %s: %w", srv.ID, err)
 		}
 		type expected struct{ instanceID, appID string }
 		var expectedItems []expected
 		for rows.Next() {
 			var item expected
-			if rows.Scan(&item.instanceID, &item.appID) == nil {
-				expectedItems = append(expectedItems, item)
+			if err := rows.Scan(&item.instanceID, &item.appID); err != nil {
+				_ = rows.Close()
+				return nil, fmt.Errorf("scan desired application instance for server %s: %w", srv.ID, err)
 			}
+			expectedItems = append(expectedItems, item)
 		}
-		rows.Close()
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, fmt.Errorf("iterate desired application instances for server %s: %w", srv.ID, err)
+		}
+		if err := rows.Close(); err != nil {
+			return nil, fmt.Errorf("close desired application instances for server %s: %w", srv.ID, err)
+		}
 		for _, item := range expectedItems {
 			if len(wantedApps) > 0 && !wantedApps[item.appID] {
 				continue
 			}
 			app, ok := appByID[item.appID]
-			if !ok || !app.Enabled {
+			if !ok || !app.Enabled || !applicationWantsServer(app, srv.ID) {
 				continue
 			}
 			container, found := observed[item.instanceID]
@@ -831,6 +840,21 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 		}
 	}
 	return nil, nil
+}
+
+func applicationWantsServer(app applications.Application, serverID string) bool {
+	if app.DeploymentMode == applications.DeploymentModeAll || strings.TrimSpace(app.DeploymentMode) == "" {
+		return true
+	}
+	if app.DeploymentMode != applications.DeploymentModeSelected {
+		return false
+	}
+	for _, desiredServerID := range app.DeploymentServers {
+		if strings.TrimSpace(desiredServerID) == serverID {
+			return true
+		}
+	}
+	return false
 }
 
 func applicationReconcileBypassesBackoff(trigger tasks.PeriodicTrigger, payload ApplicationReconcileTrigger) bool {
