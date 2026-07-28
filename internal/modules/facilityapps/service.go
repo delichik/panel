@@ -390,8 +390,8 @@ func (s *Service) PlanRuntimeUpdate(_ context.Context, app applications.Applicat
 		Mode:   appruntime.UpdateModeReload,
 		Reason: "nginx configuration supports reload",
 		Strategy: &appruntime.ReloadStrategy{
-			ValidateCommand: []string{"nginx", "-t", "-c", "/etc/nginx/nginx.conf"},
-			ReloadCommand:   []string{"nginx", "-s", "reload"},
+			ValidateCommand: []string{"nginx", "-t", "-c", proxyContainerRoot + "/nginx.conf"},
+			ReloadCommand:   []string{"nginx", "-s", "reload", "-c", proxyContainerRoot + "/nginx.conf"},
 		},
 	}
 }
@@ -497,6 +497,7 @@ func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReversePro
 		ContainerName: proxyContainerName,
 		Name:          "reverse-proxy",
 		Image:         supportedProxyImage,
+		Command:       []string{"nginx", "-c", proxyContainerRoot + "/nginx.conf", "-g", "daemon off;"},
 		Ports:         ports,
 		NetworkMode:   networkMode,
 		Mounts:        mounts,
@@ -692,7 +693,7 @@ http {
         '' "";
     }
 
-    include /etc/nginx/conf.d/*.conf;
+    include /etc/panel-nginx/conf.d/*.conf;
 }
 `
 }

@@ -3,6 +3,7 @@ package facilityapps
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -137,6 +138,9 @@ func TestProxySpecMountsNginxConfigurationDirectory(t *testing.T) {
 	}
 	foundNginxMount := false
 	for _, mount := range spec.Mounts {
+		if mount.Target == "/etc/nginx" {
+			t.Fatalf("nginx image configuration must not be shadowed: %#v", spec.Mounts)
+		}
 		if mount.Source == proxyConfigRoot && mount.Target == proxyContainerRoot && mount.ReadOnly {
 			foundNginxMount = true
 		}
@@ -146,6 +150,16 @@ func TestProxySpecMountsNginxConfigurationDirectory(t *testing.T) {
 	}
 	if !foundNginxMount {
 		t.Fatalf("nginx directory mount missing: %#v", spec.Mounts)
+	}
+	wantCommand := []string{"nginx", "-c", "/etc/panel-nginx/nginx.conf", "-g", "daemon off;"}
+	if !reflect.DeepEqual(spec.Command, wantCommand) {
+		t.Fatalf("command = %#v, want %#v", spec.Command, wantCommand)
+	}
+	mainConfig := string(spec.Files[0].Content)
+	for _, want := range []string{"include /etc/nginx/mime.types;", "include /etc/panel-nginx/conf.d/*.conf;"} {
+		if !strings.Contains(mainConfig, want) {
+			t.Fatalf("main nginx config missing %q:\n%s", want, mainConfig)
+		}
 	}
 }
 
@@ -189,8 +203,8 @@ func TestProxySpecMountsTLSCertificatesOutsideNginxDirectory(t *testing.T) {
 		}
 	}
 	for _, mount := range spec.Mounts {
-		if mount.Target == "/etc/nginx/panel-certs" {
-			t.Fatalf("nested certificate mount still present: %#v", spec.Mounts)
+		if mount.Target == "/etc/nginx" || strings.HasPrefix(mount.Target, "/etc/nginx/") {
+			t.Fatalf("nginx image configuration must not be shadowed or nested: %#v", spec.Mounts)
 		}
 	}
 
@@ -246,6 +260,14 @@ func TestReverseProxyFacilityPlansReload(t *testing.T) {
 	plan := svc.PlanRuntimeUpdate(context.Background(), applications.Application{ID: proxyApplicationID}, server.Server{}, appruntime.Spec{}, appruntime.Spec{})
 	if plan.Mode != appruntime.UpdateModeReload || plan.Strategy == nil || len(plan.Strategy.ValidateCommand) == 0 || len(plan.Strategy.ReloadCommand) == 0 {
 		t.Fatalf("reload plan = %#v", plan)
+	}
+	wantValidate := []string{"nginx", "-t", "-c", "/etc/panel-nginx/nginx.conf"}
+	wantReload := []string{"nginx", "-s", "reload", "-c", "/etc/panel-nginx/nginx.conf"}
+	if !reflect.DeepEqual(plan.Strategy.ValidateCommand, wantValidate) {
+		t.Fatalf("validate command = %#v, want %#v", plan.Strategy.ValidateCommand, wantValidate)
+	}
+	if !reflect.DeepEqual(plan.Strategy.ReloadCommand, wantReload) {
+		t.Fatalf("reload command = %#v, want %#v", plan.Strategy.ReloadCommand, wantReload)
 	}
 }
 

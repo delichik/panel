@@ -14,7 +14,7 @@ const (
 	proxyContainerName   = "panel-facility-reverse-proxy"
 	proxyConfigRoot      = "nginx"
 	proxyConfigPath      = "nginx/nginx.conf"
-	proxyContainerRoot   = "/etc/nginx"
+	proxyContainerRoot   = "/etc/panel-nginx"
 	proxyConfigDir       = "nginx/conf.d"
 	proxyStaticMountRoot = "/srv/panel-static"
 	proxyTLSMountRoot    = "/etc/panel-certs"
