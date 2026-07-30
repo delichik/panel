@@ -120,7 +120,7 @@ export const facilityAppsApi = {
       previewToken: preview.token.value,
     }, { headers: { 'Idempotency-Key': key() } });
   },
-  putFacilityEditAsset(kind: string, sessionId: string, assetKey: string, revision: number, input: { file: File; name: string; kind: string }) {
+  putFacilityEditAsset(kind: string, sessionId: string, assetKey: string, revision: number, input: { file: File; name: string; kind: string; contentMode?: 'text' | 'binary' }) {
     assertSupported(kind);
     const form = new FormData();
     form.set('file', input.file);
@@ -128,6 +128,7 @@ export const facilityAppsApi = {
     form.set('clientOperationId', key());
     form.set('name', input.name);
     form.set('kind', input.kind);
+    form.set('contentMode', input.contentMode ?? 'binary');
     return multipartJson<FacilityEditSession>('PUT', `/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetKey)}`, form);
   },
   downloadFacilityEditAsset(kind: string, sessionId: string, assetKey: string, filename: string): Promise<DownloadResult> {

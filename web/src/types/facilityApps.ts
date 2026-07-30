@@ -53,6 +53,7 @@ export interface StaticAsset {
   id: string;
   name: string;
   kind: string;
+  contentMode: 'text' | 'binary';
   filename: string;
   size: number;
   sha256: string;
@@ -110,6 +111,7 @@ export interface FacilityEditAsset {
   sourceAssetId?: string;
   name: string;
   kind: string;
+  contentMode: 'text' | 'binary';
   filename: string;
   size: number;
   sha256: string;

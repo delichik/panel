@@ -216,8 +216,8 @@ export let mockFacility: ReverseProxyConfig = {
     },
   ],
   staticAssets: [
-    { id: 'asset-docs', name: 'docs bundle', kind: 'uploaded_bundle', filename: 'docs.zip', size: 7340032, sha256: 'sha-docs', createdAt: now, updatedAt: now },
-    { id: 'asset-release-index', name: 'release index', kind: 'uploaded_file', filename: 'index.html', size: 48216, sha256: 'sha-release-index', createdAt: now, updatedAt: now },
+    { id: 'asset-docs', name: 'docs bundle', kind: 'uploaded_bundle', contentMode: 'binary', filename: 'docs.zip', size: 7340032, sha256: 'sha-docs', createdAt: now, updatedAt: now },
+    { id: 'asset-release-index', name: 'release index', kind: 'uploaded_file', contentMode: 'binary', filename: 'index.html', size: 48216, sha256: 'sha-release-index', createdAt: now, updatedAt: now },
   ],
   routeSummaries: [
     { domain: 'panel.example.test', path: '/', source: 'system_panel', serverIds: ['srv-edge-sgp'], httpsStatus: 'domain_certificate', certificateName: 'panel.example.test' },
@@ -436,7 +436,7 @@ export function beginFacilitySession(): FacilityEditSession {
     baseResourceVersion: { value: String(mockFacility.version), updatedAt: mockFacility.updatedAt },
     draft: { deploymentServers: mockFacility.deploymentServers, panelEntry: mockFacility.panelEntry, domains: mockFacility.domains },
     revision: 1,
-    assets: mockFacility.staticAssets.map((asset) => ({ assetKey: asset.id, sourceAssetId: asset.id, name: asset.name, kind: asset.kind, filename: asset.filename, size: asset.size, sha256: asset.sha256, createdAt: asset.createdAt, updatedAt: asset.updatedAt })),
+    assets: mockFacility.staticAssets.map((asset) => ({ assetKey: asset.id, sourceAssetId: asset.id, name: asset.name, kind: asset.kind, contentMode: asset.contentMode, filename: asset.filename, size: asset.size, sha256: asset.sha256, createdAt: asset.createdAt, updatedAt: asset.updatedAt })),
     idleExpiresAt: '2026-07-22T08:00:00.000Z',
     absoluteExpiresAt: '2026-07-28T08:00:00.000Z',
     createdAt: now,
@@ -458,7 +458,7 @@ export function patchFacilitySession(id: string, draft: FacilityEditSession['dra
   return session;
 }
 
-export function putFacilityAsset(id: string, assetKey: string, input: { name: string; kind: string; filename: string; size: number }) {
+export function putFacilityAsset(id: string, assetKey: string, input: { name: string; kind: string; contentMode?: 'text' | 'binary'; filename: string; size: number }) {
   const session = facilitySessions.get(id);
   if (!session) return null;
   session.assets = session.assets.filter((asset) => asset.assetKey !== assetKey);
@@ -466,6 +466,7 @@ export function putFacilityAsset(id: string, assetKey: string, input: { name: st
     assetKey,
     name: input.name,
     kind: input.kind,
+    contentMode: input.contentMode ?? 'binary',
     filename: input.filename,
     size: input.size,
     sha256: `sha-${assetKey}`,
@@ -509,6 +510,7 @@ export function commitFacilitySession(id: string) {
       id: asset.sourceAssetId || asset.assetKey,
       name: asset.name,
       kind: asset.kind,
+      contentMode: asset.contentMode,
       filename: asset.filename,
       size: asset.size,
       sha256: asset.sha256,

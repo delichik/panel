@@ -11,10 +11,11 @@ import (
 )
 
 type FacilityAssetDownload struct {
-	Name     string
-	Kind     string
-	Filename string
-	Root     string
+	Name        string
+	Kind        string
+	ContentMode string
+	Filename    string
+	Root        string
 }
 
 func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, assetKey string) (FacilityAssetDownload, error) {
@@ -27,7 +28,7 @@ func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, a
 	}
 	var result FacilityAssetDownload
 	var sourceID, blobDir string
-	err = s.db.QueryRowContext(ctx, `SELECT name,kind,filename,source_asset_id,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key=? AND state='ready'`, record.ID, strings.TrimSpace(assetKey)).Scan(&result.Name, &result.Kind, &result.Filename, &sourceID, &blobDir)
+	err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename,source_asset_id,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key=? AND state='ready'`, record.ID, strings.TrimSpace(assetKey)).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename, &sourceID, &blobDir)
 	if err == sql.ErrNoRows {
 		return FacilityAssetDownload{}, panelerr.NotFound("facility_edit_session_asset")
 	}
@@ -50,7 +51,7 @@ func (s *Service) GetStaticAssetDownload(ctx context.Context, assetID string) (F
 		return FacilityAssetDownload{}, panelerr.NotFound("facility_static_asset")
 	}
 	var result FacilityAssetDownload
-	err := s.db.QueryRowContext(ctx, `SELECT name,kind,filename FROM facility_static_assets WHERE id=?`, assetID).Scan(&result.Name, &result.Kind, &result.Filename)
+	err := s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename FROM facility_static_assets WHERE id=?`, assetID).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename)
 	if err == sql.ErrNoRows {
 		return FacilityAssetDownload{}, panelerr.NotFound("facility_static_asset")
 	}

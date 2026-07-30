@@ -66,6 +66,9 @@ func serveFacilityAssetDownload(w http.ResponseWriter, r *http.Request, asset Fa
 			return
 		}
 		contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(filename)))
+		if asset.ContentMode == "text" && contentType == "" {
+			contentType = "text/plain; charset=utf-8"
+		}
 		if contentType == "" {
 			var sniff [512]byte
 			n, _ := file.Read(sniff[:])

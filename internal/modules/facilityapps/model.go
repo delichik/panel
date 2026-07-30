@@ -96,14 +96,15 @@ type FacilityRoutePath struct {
 }
 
 type StaticAsset struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Filename  string    `json:"filename"`
-	Size      int64     `json:"size"`
-	SHA256    string    `json:"sha256"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Kind        string    `json:"kind"`
+	ContentMode string    `json:"contentMode"`
+	Filename    string    `json:"filename"`
+	Size        int64     `json:"size"`
+	SHA256      string    `json:"sha256"`
+	CreatedAt   time.Time `json:"createdAt"`
+	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
 type StaticAssetUploadInput struct {
@@ -169,6 +170,7 @@ type FacilityEditAsset struct {
 	SourceAssetID string    `json:"sourceAssetId,omitempty"`
 	Name          string    `json:"name"`
 	Kind          string    `json:"kind"`
+	ContentMode   string    `json:"contentMode"`
 	Filename      string    `json:"filename"`
 	Size          int64     `json:"size"`
 	SHA256        string    `json:"sha256"`
@@ -209,6 +211,7 @@ type FacilityEditAssetInput struct {
 	ClientOperationID string
 	Name              string
 	Kind              string
+	ContentMode       string
 	FileName          string
 	Content           []byte
 }

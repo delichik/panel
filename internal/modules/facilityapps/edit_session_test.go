@@ -130,6 +130,165 @@ func TestFacilityEditSessionDeletedReferencedAssetIsBlocking(t *testing.T) {
 	}
 }
 
+func TestFacilityEditTextAssetModeValidationAndStableIdentity(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-text", "empty-text", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "empty-text", Name: "config", Kind: StaticSourceUploadedFile,
+		ContentMode: "text", FileName: "config.txt", Content: []byte{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.Assets) != 1 || session.Assets[0].AssetKey != "asset-text" || session.Assets[0].ContentMode != "text" {
+		t.Fatalf("text asset not preserved: %#v", session.Assets)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-text", "max-text", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "max-text", Name: "config", Kind: StaticSourceUploadedFile,
+		ContentMode: "text", FileName: "config.txt", Content: bytes.Repeat([]byte("a"), 1<<20),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeRevision := session.Revision
+	_, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-text", "large-text", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "large-text", Name: "config", Kind: StaticSourceUploadedFile,
+		ContentMode: "text", FileName: "config.txt", Content: bytes.Repeat([]byte("a"), (1<<20)+1),
+	})
+	assertFacilityPanelError(t, err, "facility_edit_text_invalid")
+	after, err := svc.GetFacilityEditSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != beforeRevision || after.Assets[0].Size != 1<<20 {
+		t.Fatalf("invalid text changed session: %#v", after)
+	}
+	_, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-text", "bad-utf8", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "bad-utf8", Name: "config", Kind: StaticSourceUploadedFile,
+		ContentMode: "text", FileName: "config.txt", Content: []byte{0xff},
+	})
+	assertFacilityPanelError(t, err, "facility_edit_text_invalid")
+	_, err = svc.PutFacilityEditAsset(ctx, session.ID, "bundle", "bad-bundle", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "bad-bundle", Name: "bundle", Kind: StaticSourceUploadedBundle,
+		ContentMode: "text", FileName: "bundle.zip", Content: []byte("text"),
+	})
+	assertFacilityPanelError(t, err, "facility_edit_asset_mode_invalid")
+}
+
+func TestFacilityEditAssetDefaultsToBinaryAndRejectsModeChange(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset", "binary-default", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "binary-default", Name: "asset", Kind: StaticSourceUploadedFile,
+		FileName: "asset.bin", Content: []byte("binary"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Assets[0].ContentMode != "binary" {
+		t.Fatalf("mode=%q", session.Assets[0].ContentMode)
+	}
+	beforeRevision := session.Revision
+	beforeSHA := session.Assets[0].SHA256
+	_, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset", "switch-mode", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "switch-mode", Name: "asset", Kind: StaticSourceUploadedFile,
+		ContentMode: "text", FileName: "asset.txt", Content: []byte("text"),
+	})
+	assertFacilityPanelError(t, err, "facility_edit_asset_mode_immutable")
+	after, err := svc.GetFacilityEditSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != beforeRevision || after.Assets[0].SHA256 != beforeSHA || after.Assets[0].ContentMode != "binary" {
+		t.Fatalf("mode switch changed asset: %#v", after)
+	}
+}
+
+func TestFacilityEditAssetRejectsKindChangeWithoutMutation(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset", "seed", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "seed", Name: "asset", Kind: StaticSourceUploadedFile, ContentMode: "binary", FileName: "asset.bin", Content: []byte("original")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var beforeKind, beforeMode, beforeHash, beforeBlob string
+	var beforeSize int64
+	if err := svc.db.QueryRowContext(ctx, `SELECT kind,content_mode,sha256,size,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key='asset'`, session.ID).Scan(&beforeKind, &beforeMode, &beforeHash, &beforeSize, &beforeBlob); err != nil {
+		t.Fatal(err)
+	}
+	beforeContent, err := os.ReadFile(filepath.Join(beforeBlob, "content", "asset.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset", "switch-kind", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "switch-kind", Name: "asset", Kind: StaticSourceUploadedBundle, ContentMode: "binary", FileName: "asset.zip", Content: []byte("not-an-archive")})
+	assertFacilityPanelError(t, err, "facility_edit_asset_kind_immutable")
+	after, err := svc.GetFacilityEditSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != session.Revision {
+		t.Fatalf("revision changed: %d -> %d", session.Revision, after.Revision)
+	}
+	var afterKind, afterMode, afterHash, afterBlob string
+	var afterSize int64
+	if err := svc.db.QueryRowContext(ctx, `SELECT kind,content_mode,sha256,size,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key='asset'`, session.ID).Scan(&afterKind, &afterMode, &afterHash, &afterSize, &afterBlob); err != nil {
+		t.Fatal(err)
+	}
+	afterContent, err := os.ReadFile(filepath.Join(afterBlob, "content", "asset.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeKind != afterKind || beforeMode != afterMode || beforeHash != afterHash || beforeSize != afterSize || beforeBlob != afterBlob || !bytes.Equal(beforeContent, afterContent) {
+		t.Fatalf("kind switch mutated asset: before=%q/%q/%q/%d/%q after=%q/%q/%q/%d/%q", beforeKind, beforeMode, beforeHash, beforeSize, beforeBlob, afterKind, afterMode, afterHash, afterSize, afterBlob)
+	}
+}
+
+func TestFacilityEditTextAssetCommitAndReopenPreservesMode(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-text", "put-text", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "put-text", Name: "config", Kind: StaticSourceUploadedFile,
+		ContentMode: "text", FileName: "config.txt", Content: []byte("hello"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.CommitFacilityEditSession(ctx, session.ID, "commit-text", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(reopened.Assets) != 1 || reopened.Assets[0].AssetKey == "" || reopened.Assets[0].ContentMode != "text" {
+		t.Fatalf("reopened text asset not preserved: %#v", reopened.Assets)
+	}
+}
+
 func TestFacilityAssetDownloadsResolveCommittedSourceAndReplacementBlob(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()

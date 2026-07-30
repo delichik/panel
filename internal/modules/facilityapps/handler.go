@@ -105,7 +105,7 @@ func (h *Handler) PutFacilityEditAsset(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.Validation("idempotency_key_required", "Idempotency-Key header is required"))
 		return
 	}
-	result, err := h.service.PutFacilityEditAsset(r.Context(), r.PathValue("id"), r.PathValue("assetKey"), key, FacilityEditAssetInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Name: r.FormValue("name"), Kind: r.FormValue("kind"), FileName: header.Filename, Content: content})
+	result, err := h.service.PutFacilityEditAsset(r.Context(), r.PathValue("id"), r.PathValue("assetKey"), key, FacilityEditAssetInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Name: r.FormValue("name"), Kind: r.FormValue("kind"), ContentMode: r.FormValue("contentMode"), FileName: header.Filename, Content: content})
 	if err != nil {
 		httpx.Error(w, err)
 		return

@@ -128,6 +128,8 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - 反向代理部署时自动读取证书服务的 `ReverseProxyCertificates` 聚合结果。域名证书优先；没有匹配域名证书时使用匹配的用户域自签 TLS 证书；都没有时只生成 80 端口，不生成 443。
 - `GET /api/v1/facility-apps/reverse-proxy` 返回 `routeSummaries`，供前端按域名汇总 HTTPS 状态：`domain_certificate`、`self_signed_certificate` 或 `disabled`。nginx 生成逻辑必须与该摘要使用同一套证书匹配规则；UI 不应把 HTTPS 状态展示成路径属性。
 - 静态资产 API 挂在 `/api/v1/facility-apps/reverse-proxy/static-assets`，支持兼容列表、multipart 上传、删除和认证下载；新配置页不即时修改正式资产，而是随设施编辑会话提交。配置页与应用编辑器使用相同的顶部步骤工作区和文件行操作语言；替换传回原 `assetKey`，删除被引用资产继续由 validate/commit 阻断，冲突提供明确的放弃草稿并重新加载入口。
+- Facility asset metadata carries `contentMode=text|binary` independently from `kind=uploaded_file|uploaded_bundle`. Existing rows and multipart clients without the field default to `binary`; bundles are always binary. Text assets are valid UTF-8 up to 1 MiB (including empty files), retain their current `assetKey` for replacement and route references inside an edit session, and are the only facility assets exposed to the text editor. Commit keeps the existing temporary-key-to-final-ID mapping for newly created assets; reopened sessions use that final ID while preserving `contentMode`.
+- An asset's content mode and kind are immutable for a given `assetKey`; conversion requires deleting and recreating the asset. Rejected conversions do not change the blob, metadata, route references, or session revision.
 
 ## Entrance Gateway UI And Static Content
 

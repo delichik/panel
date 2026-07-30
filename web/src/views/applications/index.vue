@@ -23,6 +23,8 @@ import Textarea from '@/components/ui/Textarea.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
+import FacilityTextAssetDialog from './FacilityTextAssetDialog.vue';
+import { reloadFacilityTextWorkflow, saveFacilityTextWorkflow } from './facilityTextWorkflow';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule } from '@/types/applications';
@@ -119,6 +121,13 @@ const fileActionErrors = ref<Record<string, string>>({});
 const fileActionPending = ref('');
 const assetActionErrors = ref<Record<string, string>>({});
 const assetActionPending = ref('');
+const facilityTextDialog = ref(false);
+const facilityTextEditing = ref<FacilityEditAsset | null>(null);
+const facilityTextKey = ref('');
+const facilityTextLoading = ref(false);
+const facilityTextError = ref('');
+const facilityTextConflict = ref(false);
+const facilityTextForm = reactive({ name: '', filename: '', content: '' });
 const fileLanguage = ref<TemplateLanguage>('plain');
 const fileLanguageManual = ref(false);
 const fileDialogKey = ref('');
@@ -1017,7 +1026,7 @@ async function runFileAction(key: string, action: () => Promise<void>) {
   }
 }
 
-async function uploadFacilityAsset(fileOrFiles: File | File[], target?: FacilityEditAsset) {
+async function uploadFacilityAsset(fileOrFiles: File | File[], target?: FacilityEditAsset, kind?: 'uploaded_file' | 'uploaded_bundle') {
   const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
   if (!file || !facilitySession.value) return;
   const assetKey = target?.assetKey || `asset-${Date.now()}`;
@@ -1026,10 +1035,72 @@ async function uploadFacilityAsset(fileOrFiles: File | File[], target?: Facility
     facilitySession.value = await facilityAppsApi.putFacilityEditAsset(facilityKind.value, facilitySession.value!.id, assetKey, facilitySession.value!.revision, {
       file,
       name: target?.name || file.name.replace(/\.[^.]+$/, '') || file.name,
-      kind: target?.kind || (/\.(zip|tar|tar\.gz|tgz)$/i.test(file.name) ? 'uploaded_bundle' : 'uploaded_file'),
+      kind: target?.kind || kind || 'uploaded_file',
+      contentMode: 'binary',
     });
     markDirty();
   });
+}
+
+async function openFacilityTextDialog(asset?: FacilityEditAsset) {
+  if (!facilitySession.value || (asset && asset.contentMode !== 'text')) return;
+  facilityTextEditing.value = asset ?? null;
+  facilityTextKey.value = asset?.assetKey ?? `asset-${Date.now()}`;
+  facilityTextForm.name = asset?.name ?? '';
+  facilityTextForm.filename = asset?.filename ?? '';
+  facilityTextForm.content = '';
+  facilityTextError.value = '';
+  facilityTextConflict.value = false;
+  facilityTextDialog.value = true;
+  if (!asset) return;
+  facilityTextLoading.value = true;
+  try {
+    const result = await facilityAppsApi.downloadFacilityEditAsset(facilityKind.value, facilitySession.value.id, asset.assetKey, asset.filename);
+    facilityTextForm.content = await result.blob.text();
+  } catch (err) {
+    facilityTextError.value = err instanceof Error ? err.message : t('common.operationFailed');
+  } finally {
+    facilityTextLoading.value = false;
+  }
+}
+
+async function saveFacilityTextAsset(payload?: { assetKey: string; name: string; filename: string; content: string }) {
+  if (!facilitySession.value || !facilityTextForm.filename.trim()) return;
+  const target = facilityTextEditing.value;
+  const assetKey = payload?.assetKey || target?.assetKey || `asset-${Date.now()}`;
+  assetActionPending.value = assetKey;
+  const workflowState = { open: facilityTextDialog.value, error: facilityTextError.value, conflict: facilityTextConflict.value };
+  await saveFacilityTextWorkflow(workflowState, async () => {
+    const file = new File([payload?.content ?? facilityTextForm.content], (payload?.filename ?? facilityTextForm.filename).trim(), { type: 'text/plain;charset=utf-8' });
+    facilitySession.value = await facilityAppsApi.putFacilityEditAsset(facilityKind.value, facilitySession.value!.id, assetKey, facilitySession.value!.revision, {
+      file, name: (payload?.name ?? facilityTextForm.name).trim() || file.name, kind: 'uploaded_file', contentMode: 'text',
+    });
+    markDirty();
+  }, (err) => err instanceof Error ? err.message : t('common.operationFailed'));
+  facilityTextDialog.value = workflowState.open;
+  facilityTextError.value = workflowState.error;
+  facilityTextConflict.value = workflowState.conflict;
+  assetActionPending.value = '';
+}
+
+async function reloadFacilityTextSession() {
+  pending.value = 'editor-reload';
+  const workflowState = { open: facilityTextDialog.value, error: facilityTextError.value, conflict: facilityTextConflict.value };
+  const sessionId = facilitySession.value?.id;
+  await reloadFacilityTextWorkflow(workflowState, sessionId,
+    (id) => facilityAppsApi.discardFacilityEdit(facilityKind.value, id),
+    async () => {
+      facilitySession.value = null;
+      actionError.value = '';
+      await loadFacilityData();
+      await startFacilityEditor();
+    },
+    (err) => err instanceof Error ? err.message : t('common.operationFailed'),
+  );
+  facilityTextDialog.value = workflowState.open;
+  facilityTextError.value = workflowState.error;
+  facilityTextConflict.value = workflowState.conflict;
+  pending.value = '';
 }
 
 async function downloadFacilitySessionAsset(asset: FacilityEditAsset) {
@@ -1604,13 +1675,18 @@ onBeforeUnmount(() => {
             <section v-show="activeFacilitySection === 'assets'" class="workspace-panel">
               <div class="section-heading">
                 <div class="section-copy"><h3>{{ t('applicationsPage.staticAssets') }}</h3><p>{{ t('applicationsPage.assetUploadLimit') }}</p></div>
-                <FileUploadButton size="sm" :loading="assetActionPending === '__new-asset'" :disabled="!facilitySession" :label="t('applicationsPage.uploadStaticAsset')" @change="uploadFacilityAsset" />
+                <div class="row-actions">
+                  <Button size="sm" :disabled="!facilitySession" @click="openFacilityTextDialog()"><Plus />{{ t('applicationsPage.newTextFile') }}</Button>
+                  <FileUploadButton size="sm" :loading="assetActionPending === '__new-asset'" :disabled="!facilitySession" :label="t('applicationsPage.uploadFile')" @change="uploadFacilityAsset($event, undefined, 'uploaded_file')" />
+                  <FileUploadButton size="sm" accept=".zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip" :loading="assetActionPending === '__new-asset'" :disabled="!facilitySession" :label="t('applicationsPage.uploadArchive')" @change="uploadFacilityAsset($event, undefined, 'uploaded_bundle')" />
+                </div>
               </div>
               <div v-if="assetActionErrors['__new-asset']" class="row-error">{{ assetActionErrors['__new-asset'] }}</div>
               <div v-for="asset in facilitySession?.assets || []" :key="asset.assetKey" class="item-row">
                 <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
                 <div class="row-actions">
-                  <FileUploadButton size="sm" :accept="asset.kind === 'uploaded_bundle' ? '.zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip' : undefined" :loading="assetActionPending === asset.assetKey" :label="t('common.replace')" @change="uploadFacilityAsset($event, asset)" />
+                  <Button v-if="asset.contentMode === 'text'" size="sm" :disabled="assetActionPending === asset.assetKey" @click="openFacilityTextDialog(asset)">{{ t('common.edit') }}</Button>
+                  <FileUploadButton v-else size="sm" :accept="asset.kind === 'uploaded_bundle' ? '.zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip' : undefined" :loading="assetActionPending === asset.assetKey" :label="t('common.replace')" @change="uploadFacilityAsset($event, asset)" />
                   <DownloadButton size="sm" :loading="assetActionPending === asset.assetKey" :label="t('common.download')" @click="downloadFacilitySessionAsset(asset)" />
                   <Button size="sm" variant="danger" :disabled="assetActionPending === asset.assetKey" @click="ask('facility-asset-delete', asset.assetKey)">{{ t('common.delete') }}</Button>
                 </div>
@@ -1738,6 +1814,14 @@ onBeforeUnmount(() => {
       <Button variant="primary" :loading="pending === 'editor'" :disabled="fileSaveDisabled" @click="saveFile">{{ t('common.save') }}</Button>
     </template>
   </Dialog>
+
+  <FacilityTextAssetDialog
+    v-model:open="facilityTextDialog" v-model:name="facilityTextForm.name" v-model:filename="facilityTextForm.filename" v-model:content="facilityTextForm.content"
+    :editing="Boolean(facilityTextEditing)" :asset-key="facilityTextKey" :loading="facilityTextLoading"
+    :saving="Boolean(assetActionPending)" :error="facilityTextError" :conflict="facilityTextConflict"
+    :labels="{ editTitle: t('applicationsPage.editTextFile'), newTitle: t('applicationsPage.newTextFile'), close: t('common.close'), name: t('common.name'), filename: t('applicationsPage.filePath'), loading: t('applicationsPage.fileLoading'), content: t('applicationsPage.fileContent'), cancel: t('common.cancel'), save: t('common.save'), reload: t('applicationsPage.discardTextAndReload') }"
+    @save="saveFacilityTextAsset" @reload="reloadFacilityTextSession"
+  />
 
   <Dialog v-model:open="confirmOpen" :title="t(`applicationsPage.confirm.${confirmKind}.title`)" :description="t(`applicationsPage.confirm.${confirmKind}.description`)" :close-label="t('common.close')">
     <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><AlertTriangle class="size-4 shrink-0" />{{ t('applicationsPage.confirmImpact') }}</div>

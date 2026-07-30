@@ -161,6 +161,63 @@ func TestMigrateAddsLoadColumnsToLegacyMetricsSchema(t *testing.T) {
 	}
 }
 
+func TestMigrateAddsConstrainedFacilityContentModeToLegacyRows(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := []string{
+		`CREATE TABLE facility_static_assets (id TEXT PRIMARY KEY,name TEXT NOT NULL,kind TEXT NOT NULL,filename TEXT NOT NULL DEFAULT '',size INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL)`,
+		`CREATE TABLE facility_edit_session_assets (session_id TEXT NOT NULL,asset_key TEXT NOT NULL,source_asset_id TEXT NOT NULL DEFAULT '',name TEXT NOT NULL,kind TEXT NOT NULL,filename TEXT NOT NULL DEFAULT '',size INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT '',content_sha256 TEXT NOT NULL DEFAULT '',blob_dir TEXT NOT NULL DEFAULT '',state TEXT NOT NULL DEFAULT 'ready',created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(session_id,asset_key))`,
+		`INSERT INTO facility_static_assets(id,name,kind,filename,created_at,updated_at) VALUES('a','a','uploaded_file','a.bin','now','now')`,
+		`INSERT INTO facility_edit_session_assets(session_id,asset_key,name,kind,filename,created_at,updated_at) VALUES('s','a','a','uploaded_file','a.bin','now','now')`,
+	}
+	for _, statement := range statements {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	for _, table := range []string{"facility_static_assets", "facility_edit_session_assets"} {
+		var mode string
+		if err := store.AppDB().QueryRow(`SELECT content_mode FROM ` + table + ` LIMIT 1`).Scan(&mode); err != nil {
+			t.Fatal(err)
+		}
+		if mode != "binary" {
+			t.Fatalf("%s migrated mode=%q", table, mode)
+		}
+		if _, err := store.AppDB().Exec(`UPDATE ` + table + ` SET content_mode='invalid'`); err == nil {
+			t.Fatalf("%s accepted invalid mode", table)
+		}
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO facility_static_assets(id,name,kind,filename,created_at,updated_at) VALUES('b','b','uploaded_file','b.bin','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	var mode string
+	if err := store.AppDB().QueryRow(`SELECT content_mode FROM facility_static_assets WHERE id='b'`).Scan(&mode); err != nil || mode != "binary" {
+		t.Fatalf("default mode=%q err=%v", mode, err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO facility_edit_session_assets(session_id,asset_key,name,kind,filename,created_at,updated_at) VALUES('s','b','b','uploaded_file','b.bin','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.AppDB().QueryRow(`SELECT content_mode FROM facility_edit_session_assets WHERE asset_key='b'`).Scan(&mode); err != nil || mode != "binary" {
+		t.Fatalf("session asset default mode=%q err=%v", mode, err)
+	}
+}
+
 func TestSQLiteDSNAddsDefaultPragmasToFileURI(t *testing.T) {
 	dsn := sqliteDSN("file:custom.db?cache=shared")
 	if !strings.HasPrefix(dsn, "file:custom.db?") {

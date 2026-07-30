@@ -461,7 +461,13 @@ export function installMockApi() {
       return result ? json(result, 202) : error('key_asset_not_found', 'Key asset was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/applications' && method(init) === 'GET') return json(mockApplicationSummaries());
+    if (url.pathname === '/api/v1/applications' && method(init) === 'GET') {
+      const items = mockApplicationSummaries();
+      const page = Math.max(1, Number(url.searchParams.get('page') || 1));
+      const pageSize = Math.max(1, Math.min(200, Number(url.searchParams.get('pageSize') || 50)));
+      const start = (page - 1) * pageSize;
+      return json({ items: items.slice(start, start + pageSize), total: items.length, page, pageSize });
+    }
     const appMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)$/);
     if (appMatch && method(init) === 'GET') {
       const found = mockApplications.find((item) => item.id === decodeURIComponent(appMatch[1]));
@@ -596,6 +602,7 @@ export function installMockApi() {
       const session = putFacilityAsset(decodeURIComponent(facilityAssetMatch[1]), assetKey, {
         name: textField(form, 'name') || (file instanceof File ? file.name.replace(/\.[^.]+$/, '') : assetKey),
         kind: textField(form, 'kind') || (file instanceof File && file.name.endsWith('.zip') ? 'uploaded_bundle' : 'uploaded_file'),
+        contentMode: textField(form, 'contentMode') === 'text' ? 'text' : 'binary',
         filename: file instanceof File ? file.name : `${assetKey}.bin`,
         size: file instanceof File ? file.size : 0,
       });

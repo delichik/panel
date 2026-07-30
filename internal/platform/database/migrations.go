@@ -270,6 +270,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			id TEXT PRIMARY KEY,
 			name TEXT NOT NULL,
 			kind TEXT NOT NULL CHECK(kind IN ('uploaded_file','uploaded_bundle')),
+			content_mode TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary')),
 			filename TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0,
 			sha256 TEXT NOT NULL DEFAULT '',
@@ -307,6 +308,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			source_asset_id TEXT NOT NULL DEFAULT '',
 			name TEXT NOT NULL,
 			kind TEXT NOT NULL CHECK(kind IN ('uploaded_file','uploaded_bundle')),
+			content_mode TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary')),
 			filename TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0,
 			sha256 TEXT NOT NULL DEFAULT '',
@@ -691,18 +693,20 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "facility_static_assets", map[string]string{
-		"name":       "TEXT NOT NULL DEFAULT ''",
-		"kind":       "TEXT NOT NULL DEFAULT 'uploaded_file'",
-		"filename":   "TEXT NOT NULL DEFAULT ''",
-		"size":       "INTEGER NOT NULL DEFAULT 0",
-		"sha256":     "TEXT NOT NULL DEFAULT ''",
-		"created_at": "TEXT NOT NULL DEFAULT ''",
-		"updated_at": "TEXT NOT NULL DEFAULT ''",
+		"content_mode": "TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary'))",
+		"name":         "TEXT NOT NULL DEFAULT ''",
+		"kind":         "TEXT NOT NULL DEFAULT 'uploaded_file'",
+		"filename":     "TEXT NOT NULL DEFAULT ''",
+		"size":         "INTEGER NOT NULL DEFAULT 0",
+		"sha256":       "TEXT NOT NULL DEFAULT ''",
+		"created_at":   "TEXT NOT NULL DEFAULT ''",
+		"updated_at":   "TEXT NOT NULL DEFAULT ''",
 	}); err != nil {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "facility_edit_session_assets", map[string]string{
 		"content_sha256": "TEXT NOT NULL DEFAULT ''",
+		"content_mode":   "TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary'))",
 	}); err != nil {
 		return err
 	}

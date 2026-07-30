@@ -30,7 +30,7 @@ const (
 )
 
 func (s *Service) ListStaticAssets(ctx context.Context) ([]StaticAsset, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,kind,filename,size,sha256,created_at,updated_at FROM facility_static_assets ORDER BY created_at DESC`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_static_assets ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -89,14 +89,15 @@ func (s *Service) UploadStaticAsset(ctx context.Context, in StaticAssetUploadInp
 	sum := sha256.Sum256(in.Content)
 	now := time.Now().UTC()
 	asset := StaticAsset{
-		ID:        assetID,
-		Name:      name,
-		Kind:      kind,
-		Filename:  filename,
-		Size:      int64(len(in.Content)),
-		SHA256:    hex.EncodeToString(sum[:]),
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:          assetID,
+		Name:        name,
+		Kind:        kind,
+		ContentMode: "binary",
+		Filename:    filename,
+		Size:        int64(len(in.Content)),
+		SHA256:      hex.EncodeToString(sum[:]),
+		CreatedAt:   now,
+		UpdatedAt:   now,
 	}
 	if err := s.insertStaticAsset(ctx, asset); err != nil {
 		_ = os.RemoveAll(s.staticAssetDir(assetID))
@@ -157,7 +158,7 @@ func (s *Service) staticAssetInUse(ctx context.Context, assetID string) (bool, e
 }
 
 func (s *Service) getStaticAsset(ctx context.Context, assetID string) (StaticAsset, error) {
-	asset, err := scanStaticAsset(s.db.QueryRowContext(ctx, `SELECT id,name,kind,filename,size,sha256,created_at,updated_at FROM facility_static_assets WHERE id=?`, assetID))
+	asset, err := scanStaticAsset(s.db.QueryRowContext(ctx, `SELECT id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_static_assets WHERE id=?`, assetID))
 	if err == sql.ErrNoRows {
 		return StaticAsset{}, panelerr.NotFound("static asset")
 	}
@@ -207,7 +208,7 @@ func (s *Service) insertStaticAsset(ctx context.Context, asset StaticAsset) erro
 		return err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`,
+	_, err = tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,'binary',?,?,?,?,?)`,
 		asset.ID, asset.Name, asset.Kind, asset.Filename, asset.Size, asset.SHA256, formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt))
 	if err != nil {
 		return err
@@ -227,7 +228,7 @@ func bumpFacilityConfigVersionTx(ctx context.Context, tx *sql.Tx) error {
 func scanStaticAsset(row interface{ Scan(dest ...any) error }) (StaticAsset, error) {
 	var asset StaticAsset
 	var created, updated string
-	if err := row.Scan(&asset.ID, &asset.Name, &asset.Kind, &asset.Filename, &asset.Size, &asset.SHA256, &created, &updated); err != nil {
+	if err := row.Scan(&asset.ID, &asset.Name, &asset.Kind, &asset.ContentMode, &asset.Filename, &asset.Size, &asset.SHA256, &created, &updated); err != nil {
 		return StaticAsset{}, err
 	}
 	asset.CreatedAt = parseTime(created)

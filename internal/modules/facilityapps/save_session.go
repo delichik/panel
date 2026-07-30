@@ -127,7 +127,7 @@ func (s *Service) UploadSaveSessionAsset(ctx context.Context, sessionID string, 
 	if previous := session.Assets[assetID]; previous != nil && !previous.Asset.CreatedAt.IsZero() {
 		createdAt = previous.Asset.CreatedAt
 	}
-	asset := StaticAsset{ID: assetID, Name: name, Kind: kind, Filename: filename, Size: int64(len(in.Content)), SHA256: hex.EncodeToString(sum[:]), CreatedAt: createdAt, UpdatedAt: now}
+	asset := StaticAsset{ID: assetID, Name: name, Kind: kind, ContentMode: "binary", Filename: filename, Size: int64(len(in.Content)), SHA256: hex.EncodeToString(sum[:]), CreatedAt: createdAt, UpdatedAt: now}
 	s.sessionMu.Lock()
 	session.Assets[assetID] = &stagedFacilityAsset{Asset: asset, Dir: assetDir}
 	session.UpdatedAt = now
@@ -408,7 +408,7 @@ func replaceStaticAssetsTx(ctx context.Context, tx *sql.Tx, assets map[string]*s
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
 	for _, asset := range items {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, asset.ID, asset.Name, asset.Kind, asset.Filename, asset.Size, asset.SHA256, formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, asset.ID, asset.Name, asset.Kind, asset.ContentMode, asset.Filename, asset.Size, asset.SHA256, formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt)); err != nil {
 			return err
 		}
 	}

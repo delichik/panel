@@ -25,6 +25,34 @@ function key() {
   return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
+function normalizeApplicationList(
+  value: unknown,
+  params: { page?: number; pageSize?: number },
+): ListPage<ApplicationSummaryDto> {
+  if (Array.isArray(value)) {
+    return {
+      items: value as ApplicationSummaryDto[],
+      total: value.length,
+      page: params.page ?? 1,
+      pageSize: params.pageSize ?? 50,
+    };
+  }
+
+  if (value && typeof value === 'object') {
+    const page = value as Partial<ListPage<ApplicationSummaryDto>>;
+    if (
+      Array.isArray(page.items)
+      && Number.isInteger(page.total) && (page.total ?? -1) >= 0
+      && Number.isInteger(page.page) && (page.page ?? 0) >= 1
+      && Number.isInteger(page.pageSize) && (page.pageSize ?? 0) >= 1
+    ) {
+      return page as ListPage<ApplicationSummaryDto>;
+    }
+  }
+
+  throw new ApiError('Applications API returned an invalid list response.', 200, 'invalid_api_response', value);
+}
+
 async function deleteJson<T>(path: string, body: unknown, idempotencyKey = key()): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
     method: 'DELETE',
@@ -66,7 +94,8 @@ export const applicationsApi = {
     Object.entries(params).forEach(([name, value]) => {
       if (value !== undefined && value !== '') query.set(name, String(value));
     });
-    return apiClient.get<ListPage<ApplicationSummaryDto>>(`/applications${query.size ? `?${query}` : ''}`, options);
+    return apiClient.get<unknown>(`/applications${query.size ? `?${query}` : ''}`, options)
+      .then((result) => normalizeApplicationList(result, params));
   },
   get(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationDto>(`/applications/${id(applicationId)}`, options);

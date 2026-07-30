@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"panel/internal/modules/applications"
 	panelerr "panel/internal/platform/errors"
@@ -58,6 +59,7 @@ type facilityManifestAsset struct {
 	SourceID      string `json:"sourceId,omitempty"`
 	Name          string `json:"name"`
 	Kind          string `json:"kind"`
+	ContentMode   string `json:"contentMode"`
 	Filename      string `json:"filename"`
 	Size          int64  `json:"size"`
 	SHA256        string `json:"sha256"`
@@ -117,8 +119,8 @@ func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacility
 		return FacilityEditSession{}, err
 	}
 	for _, asset := range assets {
-		_, err = tx.ExecContext(ctx, `INSERT INTO facility_edit_session_assets(session_id,asset_key,source_asset_id,name,kind,filename,size,sha256,content_sha256,blob_dir,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'ready',?,?)`,
-			sessionID, asset.ID, asset.ID, asset.Name, asset.Kind, asset.Filename, asset.Size, asset.SHA256, contentHashes[asset.ID], "", formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt))
+		_, err = tx.ExecContext(ctx, `INSERT INTO facility_edit_session_assets(session_id,asset_key,source_asset_id,name,kind,content_mode,filename,size,sha256,content_sha256,blob_dir,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'ready',?,?)`,
+			sessionID, asset.ID, asset.ID, asset.Name, asset.Kind, asset.ContentMode, asset.Filename, asset.Size, asset.SHA256, contentHashes[asset.ID], "", formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt))
 		if err != nil {
 			return FacilityEditSession{}, err
 		}
@@ -229,14 +231,38 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey,
 		name = strings.TrimSpace(in.FileName)
 	}
 	kind := strings.TrimSpace(in.Kind)
-	if name == "" || (kind != StaticSourceUploadedFile && kind != StaticSourceUploadedBundle) || len(in.Content) == 0 {
+	contentMode := strings.TrimSpace(in.ContentMode)
+	if contentMode == "" {
+		contentMode = "binary"
+	}
+	if name == "" || (kind != StaticSourceUploadedFile && kind != StaticSourceUploadedBundle) || (contentMode != "text" && contentMode != "binary") {
 		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_invalid", "asset name, kind, and content are required")
+	}
+	if kind == StaticSourceUploadedBundle && contentMode != "binary" {
+		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_mode_invalid", "bundle assets must be binary")
+	}
+	if contentMode == "text" && (len(in.Content) > 1<<20 || !utf8.Valid(in.Content)) {
+		return FacilityEditSession{}, panelerr.Validation("facility_edit_text_invalid", "text assets must be valid UTF-8 and no larger than 1 MiB")
+	}
+	if contentMode == "binary" && len(in.Content) == 0 {
+		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_invalid", "binary asset content is required")
 	}
 	filename := safeAssetFilename(in.FileName)
 	if filename == "" {
 		filename = "asset"
 	}
-	requestHash := facilityEditHash(in.Revision, assetKey, name, kind, filename, in.Content)
+	var existingKind, existingMode string
+	lookupErr := s.db.QueryRowContext(ctx, `SELECT kind,content_mode FROM facility_edit_session_assets WHERE session_id=? AND asset_key=?`, sessionID, assetKey).Scan(&existingKind, &existingMode)
+	if lookupErr != nil && lookupErr != sql.ErrNoRows {
+		return FacilityEditSession{}, lookupErr
+	}
+	if lookupErr == nil && existingMode != contentMode {
+		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_mode_immutable", "asset content mode cannot be changed; delete and recreate the asset")
+	}
+	if lookupErr == nil && existingKind != kind {
+		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_kind_immutable", "asset kind cannot be changed; delete and recreate the asset")
+	}
+	requestHash := facilityEditHash(in.Revision, assetKey, name, kind, contentMode, filename, in.Content)
 	if session, ok, err := s.facilityEditOperationResult(ctx, sessionID, in.ClientOperationID, idempotencyKey, requestHash); ok || err != nil {
 		return session, err
 	}
@@ -280,8 +306,8 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey,
 	if err := bumpFacilityEditRevision(ctx, tx, sessionID, in.Revision); err != nil {
 		return FacilityEditSession{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO facility_edit_session_assets(session_id,asset_key,source_asset_id,name,kind,filename,size,sha256,content_sha256,blob_dir,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,'ready',?,?) ON CONFLICT(session_id,asset_key) DO UPDATE SET name=excluded.name,kind=excluded.kind,filename=excluded.filename,size=excluded.size,sha256=excluded.sha256,content_sha256=excluded.content_sha256,blob_dir=excluded.blob_dir,state='ready',updated_at=excluded.updated_at`,
-		sessionID, assetKey, sourceID, name, kind, filename, len(in.Content), hex.EncodeToString(sum[:]), contentSHA, dir, created, formatTime(now))
+	_, err = tx.ExecContext(ctx, `INSERT INTO facility_edit_session_assets(session_id,asset_key,source_asset_id,name,kind,content_mode,filename,size,sha256,content_sha256,blob_dir,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'ready',?,?) ON CONFLICT(session_id,asset_key) DO UPDATE SET name=excluded.name,kind=excluded.kind,content_mode=excluded.content_mode,filename=excluded.filename,size=excluded.size,sha256=excluded.sha256,content_sha256=excluded.content_sha256,blob_dir=excluded.blob_dir,state='ready',updated_at=excluded.updated_at`,
+		sessionID, assetKey, sourceID, name, kind, contentMode, filename, len(in.Content), hex.EncodeToString(sum[:]), contentSHA, dir, created, formatTime(now))
 	if err != nil {
 		return FacilityEditSession{}, err
 	}
@@ -696,7 +722,7 @@ func (s *Service) loadFacilityEditSession(ctx context.Context, sessionID string)
 }
 
 func (s *Service) loadFacilityEditAssets(ctx context.Context, sessionID string) ([]FacilityEditAsset, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT asset_key,source_asset_id,name,kind,filename,size,sha256,created_at,updated_at FROM facility_edit_session_assets WHERE session_id=? AND state='ready' ORDER BY created_at DESC`, sessionID)
+	rows, err := s.db.QueryContext(ctx, `SELECT asset_key,source_asset_id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_edit_session_assets WHERE session_id=? AND state='ready' ORDER BY created_at DESC`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -705,7 +731,7 @@ func (s *Service) loadFacilityEditAssets(ctx context.Context, sessionID string) 
 	for rows.Next() {
 		var asset FacilityEditAsset
 		var created, updated string
-		if err := rows.Scan(&asset.AssetKey, &asset.SourceAssetID, &asset.Name, &asset.Kind, &asset.Filename, &asset.Size, &asset.SHA256, &created, &updated); err != nil {
+		if err := rows.Scan(&asset.AssetKey, &asset.SourceAssetID, &asset.Name, &asset.Kind, &asset.ContentMode, &asset.Filename, &asset.Size, &asset.SHA256, &created, &updated); err != nil {
 			return nil, err
 		}
 		asset.CreatedAt, asset.UpdatedAt = parseTime(created), parseTime(updated)
@@ -742,14 +768,14 @@ func (s *Service) facilityEditConflict(ctx context.Context, sessionID string, ex
 func (s *Service) prepareFacilityCommitManifest(record facilityEditRecord) (facilityCommitManifest, error) {
 	assets := make([]facilityManifestAsset, 0, len(record.Assets))
 	mapping := map[string]string{}
-	rows, err := s.db.Query(`SELECT asset_key,source_asset_id,name,kind,filename,size,sha256,content_sha256,blob_dir,created_at,updated_at FROM facility_edit_session_assets WHERE session_id=? AND state='ready'`, record.ID)
+	rows, err := s.db.Query(`SELECT asset_key,source_asset_id,name,kind,content_mode,filename,size,sha256,content_sha256,blob_dir,created_at,updated_at FROM facility_edit_session_assets WHERE session_id=? AND state='ready'`, record.ID)
 	if err != nil {
 		return facilityCommitManifest{}, err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var item facilityManifestAsset
-		if err := rows.Scan(&item.AssetKey, &item.SourceID, &item.Name, &item.Kind, &item.Filename, &item.Size, &item.SHA256, &item.ContentSHA256, &item.BlobDir, &item.CreatedAt, &item.UpdatedAt); err != nil {
+		if err := rows.Scan(&item.AssetKey, &item.SourceID, &item.Name, &item.Kind, &item.ContentMode, &item.Filename, &item.Size, &item.SHA256, &item.ContentSHA256, &item.BlobDir, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return facilityCommitManifest{}, err
 		}
 		item.FinalID = item.SourceID
@@ -926,7 +952,7 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 		return err
 	}
 	for _, asset := range manifest.Assets {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, asset.FinalID, asset.Name, asset.Kind, asset.Filename, asset.Size, asset.SHA256, asset.CreatedAt, asset.UpdatedAt); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, asset.FinalID, asset.Name, asset.Kind, asset.ContentMode, asset.Filename, asset.Size, asset.SHA256, asset.CreatedAt, asset.UpdatedAt); err != nil {
 			return err
 		}
 	}

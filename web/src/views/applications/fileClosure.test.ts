@@ -33,6 +33,14 @@ describe('application and facility file closure', () => {
     expect(facilityApiSource).toContain('/static-assets/${id(assetId)}/content');
   });
 
+  it('only exposes facility text assets to the editor and saves the same key', () => {
+    expect(viewSource).toContain("asset.contentMode === 'text'");
+    expect(viewSource).toContain("contentMode: 'text'");
+    expect(viewSource).toContain("contentMode: 'binary'");
+    expect(viewSource).toContain('const assetKey = target?.assetKey');
+    expect(facilityApiSource).toContain("form.set('contentMode', input.contentMode ?? 'binary')");
+  });
+
   it('uses the shared top-step workspace for facility configuration', () => {
     expect(viewSource).toContain('v-for="section in facilityRailSections"');
     expect(viewSource).toContain("t('applicationsPage.gatewayWorkspace')");

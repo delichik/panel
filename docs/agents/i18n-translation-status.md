@@ -290,3 +290,7 @@
 ## Backend Error Translation Notes
 
 - `container_managed_by_application` currently returns its English source message. Add Simplified Chinese coverage when container resource action errors are next wired through backend i18n.
+# 2026-07-30 facility text assets
+
+- Facility create-text, upload-file, upload-archive, edit, loading, and save controls reuse existing English and Simplified Chinese translation keys. Asset names, filenames, and backend diagnostics remain instance values.
+- The facility text dialog revision-conflict recovery action has matching English and Simplified Chinese text and explicitly states that unsaved text will be discarded.
