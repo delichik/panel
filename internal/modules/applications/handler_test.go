@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -95,6 +98,73 @@ func TestHandlerApplicationFiles(t *testing.T) {
 	rec = serveTestRoute(handler, http.MethodDelete, "/api/v1/applications/app-1/files/file-1", nil)
 	if rec.Code != http.StatusNoContent || fake.deletedFileID != "file-1" {
 		t.Fatalf("delete file status=%d id=%q body=%s", rec.Code, fake.deletedFileID, rec.Body.String())
+	}
+}
+
+func TestHandlerUploadsAndDownloadsEditSessionBinary(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	session, err := svc.BeginEditSession(context.Background(), applicationEditSessionOwner, BeginEditSessionInput{Draft: &SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	file, err := writer.CreateFormFile("file", "logo.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = file.Write([]byte("binary-content"))
+	_ = writer.WriteField("revision", "1")
+	_ = writer.WriteField("clientOperationId", "upload-binary")
+	_ = writer.WriteField("path", "assets/logo.png")
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(svc)
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, func(next http.Handler) http.Handler { return next })
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/application-edit-sessions/"+session.ID+"/uploads/logo", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Idempotency-Key", "upload-binary")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("upload status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	download := httptest.NewRecorder()
+	mux.ServeHTTP(download, httptest.NewRequest(http.MethodGet, "/api/v1/application-edit-sessions/"+session.ID+"/files/logo/content", nil))
+	if download.Code != http.StatusOK || download.Body.String() != "binary-content" {
+		t.Fatalf("download status=%d body=%q", download.Code, download.Body.String())
+	}
+	if download.Header().Get("Content-Disposition") == "" {
+		t.Fatal("download filename header is missing")
+	}
+}
+
+func TestApplicationDownloadDispositionSanitizesFilename(t *testing.T) {
+	for _, name := range []string{"../bad\r\nX-Evil: yes\".txt", "报告.txt"} {
+		header := applicationContentDisposition(name)
+		mediaType, params, err := mime.ParseMediaType(header)
+		if err != nil || mediaType != "attachment" {
+			t.Fatalf("header %q: %v", header, err)
+		}
+		if strings.ContainsAny(params["filename"], "\r\n\x00/\\\"") {
+			t.Fatalf("unsafe filename %q", params["filename"])
+		}
+	}
+}
+
+func TestReadApplicationUploadBoundary(t *testing.T) {
+	content, err := readApplicationUpload(strings.NewReader("1234"), 4)
+	if err != nil || string(content) != "1234" {
+		t.Fatalf("boundary content=%q err=%v", content, err)
+	}
+	if _, err := readApplicationUpload(strings.NewReader("12345"), 4); !errors.Is(err, errApplicationUploadTooLarge) {
+		t.Fatalf("over limit err=%v", err)
 	}
 }
 

@@ -89,7 +89,7 @@ onBeforeUnmount(() => restoreFocusTo?.focus());
             <X />
           </IconButton>
         </header>
-        <div class="min-h-0 px-5 py-4" :class="size === 'large' ? 'overflow-hidden' : 'overflow-auto'">
+        <div class="min-h-0 overflow-auto px-5 py-4">
           <slot />
         </div>
         <footer v-if="$slots.footer" class="flex justify-end gap-2 border-t border-border px-5 py-4">

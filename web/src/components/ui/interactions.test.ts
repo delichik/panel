@@ -78,6 +78,42 @@ describe('Select', () => {
 });
 
 describe('Dropdown', () => {
+	 it('does not close from the synthetic click after keyboard activation', async () => {
+		const wrapper = mount(Dropdown, { attachTo: document.body, slots: { trigger: '<button id="keyboard-trigger">Menu</button>', default: '<DropdownItem>First</DropdownItem>' }, global: { components: { DropdownItem } } });
+		const trigger = wrapper.get('#keyboard-trigger');
+		await trigger.trigger('keydown', { key: 'Enter' });
+		trigger.element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
+		await nextTick();
+		expect(trigger.attributes('aria-expanded')).toBe('true');
+		expect(document.querySelector('[role="menu"]')).not.toBeNull();
+		wrapper.unmount();
+	 });
+
+	 it.each(['Enter', ' '])('opens once from %s keyboard activation', async (key) => {
+		const wrapper = mount(Dropdown, { attachTo: document.body, slots: { trigger: '<button id="key-trigger">Menu</button>', default: '<DropdownItem>First</DropdownItem>' }, global: { components: { DropdownItem } } });
+		const trigger = wrapper.get('#key-trigger');
+		await trigger.trigger('keydown', { key });
+		trigger.element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
+		await nextTick();
+		expect(trigger.attributes('aria-expanded')).toBe('true');
+		wrapper.unmount();
+	 });
+
+	 it('opens from an independent assistive-technology style click', async () => {
+		const wrapper = mount(Dropdown, { attachTo: document.body, slots: { trigger: '<button id="at-trigger">Menu</button>', default: '<DropdownItem>First</DropdownItem>' }, global: { components: { DropdownItem } } });
+		wrapper.get('#at-trigger').element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 0 }));
+		await nextTick();
+		expect(document.querySelector('[role="menu"]')).not.toBeNull();
+		wrapper.unmount();
+	 });
+
+	 it('toggles from a pointer click', async () => {
+		const wrapper = mount(Dropdown, { attachTo: document.body, slots: { trigger: '<button id="pointer-trigger">Menu</button>', default: '<DropdownItem>First</DropdownItem>' }, global: { components: { DropdownItem } } });
+		wrapper.get('#pointer-trigger').element.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+		await nextTick();
+		expect(document.querySelector('[role="menu"]')).not.toBeNull();
+		wrapper.unmount();
+	 });
   it('exposes menu state and supports menu keyboard navigation', async () => {
     const wrapper = mount(Dropdown, {
       attachTo: document.body,
@@ -92,13 +128,14 @@ describe('Dropdown', () => {
     await nextTick();
 
     expect(trigger.attributes('aria-expanded')).toBe('true');
-    const items = wrapper.findAll('[role="menuitem"]');
-    expect(document.activeElement).toBe(items[0]?.element);
-    await items[0]!.trigger('keydown', { key: 'End' });
-    expect(document.activeElement).toBe(items[2]?.element);
-    await items[2]!.trigger('keydown', { key: 'Escape' });
+    const items = Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]'));
+    expect(document.activeElement).toBe(items[0]);
+    items[0]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
     await nextTick();
-    expect(wrapper.find('[role="menu"]').exists()).toBe(false);
+    expect(document.activeElement).toBe(items[2]);
+    items[2]!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('[role="menu"]')).toBeNull();
     expect(document.activeElement).toBe(trigger.element);
   });
 });

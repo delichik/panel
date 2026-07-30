@@ -8,4 +8,5 @@ type EditSessionFileContent struct {
 	Size          int64  `json:"size"`
 	SHA256        string `json:"sha256"`
 	ContentBase64 string `json:"contentBase64"`
+	Content       []byte `json:"-"`
 }

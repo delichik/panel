@@ -1,22 +1,99 @@
 package docker
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	agentcontract "panel/internal/agent/contract"
 	appruntime "panel/internal/modules/applications/runtime"
 )
+
+func TestManagedArchiveLimitsRejectCountDepthSizeAndRatio(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		path       string
+		count      int
+		extracted  int64
+		compressed int64
+	}{
+		{name: "count", path: "a", count: managedArchiveMaxFiles + 1, extracted: 1, compressed: 1},
+		{name: "depth", path: strings.Repeat("a/", managedArchiveMaxDepth) + "x", count: 1, extracted: 1, compressed: 1},
+		{name: "size", path: "a", count: 1, extracted: managedArchiveMaxExtracted + 1, compressed: managedArchiveMaxExtracted},
+		{name: "ratio", path: "a", count: 1, extracted: 2 << 20, compressed: 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateManagedArchiveLimits(tc.path, tc.count, tc.extracted, tc.compressed); err == nil {
+				t.Fatal("expected managed archive limit error")
+			}
+		})
+	}
+}
+
+func TestManagedArchiveRejectsEmptyDirectoryFlood(t *testing.T) {
+	var raw bytes.Buffer
+	zw := zip.NewWriter(&raw)
+	for i := 0; i <= managedArchiveMaxFiles; i++ {
+		header := &zip.FileHeader{Name: fmt.Sprintf("d%05d/", i), Method: zip.Store}
+		if _, err := zw.CreateHeader(header); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(raw.Bytes()), int64(raw.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedZipEntries(zr, int64(raw.Len())); err == nil {
+		t.Fatal("expected entry limit error")
+	}
+}
+
+func TestManagedTarRejectsEmptyDirectoryFlood(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	for i := 0; i <= managedArchiveMaxFiles; i++ {
+		if err := tw.WriteHeader(&tar.Header{Name: fmt.Sprintf("d%05d/", i), Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedTarEntries(tar.NewReader(bytes.NewReader(raw.Bytes())), int64(raw.Len())); err == nil {
+		t.Fatal("expected entry limit error")
+	}
+}
+
+func TestManagedTarRejectsIgnoredHeaderFlood(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	for i := 0; i <= managedArchiveMaxFiles; i++ {
+		if err := tw.WriteHeader(&tar.Header{Name: fmt.Sprintf("l%05d", i), Typeflag: tar.TypeSymlink, Linkname: "target", Mode: 0o777}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := managedTarEntries(tar.NewReader(bytes.NewReader(raw.Bytes())), int64(raw.Len())); err == nil {
+		t.Fatal("expected entry limit error")
+	}
+}
 
 func TestDockerAPIClientPullImagePassesExplicitLatestTag(t *testing.T) {
 	latest := "latest"

@@ -11,6 +11,8 @@
 - `DownloadButton`：用于 blob、归档、证书、密钥等下载动作，页面负责调用 API 并处理 `saveBlobDownload`。
 - `StatusBadge`：集中维护状态到 tone 的映射。支持 `generic`、`server`、`task`、`certificate`、`resource`、`operation` domain；页面只有在确有业务差异时才传入显式 `tone`。
 - `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。
+- `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；继续支持方向键、Home/End、Escape 和焦点恢复。
+- `Dialog`：普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
 - `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。
 
 ## Pattern components

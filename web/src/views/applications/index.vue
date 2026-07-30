@@ -20,14 +20,13 @@ import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
-import EditorSectionRail from '@/components/patterns/EditorSectionRail.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import EditorPage from '@/components/templates/EditorPage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule } from '@/types/applications';
-import type { FacilityAppSummary, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig } from '@/types/facilityApps';
+import type { FacilityAppSummary, FacilityEditAsset, FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset } from '@/types/facilityApps';
 import {
   applicationSections,
   applicationStatus,
@@ -68,6 +67,7 @@ import {
 } from './model';
 import { inferTemplateLanguage, type TemplateLanguage } from './templateLanguage';
 import { isSameFileDialogContext, type FileDialogContext } from './fileDialogContext';
+import { archiveBasePath } from './archivePath';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -86,6 +86,7 @@ let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applications = ref<ApplicationSummaryDto[]>([]);
 const applicationDetails = ref<Record<string, ApplicationDto>>({});
+const applicationFiles = ref<Record<string, ApplicationFile[]>>({});
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
 const facilities = ref<FacilityAppSummary[]>([]);
 const facility = ref<ReverseProxyConfig | null>(null);
@@ -114,6 +115,10 @@ const fileDialog = ref(false);
 const fileEditing = ref<ApplicationFile | null>(null);
 const fileLoading = ref(false);
 const fileLoadError = ref('');
+const fileActionErrors = ref<Record<string, string>>({});
+const fileActionPending = ref('');
+const assetActionErrors = ref<Record<string, string>>({});
+const assetActionPending = ref('');
 const fileLanguage = ref<TemplateLanguage>('plain');
 const fileLanguageManual = ref(false);
 const fileDialogKey = ref('');
@@ -136,7 +141,7 @@ const proxyDraft = reactive<ReverseProxyRule>(makeProxyRule());
 const proxyPathDraft = reactive(makeProxyPath());
 const facilityDomainDraft = reactive<FacilityRouteDomain>(makeFacilityDomain());
 const facilityPathDraft = reactive<FacilityRoutePath>(makeFacilityPath());
-const fileForm = reactive({ path: '', kind: 'template', contentType: 'text/plain', content: '' });
+const fileForm = reactive({ path: '', content: '' });
 
 const mode = computed(() => routeMode(route.path, route.params));
 const facilityKind = computed(() => String(route.params.facilityKind ?? ''));
@@ -176,10 +181,10 @@ const appWorkspacePanels = computed(() => [
   { id: 'files', label: t('applicationsPage.panelFilesAssets'), description: t('applicationsPage.panelFilesAssetsHint'), icon: Layers3 },
 ]);
 const facilitySectionNav = computed(() => [
-  { id: 'gateways', label: t('applicationsPage.gatewayNodes') },
-  { id: 'domains', label: t('applicationsPage.domainGroups') },
-  { id: 'panel', label: t('applicationsPage.panelEntry') },
-  { id: 'assets', label: t('applicationsPage.staticAssets') },
+  { id: 'gateways', label: t('applicationsPage.gatewayNodes'), icon: Server },
+  { id: 'domains', label: t('applicationsPage.domainGroups'), icon: Globe2 },
+  { id: 'panel', label: t('applicationsPage.panelEntry'), icon: Network },
+  { id: 'assets', label: t('applicationsPage.staticAssets'), icon: Layers3 },
 ]);
 const appRailSections = computed(() => appWorkspacePanels.value.map((section) => ({
   ...section,
@@ -190,7 +195,7 @@ const appRailSections = computed(() => appWorkspacePanels.value.map((section) =>
 })));
 const facilityRailSections = computed(() => facilitySectionNav.value.map((section) => ({
   ...section,
-  ...(facilitySectionStates.value.find((item) => item.id === section.id) ?? { complete: false }),
+  ...(facilitySectionStates.value.find((item) => item.id === section.id) ?? { complete: false, error: false, dirty: false }),
   children: section.id === 'domains'
     ? facilityDraft.domains.map((domain, index) => ({
       id: `${domain.domain || 'domain'}-${index}`,
@@ -211,13 +216,11 @@ const assetOptions = computed(() => [
   ...(facility.value?.staticAssets ?? []).map((asset) => ({ value: asset.id, label: `${asset.name} / ${asset.filename}` })),
   ...(facilitySession.value?.assets ?? []).map((asset) => ({ value: asset.assetKey, label: `${asset.name} / ${asset.filename}` })),
 ]);
-const fileKindOptions = computed(() => [{ label: t('applicationsPage.fileKindTemplate'), value: 'template' }, { label: t('applicationsPage.fileKindBinary'), value: 'binary' }]);
 const fileLanguageOptions = computed(() => (['plain', 'yaml', 'json', 'shell', 'nginx', 'properties', 'dockerfile'] as TemplateLanguage[]).map((value) => ({
   value,
   label: t(`applicationsPage.templateLanguage.${value}`),
 })));
-const existingBinaryFile = computed(() => Boolean(fileEditing.value && fileForm.kind !== 'template'));
-const fileSaveDisabled = computed(() => fileLoading.value || Boolean(fileLoadError.value) || !fileForm.path.trim() || existingBinaryFile.value);
+const fileSaveDisabled = computed(() => fileLoading.value || Boolean(fileLoadError.value) || !fileForm.path.trim());
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['host_path', 'uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
@@ -231,8 +234,8 @@ const facilityRedirectCode = computed({
   set: (value: string) => { facilityPathDraft.redirectCode = Number(value); },
 });
 
-watch([() => fileForm.path, () => fileForm.contentType], () => {
-  if (fileDialog.value && !fileLanguageManual.value) fileLanguage.value = inferTemplateLanguage(fileForm.path, fileForm.contentType);
+watch(() => fileForm.path, () => {
+  if (fileDialog.value && !fileLanguageManual.value) fileLanguage.value = inferTemplateLanguage(fileForm.path, '');
 });
 const appDeploymentServersModel = computed({
   get: () => appDraft.deploymentServers,
@@ -402,9 +405,13 @@ async function loadApplicationDetail(applicationId: string) {
   applicationDetailController = controller;
   detailLoading.value = true;
   try {
-    const app = await applicationsApi.get(applicationId, { signal: controller.signal });
+    const [app, files] = await Promise.all([
+      applicationsApi.get(applicationId, { signal: controller.signal }),
+      applicationsApi.listFiles(applicationId, { signal: controller.signal }),
+    ]);
     if (requestId !== applicationDetailRequestId || mode.value !== modeAtStart || applicationId !== selectedId.value) return;
     applicationDetails.value = { ...applicationDetails.value, [applicationId]: app };
+    applicationFiles.value = { ...applicationFiles.value, [applicationId]: files };
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
@@ -477,19 +484,21 @@ function ask(kind: typeof confirmKind.value, target: string) {
 
 async function confirmAction() {
   if (confirmKind.value === 'file-delete' && editSession.value) {
-    await runEditorAction(async () => {
+    const targetKey = confirmTarget.value;
+    await runFileAction(targetKey, async () => {
       editSession.value = await applicationsApi.deleteEditSessionFile(editSession.value!.id, confirmTarget.value, editSession.value!.revision);
       markDirty();
     });
-    confirmOpen.value = false;
+    confirmOpen.value = Boolean(fileActionErrors.value[targetKey]);
     return;
   }
   if (confirmKind.value === 'facility-asset-delete' && facilitySession.value) {
-    await runEditorAction(async () => {
+    const targetKey = confirmTarget.value;
+    await runAssetAction(targetKey, async () => {
       facilitySession.value = await facilityAppsApi.deleteFacilityEditAsset(facilityKind.value, facilitySession.value!.id, confirmTarget.value, facilitySession.value!.revision);
       markDirty();
     });
-    confirmOpen.value = false;
+    confirmOpen.value = Boolean(assetActionErrors.value[targetKey]);
     return;
   }
   const app = selectedApplication.value;
@@ -615,6 +624,22 @@ async function startFacilityEditor() {
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
+  }
+}
+
+async function reloadFacilityEditor() {
+  pending.value = 'editor-reload';
+  const currentSession = facilitySession.value;
+  try {
+    if (currentSession) await facilityAppsApi.discardFacilityEdit(facilityKind.value, currentSession.id);
+    facilitySession.value = null;
+    actionError.value = '';
+    await loadFacilityData();
+    await startFacilityEditor();
+  } catch (err) {
+    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+  } finally {
+    pending.value = '';
   }
 }
 
@@ -855,6 +880,7 @@ function selectFileLanguage(value: string) {
 }
 
 async function openFileDialog(file?: ApplicationFile) {
+  if (file && file.kind !== 'template') return;
   const requestId = ++fileLoadRequestId;
   fileDialogKey.value = file?.fileKey || file?.id || `file-${Date.now()}`;
   fileEditing.value = file ?? null;
@@ -863,11 +889,9 @@ async function openFileDialog(file?: ApplicationFile) {
   fileLanguageManual.value = false;
   Object.assign(fileForm, {
     path: file?.path ?? 'config/app.conf',
-    kind: file?.kind ?? 'template',
-    contentType: file?.contentType ?? 'text/plain',
     content: '',
   });
-  fileLanguage.value = inferTemplateLanguage(fileForm.path, fileForm.contentType);
+  fileLanguage.value = inferTemplateLanguage(fileForm.path, file?.contentType ?? '');
   fileDialog.value = true;
   if (!file || file.kind !== 'template' || !editSession.value) return;
   try {
@@ -893,10 +917,8 @@ async function saveFile() {
   const sessionId = editSession.value.id;
   const revision = editSession.value.revision;
   const input = {
-      path: fileForm.path,
-      kind: fileForm.kind,
-      contentType: fileForm.contentType,
-      contentBase64: encodeBase64Utf8(fileForm.content),
+    path: fileForm.path,
+    contentBase64: encodeBase64Utf8(fileForm.content),
   };
   pending.value = 'editor';
   saveStage.value = 'editor' as SaveStage;
@@ -918,28 +940,121 @@ async function saveFile() {
 async function uploadArchive(fileOrFiles: File | File[]) {
   const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
   if (!file || !editSession.value) return;
-  await runEditorAction(async () => {
+  await runFileAction('__new-archive', async () => {
     editSession.value = await applicationsApi.uploadEditSessionArchive(editSession.value!.id, editSession.value!.revision, {
       file,
       fileKey: `archive-${Date.now()}`,
-      basePath: '/',
+      basePath: archiveBasePath(file.name),
       kind: 'archive',
     });
     markDirty();
   });
 }
 
-async function uploadFacilityAsset(fileOrFiles: File | File[]) {
+async function uploadBinary(fileOrFiles: File | File[]) {
   const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
-  if (!file || !facilitySession.value) return;
-  await runEditorAction(async () => {
-    facilitySession.value = await facilityAppsApi.putFacilityEditAsset(facilityKind.value, facilitySession.value!.id, `asset-${Date.now()}`, facilitySession.value!.revision, {
+  if (!file || !editSession.value) return;
+  await runFileAction('__new-file', async () => {
+    editSession.value = await applicationsApi.uploadEditSessionFile(editSession.value!.id, `file-${Date.now()}`, editSession.value!.revision, {
       file,
-      name: file.name.replace(/\.[^.]+$/, '') || file.name,
-      kind: file.name.endsWith('.zip') ? 'uploaded_bundle' : 'uploaded_file',
+      path: file.name,
     });
     markDirty();
   });
+}
+
+async function replaceApplicationFile(target: ApplicationFile, fileOrFiles: File | File[]) {
+  const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
+  const targetKey = target.fileKey || target.id || '';
+  if (!file || !editSession.value || !targetKey || target.kind === 'template') return;
+  await runFileAction(targetKey, async () => {
+    if (target.kind === 'archive') {
+      editSession.value = await applicationsApi.uploadEditSessionArchive(editSession.value!.id, editSession.value!.revision, {
+        file,
+        fileKey: targetKey,
+        basePath: target.path,
+        kind: 'archive',
+      });
+    } else {
+      editSession.value = await applicationsApi.uploadEditSessionFile(editSession.value!.id, targetKey, editSession.value!.revision, {
+        file,
+        path: target.path,
+      });
+    }
+    markDirty();
+  });
+}
+
+async function downloadApplicationSessionFile(file: ApplicationFile) {
+  const targetKey = file.fileKey || file.id || '';
+  if (!editSession.value || !targetKey) return;
+  await runFileAction(targetKey, async () => {
+    saveBlobDownload(await applicationsApi.downloadEditSessionFile(editSession.value!.id, targetKey, applicationFileDownloadName(file)));
+  });
+}
+
+async function downloadCommittedApplicationFile(file: ApplicationFile) {
+  if (!selectedApplication.value.id || !file.id) return;
+  await runFileAction(`committed:${file.id}`, async () => {
+    saveBlobDownload(await applicationsApi.downloadFile(selectedApplication.value.id, file.id!, applicationFileDownloadName(file)));
+  });
+}
+
+function applicationFileDownloadName(file: ApplicationFile) {
+  if (file.kind === 'archive' && file.contentType) return file.contentType;
+  return file.path.split('/').filter(Boolean).at(-1) || 'application-file';
+}
+
+async function runFileAction(key: string, action: () => Promise<void>) {
+  fileActionPending.value = key;
+  fileActionErrors.value = { ...fileActionErrors.value, [key]: '' };
+  try {
+    await action();
+  } catch (err) {
+    fileActionErrors.value = { ...fileActionErrors.value, [key]: err instanceof Error ? err.message : t('common.operationFailed') };
+  } finally {
+    fileActionPending.value = '';
+  }
+}
+
+async function uploadFacilityAsset(fileOrFiles: File | File[], target?: FacilityEditAsset) {
+  const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
+  if (!file || !facilitySession.value) return;
+  const assetKey = target?.assetKey || `asset-${Date.now()}`;
+  const actionKey = target?.assetKey || '__new-asset';
+  await runAssetAction(actionKey, async () => {
+    facilitySession.value = await facilityAppsApi.putFacilityEditAsset(facilityKind.value, facilitySession.value!.id, assetKey, facilitySession.value!.revision, {
+      file,
+      name: target?.name || file.name.replace(/\.[^.]+$/, '') || file.name,
+      kind: target?.kind || (/\.(zip|tar|tar\.gz|tgz)$/i.test(file.name) ? 'uploaded_bundle' : 'uploaded_file'),
+    });
+    markDirty();
+  });
+}
+
+async function downloadFacilitySessionAsset(asset: FacilityEditAsset) {
+  if (!facilitySession.value) return;
+  await runAssetAction(asset.assetKey, async () => {
+    saveBlobDownload(await facilityAppsApi.downloadFacilityEditAsset(facilityKind.value, facilitySession.value!.id, asset.assetKey, asset.filename));
+  });
+}
+
+async function downloadCommittedFacilityAsset(asset: StaticAsset) {
+  await runAssetAction(`committed:${asset.id}`, async () => {
+    saveBlobDownload(await facilityAppsApi.downloadStaticAsset(facilityKind.value, asset.id, asset.filename));
+  });
+}
+
+async function runAssetAction(key: string, action: () => Promise<void>) {
+  assetActionPending.value = key;
+  assetActionErrors.value = { ...assetActionErrors.value, [key]: '' };
+  try {
+    await action();
+  } catch (err) {
+    assetActionErrors.value = { ...assetActionErrors.value, [key]: err instanceof Error ? err.message : t('common.operationFailed') };
+  } finally {
+    assetActionPending.value = '';
+  }
 }
 
 function sourceSummary() {
@@ -1141,7 +1256,16 @@ onBeforeUnmount(() => {
                     <EmptyState v-if="!selectedApplication.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.noRoutesHint')" />
                   </section>
                   <section v-else class="rounded-2xl border border-border bg-background p-4">
-                    <p class="m-0 text-sm text-muted-foreground">{{ selectedApplication.persistentPath ? t('applicationsPage.persistentPath', { path: selectedApplication.persistentPath }) : t('applicationsPage.noPersistentData') }}</p>
+                    <div class="grid gap-3">
+                      <div v-for="file in applicationFiles[selectedApplication.id] || []" :key="file.id" class="item-row">
+                        <div><strong>{{ file.path }}</strong><span>{{ file.size }} {{ t('applicationsPage.bytes') }}</span></div>
+                        <div class="row-actions">
+                          <DownloadButton size="sm" :loading="fileActionPending === `committed:${file.id}`" :label="t('common.download')" @click="downloadCommittedApplicationFile(file)" />
+                        </div>
+                        <div v-if="fileActionErrors[`committed:${file.id}`]" class="row-error">{{ fileActionErrors[`committed:${file.id}`] }}</div>
+                      </div>
+                      <EmptyState v-if="!(applicationFiles[selectedApplication.id] || []).length" :title="t('applicationsPage.noFiles')" :description="t('applicationsPage.noCommittedFilesHint')" />
+                    </div>
                   </section>
                 </Tabs>
               </div>
@@ -1259,6 +1383,17 @@ onBeforeUnmount(() => {
               <EmptyState v-if="!facility.routeSummaries.length" :title="t('applicationsPage.noGatewayRoutes')" :description="t('applicationsPage.noGatewayRoutesHint')" />
             </div>
           </section>
+          <section class="rounded-2xl border border-border bg-background p-4">
+            <h3>{{ t('applicationsPage.staticAssets') }}</h3>
+            <div class="mt-3 grid gap-2">
+              <div v-for="asset in facility.staticAssets" :key="asset.id" class="item-row">
+                <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
+                <DownloadButton size="sm" :loading="assetActionPending === `committed:${asset.id}`" :label="t('common.download')" @click="downloadCommittedFacilityAsset(asset)" />
+                <div v-if="assetActionErrors[`committed:${asset.id}`]" class="row-error">{{ assetActionErrors[`committed:${asset.id}`] }}</div>
+              </div>
+              <EmptyState v-if="!facility.staticAssets.length" :title="t('applicationsPage.noAssets')" :description="t('applicationsPage.noAssetsHint')" />
+            </div>
+          </section>
         </div>
       </section>
       <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
@@ -1283,7 +1418,10 @@ onBeforeUnmount(() => {
   <ConsolePage v-else-if="isAppEditor || isFacilityEditor" :title="isFacilityEditor ? t('applicationsPage.gatewayEditor') : (isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor'))" :description="isFacilityEditor ? t('applicationsPage.gatewayEditorDescription') : t('applicationsPage.applicationEditorDescription')">
     <EditorPage>
       <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-      <div v-if="actionError" class="mb-4 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+      <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+        <span class="text-danger">{{ actionError }}</span>
+        <Button v-if="isFacilityEditor" size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
+      </div>
       <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
 
       <div v-if="isAppEditor" class="app-editor-layout">
@@ -1364,11 +1502,22 @@ onBeforeUnmount(() => {
               <div class="section-heading">
                 <div class="section-copy"><h3>{{ t('applicationsPage.panelFilesAssets') }}</h3><p>{{ t('applicationsPage.filesHint') }}</p></div>
                 <div class="flex flex-wrap gap-2">
-                  <Button size="sm" @click="openFileDialog()"><Plus />{{ t('applicationsPage.addFile') }}</Button>
-                  <FileUploadButton size="sm" accept=".zip,application/zip" :loading="pending === 'editor'" :disabled="!editSession" :label="t('applicationsPage.uploadArchive')" @change="uploadArchive" />
+                  <Button size="sm" @click="openFileDialog()"><Plus />{{ t('applicationsPage.newTextFile') }}</Button>
+                  <FileUploadButton size="sm" :loading="fileActionPending === '__new-file'" :disabled="!editSession" :label="t('applicationsPage.uploadFile')" @change="uploadBinary" />
+                  <FileUploadButton size="sm" accept=".zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip" :loading="fileActionPending === '__new-archive'" :disabled="!editSession" :label="t('applicationsPage.uploadFolderArchive')" @change="uploadArchive" />
                 </div>
               </div>
-              <div v-for="file in editSession?.files || []" :key="file.fileKey || file.id" class="item-row"><div><strong>{{ file.path }}</strong><span>{{ file.kind }} / {{ file.size }} bytes</span></div><div class="row-actions"><Button v-if="file.kind === 'template'" size="sm" @click="openFileDialog(file)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="ask('file-delete', file.fileKey || file.id || '')">{{ t('common.delete') }}</Button></div></div>
+              <div v-if="fileActionErrors['__new-file'] || fileActionErrors['__new-archive']" class="row-error">{{ fileActionErrors['__new-file'] || fileActionErrors['__new-archive'] }}</div>
+              <div v-for="file in editSession?.files || []" :key="file.fileKey || file.id" class="item-row">
+                <div><strong>{{ file.path }}</strong><span>{{ file.size }} {{ t('applicationsPage.bytes') }}</span></div>
+                <div class="row-actions">
+                  <Button v-if="file.kind === 'template'" size="sm" @click="openFileDialog(file)">{{ t('common.edit') }}</Button>
+                  <FileUploadButton v-else size="sm" :accept="file.kind === 'archive' ? '.zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip' : undefined" :loading="fileActionPending === (file.fileKey || file.id)" :label="t('common.replace')" @change="replaceApplicationFile(file, $event)" />
+                  <DownloadButton size="sm" :loading="fileActionPending === (file.fileKey || file.id)" :label="t('common.download')" @click="downloadApplicationSessionFile(file)" />
+                  <Button size="sm" variant="danger" :disabled="fileActionPending === (file.fileKey || file.id)" @click="ask('file-delete', file.fileKey || file.id || '')">{{ t('common.delete') }}</Button>
+                </div>
+                <div v-if="fileActionErrors[file.fileKey || file.id || '']" class="row-error">{{ fileActionErrors[file.fileKey || file.id || ''] }}</div>
+              </div>
               <EmptyState v-if="!(editSession?.files || []).length" :title="t('applicationsPage.noFiles')" :description="t('applicationsPage.noFilesHint')" />
             </section>
           </div>
@@ -1410,59 +1559,69 @@ onBeforeUnmount(() => {
         </aside>
       </div>
 
-      <div v-else class="grid min-h-0 gap-4 xl:grid-cols-[260px_minmax(0,1fr)_340px]">
-        <aside class="sticky top-0 self-start rounded-2xl border border-border bg-card p-3">
-          <EditorSectionRail
-            v-model="activeFacilitySection"
-            :sections="facilityRailSections"
-            :label="t('applicationsPage.gatewayEditor')"
-            :complete-label="t('common.complete')"
-            :error-label="t('common.error')"
-            :dirty-label="t('applicationsPage.dirty')"
-          />
-        </aside>
-
-        <section class="grid max-h-[calc(100dvh-220px)] gap-5 overflow-auto rounded-2xl border border-border bg-card p-5">
-          <section v-show="activeFacilitySection === 'gateways'" class="grid gap-4">
-            <div class="section-copy"><h3>{{ t('applicationsPage.gatewayNodes') }}</h3><p>{{ t('applicationsPage.gatewayNodesHint') }}</p></div>
-            <ServerMultiPicker v-model="facilityDeploymentServersModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
-          </section>
-
-          <section v-show="activeFacilitySection === 'domains'" class="grid gap-4">
-            <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.domainGroups') }}</h3><p>{{ t('applicationsPage.domainGroupsHint') }}</p></div><Button size="sm" @click="openFacilityDomainDialog()"><Plus />{{ t('applicationsPage.addDomain') }}</Button></div>
-            <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="rounded-2xl border border-border bg-background p-4">
-              <div class="flex items-start justify-between gap-3">
-                <div><strong>{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ domain.originServerIds.join(', ') || t('common.notAvailable') }}</span></div>
-                <div class="row-actions"><Button size="sm" @click="openFacilityDomainDialog(domainIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(facilityDraft.domains, domainIndex, 'facility')">{{ t('common.delete') }}</Button></div>
-              </div>
-              <div class="mt-3 grid gap-2">
-                <div v-for="(path, pathIndex) in domain.paths" :key="`${path.path}-${pathIndex}`" class="item-row"><div><strong>{{ path.path || '/' }} · {{ path.ruleType }}</strong><span>{{ pathTarget(path) }}</span></div><div class="row-actions"><Button size="sm" @click="openFacilityPathDialog(domainIndex, pathIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(domain.paths, pathIndex, 'facility')">{{ t('common.delete') }}</Button></div></div>
-                <Button size="sm" class="justify-self-start" @click="openFacilityPathDialog(domainIndex)"><Plus />{{ t('common.addPath') }}</Button>
-              </div>
+      <div v-else class="app-editor-layout">
+        <section class="app-editor-shell">
+          <div class="app-editor-header">
+            <div class="section-copy"><h3>{{ t('applicationsPage.gatewayWorkspace') }}</h3><p>{{ t('applicationsPage.gatewayWorkspaceHint') }}</p></div>
+            <div class="workspace-steps" role="tablist" :aria-label="t('applicationsPage.gatewayEditor')">
+              <button v-for="section in facilityRailSections" :key="section.id" class="workspace-step" :class="{ active: activeFacilitySection === section.id, error: section.error }" type="button" @click="activeFacilitySection = section.id">
+                <component :is="section.icon" class="size-4" />
+                <span>{{ section.label }}</span>
+                <StatusBadge :status="section.error ? 'error' : section.complete ? 'complete' : 'pending'" :tone="section.error ? 'danger' : section.complete ? 'success' : 'neutral'" :label="section.error ? t('common.error') : section.complete ? t('common.complete') : t('applicationsPage.pending')" />
+              </button>
             </div>
-          </section>
+          </div>
 
-          <section v-show="activeFacilitySection === 'panel'" class="grid gap-4">
-            <div class="section-copy"><h3>{{ t('applicationsPage.panelEntry') }}</h3><p>{{ t('applicationsPage.panelEntryHint') }}</p></div>
-            <label class="flex items-center justify-between rounded-xl border border-border p-3 text-sm">{{ t('applicationsPage.panelEntry') }}<Switch v-model="facilityDraft.panelEnabled" :label="t('applicationsPage.panelEntry')" @click="markDirty" /></label>
-            <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-              <label class="field">{{ t('applicationsPage.panelServer') }}<Input v-model="facilityDraft.panelServerId" :invalid="Boolean(facilityErrors.panelServerId)" @input="markDirty" /></label>
-              <label class="field">{{ t('applicationsPage.panelDomain') }}<Input v-model="facilityDraft.panelDomain" :invalid="Boolean(facilityErrors.panelDomain)" @input="markDirty" /></label>
-            </div>
-          </section>
+          <div class="app-editor-body">
+            <section v-show="activeFacilitySection === 'gateways'" class="workspace-panel">
+              <div class="section-copy"><h3>{{ t('applicationsPage.gatewayNodes') }}</h3><p>{{ t('applicationsPage.gatewayNodesHint') }}</p></div>
+              <ServerMultiPicker v-model="facilityDeploymentServersModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
+            </section>
 
-          <section v-show="activeFacilitySection === 'assets'" class="grid gap-4">
-            <div class="section-heading">
-              <div class="section-copy"><h3>{{ t('applicationsPage.staticAssets') }}</h3><p>{{ t('applicationsPage.assetUploadLimit') }}</p></div>
-              <div>
-                <FileUploadButton size="sm" :loading="pending === 'editor'" :disabled="!facilitySession" :label="t('applicationsPage.uploadStaticAsset')" @change="uploadFacilityAsset" />
+            <section v-show="activeFacilitySection === 'domains'" class="workspace-panel">
+              <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.domainGroups') }}</h3><p>{{ t('applicationsPage.domainGroupsHint') }}</p></div><Button size="sm" @click="openFacilityDomainDialog()"><Plus />{{ t('applicationsPage.addDomain') }}</Button></div>
+              <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="rounded-xl border border-border bg-background p-4">
+                <div class="flex items-start justify-between gap-3 max-sm:flex-col">
+                  <div><strong>{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ domain.originServerIds.join(', ') || t('common.notAvailable') }}</span></div>
+                  <div class="row-actions"><Button size="sm" @click="openFacilityDomainDialog(domainIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(facilityDraft.domains, domainIndex, 'facility')">{{ t('common.delete') }}</Button></div>
+                </div>
+                <div class="mt-3 grid gap-2">
+                  <div v-for="(path, pathIndex) in domain.paths" :key="`${path.path}-${pathIndex}`" class="item-row"><div><strong>{{ path.path || '/' }} · {{ path.ruleType }}</strong><span>{{ pathTarget(path) }}</span></div><div class="row-actions"><Button size="sm" @click="openFacilityPathDialog(domainIndex, pathIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(domain.paths, pathIndex, 'facility')">{{ t('common.delete') }}</Button></div></div>
+                  <Button size="sm" class="justify-self-start" @click="openFacilityPathDialog(domainIndex)"><Plus />{{ t('common.addPath') }}</Button>
+                </div>
               </div>
-            </div>
-            <div v-for="asset in facilitySession?.assets || []" :key="asset.assetKey" class="item-row"><div><strong>{{ asset.name }}</strong><span>{{ asset.kind }} / {{ asset.filename }}</span></div><Button size="sm" variant="danger" @click="ask('facility-asset-delete', asset.assetKey)">{{ t('common.delete') }}</Button></div>
-          </section>
+            </section>
+
+            <section v-show="activeFacilitySection === 'panel'" class="workspace-panel">
+              <div class="section-copy"><h3>{{ t('applicationsPage.panelEntry') }}</h3><p>{{ t('applicationsPage.panelEntryHint') }}</p></div>
+              <label class="switch-field">{{ t('applicationsPage.panelEntry') }}<Switch v-model="facilityDraft.panelEnabled" :label="t('applicationsPage.panelEntry')" @click="markDirty" /></label>
+              <div class="form-grid">
+                <label class="field">{{ t('applicationsPage.panelServer') }}<Input v-model="facilityDraft.panelServerId" :invalid="Boolean(facilityErrors.panelServerId)" @input="markDirty" /></label>
+                <label class="field">{{ t('applicationsPage.panelDomain') }}<Input v-model="facilityDraft.panelDomain" :invalid="Boolean(facilityErrors.panelDomain)" @input="markDirty" /></label>
+              </div>
+            </section>
+
+            <section v-show="activeFacilitySection === 'assets'" class="workspace-panel">
+              <div class="section-heading">
+                <div class="section-copy"><h3>{{ t('applicationsPage.staticAssets') }}</h3><p>{{ t('applicationsPage.assetUploadLimit') }}</p></div>
+                <FileUploadButton size="sm" :loading="assetActionPending === '__new-asset'" :disabled="!facilitySession" :label="t('applicationsPage.uploadStaticAsset')" @change="uploadFacilityAsset" />
+              </div>
+              <div v-if="assetActionErrors['__new-asset']" class="row-error">{{ assetActionErrors['__new-asset'] }}</div>
+              <div v-for="asset in facilitySession?.assets || []" :key="asset.assetKey" class="item-row">
+                <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
+                <div class="row-actions">
+                  <FileUploadButton size="sm" :accept="asset.kind === 'uploaded_bundle' ? '.zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip' : undefined" :loading="assetActionPending === asset.assetKey" :label="t('common.replace')" @change="uploadFacilityAsset($event, asset)" />
+                  <DownloadButton size="sm" :loading="assetActionPending === asset.assetKey" :label="t('common.download')" @click="downloadFacilitySessionAsset(asset)" />
+                  <Button size="sm" variant="danger" :disabled="assetActionPending === asset.assetKey" @click="ask('facility-asset-delete', asset.assetKey)">{{ t('common.delete') }}</Button>
+                </div>
+                <div v-if="assetActionErrors[asset.assetKey]" class="row-error">{{ assetActionErrors[asset.assetKey] }}</div>
+              </div>
+              <EmptyState v-if="!(facilitySession?.assets || []).length" :title="t('applicationsPage.noAssets')" :description="t('applicationsPage.noAssetsHint')" />
+            </section>
+          </div>
         </section>
 
-        <aside class="sticky top-0 grid content-start gap-3 self-start">
+        <aside class="app-editor-summary">
           <section class="rounded-2xl border border-border bg-card p-4">
             <h3>{{ t('applicationsPage.gatewayChangeSummary') }}</h3>
             <div class="mt-3 grid gap-2 text-sm">
@@ -1562,20 +1721,16 @@ onBeforeUnmount(() => {
     </template>
   </Dialog>
 
-  <Dialog v-model:open="fileDialog" size="large" :title="fileEditing ? t('applicationsPage.editFile') : t('applicationsPage.addFile')" :close-label="t('common.close')">
+  <Dialog v-model:open="fileDialog" size="large" :title="fileEditing ? t('applicationsPage.editTextFile') : t('applicationsPage.newTextFile')" :close-label="t('common.close')">
     <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
       <div class="grid gap-3 md:grid-cols-2">
         <label class="field">{{ t('applicationsPage.filePath') }}<Input v-model="fileForm.path" /></label>
-        <label class="field">{{ t('applicationsPage.fileKind') }}<Select v-model="fileForm.kind" :options="fileKindOptions" :disabled="Boolean(fileEditing)" /></label>
-        <label class="field">{{ t('applicationsPage.contentType') }}<Input v-model="fileForm.contentType" /></label>
-        <label v-if="fileForm.kind === 'template'" class="field">{{ t('applicationsPage.highlightLanguage') }}<Select :model-value="fileLanguage" :options="fileLanguageOptions" @update:model-value="selectFileLanguage" /></label>
+        <label class="field">{{ t('applicationsPage.highlightLanguage') }}<Select :model-value="fileLanguage" :options="fileLanguageOptions" @update:model-value="selectFileLanguage" /></label>
       </div>
       <div class="min-h-0">
         <div v-if="fileLoading" class="grid h-full place-items-center text-sm text-muted-foreground">{{ t('applicationsPage.fileLoading') }}</div>
         <div v-else-if="fileLoadError" class="rounded-md border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ t('applicationsPage.fileLoadFailed') }} {{ fileLoadError }}</div>
-        <div v-else-if="existingBinaryFile" class="rounded-md border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('applicationsPage.binaryEditUnavailable') }}</div>
-        <CodeEditor v-else-if="fileForm.kind === 'template'" v-model="fileForm.content" :language="fileLanguage" :editor-label="t('applicationsPage.fileContent')" />
-        <label v-else class="field h-full">{{ t('applicationsPage.fileContent') }}<Textarea v-model="fileForm.content" class="min-h-[320px] flex-1 font-mono" /></label>
+        <CodeEditor v-else v-model="fileForm.content" :language="fileLanguage" :editor-label="t('applicationsPage.fileContent')" />
       </div>
     </div>
     <template #footer>
@@ -1864,6 +2019,18 @@ strong {
   flex-wrap: wrap;
   gap: 0.5rem;
   justify-content: flex-end;
+}
+
+.row-error {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid hsl(var(--danger-border));
+  border-radius: 0.5rem;
+  background: hsl(var(--danger-bg));
+  color: hsl(var(--danger));
+  padding: 0.5rem 0.625rem;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
 }
 
 @media (max-width: 760px) {

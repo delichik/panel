@@ -1,8 +1,12 @@
 package facilityapps
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -107,16 +111,68 @@ func TestFacilityEditSessionDeletedReferencedAssetIsBlocking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	session, err = svc.DeleteFacilityEditAsset(ctx, session.ID, "asset-main", "asset-delete", FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "asset-delete"})
+	beforeRevision := session.Revision
+	var beforeDir string
+	if err := svc.db.QueryRowContext(ctx, `SELECT blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key=?`, session.ID, "asset-main").Scan(&beforeDir); err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.DeleteFacilityEditAsset(ctx, session.ID, "asset-main", "asset-delete", FacilityEditMutationInput{Revision: session.Revision, ClientOperationID: "asset-delete"})
+	assertFacilityPanelError(t, err, "facility_static_asset_in_use")
+	after, getErr := svc.GetFacilityEditSession(ctx, session.ID)
+	if getErr != nil {
+		t.Fatal(getErr)
+	}
+	if after.Revision != beforeRevision || len(after.Assets) != 1 {
+		t.Fatalf("delete changed session: %#v", after)
+	}
+	if _, statErr := os.Stat(beforeDir); statErr != nil {
+		t.Fatalf("asset blob changed: %v", statErr)
+	}
+}
+
+func TestFacilityAssetDownloadsResolveCommittedSourceAndReplacementBlob(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	asset, err := svc.UploadStaticAsset(ctx, StaticAssetUploadInput{Name: "site", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("committed")})
 	if err != nil {
 		t.Fatal(err)
 	}
-	validation, err := svc.ValidateFacilityEditSession(ctx, session.ID, session.Revision)
+	committed, err := svc.GetStaticAssetDownload(ctx, asset.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if validation.Valid || len(validation.Diagnostics) == 0 || validation.Diagnostics[0].Code != "facility_static_asset_referenced_after_delete" {
-		t.Fatalf("validation = %#v", validation)
+	assertFacilityDownloadFile(t, committed, "committed")
+
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := svc.GetFacilityEditAssetDownload(ctx, session.ID, asset.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFacilityDownloadFile(t, source, "committed")
+
+	session, err = svc.PutFacilityEditAsset(ctx, session.ID, asset.ID, "replace", FacilityEditAssetInput{Revision: session.Revision, ClientOperationID: "replace", Name: "site", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("replacement")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := svc.GetFacilityEditAssetDownload(ctx, session.ID, asset.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFacilityDownloadFile(t, replacement, "replacement")
+	if len(session.Assets) != 1 || session.Assets[0].AssetKey != asset.ID || session.Assets[0].SourceAssetID != asset.ID {
+		t.Fatalf("replacement identity = %#v", session.Assets)
+	}
+}
+
+func assertFacilityDownloadFile(t *testing.T, download FacilityAssetDownload, want string) {
+	t.Helper()
+	content, err := os.ReadFile(filepath.Join(download.Root, download.Filename))
+	if err != nil || string(content) != want {
+		t.Fatalf("download content=%q err=%v", content, err)
 	}
 }
 
@@ -694,6 +750,52 @@ func TestFacilityArchiveLimitsRejectCountDepthSizeAndRatio(t *testing.T) {
 			assertFacilityPanelError(t, validateFacilityArchiveLimits(tc.path, tc.count, tc.extracted, tc.compressed), "facility_static_asset_archive_limits_exceeded")
 		})
 	}
+}
+
+func TestFacilityArchiveRejectsEmptyDirectoryFlood(t *testing.T) {
+	var raw bytes.Buffer
+	zw := zip.NewWriter(&raw)
+	for i := 0; i <= facilityAssetArchiveMaxFiles; i++ {
+		if _, err := zw.CreateHeader(&zip.FileHeader{Name: fmt.Sprintf("d%05d/", i), Method: zip.Store}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(raw.Bytes()), int64(raw.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertFacilityPanelError(t, extractZip(zr, t.TempDir(), int64(raw.Len())), "facility_static_asset_archive_limits_exceeded")
+}
+
+func TestFacilityTarRejectsEmptyDirectoryFlood(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	for i := 0; i <= facilityAssetArchiveMaxFiles; i++ {
+		if err := tw.WriteHeader(&tar.Header{Name: fmt.Sprintf("d%05d/", i), Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertFacilityPanelError(t, extractTar(tar.NewReader(bytes.NewReader(raw.Bytes())), t.TempDir(), int64(raw.Len())), "facility_static_asset_archive_limits_exceeded")
+}
+
+func TestFacilityTarRejectsIgnoredHeaderFlood(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	for i := 0; i <= facilityAssetArchiveMaxFiles; i++ {
+		if err := tw.WriteHeader(&tar.Header{Name: fmt.Sprintf("l%05d", i), Typeflag: tar.TypeSymlink, Linkname: "target", Mode: 0o777}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertFacilityPanelError(t, extractTar(tar.NewReader(bytes.NewReader(raw.Bytes())), t.TempDir(), int64(raw.Len())), "facility_static_asset_archive_limits_exceeded")
 }
 
 type successfulFacilityReconciler struct{}

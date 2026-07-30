@@ -41,7 +41,7 @@ AppShell
 - `DashboardPage`：指标、图表、风险队列等概览。
 - `ListPage`：工具栏 + 表格内部滚动 + 固定分页。
 - `MasterDetailPage`：左选择、右详情，适合服务器、DNS、证书等对象管理。
-- `MasterDetailLayout`：一级对象选择工作台的轻量双栏几何。默认单列，`xl` 及以上使用 `360px minmax(0, 1fr)`，统一 `gap-4`、两侧 `min-width/min-height: 0` 和横向溢出保护；页面通过 `master` / `detail` named slots 保留自己的边框、背景、padding 与业务滚动。不得通过页面 class 或公共 API覆盖左栏宽度。settings 分区导航、应用设施编辑 rail、任务详情内层 `280px` 列表和 AppShell 导航不适用。
+- `MasterDetailLayout`：一级对象选择工作台的轻量双栏几何。默认单列，`xl` 及以上使用 `360px minmax(0, 1fr)`，统一 `gap-4`、两侧 `min-width/min-height: 0` 和横向溢出保护；页面通过 `master` / `detail` named slots 保留自己的边框、背景、padding 与业务滚动。不得通过页面 class 或公共 API覆盖左栏宽度。settings 分区导航、任务详情内层 `280px` 列表和 AppShell 导航不适用。
 - `EditorPage`：复杂创建/编辑，正文内部滚动，底部固定提交栏。
 - `SettingsPage`：分区短表单，最大宽度收敛，分区独立保存。
 - `WorkspacePage`：诊断、日志、终端等满高工作面。
@@ -65,4 +65,4 @@ AppShell
 - 滚动只能发生在模板正文、表格体、详情正文、日志正文、编辑正文等内部区域。
 - 仪表盘卡片允许跨列时，必须用容器宽度或断点保护；在容器不足以容纳两列时不得让 `grid-column: span 2` 生成隐式列撑宽页面。
 - 编辑器类固定格式工作区必须至少定义宽屏、中屏、窄屏三档布局：宽屏可保留主编辑区 + sticky 摘要，主编辑正文内部滚动；中屏（约 900-1279px）必须让摘要区下移或折叠到主内容之后，header 自然堆叠，步骤导航改为稳定的 2-3 列卡片 grid，正文不得被过小 `max-height` 压扁；窄屏必须单列组织 header、模式切换、步骤、字段和摘要，不得依赖横向滚动兜底。
-- 窄屏：允许页面级滚动，双栏折叠为单栏或抽屉。
+- 窄屏：AppShell、RouteContent、ConsolePage 和 EditorPage 必须共同解除视口裁切并允许页面级滚动，双栏折叠为单栏或抽屉；只改 body overflow 不算完成。large Dialog 的 body 自身滚动，Dropdown 使用 body portal、fixed 定位和上下碰撞计算，确保提交栏与菜单可达。

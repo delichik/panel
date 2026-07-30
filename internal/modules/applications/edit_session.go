@@ -174,6 +174,10 @@ func (s *Service) PatchEditSession(ctx context.Context, owner, sessionID string,
 }
 
 func (s *Service) PutEditSessionFile(ctx context.Context, owner, sessionID, fileKey, idempotencyKey string, in EditSessionFileInput) (ApplicationEditSession, error) {
+	kind := strings.TrimSpace(in.Kind)
+	if kind != "" && kind != ApplicationFileKindTemplate {
+		return ApplicationEditSession{}, panelerr.Validation("application_file_kind_invalid", "JSON file writes only support template files")
+	}
 	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(in.ContentBase64))
 	if err != nil {
 		return ApplicationEditSession{}, panelerr.Validation("application_file_content_invalid", "file content must be base64 encoded")
@@ -185,19 +189,40 @@ func (s *Service) PutEditSessionFile(ctx context.Context, owner, sessionID, file
 	if err != nil {
 		return ApplicationEditSession{}, err
 	}
-	kind := strings.TrimSpace(in.Kind)
-	if kind != ApplicationFileKindBinary && kind != ApplicationFileKindTemplate {
-		return ApplicationEditSession{}, panelerr.Validation("application_file_kind_invalid", "file kind must be binary or template")
+	kind = ApplicationFileKindTemplate
+	fileKey = strings.TrimSpace(fileKey)
+	if fileKey == "" {
+		return ApplicationEditSession{}, panelerr.Validation("application_file_key_required", "file key is required")
+	}
+	contentType := inferApplicationFileContentType(pathValue, content, true)
+	requestHash := editRequestHash(in.Revision, fileKey, pathValue, kind, contentType, content)
+	if result, ok, err := s.editOperationResult(ctx, owner, sessionID, in.ClientOperationID, idempotencyKey, requestHash); err != nil || ok {
+		return result, err
+	}
+	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, pathValue, kind, contentType, content)
+}
+
+func (s *Service) UploadEditSessionBinary(ctx context.Context, owner, sessionID, fileKey, idempotencyKey string, in EditSessionBinaryInput) (ApplicationEditSession, error) {
+	if strings.TrimSpace(in.ClientOperationID) == "" {
+		return ApplicationEditSession{}, panelerr.Validation("client_operation_id_required", "clientOperationId is required")
+	}
+	if len(in.Content) == 0 {
+		return ApplicationEditSession{}, panelerr.Validation("application_file_content_invalid", "file content is required")
+	}
+	pathValue, err := normalizeApplicationFilePath(in.Path)
+	if err != nil {
+		return ApplicationEditSession{}, err
 	}
 	fileKey = strings.TrimSpace(fileKey)
 	if fileKey == "" {
 		return ApplicationEditSession{}, panelerr.Validation("application_file_key_required", "file key is required")
 	}
-	requestHash := editRequestHash(in.Revision, fileKey, pathValue, kind, in.ContentType, content)
+	contentType := inferApplicationFileContentType(firstNonEmpty(strings.TrimSpace(in.FileName), pathValue), in.Content, false)
+	requestHash := editRequestHash(in.Revision, fileKey, pathValue, ApplicationFileKindBinary, contentType, in.Content)
 	if result, ok, err := s.editOperationResult(ctx, owner, sessionID, in.ClientOperationID, idempotencyKey, requestHash); err != nil || ok {
 		return result, err
 	}
-	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, pathValue, kind, in.ContentType, content)
+	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, pathValue, ApplicationFileKindBinary, contentType, in.Content)
 }
 
 func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, fileKey string) (EditSessionFileContent, error) {
@@ -225,6 +250,7 @@ func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, file
 		return EditSessionFileContent{}, err
 	}
 	result.ContentBase64 = base64.StdEncoding.EncodeToString(content)
+	result.Content = content
 	return result, nil
 }
 

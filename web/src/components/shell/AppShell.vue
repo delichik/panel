@@ -39,7 +39,7 @@ async function signOut() {
 </script>
 
 <template>
-  <div class="grid h-dvh min-h-0 w-full overflow-hidden bg-background lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
+  <div class="grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
     <aside class="hidden min-h-0 flex-col border-r border-border bg-card lg:flex">
       <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
         <div class="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground">P</div>
@@ -67,7 +67,7 @@ async function signOut() {
       </nav>
     </aside>
 
-    <main class="grid min-h-0 min-w-0 grid-rows-[56px_minmax(0,1fr)]">
+    <main class="grid min-h-dvh min-w-0 grid-rows-[56px_auto] lg:min-h-0 lg:grid-rows-[56px_minmax(0,1fr)]">
       <header class="flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4">
         <div class="flex min-w-0 items-center gap-2">
           <IconButton class="lg:hidden" :label="t('layout.nav.open')" @click="drawerOpen = true">
@@ -107,7 +107,7 @@ async function signOut() {
           </Dropdown>
         </div>
       </header>
-      <section class="min-h-0 min-w-0 overflow-hidden">
+      <section class="min-h-0 min-w-0 overflow-visible lg:overflow-hidden">
         <RouterView />
       </section>
     </main>

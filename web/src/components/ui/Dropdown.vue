@@ -1,13 +1,16 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue';
 
-defineProps<{ align?: 'left' | 'right' }>();
+const props = defineProps<{ align?: 'left' | 'right' }>();
 
 const open = ref(false);
 const root = ref<HTMLElement | null>(null);
 const trigger = ref<HTMLElement | null>(null);
 const menu = ref<HTMLElement | null>(null);
 const menuId = useId();
+const menuStyle = ref<Record<string, string>>({});
+let suppressSyntheticClick = false;
+let syntheticClickTimer: number | undefined;
 
 function triggerControl() {
   return trigger.value?.querySelector<HTMLElement>('button, [href], [tabindex]:not([tabindex="-1"])');
@@ -27,19 +30,61 @@ function menuItems() {
 async function setOpen(value: boolean, focus: 'first' | 'last' | 'trigger' | 'none' = 'none') {
   open.value = value;
   await nextTick();
+  if (value) updateMenuPosition();
   if (focus === 'first') menuItems()[0]?.focus();
   if (focus === 'last') menuItems().at(-1)?.focus();
   if (focus === 'trigger') triggerControl()?.focus();
 }
 
 function onDocumentClick(event: MouseEvent) {
-  if (root.value && !root.value.contains(event.target as Node)) void setOpen(false);
+  const target = event.target as Node;
+  if (root.value && !root.value.contains(target) && !menu.value?.contains(target)) void setOpen(false);
+}
+
+function updateMenuPosition() {
+  if (!open.value) return;
+  const control = triggerControl();
+  if (!control) return;
+  const rect = control.getBoundingClientRect();
+  const gap = 8;
+  const padding = 16;
+  const width = Math.max(208, menu.value?.offsetWidth ?? 208);
+  const left = props.align === 'left'
+    ? Math.min(rect.left, window.innerWidth - width - padding)
+    : Math.max(padding, rect.right - width);
+  const availableBelow = window.innerHeight - rect.bottom - gap - padding;
+  const availableAbove = rect.top - gap - padding;
+  const placeAbove = availableBelow < 160 && availableAbove > availableBelow;
+  menuStyle.value = {
+    position: 'fixed',
+    left: `${Math.max(padding, left)}px`,
+    right: 'auto',
+    top: placeAbove ? 'auto' : `${rect.bottom + gap}px`,
+    bottom: placeAbove ? `${window.innerHeight - rect.top + gap}px` : 'auto',
+    minWidth: `${Math.min(width, window.innerWidth - padding * 2)}px`,
+    maxWidth: `${window.innerWidth - padding * 2}px`,
+    maxHeight: `${Math.max(96, Math.min(320, placeAbove ? availableAbove : availableBelow))}px`,
+  };
 }
 
 function onTriggerKeydown(event: KeyboardEvent) {
   if (!['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) return;
-  event.preventDefault();
-  void setOpen(true, event.key === 'ArrowUp' ? 'last' : 'first');
+	event.preventDefault();
+	if (event.key === 'Enter' || event.key === ' ') {
+		suppressSyntheticClick = true;
+		window.clearTimeout(syntheticClickTimer);
+		syntheticClickTimer = window.setTimeout(() => { suppressSyntheticClick = false; }, 0);
+	}
+	void setOpen(true, event.key === 'ArrowUp' ? 'last' : 'first');
+}
+
+function onTriggerClick(event: MouseEvent) {
+	if (suppressSyntheticClick && event.detail === 0) {
+		suppressSyntheticClick = false;
+		window.clearTimeout(syntheticClickTimer);
+		return;
+	}
+	void setOpen(!open.value, open.value ? 'trigger' : 'first');
 }
 
 function onMenuKeydown(event: KeyboardEvent) {
@@ -65,26 +110,35 @@ watch(open, () => nextTick(syncTriggerAria));
 onMounted(() => {
   syncTriggerAria();
   document.addEventListener('click', onDocumentClick);
+  window.addEventListener('resize', updateMenuPosition);
+  window.addEventListener('scroll', updateMenuPosition, true);
 });
-onBeforeUnmount(() => document.removeEventListener('click', onDocumentClick));
+onBeforeUnmount(() => {
+	window.clearTimeout(syntheticClickTimer);
+  document.removeEventListener('click', onDocumentClick);
+  window.removeEventListener('resize', updateMenuPosition);
+  window.removeEventListener('scroll', updateMenuPosition, true);
+});
 </script>
 
 <template>
   <div ref="root" class="relative inline-block text-left">
-    <div ref="trigger" @click.stop="setOpen(!open, open ? 'trigger' : 'first')" @keydown="onTriggerKeydown">
+    <div ref="trigger" @click.stop="onTriggerClick" @keydown="onTriggerKeydown">
       <slot name="trigger" :open="open" />
     </div>
-    <div
-      v-if="open"
-      :id="menuId"
-      ref="menu"
-      class="motion-popover absolute z-40 mt-2 min-w-52 overflow-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
-      :class="align === 'left' ? 'left-0' : 'right-0'"
-      role="menu"
-      @click="setOpen(false, 'trigger')"
-      @keydown="onMenuKeydown"
-    >
-      <slot />
-    </div>
+    <Teleport to="body">
+      <div
+        v-if="open"
+        :id="menuId"
+        ref="menu"
+        class="motion-popover z-50 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+        :style="menuStyle"
+        role="menu"
+        @click="setOpen(false, 'trigger')"
+        @keydown="onMenuKeydown"
+      >
+        <slot />
+      </div>
+    </Teleport>
   </div>
 </template>

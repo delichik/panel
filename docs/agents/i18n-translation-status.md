@@ -1,5 +1,8 @@
 # 多语言翻译状态
 
+- `web/src/views/applications/index.vue`、`web/src/components/ui/Dropdown.vue`
+  - 应用文件“新建文本文件 / 上传文件 / 上传文件夹压缩包”、替换、两态下载、字节摘要、设施顶部步骤工作区、资产空态和冲突重载入口已补齐英文与简体中文词条；文件名、路径和后端错误保持运行时原值，kind/MIME 不再作为用户输入展示。
+
 - `web/src/components/ui/Dialog.vue`、`web/src/components/ui/ToastProvider.vue`、`web/src/components/shell/AppShell.vue`
   - 对话框关闭、Toast 关闭和主导航区域的可访问名称已接入英文与简体中文词条。
 

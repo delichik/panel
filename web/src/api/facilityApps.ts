@@ -1,5 +1,6 @@
 import { apiClient } from './client';
 import { ApiError, type ApiEnvelope, authHeaders, type ApiRequestOptions } from './client';
+import { fetchDownload, type DownloadResult } from './download';
 import type {
   FacilityEditCommitResult,
   FacilityEditPreviewResult,
@@ -128,6 +129,14 @@ export const facilityAppsApi = {
     form.set('name', input.name);
     form.set('kind', input.kind);
     return multipartJson<FacilityEditSession>('PUT', `/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetKey)}`, form);
+  },
+  downloadFacilityEditAsset(kind: string, sessionId: string, assetKey: string, filename: string): Promise<DownloadResult> {
+    assertSupported(kind);
+    return fetchDownload(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetKey)}/content`, {}, filename);
+  },
+  downloadStaticAsset(kind: string, assetId: string, filename: string): Promise<DownloadResult> {
+    assertSupported(kind);
+    return fetchDownload(`/api/v1/facility-apps/reverse-proxy/static-assets/${id(assetId)}/content`, {}, filename);
   },
   deleteFacilityEditAsset(kind: string, sessionId: string, assetKey: string, revision: number) {
     assertSupported(kind);

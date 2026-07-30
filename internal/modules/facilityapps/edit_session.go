@@ -315,6 +315,13 @@ func (s *Service) DeleteFacilityEditAsset(ctx context.Context, sessionID, assetK
 	if record.State != FacilityEditSessionActive {
 		return FacilityEditSession{}, s.facilityEditConflict(ctx, sessionID, in.Revision)
 	}
+	for _, domain := range record.Draft.Domains {
+		for _, route := range domain.Paths {
+			if strings.TrimSpace(route.AssetID) == strings.TrimSpace(assetKey) {
+				return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("facility_static_asset_in_use", "Static asset is still referenced by a draft route"), map[string]any{"assetKey": assetKey, "domain": domain.Domain, "path": route.Path})
+			}
+		}
+	}
 	requestHash := facilityEditHash(in.Revision, assetKey, "delete")
 	if session, ok, err := s.facilityEditOperationResult(ctx, sessionID, in.ClientOperationID, idempotencyKey, requestHash); ok || err != nil {
 		return session, err

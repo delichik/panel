@@ -36,7 +36,7 @@
 ## API 范围
 
 - 应用 CRUD：`GET /api/v1/applications` 返回 `ApplicationSummary[]` 轻量列表，`POST /api/v1/applications` 和 `GET/PUT/DELETE /api/v1/applications/{id}` 保持完整应用详情/写入语义。
-- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`GET/DELETE /api/v1/applications/{id}/files/{fileId}`
+- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`GET/DELETE /api/v1/applications/{id}/files/{fileId}`，`GET /api/v1/applications/{id}/files/{fileId}/content` 认证流式下载
 - 保存会话：`POST /api/v1/application-save-sessions`，`POST /api/v1/application-save-sessions/{id}/files`，`POST /api/v1/application-save-sessions/{id}/files/delete`，`POST /api/v1/application-save-sessions/{id}/commit`
 - 校验和计划：`POST /api/v1/applications/{id}/validate`，`POST /api/v1/applications/{id}/plan`
 - 运行操作：`POST /api/v1/applications/{id}/deploy`，`POST /api/v1/applications/{id}/migrate`，`POST /api/v1/applications/{id}/stop`，`POST /api/v1/applications/{id}/restart`
@@ -45,7 +45,7 @@
 - 打包：`GET /api/v1/applications/{id}/package`
 - 持久化数据：`GET /api/v1/applications/{id}/persistent-data` 下载，`POST /api/v1/applications/{id}/persistent-data` 上传 zip 覆盖并重启
 - 模板目录：`GET /api/v1/application-template-catalog`
-- 前端 v4 应用页已将持久化数据下载接为 blob 下载，将恢复接为 multipart 上传；应用 edit-session 文件夹归档上传走 `POST /api/v1/application-edit-sessions/{id}/archives`，设施入口静态资产上传走 `PUT /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetKey}`。
+- 前端 v4 应用页已将持久化数据下载接为 blob 下载，将恢复接为 multipart 上传。应用 edit-session 文本写入走 JSON `PUT /files/{fileKey}`，普通二进制走 multipart `PUT /uploads/{fileKey}`，文件夹归档走 multipart `POST /archives`；三者都可通过 `/files/{fileKey}/content` 下载草稿正文。
 
 ## 校验错误
 
@@ -69,8 +69,8 @@
 - 应用持久化目录不保存为数据库字段；是否启用 persistent 由 appspec 的 `mounts.type=persistent` 派生，详情响应里的 `persistentPath` 只读生成自 `applicationPersistentDir(app.ID)`，保存 DTO 不包含 `persistentPath`。
 - 应用 `reverseProxy` 字段描述应用希望暴露的域名、Path、目标端口、目标类型和结构化 Path 选项，不代表所有部署节点都会启用反向代理。`targetType` 支持 `local` 与 `container`：旧数据或空值按 `local` 处理，代理到目标节点本地端口；`container` 代理到同节点 Application 容器名和目标端口。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖且应用实际部署到的服务器才会接收对应反向代理配置。
 - `ReverseProxyPath.options` 与设施 Path 共用 `HTTPRouteOptions`：`gzipMode`、`clientMaxBodySizeMb`、连接/读取/发送超时、`bufferingMode`、`webSocketMode`、请求 Header 和响应 Header。旧 `webSocket=true/false` 必须映射到结构化模式并保留兼容；规范化、模板渲染、`ApplicationReverseProxyConfigs` 转换和 spec hash 不得丢失 options。Header 名称按 HTTP token 校验并大小写不敏感判重，值禁止 CR/LF/NUL 和 Nginx 变量注入。所有应用代理 location 必须明确生成 `proxy_cache off;`；Panel 不主动生成、覆盖或隐藏 `Cache-Control`、`Expires`、ETag 等客户端缓存 Header。
-- 文件内容通过 API 以 base64 承载；应用文件列表不返回正文，`GET /api/v1/applications/{id}/files/{fileId}` 按需返回 `contentBase64` 供模板编辑等定向读取使用。应用文件 `kind` 支持 `binary`、`template` 和 `archive`；`archive` 表示一个原始文件夹压缩包，不在管理端展开。应用文件 CRUD、读取和部署时挂载转换集中在 `files.go`，保存会话用于批量上传、删除和提交。
-- `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器，YAML 中即使写入 `readOnly: false` 也不得让容器修改这些由 Panel 管理的文件。普通 managed file 写入后必须显式 chmod 到 runtime spec 中的 mode；archive managed file 部署到节点时必须先保存原始压缩包副本并校验 sha256，再覆盖解包到挂载目录，确保节点上手工改动的解包文件会在下一次 apply 时恢复为 Panel 期望内容。Agent 在节点保存 managed file manifest 并在容器 report 的 labels map 中附加 manifest hash 和 drift 布尔值，不上传文件清单；普通文件 drift 检查 sha256、mode 和显式 uid/gid，archive drift 检查节点保留原包 sha256 和解包目录 tree hash。Panel 按该 drift 标记、容器 generation 和 spec hash 判断是否需要为该节点重新规划 apply。
+- 应用文件列表不返回正文；模板编辑可用 `GET .../files/{fileKey}` 的 JSON/base64 读取，用户下载必须使用 session 或 committed `/content` 接口，不把 base64 当下载协议。JSON PUT 只允许 `template`，普通 `binary` 必须经 64 MiB multipart 入口上传，MIME 由服务端按文件名/内容推断。`archive` 保存原始文件夹压缩包为一个稳定 `fileKey` 条目，不在管理端展开；替换必须复用原 key 和 basePath。
+- `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器。archive 在应用 Panel、设施 bundle Panel 和 Agent 实际解包侧都限制最多 10000 个总条目（文件与目录均计数）、32 层目录、256 MiB 解包总量和 100 倍压缩比，并继续拒绝路径逃逸和不支持格式；Agent 保存原始压缩包副本并校验 sha256，再覆盖解包到挂载目录。普通文件 drift 检查 sha256、mode 和显式 uid/gid，archive drift 检查节点保留原包 sha256 和解包目录 tree hash。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
 - 启用、停用、部署同步、删除和镜像更新等流程先校验并保存 desired state，再通过 task 框架立即触发 `application_reconcile` 指定该应用；编辑器“保存并应用”只提交保存会话，启用应用由保存接口触发协调，不得在前端保存成功后额外调用 `/deploy`。编辑器保存期间必须用覆盖当前弹窗的阻塞进度遮罩展示保存会话、旧文件删除、文件上传、压缩包上传和提交保存等阶段，并禁止关闭弹窗。协调 collector 负责比较期望状态与运行状态，并请求应用 planner 创建或复用 `application_lifecycle_targets`；planner 新建的 target 进入 `ready`，随后只能由 deployment dispatcher 在 claim target 后创建 `application_target_apply|stop|purge` 任务日志锚点。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标同步中单台服务器失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；容器 start 后 inspect 结果必须为 running，否则视为该目标失败并保留容器退出/运行时诊断，不能把启动后立刻退出的容器标记为成功；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
@@ -89,7 +89,7 @@
 - 应用目标任务在任务中心展示为“应用目标应用 / 停止 / 清理”，表示 Panel 已完成一次目标收敛请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用列表接口使用 `ApplicationSummary[]`，只包含首屏必要字段：`id`、`name`、`enabled`、`imageReference`、`jobId`、`namespace`、`runtimeStatus`、`imageUpdateAvailable`、`lastError`、`updatedAt`。列表必须走专用摘要查询，只读取摘要列，并用固定数量的本地批量查询合并运行时实例状态和最近 lifecycle operation targets；不得调用完整应用 scanner、解析 appspec/YAML/配置 JSON，也不得逐应用、逐实例或逐节点查询。`specYaml`、`variables`、`reverseProxy`、`deploymentServers`、`persistentPath`、`imageUpdateTargets`、`specHash`、`generation`、`lastEvalId`、`lastDeploymentId` 等详情/诊断字段只从 `GET /api/v1/applications/{id}` 获取。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。
 - 普通应用页首屏只加载应用列表必要数据，不加载设施接口，也不预拉多个应用的 runtime；当前选中应用的 runtime 在列表可用后异步按需加载。设施目录、详情和配置页进入对应模式时再加载设施数据；直达设施 URL 必须先加载设施目录后再判断是否支持该 `facilityKind`。
-- 应用页面在桌面端是满高主从工作区，左侧选择器内部滚动并将分页固定在底部；右侧详情正文必须横向填满剩余工作区，不得再用固定 `1020px`、`1080px` 等最大宽度把内容收成居中窄列。创建应用从左侧选择器进入隐藏独立页 `/applications/apps/create`，编辑应用从详情页进入隐藏独立页 `/applications/apps/:applicationId/edit`，保存或取消后返回普通应用页。创建/编辑页使用编辑器的页面嵌入模式，只保留全局页头标题，主体为一页式可视化表单，左侧提供轻量锚点导航且随右侧内部滚动高亮当前分区，右侧分区横向填满编辑工作面；运行时分区内部承载镜像、命令、资源限制和环境变量小节，文件分区内部承载自定义变量和应用文件小节，避免字段被拆成与导航不一致的同级大分区；YAML 作为创建/编辑页底部内嵌高级分区纳入锚点导航，用户聚焦或编辑 YAML 后保存以 YAML 为准；部署、停止、重启和删除操作位于右侧详情标题区，不放在选择行中。
+- 应用页面在桌面端是满高主从工作区，左侧选择器和右侧详情正文内部滚动。创建/编辑应用使用隐藏独立页和顶部步骤工作区，宽屏为主体 + sticky 摘要，中屏摘要下移，窄屏恢复页面级滚动并保持提交栏可达；不得恢复左 rail 或依赖横向滚动。部署、停止和删除操作位于详情标题或操作区，不放在选择行中。
 - 应用、设施应用、创建/编辑应用中的操作入口必须复用 `AppActionButton` 和 `AppActionGroup`：详情级编辑、同步、停用、重启等位于详情标题区；挂载、反向代理、文件和路由摘要行的编辑/删除位于行尾并使用带文字的小按钮；完整编辑表单进入标准 dialog，避免在页面正文下方展开一组容易误解的操作区。
 - 应用页面不展示应用总数、已启用和需要关注摘要卡，页面级提示后直接进入主从工作区。
 - 应用右侧详情使用单张满高 outlined 卡片：运行状态和启用状态位于标题下方，操作按钮单独位于头部右侧；可滚动正文按基本信息、镜像更新和运行实例分区。详情正文分区不得再次做成同等级 outlined/阴影/渐变卡片，只使用标题、分隔线和轻量信息单元表达层级。下载包、持久化数据、迁移和删除收进更多菜单，不再把运行时面板渲染为独立并列卡片。
@@ -120,7 +120,8 @@
 - 应用详情的“反向代理路由”分区只读展示源站、AnyAccess、流量策略、主源站和每个 Path 的高级设置。
 - 应用编辑器可视化页必须往返保存 appspec `capAdd` 列表；输入项保存时按 Docker capability 稳定值大写化，不保存翻译文案。
 - 应用编辑器的可视化挂载区在页面正文只展示挂载摘要列表：类型、来源、容器路径、只读状态以及编辑/删除动作。新增或编辑挂载必须打开对话框承载完整字段，包含 Docker 只读挂载开关，以及按类型可用的节点文件权限字段：`file` / `panel_file` / `persistent` 支持 `uid`、`gid`，`file` 支持“可执行”开关，`persistent` 支持任意 `mode`，`panel_file` 不显示 mode。
-- 普通应用创建和编辑都使用隐藏独立页，不再从详情页打开编辑对话框。页面级滚动必须限制在编辑正文内部；中大屏下外层容器填满全局页头外剩余视口。应用文件新增、模板编辑和二进制替换使用编辑器内的聚焦对话框，主表单只保留文件列表和入口按钮；新增文件可选择模板/二进制类型，编辑模板或覆盖二进制时必须锁定原类型。端口、挂载、反向代理、变量等复杂重复行在中等宽度下折叠为单列，避免字段、说明和操作按钮挤压。
+- 普通应用创建和编辑都使用隐藏独立页。文件区只提供三个入口：新建文本文件、上传普通文件、上传文件夹压缩包；用户不填写 kind 或 MIME。文本文件进入代码编辑器；binary/archive 只有替换、下载、删除，不得出现文本编辑入口。替换保留 `fileKey`，操作中的 pending 和错误显示在对应文件行。
+- 设施编辑会话删除静态资产时，服务端必须先检查当前 draft route 对 `assetKey` 的引用；仍被引用时应在 revision、资产记录和 blob 均未变化前拒绝，前端把错误显示在对应资产行。
 - 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询 recoverable 草稿，首次修改后懒创建会话；草稿 patch 和文件操作串行携带 revision。保存主流程为本地校验 → 服务端 validate → preview → commit，提交期间禁用离开和重复提交；commit 成功只表示配置保存并请求应用，部署完成仍通过任务中心和运行时区观察。
 - v3 编辑页有路由离开和浏览器关闭保护；离开默认保留可恢复草稿，取消按钮会显式 discard 当前会话后返回列表。
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML source 编辑；结构化页也要继续提供挂载编辑入口并与源码往返同步。源码视图不是第二个高级配置区，只能提供“重新生成源码”和“应用到草稿”两个同步动作；校验失败要定位到源码视图。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入源码编辑。
@@ -148,9 +149,9 @@
 
 ## Application Folder Archives
 
-- Application save sessions support `POST /api/v1/application-save-sessions/{id}/files/archive` for multipart folder archive uploads. This endpoint is used only when the user explicitly chooses the folder archive mode; ordinary single-file uploads continue to use the `/files` JSON/base64 endpoint and must not be unpacked.
-- Folder archive mode is exposed from the binary-file upload flow but is saved as `application_files.kind=archive`. Template files always use the single-file template editor and are saved through the ordinary file upload flow.
-- Replacing a folder archive in the editor treats the workspace path as a directory/source path: existing application files at that path or below it are removed from the save session before the new archive row is uploaded.
+- Legacy save sessions retain `POST /api/v1/application-save-sessions/{id}/files/archive`; the current durable editor uses `/application-edit-sessions/{id}/archives`. Ordinary binary files use the durable multipart `/uploads/{fileKey}` endpoint and must never enter an unpacking path; JSON/base64 durable writes are template-only.
+- Folder archive mode is a separate user action saved as `application_files.kind=archive`. Template files always use the text editor; binary and archive rows expose replace/download/delete only.
+- Replacing a folder archive reuses its stable `fileKey` and basePath so mounts and draft identity remain intact.
 - Folder archives support zip, tar, tar.gz, and tgz. The backend validates archive paths so entries cannot escape the application workspace, then stores the original archive as one `application_files` row at `basePath` with filename in `content_type`, size, sha256 and content. It must not expand archive entries into multiple management-side application files.
 - During deployment, an appspec `mounts.type=file` that references an `archive` application file becomes a managed archive. The agent keeps the original archive under the instance `archives` area for sha256 verification, then extracts it into the instance `files/<source>` directory and bind-mounts that extracted directory to the container. If the retained archive sha256 differs, the agent rewrites it from Panel content before extraction; even when the archive sha256 matches, extraction overwrites the target directory to remove node-side drift. This feature does not introduce a new appspec mount type.
 
@@ -165,7 +166,7 @@
 
 ## Durable Application Edit Sessions
 
-- The durable editor API consists of `POST /api/v1/application-edit-sessions`, `GET /api/v1/application-edit-sessions/recoverable`, `GET /api/v1/application-edit-sessions/{id}`, `PATCH /draft`, `GET /files/{fileKey}`, `PUT /files/{fileKey}`, `POST /archives`, `DELETE /files/{fileKey}`, `POST /validate`, `POST /preview`, `POST /commit`, and `DELETE /api/v1/application-edit-sessions/{id}`. The single-file GET returns one session blob as base64 without changing the session revision; editors must load it before allowing an existing template to be saved. File mutations require both a client operation ID and an idempotency key; commit requires the current session revision, base resource version, preview token, and idempotency key.
+- The durable editor API also exposes multipart `PUT /uploads/{fileKey}` for ordinary binary files and `GET /files/{fileKey}/content` for authenticated downloads. Committed content uses `GET /applications/{id}/files/{fileId}/content`. JSON `PUT /files/{fileKey}` is template-only. Every mutation keeps revision, client operation ID, idempotency key, and stable-key upsert semantics; commit still requires the current revision, base resource version, preview token, and idempotency key.
 - Template session files use the large CodeMirror editor with line numbers, internal scrolling, automatic path/MIME language inference, and a per-dialog language override for plain text, YAML, JSON, Shell, Nginx, INI/Properties, and Dockerfile. Existing file kinds are immutable in the dialog, load failures disable saving, and empty or whitespace-only template content remains valid. Binary files do not enter the text editor.
 - Application edit sessions are owned by the stable single-administrator principal, not by the editable administrator username. Renaming the account must not hide or orphan recoverable drafts.
 - `baseResourceVersion` is a snapshot of the application configuration version and its configuration `updated_at` value when the session starts. Session reads must never replace the base timestamp with the application's current timestamp.

@@ -278,11 +278,16 @@ func extractStaticBundle(reader io.ReaderAt, size int64, filename, target string
 
 func extractZip(reader *zip.Reader, target string, compressedSize int64) error {
 	count := 0
+	entries := 0
 	var extracted int64
 	for _, file := range reader.File {
 		name := cleanArchivePath(file.Name)
 		if name == "" {
 			continue
+		}
+		entries++
+		if entries > facilityAssetArchiveMaxFiles {
+			return panelerr.Validation("facility_static_asset_archive_limits_exceeded", "Static asset archive exceeds entry count, depth, extracted size, or compression ratio limits")
 		}
 		if file.FileInfo().IsDir() {
 			continue
@@ -315,6 +320,7 @@ func extractZip(reader *zip.Reader, target string, compressedSize int64) error {
 
 func extractTar(reader *tar.Reader, target string, compressedSize int64) error {
 	count := 0
+	entries := 0
 	var extracted int64
 	for {
 		header, err := reader.Next()
@@ -324,15 +330,22 @@ func extractTar(reader *tar.Reader, target string, compressedSize int64) error {
 		if err != nil {
 			return panelerr.Validation("facility_static_asset_archive_invalid", "Static asset archive is invalid")
 		}
+		name := cleanArchivePath(header.Name)
+		if name == "" {
+			continue
+		}
+		entries++
+		if entries > facilityAssetArchiveMaxFiles {
+			return panelerr.Validation("facility_static_asset_archive_limits_exceeded", "Static asset archive exceeds entry count, depth, extracted size, or compression ratio limits")
+		}
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
 		if header.Typeflag != tar.TypeReg && header.Typeflag != tar.TypeRegA {
 			continue
 		}
 		if header.Size < 0 {
 			return panelerr.Validation("facility_static_asset_archive_limits_exceeded", "Static asset archive exceeds file count, depth, extracted size, or compression ratio limits")
-		}
-		name := cleanArchivePath(header.Name)
-		if name == "" {
-			continue
 		}
 		count++
 		extracted += header.Size

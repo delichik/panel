@@ -37,6 +37,13 @@ const appliedStatePath = "applied-state.json"
 const maxRuntimeCommandOutput = 1024 * 1024
 
 const (
+	managedArchiveMaxFiles     = 10000
+	managedArchiveMaxDepth     = 32
+	managedArchiveMaxExtracted = int64(256 << 20)
+	managedArchiveMaxRatio     = int64(100)
+)
+
+const (
 	labelManagedFilesHash  = "panel.application.managed_files.hash"
 	labelManagedFilesDrift = "panel.application.managed_files.drift"
 	labelManagedFilesError = "panel.application.managed_files.error"
@@ -1063,20 +1070,22 @@ func managedArchiveEntries(content []byte) ([]managedArchiveEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("managed archive zip is invalid: %w", err)
 		}
-		return managedZipEntries(reader)
+		return managedZipEntries(reader, int64(len(content)))
 	}
 	if gzipReader, err := gzip.NewReader(bytes.NewReader(content)); err == nil {
 		defer gzipReader.Close()
-		return managedTarEntries(tar.NewReader(gzipReader))
+		return managedTarEntries(tar.NewReader(gzipReader), int64(len(content)))
 	}
-	if entries, err := managedTarEntries(tar.NewReader(bytes.NewReader(content))); err == nil {
+	if entries, err := managedTarEntries(tar.NewReader(bytes.NewReader(content)), int64(len(content))); err == nil {
 		return entries, nil
 	}
 	return nil, errors.New("managed archive must be zip, tar, tar.gz, or tgz")
 }
 
-func managedZipEntries(reader *zip.Reader) ([]managedArchiveEntry, error) {
+func managedZipEntries(reader *zip.Reader, compressedSize int64) ([]managedArchiveEntry, error) {
 	out := []managedArchiveEntry{}
+	entries := 0
+	var extracted int64
 	for _, file := range reader.File {
 		name, ok := cleanManagedArchiveEntryName(file.Name)
 		if !ok {
@@ -1085,10 +1094,24 @@ func managedZipEntries(reader *zip.Reader) ([]managedArchiveEntry, error) {
 		if name == "" {
 			continue
 		}
+		entries++
+		if entries > managedArchiveMaxFiles {
+			return nil, managedArchiveLimitError()
+		}
 		info := file.FileInfo()
 		if info.IsDir() {
+			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
+				return nil, err
+			}
 			out = append(out, managedArchiveEntry{Name: name, Dir: true, Mode: archiveEntryMode(info.Mode(), true)})
 			continue
+		}
+		if file.UncompressedSize64 > uint64(managedArchiveMaxExtracted) {
+			return nil, managedArchiveLimitError()
+		}
+		extracted += int64(file.UncompressedSize64)
+		if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
+			return nil, err
 		}
 		rc, err := file.Open()
 		if err != nil {
@@ -1107,8 +1130,10 @@ func managedZipEntries(reader *zip.Reader) ([]managedArchiveEntry, error) {
 	return nonEmptyManagedArchive(out)
 }
 
-func managedTarEntries(reader *tar.Reader) ([]managedArchiveEntry, error) {
+func managedTarEntries(reader *tar.Reader, compressedSize int64) ([]managedArchiveEntry, error) {
 	out := []managedArchiveEntry{}
+	entries := 0
+	var extracted int64
 	for {
 		header, err := reader.Next()
 		if err == io.EOF {
@@ -1124,10 +1149,24 @@ func managedTarEntries(reader *tar.Reader) ([]managedArchiveEntry, error) {
 		if name == "" {
 			continue
 		}
+		entries++
+		if entries > managedArchiveMaxFiles {
+			return nil, managedArchiveLimitError()
+		}
 		switch header.Typeflag {
 		case tar.TypeDir:
+			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
+				return nil, err
+			}
 			out = append(out, managedArchiveEntry{Name: name, Dir: true, Mode: archiveEntryMode(header.FileInfo().Mode(), true)})
 		case tar.TypeReg, tar.TypeRegA:
+			if header.Size < 0 {
+				return nil, managedArchiveLimitError()
+			}
+			extracted += header.Size
+			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
+				return nil, err
+			}
 			content, err := io.ReadAll(reader)
 			if err != nil {
 				return nil, err
@@ -1138,6 +1177,18 @@ func managedTarEntries(reader *tar.Reader) ([]managedArchiveEntry, error) {
 		}
 	}
 	return nonEmptyManagedArchive(out)
+}
+
+func validateManagedArchiveLimits(name string, count int, extracted, compressed int64) error {
+	depth := strings.Count(strings.Trim(name, "/"), "/") + 1
+	if count > managedArchiveMaxFiles || depth > managedArchiveMaxDepth || extracted > managedArchiveMaxExtracted || (compressed > 0 && extracted > compressed*managedArchiveMaxRatio && extracted > 1<<20) {
+		return managedArchiveLimitError()
+	}
+	return nil
+}
+
+func managedArchiveLimitError() error {
+	return errors.New("managed archive exceeds file count, depth, extracted size, or compression ratio limits")
 }
 
 func nonEmptyManagedArchive(entries []managedArchiveEntry) ([]managedArchiveEntry, error) {

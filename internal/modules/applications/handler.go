@@ -2,6 +2,7 @@ package applications
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -15,6 +16,19 @@ const (
 	persistentArchiveMaxBytes   = 64 << 20
 	persistentArchiveFormMemory = 8 << 20
 )
+
+var errApplicationUploadTooLarge = errors.New("application upload exceeds limit")
+
+func readApplicationUpload(reader io.Reader, limit int64) ([]byte, error) {
+	content, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(content)) > limit {
+		return nil, errApplicationUploadTooLarge
+	}
+	return content, nil
+}
 
 type applicationService interface {
 	List(ctx context.Context) ([]Application, error)
@@ -61,6 +75,7 @@ type applicationEditSessionService interface {
 	GetEditSession(context.Context, string, string) (ApplicationEditSession, error)
 	PatchEditSession(context.Context, string, string, PatchEditSessionInput) (ApplicationEditSession, error)
 	PutEditSessionFile(context.Context, string, string, string, string, EditSessionFileInput) (ApplicationEditSession, error)
+	UploadEditSessionBinary(context.Context, string, string, string, string, EditSessionBinaryInput) (ApplicationEditSession, error)
 	UploadEditSessionArchive(context.Context, string, string, string, EditSessionArchiveInput) (ApplicationEditSession, error)
 	DeleteEditSessionFile(context.Context, string, string, string, string, EditSessionMutationInput) (ApplicationEditSession, error)
 	ValidateEditSession(context.Context, string, string, int) (EditSessionValidationResult, error)
@@ -186,13 +201,55 @@ func (h *Handler) PutEditSessionFile(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, result)
 }
 
+func (h *Handler) UploadEditSessionBinary(w http.ResponseWriter, r *http.Request) {
+	service, err := h.editSessions()
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes+(1<<20))
+	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
+		return
+	}
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		httpx.Error(w, panelerr.Validation("bad_request", "File is required"))
+		return
+	}
+	defer file.Close()
+	content, err := readApplicationUpload(file, persistentArchiveMaxBytes)
+	if errors.Is(err, errApplicationUploadTooLarge) {
+		httpx.Error(w, panelerr.Validation("application_file_too_large", "File exceeds the 64 MiB limit"))
+		return
+	}
+	if err != nil {
+		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read file upload"))
+		return
+	}
+	revision, _ := strconv.Atoi(r.FormValue("revision"))
+	key, ok := editIdempotencyKey(w, r)
+	if !ok {
+		return
+	}
+	result, err := service.UploadEditSessionBinary(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")), key, EditSessionBinaryInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Path: r.FormValue("path"), FileName: header.Filename, Content: content})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) UploadEditSessionArchive(w http.ResponseWriter, r *http.Request) {
 	service, err := h.editSessions()
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes+(1<<20))
 	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
 		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
 		return
@@ -206,7 +263,11 @@ func (h *Handler) UploadEditSessionArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer file.Close()
-	content, err := io.ReadAll(file)
+	content, err := readApplicationUpload(file, persistentArchiveMaxBytes)
+	if errors.Is(err, errApplicationUploadTooLarge) {
+		httpx.Error(w, panelerr.Validation("application_file_too_large", "File exceeds the 64 MiB limit"))
+		return
+	}
 	if err != nil {
 		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read archive upload"))
 		return
@@ -429,6 +490,21 @@ func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, file)
 }
 
+func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
+	file, err := h.service.GetFile(r.Context(), applicationIDFromRequest(r), applicationFileIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	name := file.Path
+	contentType := file.ContentType
+	if file.Kind == ApplicationFileKindArchive {
+		name = file.ContentType
+		contentType = inferApplicationFileContentType(name, file.Content, false)
+	}
+	serveApplicationFileContent(w, r, name, contentType, file.Content)
+}
+
 func (h *Handler) SaveFile(w http.ResponseWriter, r *http.Request) {
 	var in FileSaveInput
 	if !httpx.Decode(w, r, &in) {
@@ -457,7 +533,7 @@ func (h *Handler) Package(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+safeDownloadName(result.Filename)+`"`)
+	w.Header().Set("Content-Disposition", applicationContentDisposition(result.Filename))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result.Content)
 }
@@ -469,7 +545,7 @@ func (h *Handler) PersistentData(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+safeDownloadName(result.Filename)+`"`)
+	w.Header().Set("Content-Disposition", applicationContentDisposition(result.Filename))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(result.Content)
 }
@@ -709,13 +785,4 @@ func editIdempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
 		return "", false
 	}
 	return key, true
-}
-
-func safeDownloadName(name string) string {
-	name = strings.NewReplacer("\\", "-", "/", "-", `"`, "").Replace(name)
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return "application-package.zip"
-	}
-	return name
 }

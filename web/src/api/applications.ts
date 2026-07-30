@@ -8,6 +8,7 @@ import type {
   ApplicationEditSession,
   ApplicationEditSessionFileContent,
   ApplicationEditValidationResult,
+  ApplicationFile,
   ApplicationRuntime,
   ApplicationSaveInput,
   ApplicationSummaryDto,
@@ -42,9 +43,9 @@ async function deleteJson<T>(path: string, body: unknown, idempotencyKey = key()
   return envelope.data as T;
 }
 
-async function multipartJson<T>(path: string, form: FormData, idempotencyKey = key()): Promise<T> {
+async function multipartJson<T>(path: string, form: FormData, idempotencyKey = key(), method = 'POST'): Promise<T> {
   const response = await fetch(`/api/v1${path}`, {
-    method: 'POST',
+    method,
     headers: authHeaders({ Accept: 'application/json', 'Idempotency-Key': idempotencyKey }),
     body: form,
   });
@@ -69,6 +70,12 @@ export const applicationsApi = {
   },
   get(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationDto>(`/applications/${id(applicationId)}`, options);
+  },
+  listFiles(applicationId: string, options?: ApiRequestOptions) {
+    return apiClient.get<ApplicationFile[]>(`/applications/${id(applicationId)}/files`, options);
+  },
+  downloadFile(applicationId: string, fileId: string, filename: string): Promise<DownloadResult> {
+    return fetchDownload(`/api/v1/applications/${id(applicationId)}/files/${id(fileId)}/content`, {}, filename);
   },
   delete(applicationId: string) {
     return apiClient.delete<void>(`/applications/${id(applicationId)}`);
@@ -125,12 +132,20 @@ export const applicationsApi = {
   getEditSessionFile(sessionId: string, fileKey: string) {
     return apiClient.get<ApplicationEditSessionFileContent>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}`);
   },
-  putEditSessionFile(sessionId: string, fileKey: string, revision: number, input: { path: string; kind: string; contentType: string; contentBase64: string }) {
+  putEditSessionFile(sessionId: string, fileKey: string, revision: number, input: { path: string; contentBase64: string }) {
     return apiClient.put<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}`, {
       revision,
       clientOperationId: key(),
       ...input,
     }, { headers: { 'Idempotency-Key': key() } });
+  },
+  uploadEditSessionFile(sessionId: string, fileKey: string, revision: number, input: { file: File; path: string }) {
+    const form = new FormData();
+    form.set('file', input.file);
+    form.set('revision', String(revision));
+    form.set('clientOperationId', key());
+    form.set('path', input.path);
+    return multipartJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/uploads/${id(fileKey)}`, form, key(), 'PUT');
   },
   uploadEditSessionArchive(sessionId: string, revision: number, input: { file: File; fileKey: string; basePath: string; kind: string }) {
     const form = new FormData();
@@ -141,6 +156,9 @@ export const applicationsApi = {
     form.set('basePath', input.basePath);
     form.set('kind', input.kind);
     return multipartJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/archives`, form);
+  },
+  downloadEditSessionFile(sessionId: string, fileKey: string, filename: string): Promise<DownloadResult> {
+    return fetchDownload(`/api/v1/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}/content`, {}, filename);
   },
   deleteEditSessionFile(sessionId: string, fileKey: string, revision: number) {
     return deleteJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileKey)}`, {

@@ -1,17 +1,71 @@
 package applications
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"panel/internal/modules/tasks"
 	panelerr "panel/internal/platform/errors"
 )
+
+func TestApplicationArchiveRejectsEmptyDirectoryFlood(t *testing.T) {
+	var raw bytes.Buffer
+	zw := zip.NewWriter(&raw)
+	for i := 0; i <= applicationArchiveMaxFiles; i++ {
+		if _, err := zw.CreateHeader(&zip.FileHeader{Name: fmt.Sprintf("d%05d/", i), Method: zip.Store}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	zr, err := zip.NewReader(bytes.NewReader(raw.Bytes()), int64(raw.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = extractApplicationZip(zr, int64(raw.Len()))
+	assertPanelErrorCode(t, err, "application_file_archive_limits_exceeded")
+}
+
+func TestApplicationTarRejectsEmptyDirectoryFlood(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	for i := 0; i <= applicationArchiveMaxFiles; i++ {
+		if err := tw.WriteHeader(&tar.Header{Name: fmt.Sprintf("d%05d/", i), Typeflag: tar.TypeDir, Mode: 0o755}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := extractApplicationTar(tar.NewReader(bytes.NewReader(raw.Bytes())), int64(raw.Len()))
+	assertPanelErrorCode(t, err, "application_file_archive_limits_exceeded")
+}
+
+func TestApplicationTarRejectsIgnoredHeaderFlood(t *testing.T) {
+	var raw bytes.Buffer
+	tw := tar.NewWriter(&raw)
+	for i := 0; i <= applicationArchiveMaxFiles; i++ {
+		if err := tw.WriteHeader(&tar.Header{Name: fmt.Sprintf("l%05d", i), Typeflag: tar.TypeSymlink, Linkname: "target", Mode: 0o777}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, err := extractApplicationTar(tar.NewReader(bytes.NewReader(raw.Bytes())), int64(raw.Len()))
+	assertPanelErrorCode(t, err, "application_file_archive_limits_exceeded")
+}
 
 func TestApplicationEditSessionPersistsAndRecovers(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
@@ -147,12 +201,12 @@ func TestApplicationEditSessionRevisionAndIdempotency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := EditSessionFileInput{Revision: session.Revision, ClientOperationID: "same-op", Path: "a.txt", Kind: ApplicationFileKindBinary, ContentBase64: base64.StdEncoding.EncodeToString([]byte("one"))}
-	first, err := svc.PutEditSessionFile(ctx, "admin", session.ID, "file-a", "same-key", input)
+	input := EditSessionBinaryInput{Revision: session.Revision, ClientOperationID: "same-op", Path: "a.txt", FileName: "a.txt", Content: []byte("one")}
+	first, err := svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-a", "same-key", input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := svc.PutEditSessionFile(ctx, "admin", session.ID, "file-a", "same-key", input)
+	second, err := svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-a", "same-key", input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,9 +216,48 @@ func TestApplicationEditSessionRevisionAndIdempotency(t *testing.T) {
 	_, err = svc.PatchEditSession(ctx, "admin", session.ID, PatchEditSessionInput{Revision: 1, Draft: session.Draft})
 	assertPanelErrorCode(t, err, "edit_session_revision_conflict")
 	changed := input
-	changed.ContentBase64 = base64.StdEncoding.EncodeToString([]byte("two"))
-	_, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-a", "same-key", changed)
+	changed.Content = []byte("two")
+	_, err = svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-a", "same-key", changed)
 	assertPanelErrorCode(t, err, "idempotency_key_reused")
+}
+
+func TestApplicationEditSessionBinaryRequiresMultipartPath(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{Draft: &SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "binary", "json-binary", EditSessionFileInput{Revision: session.Revision, ClientOperationID: "json-binary", Path: "asset.png", Kind: ApplicationFileKindBinary, ContentBase64: base64.StdEncoding.EncodeToString([]byte("png"))})
+	assertPanelErrorCode(t, err, "application_file_kind_invalid")
+
+	updated, err := svc.UploadEditSessionBinary(ctx, "admin", session.ID, "binary", "multipart-binary", EditSessionBinaryInput{Revision: session.Revision, ClientOperationID: "multipart-binary", Path: "asset.png", FileName: "asset.png", Content: []byte("png")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Files) != 1 || updated.Files[0].FileKey != "binary" || updated.Files[0].Kind != ApplicationFileKindBinary || updated.Files[0].ContentType != "image/png" {
+		t.Fatalf("binary file = %#v", updated.Files)
+	}
+}
+
+func TestApplicationArchiveLimitsRejectCountDepthSizeAndRatio(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		path       string
+		count      int
+		extracted  int64
+		compressed int64
+	}{
+		{name: "count", path: "a", count: applicationArchiveMaxFiles + 1, extracted: 1, compressed: 1},
+		{name: "depth", path: strings.Repeat("a/", applicationArchiveMaxDepth) + "x", count: 1, extracted: 1, compressed: 1},
+		{name: "size", path: "a", count: 1, extracted: applicationArchiveMaxExtracted + 1, compressed: applicationArchiveMaxExtracted},
+		{name: "ratio", path: "a", count: 1, extracted: 2 << 20, compressed: 1024},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertPanelErrorCode(t, validateApplicationArchiveLimits(tc.path, tc.count, tc.extracted, tc.compressed), "application_file_archive_limits_exceeded")
+		})
+	}
 }
 
 func TestApplicationEditSessionPreviewAndCommit(t *testing.T) {
@@ -336,8 +429,8 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	firstInput := EditSessionFileInput{Revision: session.Revision, ClientOperationID: "file-1", Path: "a.txt", Kind: ApplicationFileKindBinary, ContentBase64: base64.StdEncoding.EncodeToString([]byte("one"))}
-	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-a", "file-key-1", firstInput)
+	firstInput := EditSessionBinaryInput{Revision: session.Revision, ClientOperationID: "file-1", Path: "a.txt", FileName: "a.txt", Content: []byte("one")}
+	session, err = svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-a", "file-key-1", firstInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,8 +440,8 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 	}
 	stale := firstInput
 	stale.ClientOperationID = "file-stale"
-	stale.ContentBase64 = base64.StdEncoding.EncodeToString([]byte("stale"))
-	_, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-a", "file-key-stale", stale)
+	stale.Content = []byte("stale")
+	_, err = svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-a", "file-key-stale", stale)
 	assertPanelErrorCode(t, err, "edit_session_revision_conflict")
 	content, err := os.ReadFile(firstBlob)
 	if err != nil || string(content) != "one" {
@@ -358,8 +451,8 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("failed blob was not cleaned: entries=%v err=%v", entries, err)
 	}
-	pathConflict := EditSessionFileInput{Revision: session.Revision, ClientOperationID: "file-path-conflict", Path: "a.txt", Kind: ApplicationFileKindBinary, ContentBase64: base64.StdEncoding.EncodeToString([]byte("conflict"))}
-	if _, err := svc.PutEditSessionFile(ctx, "admin", session.ID, "file-b", "file-key-path-conflict", pathConflict); err == nil {
+	pathConflict := EditSessionBinaryInput{Revision: session.Revision, ClientOperationID: "file-path-conflict", Path: "a.txt", FileName: "a.txt", Content: []byte("conflict")}
+	if _, err := svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-b", "file-key-path-conflict", pathConflict); err == nil {
 		t.Fatal("expected duplicate path conflict")
 	}
 	afterConflict, err := svc.GetEditSession(ctx, "admin", session.ID)
@@ -371,8 +464,8 @@ func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 		t.Fatalf("database-conflict blob was not cleaned: entries=%v err=%v", entries, err)
 	}
 
-	replacement := EditSessionFileInput{Revision: session.Revision, ClientOperationID: "file-2", Path: "a.txt", Kind: ApplicationFileKindBinary, ContentBase64: base64.StdEncoding.EncodeToString([]byte("two"))}
-	if _, err := svc.PutEditSessionFile(ctx, "admin", session.ID, "file-a", "file-key-2", replacement); err != nil {
+	replacement := EditSessionBinaryInput{Revision: session.Revision, ClientOperationID: "file-2", Path: "a.txt", FileName: "a.txt", Content: []byte("two")}
+	if _, err := svc.UploadEditSessionBinary(ctx, "admin", session.ID, "file-a", "file-key-2", replacement); err != nil {
 		t.Fatal(err)
 	}
 	var secondBlob string

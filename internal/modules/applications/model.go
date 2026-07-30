@@ -318,6 +318,14 @@ type EditSessionArchiveInput struct {
 	Content           []byte
 }
 
+type EditSessionBinaryInput struct {
+	Revision          int
+	ClientOperationID string
+	Path              string
+	FileName          string
+	Content           []byte
+}
+
 type EditSessionMutationInput struct {
 	Revision          int    `json:"revision"`
 	ClientOperationID string `json:"clientOperationId"`
