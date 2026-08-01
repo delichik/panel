@@ -1340,7 +1340,7 @@ onBeforeUnmount(() => {
         <h2 class="m-0 text-lg font-semibold text-foreground">{{ t('applicationsPage.facilityCatalogTitle') }}</h2>
         <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.facilityCatalogHint') }}</p>
       </div>
-      <div class="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr))]">
+      <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
         <template v-if="loading && !facilities.length">
           <article v-for="item in 3" :key="item" class="grid gap-4 rounded-2xl border border-border bg-background p-5" aria-hidden="true">
             <div class="flex items-start justify-between gap-3">
