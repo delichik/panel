@@ -8,6 +8,8 @@ import type {
   KeyAssetDto,
 } from '@/types/keyAssets';
 
+import { completedTask } from './tasks';
+
 const now = '2026-08-01T02:00:00.000Z';
 
 export const mockDnsDomains: DnsDomainDto[] = [
@@ -336,6 +338,13 @@ export function deleteDomain(id: string) {
   mockDnsDomains.splice(index, 1);
   recordsByDomain.delete(id);
   return true;
+}
+
+export function refreshRecords(domainId: string): { taskId: string } | null {
+  const domain = mockDnsDomains.find((item) => item.id === domainId);
+  if (!domain) return null;
+  if (domain.id === 'domain-error') throw new Error('Cloudflare token expired; refresh rejected by provider.');
+  return { taskId: completedTask('dns-refresh') };
 }
 
 export function listRecords(domainId: string) {

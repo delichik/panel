@@ -1,5 +1,5 @@
 import type { ApiEnvelope } from '@/types/api';
-import type { ApplicationDto, ApplicationEditSession, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
+import type { ApplicationDto, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
 import type { FacilityEditSession, ReverseProxyConfig } from '@/types/facilityApps';
 
 const now = '2026-08-01T08:00:00.000Z';
@@ -532,6 +532,54 @@ export function deleteApp(id: string) {
   return true;
 }
 
+export function listAppFiles(applicationId: string): ApplicationFile[] | null {
+  const app = mockApplications.find((item) => item.id === applicationId);
+  if (!app) return null;
+  const files: ApplicationFile[] = [
+    {
+      name: 'app.yaml',
+      kind: 'binary',
+      contentType: 'text/yaml',
+      size: app.specYaml.length,
+      sha256: `sha-spec-${applicationId}`,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+    },
+    {
+      name: 'env.template',
+      kind: 'template',
+      contentType: 'text/plain',
+      size: Object.entries(app.variables ?? {}).reduce((sum, [name, value]) => sum + name.length + value.length + 2, 0),
+      sha256: `sha-env-${applicationId}`,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+    },
+  ];
+  if (app.persistentPath) {
+    files.push({
+      name: 'persistent/',
+      kind: 'binary',
+      contentType: 'application/vnd.panel.directory',
+      size: 0,
+      sha256: `sha-persistent-${applicationId}`,
+      createdAt: app.createdAt,
+      updatedAt: app.updatedAt,
+    });
+  }
+  return files;
+}
+
+export function deployedAppFileContent(applicationId: string, fileName: string): { name: string; contentType: string; content: string } | null {
+  const app = mockApplications.find((item) => item.id === applicationId);
+  if (!app) return null;
+  if (fileName === 'app.yaml') return { name: fileName, contentType: 'text/yaml', content: app.specYaml };
+  if (fileName === 'env.template') {
+    const lines = Object.entries(app.variables ?? {}).map(([name, value]) => `${name}=${value}`);
+    return { name: fileName, contentType: 'text/plain', content: lines.length ? `${lines.join('\n')}\n` : '' };
+  }
+  return null;
+}
+
 export function beginAppSession(applicationId?: string): ApplicationEditSession {
   const app = mockApplications.find((item) => item.id === applicationId);
   const session: ApplicationEditSession = {
@@ -604,6 +652,41 @@ export function uploadAppArchive(id: string, input: { name: string; filename: st
   session.revision += 1;
   session.updatedAt = now;
   return session;
+}
+
+export function uploadAppFile(id: string, fileName: string, input: { name: string; filename: string; size: number; contentType: string }) {
+  const session = appSessions.get(id);
+  if (!session) return null;
+  const name = input.name.trim() || input.filename;
+  session.files = session.files.filter((file) => file.name !== name);
+  session.files.push({
+    name,
+    kind: 'binary',
+    contentType: input.contentType,
+    size: input.size,
+    sha256: `sha-${name}`,
+    createdAt: now,
+    updatedAt: now,
+  });
+  session.revision += 1;
+  session.updatedAt = now;
+  return session;
+}
+
+export function appFileContent(id: string, fileName: string): { name: string; contentType: string; content: string } | null {
+  const file = appSessions.get(id)?.files.find((item) => item.name === fileName);
+  if (!file) return null;
+  return {
+    name: file.name,
+    contentType: file.contentType || 'application/octet-stream',
+    content: decodeBase64(file.contentBase64 ?? ''),
+  };
+}
+
+function decodeBase64(value: string) {
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder('utf-8').decode(bytes);
 }
 
 export function deleteAppFile(id: string, fileName: string) {
@@ -722,6 +805,26 @@ export function deleteFacilityAsset(id: string, assetName: string) {
   session.revision += 1;
   session.updatedAt = now;
   return session;
+}
+
+export function facilityAssetContent(id: string, assetName: string): { name: string; contentType: string; content: string } | null {
+  const asset = facilitySessions.get(id)?.assets.find((item) => item.name === assetName);
+  if (!asset) return null;
+  return {
+    name: asset.filename || asset.name,
+    contentType: asset.contentMode === 'text' ? 'text/plain' : 'application/octet-stream',
+    content: `mock facility edit asset: ${assetName}\n`,
+  };
+}
+
+export function facilityStaticAssetContent(assetName: string): { name: string; contentType: string; content: string } | null {
+  const asset = mockFacility.staticAssets.find((item) => item.name === assetName);
+  if (!asset) return null;
+  return {
+    name: asset.filename || asset.name,
+    contentType: asset.contentMode === 'text' ? 'text/plain' : 'application/octet-stream',
+    content: `mock static asset: ${assetName}\n`,
+  };
 }
 
 export function facilityDiagnostics(session: FacilityEditSession): Diagnostic[] {

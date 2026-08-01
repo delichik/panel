@@ -110,12 +110,17 @@ describe('domain mock routes', () => {
     const containers = await fetch('/api/v1/servers/srv-media-syd/containers');
     const containersEnvelope = await containers.json();
     expect(containers.status).toBe(200);
-    expect(containersEnvelope.data.length).toBeGreaterThan(0);
+    expect(containersEnvelope.data.items.length).toBeGreaterThan(0);
+
+    const networks = await fetch('/api/v1/servers/srv-media-syd/networks');
+    const networksEnvelope = await networks.json();
+    expect(networks.status).toBe(200);
+    expect(networksEnvelope.data.items.length).toBeGreaterThan(0);
 
     const volumes = await fetch('/api/v1/servers/srv-observability-ams/volumes');
     const volumesEnvelope = await volumes.json();
     expect(volumes.status).toBe(200);
-    expect(volumesEnvelope.data.length).toBeGreaterThan(0);
+    expect(volumesEnvelope.data.items.length).toBeGreaterThan(0);
   });
 
   it('returns credential conflict when a credential is referenced', async () => {
@@ -193,7 +198,7 @@ describe('domain mock routes', () => {
     const records = await fetch('/api/v1/dns/domains/domain-example/records');
     const recordsEnvelope = await records.json();
     expect(records.status).toBe(200);
-    expect(recordsEnvelope.data.some((record: { type: string }) => record.type === 'TXT')).toBe(true);
+    expect(recordsEnvelope.data.items.some((record: { type: string }) => record.type === 'TXT')).toBe(true);
 
     const failed = await fetch('/api/v1/dns/domains/domain-error/records');
     const failedEnvelope = await failed.json();
@@ -318,4 +323,57 @@ describe('domain mock routes', () => {
     const diagnosticsEnvelope = await diagnostics.json();
     expect(diagnosticsEnvelope.data.databases.length).toBeGreaterThan(0);
   });
+
+  it('covers committed files, edit session uploads, DNS/resource refresh and certificate detail routes', async () => {
+    const fileList = await fetch('/api/v1/applications/app-storefront/files');
+    const fileListEnvelope = await fileList.json();
+    expect(fileList.status).toBe(200);
+    expect(fileListEnvelope.data.some((file: { name: string }) => file.name === 'app.yaml')).toBe(true);
+
+    const fileContent = await fetch('/api/v1/applications/app-storefront/files/app.yaml/content');
+    expect(fileContent.status).toBe(200);
+    expect(fileContent.headers.get('Content-Type')).toContain('text/yaml');
+
+    const created = await fetch('/api/v1/application-edit-sessions', { method: 'POST', body: JSON.stringify({ applicationId: 'app-storefront' }) });
+    const createdEnvelope = await created.json();
+    const sessionId = createdEnvelope.data.id;
+    const sessionFile = await fetch(`/api/v1/application-edit-sessions/${sessionId}/files/env-template/content`);
+    expect(sessionFile.status).toBe(200);
+    expect((await sessionFile.text()).includes('HOST')).toBe(true);
+
+    const uploadForm = new FormData();
+    uploadForm.set('file', new File(['mock upload content'], 'extra.env', { type: 'text/plain' }));
+    uploadForm.set('revision', '1');
+    uploadForm.set('name', 'extra.env');
+    const uploaded = await fetch(`/api/v1/application-edit-sessions/${sessionId}/uploads/extra.env`, { method: 'PUT', body: uploadForm });
+    const uploadedEnvelope = await uploaded.json();
+    expect(uploaded.status).toBe(200);
+    expect(uploadedEnvelope.data.files.some((file: { name: string }) => file.name === 'extra.env')).toBe(true);
+
+    const facilityCreated = await fetch('/api/v1/facility-apps/reverse-proxy/edit-sessions', { method: 'POST', body: JSON.stringify({}) });
+    const facilityEnvelope = await facilityCreated.json();
+    const facilitySessionId = facilityEnvelope.data.id;
+    const facilityAsset = await fetch(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${facilitySessionId}/assets/docs%20bundle/content`);
+    expect(facilityAsset.status).toBe(200);
+    const staticAsset = await fetch('/api/v1/facility-apps/reverse-proxy/static-assets/status%20page/content');
+    expect(staticAsset.status).toBe(200);
+
+    const refreshed = await fetch('/api/v1/dns/domains/domain-example/records/refresh', { method: 'POST' });
+    expect(refreshed.status).toBe(202);
+    const failed = await fetch('/api/v1/dns/domains/domain-error/records/refresh', { method: 'POST' });
+    const failedEnvelope = await failed.json();
+    expect(failed.status).toBe(502);
+    expect(failedEnvelope.error.code).toBe('dns_provider_error');
+
+    const networks = await fetch('/api/v1/servers/srv-media-syd/networks/refresh', { method: 'POST' });
+    expect(networks.status).toBe(202);
+    const volumes = await fetch('/api/v1/servers/srv-observability-ams/volumes/refresh', { method: 'POST' });
+    expect(volumes.status).toBe(202);
+
+    const certs = await fetch('/api/v1/certificates?pageSize=200');
+    const certsEnvelope = await certs.json();
+    const certDetail = await fetch(`/api/v1/certificates/${certsEnvelope.data.items[0].id}`);
+    expect(certDetail.status).toBe(200);
+  });
+
 });

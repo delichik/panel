@@ -1,4 +1,5 @@
 import type { ContainerDto, ImageDto, ImageList, NetworkDto, PackageUpdateList, VolumeDto } from '@/types/resources';
+import { completedTask } from './tasks';
 
 const now = '2026-08-01T03:00:00.000Z';
 
@@ -195,7 +196,7 @@ export function mockRefreshPackages(serverId: string) {
   const state = packages[serverId];
   if (!state) return null;
   state.refreshing = true;
-  return { serverId, refreshing: true, taskId: `package-refresh-${Date.now()}` };
+  return { serverId, refreshing: true, taskId: completedTask('package-refresh') };
 }
 
 export function mockUpgradePackages(serverId: string, names?: string[]) {

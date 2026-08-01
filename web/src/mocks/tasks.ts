@@ -124,6 +124,12 @@ function numericSeed(id: string) {
   return id.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0) % 240;
 }
 
+export function completedTask(prefix: string) {
+  const taskId = `${prefix}-${Date.now()}`;
+  mockTasks.unshift(task(taskId, `op-${prefix}`, 'server_resource_refresh', 'completed', 'system', `${prefix} finished`, 100, false, false));
+  return taskId;
+}
+
 export function retryTask(taskId: string) {
   const source = mockTasks.find((item) => item.id === taskId);
   if (!source || !source.allowRetry) return null;
