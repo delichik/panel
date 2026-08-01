@@ -308,6 +308,11 @@
 
 - Application files and facility static assets now expose one upload button. The dialog selects text, regular file, or folder archive; text selection shows the editor while the other types show the shared file upload control. Existing text assets open the same dialog in fixed editor mode. English and Simplified Chinese labels are wired through `web/src/i18n/index.ts`.
 
+# 2026-08-01 facility edit and preview diagnostics
+
+- Facility reverse proxy edit-session validation, preview, and commit diagnostics now translate their static messages by error code through `internal/platform/i18n`; the English fallback remains, and dynamic details (for example the wrapped error string in `Details`) stay instance values.
+- Simplified Chinese entries were added for `facility_cross_module_insights_stale`, `facility_route_summary_stale`, `facility_apply_request_failed`, `facility_static_asset_referenced_after_delete`, `facility_gateway_removal_invalidates_origin`, `facility_gateway_removal_invalidates_anyaccess_primary`, `facility_gateway_removal_invalidates_panel_entry`, `facility_commit_recovered`, and `panel_host_provider_unavailable`; existing codes such as `panel_host_server_required` now also render in Chinese when returned as edit-session diagnostics.
+
 # 2026-07-30 facility text assets
 
 - Facility create-text, upload-file, upload-archive, edit, loading, and save controls reuse existing English and Simplified Chinese translation keys. Asset names, filenames, and backend diagnostics remain instance values.

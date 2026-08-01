@@ -18,6 +18,7 @@ import (
 
 	"panel/internal/modules/applications"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
 )
 
@@ -471,10 +472,10 @@ func (s *Service) PreviewFacilityEditSession(ctx context.Context, sessionID stri
 		return FacilityEditPreviewResult{}, err
 	}
 	diagnostics := append([]applications.Diagnostic(nil), validation.Diagnostics...)
-	diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_cross_module_insights_stale", Severity: "warning", Message: "DNS, certificate, firewall, and gateway port insights are temporarily unavailable"})
+	diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_cross_module_insights_stale", Severity: "warning", Message: i18n.Translate("facility_cross_module_insights_stale", "DNS, certificate, firewall, and gateway port insights are temporarily unavailable")})
 	if normalized, normalizeErr := normalizeInput(record.Draft); normalizeErr == nil {
 		if _, summaryErr := s.routeSummaries(ctx, normalized); summaryErr != nil {
-			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_route_summary_stale", Severity: "warning", Message: "Route summary could not be refreshed", Details: map[string]any{"error": summaryErr.Error()}})
+			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_route_summary_stale", Severity: "warning", Message: i18n.Translate("facility_route_summary_stale", "Route summary could not be refreshed"), Details: map[string]any{"error": summaryErr.Error()}})
 		}
 	}
 	now := time.Now().UTC()
@@ -590,10 +591,10 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 	result := FacilityEditCommitResult{Config: config, ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt}, ApplyRequested: true}
 	if err := s.syncReverseProxyTraits(ctx, previous.DeploymentServers, config.DeploymentServers); err != nil {
 		result.ApplyRequested = false
-		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: "Configuration was committed, but applying it could not be requested", Details: map[string]any{"error": err.Error()}})
+		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, config.DeploymentServers)); err != nil {
 		result.ApplyRequested = false
-		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: "Configuration was committed, but applying it could not be requested", Details: map[string]any{"error": err.Error()}})
+		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
 	if err := s.finishFacilityCommit(ctx, record, leaseOwner, result); err != nil {
 		return FacilityEditCommitResult{}, err
@@ -651,11 +652,11 @@ func (s *Service) validateFacilityEditDraft(ctx context.Context, record facility
 				asset, ok = assets[route.AssetID]
 			}
 			if !ok {
-				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_asset_referenced_after_delete", Severity: "error", Field: "domains", Message: "A route still references a deleted asset", Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
+				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_asset_referenced_after_delete", Severity: "error", Field: "domains", Message: i18n.Translate("facility_static_asset_referenced_after_delete", "A route still references a deleted asset"), Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
 				continue
 			}
 			if asset.Kind != route.SourceType {
-				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_site_asset_kind_invalid", Severity: "error", Field: "domains", Message: "Static asset kind does not match route source", Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
+				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_site_asset_kind_invalid", Severity: "error", Field: "domains", Message: i18n.Translate("facility_static_site_asset_kind_invalid", "Static asset kind does not match route source"), Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
 			}
 		}
 	}
@@ -680,19 +681,19 @@ func facilityTopologyDiagnostics(draft ReverseProxySaveInput) []applications.Dia
 	for _, domain := range draft.Domains {
 		for _, serverID := range domain.OriginServerIDs {
 			if _, ok := gateways[strings.TrimSpace(serverID)]; !ok {
-				diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_origin", Severity: "error", Field: "domains", Message: "Removing a gateway would remove a configured domain origin", Details: map[string]any{"domain": domain.Domain, "serverId": serverID}})
+				diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_origin", Severity: "error", Field: "domains", Message: i18n.Translate("facility_gateway_removal_invalidates_origin", "Removing a gateway would remove a configured domain origin"), Details: map[string]any{"domain": domain.Domain, "serverId": serverID}})
 			}
 		}
 		primary := strings.TrimSpace(domain.AnyAccess.PrimaryOriginServerID)
 		if domain.AnyAccess.Enabled && primary != "" {
 			if _, ok := gateways[primary]; !ok {
-				diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_anyaccess_primary", Severity: "error", Field: "domains", Message: "Removing a gateway would remove the AnyAccess primary origin", Details: map[string]any{"domain": domain.Domain, "serverId": primary}})
+				diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_anyaccess_primary", Severity: "error", Field: "domains", Message: i18n.Translate("facility_gateway_removal_invalidates_anyaccess_primary", "Removing a gateway would remove the AnyAccess primary origin"), Details: map[string]any{"domain": domain.Domain, "serverId": primary}})
 			}
 		}
 	}
 	if draft.PanelEntry.Enabled {
 		if _, ok := gateways[strings.TrimSpace(draft.PanelEntry.ServerID)]; !ok {
-			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_panel_entry", Severity: "error", Field: "panelEntry.serverId", Message: "Panel Entry server must remain in the gateway set", Details: map[string]any{"serverId": draft.PanelEntry.ServerID}})
+			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_gateway_removal_invalidates_panel_entry", Severity: "error", Field: "panelEntry.serverId", Message: i18n.Translate("facility_gateway_removal_invalidates_panel_entry", "Panel Entry server must remain in the gateway set"), Details: map[string]any{"serverId": draft.PanelEntry.ServerID}})
 		}
 	}
 	return diagnostics
@@ -701,7 +702,7 @@ func facilityTopologyDiagnostics(draft ReverseProxySaveInput) []applications.Dia
 func facilityDiagnosticForError(err error) []applications.Diagnostic {
 	var target *panelerr.Error
 	if errors.As(err, &target) {
-		return []applications.Diagnostic{{Code: target.Code, Severity: "error", Message: target.Message, Details: target.Details}}
+		return []applications.Diagnostic{{Code: target.Code, Severity: "error", Message: i18n.Translate(target.Code, target.Message), Details: target.Details}}
 	}
 	return []applications.Diagnostic{{Code: "facility_validation_failed", Severity: "error", Message: err.Error()}}
 }
@@ -1111,13 +1112,13 @@ func (s *Service) recoverFacilityEditRecord(ctx context.Context, record facility
 		return
 	}
 	config, _ := s.GetReverseProxy(ctx)
-	result := FacilityEditCommitResult{Config: config, ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt}, ApplyRequested: true, Diagnostics: []applications.Diagnostic{{Code: "facility_commit_recovered", Severity: "info", Message: "Committed facility configuration was recovered after restart"}}}
+	result := FacilityEditCommitResult{Config: config, ResourceVersion: applications.ResourceVersion{Value: strconv.Itoa(config.Version), UpdatedAt: config.UpdatedAt}, ApplyRequested: true, Diagnostics: []applications.Diagnostic{{Code: "facility_commit_recovered", Severity: "info", Message: i18n.Translate("facility_commit_recovered", "Committed facility configuration was recovered after restart")}}}
 	if err := s.syncReverseProxyTraits(ctx, manifest.PreviousServers, config.DeploymentServers); err != nil {
 		result.ApplyRequested = false
-		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: "Configuration was recovered, but applying it could not be requested", Details: map[string]any{"error": err.Error()}})
+		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	} else if err := s.triggerReverseProxyReconcile(ctx, "facility_recovery", removedServers(manifest.PreviousServers, config.DeploymentServers)); err != nil {
 		result.ApplyRequested = false
-		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: "Configuration was recovered, but applying it could not be requested", Details: map[string]any{"error": err.Error()}})
+		result.Diagnostics = append(result.Diagnostics, applications.Diagnostic{Code: "facility_apply_request_failed", Severity: "warning", Message: i18n.Translate("facility_apply_request_failed", "Configuration was recovered, but applying it could not be requested"), Details: map[string]any{"error": err.Error()}})
 	}
 	_ = s.finishFacilityCommit(ctx, record, record.CommitLeaseOwner, result)
 	_ = os.RemoveAll(manifest.BackupDir)
