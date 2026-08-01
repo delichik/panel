@@ -16,6 +16,7 @@ import (
 	"time"
 
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
 )
 
@@ -395,7 +396,7 @@ func (s *Service) PreviewEditSession(ctx context.Context, owner, sessionID strin
 		return EditSessionPreviewResult{}, err
 	}
 	diagnostics := append([]Diagnostic{}, validation.Diagnostics...)
-	diagnostics = append(diagnostics, Diagnostic{Code: "application_cross_module_insights_unavailable", Severity: "info", Message: "Cross-module DNS, certificate, and gateway insights are not available in this API revision"})
+	diagnostics = append(diagnostics, Diagnostic{Code: "application_cross_module_insights_unavailable", Severity: "info", Message: i18n.Translate("application_cross_module_insights_unavailable", "Cross-module DNS, certificate, and gateway insights are not available in this API revision")})
 	res, err := s.db.ExecContext(ctx, `UPDATE application_edit_sessions SET preview_token=?,preview_revision=?,preview_expires_at=?,updated_at=?,idle_expires_at=? WHERE id=? AND owner_id=? AND revision=? AND state=?`,
 		token, revision, formatTime(now.Add(editSessionPreviewTTL)), formatTime(now), formatTime(now.Add(editSessionIdleTTL)), sessionID, normalizeEditOwner(owner), revision, EditSessionStateActive)
 	if err != nil {
@@ -709,11 +710,11 @@ func (s *Service) validateEditDraft(ctx context.Context, record editSessionRecor
 	}
 	var pe *panelerr.Error
 	if errors.As(err, &pe) {
-		diagnostics := []Diagnostic{{Code: pe.Code, Severity: "error", Message: pe.Message}}
+		diagnostics := []Diagnostic{{Code: pe.Code, Severity: "error", Message: i18n.Translate(pe.Code, pe.Message)}}
 		if issues, ok := pe.Details["issues"].([]ValidationIssue); ok {
 			diagnostics = diagnostics[:0]
 			for _, issue := range issues {
-				diagnostics = append(diagnostics, Diagnostic{Code: pe.Code, Severity: "error", Field: issue.Field, Message: issue.Message})
+				diagnostics = append(diagnostics, Diagnostic{Code: pe.Code, Severity: "error", Field: issue.Field, Message: i18n.Translate("", issue.Message)})
 			}
 		}
 		return diagnostics, nil
@@ -740,7 +741,7 @@ func (s *Service) recoverEditCommit(ctx context.Context, record editSessionRecor
 		_, _ = s.db.ExecContext(ctx, `UPDATE application_edit_sessions SET state=?,conflict_json=?,commit_lease_owner='',commit_lease_expires_at='',updated_at=? WHERE id=? AND owner_id=? AND state=?`, nextState, conflictJSON, formatTime(time.Now().UTC()), record.ID, record.OwnerID, EditSessionStateCommitting)
 		return ApplicationEditSession{}, false
 	}
-	result.Diagnostics = append(result.Diagnostics, Diagnostic{Code: "application_commit_recovered", Severity: "info", Message: "The committed application was recovered after an interrupted response"})
+	result.Diagnostics = append(result.Diagnostics, Diagnostic{Code: "application_commit_recovered", Severity: "info", Message: i18n.Translate("application_commit_recovered", "The committed application was recovered after an interrupted response")})
 	raw, _ := json.Marshal(result)
 	now := time.Now().UTC()
 	_, err = s.db.ExecContext(ctx, `UPDATE application_edit_sessions SET state=?,commit_result_json=?,commit_lease_owner='',commit_lease_expires_at='',committed_at=?,updated_at=? WHERE id=? AND owner_id=? AND state=?`, EditSessionStateCommitted, string(raw), formatTime(now), formatTime(now), record.ID, record.OwnerID, EditSessionStateCommitting)
@@ -806,7 +807,7 @@ func (s *Service) persistedEditCommitResult(ctx context.Context, record editSess
 	}
 	diagnostics := []Diagnostic{}
 	if applyErr != nil {
-		diagnostics = append(diagnostics, Diagnostic{Code: "application_apply_request_failed", Severity: "warning", Message: "Configuration was committed, but applying it could not be requested", Details: map[string]any{"error": applyErr.Error()}})
+		diagnostics = append(diagnostics, Diagnostic{Code: "application_apply_request_failed", Severity: "warning", Message: i18n.Translate("application_apply_request_failed", "Configuration was committed, but applying it could not be requested"), Details: map[string]any{"error": applyErr.Error()}})
 	}
 	return EditCommitResult{Application: app, ResourceVersion: applicationResourceVersion(app), ApplyRequested: record.Draft.Enabled, Diagnostics: diagnostics}, true
 }
