@@ -54,7 +54,7 @@
 - Docker 镜像更新缓存使用 `image_updates`、`image_refreshes`，Application 容器协调观察状态使用 `application_reconcile_states`；fail2ban 的 Panel 草稿 YAML 与接管开关使用 `fail2ban_configs` 按服务器保存；Docker 实时资源清单不复制到数据库。
 - 后端对外错误响应需要走 `platform/errors`、`platform/http` 和 `platform/i18n`，不要在 handler 中散落用户可见错误文案。
 - `internal/platform` 禁止依赖 `internal/modules`；业务模块之间禁止直接导入其他模块的 `store` 实现。`internal/architecture/dependencies_test.go` 固化这些依赖边界。
-- API method/path 清单由 `internal/bootstrap/panel/routes_manifest_test.go` 固化；有意调整 API 时必须同步确认前后端契约后更新清单，目录重构不得顺便改变清单。设施应用目录新增 `GET /api/v1/facility-apps` summary 路由，反向代理完整详情继续使用 `GET /api/v1/facility-apps/reverse-proxy`。
+- API method/path 清单由 `internal/bootstrap/panel/routes_manifest_test.go` 固化；有意调整 API 时必须同步确认前后端契约后更新清单，目录重构不得顺便改变清单。设施类型没有通用 list 路由；反向代理设施完整详情使用 `GET /api/v1/facility-apps/reverse-proxy`。
 - SSH 解密后的凭据传输模型定义在 `internal/platform/ssh`，服务器凭据模块通过类型别名实现该平台端口，避免 platform 反向依赖业务模块。
 
 ## 数据库约定

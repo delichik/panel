@@ -96,7 +96,7 @@ func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacility
 			_ = os.RemoveAll(dir)
 		}
 	}()
-	assets, err := s.ListStaticAssets(ctx)
+	assets, err := s.listStaticAssets(ctx)
 	if err != nil {
 		return FacilityEditSession{}, err
 	}
@@ -212,7 +212,7 @@ func (s *Service) PatchFacilityEditSession(ctx context.Context, sessionID string
 	return s.GetFacilityEditSession(ctx, sessionID)
 }
 
-func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey, idempotencyKey string, in FacilityEditAssetInput) (FacilityEditSession, error) {
+func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetRef, idempotencyKey string, in FacilityEditAssetInput) (FacilityEditSession, error) {
 	s.editCommitMu.Lock()
 	defer s.editCommitMu.Unlock()
 	record, err := s.loadFacilityEditSession(ctx, sessionID)
@@ -222,9 +222,9 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey,
 	if record.State != FacilityEditSessionActive {
 		return FacilityEditSession{}, s.facilityEditConflict(ctx, sessionID, in.Revision)
 	}
-	assetKey = strings.TrimSpace(assetKey)
-	if assetKey == "" || strings.TrimSpace(in.ClientOperationID) == "" {
-		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_operation_invalid", "assetKey and clientOperationId are required")
+	assetRef = strings.TrimSpace(assetRef)
+	if assetRef == "" || strings.TrimSpace(in.ClientOperationID) == "" {
+		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_operation_invalid", "assetName and clientOperationId are required")
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
@@ -237,6 +237,24 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey,
 	}
 	if name == "" || (kind != StaticSourceUploadedFile && kind != StaticSourceUploadedBundle) || (contentMode != "text" && contentMode != "binary") {
 		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_invalid", "asset name, kind, and content are required")
+	}
+	var assetKey string
+	lookupErr := s.db.QueryRowContext(ctx, `SELECT asset_key FROM facility_edit_session_assets WHERE session_id=? AND name=? LIMIT 1`, sessionID, assetRef).Scan(&assetKey)
+	if lookupErr == sql.ErrNoRows {
+		lookupErr = s.db.QueryRowContext(ctx, `SELECT asset_key FROM facility_edit_session_assets WHERE session_id=? AND asset_key=? LIMIT 1`, sessionID, assetRef).Scan(&assetKey)
+	}
+	if lookupErr == sql.ErrNoRows {
+		assetKey = assetRef
+	} else if lookupErr != nil {
+		return FacilityEditSession{}, lookupErr
+	}
+	var duplicateKey string
+	duplicateErr := s.db.QueryRowContext(ctx, `SELECT asset_key FROM facility_edit_session_assets WHERE session_id=? AND name=? AND asset_key<>? LIMIT 1`, sessionID, name, assetKey).Scan(&duplicateKey)
+	if duplicateErr != nil && duplicateErr != sql.ErrNoRows {
+		return FacilityEditSession{}, duplicateErr
+	}
+	if duplicateErr == nil {
+		return FacilityEditSession{}, panelerr.Validation("facility_static_asset_name_duplicate", "Static asset name must be unique within the facility")
 	}
 	if kind == StaticSourceUploadedBundle && contentMode != "binary" {
 		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_mode_invalid", "bundle assets must be binary")
@@ -252,14 +270,14 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey,
 		filename = "asset"
 	}
 	var existingKind, existingMode string
-	lookupErr := s.db.QueryRowContext(ctx, `SELECT kind,content_mode FROM facility_edit_session_assets WHERE session_id=? AND asset_key=?`, sessionID, assetKey).Scan(&existingKind, &existingMode)
-	if lookupErr != nil && lookupErr != sql.ErrNoRows {
-		return FacilityEditSession{}, lookupErr
+	existingErr := s.db.QueryRowContext(ctx, `SELECT kind,content_mode FROM facility_edit_session_assets WHERE session_id=? AND asset_key=?`, sessionID, assetKey).Scan(&existingKind, &existingMode)
+	if existingErr != nil && existingErr != sql.ErrNoRows {
+		return FacilityEditSession{}, existingErr
 	}
-	if lookupErr == nil && existingMode != contentMode {
+	if existingErr == nil && existingMode != contentMode {
 		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_mode_immutable", "asset content mode cannot be changed; delete and recreate the asset")
 	}
-	if lookupErr == nil && existingKind != kind {
+	if existingErr == nil && existingKind != kind {
 		return FacilityEditSession{}, panelerr.Validation("facility_edit_asset_kind_immutable", "asset kind cannot be changed; delete and recreate the asset")
 	}
 	requestHash := facilityEditHash(in.Revision, assetKey, name, kind, contentMode, filename, in.Content)
@@ -309,6 +327,9 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey,
 	_, err = tx.ExecContext(ctx, `INSERT INTO facility_edit_session_assets(session_id,asset_key,source_asset_id,name,kind,content_mode,filename,size,sha256,content_sha256,blob_dir,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,'ready',?,?) ON CONFLICT(session_id,asset_key) DO UPDATE SET name=excluded.name,kind=excluded.kind,content_mode=excluded.content_mode,filename=excluded.filename,size=excluded.size,sha256=excluded.sha256,content_sha256=excluded.content_sha256,blob_dir=excluded.blob_dir,state='ready',updated_at=excluded.updated_at`,
 		sessionID, assetKey, sourceID, name, kind, contentMode, filename, len(in.Content), hex.EncodeToString(sum[:]), contentSHA, dir, created, formatTime(now))
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return FacilityEditSession{}, panelerr.Validation("facility_static_asset_name_duplicate", "Static asset name must be unique within the facility")
+		}
 		return FacilityEditSession{}, err
 	}
 	if err := insertFacilityEditOperation(ctx, tx, sessionID, in.ClientOperationID, facilityIdempotencyKey(idempotencyKey), requestHash); err != nil {
@@ -328,7 +349,7 @@ func (s *Service) PutFacilityEditAsset(ctx context.Context, sessionID, assetKey,
 	return result, err
 }
 
-func (s *Service) DeleteFacilityEditAsset(ctx context.Context, sessionID, assetKey, idempotencyKey string, in FacilityEditMutationInput) (FacilityEditSession, error) {
+func (s *Service) DeleteFacilityEditAsset(ctx context.Context, sessionID, assetRef, idempotencyKey string, in FacilityEditMutationInput) (FacilityEditSession, error) {
 	s.editCommitMu.Lock()
 	defer s.editCommitMu.Unlock()
 	if strings.TrimSpace(in.ClientOperationID) == "" {
@@ -341,10 +362,24 @@ func (s *Service) DeleteFacilityEditAsset(ctx context.Context, sessionID, assetK
 	if record.State != FacilityEditSessionActive {
 		return FacilityEditSession{}, s.facilityEditConflict(ctx, sessionID, in.Revision)
 	}
+	assetRef = strings.TrimSpace(assetRef)
+	var assetKey string
+	lookupErr := s.db.QueryRowContext(ctx, `SELECT asset_key FROM facility_edit_session_assets WHERE session_id=? AND name=? LIMIT 1`, sessionID, assetRef).Scan(&assetKey)
+	if lookupErr == sql.ErrNoRows {
+		assetKey = assetRef
+	} else if lookupErr != nil {
+		return FacilityEditSession{}, lookupErr
+	}
 	for _, domain := range record.Draft.Domains {
 		for _, route := range domain.Paths {
-			if strings.TrimSpace(route.AssetID) == strings.TrimSpace(assetKey) {
-				return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("facility_static_asset_in_use", "Static asset is still referenced by a draft route"), map[string]any{"assetKey": assetKey, "domain": domain.Domain, "path": route.Path})
+			assetName := strings.TrimSpace(route.AssetName)
+			if assetName == "" {
+				assetName = strings.TrimSpace(route.AssetID)
+			}
+			for _, asset := range record.Assets {
+				if asset.AssetKey == strings.TrimSpace(assetKey) && (asset.Name == assetName || asset.AssetKey == assetName || asset.SourceAssetID == assetName) {
+					return FacilityEditSession{}, panelerr.WithDetails(panelerr.Conflict("facility_static_asset_in_use", "Static asset is still referenced by a draft route"), map[string]any{"assetKey": assetKey, "assetName": assetName, "domain": domain.Domain, "path": route.Path})
+				}
 			}
 		}
 	}
@@ -603,6 +638,7 @@ func (s *Service) validateFacilityEditDraft(ctx context.Context, record facility
 	assets := map[string]FacilityEditAsset{}
 	for _, asset := range record.Assets {
 		assets[asset.AssetKey] = asset
+		assets[asset.Name] = asset
 	}
 	assetDiagnostics := []applications.Diagnostic{}
 	for _, domain := range normalized.Domains {
@@ -610,13 +646,16 @@ func (s *Service) validateFacilityEditDraft(ctx context.Context, record facility
 			if route.SourceType != StaticSourceUploadedFile && route.SourceType != StaticSourceUploadedBundle {
 				continue
 			}
-			asset, ok := assets[route.AssetID]
+			asset, ok := assets[route.AssetName]
+			if !ok && route.AssetID != "" {
+				asset, ok = assets[route.AssetID]
+			}
 			if !ok {
-				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_asset_referenced_after_delete", Severity: "error", Field: "domains", Message: "A route still references a deleted asset", Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetKey": route.AssetID}})
+				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_asset_referenced_after_delete", Severity: "error", Field: "domains", Message: "A route still references a deleted asset", Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
 				continue
 			}
 			if asset.Kind != route.SourceType {
-				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_site_asset_kind_invalid", Severity: "error", Field: "domains", Message: "Static asset kind does not match route source", Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetKey": route.AssetID}})
+				assetDiagnostics = append(assetDiagnostics, applications.Diagnostic{Code: "facility_static_site_asset_kind_invalid", Severity: "error", Field: "domains", Message: "Static asset kind does not match route source", Details: map[string]any{"domain": domain.Domain, "path": route.Path, "assetName": route.AssetName}})
 			}
 		}
 	}
@@ -718,6 +757,20 @@ func (s *Service) loadFacilityEditSession(ctx context.Context, sessionID string)
 		return facilityEditRecord{}, err
 	}
 	record.Assets = assets
+	for domainIndex := range record.Draft.Domains {
+		for pathIndex := range record.Draft.Domains[domainIndex].Paths {
+			path := &record.Draft.Domains[domainIndex].Paths[pathIndex]
+			if strings.TrimSpace(path.AssetName) == "" && strings.TrimSpace(path.AssetID) != "" {
+				for _, asset := range assets {
+					if asset.AssetKey == path.AssetID || asset.SourceAssetID == path.AssetID {
+						path.AssetName = asset.Name
+						break
+					}
+				}
+			}
+			path.AssetID = ""
+		}
+	}
 	return record, nil
 }
 
@@ -767,7 +820,6 @@ func (s *Service) facilityEditConflict(ctx context.Context, sessionID string, ex
 
 func (s *Service) prepareFacilityCommitManifest(record facilityEditRecord) (facilityCommitManifest, error) {
 	assets := make([]facilityManifestAsset, 0, len(record.Assets))
-	mapping := map[string]string{}
 	rows, err := s.db.Query(`SELECT asset_key,source_asset_id,name,kind,content_mode,filename,size,sha256,content_sha256,blob_dir,created_at,updated_at FROM facility_edit_session_assets WHERE session_id=? AND state='ready'`, record.ID)
 	if err != nil {
 		return facilityCommitManifest{}, err
@@ -782,18 +834,9 @@ func (s *Service) prepareFacilityCommitManifest(record facilityEditRecord) (faci
 		if item.FinalID == "" {
 			item.FinalID = id.New("facility_static")
 		}
-		mapping[item.AssetKey] = item.FinalID
 		assets = append(assets, item)
 	}
 	draft := cloneFacilityDraft(record.Draft)
-	for domainIndex := range draft.Domains {
-		for pathIndex := range draft.Domains[domainIndex].Paths {
-			path := &draft.Domains[domainIndex].Paths[pathIndex]
-			if path.SourceType == StaticSourceUploadedFile || path.SourceType == StaticSourceUploadedBundle {
-				path.AssetID = mapping[path.AssetID]
-			}
-		}
-	}
 	baseVersion, _ := strconv.Atoi(record.BaseResourceVersion.Value)
 	current, _ := s.loadConfig(context.Background())
 	return facilityCommitManifest{SessionID: record.ID, BaseVersion: baseVersion, Config: draft, PreviousServers: append([]string(nil), current.DeploymentServers...), Assets: assets, BackupDir: filepath.Join(s.facilityEditPath(record.ID), "backup")}, nil
@@ -887,7 +930,7 @@ func (s *Service) moveFacilityManifestFiles(manifest *facilityCommitManifest) er
 	for _, asset := range manifest.Assets {
 		finalIDs[asset.FinalID] = asset
 	}
-	existing, err := s.ListStaticAssets(context.Background())
+	existing, err := s.listStaticAssets(context.Background())
 	if err != nil {
 		return err
 	}

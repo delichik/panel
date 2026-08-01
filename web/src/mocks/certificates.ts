@@ -8,7 +8,7 @@ import type {
   KeyAssetDto,
 } from '@/types/keyAssets';
 
-const now = '2026-07-21T02:00:00.000Z';
+const now = '2026-08-01T02:00:00.000Z';
 
 export const mockDnsDomains: DnsDomainDto[] = [
   { id: 'domain-example', name: 'example.com', provider: 'cloudflare', createdAt: '2026-07-18T08:00:00.000Z', updatedAt: now },
@@ -19,6 +19,12 @@ export const mockDnsDomains: DnsDomainDto[] = [
   { id: 'domain-static', name: 'static.example.test', provider: 'cloudflare', createdAt: '2026-07-15T08:00:00.000Z', updatedAt: now },
   { id: 'domain-downloads', name: 'downloads.example.test', provider: 'cloudflare', createdAt: '2026-07-15T09:00:00.000Z', updatedAt: now },
   { id: 'domain-long', name: 'very-long-customer-facing-domain-name-for-layout-validation.example.test', provider: 'cloudflare', createdAt: '2026-07-14T08:00:00.000Z', updatedAt: now },
+  { id: 'domain-panel', name: 'panel.example.test', provider: 'cloudflare', createdAt: '2026-07-12T08:00:00.000Z', updatedAt: now },
+  { id: 'domain-docs', name: 'docs.example.test', provider: 'cloudflare', createdAt: '2026-07-12T09:00:00.000Z', updatedAt: now },
+  { id: 'domain-billing', name: 'billing.example.test', provider: 'cloudflare', createdAt: '2026-07-11T08:00:00.000Z', updatedAt: now },
+  { id: 'domain-hooks', name: 'hooks.example.test', provider: 'cloudflare', createdAt: '2026-07-11T09:00:00.000Z', updatedAt: now },
+  { id: 'domain-status', name: 'status.example.test', provider: 'cloudflare', createdAt: '2026-07-10T08:00:00.000Z', updatedAt: now },
+  { id: 'domain-staging', name: 'staging.internal.test', provider: 'cloudflare', createdAt: '2026-07-09T08:00:00.000Z', updatedAt: now },
 ];
 
 const recordsByDomain = new Map<string, DnsRecordDto[]>([
@@ -47,6 +53,26 @@ const recordsByDomain = new Map<string, DnsRecordDto[]>([
   ]],
   ['domain-long', [
     { id: 'rec-long-root', type: 'CNAME', name: '@', value: 'gateway.example.test', ttl: 600, proxied: true, comment: 'Long domain row used to validate wrapping and table density.', modifiedAt: now },
+  ]],
+  ['domain-panel', [
+    { id: 'rec-panel-root', type: 'A', name: '@', value: '203.0.113.10', ttl: 120, proxied: true, modifiedAt: now },
+    { id: 'rec-panel-acme', type: 'TXT', name: '_acme-challenge', value: 'panel-dns-ready', ttl: 60, proxied: false, modifiedAt: now },
+  ]],
+  ['domain-docs', [
+    { id: 'rec-docs-root', type: 'CNAME', name: '@', value: 'observability.example.test', ttl: 300, proxied: true, modifiedAt: now },
+  ]],
+  ['domain-billing', [
+    { id: 'rec-billing-root', type: 'A', name: '@', value: '203.0.113.41', ttl: 120, proxied: true, modifiedAt: now },
+    { id: 'rec-billing-www', type: 'CNAME', name: 'www', value: 'billing.example.test', ttl: 300, proxied: true, modifiedAt: now },
+  ]],
+  ['domain-hooks', [
+    { id: 'rec-hooks-root', type: 'A', name: '@', value: '203.0.113.12', ttl: 60, proxied: false, modifiedAt: now },
+  ]],
+  ['domain-status', [
+    { id: 'rec-status-root', type: 'A', name: '@', value: '203.0.113.15', ttl: 60, proxied: false, modifiedAt: now },
+  ]],
+  ['domain-staging', [
+    { id: 'rec-staging-root', type: 'A', name: '@', value: '10.93.5.44', ttl: 300, proxied: false, comment: 'Internal-only staging zone', modifiedAt: now },
   ]],
 ]);
 
@@ -166,6 +192,102 @@ export const mockDomainCertificates = [
     createdAt: '2026-05-01T00:00:00.000Z',
     updatedAt: now,
   },
+  {
+    id: 'cert-panel',
+    name: 'panel.example.test',
+    domainId: 'domain-panel',
+    domain: 'panel.example.test',
+    prefix: '',
+    scope: 'single',
+    domains: ['panel.example.test'],
+    certificatePath: '/data/certificates/cert-panel/fullchain.pem',
+    privateKeyPath: '/data/certificates/cert-panel/privkey.pem',
+    issuer: 'letsencrypt',
+    status: 'issued',
+    autoRenew: true,
+    nextRenewAt: '2026-09-12T00:00:00.000Z',
+    notBefore: '2026-06-14T00:00:00.000Z',
+    notAfter: '2026-09-12T00:00:00.000Z',
+    createdAt: '2026-06-14T00:00:00.000Z',
+    updatedAt: now,
+  },
+  {
+    id: 'cert-billing',
+    name: 'billing.example.test',
+    domainId: 'domain-billing',
+    domain: 'billing.example.test',
+    prefix: '',
+    scope: 'single',
+    domains: ['billing.example.test', 'www.billing.example.test'],
+    certificatePath: '/data/certificates/cert-billing/fullchain.pem',
+    privateKeyPath: '/data/certificates/cert-billing/privkey.pem',
+    issuer: 'letsencrypt',
+    status: 'issued',
+    autoRenew: true,
+    nextRenewAt: '2026-08-20T00:00:00.000Z',
+    notBefore: '2026-05-22T00:00:00.000Z',
+    notAfter: '2026-08-20T00:00:00.000Z',
+    createdAt: '2026-05-22T00:00:00.000Z',
+    updatedAt: now,
+  },
+  {
+    id: 'cert-hooks-renewing',
+    name: 'hooks.example.test',
+    domainId: 'domain-hooks',
+    domain: 'hooks.example.test',
+    prefix: '',
+    scope: 'single',
+    domains: ['hooks.example.test'],
+    certificatePath: '/data/certificates/cert-hooks/fullchain.pem',
+    privateKeyPath: '/data/certificates/cert-hooks/privkey.pem',
+    issuer: 'letsencrypt',
+    status: 'renewing',
+    autoRenew: true,
+    nextRenewAt: '2026-08-01T04:00:00.000Z',
+    notBefore: '2026-05-03T00:00:00.000Z',
+    notAfter: '2026-08-01T00:00:00.000Z',
+    createdAt: '2026-05-03T00:00:00.000Z',
+    updatedAt: now,
+  },
+  {
+    id: 'cert-status',
+    name: 'status.example.test',
+    domainId: 'domain-status',
+    domain: 'status.example.test',
+    prefix: '',
+    scope: 'single',
+    domains: ['status.example.test'],
+    certificatePath: '/data/certificates/cert-status/fullchain.pem',
+    privateKeyPath: '/data/certificates/cert-status/privkey.pem',
+    issuer: 'letsencrypt',
+    status: 'issued',
+    autoRenew: true,
+    nextRenewAt: '2026-10-01T00:00:00.000Z',
+    notBefore: '2026-07-03T00:00:00.000Z',
+    notAfter: '2026-10-01T00:00:00.000Z',
+    createdAt: '2026-07-03T00:00:00.000Z',
+    updatedAt: now,
+  },
+  {
+    id: 'cert-staging-failed',
+    name: 'staging.internal.test',
+    domainId: 'domain-staging',
+    domain: 'staging.internal.test',
+    prefix: '',
+    scope: 'single',
+    domains: ['staging.internal.test'],
+    certificatePath: '',
+    privateKeyPath: '',
+    issuer: 'letsencrypt',
+    status: 'failed',
+    lastError: 'DNS-01 challenge failed: TXT record never appeared in staging zone.',
+    autoRenew: false,
+    nextRenewAt: '',
+    notBefore: '',
+    notAfter: '',
+    createdAt: '2026-07-28T00:00:00.000Z',
+    updatedAt: now,
+  },
 ];
 
 export const mockSelfSigned = [
@@ -173,6 +295,9 @@ export const mockSelfSigned = [
   { id: 'self-leaf-gateway', parentCaId: 'self-ca-local', kind: 'leaf', name: 'Gateway local leaf', commonName: 'gateway.internal', dnsNames: ['gateway.internal'], ipAddresses: ['10.0.0.10'], fingerprint: 'SHA256:1EAF', notBefore: '2026-07-01T00:00:00.000Z', notAfter: '2026-10-01T00:00:00.000Z', createdAt: '2026-07-01T00:00:00.000Z', updatedAt: now },
   { id: 'self-leaf-agent', parentCaId: 'self-ca-local', kind: 'leaf', name: 'Agent mutual TLS leaf', commonName: 'agent.internal', dnsNames: ['agent.internal', 'agent.service.consul'], ipAddresses: ['10.8.0.12', '10.22.0.41'], fingerprint: 'SHA256:A6E7', notBefore: '2026-07-10T00:00:00.000Z', notAfter: '2026-08-10T00:00:00.000Z', createdAt: '2026-07-10T00:00:00.000Z', updatedAt: now },
   { id: 'self-ca-customer', kind: 'ca', name: 'Customer staging CA', commonName: 'Customer Staging Root', dnsNames: [], ipAddresses: [], fingerprint: 'SHA256:C057', notBefore: '2026-03-01T00:00:00.000Z', notAfter: '2029-03-01T00:00:00.000Z', createdAt: '2026-03-01T00:00:00.000Z', updatedAt: now },
+  { id: 'self-leaf-static', parentCaId: 'self-ca-local', kind: 'leaf', name: 'Static site leaf', commonName: 'static.example.test', dnsNames: ['static.example.test'], ipAddresses: [], fingerprint: 'SHA256:5TAT', notBefore: '2026-07-01T00:00:00.000Z', notAfter: '2026-10-01T00:00:00.000Z', createdAt: '2026-07-01T00:00:00.000Z', updatedAt: now },
+  { id: 'self-leaf-expiring', parentCaId: 'self-ca-customer', kind: 'leaf', name: 'Staging leaf near expiry', commonName: 'staging.internal.test', dnsNames: ['staging.internal.test'], ipAddresses: ['10.93.5.44'], fingerprint: 'SHA256:E8P1', notBefore: '2026-05-01T00:00:00.000Z', notAfter: '2026-08-05T00:00:00.000Z', createdAt: '2026-05-01T00:00:00.000Z', updatedAt: now },
+  { id: 'self-leaf-metrics', parentCaId: 'self-ca-local', kind: 'leaf', name: 'Metrics scrape leaf', commonName: 'metrics.internal', dnsNames: ['metrics.internal'], ipAddresses: ['10.82.8.18'], fingerprint: 'SHA256:ME71', notBefore: '2026-06-01T00:00:00.000Z', notAfter: '2026-12-01T00:00:00.000Z', createdAt: '2026-06-01T00:00:00.000Z', updatedAt: now },
 ];
 
 export const mockKeyAssets: KeyAssetDto[] = [
@@ -182,6 +307,9 @@ export const mockKeyAssets: KeyAssetDto[] = [
   { id: 'asset-ca-customer', type: 'ca_certificate', name: 'Customer staging CA', algorithm: 'rsa', keySize: 4096, commonName: 'Customer Staging Root', dnsNames: [], ipAddresses: [], fingerprint: 'SHA256:C057CA', notBefore: '2026-03-01T00:00:00.000Z', notAfter: '2029-03-01T00:00:00.000Z', hasCertificate: true, hasPrivateKey: true, hasPublicKey: false, downloadKinds: ['certificate', 'private_key'], childCount: 2, referenceCount: 0, references: [], canReissue: false, canRegenerate: false, canDelete: true, createdAt: '2026-03-01T00:00:00.000Z', updatedAt: now },
   { id: 'asset-tls-downloads', type: 'tls_certificate', name: 'Downloads TLS near expiry', parentAssetId: 'asset-ca-customer', algorithm: 'rsa', keySize: 2048, commonName: 'downloads.example.test', dnsNames: ['downloads.example.test'], ipAddresses: [], fingerprint: 'SHA256:D04D', notBefore: '2026-05-01T00:00:00.000Z', notAfter: '2026-07-29T00:00:00.000Z', hasCertificate: true, hasPrivateKey: true, hasPublicKey: false, downloadKinds: ['certificate', 'private_key'], childCount: 0, referenceCount: 1, references: [{ resourceType: 'facility', resourceId: 'reverse_proxy', resourceName: 'Entrance gateway', relation: 'static route tls' }], canReissue: true, canRegenerate: false, canDelete: false, createdAt: '2026-05-01T00:00:00.000Z', updatedAt: now },
   { id: 'asset-ssh-ci-runner', type: 'ssh_key_pair', name: 'CI runner SSH key with long rotation label', algorithm: 'rsa', keySize: 4096, commonName: '', dnsNames: [], ipAddresses: [], fingerprint: 'SHA256:C1RUN', hasCertificate: false, hasPrivateKey: true, hasPublicKey: true, downloadKinds: ['private_key', 'public_key'], childCount: 0, referenceCount: 2, references: [{ resourceType: 'server', resourceId: 'srv-api-hkg', resourceName: 'api-hkg-01', relation: 'ssh credential' }, { resourceType: 'server', resourceId: 'srv-worker-nrt', resourceName: 'worker-nrt-queue-a', relation: 'ssh credential' }], canReissue: false, canRegenerate: true, canDelete: false, createdAt: '2026-06-10T00:00:00.000Z', updatedAt: now },
+  { id: 'asset-tls-status', type: 'tls_certificate', name: 'Status page TLS', parentAssetId: 'asset-ca-platform', algorithm: 'ecdsa', keySize: 256, commonName: 'status.example.test', dnsNames: ['status.example.test'], ipAddresses: [], fingerprint: 'SHA256:5TAT', notBefore: '2026-07-03T00:00:00.000Z', notAfter: '2026-10-01T00:00:00.000Z', hasCertificate: true, hasPrivateKey: true, hasPublicKey: false, downloadKinds: ['certificate', 'private_key'], childCount: 0, referenceCount: 1, references: [{ resourceType: 'facility', resourceId: 'reverse_proxy', resourceName: 'Entrance gateway', relation: 'static route tls' }], canReissue: true, canRegenerate: false, canDelete: true, createdAt: '2026-07-03T00:00:00.000Z', updatedAt: now },
+  { id: 'asset-ssh-backup', type: 'ssh_key_pair', name: 'Backup transfer key', algorithm: 'ed25519', commonName: '', dnsNames: [], ipAddresses: [], fingerprint: 'SHA256:B4CK', hasCertificate: false, hasPrivateKey: true, hasPublicKey: true, downloadKinds: ['private_key', 'public_key'], childCount: 0, referenceCount: 1, references: [{ resourceType: 'server', resourceId: 'srv-backup-fra', resourceName: 'backup-fra-vault', relation: 'ssh credential' }], canReissue: false, canRegenerate: true, canDelete: false, createdAt: '2026-07-01T00:00:00.000Z', updatedAt: now },
+  { id: 'asset-tls-orphan', type: 'tls_certificate', name: 'Orphaned imported TLS', algorithm: 'rsa', keySize: 2048, commonName: 'legacy.internal', dnsNames: ['legacy.internal'], ipAddresses: [], fingerprint: 'SHA256:0RPH', notBefore: '2025-01-01T00:00:00.000Z', notAfter: '2026-01-01T00:00:00.000Z', hasCertificate: true, hasPrivateKey: false, hasPublicKey: false, downloadKinds: ['certificate'], childCount: 0, referenceCount: 0, references: [], canReissue: false, canRegenerate: false, canDelete: true, createdAt: '2026-07-22T00:00:00.000Z', updatedAt: now },
 ];
 
 export function createDomain(input: { name: string; provider: string }) {

@@ -376,6 +376,96 @@ func TestMigrateAllowsCertificatePrefixesScope(t *testing.T) {
 	}
 }
 
+func TestMigrateApplicationFilePathsToOpaqueNames(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`CREATE TABLE application_files (id TEXT PRIMARY KEY, path TEXT NOT NULL)`,
+		`CREATE TABLE application_edit_session_files (session_id TEXT NOT NULL, file_key TEXT NOT NULL, path TEXT NOT NULL)`,
+		`INSERT INTO application_files(id,path) VALUES('file-1','config/app.conf')`,
+		`INSERT INTO application_edit_session_files(session_id,file_key,path) VALUES('session-1','file-1','templates/site.conf')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &Store{appDB: db}
+	if err := store.migrateApplicationFileNames(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for table, want := range map[string]string{
+		"application_files":              "config/app.conf",
+		"application_edit_session_files": "templates/site.conf",
+	} {
+		columns := tableColumns(t, db, table)
+		if !columns["name"] || columns["path"] {
+			t.Fatalf("%s columns after migration = %#v", table, columns)
+		}
+		var got string
+		if err := db.QueryRow(`SELECT name FROM ` + table).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("%s name = %q, want %q", table, got, want)
+		}
+	}
+}
+
+func TestMigrateFacilityAssetNamesAddsScopedUniqueIndexes(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, statement := range []string{
+		`CREATE TABLE facility_static_assets (id TEXT PRIMARY KEY, name TEXT NOT NULL, filename TEXT NOT NULL, created_at TEXT NOT NULL)`,
+		`CREATE TABLE facility_edit_session_assets (session_id TEXT NOT NULL, asset_key TEXT NOT NULL, name TEXT NOT NULL, filename TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(session_id,asset_key))`,
+		`INSERT INTO facility_static_assets VALUES('asset-a','site','a.zip','2026-01-01')`,
+		`INSERT INTO facility_static_assets VALUES('asset-b','site','b.zip','2026-01-02')`,
+		`INSERT INTO facility_edit_session_assets VALUES('session-a','asset-a','draft','a.zip','2026-01-01')`,
+		`INSERT INTO facility_edit_session_assets VALUES('session-a','asset-b','draft','b.zip','2026-01-02')`,
+		`INSERT INTO facility_edit_session_assets VALUES('session-b','asset-c','draft','c.zip','2026-01-03')`,
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &Store{appDB: db}
+	if err := store.migrateFacilityAssetNames(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	assertNames := func(query string, want []string) {
+		t.Helper()
+		rows, err := db.Query(query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		got := []string{}
+		for rows.Next() {
+			var name string
+			if err := rows.Scan(&name); err != nil {
+				t.Fatal(err)
+			}
+			got = append(got, name)
+		}
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("names = %#v, want %#v", got, want)
+		}
+	}
+	assertNames(`SELECT name FROM facility_static_assets ORDER BY created_at,id`, []string{"site", "site-2"})
+	assertNames(`SELECT name FROM facility_edit_session_assets ORDER BY session_id,created_at,asset_key`, []string{"draft", "draft-2", "draft"})
+	if _, err := db.Exec(`INSERT INTO facility_static_assets VALUES('asset-c','site','c.zip','2026-01-03')`); err == nil {
+		t.Fatal("expected facility static asset name uniqueness violation")
+	}
+	if _, err := db.Exec(`INSERT INTO facility_edit_session_assets VALUES('session-a','asset-c','draft','c.zip','2026-01-03')`); err == nil {
+		t.Fatal("expected facility edit session asset name uniqueness violation")
+	}
+}
+
 func TestMigrateAddsFail2BanManagedColumn(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

@@ -15,6 +15,9 @@ export let mockCredentials: CredentialDto[] = [
   { id: 'cred-staging', name: 'Staging shared password', type: 'password', username: 'staging', createdAt: '2026-07-10T08:00:00.000Z', updatedAt: '2026-07-17T09:00:00.000Z' },
   { id: 'cred-unused-imported', name: 'Imported unused key pending review', type: 'private_key', username: 'imported', createdAt: '2026-07-09T08:00:00.000Z', updatedAt: '2026-07-16T09:00:00.000Z' },
   { id: 'cred-rotating-long-name', name: 'Rotating credential with intentionally long display name', type: 'password', username: 'rotation-user', createdAt: '2026-07-08T08:00:00.000Z', updatedAt: '2026-07-15T09:00:00.000Z' },
+  { id: 'cred-gpu-lab', name: 'GPU lab deploy key', type: 'private_key', username: 'render', createdAt: '2026-07-07T08:00:00.000Z', updatedAt: '2026-07-30T09:00:00.000Z' },
+  { id: 'cred-backup-vault', name: 'Backup vault key', type: 'private_key', username: 'backup', createdAt: '2026-07-06T08:00:00.000Z', updatedAt: '2026-07-29T09:00:00.000Z' },
+  { id: 'cred-edge-lax', name: 'LAX edge password', type: 'password', username: 'edge', createdAt: '2026-07-05T08:00:00.000Z', updatedAt: '2026-07-28T09:00:00.000Z' },
 ];
 
 export let mockServers: ServerDto[] = [
@@ -139,11 +142,61 @@ export let mockServers: ServerDto[] = [
     'sys.ufw_installed': 'true',
     'mock.package_updates': '2',
   }),
-  server('srv-staging-mad', 'staging-mad-shared', '10.93.5.44', 'cred-staging', true, {
-    'agent.enabled': 'false',
+    server('srv-staging-mad', 'staging-mad-shared', '10.93.5.44', 'cred-staging', true, {
+    'agent.enabled': 'true',
+    'agent.status': 'compatible',
+    'agent.version': '0.9.6',
     'sys.ufw_supported': 'true',
     'sys.ufw_installed': 'false',
+    'sys.memory_total_mb': '8192',
+    'sys.disk_total_gb': '160',
+    'mock.package_updates': '5',
+  }),
+  server('srv-edge-sgp-02', 'edge-sgp-02', '10.8.0.13', 'cred-root-key', true, {
+    'agent.enabled': 'true',
+    'agent.status': 'compatible',
+    'agent.version': '0.9.7',
+    'sys.ufw_supported': 'true',
+    'sys.ufw_installed': 'true',
+    'sys.ufw_active': 'true',
+    'sys.memory_total_mb': '16384',
+    'sys.disk_total_gb': '240',
+    'mock.package_updates': '2',
+  }),
+  server('srv-edge-lax', 'edge-lax-01', '10.18.2.21', 'cred-edge-lax', true, {
+    'agent.enabled': 'true',
+    'agent.status': 'degraded',
+    'agent.last_error': 'report stream delayed by 12m',
+    'agent.version': '0.9.7',
+    'sys.ufw_supported': 'true',
+    'sys.ufw_installed': 'true',
+    'sys.ufw_active': 'true',
+    'sys.memory_total_mb': '16384',
+    'sys.disk_total_gb': '320',
+    'mock.package_updates': '7',
+  }),
+  server('srv-gpu-nrt', 'gpu-nrt-render', '10.31.9.40', 'cred-gpu-lab', true, {
+    'agent.enabled': 'true',
+    'agent.status': 'compatible',
+    'agent.version': '0.9.8-canary',
+    'sys.ufw_supported': 'true',
+    'sys.ufw_installed': 'true',
+    'sys.ufw_active': 'true',
+    'sys.memory_total_mb': '131072',
+    'sys.disk_total_gb': '1920',
+    'sys.gpu_count': '2',
     'mock.package_updates': '4',
+  }),
+  server('srv-backup-fra', 'backup-fra-vault', '10.12.11.8', 'cred-backup-vault', true, {
+    'agent.enabled': 'true',
+    'agent.status': 'compatible',
+    'agent.version': '0.9.7',
+    'sys.ufw_supported': 'true',
+    'sys.ufw_installed': 'true',
+    'sys.ufw_active': 'true',
+    'sys.memory_total_mb': '32768',
+    'sys.disk_total_gb': '4096',
+    'mock.package_updates': '0',
   }),
 ];
 
@@ -260,6 +313,23 @@ function server(id: string, name: string, host: string, credentialId: string, re
   const readonly = credentialId === 'cred-readonly';
   const privileged = reachable && !readonly;
   const packageUpdates = Number(traits['mock.package_updates'] ?? 0);
+  const zone = id.includes('sgp') ? 'ap-southeast-1'
+    : id.includes('hkg') ? 'ap-east-1'
+    : id.includes('nrt') ? 'ap-northeast-1'
+    : id.includes('fra') ? 'eu-central-1'
+    : id.includes('sfo') || id.includes('lax') ? 'us-west-1'
+    : id.includes('iad') ? 'us-east-1'
+    : id.includes('syd') ? 'ap-southeast-2'
+    : id.includes('ams') ? 'eu-west-1'
+    : id.includes('lon') ? 'eu-west-2'
+    : id.includes('mad') ? 'eu-south-2'
+    : 'lab';
+  const notes = id === 'srv-edge-sgp' ? 'Primary ingress node for Singapore workloads.'
+    : id === 'srv-edge-lax' ? 'Americas edge node. Agent reports are currently delayed.'
+    : id === 'srv-gpu-nrt' ? 'Dual-GPU render host reserved for media jobs.'
+    : id === 'srv-backup-fra' ? 'Immutable backup vault; package upgrades are intentionally frozen.'
+    : readonly ? 'Read-only credential intentionally blocks privileged task buttons in the demo.'
+    : '';
   return {
     id,
     name,
@@ -269,17 +339,21 @@ function server(id: string, name: string, host: string, credentialId: string, re
     credentialId,
     dockerHost: 'unix:///var/run/docker.sock',
     traits,
-    variables: {},
-    notes: id === 'srv-edge-sgp' ? 'Primary ingress node for Singapore workloads.' : readonly ? 'Read-only credential intentionally blocks privileged task buttons in the demo.' : '',
-    os: { id: 'debian', versionId: '13', prettyName: 'Debian GNU/Linux 13', supported: reachable },
-    architecture: { os: 'linux', arch: 'amd64', rawMachine: 'x86_64' },
+    variables: {
+      PUBLIC_ADDRESS: host,
+      AVAILABILITY_ZONE: zone,
+      ...(id.includes('gpu') ? { GPU_CLASS: 'l4' } : {}),
+    },
+    notes,
+    os: { id: id.includes('legacy') ? 'ubuntu' : 'debian', versionId: id.includes('legacy') ? '20.04' : '13', prettyName: id.includes('legacy') ? 'Ubuntu 20.04.6 LTS' : 'Debian GNU/Linux 13', supported: reachable && !id.includes('legacy') },
+    architecture: { os: 'linux', arch: id.includes('gpu') ? 'amd64' : 'amd64', rawMachine: 'x86_64' },
     sudo: { passwordless: privileged },
     privilege: { mode: privileged ? 'passwordless_sudo' : 'none', privileged },
     reachable,
     loadAverage: reachable ? `${(0.34 + packageUpdates / 20).toFixed(2)} ${(0.28 + packageUpdates / 25).toFixed(2)} ${(0.24 + packageUpdates / 30).toFixed(2)}` : '',
-    lastCheckedAt: reachable ? '2026-07-21T02:58:00.000Z' : '2026-07-20T22:12:00.000Z',
+    lastCheckedAt: reachable ? '2026-08-01T07:58:00.000Z' : '2026-07-31T22:12:00.000Z',
     lastError,
     createdAt: '2026-07-18T08:00:00.000Z',
-    updatedAt: '2026-07-21T03:00:00.000Z',
+    updatedAt: '2026-08-01T08:00:00.000Z',
   };
 }

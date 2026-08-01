@@ -1,7 +1,7 @@
 # 多语言翻译状态
 
 - `web/src/views/applications/index.vue`、`web/src/components/ui/Dropdown.vue`
-  - 应用文件“新建文本文件 / 上传文件 / 上传文件夹压缩包”、替换、两态下载、字节摘要、设施顶部步骤工作区、资产空态和冲突重载入口已补齐英文与简体中文词条；文件名、路径和后端错误保持运行时原值，kind/MIME 不再作为用户输入展示。
+  - 应用文件和设施资产共用一个上传入口；上传弹窗的文本文件、普通文件、文件夹压缩包类型选择，以及编辑器/文件选择分支、替换、两态下载、字节摘要、应用与设施连续纵向配置区（瀑布流配置）、资产空态和冲突重载入口已补齐英文与简体中文词条；文件名、路径和后端错误保持运行时原值，kind/MIME 不再作为用户输入展示。
 
 - `web/src/components/ui/Dialog.vue`、`web/src/components/ui/ToastProvider.vue`、`web/src/components/shell/AppShell.vue`
   - 对话框关闭、Toast 关闭和主导航区域的可访问名称已接入英文与简体中文词条。
@@ -46,10 +46,10 @@
   - 普通登录改为真实 `/api/v1/auth/login|session|logout` 链路后，登录失败和强制改密提示已补齐英文与简体中文；用户名、后端错误详情和 branding 配置保持实例原值。
 
 - `web/src/views/applications/index.vue`
-  - 应用创建/编辑器重做为顶部步骤工作区，新增配置模式、YAML source/源码模式、Identity/Runtime source/Networking/Storage/Deployment/Files/Assets 面板、源码同步/应用提示、源码暂存校验和空状态文案，已接入英文与简体中文词条；应用名、镜像引用、服务器 ID、域名、Path、文件路径和后端诊断保持实例原值。
+  - 应用创建/编辑器重做为连续纵向配置流，配置区改用基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件等面向任务的名称；YAML 源码、配置检查、变更预览、保存并应用、文件引用名称/下载文件名说明和空状态文案已接入英文与简体中文词条；应用名、镜像引用、服务器 ID、域名、Path、文件路径和后端诊断保持实例原值。
 
 - `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`
-  - 页面接入统一 `SearchInput`、`PaginationBar`、`EditorSectionRail`、`ServerMultiPicker`、`FileUploadButton`、`DownloadButton`、`StatusBadge` 后，新增公共文案 `common.clearSearch`、`common.complete`、`common.error` 以及应用服务器选项说明已补齐英文与简体中文；服务器 ID、任务状态原始值和上传文件名保持实例原值。
+  - 页面接入统一 `SearchInput`、`PaginationBar`、`ServerMultiPicker`、`FileUploadButton`、`DownloadButton`、`StatusBadge` 后，新增公共文案 `common.clearSearch`、`common.complete`、`common.error` 以及应用服务器选项说明已补齐英文与简体中文；应用与设施编辑器在同一连续纵向配置流中展开全部配置区；服务器 ID、任务状态原始值和上传文件名保持实例原值。
 
 - `web/src/views/applications/index.vue`、`web/src/api/facilityApps.ts`
   - 设施应用目录/详情/配置三层信息架构、入口代理设施卡片、设施分类、设施状态和未知设施不可用空态已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；`facilityKind`、服务器 ID、域名、Path、后端诊断和操作状态保持实例原值。
@@ -61,8 +61,8 @@
   - 任务列表分页控件、上一页/下一页和分页摘要已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；任务 ID、操作 ID 和后端日志保持原始文本。
 
 - `web/src/views/applications/`（应用/设施编辑体验专项）
-  - 应用创建/编辑器的分区导航、完成度、结构化变量/环境/端口/挂载/反向代理对话框、YAML 同步/应用、保存阶段、创建检查与变更摘要文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条。
-  - 设施入口网关配置的网关节点、域名组、Path 类型、静态资产引用、Panel 入口、变更摘要、校验错误和对话框文案已接入英文与简体中文词条；应用名、服务器 ID、域名、Path、镜像引用、后端诊断和日志正文保持实例原值。
+  - 应用创建/编辑器的连续纵向配置流、基本信息/运行设置/网络与访问/环境与存储/部署目标/应用文件标题、结构化变量/环境/端口/挂载/反向代理对话框、YAML 生成/应用、配置检查、变更预览、保存并应用和变更摘要文案已接入 `web/src/i18n/index.ts` 的英文与简体中文词条。
+  - 设施入口网关配置的网关服务器、域名和路由、Path 类型、静态文件引用、Panel 访问入口、变更摘要、配置检查和对话框文案已接入英文与简体中文词条；静态文件的引用名称与下载文件名已分别说明，应用名、服务器 ID、域名、Path、镜像引用、后端诊断和日志正文保持实例原值。
 
 - `web/src/views/tasks/`、`web/src/views/settings/`、`web/src/views/maintenance/`、`web/src/views/debug/`（v4 阶段 7 任务 + 设置 + 维护 + 诊断页面族）
   - 任务操作组、状态筛选、步骤/日志/错误、重试/立即运行，设置分区保存、备份导出、还原预检/确认，维护登录、阶段、能力按钮、下载入口，以及诊断 Runtime/Tasks/Database tab、暂停/恢复、stale 快照提示、任务运行时指标和任务定义表格列名已接入 `web/src/i18n/index.ts` 的英文与简体中文词条；任务类型、并发策略、数据库表名、日志正文和后端原始诊断保持实例原值。
@@ -290,7 +290,16 @@
 ## Backend Error Translation Notes
 
 - `container_managed_by_application` currently returns its English source message. Add Simplified Chinese coverage when container resource action errors are next wired through backend i18n.
+# 2026-08-01 shared asset upload dialog
+
+- Application files and facility static assets now expose one upload button. The dialog selects text, regular file, or folder archive; text selection shows the editor while the other types show the shared file upload control. Existing text assets open the same dialog in fixed editor mode. English and Simplified Chinese labels are wired through `web/src/i18n/index.ts`.
+
 # 2026-07-30 facility text assets
 
 - Facility create-text, upload-file, upload-archive, edit, loading, and save controls reuse existing English and Simplified Chinese translation keys. Asset names, filenames, and backend diagnostics remain instance values.
 - The facility text dialog revision-conflict recovery action has matching English and Simplified Chinese text and explicitly states that unsaved text will be discarded.
+
+# 2026-07-31 facility and application file names
+
+- Application files and facility static assets now share the `AssetFileManager` interaction and multipart/DELETE request helpers; no new user-facing translation keys were needed. Facility types remain fixed adapters without a generic facility list API.
+- Application files and facility static assets use scope-local `name` identity rather than path semantics. The duplicate facility asset name error and application file name validation are covered by Simplified Chinese backend translations, and the editor labels use Name/名称.

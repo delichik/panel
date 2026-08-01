@@ -202,7 +202,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS application_edit_session_files (
 			session_id TEXT NOT NULL,
 			file_key TEXT NOT NULL,
-			path TEXT NOT NULL,
+			name TEXT NOT NULL,
 			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
 			content_type TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0,
@@ -212,7 +212,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			PRIMARY KEY(session_id,file_key),
-			UNIQUE(session_id,path),
+			UNIQUE(session_id,name),
 			FOREIGN KEY(session_id) REFERENCES application_edit_sessions(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS application_edit_session_operations (
@@ -229,7 +229,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 		`CREATE TABLE IF NOT EXISTS application_files (
 			id TEXT PRIMARY KEY,
 			application_id TEXT NOT NULL,
-			path TEXT NOT NULL,
+			name TEXT NOT NULL,
 			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
 			content_type TEXT NOT NULL DEFAULT '',
 			size INTEGER NOT NULL DEFAULT 0,
@@ -237,7 +237,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			content BLOB,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
-			UNIQUE(application_id, path),
+			UNIQUE(application_id, name),
 			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
 		)`,
 		`CREATE TABLE IF NOT EXISTS application_instances (
@@ -661,6 +661,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}); err != nil {
 		return err
 	}
+	if err := s.migrateApplicationFileNames(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureAppColumns(ctx, "application_reconcile_states", map[string]string{
 		"reconcile_failures":       "INTEGER NOT NULL DEFAULT 0",
 		"reconcile_next_run_at":    "TEXT NOT NULL DEFAULT ''",
@@ -708,6 +711,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 		"content_sha256": "TEXT NOT NULL DEFAULT ''",
 		"content_mode":   "TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary'))",
 	}); err != nil {
+		return err
+	}
+	if err := s.migrateFacilityAssetNames(ctx); err != nil {
 		return err
 	}
 	if err := s.ensureAppColumns(ctx, "fail2ban_configs", map[string]string{
@@ -1283,6 +1289,107 @@ func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+func (s *Store) migrateApplicationFileNames(ctx context.Context) error {
+	for _, table := range []string{"application_files", "application_edit_session_files"} {
+		columns, err := databaseTableColumns(ctx, s.appDB, table)
+		if err != nil {
+			return err
+		}
+		if columns["name"] || !columns["path"] {
+			continue
+		}
+		if _, err := s.appDB.ExecContext(ctx, `ALTER TABLE `+table+` RENAME COLUMN path TO name`); err != nil {
+			return fmt.Errorf("rename %s.path to name: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) migrateFacilityAssetNames(ctx context.Context) error {
+	tx, err := s.appDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if err := makeFacilityAssetNamesUnique(ctx, tx, "facility_static_assets", "id", ""); err != nil {
+		return err
+	}
+	if err := makeFacilityAssetNamesUnique(ctx, tx, "facility_edit_session_assets", "asset_key", "session_id"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_facility_static_assets_name ON facility_static_assets(name)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_facility_edit_session_assets_name ON facility_edit_session_assets(session_id,name)`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func makeFacilityAssetNamesUnique(ctx context.Context, tx *sql.Tx, table, idColumn, scopeColumn string) error {
+	query := `SELECT ` + idColumn + `,name,filename`
+	if scopeColumn != "" {
+		query += `,` + scopeColumn
+	}
+	query += ` FROM ` + table + ` ORDER BY created_at,` + idColumn
+	rows, err := tx.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	type assetNameRow struct{ id, name, filename, scope string }
+	items := []assetNameRow{}
+	for rows.Next() {
+		var item assetNameRow
+		if scopeColumn == "" {
+			err = rows.Scan(&item.id, &item.name, &item.filename)
+		} else {
+			err = rows.Scan(&item.id, &item.name, &item.filename, &item.scope)
+		}
+		if err != nil {
+			rows.Close()
+			return err
+		}
+		items = append(items, item)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	used := map[string]map[string]struct{}{}
+	for _, item := range items {
+		if used[item.scope] == nil {
+			used[item.scope] = map[string]struct{}{}
+		}
+		base := strings.TrimSpace(item.name)
+		if base == "" {
+			base = strings.TrimSpace(item.filename)
+		}
+		if base == "" {
+			base = item.id
+		}
+		name := base
+		for suffix := 2; ; suffix++ {
+			if _, exists := used[item.scope][name]; !exists {
+				break
+			}
+			name = fmt.Sprintf("%s-%d", base, suffix)
+		}
+		used[item.scope][name] = struct{}{}
+		if name != item.name {
+			update := `UPDATE ` + table + ` SET name=? WHERE ` + idColumn + `=?`
+			args := []any{name, item.id}
+			if scopeColumn != "" {
+				update += ` AND ` + scopeColumn + `=?`
+				args = append(args, item.scope)
+			}
+			if _, err := tx.ExecContext(ctx, update, args...); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Store) migrateCertificateScopeConstraint(ctx context.Context) error {

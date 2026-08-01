@@ -18,7 +18,7 @@ type FacilityAssetDownload struct {
 	Root        string
 }
 
-func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, assetKey string) (FacilityAssetDownload, error) {
+func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, assetRef string) (FacilityAssetDownload, error) {
 	record, err := s.loadFacilityEditSession(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
 		return FacilityAssetDownload{}, err
@@ -28,7 +28,13 @@ func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, a
 	}
 	var result FacilityAssetDownload
 	var sourceID, blobDir string
-	err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename,source_asset_id,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key=? AND state='ready'`, record.ID, strings.TrimSpace(assetKey)).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename, &sourceID, &blobDir)
+	ref := strings.TrimSpace(assetRef)
+	err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename,source_asset_id,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND name=? AND state='ready'`, record.ID, ref).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename, &sourceID, &blobDir)
+	if err == sql.ErrNoRows {
+		// Legacy edit sessions exposed the opaque asset key. Keep reads working
+		// while new clients address assets by name.
+		err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename,source_asset_id,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key=? AND state='ready'`, record.ID, ref).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename, &sourceID, &blobDir)
+	}
 	if err == sql.ErrNoRows {
 		return FacilityAssetDownload{}, panelerr.NotFound("facility_edit_session_asset")
 	}
@@ -45,20 +51,17 @@ func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, a
 	return validateFacilityAssetDownload(result)
 }
 
-func (s *Service) GetStaticAssetDownload(ctx context.Context, assetID string) (FacilityAssetDownload, error) {
-	assetID = strings.TrimSpace(assetID)
-	if assetID == "" || filepath.Base(assetID) != assetID {
-		return FacilityAssetDownload{}, panelerr.NotFound("facility_static_asset")
-	}
-	var result FacilityAssetDownload
-	err := s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename FROM facility_static_assets WHERE id=?`, assetID).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename)
-	if err == sql.ErrNoRows {
-		return FacilityAssetDownload{}, panelerr.NotFound("facility_static_asset")
-	}
+func (s *Service) GetStaticAssetDownload(ctx context.Context, assetRef string) (FacilityAssetDownload, error) {
+	asset, err := s.getStaticAssetByRef(ctx, assetRef)
 	if err != nil {
 		return FacilityAssetDownload{}, err
 	}
-	result.Root = s.staticAssetContentDir(assetID)
+	var result FacilityAssetDownload
+	err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename FROM facility_static_assets WHERE id=?`, asset.ID).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename)
+	if err != nil {
+		return FacilityAssetDownload{}, err
+	}
+	result.Root = s.staticAssetContentDir(asset.ID)
 	return validateFacilityAssetDownload(result)
 }
 

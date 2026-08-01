@@ -45,7 +45,7 @@ func (s *Service) BeginSaveSession(ctx context.Context, in BeginSaveSessionInput
 	if baseUpdatedAt.IsZero() {
 		baseUpdatedAt = current.UpdatedAt
 	}
-	assets, err := s.ListStaticAssets(ctx)
+	assets, err := s.listStaticAssets(ctx)
 	if err != nil {
 		return SaveSessionResult{}, err
 	}
@@ -94,11 +94,25 @@ func (s *Service) UploadSaveSessionAsset(ctx context.Context, sessionID string, 
 	if len(in.Content) == 0 {
 		return StaticAsset{}, panelerr.Validation("facility_static_asset_file_required", "Static asset file is required")
 	}
-	assetID := strings.TrimSpace(in.AssetID)
-	if assetID == "" {
+	assetRef := strings.TrimSpace(firstNonEmpty(in.AssetName, in.AssetID))
+	assetID := assetRef
+	if assetRef == "" {
 		assetID = id.New("facility_static")
 	} else if _, ok := session.Assets[assetID]; !ok {
-		return StaticAsset{}, panelerr.NotFound("static asset")
+		for existingID, existing := range session.Assets {
+			if existing != nil && existing.Asset.Name == assetRef {
+				assetID = existingID
+				break
+			}
+		}
+		if _, ok := session.Assets[assetID]; !ok {
+			return StaticAsset{}, panelerr.NotFound("static asset")
+		}
+	}
+	for existingID, existing := range session.Assets {
+		if existingID != assetID && existing != nil && existing.Asset.Name == name {
+			return StaticAsset{}, panelerr.Validation("facility_static_asset_name_duplicate", "Static asset name must be unique within the facility")
+		}
 	}
 	filename := safeAssetFilename(in.FileName)
 	if filename == "" {
@@ -144,12 +158,21 @@ func (s *Service) DeleteSaveSessionAsset(ctx context.Context, sessionID string, 
 	if err != nil {
 		return err
 	}
-	assetID := strings.TrimSpace(in.AssetID)
-	if assetID == "" {
+	assetRef := strings.TrimSpace(firstNonEmpty(in.AssetName, in.AssetID))
+	if assetRef == "" {
 		return panelerr.NotFound("static asset")
 	}
 	s.sessionMu.Lock()
+	assetID := assetRef
 	staged := session.Assets[assetID]
+	if staged == nil {
+		for existingID, existing := range session.Assets {
+			if existing != nil && existing.Asset.Name == assetRef {
+				assetID, staged = existingID, existing
+				break
+			}
+		}
+	}
 	if staged != nil {
 		delete(session.Assets, assetID)
 		session.UpdatedAt = time.Now().UTC()
@@ -325,13 +348,29 @@ func validateSessionAssetReferences(cfg ReverseProxyConfig, assets map[string]*s
 			if routePath.SourceType != StaticSourceUploadedFile && routePath.SourceType != StaticSourceUploadedBundle {
 				continue
 			}
-			staged := assets[routePath.AssetID]
+			staged := stagedFacilityAssetByName(assets, routePath.AssetName)
+			if staged == nil && routePath.AssetID != "" {
+				staged = assets[routePath.AssetID]
+			}
 			if staged == nil {
 				return panelerr.Validation("facility_static_site_asset_required", "Static site asset is required")
 			}
 			if staged.Asset.Kind != routePath.SourceType {
 				return panelerr.Validation("facility_static_site_asset_kind_invalid", "Static site asset kind does not match its source")
 			}
+		}
+	}
+	return nil
+}
+
+func stagedFacilityAssetByName(assets map[string]*stagedFacilityAsset, name string) *stagedFacilityAsset {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	for _, staged := range assets {
+		if staged != nil && staged.Asset.Name == name {
+			return staged
 		}
 	}
 	return nil
@@ -349,7 +388,7 @@ func (s *Service) installSessionAssets(session *facilitySaveSession) (func(), er
 	if err := os.MkdirAll(backupDir, 0o700); err != nil {
 		return nil, err
 	}
-	existing, err := s.ListStaticAssets(context.Background())
+	existing, err := s.listStaticAssets(context.Background())
 	if err != nil {
 		return nil, err
 	}

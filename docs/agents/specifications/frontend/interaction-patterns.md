@@ -22,6 +22,7 @@
 - `ServerMultiPicker`：用于应用部署、设施覆盖节点、批量任务等服务器多选。支持禁用 id 与禁用原因，选中态、禁用态和能力标签保持一致。
 - `MasterList`：用于主从布局左侧列表容器，统一选中态、空态、加载骨架、滚动边界和 item slot。详情区标题与动作应由页面自己的 detail header 承载。
 - `EditorSectionRail`：用于编辑器左侧分区导航。支持 complete、error、dirty badge 和二级 child item list；编辑器页面不得再自造不同视觉的分区 rail，badge 文案由页面 i18n 传入。
+- `AssetFileManager`：用于应用文件和设施静态资产这两类同构的文件工作区。顶部只提供一个上传入口，弹窗内选择文本文件、普通文件或文件夹归档；文本类型显示编辑器，普通文件和归档显示文件选择控件。组件还统一提供文本编辑、替换、下载、删除、错误行展示和并发冲突重载；页面只通过 `AssetFileAdapter` 注入领域 API 和文案。`items[].key` 必须是应用内或设施内唯一的 `name`，不把物理 `id`、`fileKey` 或 `assetKey` 暴露给组件。
 
 ## 使用规则
 
@@ -29,11 +30,12 @@
 2. 组件只承载通用交互与视觉，不直接绑定业务 API、路由或 i18n key。业务文案从页面传入，并按 i18n 规范维护；新增页面替换时不得依赖组件内英文默认值。
 3. `StatusBadge` 的 tone map 是默认规则；业务状态显示文案仍由页面翻译或格式化后传入 `label`。
 4. 上传、下载、确认对话框只负责交互入口；请求、错误摘要、任务入口和两阶段反馈由业务页面按照 [interaction-model.md](interaction-model.md) 实现。
-5. 中大屏布局中，`MasterList`、`ServerContextSelector`、`EditorSectionRail` 必须放在模板提供的内部滚动区域，不得恢复页面级滚动。
+5. 应用文件与设施静态资产如果具备相同的上传、替换、下载、删除和文本编辑行为，必须复用 `AssetFileManager`，不得在页面内复制另一套文件行和弹窗；领域差异只能放在 adapter/API 中。
+6. 中大屏布局中，`MasterList`、`ServerContextSelector`、`EditorSectionRail`、`AssetFileManager` 必须放在模板提供的内部滚动区域，不得恢复页面级滚动。
 
 ## 当前接入记录
 
 - `web/src/views/tasks/index.vue`：任务搜索、分页和任务状态已接入 `SearchInput`、`PaginationBar`、`StatusBadge`。
 - `web/src/views/application-operations/index.vue` 与 `web/src/views/system-events/index.vue`：运行事件列表筛选、分页、状态、首次加载表格骨架和详情可用性提示已接入 `SearchInput`、`Select`、`Table`、`PaginationBar`、`StatusBadge`、`Tooltip` 与 `Dialog`。
-- `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施编辑分区导航、部署/网关/源站服务器多选、持久化数据下载/恢复、应用归档上传和设施静态资产上传已接入统一 primitives/patterns。
+- `web/src/views/applications/index.vue`：应用搜索、状态、应用/设施连续纵向配置流、部署/网关/源站服务器多选、持久化数据下载/恢复，以及应用文件和设施静态资产共用的 `AssetFileManager` 已接入统一 primitives/patterns。
 - `web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue`：服务器上下文选择已接入 `ServerContextSelector` 及其加载骨架，页面不得再在同一上下文区域叠加 Select 下拉。

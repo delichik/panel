@@ -25,7 +25,7 @@ func (h *Handler) DownloadFacilityEditAsset(w http.ResponseWriter, r *http.Reque
 		httpx.Error(w, panelerr.New(http.StatusNotImplemented, "facility_asset_download_unavailable", "Facility asset downloads are not available"))
 		return
 	}
-	result, err := service.GetFacilityEditAssetDownload(r.Context(), r.PathValue("id"), r.PathValue("assetKey"))
+	result, err := service.GetFacilityEditAssetDownload(r.Context(), r.PathValue("id"), r.PathValue("assetName"))
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -39,7 +39,7 @@ func (h *Handler) DownloadStaticAsset(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.New(http.StatusNotImplemented, "facility_asset_download_unavailable", "Facility asset downloads are not available"))
 		return
 	}
-	result, err := service.GetStaticAssetDownload(r.Context(), r.PathValue("assetId"))
+	result, err := service.GetStaticAssetDownload(r.Context(), r.PathValue("assetName"))
 	if err != nil {
 		httpx.Error(w, err)
 		return

@@ -19,7 +19,7 @@ func (h *Handler) GetEditSessionFile(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.New(http.StatusNotImplemented, "application_edit_sessions_unavailable", "Application edit sessions are not available"))
 		return
 	}
-	result, err := service.GetEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")))
+	result, err := service.GetEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r))
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -33,12 +33,12 @@ func (h *Handler) DownloadEditSessionFile(w http.ResponseWriter, r *http.Request
 		httpx.Error(w, panelerr.New(http.StatusNotImplemented, "application_edit_sessions_unavailable", "Application edit sessions are not available"))
 		return
 	}
-	result, err := service.GetEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")))
+	result, err := service.GetEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	name := result.Path
+	name := result.Name
 	if result.Kind == ApplicationFileKindArchive && strings.TrimSpace(result.ContentType) != "" {
 		name = result.ContentType
 	}

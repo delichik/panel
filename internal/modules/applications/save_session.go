@@ -36,7 +36,7 @@ type saveSession struct {
 type stagedFile struct {
 	ID            string
 	ApplicationID string
-	Path          string
+	Name          string
 	Kind          string
 	ContentType   string
 	Size          int64
@@ -73,7 +73,7 @@ func (s *Service) BeginSaveSession(ctx context.Context, in BeginSaveSessionInput
 			return SaveSessionResult{}, err
 		}
 		for _, file := range files {
-			staged, err := s.stageFileBytes(session, file.Path, file.Kind, file.ContentType, file.Content, file.CreatedAt)
+			staged, err := s.stageFileBytes(session, file.Name, file.Kind, file.ContentType, file.Content, file.CreatedAt)
 			if err != nil {
 				return SaveSessionResult{}, err
 			}
@@ -98,7 +98,7 @@ func (s *Service) UploadSaveSessionFile(ctx context.Context, sessionID string, i
 	if err != nil {
 		return ApplicationFile{}, err
 	}
-	staged, err := s.stageFileBytes(session, in.Path, in.Kind, in.ContentType, content, time.Now().UTC())
+	staged, err := s.stageFileBytes(session, in.Name, in.Kind, in.ContentType, content, time.Now().UTC())
 	if err != nil {
 		return ApplicationFile{}, err
 	}
@@ -118,17 +118,14 @@ func (s *Service) UploadSaveSessionArchive(ctx context.Context, sessionID string
 	if len(in.Content) == 0 {
 		return nil, panelerr.Validation("application_file_content_invalid", "file content is required")
 	}
-	basePath, err := normalizeApplicationArchiveBasePath(in.BasePath)
+	name, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.BasePath))
 	if err != nil {
 		return nil, err
-	}
-	if basePath == "" {
-		return nil, panelerr.Validation("application_file_path_invalid", "archive path is required")
 	}
 	if _, err := extractApplicationFileArchive(bytes.NewReader(in.Content), int64(len(in.Content)), in.FileName); err != nil {
 		return nil, err
 	}
-	staged, err := s.stageFileBytes(session, basePath, ApplicationFileKindArchive, strings.TrimSpace(in.FileName), in.Content, time.Now().UTC())
+	staged, err := s.stageFileBytes(session, name, ApplicationFileKindArchive, strings.TrimSpace(in.FileName), in.Content, time.Now().UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -142,14 +139,14 @@ func (s *Service) DeleteSaveSessionFile(ctx context.Context, sessionID string, i
 	if err != nil {
 		return err
 	}
-	targetPath, err := normalizeApplicationFilePath(in.Path)
+	name, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.Path))
 	if err != nil {
 		return err
 	}
 	s.sessionMu.Lock()
-	staged := session.Files[targetPath]
+	staged := session.Files[name]
 	if staged != nil {
-		delete(session.Files, targetPath)
+		delete(session.Files, name)
 		session.UpdatedAt = time.Now().UTC()
 	}
 	s.sessionMu.Unlock()
@@ -183,7 +180,7 @@ func (s *Service) CommitSaveSession(ctx context.Context, sessionID string) (Appl
 }
 
 func decodeApplicationFileInput(in FileSaveInput) ([]byte, error) {
-	if _, err := normalizeApplicationFilePath(in.Path); err != nil {
+	if _, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.Path)); err != nil {
 		return nil, err
 	}
 	kind := strings.TrimSpace(in.Kind)
@@ -224,8 +221,8 @@ func (s *Service) discardSaveSession(sessionID string) {
 	}
 }
 
-func (s *Service) stageFileBytes(session *saveSession, targetPath, kind, contentType string, content []byte, createdAt time.Time) (*stagedFile, error) {
-	targetPath, err := normalizeApplicationFilePath(targetPath)
+func (s *Service) stageFileBytes(session *saveSession, name, kind, contentType string, content []byte, createdAt time.Time) (*stagedFile, error) {
+	name, err := normalizeApplicationFileName(name)
 	if err != nil {
 		return nil, err
 	}
@@ -241,7 +238,7 @@ func (s *Service) stageFileBytes(session *saveSession, targetPath, kind, content
 	staged := &stagedFile{
 		ID:            id.New("afile"),
 		ApplicationID: session.ApplicationID,
-		Path:          targetPath,
+		Name:          name,
 		Kind:          kind,
 		ContentType:   strings.TrimSpace(contentType),
 		Size:          int64(len(content)),
@@ -254,8 +251,8 @@ func (s *Service) stageFileBytes(session *saveSession, targetPath, kind, content
 		return nil, err
 	}
 	s.sessionMu.Lock()
-	old := session.Files[targetPath]
-	session.Files[targetPath] = staged
+	old := session.Files[name]
+	session.Files[name] = staged
 	session.UpdatedAt = now
 	session.ExpiresAt = now.Add(30 * time.Minute)
 	s.sessionMu.Unlock()
@@ -315,7 +312,7 @@ func (session *saveSession) result() SaveSessionResult {
 	for _, staged := range session.Files {
 		files = append(files, staged.applicationFile(nil))
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
 	return SaveSessionResult{
 		ID:            session.ID,
 		ApplicationID: session.ApplicationID,
@@ -333,7 +330,7 @@ func (session *saveSession) applicationFiles() ([]ApplicationFile, error) {
 		}
 		files = append(files, staged.applicationFile(content))
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
 	return files, nil
 }
 
@@ -345,7 +342,8 @@ func (file *stagedFile) applicationFile(content []byte) ApplicationFile {
 	return ApplicationFile{
 		ID:            file.ID,
 		ApplicationID: file.ApplicationID,
-		Path:          file.Path,
+		Name:          file.Name,
+		Path:          file.Name,
 		Kind:          file.Kind,
 		ContentType:   file.ContentType,
 		Size:          file.Size,
@@ -363,6 +361,10 @@ func normalizeApplicationFilesForSave(appID string, files []ApplicationFile, now
 	}
 	out := make([]ApplicationFile, 0, len(files))
 	for _, file := range files {
+		if file.Name == "" {
+			file.Name = file.Path
+		}
+		file.Path = file.Name
 		if file.ID == "" {
 			file.ID = id.New("afile")
 		}
@@ -532,16 +534,4 @@ func cleanApplicationArchivePath(value string) (string, bool) {
 		return "", false
 	}
 	return value, true
-}
-
-func normalizeApplicationArchiveBasePath(value string) (string, error) {
-	value = strings.Trim(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/"), "/")
-	if value == "" {
-		return "", nil
-	}
-	normalized, err := normalizeApplicationFilePath(value + "/.archive-base")
-	if err != nil {
-		return "", err
-	}
-	return path.Dir(normalized), nil
 }

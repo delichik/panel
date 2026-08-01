@@ -1,6 +1,6 @@
 import type { ContainerDto, ImageDto, ImageList, NetworkDto, PackageUpdateList, VolumeDto } from '@/types/resources';
 
-const now = '2026-07-21T03:00:00.000Z';
+const now = '2026-08-01T03:00:00.000Z';
 
 const packages: Record<string, PackageUpdateList> = {
   'srv-edge-sgp': {
@@ -232,7 +232,7 @@ export function mockDeleteContainer(serverId: string, containerId: string) {
 
 export function mockContainerLogs(serverId: string, containerId: string) {
   if (!containers[serverId]?.some((item) => item.id === containerId)) return null;
-  return { containerId, logs: Array.from({ length: 80 }, (_, index) => `[2026-07-21T03:${String(index).padStart(2, '0')}:00Z] request completed from edge gateway with trace=${containerId}-${index}`).join('\n') };
+  return { containerId, logs: Array.from({ length: 80 }, (_, index) => `[2026-08-01T03:${String(index).padStart(2, '0')}:00Z] request completed from edge gateway with trace=${containerId}-${index}`).join('\n') };
 }
 
 export function mockImages(serverId: string) {
@@ -329,35 +329,65 @@ function image(id: string, reference: string, updateAvailable: boolean, inUse: b
 }
 
 function defaultPackages(serverId: string): PackageUpdateList {
-  const count = serverId.includes('legacy') ? 9 : serverId.includes('media') ? 6 : serverId.includes('staging') ? 4 : 2;
+  const count = serverId.includes('legacy') ? 11
+    : serverId.includes('worker') ? 8
+    : serverId.includes('media') || serverId.includes('gpu') ? 6
+    : serverId.includes('staging') || serverId.includes('lax') ? 5
+    : serverId.includes('backup') ? 0
+    : 3;
   return {
     serverId,
     lastRefreshedAt: now,
     refreshing: false,
     updates: Array.from({ length: count }, (_, index) => ({
-      name: `${serverId.replace(/^srv-/, '')}-package-${index + 1}`,
+      name: index === 0 && serverId.includes('legacy') ? 'linux-image-generic'
+        : index === 1 && count > 3 ? 'openssl'
+        : `${serverId.replace(/^srv-/, '')}-package-${index + 1}`,
       installedVersion: `1.${index}.0`,
-      candidateVersion: `1.${index}.1`,
+      candidateVersion: `1.${index + 1}.0`,
       source: index % 2 ? 'debian' : 'debian-security',
     })),
   };
 }
 
 function defaultContainers(serverId: string): ContainerDto[] {
-  if (serverId.includes('media')) return [
-    container(`ctr-${serverId}-transcoder`, 'transcoder-worker', 'ghcr.io/example/transcoder:2.4.0', 'running', false),
-    container(`ctr-${serverId}-failed-job`, 'failed-transcode-job', 'ghcr.io/example/transcoder:2.3.1', 'exited', false),
+  if (serverId.includes('media') || serverId.includes('gpu')) return [
+    container(`ctr-${serverId}-transcoder`, 'transcoder-worker', 'ghcr.io/example/transcoder:0.12.3', 'running', false),
+    container(`ctr-${serverId}-failed-job`, 'failed-transcode-job', 'ghcr.io/example/transcoder:0.12.1', 'exited', false),
+    container(`ctr-${serverId}-sidecar`, 'ffmpeg-probe', 'ghcr.io/example/ffmpeg-probe:1.0.2', 'running', false),
   ];
   if (serverId.includes('staging')) return [
     container(`ctr-${serverId}-preview`, 'preview-service', 'nginx:1.28-alpine', 'running', false),
+    container(`ctr-${serverId}-mailhog`, 'mailhog', 'mailhog/mailhog:v1.0.1', 'running', false),
+  ];
+  if (serverId.includes('backup')) return [
+    container(`ctr-${serverId}-restic`, 'restic-sidecar', 'ghcr.io/example/restic:0.17.3', 'exited', false),
+    container(`ctr-${serverId}-agent`, 'panel-agent-helper', 'ghcr.io/example/panel-agent-helper:0.9.7', 'running', false),
+  ];
+  if (serverId.includes('cache')) return [
+    container(`ctr-${serverId}-redis`, 'panel-redis-sidecar', 'redis:7.4-alpine', 'running', false),
+    container(`ctr-${serverId}-exporter`, 'redis-exporter', 'oliver006/redis_exporter:v1.66.0', 'running', false),
+  ];
+  if (serverId.includes('db')) return [
+    container(`ctr-${serverId}-postgres`, 'postgres-primary', 'postgres:16.4', 'running', false),
+    container(`ctr-${serverId}-exporter`, 'postgres-exporter', 'prometheuscommunity/postgres-exporter:v0.15.0', 'running', false),
+    container(`ctr-${serverId}-old`, 'old-pg-upgrade-shell', 'debian:12-slim', 'exited', false),
   ];
   return [
     container(`ctr-${serverId}-agent`, 'panel-agent-helper', 'ghcr.io/example/panel-agent-helper:0.9.7', 'running', false),
     container(`ctr-${serverId}-old`, 'old-maintenance-shell', 'debian:12-slim', 'exited', false),
+    ...(serverId.includes('edge') || serverId.includes('api') ? [container(`ctr-${serverId}-gateway-helper`, 'gateway-helper', 'ghcr.io/example/gateway-helper:1.2.0', 'running', false)] : []),
   ];
 }
 
 function defaultImages(serverId: string): ImageList {
+  const extras = serverId.includes('gpu') || serverId.includes('media')
+    ? [image(`img-${serverId}-transcoder`, 'ghcr.io/example/transcoder:0.12.3', true, true, ['app-media'])]
+    : serverId.includes('cache')
+      ? [image(`img-${serverId}-redis`, 'redis:7.4-alpine', false, true, ['app-cache-sidecar'])]
+      : serverId.includes('api') || serverId.includes('edge')
+        ? [image(`img-${serverId}-storefront`, 'ghcr.io/example/storefront:1.9.0', true, true, ['app-storefront'])]
+        : [];
   return {
     serverId,
     lastRefreshedAt: now,
@@ -366,6 +396,7 @@ function defaultImages(serverId: string): ImageList {
       image(`img-${serverId}-agent`, 'ghcr.io/example/panel-agent-helper:0.9.7', false, true, []),
       image(`img-${serverId}-base`, 'debian:12-slim', true, true, []),
       image(`img-${serverId}-unused`, 'alpine:3.20', false, false, []),
+      ...extras,
     ],
   };
 }

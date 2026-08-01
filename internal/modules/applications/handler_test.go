@@ -77,7 +77,7 @@ func TestHandlerCreateApplication(t *testing.T) {
 }
 
 func TestHandlerApplicationFiles(t *testing.T) {
-	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", ApplicationID: "app-1", Path: "config/app.conf", Kind: "template"}}}
+	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", ApplicationID: "app-1", Name: "config/app.conf", Kind: "template"}}}
 	handler := NewHandler(fake)
 
 	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/files", nil)
@@ -90,8 +90,8 @@ func TestHandlerApplicationFiles(t *testing.T) {
 		t.Fatalf("get file status=%d body=%s", rec.Code, rec.Body.String())
 	}
 
-	rec = serveTestRoute(handler, http.MethodPost, "/api/v1/applications/app-1/files", bytes.NewBufferString(`{"path":"config/app.conf","kind":"template","contentBase64":"aGVsbG8="}`))
-	if rec.Code != http.StatusOK || fake.fileInput.Path != "config/app.conf" || fake.fileInput.Kind != "template" {
+	rec = serveTestRoute(handler, http.MethodPost, "/api/v1/applications/app-1/files", bytes.NewBufferString(`{"name":"config/app.conf","kind":"template","contentBase64":"aGVsbG8="}`))
+	if rec.Code != http.StatusOK || fake.fileInput.Name != "config/app.conf" || fake.fileInput.Kind != "template" {
 		t.Fatalf("save file status=%d input=%#v body=%s", rec.Code, fake.fileInput, rec.Body.String())
 	}
 
@@ -118,7 +118,7 @@ func TestHandlerUploadsAndDownloadsEditSessionBinary(t *testing.T) {
 	_, _ = file.Write([]byte("binary-content"))
 	_ = writer.WriteField("revision", "1")
 	_ = writer.WriteField("clientOperationId", "upload-binary")
-	_ = writer.WriteField("path", "assets/logo.png")
+	_ = writer.WriteField("name", "logo")
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -223,11 +223,11 @@ func TestHandlerRestorePersistentData(t *testing.T) {
 }
 
 func TestHandlerUploadSaveSessionArchive(t *testing.T) {
-	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", Path: "public/index.html", Kind: "binary"}}}
+	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", Name: "site", Kind: "binary"}}}
 	handler := NewHandler(fake)
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
-	_ = writer.WriteField("basePath", "public")
+	_ = writer.WriteField("name", "site")
 	_ = writer.WriteField("kind", "binary")
 	part, err := writer.CreateFormFile("file", "site.zip")
 	if err != nil {
@@ -245,7 +245,7 @@ func TestHandlerUploadSaveSessionArchive(t *testing.T) {
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 	mux.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK || fake.sessionID != "asave-1" || fake.fileArchiveInput.BasePath != "public" || fake.fileArchiveInput.Kind != "binary" || string(fake.fileArchiveInput.Content) != "zip" {
+	if rec.Code != http.StatusOK || fake.sessionID != "asave-1" || fake.fileArchiveInput.Name != "site" || fake.fileArchiveInput.Kind != "binary" || string(fake.fileArchiveInput.Content) != "zip" {
 		t.Fatalf("archive status=%d session=%q input=%#v body=%s", rec.Code, fake.sessionID, fake.fileArchiveInput, rec.Body.String())
 	}
 }

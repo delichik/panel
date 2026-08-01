@@ -2,27 +2,6 @@ import type { AnyAccessConfig, ApplicationEditPreviewResult, ApplicationRuntime,
 
 export type StaticSourceType = 'host_path' | 'uploaded_file' | 'uploaded_bundle';
 export type StaticRuleType = 'static' | 'redirect' | 'proxy_pass';
-export type FacilityAppKind = 'reverse-proxy';
-
-export type FacilityAppStatus = 'available' | 'degraded' | 'unavailable';
-
-export interface FacilityAppSummary {
-  kind: FacilityAppKind;
-  titleKey: string;
-  descriptionKey: string;
-  categoryKey: string;
-  status: FacilityAppStatus;
-  updatedAt?: string;
-  operationStatus?: string;
-  lastError?: string;
-}
-
-export interface FacilityAppDetail {
-  kind: FacilityAppKind;
-  summary: FacilityAppSummary;
-  reverseProxy?: ReverseProxyConfig;
-}
-
 export interface PanelEntry {
   enabled: boolean;
   serverId?: string;
@@ -34,6 +13,8 @@ export interface FacilityRoutePath {
   ruleType?: StaticRuleType | string;
   rootPath?: string;
   sourceType: StaticSourceType | string;
+  assetName?: string;
+  /** @deprecated Only accepted while reading pre-assetName drafts. */
   assetId?: string;
   redirectUrl?: string;
   redirectCode?: number;
@@ -50,7 +31,6 @@ export interface FacilityRouteDomain {
 }
 
 export interface StaticAsset {
-  id: string;
   name: string;
   kind: string;
   contentMode: 'text' | 'binary';
@@ -107,8 +87,6 @@ export interface ReverseProxySaveInput {
 }
 
 export interface FacilityEditAsset {
-  assetKey: string;
-  sourceAssetId?: string;
   name: string;
   kind: string;
   contentMode: 'text' | 'binary';

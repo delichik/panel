@@ -193,7 +193,7 @@ func (h *Handler) PutEditSessionFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	result, err := service.PutEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")), key, in)
+	result, err := service.PutEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r), key, in)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -235,7 +235,7 @@ func (h *Handler) UploadEditSessionBinary(w http.ResponseWriter, r *http.Request
 	if !ok {
 		return
 	}
-	result, err := service.UploadEditSessionBinary(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")), key, EditSessionBinaryInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Path: r.FormValue("path"), FileName: header.Filename, Content: content})
+	result, err := service.UploadEditSessionBinary(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r), key, EditSessionBinaryInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Name: firstNonEmpty(r.FormValue("name"), r.FormValue("path")), FileName: header.Filename, Content: content})
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -277,7 +277,7 @@ func (h *Handler) UploadEditSessionArchive(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	result, err := service.UploadEditSessionArchive(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), key, EditSessionArchiveInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), FileKey: r.FormValue("fileKey"), BasePath: r.FormValue("basePath"), Kind: r.FormValue("kind"), FileName: header.Filename, Content: content})
+	result, err := service.UploadEditSessionArchive(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), key, EditSessionArchiveInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), FileKey: r.FormValue("fileKey"), Name: firstNonEmpty(r.FormValue("name"), r.FormValue("basePath")), Kind: r.FormValue("kind"), FileName: header.Filename, Content: content})
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -299,7 +299,7 @@ func (h *Handler) DeleteEditSessionFile(w http.ResponseWriter, r *http.Request) 
 	if !ok {
 		return
 	}
-	result, err := service.DeleteEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), strings.TrimSpace(r.PathValue("fileKey")), key, in)
+	result, err := service.DeleteEditSessionFile(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r), editSessionAssetNameFromRequest(r), key, in)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -496,7 +496,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	name := file.Path
+	name := file.Name
 	contentType := file.ContentType
 	if file.Kind == ApplicationFileKindArchive {
 		name = file.ContentType
@@ -629,7 +629,7 @@ func (h *Handler) UploadSaveSessionArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	files, err := h.service.UploadSaveSessionArchive(r.Context(), saveSessionIDFromRequest(r), FileArchiveInput{
-		BasePath: r.FormValue("basePath"),
+		Name:     firstNonEmpty(r.FormValue("name"), r.FormValue("basePath")),
 		Kind:     r.FormValue("kind"),
 		FileName: header.Filename,
 		Content:  content,
@@ -767,7 +767,14 @@ func applicationIDFromRequest(r *http.Request) string {
 }
 
 func applicationFileIDFromRequest(r *http.Request) string {
-	return strings.TrimSpace(r.PathValue("fileId"))
+	return strings.TrimSpace(r.PathValue("name"))
+}
+
+func editSessionAssetNameFromRequest(r *http.Request) string {
+	if value := strings.TrimSpace(r.PathValue("name")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(r.PathValue("fileKey"))
 }
 
 func saveSessionIDFromRequest(r *http.Request) string {

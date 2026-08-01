@@ -9,7 +9,7 @@
 | 色彩、字体、圆角、阴影、间距、控件高度、断点与主题运行时 | [visual-tokens.md](visual-tokens.md) | `web/src/styles/main.css`、`web/src/design/theme.ts`、`web/src/design/tokens.ts` |
 | AppShell、PageHeader、页面模板的使用边界与反例 | [layout-system.md](layout-system.md) | `web/src/components/shell/`、`web/src/components/templates/` |
 | 操作分级、列表查询进 URL、编辑脏状态、异步两阶段、反馈分层、加载骨架屏、浮层与键盘焦点模型 | [interaction-model.md](interaction-model.md) | 页面族目录、`web/src/components/ui/` |
-| 搜索、分页、确认、上传下载、状态、服务器选择、主从列表、编辑分区导航 | [interaction-patterns.md](interaction-patterns.md) | `web/src/components/ui/`、`web/src/components/patterns/` |
+| 搜索、分页、确认、上传下载、状态、服务器选择、主从列表、连续配置流、应用文件与设施资产管理 | [interaction-patterns.md](interaction-patterns.md) | `web/src/components/ui/`、`web/src/components/patterns/` |
 | 测试命令、单测组织、e2e/a11y 重建约定、Mock 体系 | [testing.md](testing.md) | `web/vitest.unit.config.ts`、`web/src/mocks/`、Taskfile |
 
 ## 使用要求

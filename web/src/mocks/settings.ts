@@ -16,7 +16,7 @@ export let mockRuntimeSettings: RuntimeSettings = {
   language: 'zh-CN',
   logLevel: 'info',
   remoteCommandTimeoutSeconds: 45,
-  branding: { loginTitle: 'Panel', loginSubtitle: 'Operations control plane' },
+  branding: { loginTitle: 'Panel', loginSubtitle: 'Demo operations control plane' },
   certificates: { email: 'ops@example.com', dnsPropagationDelaySeconds: 30 },
   jwtSecretConfigured: true,
 };
@@ -24,6 +24,10 @@ export let mockRuntimeSettings: RuntimeSettings = {
 export let mockServerVariables: ServerVariableDefinition[] = [
   { name: 'Public address', key: 'PUBLIC_ADDRESS', required: true },
   { name: 'Availability zone', key: 'AVAILABILITY_ZONE', required: false },
+  { name: 'Region code', key: 'REGION_CODE', required: false },
+  { name: 'Maintenance window', key: 'MAINTENANCE_WINDOW', required: false },
+  { name: 'GPU class', key: 'GPU_CLASS', required: false },
+  { name: 'Backup tier', key: 'BACKUP_TIER', required: false },
 ];
 
 export function saveRuntime(input: Partial<RuntimeSettings>) {
@@ -52,7 +56,7 @@ export function restorePreflight(): RestorePreflightResponse {
   return {
     encrypted: true,
     passwordRequired: true,
-    manifest: { formatVersion: 1, panelVersion: 'alpha', createdAt: '2026-07-21T07:40:00.000Z', encrypted: true, includes: ['app', 'logs', 'metrics'], files: [{ path: 'app.db', size: 42000, sha256: 'abc123' }] },
+    manifest: { formatVersion: 1, panelVersion: 'alpha', createdAt: '2026-08-01T07:40:00.000Z', encrypted: true, includes: ['app', 'logs', 'metrics'], files: [{ path: 'app.db', size: 42000, sha256: 'abc123' }] },
   };
 }
 

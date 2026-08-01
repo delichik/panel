@@ -35,7 +35,7 @@
 - 复杂无样式交互可使用 headless 组件库；业务页面仍必须通过 Panel 自有 primitives 暴露一致样式。
 - `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch。
 - 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 FilterBar、ServerContextSelector、ServerMultiPicker、MasterList、EditorSectionRail；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
-- `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`、`web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue` 已开始接入统一 patterns：搜索使用 `SearchInput`，任务分页使用 `PaginationBar`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，安全/资源服务器上下文使用单一 `ServerContextSelector`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器都使用顶部步骤工作区，不再使用 `EditorSectionRail`。后续页面修改不得恢复页面内自造的同类控件，也不得在 `ServerContextSelector` 上方叠加服务器 Select 下拉。
+- `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`、`web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue` 已开始接入统一 patterns：搜索使用 `SearchInput`，任务分页使用 `PaginationBar`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，安全/资源服务器上下文使用单一 `ServerContextSelector`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。后续页面修改不得在 `ServerContextSelector` 上方叠加服务器 Select 下拉。
 - 图标统一使用 `@lucide/vue`。
 - 主题只支持 `system` / `light` / `dark`，通过 `data-theme` 和 CSS 变量运行。
 - 中大屏 AppShell 必须填满视口并禁止页面级滚动；滚动限制在模板正文、表格、详情、日志或编辑正文内部。
@@ -94,10 +94,10 @@
 `web/src/views/applications/` 已替换阶段占位：
 
 - 普通应用页 `/applications/apps` 是独立控制面，不再通过应用/设施应用顶层 tabs 互切。左侧应用选择与镜像/实例摘要读取 `/api/v1/applications` 的 `ApplicationSummary[]`，右侧详情和编辑入口按需读取 `/api/v1/applications/{id}` 完整 DTO 后展示状态、镜像更新、反向代理路由、运行时节点实例、日志入口、同步、停用、删除和持久化数据操作。运行时仍使用 `/api/v1/applications/{id}/runtime`，其他正式 API 使用 `/logs`、`/deploy`、`/stop`、`/image/check`、`/image/update`、`GET/POST /persistent-data` 和 `DELETE /api/v1/applications/{id}`；持久化下载走 blob 下载，上传走 multipart restore。
-- 创建/编辑应用走隐藏路由 `/applications/apps/create` 与 `/applications/apps/:applicationId/edit`，使用 `EditorPage` 与 `/api/v1/application-edit-sessions` durable 会话；编辑器是分层 header + responsive step grid + 主体意图面板 + 摘要区，不得恢复旧式左侧一串 section、中间传统表单、右侧摘要的布局。宽屏可保留右侧 sticky 摘要；中屏必须让摘要下移、步骤变成稳定多列 grid；窄屏必须单列组织模式切换、步骤、字段和摘要，禁止横向裁切。AppSpec 只有一个“YAML source / 源码”视图。文件入口固定为“新建文本文件 / 上传文件 / 上传文件夹压缩包”：文本 JSON PUT 固定保存为 `template`，普通文件通过 `/uploads/{fileKey}` multipart 固定保存为 `binary`，文件夹压缩包通过 `/archives` 保存为单个 `archive` 条目；类型和 MIME 不由用户填写。三类文件都支持会话态下载，binary/archive 替换必须保留原 `fileKey`，正式详情支持已提交文件下载。
-- 设施应用页 `/applications/facility-apps` 是独立入口，不再通过应用/设施应用顶层 tabs 互切，也不暴露隐藏 `facility-reverse-proxy` 应用。前端信息架构必须保持三层：`/applications/facility-apps` 是设施目录并读取 `/api/v1/facility-apps` summary，`/applications/facility-apps/:facilityKind` 是设施详情，`/applications/facility-apps/:facilityKind/config` 是设施配置。当前唯一内置设施是 `reverse-proxy`，但页面、类型和 API adapter 不得把“设施应用”整体等同为入口代理；未知 `facilityKind` 在本页显示本地化不可用空态，不跳转 overview。
-- 反向代理设施详情读取 `/api/v1/facility-apps/reverse-proxy`，展示网关节点、路由摘要、静态资产、应用路由、Panel 入口和当前 lifecycle operation。配置页走 `/api/v1/facility-apps/reverse-proxy/edit-sessions`，与应用编辑器统一为顶部步骤工作区 + 主体面板 + sticky 摘要；域名和 Path 使用列表 + 对话框。静态资产新增/同 key 替换使用 `PUT .../assets/{assetKey}` multipart，会话态和正式态分别通过对应 `/content` 接口下载；冲突时提供放弃当前草稿并重新加载正式配置的明确入口。
-- The facility asset workspace exposes three explicit actions: create text file, upload file, and upload archive. Only assets returned with `contentMode=text` can open the code editor; binary files and bundles remain replace/download/delete only, regardless of filename extension.
+- 创建/编辑应用走隐藏路由 `/applications/apps/create` 与 `/applications/apps/:applicationId/edit`，使用 `EditorPage` 与 `/api/v1/application-edit-sessions` durable 会话；编辑器是分层 header + 连续纵向配置流 + 摘要区，不得恢复分区切换或等宽分页卡片。基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件按顺序全部展开，正文统一滚动；窄屏字段单列组织，禁止横向裁切。AppSpec 只有一个“YAML source / 源码”视图。文件区固定为一个上传入口，弹窗内选择文本文件、普通文件或文件夹压缩包：文本 JSON PUT 固定保存为 `template`，普通文件通过 `/uploads/{name}` multipart 固定保存为 `binary`，文件夹压缩包通过 `/archives` 保存为单个 `archive` 条目；类型和 MIME 不由用户填写。三类文件都支持会话态下载，binary/archive 替换必须保留原 `name`，正式详情支持已提交文件下载。文件工作区必须复用 `AssetFileManager`，不在应用页另写文件行交互。
+- 设施应用页 `/applications/facility-apps` 是独立入口，不再通过应用/设施应用顶层 tabs 互切，也不暴露隐藏 `facility-reverse-proxy` 应用。设施类型由前端内置适配器固定提供，不调用设施 list API；当前唯一内置设施是 `reverse-proxy`，页面直接使用其专属详情与配置 API。新增设施类型时新增自己的类型、配置和 API adapter。
+- 反向代理设施详情读取 `/api/v1/facility-apps/reverse-proxy`，展示网关节点、路由摘要、静态资产、应用路由、Panel 入口和当前 lifecycle operation。配置页走 `/api/v1/facility-apps/reverse-proxy/edit-sessions`，与应用编辑器统一为连续纵向配置流 + sticky 摘要；网关服务器、域名和路由、Panel 访问入口和静态文件按顺序全部展开，正文统一滚动；域名和 Path 使用列表 + 对话框。静态文件新增/同 name 替换使用 `PUT .../assets/{assetName}` multipart，会话态和正式态分别通过对应 `/content` 接口下载；冲突时提供放弃当前修改并重新加载正式配置的明确入口。静态文件与应用文件共用 `AssetFileManager` 和请求封装，设施 adapter 只负责映射自己的配置契约。
+- The facility asset workspace exposes one upload action. The upload dialog chooses text file, regular file, or folder archive; text selection opens the editor, while regular files and bundles use the upload control. Existing text assets open the same dialog in fixed editor mode. Only assets returned with `contentMode=text` can open the code editor; binary files and bundles remain replace/download/delete only, regardless of filename extension.
 - Mock 模式覆盖同名正式路径，包含持久化数据 zip 下载/恢复、应用 archive 上传、设施静态资产上传/删除、正常应用、空/删除后状态、保存冲突、部署中、日志错误和长配置诊断；未实现路径继续返回 `mock_route_not_found`。
 
 ### 阶段 7：任务 + 设置 + 维护 + 诊断
@@ -130,6 +130,7 @@
 - 密钥资产页位于 `/certificates/keys`：管理 CA/TLS/SSH key asset，支持生成、单资产导入、导出、下载、批量导入预检/执行、TLS 重签、SSH 重生成和删除。`GET /api/v1/key-assets` 和自签证书列表使用不含证书/私钥密文、public key 正文、metadata 与引用明细的摘要查询；引用安全校验在删除等定向操作中执行，不允许列表扫描全部应用 YAML 或反向代理配置。单资产文件与导出归档下载使用 blob 下载，不经 JSON `ApiClient`。
 - 批量导入预检是 multipart route，前端在 `web/src/api/keyAssets.ts` 中局部使用 `fetch` 并保持 envelope 校验；未改全局 `ApiClient`。
 - Mock 模式覆盖同名正式路径，包含正常、空记录、Cloudflare Provider 错误、域名删除冲突、多域名列表、证书签发/等待/过期/失败、任务创建、密钥资产引用冲突和批量导入冲突；未实现路径继续返回 `mock_route_not_found`。
+- 主列表 Mock 与正式 API 对齐为 `ListPage`：`/servers`、`/credentials`、`/applications`、`/dns/domains`、`/certificates`、`/self-signed-certificates`、`/key-assets` 支持 `page`/`pageSize`/`q`；`GET /servers/:id` 返回完整服务器详情。
 
 ## API 与 Mock
 
@@ -137,6 +138,8 @@
 - `ApiClient` 只接受统一 JSON envelope：`{ data }` 或 `{ error }`。
 - 401、HTML 响应、非 JSON 响应、JSON 解析失败、缺少 data envelope、Abort 和网络错误必须明确抛出 `ApiError`，不得吞错并返回 fallback 数据。
 - Mock API 只在 `VITE_PANEL_TEST_MODE=true` 时由 `web/src/main.ts` 安装。`task run:web:test` 默认不启用认证验证，Mock `/auth/session` 直接返回已认证演示 session；需要登录、token、强制改密和 JWT secret 校验时运行 `task run:web:test AUTH=true`，由 `VITE_PANEL_TEST_AUTH=true` 开启。
+- 主资源列表 Mock 必须返回 `ListPage`（`items`/`total`/`page`/`pageSize`），并支持 `page`/`pageSize`/`q`：`/servers`、`/credentials`、`/applications`、`/dns/domains`、`/certificates`、`/self-signed-certificates`、`/key-assets`。`GET /servers/:id` 返回完整详情。
+- 演示样本需覆盖多样状态与分页规模：约 20 台服务器、多命名空间应用（部署中/部分部署/失败/停用）、DNS/证书签发与续签/失败、任务与运行事件多页、资源与安全按服务器差异化默认值。
 - 未实现 Mock 路由必须返回 `{ error: { code: "mock_route_not_found" } }`，不得返回假成功。
 
 ## i18n

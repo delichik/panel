@@ -36,7 +36,7 @@
 ## API 范围
 
 - 应用 CRUD：`GET /api/v1/applications` 返回 `ApplicationSummary[]` 轻量列表，`POST /api/v1/applications` 和 `GET/PUT/DELETE /api/v1/applications/{id}` 保持完整应用详情/写入语义。
-- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`GET/DELETE /api/v1/applications/{id}/files/{fileId}`，`GET /api/v1/applications/{id}/files/{fileId}/content` 认证流式下载
+- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`GET/DELETE /api/v1/applications/{id}/files/{name}`，`GET /api/v1/applications/{id}/files/{name}/content` 认证流式下载；`name` 是应用内唯一外部身份，物理 file id 只用于存储和运行时分配。
 - 保存会话：`POST /api/v1/application-save-sessions`，`POST /api/v1/application-save-sessions/{id}/files`，`POST /api/v1/application-save-sessions/{id}/files/delete`，`POST /api/v1/application-save-sessions/{id}/commit`
 - 校验和计划：`POST /api/v1/applications/{id}/validate`，`POST /api/v1/applications/{id}/plan`
 - 运行操作：`POST /api/v1/applications/{id}/deploy`，`POST /api/v1/applications/{id}/migrate`，`POST /api/v1/applications/{id}/stop`，`POST /api/v1/applications/{id}/restart`
@@ -45,7 +45,7 @@
 - 打包：`GET /api/v1/applications/{id}/package`
 - 持久化数据：`GET /api/v1/applications/{id}/persistent-data` 下载，`POST /api/v1/applications/{id}/persistent-data` 上传 zip 覆盖并重启
 - 模板目录：`GET /api/v1/application-template-catalog`
-- 前端 v4 应用页已将持久化数据下载接为 blob 下载，将恢复接为 multipart 上传。应用 edit-session 文本写入走 JSON `PUT /files/{fileKey}`，普通二进制走 multipart `PUT /uploads/{fileKey}`，文件夹归档走 multipart `POST /archives`；三者都可通过 `/files/{fileKey}/content` 下载草稿正文。
+- 前端 v4 应用页已将持久化数据下载接为 blob 下载，将恢复接为 multipart 上传。应用 edit-session 文本写入走 JSON `PUT /files/{name}`，普通二进制走 multipart `PUT /uploads/{name}`，文件夹归档走 multipart `POST /archives`；三者都可通过 `/files/{name}/content` 下载草稿正文。旧 file key 仅作为服务端兼容输入，不属于新的外部身份。
 
 ## 校验错误
 
@@ -69,7 +69,7 @@
 - 应用持久化目录不保存为数据库字段；是否启用 persistent 由 appspec 的 `mounts.type=persistent` 派生，详情响应里的 `persistentPath` 只读生成自 `applicationPersistentDir(app.ID)`，保存 DTO 不包含 `persistentPath`。
 - 应用 `reverseProxy` 字段描述应用希望暴露的域名、Path、目标端口、目标类型和结构化 Path 选项，不代表所有部署节点都会启用反向代理。`targetType` 支持 `local` 与 `container`：旧数据或空值按 `local` 处理，代理到目标节点本地端口；`container` 代理到同节点 Application 容器名和目标端口。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖且应用实际部署到的服务器才会接收对应反向代理配置。
 - `ReverseProxyPath.options` 与设施 Path 共用 `HTTPRouteOptions`：`gzipMode`、`clientMaxBodySizeMb`、连接/读取/发送超时、`bufferingMode`、`webSocketMode`、请求 Header 和响应 Header。旧 `webSocket=true/false` 必须映射到结构化模式并保留兼容；规范化、模板渲染、`ApplicationReverseProxyConfigs` 转换和 spec hash 不得丢失 options。Header 名称按 HTTP token 校验并大小写不敏感判重，值禁止 CR/LF/NUL 和 Nginx 变量注入。所有应用代理 location 必须明确生成 `proxy_cache off;`；Panel 不主动生成、覆盖或隐藏 `Cache-Control`、`Expires`、ETag 等客户端缓存 Header。
-- 应用文件列表不返回正文；模板编辑可用 `GET .../files/{fileKey}` 的 JSON/base64 读取，用户下载必须使用 session 或 committed `/content` 接口，不把 base64 当下载协议。JSON PUT 只允许 `template`，普通 `binary` 必须经 64 MiB multipart 入口上传，MIME 由服务端按文件名/内容推断。`archive` 保存原始文件夹压缩包为一个稳定 `fileKey` 条目，不在管理端展开；替换必须复用原 key 和 basePath。
+- 应用文件列表不返回正文；模板编辑可用 `GET .../files/{name}` 的 JSON/base64 读取，用户下载必须使用 session 或 committed `/content` 接口，不把 base64 当下载协议。JSON PUT 只允许 `template`，普通 `binary` 必须经 64 MiB multipart 入口上传，MIME 由服务端按名称/内容推断。每个应用文件在应用范围内使用唯一 `name`，它是不透明的应用内身份，不代表反向代理 URL Path 或宿主机路径；旧版本的 path/file key 只在兼容层解析并原样迁移。`archive` 保存原始文件夹压缩包为一个稳定的应用内 name 条目，不在管理端展开；替换必须复用原 name。
 - `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器。archive 在应用 Panel、设施 bundle Panel 和 Agent 实际解包侧都限制最多 10000 个总条目（文件与目录均计数）、32 层目录、256 MiB 解包总量和 100 倍压缩比，并继续拒绝路径逃逸和不支持格式；Agent 保存原始压缩包副本并校验 sha256，再覆盖解包到挂载目录。普通文件 drift 检查 sha256、mode 和显式 uid/gid，archive drift 检查节点保留原包 sha256 和解包目录 tree hash。
 - 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
 - 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
@@ -89,7 +89,7 @@
 - 应用目标任务在任务中心展示为“应用目标应用 / 停止 / 清理”，表示 Panel 已完成一次目标收敛请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
 - 应用列表接口使用 `ApplicationSummary[]`，只包含首屏必要字段：`id`、`name`、`enabled`、`imageReference`、`jobId`、`namespace`、`runtimeStatus`、`imageUpdateAvailable`、`lastError`、`updatedAt`。列表必须走专用摘要查询，只读取摘要列，并用固定数量的本地批量查询合并运行时实例状态和最近 lifecycle operation targets；不得调用完整应用 scanner、解析 appspec/YAML/配置 JSON，也不得逐应用、逐实例或逐节点查询。`specYaml`、`variables`、`reverseProxy`、`deploymentServers`、`persistentPath`、`imageUpdateTargets`、`specHash`、`generation`、`lastEvalId`、`lastDeploymentId` 等详情/诊断字段只从 `GET /api/v1/applications/{id}` 获取。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。
 - 普通应用页首屏只加载应用列表必要数据，不加载设施接口，也不预拉多个应用的 runtime；当前选中应用的 runtime 在列表可用后异步按需加载。设施目录、详情和配置页进入对应模式时再加载设施数据；直达设施 URL 必须先加载设施目录后再判断是否支持该 `facilityKind`。
-- 应用页面在桌面端是满高主从工作区，左侧选择器和右侧详情正文内部滚动。创建/编辑应用使用隐藏独立页和顶部步骤工作区，宽屏为主体 + sticky 摘要，中屏摘要下移，窄屏恢复页面级滚动并保持提交栏可达；不得恢复左 rail 或依赖横向滚动。部署、停止和删除操作位于详情标题或操作区，不放在选择行中。
+- 应用页面在桌面端是满高主从布局，左侧选择器和右侧详情正文内部滚动。创建/编辑应用使用隐藏独立页和连续纵向配置流，宽屏为主体 + sticky 摘要，中屏摘要下移，窄屏恢复页面级滚动并保持提交栏可达；不得恢复左 rail、分页卡片或依赖横向滚动。部署、停止和删除操作位于详情标题或操作区，不放在选择行中。
 - 应用、设施应用、创建/编辑应用中的操作入口必须复用 `AppActionButton` 和 `AppActionGroup`：详情级编辑、同步、停用、重启等位于详情标题区；挂载、反向代理、文件和路由摘要行的编辑/删除位于行尾并使用带文字的小按钮；完整编辑表单进入标准 dialog，避免在页面正文下方展开一组容易误解的操作区。
 - 应用页面不展示应用总数、已启用和需要关注摘要卡，页面级提示后直接进入主从工作区。
 - 应用右侧详情使用单张满高 outlined 卡片：运行状态和启用状态位于标题下方，操作按钮单独位于头部右侧；可滚动正文按基本信息、镜像更新和运行实例分区。详情正文分区不得再次做成同等级 outlined/阴影/渐变卡片，只使用标题、分隔线和轻量信息单元表达层级。下载包、持久化数据、迁移和删除收进更多菜单，不再把运行时面板渲染为独立并列卡片。
@@ -112,7 +112,7 @@
 - `ApplicationEditor.vue` 的可视化编辑只维护 appspec `command` 有序数组。每一行是一个 argv 项，编辑器不得按空格拆分用户输入。
 - `command` 表示完整容器命令数组，包含可执行文件、flag 和参数值；运行时写入 Docker `Cmd`，不得翻译成 `Entrypoint`。
 - 后端 appspec 校验允许多个非空 `command` 项，空 command 项会正规化为未设置，避免不填写 command 时阻塞保存。
-- 应用编辑器使用隐藏独立 `EditorPage`：顶部步骤工作区展示身份、运行时来源、网络、存储、部署、文件/资产的完成度/错误，主体展示当前配置意图面板，右侧 sticky 摘要展示创建检查、变更数量、会话状态和诊断。创建页强调名称、镜像、端口的最短发布路径；编辑页强调当前运行状态和变更摘要。
+- 应用编辑器使用隐藏独立 `EditorPage`：正文按基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件顺序连续展开，右侧 sticky 摘要展示保存前检查、变更数量、编辑状态和检查结果；顶部只保留表单/YAML 源码编辑方式，不提供分区切换。创建页强调名称和镜像的起步配置；编辑页强调当前修改和保存结果。
 - 应用编辑器的可视化草稿必须是结构化数据，不得把变量、环境变量、部署服务器、端口、挂载或反向代理规则压成 JSON/多行文本作为主要交互。复杂重复项使用“摘要列表 + 新增/编辑对话框 + 删除确认”，对话框内使用独立克隆草稿，取消不得污染主草稿。
 - 应用反向代理规则对话框必须通过明确 DTO 克隆函数创建独立草稿，不能对 Vue reactive Proxy 直接调用 `structuredClone`；只有点击保存才替换 `form.reverseProxy` 中对应规则，新建或编辑后取消不得留下空规则、空 Path 或高级选项修改。每个 Path 的高级字段复用 `RoutePathAdvancedFields.vue`。
 - 应用反向代理规则使用 `originServerIds` 和 `anyAccess`。源站候选必须同时属于应用部署节点和设施全局网关节点；后端保存时重新校验。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
@@ -120,9 +120,9 @@
 - 应用详情的“反向代理路由”分区只读展示源站、AnyAccess、流量策略、主源站和每个 Path 的高级设置。
 - 应用编辑器可视化页必须往返保存 appspec `capAdd` 列表；输入项保存时按 Docker capability 稳定值大写化，不保存翻译文案。
 - 应用编辑器的可视化挂载区在页面正文只展示挂载摘要列表：类型、来源、容器路径、只读状态以及编辑/删除动作。新增或编辑挂载必须打开对话框承载完整字段，包含 Docker 只读挂载开关，以及按类型可用的节点文件权限字段：`file` / `panel_file` / `persistent` 支持 `uid`、`gid`，`file` 支持“可执行”开关，`persistent` 支持任意 `mode`，`panel_file` 不显示 mode。
-- 普通应用创建和编辑都使用隐藏独立页。文件区只提供三个入口：新建文本文件、上传普通文件、上传文件夹压缩包；用户不填写 kind 或 MIME。文本文件进入代码编辑器；binary/archive 只有替换、下载、删除，不得出现文本编辑入口。替换保留 `fileKey`，操作中的 pending 和错误显示在对应文件行。
-- 设施编辑会话删除静态资产时，服务端必须先检查当前 draft route 对 `assetKey` 的引用；仍被引用时应在 revision、资产记录和 blob 均未变化前拒绝，前端把错误显示在对应资产行。
-- 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询 recoverable 草稿，首次修改后懒创建会话；草稿 patch 和文件操作串行携带 revision。保存主流程为本地校验 → 服务端 validate → preview → commit，提交期间禁用离开和重复提交；commit 成功只表示配置保存并请求应用，部署完成仍通过任务中心和运行时区观察。
+- 普通应用创建和编辑都使用隐藏独立页。文件区只提供一个上传入口，弹窗内选择文本文件、普通文件或上传文件夹压缩包；用户不填写 kind 或 MIME。文本类型进入代码编辑器，普通文件和归档类型显示文件选择控件；已存在的文本文件编辑仍复用同一弹窗，binary/archive 只有替换、下载、删除，不得出现文本编辑入口。替换保留原 `name`，操作中的 pending 和错误显示在对应文件行或上传弹窗内。
+- 设施编辑会话删除静态资产时，服务端必须先检查当前 draft route 对 `assetName` 的引用；仍被引用时应在 revision、资产记录和 blob 均未变化前拒绝，前端把错误显示在对应资产行。
+- 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询可恢复编辑，首次修改后懒创建会话；修改和文件操作串行携带 revision。保存主流程为本地校验 → 服务端检查 → 预览变更 → 保存并应用，提交期间禁用离开和重复提交；成功只表示配置已保存并请求应用，部署完成仍通过任务中心和运行时区观察。
 - v3 编辑页有路由离开和浏览器关闭保护；离开默认保留可恢复草稿，取消按钮会显式 discard 当前会话后返回列表。
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML source 编辑；结构化页也要继续提供挂载编辑入口并与源码往返同步。源码视图不是第二个高级配置区，只能提供“重新生成源码”和“应用到草稿”两个同步动作；校验失败要定位到源码视图。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入源码编辑。
 - YAML source 只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须留在结构化面板与保存输入中，不能只出现在 YAML source 内。
@@ -149,10 +149,10 @@
 
 ## Application Folder Archives
 
-- Legacy save sessions retain `POST /api/v1/application-save-sessions/{id}/files/archive`; the current durable editor uses `/application-edit-sessions/{id}/archives`. Ordinary binary files use the durable multipart `/uploads/{fileKey}` endpoint and must never enter an unpacking path; JSON/base64 durable writes are template-only.
+- Legacy save sessions retain `POST /api/v1/application-save-sessions/{id}/files/archive`; the current durable editor uses `/application-edit-sessions/{id}/archives`. Ordinary binary files use the durable multipart `/uploads/{name}` endpoint and must never enter an unpacking path; JSON/base64 durable writes are template-only.
 - Folder archive mode is a separate user action saved as `application_files.kind=archive`. Template files always use the text editor; binary and archive rows expose replace/download/delete only.
-- Replacing a folder archive reuses its stable `fileKey` and basePath so mounts and draft identity remain intact.
-- Folder archives support zip, tar, tar.gz, and tgz. The backend validates archive paths so entries cannot escape the application workspace, then stores the original archive as one `application_files` row at `basePath` with filename in `content_type`, size, sha256 and content. It must not expand archive entries into multiple management-side application files.
+- Replacing a folder archive reuses its stable application-local `name` so mounts and draft identity remain intact.
+- Folder archives support zip, tar, tar.gz, and tgz. The backend stores the original archive as one `application_files` row keyed by the application-local opaque `name`; managed runtime paths are allocated separately from the stable file ID. It must not expand archive entries into multiple management-side application files.
 - During deployment, an appspec `mounts.type=file` that references an `archive` application file becomes a managed archive. The agent keeps the original archive under the instance `archives` area for sha256 verification, then extracts it into the instance `files/<source>` directory and bind-mounts that extracted directory to the container. If the retained archive sha256 differs, the agent rewrites it from Panel content before extraction; even when the archive sha256 matches, extraction overwrites the target directory to remove node-side drift. This feature does not introduce a new appspec mount type.
 
 ## Application Create Editor UX
@@ -166,7 +166,7 @@
 
 ## Durable Application Edit Sessions
 
-- The durable editor API also exposes multipart `PUT /uploads/{fileKey}` for ordinary binary files and `GET /files/{fileKey}/content` for authenticated downloads. Committed content uses `GET /applications/{id}/files/{fileId}/content`. JSON `PUT /files/{fileKey}` is template-only. Every mutation keeps revision, client operation ID, idempotency key, and stable-key upsert semantics; commit still requires the current revision, base resource version, preview token, and idempotency key.
+- The durable editor API also exposes multipart `PUT /uploads/{name}` for ordinary binary files and `GET /files/{name}/content` for authenticated downloads. Committed content uses `GET /applications/{id}/files/{name}/content`. JSON `PUT /files/{name}` is template-only. Every mutation keeps revision, client operation ID, idempotency key, and stable-name upsert semantics; commit still requires the current revision, base resource version, preview token, and idempotency key. Physical file ids remain internal to storage and runtime allocation.
 - Template session files use the large CodeMirror editor with line numbers, internal scrolling, automatic path/MIME language inference, and a per-dialog language override for plain text, YAML, JSON, Shell, Nginx, INI/Properties, and Dockerfile. Existing file kinds are immutable in the dialog, load failures disable saving, and empty or whitespace-only template content remains valid. Binary files do not enter the text editor.
 - Application edit sessions are owned by the stable single-administrator principal, not by the editable administrator username. Renaming the account must not hide or orphan recoverable drafts.
 - `baseResourceVersion` is a snapshot of the application configuration version and its configuration `updated_at` value when the session starts. Session reads must never replace the base timestamp with the application's current timestamp.
@@ -177,9 +177,9 @@
 - Validation refreshes the session idle TTL. Periodic cleanup acts as the recovery worker for expired commit leases even when no client performs a session GET, removes expired/terminal workspaces, and cleans abandoned `.partial` files, unreferenced blobs, and workspace directories that no longer have a database session row. Orphan candidates require at least one hour of staleness; a workspace without a database row is removed only when both the directory and every contained file are stale, because directory timestamps alone cannot distinguish an abandoned workspace from `BeginEditSession` or an upload that has not committed its database row yet. A live commit lease always protects its workspace.
 - Configuration persistence and apply/reconcile dispatch are separate outcomes. If application rows/files were committed but lifecycle or reverse-proxy dispatch fails, the session is finalized as `committed` with an `application_apply_request_failed` warning. Commit recovery verifies the exact persisted draft and file set before finalizing. If persistence is observable through the reserved create ID or a newer application version but later changes prevent exact verification, recovery moves the session to `conflict` with `commit_outcome_ambiguous`; it must never reset such a session to `active` or create/apply it twice.
 - Facility reverse-proxy editing uses its own `facility_edit_sessions`, asset, operation, manifest, and config-version contract documented in `containerization.md`; it must not reuse application edit-session rows or expose the hidden `facility-reverse-proxy` application as the editable resource. Both commit adapters separate durable configuration success from the later application reconcile request.
-- 前端设施应用必须按目录/详情/配置三层建模：`/applications/facility-apps` 通过 `GET /api/v1/facility-apps` 展示 `FacilityAppSummary[]` 设施目录，summary 只包含设施身份、健康状态、更新时间、最近 operation 状态和错误，不包含网关、路由、静态资产或应用路由计数；这些统计只在 `/applications/facility-apps/:facilityKind` 详情按需加载。设施目录后端不得调用完整 `GetReverseProxy` 路径。`/applications/facility-apps/:facilityKind/config` 展示设施自己的配置 renderer。入口代理只是当前唯一 `facilityKind=reverse-proxy` 的设施项；新增设施类型时应新增 summary/detail/config renderer，而不是把设施应用菜单改成某个设施的详情页。
-- 前端 `facilityAppsApi` 对页面暴露 `listFacilities`、`getFacility`、`reconcileFacility`、`beginFacilityEdit` 等域语义，内部 adapter 才映射到当前 `/api/v1/facility-apps/reverse-proxy` 后端路径。页面不得直接以 reverse-proxy 方法承担“设施应用”目录语义；未知 `facilityKind` 应显示本地化不可用空态。
-- 前端入口代理设施配置页必须是独立编辑工作区：左侧展示网关节点、域名组、Panel 入口、静态资产分区和域名列表，中间按域名/Path/Panel/资产分区编辑，右侧 sticky 摘要展示新增、修改、删除数量与诊断。域名、Path、静态资产和 Panel 入口不得合并成 JSON 大文本框。
+- 前端设施应用入口使用前后端内置的设施适配器，不调用通用设施 list API；当前 `reverse-proxy` 详情与配置直接使用其专属 API。新增设施类型时应新增自己的类型、配置和 API adapter，而不是把所有设施抽象成共享 summary。
+- 前端设施 API adapter 按设施提供 `getConfig`、`reconcile`、`beginEdit` 等专属域语义，直接映射到 `/api/v1/facility-apps/reverse-proxy`；不提供 `listFacilities` 目录方法。新增设施时新增自己的 adapter 和配置契约。设施静态资产同样通过设施配置/编辑会话返回自己的 `assets` 集合，客户端按设施内唯一 `name` 操作，不新增通用资产目录 API。
+- 前端入口代理设施配置页必须是独立编辑页：正文按网关服务器、域名和路由、Panel 访问入口、静态文件顺序连续展开，右侧 sticky 摘要展示新增、修改、删除数量与检查结果；不提供左侧分区导航，域名、Path、静态文件和 Panel 入口不得合并成 JSON 大文本框。
 - 设施域名和 Path 编辑使用“列表 + 对话框”模式：域名对话框编辑域名和源站节点，Path 对话框按 `static` / `redirect` / `proxy_pass` 展示不同字段；复杂项取消时不得污染主草稿。保存仍走 `/api/v1/facility-apps/reverse-proxy/edit-sessions/*` 的 patch、validate、preview、commit 路径，不新增 mock-only endpoint。
 
 ## Managed Facility Application Identity

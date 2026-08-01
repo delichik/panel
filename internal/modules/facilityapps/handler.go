@@ -15,9 +15,8 @@ type service interface {
 	GetReverseProxy(ctx context.Context) (ReverseProxyConfig, error)
 	SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput) (ReverseProxyConfig, error)
 	ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult, error)
-	ListStaticAssets(ctx context.Context) ([]StaticAsset, error)
 	UploadStaticAsset(ctx context.Context, in StaticAssetUploadInput) (StaticAsset, error)
-	DeleteStaticAsset(ctx context.Context, assetID string) error
+	DeleteStaticAsset(ctx context.Context, assetName string) error
 	BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error)
 	UploadSaveSessionAsset(ctx context.Context, sessionID string, in StaticAssetUploadInput) (StaticAsset, error)
 	DeleteSaveSessionAsset(ctx context.Context, sessionID string, in StaticAssetDeleteInput) error
@@ -105,7 +104,7 @@ func (h *Handler) PutFacilityEditAsset(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.Validation("idempotency_key_required", "Idempotency-Key header is required"))
 		return
 	}
-	result, err := h.service.PutFacilityEditAsset(r.Context(), r.PathValue("id"), r.PathValue("assetKey"), key, FacilityEditAssetInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Name: r.FormValue("name"), Kind: r.FormValue("kind"), ContentMode: r.FormValue("contentMode"), FileName: header.Filename, Content: content})
+	result, err := h.service.PutFacilityEditAsset(r.Context(), r.PathValue("id"), r.PathValue("assetName"), key, FacilityEditAssetInput{Revision: revision, ClientOperationID: r.FormValue("clientOperationId"), Name: r.FormValue("name"), Kind: r.FormValue("kind"), ContentMode: r.FormValue("contentMode"), FileName: header.Filename, Content: content})
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -123,7 +122,7 @@ func (h *Handler) DeleteFacilityEditAsset(w http.ResponseWriter, r *http.Request
 		httpx.Error(w, panelerr.Validation("idempotency_key_required", "Idempotency-Key header is required"))
 		return
 	}
-	result, err := h.service.DeleteFacilityEditAsset(r.Context(), r.PathValue("id"), r.PathValue("assetKey"), key, in)
+	result, err := h.service.DeleteFacilityEditAsset(r.Context(), r.PathValue("id"), r.PathValue("assetName"), key, in)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -193,30 +192,8 @@ type Handler struct {
 	service service
 }
 
-type facilitySummaryListService interface {
-	ListSummaries(context.Context) ([]FacilityAppSummary, error)
-}
-
 func NewHandler(service service) *Handler {
 	return &Handler{service: service}
-}
-
-func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	if summaryList, ok := h.service.(facilitySummaryListService); ok {
-		summaries, err := summaryList.ListSummaries(r.Context())
-		if err != nil {
-			httpx.Error(w, err)
-			return
-		}
-		httpx.JSON(w, http.StatusOK, summaries)
-		return
-	}
-	config, err := h.service.GetReverseProxy(r.Context())
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, []FacilityAppSummary{facilitySummaryFromReverseProxy(config)})
 }
 
 func (h *Handler) ReverseProxy(w http.ResponseWriter, r *http.Request) {
@@ -226,27 +203,6 @@ func (h *Handler) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
-}
-
-func facilitySummaryFromReverseProxy(config ReverseProxyConfig) FacilityAppSummary {
-	status := "available"
-	if config.LastError != "" {
-		status = "degraded"
-	}
-	operationStatus := ""
-	if config.Operation != nil {
-		operationStatus = config.Operation.Status
-	}
-	return FacilityAppSummary{
-		Kind:            "reverse-proxy",
-		TitleKey:        "applicationsPage.entranceProxyFacility",
-		DescriptionKey:  "applicationsPage.entranceProxyFacilityDescription",
-		CategoryKey:     "applicationsPage.facilityCategoryTraffic",
-		Status:          status,
-		UpdatedAt:       config.UpdatedAt,
-		OperationStatus: operationStatus,
-		LastError:       config.LastError,
-	}
 }
 
 func (h *Handler) SaveReverseProxy(w http.ResponseWriter, r *http.Request) {
@@ -305,12 +261,13 @@ func (h *Handler) UploadSaveSessionAsset(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	result, err := h.service.UploadSaveSessionAsset(r.Context(), r.PathValue("id"), StaticAssetUploadInput{
-		AssetID:  r.FormValue("assetId"),
-		Name:     r.FormValue("name"),
-		Kind:     r.FormValue("kind"),
-		FileName: header.Filename,
-		Size:     header.Size,
-		Content:  content,
+		AssetID:   r.FormValue("assetId"),
+		AssetName: firstNonEmpty(r.FormValue("assetName"), r.FormValue("assetId")),
+		Name:      r.FormValue("name"),
+		Kind:      r.FormValue("kind"),
+		FileName:  header.Filename,
+		Size:      header.Size,
+		Content:   content,
 	})
 	if err != nil {
 		httpx.Error(w, err)
@@ -349,15 +306,6 @@ func (h *Handler) DiscardSaveSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handler) StaticAssets(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.ListStaticAssets(r.Context())
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
-}
-
 func (h *Handler) UploadStaticAsset(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
@@ -393,8 +341,8 @@ func (h *Handler) UploadStaticAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) DeleteStaticAsset(w http.ResponseWriter, r *http.Request) {
-	assetID := strings.TrimSpace(r.PathValue("assetId"))
-	if err := h.service.DeleteStaticAsset(r.Context(), assetID); err != nil {
+	assetName := strings.TrimSpace(r.PathValue("assetName"))
+	if err := h.service.DeleteStaticAsset(r.Context(), assetName); err != nil {
 		httpx.Error(w, err)
 		return
 	}

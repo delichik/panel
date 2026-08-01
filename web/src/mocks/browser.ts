@@ -60,7 +60,6 @@ import {
   mockApplicationSummaries,
   mockApplications,
   mockFacility,
-  mockFacilitySummaries,
   patchAppSession,
   patchFacilitySession,
   putAppFile,
@@ -214,7 +213,9 @@ export function installMockApi() {
       }
     }
 
-    if (url.pathname === '/api/v1/servers' && method(init) === 'GET') return json(mockServers);
+    if (url.pathname === '/api/v1/servers' && method(init) === 'GET') {
+      return json(listPage(mockServers, url, (item, q) => includesText(q, item.name, item.host, item.id)));
+    }
     if (url.pathname === '/api/v1/servers' && method(init) === 'POST') return json(createServer(await body<ServerSaveInput>(init)), 201);
     if (url.pathname === '/api/v1/servers/probe' && method(init) === 'POST') return json(probeServer(await body<ServerSaveInput>(init)));
     const metricsMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/metrics$/);
@@ -228,6 +229,10 @@ export function installMockApi() {
       return bundle ? json(bundle) : error('server_not_found', 'Server was not found.', 404);
     }
     const serverMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)$/);
+    if (serverMatch && method(init) === 'GET') {
+      const found = mockServers.find((item) => item.id === decodeURIComponent(serverMatch[1]));
+      return found ? json(found) : error('server_not_found', 'Server was not found.', 404);
+    }
     if (serverMatch && method(init) === 'PUT') {
       const saved = updateServer(decodeURIComponent(serverMatch[1]), await body<ServerSaveInput>(init));
       return saved ? json(saved) : error('server_not_found', 'Server was not found.', 404);
@@ -309,7 +314,9 @@ export function installMockApi() {
       return result === 'accepted' ? json(accepted('server-fail2ban-apply'), 202) : error('server_not_found', 'Server was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/credentials' && method(init) === 'GET') return json(mockCredentials);
+    if (url.pathname === '/api/v1/credentials' && method(init) === 'GET') {
+      return json(listPage(mockCredentials, url, (item, q) => includesText(q, item.name, item.username, item.id)));
+    }
     if (url.pathname === '/api/v1/credentials' && method(init) === 'POST') {
       const input = await body<CredentialInput>(init);
       return json(createCredential({ id: `cred-${Date.now()}`, name: input.name, type: input.type, username: input.username, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }), 201);
@@ -326,7 +333,9 @@ export function installMockApi() {
       return result === 'deleted' ? json(null) : error('credential_not_found', 'Credential was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/dns/domains' && method(init) === 'GET') return json(mockDnsDomains);
+    if (url.pathname === '/api/v1/dns/domains' && method(init) === 'GET') {
+      return json(listPage(mockDnsDomains, url, (item, q) => includesText(q, item.name, item.id, item.provider)));
+    }
     if (url.pathname === '/api/v1/dns/domains' && method(init) === 'POST') {
       try {
         return json(createDomain(await body<{ name: string; provider: string }>(init)), 201);
@@ -368,7 +377,9 @@ export function installMockApi() {
       return deleteRecord(decodeURIComponent(recordMatch[1]), decodeURIComponent(recordMatch[2])) ? json(null) : error('dns_record_not_found', 'DNS record was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/certificates' && method(init) === 'GET') return json(mockDomainCertificates);
+    if (url.pathname === '/api/v1/certificates' && method(init) === 'GET') {
+      return json(listPage(mockDomainCertificates, url, (item, q) => includesText(q, item.name, item.domain, item.id, ...(item.domains ?? []))));
+    }
     if (url.pathname === '/api/v1/certificates' && method(init) === 'POST') {
       const result = issueCertificate(await body(init));
       return result ? json(result, 201) : error('dns_domain_not_found', 'DNS domain was not found.', 404);
@@ -385,7 +396,9 @@ export function installMockApi() {
       return deleteCertificate(decodeURIComponent(certOperationMatch[1])) ? json(null) : error('certificate_not_found', 'Certificate was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/self-signed-certificates' && method(init) === 'GET') return json(mockSelfSigned);
+    if (url.pathname === '/api/v1/self-signed-certificates' && method(init) === 'GET') {
+      return json(listPage(mockSelfSigned, url, (item, q) => includesText(q, item.name, item.commonName, item.id, item.fingerprint, ...(item.dnsNames ?? []))));
+    }
     if (url.pathname === '/api/v1/self-signed-cas' && method(init) === 'POST') return json(createSelfCa(await body(init)), 201);
     if (url.pathname === '/api/v1/self-signed-certificates' && method(init) === 'POST') return json(createSelfLeaf(await body(init)), 201);
     const selfMatch = url.pathname.match(/^\/api\/v1\/self-signed-certificates\/([^/]+)(?:\/renew)?$/);
@@ -397,7 +410,9 @@ export function installMockApi() {
       return deleteSelfSigned(decodeURIComponent(selfMatch[1])) ? json(null) : error('self_signed_certificate_not_found', 'Self-signed certificate was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/key-assets' && method(init) === 'GET') return json(mockKeyAssets);
+    if (url.pathname === '/api/v1/key-assets' && method(init) === 'GET') {
+      return json(listPage(mockKeyAssets, url, (item, q) => includesText(q, item.name, item.commonName, item.fingerprint, item.id)));
+    }
     if (url.pathname === '/api/v1/key-assets/ca' && method(init) === 'POST') return json(createAsset(await body(init), 'ca_certificate'), 201);
     if (url.pathname === '/api/v1/key-assets/tls' && method(init) === 'POST') return json(createAsset(await body(init), 'tls_certificate'), 201);
     if (url.pathname === '/api/v1/key-assets/ssh/generate' && method(init) === 'POST') return json(createAsset(await body(init), 'ssh_key_pair'), 201);
@@ -462,11 +477,7 @@ export function installMockApi() {
     }
 
     if (url.pathname === '/api/v1/applications' && method(init) === 'GET') {
-      const items = mockApplicationSummaries();
-      const page = Math.max(1, Number(url.searchParams.get('page') || 1));
-      const pageSize = Math.max(1, Math.min(200, Number(url.searchParams.get('pageSize') || 50)));
-      const start = (page - 1) * pageSize;
-      return json({ items: items.slice(start, start + pageSize), total: items.length, page, pageSize });
+      return json(listPage(mockApplicationSummaries(), url, (item, q) => includesText(q, item.name, item.imageReference, item.namespace, item.id)));
     }
     const appMatch = url.pathname.match(/^\/api\/v1\/applications\/([^/]+)$/);
     if (appMatch && method(init) === 'GET') {
@@ -538,7 +549,7 @@ export function installMockApi() {
       return file ? json(file) : error('application_edit_session_file_not_found', 'Application edit session file was not found.', 404);
     }
     if (appSessionFileMatch && method(init) === 'PUT') {
-      const session = putAppFile(decodeURIComponent(appSessionFileMatch[1]), decodeURIComponent(appSessionFileMatch[2]), await body<{ path: string; kind: string; contentType: string; contentBase64: string }>(init));
+      const session = putAppFile(decodeURIComponent(appSessionFileMatch[1]), decodeURIComponent(appSessionFileMatch[2]), await body<{ name: string; kind: string; contentType: string; contentBase64: string }>(init));
       return session ? json(session) : error('application_edit_session_not_found', 'Application edit session was not found.', 404);
     }
     if (appSessionFileMatch && method(init) === 'DELETE') {
@@ -549,11 +560,10 @@ export function installMockApi() {
     if (appSessionArchiveMatch && method(init) === 'POST') {
       const form = await formBody(init);
       const file = form.get('file');
-      const fileKey = textField(form, 'fileKey') || `archive-${Date.now()}`;
+      const name = textField(form, 'name') || (file instanceof File ? file.name : `archive-${Date.now()}`);
       const session = uploadAppArchive(decodeURIComponent(appSessionArchiveMatch[1]), {
-        fileKey,
-        basePath: textField(form, 'basePath') || '/',
-        filename: file instanceof File ? file.name : `${fileKey}.zip`,
+        name,
+        filename: file instanceof File ? file.name : `${name}.zip`,
         size: file instanceof File ? file.size : 0,
         contentType: file instanceof File ? file.type || 'application/zip' : 'application/zip',
       });
@@ -577,7 +587,6 @@ export function installMockApi() {
       }
     }
 
-    if (url.pathname === '/api/v1/facility-apps' && method(init) === 'GET') return json(mockFacilitySummaries());
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy' && method(init) === 'GET') return json(mockFacility);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/reconcile' && method(init) === 'POST') return json({ config: mockFacility }, 202);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/edit-sessions/recoverable') return json([]);
@@ -598,12 +607,12 @@ export function installMockApi() {
     if (facilityAssetMatch && method(init) === 'PUT') {
       const form = await formBody(init);
       const file = form.get('file');
-      const assetKey = decodeURIComponent(facilityAssetMatch[2]);
-      const session = putFacilityAsset(decodeURIComponent(facilityAssetMatch[1]), assetKey, {
-        name: textField(form, 'name') || (file instanceof File ? file.name.replace(/\.[^.]+$/, '') : assetKey),
+      const assetName = decodeURIComponent(facilityAssetMatch[2]);
+      const session = putFacilityAsset(decodeURIComponent(facilityAssetMatch[1]), assetName, {
+        name: textField(form, 'name') || (file instanceof File ? file.name.replace(/\.[^.]+$/, '') : assetName),
         kind: textField(form, 'kind') || (file instanceof File && file.name.endsWith('.zip') ? 'uploaded_bundle' : 'uploaded_file'),
         contentMode: textField(form, 'contentMode') === 'text' ? 'text' : 'binary',
-        filename: file instanceof File ? file.name : `${assetKey}.bin`,
+        filename: file instanceof File ? file.name : `${assetName}.bin`,
         size: file instanceof File ? file.size : 0,
       });
       return session ? json(session) : error('facility_edit_session_not_found', 'Facility edit session was not found.', 404);
@@ -903,6 +912,31 @@ export function installMockApi() {
     }
 
     return error('mock_route_not_found', `Mock route not found: ${url.pathname}`, 404, { path: url.pathname });
+  };
+}
+
+function parseListPage(url: URL) {
+  const rawPage = Number(url.searchParams.get('page') || 1);
+  const page = Number.isFinite(rawPage) && rawPage >= 1 ? Math.floor(rawPage) : 1;
+  const rawPageSize = Number(url.searchParams.get('pageSize') || 50);
+  const pageSize = Number.isFinite(rawPageSize) && rawPageSize >= 1 ? Math.min(200, Math.floor(rawPageSize)) : 50;
+  const q = (url.searchParams.get('q') || '').trim().toLowerCase();
+  return { page, pageSize, q };
+}
+
+function includesText(q: string, ...parts: Array<string | undefined | null>) {
+  return parts.some((part) => typeof part === 'string' && part.toLowerCase().includes(q));
+}
+
+function listPage<T>(items: T[], url: URL, matches?: (item: T, q: string) => boolean) {
+  const { page, pageSize, q } = parseListPage(url);
+  const filtered = q && matches ? items.filter((item) => matches(item, q)) : [...items];
+  const start = (page - 1) * pageSize;
+  return {
+    items: filtered.slice(start, start + pageSize),
+    total: filtered.length,
+    page,
+    pageSize,
   };
 }
 

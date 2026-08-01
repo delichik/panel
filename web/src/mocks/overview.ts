@@ -1,7 +1,7 @@
 import type { OverviewCardConfiguration, OverviewCardConfigurationSet, OverviewCardData, OverviewDto, OverviewMetricsSeries } from '@/types/overview';
 import type { ServerDto } from '@/types/servers';
 
-const now = '2026-07-21T03:00:00.000Z';
+const now = '2026-08-01T08:00:00.000Z';
 
 export function overviewFromServers(servers: ServerDto[]): OverviewDto {
   return {
@@ -52,8 +52,8 @@ function card(id: string, kind: OverviewCardConfiguration['kind'], range: Overvi
 }
 
 function series(seed: number): OverviewMetricsSeries {
-  const points = Array.from({ length: 10 }, (_, index) => ({
-    time: new Date(Date.parse(now) - (9 - index) * 6 * 60 * 1000).toISOString(),
+  const points = Array.from({ length: 24 }, (_, index) => ({
+    time: new Date(Date.parse(now) - (23 - index) * 5 * 60 * 1000).toISOString(),
     index,
   }));
   return {

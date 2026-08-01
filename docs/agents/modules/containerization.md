@@ -37,9 +37,9 @@
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
-设施应用目录 API 为 `GET /api/v1/facility-apps`，只包含目录身份与状态；完整配置由 `/facility-apps/reverse-proxy` 按需读取。新事务编辑器使用持久 `/edit-sessions` API：创建、recoverable 查询、详情、draft patch、按稳定 `assetKey` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetKey}/content` 解析当前 blob；未替换的既有资产回退读取 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetId}/content` 下载，bundle 目录即时打包为 zip。
+设施类型没有通用目录 API；前后端按设施分别内置适配器。当前入口代理设施直接使用 `reverse-proxy` 专属配置与 `/facility-apps/reverse-proxy` 端点。新事务编辑器使用持久 `/edit-sessions` API：创建、recoverable 查询、详情、draft patch、按设施内唯一 `assetName` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetName}/content` 解析当前 blob；未替换的既有资产回退读取内部 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetName}/content` 下载，bundle 目录即时打包为 zip。物理 asset key/id 只用于存储、提交 manifest 和旧数据兼容。
 
-持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetKey` 引用资产，commit manifest 决定最终 asset ID 并在写数据库前统一改写。删除仍被 route 引用的资产、移除仍被 origin/AnyAccess primary/Panel Entry 使用的 gateway、或把 Panel Entry 绑定到非 setup Panel host 都是阻断诊断，服务端不得静默修剪。
+持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetName` 引用资产，commit manifest 决定内部最终 asset id 并在写数据库前统一改写。删除仍被 route 引用的资产、移除仍被 origin/AnyAccess primary/Panel Entry 使用的 gateway、或把 Panel Entry 绑定到非 setup Panel host 都是阻断诊断，服务端不得静默修剪。
 
 所有会修改正式设施配置或正式静态资产的旧、新入口共享同一单资源提交锁：直接 `PUT /reverse-proxy`、旧 save-session commit、直接静态资产上传/删除和新 edit-session commit 不得交错文件 rename 或数据库写。旧 save-session 在锁内使用创建时的 config version 做事务 CAS。新会话冲突后可通过 draft PATCH 携带当前 `baseResourceVersion` 执行 rebase；rebase 保留 session assets、更新 base version、清除 conflict 后允许重新 preview/commit。
 
@@ -120,16 +120,16 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。
 - 手工代理、应用代理、Panel 入口和 AnyAccess 转发均明确生成 `proxy_cache off;`；Panel 不管理客户端缓存 Header。
 
-- `facility_static_assets` 保存设施应用上传的静态资产元数据，文件内容存放在 `<dataRoot>/facility-apps/static-assets/<assetId>/content`。普通文件永远不解压；文件夹包支持 zip、tar、tar.gz 或 tgz，并限制最多 10000 个文件、32 层目录、256 MiB 解包总量和 100 倍压缩比。
+- `facility_static_assets` 保存设施应用上传的静态资产元数据；每个设施内的 `name` 唯一，编辑会话内的资产 `name` 也唯一。文件内容存放在内部 `<dataRoot>/facility-apps/static-assets/<assetId>/content`，asset id 不属于公开契约。普通文件永远不解压；文件夹包支持 zip、tar、tar.gz 或 tgz，并限制最多 10000 个文件、32 层目录、256 MiB 解包总量和 100 倍压缩比。
 - 入口网关路径规则保存在 `domains[].paths` 中。`ruleType` 支持 `static`、`redirect`、`proxy_pass`。
 - `static` 规则的 `sourceType` 支持 `host_path`、`uploaded_file`、`uploaded_bundle`。`host_path` 继续把目标节点本地目录只读 bind mount 到 nginx；上传来源通过 agent managed files 下发到节点并只读挂载。
 - `redirect` 规则写入 nginx `return`，支持 301、302、307、308；`proxy_pass` 规则写入手工 upstream URL，并通过 `proxySourceMode` 控制是否透传源请求信息。
 - 前端按域名设置源站节点，Path 不再单独保存节点字段。每个域名至少选择一台源站，且只能从设施全局网关节点中选择。
 - 反向代理部署时自动读取证书服务的 `ReverseProxyCertificates` 聚合结果。域名证书优先；没有匹配域名证书时使用匹配的用户域自签 TLS 证书；都没有时只生成 80 端口，不生成 443。
 - `GET /api/v1/facility-apps/reverse-proxy` 返回 `routeSummaries`，供前端按域名汇总 HTTPS 状态：`domain_certificate`、`self_signed_certificate` 或 `disabled`。nginx 生成逻辑必须与该摘要使用同一套证书匹配规则；UI 不应把 HTTPS 状态展示成路径属性。
-- 静态资产 API 挂在 `/api/v1/facility-apps/reverse-proxy/static-assets`，支持兼容列表、multipart 上传、删除和认证下载；新配置页不即时修改正式资产，而是随设施编辑会话提交。配置页与应用编辑器使用相同的顶部步骤工作区和文件行操作语言；替换传回原 `assetKey`，删除被引用资产继续由 validate/commit 阻断，冲突提供明确的放弃草稿并重新加载入口。
-- Facility asset metadata carries `contentMode=text|binary` independently from `kind=uploaded_file|uploaded_bundle`. Existing rows and multipart clients without the field default to `binary`; bundles are always binary. Text assets are valid UTF-8 up to 1 MiB (including empty files), retain their current `assetKey` for replacement and route references inside an edit session, and are the only facility assets exposed to the text editor. Commit keeps the existing temporary-key-to-final-ID mapping for newly created assets; reopened sessions use that final ID while preserving `contentMode`.
-- An asset's content mode and kind are immutable for a given `assetKey`; conversion requires deleting and recreating the asset. Rejected conversions do not change the blob, metadata, route references, or session revision.
+- 静态资产 API 挂在 `/api/v1/facility-apps/reverse-proxy/static-assets`，只提供兼容的单资产上传、删除和认证下载，不提供通用资产 list；正式配置的 `staticAssets` 集合由入口代理自己的配置响应返回。新配置页不即时修改正式资产，而是随设施编辑会话提交。配置页与应用编辑器使用连续纵向配置流和统一文件行操作；静态文件的引用名称用于路由选择，下载文件名用于下载结果；替换传回原 `assetName`，删除被引用资产继续由 validate/commit 阻断，冲突提供明确的放弃修改并重新加载入口。
+- Facility asset metadata carries `contentMode=text|binary` independently from `kind=uploaded_file|uploaded_bundle`. Existing rows and multipart clients without the field default to `binary`; bundles are always binary. Text assets are valid UTF-8 up to 1 MiB (including empty files), retain their current facility-local `name` for replacement and route references inside an edit session, and are the only facility assets exposed to the text editor. Commit keeps the internal temporary-key-to-final-ID mapping for newly created assets; reopened sessions use the stable name while preserving `contentMode`.
+- An asset's content mode and kind are immutable for a given facility-local `name`; conversion requires deleting and recreating the asset. Rejected conversions do not change the blob, metadata, route references, or session revision.
 
 ## Entrance Gateway UI And Static Content
 

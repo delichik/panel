@@ -98,8 +98,8 @@ func (s *Service) BeginEditSession(ctx context.Context, owner string, in BeginEd
 			if err := os.WriteFile(blobPath, file.Content, 0o600); err != nil {
 				return ApplicationEditSession{}, err
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO application_edit_session_files(session_id,file_key,path,kind,content_type,size,sha256,blob_path,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-				sessionID, fileKey, file.Path, file.Kind, file.ContentType, file.Size, file.SHA256, blobPath, "ready", formatTime(file.CreatedAt), formatTime(file.UpdatedAt)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO application_edit_session_files(session_id,file_key,name,kind,content_type,size,sha256,blob_path,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+				sessionID, fileKey, file.Name, file.Kind, file.ContentType, file.Size, file.SHA256, blobPath, "ready", formatTime(file.CreatedAt), formatTime(file.UpdatedAt)); err != nil {
 				return ApplicationEditSession{}, err
 			}
 		}
@@ -173,7 +173,7 @@ func (s *Service) PatchEditSession(ctx context.Context, owner, sessionID string,
 	return s.GetEditSession(ctx, owner, sessionID)
 }
 
-func (s *Service) PutEditSessionFile(ctx context.Context, owner, sessionID, fileKey, idempotencyKey string, in EditSessionFileInput) (ApplicationEditSession, error) {
+func (s *Service) PutEditSessionFile(ctx context.Context, owner, sessionID, fileRef, idempotencyKey string, in EditSessionFileInput) (ApplicationEditSession, error) {
 	kind := strings.TrimSpace(in.Kind)
 	if kind != "" && kind != ApplicationFileKindTemplate {
 		return ApplicationEditSession{}, panelerr.Validation("application_file_kind_invalid", "JSON file writes only support template files")
@@ -185,47 +185,61 @@ func (s *Service) PutEditSessionFile(ctx context.Context, owner, sessionID, file
 	if strings.TrimSpace(in.ClientOperationID) == "" {
 		return ApplicationEditSession{}, panelerr.Validation("client_operation_id_required", "clientOperationId is required")
 	}
-	pathValue, err := normalizeApplicationFilePath(in.Path)
+	name, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.Path))
 	if err != nil {
 		return ApplicationEditSession{}, err
 	}
 	kind = ApplicationFileKindTemplate
-	fileKey = strings.TrimSpace(fileKey)
-	if fileKey == "" {
-		return ApplicationEditSession{}, panelerr.Validation("application_file_key_required", "file key is required")
+	fileRef = strings.TrimSpace(fileRef)
+	if fileRef == "" {
+		return ApplicationEditSession{}, panelerr.Validation("application_file_name_invalid", "file name is required")
 	}
-	contentType := inferApplicationFileContentType(pathValue, content, true)
-	requestHash := editRequestHash(in.Revision, fileKey, pathValue, kind, contentType, content)
+	fileKey, err := s.resolveEditSessionFileKey(ctx, sessionID, fileRef)
+	if err != nil {
+		return ApplicationEditSession{}, err
+	}
+	if fileKey == "" {
+		fileKey = fileRef
+	}
+	contentType := inferApplicationFileContentType(name, content, true)
+	requestHash := editRequestHash(in.Revision, name, kind, contentType, content)
 	if result, ok, err := s.editOperationResult(ctx, owner, sessionID, in.ClientOperationID, idempotencyKey, requestHash); err != nil || ok {
 		return result, err
 	}
-	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, pathValue, kind, contentType, content)
+	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, name, kind, contentType, content)
 }
 
-func (s *Service) UploadEditSessionBinary(ctx context.Context, owner, sessionID, fileKey, idempotencyKey string, in EditSessionBinaryInput) (ApplicationEditSession, error) {
+func (s *Service) UploadEditSessionBinary(ctx context.Context, owner, sessionID, fileRef, idempotencyKey string, in EditSessionBinaryInput) (ApplicationEditSession, error) {
 	if strings.TrimSpace(in.ClientOperationID) == "" {
 		return ApplicationEditSession{}, panelerr.Validation("client_operation_id_required", "clientOperationId is required")
 	}
 	if len(in.Content) == 0 {
 		return ApplicationEditSession{}, panelerr.Validation("application_file_content_invalid", "file content is required")
 	}
-	pathValue, err := normalizeApplicationFilePath(in.Path)
+	name, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.Path))
 	if err != nil {
 		return ApplicationEditSession{}, err
 	}
-	fileKey = strings.TrimSpace(fileKey)
-	if fileKey == "" {
-		return ApplicationEditSession{}, panelerr.Validation("application_file_key_required", "file key is required")
+	fileRef = strings.TrimSpace(fileRef)
+	if fileRef == "" {
+		return ApplicationEditSession{}, panelerr.Validation("application_file_name_invalid", "file name is required")
 	}
-	contentType := inferApplicationFileContentType(firstNonEmpty(strings.TrimSpace(in.FileName), pathValue), in.Content, false)
-	requestHash := editRequestHash(in.Revision, fileKey, pathValue, ApplicationFileKindBinary, contentType, in.Content)
+	fileKey, err := s.resolveEditSessionFileKey(ctx, sessionID, fileRef)
+	if err != nil {
+		return ApplicationEditSession{}, err
+	}
+	if fileKey == "" {
+		fileKey = fileRef
+	}
+	contentType := inferApplicationFileContentType(firstNonEmpty(strings.TrimSpace(in.FileName), name), in.Content, false)
+	requestHash := editRequestHash(in.Revision, name, ApplicationFileKindBinary, contentType, in.Content)
 	if result, ok, err := s.editOperationResult(ctx, owner, sessionID, in.ClientOperationID, idempotencyKey, requestHash); err != nil || ok {
 		return result, err
 	}
-	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, pathValue, ApplicationFileKindBinary, contentType, in.Content)
+	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, name, ApplicationFileKindBinary, contentType, in.Content)
 }
 
-func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, fileKey string) (EditSessionFileContent, error) {
+func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, fileRef string) (EditSessionFileContent, error) {
 	record, err := s.loadEditSession(ctx, normalizeEditOwner(owner), sessionID)
 	if err != nil {
 		return EditSessionFileContent{}, err
@@ -234,10 +248,14 @@ func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, file
 		return EditSessionFileContent{}, panelerr.Conflict("application_edit_session_state_invalid", "application edit session is not editable")
 	}
 
+	fileKey, resolveErr := s.resolveEditSessionFileKey(ctx, record.ID, fileRef)
+	if resolveErr != nil {
+		return EditSessionFileContent{}, resolveErr
+	}
 	var result EditSessionFileContent
 	var blobPath string
-	err = s.db.QueryRowContext(ctx, `SELECT file_key,path,kind,content_type,size,sha256,blob_path FROM application_edit_session_files WHERE session_id=? AND file_key=? AND state='ready'`, record.ID, strings.TrimSpace(fileKey)).Scan(
-		&result.FileKey, &result.Path, &result.Kind, &result.ContentType, &result.Size, &result.SHA256, &blobPath,
+	err = s.db.QueryRowContext(ctx, `SELECT file_key,name,kind,content_type,size,sha256,blob_path FROM application_edit_session_files WHERE session_id=? AND file_key=? AND state='ready'`, record.ID, strings.TrimSpace(fileKey)).Scan(
+		&result.FileKey, &result.Name, &result.Kind, &result.ContentType, &result.Size, &result.SHA256, &blobPath,
 	)
 	if err == sql.ErrNoRows {
 		return EditSessionFileContent{}, panelerr.NotFound("application_edit_session_file")
@@ -251,39 +269,73 @@ func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, file
 	}
 	result.ContentBase64 = base64.StdEncoding.EncodeToString(content)
 	result.Content = content
+	result.Path = result.Name
 	return result, nil
 }
 
+// resolveEditSessionFileKey translates the public name reference to the
+// storage key used by older edit sessions. New requests never need to know
+// that key, but the fallback keeps pre-name sessions recoverable.
+func (s *Service) resolveEditSessionFileKey(ctx context.Context, sessionID, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", nil
+	}
+	var fileKey string
+	err := s.db.QueryRowContext(ctx, `SELECT file_key FROM application_edit_session_files WHERE session_id=? AND name=? AND state='ready'`, strings.TrimSpace(sessionID), ref).Scan(&fileKey)
+	if err == sql.ErrNoRows {
+		err = s.db.QueryRowContext(ctx, `SELECT file_key FROM application_edit_session_files WHERE session_id=? AND file_key=? AND state='ready'`, strings.TrimSpace(sessionID), ref).Scan(&fileKey)
+	}
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return fileKey, err
+}
+
 func (s *Service) UploadEditSessionArchive(ctx context.Context, owner, sessionID, idempotencyKey string, in EditSessionArchiveInput) (ApplicationEditSession, error) {
-	if strings.TrimSpace(in.ClientOperationID) == "" || strings.TrimSpace(in.FileKey) == "" {
-		return ApplicationEditSession{}, panelerr.Validation("application_edit_operation_invalid", "fileKey and clientOperationId are required")
+	if strings.TrimSpace(in.ClientOperationID) == "" {
+		return ApplicationEditSession{}, panelerr.Validation("application_edit_operation_invalid", "name and clientOperationId are required")
 	}
 	if len(in.Content) == 0 {
 		return ApplicationEditSession{}, panelerr.Validation("application_file_content_invalid", "archive file is required")
 	}
-	basePath, err := normalizeApplicationArchiveBasePath(in.BasePath)
+	name, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.BasePath))
 	if err != nil {
 		return ApplicationEditSession{}, err
-	}
-	if basePath == "" {
-		return ApplicationEditSession{}, panelerr.Validation("application_file_path_invalid", "archive path is required")
 	}
 	if _, err := extractApplicationFileArchive(strings.NewReader(string(in.Content)), int64(len(in.Content)), in.FileName); err != nil {
 		// strings.Reader implements ReaderAt; using it keeps validation identical to the legacy path.
 		return ApplicationEditSession{}, err
 	}
-	requestHash := editRequestHash(in.Revision, in.FileKey, basePath, ApplicationFileKindArchive, in.FileName, in.Content)
+	fileKey, err := s.resolveEditSessionFileKey(ctx, sessionID, name)
+	if err != nil {
+		return ApplicationEditSession{}, err
+	}
+	if fileKey == "" && strings.TrimSpace(in.FileKey) != "" {
+		fileKey, err = s.resolveEditSessionFileKey(ctx, sessionID, in.FileKey)
+		if err != nil {
+			return ApplicationEditSession{}, err
+		}
+	}
+	if fileKey == "" {
+		fileKey = name
+	}
+	requestHash := editRequestHash(in.Revision, name, ApplicationFileKindArchive, in.FileName, in.Content)
 	if result, ok, err := s.editOperationResult(ctx, owner, sessionID, in.ClientOperationID, idempotencyKey, requestHash); err != nil || ok {
 		return result, err
 	}
-	return s.writeEditSessionFile(ctx, owner, sessionID, in.FileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, basePath, ApplicationFileKindArchive, in.FileName, in.Content)
+	return s.writeEditSessionFile(ctx, owner, sessionID, fileKey, idempotencyKey, in.ClientOperationID, requestHash, in.Revision, name, ApplicationFileKindArchive, in.FileName, in.Content)
 }
 
-func (s *Service) DeleteEditSessionFile(ctx context.Context, owner, sessionID, fileKey, idempotencyKey string, in EditSessionMutationInput) (ApplicationEditSession, error) {
+func (s *Service) DeleteEditSessionFile(ctx context.Context, owner, sessionID, fileRef, idempotencyKey string, in EditSessionMutationInput) (ApplicationEditSession, error) {
 	if strings.TrimSpace(in.ClientOperationID) == "" {
 		return ApplicationEditSession{}, panelerr.Validation("client_operation_id_required", "clientOperationId is required")
 	}
-	requestHash := editRequestHash(in.Revision, fileKey, "delete")
+	fileKey, err := s.resolveEditSessionFileKey(ctx, sessionID, fileRef)
+	if err != nil {
+		return ApplicationEditSession{}, err
+	}
+	requestHash := editRequestHash(in.Revision, strings.TrimSpace(fileRef), "delete")
 	if result, ok, err := s.editOperationResult(ctx, owner, sessionID, in.ClientOperationID, idempotencyKey, requestHash); err != nil || ok {
 		return result, err
 	}
@@ -442,7 +494,7 @@ func (s *Service) DiscardEditSession(ctx context.Context, owner, sessionID strin
 	return nil
 }
 
-func (s *Service) writeEditSessionFile(ctx context.Context, owner, sessionID, fileKey, idempotencyKey, operationID, requestHash string, revision int, targetPath, kind, contentType string, content []byte) (ApplicationEditSession, error) {
+func (s *Service) writeEditSessionFile(ctx context.Context, owner, sessionID, fileKey, idempotencyKey, operationID, requestHash string, revision int, name, kind, contentType string, content []byte) (ApplicationEditSession, error) {
 	owner = normalizeEditOwner(owner)
 	dir := s.editSessionPath(sessionID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -478,8 +530,8 @@ func (s *Service) writeEditSessionFile(ctx context.Context, owner, sessionID, fi
 	if err := s.bumpEditRevision(ctx, tx, owner, sessionID, revision); err != nil {
 		return ApplicationEditSession{}, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO application_edit_session_files(session_id,file_key,path,kind,content_type,size,sha256,blob_path,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,file_key) DO UPDATE SET path=excluded.path,kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,blob_path=excluded.blob_path,state='ready',updated_at=excluded.updated_at`,
-		sessionID, fileKey, targetPath, kind, strings.TrimSpace(contentType), len(content), hex.EncodeToString(sum[:]), blobPath, "ready", formatTime(now), formatTime(now))
+	_, err = tx.ExecContext(ctx, `INSERT INTO application_edit_session_files(session_id,file_key,name,kind,content_type,size,sha256,blob_path,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(session_id,file_key) DO UPDATE SET name=excluded.name,kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,blob_path=excluded.blob_path,state='ready',updated_at=excluded.updated_at`,
+		sessionID, fileKey, name, kind, strings.TrimSpace(contentType), len(content), hex.EncodeToString(sum[:]), blobPath, "ready", formatTime(now), formatTime(now))
 	if err != nil {
 		return ApplicationEditSession{}, applicationSaveError(err)
 	}
@@ -577,7 +629,7 @@ func (s *Service) loadEditSession(ctx context.Context, owner, sessionID string) 
 }
 
 func (s *Service) editSessionFiles(ctx context.Context, sessionID string) ([]EditSessionFile, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT file_key,path,kind,content_type,size,sha256,created_at,updated_at FROM application_edit_session_files WHERE session_id=? AND state='ready' ORDER BY path`, sessionID)
+	rows, err := s.db.QueryContext(ctx, `SELECT file_key,name,kind,content_type,size,sha256,created_at,updated_at FROM application_edit_session_files WHERE session_id=? AND state='ready' ORDER BY name`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -586,17 +638,18 @@ func (s *Service) editSessionFiles(ctx context.Context, sessionID string) ([]Edi
 	for rows.Next() {
 		var item EditSessionFile
 		var createdAt, updatedAt string
-		if err := rows.Scan(&item.FileKey, &item.Path, &item.Kind, &item.ContentType, &item.Size, &item.SHA256, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&item.FileKey, &item.Name, &item.Kind, &item.ContentType, &item.Size, &item.SHA256, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		item.CreatedAt, item.UpdatedAt = parseEditTime(createdAt), parseEditTime(updatedAt)
+		item.Path = item.Name
 		items = append(items, item)
 	}
 	return items, rows.Err()
 }
 
 func (s *Service) editSessionApplicationFiles(ctx context.Context, sessionID, applicationID string) ([]ApplicationFile, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT file_key,path,kind,content_type,size,sha256,blob_path,created_at,updated_at FROM application_edit_session_files WHERE session_id=? AND state='ready' ORDER BY path`, sessionID)
+	rows, err := s.db.QueryContext(ctx, `SELECT file_key,name,kind,content_type,size,sha256,blob_path,created_at,updated_at FROM application_edit_session_files WHERE session_id=? AND state='ready' ORDER BY name`, sessionID)
 	if err != nil {
 		return nil, err
 	}
@@ -605,10 +658,11 @@ func (s *Service) editSessionApplicationFiles(ctx context.Context, sessionID, ap
 	for rows.Next() {
 		var file ApplicationFile
 		var blobPath, createdAt, updatedAt string
-		if err := rows.Scan(&file.ID, &file.Path, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &blobPath, &createdAt, &updatedAt); err != nil {
+		if err := rows.Scan(&file.ID, &file.Name, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &blobPath, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
 		file.ApplicationID = applicationID
+		file.Path = file.Name
 		file.Content, err = readEditSessionBlob(file.ID, blobPath, file.Size, file.SHA256)
 		if err != nil {
 			return nil, err
@@ -808,13 +862,13 @@ func applicationFileSetsMatch(persisted, desired []ApplicationFile) bool {
 	}
 	want := make(map[string]signature, len(desired))
 	for _, file := range desired {
-		want[file.Path] = signature{file.Kind, file.ContentType, file.SHA256, file.Size}
+		want[file.Name] = signature{file.Kind, file.ContentType, file.SHA256, file.Size}
 	}
 	for _, file := range persisted {
-		if want[file.Path] != (signature{file.Kind, file.ContentType, file.SHA256, file.Size}) {
+		if want[file.Name] != (signature{file.Kind, file.ContentType, file.SHA256, file.Size}) {
 			return false
 		}
-		delete(want, file.Path)
+		delete(want, file.Name)
 	}
 	return len(want) == 0
 }

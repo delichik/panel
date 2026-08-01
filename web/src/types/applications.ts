@@ -109,10 +109,8 @@ export interface ApplicationSaveInput {
 }
 
 export interface ApplicationFile {
-  id?: string;
-  fileKey?: string;
   applicationId?: string;
-  path: string;
+  name: string;
   kind: FileKind | string;
   contentType: string;
   size: number;
@@ -123,8 +121,7 @@ export interface ApplicationFile {
 }
 
 export interface ApplicationEditSessionFileContent {
-  fileKey: string;
-  path: string;
+	name: string;
   kind: FileKind | string;
   contentType: string;
   size: number;

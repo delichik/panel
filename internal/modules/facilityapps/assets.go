@@ -29,7 +29,7 @@ const (
 	facilityAssetArchiveMaxRatio     = int64(100)
 )
 
-func (s *Service) ListStaticAssets(ctx context.Context) ([]StaticAsset, error) {
+func (s *Service) listStaticAssets(ctx context.Context) ([]StaticAsset, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_static_assets ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
@@ -55,6 +55,13 @@ func (s *Service) UploadStaticAsset(ctx context.Context, in StaticAssetUploadInp
 	}
 	if name == "" {
 		return StaticAsset{}, panelerr.Validation("facility_static_asset_name_required", "Static asset name is required")
+	}
+	var duplicate int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM facility_static_assets WHERE name=?`, name).Scan(&duplicate); err != nil {
+		return StaticAsset{}, err
+	}
+	if duplicate > 0 {
+		return StaticAsset{}, panelerr.Validation("facility_static_asset_name_duplicate", "Static asset name must be unique within the facility")
 	}
 	kind := strings.TrimSpace(in.Kind)
 	if kind != StaticSourceUploadedFile && kind != StaticSourceUploadedBundle {
@@ -106,13 +113,18 @@ func (s *Service) UploadStaticAsset(ctx context.Context, in StaticAssetUploadInp
 	return asset, nil
 }
 
-func (s *Service) DeleteStaticAsset(ctx context.Context, assetID string) error {
+func (s *Service) DeleteStaticAsset(ctx context.Context, assetName string) error {
 	s.editCommitMu.Lock()
 	defer s.editCommitMu.Unlock()
-	assetID = strings.TrimSpace(assetID)
-	if assetID == "" {
+	assetName = strings.TrimSpace(assetName)
+	if assetName == "" {
 		return panelerr.NotFound("static asset")
 	}
+	asset, err := s.getStaticAssetByRef(ctx, assetName)
+	if err != nil {
+		return err
+	}
+	assetID := asset.ID
 	used, err := s.staticAssetInUse(ctx, assetID)
 	if err != nil {
 		return err
@@ -149,7 +161,11 @@ func (s *Service) staticAssetInUse(ctx context.Context, assetID string) (bool, e
 	}
 	for _, domain := range cfg.Domains {
 		for _, routePath := range domain.Paths {
-			if routePath.AssetID == assetID {
+			asset, err := s.getStaticAsset(ctx, assetID)
+			if err != nil {
+				return false, err
+			}
+			if routePath.AssetName == asset.Name {
 				return true, nil
 			}
 		}
@@ -163,6 +179,28 @@ func (s *Service) getStaticAsset(ctx context.Context, assetID string) (StaticAss
 		return StaticAsset{}, panelerr.NotFound("static asset")
 	}
 	return asset, err
+}
+
+func (s *Service) getStaticAssetByName(ctx context.Context, name string) (StaticAsset, error) {
+	asset, err := scanStaticAsset(s.db.QueryRowContext(ctx, `SELECT id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_static_assets WHERE name=?`, strings.TrimSpace(name)))
+	if err == sql.ErrNoRows {
+		return StaticAsset{}, panelerr.NotFound("static asset")
+	}
+	return asset, err
+}
+
+// getStaticAssetByRef keeps old physical-id callers working while all new
+// requests use the facility-local asset name.
+func (s *Service) getStaticAssetByRef(ctx context.Context, ref string) (StaticAsset, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return StaticAsset{}, panelerr.NotFound("static asset")
+	}
+	asset, err := s.getStaticAssetByName(ctx, ref)
+	if err == nil {
+		return asset, nil
+	}
+	return s.getStaticAsset(ctx, ref)
 }
 
 func (s *Service) staticAssetFiles(assetID string) ([]appruntimeFile, error) {
@@ -211,6 +249,9 @@ func (s *Service) insertStaticAsset(ctx context.Context, asset StaticAsset) erro
 	_, err = tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,'binary',?,?,?,?,?)`,
 		asset.ID, asset.Name, asset.Kind, asset.Filename, asset.Size, asset.SHA256, formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt))
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return panelerr.Validation("facility_static_asset_name_duplicate", "Static asset name must be unique within the facility")
+		}
 		return err
 	}
 	if err := bumpFacilityConfigVersionTx(ctx, tx); err != nil {

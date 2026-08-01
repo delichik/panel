@@ -4001,8 +4001,8 @@ func replaceApplicationFiles(ctx context.Context, exec sqlExec, appID string, fi
 		return err
 	}
 	for _, file := range files {
-		if _, err := exec.ExecContext(ctx, `INSERT INTO application_files(id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			file.ID, appID, file.Path, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt)); err != nil {
+		if _, err := exec.ExecContext(ctx, `INSERT INTO application_files(id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			file.ID, appID, file.Name, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt)); err != nil {
 			return err
 		}
 	}
@@ -4810,9 +4810,9 @@ func (s *Service) renderManagedFilesForServer(ctx context.Context, app Applicati
 	if len(managed) == 0 || len(files) == 0 {
 		return managed, nil
 	}
-	filesByPath := map[string]ApplicationFile{}
+	filesByAllocation := map[string]ApplicationFile{}
 	for _, file := range files {
-		filesByPath[file.Path] = file
+		filesByAllocation[applicationFileAllocationName(file.ID)] = file
 	}
 	data, err := s.templateData(ctx, app, app.Variables, files, &srv)
 	if err != nil {
@@ -4820,7 +4820,7 @@ func (s *Service) renderManagedFilesForServer(ctx context.Context, app Applicati
 	}
 	out := append([]appruntime.ManagedFile(nil), managed...)
 	for i, item := range out {
-		file, ok := filesByPath[item.Path]
+		file, ok := filesByAllocation[item.Path]
 		if !ok || file.Kind != ApplicationFileKindTemplate {
 			continue
 		}
@@ -5847,11 +5847,11 @@ func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Applic
 
 func fileVariables(files []ApplicationFile) map[string]any {
 	items := make([]map[string]any, 0, len(files))
-	byPath := map[string]any{}
+	byName := map[string]any{}
 	for _, file := range files {
 		content := string(file.Content)
 		item := map[string]any{
-			"path":        file.Path,
+			"name":        file.Name,
 			"kind":        file.Kind,
 			"contentType": file.ContentType,
 			"size":        file.Size,
@@ -5860,16 +5860,16 @@ func fileVariables(files []ApplicationFile) map[string]any {
 			"base64":      base64.StdEncoding.EncodeToString(file.Content),
 		}
 		items = append(items, item)
-		byPath[file.Path] = item
+		byName[file.Name] = item
 	}
-	return map[string]any{"items": items, "byPath": byPath}
+	return map[string]any{"items": items, "byName": byName}
 }
 
 func applicationHash(spec appspec.Spec, variables map[string]string, deploymentMode string, deploymentServers []string, reverseProxy []ReverseProxyRule, files []ApplicationFile, resolved map[string]any) (string, error) {
 	fileRefs := make([]map[string]any, 0, len(files))
 	for _, file := range files {
 		fileRefs = append(fileRefs, map[string]any{
-			"path":   file.Path,
+			"name":   file.Name,
 			"kind":   file.Kind,
 			"sha256": file.SHA256,
 			"size":   file.Size,
@@ -5904,20 +5904,12 @@ func stableResolvedVariables(resolved map[string]any) map[string]any {
 	return out
 }
 
-func normalizeApplicationFilePath(value string) (string, error) {
-	return normalizeApplicationWorkspacePath(value)
-}
-
-func normalizeApplicationWorkspacePath(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" || strings.HasPrefix(value, "/") || strings.Contains(value, "\\") {
-		return "", panelerr.Validation("application_file_path_invalid", "application file path must be relative to the application workspace")
+func normalizeApplicationFileName(value string) (string, error) {
+	name := strings.TrimSpace(value)
+	if name == "" {
+		return "", panelerr.Validation("application_file_name_invalid", "application file name is invalid")
 	}
-	cleaned := path.Clean(value)
-	if cleaned == "." || strings.HasPrefix(cleaned, "../") || cleaned == ".." {
-		return "", panelerr.Validation("application_file_path_invalid", "application file path must stay inside the application workspace")
-	}
-	return cleaned, nil
+	return name, nil
 }
 
 func applicationPersistentDir(appID string) string {
@@ -6029,7 +6021,7 @@ func (s *Service) Package(ctx context.Context, appID string) (PackageResult, err
 		return PackageResult{}, err
 	}
 	for _, file := range files {
-		name := path.Join("files", strings.TrimPrefix(file.Path, "/"))
+		name := path.Join("files", strings.TrimPrefix(file.Name, "/"))
 		if err := writeZipFile(name, file.Content); err != nil {
 			return PackageResult{}, err
 		}

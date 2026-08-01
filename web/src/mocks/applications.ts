@@ -1,8 +1,8 @@
 import type { ApiEnvelope } from '@/types/api';
 import type { ApplicationDto, ApplicationEditSession, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
-import type { FacilityAppSummary, FacilityEditSession, ReverseProxyConfig } from '@/types/facilityApps';
+import type { FacilityEditSession, ReverseProxyConfig } from '@/types/facilityApps';
 
-const now = '2026-07-21T08:00:00.000Z';
+const now = '2026-08-01T08:00:00.000Z';
 
 export const mockApplications: ApplicationDto[] = [
   {
@@ -143,6 +143,142 @@ export const mockApplications: ApplicationDto[] = [
     createdAt: now,
     updatedAt: now,
   },
+  {
+    id: 'app-billing',
+    version: 8,
+    kind: 'application',
+    name: 'billing-portal',
+    enabled: true,
+    specYaml: 'name: billing-portal\nimage: ghcr.io/example/billing:5.1.2\nports:\n  - label: http\n    to: 8088\nmounts:\n  - type: persistent\n    target: /var/lib/billing\n',
+    variables: { BILLING_MODE: 'live', STRIPE_REGION: 'ap' },
+    persistentPath: '/opt/panel/apps/app-billing/persistent',
+    deploymentMode: 'selected',
+    deploymentServers: ['srv-api-hkg', 'srv-edge-sgp'],
+    reverseProxy: [{ domain: 'billing.example.test', targetType: 'local', targetPort: 8088, originServerIds: ['srv-api-hkg', 'srv-edge-sgp'], anyAccess: { enabled: true, strategy: 'least_conn' }, paths: [{ path: '/', webSocket: false }, { path: '/webhooks', webSocket: false }] }],
+    generation: 9,
+    specHash: 'hash-billing',
+    imageReference: 'ghcr.io/example/billing:5.1.2',
+    imageDigest: 'sha256:billing-current',
+    imageLatestDigest: 'sha256:billing-newer',
+    imageCheckedAt: now,
+    imageUpdateAvailable: true,
+    imageUpdateTargets: [{ serverId: 'srv-api-hkg', serverName: 'api-hkg-01', reference: 'ghcr.io/example/billing:5.1.2', updateAvailable: true, checkedAt: now }],
+    jobId: 'panel-billing',
+    namespace: 'finance',
+    runtimeStatus: 'deployed',
+    lastDeploymentId: 'deploy-billing-44',
+    createdAt: now,
+    updatedAt: now,
+  },
+  {
+    id: 'app-webhook',
+    version: 3,
+    kind: 'application',
+    name: 'webhook-ingress',
+    enabled: true,
+    specYaml: 'name: webhook-ingress\nimage: ghcr.io/example/webhooks:1.4.0\nports:\n  - label: http\n    to: 8091\n',
+    variables: { MAX_BODY_MB: '8', SIGNATURE_REQUIRED: 'true' },
+    deploymentMode: 'selected',
+    deploymentServers: ['srv-edge-sgp', 'srv-edge-lax'],
+    reverseProxy: [{ domain: 'hooks.example.test', targetType: 'local', targetPort: 8091, originServerIds: ['srv-edge-sgp', 'srv-edge-lax'], anyAccess: { enabled: true, strategy: 'round_robin' }, paths: [{ path: '/v1/hooks', webSocket: false }] }],
+    generation: 4,
+    specHash: 'hash-webhook',
+    imageReference: 'ghcr.io/example/webhooks:1.4.0',
+    imageUpdateAvailable: false,
+    jobId: 'panel-webhooks',
+    namespace: 'default',
+    runtimeStatus: 'partially_deployed',
+    lastError: 'srv-edge-lax agent report is stale.',
+    createdAt: now,
+    updatedAt: now,
+  },
+  {
+    id: 'app-media',
+    version: 5,
+    kind: 'application',
+    name: 'media-transcoder',
+    enabled: true,
+    specYaml: 'name: media-transcoder\nimage: ghcr.io/example/transcoder:0.12.3\nrestart:\n  policy: unless-stopped\nresources:\n  gpu: 1\n',
+    variables: { FFMPEG_PRESET: 'slow', OUTPUT_BUCKET: 's3://media-output' },
+    persistentPath: '/opt/panel/apps/app-media/persistent',
+    deploymentMode: 'selected',
+    deploymentServers: ['srv-media-syd', 'srv-gpu-nrt'],
+    reverseProxy: [],
+    generation: 6,
+    specHash: 'hash-media',
+    imageReference: 'ghcr.io/example/transcoder:0.12.3',
+    imageUpdateAvailable: true,
+    imageLastError: 'Registry rate limited while checking media image.',
+    jobId: 'panel-media',
+    namespace: 'media',
+    runtimeStatus: 'deploying',
+    createdAt: now,
+    updatedAt: now,
+  },
+  {
+    id: 'app-cache-sidecar',
+    version: 2,
+    kind: 'application',
+    name: 'redis-sidecar',
+    enabled: true,
+    specYaml: 'name: redis-sidecar\nimage: redis:7.4-alpine\nports:\n  - label: redis\n    to: 6379\n',
+    variables: { MAXMEMORY: '2gb' },
+    deploymentMode: 'selected',
+    deploymentServers: ['srv-cache-sfo'],
+    reverseProxy: [],
+    generation: 2,
+    specHash: 'hash-redis',
+    imageReference: 'redis:7.4-alpine',
+    imageUpdateAvailable: false,
+    jobId: 'panel-redis-sidecar',
+    namespace: 'infra',
+    runtimeStatus: 'deployed',
+    createdAt: now,
+    updatedAt: now,
+  },
+  {
+    id: 'app-canary-broken',
+    version: 11,
+    kind: 'application',
+    name: 'checkout-canary',
+    enabled: true,
+    specYaml: 'name: checkout-canary\nimage: ghcr.io/example/checkout:canary-2026.08.01\nports:\n  - label: http\n    to: 8080\n',
+    variables: { CANARY_WEIGHT: '5' },
+    deploymentMode: 'selected',
+    deploymentServers: ['srv-api-hkg-02'],
+    reverseProxy: [{ domain: 'checkout-canary.example.test', targetType: 'local', targetPort: 8080, originServerIds: ['srv-api-hkg-02'], anyAccess: { enabled: false }, paths: [{ path: '/', webSocket: false }] }],
+    generation: 11,
+    specHash: 'hash-canary',
+    imageReference: 'ghcr.io/example/checkout:canary-2026.08.01',
+    imageUpdateAvailable: false,
+    jobId: 'panel-checkout-canary',
+    namespace: 'default',
+    runtimeStatus: 'failed',
+    lastError: 'Canary probe failed: /ready returned 503 for 3 consecutive checks.',
+    createdAt: now,
+    updatedAt: now,
+  },
+  {
+    id: 'app-backup-agent',
+    version: 1,
+    kind: 'application',
+    name: 'backup-agent',
+    enabled: true,
+    specYaml: 'name: backup-agent\nimage: ghcr.io/example/backup-agent:2.1.0\nschedule: "0 2 * * *"\n',
+    variables: { RETENTION_DAYS: '30', TARGET: 's3://panel-backups' },
+    deploymentMode: 'selected',
+    deploymentServers: ['srv-backup-fra', 'srv-db-fra'],
+    reverseProxy: [],
+    generation: 1,
+    specHash: 'hash-backup',
+    imageReference: 'ghcr.io/example/backup-agent:2.1.0',
+    imageUpdateAvailable: false,
+    jobId: 'panel-backup-agent',
+    namespace: 'ops',
+    runtimeStatus: 'stopped',
+    createdAt: now,
+    updatedAt: now,
+  },
 ];
 
 const runtimes: Record<string, ApplicationRuntime> = {
@@ -193,12 +329,65 @@ const runtimes: Record<string, ApplicationRuntime> = {
     instances: [{ instanceId: 'inst-docs', serverId: 'srv-observability-ams', serverName: 'observability-ams', containerName: 'panel-docs', status: 'running', observedGeneration: 4 }],
   },
   'app-disabled': { applicationId: 'app-disabled', runtimeId: 'runtime-disabled', status: 'stopped', observedAt: now, instances: [] },
+  'app-billing': {
+    applicationId: 'app-billing',
+    runtimeId: 'runtime-billing',
+    status: 'deployed',
+    observedAt: now,
+    instances: [
+      { instanceId: 'inst-billing-api', serverId: 'srv-api-hkg', serverName: 'api-hkg-01', containerName: 'panel-billing', status: 'running', observedGeneration: 9 },
+      { instanceId: 'inst-billing-edge', serverId: 'srv-edge-sgp', serverName: 'edge-sgp-01', containerName: 'panel-billing', status: 'running', observedGeneration: 9 },
+    ],
+  },
+  'app-webhook': {
+    applicationId: 'app-webhook',
+    runtimeId: 'runtime-webhook',
+    status: 'partially_deployed',
+    observedAt: now,
+    instances: [
+      { instanceId: 'inst-webhook-sgp', serverId: 'srv-edge-sgp', serverName: 'edge-sgp-01', containerName: 'panel-webhooks', status: 'running', observedGeneration: 4 },
+      { instanceId: 'inst-webhook-lax', serverId: 'srv-edge-lax', serverName: 'edge-lax-01', containerName: 'panel-webhooks', status: 'unknown', error: 'agent report stale for 12m' },
+    ],
+  },
+  'app-media': {
+    applicationId: 'app-media',
+    runtimeId: 'runtime-media',
+    status: 'deploying',
+    observedAt: now,
+    instances: [
+      { instanceId: 'inst-media-syd', serverId: 'srv-media-syd', serverName: 'media-syd-transcode', containerName: 'panel-media', status: 'running', observedGeneration: 6 },
+      { instanceId: 'inst-media-gpu', serverId: 'srv-gpu-nrt', serverName: 'gpu-nrt-render', containerName: 'panel-media', status: 'starting', observedGeneration: 6 },
+    ],
+    operation: { id: 'op-media', applicationId: 'app-media', type: 'deploy', status: 'deploying', taskId: 'task-media-12', generation: 6, trigger: 'user', createdAt: now, updatedAt: now },
+  },
+  'app-cache-sidecar': {
+    applicationId: 'app-cache-sidecar',
+    runtimeId: 'runtime-redis',
+    status: 'deployed',
+    observedAt: now,
+    instances: [{ instanceId: 'inst-redis', serverId: 'srv-cache-sfo', serverName: 'cache-sfo-edge', containerName: 'panel-redis-sidecar', status: 'running', observedGeneration: 2 }],
+  },
+  'app-canary-broken': {
+    applicationId: 'app-canary-broken',
+    runtimeId: 'runtime-canary',
+    status: 'failed',
+    observedAt: now,
+    instances: [{ instanceId: 'inst-canary', serverId: 'srv-api-hkg-02', serverName: 'api-hkg-02-canary', containerName: 'panel-checkout-canary', status: 'failed', error: 'readiness probe failed' }],
+    operation: { id: 'op-canary', applicationId: 'app-canary-broken', type: 'deploy', status: 'failed', taskId: 'task-canary-3', generation: 11, trigger: 'user', error: 'Canary probe failed.', createdAt: now, updatedAt: now },
+  },
+  'app-backup-agent': {
+    applicationId: 'app-backup-agent',
+    runtimeId: 'runtime-backup',
+    status: 'stopped',
+    observedAt: now,
+    instances: [],
+  },
 };
 
 export let mockFacility: ReverseProxyConfig = {
   id: 'reverse_proxy',
-  version: 5,
-  deploymentServers: ['srv-edge-sgp', 'srv-api-hkg', 'srv-api-hkg-02'],
+  version: 8,
+  deploymentServers: ['srv-edge-sgp', 'srv-edge-sgp-02', 'srv-api-hkg', 'srv-api-hkg-02', 'srv-edge-lax'],
   panelHostServerId: 'srv-edge-sgp',
   panelEntry: { enabled: true, serverId: 'srv-edge-sgp', domain: 'panel.example.test' },
   domains: [
@@ -206,35 +395,47 @@ export let mockFacility: ReverseProxyConfig = {
       domain: 'static.example.test',
       originServerIds: ['srv-edge-sgp', 'srv-api-hkg'],
       anyAccess: { enabled: true, strategy: 'round_robin' },
-      paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_bundle', assetId: 'asset-docs' }],
+      paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_bundle', assetName: 'docs bundle' }],
     },
     {
       domain: 'downloads.example.test',
       originServerIds: ['srv-api-hkg-02'],
       anyAccess: { enabled: false },
-      paths: [{ path: '/releases', ruleType: 'static', sourceType: 'uploaded_file', assetId: 'asset-release-index' }],
+      paths: [{ path: '/releases', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'release index' }],
+    },
+    {
+      domain: 'status.example.test',
+      originServerIds: ['srv-edge-sgp-02'],
+      anyAccess: { enabled: true, strategy: 'first' },
+      paths: [{ path: '/', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'status page' }],
     },
   ],
   staticAssets: [
-    { id: 'asset-docs', name: 'docs bundle', kind: 'uploaded_bundle', contentMode: 'binary', filename: 'docs.zip', size: 7340032, sha256: 'sha-docs', createdAt: now, updatedAt: now },
-    { id: 'asset-release-index', name: 'release index', kind: 'uploaded_file', contentMode: 'binary', filename: 'index.html', size: 48216, sha256: 'sha-release-index', createdAt: now, updatedAt: now },
+    { name: 'docs bundle', kind: 'uploaded_bundle', contentMode: 'binary', filename: 'docs.zip', size: 7340032, sha256: 'sha-docs', createdAt: now, updatedAt: now },
+    { name: 'release index', kind: 'uploaded_file', contentMode: 'binary', filename: 'index.html', size: 48216, sha256: 'sha-release-index', createdAt: now, updatedAt: now },
+    { name: 'status page', kind: 'uploaded_file', contentMode: 'text', filename: 'status.html', size: 8192, sha256: 'sha-status', createdAt: now, updatedAt: now },
   ],
   routeSummaries: [
     { domain: 'panel.example.test', path: '/', source: 'system_panel', serverIds: ['srv-edge-sgp'], httpsStatus: 'domain_certificate', certificateName: 'panel.example.test' },
     { domain: 'shop.example.test', path: '/', source: 'application', serverIds: ['srv-edge-sgp', 'srv-api-hkg'], httpsStatus: 'domain_certificate', applicationId: 'app-storefront', applicationName: 'storefront' },
     { domain: 'api.example.test', path: '/v1', source: 'application', serverIds: ['srv-api-hkg', 'srv-api-hkg-02'], httpsStatus: 'domain_certificate', applicationId: 'app-api', applicationName: 'public-api' },
+    { domain: 'billing.example.test', path: '/', source: 'application', serverIds: ['srv-api-hkg', 'srv-edge-sgp'], httpsStatus: 'domain_certificate', applicationId: 'app-billing', applicationName: 'billing-portal' },
+    { domain: 'hooks.example.test', path: '/v1/hooks', source: 'application', serverIds: ['srv-edge-sgp', 'srv-edge-lax'], httpsStatus: 'domain_certificate', applicationId: 'app-webhook', applicationName: 'webhook-ingress' },
     { domain: 'static.example.test', path: '/', source: 'static_asset', serverIds: ['srv-edge-sgp', 'srv-api-hkg'], httpsStatus: 'self_signed_certificate' },
     { domain: 'downloads.example.test', path: '/releases', source: 'static_asset', serverIds: ['srv-api-hkg-02'], httpsStatus: 'missing' },
+    { domain: 'status.example.test', path: '/', source: 'static_asset', serverIds: ['srv-edge-sgp-02'], httpsStatus: 'domain_certificate', certificateName: 'status.example.test' },
   ],
   applicationRoutes: [
     { applicationId: 'app-storefront', applicationName: 'storefront', deploymentMode: 'selected', deploymentServers: ['srv-edge-sgp', 'srv-api-hkg'], routes: [{ domain: 'shop.example.test', targetPort: 8080, originServerIds: ['srv-edge-sgp', 'srv-api-hkg'], paths: [{ path: '/' }] }] },
     { applicationId: 'app-api', applicationName: 'public-api', deploymentMode: 'selected', deploymentServers: ['srv-api-hkg', 'srv-api-hkg-02'], routes: [{ domain: 'api.example.test', targetPort: 9000, originServerIds: ['srv-api-hkg', 'srv-api-hkg-02'], paths: [{ path: '/v1' }, { path: '/events' }] }] },
+    { applicationId: 'app-billing', applicationName: 'billing-portal', deploymentMode: 'selected', deploymentServers: ['srv-api-hkg', 'srv-edge-sgp'], routes: [{ domain: 'billing.example.test', targetPort: 8088, originServerIds: ['srv-api-hkg', 'srv-edge-sgp'], paths: [{ path: '/' }, { path: '/webhooks' }] }] },
+    { applicationId: 'app-webhook', applicationName: 'webhook-ingress', deploymentMode: 'selected', deploymentServers: ['srv-edge-sgp', 'srv-edge-lax'], routes: [{ domain: 'hooks.example.test', targetPort: 8091, originServerIds: ['srv-edge-sgp', 'srv-edge-lax'], paths: [{ path: '/v1/hooks' }] }] },
     { applicationId: 'app-internal-docs', applicationName: 'internal-docs', deploymentMode: 'selected', deploymentServers: ['srv-observability-ams'], routes: [{ domain: 'docs.example.test', targetPort: 8080, originServerIds: ['srv-observability-ams'], paths: [{ path: '/' }] }] },
   ],
-  operation: { id: 'op-facility', applicationId: 'facility-reverse-proxy', type: 'deploy', status: 'deployed', generation: 5, createdAt: now, updatedAt: now },
+  operation: { id: 'op-facility', applicationId: 'facility-reverse-proxy', type: 'deploy', status: 'deployed', generation: 8, createdAt: now, updatedAt: now },
   updatedAt: now,
-  routes: 7,
-  enabledServers: ['srv-edge-sgp', 'srv-api-hkg', 'srv-api-hkg-02'],
+  routes: 12,
+  enabledServers: ['srv-edge-sgp', 'srv-edge-sgp-02', 'srv-api-hkg', 'srv-api-hkg-02', 'srv-edge-lax'],
 };
 
 export function mockApplicationSummaries(): ApplicationSummaryDto[] {
@@ -252,19 +453,6 @@ export function mockApplicationSummaries(): ApplicationSummaryDto[] {
   }));
 }
 
-export function mockFacilitySummaries(): FacilityAppSummary[] {
-  return [{
-    kind: 'reverse-proxy',
-    titleKey: 'applicationsPage.entranceProxyFacility',
-    descriptionKey: 'applicationsPage.entranceProxyFacilityDescription',
-    categoryKey: 'applicationsPage.facilityCategoryTraffic',
-    status: mockFacility.lastError ? 'degraded' : 'available',
-    updatedAt: mockFacility.updatedAt,
-    operationStatus: mockFacility.operation?.status,
-    lastError: mockFacility.lastError,
-  }];
-}
-
 const appSessions = new Map<string, ApplicationEditSession>();
 const facilitySessions = new Map<string, FacilityEditSession>();
 
@@ -272,9 +460,60 @@ export function appRuntime(id: string) {
   return runtimes[id];
 }
 
+const logLines: Record<string, string[]> = {
+  'app-storefront': [
+    '[info] listening on :8080',
+    '[info] route / resolved',
+    '[warn] upstream retry from core-1',
+    '[info] checkout session created sid=cs_test_01',
+    '[info] inventory cache hit sku=sku-441',
+  ],
+  'app-api': [
+    '[info] public-api ready region=apac',
+    '[info] GET /v1/health 200 4ms',
+    '[info] GET /v1/orders 200 18ms',
+    '[warn] rate limit soft threshold crossed for tenant=acme',
+  ],
+  'app-billing': [
+    '[info] billing-portal ready',
+    '[info] webhook signature verified provider=stripe',
+    '[info] invoice finalized id=in_1042',
+  ],
+  'app-webhook': [
+    '[info] webhook-ingress listening on :8091',
+    '[info] accepted delivery id=deliv_88 source=github',
+    '[warn] retry scheduled for delivery id=deliv_91',
+  ],
+  'app-media': [
+    '[info] transcoder worker online gpu=1',
+    '[info] job job_221 queued preset=slow',
+    '[info] job job_220 completed duration=42s',
+  ],
+  'app-canary-broken': [
+    '[error] readiness probe failed path=/ready status=503',
+    '[error] circuit open after 3 consecutive failures',
+    '[warn] traffic weight reduced to 0',
+  ],
+  'app-analytics': [
+    '[error] worker exited code=137',
+    '[warn] batch flush deferred because clickhouse is slow',
+    '[info] residual workers still processing shard=2',
+  ],
+};
+
 export function appLogs(id: string): LogResult {
   if (id === 'app-worker') throw new Error('Runtime log stream is temporarily unavailable.');
-  return { instanceId: 'inst-edge', containerName: 'panel-storefront', type: 'stdout', logs: ['[info] listening on :8080', '[info] route / resolved', '[warn] upstream retry from core-1'].join('\n') };
+  const lines = logLines[id] ?? [
+    `[info] ${id} runtime attached`,
+    '[info] health endpoint responded 200',
+    '[debug] metrics scrape completed',
+  ];
+  return {
+    instanceId: `inst-${id.replace(/^app-/, '')}`,
+    containerName: `panel-${id.replace(/^app-/, '')}`,
+    type: 'stdout',
+    logs: lines.join('\n'),
+  };
 }
 
 export function appOperation(id: string, operation: string): OperationResult | null {
@@ -311,7 +550,7 @@ export function beginAppSession(applicationId?: string): ApplicationEditSession 
       reverseProxy: app?.reverseProxy ?? [],
     },
     revision: 1,
-    files: [{ fileKey: 'file-env', path: 'config/env.template', kind: 'template', contentType: 'text/plain', size: 12, sha256: 'sha-env', contentBase64: 'SE9TVD17eyBob3N0IH19Cg==', createdAt: now, updatedAt: now }],
+    files: [{ name: 'env-template', kind: 'template', contentType: 'text/plain', size: 12, sha256: 'sha-env', contentBase64: 'SE9TVD17eyBob3N0IH19Cg==', createdAt: now, updatedAt: now }],
     idleExpiresAt: '2026-07-22T08:00:00.000Z',
     absoluteExpiresAt: '2026-07-28T08:00:00.000Z',
     createdAt: now,
@@ -334,32 +573,31 @@ export function patchAppSession(id: string, draft: ApplicationEditSession['draft
   return session;
 }
 
-export function getAppFile(id: string, fileKey: string) {
-  const file = appSessions.get(id)?.files.find((item) => item.fileKey === fileKey);
+export function getAppFile(id: string, fileName: string) {
+  const file = appSessions.get(id)?.files.find((item) => item.name === fileName);
   return file ? { ...file, contentBase64: file.contentBase64 ?? '' } : null;
 }
 
-export function putAppFile(id: string, fileKey: string, input: { path: string; kind: string; contentType: string; contentBase64: string }) {
+export function putAppFile(id: string, fileName: string, input: { name: string; kind: string; contentType: string; contentBase64: string }) {
   const session = appSessions.get(id);
   if (!session) return null;
-  session.files = session.files.filter((file) => file.fileKey !== fileKey);
-  session.files.push({ fileKey, path: input.path, kind: input.kind, contentType: input.contentType, size: input.contentBase64.length, sha256: `sha-${fileKey}`, contentBase64: input.contentBase64, createdAt: now, updatedAt: now });
+  session.files = session.files.filter((file) => file.name !== fileName);
+  session.files.push({ name: input.name, kind: input.kind, contentType: input.contentType, size: input.contentBase64.length, sha256: `sha-${fileName}`, contentBase64: input.contentBase64, createdAt: now, updatedAt: now });
   session.revision += 1;
   return session;
 }
 
-export function uploadAppArchive(id: string, input: { fileKey: string; basePath: string; filename: string; size: number; contentType: string }) {
+export function uploadAppArchive(id: string, input: { name: string; filename: string; size: number; contentType: string }) {
   const session = appSessions.get(id);
   if (!session) return null;
-  const normalizedPath = input.basePath.trim() && input.basePath !== '/' ? input.basePath : input.filename;
-  session.files = session.files.filter((file) => file.fileKey !== input.fileKey);
+  const name = input.name.trim() || input.filename;
+  session.files = session.files.filter((file) => file.name !== name);
   session.files.push({
-    fileKey: input.fileKey,
-    path: normalizedPath,
+    name,
     kind: 'archive',
     contentType: input.contentType,
     size: input.size,
-    sha256: `sha-${input.fileKey}`,
+    sha256: `sha-${name}`,
     createdAt: now,
     updatedAt: now,
   });
@@ -368,10 +606,10 @@ export function uploadAppArchive(id: string, input: { fileKey: string; basePath:
   return session;
 }
 
-export function deleteAppFile(id: string, fileKey: string) {
+export function deleteAppFile(id: string, fileName: string) {
   const session = appSessions.get(id);
   if (!session) return null;
-  session.files = session.files.filter((file) => file.fileKey !== fileKey);
+  session.files = session.files.filter((file) => file.name !== fileName);
   session.revision += 1;
   return session;
 }
@@ -436,7 +674,7 @@ export function beginFacilitySession(): FacilityEditSession {
     baseResourceVersion: { value: String(mockFacility.version), updatedAt: mockFacility.updatedAt },
     draft: { deploymentServers: mockFacility.deploymentServers, panelEntry: mockFacility.panelEntry, domains: mockFacility.domains },
     revision: 1,
-    assets: mockFacility.staticAssets.map((asset) => ({ assetKey: asset.id, sourceAssetId: asset.id, name: asset.name, kind: asset.kind, contentMode: asset.contentMode, filename: asset.filename, size: asset.size, sha256: asset.sha256, createdAt: asset.createdAt, updatedAt: asset.updatedAt })),
+    assets: mockFacility.staticAssets.map((asset) => ({ name: asset.name, kind: asset.kind, contentMode: asset.contentMode, filename: asset.filename, size: asset.size, sha256: asset.sha256, createdAt: asset.createdAt, updatedAt: asset.updatedAt })),
     idleExpiresAt: '2026-07-22T08:00:00.000Z',
     absoluteExpiresAt: '2026-07-28T08:00:00.000Z',
     createdAt: now,
@@ -458,18 +696,17 @@ export function patchFacilitySession(id: string, draft: FacilityEditSession['dra
   return session;
 }
 
-export function putFacilityAsset(id: string, assetKey: string, input: { name: string; kind: string; contentMode?: 'text' | 'binary'; filename: string; size: number }) {
+export function putFacilityAsset(id: string, assetName: string, input: { name: string; kind: string; contentMode?: 'text' | 'binary'; filename: string; size: number }) {
   const session = facilitySessions.get(id);
   if (!session) return null;
-  session.assets = session.assets.filter((asset) => asset.assetKey !== assetKey);
+  session.assets = session.assets.filter((asset) => asset.name !== assetName);
   session.assets.push({
-    assetKey,
     name: input.name,
     kind: input.kind,
     contentMode: input.contentMode ?? 'binary',
     filename: input.filename,
     size: input.size,
-    sha256: `sha-${assetKey}`,
+    sha256: `sha-${assetName}`,
     createdAt: now,
     updatedAt: now,
   });
@@ -478,10 +715,10 @@ export function putFacilityAsset(id: string, assetKey: string, input: { name: st
   return session;
 }
 
-export function deleteFacilityAsset(id: string, assetKey: string) {
+export function deleteFacilityAsset(id: string, assetName: string) {
   const session = facilitySessions.get(id);
   if (!session) return null;
-  session.assets = session.assets.filter((asset) => asset.assetKey !== assetKey);
+  session.assets = session.assets.filter((asset) => asset.name !== assetName);
   session.revision += 1;
   session.updatedAt = now;
   return session;
@@ -507,7 +744,6 @@ export function commitFacilitySession(id: string) {
     panelEntry: session.draft.panelEntry,
     domains: session.draft.domains,
     staticAssets: session.assets.map((asset) => ({
-      id: asset.sourceAssetId || asset.assetKey,
       name: asset.name,
       kind: asset.kind,
       contentMode: asset.contentMode,

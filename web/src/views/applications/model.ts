@@ -331,7 +331,7 @@ export function makeFacilityDomain(): FacilityRouteDomain {
 }
 
 export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoutePath {
-  return { path: '/', ruleType: type, sourceType: 'host_path', rootPath: '/srv/www', assetId: '', redirectUrl: '', redirectCode: 302, proxyUrl: '', proxySourceMode: 'preserve_source', options: defaultRouteOptions() };
+  return { path: '/', ruleType: type, sourceType: 'host_path', rootPath: '/srv/www', assetName: '', redirectUrl: '', redirectCode: 302, proxyUrl: '', proxySourceMode: 'preserve_source', options: defaultRouteOptions() };
 }
 
 export function cloneProxyRules(rules: ReverseProxyRule[]) {

@@ -646,11 +646,12 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
-		Path:          "config/app.conf",
+	file, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
+		Name:          "config/app.conf",
 		Kind:          "template",
 		ContentBase64: base64.StdEncoding.EncodeToString([]byte("server={{ .vars.server }}")),
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Update(ctx, app.ID, SaveInput{
@@ -665,13 +666,14 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 		t.Fatalf("deploys = %#v", runtime.deploys)
 	}
 	spec := runtime.deploys[0].Spec
-	if len(spec.Files) != 1 || spec.Files[0].Path != "config/app.conf" || string(spec.Files[0].Content) != "server=localhost" {
+	allocation := applicationFileAllocationName(file.ID)
+	if len(spec.Files) != 1 || spec.Files[0].Path != allocation || string(spec.Files[0].Content) != "server=localhost" {
 		t.Fatalf("files = %#v", spec.Files)
 	}
 	if spec.Files[0].Mode != "0755" || spec.Files[0].UID == nil || *spec.Files[0].UID != 1000 || spec.Files[0].GID == nil || *spec.Files[0].GID != 1001 {
 		t.Fatalf("file permissions = %#v", spec.Files[0])
 	}
-	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Target != "/etc/app.conf" {
+	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Source != allocation || spec.Mounts[0].Target != "/etc/app.conf" {
 		t.Fatalf("mounts = %#v", spec.Mounts)
 	}
 }
@@ -689,12 +691,13 @@ func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.UploadSaveSessionArchive(ctx, session.ID, FileArchiveInput{
-		BasePath: "public",
+	files, err := svc.UploadSaveSessionArchive(ctx, session.ID, FileArchiveInput{
+		Name:     "public",
 		Kind:     "binary",
 		FileName: "site.zip",
 		Content:  archive,
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.CommitSaveSession(ctx, session.ID); err != nil {
@@ -704,10 +707,11 @@ func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
 		t.Fatal("expected deployment")
 	}
 	spec := runtimeClient.deploys[0].Spec
-	if len(spec.Files) != 1 || spec.Files[0].Kind != appruntime.ManagedFileKindArchive || spec.Files[0].Path != "public" || !bytes.Equal(spec.Files[0].Content, archive) {
+	allocation := applicationFileAllocationName(files[0].ID)
+	if len(spec.Files) != 1 || spec.Files[0].Kind != appruntime.ManagedFileKindArchive || spec.Files[0].Path != allocation || !bytes.Equal(spec.Files[0].Content, archive) {
 		t.Fatalf("files = %#v", spec.Files)
 	}
-	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Source != "public" || spec.Mounts[0].Target != "/usr/share/nginx/html" || !spec.Mounts[0].ReadOnly {
+	if len(spec.Mounts) != 1 || spec.Mounts[0].Type != "managed_file" || spec.Mounts[0].Source != allocation || spec.Mounts[0].Target != "/usr/share/nginx/html" || !spec.Mounts[0].ReadOnly {
 		t.Fatalf("mounts = %#v", spec.Mounts)
 	}
 }

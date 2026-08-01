@@ -1,8 +1,9 @@
 package applications
 
 type EditSessionFileContent struct {
-	FileKey       string `json:"fileKey"`
-	Path          string `json:"path"`
+	FileKey       string `json:"-"`
+	Name          string `json:"name"`
+	Path          string `json:"-"` // Deprecated compatibility alias for name.
 	Kind          string `json:"kind"`
 	ContentType   string `json:"contentType"`
 	Size          int64  `json:"size"`

@@ -1,6 +1,8 @@
 package facilityapps
 
 import (
+	"encoding/json"
+	"strings"
 	"time"
 
 	"panel/internal/modules/applications"
@@ -52,17 +54,6 @@ type ReverseProxyConfig struct {
 	EnabledServers    []string                                     `json:"enabledServers"`
 }
 
-type FacilityAppSummary struct {
-	Kind            string    `json:"kind"`
-	TitleKey        string    `json:"titleKey"`
-	DescriptionKey  string    `json:"descriptionKey"`
-	CategoryKey     string    `json:"categoryKey"`
-	Status          string    `json:"status"`
-	UpdatedAt       time.Time `json:"updatedAt"`
-	OperationStatus string    `json:"operationStatus,omitempty"`
-	LastError       string    `json:"lastError,omitempty"`
-}
-
 type ReverseProxySaveInput struct {
 	DeploymentServers []string              `json:"deploymentServers"`
 	PanelEntry        PanelEntry            `json:"panelEntry"`
@@ -87,7 +78,8 @@ type FacilityRoutePath struct {
 	RuleType        string                        `json:"ruleType,omitempty"`
 	RootPath        string                        `json:"rootPath,omitempty"`
 	SourceType      string                        `json:"sourceType"`
-	AssetID         string                        `json:"assetId,omitempty"`
+	AssetName       string                        `json:"assetName,omitempty"`
+	AssetID         string                        `json:"-"`
 	RedirectURL     string                        `json:"redirectUrl,omitempty"`
 	RedirectCode    int                           `json:"redirectCode,omitempty"`
 	ProxyURL        string                        `json:"proxyUrl,omitempty"`
@@ -95,8 +87,39 @@ type FacilityRoutePath struct {
 	Options         applications.HTTPRouteOptions `json:"options,omitempty"`
 }
 
+// UnmarshalJSON accepts the pre-name route reference while keeping new
+// responses free of the physical asset identifier.
+func (p *FacilityRoutePath) UnmarshalJSON(data []byte) error {
+	type routePathAlias FacilityRoutePath
+	var value routePathAlias
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	var legacy struct {
+		AssetID string `json:"assetId"`
+	}
+	if err := json.Unmarshal(data, &legacy); err != nil {
+		return err
+	}
+	*p = FacilityRoutePath(value)
+	p.AssetID = legacy.AssetID
+	return nil
+}
+
+func (p FacilityRoutePath) MarshalJSON() ([]byte, error) {
+	type routePathAlias FacilityRoutePath
+	value := routePathAlias(p)
+	if strings.TrimSpace(value.AssetName) == "" {
+		value.AssetName = strings.TrimSpace(value.AssetID)
+	}
+	value.AssetID = ""
+	return json.Marshal(value)
+}
+
 type StaticAsset struct {
-	ID          string    `json:"id"`
+	// ID is a storage key and is intentionally not part of the public asset
+	// contract.  Routes and clients address an asset by its facility-local name.
+	ID          string    `json:"-"`
 	Name        string    `json:"name"`
 	Kind        string    `json:"kind"`
 	ContentMode string    `json:"contentMode"`
@@ -108,12 +131,13 @@ type StaticAsset struct {
 }
 
 type StaticAssetUploadInput struct {
-	AssetID  string
-	Name     string
-	Kind     string
-	FileName string
-	Size     int64
-	Content  []byte
+	AssetID   string
+	AssetName string
+	Name      string
+	Kind      string
+	FileName  string
+	Size      int64
+	Content   []byte
 }
 
 type RouteSummary struct {
@@ -142,7 +166,9 @@ type CommitSaveSessionInput struct {
 }
 
 type StaticAssetDeleteInput struct {
-	AssetID string `json:"assetId"`
+	AssetName string `json:"assetName,omitempty"`
+	// AssetID is accepted only by the legacy in-memory save-session endpoint.
+	AssetID string `json:"assetId,omitempty"`
 }
 
 type SaveSessionResult struct {
@@ -166,8 +192,10 @@ const (
 )
 
 type FacilityEditAsset struct {
-	AssetKey      string    `json:"assetKey"`
-	SourceAssetID string    `json:"sourceAssetId,omitempty"`
+	// AssetKey and SourceAssetID are storage references kept for commit and
+	// migration handling; clients use the facility-local name as identity.
+	AssetKey      string    `json:"-"`
+	SourceAssetID string    `json:"-"`
 	Name          string    `json:"name"`
 	Kind          string    `json:"kind"`
 	ContentMode   string    `json:"contentMode"`

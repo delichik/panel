@@ -23,14 +23,16 @@ describe('domain mock routes', () => {
   });
 
   it('serves demo-sized inventory data for pagination and varied states', async () => {
-    const servers = await fetch('/api/v1/servers');
+    const servers = await fetch('/api/v1/servers?pageSize=200');
     const serversEnvelope = await servers.json();
-    expect(serversEnvelope.data.length).toBeGreaterThanOrEqual(12);
-    expect(serversEnvelope.data.some((server: { reachable: boolean }) => !server.reachable)).toBe(true);
+    expect(serversEnvelope.data.total).toBeGreaterThanOrEqual(15);
+    expect(serversEnvelope.data.items.length).toBe(serversEnvelope.data.total);
+    expect(serversEnvelope.data.items.some((server: { reachable: boolean }) => !server.reachable)).toBe(true);
 
-    const credentials = await fetch('/api/v1/credentials');
+    const credentials = await fetch('/api/v1/credentials?pageSize=200');
     const credentialsEnvelope = await credentials.json();
-    expect(credentialsEnvelope.data.length).toBeGreaterThanOrEqual(12);
+    expect(credentialsEnvelope.data.total).toBeGreaterThanOrEqual(15);
+    expect(credentialsEnvelope.data.items.length).toBe(credentialsEnvelope.data.total);
 
     const tasks = await fetch('/api/v1/tasks?pageSize=12&page=1');
     const tasksEnvelope = await tasks.json();
@@ -42,6 +44,53 @@ describe('domain mock routes', () => {
     expect(secondEnvelope.data.items[0].id).not.toBe(tasksEnvelope.data.items[0].id);
   });
 
+  it('paginates and filters inventory list endpoints with ListPage envelopes', async () => {
+    const page = await fetch('/api/v1/servers?page=1&pageSize=5');
+    const pageEnvelope = await page.json();
+    expect(page.status).toBe(200);
+    expect(pageEnvelope.data.page).toBe(1);
+    expect(pageEnvelope.data.pageSize).toBe(5);
+    expect(pageEnvelope.data.items.length).toBe(5);
+    expect(pageEnvelope.data.total).toBeGreaterThan(5);
+
+    const filtered = await fetch('/api/v1/servers?q=hkg&pageSize=50');
+    const filteredEnvelope = await filtered.json();
+    expect(filteredEnvelope.data.total).toBeGreaterThan(0);
+    expect(filteredEnvelope.data.items.every((server: { name: string; host: string; id: string }) =>
+      [server.name, server.host, server.id].some((value) => value.toLowerCase().includes('hkg')),
+    )).toBe(true);
+
+    const domains = await fetch('/api/v1/dns/domains?q=shop');
+    const domainsEnvelope = await domains.json();
+    expect(domainsEnvelope.data.items.some((domain: { name: string }) => domain.name.includes('shop'))).toBe(true);
+
+    const apps = await fetch('/api/v1/applications?q=storefront');
+    const appsEnvelope = await apps.json();
+    expect(appsEnvelope.data.items.some((app: { name: string; id: string }) => app.id.includes('storefront') || app.name.toLowerCase().includes('storefront'))).toBe(true);
+
+    const detail = await fetch('/api/v1/servers/srv-edge-sgp');
+    const detailEnvelope = await detail.json();
+    expect(detail.status).toBe(200);
+    expect(detailEnvelope.data.id).toBe('srv-edge-sgp');
+  });
+
+  it('serves expanded demo application and certificate inventory', async () => {
+    const apps = await fetch('/api/v1/applications?pageSize=200');
+    const appsEnvelope = await apps.json();
+    expect(appsEnvelope.data.total).toBeGreaterThanOrEqual(12);
+    expect(appsEnvelope.data.items.some((app: { runtimeStatus: string }) => app.runtimeStatus === 'failed')).toBe(true);
+    expect(appsEnvelope.data.items.some((app: { id: string }) => app.id === 'app-billing')).toBe(true);
+
+    const certs = await fetch('/api/v1/certificates?pageSize=200');
+    const certsEnvelope = await certs.json();
+    expect(certsEnvelope.data.total).toBeGreaterThanOrEqual(10);
+    expect(certsEnvelope.data.items.some((cert: { status: string }) => cert.status === 'renewing')).toBe(true);
+
+    const events = await fetch('/api/v1/system-events?pageSize=20&page=1');
+    const eventsEnvelope = await events.json();
+    expect(eventsEnvelope.data.total).toBeGreaterThan(40);
+    expect(eventsEnvelope.data.items.length).toBe(20);
+  });
   it('serves resource and security data for expanded demo servers', async () => {
     const ufw = await fetch('/api/v1/servers/srv-api-hkg/ufw');
     const ufwEnvelope = await ufw.json();
@@ -138,7 +187,8 @@ describe('domain mock routes', () => {
   it('serves DNS records and exposes provider failures on real routes', async () => {
     const domains = await fetch('/api/v1/dns/domains');
     const domainsEnvelope = await domains.json();
-    expect(domainsEnvelope.data.length).toBeGreaterThanOrEqual(8);
+    expect(domainsEnvelope.data.total).toBeGreaterThanOrEqual(12);
+    expect(domainsEnvelope.data.items.length).toBe(domainsEnvelope.data.total);
 
     const records = await fetch('/api/v1/dns/domains/domain-example/records');
     const recordsEnvelope = await records.json();
@@ -154,7 +204,8 @@ describe('domain mock routes', () => {
   it('creates certificate tasks on the real certificate route', async () => {
     const existing = await fetch('/api/v1/certificates');
     const existingEnvelope = await existing.json();
-    expect(existingEnvelope.data.length).toBeGreaterThanOrEqual(6);
+    expect(existingEnvelope.data.total).toBeGreaterThanOrEqual(10);
+    expect(existingEnvelope.data.items.length).toBe(existingEnvelope.data.total);
 
     const response = await fetch('/api/v1/certificates', {
       method: 'POST',

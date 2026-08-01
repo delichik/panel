@@ -186,9 +186,12 @@ type ReverseProxyRoute struct {
 }
 
 type ApplicationFile struct {
-	ID            string    `json:"id"`
+	// ID is retained for runtime allocation and storage migration only. The
+	// public file identity is the application-scoped name.
+	ID            string    `json:"-"`
 	ApplicationID string    `json:"applicationId"`
-	Path          string    `json:"path"`
+	Name          string    `json:"name"`
+	Path          string    `json:"-"` // Deprecated compatibility alias for name.
 	Kind          string    `json:"kind"`
 	ContentType   string    `json:"contentType"`
 	Size          int64     `json:"size"`
@@ -200,18 +203,21 @@ type ApplicationFile struct {
 }
 
 type FileSaveInput struct {
-	Path          string `json:"path"`
+	Name          string `json:"name"`
+	Path          string `json:"path,omitempty"` // Deprecated compatibility input alias for name.
 	Kind          string `json:"kind"`
 	ContentType   string `json:"contentType"`
 	ContentBase64 string `json:"contentBase64"`
 }
 
 type FileDeleteInput struct {
-	Path string `json:"path"`
+	Name string `json:"name"`
+	Path string `json:"path,omitempty"` // Deprecated compatibility input alias for name.
 }
 
 type FileArchiveInput struct {
-	BasePath string
+	Name     string
+	BasePath string // Deprecated compatibility alias for name.
 	Kind     string
 	FileName string
 	Content  []byte
@@ -260,8 +266,9 @@ type PreviewToken struct {
 }
 
 type EditSessionFile struct {
-	FileKey     string    `json:"fileKey"`
-	Path        string    `json:"path"`
+	FileKey     string    `json:"-"`
+	Name        string    `json:"name"`
+	Path        string    `json:"-"` // Deprecated compatibility alias for name.
 	Kind        string    `json:"kind"`
 	ContentType string    `json:"contentType"`
 	Size        int64     `json:"size"`
@@ -302,7 +309,8 @@ type PatchEditSessionInput struct {
 type EditSessionFileInput struct {
 	Revision          int    `json:"revision"`
 	ClientOperationID string `json:"clientOperationId"`
-	Path              string `json:"path"`
+	Name              string `json:"name"`
+	Path              string `json:"path,omitempty"` // Deprecated compatibility input alias for name.
 	Kind              string `json:"kind"`
 	ContentType       string `json:"contentType"`
 	ContentBase64     string `json:"contentBase64"`
@@ -312,7 +320,8 @@ type EditSessionArchiveInput struct {
 	Revision          int
 	ClientOperationID string
 	FileKey           string
-	BasePath          string
+	Name              string
+	BasePath          string // Deprecated compatibility alias for name.
 	Kind              string
 	FileName          string
 	Content           []byte
@@ -321,7 +330,8 @@ type EditSessionArchiveInput struct {
 type EditSessionBinaryInput struct {
 	Revision          int
 	ClientOperationID string
-	Path              string
+	Name              string
+	Path              string `json:"-"` // Deprecated compatibility alias for name.
 	FileName          string
 	Content           []byte
 }

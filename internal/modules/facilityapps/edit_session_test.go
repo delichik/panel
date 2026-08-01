@@ -73,6 +73,38 @@ func TestFacilityEditSessionConcurrentCommitUsesConfigVersionCAS(t *testing.T) {
 	}
 }
 
+func TestFacilityStaticAssetNamesAreUniqueWithinFacility(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	input := StaticAssetUploadInput{Name: "site", Kind: StaticSourceUploadedFile, FileName: "index.html", Content: []byte("hello")}
+	if _, err := svc.UploadStaticAsset(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.UploadStaticAsset(ctx, input)
+	assertFacilityPanelError(t, err, "facility_static_asset_name_duplicate")
+}
+
+func TestFacilityEditAssetNamesAreUniqueWithinSession(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := svc.PutFacilityEditAsset(ctx, session.ID, "asset-a", "put-a", FacilityEditAssetInput{
+		Revision: session.Revision, ClientOperationID: "put-a", Name: "site", Kind: StaticSourceUploadedFile, ContentMode: "text", FileName: "index.html", Content: []byte("hello"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = svc.PutFacilityEditAsset(ctx, session.ID, "asset-b", "put-b", FacilityEditAssetInput{
+		Revision: first.Revision, ClientOperationID: "put-b", Name: "site", Kind: StaticSourceUploadedFile, ContentMode: "text", FileName: "other.html", Content: []byte("world"),
+	})
+	assertFacilityPanelError(t, err, "facility_static_asset_name_duplicate")
+}
+
 func TestFacilityEditSessionApplyFailureRemainsCommitted(t *testing.T) {
 	svc, _, closeStore := newFacilityEditTestService(t)
 	defer closeStore()

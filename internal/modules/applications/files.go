@@ -23,12 +23,11 @@ func (s *Service) ListFiles(ctx context.Context, appID string) ([]ApplicationFil
 	return s.listFiles(ctx, appID, false)
 }
 
-func (s *Service) GetFile(ctx context.Context, appID, fileID string) (ApplicationFile, error) {
+func (s *Service) GetFile(ctx context.Context, appID, fileRef string) (ApplicationFile, error) {
 	if _, err := s.Get(ctx, appID); err != nil {
 		return ApplicationFile{}, err
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at FROM application_files WHERE application_id=? AND id=?`, appID, fileID)
-	file, err := scanApplicationFile(row, true)
+	file, err := s.getFileByRef(ctx, appID, fileRef, true)
 	if err == sql.ErrNoRows {
 		return ApplicationFile{}, panelerr.NotFound("application_file")
 	}
@@ -40,7 +39,7 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 	if err != nil {
 		return ApplicationFile{}, err
 	}
-	targetPath, err := normalizeApplicationFilePath(in.Path)
+	name, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.Path))
 	if err != nil {
 		return ApplicationFile{}, err
 	}
@@ -57,7 +56,7 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 	file := ApplicationFile{
 		ID:            id.New("afile"),
 		ApplicationID: appID,
-		Path:          targetPath,
+		Name:          name,
 		Kind:          kind,
 		ContentType:   strings.TrimSpace(in.ContentType),
 		Size:          int64(len(content)),
@@ -66,7 +65,7 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
-	if existing, existingErr := s.getFileByPath(ctx, appID, targetPath, false); existingErr == nil && existing.Kind == file.Kind && existing.ContentType == file.ContentType && existing.Size == file.Size && existing.SHA256 == file.SHA256 {
+	if existing, existingErr := s.getFileByName(ctx, appID, name, false); existingErr == nil && existing.Kind == file.Kind && existing.ContentType == file.ContentType && existing.Size == file.Size && existing.SHA256 == file.SHA256 {
 		return existing, nil
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -74,10 +73,10 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 		return ApplicationFile{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `INSERT INTO application_files(id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at)
+	_, err = tx.ExecContext(ctx, `INSERT INTO application_files(id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(application_id,path) DO UPDATE SET kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,content=excluded.content,updated_at=excluded.updated_at`,
-		file.ID, file.ApplicationID, file.Path, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt))
+		ON CONFLICT(application_id,name) DO UPDATE SET kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,content=excluded.content,updated_at=excluded.updated_at`,
+		file.ID, file.ApplicationID, file.Name, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt))
 	if err != nil {
 		return ApplicationFile{}, err
 	}
@@ -94,10 +93,10 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 	if err := s.redeployIfEnabled(ctx, app); err != nil {
 		return ApplicationFile{}, err
 	}
-	return s.getFileByPath(ctx, appID, targetPath, false)
+	return s.getFileByName(ctx, appID, name, false)
 }
 
-func (s *Service) DeleteFile(ctx context.Context, appID, fileID string) error {
+func (s *Service) DeleteFile(ctx context.Context, appID, fileRef string) error {
 	app, err := s.Get(ctx, appID)
 	if err != nil {
 		return err
@@ -107,7 +106,11 @@ func (s *Service) DeleteFile(ctx context.Context, appID, fileID string) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	res, err := tx.ExecContext(ctx, `DELETE FROM application_files WHERE application_id=? AND id=?`, appID, fileID)
+	file, err := s.getFileByRef(ctx, appID, fileRef, false)
+	if err != nil {
+		return err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM application_files WHERE application_id=? AND id=?`, appID, file.ID)
 	if err != nil {
 		return err
 	}
@@ -129,11 +132,11 @@ func (s *Service) DeleteFile(ctx context.Context, appID, fileID string) error {
 }
 
 func (s *Service) listFiles(ctx context.Context, appID string, includeContent bool) ([]ApplicationFile, error) {
-	columns := `id,application_id,path,kind,content_type,size,sha256,created_at,updated_at`
+	columns := `id,application_id,name,kind,content_type,size,sha256,created_at,updated_at`
 	if includeContent {
-		columns = `id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at`
+		columns = `id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at`
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? ORDER BY path ASC`, appID)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? ORDER BY name ASC`, appID)
 	if err != nil {
 		return nil, err
 	}
@@ -149,12 +152,12 @@ func (s *Service) listFiles(ctx context.Context, appID string, includeContent bo
 	return out, rows.Err()
 }
 
-func (s *Service) getFileByPath(ctx context.Context, appID, filePath string, includeContent bool) (ApplicationFile, error) {
-	columns := `id,application_id,path,kind,content_type,size,sha256,created_at,updated_at`
+func (s *Service) getFileByName(ctx context.Context, appID, name string, includeContent bool) (ApplicationFile, error) {
+	columns := `id,application_id,name,kind,content_type,size,sha256,created_at,updated_at`
 	if includeContent {
-		columns = `id,application_id,path,kind,content_type,size,sha256,content,created_at,updated_at`
+		columns = `id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at`
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? AND path=?`, appID, filePath)
+	row := s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? AND name=?`, appID, name)
 	file, err := scanApplicationFile(row, includeContent)
 	if err == sql.ErrNoRows {
 		return ApplicationFile{}, panelerr.NotFound("application_file")
@@ -162,20 +165,38 @@ func (s *Service) getFileByPath(ctx context.Context, appID, filePath string, inc
 	return file, err
 }
 
+func (s *Service) getFileByRef(ctx context.Context, appID, ref string, includeContent bool) (ApplicationFile, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ApplicationFile{}, panelerr.NotFound("application_file")
+	}
+	file, err := s.getFileByName(ctx, appID, ref, includeContent)
+	if err == nil {
+		return file, nil
+	}
+	columns := `id,application_id,name,kind,content_type,size,sha256,created_at,updated_at`
+	if includeContent {
+		columns = `id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at`
+	}
+	row := s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? AND id=?`, appID, ref)
+	return scanApplicationFile(row, includeContent)
+}
+
 func scanApplicationFile(row appScanner, includeContent bool) (ApplicationFile, error) {
 	var file ApplicationFile
 	var createdAt, updatedAt string
 	if includeContent {
-		if err := row.Scan(&file.ID, &file.ApplicationID, &file.Path, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &file.Content, &createdAt, &updatedAt); err != nil {
+		if err := row.Scan(&file.ID, &file.ApplicationID, &file.Name, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &file.Content, &createdAt, &updatedAt); err != nil {
 			return ApplicationFile{}, err
 		}
 	} else {
-		if err := row.Scan(&file.ID, &file.ApplicationID, &file.Path, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &createdAt, &updatedAt); err != nil {
+		if err := row.Scan(&file.ID, &file.ApplicationID, &file.Name, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &createdAt, &updatedAt); err != nil {
 			return ApplicationFile{}, err
 		}
 	}
 	file.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
 	file.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	file.Path = file.Name
 	if includeContent {
 		file.ContentBase64 = base64.StdEncoding.EncodeToString(file.Content)
 	}
@@ -187,9 +208,9 @@ func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec app
 	if len(fileMounts) == 0 {
 		return job, nil
 	}
-	filesByPath := map[string]ApplicationFile{}
+	filesByName := map[string]ApplicationFile{}
 	for _, file := range files {
-		filesByPath[file.Path] = file
+		filesByName[file.Name] = file
 	}
 	mounts := make([]appruntime.Mount, 0, len(job.Mounts)+len(fileMounts))
 	for _, mount := range job.Mounts {
@@ -224,14 +245,15 @@ func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec app
 			mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: mount.ReadOnly})
 			continue
 		}
-		rel, err := normalizeApplicationWorkspacePath(mount.Source)
+		name, err := normalizeApplicationFileName(mount.Source)
 		if err != nil {
 			return appruntime.Spec{}, err
 		}
-		file, ok := filesByPath[rel]
+		file, ok := filesByName[name]
 		if !ok {
-			return appruntime.Spec{}, panelerr.Validation("application_file_mount_missing", "mounted application file "+rel+" does not exist")
+			return appruntime.Spec{}, panelerr.Validation("application_file_mount_missing", "mounted application file "+name+" does not exist")
 		}
+		rel := applicationFileAllocationName(file.ID)
 		if file.Kind == ApplicationFileKindArchive {
 			managed = append(managed, appruntime.ManagedFile{Kind: appruntime.ManagedFileKindArchive, Path: rel, Content: file.Content, UID: cloneInt(mount.UID), GID: cloneInt(mount.GID)})
 			mounts = append(mounts, appruntime.Mount{Type: "managed_file", Source: rel, Target: mount.Target, ReadOnly: mount.ReadOnly})
@@ -266,4 +288,12 @@ func cloneInt(value *int) *int {
 	}
 	cloned := *value
 	return &cloned
+}
+
+func applicationFileAllocationName(fileID string) string {
+	name := sanitizeRuntimeName(strings.TrimSpace(fileID))
+	if name == "" {
+		name = "file"
+	}
+	return "application-files/" + name
 }

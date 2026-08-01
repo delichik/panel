@@ -141,7 +141,7 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		cfg.PanelHostServerID, _ = s.panelHost.HostServerID(ctx)
 	}
 	cfg.EnabledServers = append([]string(nil), cfg.DeploymentServers...)
-	assets, err := s.ListStaticAssets(ctx)
+	assets, err := s.listStaticAssets(ctx)
 	if err == nil {
 		cfg.StaticAssets = assets
 	}
@@ -157,36 +157,6 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 		cfg.Operation = &operation
 	}
 	return cfg, nil
-}
-
-// ListSummaries returns the fixed facility catalog without constructing the
-// reverse-proxy detail model.
-func (s *Service) ListSummaries(ctx context.Context) ([]FacilityAppSummary, error) {
-	summary := FacilityAppSummary{
-		Kind:           "reverse-proxy",
-		TitleKey:       "applicationsPage.entranceProxyFacility",
-		DescriptionKey: "applicationsPage.entranceProxyFacilityDescription",
-		CategoryKey:    "applicationsPage.facilityCategoryTraffic",
-		Status:         "available",
-	}
-	var updatedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID).
-		Scan(&summary.LastError, &updatedAt)
-	if err != nil && err != sql.ErrNoRows {
-		return nil, err
-	}
-	if updatedAt != "" {
-		summary.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
-	}
-	if summary.LastError != "" {
-		summary.Status = "degraded"
-	}
-	if err := s.db.QueryRowContext(ctx, `SELECT status FROM application_lifecycle_operations
-		WHERE application_id=? ORDER BY created_at DESC,id DESC LIMIT 1`, proxyApplicationID).
-		Scan(&summary.OperationStatus); err != nil && err != sql.ErrNoRows {
-		return nil, err
-	}
-	return []FacilityAppSummary{summary}, nil
 }
 
 func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput) (ReverseProxyConfig, error) {
@@ -774,22 +744,22 @@ func (s *Service) staticSiteMount(ctx context.Context, site FacilityRoutePath, m
 		*mounts = append(*mounts, appruntime.Mount{Type: "bind", Source: root, Target: mountTarget, ReadOnly: true})
 		return &staticMountAsset{Kind: StaticSourceUploadedBundle}, nil
 	case StaticSourceUploadedFile, StaticSourceUploadedBundle:
-		assetID := strings.TrimSpace(site.AssetID)
-		if assetID == "" {
+		assetName := strings.TrimSpace(site.AssetName)
+		if assetName == "" {
 			return nil, nil
 		}
-		asset, err := s.getStaticAsset(ctx, assetID)
+		asset, err := s.getStaticAssetByName(ctx, assetName)
 		if err != nil {
 			return nil, err
 		}
 		if asset.Kind != sourceType {
 			return nil, panelerr.Validation("facility_static_site_asset_kind_invalid", "Static site asset kind does not match its source")
 		}
-		assetFiles, err := s.staticAssetFiles(assetID)
+		assetFiles, err := s.staticAssetFiles(asset.ID)
 		if err != nil {
 			return nil, err
 		}
-		base := "static-assets/" + assetID
+		base := "static-assets/" + asset.ID
 		for _, file := range assetFiles {
 			appendManagedFile(files, appruntime.ManagedFile{Path: base + "/" + file.Path, Content: file.Content, Mode: "0644"})
 		}
@@ -1042,6 +1012,7 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 		}
 		for j := range cfg.Domains[i].Paths {
 			path := &cfg.Domains[i].Paths[j]
+			s.normalizeStoredRouteAsset(ctx, path)
 			path.RuleType = normalizedStaticRuleType(path.RuleType)
 			path.SourceType = normalizedStaticSourceType(path.SourceType)
 			path.ProxySourceMode = normalizedProxySourceMode(path.ProxySourceMode)
@@ -1058,6 +1029,20 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	}
 	cfg.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	return cfg, nil
+}
+
+func (s *Service) normalizeStoredRouteAsset(ctx context.Context, path *FacilityRoutePath) {
+	if path == nil {
+		return
+	}
+	if strings.TrimSpace(path.AssetName) == "" && strings.TrimSpace(path.AssetID) != "" {
+		if asset, err := s.getStaticAsset(ctx, strings.TrimSpace(path.AssetID)); err == nil {
+			path.AssetName = asset.Name
+		} else {
+			path.AssetName = strings.TrimSpace(path.AssetID)
+		}
+	}
+	path.AssetID = ""
 }
 
 func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error {
@@ -1366,7 +1351,10 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 	ruleType := normalizedStaticRuleType(site.RuleType)
 	sourceType := normalizedStaticSourceType(site.SourceType)
 	root := strings.TrimSpace(site.RootPath)
-	assetID := strings.TrimSpace(site.AssetID)
+	assetName := strings.TrimSpace(site.AssetName)
+	if assetName == "" {
+		assetName = strings.TrimSpace(site.AssetID)
+	}
 	redirectURL := strings.TrimSpace(site.RedirectURL)
 	redirectCode := normalizedRedirectCode(site.RedirectCode)
 	proxyURL := strings.TrimSpace(site.ProxyURL)
@@ -1378,9 +1366,9 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 			if root == "" || strings.Contains(root, "\x00") {
 				return FacilityRoutePath{}, panelerr.Validation("facility_static_site_root_invalid", "Static content root path is invalid")
 			}
-			assetID = ""
+			assetName = ""
 		case StaticSourceUploadedFile, StaticSourceUploadedBundle:
-			if assetID == "" || strings.ContainsAny(assetID, `/\`) {
+			if assetName == "" || strings.ContainsAny(assetName, `/\`) {
 				return FacilityRoutePath{}, panelerr.Validation("facility_static_site_asset_required", "Static content asset is required")
 			}
 			root = ""
@@ -1392,7 +1380,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 		if !validNginxValue(redirectURL) {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_redirect_invalid", "Redirect target is invalid")
 		}
-		root, assetID, proxyURL, proxySourceMode = "", "", "", ""
+		root, assetName, proxyURL, proxySourceMode = "", "", "", ""
 	case StaticRuleProxyPass:
 		if !validNginxValue(proxyURL) || !validProxyURL(proxyURL) {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_proxy_invalid", "Manual proxy target is invalid")
@@ -1400,7 +1388,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 		if proxySourceMode != ProxySourcePreserve && proxySourceMode != ProxySourceHide {
 			return FacilityRoutePath{}, panelerr.Validation("facility_static_site_proxy_mode_invalid", "Proxy request information mode is invalid")
 		}
-		root, assetID, redirectURL, redirectCode = "", "", "", 0
+		root, assetName, redirectURL, redirectCode = "", "", "", 0
 	default:
 		return FacilityRoutePath{}, panelerr.Validation("facility_static_site_rule_invalid", "Reverse proxy route type is invalid")
 	}
@@ -1421,7 +1409,7 @@ func normalizeFacilityRoutePath(site FacilityRoutePath) (FacilityRoutePath, erro
 	if err != nil {
 		return FacilityRoutePath{}, err
 	}
-	return FacilityRoutePath{Path: pathValue, RuleType: ruleType, RootPath: root, SourceType: sourceType, AssetID: assetID, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, Options: options}, nil
+	return FacilityRoutePath{Path: pathValue, RuleType: ruleType, RootPath: root, SourceType: sourceType, AssetName: assetName, RedirectURL: redirectURL, RedirectCode: redirectCode, ProxyURL: proxyURL, ProxySourceMode: proxySourceMode, Options: options}, nil
 }
 
 func (s *Service) buildProxyRelay(ctx context.Context, domain string, originServerIDs []string, anyAccess applications.AnyAccessConfig) (*proxyRelay, error) {

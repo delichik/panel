@@ -1,13 +1,19 @@
 import type { ApplicationOperationDetailDto, ApplicationOperationDto } from '@/types/applicationOperations';
 import type { SystemEventDetailDto, SystemEventDto } from '@/types/systemEvents';
 
-const now = new Date('2026-07-25T08:00:00.000Z');
+const now = new Date('2026-08-01T08:00:00.000Z');
 
 export const mockApplicationOperations: ApplicationOperationDto[] = [
-  operation('op-apply-storefront', 'app-storefront', 'Storefront', 'apply', 'user', 'running', 3, 1, 0, true, ''),
-  operation('op-recover-api', 'app-api', 'Public API', 'recover', 'system', 'partial_failed', 4, 2, 1, true, 'edge-2 failed health verification'),
-  operation('op-stop-preview', 'app-preview', 'Preview app', 'stop', 'user', 'succeeded', 2, 2, 0, false, ''),
-  ...Array.from({ length: 34 }, (_, index) => {
+  operation('op-apply-storefront', 'app-storefront', 'storefront', 'apply', 'user', 'running', 3, 1, 0, true, ''),
+  operation('op-recover-api', 'app-api', 'public-api', 'recover', 'system', 'partial_failed', 4, 2, 1, true, 'edge-2 failed health verification'),
+  operation('op-stop-preview', 'app-disabled', 'disabled-preview', 'stop', 'user', 'succeeded', 2, 2, 0, false, ''),
+  operation('op-billing-image', 'app-billing', 'billing-portal', 'image_update', 'user', 'succeeded', 2, 2, 0, true, ''),
+  operation('op-webhook-sync', 'app-webhook', 'webhook-ingress', 'sync', 'system', 'running', 2, 1, 0, true, ''),
+  operation('op-media-deploy', 'app-media', 'media-transcoder', 'apply', 'user', 'running', 2, 0, 0, true, ''),
+  operation('op-canary-failed', 'app-canary-broken', 'checkout-canary', 'apply', 'user', 'failed', 1, 0, 1, true, 'Canary probe failed: /ready returned 503'),
+  operation('op-analytics-retry', 'app-analytics', 'analytics-pipeline', 'recover', 'scheduler', 'partial_failed', 2, 1, 1, true, 'worker-nrt-queue-a OOM killed'),
+  operation('op-backup-stop', 'app-backup-agent', 'backup-agent', 'stop', 'user', 'succeeded', 2, 2, 0, true, ''),
+  ...Array.from({ length: 48 }, (_, index) => {
     const statuses = ['queued', 'running', 'succeeded', 'failed', 'partial_failed', 'cancelled'];
     const actions = ['apply', 'sync', 'stop', 'purge'];
     const sources = ['user', 'system', 'scheduler'];
@@ -33,7 +39,13 @@ export const mockSystemEvents: SystemEventDto[] = [
   event('evt-task-failed', 'task.failed', 'task', 'error', 'task', 'task-agent-rollout-1', 'tasks', 'Agent rollout failed and can be retried.', true),
   event('evt-log-attached', 'log.attached', 'log', 'info', 'application', 'app-storefront', 'applications', 'Runtime log reference attached to application operation.', true),
   event('evt-warning-pruned', 'event.detail.pruned', 'runtime', 'warning', 'operation', 'op-stop-preview', 'runtime-events', 'Event detail was cleaned after retention elapsed.', false),
-  ...Array.from({ length: 42 }, (_, index) => {
+  event('evt-canary-failed', 'application.operation.failed', 'application', 'error', 'operation', 'op-canary-failed', 'applications', 'checkout-canary deployment failed readiness checks.', true),
+  event('evt-media-progress', 'application.operation.target.started', 'application', 'info', 'operation', 'op-media-deploy', 'applications', 'media-transcoder deploy started on gpu-nrt-render.', true),
+  event('evt-billing-image', 'application.image.updated', 'application', 'info', 'application', 'app-billing', 'applications', 'billing-portal image update completed on both targets.', true),
+  event('evt-agent-degraded', 'server.agent.degraded', 'alert', 'warning', 'server', 'srv-edge-lax', 'servers', 'edge-lax-01 agent report stream is delayed by 12 minutes.', true),
+  event('evt-cert-renewing', 'certificate.renewing', 'system', 'info', 'certificate', 'cert-hooks-renewing', 'certificates', 'hooks.example.test certificate renewal started.', true),
+  event('evt-package-pending', 'packages.updates_available', 'alert', 'warning', 'server', 'srv-worker-nrt', 'packages', 'worker-nrt-queue-a has 22 package updates pending.', true),
+  ...Array.from({ length: 56 }, (_, index) => {
     const categories = ['application', 'task', 'alert', 'log', 'runtime', 'system'];
     const severities = ['info', 'warning', 'error'];
     return event(
