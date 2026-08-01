@@ -24,7 +24,8 @@ AppShell
 ## PageHeader
 
 - 源码：`web/src/components/shell/PageHeader.vue`。
-- 统一结构：标题、说明、可选 actions、可选 breadcrumb。
+- 统一结构：标题、说明、可选 back（返回上一级）、可选 actions、可选 breadcrumb。
+- 需要返回上一级时传入 `backLabel` 并监听 `back` 事件，返回按钮渲染在标题左侧；返回目标由页面决定（如详情返回列表、编辑器返回详情），不得用 `router.back()` 兜底。
 - actions 区主操作至多一个，其余操作用次要按钮或 Dropdown。
 - 中窄屏下标题区与 actions 区上下堆叠，actions 可换行，不得裁切关键操作。
 

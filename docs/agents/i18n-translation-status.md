@@ -21,6 +21,20 @@
 
 ## 最近已补齐
 
+- `web/src/views/applications/index.vue`、`web/src/i18n/index.ts`
+  - 设施网关服务器选择与展示统一使用服务器名称（来自 `/api/v1/servers`，未知 ID 回退为原值）；Panel 入口服务器由文本框改为单选选择器；新增 `applicationsPage.loadBalancingStrategy.first` 词条已接入英文与简体中文。
+
+
+- `web/src/views/applications/index.vue`、`web/src/i18n/index.ts`
+  - 设施网关域名对话框补充负载均衡（启用开关、round_robin / ip_hash / primary_backup 策略、主源服务器选择）；location 对话框补充高级选项（proxy_pass 的请求体上限、连接/读取/发送超时、代理缓冲、WebSocket 模式、来源信息转发、请求/响应自定义头，static 的 gzip 与响应头）；新增 `common.addPath` 与 `applicationsPage.*` 词条均已接入英文与简体中文；域名、策略值和自定义头保持用户输入，路径与服务器 ID 保持实例原值。
+
+
+- `web/src/components/shell/PageHeader.vue`、`web/src/components/templates/ConsolePage.vue`、`web/src/views/applications/index.vue`
+  - 页面标题左侧新增“返回上一级”按钮，新增公共词条 `common.back` 已补齐英文与简体中文；应用/设施编辑器和设施详情页返回目标由页面确定，设施目录右侧状态栏已移除。
+
+- `web/src/components/patterns/AssetFileManager.vue`、`web/src/views/applications/index.vue`
+  - 设施编辑器域名/路由区块重构为域名卡片 + 路径行结构，路径类型、来源和目标摘要复用既有 `routeType.*` / `sourceType.*` 词条；新增域名与路径空态词条 `applicationsPage.noDomains`、`applicationsPage.noDomainsHint`、`applicationsPage.noPathsHint` 已补齐英文与简体中文。文件名、路径、服务器 ID、URL 和后端诊断保持实例原值。
+
 - `web/src/views/credentials/index.vue`、`web/src/views/certificates/index.vue`
   - SSH 私钥凭据和密钥资产导入弹窗改用共享材料编辑器，编辑器可访问名称及 CA/TLS 材料 tab 复用既有英文与简体中文词条；私钥、证书正文和后端错误保持用户或运行时原值。
 

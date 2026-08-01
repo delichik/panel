@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { UploadCloud } from '@lucide/vue';
+import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import CodeEditor from '@/components/ui/CodeEditor.vue';
 import Dialog from '@/components/ui/Dialog.vue';
@@ -11,7 +12,7 @@ import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import type { CodeEditorLanguage } from '@/components/ui/codeEditorLanguage';
-import type { AssetFileAdapter, AssetFileItem, AssetFileManagerLabels, SaveTextAssetInput, UploadAssetInput } from './assetFileManager';
+import type { AssetFileAdapter, AssetFileItem, AssetFileKind, AssetFileManagerLabels, SaveTextAssetInput, UploadAssetInput } from './assetFileManager';
 
 const archiveAccept = '.zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip';
 
@@ -69,6 +70,12 @@ const textSaveDisabled = computed(() => textLoading.value || textSaving.value ||
 
 function itemKey(item: AssetFileItem) {
   return item.key;
+}
+
+function kindLabel(kind: AssetFileKind) {
+  if (kind === 'text') return props.labels.uploadTypeText;
+  if (kind === 'archive') return props.labels.uploadTypeArchive;
+  return props.labels.uploadTypeBinary;
 }
 
 function firstFile(value: File | File[]) {
@@ -220,9 +227,12 @@ async function confirmDelete() {
       </div>
     </div>
     <div v-for="item in items" :key="item.key" class="item-row">
-      <div>
-        <strong>{{ item.name }}</strong>
-        <span>{{ item.filename ? `${item.filename} · ` : '' }}{{ item.size }} {{ labels.bytes }}</span>
+      <div class="min-w-0">
+        <div class="flex flex-wrap items-center gap-2">
+          <strong class="asset-name">{{ item.name }}</strong>
+          <Badge tone="neutral">{{ kindLabel(item.kind) }}</Badge>
+        </div>
+        <span class="asset-meta">{{ item.filename ? `${item.filename} · ` : '' }}{{ item.size }} {{ labels.bytes }}</span>
       </div>
       <div class="row-actions">
         <Button v-if="item.kind === 'text' && item.editable !== false" size="sm" :disabled="pending === item.key" @click="openText(item)">{{ labels.edit }}</Button>
@@ -290,3 +300,119 @@ async function confirmDelete() {
     </template>
   </Dialog>
 </template>
+
+<style scoped>
+.section-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.section-copy {
+  display: grid;
+  gap: 0.25rem;
+  min-width: 0;
+}
+
+.section-copy h3 {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.section-copy p {
+  margin: 0;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.item-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.875rem;
+  background: hsl(var(--background));
+  padding: 0.75rem;
+  transition:
+    background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
+    border-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
+    box-shadow var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+}
+
+.item-row:hover {
+  border-color: hsl(var(--border) / 0.92);
+  background: hsl(var(--muted) / 0.34);
+  transform: translateY(var(--panel-motion-hover-y));
+  box-shadow: var(--panel-motion-shadow-raised);
+}
+
+.asset-name {
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.asset-meta {
+  display: block;
+  margin-top: 0.25rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.row-error {
+  grid-column: 1 / -1;
+  min-width: 0;
+  border: 1px solid hsl(var(--danger-border));
+  border-radius: 0.5rem;
+  background: hsl(var(--danger-bg));
+  color: hsl(var(--danger));
+  padding: 0.5rem 0.625rem;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+}
+
+.field {
+  display: grid;
+  gap: 0.35rem;
+  color: hsl(var(--foreground));
+  font-size: 0.875rem;
+}
+
+.field > span {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+@media (max-width: 760px) {
+  .item-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .item-row .row-actions {
+    justify-content: flex-start;
+  }
+
+  .section-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
+</style>

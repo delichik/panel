@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, ClipboardList, Code2, Globe2, History, Plus, RefreshCw, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
 import { applicationsApi } from '@/api/applications';
+import { serversApi } from '@/api/servers';
 import { saveBlobDownload } from '@/api/download';
 import { reverseProxyFacilityApi } from '@/api/facilityApps';
 import Badge from '@/components/ui/Badge.vue';
@@ -21,6 +22,7 @@ import Switch from '@/components/ui/Switch.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
+import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -29,6 +31,7 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule } from '@/types/applications';
 import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset } from '@/types/facilityApps';
+import type { ServerDto } from '@/types/servers';
 import {
   applicationStatus,
   applyYamlToDraft,
@@ -95,7 +98,7 @@ const totalApplications = ref(0);
 const loading = ref(false);
 const detailLoading = ref(false);
 const facilitiesLoaded = ref(true);
-const facilities = [{ kind: 'reverse-proxy', titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' }];
+const facilities = [{ kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' }];
 const error = ref('');
 const feedback = ref('');
 const actionError = ref('');
@@ -130,6 +133,8 @@ const proxyDraft = reactive<ReverseProxyRule>(makeProxyRule());
 const proxyPathDraft = reactive(makeProxyPath());
 const facilityDomainDraft = reactive<FacilityRouteDomain>(makeFacilityDomain());
 const facilityPathDraft = reactive<FacilityRoutePath>(makeFacilityPath());
+const facilityRequestHeaders = ref<KeyValueRow[]>([]);
+const facilityResponseHeaders = ref<KeyValueRow[]>([]);
 
 const mode = computed(() => routeMode(route.path, route.params));
 const facilityKind = computed(() => String(route.params.facilityKind ?? ''));
@@ -160,13 +165,28 @@ const facilityConfigSummary = computed(() => ({
   assets: facility.value?.staticAssets.length ?? 0,
   appRoutes: facility.value?.applicationRoutes.length ?? 0,
 }));
+const servers = ref<ServerDto[]>([]);
+const serverNameMap = computed(() => new Map(servers.value.map((server) => [server.id, server.name])));
+function serverDisplayName(id: string) {
+  return serverNameMap.value.get(id) || id;
+}
 const serverOptions = computed(() => {
+  const byId = new Map(servers.value.map((server) => [server.id, server]));
   const ids = new Set<string>();
   Object.values(applicationDetails.value).forEach((app) => app.deploymentServers.forEach((id) => ids.add(id)));
   appDraft.deploymentServers.forEach((id) => ids.add(id));
   facility.value?.deploymentServers.forEach((id) => ids.add(id));
   facility.value?.enabledServers.forEach((id) => ids.add(id));
-  return Array.from(ids).map((id) => ({ id, label: id, name: id, description: t('applicationsPage.serverOptionDescription', { id }) }));
+  return Array.from(ids).map((id) => {
+    const server = byId.get(id);
+    return {
+      id,
+      label: server?.name ?? id,
+      name: server?.name ?? id,
+      description: server?.host ? server.host : t('applicationsPage.serverOptionDescription', { id }),
+      status: server ? (server.reachable ? 'reachable' : 'unreachable') : undefined,
+    };
+  });
 });
 const assetOptions = computed(() => [
   ...(facility.value?.staticAssets ?? []).map((asset) => ({ value: asset.name, label: `${asset.name} / ${asset.filename}` })),
@@ -206,6 +226,35 @@ const facilityRedirectCode = computed({
   get: () => String(facilityPathDraft.redirectCode ?? 302),
   set: (value: string) => { facilityPathDraft.redirectCode = Number(value); },
 });
+const anyAccessStrategyOptions = computed(() => (['round_robin', 'ip_hash', 'primary_backup'] as const).map((value) => ({ label: t(`applicationsPage.loadBalancingStrategy.${value}`), value })));
+const httpModeOptions = computed(() => (['inherit', 'on', 'off'] as const).map((value) => ({ label: t(`applicationsPage.httpMode.${value}`), value })));
+const webSocketModeOptions = computed(() => (['auto', 'on', 'off'] as const).map((value) => ({ label: t(`applicationsPage.httpMode.${value}`), value })));
+const proxySourceModeOptions = computed(() => (['preserve_source', 'hide_source'] as const).map((value) => ({ label: t(`applicationsPage.proxySourceMode.${value}`), value })));
+const facilityDomainOriginOptions = computed(() => facilityDomainDraft.originServerIds.map((id) => ({ label: serverDisplayName(id), value: id })));
+
+function facilityPathNumberOption(field: 'clientMaxBodySizeMb' | 'connectTimeoutSeconds' | 'readTimeoutSeconds' | 'sendTimeoutSeconds') {
+  return computed({
+    get: () => String(facilityPathDraft.options?.[field] ?? 0),
+    set: (value: string) => {
+      if (!facilityPathDraft.options) return;
+      const parsed = Number(value);
+      facilityPathDraft.options[field] = Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    },
+  });
+}
+function facilityPathStringOption(field: 'gzipMode' | 'bufferingMode' | 'webSocketMode', fallback: string) {
+  return computed({
+    get: () => facilityPathDraft.options?.[field] ?? fallback,
+    set: (value: string) => { if (facilityPathDraft.options) facilityPathDraft.options[field] = value; },
+  });
+}
+const facilityGzipMode = facilityPathStringOption('gzipMode', 'inherit');
+const facilityBufferingMode = facilityPathStringOption('bufferingMode', 'inherit');
+const facilityWebSocketMode = facilityPathStringOption('webSocketMode', 'off');
+const facilityClientMaxBodySizeMb = facilityPathNumberOption('clientMaxBodySizeMb');
+const facilityConnectTimeoutSeconds = facilityPathNumberOption('connectTimeoutSeconds');
+const facilityReadTimeoutSeconds = facilityPathNumberOption('readTimeoutSeconds');
+const facilitySendTimeoutSeconds = facilityPathNumberOption('sendTimeoutSeconds');
 
 const applicationAssetAdapter: AssetFileAdapter = {
   async upload({ file, kind }) {
@@ -386,6 +435,7 @@ function handleBeforeUnload(event: BeforeUnloadEvent) {
 }
 
 async function load() {
+  void loadServers();
   const currentMode = mode.value;
   if (currentMode !== 'apps') {
     cancelRuntimeLoad();
@@ -401,6 +451,14 @@ async function load() {
   }
   if (currentMode === 'facilityCatalog' || currentMode === 'facilityDetail' || currentMode === 'facilityConfig') {
     await loadFacilityData();
+  }
+}
+
+async function loadServers() {
+  try {
+    servers.value = await serversApi.list();
+  } catch {
+    // Server names are a display enhancement; keep IDs when the list is unavailable.
   }
 }
 
@@ -688,7 +746,19 @@ function cancelFacilityEdit() {
   actionError.value = '';
   feedback.value = '';
   isDirty.value = false;
+  if (mode.value === 'facilityConfig') {
+    void router.push(`/applications/facility-apps/${facilityKind.value}`);
+    return;
+  }
   facilityEditing.value = false;
+}
+
+function goBackFromFacilityPage() {
+  if (facilityEditingView.value) {
+    cancelFacilityEdit();
+    return;
+  }
+  void router.push('/applications/facility-apps');
 }
 
 async function reloadApplicationEditor() {
@@ -927,6 +997,9 @@ function openFacilityPathDialog(domainIndex: number, pathIndex = -1) {
   dialogParentIndex.value = domainIndex;
   dialogIndex.value = pathIndex;
   Object.assign(facilityPathDraft, pathIndex >= 0 ? cloneFacilityPath(facilityDraft.domains[domainIndex].paths[pathIndex]) : makeFacilityPath());
+  if (!facilityPathDraft.options) Object.assign(facilityPathDraft, { options: defaultRouteOptions() });
+  facilityRequestHeaders.value = (facilityPathDraft.options?.requestHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
+  facilityResponseHeaders.value = (facilityPathDraft.options?.responseHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
   dialogOpen.value = true;
 }
 
@@ -934,6 +1007,12 @@ function saveFacilityPathDialog() {
   const paths = facilityDraft.domains[dialogParentIndex.value]?.paths;
   if (!paths) return;
   const next = cloneFacilityPath(facilityPathDraft);
+  next.options = {
+    ...defaultRouteOptions(),
+    ...(next.options ?? {}),
+    requestHeaders: facilityRequestHeaders.value.filter((row) => row.key.trim() || row.value.trim()).map((row) => ({ name: row.key.trim(), value: row.value })),
+    responseHeaders: facilityResponseHeaders.value.filter((row) => row.key.trim() || row.value.trim()).map((row) => ({ name: row.key.trim(), value: row.value })),
+  };
   if (dialogIndex.value >= 0) paths[dialogIndex.value] = next;
   else paths.push(next);
   dialogOpen.value = false;
@@ -1009,6 +1088,18 @@ function pathTarget(path: FacilityRoutePath) {
   if (path.ruleType === 'redirect') return path.redirectUrl || t('common.notAvailable');
   if (path.ruleType === 'proxy_pass') return path.proxyUrl || t('common.notAvailable');
   return path.sourceType === 'host_path' ? path.rootPath : path.assetName;
+}
+
+function facilityPathTargetLabel(path: FacilityRoutePath) {
+  if (path.ruleType === 'static') {
+    const source = path.sourceType === 'host_path'
+      ? t('applicationsPage.sourceType.host_path')
+      : path.sourceType === 'uploaded_file'
+        ? t('applicationsPage.sourceType.uploaded_file')
+        : t('applicationsPage.sourceType.uploaded_bundle');
+    return `${source}: ${pathTarget(path) || t('common.notAvailable')}`;
+  }
+  return pathTarget(path) || t('common.notAvailable');
 }
 
 function emptyApplication(): ApplicationDto {
@@ -1244,73 +1335,72 @@ onBeforeUnmount(() => {
     <template #actions>
       <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
-    <div class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
-      <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
-        <div class="mb-4">
-          <h2 class="m-0 text-lg font-semibold text-foreground">{{ t('applicationsPage.facilityCatalogTitle') }}</h2>
-          <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.facilityCatalogHint') }}</p>
-        </div>
-        <div class="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr))]">
-          <template v-if="loading && !facilities.length">
-            <article v-for="item in 4" :key="item" class="grid gap-4 rounded-2xl border border-border bg-background p-4" aria-hidden="true">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0 flex-1">
-                  <div class="motion-skeleton h-5 w-40 rounded bg-muted animate-pulse" />
-                  <div class="motion-skeleton mt-3 h-4 w-full rounded bg-muted animate-pulse" />
-                  <div class="motion-skeleton mt-2 h-4 w-2/3 rounded bg-muted animate-pulse" />
-                </div>
-                <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
+    <section class="h-full min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
+      <div class="mb-4">
+        <h2 class="m-0 text-lg font-semibold text-foreground">{{ t('applicationsPage.facilityCatalogTitle') }}</h2>
+        <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.facilityCatalogHint') }}</p>
+      </div>
+      <div class="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr))]">
+        <template v-if="loading && !facilities.length">
+          <article v-for="item in 3" :key="item" class="grid gap-4 rounded-2xl border border-border bg-background p-5" aria-hidden="true">
+            <div class="flex items-start justify-between gap-3">
+              <div class="motion-skeleton size-12 rounded-2xl bg-muted animate-pulse" />
+              <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
+            </div>
+            <div class="grid gap-2">
+              <div class="motion-skeleton h-5 w-2/3 rounded bg-muted animate-pulse" />
+              <div class="motion-skeleton h-4 w-full rounded bg-muted animate-pulse" />
+              <div class="motion-skeleton h-4 w-3/4 rounded bg-muted animate-pulse" />
+            </div>
+            <div class="grid grid-cols-3 gap-2">
+              <div v-for="stat in 3" :key="stat" class="motion-skeleton h-12 rounded-xl bg-muted animate-pulse" />
+            </div>
+            <div class="motion-skeleton h-8 w-28 rounded bg-muted animate-pulse" />
+          </article>
+        </template>
+        <template v-else>
+          <article
+            v-for="item in facilities"
+            :key="item.kind"
+            role="link"
+            tabindex="0"
+            class="motion-list-item grid cursor-pointer gap-4 rounded-2xl border border-border bg-background p-5 transition-colors hover:bg-accent"
+            @click="router.push(`/applications/facility-apps/${item.kind}`)"
+            @keydown.enter="router.push(`/applications/facility-apps/${item.kind}`)"
+            @keydown.space.prevent="router.push(`/applications/facility-apps/${item.kind}`)"
+          >
+            <div class="flex items-start justify-between gap-3">
+              <div class="grid size-12 place-items-center rounded-2xl border border-border bg-muted/40 text-foreground">
+                <component :is="item.icon" class="size-6" aria-hidden="true" />
               </div>
-              <div class="flex gap-2">
-                <div v-for="button in 3" :key="button" class="motion-skeleton h-8 w-24 rounded bg-muted animate-pulse" />
-              </div>
-            </article>
-          </template>
-          <template v-else>
-            <article
-              v-for="item in facilities"
-              :key="item.kind"
-              role="link"
-              tabindex="0"
-              class="motion-list-item grid cursor-pointer gap-4 rounded-2xl border border-border bg-background p-4 transition-colors hover:bg-accent"
-              @click="router.push(`/applications/facility-apps/${item.kind}`)"
-              @keydown.enter="router.push(`/applications/facility-apps/${item.kind}`)"
-              @keydown.space.prevent="router.push(`/applications/facility-apps/${item.kind}`)"
-            >
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <div class="flex flex-wrap items-center gap-2">
-                    <h3 class="m-0 text-base font-semibold text-foreground">{{ t(item.titleKey) }}</h3>
-                    <Badge tone="info">{{ t(item.categoryKey) }}</Badge>
-                  </div>
-                  <p class="m-0 mt-2 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
-                </div>
+              <div class="flex flex-wrap items-center justify-end gap-2">
+                <Badge tone="info">{{ t(item.categoryKey) }}</Badge>
                 <StatusBadge :status="item.status" :tone="item.status === 'degraded' ? 'danger' : 'success'" :label="t(`applicationsPage.facilityStatus.${item.status}`)" />
               </div>
-              <div class="flex flex-wrap gap-2">
-                <Button size="sm" @click.stop="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
-              </div>
-            </article>
-            <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
-          </template>
-        </div>
-      </section>
-      <aside class="grid content-start gap-3 rounded-2xl border border-border bg-card p-5">
-        <h3>{{ t('applicationsPage.facilityCatalogStatus') }}</h3>
-        <div class="grid gap-3 text-sm">
-          <div><span>{{ t('applicationsPage.availableFacilities') }}</span><strong>{{ facilities.length }}</strong></div>
-          <div><span>{{ t('applicationsPage.panelEntry') }}</span><strong>{{ facility?.panelEntry.enabled ? facility.panelEntry.domain : t('applicationsPage.panelEntryDisabled') }}</strong></div>
-          <div v-if="facility?.operation"><span>{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
-        </div>
-      </aside>
-    </div>
+            </div>
+            <div class="grid gap-1.5">
+              <h3 class="m-0 text-base font-semibold text-foreground">{{ t(item.titleKey) }}</h3>
+              <p class="m-0 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
+            </div>
+            <div class="facility-card-stats">
+              <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
+              <div class="facility-card-stat"><strong>{{ facility?.deploymentServers.length ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayNodes') }}</span></div>
+              <div class="facility-card-stat"><strong>{{ facility?.staticAssets.length ?? '—' }}</strong><span>{{ t('applicationsPage.staticAssets') }}</span></div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+              <Button size="sm" @click.stop="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+            </div>
+          </article>
+          <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
+        </template>
+      </div>
+    </section>
   </ConsolePage>
 
-  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :title="facilityEditingView ? t('applicationsPage.gatewayEditor') : (currentFacilitySummary ? t(currentFacilitySummary.titleKey) : t('applicationsPage.facilityUnavailable'))" :description="facilityEditingView ? t('applicationsPage.gatewayEditorDescription') : (currentFacilitySummary ? t(currentFacilitySummary.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind }))">
+  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityEditingView ? t('applicationsPage.gatewayEditor') : (currentFacilitySummary ? t(currentFacilitySummary.titleKey) : t('applicationsPage.facilityUnavailable'))" :description="facilityEditingView ? t('applicationsPage.gatewayEditorDescription') : (currentFacilitySummary ? t(currentFacilitySummary.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind }))">
     <template #actions>
       <template v-if="!facilityEditingView">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button size="sm" @click="router.push('/applications/facility-apps')">{{ t('routes.facilityApps.title') }}</Button>
         <Button v-if="currentFacilitySummary" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
         <Button v-if="currentFacilitySummary" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
       </template>
@@ -1339,13 +1429,37 @@ onBeforeUnmount(() => {
   
               <section class="workspace-panel">
                 <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.domainGroups') }}</h3><p>{{ t('applicationsPage.domainGroupsHint') }}</p></div><Button size="sm" @click="openFacilityDomainDialog()"><Plus />{{ t('applicationsPage.addDomain') }}</Button></div>
-                <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="rounded-xl border border-border bg-background p-4">
-                  <div class="flex items-start justify-between gap-3 max-sm:flex-col">
-                    <div><strong>{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ domain.originServerIds.join(', ') || t('common.notAvailable') }}</span></div>
-                    <div class="row-actions"><Button size="sm" @click="openFacilityDomainDialog(domainIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(facilityDraft.domains, domainIndex, 'facility')">{{ t('common.delete') }}</Button></div>
+                <EmptyState v-if="!facilityDraft.domains.length" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
+                <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="facility-domain-card">
+                  <div class="facility-domain-header">
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <Globe2 class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                        <strong class="facility-domain-name">{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong>
+                        <Badge v-if="domain.anyAccess?.enabled" tone="info">{{ t(`applicationsPage.loadBalancingStrategy.${domain.anyAccess?.strategy || 'round_robin'}`) }}</Badge>
+                      </div>
+                      <span class="facility-domain-servers">{{ t('applicationsPage.originServers', { count: domain.originServerIds.length }) }} · {{ domain.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</span>
+                    </div>
+                    <div class="row-actions">
+                      <Button size="sm" @click="openFacilityDomainDialog(domainIndex)">{{ t('common.edit') }}</Button>
+                      <Button size="sm" variant="danger" @click="removeAt(facilityDraft.domains, domainIndex, 'facility')">{{ t('common.delete') }}</Button>
+                    </div>
                   </div>
-                  <div class="mt-3 grid gap-2">
-                    <div v-for="(path, pathIndex) in domain.paths" :key="pathIndex" class="item-row"><div><strong>{{ t('applicationsPage.pathSummary', { path: path.path || '/', type: path.ruleType || t('common.notAvailable') }) }}</strong><span>{{ pathTarget(path) }}</span></div><div class="row-actions"><Button size="sm" @click="openFacilityPathDialog(domainIndex, pathIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(domain.paths, pathIndex, 'facility')">{{ t('common.delete') }}</Button></div></div>
+                  <div class="facility-paths">
+                    <div v-for="(path, pathIndex) in domain.paths" :key="pathIndex" class="facility-path-row">
+                      <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <Badge tone="neutral" class="panel-mono">{{ path.path || '/' }}</Badge>
+                          <Badge tone="info">{{ path.ruleType ? t(`applicationsPage.routeType.${path.ruleType}`) : t('common.notAvailable') }}</Badge>
+                        </div>
+                        <span class="facility-path-target">{{ facilityPathTargetLabel(path) }}</span>
+                      </div>
+                      <div class="row-actions">
+                        <Button size="sm" @click="openFacilityPathDialog(domainIndex, pathIndex)">{{ t('common.edit') }}</Button>
+                        <Button size="sm" variant="danger" @click="removeAt(domain.paths, pathIndex, 'facility')">{{ t('common.delete') }}</Button>
+                      </div>
+                    </div>
+                    <p v-if="!domain.paths.length" class="facility-paths-empty">{{ t('applicationsPage.noPathsHint') }}</p>
                     <Button size="sm" class="justify-self-start" @click="openFacilityPathDialog(domainIndex)"><Plus />{{ t('common.addPath') }}</Button>
                   </div>
                 </div>
@@ -1354,10 +1468,10 @@ onBeforeUnmount(() => {
               <section class="workspace-panel">
                 <div class="section-copy"><h3>{{ t('applicationsPage.panelEntry') }}</h3><p>{{ t('applicationsPage.panelEntryHint') }}</p></div>
                 <label class="switch-field">{{ t('applicationsPage.panelEntry') }}<Switch v-model="facilityDraft.panelEnabled" :label="t('applicationsPage.panelEntry')" @click="markDirty" /></label>
-                <div class="form-grid">
-                  <label class="field">{{ t('applicationsPage.panelServer') }}<Input v-model="facilityDraft.panelServerId" :invalid="Boolean(facilityErrors.panelServerId)" @input="markDirty" /></label>
+                <template v-if="facilityDraft.panelEnabled">
+                  <label class="field">{{ t('applicationsPage.panelServer') }}<ServerContextSelector v-model="facilityDraft.panelServerId" :servers="serverOptions" :label="t('applicationsPage.panelServer')" @update:model-value="markDirty" /></label>
                   <label class="field">{{ t('applicationsPage.panelDomain') }}<Input v-model="facilityDraft.panelDomain" :invalid="Boolean(facilityErrors.panelDomain)" @input="markDirty" /></label>
-                </div>
+                </template>
               </section>
   
               <section class="workspace-panel">
@@ -1417,7 +1531,7 @@ onBeforeUnmount(() => {
             <div class="mt-3 grid gap-2">
               <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
                 <div class="flex items-center justify-between"><strong>{{ summary.domain }}{{ summary.path }}</strong><StatusBadge :status="summary.httpsStatus" :tone="summary.httpsStatus === 'disabled' ? 'warning' : 'success'" /></div>
-                <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.join(', ') }}</span>
+                <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.map((id) => serverDisplayName(id)).join(', ') }}</span>
               </div>
               <EmptyState v-if="!facility.routeSummaries.length" :title="t('applicationsPage.noGatewayRoutes')" :description="t('applicationsPage.noGatewayRoutesHint')" />
             </div>
@@ -1447,7 +1561,7 @@ onBeforeUnmount(() => {
     </div>
   </ConsolePage>
 
-  <ConsolePage v-else-if="isAppEditor" :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')" :description="t('applicationsPage.applicationEditorDescription')">
+  <ConsolePage v-else-if="isAppEditor" :back-label="t('common.back')" @back="router.push('/applications/apps')" :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')" :description="t('applicationsPage.applicationEditorDescription')">
     <EditorPage>
       <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
       <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
@@ -1618,6 +1732,14 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'facilityDomain'" class="grid gap-3">
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityDomainDraft.domain" /></label>
       <ServerMultiPicker v-model="facilityDomainOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: facilityDomainDraft.originServerIds.length })" />
+      <div class="options-block">
+        <div class="section-copy"><h3>{{ t('applicationsPage.loadBalancing') }}</h3><p>{{ t('applicationsPage.loadBalancingHint') }}</p></div>
+        <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="facilityDomainDraft.anyAccess.enabled" :label="t('applicationsPage.anyAccess')" /></label>
+        <div v-if="facilityDomainDraft.anyAccess.enabled" class="grid gap-3">
+          <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="facilityDomainDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
+          <label v-if="facilityDomainDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="facilityDomainDraft.anyAccess.primaryOriginServerId" :options="facilityDomainOriginOptions" /></label>
+        </div>
+      </div>
     </div>
     <div v-else-if="dialogKind === 'facilityPath'" class="grid gap-3">
       <label class="field">{{ t('common.path') }}<Input v-model="facilityPathDraft.path" /></label>
@@ -1633,7 +1755,37 @@ onBeforeUnmount(() => {
       </template>
       <template v-else>
         <label class="field">{{ t('applicationsPage.proxyUrl') }}<Input v-model="facilityPathDraft.proxyUrl" /></label>
+        <label class="field">{{ t('applicationsPage.proxySourceMode') }}<Select v-model="facilityPathDraft.proxySourceMode" :options="proxySourceModeOptions" /></label>
       </template>
+
+      <div class="options-block">
+        <div class="section-copy"><h3>{{ t('applicationsPage.advancedOptions') }}</h3><p>{{ t('applicationsPage.advancedOptionsHint') }}</p></div>
+        <label v-if="facilityPathDraft.ruleType !== 'redirect'" class="field">{{ t('applicationsPage.gzipMode') }}<Select v-model="facilityGzipMode" :options="httpModeOptions" /></label>
+        <template v-if="facilityPathDraft.ruleType === 'proxy_pass'">
+          <div class="form-grid">
+            <label class="field">{{ t('applicationsPage.clientMaxBodySizeMb') }}<Input v-model="facilityClientMaxBodySizeMb" type="number" min="0" /></label>
+            <label class="field">{{ t('applicationsPage.connectTimeoutSeconds') }}<Input v-model="facilityConnectTimeoutSeconds" type="number" min="0" /></label>
+            <label class="field">{{ t('applicationsPage.readTimeoutSeconds') }}<Input v-model="facilityReadTimeoutSeconds" type="number" min="0" /></label>
+            <label class="field">{{ t('applicationsPage.sendTimeoutSeconds') }}<Input v-model="facilitySendTimeoutSeconds" type="number" min="0" /></label>
+            <label class="field">{{ t('applicationsPage.bufferingMode') }}<Select v-model="facilityBufferingMode" :options="httpModeOptions" /></label>
+            <label class="field">{{ t('applicationsPage.webSocketMode') }}<Select v-model="facilityWebSocketMode" :options="webSocketModeOptions" /></label>
+          </div>
+          <div class="options-subheading">{{ t('applicationsPage.requestHeaders') }}</div>
+          <div v-for="(row, index) in facilityRequestHeaders" :key="row.id" class="header-row">
+            <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
+            <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
+            <Button size="sm" variant="danger" class="shrink-0" @click="facilityRequestHeaders.splice(index, 1)"><Trash2 /></Button>
+          </div>
+          <Button size="sm" class="justify-self-start" @click="facilityRequestHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
+        </template>
+        <div class="options-subheading">{{ t('applicationsPage.responseHeaders') }}</div>
+        <div v-for="(row, index) in facilityResponseHeaders" :key="row.id" class="header-row">
+          <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
+          <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
+          <Button size="sm" variant="danger" class="shrink-0" @click="facilityResponseHeaders.splice(index, 1)"><Trash2 /></Button>
+        </div>
+        <Button size="sm" class="justify-self-start" @click="facilityResponseHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
+      </div>
     </div>
     <template #footer>
       <Button variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</Button>
@@ -1915,6 +2067,147 @@ strong {
   padding: 0.5rem 0.625rem;
   font-size: 0.75rem;
   overflow-wrap: anywhere;
+}
+
+
+.facility-domain-card {
+  display: grid;
+  gap: 0.875rem;
+  min-width: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.875rem;
+  background: hsl(var(--muted) / 0.3);
+  padding: 0.875rem;
+}
+
+.facility-domain-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.facility-domain-name {
+  display: inline;
+  color: hsl(var(--foreground));
+  font-size: 0.9375rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.facility-domain-servers {
+  display: block;
+  margin-top: 0.25rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.facility-paths {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  padding-top: 0.875rem;
+  border-top: 1px dashed hsl(var(--border));
+}
+
+.facility-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  min-width: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background: hsl(var(--background));
+  padding: 0.625rem 0.75rem;
+}
+
+.facility-path-target {
+  display: block;
+  margin-top: 0.25rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.facility-paths-empty {
+  margin: 0;
+  border: 1px dashed hsl(var(--border));
+  border-radius: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  color: hsl(var(--muted-foreground));
+  font-size: 0.8125rem;
+  line-height: 1.5;
+}
+
+.options-block {
+  display: grid;
+  gap: 0.75rem;
+  min-width: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.875rem;
+  background: hsl(var(--muted) / 0.3);
+  padding: 0.875rem;
+}
+
+.options-subheading {
+  margin: 0;
+  color: hsl(var(--foreground));
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.header-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.facility-card-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.facility-card-stat {
+  display: grid;
+  gap: 0.125rem;
+  min-width: 0;
+  border: 1px solid hsl(var(--border));
+  border-radius: 0.75rem;
+  background: hsl(var(--background));
+  padding: 0.625rem 0.75rem;
+}
+
+.facility-card-stat strong {
+  display: block;
+  color: hsl(var(--foreground));
+  font-size: 1.125rem;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.facility-card-stat span {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+@media (max-width: 640px) {
+  .facility-path-row {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .facility-path-row .row-actions {
+    justify-content: flex-start;
+  }
 }
 
 @media (max-width: 760px) {
