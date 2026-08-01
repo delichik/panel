@@ -44,6 +44,7 @@ import {
   draftFromApplication,
   facilityDraftFromConfig,
   facilitySaveInputFromDraft,
+  facilitySaveInputsEqual,
   hasBlockingDiagnostic,
   makeFacilityDomain,
   makeFacilityPath,
@@ -721,13 +722,13 @@ async function startFacilityEditor() {
   facilityRecovered.value = null;
   isDirty.value = false;
   try {
+    const recovered = await reverseProxyFacilityApi.recoverableEditSessions({ signal: controller.signal });
+    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
+    const committed = facilitySaveInputFromDraft(facilityDraftFromConfig(facility.value));
+    facilityRecovered.value = recovered.find((session) => !facilitySaveInputsEqual(session.draft, committed)) ?? null;
     facilitySession.value = await reverseProxyFacilityApi.beginEdit(facilitySaveInputFromDraft(facilityDraft));
     if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
     Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, panelEntry: facilitySession.value.draft.panelEntry, domains: facilitySession.value.draft.domains }));
-    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
-    const recovered = await reverseProxyFacilityApi.recoverableEditSessions({ signal: controller.signal });
-    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
-    facilityRecovered.value = recovered[0] ?? null;
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
