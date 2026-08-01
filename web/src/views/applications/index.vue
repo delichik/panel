@@ -138,7 +138,8 @@ const isCreateMode = computed(() => mode.value === 'create');
 const isReverseProxyFacility = computed(() => !facilityKind.value || facilityKind.value === 'reverse-proxy');
 const currentFacilitySummary = computed(() => facilities.find((item) => item.kind === (facilityKind.value || 'reverse-proxy')) ?? null);
 const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && isReverseProxyFacility.value);
-const isUnsupportedFacilityRoute = computed(() => (mode.value === 'facilityDetail' || mode.value === 'facilityConfig') && !isReverseProxyFacility.value);
+const facilityEditing = ref(false);
+const facilityEditingView = computed(() => (mode.value === 'facilityConfig' && isReverseProxyFacility.value) || facilityEditing.value);
 const currentApplicationSummary = computed(() => applications.value.find((item) => item.id === selectedId.value) ?? null);
 const currentApplication = computed(() => selectedId.value ? applicationDetails.value[selectedId.value] ?? null : null);
 const selectedApplication = computed(() => currentApplication.value ?? applicationFromSummary(currentApplicationSummary.value) ?? emptyApplication());
@@ -366,6 +367,7 @@ watch(() => route.path, async () => {
   cancelEditorQuery();
   actionError.value = '';
   feedback.value = '';
+  facilityEditing.value = false;
   await load();
   if (isAppEditor.value) await startApplicationEditor();
   if (isFacilityEditor.value) await startFacilityEditor();
@@ -670,6 +672,25 @@ async function startFacilityEditor() {
   }
 }
 
+async function startInPlaceFacilityEdit() {
+  if (facilityEditingView.value) return;
+  facilityEditing.value = true;
+  actionError.value = '';
+  feedback.value = '';
+  await startFacilityEditor();
+}
+
+function cancelFacilityEdit() {
+  if (isDirty.value && !window.confirm(t('applicationsPage.leaveDirty'))) return;
+  facilitySession.value = null;
+  facilityPreview.value = null;
+  facilityDiagnostics.value = [];
+  actionError.value = '';
+  feedback.value = '';
+  isDirty.value = false;
+  facilityEditing.value = false;
+}
+
 async function reloadApplicationEditor() {
   pending.value = 'editor-reload';
   const currentSession = editSession.value;
@@ -738,8 +759,13 @@ async function commitFacilityConfig() {
     facility.value = result.config;
     feedback.value = result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted');
     isDirty.value = false;
-    await router.push(`/applications/facility-apps/${facilityKind.value}`);
-    await load();
+    if (mode.value === 'facilityConfig') {
+      await router.replace(`/applications/facility-apps/${facilityKind.value}`);
+      await load();
+    } else {
+      facilityEditing.value = false;
+      await load();
+    }
   }, 'commit');
 }
 
@@ -1241,7 +1267,16 @@ onBeforeUnmount(() => {
             </article>
           </template>
           <template v-else>
-            <article v-for="item in facilities" :key="item.kind" class="motion-list-item grid gap-4 rounded-2xl border border-border bg-background p-4">
+            <article
+              v-for="item in facilities"
+              :key="item.kind"
+              role="link"
+              tabindex="0"
+              class="motion-list-item grid cursor-pointer gap-4 rounded-2xl border border-border bg-background p-4 transition-colors hover:bg-accent"
+              @click="router.push(`/applications/facility-apps/${item.kind}`)"
+              @keydown.enter="router.push(`/applications/facility-apps/${item.kind}`)"
+              @keydown.space.prevent="router.push(`/applications/facility-apps/${item.kind}`)"
+            >
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
                   <div class="flex flex-wrap items-center gap-2">
@@ -1253,9 +1288,7 @@ onBeforeUnmount(() => {
                 <StatusBadge :status="item.status" :tone="item.status === 'degraded' ? 'danger' : 'success'" :label="t(`applicationsPage.facilityStatus.${item.status}`)" />
               </div>
               <div class="flex flex-wrap gap-2">
-                <Button size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${item.kind}`)">{{ t('common.view') }}</Button>
-                <Button size="sm" @click="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
-                <Button size="sm" @click="router.push(`/applications/facility-apps/${item.kind}/config`)"><Wrench />{{ t('common.configure') }}</Button>
+                <Button size="sm" @click.stop="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
               </div>
             </article>
             <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
@@ -1273,14 +1306,103 @@ onBeforeUnmount(() => {
     </div>
   </ConsolePage>
 
-  <ConsolePage v-else-if="mode === 'facilityDetail'" :title="currentFacilitySummary ? t(currentFacilitySummary.titleKey) : t('applicationsPage.facilityUnavailable')" :description="currentFacilitySummary ? t(currentFacilitySummary.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })">
+  <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :title="facilityEditingView ? t('applicationsPage.gatewayEditor') : (currentFacilitySummary ? t(currentFacilitySummary.titleKey) : t('applicationsPage.facilityUnavailable'))" :description="facilityEditingView ? t('applicationsPage.gatewayEditorDescription') : (currentFacilitySummary ? t(currentFacilitySummary.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind }))">
     <template #actions>
-      <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-      <Button size="sm" @click="router.push('/applications/facility-apps')">{{ t('routes.facilityApps.title') }}</Button>
-      <Button v-if="currentFacilitySummary" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
-      <Button v-if="currentFacilitySummary" size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${facilityKind}/config`)"><Wrench />{{ t('common.configure') }}</Button>
+      <template v-if="!facilityEditingView">
+        <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
+        <Button size="sm" @click="router.push('/applications/facility-apps')">{{ t('routes.facilityApps.title') }}</Button>
+        <Button v-if="currentFacilitySummary" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+        <Button v-if="currentFacilitySummary" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
+      </template>
     </template>
-    <div class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+    <template v-if="facilityEditingView">
+      <EditorPage>
+        <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
+        <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+          <span class="text-danger">{{ actionError }}</span>
+          <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
+        </div>
+        <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
+        <div class="app-editor-layout">
+          <section class="app-editor-shell">
+            <div class="app-editor-header">
+              <p class="editor-flow-hint">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
+            </div>
+  
+            <div class="app-editor-body">
+              <section class="workspace-panel">
+                <div class="section-copy"><h3>{{ t('applicationsPage.gatewayNodes') }}</h3><p>{{ t('applicationsPage.gatewayNodesHint') }}</p></div>
+                <div class="server-picker-grid">
+                  <ServerMultiPicker v-model="facilityDeploymentServersModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
+                </div>
+              </section>
+  
+              <section class="workspace-panel">
+                <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.domainGroups') }}</h3><p>{{ t('applicationsPage.domainGroupsHint') }}</p></div><Button size="sm" @click="openFacilityDomainDialog()"><Plus />{{ t('applicationsPage.addDomain') }}</Button></div>
+                <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="rounded-xl border border-border bg-background p-4">
+                  <div class="flex items-start justify-between gap-3 max-sm:flex-col">
+                    <div><strong>{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ domain.originServerIds.join(', ') || t('common.notAvailable') }}</span></div>
+                    <div class="row-actions"><Button size="sm" @click="openFacilityDomainDialog(domainIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(facilityDraft.domains, domainIndex, 'facility')">{{ t('common.delete') }}</Button></div>
+                  </div>
+                  <div class="mt-3 grid gap-2">
+                    <div v-for="(path, pathIndex) in domain.paths" :key="pathIndex" class="item-row"><div><strong>{{ t('applicationsPage.pathSummary', { path: path.path || '/', type: path.ruleType || t('common.notAvailable') }) }}</strong><span>{{ pathTarget(path) }}</span></div><div class="row-actions"><Button size="sm" @click="openFacilityPathDialog(domainIndex, pathIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(domain.paths, pathIndex, 'facility')">{{ t('common.delete') }}</Button></div></div>
+                    <Button size="sm" class="justify-self-start" @click="openFacilityPathDialog(domainIndex)"><Plus />{{ t('common.addPath') }}</Button>
+                  </div>
+                </div>
+              </section>
+  
+              <section class="workspace-panel">
+                <div class="section-copy"><h3>{{ t('applicationsPage.panelEntry') }}</h3><p>{{ t('applicationsPage.panelEntryHint') }}</p></div>
+                <label class="switch-field">{{ t('applicationsPage.panelEntry') }}<Switch v-model="facilityDraft.panelEnabled" :label="t('applicationsPage.panelEntry')" @click="markDirty" /></label>
+                <div class="form-grid">
+                  <label class="field">{{ t('applicationsPage.panelServer') }}<Input v-model="facilityDraft.panelServerId" :invalid="Boolean(facilityErrors.panelServerId)" @input="markDirty" /></label>
+                  <label class="field">{{ t('applicationsPage.panelDomain') }}<Input v-model="facilityDraft.panelDomain" :invalid="Boolean(facilityErrors.panelDomain)" @input="markDirty" /></label>
+                </div>
+              </section>
+  
+              <section class="workspace-panel">
+                <AssetFileManager
+                  :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!facilitySession"
+                  :labels="{ title: t('applicationsPage.staticAssets'), hint: t('applicationsPage.assetUploadLimit'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
+                />
+              </section>
+            </div>
+          </section>
+  
+          <aside class="app-editor-summary">
+            <section class="rounded-2xl border border-border bg-card p-4">
+              <h3>{{ t('applicationsPage.gatewayChangeSummary') }}</h3>
+              <div class="mt-3 grid gap-2 text-sm">
+                <div><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityDraft.deploymentServers.length }}</strong></div>
+                <div><span>{{ t('applicationsPage.domainGroups') }}</span><strong>{{ facilityDraft.domains.length }}</strong></div>
+                <div><span>{{ t('applicationsPage.previewAdded') }}</span><strong>{{ facilityDiff.added }}</strong></div>
+                <div><span>{{ t('applicationsPage.previewChanged') }}</span><strong>{{ facilityDiff.changed }}</strong></div>
+                <div><span>{{ t('applicationsPage.previewRemoved') }}</span><strong>{{ facilityDiff.removed }}</strong></div>
+              </div>
+            </section>
+            <section class="rounded-2xl border border-border bg-card p-4">
+              <h3>{{ t('applicationsPage.diagnostics') }}</h3>
+              <div class="mt-3 grid gap-2">
+                <div v-for="item in facilityDiagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}</div>
+                <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
+              </div>
+            </section>
+          </aside>
+        </div>
+        <template #footer>
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
+            <div class="flex flex-wrap gap-2">
+              <Button variant="secondary" :disabled="saving" @click="cancelFacilityEdit">{{ t('common.cancel') }}</Button>
+              <Button variant="secondary" :loading="pending === 'validate'" :disabled="saving" @click="validateFacility">{{ t('applicationsPage.validate') }}</Button>
+              <Button variant="secondary" :loading="pending === 'preview'" :disabled="saving" @click="previewFacilityConfig">{{ t('applicationsPage.preview') }}</Button>
+              <Button variant="primary" :loading="pending === 'commit'" :disabled="Boolean(Object.keys(facilityErrors).length || hasBlockingFacilityDiagnostics || saving)" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
+            </div>
+          </div>
+        </template>
+      </EditorPage>
+    </template>
+    <div v-else class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
         <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
         <div v-else-if="facility" class="grid gap-4">
@@ -1325,23 +1447,15 @@ onBeforeUnmount(() => {
     </div>
   </ConsolePage>
 
-  <ConsolePage v-else-if="isUnsupportedFacilityRoute" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })">
-    <template #actions>
-      <Button size="sm" @click="router.push('/applications/facility-apps')">{{ t('routes.facilityApps.title') }}</Button>
-    </template>
-      <EmptyState :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
-  </ConsolePage>
-
-  <ConsolePage v-else-if="isAppEditor || isFacilityEditor" :title="isFacilityEditor ? t('applicationsPage.gatewayEditor') : (isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor'))" :description="isFacilityEditor ? t('applicationsPage.gatewayEditorDescription') : t('applicationsPage.applicationEditorDescription')">
+  <ConsolePage v-else-if="isAppEditor" :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')" :description="t('applicationsPage.applicationEditorDescription')">
     <EditorPage>
       <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
       <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
         <span class="text-danger">{{ actionError }}</span>
-        <Button v-if="isFacilityEditor" size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
       </div>
       <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
 
-      <div v-if="isAppEditor" class="app-editor-layout">
+      <div class="app-editor-layout">
         <section class="app-editor-shell">
           <div class="app-editor-header">
             <div class="app-editor-title-row">
@@ -1453,81 +1567,15 @@ onBeforeUnmount(() => {
         </aside>
       </div>
 
-      <div v-else class="app-editor-layout">
-        <section class="app-editor-shell">
-          <div class="app-editor-header">
-            <p class="editor-flow-hint">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
-          </div>
-
-          <div class="app-editor-body">
-            <section class="workspace-panel">
-              <div class="section-copy"><h3>{{ t('applicationsPage.gatewayNodes') }}</h3><p>{{ t('applicationsPage.gatewayNodesHint') }}</p></div>
-              <div class="server-picker-grid">
-                <ServerMultiPicker v-model="facilityDeploymentServersModel" :servers="serverOptions" :label="t('applicationsPage.gatewayNodes')" />
-              </div>
-            </section>
-
-            <section class="workspace-panel">
-              <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.domainGroups') }}</h3><p>{{ t('applicationsPage.domainGroupsHint') }}</p></div><Button size="sm" @click="openFacilityDomainDialog()"><Plus />{{ t('applicationsPage.addDomain') }}</Button></div>
-              <div v-for="(domain, domainIndex) in facilityDraft.domains" :key="`${domain.domain}-${domainIndex}`" class="rounded-xl border border-border bg-background p-4">
-                <div class="flex items-start justify-between gap-3 max-sm:flex-col">
-                  <div><strong>{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong><span>{{ domain.originServerIds.join(', ') || t('common.notAvailable') }}</span></div>
-                  <div class="row-actions"><Button size="sm" @click="openFacilityDomainDialog(domainIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(facilityDraft.domains, domainIndex, 'facility')">{{ t('common.delete') }}</Button></div>
-                </div>
-                <div class="mt-3 grid gap-2">
-                  <div v-for="(path, pathIndex) in domain.paths" :key="pathIndex" class="item-row"><div><strong>{{ t('applicationsPage.pathSummary', { path: path.path || '/', type: path.ruleType || t('common.notAvailable') }) }}</strong><span>{{ pathTarget(path) }}</span></div><div class="row-actions"><Button size="sm" @click="openFacilityPathDialog(domainIndex, pathIndex)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(domain.paths, pathIndex, 'facility')">{{ t('common.delete') }}</Button></div></div>
-                  <Button size="sm" class="justify-self-start" @click="openFacilityPathDialog(domainIndex)"><Plus />{{ t('common.addPath') }}</Button>
-                </div>
-              </div>
-            </section>
-
-            <section class="workspace-panel">
-              <div class="section-copy"><h3>{{ t('applicationsPage.panelEntry') }}</h3><p>{{ t('applicationsPage.panelEntryHint') }}</p></div>
-              <label class="switch-field">{{ t('applicationsPage.panelEntry') }}<Switch v-model="facilityDraft.panelEnabled" :label="t('applicationsPage.panelEntry')" @click="markDirty" /></label>
-              <div class="form-grid">
-                <label class="field">{{ t('applicationsPage.panelServer') }}<Input v-model="facilityDraft.panelServerId" :invalid="Boolean(facilityErrors.panelServerId)" @input="markDirty" /></label>
-                <label class="field">{{ t('applicationsPage.panelDomain') }}<Input v-model="facilityDraft.panelDomain" :invalid="Boolean(facilityErrors.panelDomain)" @input="markDirty" /></label>
-              </div>
-            </section>
-
-            <section class="workspace-panel">
-              <AssetFileManager
-                :items="facilityAssetItems" :adapter="facilityAssetAdapter" :disabled="!facilitySession"
-                :labels="{ title: t('applicationsPage.staticAssets'), hint: t('applicationsPage.assetUploadLimit'), uploadAsset: t('applicationsPage.uploadAsset'), uploadAssetTitle: t('applicationsPage.uploadAssetTitle'), uploadType: t('applicationsPage.uploadType'), uploadTypeText: t('applicationsPage.uploadTypeText'), uploadTypeBinary: t('applicationsPage.uploadTypeBinary'), uploadTypeArchive: t('applicationsPage.uploadTypeArchive'), uploadFile: t('applicationsPage.uploadFile'), uploadArchive: t('applicationsPage.uploadArchive'), operationFailed: t('applicationsPage.operationFailed'), edit: t('common.edit'), replace: t('common.replace'), download: t('common.download'), delete: t('common.delete'), bytes: t('applicationsPage.bytes'), noAssets: t('applicationsPage.noAssets'), noAssetsHint: t('applicationsPage.noAssetsHint'), textTitle: t('applicationsPage.editTextFile'), newTextTitle: t('applicationsPage.newTextFile'), name: t('applicationsPage.assetReferenceName'), nameHint: t('applicationsPage.assetReferenceNameHint'), filename: t('applicationsPage.assetDownloadFilename'), filenameHint: t('applicationsPage.assetDownloadFilenameHint'), language: t('applicationsPage.highlightLanguage'), content: t('applicationsPage.fileContent'), loading: t('applicationsPage.fileLoading'), loadFailed: t('applicationsPage.fileLoadFailed'), cancel: t('common.cancel'), save: t('common.save'), close: t('common.close'), reload: t('applicationsPage.discardTextAndReload'), deleteTitle: t('applicationsPage.confirm.facility-asset-delete.title'), deleteDescription: t('applicationsPage.confirm.facility-asset-delete.description'), confirmDelete: t('common.delete') }"
-              />
-            </section>
-          </div>
-        </section>
-
-        <aside class="app-editor-summary">
-          <section class="rounded-2xl border border-border bg-card p-4">
-            <h3>{{ t('applicationsPage.gatewayChangeSummary') }}</h3>
-            <div class="mt-3 grid gap-2 text-sm">
-              <div><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityDraft.deploymentServers.length }}</strong></div>
-              <div><span>{{ t('applicationsPage.domainGroups') }}</span><strong>{{ facilityDraft.domains.length }}</strong></div>
-              <div><span>{{ t('applicationsPage.previewAdded') }}</span><strong>{{ facilityDiff.added }}</strong></div>
-              <div><span>{{ t('applicationsPage.previewChanged') }}</span><strong>{{ facilityDiff.changed }}</strong></div>
-              <div><span>{{ t('applicationsPage.previewRemoved') }}</span><strong>{{ facilityDiff.removed }}</strong></div>
-            </div>
-          </section>
-          <section class="rounded-2xl border border-border bg-card p-4">
-            <h3>{{ t('applicationsPage.diagnostics') }}</h3>
-            <div class="mt-3 grid gap-2">
-              <div v-for="item in facilityDiagnostics" :key="`${item.code}-${item.field}`" class="rounded-xl border p-3 text-sm" :class="item.severity === 'error' ? 'border-danger-border bg-danger-bg text-danger' : 'border-warning-border bg-warning-bg text-warning'">{{ item.field ? `${item.field}: ` : '' }}{{ item.message }}</div>
-              <p v-if="!facilityDiagnostics.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.noDiagnostics') }}</p>
-            </div>
-          </section>
-        </aside>
-      </div>
 
       <template #footer>
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
           <div class="flex flex-wrap gap-2">
             <Button variant="secondary" :disabled="saving" @click="router.back()">{{ t('common.cancel') }}</Button>
-            <Button variant="secondary" :loading="pending === 'validate'" :disabled="saving" @click="isFacilityEditor ? validateFacility() : validateApplication()">{{ t('applicationsPage.validate') }}</Button>
-            <Button variant="secondary" :loading="pending === 'preview'" :disabled="saving" @click="isFacilityEditor ? previewFacilityConfig() : previewApplication()">{{ t('applicationsPage.preview') }}</Button>
-            <Button variant="primary" :loading="pending === 'commit'" :disabled="isFacilityEditor ? Boolean(Object.keys(facilityErrors).length || hasBlockingFacilityDiagnostics || saving) : Boolean(Object.keys(appErrors).length || hasBlockingAppDiagnostics || saving)" @click="isFacilityEditor ? commitFacilityConfig() : commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
+            <Button variant="secondary" :loading="pending === 'validate'" :disabled="saving" @click="validateApplication()">{{ t('applicationsPage.validate') }}</Button>
+            <Button variant="secondary" :loading="pending === 'preview'" :disabled="saving" @click="previewApplication()">{{ t('applicationsPage.preview') }}</Button>
+            <Button variant="primary" :loading="pending === 'commit'" :disabled="Boolean(Object.keys(appErrors).length || hasBlockingAppDiagnostics || saving)" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
           </div>
         </div>
       </template>
