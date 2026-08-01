@@ -146,7 +146,6 @@
 
 - 新增或修改用户可见文案必须写入 `web/src/i18n/index.ts` 英文和简体中文词条。
 - 路由元信息只写 `meta.titleKey`，不写用户可见文案。
-- 文案状态同步维护 `docs/agents/i18n-translation-status.md`。
 
 ## 验证
 

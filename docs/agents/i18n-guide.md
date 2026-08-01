@@ -153,8 +153,7 @@ if locale == "zh-CN" {
 3. 将调用方改为使用 key / 翻译函数
 4. 如果涉及持久化结构，确认没有把展示文案写入存储
 5. 如果涉及系统级语言行为，确认 settings 接口与默认值是否需要同步
-6. 更新 `docs/i18n-translation-status.md`
-7. 执行相关 `task build:*` / `task test:*`
+6. 执行相关 `task build:*` / `task test:*`
 
 ## 暂不建议做的事
 

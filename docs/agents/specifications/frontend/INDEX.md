@@ -18,5 +18,5 @@
 2. 视觉一律经 token：业务代码禁止裸色值、裸尺寸和自造阴影。颜色、状态和控件层级来自 `web/src/styles/main.css` 中的 `--panel-*` / Tailwind theme 变量。
 3. 组件一律经自有 primitives：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、Tabs、Badge、Table、Toast、Skeleton、EmptyState、Tooltip、Switch 位于 `web/src/components/ui/`。业务页面不得引入 Naive UI 或 Vuetify。
 4. 页面族必须独立：overview、servers、credentials、security、resources、applications、dns、certificates、application-operations、system-events、tasks、settings、auth、maintenance、debug 都有独立入口目录。可以复用模板和 primitives，但内容结构、操作闭环和 API 模块必须按业务任务设计。
-5. 新增或修改用户可见文案遵守 `docs/agents/i18n-guide.md`，并维护 `docs/agents/i18n-translation-status.md`。
+5. 新增或修改用户可见文案遵守 `docs/agents/i18n-guide.md`。
 6. 新增可跨页面复用的组件或模式时，新增或更新规范并维护本索引。
