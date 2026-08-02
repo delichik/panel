@@ -165,6 +165,12 @@ async function loadPanel(options: { clear?: boolean } = {}) {
   }
 }
 
+async function refresh() {
+  const previous = selectedId.value;
+  await loadServers();
+  if (selectedId.value === previous) await loadPanel();
+}
+
 function clearPanelState() {
   ufwState.value = null;
   fail2banState.value = null;
@@ -292,7 +298,7 @@ onBeforeUnmount(() => {
 <template>
   <ConsolePage :title="t(pageTitleKey)" :description="t(pageDescriptionKey)">
     <template #actions>
-      <Button size="sm" :loading="loadingServers || loadingPanel" @click="loadServers"><RefreshCcw />{{ t('common.refresh') }}</Button>
+      <Button size="sm" :loading="loadingServers || loadingPanel" @click="refresh"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
     <MasterDetailLayout class="h-full min-h-[640px]">

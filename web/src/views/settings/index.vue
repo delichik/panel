@@ -21,6 +21,7 @@ import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
 import type { SystemCertificateDto } from '@/types/keyAssets';
 import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVariableDefinition } from '@/types/settings';
+import { createLatestRequestGuard } from '@/views/_shared/requestState';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -34,6 +35,7 @@ const serverVariables = ref<ServerVariableDefinition[]>([]);
 const systemCertificates = ref<SystemCertificateDto[]>([]);
 const activeSection = ref(sectionFromPath(route.path));
 const loading = ref(false);
+const listRequests = createLatestRequestGuard();
 const pending = ref('');
 const error = ref('');
 const feedback = ref('');
@@ -95,20 +97,38 @@ watch(() => route.path, (path) => {
 });
 
 async function load() {
+  const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   try {
-    const [settings, variables, nextVersion, certs] = await Promise.all([settingsApi.runtime(), settingsApi.serverVariables(), systemApi.version(), keyAssetsApi.systemCertificates()]);
-    runtime.value = settings;
-    version.value = nextVersion;
-    serverVariables.value = variables;
-    systemCertificates.value = certs;
-    hydrate(settings, variables);
+    const [settingsResult, variablesResult, versionResult, certsResult] = await Promise.allSettled([
+      settingsApi.runtime(),
+      settingsApi.serverVariables(),
+      systemApi.version(),
+      keyAssetsApi.systemCertificates(),
+    ]);
+    if (!listRequests.isCurrent(requestId)) return;
+    let firstError = '';
+    if (settingsResult.status === 'fulfilled') runtime.value = settingsResult.value;
+    else firstError = settingsResult.reason instanceof Error ? settingsResult.reason.message : t('settingsPage.loadFailed');
+    if (variablesResult.status === 'fulfilled') serverVariables.value = variablesResult.value;
+    else if (!firstError) firstError = variablesResult.reason instanceof Error ? variablesResult.reason.message : t('settingsPage.loadFailed');
+    if (versionResult.status === 'fulfilled') version.value = versionResult.value;
+    else if (!firstError) firstError = versionResult.reason instanceof Error ? versionResult.reason.message : t('settingsPage.loadFailed');
+    if (certsResult.status === 'fulfilled') systemCertificates.value = certsResult.value;
+    else if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('settingsPage.loadFailed');
+    if (settingsResult.status === 'fulfilled' && variablesResult.status === 'fulfilled') {
+      hydrate(settingsResult.value, variablesResult.value);
+    }
+    if (firstError) {
+      error.value = firstError;
+      notifyError(firstError);
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settingsPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('settingsPage.loadFailed'));
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) loading.value = false;
   }
 }
 

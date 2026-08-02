@@ -26,6 +26,7 @@ import type { DnsDomainDto } from '@/types/dns';
 import type { ImportPreflightDto, KeyAssetDto, KeyAssetType } from '@/types/keyAssets';
 import { assetImportHasCertificate, initialAssetImportMaterialTab, type AssetImportMaterialTab } from './assetImportEditor';
 import { assetTone, certificateState, certificateTone, selfSignedTone } from './model';
+import { createLatestRequestGuard } from '@/views/_shared/requestState';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -38,6 +39,7 @@ const selfSigned = ref<SelfSignedCertificateDto[]>([]);
 const assets = ref<KeyAssetDto[]>([]);
 const selectedId = ref('');
 const loading = ref(false);
+const listRequests = createLatestRequestGuard();
 const error = ref('');
 const assetActionError = ref('');
 const feedback = ref('');
@@ -80,38 +82,73 @@ const assetImportMaterialTabs = computed(() => [
 ]);
 
 onMounted(load);
-watch(page, () => { void load(); });
+watch(() => route.path, () => { void load(); });
 
 async function load() {
+  const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   try {
-    const [nextDomains, nextCerts, nextSelf, nextAssets] = await Promise.all([
+    const [domainsResult, certsResult, selfResult, assetsResult] = await Promise.allSettled([
       dnsApi.listDomains(),
       certificatesApi.list({ page: page.value, pageSize }),
       certificatesApi.listSelfSignedPage({ page: page.value, pageSize }),
       keyAssetsApi.listPage({ page: page.value, pageSize }),
     ]);
-    domains.value = Array.isArray(nextDomains) ? nextDomains : [];
-    certs.value = nextCerts.items.map(normalizeDomainCertificate);
-    selfSigned.value = nextSelf.items.map(normalizeSelfSignedCertificate);
-    assets.value = nextAssets.items.map(normalizeKeyAsset);
-    total.value = mode.value === 'self' ? nextSelf.total : mode.value === 'keys' ? nextAssets.total : nextCerts.total;
+    if (!listRequests.isCurrent(requestId)) return;
+    let firstError = '';
+    if (domainsResult.status === 'fulfilled') {
+      domains.value = Array.isArray(domainsResult.value) ? domainsResult.value : [];
+    } else {
+      firstError = domainsResult.reason instanceof Error ? domainsResult.reason.message : t('certificatesPage.loadFailed');
+    }
+    if (certsResult.status === 'fulfilled') {
+      certs.value = certsResult.value.items.map(normalizeDomainCertificate);
+    } else {
+      if (!firstError) firstError = certsResult.reason instanceof Error ? certsResult.reason.message : t('certificatesPage.loadFailed');
+    }
+    if (selfResult.status === 'fulfilled') {
+      selfSigned.value = selfResult.value.items.map(normalizeSelfSignedCertificate);
+    } else {
+      if (!firstError) firstError = selfResult.reason instanceof Error ? selfResult.reason.message : t('certificatesPage.loadFailed');
+    }
+    if (assetsResult.status === 'fulfilled') {
+      assets.value = assetsResult.value.items.map(normalizeKeyAsset);
+    } else {
+      if (!firstError) firstError = assetsResult.reason instanceof Error ? assetsResult.reason.message : t('certificatesPage.loadFailed');
+    }
+    const nextTotal = mode.value === 'self'
+      ? (selfResult.status === 'fulfilled' ? selfResult.value.total : total.value)
+      : mode.value === 'keys'
+        ? (assetsResult.status === 'fulfilled' ? assetsResult.value.total : total.value)
+        : (certsResult.status === 'fulfilled' ? certsResult.value.total : total.value);
+    total.value = nextTotal;
     const visibleAssets = assets.value.filter((item) => !isSystemManagedAsset(item));
     const list = mode.value === 'self' ? selfSigned.value : mode.value === 'keys' ? visibleAssets : certs.value;
     selectedId.value = list.some((item) => item.id === selectedId.value) ? selectedId.value : list[0]?.id ?? '';
+    if (firstError) {
+      error.value = firstError;
+      notifyError(firstError);
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('certificatesPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('certificatesPage.loadFailed'));
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) loading.value = false;
   }
 }
 
 function switchMode(path: string) {
+  listRequests.invalidate();
   selectedId.value = '';
   page.value = 1;
-  void router.push(path).then(() => { if (page.value === 1) void load(); });
+  if (route.path === path) void load();
+  else void router.push(path);
+}
+
+function changePage(value: number) {
+  page.value = value;
+  void load();
 }
 
 function openIssue() {
@@ -440,7 +477,7 @@ function onFile(event: Event) {
             </button>
           </template>
           </div>
-          <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" />
+          <PaginationBar :page="page" class="px-3" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')" @update:page="changePage" />
         </aside>
         </template>
 

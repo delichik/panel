@@ -18,6 +18,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto, DnsRecordDto } from '@/types/dns';
+import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { domainTone, normalizeRecordName } from './model';
 
 const { t } = useI18n();
@@ -33,6 +34,8 @@ const page = ref(1);
 const pageSize = 50;
 const totalDomains = ref(0);
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let recordsRequestId = 0;
+const listRequests = createLatestRequestGuard();
 const loadingDomains = ref(false);
 const loadingRecords = ref(false);
 const error = ref('');
@@ -68,7 +71,10 @@ watch(selectedId, (id, _old, onCleanup) => {
   void router.replace({ query: { ...route.query, domain: id || undefined } });
   records.value = [];
   recordsError.value = '';
-  if (!id) return;
+  if (!id) {
+    loadingRecords.value = false;
+    return;
+  }
   const controller = new AbortController();
   onCleanup(() => controller.abort());
   void loadRecords(id, controller.signal);
@@ -77,10 +83,12 @@ watch(selectedId, (id, _old, onCleanup) => {
 onMounted(loadDomains);
 
 async function loadDomains() {
+  const requestId = listRequests.begin();
   loadingDomains.value = true;
   error.value = '';
   try {
     const result = await dnsApi.listDomainPage({ page: page.value, pageSize, q: search.value.trim() || undefined });
+    if (!listRequests.isCurrent(requestId)) return;
     domains.value = result.items;
     totalDomains.value = result.total;
     const queryDomain = String(route.query.domain ?? '');
@@ -89,7 +97,7 @@ async function loadDomains() {
     error.value = err instanceof Error ? err.message : t('dnsPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('dnsPage.loadFailed'));
   } finally {
-    loadingDomains.value = false;
+    if (listRequests.isCurrent(requestId)) loadingDomains.value = false;
   }
 }
 
@@ -97,35 +105,40 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
 async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
   if (!domainId) return;
+  const requestId = ++recordsRequestId;
   loadingRecords.value = true;
   recordsError.value = '';
   try {
-    records.value = (await dnsApi.listRecords(domainId, signal)).items;
+    const result = await dnsApi.listRecords(domainId, signal);
+    if (requestId !== recordsRequestId || selectedId.value !== domainId) return;
+    records.value = result.items;
     providerErrorDomainId.value = '';
   } catch (err) {
-    if (signal?.aborted) return;
+    if (signal?.aborted || requestId !== recordsRequestId) return;
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
     notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'));
     providerErrorDomainId.value = domainId;
   } finally {
-    if (!signal?.aborted) loadingRecords.value = false;
+    if (requestId === recordsRequestId) loadingRecords.value = false;
   }
 }
 
 async function syncRecords() {
-  if (!selectedId.value) return;
+  const domainId = selectedId.value;
+  if (!domainId) return;
   loadingRecords.value = true;
   recordsError.value = '';
   try {
-    const result = await dnsApi.refreshRecords(selectedId.value);
+    const result = await dnsApi.refreshRecords(domainId);
     feedback.value = t('resourcesPage.taskAccepted', { taskId: result.taskId });
     await waitForTask(result.taskId);
-    await loadRecords(selectedId.value);
+    if (selectedId.value !== domainId) return;
+    await loadRecords(domainId);
   } catch (err) {
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
     notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'));
   } finally {
-    loadingRecords.value = false;
+    if (selectedId.value === domainId) loadingRecords.value = false;
   }
 }
 

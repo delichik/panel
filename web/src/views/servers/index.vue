@@ -22,6 +22,7 @@ import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone, validateServerInput } from './model';
+import { createLatestRequestGuard } from '@/views/_shared/requestState';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -37,6 +38,11 @@ const page = ref(1);
 const pageSize = 50;
 const totalServers = ref(0);
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let detailController: AbortController | null = null;
+let metricsController: AbortController | null = null;
+let detailRequestId = 0;
+let metricsRequestId = 0;
+const listRequests = createLatestRequestGuard();
 const loading = ref(false);
 const detailLoading = ref(false);
 const error = ref('');
@@ -111,25 +117,36 @@ watch(selectedId, () => {
 
 async function loadServerDetail() {
   const id = selectedId.value;
-  if (!id || serverDetails.value[id]) return;
+  detailController?.abort();
+  const requestId = ++detailRequestId;
+  if (!id || serverDetails.value[id]) {
+    detailLoading.value = false;
+    return;
+  }
+  const controller = new AbortController();
+  detailController = controller;
   detailLoading.value = true;
   try {
-    const detail = await serversApi.get(id);
+    const detail = await serversApi.get(id, { signal: controller.signal });
+    if (requestId !== detailRequestId || selectedId.value !== id) return;
     serverDetails.value = { ...serverDetails.value, [id]: detail };
   } catch (err) {
+    if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
   } finally {
-    detailLoading.value = false;
+    if (requestId === detailRequestId) detailLoading.value = false;
   }
 }
 
 async function load() {
+  const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   credentialError.value = '';
   try {
     const [serversResult, credentialsResult] = await Promise.allSettled([serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }), credentialsApi.list()]);
+    if (!listRequests.isCurrent(requestId)) return;
     if (serversResult.status === 'fulfilled') {
       const nextServers = serversResult.value.items;
       totalServers.value = serversResult.value.total;
@@ -152,15 +169,17 @@ async function load() {
       notifyError(credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed'));
     }
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) loading.value = false;
   }
 }
 
 async function loadServers() {
+  const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   try {
     const result = await serversApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined });
+    if (!listRequests.isCurrent(requestId)) return;
     servers.value = result.items;
     totalServers.value = result.total;
     selectedId.value = result.items.some((item) => item.id === selectedId.value) ? selectedId.value : result.items[0]?.id ?? '';
@@ -168,22 +187,33 @@ async function loadServers() {
     error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) loading.value = false;
   }
 }
 
 async function loadMetrics() {
+  metricsController?.abort();
+  const requestId = ++metricsRequestId;
+  const id = selectedId.value;
   metrics.value = null;
   metricsError.value = '';
-  if (!selectedId.value) return;
+  if (!id) {
+    metricsLoading.value = false;
+    return;
+  }
+  const controller = new AbortController();
+  metricsController = controller;
   metricsLoading.value = true;
   try {
-    metrics.value = await serversApi.metrics(selectedId.value, '1h');
+    const next = await serversApi.metrics(id, '1h', { signal: controller.signal });
+    if (requestId !== metricsRequestId || selectedId.value !== id) return;
+    metrics.value = next;
   } catch (err) {
+    if (isAbortError(err)) return;
     metricsError.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
     notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'));
   } finally {
-    metricsLoading.value = false;
+    if (requestId === metricsRequestId) metricsLoading.value = false;
   }
 }
 
@@ -373,8 +403,16 @@ function bytesPerSecond(value?: number) {
   return typeof value === 'number' ? `${bytes(value)}/s` : t('common.notAvailable');
 }
 
+function isAbortError(error: unknown) {
+  return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
+}
+
 onMounted(load);
-onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
+  detailController?.abort();
+  metricsController?.abort();
+});
 </script>
 
 <template>

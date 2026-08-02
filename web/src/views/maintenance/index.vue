@@ -23,6 +23,7 @@ const feedback = ref('');
 const mode = ref<'export' | 'restore'>('export');
 const form = reactive({ username: '', password: '', archivePassword: '' });
 let timer: number | undefined;
+let statusRequestId = 0;
 
 const phaseTone = computed(() => {
   if (status.value?.phase === 'completed') return 'success';
@@ -34,10 +35,12 @@ const phaseTone = computed(() => {
 async function login() {
   pending.value = 'login';
   error.value = '';
+  statusRequestId += 1;
   try {
     await maintenanceApi.login(mode.value, form.username, form.password);
     authenticated.value = true;
     await load();
+    schedulePoll();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('maintenancePage.loginFailed');
     notifyError(err instanceof Error ? err.message : t('maintenancePage.loginFailed'));
@@ -48,17 +51,23 @@ async function login() {
 
 async function load() {
   if (!authenticated.value) return;
+  const requestId = ++statusRequestId;
   loading.value = true;
   error.value = '';
   try {
-    status.value = mode.value === 'export' ? await maintenanceApi.exportStatus() : await maintenanceApi.restoreStatus();
+    const next = mode.value === 'export' ? await maintenanceApi.exportStatus() : await maintenanceApi.restoreStatus();
+    if (requestId !== statusRequestId) return;
+    status.value = next;
   } catch (err) {
+    if (requestId !== statusRequestId) return;
     const message = err instanceof Error ? err.message : t('maintenancePage.loadFailed');
     notifyError(message);
     if (mode.value === 'export') {
       mode.value = 'restore';
       try {
-        status.value = await maintenanceApi.restoreStatus();
+        const next = await maintenanceApi.restoreStatus();
+        if (requestId !== statusRequestId) return;
+        status.value = next;
       } catch {
         error.value = message;
       }
@@ -66,12 +75,13 @@ async function load() {
       error.value = message;
     }
   } finally {
-    loading.value = false;
+    if (requestId === statusRequestId) loading.value = false;
   }
 }
 
 async function command(name: 'start' | 'password' | 'retry' | 'clear' | 'exit') {
   if (!status.value) return;
+  statusRequestId += 1;
   pending.value = name;
   error.value = '';
   feedback.value = '';
@@ -87,11 +97,14 @@ async function command(name: 'start' | 'password' | 'retry' | 'clear' | 'exit') 
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
+    schedulePoll();
   }
 }
 
 async function logout() {
   loggingOut.value = true;
+  stopPolling();
+  statusRequestId += 1;
   try {
     await maintenanceApi.logout(mode.value);
     authenticated.value = false;
@@ -115,17 +128,31 @@ async function downloadArchive() {
   }
 }
 
-function startPolling() {
-  timer = window.setInterval(() => {
-    if (authenticated.value && status.value?.phase !== 'completed' && status.value?.phase !== 'failed') void load();
-  }, status.value?.pollAfterMs || 2000);
+function schedulePoll(delay = status.value?.pollAfterMs || 2000) {
+  if (timer !== undefined || !authenticated.value) return;
+  if (status.value?.phase === 'completed' || status.value?.phase === 'failed') return;
+  timer = window.setTimeout(async () => {
+    timer = undefined;
+    if (!authenticated.value || status.value?.phase === 'completed' || status.value?.phase === 'failed') return;
+    await load();
+    if (authenticated.value && status.value?.phase !== 'completed' && status.value?.phase !== 'failed') {
+      schedulePoll(status.value?.pollAfterMs);
+    }
+  }, delay);
+}
+
+function stopPolling() {
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    timer = undefined;
+  }
 }
 
 onMounted(async () => {
   if (authenticated.value) await load();
-  startPolling();
+  schedulePoll();
 });
-onBeforeUnmount(() => window.clearInterval(timer));
+onBeforeUnmount(stopPolling);
 </script>
 
 <template>

@@ -30,6 +30,8 @@ const cardLoading = ref<Record<string, boolean>>({});
 const cardErrors = ref<Record<string, string>>({});
 const cardValues = ref<Record<string, string>>({});
 const cardData = ref<Record<string, OverviewCardData>>({});
+let cardRequestSeq = 0;
+const cardRequests = new Map<string, number>();
 const loading = ref(false);
 const pageError = ref('');
 const saveError = ref('');
@@ -88,6 +90,7 @@ const heightOptions = computed(() => Array.from({ length: 4 }, (_, index) => ({ 
 async function load() {
   loading.value = true;
   pageError.value = '';
+  invalidateCardRequests();
   try {
     const [nextOverview, nextCards] = await Promise.all([overviewApi.getOverview(), overviewApi.getCards()]);
     overview.value = nextOverview;
@@ -107,27 +110,43 @@ async function loadCard(cardId: string) {
   const nextErrors = { ...cardErrors.value };
   delete nextErrors[cardId];
   cardErrors.value = nextErrors;
+  const requestId = ++cardRequestSeq;
+  cardRequests.set(cardId, requestId);
   if (!card || !persistedCardIds.value.has(cardId) || card.kind === 'packageUpdates' || card.kind === 'containerUpdates' || card.kind === 'placeholder') {
+    cardRequests.delete(cardId);
     const nextData = { ...cardData.value };
     delete nextData[cardId];
     cardData.value = nextData;
     cardValues.value = { ...cardValues.value, [cardId]: derivedCardValue(card) };
     return;
   }
+  const cardAtStart = {
+    kind: card.kind,
+    range: card.range,
+    networkDirection: card.networkDirection,
+    serverIds: [...card.serverIds],
+  };
   cardLoading.value = { ...cardLoading.value, [cardId]: true };
   try {
     const data = await overviewApi.getCardData(cardId);
+    if (cardRequests.get(cardId) !== requestId) return;
+    const currentCard = cards.value.find((item) => item.id === cardId);
+    if (!currentCard || !sameCardConfig(currentCard, cardAtStart)) return;
     cardData.value = { ...cardData.value, [cardId]: data };
     cardValues.value = { ...cardValues.value, [cardId]: metricValue(card, data) };
     if (!cardHasData(card, data)) cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardEmpty') };
   } catch (err) {
+    if (cardRequests.get(cardId) !== requestId) return;
     const message = err instanceof Error ? err.message : t('overviewPage.cardFailed');
     notifyError(message);
     cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardFailed') };
   } finally {
-    const nextLoading = { ...cardLoading.value };
-    delete nextLoading[cardId];
-    cardLoading.value = nextLoading;
+    if (cardRequests.get(cardId) === requestId) {
+      const nextLoading = { ...cardLoading.value };
+      delete nextLoading[cardId];
+      cardLoading.value = nextLoading;
+      cardRequests.delete(cardId);
+    }
   }
 }
 
@@ -144,10 +163,15 @@ function addCard() {
 
 function removeCard(cardId: string) {
   cards.value = cards.value.filter((card) => card.id !== cardId);
+  cardRequests.delete(cardId);
+  const nextLoading = { ...cardLoading.value };
+  delete nextLoading[cardId];
+  cardLoading.value = nextLoading;
   if (editingCardId.value === cardId) closeCardEditor();
 }
 
 function resetCards() {
+  invalidateCardRequests();
   cards.value = defaultOverviewCards();
   cardErrors.value = {};
   cardData.value = {};
@@ -162,6 +186,7 @@ async function saveCards() {
     const saved = await overviewApi.updateCards({ cards: visibleCards });
     cards.value = saved.cards.map(normalizeCardSize);
     persistedCardIds.value = new Set(cards.value.map((card) => card.id));
+    invalidateCardRequests();
     editMode.value = false;
     closeCardEditor();
     await Promise.all(cards.value.map((card) => loadCard(card.id)));
@@ -386,6 +411,22 @@ function normalizeCardSize(card: OverviewCardConfiguration): OverviewCardConfigu
     height: clampInteger(card.height, 1, 4),
     serverIds: [...card.serverIds],
   };
+}
+
+function sameCardConfig(
+  card: OverviewCardConfiguration,
+  expected: { kind: OverviewCardKind; range: OverviewCardRange; networkDirection?: string; serverIds: string[] },
+) {
+  return card.kind === expected.kind
+    && card.range === expected.range
+    && card.networkDirection === expected.networkDirection
+    && JSON.stringify(card.serverIds) === JSON.stringify(expected.serverIds);
+}
+
+function invalidateCardRequests() {
+  cardRequestSeq += 1;
+  cardRequests.clear();
+  cardLoading.value = {};
 }
 
 function clampInteger(value: number, min: number, max: number) {

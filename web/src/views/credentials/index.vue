@@ -20,6 +20,7 @@ import { useI18n } from '@/i18n';
 import type { CredentialDto, CredentialInput, CredentialType } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
 import { credentialReferences } from '@/views/servers/model';
+import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { secretPayload, validateCredentialInput } from './model';
 
 const { t } = useI18n();
@@ -33,6 +34,7 @@ const page = ref(1);
 const pageSize = 50;
 const total = ref(0);
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+const listRequests = createLatestRequestGuard();
 const loading = ref(false);
 const error = ref('');
 const actionError = ref('');
@@ -67,19 +69,37 @@ const typeOptions = computed(() => [
 ]);
 
 async function load() {
+  const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   try {
-    const [nextCredentials, nextServers] = await Promise.all([credentialsApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }), serversApi.list()]);
-    credentials.value = nextCredentials.items;
-    total.value = nextCredentials.total;
-    servers.value = nextServers;
-    selectedId.value = selectedId.value && nextCredentials.items.some((item) => item.id === selectedId.value) ? selectedId.value : nextCredentials.items[0]?.id || '';
+    const [credentialsResult, serversResult] = await Promise.allSettled([
+      credentialsApi.listPage({ page: page.value, pageSize, q: search.value.trim() || undefined }),
+      serversApi.list(),
+    ]);
+    if (!listRequests.isCurrent(requestId)) return;
+    let firstError = '';
+    if (credentialsResult.status === 'fulfilled') {
+      credentials.value = credentialsResult.value.items;
+      total.value = credentialsResult.value.total;
+      selectedId.value = selectedId.value && credentialsResult.value.items.some((item) => item.id === selectedId.value) ? selectedId.value : credentialsResult.value.items[0]?.id || '';
+    } else {
+      firstError = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('credentialsPage.loadFailed');
+    }
+    if (serversResult.status === 'fulfilled') {
+      servers.value = serversResult.value;
+    } else {
+      if (!firstError) firstError = serversResult.reason instanceof Error ? serversResult.reason.message : t('credentialsPage.loadFailed');
+    }
+    if (firstError) {
+      error.value = firstError;
+      notifyError(firstError);
+    }
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('credentialsPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('credentialsPage.loadFailed'));
   } finally {
-    loading.value = false;
+    if (listRequests.isCurrent(requestId)) loading.value = false;
   }
 }
 

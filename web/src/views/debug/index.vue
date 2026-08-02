@@ -24,6 +24,7 @@ const loading = ref(false);
 const paused = ref(false);
 const error = ref('');
 let timer: number | undefined;
+let snapshotRequestId = 0;
 
 type TaskMetricRow = { key: string; label: string; value: string };
 type TaskDefinitionRow = {
@@ -117,18 +118,21 @@ function formatTaskActions(definition: DebugTaskDefinition) {
 }
 
 async function load() {
+  const requestId = ++snapshotRequestId;
   loading.value = true;
   error.value = '';
   try {
     const next = await debugApi.snapshot();
+    if (requestId !== snapshotRequestId) return;
     snapshot.value = next;
     lastGoodSnapshot.value = next;
   } catch (err) {
+    if (requestId !== snapshotRequestId) return;
     error.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
     notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'));
     snapshot.value = null;
   } finally {
-    loading.value = false;
+    if (requestId === snapshotRequestId) loading.value = false;
   }
 }
 
