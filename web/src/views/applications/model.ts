@@ -254,6 +254,26 @@ export function validateFacilityDraft(draft: FacilityDraftUi): FieldErrors {
   return errors;
 }
 
+export function validateFacilityPathFields(path: FacilityRoutePath): FieldErrors {
+  const errors: FieldErrors = {};
+  const pathValue = (path.path ?? '').trim();
+  if (pathValue !== '' && (!pathValue.startsWith('/') || /[\s;{}]/.test(pathValue))) {
+    errors.path = 'applicationsPage.validationPath';
+  }
+  if (path.ruleType === 'redirect') {
+    const target = (path.redirectUrl ?? '').trim();
+    if (!target || /[\s\x00;{}]/.test(target)) {
+      errors.redirectUrl = 'applicationsPage.validationRedirectUrl';
+    }
+  } else if (path.ruleType === 'proxy_pass') {
+    const target = (path.proxyUrl ?? '').trim();
+    const lower = target.toLowerCase();
+    if (!target || !(lower.startsWith('http://') || lower.startsWith('https://')) || /[\s\x00;{}]/.test(target)) {
+      errors.proxyUrl = 'applicationsPage.validationProxyUrl';
+    }
+  }
+  return errors;
+}
 export function facilitySections(draft: FacilityDraftUi, errors: FieldErrors): SectionState[] {
   return [
     { id: 'gateways', complete: draft.deploymentServers.length > 0, error: Boolean(errors.deploymentServers) },

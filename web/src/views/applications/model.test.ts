@@ -13,6 +13,7 @@ import {
   syncDraftToYaml,
   validateApplicationDraft,
   validateFacilityDraft,
+  validateFacilityPathFields,
 } from './model';
 import type { ApplicationDto } from '@/types/applications';
 import type { ReverseProxyConfig } from '@/types/facilityApps';
@@ -142,5 +143,43 @@ describe('application editor model', () => {
     draft.mounts.push({ id: 'm1', type: 'persistent', source: '', target: '/data', readOnly: false, mode: '0755' });
 
     expect(specYamlFromDraft(draft)).toContain('mounts:');
+  });
+});
+describe('facility path dialog validation', () => {
+  it('accepts a clean redirect target', () => {
+    const errors = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/target?q=1&r=2' });
+    expect(errors).toEqual({});
+  });
+
+  it('rejects an empty redirect target', () => {
+    const errors = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: '' });
+    expect(errors.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
+  });
+
+  it('rejects a redirect target with spaces or special characters', () => {
+    const spaced = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/a b' });
+    expect(spaced.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
+    const semi = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/a;b' });
+    expect(semi.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
+  });
+
+  it('rejects a proxy target without http(s) scheme', () => {
+    const errors = validateFacilityPathFields({ path: '/p', ruleType: 'proxy_pass', sourceType: 'host_path', proxyUrl: '127.0.0.1:9000' });
+    expect(errors.proxyUrl).toBe('applicationsPage.validationProxyUrl');
+  });
+
+  it('accepts an http proxy target', () => {
+    const errors = validateFacilityPathFields({ path: '/p', ruleType: 'proxy_pass', sourceType: 'host_path', proxyUrl: 'http://127.0.0.1:9000' });
+    expect(errors).toEqual({});
+  });
+
+  it('rejects a path that does not start with a slash', () => {
+    const errors = validateFacilityPathFields({ path: 'go', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' });
+    expect(errors.path).toBe('applicationsPage.validationPath');
+  });
+
+  it('treats an empty path as valid (defaults to /)', () => {
+    const errors = validateFacilityPathFields({ path: '', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' });
+    expect(errors).toEqual({});
   });
 });

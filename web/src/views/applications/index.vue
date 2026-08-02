@@ -61,8 +61,10 @@ import {
   syncDraftToYaml,
   validateApplicationDraft,
   validateFacilityDraft,
+  validateFacilityPathFields,
   type ApplicationDraftUi,
   type FacilityDraftUi,
+  type FieldErrors,
   type KeyValueRow,
   type MountRow,
   type PortRow,
@@ -133,6 +135,7 @@ const proxyDraft = reactive<ReverseProxyRule>(makeProxyRule());
 const proxyPathDraft = reactive(makeProxyPath());
 const facilityDomainDraft = reactive<FacilityRouteDomain>(makeFacilityDomain());
 const facilityPathDraft = reactive<FacilityRoutePath>(makeFacilityPath());
+const facilityPathErrors = reactive<FieldErrors>({});
 const facilityRequestHeaders = ref<KeyValueRow[]>([]);
 const facilityResponseHeaders = ref<KeyValueRow[]>([]);
 
@@ -217,7 +220,7 @@ const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.valu
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['host_path', 'uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
-const saving = computed(() => pending.value === 'validate' || pending.value === 'preview' || pending.value === 'commit');
+const saving = computed(() => pending.value === 'preview' || pending.value === 'commit');
 const proxyPathWebSocket = computed({
   get: () => Boolean(proxyPathDraft.webSocket),
   set: (value: boolean) => { proxyPathDraft.webSocket = value; },
@@ -670,16 +673,6 @@ async function patchApplicationDraft() {
   });
 }
 
-async function validateApplication() {
-  await patchApplicationDraft();
-  if (!editSession.value) return;
-  await runEditorAction(async () => {
-    const result = await applicationsApi.validateEditSession(editSession.value!.id, editSession.value!.revision);
-    diagnostics.value = result.diagnostics;
-    feedback.value = result.valid ? t('applicationsPage.validationPassed') : t('applicationsPage.validationFound');
-  }, 'validate');
-}
-
 async function previewApplication() {
   await patchApplicationDraft();
   if (!editSession.value) return;
@@ -690,8 +683,17 @@ async function previewApplication() {
 }
 
 async function commitApplication() {
+  const localErrorKeys = Object.keys(appErrors.value);
+  if (localErrorKeys.length) {
+    actionError.value = t(appErrors.value[localErrorKeys[0]]);
+    return;
+  }
   await previewApplication();
-  if (!editSession.value || !preview.value || hasBlockingAppDiagnostics.value) return;
+  if (!editSession.value || !preview.value) return;
+  if (hasBlockingAppDiagnostics.value) {
+    feedback.value = t('applicationsPage.validationFound');
+    return;
+  }
   await runEditorAction(async () => {
     const result = await applicationsApi.commitEditSession(editSession.value!, preview.value!);
     feedback.value = result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed');
@@ -798,16 +800,6 @@ async function patchFacilityDraft() {
   });
 }
 
-async function validateFacility() {
-  await patchFacilityDraft();
-  if (!facilitySession.value) return;
-  await runEditorAction(async () => {
-    const result = await reverseProxyFacilityApi.validateEdit(facilitySession.value!.id, facilitySession.value!.revision);
-    facilityDiagnostics.value = result.diagnostics;
-    feedback.value = result.valid ? t('applicationsPage.validationPassed') : t('applicationsPage.validationFound');
-  }, 'validate');
-}
-
 async function previewFacilityConfig() {
   await patchFacilityDraft();
   if (!facilitySession.value) return;
@@ -818,8 +810,17 @@ async function previewFacilityConfig() {
 }
 
 async function commitFacilityConfig() {
+  const localErrorKeys = Object.keys(facilityErrors.value);
+  if (localErrorKeys.length) {
+    actionError.value = t(facilityErrors.value[localErrorKeys[0]]);
+    return;
+  }
   await previewFacilityConfig();
-  if (!facilitySession.value || !facilityPreview.value || hasBlockingFacilityDiagnostics.value) return;
+  if (!facilitySession.value || !facilityPreview.value) return;
+  if (hasBlockingFacilityDiagnostics.value) {
+    feedback.value = t('applicationsPage.validationFound');
+    return;
+  }
   await runEditorAction(async () => {
     const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value!, facilityPreview.value!);
     facility.value = result.config;
@@ -861,6 +862,8 @@ function markDirty() {
   isDirty.value = true;
   preview.value = null;
   facilityPreview.value = null;
+  diagnostics.value = [];
+  facilityDiagnostics.value = [];
 }
 
 function markAppStructuredDirty() {
@@ -992,6 +995,7 @@ function openFacilityPathDialog(domainIndex: number, pathIndex = -1) {
   dialogKind.value = 'facilityPath';
   dialogParentIndex.value = domainIndex;
   dialogIndex.value = pathIndex;
+  Object.keys(facilityPathErrors).forEach((key) => delete facilityPathErrors[key]);
   Object.assign(facilityPathDraft, pathIndex >= 0 ? cloneFacilityPath(facilityDraft.domains[domainIndex].paths[pathIndex]) : makeFacilityPath());
   if (!facilityPathDraft.options) Object.assign(facilityPathDraft, { options: defaultRouteOptions() });
   facilityRequestHeaders.value = (facilityPathDraft.options?.requestHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
@@ -999,9 +1003,17 @@ function openFacilityPathDialog(domainIndex: number, pathIndex = -1) {
   dialogOpen.value = true;
 }
 
+function clearFacilityPathError(field: string) {
+  delete facilityPathErrors[field];
+}
+
 function saveFacilityPathDialog() {
   const paths = facilityDraft.domains[dialogParentIndex.value]?.paths;
   if (!paths) return;
+  const nextErrors = validateFacilityPathFields(facilityPathDraft);
+  Object.keys(facilityPathErrors).forEach((key) => delete facilityPathErrors[key]);
+  Object.assign(facilityPathErrors, nextErrors);
+  if (Object.keys(facilityPathErrors).length) return;
   const next = cloneFacilityPath(facilityPathDraft);
   next.options = {
     ...defaultRouteOptions(),
@@ -1506,9 +1518,8 @@ onBeforeUnmount(() => {
             <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
             <div class="flex flex-wrap gap-2">
               <Button variant="secondary" :disabled="saving" @click="cancelFacilityEdit">{{ t('common.cancel') }}</Button>
-              <Button variant="secondary" :loading="pending === 'validate'" :disabled="saving" @click="validateFacility">{{ t('applicationsPage.validate') }}</Button>
               <Button variant="secondary" :loading="pending === 'preview'" :disabled="saving" @click="previewFacilityConfig">{{ t('applicationsPage.preview') }}</Button>
-              <Button variant="primary" :loading="pending === 'commit'" :disabled="Boolean(Object.keys(facilityErrors).length || hasBlockingFacilityDiagnostics || saving)" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
+              <Button variant="primary" :loading="pending === 'commit'" :disabled="saving" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
             </div>
           </div>
         </template>
@@ -1685,9 +1696,8 @@ onBeforeUnmount(() => {
           <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
           <div class="flex flex-wrap gap-2">
             <Button variant="secondary" :disabled="saving" @click="router.back()">{{ t('common.cancel') }}</Button>
-            <Button variant="secondary" :loading="pending === 'validate'" :disabled="saving" @click="validateApplication()">{{ t('applicationsPage.validate') }}</Button>
             <Button variant="secondary" :loading="pending === 'preview'" :disabled="saving" @click="previewApplication()">{{ t('applicationsPage.preview') }}</Button>
-            <Button variant="primary" :loading="pending === 'commit'" :disabled="Boolean(Object.keys(appErrors).length || hasBlockingAppDiagnostics || saving)" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
+            <Button variant="primary" :loading="pending === 'commit'" :disabled="saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
           </div>
         </div>
       </template>
@@ -1740,7 +1750,8 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <div v-else-if="dialogKind === 'facilityPath'" class="grid gap-3">
-      <label class="field">{{ t('common.path') }}<Input v-model="facilityPathDraft.path" /></label>
+      <label class="field">{{ t('common.path') }}<Input v-model="facilityPathDraft.path" :invalid="Boolean(facilityPathErrors.path)" @input="clearFacilityPathError('path')" /></label>
+      <p v-if="facilityPathErrors.path" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.path) }}</p>
       <label class="field">{{ t('common.type') }}<Select v-model="facilityPathDraft.ruleType" :options="routeTypeOptions" /></label>
       <template v-if="facilityPathDraft.ruleType === 'static'">
         <label class="field">{{ t('applicationsPage.sourceType') }}<Select v-model="facilityPathDraft.sourceType" :options="sourceTypeOptions" /></label>
@@ -1748,11 +1759,13 @@ onBeforeUnmount(() => {
         <label v-else class="field">{{ t('applicationsPage.staticAsset') }}<Select v-model="facilityPathDraft.assetName" :options="assetOptions" /></label>
       </template>
       <template v-else-if="facilityPathDraft.ruleType === 'redirect'">
-        <label class="field">{{ t('applicationsPage.redirectUrl') }}<Input v-model="facilityPathDraft.redirectUrl" /></label>
+        <label class="field">{{ t('applicationsPage.redirectUrl') }}<Input v-model="facilityPathDraft.redirectUrl" :invalid="Boolean(facilityPathErrors.redirectUrl)" @input="clearFacilityPathError('redirectUrl')" /></label>
+        <p v-if="facilityPathErrors.redirectUrl" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.redirectUrl) }}</p>
         <label class="field">{{ t('applicationsPage.redirectCode') }}<Select v-model="facilityRedirectCode" :options="['301', '302', '307', '308'].map((value) => ({ label: value, value }))" /></label>
       </template>
       <template v-else>
-        <label class="field">{{ t('applicationsPage.proxyUrl') }}<Input v-model="facilityPathDraft.proxyUrl" /></label>
+        <label class="field">{{ t('applicationsPage.proxyUrl') }}<Input v-model="facilityPathDraft.proxyUrl" :invalid="Boolean(facilityPathErrors.proxyUrl)" @input="clearFacilityPathError('proxyUrl')" /></label>
+        <p v-if="facilityPathErrors.proxyUrl" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.proxyUrl) }}</p>
         <label class="field">{{ t('applicationsPage.proxySourceMode') }}<Select v-model="facilityPathDraft.proxySourceMode" :options="proxySourceModeOptions" /></label>
       </template>
 
