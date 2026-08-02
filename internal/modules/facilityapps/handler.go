@@ -13,17 +13,8 @@ import (
 
 type service interface {
 	GetReverseProxy(ctx context.Context) (ReverseProxyConfig, error)
-	SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput) (ReverseProxyConfig, error)
 	ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult, error)
-	UploadStaticAsset(ctx context.Context, in StaticAssetUploadInput) (StaticAsset, error)
-	DeleteStaticAsset(ctx context.Context, assetName string) error
-	BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error)
-	UploadSaveSessionAsset(ctx context.Context, sessionID string, in StaticAssetUploadInput) (StaticAsset, error)
-	DeleteSaveSessionAsset(ctx context.Context, sessionID string, in StaticAssetDeleteInput) error
-	CommitSaveSession(ctx context.Context, sessionID string, in CommitSaveSessionInput) (SaveSessionCommitResult, error)
-	DiscardSaveSession(sessionID string)
 	BeginFacilityEditSession(context.Context, BeginFacilityEditSessionInput) (FacilityEditSession, error)
-	GetFacilityEditSession(context.Context, string) (FacilityEditSession, error)
 	PatchFacilityEditSession(context.Context, string, PatchFacilityEditSessionInput) (FacilityEditSession, error)
 	PutFacilityEditAsset(context.Context, string, string, string, FacilityEditAssetInput) (FacilityEditSession, error)
 	DeleteFacilityEditAsset(context.Context, string, string, string, FacilityEditMutationInput) (FacilityEditSession, error)
@@ -44,15 +35,6 @@ func (h *Handler) BeginFacilityEditSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) GetFacilityEditSession(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.GetFacilityEditSession(r.Context(), r.PathValue("id"))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) PatchFacilityEditSession(w http.ResponseWriter, r *http.Request) {
@@ -195,19 +177,6 @@ func (h *Handler) ReverseProxy(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) SaveReverseProxy(w http.ResponseWriter, r *http.Request) {
-	var in ReverseProxySaveInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	result, err := h.service.SaveReverseProxy(r.Context(), in)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
-}
-
 func (h *Handler) ReconcileReverseProxy(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.ReconcileReverseProxyNow(r.Context())
 	if err != nil {
@@ -215,126 +184,4 @@ func (h *Handler) ReconcileReverseProxy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
-}
-
-func (h *Handler) BeginSaveSession(w http.ResponseWriter, r *http.Request) {
-	var in BeginSaveSessionInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	result, err := h.service.BeginSaveSession(r.Context(), in)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) UploadSaveSessionAsset(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
-	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	defer file.Close()
-	content, err := io.ReadAll(file)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	result, err := h.service.UploadSaveSessionAsset(r.Context(), r.PathValue("id"), StaticAssetUploadInput{
-		AssetID:   r.FormValue("assetId"),
-		AssetName: firstNonEmpty(r.FormValue("assetName"), r.FormValue("assetId")),
-		Name:      r.FormValue("name"),
-		Kind:      r.FormValue("kind"),
-		FileName:  header.Filename,
-		Size:      header.Size,
-		Content:   content,
-	})
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) DeleteSaveSessionAsset(w http.ResponseWriter, r *http.Request) {
-	var in StaticAssetDeleteInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	if err := h.service.DeleteSaveSessionAsset(r.Context(), r.PathValue("id"), in); err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) CommitSaveSession(w http.ResponseWriter, r *http.Request) {
-	var in CommitSaveSessionInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	result, err := h.service.CommitSaveSession(r.Context(), r.PathValue("id"), in)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
-}
-
-func (h *Handler) DiscardSaveSession(w http.ResponseWriter, r *http.Request) {
-	h.service.DiscardSaveSession(r.PathValue("id"))
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) UploadStaticAsset(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 64<<20)
-	if err := r.ParseMultipartForm(64 << 20); err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
-	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	defer file.Close()
-	content, err := io.ReadAll(file)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	result, err := h.service.UploadStaticAsset(r.Context(), StaticAssetUploadInput{
-		Name:     r.FormValue("name"),
-		Kind:     r.FormValue("kind"),
-		FileName: header.Filename,
-		Size:     header.Size,
-		Content:  content,
-	})
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) DeleteStaticAsset(w http.ResponseWriter, r *http.Request) {
-	assetName := strings.TrimSpace(r.PathValue("assetName"))
-	if err := h.service.DeleteStaticAsset(r.Context(), assetName); err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
 }

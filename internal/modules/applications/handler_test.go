@@ -60,22 +60,6 @@ func serveTestRoute(handler *Handler, method, target string, body *bytes.Buffer)
 	return rec
 }
 
-func TestHandlerCreateApplication(t *testing.T) {
-	fake := &fakeApplicationService{app: Application{ID: "app-1", Name: "web"}}
-	handler := NewHandler(fake)
-
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/applications", bytes.NewBufferString(`{"name":"web","enabled":true,"specYaml":"name: web\nimage: nginx\n","variables":{"A":"1"}}`))
-	handler.Create(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
-	}
-	if !fake.saved.Enabled || fake.saved.Name != "web" || fake.saved.Variables["A"] != "1" {
-		t.Fatalf("saved = %#v", fake.saved)
-	}
-}
-
 func TestHandlerApplicationFiles(t *testing.T) {
 	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", ApplicationID: "app-1", Name: "config/app.conf", Kind: "template"}}}
 	handler := NewHandler(fake)
@@ -83,21 +67,6 @@ func TestHandlerApplicationFiles(t *testing.T) {
 	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/files", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("list files status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	rec = serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/files/file-1", nil)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("get file status=%d body=%s", rec.Code, rec.Body.String())
-	}
-
-	rec = serveTestRoute(handler, http.MethodPost, "/api/v1/applications/app-1/files", bytes.NewBufferString(`{"name":"config/app.conf","kind":"template","contentBase64":"aGVsbG8="}`))
-	if rec.Code != http.StatusOK || fake.fileInput.Name != "config/app.conf" || fake.fileInput.Kind != "template" {
-		t.Fatalf("save file status=%d input=%#v body=%s", rec.Code, fake.fileInput, rec.Body.String())
-	}
-
-	rec = serveTestRoute(handler, http.MethodDelete, "/api/v1/applications/app-1/files/file-1", nil)
-	if rec.Code != http.StatusNoContent || fake.deletedFileID != "file-1" {
-		t.Fatalf("delete file status=%d id=%q body=%s", rec.Code, fake.deletedFileID, rec.Body.String())
 	}
 }
 
@@ -168,20 +137,6 @@ func TestReadApplicationUploadBoundary(t *testing.T) {
 	}
 }
 
-func TestHandlerPackageApplication(t *testing.T) {
-	fake := &fakeApplicationService{pkg: PackageResult{Filename: "web-package.zip", Content: []byte("zip")}}
-	handler := NewHandler(fake)
-
-	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/package", nil)
-
-	if rec.Code != http.StatusOK || fake.packagedID != "app-1" || rec.Body.String() != "zip" {
-		t.Fatalf("package status=%d id=%q body=%q", rec.Code, fake.packagedID, rec.Body.String())
-	}
-	if got := rec.Header().Get("Content-Type"); got != "application/zip" {
-		t.Fatalf("content type = %q", got)
-	}
-}
-
 func TestHandlerPersistentData(t *testing.T) {
 	fake := &fakeApplicationService{persistentData: PackageResult{Filename: "web-persistent.zip", Content: []byte("data")}}
 	handler := NewHandler(fake)
@@ -222,34 +177,6 @@ func TestHandlerRestorePersistentData(t *testing.T) {
 	}
 }
 
-func TestHandlerUploadSaveSessionArchive(t *testing.T) {
-	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", Name: "site", Kind: "binary"}}}
-	handler := NewHandler(fake)
-	var body bytes.Buffer
-	writer := multipart.NewWriter(&body)
-	_ = writer.WriteField("name", "site")
-	_ = writer.WriteField("kind", "binary")
-	part, err := writer.CreateFormFile("file", "site.zip")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _ = part.Write([]byte("zip"))
-	if err := writer.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	mux := http.NewServeMux()
-	handler.RegisterRoutes(mux, func(next http.Handler) http.Handler { return next })
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/application-save-sessions/asave-1/files/archive", &body)
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	mux.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK || fake.sessionID != "asave-1" || fake.fileArchiveInput.Name != "site" || fake.fileArchiveInput.Kind != "binary" || string(fake.fileArchiveInput.Content) != "zip" {
-		t.Fatalf("archive status=%d session=%q input=%#v body=%s", rec.Code, fake.sessionID, fake.fileArchiveInput, rec.Body.String())
-	}
-}
-
 func TestHandlerDeployAndStopApplication(t *testing.T) {
 	fake := &fakeApplicationService{op: OperationResult{TaskID: "task-1", EvalID: "eval-1", Application: Application{ID: "app-1"}}}
 	handler := NewHandler(fake)
@@ -257,11 +184,6 @@ func TestHandlerDeployAndStopApplication(t *testing.T) {
 	rec := serveTestRoute(handler, http.MethodPost, "/api/v1/applications/app-1/deploy", nil)
 	if rec.Code != http.StatusOK || fake.deployedID != "app-1" {
 		t.Fatalf("deploy status=%d id=%q body=%s", rec.Code, fake.deployedID, rec.Body.String())
-	}
-
-	rec = serveTestRoute(handler, http.MethodPost, "/api/v1/applications/app-1/migrate", bytes.NewBufferString(`{"sourceServerId":"srv-a","targetServerId":"srv-b"}`))
-	if rec.Code != http.StatusOK || fake.migratedID != "app-1" || fake.migrateInput.SourceServerID != "srv-a" || fake.migrateInput.TargetServerID != "srv-b" {
-		t.Fatalf("migrate status=%d id=%q input=%#v body=%s", rec.Code, fake.migratedID, fake.migrateInput, rec.Body.String())
 	}
 
 	rec = serveTestRoute(handler, http.MethodPost, "/api/v1/applications/app-1/stop", nil)

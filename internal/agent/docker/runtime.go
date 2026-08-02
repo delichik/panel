@@ -35,6 +35,7 @@ const managedBridgeNetwork = "panel-apps"
 const managedFilesManifestPath = "managed-files.json"
 const appliedStatePath = "applied-state.json"
 const maxRuntimeCommandOutput = 1024 * 1024
+const managedDirectoryMode = 0o755
 
 const (
 	managedArchiveMaxFiles     = 10000
@@ -530,7 +531,7 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		if err := ensureManagedDirectory(filepath.Dir(target)); err != nil {
 			return err
 		}
 		mode, err := managedFileMode(file.Mode)
@@ -568,7 +569,7 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 }
 
 func writeFileAtomic(target string, content []byte, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+	if err := ensureManagedDirectory(filepath.Dir(target)); err != nil {
 		return err
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(target), ".panel-write-*")
@@ -596,6 +597,15 @@ func writeFileAtomic(target string, content []byte, mode os.FileMode) error {
 		_ = os.Remove(target)
 	}
 	return os.Rename(tmpName, target)
+}
+
+// ensureManagedDirectory creates a managed-file parent directory and keeps it
+// traversable by non-root container users such as the nginx worker.
+func ensureManagedDirectory(dir string) error {
+	if err := os.MkdirAll(dir, managedDirectoryMode); err != nil {
+		return err
+	}
+	return os.Chmod(dir, managedDirectoryMode)
 }
 
 func (r *LocalRuntime) writeManagedArchive(spec appruntime.Spec, file appruntime.ManagedFile) (managedFileManifestEntry, error) {

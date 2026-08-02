@@ -70,7 +70,7 @@
 - 前端启动时必须先恢复 `/api/v1/auth/session`，路由守卫不得默认已登录。未认证访问普通控制台路由跳转 `/login?redirect=...`；如果 session 返回 `passwordChangeRequired`，登录页必须显示 `/api/v1/auth/account` 改密表单，普通控制台路由继续重定向回登录页直到改密完成；维护模式 `/maintenance/backup` 使用独立维护 token，不与普通 session 混用。
 - 非 ApiClient 的 blob、multipart 和 DELETE body fetch helper 也必须复用 `authHeaders()`，包括应用/设施编辑资产、密钥资产导入、备份恢复和下载路径，避免真实环境下绕过 token 注入。
 - `/api/v1/settings/public-branding` 是公共 branding 接口，登录页可使用它覆盖本地 `app.name` / `app.subtitle` fallback；设置页安全分区展示并提交 `/api/v1/auth/jwt-secret` 的 JWT 密钥重置；设置页系统分区展示 `/api/v1/system/version` 的版本、通道、最新版本和更新状态；服务器详情指标卡展示 `/api/v1/servers/{id}/metrics` 的最新 CPU、内存、磁盘、网络收发和负载，API client 的默认 range 必须是后端支持的 `1h`。`/api/v1/servers/{id}/agent/certificate` 应在 API 层保留 typed client，但该接口返回私钥材料，新增 UI 入口前必须明确使用场景和权限提示。
-- v4 应用与设施配置已使用 durable edit-session 工作流。`application-save-sessions/*`、`facility-apps/reverse-proxy/save-sessions/*`、`PUT /facility-apps/reverse-proxy`、`static-assets/*`、`application-template-catalog` 以及 `/applications/{id}/files|package|plan|validate|migrate` 等 legacy/低层接口不得为了“接口覆盖率”重新暴露为主 UI 入口；只有确认仍承担生产工作流时再接入。
+- v4 应用与设施配置已使用 durable edit-session 工作流。`application-save-sessions/*`、`facility-apps/reverse-proxy/save-sessions/*`、`PUT /facility-apps/reverse-proxy`、`static-assets/*` 上传/删除、`application-template-catalog` 以及 `/applications/{id}/files|package|plan|validate|migrate` 等 legacy/低层接口已从后端移除，前端不得重新暴露；生产工作流统一走 edit-session。
 
 ### 阶段 3：概览 + 服务器 + SSH 凭据
 
@@ -117,7 +117,7 @@
 
 `web/src/views/application-operations/` 与 `web/src/views/system-events/` 是统一运行事件能力的两个前端页面族：
 
-- 操作记录读取 `/api/v1/application-operations`，主体是应用 operation 投影，支持按应用 ID、来源和状态筛选。列表应用列只展示应用名称快照，详情标题使用应用名称快照，用户可见位置不直接展示 `applicationId` / `operationId` 原始 id。详情可用时打开详情弹窗展示 targets 和 events；详情已清理时详情按钮禁用并显示清理提示。
+- 操作记录读取 `/api/v1/application-operations`，主体是应用 operation 投影，支持按应用 ID、来源和状态筛选。列表应用列只展示应用名称快照，详情标题使用应用名称快照，用户可见位置不直接展示 `applicationId` / `operationId` 原始 id。详情可用时打开详情弹窗展示 targets 和 events；失败或部分失败记录在列表和详情中直接展示失败摘要；详情已清理时详情按钮禁用并显示清理提示。
 - 系统事件读取 `/api/v1/system-events`，主体是诊断事件，支持按关联对象 ID、级别和类别筛选。页面只展示后端提供的事件类型与类别，不假设独立 alert 服务。
 - 两个页面均使用 `ListPage`、`SearchInput`、`Select`、`Table`、`PaginationBar`、`StatusBadge` 和 `Dialog`，保持桌面内部滚动，不恢复页面级滚动。
 - Mock 模式覆盖同名正式路径，包含详情可用、详情已清理、分页和筛选样本。

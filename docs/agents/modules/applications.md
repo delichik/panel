@@ -8,13 +8,13 @@
 
 ## 适用场景
 
-修改应用创建、编辑、appspec、变量解析、应用文件、保存会话、修订、部署、停止、重启、日志、运行时状态、镜像更新或应用反向代理字段时，先读本文档。
+修改应用创建、编辑、appspec、变量解析、应用文件、编辑会话、修订、部署、停止、重启、日志、运行时状态、镜像更新或应用反向代理字段时，先读本文档。
 
 ## 后端入口
 
 - 应用服务与 handler：`internal/modules/applications/`；HTTP 路由在 `routes.go` 注册。
 - 应用文件 CRUD、文件读取和运行时 managed-file 挂载：`internal/modules/applications/files.go`
-- 保存会话与临时文件生命周期：`internal/modules/applications/save_session.go`
+- 编辑会话与临时文件生命周期：`internal/modules/applications/edit_session.go`
 - 应用规格模型、校验和渲染：`internal/modules/applications/spec/`
 - 运行时规格类型：`internal/modules/applications/runtime/`
 - Agent 协议与运行时客户端接口：`internal/agent/contract/`、`internal/agent/client/`
@@ -35,21 +35,18 @@
 
 ## API 范围
 
-- 应用 CRUD：`GET /api/v1/applications` 返回 `ApplicationSummary[]` 轻量列表，`POST /api/v1/applications` 和 `GET/PUT/DELETE /api/v1/applications/{id}` 保持完整应用详情/写入语义。
-- 应用文件：`GET/POST /api/v1/applications/{id}/files`，`GET/DELETE /api/v1/applications/{id}/files/{name}`，`GET /api/v1/applications/{id}/files/{name}/content` 认证流式下载；`name` 是应用内唯一外部身份，物理 file id 只用于存储和运行时分配。
-- 保存会话：`POST /api/v1/application-save-sessions`，`POST /api/v1/application-save-sessions/{id}/files`，`POST /api/v1/application-save-sessions/{id}/files/delete`，`POST /api/v1/application-save-sessions/{id}/commit`
-- 校验和计划：`POST /api/v1/applications/{id}/validate`，`POST /api/v1/applications/{id}/plan`
-- 运行操作：`POST /api/v1/applications/{id}/deploy`，`POST /api/v1/applications/{id}/migrate`，`POST /api/v1/applications/{id}/stop`，`POST /api/v1/applications/{id}/restart`
+- 应用列表/详情/删除：`GET /api/v1/applications` 返回 `ApplicationSummary[]` 轻量列表，`GET/DELETE /api/v1/applications/{id}` 提供完整详情与删除；创建和更新统一通过 durable edit-session 提交。
+- 应用文件：`GET /api/v1/applications/{id}/files` 列表，`GET /api/v1/applications/{id}/files/{name}/content` 认证流式下载；`name` 是应用内唯一外部身份，物理 file id 只用于存储和运行时分配。
+- 编辑会话校验：`POST /api/v1/application-edit-sessions/{id}/validate`，`POST /api/v1/application-edit-sessions/{id}/preview`
+- 运行操作：`POST /api/v1/applications/{id}/deploy`，`POST /api/v1/applications/{id}/stop`，`POST /api/v1/applications/{id}/restart`
 - 镜像：`POST /api/v1/applications/{id}/image/check`，`POST /api/v1/applications/{id}/image/update`
 - 运行时和日志：`GET /api/v1/applications/{id}/runtime`，`GET /api/v1/applications/{id}/logs`
-- 打包：`GET /api/v1/applications/{id}/package`
 - 持久化数据：`GET /api/v1/applications/{id}/persistent-data` 下载，`POST /api/v1/applications/{id}/persistent-data` 上传 zip 覆盖并重启
-- 模板目录：`GET /api/v1/application-template-catalog`
 - 前端 v4 应用页已将持久化数据下载接为 blob 下载，将恢复接为 multipart 上传。应用 edit-session 文本写入走 JSON `PUT /files/{name}`，普通二进制走 multipart `PUT /uploads/{name}`，文件夹归档走 multipart `POST /archives`；三者都可通过 `/files/{name}/content` 下载草稿正文。旧 file key 仅作为服务端兼容输入，不属于新的外部身份。
 
 ## 校验错误
 
-- 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程遇到 appspec/YAML 校验失败时，不能只返回泛化的 `application_invalid` 文案。API 错误响应保持 `code=application_invalid`，`error.message` 显示第一条 `<field>: <message>`，并在 `error.details.issues` 返回完整 `{ field, message }` 列表，字段结构与 `/validate` 接口一致；`message` 和每条 issue 的 `message` 必须按当前语言翻译，`field` 保持稳定路径用于定位。
+- 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程遇到 appspec/YAML 校验失败时，不能只返回泛化的 `application_invalid` 文案。API 错误响应保持 `code=application_invalid`，`error.message` 显示第一条 `<field>: <message>`，并在 `error.details.issues` 返回完整 `{ field, message }` 列表，字段结构与编辑会话 `/validate` 响应一致；`message` 和每条 issue 的 `message` 必须按当前语言翻译，`field` 保持稳定路径用于定位。
 
 - 编辑会话 `/validate` 与 `/preview` 响应的 `diagnostics` 必须是数组（可为空数组），后端不得把 Go 的 nil 切片序列化成 JSON `null`（设施校验无问题时返回空切片）；前端赋值时也会把 `null` 归一化为空数组，避免摘要面板读取 `diagnostics.length` 崩溃。
 ## 数据与行为约定
@@ -65,16 +62,16 @@
 - 默认部署模式为 `all`，会在所有 agent 健康且兼容的服务器上各创建一个实例；`selected` 只部署到选中的服务器。含 `persistent` 挂载的应用必须且只能部署到一个服务器；已有运行时实例后，可通过实例所在服务器的 agent 将 `/opt/panel/apps/<applicationId>/persistent` 打包下载，或上传 zip 由 agent 校验路径后全量覆盖该目录并触发应用重启。尚未部署的 `persistent` 应用允许先向选定服务器导入 zip，agent 会创建并覆盖 Panel 托管的 persistent 目录，导入完成后不触发重启，用于从 compose 等外部运行方式迁移数据后再首次启动。
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID；该修剪属于用户配置变化，必须同时递增应用 `version` 和配置 `updated_at`。数据库外键会级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
 - 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后删除来源服务器上的容器和该实例运行目录，并移除来源 `application_instances` 记录。
-- `persistent` 挂载支持在单条 mount 上配置 `uid`、`gid` 和目录 `mode`（如 `"0755"`），部署写入托管文件阶段会确保对应宿主机持久化子目录存在并应用权限，解决非 root 容器进程写入持久化目录的问题。`file` 和 `panel_file` 挂载也支持 `uid`/`gid`，用于 Panel 写入节点 runtime 文件后的 chown；`file` 挂载额外支持 `mode`，前端可视化编辑只暴露“可执行”开关并写为 `0755`。Agent 写入 managed file 后必须显式 chmod 到解析后的 mode，确保重新部署能覆盖既有文件权限。`panel_file` 不允许用户配置 mode，其权限来自内部文件来源。`readOnly` 只表示 Docker bind mount 的 `:ro`，不等同于节点文件权限。权限字段不得用于 host/global bind 或 Docker volume，避免 Panel 修改用户自管宿主机目录或 Docker 管理卷。
+- `persistent` 挂载支持在单条 mount 上配置 `uid`、`gid` 和目录 `mode`（如 `"0755"`），部署写入托管文件阶段会确保对应宿主机持久化子目录存在并应用权限，解决非 root 容器进程写入持久化目录的问题。`file` 和 `panel_file` 挂载也支持 `uid`/`gid`，用于 Panel 写入节点 runtime 文件后的 chown；`file` 挂载额外支持 `mode`，前端可视化编辑只暴露“可执行”开关并写为 `0755`。Agent 写入普通 managed file 后必须显式 chmod 到解析后的 mode，确保重新部署能覆盖既有文件权限；普通 managed file 的父目录固定为 `0755`，保证以非 root 用户运行的容器（如 Nginx worker）可以进入挂载目录读取文件，文件本身的 mode 仍由 managed file 控制。`panel_file` 不允许用户配置 mode，其权限来自内部文件来源。`readOnly` 只表示 Docker bind mount 的 `:ro`，不等同于节点文件权限。权限字段不得用于 host/global bind 或 Docker volume，避免 Panel 修改用户自管宿主机目录或 Docker 管理卷。
 - 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
 - 应用持久化目录不保存为数据库字段；是否启用 persistent 由 appspec 的 `mounts.type=persistent` 派生，详情响应里的 `persistentPath` 只读生成自 `applicationPersistentDir(app.ID)`，保存 DTO 不包含 `persistentPath`。
 - 应用 `reverseProxy` 字段描述应用希望暴露的域名、Path、目标端口、目标类型和结构化 Path 选项，不代表所有部署节点都会启用反向代理。`targetType` 支持 `local` 与 `container`：旧数据或空值按 `local` 处理，代理到目标节点本地端口；`container` 代理到同节点 Application 容器名和目标端口。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖且应用实际部署到的服务器才会接收对应反向代理配置。
 - `ReverseProxyPath.options` 与设施 Path 共用 `HTTPRouteOptions`：`gzipMode`、`clientMaxBodySizeMb`、连接/读取/发送超时、`bufferingMode`、`webSocketMode`、请求 Header 和响应 Header。旧 `webSocket=true/false` 必须映射到结构化模式并保留兼容；规范化、模板渲染、`ApplicationReverseProxyConfigs` 转换和 spec hash 不得丢失 options。Header 名称按 HTTP token 校验并大小写不敏感判重，值禁止 CR/LF/NUL 和 Nginx 变量注入。所有应用代理 location 必须明确生成 `proxy_cache off;`；Panel 不主动生成、覆盖或隐藏 `Cache-Control`、`Expires`、ETag 等客户端缓存 Header。
 - 应用文件列表不返回正文；模板编辑可用 `GET .../files/{name}` 的 JSON/base64 读取，用户下载必须使用 session 或 committed `/content` 接口，不把 base64 当下载协议。JSON PUT 只允许 `template`，普通 `binary` 必须经 64 MiB multipart 入口上传，MIME 由服务端按名称/内容推断。每个应用文件在应用范围内使用唯一 `name`，它是不透明的应用内身份，不代表反向代理 URL Path 或宿主机路径；旧版本的 path/file key 只在兼容层解析并原样迁移。`archive` 保存原始文件夹压缩包为一个稳定的应用内 name 条目，不在管理端展开；替换必须复用原 name。
 - `file`、`panel_file`、内部文件和模板渲染后的 managed file 统一以只读 `managed_file` 挂载到容器。archive 在应用 Panel、设施 bundle Panel 和 Agent 实际解包侧都限制最多 10000 个总条目（文件与目录均计数）、32 层目录、256 MiB 解包总量和 100 倍压缩比，并继续拒绝路径逃逸和不支持格式；Agent 保存原始压缩包副本并校验 sha256，再覆盖解包到挂载目录。普通文件 drift 检查 sha256、mode 和显式 uid/gid，archive drift 检查节点保留原包 sha256 和解包目录 tree hash。
-- 保存会话的临时目录由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`，不得依赖进程工作目录下的相对 `tmp`。
-- 保存会话的创建、上传、删除、提交、过期清理和临时文件转换集中在 `save_session.go`；应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
-- 启用、停用、部署同步、删除和镜像更新等流程先校验并保存 desired state，再通过 task 框架立即触发 `application_reconcile` 指定该应用；编辑器“保存并应用”只提交保存会话，启用应用由保存接口触发协调，不得在前端保存成功后额外调用 `/deploy`。编辑器保存期间必须用覆盖当前弹窗的阻塞进度遮罩展示保存会话、旧文件删除、文件上传、压缩包上传和提交保存等阶段，并禁止关闭弹窗。协调 collector 负责比较期望状态与运行状态，并请求应用 planner 创建或复用 `application_lifecycle_targets`；planner 新建的 target 进入 `ready`，随后只能由 deployment dispatcher 在 claim target 后创建 `application_target_apply|stop|purge` 任务日志锚点。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标同步中单台服务器失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；容器 start 后 inspect 结果必须为 running，否则视为该目标失败并保留容器退出/运行时诊断，不能把启动后立刻退出的容器标记为成功；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
+- 保存会话服务层的临时目录仍由应用装配层设置到 `<dataRoot>/tmp/application-save-sessions`；该基础目录也用于推导 durable edit-session 工作目录，不得依赖进程工作目录下的相对 `tmp`。
+- 保存会话和编辑会话的临时文件生命周期分别集中在 `save_session.go` 与 `edit_session.go`；save-session HTTP 接口已移除，应用 CRUD、部署和运行时流程不得复制会话锁或临时目录清理逻辑。
+- 启用、停用、部署同步、删除和镜像更新等流程先校验并保存 desired state，再通过 task 框架立即触发 `application_reconcile` 指定该应用；编辑器“保存并应用”只提交编辑会话，启用应用由保存接口触发协调，不得在前端保存成功后额外调用 `/deploy`。编辑器保存期间必须用覆盖当前弹窗的阻塞进度遮罩展示编辑会话、旧文件删除、文件上传、压缩包上传和提交编辑等阶段，并禁止关闭弹窗。协调 collector 负责比较期望状态与运行状态，并请求应用 planner 创建或复用 `application_lifecycle_targets`；planner 新建的 target 进入 `ready`，随后只能由 deployment dispatcher 在 claim target 后创建 `application_target_apply|stop|purge` 任务日志锚点。部署编排必须留在 Panel 侧，agent 不保留胖 deploy handler，只提供写文件、创建容器、Docker 镜像和容器动作等原子接口。多目标同步中单台服务器失败不得提前中断后续服务器，必须记录该实例失败并继续尝试剩余目标，最后汇总失败目标返回应用运行时错误；容器 start 后 inspect 结果必须为 running，否则视为该目标失败并保留容器退出/运行时诊断，不能把启动后立刻退出的容器标记为成功；Agent/Docker runtime 返回的部署、停止、重启和日志错误必须包装为用户可见的应用运行时错误，保留原始诊断，不能退化成统一内部错误。
 - 多目标应用同步必须按任务系统“操作 + 任务”语义建模：一次协调请求是一个 operation，每个目标服务器是该 operation 下的一个 target；任务参数或资源字段必须能定位到对应服务器和应用。创建启用应用、更新启用应用、手动同步、迁移、变量刷新、持久化数据恢复后的重同步和系统触发的启用应用重同步，都必须通过 `PlanApplicationDeployment` 创建/复用 lifecycle target；HTTP、普通业务服务、collector 和前端不得直接创建或运行 `application_target_*`。应用模块提供 `DeploymentDispatcher` 作为部署执行基础设施，负责内存 plan/execute/verify/aggregate 队列、到期 `failed_retryable -> ready` 恢复、`ready -> claimed` 条件 claim、verify lease claim、startup/repair recovery，以及 claim 后创建目标任务日志锚点；队列溢出只能丢失内存提示，必须通过 dirty repair 重新扫描 DB durable target。planner 在创建 lifecycle operation 或 target 前必须先检查 `application:<appId>:server:<serverId>` 活跃 target；`force=true` 和手动同步不能绕过该冲突域唯一性。新 apply revision 可以把旧的非终态 apply target 标记为 `superseded` 后再创建新 target；更高优先级 stop/purge 只能替换尚未进入远程 mutation 的早期 target。
 - 目标任务失败、取消或 Panel 重启后被任务系统标记为 orphan failed 时，应用模块必须把对应 `application_lifecycle_targets` 从 pending/preparing/deploying 收敛为 failed，并聚合更新 lifecycle operation；apply 任务中断留下的 deploying 实例缓存也要标记为 failed，避免运行时视图永久显示部署中。
 - 应用同步的 `pull image` 步骤允许最长 15 分钟，以适配较慢的镜像仓库或大镜像下载；未显式写 tag 的镜像引用必须按 Docker CLI 语义拉取 `latest`，不得触发 Docker Engine API 拉取仓库全部标签；其它 agent/runtime 操作仍使用常规短超时。
@@ -151,7 +148,7 @@
 
 ## Application Folder Archives
 
-- Legacy save sessions retain `POST /api/v1/application-save-sessions/{id}/files/archive`; the current durable editor uses `/application-edit-sessions/{id}/archives`. Ordinary binary files use the durable multipart `/uploads/{name}` endpoint and must never enter an unpacking path; JSON/base64 durable writes are template-only.
+- Legacy save-session HTTP endpoints are removed; the current durable editor uses `/application-edit-sessions/{id}/archives`. Ordinary binary files use the durable multipart `/uploads/{name}` endpoint and must never enter an unpacking path; JSON/base64 durable writes are template-only.
 - Folder archive mode is a separate user action saved as `application_files.kind=archive`. Template files always use the text editor; binary and archive rows expose replace/download/delete only.
 - Replacing a folder archive reuses its stable application-local `name` so mounts and draft identity remain intact.
 - Folder archives support zip, tar, tar.gz, and tgz. The backend stores the original archive as one `application_files` row keyed by the application-local opaque `name`; managed runtime paths are allocated separately from the stable file ID. It must not expand archive entries into multiple management-side application files.

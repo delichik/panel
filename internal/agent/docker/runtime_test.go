@@ -345,6 +345,35 @@ func TestWriteManagedFilesAppliesFileMode(t *testing.T) {
 	}
 }
 
+func TestWriteManagedFilesMakesDirectoriesTraversable(t *testing.T) {
+	root := t.TempDir()
+	r := &LocalRuntime{root: root}
+	parent := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "static-assets", "asset-1")
+	if err := os.MkdirAll(parent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	spec := appruntime.Spec{
+		ApplicationID: "app-1",
+		InstanceID:    "app-1-srv-a",
+		Files: []appruntime.ManagedFile{{
+			Path:    "static-assets/asset-1/index.html",
+			Content: []byte("ok"),
+			Mode:    "0644",
+		}},
+	}
+
+	if err := r.writeManagedFiles(spec); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o755 {
+		t.Fatalf("parent mode = %v, want 0755", info.Mode().Perm())
+	}
+}
+
 func TestWriteManagedArchiveKeepsArchiveAndOverwritesExtractedFiles(t *testing.T) {
 	root := t.TempDir()
 	r := &LocalRuntime{root: root}

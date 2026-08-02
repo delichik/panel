@@ -186,7 +186,12 @@ onMounted(load);
         </template>
         <template #action="{ row }">{{ t(`applicationOperationsPage.action.${row.action}`) }}</template>
         <template #source="{ row }">{{ sourceLabel(row.source) }}</template>
-        <template #status="{ row }"><StatusBadge :status="row.status" domain="operation" :label="statusLabel(row.status)" /></template>
+        <template #status="{ row }">
+          <div class="grid min-w-0 gap-1">
+            <StatusBadge class="shrink-0 justify-self-start" :status="row.status" domain="operation" :label="statusLabel(row.status)" />
+            <span v-if="row.failureSummary" class="line-clamp-2 min-w-0 break-words text-xs leading-5 text-danger" :title="row.failureSummary">{{ row.failureSummary }}</span>
+          </div>
+        </template>
         <template #targetTotal="{ row }">{{ targetProgress(row) }}</template>
         <template #latestEventAt="{ row }">{{ formatDateTime(row.latestEventAt) }}</template>
         <template #operationId="{ row }">
@@ -214,7 +219,7 @@ onMounted(load);
       <section class="grid gap-2 rounded-xl border border-border p-3 text-sm">
         <div><span class="text-muted-foreground">{{ t('common.status') }}</span> <StatusBadge :status="detail.operation.status" domain="operation" :label="statusLabel(detail.operation.status)" /></div>
         <div><span class="text-muted-foreground">{{ t('applicationOperationsPage.column.targets') }}</span> <strong>{{ targetProgress(detail.operation) }}</strong></div>
-        <div v-if="detail.operation.failureSummary" class="rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">{{ detail.operation.failureSummary }}</div>
+        <div v-if="detail.operation.failureSummary" class="whitespace-pre-wrap break-words rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">{{ detail.operation.failureSummary }}</div>
       </section>
       <section>
         <h3 class="m-0 mb-2 text-sm font-semibold">{{ t('applicationOperationsPage.targets') }}</h3>

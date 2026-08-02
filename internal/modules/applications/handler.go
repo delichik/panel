@@ -33,32 +33,18 @@ func readApplicationUpload(reader io.Reader, limit int64) ([]byte, error) {
 type applicationService interface {
 	List(ctx context.Context) ([]Application, error)
 	Get(ctx context.Context, id string) (Application, error)
-	Create(ctx context.Context, in SaveInput) (Application, error)
-	Update(ctx context.Context, id string, in SaveInput) (Application, error)
 	Delete(ctx context.Context, id string) error
 	ListFiles(ctx context.Context, id string) ([]ApplicationFile, error)
 	GetFile(ctx context.Context, id, fileID string) (ApplicationFile, error)
-	SaveFile(ctx context.Context, id string, in FileSaveInput) (ApplicationFile, error)
-	DeleteFile(ctx context.Context, id, fileID string) error
-	BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error)
-	UploadSaveSessionFile(ctx context.Context, sessionID string, in FileSaveInput) (ApplicationFile, error)
-	UploadSaveSessionArchive(ctx context.Context, sessionID string, in FileArchiveInput) ([]ApplicationFile, error)
-	DeleteSaveSessionFile(ctx context.Context, sessionID string, in FileDeleteInput) error
-	CommitSaveSession(ctx context.Context, sessionID string) (Application, error)
-	Package(ctx context.Context, id string) (PackageResult, error)
 	PersistentData(ctx context.Context, id string) (PackageResult, error)
 	RestorePersistentData(ctx context.Context, id string, content []byte) (OperationResult, error)
-	Validate(ctx context.Context, id string) (ValidationResult, error)
-	Plan(ctx context.Context, id string) (PlanResult, error)
 	CheckImageUpdate(ctx context.Context, id string) (Application, error)
 	UpdateImage(ctx context.Context, id string) (OperationResult, error)
 	Deploy(ctx context.Context, id string) (OperationResult, error)
-	Migrate(ctx context.Context, id string, in MigrationInput) (OperationResult, error)
 	Stop(ctx context.Context, id string, purge bool) (OperationResult, error)
 	Restart(ctx context.Context, id string) (OperationResult, error)
 	Runtime(ctx context.Context, id string) (ApplicationRuntime, error)
 	Logs(ctx context.Context, id string, in LogInput) (LogResult, error)
-	TemplateCatalog(ctx context.Context) (TemplateCatalog, error)
 }
 
 type applicationRuntimeListService interface {
@@ -71,7 +57,6 @@ type applicationSummaryListService interface {
 
 type applicationEditSessionService interface {
 	BeginEditSession(context.Context, string, BeginEditSessionInput) (ApplicationEditSession, error)
-	GetEditSession(context.Context, string, string) (ApplicationEditSession, error)
 	PatchEditSession(context.Context, string, string, PatchEditSessionInput) (ApplicationEditSession, error)
 	PutEditSessionFile(context.Context, string, string, string, string, EditSessionFileInput) (ApplicationEditSession, error)
 	UploadEditSessionBinary(context.Context, string, string, string, string, EditSessionBinaryInput) (ApplicationEditSession, error)
@@ -81,15 +66,6 @@ type applicationEditSessionService interface {
 	PreviewEditSession(context.Context, string, string, int) (EditSessionPreviewResult, error)
 	CommitEditSession(context.Context, string, string, string, CommitEditSessionInput) (EditCommitResult, error)
 	DiscardEditSession(context.Context, string, string) error
-}
-
-func (h *Handler) TemplateCatalog(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.TemplateCatalog(r.Context())
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
 }
 
 type Handler struct {
@@ -130,20 +106,6 @@ func (h *Handler) BeginEditSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) GetEditSession(w http.ResponseWriter, r *http.Request) {
-	service, err := h.editSessions()
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	result, err := service.GetEditSession(r.Context(), editSessionOwner(r.Context()), editSessionIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) PatchEditSession(w http.ResponseWriter, r *http.Request) {
@@ -414,34 +376,8 @@ func applicationSummaryFromApplication(app Application) ApplicationSummary {
 	}
 }
 
-func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
-	var in SaveInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	app, err := h.service.Create(r.Context(), in)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusCreated, app)
-}
-
 func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
 	app, err := h.service.Get(r.Context(), applicationIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, app)
-}
-
-func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
-	var in SaveInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	app, err := h.service.Update(r.Context(), applicationIDFromRequest(r), in)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -466,15 +402,6 @@ func (h *Handler) ListFiles(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, files)
 }
 
-func (h *Handler) GetFile(w http.ResponseWriter, r *http.Request) {
-	file, err := h.service.GetFile(r.Context(), applicationIDFromRequest(r), applicationFileIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, file)
-}
-
 func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	file, err := h.service.GetFile(r.Context(), applicationIDFromRequest(r), applicationFileIDFromRequest(r))
 	if err != nil {
@@ -488,39 +415,6 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 		contentType = inferApplicationFileContentType(name, file.Content, false)
 	}
 	serveApplicationFileContent(w, r, name, contentType, file.Content)
-}
-
-func (h *Handler) SaveFile(w http.ResponseWriter, r *http.Request) {
-	var in FileSaveInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	file, err := h.service.SaveFile(r.Context(), applicationIDFromRequest(r), in)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, file)
-}
-
-func (h *Handler) DeleteFile(w http.ResponseWriter, r *http.Request) {
-	if err := h.service.DeleteFile(r.Context(), applicationIDFromRequest(r), applicationFileIDFromRequest(r)); err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.NoContent(w)
-}
-
-func (h *Handler) Package(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.Package(r.Context(), applicationIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", applicationContentDisposition(result.Filename))
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(result.Content)
 }
 
 func (h *Handler) PersistentData(w http.ResponseWriter, r *http.Request) {
@@ -567,104 +461,6 @@ func (h *Handler) RestorePersistentData(w http.ResponseWriter, r *http.Request) 
 	httpx.JSON(w, http.StatusOK, result)
 }
 
-func (h *Handler) BeginSaveSession(w http.ResponseWriter, r *http.Request) {
-	var in BeginSaveSessionInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	result, err := h.service.BeginSaveSession(r.Context(), in)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) UploadSaveSessionFile(w http.ResponseWriter, r *http.Request) {
-	var in FileSaveInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	file, err := h.service.UploadSaveSessionFile(r.Context(), saveSessionIDFromRequest(r), in)
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, file)
-}
-
-func (h *Handler) UploadSaveSessionArchive(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, persistentArchiveMaxBytes)
-	if err := r.ParseMultipartForm(persistentArchiveFormMemory); err != nil {
-		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request body"))
-		return
-	}
-	if r.MultipartForm != nil {
-		defer r.MultipartForm.RemoveAll()
-	}
-	file, header, err := r.FormFile("file")
-	if err != nil {
-		httpx.Error(w, panelerr.Validation("bad_request", "Archive file is required"))
-		return
-	}
-	defer file.Close()
-	content, err := io.ReadAll(file)
-	if err != nil {
-		httpx.Error(w, panelerr.BadRequest("bad_request", "Failed to read archive upload"))
-		return
-	}
-	files, err := h.service.UploadSaveSessionArchive(r.Context(), saveSessionIDFromRequest(r), FileArchiveInput{
-		Name:     firstNonEmpty(r.FormValue("name"), r.FormValue("basePath")),
-		Kind:     r.FormValue("kind"),
-		FileName: header.Filename,
-		Content:  content,
-	})
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, files)
-}
-
-func (h *Handler) DeleteSaveSessionFile(w http.ResponseWriter, r *http.Request) {
-	var in FileDeleteInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	if err := h.service.DeleteSaveSessionFile(r.Context(), saveSessionIDFromRequest(r), in); err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.NoContent(w)
-}
-
-func (h *Handler) CommitSaveSession(w http.ResponseWriter, r *http.Request) {
-	app, err := h.service.CommitSaveSession(r.Context(), saveSessionIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, app)
-}
-
-func (h *Handler) Validate(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.Validate(r.Context(), applicationIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
-}
-
-func (h *Handler) Plan(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.Plan(r.Context(), applicationIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
-}
-
 func (h *Handler) CheckImageUpdate(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.CheckImageUpdate(r.Context(), applicationIDFromRequest(r))
 	if err != nil {
@@ -685,19 +481,6 @@ func (h *Handler) UpdateImage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Deploy(w http.ResponseWriter, r *http.Request) {
 	result, err := h.service.Deploy(r.Context(), applicationIDFromRequest(r))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
-}
-
-func (h *Handler) Migrate(w http.ResponseWriter, r *http.Request) {
-	var in MigrationInput
-	if !httpx.Decode(w, r, &in) {
-		return
-	}
-	result, err := h.service.Migrate(r.Context(), applicationIDFromRequest(r), in)
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -760,10 +543,6 @@ func editSessionAssetNameFromRequest(r *http.Request) string {
 		return value
 	}
 	return strings.TrimSpace(r.PathValue("fileKey"))
-}
-
-func saveSessionIDFromRequest(r *http.Request) string {
-	return strings.TrimSpace(r.PathValue("id"))
 }
 
 func editSessionIDFromRequest(r *http.Request) string {
