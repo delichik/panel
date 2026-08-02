@@ -67,9 +67,17 @@ export class ApiClient {
   }
 
   private async request<T>(method: string, path: string, body?: unknown, options?: ApiRequestOptions): Promise<T> {
+    let signal = options?.signal;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    if (!signal) {
+      const controller = new AbortController();
+      timer = setTimeout(() => { timedOut = true; controller.abort(); }, 30_000);
+      signal = controller.signal;
+    }
     const response = await fetch(`${this.baseUrl}${path}`, {
       method,
-      signal: options?.signal,
+      signal,
       headers: authHeaders({
           Accept: 'application/json',
           ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
@@ -80,10 +88,10 @@ export class ApiClient {
       body: body === undefined ? undefined : JSON.stringify(body),
     }).catch((error: unknown) => {
       if (error instanceof DOMException && error.name === 'AbortError') {
-        throw new ApiError('Request was aborted.', 0, 'request_aborted');
+        throw new ApiError(timedOut ? 'Request timed out.' : 'Request was aborted.', 0, timedOut ? 'request_timeout' : 'request_aborted');
       }
       throw new ApiError(error instanceof Error ? error.message : 'Network request failed.', 0, 'network_error', error);
-    });
+    }).finally(() => { if (timer !== undefined) clearTimeout(timer); });
 
     if (response.status === 204) {
       return undefined as T;

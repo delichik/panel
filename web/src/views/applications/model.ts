@@ -250,27 +250,40 @@ export function validateFacilityDraft(draft: FacilityDraftUi): FieldErrors {
   if (draft.panelEnabled && !draft.panelDomain.trim()) errors.panelDomain = 'applicationsPage.validationPanelDomain';
   if (draft.domains.some((domain) => !domain.domain.trim())) errors.domains = 'applicationsPage.validationDomains';
   if (draft.domains.some((domain) => !domain.originServerIds.length || domain.originServerIds.some((id) => !draft.deploymentServers.includes(id)))) errors.originServers = 'applicationsPage.validationOriginServers';
-  if (draft.domains.some((domain) => !domain.paths.length || domain.paths.some((path) => !path.path.trim()))) errors.paths = 'applicationsPage.validationPaths';
+  if (draft.domains.some((domain) => !domain.paths.length)) errors.paths = 'applicationsPage.validationPaths';
   return errors;
 }
 
 export function validateFacilityPathFields(path: FacilityRoutePath): FieldErrors {
   const errors: FieldErrors = {};
   const pathValue = (path.path ?? '').trim();
-  if (pathValue !== '' && (!pathValue.startsWith('/') || /[\s;{}]/.test(pathValue))) {
+  if (pathValue !== '' && (!pathValue.startsWith('/') || /[\s;{}#"\\']/.test(pathValue))) {
     errors.path = 'applicationsPage.validationPath';
   }
   if (path.ruleType === 'redirect') {
     const target = (path.redirectUrl ?? '').trim();
-    if (!target || /[\s\x00;{}]/.test(target)) {
+    if (!target || /[\s\x00;{}#"\\']/.test(target)) {
       errors.redirectUrl = 'applicationsPage.validationRedirectUrl';
     }
   } else if (path.ruleType === 'proxy_pass') {
     const target = (path.proxyUrl ?? '').trim();
     const lower = target.toLowerCase();
-    if (!target || !(lower.startsWith('http://') || lower.startsWith('https://')) || /[\s\x00;{}]/.test(target)) {
+    if (!target || !(lower.startsWith('http://') || lower.startsWith('https://')) || /[\s\x00;{}#"\\']/.test(target)) {
       errors.proxyUrl = 'applicationsPage.validationProxyUrl';
     }
+  }
+  return errors;
+}
+export function validateFacilityDomainFields(domain: FacilityRouteDomain, existing: FacilityRouteDomain[], selfIndex: number): FieldErrors {
+  const errors: FieldErrors = {};
+  const value = (domain.domain ?? '').trim().toLowerCase();
+  if (!value || /[\s;{}]/.test(value)) {
+    errors.domain = 'applicationsPage.validationDomain';
+  } else if (existing.some((item, index) => index !== selfIndex && (item.domain ?? '').trim().toLowerCase() === value)) {
+    errors.domain = 'applicationsPage.validationDomainDuplicate';
+  }
+  if (!domain.originServerIds.length) {
+    errors.originServers = 'applicationsPage.validationDomainOriginServers';
   }
   return errors;
 }

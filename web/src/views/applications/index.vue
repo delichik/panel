@@ -61,6 +61,7 @@ import {
   syncDraftToYaml,
   validateApplicationDraft,
   validateFacilityDraft,
+  validateFacilityDomainFields,
   validateFacilityPathFields,
   type ApplicationDraftUi,
   type FacilityDraftUi,
@@ -136,6 +137,7 @@ const proxyPathDraft = reactive(makeProxyPath());
 const facilityDomainDraft = reactive<FacilityRouteDomain>(makeFacilityDomain());
 const facilityPathDraft = reactive<FacilityRoutePath>(makeFacilityPath());
 const facilityPathErrors = reactive<FieldErrors>({});
+const facilityDomainErrors = reactive<FieldErrors>({});
 const facilityRequestHeaders = ref<KeyValueRow[]>([]);
 const facilityResponseHeaders = ref<KeyValueRow[]>([]);
 
@@ -674,6 +676,11 @@ async function patchApplicationDraft() {
 }
 
 async function previewApplication() {
+  const localErrorKeys = Object.keys(appErrors.value);
+  if (localErrorKeys.length) {
+    actionError.value = t(appErrors.value[localErrorKeys[0]]);
+    return;
+  }
   await patchApplicationDraft();
   if (!editSession.value) return;
   await runEditorAction(async () => {
@@ -801,6 +808,11 @@ async function patchFacilityDraft() {
 }
 
 async function previewFacilityConfig() {
+  const localErrorKeys = Object.keys(facilityErrors.value);
+  if (localErrorKeys.length) {
+    actionError.value = t(facilityErrors.value[localErrorKeys[0]]);
+    return;
+  }
   await patchFacilityDraft();
   if (!facilitySession.value) return;
   await runEditorAction(async () => {
@@ -979,11 +991,20 @@ function saveProxyPathDialog() {
 function openFacilityDomainDialog(index = -1) {
   dialogKind.value = 'facilityDomain';
   dialogIndex.value = index;
+  Object.keys(facilityDomainErrors).forEach((key) => delete facilityDomainErrors[key]);
   Object.assign(facilityDomainDraft, index >= 0 ? cloneFacilityDomains([facilityDraft.domains[index]])[0] : makeFacilityDomain());
   dialogOpen.value = true;
 }
 
+function clearFacilityDomainError(field: string) {
+  delete facilityDomainErrors[field];
+}
+
 function saveFacilityDomainDialog() {
+  const nextErrors = validateFacilityDomainFields(facilityDomainDraft, facilityDraft.domains, dialogIndex.value);
+  Object.keys(facilityDomainErrors).forEach((key) => delete facilityDomainErrors[key]);
+  Object.assign(facilityDomainErrors, nextErrors);
+  if (Object.keys(facilityDomainErrors).length) return;
   const next = cloneFacilityDomains([facilityDomainDraft])[0];
   if (dialogIndex.value >= 0) facilityDraft.domains[dialogIndex.value] = next;
   else facilityDraft.domains.push(next);
@@ -1738,8 +1759,10 @@ onBeforeUnmount(() => {
       <label class="field">{{ t('applicationsPage.webSocket') }}<Switch v-model="proxyPathWebSocket" :label="t('applicationsPage.webSocket')" /></label>
     </div>
     <div v-else-if="dialogKind === 'facilityDomain'" class="grid gap-3">
-      <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityDomainDraft.domain" /></label>
-      <ServerMultiPicker v-model="facilityDomainOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: facilityDomainDraft.originServerIds.length })" />
+      <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityDomainDraft.domain" :invalid="Boolean(facilityDomainErrors.domain)" @input="clearFacilityDomainError('domain')" /></label>
+      <p v-if="facilityDomainErrors.domain" class="m-0 text-sm text-danger">{{ t(facilityDomainErrors.domain) }}</p>
+      <ServerMultiPicker v-model="facilityDomainOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: facilityDomainDraft.originServerIds.length })" @update:model-value="clearFacilityDomainError('originServers')" />
+      <p v-if="facilityDomainErrors.originServers" class="m-0 text-sm text-danger">{{ t(facilityDomainErrors.originServers) }}</p>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.loadBalancing') }}</h3><p>{{ t('applicationsPage.loadBalancingHint') }}</p></div>
         <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="facilityDomainDraft.anyAccess.enabled" :label="t('applicationsPage.anyAccess')" /></label>

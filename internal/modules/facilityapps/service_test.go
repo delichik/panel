@@ -65,6 +65,30 @@ func TestNormalizeInputRejectsInvalidOriginsAndDuplicatePaths(t *testing.T) {
 	}
 }
 
+func TestNormalizeInputRejectsUnsafeRedirectTargets(t *testing.T) {
+	for _, target := range []string{
+		"https://target.example.test/path#fragment",
+		`https://target.example.test/path"quote`,
+		"https://target.example.test/path\\backslash",
+		"https://target.example.test/path'quote",
+	} {
+		_, err := normalizeInput(ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}, Domains: []FacilityRouteDomain{{
+			Domain: "example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: target}},
+		}}})
+		if err == nil || !strings.Contains(err.Error(), "Redirect target is invalid") {
+			t.Fatalf("expected redirect target %q to be rejected, got %v", target, err)
+		}
+	}
+	cfg, err := normalizeInput(ReverseProxySaveInput{DeploymentServers: []string{"srv-a"}, Domains: []FacilityRouteDomain{{
+		Domain: "example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://target.example.test/ok?q=1&r=2"}},
+	}}})
+	if err != nil {
+		t.Fatalf("expected clean redirect target to pass: %v", err)
+	}
+	if got := cfg.Domains[0].Paths[0].RedirectURL; got != "https://target.example.test/ok?q=1&r=2" {
+		t.Fatalf("redirect url = %q", got)
+	}
+}
 func TestRenderNginxConfigSeparatesOriginAndAnyAccessRelay(t *testing.T) {
 	svc := &Service{servers: facilityTestServers{items: map[string]server.Server{
 		"srv-origin": {ID: "srv-origin", Host: "10.0.0.11"},

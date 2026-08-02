@@ -1729,7 +1729,7 @@ func validNginxPath(value string) bool {
 }
 
 func validNginxValue(value string) bool {
-	return value != "" && !strings.ContainsAny(value, " \t\x00\r\n;{}")
+	return value != "" && !strings.ContainsAny(value, " \t\x00\r\n;{}#\"'\\")
 }
 
 func validProxyURL(value string) bool {

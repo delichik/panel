@@ -13,6 +13,7 @@ import {
   syncDraftToYaml,
   validateApplicationDraft,
   validateFacilityDraft,
+  validateFacilityDomainFields,
   validateFacilityPathFields,
 } from './model';
 import type { ApplicationDto } from '@/types/applications';
@@ -161,6 +162,8 @@ describe('facility path dialog validation', () => {
     expect(spaced.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
     const semi = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/a;b' });
     expect(semi.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
+    const fragment = validateFacilityPathFields({ path: '/go', ruleType: 'redirect', sourceType: 'host_path', redirectUrl: 'https://example.com/a#b' });
+    expect(fragment.redirectUrl).toBe('applicationsPage.validationRedirectUrl');
   });
 
   it('rejects a proxy target without http(s) scheme', () => {
@@ -181,5 +184,34 @@ describe('facility path dialog validation', () => {
   it('treats an empty path as valid (defaults to /)', () => {
     const errors = validateFacilityPathFields({ path: '', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' });
     expect(errors).toEqual({});
+  });
+});
+describe('facility domain dialog validation', () => {
+  const baseDomain = { domain: 'a.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false, strategy: 'round_robin' }, paths: [{ path: '/', ruleType: 'static', sourceType: 'host_path' }] };
+
+  it('accepts a clean domain with origin servers', () => {
+    const errors = validateFacilityDomainFields(baseDomain, [baseDomain], 0);
+    expect(errors).toEqual({});
+  });
+
+  it('rejects an empty or invalid domain', () => {
+    const errors = validateFacilityDomainFields({ ...baseDomain, domain: '' }, [], -1);
+    expect(errors.domain).toBe('applicationsPage.validationDomain');
+    const spaced = validateFacilityDomainFields({ ...baseDomain, domain: 'a b.test' }, [], -1);
+    expect(spaced.domain).toBe('applicationsPage.validationDomain');
+  });
+
+  it('rejects a duplicate domain', () => {
+    const existing = [
+      { ...baseDomain, domain: 'b.example.test' },
+      { ...baseDomain, domain: 'a.example.test' },
+    ];
+    const errors = validateFacilityDomainFields({ ...baseDomain, domain: 'B.EXAMPLE.TEST' }, existing, 1);
+    expect(errors.domain).toBe('applicationsPage.validationDomainDuplicate');
+  });
+
+  it('rejects a domain without origin servers', () => {
+    const errors = validateFacilityDomainFields({ ...baseDomain, originServerIds: [] }, [], -1);
+    expect(errors.originServers).toBe('applicationsPage.validationDomainOriginServers');
   });
 });
