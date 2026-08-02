@@ -28,9 +28,6 @@ export const reverseProxyFacilityApi = {
       draft,
     });
   },
-  recoverableEditSessions(options?: ApiRequestOptions) {
-    return apiClient.get<FacilityEditSession[]>('/facility-apps/reverse-proxy/edit-sessions/recoverable?clientDraftKey=facility%3Areverse-proxy', options);
-  },
   patchEdit(sessionId: string, revision: number, baseResourceVersion: string, draft: ReverseProxySaveInput) {
     return apiClient.patch<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/draft`, { revision, baseResourceVersion, draft });
   },

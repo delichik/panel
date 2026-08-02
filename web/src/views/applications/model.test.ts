@@ -6,7 +6,6 @@ import {
   draftFromApplication,
   facilityDraftFromConfig,
   facilitySaveInputFromDraft,
-  facilitySaveInputsEqual,
   makeFacilityDomain,
   makeKeyValueRow,
   saveInputFromDraft,
@@ -122,29 +121,5 @@ describe('application editor model', () => {
     draft.mounts.push({ id: 'm1', type: 'persistent', source: '', target: '/data', readOnly: false, mode: '0755' });
 
     expect(specYamlFromDraft(draft)).toContain('mounts:');
-  });
-});
-
-
-describe('facilitySaveInputsEqual', () => {
-  it('compares deployment servers, panel entry, and domains', () => {
-    const base = {
-      id: 'reverse_proxy',
-      version: 1,
-      deploymentServers: ['srv-1'],
-      panelEntry: { enabled: true, serverId: 'srv-1', domain: 'panel.example.test' },
-      domains: [{ domain: 'static.example.test', originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' }] }],
-      staticAssets: [],
-      routeSummaries: [],
-      applicationRoutes: [],
-      updatedAt: '',
-      routes: 0,
-      enabledServers: ['srv-1'],
-    } satisfies ReverseProxyConfig;
-    const draft = facilitySaveInputFromDraft(facilityDraftFromConfig(base));
-    expect(facilitySaveInputsEqual(draft, facilitySaveInputFromDraft(facilityDraftFromConfig(base)))).toBe(true);
-    expect(facilitySaveInputsEqual(draft, { ...draft, deploymentServers: ['srv-2'] })).toBe(false);
-    expect(facilitySaveInputsEqual(draft, { ...draft, domains: [] })).toBe(false);
-    expect(facilitySaveInputsEqual(draft, { ...draft, panelEntry: { enabled: false } })).toBe(false);
   });
 });

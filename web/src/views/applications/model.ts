@@ -241,12 +241,6 @@ export function facilitySaveInputFromDraft(draft: FacilityDraftUi): ReverseProxy
   };
 }
 
-export function facilitySaveInputsEqual(a: ReverseProxySaveInput, b: ReverseProxySaveInput): boolean {
-  if (a.deploymentServers.length !== b.deploymentServers.length || a.deploymentServers.some((value, index) => value !== b.deploymentServers[index])) return false;
-  if (JSON.stringify(a.panelEntry) !== JSON.stringify(b.panelEntry)) return false;
-  return JSON.stringify(a.domains) === JSON.stringify(b.domains);
-}
-
 export function validateFacilityDraft(draft: FacilityDraftUi): FieldErrors {
   const errors: FieldErrors = {};
   if (!draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationGatewayServers';

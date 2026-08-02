@@ -44,7 +44,6 @@ import {
   draftFromApplication,
   facilityDraftFromConfig,
   facilitySaveInputFromDraft,
-  facilitySaveInputsEqual,
   hasBlockingDiagnostic,
   makeFacilityDomain,
   makeFacilityPath,
@@ -121,7 +120,6 @@ const editSession = ref<ApplicationEditSession | null>(null);
 const facilitySession = ref<FacilityEditSession | null>(null);
 const facilityPreview = ref<FacilityEditPreviewResult | null>(null);
 const facilityDiagnostics = ref<Diagnostic[]>([]);
-const facilityRecovered = ref<FacilityEditSession | null>(null);
 const isDirty = ref(false);
 const saveStage = ref<SaveStage>('idle');
 const dialogOpen = ref(false);
@@ -719,13 +717,8 @@ async function startFacilityEditor() {
   facilityDiagnostics.value = [];
   facilityPreview.value = null;
   facilitySession.value = null;
-  facilityRecovered.value = null;
   isDirty.value = false;
   try {
-    const recovered = await reverseProxyFacilityApi.recoverableEditSessions({ signal: controller.signal });
-    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
-    const committed = facilitySaveInputFromDraft(facilityDraftFromConfig(facility.value));
-    facilityRecovered.value = recovered.find((session) => !facilitySaveInputsEqual(session.draft, committed)) ?? null;
     facilitySession.value = await reverseProxyFacilityApi.beginEdit(facilitySaveInputFromDraft(facilityDraft));
     if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || facilityKind.value !== kindAtStart) return;
     Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, panelEntry: facilitySession.value.draft.panelEntry, domains: facilitySession.value.draft.domains }));
@@ -733,29 +726,6 @@ async function startFacilityEditor() {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
   }
-}
-
-function dismissFacilityRecoveredDraft() {
-  facilityRecovered.value = null;
-}
-
-async function loadFacilityRecoveredDraft() {
-  const recovered = facilityRecovered.value;
-  if (!recovered) return;
-  const current = facilitySession.value;
-  try {
-    if (current && current.id !== recovered.id) await reverseProxyFacilityApi.discardEdit(current.id);
-  } catch {
-    // The fresh session expires on its own; adopting the recovered draft is still safe.
-  }
-  facilitySession.value = recovered;
-  facilityRecovered.value = null;
-  facilityPreview.value = null;
-  facilityDiagnostics.value = [];
-  actionError.value = '';
-  feedback.value = '';
-  Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: recovered.draft.deploymentServers, panelEntry: recovered.draft.panelEntry, domains: recovered.draft.domains }));
-  isDirty.value = true;
 }
 
 async function startInPlaceFacilityEdit() {
@@ -771,7 +741,6 @@ function cancelFacilityEdit() {
   facilitySession.value = null;
   facilityPreview.value = null;
   facilityDiagnostics.value = [];
-  facilityRecovered.value = null;
   actionError.value = '';
   feedback.value = '';
   isDirty.value = false;
@@ -1442,13 +1411,6 @@ onBeforeUnmount(() => {
           <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
         </div>
         <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-        <div v-if="facilityRecovered" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
-          <span>{{ t('applicationsPage.recoveredDraftNotice') }}</span>
-          <div class="flex flex-wrap gap-2">
-            <Button size="sm" @click="loadFacilityRecoveredDraft">{{ t('applicationsPage.loadRecoveredDraft') }}</Button>
-            <Button size="sm" variant="secondary" @click="dismissFacilityRecoveredDraft">{{ t('applicationsPage.dismissRecoveredDraft') }}</Button>
-          </div>
-        </div>
         <div class="app-editor-layout">
           <section class="app-editor-shell">
             <div class="app-editor-header">
