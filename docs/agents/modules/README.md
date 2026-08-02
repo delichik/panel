@@ -14,6 +14,7 @@
 | 任务范围 | 优先阅读 |
 | --- | --- |
 | 启动装配、API 路由、配置、存储、认证、运行时设置、系统版本与更新检查 | [backend-core.md](backend-core.md) |
+| 轻量 ORM（模型注册、链式查询、CRUD、AutoMigrate、迁移步骤） | [database-orm.md](database-orm.md) |
 | `panel setup`、本地控制 socket、Panel 宿主节点和自身入口初始化 | [installation.md](installation.md) |
 | 全量备份导出、维护模式、启动期覆盖还原、恢复模式页面 | [backup-restore.md](backup-restore.md) |
 | Vue 页面、API client、Pinia store、路由、样式和前端测试 | [frontend.md](frontend.md) |

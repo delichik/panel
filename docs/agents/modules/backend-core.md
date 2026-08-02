@@ -28,7 +28,7 @@
 - 应用装配与路由：`internal/bootstrap/panel/app.go`
 - 配置：`internal/platform/config/config.go`
 - 进程日志：`internal/platform/logging/`
-- 数据库连接和迁移：`internal/platform/database/store.go`、`internal/platform/database/migrations.go`
+- 数据库连接和迁移：`internal/platform/database/store.go`、`internal/platform/database/migrations.go`、`internal/platform/database/orm/`、`internal/platform/database/models/`
 - 认证：`internal/modules/identity/`
 - 运行时设置：`internal/modules/settings/`
 - 统一 HTTP 响应与路由注册契约：`internal/platform/http/`
@@ -63,6 +63,7 @@
 - 数据库路径配置包括 `appDatabase`、`logDatabase`、`metricsDatabase`，环境变量分别是 `PANEL_APP_DATABASE`、`PANEL_LOG_DATABASE`、`PANEL_METRICS_DATABASE`，三者必须指向不同文件。旧 `taskDatabase` 配置、`PANEL_TASK_DATABASE` 环境变量和默认 `data/db/tasks.db` 文件仅作为升级兼容入口，启动时会迁移到 `data/db/log.db`。
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
+- `Store.Migrate` 已由 ORM 驱动：对 app/log/metrics 三库分别调用 `orm.AutoMigrateModels(WithDestructive(true))`（DDL 由 `internal/platform/database/models` 的 42 个模型负责，CHECK 约束经 `TableConstraints()` 声明），随后按 `models.ExtraIndexDDL()` 幂等创建复合/部分/复合 UNIQUE 索引，并用 `orm.RunSteps` 执行一次性数据迁移；历史遗留表（旧 tasks/certificates）由对应 Step/直连迁移清理，不依赖自动删除。证书 scope 约束重建因需事务外切换 `PRAGMA foreign_keys`，由 Migrate 直接调用而非 Step。
 - 入口网关设施配置表 `facility_app_configs` 使用 `domains_json` 保存域名、源站、AnyAccess 和嵌套 Path。升级旧库时迁移会转换旧设施字段与应用 `reverse_proxy_json`，先检查设施、应用和 Panel 入口的域名所有权冲突，再重建设施表删除旧镜像、静态站点和域名策略列；迁移完成后业务代码不保留旧 JSON 字段兼容。
 - `panel_installation` 是固定 `default` 记录的单例安装状态，使用服务器外键保存待初始化节点和唯一 Panel 宿主节点。宿主节点不能通过普通服务器删除流程移除；Panel 入口启用时必须绑定该节点，宿主节点可由 setup 或设施应用网关配置首次保存登记。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。

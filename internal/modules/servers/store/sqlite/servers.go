@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"panel/internal/modules/servers/domain"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
+	"panel/internal/platform/linux"
 )
 
 type ServerRepository struct {
@@ -21,25 +25,13 @@ func NewServerRepository(db *sql.DB) *ServerRepository {
 }
 
 func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,architecture_os,architecture_arch,architecture_machine,reachable,sudo_passwordless,sudo_last_checked_at,privilege_mode,privilege_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers ORDER BY created_at DESC`)
-	if err != nil {
+	var rows []models.Server
+	if err := orm.New(r.db).From("servers").OrderBy("created_at DESC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	out := []domain.Server{}
-	for rows.Next() {
-		srv, err := scanServer(rows)
-		if err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		out = append(out, srv)
-	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return nil, err
-	}
-	if err := rows.Close(); err != nil {
-		return nil, err
+	out := make([]domain.Server, 0, len(rows))
+	for i := range rows {
+		out = append(out, toDomainServer(rows[i]))
 	}
 	return out, nil
 }
@@ -127,43 +119,27 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 }
 
 func (r *ServerRepository) Get(ctx context.Context, serverID string) (domain.Server, error) {
-	srv, err := scanServer(r.db.QueryRowContext(ctx, `SELECT id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,os_id,os_version_id,os_pretty_name,os_supported,architecture_os,architecture_arch,architecture_machine,reachable,sudo_passwordless,sudo_last_checked_at,privilege_mode,privilege_last_checked_at,last_checked_at,last_error,created_at,updated_at FROM servers WHERE id=?`, serverID))
-	if err == sql.ErrNoRows {
+	var row models.Server
+	err := orm.New(r.db).From("servers").Where("id=?", serverID).First(ctx, &row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Server{}, panelerr.NotFound("server")
 	}
-	return srv, err
+	if err != nil {
+		return domain.Server{}, err
+	}
+	return toDomainServer(row), nil
 }
 
 func (r *ServerRepository) ListIDs(ctx context.Context) ([]string, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id FROM servers ORDER BY created_at DESC`)
-	if err != nil {
+	var ids []string
+	if err := orm.New(r.db).From("servers").OrderBy("created_at DESC").Pluck(ctx, "id", &ids); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
-	}
-	return ids, rows.Err()
+	return ids, nil
 }
 
 func (r *ServerRepository) Insert(ctx context.Context, srv domain.Server) error {
-	traits, err := json.Marshal(srv.Traits)
-	if err != nil {
-		return err
-	}
-	variables, err := json.Marshal(srv.Variables)
-	if err != nil {
-		return err
-	}
-	_, err = r.db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,notes,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-		srv.ID, srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, string(traits), string(variables), srv.Notes,
-		srv.CreatedAt.UTC().Format(time.RFC3339Nano), srv.UpdatedAt.UTC().Format(time.RFC3339Nano))
-	return err
+	return orm.New(r.db).Insert(ctx, fromDomainServer(srv))
 }
 
 func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error {
@@ -175,7 +151,7 @@ func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error 
 	if err != nil {
 		return err
 	}
-	result, err := r.db.ExecContext(ctx, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,docker_host=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,docker_host=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
 		srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, string(traits), string(variables), srv.Notes,
 		srv.UpdatedAt.UTC().Format(time.RFC3339Nano), srv.ID)
 	if err != nil {
@@ -192,7 +168,7 @@ func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error 
 }
 
 func (r *ServerRepository) Delete(ctx context.Context, serverID string) error {
-	result, err := r.db.ExecContext(ctx, `DELETE FROM servers WHERE id=?`, serverID)
+	result, err := orm.RawExec(ctx, r.db, `DELETE FROM servers WHERE id=?`, serverID)
 	if err != nil {
 		return err
 	}
@@ -206,41 +182,87 @@ func (r *ServerRepository) Delete(ctx context.Context, serverID string) error {
 	return nil
 }
 
-type serverScanner interface{ Scan(dest ...any) error }
-
-func scanServer(row serverScanner) (domain.Server, error) {
-	var srv domain.Server
-	var traits, variables, created, updated string
-	var osSupported, reachable, sudo int
-	var sudoAt, privilegeAt, checkedAt sql.NullString
-	err := row.Scan(&srv.ID, &srv.Name, &srv.Host, &srv.Port, &srv.SSHUsername, &srv.CredentialID, &srv.DockerHost, &traits, &variables, &srv.Notes, &srv.OS.ID, &srv.OS.VersionID, &srv.OS.PrettyName, &osSupported, &srv.Architecture.OS, &srv.Architecture.Arch, &srv.Architecture.RawMachine, &reachable, &sudo, &sudoAt, &srv.Privilege.Mode, &privilegeAt, &checkedAt, &srv.LastError, &created, &updated)
-	if err != nil {
-		return domain.Server{}, err
+// toDomainServer 将 models.Server 中间载体映射为 domain.Server，保持原
+// scanServer 的默认值与归一化语义（空 privilege_mode -> none 等）。
+func toDomainServer(m models.Server) domain.Server {
+	srv := domain.Server{
+		ID:            m.ID,
+		Name:          m.Name,
+		Host:          m.Host,
+		Port:          m.Port,
+		SSHUsername:   m.SSHUsername,
+		CredentialID:  m.CredentialID,
+		DockerHost:    m.DockerHost,
+		Traits:        stringMap(m.Traits),
+		Variables:     stringMap(m.VariablesJSON),
+		Notes:         m.Notes,
+		OS:            linux.OSRelease{ID: m.OSID, VersionID: m.OSVersionID, PrettyName: m.OSPrettyName, Supported: m.OSSupported},
+		Architecture:  domain.ArchitectureInfo{OS: m.ArchitectureOS, Arch: m.ArchitectureArch, RawMachine: m.ArchitectureMachine},
+		Sudo:          domain.SudoState{Passwordless: m.SudoPasswordless, LastCheckedAt: m.SudoLastCheckedAt},
+		Reachable:     m.Reachable,
+		LastCheckedAt: m.LastCheckedAt,
+		LastError:     m.LastError,
+		CreatedAt:     m.CreatedAt,
+		UpdatedAt:     m.UpdatedAt,
 	}
-	srv.Traits = map[string]string{}
-	_ = json.Unmarshal([]byte(traits), &srv.Traits)
-	srv.Variables = map[string]string{}
-	_ = json.Unmarshal([]byte(variables), &srv.Variables)
-	srv.OS.Supported = osSupported == 1
-	srv.Reachable = reachable == 1
-	srv.Sudo.Passwordless = sudo == 1
+	srv.Privilege = domain.PrivilegeState{Mode: m.PrivilegeMode, LastCheckedAt: m.PrivilegeLastCheckedAt}
 	if srv.Privilege.Mode == "" {
 		srv.Privilege.Mode = "none"
 	}
 	srv.Privilege.Privileged = srv.Privilege.Mode == "root" || srv.Privilege.Mode == "passwordless_sudo"
-	if sudoAt.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, sudoAt.String)
-		srv.Sudo.LastCheckedAt = &v
+	return srv
+}
+
+func fromDomainServer(srv domain.Server) *models.Server {
+	return &models.Server{
+		ID:                     srv.ID,
+		Name:                   srv.Name,
+		Host:                   srv.Host,
+		Port:                   srv.Port,
+		SSHUsername:            srv.SSHUsername,
+		CredentialID:           srv.CredentialID,
+		DockerHost:             srv.DockerHost,
+		Traits:                 anyMap(srv.Traits),
+		VariablesJSON:          anyMap(srv.Variables),
+		Notes:                  srv.Notes,
+		OSID:                   srv.OS.ID,
+		OSVersionID:            srv.OS.VersionID,
+		OSPrettyName:           srv.OS.PrettyName,
+		OSSupported:            srv.OS.Supported,
+		ArchitectureOS:         srv.Architecture.OS,
+		ArchitectureArch:       srv.Architecture.Arch,
+		ArchitectureMachine:    srv.Architecture.RawMachine,
+		Reachable:              srv.Reachable,
+		SudoPasswordless:       srv.Sudo.Passwordless,
+		SudoLastCheckedAt:      srv.Sudo.LastCheckedAt,
+		PrivilegeMode:          srv.Privilege.Mode,
+		PrivilegeLastCheckedAt: srv.Privilege.LastCheckedAt,
+		LastCheckedAt:          srv.LastCheckedAt,
+		LastError:              srv.LastError,
+		CreatedAt:              srv.CreatedAt,
+		UpdatedAt:              srv.UpdatedAt,
 	}
-	if privilegeAt.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, privilegeAt.String)
-		srv.Privilege.LastCheckedAt = &v
+}
+
+// stringMap 保持原 scanServer 的 JSON 容错语义：非法/非字符串值视为空，
+// "null" 归一化为 nil。
+func stringMap(m map[string]any) map[string]string {
+	out := map[string]string{}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		return out
 	}
-	if checkedAt.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, checkedAt.String)
-		srv.LastCheckedAt = &v
+	_ = json.Unmarshal(raw, &out)
+	return out
+}
+
+func anyMap(m map[string]string) map[string]any {
+	if m == nil {
+		return nil
 	}
-	srv.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-	srv.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
-	return srv, nil
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = v
+	}
+	return out
 }

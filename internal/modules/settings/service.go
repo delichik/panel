@@ -13,6 +13,8 @@ import (
 	"unicode/utf8"
 
 	"panel/internal/platform/config"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/i18n"
 	"panel/internal/platform/logging"
@@ -251,7 +253,7 @@ func (s *Service) SetJWTSecret(ctx context.Context, secret string) (RuntimeSetti
 
 func (s *Service) ServerVariableDefinitions(ctx context.Context) ([]ServerVariableDefinition, error) {
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM runtime_settings WHERE key=?`, RuntimeSettingServerVariableDefinitions).Scan(&raw)
+	err := orm.New(s.db).From("runtime_settings").Where("key = ?", RuntimeSettingServerVariableDefinitions).Select("value").ScanValue(ctx, &raw)
 	if err == sql.ErrNoRows || strings.TrimSpace(raw) == "" {
 		return []ServerVariableDefinition{}, nil
 	}
@@ -284,7 +286,7 @@ func (s *Service) ensureDefaultRuntimeSettings(ctx context.Context) error {
 	defaults := defaultRuntimeSettings(s.cfg)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for key, value := range runtimeValues(defaults, true) {
-		if _, err := s.db.ExecContext(ctx, `
+		if _, err := orm.RawExec(ctx, s.db, `
 			INSERT INTO runtime_settings(key, value, updated_at)
 			VALUES (?, ?, ?)
 			ON CONFLICT(key) DO NOTHING
@@ -297,38 +299,28 @@ func (s *Service) ensureDefaultRuntimeSettings(ctx context.Context) error {
 
 func (s *Service) saveValues(ctx context.Context, values map[string]string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	for key, value := range values {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO runtime_settings(key, value, updated_at)
-			VALUES (?, ?, ?)
-			ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-		`, key, value, now); err != nil {
-			_ = tx.Rollback()
-			return err
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		for key, value := range values {
+			if _, err := orm.RawExec(ctx, tx, `
+				INSERT INTO runtime_settings(key, value, updated_at)
+				VALUES (?, ?, ?)
+				ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+			`, key, value, now); err != nil {
+				return err
+			}
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+		return nil
+	})
 }
 
 func (s *Service) load(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT key, value FROM runtime_settings`)
-	if err != nil {
+	var rows []models.RuntimeSetting
+	if err := orm.New(s.db).From("runtime_settings").All(ctx, &rows); err != nil {
 		return err
 	}
-	defer rows.Close()
 	next := defaultRuntimeSettings(s.cfg)
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			return err
-		}
+	for _, row := range rows {
+		key, value := row.Key, row.Value
 		switch key {
 		case "metricsRetentionDays":
 			if n, err := strconv.Atoi(value); err == nil {
@@ -384,9 +376,6 @@ func (s *Service) load(ctx context.Context) error {
 				next.Certificates.DNSPropagationDelaySeconds = n
 			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 	if err := validateRuntimeSettings(next); err != nil {
 		return err

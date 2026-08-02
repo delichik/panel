@@ -11,6 +11,7 @@ import (
 
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/orm"
 	id "panel/internal/platform/identity"
 )
 
@@ -230,7 +231,7 @@ func (d *deploymentDispatcher) claimExecuteTarget(ctx context.Context, targetID 
 		return LifecycleTarget{}, false, nil
 	}
 	leaseExpiresAt := now.Add(d.leaseTTL)
-	res, err := d.service.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := orm.RawExec(ctx, d.service.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			lease_owner=?,
@@ -264,7 +265,7 @@ func (d *deploymentDispatcher) claimExecuteTarget(ctx context.Context, targetID 
 		_ = d.markTargetTaskCreateFailed(ctx, target.ID, err)
 		return LifecycleTarget{}, false, err
 	}
-	res, err = d.service.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err = orm.RawExec(ctx, d.service.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET lease_owner=?,
 			claimed_task_id=?,
 			updated_at=?
@@ -476,7 +477,7 @@ func (d *deploymentDispatcher) claimVerifyTarget(ctx context.Context, targetID s
 		return false, nil
 	}
 	now := time.Now().UTC()
-	res, err := d.service.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := orm.RawExec(ctx, d.service.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET lease_owner=?,
 			lease_expires_at=?,
 			updated_at=?
@@ -578,7 +579,7 @@ func (d *deploymentDispatcher) markTargetTaskCreateFailed(ctx context.Context, t
 	nowTime := time.Now().UTC()
 	nextRunAt := formatTime(nowTime.Add(lifecycleExecutionRetryDelay(ctx, d.service.lifecycleDB(), targetID)))
 	now := formatTime(nowTime)
-	_, err := d.service.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	_, err := orm.RawExec(ctx, d.service.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			error=?,
@@ -609,7 +610,7 @@ func (d *deploymentDispatcher) markTargetTaskCreateFailed(ctx context.Context, t
 }
 
 func (d *deploymentDispatcher) recoverPlannedTargets(ctx context.Context, now string) error {
-	_, err := d.service.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	_, err := orm.RawExec(ctx, d.service.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			updated_at=?
@@ -624,7 +625,7 @@ func (d *deploymentDispatcher) recoverPlannedTargets(ctx context.Context, now st
 }
 
 func (d *deploymentDispatcher) recoverRetryableTargets(ctx context.Context, now string) error {
-	_, err := d.service.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	_, err := orm.RawExec(ctx, d.service.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			updated_at=?
@@ -642,7 +643,7 @@ func (d *deploymentDispatcher) recoverRetryableTargets(ctx context.Context, now 
 func (d *deploymentDispatcher) recoverExpiredLeases(ctx context.Context, now string) error {
 	nowTime := time.Now().UTC()
 	nextRunAt := formatTime(nowTime.Add(withLifecycleRetryJitter(10 * time.Second)))
-	_, err := d.service.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	_, err := orm.RawExec(ctx, d.service.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=CASE
 				WHEN stage='' OR stage='waiting_server_queue' THEN 'ready'
 				ELSE 'failed_retryable'
@@ -666,37 +667,25 @@ func (d *deploymentDispatcher) recoverExpiredLeases(ctx context.Context, now str
 }
 
 func (d *deploymentDispatcher) enqueueTargets(ctx context.Context, predicate string, args []any, enqueue func(string)) error {
-	rows, err := d.service.lifecycleDB().QueryContext(ctx, `SELECT id FROM application_lifecycle_targets WHERE `+predicate, args...)
-	if err != nil {
+	var targetIDs []string
+	if err := orm.New(d.service.lifecycleDB()).From("application_lifecycle_targets").Where(predicate, args...).Pluck(ctx, "id", &targetIDs); err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var targetID string
-		if err := rows.Scan(&targetID); err != nil {
-			return err
-		}
+	for _, targetID := range targetIDs {
 		enqueue(targetID)
 	}
-	return rows.Err()
+	return nil
 }
 
 func (d *deploymentDispatcher) enqueueTerminalOperations(ctx context.Context) error {
-	rows, err := d.service.lifecycleDB().QueryContext(ctx, `SELECT DISTINCT operation_id
-		FROM application_lifecycle_targets
-		WHERE state IN ('succeeded','failed','superseded','cancelled')`)
-	if err != nil {
+	var operationIDs []string
+	if err := orm.New(d.service.lifecycleDB()).From("application_lifecycle_targets").Where("state IN (?,?,?,?)", "succeeded", "failed", "superseded", "cancelled").Distinct().Pluck(ctx, "operation_id", &operationIDs); err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var operationID string
-		if err := rows.Scan(&operationID); err != nil {
-			return err
-		}
+	for _, operationID := range operationIDs {
 		d.EnqueueAggregate(operationID)
 	}
-	return rows.Err()
+	return nil
 }
 
 type stringWorkQueue struct {

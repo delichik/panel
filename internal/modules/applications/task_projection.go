@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 )
 
 type deploymentTaskReference struct {
@@ -160,12 +162,11 @@ func deploymentReferenceFromTask(task tasks.Task) deploymentTaskReference {
 }
 
 func (s *Service) lifecycleOperationByID(ctx context.Context, operationID string) (LifecycleOperation, error) {
-	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
-		FROM application_lifecycle_operations WHERE id=?`, operationID)
-	op, err := scanLifecycleOperation(row)
-	if err != nil {
+	var m models.ApplicationLifecycleOperation
+	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_operations").Where("id=?", operationID).First(ctx, &m); err != nil {
 		return LifecycleOperation{}, err
 	}
+	op := toDomainLifecycleOperation(m)
 	targets, err := s.lifecycleTargets(ctx, op.ID)
 	if err != nil {
 		return LifecycleOperation{}, err
@@ -177,16 +178,15 @@ func (s *Service) lifecycleOperationByID(ctx context.Context, operationID string
 func (s *Service) lifecycleTargetsByClaimedTaskIDs(ctx context.Context, taskIDs []string) (map[string]LifecycleTarget, error) {
 	out := map[string]LifecycleTarget{}
 	for _, taskID := range taskIDs {
-		row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
-			FROM application_lifecycle_targets WHERE claimed_task_id=? ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1`, taskID)
-		target, err := scanLifecycleTarget(row)
+		var r lifecycleTargetRow
+		err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Where("claimed_task_id=?", taskID).OrderBy("updated_at DESC", "created_at DESC", "id DESC").First(ctx, &r)
 		if err == sql.ErrNoRows {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		out[taskID] = target
+		out[taskID] = toDomainLifecycleTarget(r)
 	}
 	return out, nil
 }

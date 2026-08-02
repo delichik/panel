@@ -20,6 +20,8 @@ import (
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -27,6 +29,25 @@ import (
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 
 const proxyBridgeLocalHost = "host.docker.internal"
+
+// applicationReverseProxyRow 保持 reverse_proxy_json 原始字节，
+// 与存量行解析逻辑（[]applications.ReverseProxyRule）逐字节一致。
+type applicationReverseProxyRow struct {
+	ID               string
+	Name             string
+	ReverseProxyJSON string
+}
+
+// facilityConfigRow 保持 facility_app_configs 各 JSON 列原始字节，
+// 与 loadConfig 的存量 json.Unmarshal 行为逐字节一致。
+type facilityConfigRow struct {
+	Version                 int
+	DeploymentServerIDsJSON string `orm:"column:deployment_server_ids_json"`
+	PanelEntryJSON          string `orm:"column:panel_entry_json"`
+	DomainsJSON             string `orm:"column:domains_json"`
+	LastError               string
+	UpdatedAt               string
+}
 
 type AgentRuntimeClient interface {
 	RuntimeWriteFiles(ctx context.Context, baseURL string, req agentcontract.RuntimeWriteFilesRequest) error
@@ -245,7 +266,7 @@ func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []s
 	}
 	for _, serverID := range ids {
 		var raw string
-		if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&raw); err != nil {
+		if err := orm.New(s.db).From("servers").Select("traits").Where("id=?", serverID).ScanValue(ctx, &raw); err != nil {
 			if err == sql.ErrNoRows {
 				continue
 			}
@@ -262,7 +283,7 @@ func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []s
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(nextRaw), time.Now().UTC().Format(time.RFC3339Nano), serverID); err != nil {
+		if err := orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{"traits": string(nextRaw), "updated_at": time.Now().UTC().Format(time.RFC3339Nano)}); err != nil {
 			return err
 		}
 	}
@@ -290,29 +311,21 @@ func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicati
 	if cfg.PanelEntry.Enabled {
 		owners[cfg.PanelEntry.Domain] = "Panel entry"
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,reverse_proxy_json FROM applications WHERE kind <> ? AND id <> ?`, applications.ApplicationKindFacility, applicationID)
-	if err != nil {
+	var applicationRows []applicationReverseProxyRow
+	if err := orm.New(s.db).From("applications").Select("id", "name", "reverse_proxy_json").Where("kind<>?", applications.ApplicationKindFacility).And("id<>?", applicationID).All(ctx, &applicationRows); err != nil {
 		return err
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, name, raw string
-		if err := rows.Scan(&id, &name, &raw); err != nil {
-			return err
-		}
+	for _, row := range applicationRows {
 		var existing []applications.ReverseProxyRule
-		if err := json.Unmarshal([]byte(raw), &existing); err != nil {
+		if err := json.Unmarshal([]byte(row.ReverseProxyJSON), &existing); err != nil {
 			return err
 		}
 		for _, rule := range existing {
 			domain := strings.ToLower(strings.TrimSpace(rule.Domain))
 			if domain != "" {
-				owners[domain] = "application " + name
+				owners[domain] = "application " + row.Name
 			}
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 	seen := map[string]struct{}{}
 	for _, rule := range rules {
@@ -1012,17 +1025,18 @@ func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstrea
 
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: []string{}, Domains: []FacilityRouteDomain{}}
-	row := s.db.QueryRowContext(ctx, `SELECT version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at FROM facility_app_configs WHERE id=?`, ReverseProxyID)
-	var serversRaw, panelRaw, domainsRaw, updated string
-	if err := row.Scan(&cfg.Version, &serversRaw, &panelRaw, &domainsRaw, &cfg.LastError, &updated); err != nil {
+	var row facilityConfigRow
+	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "panel_entry_json", "domains_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
 		if err == sql.ErrNoRows {
 			return cfg, nil
 		}
 		return ReverseProxyConfig{}, err
 	}
-	_ = json.Unmarshal([]byte(serversRaw), &cfg.DeploymentServers)
-	_ = json.Unmarshal([]byte(panelRaw), &cfg.PanelEntry)
-	_ = json.Unmarshal([]byte(domainsRaw), &cfg.Domains)
+	cfg.Version = row.Version
+	cfg.LastError = row.LastError
+	_ = json.Unmarshal([]byte(row.DeploymentServerIDsJSON), &cfg.DeploymentServers)
+	_ = json.Unmarshal([]byte(row.PanelEntryJSON), &cfg.PanelEntry)
+	_ = json.Unmarshal([]byte(row.DomainsJSON), &cfg.Domains)
 	if cfg.DeploymentServers == nil {
 		cfg.DeploymentServers = []string{}
 	}
@@ -1056,7 +1070,7 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 			}
 		}
 	}
-	cfg.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
+	cfg.UpdatedAt, _ = time.Parse(time.RFC3339Nano, row.UpdatedAt)
 	return cfg, nil
 }
 
@@ -1088,7 +1102,7 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
 		VALUES(?,1,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
 		ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now)
@@ -1096,34 +1110,62 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 }
 
 func (s *Service) setLastError(ctx context.Context, message string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE facility_app_configs SET last_error=?,updated_at=? WHERE id=?`, message, time.Now().UTC().Format(time.RFC3339Nano), ReverseProxyID)
-	return err
+	return orm.New(s.db).From("facility_app_configs").Where("id=?", ReverseProxyID).UpdateColumns(ctx, map[string]any{"last_error": message, "updated_at": time.Now().UTC().Format(time.RFC3339Nano)})
 }
 
 func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg ReverseProxyConfig) (int, string, error) {
 	cfgHash := facilityConfigHash(cfg)
 	now := time.Now().UTC()
-	var generation int
-	var currentHash string
-	err := s.db.QueryRowContext(ctx, `SELECT generation,spec_hash FROM applications WHERE id=?`, proxyApplicationID).Scan(&generation, &currentHash)
+	var app models.Application
+	err := orm.New(s.db).From("applications").Where("id=?", proxyApplicationID).First(ctx, &app)
 	if err == sql.ErrNoRows {
-		deploymentServers, _ := json.Marshal(cfg.DeploymentServers)
-		reverseProxy, _ := json.Marshal([]applications.ReverseProxyRule{})
-		_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			proxyApplicationID, applications.ApplicationKindFacility, "__panel_facility_reverse_proxy__", boolInt(len(cfg.DeploymentServers) > 0), 0, facilitySpecYAML(cfg), "{}", "{}", applications.DeploymentModeSelected, string(deploymentServers), string(reverseProxy), 1, cfgHash, supportedProxyImage, "", "", nil, 0, "", proxyApplicationID, "facility", "", "", cfg.LastError, formatTime(now), formatTime(now))
-		return 1, cfgHash, err
+		app = models.Application{
+			ID:                      proxyApplicationID,
+			Version:                 1,
+			Kind:                    applications.ApplicationKindFacility,
+			Name:                    "__panel_facility_reverse_proxy__",
+			Enabled:                 len(cfg.DeploymentServers) > 0,
+			SpecYAML:                facilitySpecYAML(cfg),
+			VariablesJSON:           map[string]any{},
+			ResolvedVariablesJSON:   map[string]any{},
+			DeploymentMode:          applications.DeploymentModeSelected,
+			DeploymentServerIDsJSON: cfg.DeploymentServers,
+			ReverseProxyJSON:        []map[string]any{},
+			Generation:              1,
+			SpecHash:                cfgHash,
+			ImageReference:          supportedProxyImage,
+			JobID:                   proxyApplicationID,
+			Namespace:               "facility",
+			LastError:               cfg.LastError,
+			CreatedAt:               now,
+			UpdatedAt:               now,
+		}
+		if err := orm.Insert(ctx, s.db, &app); err != nil {
+			return 0, "", err
+		}
+		return 1, cfgHash, nil
 	}
 	if err != nil {
 		return 0, "", err
 	}
-	if currentHash != cfgHash {
+	generation := app.Generation
+	if app.SpecHash != cfgHash {
 		generation += 1
 	}
 	deploymentServers, _ := json.Marshal(cfg.DeploymentServers)
-	_, err = s.db.ExecContext(ctx, `UPDATE applications SET kind=?,enabled=?,deletion_requested=0,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,last_error=?,updated_at=? WHERE id=?`,
-		applications.ApplicationKindFacility, boolInt(len(cfg.DeploymentServers) > 0), facilitySpecYAML(cfg), applications.DeploymentModeSelected, string(deploymentServers), generation, cfgHash, supportedProxyImage, cfg.LastError, formatTime(now), proxyApplicationID)
-	if err != nil {
+	if err := orm.New(s.db).From("applications").Where("id=?", proxyApplicationID).UpdateColumns(ctx, map[string]any{
+		"kind":                       applications.ApplicationKindFacility,
+		"enabled":                    boolInt(len(cfg.DeploymentServers) > 0),
+		"deletion_requested":         0,
+		"spec_yaml":                  facilitySpecYAML(cfg),
+		"deployment_mode":            applications.DeploymentModeSelected,
+		"deployment_server_ids_json": string(deploymentServers),
+		"generation":                 generation,
+		"spec_hash":                  cfgHash,
+		"image_reference":            supportedProxyImage,
+		"last_error":                 cfg.LastError,
+		"updated_at":                 formatTime(now),
+	}); err != nil {
 		return 0, "", err
 	}
 	return generation, cfgHash, nil

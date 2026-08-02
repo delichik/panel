@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"panel/internal/modules/runtimeevents"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -153,11 +155,7 @@ func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput, vali
 	return createTask(ctx, tx, in, nil)
 }
 
-type taskExecer interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInsert func(Task)) (Task, error) {
+func createTask(ctx context.Context, exec orm.Executor, in CreateInput, beforeInsert func(Task)) (Task, error) {
 	if strings.TrimSpace(in.Type) == "" {
 		return Task{}, panelerr.Validation("task_type_required", "Task type is required")
 	}
@@ -194,32 +192,53 @@ func createTask(ctx context.Context, exec taskExecer, in CreateInput, beforeInse
 		NextRunAt:           in.NextRunAt,
 		CreatedAt:           now,
 	}
-	var percentage any
-	var startedAt any
-	var finishedAt any
 	switch status {
 	case StatusCompleted:
 		done := float64(100)
 		t.Percentage = &done
 		t.FinishedAt = &now
-		percentage = done
-		finishedAt = now.Format(time.RFC3339Nano)
 		if t.Stage == "" {
 			t.Stage = "completed"
 		}
 	case StatusRunning:
 		t.StartedAt = &now
-		startedAt = now.Format(time.RFC3339Nano)
-	}
-	nextRunAt := ""
-	if in.NextRunAt != nil {
-		nextRunAt = in.NextRunAt.UTC().Format(time.RFC3339Nano)
 	}
 	if beforeInsert != nil {
 		beforeInsert(t)
 	}
-	_, err := exec.ExecContext(ctx, `INSERT INTO tasks(id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,params_json,metadata_json,status,stage,percentage,summary,retry_count,max_retries,next_run_at,created_at,started_at,finished_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		t.ID, t.OperationID, t.Type, t.ParentTaskID, t.ChildIndex, t.ChildCount, t.ExecutionMode, t.ConcurrencyKey, t.ScheduleKey, t.ServerID, t.NodeID, t.ResourceType, t.ResourceID, t.TriggerType, t.TriggerResourceType, t.TriggerResourceID, t.TriggerTaskID, t.TriggeredBy, t.ParamsJSON, t.MetadataJSON, t.Status, t.Stage, percentage, t.Summary, t.RetryCount, t.MaxRetries, nullString(nextRunAt), now.Format(time.RFC3339Nano), startedAt, finishedAt)
+	err := orm.New(exec).From("tasks").Insert(ctx, &taskRow{
+		ID:                  t.ID,
+		OperationID:         t.OperationID,
+		Type:                t.Type,
+		ParentTaskID:        t.ParentTaskID,
+		ChildIndex:          t.ChildIndex,
+		ChildCount:          t.ChildCount,
+		ExecutionMode:       t.ExecutionMode,
+		ConcurrencyKey:      t.ConcurrencyKey,
+		ScheduleKey:         t.ScheduleKey,
+		ServerID:            t.ServerID,
+		NodeID:              t.NodeID,
+		ResourceType:        t.ResourceType,
+		ResourceID:          t.ResourceID,
+		TriggerType:         t.TriggerType,
+		TriggerResourceType: t.TriggerResourceType,
+		TriggerResourceID:   t.TriggerResourceID,
+		TriggerTaskID:       t.TriggerTaskID,
+		TriggeredBy:         t.TriggeredBy,
+		ParamsJSON:          t.ParamsJSON,
+		MetadataJSON:        t.MetadataJSON,
+		Status:              t.Status,
+		Stage:               t.Stage,
+		Percentage:          t.Percentage,
+		Summary:             t.Summary,
+		Error:               t.Error,
+		RetryCount:          t.RetryCount,
+		MaxRetries:          t.MaxRetries,
+		NextRunAt:           t.NextRunAt,
+		CreatedAt:           now,
+		StartedAt:           t.StartedAt,
+		FinishedAt:          t.FinishedAt,
+	})
 	return t, err
 }
 
@@ -240,7 +259,7 @@ func (s *Service) startExecution(ctx context.Context, taskID string) (bool, erro
 	}
 	s.registerRunningExecutionLocked(taskID)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusRunning, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error='', next_run_at=NULL, percentage=COALESCE(percentage, 0), started_at=COALESCE(started_at, ?), finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusRunning, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		s.unregisterRunningExecutionLocked(taskID)
 		return false, err
@@ -259,7 +278,7 @@ func (s *Service) startExecution(ctx context.Context, taskID string) (bool, erro
 }
 
 func (s *Service) Advance(ctx context.Context, taskID, stage, message string) error {
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET stage=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{stage, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET stage=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{stage, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		return err
 	}
@@ -275,10 +294,10 @@ func (s *Service) Advance(ctx context.Context, taskID, stage, message string) er
 
 func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) error {
 	line = Redact(line)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `INSERT INTO task_logs(task_id,time,stream,line) VALUES(?,?,?,?)`, taskID, now, stream, line)
+	log := models.TaskLog{TaskID: taskID, Time: time.Now().UTC(), Stream: stream, Line: line}
+	err := orm.Insert(ctx, s.db, &log)
 	if err == nil && s.events != nil {
-		cursor, _ := res.LastInsertId()
+		cursor := log.ID
 		if task, getErr := s.Get(ctx, taskID); getErr == nil {
 			logRefs, _ := json.Marshal([]map[string]any{{"taskId": task.ID, "cursor": cursor, "stream": stream}})
 			_ = s.writeTaskEvent(ctx, runtimeevents.EventLogAttached, task, "Task log attached", runtimeevents.SeverityInfo, &runtimeevents.EventDetailInput{
@@ -293,7 +312,7 @@ func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusCompleted, "completed", summary, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, percentage=100, summary=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusCompleted, "completed", summary, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
@@ -313,7 +332,7 @@ func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	res, updateErr := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusFailed, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, updateErr := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusFailed, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if updateErr == nil {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
@@ -344,7 +363,7 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, retry_count=?, next_run_at=?, finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, retry_count=?, next_run_at=?, finished_at=NULL WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
 		append([]any{StatusFailedRetryable, msg, nextRetry, nextRun.Format(time.RFC3339Nano), taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
 		if affected, _ := res.RowsAffected(); affected > 0 {
@@ -365,7 +384,7 @@ func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
 	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusBlocked, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusBlocked, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
 	if err == nil {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
@@ -378,53 +397,46 @@ func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
 }
 
 func (s *Service) RunNow(ctx context.Context, taskID string) (Task, error) {
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, next_run_at=NULL, finished_at=NULL WHERE id=? AND status IN (?,?,?)`,
-		StatusQueued, taskID, StatusQueued, StatusScheduled, StatusFailedRetryable)
-	if err != nil {
+	q := orm.New(s.db).From("tasks").Where("id = ?", taskID)
+	q.AndIn("status", []string{StatusQueued, StatusScheduled, StatusFailedRetryable})
+	if err := q.UpdateColumns(ctx, map[string]any{"status": StatusQueued, "next_run_at": nil, "finished_at": nil}); err != nil {
 		return Task{}, err
-	}
-	affected, _ := res.RowsAffected()
-	if affected == 0 {
-		return s.Get(ctx, taskID)
 	}
 	return s.Get(ctx, taskID)
 }
 
 func (s *Service) FirstRunnable(ctx context.Context, taskType, resourceType, resourceID string) (Task, bool, error) {
-	args := []any{taskType, resourceType, resourceID, StatusQueued, StatusScheduled, StatusFailedRetryable}
-	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
-		FROM tasks
-		WHERE type=? AND resource_type=? AND resource_id=? AND status IN (?,?,?)
-		  AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)
-		ORDER BY created_at ASC LIMIT 1`, append(args, time.Now().UTC().Format(time.RFC3339Nano))...)
-	task, err := scanTask(row)
+	var row taskRow
+	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
+		Where("type = ?", taskType).
+		And("resource_type = ?", resourceType).
+		And("resource_id = ?", resourceID).
+		AndIn("status", []string{StatusQueued, StatusScheduled, StatusFailedRetryable}).
+		And("(next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)", time.Now().UTC().Format(time.RFC3339Nano)).
+		OrderBy("created_at ASC").
+		First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return Task{}, false, nil
 	}
 	if err != nil {
 		return Task{}, false, err
 	}
-	return task, true, nil
+	return row.toTask(), true, nil
 }
 
 func (s *Service) Children(ctx context.Context, parentTaskID string) ([]Task, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+taskColumns+`
-		FROM tasks
-		WHERE parent_task_id=?
-		ORDER BY child_index ASC, created_at ASC`, parentTaskID)
-	if err != nil {
+	rows := []taskRow{}
+	if err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
+		Where("parent_task_id = ?", parentTaskID).
+		OrderBy("child_index ASC", "created_at ASC").
+		All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	children := []Task{}
-	for rows.Next() {
-		task, err := scanTask(rows)
-		if err != nil {
-			return nil, err
-		}
-		children = append(children, task)
+	children := make([]Task, 0, len(rows))
+	for i := range rows {
+		children = append(children, rows[i].toTask())
 	}
-	return children, rows.Err()
+	return children, nil
 }
 
 func (s *Service) ExistingActiveByConcurrencyKey(ctx context.Context, concurrencyKey string) (Task, bool, error) {
@@ -432,18 +444,19 @@ func (s *Service) ExistingActiveByConcurrencyKey(ctx context.Context, concurrenc
 	if concurrencyKey == "" {
 		return Task{}, false, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
-		FROM tasks
-		WHERE concurrency_key=? AND status IN (?,?,?,?)
-		ORDER BY created_at DESC LIMIT 1`, concurrencyKey, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
-	task, err := scanTask(row)
+	var row taskRow
+	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
+		Where("concurrency_key = ?", concurrencyKey).
+		AndIn("status", []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}).
+		OrderBy("created_at DESC").
+		First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return Task{}, false, nil
 	}
 	if err != nil {
 		return Task{}, false, err
 	}
-	return task, true, nil
+	return row.toTask(), true, nil
 }
 
 func (s *Service) ExistingActiveByConcurrencyKeyAndType(ctx context.Context, concurrencyKey, taskType string) (Task, bool, error) {
@@ -452,18 +465,20 @@ func (s *Service) ExistingActiveByConcurrencyKeyAndType(ctx context.Context, con
 	if concurrencyKey == "" || taskType == "" {
 		return Task{}, false, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
-		FROM tasks
-		WHERE concurrency_key=? AND type=? AND status IN (?,?,?,?)
-		ORDER BY created_at DESC LIMIT 1`, concurrencyKey, taskType, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
-	task, err := scanTask(row)
+	var row taskRow
+	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
+		Where("concurrency_key = ?", concurrencyKey).
+		And("type = ?", taskType).
+		AndIn("status", []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}).
+		OrderBy("created_at DESC").
+		First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return Task{}, false, nil
 	}
 	if err != nil {
 		return Task{}, false, err
 	}
-	return task, true, nil
+	return row.toTask(), true, nil
 }
 
 func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKey string) (Task, bool, error) {
@@ -471,18 +486,19 @@ func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKe
 	if concurrencyKey == "" {
 		return Task{}, false, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+`
-		FROM tasks
-		WHERE concurrency_key=? AND status IN (?,?,?,?)
-		ORDER BY created_at ASC LIMIT 1`, concurrencyKey, StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable)
-	task, err := scanTask(row)
+	var row taskRow
+	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
+		Where("concurrency_key = ?", concurrencyKey).
+		AndIn("status", []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}).
+		OrderBy("created_at ASC").
+		First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return Task{}, false, nil
 	}
 	if err != nil {
 		return Task{}, false, err
 	}
-	return task, true, nil
+	return row.toTask(), true, nil
 }
 
 func (s *Service) CountByServerStatuses(ctx context.Context, serverID string, statuses ...string) (int, error) {
@@ -490,35 +506,17 @@ func (s *Service) CountByServerStatuses(ctx context.Context, serverID string, st
 	if len(statuses) == 0 {
 		return 0, nil
 	}
-	args := []any{serverID}
-	for _, status := range statuses {
-		args = append(args, status)
-	}
-	var count int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE server_id=? AND status IN (`+placeholders(len(statuses))+`)`, args...).Scan(&count)
-	return count, err
+	q := orm.New(s.db).From("tasks").Where("server_id = ?", serverID)
+	q.AndIn("status", statuses)
+	count, err := q.Count(ctx)
+	return int(count), err
 }
 
 func (s *Service) CancelByServer(ctx context.Context, serverID, message string) (int, error) {
 	activeStatuses := []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}
-	args := append([]any{serverID}, stringArgs(activeStatuses)...)
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tasks WHERE server_id=? AND status IN (`+placeholders(len(activeStatuses))+`)`, args...)
-	if err != nil {
-		return 0, err
-	}
 	taskIDs := []string{}
-	for rows.Next() {
-		var taskID string
-		if err := rows.Scan(&taskID); err != nil {
-			_ = rows.Close()
-			return 0, err
-		}
-		taskIDs = append(taskIDs, taskID)
-	}
-	if err := rows.Close(); err != nil {
-		return 0, err
-	}
-	if err := rows.Err(); err != nil {
+	if err := orm.New(s.db).From("tasks").Where("server_id = ?", serverID).
+		AndIn("status", activeStatuses).Pluck(ctx, "id", &taskIDs); err != nil {
 		return 0, err
 	}
 	if len(taskIDs) == 0 {
@@ -530,7 +528,7 @@ func (s *Service) CancelByServer(ctx context.Context, serverID, message string) 
 	finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	updateArgs := []any{StatusCancelled, "cancelled", Redact(message), finishedAt, serverID}
 	updateArgs = append(updateArgs, stringArgs(activeStatuses)...)
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE server_id=? AND status IN (`+placeholders(len(activeStatuses))+`)`, updateArgs...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE server_id=? AND status IN (`+placeholders(len(activeStatuses))+`)`, updateArgs...)
 	if err != nil {
 		return 0, err
 	}
@@ -554,7 +552,7 @@ func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
 		message = "Task cancelled"
 	}
 	finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
 		append([]any{StatusCancelled, "cancelled", Redact(message), finishedAt, taskID}, stringArgs(terminalStatuses)...)...)
 	if err != nil {
 		return err
@@ -577,47 +575,53 @@ func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
 }
 
 func (s *Service) SetTriggeredBy(ctx context.Context, taskID, triggeredBy string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE tasks SET triggered_by=? WHERE id=?`, triggeredBy, taskID)
-	return err
+	return orm.New(s.db).From("tasks").Where("id = ?", taskID).
+		UpdateColumns(ctx, map[string]any{"triggered_by": triggeredBy})
 }
 
 func (s *Service) CountFailuresSinceLastSuccess(ctx context.Context, taskType, resourceType, resourceID string, failureStatuses []string, excludeTriggeredBy string) (int, error) {
-	var lastSuccess sql.NullString
-	if err := s.db.QueryRowContext(ctx, `SELECT MAX(created_at) FROM tasks WHERE type=? AND resource_type=? AND resource_id=? AND status=?`,
-		taskType, resourceType, resourceID, StatusCompleted).Scan(&lastSuccess); err != nil {
+	var lastSuccess *string
+	if err := orm.New(s.db).From("tasks").
+		Where("type = ?", taskType).
+		And("resource_type = ?", resourceType).
+		And("resource_id = ?", resourceID).
+		And("status = ?", StatusCompleted).
+		SelectExpr("MAX(created_at)").
+		ScanValue(ctx, &lastSuccess); err != nil {
 		return 0, err
 	}
 	failureStatuses = cleanFilterValues(failureStatuses...)
 	if len(failureStatuses) == 0 {
 		return 0, nil
 	}
-	args := []any{taskType, resourceType, resourceID}
-	where := `type=? AND resource_type=? AND resource_id=? AND status IN (` + placeholders(len(failureStatuses)) + `)`
-	for _, status := range failureStatuses {
-		args = append(args, status)
-	}
+	q := orm.New(s.db).From("tasks").
+		Where("type = ?", taskType).
+		And("resource_type = ?", resourceType).
+		And("resource_id = ?", resourceID).
+		AndIn("status", failureStatuses)
 	if strings.TrimSpace(excludeTriggeredBy) != "" {
-		where += ` AND COALESCE(triggered_by,'') <> ?`
-		args = append(args, excludeTriggeredBy)
+		q.And("COALESCE(triggered_by,'') <> ?", excludeTriggeredBy)
 	}
-	if lastSuccess.Valid && strings.TrimSpace(lastSuccess.String) != "" {
-		where += ` AND created_at > ?`
-		args = append(args, lastSuccess.String)
+	if lastSuccess != nil && strings.TrimSpace(*lastSuccess) != "" {
+		q.And("created_at > ?", *lastSuccess)
 	}
-	var failures int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM tasks WHERE `+where, args...).Scan(&failures); err != nil {
+	failures, err := q.Count(ctx)
+	if err != nil {
 		return 0, err
 	}
-	return failures, nil
+	return int(failures), nil
 }
 
 func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+taskColumns+` FROM tasks WHERE id=?`, taskID)
-	task, err := scanTask(row)
+	var row taskRow
+	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).Where("id = ?", taskID).First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return Task{}, panelerr.NotFound("task")
 	}
-	return task, err
+	if err != nil {
+		return Task{}, err
+	}
+	return row.toTask(), nil
 }
 
 func (s *Service) List(ctx context.Context, filter ListFilter) (ListResult, error) {
@@ -635,79 +639,106 @@ func (s *Service) list(ctx context.Context, filter ListFilter, columns string) (
 	if filter.Offset < 0 {
 		filter.Offset = 0
 	}
-	args := []any{}
-	conditions := []string{}
-	statuses := cleanFilterValues(append(filter.Statuses, filter.Status)...)
-	appendEqualOrIn(&conditions, &args, "status", statuses)
-	if filter.ServerID != "" {
-		conditions = append(conditions, `server_id=?`)
-		args = append(args, filter.ServerID)
-	}
-	types := cleanFilterValues(append(filter.Types, filter.Type)...)
-	if len(types) > 0 {
-		appendEqualOrIn(&conditions, &args, "type", types)
-	} else if !filter.IncludeInternal {
-		hidden := s.hiddenTaskTypes()
-		if len(hidden) > 0 {
-			conditions = append(conditions, `type NOT IN (`+placeholders(len(hidden))+`)`)
-		}
-		for _, taskType := range hidden {
-			args = append(args, taskType)
-		}
-	}
-	if filter.ExcludeScheduled && len(types) == 0 {
-		conditions = append(conditions, `(trigger_type='' OR trigger_type<>?)`)
-		args = append(args, "scheduler")
-	}
-	if filter.OperationID != "" {
-		conditions = append(conditions, `operation_id=?`)
-		args = append(args, filter.OperationID)
-	}
-	where := ""
-	if len(conditions) > 0 {
-		where = ` WHERE ` + strings.Join(conditions, ` AND `)
-	}
+	parts := s.taskListWhereParts(filter)
 	if filter.OperationPage {
-		return s.listOperationPage(ctx, filter, where, args, columns)
+		return s.listOperationPage(ctx, filter, parts, columns)
 	}
-	countQuery := `SELECT COUNT(*) FROM tasks` + where
-	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
-		return ListResult{}, err
-	}
-	query := `SELECT ` + columns + ` FROM tasks` + where + ` ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?`
-	args = append(args, filter.Limit, filter.Offset)
-	rows, err := s.db.QueryContext(ctx, query, args...)
+	total, err := s.taskListQuery(parts).Count(ctx)
 	if err != nil {
 		return ListResult{}, err
 	}
-	defer rows.Close()
-	out := []Task{}
-	for rows.Next() {
-		task, err := scanTask(rows)
-		if err != nil {
-			return ListResult{}, err
-		}
-		out = append(out, task)
-	}
-	if err := rows.Err(); err != nil {
+	rows := []taskRow{}
+	if err := s.taskListQuery(parts).SelectExpr(columns).
+		OrderBy("created_at DESC", "id DESC").Limit(filter.Limit).Offset(filter.Offset).
+		All(ctx, &rows); err != nil {
 		return ListResult{}, err
 	}
-	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
+	out := make([]Task, 0, len(rows))
+	for i := range rows {
+		out = append(out, rows[i].toTask())
+	}
+	return ListResult{Items: out, Total: int(total), PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 }
 
-func (s *Service) listOperationPage(ctx context.Context, filter ListFilter, where string, args []any, columns string) (ListResult, error) {
+type taskListCondition struct {
+	sql  string
+	args []any
+}
+
+func (s *Service) taskListWhereParts(filter ListFilter) []taskListCondition {
+	parts := []taskListCondition{}
+	statuses := cleanFilterValues(append(filter.Statuses, filter.Status)...)
+	switch len(statuses) {
+	case 0:
+	case 1:
+		parts = append(parts, taskListCondition{sql: "status = ?", args: []any{statuses[0]}})
+	default:
+		parts = append(parts, taskListCondition{sql: "status IN (" + placeholders(len(statuses)) + ")", args: stringArgs(statuses)})
+	}
+	if filter.ServerID != "" {
+		parts = append(parts, taskListCondition{sql: "server_id = ?", args: []any{filter.ServerID}})
+	}
+	types := cleanFilterValues(append(filter.Types, filter.Type)...)
+	switch len(types) {
+	case 0:
+		if !filter.IncludeInternal {
+			hidden := s.hiddenTaskTypes()
+			if len(hidden) > 0 {
+				parts = append(parts, taskListCondition{sql: "type NOT IN (" + placeholders(len(hidden)) + ")", args: stringArgs(hidden)})
+			}
+		}
+	case 1:
+		parts = append(parts, taskListCondition{sql: "type = ?", args: []any{types[0]}})
+	default:
+		parts = append(parts, taskListCondition{sql: "type IN (" + placeholders(len(types)) + ")", args: stringArgs(types)})
+	}
+	if filter.ExcludeScheduled && len(types) == 0 {
+		parts = append(parts, taskListCondition{sql: "(trigger_type='' OR trigger_type<>?)", args: []any{"scheduler"}})
+	}
+	if filter.OperationID != "" {
+		parts = append(parts, taskListCondition{sql: "operation_id = ?", args: []any{filter.OperationID}})
+	}
+	return parts
+}
+
+func (s *Service) taskListQuery(parts []taskListCondition) *orm.Query {
+	q := orm.New(s.db).From("tasks")
+	for i, p := range parts {
+		if i == 0 {
+			q.Where(p.sql, p.args...)
+		} else {
+			q.And(p.sql, p.args...)
+		}
+	}
+	return q
+}
+
+func taskListWhereSQL(parts []taskListCondition) (string, []any) {
+	if len(parts) == 0 {
+		return "", nil
+	}
+	sqls := make([]string, 0, len(parts))
+	var args []any
+	for _, p := range parts {
+		sqls = append(sqls, p.sql)
+		args = append(args, p.args...)
+	}
+	return " WHERE " + strings.Join(sqls, " AND "), args
+}
+
+func (s *Service) listOperationPage(ctx context.Context, filter ListFilter, parts []taskListCondition, columns string) (ListResult, error) {
 	const operationKey = `COALESCE(NULLIF(operation_id,''), id)`
-	countQuery := `SELECT COUNT(DISTINCT ` + operationKey + `) FROM tasks` + where
+	q := s.taskListQuery(parts)
+	q.SelectExpr("COUNT(DISTINCT " + operationKey + ")")
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, args...).Scan(&total); err != nil {
+	if err := q.ScanValue(ctx, &total); err != nil {
 		return ListResult{}, err
 	}
 
+	where, args := taskListWhereSQL(parts)
 	keyArgs := append([]any{}, args...)
 	keyArgs = append(keyArgs, filter.Limit, filter.Offset)
-	keyQuery := `SELECT ` + operationKey + ` AS operation_key, MAX(created_at) AS operation_created_at FROM tasks` + where + ` GROUP BY operation_key ORDER BY operation_created_at DESC, operation_key DESC LIMIT ? OFFSET ?`
-	keyRows, err := s.db.QueryContext(ctx, keyQuery, keyArgs...)
+	keyRows, err := orm.Raw(ctx, s.db, `SELECT `+operationKey+` AS operation_key, MAX(created_at) AS operation_created_at FROM tasks`+where+` GROUP BY operation_key ORDER BY operation_created_at DESC, operation_key DESC LIMIT ? OFFSET ?`, keyArgs...)
 	if err != nil {
 		return ListResult{}, err
 	}
@@ -727,30 +758,15 @@ func (s *Service) listOperationPage(ctx context.Context, filter ListFilter, wher
 		return ListResult{Items: []Task{}, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 	}
 
-	itemArgs := append([]any{}, args...)
-	itemArgs = append(itemArgs, stringArgs(keys)...)
-	query := `SELECT ` + columns + ` FROM tasks` + where
-	if where == "" {
-		query += ` WHERE `
-	} else {
-		query += ` AND `
-	}
-	query += operationKey + ` IN (` + placeholders(len(keys)) + `) ORDER BY created_at DESC, id DESC`
-	rows, err := s.db.QueryContext(ctx, query, itemArgs...)
-	if err != nil {
+	itemQuery := s.taskListQuery(parts)
+	itemQuery.Where(operationKey+" IN ("+placeholders(len(keys))+")", stringArgs(keys)...)
+	rows := []taskRow{}
+	if err := itemQuery.SelectExpr(columns).OrderBy("created_at DESC", "id DESC").All(ctx, &rows); err != nil {
 		return ListResult{}, err
 	}
-	defer rows.Close()
-	out := []Task{}
-	for rows.Next() {
-		task, err := scanTask(rows)
-		if err != nil {
-			return ListResult{}, err
-		}
-		out = append(out, task)
-	}
-	if err := rows.Err(); err != nil {
-		return ListResult{}, err
+	out := make([]Task, 0, len(rows))
+	for i := range rows {
+		out = append(out, rows[i].toTask())
 	}
 	return ListResult{Items: out, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 }
@@ -803,21 +819,6 @@ func isTerminalStatus(status string) bool {
 	return false
 }
 
-func appendEqualOrIn(conditions *[]string, args *[]any, column string, values []string) {
-	if len(values) == 0 {
-		return
-	}
-	if len(values) == 1 {
-		*conditions = append(*conditions, column+`=?`)
-		*args = append(*args, values[0])
-		return
-	}
-	*conditions = append(*conditions, column+` IN (`+placeholders(len(values))+`)`)
-	for _, value := range values {
-		*args = append(*args, value)
-	}
-}
-
 func placeholders(count int) string {
 	if count <= 0 {
 		return ""
@@ -832,23 +833,8 @@ func placeholders(count int) string {
 func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time) (int, error) {
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM tasks WHERE status=?`, StatusRunning)
-	if err != nil {
-		return 0, err
-	}
-	defer rows.Close()
 	taskIDs := []string{}
-	for rows.Next() {
-		var taskID string
-		if err := rows.Scan(&taskID); err != nil {
-			return 0, err
-		}
-		taskIDs = append(taskIDs, taskID)
-	}
-	if err := rows.Err(); err != nil {
-		return 0, err
-	}
-	if err := rows.Close(); err != nil {
+	if err := orm.New(s.db).From("tasks").Where("status = ?", StatusRunning).Pluck(ctx, "id", &taskIDs); err != nil {
 		return 0, err
 	}
 
@@ -859,7 +845,7 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 		if _, ok := s.runningExecutions[taskID]; ok {
 			continue
 		}
-		res, err := s.db.ExecContext(ctx, `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'orphaned' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE id=? AND status=?`,
+		res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'orphaned' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE id=? AND status=?`,
 			StatusFailed, message, finishedAt, taskID, StatusRunning)
 		if err != nil {
 			return failed, err
@@ -896,7 +882,7 @@ func (s *Service) ExecutionContext(taskID string) context.Context {
 
 func (s *Service) FinishExecution(taskID string) {
 	var status string
-	err := s.db.QueryRowContext(context.Background(), `SELECT status FROM tasks WHERE id=?`, taskID).Scan(&status)
+	err := orm.New(s.db).From("tasks").Select("status").Where("id = ?", taskID).ScanValue(context.Background(), &status)
 	if err != nil && err != sql.ErrNoRows {
 		return
 	}
@@ -954,7 +940,7 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status=? AND created_at<=? AND type IN (` + strings.Join(placeholders, ",") + `)`
 	updateArgs := []any{StatusFailed, message, finishedAt, StatusQueued, cutoff}
 	updateArgs = append(updateArgs, args...)
-	res, err := s.db.ExecContext(ctx, query, updateArgs...)
+	res, err := orm.RawExec(ctx, s.db, query, updateArgs...)
 	if err != nil {
 		return 0, err
 	}
@@ -966,46 +952,44 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 }
 
 func (s *Service) Logs(ctx context.Context, taskID string, after int64) ([]Log, int64, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,time,stream,line FROM task_logs WHERE task_id=? AND id>? ORDER BY id ASC LIMIT 200`, taskID, after)
-	if err != nil {
+	rows := []models.TaskLog{}
+	if err := orm.New(s.db).From("task_logs").Select("id", "time", "stream", "line").
+		Where("task_id = ?", taskID).And("id > ?", after).OrderBy("id ASC").Limit(200).
+		All(ctx, &rows); err != nil {
 		return nil, after, err
 	}
-	defer rows.Close()
-	logs := []Log{}
+	logs := make([]Log, 0, len(rows))
 	next := after
-	for rows.Next() {
-		var l Log
-		var ts string
-		if err := rows.Scan(&l.Cursor, &ts, &l.Stream, &l.Line); err != nil {
-			return nil, after, err
-		}
-		l.Time, _ = time.Parse(time.RFC3339Nano, ts)
+	for _, row := range rows {
+		l := Log{Cursor: row.ID, Time: row.Time, Stream: row.Stream, Line: row.Line}
 		next = l.Cursor
 		logs = append(logs, l)
 	}
-	return logs, next, rows.Err()
+	return logs, next, nil
 }
 
 func (s *Service) UpsertStep(ctx context.Context, taskID string, in StepInput) (Step, error) {
 	if strings.TrimSpace(in.Step) == "" {
 		return Step{}, panelerr.Validation("task_step_required", "Task step is required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now().UTC()
 	var existingID string
-	err := s.db.QueryRowContext(ctx, `SELECT id FROM task_steps WHERE task_id=? AND step=?`, taskID, in.Step).Scan(&existingID)
+	err := orm.New(s.db).From("task_steps").Select("id").
+		Where("task_id = ?", taskID).And("step = ?", in.Step).ScanValue(ctx, &existingID)
 	if err == sql.ErrNoRows {
 		existingID = id.New("step")
-		started := any(nil)
-		finished := any(nil)
+		var startedAt, finishedAt *time.Time
 		if in.Status == StatusRunning || in.Status == StatusCompleted {
-			started = now
+			startedAt = &now
 		}
 		if in.Status == StatusCompleted || in.Status == StatusFailed || in.Status == StatusCancelled {
-			finished = now
+			finishedAt = &now
 		}
-		_, err = s.db.ExecContext(ctx, `INSERT INTO task_steps(id,task_id,step,status,percentage,metadata_json,started_at,finished_at,error) VALUES(?,?,?,?,?,?,?,?,?)`,
-			existingID, taskID, in.Step, in.Status, in.Percentage, in.MetadataJSON, started, finished, in.Error)
-		if err != nil {
+		if err := orm.New(s.db).From("task_steps").Insert(ctx, &stepRow{
+			ID: existingID, TaskID: taskID, Step: in.Step, Status: in.Status,
+			Percentage: in.Percentage, MetadataJSON: in.MetadataJSON,
+			StartedAt: startedAt, FinishedAt: finishedAt, Error: in.Error,
+		}); err != nil {
 			return Step{}, err
 		}
 		return s.step(ctx, existingID)
@@ -1017,34 +1001,30 @@ func (s *Service) UpsertStep(ctx context.Context, taskID string, in StepInput) (
 	args := []any{in.Status, in.Percentage, in.MetadataJSON, in.Error}
 	if in.Status == StatusRunning {
 		assignments += `,started_at=COALESCE(started_at,?)`
-		args = append(args, now)
+		args = append(args, now.Format(time.RFC3339Nano))
 	}
 	if in.Status == StatusCompleted || in.Status == StatusFailed || in.Status == StatusCancelled {
 		assignments += `,finished_at=?`
-		args = append(args, now)
+		args = append(args, now.Format(time.RFC3339Nano))
 	}
 	args = append(args, existingID)
-	if _, err := s.db.ExecContext(ctx, `UPDATE task_steps SET `+assignments+` WHERE id=?`, args...); err != nil {
+	if _, err := orm.RawExec(ctx, s.db, `UPDATE task_steps SET `+assignments+` WHERE id=?`, args...); err != nil {
 		return Step{}, err
 	}
 	return s.step(ctx, existingID)
 }
 
 func (s *Service) Steps(ctx context.Context, taskID string) ([]Step, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,task_id,step,status,percentage,metadata_json,started_at,finished_at,error FROM task_steps WHERE task_id=? ORDER BY id ASC`, taskID)
-	if err != nil {
+	rows := []stepRow{}
+	if err := orm.New(s.db).From("task_steps").
+		Where("task_id = ?", taskID).OrderBy("id ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Step{}
-	for rows.Next() {
-		step, err := scanStep(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, step)
+	out := make([]Step, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.toStep())
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
@@ -1106,62 +1086,120 @@ func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Tas
 	return err
 }
 
-type scanner interface{ Scan(dest ...any) error }
-
 const taskColumns = `id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,params_json,metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
 const taskListColumns = `id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,'' AS params_json,'' AS metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`
 
-func scanTask(row scanner) (Task, error) {
-	var t Task
-	var pct sql.NullFloat64
-	var created string
-	var startedNS, finishedNS, nextRunNS sql.NullString
-	err := row.Scan(&t.ID, &t.OperationID, &t.Type, &t.ParentTaskID, &t.ChildIndex, &t.ChildCount, &t.ExecutionMode, &t.ConcurrencyKey, &t.ScheduleKey, &t.ServerID, &t.NodeID, &t.ResourceType, &t.ResourceID, &t.TriggerType, &t.TriggerResourceType, &t.TriggerResourceID, &t.TriggerTaskID, &t.TriggeredBy, &t.ParamsJSON, &t.MetadataJSON, &t.Status, &t.Stage, &pct, &t.Summary, &t.Error, &t.RetryCount, &t.MaxRetries, &nextRunNS, &created, &startedNS, &finishedNS)
-	if err != nil {
-		return Task{}, err
+// taskRow 是 tasks 表的本地行映射：params_json/metadata_json 按原始文本往返
+// （models.Task 的 map JSON 语义会改写存储文本且无法承载非法 JSON）。
+type taskRow struct {
+	ID                  string
+	OperationID         string
+	Type                string
+	ParentTaskID        string
+	ChildIndex          int
+	ChildCount          int
+	ExecutionMode       string
+	ConcurrencyKey      string
+	ScheduleKey         string
+	ServerID            string
+	NodeID              string
+	ResourceType        string
+	ResourceID          string
+	TriggerType         string
+	TriggerResourceType string
+	TriggerResourceID   string
+	TriggerTaskID       string
+	TriggeredBy         string
+	ParamsJSON          string
+	MetadataJSON        string
+	Status              string
+	Stage               string
+	Percentage          *float64
+	Summary             string
+	Error               string
+	RetryCount          int
+	MaxRetries          int
+	NextRunAt           *time.Time
+	CreatedAt           time.Time
+	StartedAt           *time.Time
+	FinishedAt          *time.Time
+}
+
+func (r taskRow) toTask() Task {
+	t := Task{
+		ID:                  r.ID,
+		OperationID:         r.OperationID,
+		Type:                r.Type,
+		ParentTaskID:        r.ParentTaskID,
+		ChildIndex:          r.ChildIndex,
+		ChildCount:          r.ChildCount,
+		ExecutionMode:       r.ExecutionMode,
+		ConcurrencyKey:      r.ConcurrencyKey,
+		ScheduleKey:         r.ScheduleKey,
+		ServerID:            r.ServerID,
+		NodeID:              r.NodeID,
+		ResourceType:        r.ResourceType,
+		ResourceID:          r.ResourceID,
+		TriggerType:         r.TriggerType,
+		TriggerResourceType: r.TriggerResourceType,
+		TriggerResourceID:   r.TriggerResourceID,
+		TriggerTaskID:       r.TriggerTaskID,
+		TriggeredBy:         r.TriggeredBy,
+		ParamsJSON:          r.ParamsJSON,
+		MetadataJSON:        r.MetadataJSON,
+		Status:              r.Status,
+		Stage:               r.Stage,
+		Summary:             r.Summary,
+		Error:               r.Error,
+		RetryCount:          r.RetryCount,
+		MaxRetries:          r.MaxRetries,
+		NextRunAt:           r.NextRunAt,
+		CreatedAt:           r.CreatedAt,
+		StartedAt:           r.StartedAt,
+		FinishedAt:          r.FinishedAt,
 	}
-	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-	if pct.Valid {
-		t.Percentage = &pct.Float64
-	} else if t.Status == StatusCompleted {
+	if r.Percentage != nil {
+		t.Percentage = r.Percentage
+	} else if r.Status == StatusCompleted {
 		done := float64(100)
 		t.Percentage = &done
 	}
-	if nextRunNS.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, nextRunNS.String)
-		t.NextRunAt = &v
-	}
-	if startedNS.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, startedNS.String)
-		t.StartedAt = &v
-	}
-	if finishedNS.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, finishedNS.String)
-		t.FinishedAt = &v
-	}
-	return t, nil
+	return t
 }
 
 func (s *Service) step(ctx context.Context, stepID string) (Step, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,task_id,step,status,percentage,metadata_json,started_at,finished_at,error FROM task_steps WHERE id=?`, stepID)
-	return scanStep(row)
-}
-
-func scanStep(row scanner) (Step, error) {
-	var step Step
-	var started, finished sql.NullString
-	if err := row.Scan(&step.ID, &step.TaskID, &step.Step, &step.Status, &step.Percentage, &step.MetadataJSON, &started, &finished, &step.Error); err != nil {
+	var row stepRow
+	if err := orm.New(s.db).From("task_steps").Where("id = ?", stepID).First(ctx, &row); err != nil {
 		return Step{}, err
 	}
-	if started.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, started.String)
-		step.StartedAt = &v
+	return row.toStep(), nil
+}
+
+// stepRow 是 task_steps 表的本地行映射，metadata_json 按原始文本往返。
+type stepRow struct {
+	ID           string
+	TaskID       string
+	Step         string
+	Status       string
+	Percentage   float64
+	MetadataJSON string
+	StartedAt    *time.Time
+	FinishedAt   *time.Time
+	Error        string
+}
+
+func (r stepRow) toStep() Step {
+	return Step{
+		ID:           r.ID,
+		TaskID:       r.TaskID,
+		Step:         r.Step,
+		Status:       r.Status,
+		Percentage:   r.Percentage,
+		MetadataJSON: r.MetadataJSON,
+		StartedAt:    r.StartedAt,
+		FinishedAt:   r.FinishedAt,
+		Error:        r.Error,
 	}
-	if finished.Valid {
-		v, _ := time.Parse(time.RFC3339Nano, finished.String)
-		step.FinishedAt = &v
-	}
-	return step, nil
 }
 
 func backoffDuration(retryCount int) time.Duration {
@@ -1176,13 +1214,6 @@ func backoffDuration(retryCount int) time.Duration {
 		}
 	}
 	return delay
-}
-
-func nullString(value string) any {
-	if value == "" {
-		return nil
-	}
-	return value
 }
 
 func firstNonEmpty(values ...string) string {

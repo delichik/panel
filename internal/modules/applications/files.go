@@ -12,6 +12,8 @@ import (
 
 	appruntime "panel/internal/modules/applications/runtime"
 	appspec "panel/internal/modules/applications/spec"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -73,14 +75,14 @@ func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) 
 		return ApplicationFile{}, err
 	}
 	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `INSERT INTO application_files(id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at)
+	_, err = orm.RawExec(ctx, tx, `INSERT INTO application_files(id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(application_id,name) DO UPDATE SET kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,content=excluded.content,updated_at=excluded.updated_at`,
 		file.ID, file.ApplicationID, file.Name, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt))
 	if err != nil {
 		return ApplicationFile{}, err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
+	result, err := orm.RawExec(ctx, tx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
 	if err != nil {
 		return ApplicationFile{}, err
 	}
@@ -110,7 +112,7 @@ func (s *Service) DeleteFile(ctx context.Context, appID, fileRef string) error {
 	if err != nil {
 		return err
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM application_files WHERE application_id=? AND id=?`, appID, file.ID)
+	res, err := orm.RawExec(ctx, tx, `DELETE FROM application_files WHERE application_id=? AND id=?`, appID, file.ID)
 	if err != nil {
 		return err
 	}
@@ -118,7 +120,7 @@ func (s *Service) DeleteFile(ctx context.Context, appID, fileRef string) error {
 		return panelerr.NotFound("application_file")
 	}
 	now := time.Now().UTC()
-	res, err = tx.ExecContext(ctx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
+	res, err = orm.RawExec(ctx, tx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
 	if err != nil {
 		return err
 	}
@@ -131,38 +133,35 @@ func (s *Service) DeleteFile(ctx context.Context, appID, fileRef string) error {
 	return s.redeployIfEnabled(ctx, app)
 }
 
-func (s *Service) listFiles(ctx context.Context, appID string, includeContent bool) ([]ApplicationFile, error) {
-	columns := `id,application_id,name,kind,content_type,size,sha256,created_at,updated_at`
+func fileQueryColumns(includeContent bool) []string {
 	if includeContent {
-		columns = `id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at`
+		return []string{"id", "application_id", "name", "kind", "content_type", "size", "sha256", "content", "created_at", "updated_at"}
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? ORDER BY name ASC`, appID)
-	if err != nil {
+	return []string{"id", "application_id", "name", "kind", "content_type", "size", "sha256", "created_at", "updated_at"}
+}
+
+func (s *Service) listFiles(ctx context.Context, appID string, includeContent bool) ([]ApplicationFile, error) {
+	var files []models.ApplicationFile
+	if err := orm.New(s.db).From("application_files").Select(fileQueryColumns(includeContent)...).Where("application_id=?", appID).OrderBy("name ASC").All(ctx, &files); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []ApplicationFile{}
-	for rows.Next() {
-		file, err := scanApplicationFile(rows, includeContent)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, file)
+	out := make([]ApplicationFile, 0, len(files))
+	for _, file := range files {
+		out = append(out, toDomainApplicationFile(file, includeContent))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) getFileByName(ctx context.Context, appID, name string, includeContent bool) (ApplicationFile, error) {
-	columns := `id,application_id,name,kind,content_type,size,sha256,created_at,updated_at`
-	if includeContent {
-		columns = `id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at`
-	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? AND name=?`, appID, name)
-	file, err := scanApplicationFile(row, includeContent)
+	var file models.ApplicationFile
+	err := orm.New(s.db).From("application_files").Select(fileQueryColumns(includeContent)...).Where("application_id=?", appID).And("name=?", name).First(ctx, &file)
 	if err == sql.ErrNoRows {
 		return ApplicationFile{}, panelerr.NotFound("application_file")
 	}
-	return file, err
+	if err != nil {
+		return ApplicationFile{}, err
+	}
+	return toDomainApplicationFile(file, includeContent), nil
 }
 
 func (s *Service) getFileByRef(ctx context.Context, appID, ref string, includeContent bool) (ApplicationFile, error) {
@@ -174,33 +173,11 @@ func (s *Service) getFileByRef(ctx context.Context, appID, ref string, includeCo
 	if err == nil {
 		return file, nil
 	}
-	columns := `id,application_id,name,kind,content_type,size,sha256,created_at,updated_at`
-	if includeContent {
-		columns = `id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at`
+	var byID models.ApplicationFile
+	if err := orm.New(s.db).From("application_files").Select(fileQueryColumns(includeContent)...).Where("application_id=?", appID).And("id=?", ref).First(ctx, &byID); err != nil {
+		return ApplicationFile{}, err
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT `+columns+` FROM application_files WHERE application_id=? AND id=?`, appID, ref)
-	return scanApplicationFile(row, includeContent)
-}
-
-func scanApplicationFile(row appScanner, includeContent bool) (ApplicationFile, error) {
-	var file ApplicationFile
-	var createdAt, updatedAt string
-	if includeContent {
-		if err := row.Scan(&file.ID, &file.ApplicationID, &file.Name, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &file.Content, &createdAt, &updatedAt); err != nil {
-			return ApplicationFile{}, err
-		}
-	} else {
-		if err := row.Scan(&file.ID, &file.ApplicationID, &file.Name, &file.Kind, &file.ContentType, &file.Size, &file.SHA256, &createdAt, &updatedAt); err != nil {
-			return ApplicationFile{}, err
-		}
-	}
-	file.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	file.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
-	file.Path = file.Name
-	if includeContent {
-		file.ContentBase64 = base64.StdEncoding.EncodeToString(file.Content)
-	}
-	return file, nil
+	return toDomainApplicationFile(byID, includeContent), nil
 }
 
 func (s *Service) attachFiles(ctx context.Context, job appruntime.Spec, spec appspec.Spec, files []ApplicationFile, data map[string]any) (appruntime.Spec, error) {

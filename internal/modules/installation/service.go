@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 )
 
@@ -29,21 +31,26 @@ func NewService(db *sql.DB) *Service {
 }
 
 func (s *Service) Get(ctx context.Context) (State, error) {
-	var state State
-	var hostServerID, pendingServerID sql.NullString
-	var createdAt, updatedAt string
-	err := s.db.QueryRowContext(ctx, `SELECT host_server_id,pending_server_id,stage,last_error,created_at,updated_at FROM panel_installation WHERE id=?`, singletonID).
-		Scan(&hostServerID, &pendingServerID, &state.Stage, &state.LastError, &createdAt, &updatedAt)
+	var row models.PanelInstallation
+	err := orm.New(s.db).From("panel_installation").Where("id = ?", singletonID).First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return State{}, nil
 	}
 	if err != nil {
 		return State{}, err
 	}
-	state.HostServerID = hostServerID.String
-	state.PendingServerID = pendingServerID.String
-	state.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	state.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	state := State{
+		Stage:     row.Stage,
+		LastError: row.LastError,
+		CreatedAt: row.CreatedAt,
+		UpdatedAt: row.UpdatedAt,
+	}
+	if row.HostServerID != nil {
+		state.HostServerID = *row.HostServerID
+	}
+	if row.PendingServerID != nil {
+		state.PendingServerID = *row.PendingServerID
+	}
 	return state, nil
 }
 
@@ -57,8 +64,8 @@ func (s *Service) SetHostServer(ctx context.Context, serverID string) (State, er
 	if serverID == "" {
 		return State{}, panelerr.Validation("panel_host_server_required", "Panel host server is required")
 	}
-	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE id=?`, serverID).Scan(&exists); err != nil {
+	exists, err := orm.New(s.db).From("servers").Where("id = ?", serverID).Count(ctx)
+	if err != nil {
 		return State{}, err
 	}
 	if exists == 0 {
@@ -72,7 +79,7 @@ func (s *Service) SetHostServer(ctx context.Context, serverID string) (State, er
 		return State{}, panelerr.Conflict("panel_host_server_already_set", "Panel host server is already configured")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO panel_installation(id,host_server_id,pending_server_id,stage,last_error,created_at,updated_at)
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO panel_installation(id,host_server_id,pending_server_id,stage,last_error,created_at,updated_at)
 		VALUES(?,?,NULL,'complete','',?,?)
 		ON CONFLICT(id) DO UPDATE SET host_server_id=excluded.host_server_id,pending_server_id=NULL,stage='complete',last_error='',updated_at=excluded.updated_at`, singletonID, serverID, now, now)
 	if err != nil {
@@ -100,7 +107,7 @@ func (s *Service) SetPendingServer(ctx context.Context, serverID, stage string) 
 		return current, nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `INSERT INTO panel_installation(id,host_server_id,pending_server_id,stage,last_error,created_at,updated_at)
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO panel_installation(id,host_server_id,pending_server_id,stage,last_error,created_at,updated_at)
 		VALUES(?,NULL,?,?, '',?,?)
 		ON CONFLICT(id) DO UPDATE SET pending_server_id=excluded.pending_server_id,stage=excluded.stage,last_error='',updated_at=excluded.updated_at`, singletonID, serverID, strings.TrimSpace(stage), now, now)
 	if err != nil {
@@ -114,8 +121,9 @@ func (s *Service) RecordFailure(ctx context.Context, stage string, cause error) 
 	if cause != nil {
 		message = cause.Error()
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE panel_installation SET stage=?,last_error=?,updated_at=? WHERE id=?`, strings.TrimSpace(stage), message, time.Now().UTC().Format(time.RFC3339Nano), singletonID)
-	return err
+	return orm.New(s.db).From("panel_installation").Where("id = ?", singletonID).UpdateColumns(ctx, map[string]any{
+		"stage": strings.TrimSpace(stage), "last_error": message, "updated_at": time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func (s *Service) IsHostServer(ctx context.Context, serverID string) (bool, error) {

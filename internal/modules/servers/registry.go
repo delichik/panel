@@ -8,6 +8,8 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
@@ -105,33 +107,27 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 			return err
 		}
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err := s.removeServerFromApplicationTargets(ctx, tx, serverID); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	if err := s.removeServerFromOverviewCards(ctx, tx, serverID); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM servers WHERE id=?`, serverID)
-	if err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	affected, _ := res.RowsAffected()
-	if affected == 0 {
-		_ = tx.Rollback()
-		return panelerr.NotFound("server")
-	}
-	if err := tx.Commit(); err != nil {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := s.removeServerFromApplicationTargets(ctx, tx, serverID); err != nil {
+			return err
+		}
+		if err := s.removeServerFromOverviewCards(ctx, tx, serverID); err != nil {
+			return err
+		}
+		res, err := orm.RawExec(ctx, tx, `DELETE FROM servers WHERE id=?`, serverID)
+		if err != nil {
+			return err
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			return panelerr.NotFound("server")
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 	if s.metricsDB != nil {
-		if _, err := s.metricsDB.ExecContext(ctx, `DELETE FROM metrics_snapshots WHERE server_id=?`, serverID); err != nil {
+		if err := orm.New(s.metricsDB).From("metrics_snapshots").Where("server_id=?", serverID).Delete(ctx); err != nil {
 			return err
 		}
 	}
@@ -144,26 +140,17 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 }
 
 func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sql.Tx, serverID string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id,deployment_server_ids_json FROM applications WHERE deployment_server_ids_json<>''`)
-	if err != nil {
+	var rows []models.Application
+	if err := orm.New(tx).From("applications").Where("deployment_server_ids_json<>?", "").All(ctx, &rows); err != nil {
 		return err
 	}
-	defer rows.Close()
 	type update struct {
 		id  string
 		raw string
 	}
 	updates := []update{}
-	for rows.Next() {
-		var appID, raw string
-		if err := rows.Scan(&appID, &raw); err != nil {
-			return err
-		}
-		var ids []string
-		if err := json.Unmarshal([]byte(raw), &ids); err != nil {
-			continue
-		}
-		next, changed := removeString(ids, serverID)
+	for _, app := range rows {
+		next, changed := removeString(app.DeploymentServerIDsJSON, serverID)
 		if !changed {
 			continue
 		}
@@ -171,13 +158,10 @@ func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sq
 		if err != nil {
 			return err
 		}
-		updates = append(updates, update{id: appID, raw: string(encoded)})
-	}
-	if err := rows.Err(); err != nil {
-		return err
+		updates = append(updates, update{id: app.ID, raw: string(encoded)})
 	}
 	for _, item := range updates {
-		if _, err := tx.ExecContext(ctx, `UPDATE applications SET version=version+1,deployment_server_ids_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.id); err != nil {
+		if _, err := orm.RawExec(ctx, tx, `UPDATE applications SET version=version+1,deployment_server_ids_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339Nano), item.id); err != nil {
 			return err
 		}
 	}
@@ -185,25 +169,17 @@ func (s *Service) removeServerFromApplicationTargets(ctx context.Context, tx *sq
 }
 
 func (s *Service) removeServerFromOverviewCards(ctx context.Context, tx *sql.Tx, serverID string) error {
-	rows, err := tx.QueryContext(ctx, `SELECT id,cards_json FROM overview_card_configurations WHERE cards_json<>''`)
-	if err != nil {
+	var rows []models.OverviewCardConfiguration
+	if err := orm.New(tx).From("overview_card_configurations").Where("cards_json<>?", "").All(ctx, &rows); err != nil {
 		return err
 	}
-	defer rows.Close()
 	type update struct {
 		id  string
 		raw string
 	}
 	updates := []update{}
-	for rows.Next() {
-		var id, raw string
-		if err := rows.Scan(&id, &raw); err != nil {
-			return err
-		}
-		var cards []map[string]any
-		if err := json.Unmarshal([]byte(raw), &cards); err != nil {
-			continue
-		}
+	for _, row := range rows {
+		cards := row.CardsJSON
 		changed := false
 		for _, card := range cards {
 			values, ok := card["serverIds"].([]any)
@@ -227,13 +203,13 @@ func (s *Service) removeServerFromOverviewCards(ctx context.Context, tx *sql.Tx,
 		if err != nil {
 			return err
 		}
-		updates = append(updates, update{id: id, raw: string(encoded)})
-	}
-	if err := rows.Err(); err != nil {
-		return err
+		updates = append(updates, update{id: row.ID, raw: string(encoded)})
 	}
 	for _, item := range updates {
-		if _, err := tx.ExecContext(ctx, `UPDATE overview_card_configurations SET cards_json=?,updated_at=? WHERE id=?`, item.raw, time.Now().UTC().Format(time.RFC3339), item.id); err != nil {
+		if err := orm.New(tx).From("overview_card_configurations").Where("id=?", item.id).UpdateColumns(ctx, map[string]any{
+			"cards_json": item.raw,
+			"updated_at": time.Now().UTC().Format(time.RFC3339),
+		}); err != nil {
 			return err
 		}
 	}

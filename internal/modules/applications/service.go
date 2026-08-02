@@ -28,6 +28,8 @@ import (
 	"panel/internal/modules/runtimeevents"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
@@ -319,21 +321,13 @@ func (s *Service) TemplateCatalog(ctx context.Context) (TemplateCatalog, error) 
 }
 
 func (s *Service) List(ctx context.Context) ([]Application, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+applicationColumns+` FROM applications WHERE kind<>? AND deletion_requested=0 ORDER BY name ASC`, ApplicationKindFacility)
-	if err != nil {
+	var rows []models.Application
+	if err := orm.New(s.db).From("applications").Where("kind<>?", ApplicationKindFacility).And("deletion_requested=0").OrderBy("name ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	apps := []Application{}
-	for rows.Next() {
-		app, err := scanApplication(rows)
-		if err != nil {
-			return nil, err
-		}
-		apps = append(apps, app)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	apps := make([]Application, 0, len(rows))
+	for _, m := range rows {
+		apps = append(apps, toDomainApplication(m))
 	}
 	for i := range apps {
 		app, err := s.withImageUpdateStatus(ctx, apps[i])
@@ -349,72 +343,62 @@ func (s *Service) List(ctx context.Context) ([]Application, error) {
 // application detail scanner and enriches runtime state with a fixed number of
 // local queries.
 func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[ApplicationSummary], error) {
-	filter := "kind<>? AND deletion_requested=0"
-	args := []any{ApplicationKindFacility}
+	base := orm.New(s.db).From("applications").Where("kind<>?", ApplicationKindFacility).And("deletion_requested=0")
 	if query != "" {
-		filter += " AND (name LIKE ? ESCAPE '\\' OR image_reference LIKE ? ESCAPE '\\' OR namespace LIKE ? ESCAPE '\\')"
-		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
-		args = append(args, term, term, term)
+		term := orm.LikeEscaped(query)
+		base.WhereGroup(func(c *orm.Condition) {
+			c.Or("name LIKE ? ESCAPE '\\'", term)
+			c.Or("image_reference LIKE ? ESCAPE '\\'", term)
+			c.Or("namespace LIKE ? ESCAPE '\\'", term)
+		})
 	}
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM applications WHERE `+filter, args...).Scan(&total); err != nil {
-		return httpx.ListPage[ApplicationSummary]{}, err
-	}
-	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,enabled,image_reference,image_update_available,job_id,namespace,last_error,updated_at
-		FROM applications WHERE `+filter+` ORDER BY name ASC,id ASC LIMIT ? OFFSET ?`, listArgs...)
+	total64, err := base.Count(ctx)
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
-	defer rows.Close()
+	total := int(total64)
+	var rows []models.Application
+	err = base.Select("id", "name", "enabled", "image_reference", "image_update_available", "job_id", "namespace", "last_error", "updated_at").
+		OrderBy("name ASC", "id ASC").Limit(pageSize).Offset((page-1)*pageSize).All(ctx, &rows)
+	if err != nil {
+		return httpx.ListPage[ApplicationSummary]{}, err
+	}
 
 	summaries := []ApplicationSummary{}
 	byID := map[string]int{}
-	for rows.Next() {
-		var summary ApplicationSummary
-		var enabled, imageUpdateAvailable int
-		var updatedAt string
-		if err := rows.Scan(&summary.ID, &summary.Name, &enabled, &summary.ImageReference, &imageUpdateAvailable, &summary.JobID, &summary.Namespace, &summary.LastError, &updatedAt); err != nil {
-			return httpx.ListPage[ApplicationSummary]{}, err
+	for _, m := range rows {
+		summary := ApplicationSummary{
+			ID:                   m.ID,
+			Name:                 m.Name,
+			Enabled:              m.Enabled,
+			ImageReference:       m.ImageReference,
+			ImageUpdateAvailable: m.ImageUpdateAvailable,
+			JobID:                m.JobID,
+			Namespace:            m.Namespace,
+			LastError:            m.LastError,
+			UpdatedAt:            m.UpdatedAt,
 		}
-		summary.Enabled = enabled == 1
-		summary.ImageUpdateAvailable = imageUpdateAvailable == 1
-		summary.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
 		byID[summary.ID] = len(summaries)
 		summaries = append(summaries, summary)
-	}
-	if err := rows.Err(); err != nil {
-		return httpx.ListPage[ApplicationSummary]{}, err
 	}
 	if len(summaries) == 0 {
 		return httpx.ListPage[ApplicationSummary]{Items: summaries, Total: total, Page: page, PageSize: pageSize}, nil
 	}
 
-	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(summaries)), ",")
 	pageIDs := make([]any, 0, len(summaries))
 	for _, summary := range summaries {
 		pageIDs = append(pageIDs, summary.ID)
 	}
 	statuses := make(map[string][]appruntime.InstanceStatus, len(summaries))
-	instanceRows, err := s.db.QueryContext(ctx, `SELECT application_id,status FROM application_instances WHERE application_id IN (`+placeholders+`)`, pageIDs...)
-	if err != nil {
+	var instanceRows []models.ApplicationInstance
+	if err := orm.New(s.db).From("application_instances").Select("application_id", "status").AndIn("application_id", pageIDs).All(ctx, &instanceRows); err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
-	for instanceRows.Next() {
-		var appID, status string
-		if err := instanceRows.Scan(&appID, &status); err != nil {
-			instanceRows.Close()
-			return httpx.ListPage[ApplicationSummary]{}, err
-		}
-		statuses[appID] = append(statuses[appID], appruntime.InstanceStatus{Status: status})
-	}
-	if err := instanceRows.Close(); err != nil {
-		return httpx.ListPage[ApplicationSummary]{}, err
-	}
-	if err := instanceRows.Err(); err != nil {
-		return httpx.ListPage[ApplicationSummary]{}, err
+	for _, m := range instanceRows {
+		statuses[m.ApplicationID] = append(statuses[m.ApplicationID], appruntime.InstanceStatus{Status: m.Status})
 	}
 
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
 	lifecycleRows, err := s.lifecycleDB().QueryContext(ctx, `WITH latest AS (
 		SELECT id,application_id,ROW_NUMBER() OVER (PARTITION BY application_id ORDER BY created_at DESC,id DESC) AS row_num
 		FROM application_lifecycle_operations
@@ -427,18 +411,15 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
+	defer lifecycleRows.Close()
 	for lifecycleRows.Next() {
 		var appID, status string
 		if err := lifecycleRows.Scan(&appID, &status); err != nil {
-			lifecycleRows.Close()
 			return httpx.ListPage[ApplicationSummary]{}, err
 		}
 		if _, ok := byID[appID]; ok {
 			statuses[appID] = append(statuses[appID], appruntime.InstanceStatus{Status: runtimeStatusFromLifecycleTarget(status)})
 		}
-	}
-	if err := lifecycleRows.Close(); err != nil {
-		return httpx.ListPage[ApplicationSummary]{}, err
 	}
 	if err := lifecycleRows.Err(); err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
@@ -466,20 +447,15 @@ func (s *Service) ListWithRuntime(ctx context.Context) ([]Application, error) {
 }
 
 func (s *Service) ListForReconcile(ctx context.Context) ([]Application, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+applicationColumns+` FROM applications WHERE deletion_requested=0 ORDER BY kind ASC, name ASC`)
-	if err != nil {
+	var rows []models.Application
+	if err := orm.New(s.db).From("applications").Where("deletion_requested=0").OrderBy("kind ASC", "name ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	apps := []Application{}
-	for rows.Next() {
-		app, err := scanApplication(rows)
-		if err != nil {
-			return nil, err
-		}
-		apps = append(apps, app)
+	apps := make([]Application, 0, len(rows))
+	for _, m := range rows {
+		apps = append(apps, toDomainApplication(m))
 	}
-	return apps, rows.Err()
+	return apps, nil
 }
 
 func (s *Service) Get(ctx context.Context, appID string) (Application, error) {
@@ -491,12 +467,15 @@ func (s *Service) Get(ctx context.Context, appID string) (Application, error) {
 }
 
 func (s *Service) getApplication(ctx context.Context, appID string) (Application, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT `+applicationColumns+` FROM applications WHERE id=?`, appID)
-	app, err := scanApplication(row)
+	var m models.Application
+	err := orm.New(s.db).From("applications").Where("id=?", appID).First(ctx, &m)
 	if err == sql.ErrNoRows {
 		return Application{}, panelerr.NotFound("application")
 	}
-	return app, err
+	if err != nil {
+		return Application{}, err
+	}
+	return toDomainApplication(m), nil
 }
 
 func (s *Service) Create(ctx context.Context, in SaveInput) (Application, error) {
@@ -725,7 +704,7 @@ func (s *Service) Delete(ctx context.Context, appID string) error {
 	if instances, err := s.runtimeInstances(ctx, app.ID); err != nil {
 		return err
 	} else if len(instances) == 0 {
-		if _, err := s.db.ExecContext(ctx, `DELETE FROM applications WHERE id=? AND deletion_requested=1`, app.ID); err != nil {
+		if err := orm.New(s.db).From("applications").Where("id=?", app.ID).And("deletion_requested=1").Delete(ctx); err != nil {
 			return err
 		}
 		return s.reconcileReverseProxy(ctx)
@@ -956,14 +935,14 @@ func (s *Service) markApplicationImageTargetsCurrent(ctx context.Context, app Ap
 			continue
 		}
 		for _, reference := range references {
-			if _, err := s.db.ExecContext(ctx, `INSERT INTO image_updates(server_id,reference,local_digest,latest_digest,update_available,last_error,checked_at)
-				VALUES(?,?,?,?,0,'',?)
-				ON CONFLICT(server_id,reference) DO UPDATE SET
-					local_digest=excluded.local_digest,
-					latest_digest=excluded.latest_digest,
-					update_available=0,
-					last_error='',
-					checked_at=excluded.checked_at`,
+			if _, err := orm.RawExec(ctx, s.db, `INSERT INTO image_updates(server_id,reference,local_digest,latest_digest,update_available,last_error,checked_at)
+			VALUES(?,?,?,?,0,'',?)
+			ON CONFLICT(server_id,reference) DO UPDATE SET
+				local_digest=excluded.local_digest,
+				latest_digest=excluded.latest_digest,
+				update_available=0,
+				last_error='',
+				checked_at=excluded.checked_at`,
 				instance.ServerID, reference, app.ImageDigest, app.ImageDigest, formatTime(checkedAt)); err != nil {
 				return err
 			}
@@ -1504,15 +1483,15 @@ func (s *Service) Runtime(ctx context.Context, appID string) (ApplicationRuntime
 }
 
 func (s *Service) latestLifecycleOperation(ctx context.Context, appID string) (LifecycleOperation, error) {
-	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
-		FROM application_lifecycle_operations WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, appID)
-	op, err := scanLifecycleOperation(row)
+	var m models.ApplicationLifecycleOperation
+	err := orm.New(s.lifecycleDB()).From("application_lifecycle_operations").Where("application_id=?", appID).OrderBy("created_at DESC", "id DESC").First(ctx, &m)
 	if err == sql.ErrNoRows {
 		return LifecycleOperation{}, panelerr.NotFound("application_lifecycle_operation")
 	}
 	if err != nil {
 		return LifecycleOperation{}, err
 	}
+	op := toDomainLifecycleOperation(m)
 	targets, err := s.lifecycleTargets(ctx, op.ID)
 	if err != nil {
 		return LifecycleOperation{}, err
@@ -1522,18 +1501,13 @@ func (s *Service) latestLifecycleOperation(ctx context.Context, appID string) (L
 }
 
 func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]LifecycleTarget, error) {
-	rows, err := s.lifecycleDB().QueryContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
-		FROM application_lifecycle_targets WHERE operation_id=? ORDER BY server_id ASC`, operationID)
-	if err != nil {
+	var rows []lifecycleTargetRow
+	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Where("operation_id=?", operationID).OrderBy("server_id ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []LifecycleTarget{}
-	for rows.Next() {
-		target, err := scanLifecycleTarget(rows)
-		if err != nil {
-			return nil, err
-		}
+	out := make([]LifecycleTarget, 0, len(rows))
+	for _, r := range rows {
+		target := toDomainLifecycleTarget(r)
 		if s.servers != nil {
 			if srv, err := s.servers.Get(ctx, target.ServerID); err == nil {
 				target.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
@@ -1541,13 +1515,16 @@ func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]L
 		}
 		out = append(out, target)
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) lifecycleTargetByID(ctx context.Context, targetID string) (LifecycleTarget, error) {
-	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
-		FROM application_lifecycle_targets WHERE id=?`, targetID)
-	return scanLifecycleTarget(row)
+	var r lifecycleTargetRow
+	err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Where("id=?", targetID).First(ctx, &r)
+	if err != nil {
+		return LifecycleTarget{}, err
+	}
+	return toDomainLifecycleTarget(r), nil
 }
 
 func (s *Service) expectedLifecycleTargets(ctx context.Context, app Application) []LifecycleTarget {
@@ -2657,10 +2634,7 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 		StartedAt:     &now,
 		UpdatedAt:     now,
 	}
-	_, err := s.lifecycleDB().ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		operation.ID, operation.ApplicationID, operation.Type, operation.Status, operation.TaskID, operation.Generation, operation.SpecHash, operation.Trigger, operation.Error, formatTime(operation.CreatedAt), nullableTime(operation.StartedAt), nil, formatTime(operation.UpdatedAt))
-	if err != nil {
+	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_operations").Insert(ctx, fromDomainLifecycleOperation(operation)); err != nil {
 		return LifecycleOperation{}, err
 	}
 	serverIDs = uniqueStringItems(serverIDs)
@@ -2691,10 +2665,25 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			instanceID = instance.ID
 			containerName = instance.ContainerName
 		}
-		_, err := s.lifecycleDB().ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			targetID, operation.ID, app.ID, serverID, action, state, status, targetKey, desiredState, spec.Generation, spec.SpecHash, priority, 0, "", "", "", "", instanceID, containerName, "", "", "", "", "", "", formatTime(now), nil, nil, formatTime(now))
-		if err != nil {
+		targetRow := fromDomainLifecycleTarget(LifecycleTarget{
+			ID:                targetID,
+			OperationID:       operation.ID,
+			ApplicationID:     app.ID,
+			ServerID:          serverID,
+			Action:            action,
+			State:             state,
+			Status:            status,
+			TargetKey:         targetKey,
+			DesiredState:      desiredState,
+			DesiredGeneration: spec.Generation,
+			DesiredSpecHash:   spec.SpecHash,
+			Priority:          priority,
+			InstanceID:        instanceID,
+			ContainerName:     containerName,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		})
+		if err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Insert(ctx, &targetRow); err != nil {
 			return LifecycleOperation{}, err
 		}
 		target := LifecycleTarget{
@@ -2800,7 +2789,7 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 			LifecycleTargetStateStopping,
 			LifecycleTargetStatePurging)
 	}
-	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+where, args...)
+	res, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+where, args...)
 	if err != nil {
 		return err
 	}
@@ -2833,7 +2822,7 @@ func (s *Service) failLifecycleTargetExecution(ctx context.Context, targetID, st
 		nextRunAt = formatTime(now.Add(lifecycleExecutionRetryDelay(ctx, s.lifecycleDB(), targetID)))
 		finishedAt = nil
 	}
-	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			stage=?,
@@ -2926,7 +2915,7 @@ func (s *Service) afterLifecycleTargetVerified(ctx context.Context, target Lifec
 func lifecycleExecutionRetryDelay(ctx context.Context, db *sql.DB, targetID string) time.Duration {
 	attempt := 0
 	if db != nil {
-		_ = db.QueryRowContext(ctx, `SELECT attempt FROM application_lifecycle_targets WHERE id=?`, targetID).Scan(&attempt)
+		_ = orm.New(db).From("application_lifecycle_targets").Select("attempt").Where("id=?", targetID).ScanValue(ctx, &attempt)
 	}
 	delays := []time.Duration{
 		10 * time.Second,
@@ -2996,33 +2985,24 @@ func (s *Service) verifyLifecycleTargetNow(ctx context.Context, targetID string)
 		}
 	}
 	now := formatTime(time.Now().UTC())
-	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
-		SET state=?,
-			status=?,
-			stage=?,
-			error='',
-			error_code='',
-			error_message='',
-			error_detail='',
-			attempt=0,
-			next_run_at='',
-			lease_owner='',
-			lease_expires_at='',
-			finished_at=?,
-			updated_at=?
-		WHERE id=?
-		  AND state=?`,
-		LifecycleTargetStateSucceeded,
-		lifecycleStatusForState(LifecycleTargetStateSucceeded),
-		firstNonEmpty(target.Stage, "verify"),
-		now,
-		now,
-		target.ID,
-		LifecycleTargetStateVerifying)
+	err = orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Where("id=?", target.ID).And("state=?", LifecycleTargetStateVerifying).UpdateColumns(ctx, map[string]any{
+		"state":            LifecycleTargetStateSucceeded,
+		"status":           lifecycleStatusForState(LifecycleTargetStateSucceeded),
+		"stage":            firstNonEmpty(target.Stage, "verify"),
+		"error":            "",
+		"error_code":       "",
+		"error_message":    "",
+		"error_detail":     "",
+		"attempt":          0,
+		"next_run_at":      "",
+		"lease_owner":      "",
+		"lease_expires_at": "",
+		"finished_at":      now,
+		"updated_at":       now,
+	})
 	if err != nil {
 		return err
 	}
-	_, err = res.RowsAffected()
 	if err == nil {
 		latest, getErr := s.lifecycleTargetByID(ctx, target.ID)
 		if getErr == nil {
@@ -3042,7 +3022,12 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 	if cause != nil {
 		errText = cause.Error()
 	}
-	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?, error=?, finished_at=?, updated_at=? WHERE id=?`, status, errText, now, now, operationID)
+	err := orm.New(s.lifecycleDB()).From("application_lifecycle_operations").Where("id=?", operationID).UpdateColumns(ctx, map[string]any{
+		"status":      status,
+		"error":       errText,
+		"finished_at": now,
+		"updated_at":  now,
+	})
 	if err != nil {
 		return err
 	}
@@ -3085,22 +3070,18 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 }
 
 func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, operationID string) error {
-	rows, err := s.lifecycleDB().QueryContext(ctx, `SELECT server_id,state,error FROM application_lifecycle_targets WHERE operation_id=?`, operationID)
-	if err != nil {
+	var targets []models.ApplicationLifecycleTarget
+	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Select("server_id", "state", "error").Where("operation_id=?", operationID).All(ctx, &targets); err != nil {
 		return err
 	}
-	defer rows.Close()
 	total := 0
 	failed := 0
 	pending := 0
 	superseded := 0
 	failures := []runtimeDeploymentFailure{}
-	for rows.Next() {
+	for _, t := range targets {
 		total++
-		var serverID, state, errText string
-		if err := rows.Scan(&serverID, &state, &errText); err != nil {
-			return err
-		}
+		serverID, state, errText := t.ServerID, t.State, t.Error
 		switch state {
 		case LifecycleTargetStateFailed, LifecycleTargetStateCancelled:
 			failed++
@@ -3113,9 +3094,6 @@ func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, oper
 		default:
 			pending++
 		}
-	}
-	if err := rows.Err(); err != nil {
-		return err
 	}
 	if total == 0 || pending > 0 {
 		return nil
@@ -3411,7 +3389,7 @@ func (s *Service) supersedeLifecycleTargetForTask(ctx context.Context, task task
 
 func (s *Service) supersedeLifecycleTargetIfActive(ctx context.Context, targetID, message string) error {
 	now := formatTime(time.Now().UTC())
-	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	_, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?, status=?, error=?, error_code=CASE WHEN error_code='' THEN ? ELSE error_code END,
 			error_message=CASE WHEN error_message='' THEN ? ELSE error_message END,
 			error_detail=CASE WHEN error_detail='' THEN ? ELSE error_detail END,
@@ -3443,7 +3421,7 @@ func targetTaskFailureMessage(task tasks.Task, cause error) string {
 
 func (s *Service) failLifecycleTargetIfActive(ctx context.Context, targetID, message string) (bool, error) {
 	now := formatTime(time.Now().UTC())
-	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?, status=?, error=?,
 			error_code=CASE WHEN error_code='' THEN ? ELSE error_code END,
 			error_message=CASE WHEN error_message='' THEN ? ELSE error_message END,
@@ -3464,10 +3442,11 @@ func (s *Service) failDeployingRuntimeInstanceForTarget(ctx context.Context, app
 	if strings.TrimSpace(appID) == "" || strings.TrimSpace(serverID) == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE application_instances
-		SET status=?, last_error=?, updated_at=?
-		WHERE application_id=? AND server_id=? AND status IN (?,?)`,
-		appruntime.StatusFailed, message, formatTime(time.Now().UTC()), appID, serverID, appruntime.StatusPending, appruntime.StatusDeploying)
+	err := orm.New(s.db).From("application_instances").Where("application_id=?", appID).And("server_id=?", serverID).AndIn("status", []string{appruntime.StatusPending, appruntime.StatusDeploying}).UpdateColumns(ctx, map[string]any{
+		"status":     appruntime.StatusFailed,
+		"last_error": message,
+		"updated_at": formatTime(time.Now().UTC()),
+	})
 	return err
 }
 
@@ -3751,7 +3730,7 @@ func (s *Service) renewLifecycleTargetTaskLease(ctx context.Context, targetID, t
 		return nil
 	}
 	now := time.Now().UTC()
-	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET lease_expires_at=?,
 			updated_at=?
 		WHERE id=?
@@ -3785,25 +3764,9 @@ func (s *Service) renewLifecycleTargetTaskLease(ctx context.Context, targetID, t
 }
 
 func (s *Service) insertApplication(ctx context.Context, app Application) error {
-	variables, err := json.Marshal(app.Variables)
-	if err != nil {
-		return err
-	}
-	resolved, err := json.Marshal(app.ResolvedVariables)
-	if err != nil {
-		return err
-	}
-	deploymentServers, err := json.Marshal(app.DeploymentServers)
-	if err != nil {
-		return err
-	}
-	reverseProxy, err := json.Marshal(app.ReverseProxy)
-	if err != nil {
-		return err
-	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO applications(id,version,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, 1, applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
-	return err
+	m := fromDomainApplication(app)
+	m.Version = 1
+	return orm.New(s.db).From("applications").Insert(ctx, m)
 }
 
 func (s *Service) updateApplication(ctx context.Context, app Application) error {
@@ -3823,7 +3786,7 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
 		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
@@ -3836,14 +3799,27 @@ func (s *Service) updateApplicationDerived(ctx context.Context, app Application)
 	return updateApplicationDerivedWithExec(ctx, s.db, app)
 }
 
-func updateApplicationDerivedWithExec(ctx context.Context, exec sqlExec, app Application) error {
+func updateApplicationDerivedWithExec(ctx context.Context, exec orm.Executor, app Application) error {
 	resolved, err := json.Marshal(app.ResolvedVariables)
 	if err != nil {
 		return err
 	}
-	_, err = exec.ExecContext(ctx, `UPDATE applications SET resolved_variables_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=? WHERE id=?`,
-		string(resolved), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, app.ID)
-	return err
+	return orm.New(exec).From("applications").Where("id=?", app.ID).UpdateColumns(ctx, map[string]any{
+		"resolved_variables_json": string(resolved),
+		"generation":              app.Generation,
+		"spec_hash":               app.SpecHash,
+		"image_reference":         app.ImageReference,
+		"image_digest":            app.ImageDigest,
+		"image_latest_digest":     app.ImageLatestDigest,
+		"image_checked_at":        nullableTime(app.ImageCheckedAt),
+		"image_update_available":  boolInt(app.ImageUpdateAvailable),
+		"image_last_error":        app.ImageLastError,
+		"job_id":                  app.JobID,
+		"namespace":               app.Namespace,
+		"last_eval_id":            app.LastEvalID,
+		"last_deployment_id":      app.LastDeploymentID,
+		"last_error":              app.LastError,
+	})
 }
 
 func (s *Service) commitApplicationState(ctx context.Context, app Application, files []ApplicationFile, job appruntime.Spec, insertApp bool, insertRevision bool) error {
@@ -3870,7 +3846,7 @@ func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Appli
 		}
 	} else if enforceVersion {
 		var currentVersion int
-		if err := tx.QueryRowContext(ctx, `SELECT version FROM applications WHERE id=?`, app.ID).Scan(&currentVersion); err != nil {
+		if err := orm.New(tx).From("applications").Select("version").Where("id=?", app.ID).ScanValue(ctx, &currentVersion); err != nil {
 			return err
 		}
 		if currentVersion != expectedVersion {
@@ -3913,7 +3889,7 @@ func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *
 	if err != nil {
 		return err
 	}
-	result, err := exec.ExecContext(ctx, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
+	result, err := orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
 		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
 	if err != nil {
 		return err
@@ -3924,7 +3900,7 @@ func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *
 	}
 	if affected != 1 {
 		var currentVersion int
-		if scanErr := exec.QueryRowContext(ctx, `SELECT version FROM applications WHERE id=?`, app.ID).Scan(&currentVersion); scanErr != nil {
+		if scanErr := orm.New(exec).From("applications").Select("version").Where("id=?", app.ID).ScanValue(ctx, &currentVersion); scanErr != nil {
 			currentVersion = expectedVersion + 1
 		}
 		return resourceVersionConflict(expectedVersion, currentVersion)
@@ -3932,29 +3908,13 @@ func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *
 	return nil
 }
 
-func (s *Service) insertApplicationWithExec(ctx context.Context, exec sqlExec, app Application) error {
-	variables, err := json.Marshal(app.Variables)
-	if err != nil {
-		return err
-	}
-	resolved, err := json.Marshal(app.ResolvedVariables)
-	if err != nil {
-		return err
-	}
-	deploymentServers, err := json.Marshal(app.DeploymentServers)
-	if err != nil {
-		return err
-	}
-	reverseProxy, err := json.Marshal(app.ReverseProxy)
-	if err != nil {
-		return err
-	}
-	_, err = exec.ExecContext(ctx, `INSERT INTO applications(id,version,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, 1, applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.CreatedAt), formatTime(app.UpdatedAt))
-	return err
+func (s *Service) insertApplicationWithExec(ctx context.Context, exec orm.Executor, app Application) error {
+	m := fromDomainApplication(app)
+	m.Version = 1
+	return orm.New(exec).From("applications").Insert(ctx, m)
 }
 
-func (s *Service) updateApplicationWithExec(ctx context.Context, exec sqlExec, app Application) error {
+func (s *Service) updateApplicationWithExec(ctx context.Context, exec orm.Executor, app Application) error {
 	variables, err := json.Marshal(app.Variables)
 	if err != nil {
 		return err
@@ -3971,7 +3931,7 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec sqlExec, a
 	if err != nil {
 		return err
 	}
-	_, err = exec.ExecContext(ctx, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+	_, err = orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
 		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
@@ -3985,28 +3945,30 @@ func (s *Service) insertRevisionBestEffort(ctx context.Context, app Application,
 		log.Printf("application revision record failed app_id=%s generation=%d: %v", app.ID, app.Generation, err)
 	}
 }
-
-func insertRevisionWithExec(ctx context.Context, exec sqlExec, app Application, job appruntime.Spec) error {
+func insertRevisionWithExec(ctx context.Context, exec orm.Executor, app Application, job appruntime.Spec) error {
 	raw, err := json.Marshal(job)
 	if err != nil {
 		return err
 	}
-	_, err = exec.ExecContext(ctx, `INSERT OR IGNORE INTO application_revisions(id,application_id,generation,spec_hash,spec_yaml,job_json,created_at) VALUES(?,?,?,?,?,?,?)`,
+	_, err = orm.RawExec(ctx, exec, `INSERT OR IGNORE INTO application_revisions(id,application_id,generation,spec_hash,spec_yaml,job_json,created_at) VALUES(?,?,?,?,?,?,?)`,
 		id.New("arev"), app.ID, app.Generation, app.SpecHash, app.SpecYAML, string(raw), formatTime(time.Now().UTC()))
 	return err
 }
 
-func replaceApplicationFiles(ctx context.Context, exec sqlExec, appID string, files []ApplicationFile) error {
-	if _, err := exec.ExecContext(ctx, `DELETE FROM application_files WHERE application_id=?`, appID); err != nil {
+func replaceApplicationFiles(ctx context.Context, exec orm.Executor, appID string, files []ApplicationFile) error {
+	if err := orm.New(exec).From("application_files").Where("application_id=?", appID).Delete(ctx); err != nil {
 		return err
 	}
-	for _, file := range files {
-		if _, err := exec.ExecContext(ctx, `INSERT INTO application_files(id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
-			file.ID, appID, file.Name, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt)); err != nil {
-			return err
-		}
+	if len(files) == 0 {
+		return nil
 	}
-	return nil
+	items := make([]*models.ApplicationFile, 0, len(files))
+	for _, file := range files {
+		item := fromDomainApplicationFile(file)
+		item.ApplicationID = appID
+		items = append(items, item)
+	}
+	return orm.New(exec).From("application_files").InsertBatch(ctx, items)
 }
 
 func applicationSaveError(err error) error {
@@ -4299,20 +4261,18 @@ func (s *Service) planTargetActions(ctx context.Context, app Application, spec a
 }
 
 func (s *Service) activeLifecycleTarget(ctx context.Context, appID, serverID string) (LifecycleTarget, bool, error) {
-	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at
-		FROM application_lifecycle_targets
-		WHERE target_key=?
-		  AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')
-		ORDER BY updated_at DESC, created_at DESC, id DESC
-		LIMIT 1`, lifecycleTargetKey(appID, serverID))
-	target, err := scanLifecycleTarget(row)
-	if err == sql.ErrNoRows {
-		return LifecycleTarget{}, false, nil
-	}
-	if err != nil {
+	var row lifecycleTargetRow
+	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").
+		Where("target_key=?", lifecycleTargetKey(appID, serverID)).
+		And("state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')").
+		OrderBy("updated_at DESC", "created_at DESC", "id DESC").
+		First(ctx, &row); err != nil {
+		if err == sql.ErrNoRows {
+			return LifecycleTarget{}, false, nil
+		}
 		return LifecycleTarget{}, false, err
 	}
-	return target, true, nil
+	return toDomainLifecycleTarget(row), true, nil
 }
 
 func lifecycleTargetCanBeSupersededBeforeMutation(state string) bool {
@@ -4469,17 +4429,17 @@ func (s *Service) triggerApplicationReconcileTask(ctx context.Context, appID, tr
 }
 
 func (s *Service) deploymentOperationError(ctx context.Context, operationID string) error {
-	var status, errText string
-	err := s.lifecycleDB().QueryRowContext(ctx, `SELECT status,error FROM application_lifecycle_operations WHERE id=?`, operationID).Scan(&status, &errText)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
+	var op models.ApplicationLifecycleOperation
+	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_operations").Where("id=?", operationID).First(ctx, &op); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
 		return err
 	}
-	if status != LifecycleStatusFailed && status != LifecycleStatusPartiallyDeployed {
+	if op.Status != LifecycleStatusFailed && op.Status != LifecycleStatusPartiallyDeployed {
 		return nil
 	}
+	errText := op.Error
 	if strings.TrimSpace(errText) == "" {
 		errText = "Application sync failed"
 	}
@@ -4498,11 +4458,11 @@ type deployTaskRunOptions struct {
 }
 
 func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
-	if strings.TrimSpace(task.ParamsJSON) != "" {
+	if strings.TrimSpace(task.ParamsJSON) != "" && strings.TrimSpace(task.ParamsJSON) != "{}" {
 		var params deployTaskParams
-		if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err == nil && strings.TrimSpace(params.ServerID) != "" {
-			action := strings.TrimSpace(params.Action)
-			if action == "" {
+		if err := json.Unmarshal([]byte(task.ParamsJSON), &params); err == nil {
+			action := params.Action
+			if strings.TrimSpace(action) == "" {
 				action = targetActionForTaskType(task.Type)
 			}
 			return deployTaskRunOptions{
@@ -4522,7 +4482,6 @@ func deployTaskOptions(task tasks.Task) deployTaskRunOptions {
 	}
 	return deployTaskRunOptions{}
 }
-
 func (s *Service) ensureLifecycleTargetClaimedForTask(ctx context.Context, task tasks.Task, opts deployTaskRunOptions) (bool, error) {
 	targetID := strings.TrimSpace(opts.lifecycleTargetID)
 	if targetID == "" && strings.TrimSpace(opts.lifecycleOperationID) != "" && len(opts.targetIDs) == 1 {
@@ -4551,7 +4510,7 @@ func (s *Service) ensureLifecycleTargetClaimedForTask(ctx context.Context, task 
 	default:
 		return false, nil
 	}
-	res, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+	res, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_lifecycle_targets
 		SET state=?,
 			status=?,
 			lease_owner=?,
@@ -4871,7 +4830,7 @@ func (s *Service) upsertRuntimeInstance(ctx context.Context, appID, serverID str
 		return err
 	}
 	now := formatTime(time.Now().UTC())
-	_, err = s.db.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(application_id,server_id) DO UPDATE SET
 			id=excluded.id,
@@ -4889,7 +4848,7 @@ func (s *Service) upsertRuntimeInstance(ctx context.Context, appID, serverID str
 
 func (s *Service) markRuntimeInstance(ctx context.Context, instanceID, desired, status, containerID, lastErr string) error {
 	now := formatTime(time.Now().UTC())
-	_, err := s.db.ExecContext(ctx, `UPDATE application_instances SET desired_state=?,status=?,container_id=COALESCE(NULLIF(?, ''), container_id),last_error=?,updated_at=? WHERE id=?`,
+	_, err := orm.RawExec(ctx, s.db, `UPDATE application_instances SET desired_state=?,status=?,container_id=COALESCE(NULLIF(?, ''), container_id),last_error=?,updated_at=? WHERE id=?`,
 		desired, status, containerID, lastErr, now, instanceID)
 	return err
 }
@@ -4902,11 +4861,10 @@ func (s *Service) deleteRuntimeInstanceForServer(ctx context.Context, appID, ser
 		}
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `DELETE FROM application_instances WHERE application_id=? AND server_id=?`, appID, serverID); err != nil {
+	if err := orm.New(s.db).From("application_instances").Where("application_id=?", appID).And("server_id=?", serverID).Delete(ctx); err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM application_reconcile_states WHERE instance_id=?`, instance.ID)
-	return err
+	return orm.New(s.db).From("application_reconcile_states").Where("instance_id=?", instance.ID).Delete(ctx)
 }
 
 func (s *Service) cleanupRemovedDeploymentInstances(ctx context.Context, taskID string, before, after Application) error {
@@ -4934,7 +4892,6 @@ func (s *Service) cleanupRemovedDeploymentInstances(ctx context.Context, taskID 
 	}
 	return nil
 }
-
 func (s *Service) purgeRuntimeInstanceForServer(ctx context.Context, taskID, appID, serverID string, removeApplicationData bool) error {
 	instance, err := s.runtimeInstanceForServer(ctx, appID, serverID)
 	if err != nil {
@@ -4998,8 +4955,7 @@ func (s *Service) deleteApplicationIfRuntimeGone(ctx context.Context, appID stri
 	if len(instances) > 0 {
 		return nil
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM applications WHERE id=? AND deletion_requested=1`, appID)
-	return err
+	return orm.New(s.db).From("applications").Where("id=?", appID).And("deletion_requested=1").Delete(ctx)
 }
 
 func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID string) error {
@@ -5007,8 +4963,7 @@ func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID s
 		return err
 	}
 	var failures sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT MAX(reconcile_failures) FROM application_reconcile_states WHERE application_id=?`, appID).Scan(&failures)
-	if err != nil {
+	if err := orm.RawRow(ctx, s.db, `SELECT MAX(reconcile_failures) FROM application_reconcile_states WHERE application_id=?`, appID).Scan(&failures); err != nil {
 		return err
 	}
 	nextFailures := 1
@@ -5016,9 +4971,11 @@ func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID s
 		nextFailures = int(failures.Int64) + 1
 	}
 	nextRun := time.Now().UTC().Add(applicationReconcileFailureBackoff(nextFailures))
-	_, err = s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_failures=?,reconcile_next_run_at=?,reconcile_success_streak=0 WHERE application_id=?`,
-		nextFailures, nextRun.Format(time.RFC3339Nano), appID)
-	return err
+	return orm.New(s.db).From("application_reconcile_states").Where("application_id=?", appID).UpdateColumns(ctx, map[string]any{
+		"reconcile_failures":       nextFailures,
+		"reconcile_next_run_at":    nextRun.Format(time.RFC3339Nano),
+		"reconcile_success_streak": 0,
+	})
 }
 
 func (s *Service) ensureApplicationReconcileStateRows(ctx context.Context, appID string) error {
@@ -5028,10 +4985,9 @@ func (s *Service) ensureApplicationReconcileStateRows(ctx context.Context, appID
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, instance := range instances {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+		if _, err := orm.RawExec(ctx, s.db, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
 			VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
-			instance.ID, instance.ApplicationID, instance.ServerID, now)
-		if err != nil {
+			instance.ID, instance.ApplicationID, instance.ServerID, now); err != nil {
 			return err
 		}
 	}
@@ -5057,7 +5013,6 @@ func (s *Service) purgeApplicationRuntimeData(ctx context.Context, appID string)
 	}
 	return nil
 }
-
 func (s *Service) purgeRuntimeInstance(ctx context.Context, taskID string, instance appruntime.Instance, removeApplicationData bool) error {
 	srv, err := s.servers.Get(ctx, instance.ServerID)
 	if err != nil {
@@ -5112,32 +5067,29 @@ func applicationReconcileFailureBackoff(failures int) time.Duration {
 }
 
 func (s *Service) runtimeInstances(ctx context.Context, appID string) ([]appruntime.Instance, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at FROM application_instances WHERE application_id=? ORDER BY server_id ASC`, appID)
-	if err != nil {
+	var rows []models.ApplicationInstance
+	if err := orm.New(s.db).From("application_instances").Where("application_id=?", appID).OrderBy("server_id ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []appruntime.Instance{}
-	for rows.Next() {
-		instance, err := scanRuntimeInstance(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, instance)
+	out := make([]appruntime.Instance, 0, len(rows))
+	for _, m := range rows {
+		out = append(out, toRuntimeInstance(m))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) runtimeInstance(ctx context.Context, appID, instanceID string) (appruntime.Instance, error) {
 	if strings.TrimSpace(instanceID) == "" {
 		return appruntime.Instance{}, panelerr.Validation("runtime_instance_required", "Runtime instance is required")
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at FROM application_instances WHERE application_id=? AND id=?`, appID, instanceID)
-	instance, err := scanRuntimeInstance(row)
-	if err == sql.ErrNoRows {
-		return appruntime.Instance{}, panelerr.NotFound("application_instance")
+	var m models.ApplicationInstance
+	if err := orm.New(s.db).From("application_instances").Where("application_id=?", appID).And("id=?", instanceID).First(ctx, &m); err != nil {
+		if err == sql.ErrNoRows {
+			return appruntime.Instance{}, panelerr.NotFound("application_instance")
+		}
+		return appruntime.Instance{}, err
 	}
-	return instance, err
+	return toRuntimeInstance(m), nil
 }
 
 func (s *Service) primaryRuntimeInstance(ctx context.Context, appID string) (appruntime.Instance, error) {
@@ -5168,110 +5120,14 @@ func isPanelNotFound(err error) bool {
 }
 
 func (s *Service) runtimeInstanceForServer(ctx context.Context, appID, serverID string) (appruntime.Instance, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at FROM application_instances WHERE application_id=? AND server_id=?`, appID, serverID)
-	instance, err := scanRuntimeInstance(row)
-	if err == sql.ErrNoRows {
-		return appruntime.Instance{}, panelerr.NotFound("application_instance")
-	}
-	return instance, err
-}
-
-func scanRuntimeInstance(row appScanner) (appruntime.Instance, error) {
-	var instance appruntime.Instance
-	var rawSpec, created, updated string
-	if err := row.Scan(&instance.ID, &instance.ApplicationID, &instance.ServerID, &instance.ContainerName, &instance.ContainerID, &instance.DesiredState, &instance.Status, &rawSpec, &instance.LastDeployedGeneration, &instance.LastError, &created, &updated); err != nil {
+	var m models.ApplicationInstance
+	if err := orm.New(s.db).From("application_instances").Where("application_id=?", appID).And("server_id=?", serverID).First(ctx, &m); err != nil {
+		if err == sql.ErrNoRows {
+			return appruntime.Instance{}, panelerr.NotFound("application_instance")
+		}
 		return appruntime.Instance{}, err
 	}
-	_ = json.Unmarshal([]byte(rawSpec), &instance.RuntimeSpec)
-	instance.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-	instance.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
-	return instance, nil
-}
-
-func scanLifecycleOperation(row appScanner) (LifecycleOperation, error) {
-	var op LifecycleOperation
-	var created, updated string
-	var started, finished sql.NullString
-	if err := row.Scan(&op.ID, &op.ApplicationID, &op.Type, &op.Status, &op.TaskID, &op.Generation, &op.SpecHash, &op.Trigger, &op.Error, &created, &started, &finished, &updated); err != nil {
-		return LifecycleOperation{}, err
-	}
-	op.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-	op.StartedAt = parseOptionalTime(started)
-	op.FinishedAt = parseOptionalTime(finished)
-	op.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
-	return op, nil
-}
-
-func scanLifecycleTarget(row appScanner) (LifecycleTarget, error) {
-	var target LifecycleTarget
-	var created, updated string
-	var nextRunAt, leaseExpiresAt, started, finished sql.NullString
-	if err := row.Scan(
-		&target.ID,
-		&target.OperationID,
-		&target.ApplicationID,
-		&target.ServerID,
-		&target.Action,
-		&target.State,
-		&target.Status,
-		&target.TargetKey,
-		&target.DesiredState,
-		&target.DesiredGeneration,
-		&target.DesiredSpecHash,
-		&target.Priority,
-		&target.Attempt,
-		&nextRunAt,
-		&target.LeaseOwner,
-		&leaseExpiresAt,
-		&target.ClaimedTaskID,
-		&target.InstanceID,
-		&target.ContainerName,
-		&target.ContainerID,
-		&target.Stage,
-		&target.Error,
-		&target.ErrorCode,
-		&target.ErrorMessage,
-		&target.ErrorDetail,
-		&created,
-		&started,
-		&finished,
-		&updated,
-	); err != nil {
-		return LifecycleTarget{}, err
-	}
-	if strings.TrimSpace(target.Action) == "" {
-		target.Action = lifecycleActionForDesiredState(target.DesiredState)
-	}
-	if strings.TrimSpace(target.State) == "" {
-		target.State = lifecycleStateForStatus(target.Status, target.Action)
-	}
-	if strings.TrimSpace(target.Status) == "" {
-		target.Status = lifecycleStatusForState(target.State)
-	}
-	if strings.TrimSpace(target.TargetKey) == "" {
-		target.TargetKey = lifecycleTargetKey(target.ApplicationID, target.ServerID)
-	}
-	if target.Priority == 0 {
-		target.Priority = lifecyclePriorityForAction(target.Action)
-	}
-	target.NextRunAt = parseOptionalTime(nextRunAt)
-	target.LeaseExpiresAt = parseOptionalTime(leaseExpiresAt)
-	target.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-	target.StartedAt = parseOptionalTime(started)
-	target.FinishedAt = parseOptionalTime(finished)
-	target.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
-	return target, nil
-}
-
-func parseOptionalTime(value sql.NullString) *time.Time {
-	if !value.Valid || strings.TrimSpace(value.String) == "" {
-		return nil
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, value.String)
-	if err != nil {
-		return nil
-	}
-	return &parsed
+	return toRuntimeInstance(m), nil
 }
 
 type cachedImageUpdate struct {
@@ -5284,21 +5140,21 @@ type cachedImageUpdate struct {
 
 func (s *Service) cachedImageUpdate(ctx context.Context, serverID string, references []string) (cachedImageUpdate, bool, error) {
 	for _, reference := range references {
-		var item cachedImageUpdate
-		var available int
-		var checked string
-		err := s.db.QueryRowContext(ctx, `SELECT local_digest,latest_digest,update_available,last_error,checked_at FROM image_updates WHERE server_id=? AND reference=?`, serverID, reference).
-			Scan(&item.LocalDigest, &item.LatestDigest, &available, &item.LastError, &checked)
-		if err == sql.ErrNoRows {
-			continue
-		}
-		if err != nil {
+		var m models.ImageUpdate
+		if err := orm.New(s.db).From("image_updates").Where("server_id=?", serverID).And("reference=?", reference).First(ctx, &m); err != nil {
+			if err == sql.ErrNoRows {
+				continue
+			}
 			return cachedImageUpdate{}, false, err
 		}
-		item.UpdateAvailable = available == 1
-		if parsed, err := time.Parse(time.RFC3339Nano, checked); err == nil {
-			item.CheckedAt = &parsed
+		item := cachedImageUpdate{
+			LocalDigest:     m.LocalDigest,
+			LatestDigest:    m.LatestDigest,
+			UpdateAvailable: m.UpdateAvailable,
+			LastError:       m.LastError,
 		}
+		checked := m.CheckedAt
+		item.CheckedAt = &checked
 		return item, true, nil
 	}
 	return cachedImageUpdate{}, false, nil
@@ -5313,14 +5169,13 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 				status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
 				if ensureAgentRuntimeReady(srv) == nil {
 					baseURL, _ := agentURLFromServer(srv)
-					if remote, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID, instance.ContainerName); err == nil {
-						status = remote.InstanceStatus
+					if resp, err := s.runtimeClient.RuntimeStatus(ctx, baseURL, instance.ID, instance.ContainerName); err == nil {
+						status = resp.InstanceStatus
 						status.ServerID = instance.ServerID
-						status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
-						status.DesiredState = instance.DesiredState
-						_ = s.markRuntimeInstance(ctx, instance.ID, instance.DesiredState, status.Status, status.ContainerID, status.LastError)
-					} else {
-						_ = s.handleAgentError(ctx, srv, err)
+						status.InstanceID = instance.ID
+						if strings.TrimSpace(status.ServerName) == "" {
+							status.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
+						}
 					}
 				}
 			}
@@ -5329,7 +5184,6 @@ func (s *Service) refreshInstanceStatuses(ctx context.Context, instances []appru
 	}
 	return out
 }
-
 func (s *Service) cachedInstanceStatuses(ctx context.Context, instances []appruntime.Instance) []appruntime.InstanceStatus {
 	out := make([]appruntime.InstanceStatus, 0, len(instances))
 	for _, instance := range instances {
@@ -6062,66 +5916,6 @@ func validationIssuesFromSpecIssues(specIssues []appspec.Issue) []ValidationIssu
 		issues = append(issues, ValidationIssue{Field: issue.Field, Message: issue.Message})
 	}
 	return issues
-}
-
-type appScanner interface{ Scan(...any) error }
-
-type sqlExec interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}
-
-const applicationColumns = `id,version,kind,name,enabled,deletion_requested,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,image_reference,image_digest,image_latest_digest,image_checked_at,image_update_available,image_last_error,job_id,namespace,last_eval_id,last_deployment_id,last_error,created_at,updated_at`
-
-func scanApplication(row appScanner) (Application, error) {
-	var app Application
-	var enabled, deletionRequested, imageUpdateAvailable int
-	var variables, resolvedVariables, deploymentServers, reverseProxy string
-	var createdAt, updatedAt string
-	var imageCheckedAt sql.NullString
-	if err := row.Scan(&app.ID, &app.Version, &app.Kind, &app.Name, &enabled, &deletionRequested, &app.SpecYAML, &variables, &resolvedVariables, &app.DeploymentMode, &deploymentServers, &reverseProxy, &app.Generation, &app.SpecHash, &app.ImageReference, &app.ImageDigest, &app.ImageLatestDigest, &imageCheckedAt, &imageUpdateAvailable, &app.ImageLastError, &app.JobID, &app.Namespace, &app.LastEvalID, &app.LastDeploymentID, &app.LastError, &createdAt, &updatedAt); err != nil {
-		return Application{}, err
-	}
-	app.Kind = applicationKind(app.Kind)
-	app.Enabled = enabled == 1
-	app.DeletionRequested = deletionRequested == 1
-	app.ImageUpdateAvailable = imageUpdateAvailable == 1
-	if imageCheckedAt.Valid && imageCheckedAt.String != "" {
-		checkedAt, _ := time.Parse(time.RFC3339Nano, imageCheckedAt.String)
-		if !checkedAt.IsZero() {
-			app.ImageCheckedAt = &checkedAt
-		}
-	}
-	if variables != "" {
-		_ = json.Unmarshal([]byte(variables), &app.Variables)
-	}
-	if app.Variables == nil {
-		app.Variables = map[string]string{}
-	}
-	if resolvedVariables != "" {
-		_ = json.Unmarshal([]byte(resolvedVariables), &app.ResolvedVariables)
-	}
-	if app.ResolvedVariables == nil {
-		app.ResolvedVariables = map[string]any{}
-	}
-	if app.DeploymentMode == "" {
-		app.DeploymentMode = DeploymentModeAll
-	}
-	if deploymentServers != "" {
-		_ = json.Unmarshal([]byte(deploymentServers), &app.DeploymentServers)
-	}
-	if app.DeploymentServers == nil {
-		app.DeploymentServers = []string{}
-	}
-	if reverseProxy != "" {
-		_ = json.Unmarshal([]byte(reverseProxy), &app.ReverseProxy)
-	}
-	if app.ReverseProxy == nil {
-		app.ReverseProxy = []ReverseProxyRule{}
-	}
-	app.PersistentPath = persistentPathForSpecYAML(app.ID, app.SpecYAML)
-	app.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	app.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
-	return app, nil
 }
 
 func persistentPathForSpecYAML(appID, specYAML string) string {

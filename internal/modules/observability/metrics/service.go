@@ -8,6 +8,8 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/servers"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/ssh"
@@ -154,9 +156,25 @@ func (s *Service) Save(ctx context.Context, snap linux.MetricsSnapshot) error {
 		snap.Time = time.Now().UTC()
 	}
 	snap.Time = alignMetricTime(snap.Time)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO metrics_snapshots(server_id,time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps,load_average,load_1,load_5,load_15,uptime_seconds,hostname,kernel_version,os_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		snap.ServerID, snap.Time.Format(time.RFC3339Nano), snap.CPUUsagePercent, snap.MemoryUsedBytes, snap.MemoryTotalBytes, snap.DiskUsedBytes, snap.DiskTotalBytes, snap.NetworkRxBytesRate, snap.NetworkTxBytesRate, snap.Status.LoadAverage, snap.Status.Load1, snap.Status.Load5, snap.Status.Load15, snap.Status.UptimeSeconds, snap.Status.Hostname, snap.Status.KernelVersion, snap.Status.OSVersion)
-	return err
+	return orm.New(s.db).Insert(ctx, &models.MetricsSnapshot{
+		ServerID:         snap.ServerID,
+		Time:             snap.Time,
+		CPUUsagePercent:  snap.CPUUsagePercent,
+		MemoryUsedBytes:  snap.MemoryUsedBytes,
+		MemoryTotalBytes: snap.MemoryTotalBytes,
+		DiskUsedBytes:    snap.DiskUsedBytes,
+		DiskTotalBytes:   snap.DiskTotalBytes,
+		NetworkRXBps:     snap.NetworkRxBytesRate,
+		NetworkTXBps:     snap.NetworkTxBytesRate,
+		LoadAverage:      snap.Status.LoadAverage,
+		Load1:            snap.Status.Load1,
+		Load5:            snap.Status.Load5,
+		Load15:           snap.Status.Load15,
+		UptimeSeconds:    snap.Status.UptimeSeconds,
+		Hostname:         snap.Status.Hostname,
+		KernelVersion:    snap.Status.KernelVersion,
+		OSVersion:        snap.Status.OSVersion,
+	})
 }
 
 func (s *Service) SaveReported(ctx context.Context, serverID string, sampleAt time.Time, snap linux.MetricsSnapshot) error {
@@ -177,36 +195,25 @@ func (s *Service) Query(ctx context.Context, serverID, rng string) (Series, erro
 		return Series{}, panelerr.Validation("range_invalid", "Range must be 1h, 6h, 1d, or 7d")
 	}
 	since := time.Now().UTC().Add(-duration).Format(time.RFC3339Nano)
-	rows, err := s.db.QueryContext(ctx, `SELECT time,cpu_usage_percent,memory_used_bytes,memory_total_bytes,disk_used_bytes,disk_total_bytes,network_rx_bps,network_tx_bps,load_1,load_5,load_15 FROM metrics_snapshots WHERE server_id=? AND time>=? ORDER BY time ASC`, serverID, since)
-	if err != nil {
+	var rows []models.MetricsSnapshot
+	if err := orm.New(s.db).From("metrics_snapshots").Where("server_id = ?", serverID).And("time >= ?", since).OrderBy("time").All(ctx, &rows); err != nil {
 		return Series{}, err
 	}
-	defer rows.Close()
 	series := Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}}
-	for rows.Next() {
-		var ts string
-		var cpu CPUPoint
-		var mem MemoryPoint
-		var disk DiskPoint
-		var netp NetPoint
-		var load LoadPoint
-		if err := rows.Scan(&ts, &cpu.UsagePercent, &mem.UsedBytes, &mem.TotalBytes, &disk.UsedBytes, &disk.TotalBytes, &netp.RxBytesPerSecond, &netp.TxBytesPerSecond, &load.Load1, &load.Load5, &load.Load15); err != nil {
-			return Series{}, err
-		}
-		t, _ := time.Parse(time.RFC3339Nano, ts)
-		cpu.Time, mem.Time, disk.Time, netp.Time, load.Time = t, t, t, t, t
-		series.CPU = append(series.CPU, cpu)
-		series.Memory = append(series.Memory, mem)
-		series.Disk = append(series.Disk, disk)
-		series.Network = append(series.Network, netp)
-		series.Load = append(series.Load, load)
+	for _, row := range rows {
+		t := row.Time
+		series.CPU = append(series.CPU, CPUPoint{Time: t, UsagePercent: row.CPUUsagePercent})
+		series.Memory = append(series.Memory, MemoryPoint{Time: t, UsedBytes: row.MemoryUsedBytes, TotalBytes: row.MemoryTotalBytes})
+		series.Disk = append(series.Disk, DiskPoint{Time: t, UsedBytes: row.DiskUsedBytes, TotalBytes: row.DiskTotalBytes})
+		series.Network = append(series.Network, NetPoint{Time: t, RxBytesPerSecond: row.NetworkRXBps, TxBytesPerSecond: row.NetworkTXBps})
+		series.Load = append(series.Load, LoadPoint{Time: t, Load1: row.Load1, Load5: row.Load5, Load15: row.Load15})
 	}
-	return series, rows.Err()
+	return series, nil
 }
 
 func (s *Service) Cleanup(ctx context.Context, retentionDays int) (int64, error) {
 	cutoff := time.Now().UTC().Add(-time.Duration(retentionDays) * 24 * time.Hour).Format(time.RFC3339Nano)
-	res, err := s.db.ExecContext(ctx, `DELETE FROM metrics_snapshots WHERE time < ?`, cutoff)
+	res, err := orm.RawExec(ctx, s.db, `DELETE FROM metrics_snapshots WHERE time < ?`, cutoff)
 	if err != nil {
 		return 0, err
 	}
@@ -215,7 +222,7 @@ func (s *Service) Cleanup(ctx context.Context, retentionDays int) (int64, error)
 
 func (s *Service) LatestAt(ctx context.Context, serverID string) (*time.Time, error) {
 	var ts sql.NullString
-	if err := s.db.QueryRowContext(ctx, `SELECT MAX(time) FROM metrics_snapshots WHERE server_id=?`, serverID).Scan(&ts); err != nil {
+	if err := orm.RawRow(ctx, s.db, `SELECT MAX(time) FROM metrics_snapshots WHERE server_id=?`, serverID).Scan(&ts); err != nil {
 		return nil, err
 	}
 	if !ts.Valid || ts.String == "" {
@@ -226,18 +233,15 @@ func (s *Service) LatestAt(ctx context.Context, serverID string) (*time.Time, er
 }
 
 func (s *Service) LatestLoad(ctx context.Context, serverID string) (string, error) {
-	var load sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, serverID).Scan(&load)
+	var row models.MetricsSnapshot
+	err := orm.New(s.db).From("metrics_snapshots").Where("server_id = ?", serverID).OrderBy("time DESC").First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	if !load.Valid {
-		return "", nil
-	}
-	return load.String, nil
+	return row.LoadAverage, nil
 }
 
 func alignMetricTime(t time.Time) time.Time {

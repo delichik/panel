@@ -12,6 +12,8 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 
 	"gopkg.in/yaml.v3"
@@ -233,15 +235,13 @@ func (s *Service) ensureFail2BanManageable(ctx context.Context, serverID string)
 }
 
 func (s *Service) loadFail2BanConfig(ctx context.Context, serverID string) (string, bool, *time.Time, error) {
-	var raw, updatedRaw string
-	var managedInt int
-	err := s.db.QueryRowContext(ctx, `SELECT config_yaml, managed, updated_at FROM fail2ban_configs WHERE server_id=?`, serverID).Scan(&raw, &managedInt, &updatedRaw)
+	var cfg models.Fail2banConfig
+	err := orm.New(s.db).From("fail2ban_configs").Where("server_id=?", serverID).First(ctx, &cfg)
 	if err == nil {
-		updated, _ := time.Parse(time.RFC3339Nano, updatedRaw)
-		if updated.IsZero() {
-			return raw, managedInt == 1, nil, nil
+		if cfg.UpdatedAt.IsZero() {
+			return cfg.ConfigYAML, cfg.Managed, nil, nil
 		}
-		return raw, managedInt == 1, &updated, nil
+		return cfg.ConfigYAML, cfg.Managed, &cfg.UpdatedAt, nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return defaultFail2BanYAML(), false, nil, nil
@@ -256,10 +256,10 @@ func (s *Service) saveFail2BanConfig(ctx context.Context, serverID, configYAML s
 		managedValue = 1
 	}
 	if managed == nil {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO fail2ban_configs(server_id, config_yaml, updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO UPDATE SET config_yaml=excluded.config_yaml, updated_at=excluded.updated_at`, serverID, configYAML, now)
+		_, err := orm.RawExec(ctx, s.db, `INSERT INTO fail2ban_configs(server_id, config_yaml, updated_at) VALUES(?,?,?) ON CONFLICT(server_id) DO UPDATE SET config_yaml=excluded.config_yaml, updated_at=excluded.updated_at`, serverID, configYAML, now)
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO fail2ban_configs(server_id, config_yaml, managed, updated_at) VALUES(?,?,?,?) ON CONFLICT(server_id) DO UPDATE SET config_yaml=excluded.config_yaml, managed=excluded.managed, updated_at=excluded.updated_at`, serverID, configYAML, managedValue, now)
+	_, err := orm.RawExec(ctx, s.db, `INSERT INTO fail2ban_configs(server_id, config_yaml, managed, updated_at) VALUES(?,?,?,?) ON CONFLICT(server_id) DO UPDATE SET config_yaml=excluded.config_yaml, managed=excluded.managed, updated_at=excluded.updated_at`, serverID, configYAML, managedValue, now)
 	return err
 }
 

@@ -16,6 +16,8 @@ import (
 	"panel/internal/modules/applications"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -177,6 +179,22 @@ func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, tas
 	return s
 }
 
+// containerObservationRow 是 container_observations 表的本地行映射：container_json /
+// summary_json / sample_at 必须按原始文本解析（写入端可能产生任意 JSON 文本，且旧
+// 代码对 sample_at 的解析失败是静默容错的），因此不能直接使用 models.ContainerObservation
+// 的 map[string]any / time.Time 语义。
+type containerObservationRow struct {
+	ServerID      string
+	ContainerID   string
+	SampleAt      string
+	ContainerJSON string
+	SummaryJSON   string
+	Managed       bool
+	ApplicationID string
+	InstanceID    string
+	UpdatedAt     string
+}
+
 func (s *Service) Containers(ctx context.Context, serverID string) (SnapshotList[ContainerSummary], error) {
 	if _, _, err := s.readyServer(ctx, serverID); err != nil {
 		return SnapshotList[ContainerSummary]{}, err
@@ -197,56 +215,68 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 		sampleAt = time.Now().UTC()
 	}
 	sampleAt = sampleAt.UTC().Truncate(time.Second)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM container_observations WHERE server_id=?`, serverID); err != nil {
-		return err
-	}
-	for _, item := range items {
-		if strings.TrimSpace(item.ID) == "" {
-			continue
-		}
-		appID, instanceID, managed := managedLabels(item.Labels)
-		raw, err := json.Marshal(item)
-		if err != nil {
+	now := time.Now().UTC()
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := orm.New(tx).From("container_observations").Where("server_id = ?", serverID).Delete(ctx); err != nil {
 			return err
 		}
-		summaryRaw, err := json.Marshal(ContainerSummary{ID: item.ID, Names: item.Names, Image: item.Image, State: item.State, Status: item.Status, Ports: item.Ports, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
-		if err != nil {
-			return err
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO container_observations(server_id,container_id,sample_at,container_json,summary_json,managed,application_id,instance_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			serverID, item.ID, sampleAt.Format(time.RFC3339Nano), string(raw), string(summaryRaw), boolInt(managed), appID, instanceID, now); err != nil {
-			return err
-		}
-		if managed {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
-				VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
-				instanceID, appID, serverID, sampleAt.Format(time.RFC3339Nano)); err != nil {
+		for _, item := range items {
+			if strings.TrimSpace(item.ID) == "" {
+				continue
+			}
+			appID, instanceID, managed := managedLabels(item.Labels)
+			raw, err := json.Marshal(item)
+			if err != nil {
 				return err
 			}
+			summaryRaw, err := json.Marshal(ContainerSummary{ID: item.ID, Names: item.Names, Image: item.Image, State: item.State, Status: item.Status, Ports: item.Ports, Managed: managed, ApplicationID: appID, InstanceID: instanceID})
+			if err != nil {
+				return err
+			}
+			var containerJSON, summaryJSON map[string]any
+			if err := json.Unmarshal(raw, &containerJSON); err != nil {
+				return err
+			}
+			if err := json.Unmarshal(summaryRaw, &summaryJSON); err != nil {
+				return err
+			}
+			if err := orm.New(tx).Insert(ctx, &models.ContainerObservation{
+				ServerID:      serverID,
+				ContainerID:   item.ID,
+				SampleAt:      sampleAt,
+				ContainerJSON: containerJSON,
+				SummaryJSON:   summaryJSON,
+				Managed:       managed,
+				ApplicationID: appID,
+				InstanceID:    instanceID,
+				UpdatedAt:     now,
+			}); err != nil {
+				return err
+			}
+			if managed {
+				if _, err := orm.RawExec(ctx, tx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
+					VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
+					instanceID, appID, serverID, sampleAt.Format(time.RFC3339Nano)); err != nil {
+					return err
+				}
+			}
 		}
-	}
-	return tx.Commit()
+		return nil
+	})
 }
 
 func (s *Service) reportedContainerSummaries(ctx context.Context, serverID string) ([]ContainerSummary, *time.Time, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT summary_json,container_json,sample_at FROM container_observations WHERE server_id=? ORDER BY container_id`, serverID)
-	if err != nil {
+	rows := []containerObservationRow{}
+	if err := orm.New(s.db).From("container_observations").
+		Select("summary_json", "container_json", "sample_at").
+		Where("server_id = ?", serverID).OrderBy("container_id").
+		All(ctx, &rows); err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	items := []ContainerSummary{}
+	items := make([]ContainerSummary, 0, len(rows))
 	var latest time.Time
-	for rows.Next() {
-		var raw, legacyRaw, sampleRaw string
-		if err := rows.Scan(&raw, &legacyRaw, &sampleRaw); err != nil {
-			return nil, nil, err
-		}
+	for _, row := range rows {
+		raw, legacyRaw, sampleRaw := row.SummaryJSON, row.ContainerJSON, row.SampleAt
 		if raw == "" || raw == "{}" {
 			raw = legacyRaw
 		}
@@ -259,9 +289,6 @@ func (s *Service) reportedContainerSummaries(ctx context.Context, serverID strin
 		}
 		items = append(items, item)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
-	}
 	if latest.IsZero() {
 		return items, nil, nil
 	}
@@ -269,18 +296,17 @@ func (s *Service) reportedContainerSummaries(ctx context.Context, serverID strin
 }
 
 func (s *Service) reportedContainers(ctx context.Context, serverID string) ([]agentcontract.DockerContainer, *time.Time, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT container_json,sample_at FROM container_observations WHERE server_id=? ORDER BY container_id`, serverID)
-	if err != nil {
+	rows := []containerObservationRow{}
+	if err := orm.New(s.db).From("container_observations").
+		Select("container_json", "sample_at").
+		Where("server_id = ?", serverID).OrderBy("container_id").
+		All(ctx, &rows); err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	items := []agentcontract.DockerContainer{}
+	items := make([]agentcontract.DockerContainer, 0, len(rows))
 	var latest time.Time
-	for rows.Next() {
-		var raw, sampleRaw string
-		if err := rows.Scan(&raw, &sampleRaw); err != nil {
-			return nil, nil, err
-		}
+	for _, row := range rows {
+		raw, sampleRaw := row.ContainerJSON, row.SampleAt
 		var item agentcontract.DockerContainer
 		if err := json.Unmarshal([]byte(raw), &item); err != nil {
 			return nil, nil, err
@@ -289,9 +315,6 @@ func (s *Service) reportedContainers(ctx context.Context, serverID string) ([]ag
 			latest = sampleAt
 		}
 		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
 	}
 	if latest.IsZero() {
 		return items, nil, nil
@@ -360,10 +383,11 @@ func (s *Service) ensureContainerActionAllowed(ctx context.Context, serverID, co
 	if s == nil || s.db == nil || strings.TrimSpace(serverID) == "" || containerID == "" {
 		return nil
 	}
-	var appID string
-	err := s.db.QueryRowContext(ctx, `SELECT application_id FROM container_observations
-		WHERE server_id=? AND container_id=? AND managed=1 AND application_id<>''
-		ORDER BY sample_at DESC LIMIT 1`, serverID, containerID).Scan(&appID)
+	var row containerObservationRow
+	err := orm.New(s.db).From("container_observations").Select("application_id").
+		Where("server_id = ?", serverID).And("container_id = ?", containerID).
+		And("managed = 1").And("application_id <> ''").OrderBy("sample_at DESC").
+		First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -767,36 +791,25 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 			}
 			observed[instanceID] = container
 		}
-		rows, err := s.db.QueryContext(ctx, `SELECT id,application_id FROM application_instances WHERE server_id=? AND desired_state='running'`, srv.ID)
-		if err != nil {
+		type expected struct {
+			ID            string
+			ApplicationID string
+		}
+		var expectedItems []expected
+		if err := orm.New(s.db).From("application_instances").Select("id", "application_id").
+			Where("server_id = ?", srv.ID).And("desired_state = 'running'").
+			All(ctx, &expectedItems); err != nil {
 			return nil, fmt.Errorf("query desired application instances for server %s: %w", srv.ID, err)
 		}
-		type expected struct{ instanceID, appID string }
-		var expectedItems []expected
-		for rows.Next() {
-			var item expected
-			if err := rows.Scan(&item.instanceID, &item.appID); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("scan desired application instance for server %s: %w", srv.ID, err)
-			}
-			expectedItems = append(expectedItems, item)
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf("iterate desired application instances for server %s: %w", srv.ID, err)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("close desired application instances for server %s: %w", srv.ID, err)
-		}
 		for _, item := range expectedItems {
-			if len(wantedApps) > 0 && !wantedApps[item.appID] {
+			if len(wantedApps) > 0 && !wantedApps[item.ApplicationID] {
 				continue
 			}
-			app, ok := appByID[item.appID]
+			app, ok := appByID[item.ApplicationID]
 			if !ok || !app.Enabled || !applicationWantsServer(app, srv.ID) {
 				continue
 			}
-			container, found := observed[item.instanceID]
+			container, found := observed[item.ID]
 			drifted := !found || container.State != "running"
 			if found {
 				drifted = drifted ||
@@ -951,7 +964,7 @@ func (s *Service) applicationReconcileState(ctx context.Context, appID string) (
 	var failures sql.NullInt64
 	var nextRunAt sql.NullString
 	var successStreak sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT MAX(reconcile_failures), MAX(NULLIF(reconcile_next_run_at,'')), MAX(reconcile_success_streak) FROM application_reconcile_states WHERE application_id=?`, appID).Scan(&failures, &nextRunAt, &successStreak)
+	err := orm.RawRow(ctx, s.db, `SELECT MAX(reconcile_failures), MAX(NULLIF(reconcile_next_run_at,'')), MAX(reconcile_success_streak) FROM application_reconcile_states WHERE application_id=?`, appID).Scan(&failures, &nextRunAt, &successStreak)
 	if err != nil {
 		return applicationReconcileState{}, err
 	}
@@ -971,9 +984,13 @@ func (s *Service) applicationReconcileState(ctx context.Context, appID string) (
 }
 
 func (s *Service) updateApplicationReconcileBackoff(ctx context.Context, appID string, failures int, next time.Time) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_failures=?,reconcile_next_run_at=?,reconcile_success_streak=0 WHERE application_id=?`,
-		failures, next.UTC().Format(time.RFC3339Nano), appID)
-	return err
+	return orm.New(s.db).From("application_reconcile_states").
+		Where("application_id = ?", appID).
+		UpdateColumns(ctx, map[string]any{
+			"reconcile_failures":       failures,
+			"reconcile_next_run_at":    next.UTC().Format(time.RFC3339Nano),
+			"reconcile_success_streak": 0,
+		})
 }
 
 func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID string) error {
@@ -993,21 +1010,29 @@ func (s *Service) recordApplicationReconcileHealthy(ctx context.Context, appID s
 	}
 	streak := state.successStreak + 1
 	if streak >= applicationReconcileHealthyChecksToReset {
-		_, err = s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_failures=0,reconcile_next_run_at='',reconcile_success_streak=0 WHERE application_id=?`, appID)
-		return err
+		return orm.New(s.db).From("application_reconcile_states").
+			Where("application_id = ?", appID).
+			UpdateColumns(ctx, map[string]any{
+				"reconcile_failures":       0,
+				"reconcile_next_run_at":    "",
+				"reconcile_success_streak": 0,
+			})
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_success_streak=? WHERE application_id=?`, streak, appID)
-	return err
+	return orm.New(s.db).From("application_reconcile_states").
+		Where("application_id = ?", appID).
+		UpdateColumns(ctx, map[string]any{"reconcile_success_streak": streak})
 }
 
 func (s *Service) resetApplicationReconcileHealthStreak(ctx context.Context, appID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_success_streak=0 WHERE application_id=?`, appID)
-	return err
+	return orm.New(s.db).From("application_reconcile_states").
+		Where("application_id = ?", appID).
+		UpdateColumns(ctx, map[string]any{"reconcile_success_streak": 0})
 }
 
 func (s *Service) clearApplicationReconcileNextRun(ctx context.Context, appID string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE application_reconcile_states SET reconcile_next_run_at='' WHERE application_id=?`, appID)
-	return err
+	return orm.New(s.db).From("application_reconcile_states").
+		Where("application_id = ?", appID).
+		UpdateColumns(ctx, map[string]any{"reconcile_next_run_at": ""})
 }
 
 func applicationReconcileBackoff(failures int) time.Duration {
@@ -1211,28 +1236,28 @@ func (s *Service) runImageRefresh(ctx context.Context, task tasks.Task, serverID
 			lastError:       lastError,
 		})
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		_ = s.tasks.Fail(ctx, task.ID, err)
-		return
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM image_updates WHERE server_id=?`, serverID); err != nil {
-		_ = s.tasks.Fail(ctx, task.ID, err)
-		return
-	}
-	for _, update := range updates {
-		if _, err = tx.ExecContext(ctx, `INSERT INTO image_updates(server_id,reference,local_digest,latest_digest,update_available,last_error,checked_at) VALUES(?,?,?,?,?,?,?)`,
-			serverID, update.reference, update.localDigest, update.latestDigest, boolInt(update.updateAvailable), update.lastError, now.Format(time.RFC3339Nano)); err != nil {
-			_ = s.tasks.Fail(ctx, task.ID, err)
-			return
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := orm.New(tx).From("image_updates").Where("server_id = ?", serverID).Delete(ctx); err != nil {
+			return err
 		}
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO image_refreshes(server_id,refreshed_at) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, serverID, now.Format(time.RFC3339Nano)); err != nil {
-		_ = s.tasks.Fail(ctx, task.ID, err)
-		return
-	}
-	if err = tx.Commit(); err != nil {
+		for _, update := range updates {
+			if err := orm.New(tx).Insert(ctx, &models.ImageUpdate{
+				ServerID:        serverID,
+				Reference:       update.reference,
+				LocalDigest:     update.localDigest,
+				LatestDigest:    update.latestDigest,
+				UpdateAvailable: update.updateAvailable,
+				LastError:       update.lastError,
+				CheckedAt:       now,
+			}); err != nil {
+				return err
+			}
+		}
+		if _, err := orm.RawExec(ctx, tx, `INSERT INTO image_refreshes(server_id,refreshed_at) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, serverID, now.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
 		_ = s.tasks.Fail(ctx, task.ID, err)
 		return
 	}
@@ -1248,7 +1273,7 @@ func (s *Service) replaceResourceSnapshot(ctx context.Context, serverID, resourc
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO docker_resource_snapshots(server_id,resource_type,items_json,observed_at) VALUES(?,?,?,?)
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO docker_resource_snapshots(server_id,resource_type,items_json,observed_at) VALUES(?,?,?,?)
 		ON CONFLICT(server_id,resource_type) DO UPDATE SET items_json=excluded.items_json,observed_at=excluded.observed_at`,
 		serverID, resourceType, string(raw), time.Now().UTC().Format(time.RFC3339Nano))
 	return err
@@ -1258,22 +1283,31 @@ func (s *Service) resourceSnapshot(ctx context.Context, serverID, resourceType s
 	if _, _, err := s.readyServer(ctx, serverID); err != nil {
 		return nil, err
 	}
-	var raw, observedRaw string
-	err := s.db.QueryRowContext(ctx, `SELECT items_json,observed_at FROM docker_resource_snapshots WHERE server_id=? AND resource_type=?`, serverID, resourceType).Scan(&raw, &observedRaw)
+	var row dockerResourceSnapshotRow
+	err := orm.New(s.db).From("docker_resource_snapshots").Select("items_json", "observed_at").
+		Where("server_id = ?", serverID).And("resource_type = ?", resourceType).
+		First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := json.Unmarshal([]byte(raw), out); err != nil {
+	if err := json.Unmarshal([]byte(row.ItemsJSON), out); err != nil {
 		return nil, err
 	}
-	observed, err := time.Parse(time.RFC3339Nano, observedRaw)
+	observed, err := time.Parse(time.RFC3339Nano, row.ObservedAt)
 	if err != nil {
 		return nil, nil
 	}
 	return &observed, nil
+}
+
+// dockerResourceSnapshotRow 是 docker_resource_snapshots 的本地行映射：items_json /
+// observed_at 按原始文本读取，保留旧代码对 observed_at 解析失败的静默容错。
+type dockerResourceSnapshotRow struct {
+	ItemsJSON  string
+	ObservedAt string
 }
 
 func (s *Service) runApplicationUpdates(task tasks.Task, applicationIDs []string) {
@@ -1323,36 +1357,48 @@ type cachedImage struct {
 	LastError       string
 }
 
+// imageUpdateRow 是 image_updates 表的本地行映射：checked_at/update_available 需要
+// 按旧代码的容错语义解析（时间解析失败时静默忽略），不能直接用 models.ImageUpdate
+// 的 time.Time/bool 语义（解析失败会直接报错）。
+type imageUpdateRow struct {
+	Reference       string
+	LocalDigest     string
+	LatestDigest    string
+	UpdateAvailable bool
+	LastError       string
+	CheckedAt       string
+}
+
 func (s *Service) imageCache(ctx context.Context, serverID string) (map[string]cachedImage, *time.Time, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT reference,local_digest,latest_digest,update_available,last_error,checked_at FROM image_updates WHERE server_id=?`, serverID)
-	if err != nil {
+	var rows []imageUpdateRow
+	if err := orm.New(s.db).From("image_updates").
+		Select("reference", "local_digest", "latest_digest", "update_available", "last_error", "checked_at").
+		Where("server_id = ?", serverID).
+		All(ctx, &rows); err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
 	out := map[string]cachedImage{}
-	for rows.Next() {
-		var item cachedImage
-		var available int
-		var checked string
-		var reference string
-		if err := rows.Scan(&reference, &item.LocalDigest, &item.LatestDigest, &available, &item.LastError, &checked); err != nil {
-			return nil, nil, err
+	for _, row := range rows {
+		item := cachedImage{
+			LocalDigest:     row.LocalDigest,
+			LatestDigest:    row.LatestDigest,
+			UpdateAvailable: row.UpdateAvailable,
+			LastError:       row.LastError,
 		}
-		item.UpdateAvailable = available == 1
-		if parsed, err := time.Parse(time.RFC3339Nano, checked); err == nil {
+		if parsed, err := time.Parse(time.RFC3339Nano, row.CheckedAt); err == nil {
 			item.CheckedAt = &parsed
 		}
-		out[reference] = item
+		out[row.Reference] = item
 	}
 	var raw sql.NullString
-	_ = s.db.QueryRowContext(ctx, `SELECT refreshed_at FROM image_refreshes WHERE server_id=?`, serverID).Scan(&raw)
+	_ = orm.RawRow(ctx, s.db, `SELECT refreshed_at FROM image_refreshes WHERE server_id=?`, serverID).Scan(&raw)
 	var refreshedAt *time.Time
 	if raw.Valid {
 		if parsed, err := time.Parse(time.RFC3339Nano, raw.String); err == nil {
 			refreshedAt = &parsed
 		}
 	}
-	return out, refreshedAt, rows.Err()
+	return out, refreshedAt, nil
 }
 
 func managedLabels(labels map[string]string) (string, string, bool) {

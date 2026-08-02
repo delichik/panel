@@ -117,7 +117,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())
@@ -174,11 +174,11 @@ func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
 	}
 	targets, _ := json.Marshal([]string{srv.ID, "srv_other"})
 	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		"app_1", "app", 1, "name: app\nimage: nginx\n", "{}", "{}", "selected", string(targets), "[]", 1, "job_1", "now", "now"); err != nil {
+		"app_1", "app", 1, "name: app\nimage: nginx\n", "{}", "{}", "selected", string(targets), "[]", 1, "job_1", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	cards := `[{"id":"card_1","kind":"cpu","width":3,"height":2,"range":"1h","networkDirection":"both","serverIds":["` + srv.ID + `","srv_other"]}]`
-	if _, err := store.AppDB().Exec(`INSERT INTO overview_card_configurations(id,cards_json,updated_at) VALUES('default',?,'now')`, cards); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO overview_card_configurations(id,cards_json,updated_at) VALUES('default',?,'2026-01-01T00:00:00Z')`, cards); err != nil {
 		t.Fatal(err)
 	}
 
@@ -423,7 +423,7 @@ func TestEnableUFWInstallsWhenMissingAndAllowsSSHBeforeEnable(t *testing.T) {
 	blockEnable := make(chan struct{})
 	exec := &ufwEnableFakeExec{blockEnable: blockEnable}
 	svc, taskSvc, store := testServerService(t, exec)
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_enable','s','127.0.0.1',22022,'du','cred_1','debian','13','Debian GNU/Linux 13',1,1,1,'passwordless_sudo','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_enable','s','127.0.0.1',22022,'du','cred_1','debian','13','Debian GNU/Linux 13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -457,7 +457,7 @@ func TestRestartCreatesRunningTaskAndSchedulesReboot(t *testing.T) {
 	blockRestart := make(chan struct{})
 	exec := &restartFakeExec{blockRestart: blockRestart}
 	svc, taskSvc, store := testServerService(t, exec)
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_restart','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'passwordless_sudo','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_restart','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -498,10 +498,10 @@ func TestUFWStateAllowAndDeleteRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'passwordless_sudo','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1','debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())
@@ -541,11 +541,11 @@ func TestUFWStateUsesAgentWhenConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())
@@ -578,11 +578,11 @@ func TestUFWStateUsesCompatibleAgentWithoutStoredPrivilege(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,0,'none','now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,0,'none','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())
@@ -615,11 +615,11 @@ func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())
@@ -642,7 +642,7 @@ func TestUFWWriteOperationsUseAgentWhenConfigured(t *testing.T) {
 func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	health := agentHealth("0.9.0")
@@ -661,7 +661,7 @@ func TestCheckConfiguredAgentsMarksIncompatibleVersion(t *testing.T) {
 func TestCheckConfiguredAgentsMarksCompatibleWhenVersionMatches(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	health := agentHealth(agentcontract.Version)
@@ -683,7 +683,7 @@ func TestCheckConfiguredAgentsMarksCompatibleWhenVersionMatches(t *testing.T) {
 func TestCheckAgentKeepsExpiringCertificateCompatible(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC()
@@ -758,7 +758,7 @@ func TestSynchronousConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 func TestCheckConfiguredAgentsDeploysNonDefaultAgentURL(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9443","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	setServerArchitecture(t, store, "srv_agent")
@@ -795,7 +795,7 @@ func TestIssueAgentCertificateUsesCurrentServerHostURL(t *testing.T) {
 	}
 	svc.SetAgentTLSAssets(assets)
 	traits := `{"agent.enabled":"true","agent.url":"https://198.51.100.2:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','203.0.113.10',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','203.0.113.10',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 
@@ -822,7 +822,7 @@ func TestIssueAgentCertificateUsesCurrentServerHostURL(t *testing.T) {
 func TestUpdateHostRefreshesAgentURLAndInvalidatesCertificate(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://198.51.100.2:9786","agent.status":"compatible","agent.certificate.fingerprint":"OLD","agent.certificate.not_after":"2027-01-01T00:00:00Z"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','198.51.100.2',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','198.51.100.2',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 
@@ -850,7 +850,7 @@ func TestUpdateHostRefreshesAgentURLAndInvalidatesCertificate(t *testing.T) {
 func TestCheckConfiguredAgentsDeploysConfiguredIncompatibleAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"incompatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	setServerArchitecture(t, store, "srv_agent")
@@ -876,7 +876,7 @@ func TestCheckConfiguredAgentsDeploysExpiredStoredAgentCertificate(t *testing.T)
 	_, taskSvc, store := testServerService(t, nil)
 	expiredAt := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","agent.certificate.not_after":"` + expiredAt + `"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	setServerArchitecture(t, store, "srv_agent")
@@ -902,7 +902,7 @@ func TestCheckConfiguredAgentsDeploysExpiringStoredAgentCertificate(t *testing.T
 	_, taskSvc, store := testServerService(t, nil)
 	expiringAt := time.Now().UTC().Add(agentCertificateRenewBefore / 2).Format(time.RFC3339Nano)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","agent.certificate.not_after":"` + expiringAt + `"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	setServerArchitecture(t, store, "srv_agent")
@@ -945,7 +945,7 @@ func TestCheckConfiguredAgentsDoesNotDeployUnavailableNetworkError(t *testing.T)
 	_, taskSvc, store := testServerService(t, nil)
 	lastErr := `rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp 127.0.0.1:9786: i/o timeout"`
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"unavailable","agent.last_error":"` + strings.ReplaceAll(lastErr, `"`, `\"`) + `"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
@@ -976,7 +976,7 @@ func TestCheckConfiguredAgentsDoesNotDeployUnavailableNetworkError(t *testing.T)
 func TestCheckConfiguredAgentsDoesNotDeployUndeployableAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"undeployable","agent.auto_deploy_blocked":"true"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
@@ -1000,7 +1000,7 @@ func TestCheckConfiguredAgentsDoesNotDeployUndeployableAgent(t *testing.T) {
 func TestCheckConfiguredAgentsMarksCertificateTimeErrorIncompatible(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	certErr := x509.CertificateInvalidError{Reason: x509.Expired}
@@ -1054,7 +1054,7 @@ func TestAgentCertificateTimeErrorDeploysWhenAlreadyIncompatible(t *testing.T) {
 func TestSystemDetectionDeploysForIncompatibleAgent(t *testing.T) {
 	_, taskSvc, store := testServerService(t, nil)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"incompatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	setServerArchitecture(t, store, "srv_agent")
@@ -1200,7 +1200,7 @@ func TestAgentHealthRequiresFiveSuccessesToClearAutoDeployFailures(t *testing.T)
 	svc, _, store := testServerService(t, nil)
 	lastFailure := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","agent.auto_deploy_failures":"1","agent.auto_deploy_last_failure_at":"` + lastFailure + `"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
@@ -1280,7 +1280,7 @@ func TestSystemCertificatesIncludeAgentServerCertificates(t *testing.T) {
 	}
 	svc.SetAgentTLSAssets(assets)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","agent.certificate.fingerprint":"ABC","agent.certificate.not_before":"2025-01-01T00:00:00Z","agent.certificate.not_after":"2027-01-01T00:00:00Z"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1310,7 +1310,7 @@ func TestSystemCertificatesSkipAgentServerWithoutCertificateMetadata(t *testing.
 	}
 	svc.SetAgentTLSAssets(assets)
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible","agent.certificate.fingerprint":"ABC"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_agent','s','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1363,11 +1363,11 @@ func TestUFWStateDoesNotFallbackOnAgentCertificateTimeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_supported,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du','cred_1',?,'debian','13',1,1,1,'passwordless_sudo','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	exec := &ufwManageFakeExec{}
@@ -1445,7 +1445,7 @@ func TestVerifyRemoteAgentCertificateFileComparesNewCertificateHash(t *testing.T
 
 func TestAgentTargetPlatformDetectsMissingStructuredArchitecture(t *testing.T) {
 	svc, _, store := testServerService(t, agentArchFakeExec{arch: "x86_64"})
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,created_at,updated_at) VALUES('srv_arch','s','127.0.0.1',22,'du','cred_1','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,created_at,updated_at) VALUES('srv_arch','s','127.0.0.1',22,'du','cred_1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	srv, err := svc.Get(context.Background(), "srv_arch")
@@ -1545,7 +1545,7 @@ func TestCreateServerInitialInfoFailureRollsBackServer(t *testing.T) {
 func TestCollectServerInfoInputsIncludesOnlyCompatibleAgents(t *testing.T) {
 	svc, _, store := testServerService(t, nil)
 	compatibleTraits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_ready','ready','127.0.0.1',22,'du','cred_1',?,'now','now'),('srv_plain','plain','127.0.0.2',22,'du','cred_1','{}','now','now')`, compatibleTraits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_ready','ready','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z'),('srv_plain','plain','127.0.0.2',22,'du','cred_1','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, compatibleTraits); err != nil {
 		t.Fatal(err)
 	}
 	batch, shouldRun, err := svc.CollectServerInfoInputs(context.Background())
@@ -1560,7 +1560,7 @@ func TestCollectServerInfoInputsIncludesOnlyCompatibleAgents(t *testing.T) {
 func TestScheduledServerInfoFailureDoesNotRollbackServer(t *testing.T) {
 	svc, taskSvc, store := testServerService(t, &connectivityFakeExec{})
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_refresh','refresh','127.0.0.1',22,'du','cred_1',?,'now','now')`, traits); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_refresh','refresh','127.0.0.1',22,'du','cred_1',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, traits); err != nil {
 		t.Fatal(err)
 	}
 	svc.SetAgentClient(&serverFakeAgentClient{err: errors.New("agent down")})
@@ -2011,7 +2011,7 @@ func testServerService(t *testing.T, exec sshx.RemoteExecutor) (*Service, *tasks
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred_1','c','password','du','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())

@@ -11,6 +11,8 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/ssh"
@@ -55,30 +57,19 @@ func NewService(db *sql.DB, servers *server.Service, exec sshx.RemoteExecutor, t
 }
 
 func (s *Service) List(ctx context.Context, serverID string) (UpdateList, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name,installed_version,candidate_version,source FROM package_updates WHERE server_id=? ORDER BY name`, serverID)
-	if err != nil {
+	var rows []models.PackageUpdate
+	if err := orm.New(s.db).From("package_updates").Where("server_id = ?", serverID).OrderBy("name").All(ctx, &rows); err != nil {
 		return UpdateList{}, err
 	}
 	out := UpdateList{ServerID: serverID, Updates: []linux.PackageUpdate{}}
-	for rows.Next() {
-		var u linux.PackageUpdate
-		if err := rows.Scan(&u.Name, &u.InstalledVersion, &u.CandidateVersion, &u.Source); err != nil {
-			_ = rows.Close()
-			return UpdateList{}, err
-		}
-		out.Updates = append(out.Updates, u)
+	for _, row := range rows {
+		out.Updates = append(out.Updates, linux.PackageUpdate{
+			Name: row.Name, InstalledVersion: row.InstalledVersion, CandidateVersion: row.CandidateVersion, Source: row.Source,
+		})
 	}
-	if err := rows.Err(); err != nil {
-		_ = rows.Close()
-		return UpdateList{}, err
-	}
-	if err := rows.Close(); err != nil {
-		return UpdateList{}, err
-	}
-	var ts sql.NullString
-	_ = s.db.QueryRowContext(ctx, `SELECT refreshed_at FROM package_refreshes WHERE server_id=?`, serverID).Scan(&ts)
-	if ts.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, ts.String)
+	var refresh models.PackageRefresh
+	if err := orm.New(s.db).From("package_refreshes").Where("server_id = ?", serverID).First(ctx, &refresh); err == nil {
+		t := refresh.RefreshedAt
 		out.LastRefreshedAt = &t
 	}
 	if out.LastRefreshedAt == nil || time.Since(*out.LastRefreshedAt) > 10*time.Minute {
@@ -386,57 +377,52 @@ func packageAgentURL(srv server.Server) (string, error) {
 }
 
 func (s *Service) replaceUpdates(ctx context.Context, serverID string, updates []linux.PackageUpdate) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM package_updates WHERE server_id=?`, serverID); err != nil {
-		return err
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for _, u := range updates {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO package_updates(server_id,name,installed_version,candidate_version,source,refreshed_at) VALUES(?,?,?,?,?,?)`, serverID, u.Name, u.InstalledVersion, u.CandidateVersion, u.Source, now); err != nil {
+	now := time.Now().UTC()
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := orm.New(tx).From("package_updates").Where("server_id = ?", serverID).Delete(ctx); err != nil {
 			return err
 		}
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO package_refreshes(server_id,refreshed_at) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, serverID, now); err != nil {
-		return err
-	}
-	return tx.Commit()
+		records := make([]models.PackageUpdate, 0, len(updates))
+		for _, u := range updates {
+			records = append(records, models.PackageUpdate{
+				ServerID: serverID, Name: u.Name, InstalledVersion: u.InstalledVersion,
+				CandidateVersion: u.CandidateVersion, Source: u.Source, RefreshedAt: now,
+			})
+		}
+		if err := orm.New(tx).InsertBatch(ctx, records); err != nil {
+			return err
+		}
+		if _, err := orm.RawExec(ctx, tx, `INSERT INTO package_refreshes(server_id,refreshed_at) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, serverID, now.Format(time.RFC3339Nano)); err != nil {
+			return err
+		}
+		return nil
+	})
 }
 
 func (s *Service) Counts(ctx context.Context) (map[string]int, map[string]*time.Time, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT server_id, COUNT(*) FROM package_updates GROUP BY server_id`)
-	if err != nil {
+	var grouped []serverUpdateCount
+	if err := orm.New(s.db).From("package_updates").SelectExpr("server_id, COUNT(*) AS count").GroupBy("server_id").All(ctx, &grouped); err != nil {
 		return nil, nil, err
 	}
 	counts := map[string]int{}
-	for rows.Next() {
-		var id string
-		var c int
-		if err := rows.Scan(&id, &c); err != nil {
-			rows.Close()
-			return nil, nil, err
-		}
-		counts[id] = c
+	for _, row := range grouped {
+		counts[row.ServerID] = int(row.Count)
 	}
-	rows.Close()
-	rows, err = s.db.QueryContext(ctx, `SELECT server_id, refreshed_at FROM package_refreshes`)
-	if err != nil {
+	var refreshes []models.PackageRefresh
+	if err := orm.New(s.db).From("package_refreshes").All(ctx, &refreshes); err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
 	times := map[string]*time.Time{}
-	for rows.Next() {
-		var id, raw string
-		if err := rows.Scan(&id, &raw); err != nil {
-			return nil, nil, err
-		}
-		t, _ := time.Parse(time.RFC3339Nano, raw)
-		times[id] = &t
+	for _, row := range refreshes {
+		t := row.RefreshedAt
+		times[row.ServerID] = &t
 	}
-	return counts, times, rows.Err()
+	return counts, times, nil
+}
+
+type serverUpdateCount struct {
+	ServerID string `orm:"column:server_id"`
+	Count    int64  `orm:"column:count"`
 }
 
 type taskLogSink struct {

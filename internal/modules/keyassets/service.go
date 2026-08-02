@@ -24,6 +24,8 @@ import (
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
@@ -105,14 +107,14 @@ func (s *Service) exportDB() *sql.DB {
 }
 
 func (s *Service) EnsureLegacySelfSignedMigrated(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO runtime_settings(key,value,updated_at) VALUES('key_assets_self_signed_migrated','',?)`, formatTime(time.Now().UTC())); err != nil {
+	if _, err := orm.RawExec(ctx, s.db, `INSERT OR IGNORE INTO runtime_settings(key,value,updated_at) VALUES('key_assets_self_signed_migrated','',?)`, formatTime(time.Now().UTC())); err != nil {
 		return err
 	}
 	var marker string
-	if err := s.db.QueryRowContext(ctx, `SELECT value FROM runtime_settings WHERE key='key_assets_self_signed_migrated'`).Scan(&marker); err != nil {
+	if err := orm.New(s.db).From("runtime_settings").Select("value").Where("key = ?", "key_assets_self_signed_migrated").ScanValue(ctx, &marker); err != nil {
 		return err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,parent_ca_id,kind,name,common_name,dns_names_json,ip_addresses_json,certificate_path,private_key_path,public_key_path,created_at,updated_at FROM self_signed_certificates ORDER BY kind,name`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,parent_ca_id,kind,name,common_name,dns_names_json,ip_addresses_json,certificate_path,private_key_path,public_key_path,created_at,updated_at FROM self_signed_certificates ORDER BY kind,name`)
 	if err != nil {
 		return err
 	}
@@ -144,7 +146,7 @@ func (s *Service) EnsureLegacySelfSignedMigrated(ctx context.Context) error {
 	}
 	if len(records) == 0 {
 		if marker != "done" {
-			_, err = s.db.ExecContext(ctx, `UPDATE runtime_settings SET value='done',updated_at=? WHERE key='key_assets_self_signed_migrated'`, formatTime(time.Now().UTC()))
+			err = orm.New(s.db).From("runtime_settings").Where("key = ?", "key_assets_self_signed_migrated").UpdateColumns(ctx, map[string]any{"value": "done", "updated_at": formatTime(time.Now().UTC())})
 		}
 		return err
 	}
@@ -231,21 +233,20 @@ func (s *Service) EnsureLegacySelfSignedMigrated(ctx context.Context) error {
 		preparedAssets = append(preparedAssets, stored)
 		toCleanup = append(toCleanup, filepath.Dir(rec.CertPath))
 	}
-	if err := withTx(ctx, s.db, func(tx *sql.Tx) error {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		for _, asset := range preparedAssets {
-			var exists int
-			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM key_assets WHERE id=?`, asset.ID).Scan(&exists); err != nil {
+			exists, err := orm.New(tx).From("key_assets").Where("id = ?", asset.ID).Exists(ctx)
+			if err != nil {
 				return err
 			}
-			if exists > 0 {
+			if exists {
 				continue
 			}
 			if err := s.insertAssetTx(ctx, tx, asset); err != nil {
 				return err
 			}
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE runtime_settings SET value='done',updated_at=? WHERE key='key_assets_self_signed_migrated'`, formatTime(time.Now().UTC()))
-		return err
+		return orm.New(tx).From("runtime_settings").Where("key = ?", "key_assets_self_signed_migrated").UpdateColumns(ctx, map[string]any{"value": "done", "updated_at": formatTime(time.Now().UTC())})
 	}); err != nil {
 		return err
 	}
@@ -259,7 +260,7 @@ func (s *Service) EnsureLegacySelfSignedMigrated(ctx context.Context) error {
 }
 
 func (s *Service) List(ctx context.Context) ([]Asset, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+assetColumns+` FROM key_assets ORDER BY type,name`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets ORDER BY type,name`)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +296,7 @@ func (s *Service) List(ctx context.Context) ([]Asset, error) {
 }
 
 func (s *Service) ListSummaries(ctx context.Context) ([]Asset, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
 		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets ORDER BY type,name,id`)
 	if err != nil {
 		return nil, err
@@ -358,15 +359,28 @@ func (s *Service) listSummaryPage(ctx context.Context, page, pageSize int, query
 	}
 	if query != "" {
 		filter += " AND (name LIKE ? ESCAPE '\\' OR common_name LIKE ? ESCAPE '\\' OR fingerprint LIKE ? ESCAPE '\\')"
-		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		term := orm.LikeEscaped(query)
 		args = append(args, term, term, term)
 	}
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM key_assets WHERE `+filter, args...).Scan(&total); err != nil {
+	countQuery := orm.New(s.db).From("key_assets")
+	if len(types) > 0 {
+		countQuery.AndIn("type", types)
+	}
+	if query != "" {
+		term := orm.LikeEscaped(query)
+		countQuery.WhereGroup(func(c *orm.Condition) {
+			c.Where("name LIKE ? ESCAPE '\\'", term)
+			c.Or("common_name LIKE ? ESCAPE '\\'", term)
+			c.Or("fingerprint LIKE ? ESCAPE '\\'", term)
+		})
+	}
+	total64, err := countQuery.Count(ctx)
+	if err != nil {
 		return httpx.ListPage[Asset]{}, err
 	}
+	total := int(total64)
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
 		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets WHERE `+filter+` ORDER BY type,name,id LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[Asset]{}, err
@@ -406,7 +420,7 @@ func (s *Service) listSummaryPage(ctx context.Context, page, pageSize int, query
 		for i := range items {
 			ids[i] = items[i].ID
 		}
-		countRows, err := s.db.QueryContext(ctx, `SELECT parent_asset_id,COUNT(*) FROM key_assets WHERE parent_asset_id IN (`+placeholders+`) GROUP BY parent_asset_id`, ids...)
+		countRows, err := orm.Raw(ctx, s.db, `SELECT parent_asset_id,COUNT(*) FROM key_assets WHERE parent_asset_id IN (`+placeholders+`) GROUP BY parent_asset_id`, ids...)
 		if err != nil {
 			return httpx.ListPage[Asset]{}, err
 		}
@@ -661,8 +675,8 @@ func (s *Service) Delete(ctx context.Context, assetID string) error {
 		return err
 	}
 	if stored.Type == TypeCACertificate {
-		var children int
-		if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM key_assets WHERE parent_asset_id=?`, assetID).Scan(&children); err != nil {
+		children, err := orm.New(s.db).From("key_assets").Where("parent_asset_id = ?", assetID).Count(ctx)
+		if err != nil {
 			return err
 		}
 		if children > 0 {
@@ -676,8 +690,7 @@ func (s *Service) Delete(ctx context.Context, assetID string) error {
 	if len(references[assetID]) > 0 {
 		return panelerr.Conflict("key_asset_in_use", "Key asset is still used by an application or reverse proxy")
 	}
-	_, err = s.db.ExecContext(ctx, `DELETE FROM key_assets WHERE id=?`, assetID)
-	return err
+	return orm.New(s.db).From("key_assets").Where("id = ?", assetID).Delete(ctx)
 }
 
 func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult, error) {
@@ -895,7 +908,7 @@ func (s *Service) OpenInternalFile(ctx context.Context, source string) (io.ReadC
 }
 
 func (s *Service) ReverseProxyCertificates(ctx context.Context) ([]proxycert.Certificate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+assetColumns+` FROM key_assets WHERE type=? ORDER BY name`, TypeTLSCertificate)
+	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE type=? ORDER BY name`, TypeTLSCertificate)
 	if err != nil {
 		return nil, err
 	}
@@ -987,7 +1000,7 @@ func (s *Service) CreateExport(ctx context.Context, in ExportRequest) (ExportRes
 	}
 	now := time.Now().UTC()
 	expiresAt := now.Add(30 * time.Minute)
-	if _, err := s.exportDB().ExecContext(ctx, `INSERT INTO key_asset_exports(task_id,filename,file_path,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?)
+	if _, err := orm.RawExec(ctx, s.exportDB(), `INSERT INTO key_asset_exports(task_id,filename,file_path,expires_at,created_at,updated_at) VALUES(?,?,?,?,?,?)
 		ON CONFLICT(task_id) DO UPDATE SET filename=excluded.filename,file_path=excluded.file_path,expires_at=excluded.expires_at,updated_at=excluded.updated_at`,
 		taskID, filename, filePath, formatTime(expiresAt), formatTime(now), formatTime(now)); err != nil {
 		_ = fail(err)
@@ -1012,26 +1025,26 @@ func (s *Service) DownloadExport(ctx context.Context, taskID string) ([]byte, st
 			return nil, "", panelerr.NotFound("key_asset_export")
 		}
 	}
-	var filename, filePath, expiresAtRaw string
-	if err := s.exportDB().QueryRowContext(ctx, `SELECT filename,file_path,expires_at FROM key_asset_exports WHERE task_id=?`, taskID).Scan(&filename, &filePath, &expiresAtRaw); err != nil {
+	var export models.KeyAssetExport
+	if err := orm.New(s.exportDB()).From("key_asset_exports").Select("filename", "file_path", "expires_at").Where("task_id = ?", taskID).First(ctx, &export); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, "", panelerr.NotFound("key_asset_export")
 		}
 		return nil, "", err
 	}
-	if expiresAt := parseTime(expiresAtRaw); !expiresAt.IsZero() && time.Now().UTC().After(expiresAt) {
-		_, _ = s.exportDB().ExecContext(ctx, `DELETE FROM key_asset_exports WHERE task_id=?`, taskID)
-		_ = os.Remove(filePath)
+	if !export.ExpiresAt.IsZero() && time.Now().UTC().After(export.ExpiresAt) {
+		_ = orm.New(s.exportDB()).From("key_asset_exports").Where("task_id = ?", taskID).Delete(ctx)
+		_ = os.Remove(export.FilePath)
 		return nil, "", panelerr.NotFound("key_asset_export")
 	}
-	content, err := os.ReadFile(filePath)
+	content, err := os.ReadFile(export.FilePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, "", panelerr.NotFound("key_asset_export")
 		}
 		return nil, "", err
 	}
-	return content, filename, nil
+	return content, export.Filename, nil
 }
 
 func (s *Service) startExportCleanup() {
@@ -1047,32 +1060,20 @@ func (s *Service) startExportCleanup() {
 }
 
 func (s *Service) cleanupExpiredExports(ctx context.Context, now time.Time) {
-	rows, err := s.exportDB().QueryContext(ctx, `SELECT task_id,file_path FROM key_asset_exports WHERE expires_at<>'' AND expires_at<=?`, formatTime(now))
-	if err != nil {
+	exports := []models.KeyAssetExport{}
+	if err := orm.New(s.exportDB()).From("key_asset_exports").Select("task_id", "file_path").Where("expires_at <> ''").And("expires_at <= ?", formatTime(now)).All(ctx, &exports); err != nil {
 		return
 	}
-
 	expired := map[string]string{}
-	for rows.Next() {
-		var taskID, filePath string
-		if err := rows.Scan(&taskID, &filePath); err != nil {
-			_ = rows.Close()
-			return
-		}
-		expired[taskID] = filePath
-	}
-	if err := rows.Close(); err != nil {
-		return
-	}
-	if rows.Err() != nil {
-		return
+	for _, export := range exports {
+		expired[export.TaskID] = export.FilePath
 	}
 	if len(expired) == 0 {
 		return
 	}
 
 	for taskID, filePath := range expired {
-		if _, err := s.exportDB().ExecContext(ctx, `DELETE FROM key_asset_exports WHERE task_id=? AND expires_at<=?`, taskID, formatTime(now)); err != nil {
+		if err := orm.New(s.exportDB()).From("key_asset_exports").Where("task_id = ?", taskID).And("expires_at <= ?", formatTime(now)).Delete(ctx); err != nil {
 			continue
 		}
 		_ = os.Remove(filePath)
@@ -1219,7 +1220,7 @@ func (s *Service) ExecuteImport(ctx context.Context, planID string, in ImportExe
 		}
 	}
 	imported := []Asset{}
-	err = withTx(ctx, s.db, func(tx *sql.Tx) error {
+	err = orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		for _, asset := range assets {
 			if strategy == "skip_existing" {
 				if _, err := s.getStoredAssetTx(ctx, tx, asset.ID); err == nil {
@@ -1469,7 +1470,7 @@ func parseInternalFileSource(source string) (string, string, error) {
 }
 
 func (s *Service) getStoredAsset(ctx context.Context, assetID string) (storedAsset, error) {
-	asset, err := scanStoredAsset(s.db.QueryRowContext(ctx, `SELECT `+assetColumns+` FROM key_assets WHERE id=?`, assetID))
+	asset, err := scanStoredAsset(orm.RawRow(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE id=?`, assetID))
 	if err == sql.ErrNoRows {
 		return storedAsset{}, panelerr.NotFound("key asset")
 	}
@@ -1477,7 +1478,7 @@ func (s *Service) getStoredAsset(ctx context.Context, assetID string) (storedAss
 }
 
 func (s *Service) getStoredAssetByName(ctx context.Context, name string) (storedAsset, error) {
-	asset, err := scanStoredAsset(s.db.QueryRowContext(ctx, `SELECT `+assetColumns+` FROM key_assets WHERE name=?`, strings.TrimSpace(name)))
+	asset, err := scanStoredAsset(orm.RawRow(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE name=?`, strings.TrimSpace(name)))
 	if err == sql.ErrNoRows {
 		return storedAsset{}, panelerr.NotFound("key asset")
 	}
@@ -1485,7 +1486,7 @@ func (s *Service) getStoredAssetByName(ctx context.Context, name string) (stored
 }
 
 func (s *Service) getStoredAssetTx(ctx context.Context, tx *sql.Tx, assetID string) (storedAsset, error) {
-	asset, err := scanStoredAsset(tx.QueryRowContext(ctx, `SELECT `+assetColumns+` FROM key_assets WHERE id=?`, assetID))
+	asset, err := scanStoredAsset(orm.RawRow(ctx, tx, `SELECT `+assetColumns+` FROM key_assets WHERE id=?`, assetID))
 	if err == sql.ErrNoRows {
 		return storedAsset{}, panelerr.NotFound("key asset")
 	}
@@ -1493,7 +1494,7 @@ func (s *Service) getStoredAssetTx(ctx context.Context, tx *sql.Tx, assetID stri
 }
 
 func (s *Service) getStoredAssetByNameTx(ctx context.Context, tx *sql.Tx, name string) (storedAsset, error) {
-	asset, err := scanStoredAsset(tx.QueryRowContext(ctx, `SELECT `+assetColumns+` FROM key_assets WHERE name=?`, strings.TrimSpace(name)))
+	asset, err := scanStoredAsset(orm.RawRow(ctx, tx, `SELECT `+assetColumns+` FROM key_assets WHERE name=?`, strings.TrimSpace(name)))
 	if err == sql.ErrNoRows {
 		return storedAsset{}, panelerr.NotFound("key asset")
 	}
@@ -1501,7 +1502,7 @@ func (s *Service) getStoredAssetByNameTx(ctx context.Context, tx *sql.Tx, name s
 }
 
 func (s *Service) insertAsset(ctx context.Context, asset storedAsset) error {
-	return withTx(ctx, s.db, func(tx *sql.Tx) error {
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		return s.insertAssetTx(ctx, tx, asset)
 	})
 }
@@ -1515,13 +1516,13 @@ func (s *Service) insertAssetTx(ctx context.Context, tx *sql.Tx, asset storedAss
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO key_assets(id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,certificate_ciphertext,private_key_ciphertext,public_key,metadata_json,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = orm.RawExec(ctx, tx, `INSERT INTO key_assets(id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,certificate_ciphertext,private_key_ciphertext,public_key,metadata_json,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		asset.ID, asset.Type, asset.Name, strings.TrimSpace(asset.ParentAssetID), asset.Algorithm, asset.KeySize, asset.CommonName, mustJSON(asset.DNSNames), mustJSON(asset.IPAddresses), asset.Fingerprint, asset.certificateText, privateKeyCiphertext, asset.PublicKey, string(metadataJSON), formatOptionalTime(asset.NotBefore), formatOptionalTime(asset.NotAfter), formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt))
 	return err
 }
 
 func (s *Service) updateAsset(ctx context.Context, asset storedAsset) error {
-	return withTx(ctx, s.db, func(tx *sql.Tx) error {
+	return orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		return s.updateAssetTx(ctx, tx, asset)
 	})
 }
@@ -1535,7 +1536,7 @@ func (s *Service) updateAssetTx(ctx context.Context, tx *sql.Tx, asset storedAss
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE key_assets SET type=?,name=?,parent_asset_id=?,algorithm=?,key_size=?,common_name=?,dns_names_json=?,ip_addresses_json=?,fingerprint=?,certificate_ciphertext=?,private_key_ciphertext=?,public_key=?,metadata_json=?,not_before=?,not_after=?,updated_at=? WHERE id=?`,
+	_, err = orm.RawExec(ctx, tx, `UPDATE key_assets SET type=?,name=?,parent_asset_id=?,algorithm=?,key_size=?,common_name=?,dns_names_json=?,ip_addresses_json=?,fingerprint=?,certificate_ciphertext=?,private_key_ciphertext=?,public_key=?,metadata_json=?,not_before=?,not_after=?,updated_at=? WHERE id=?`,
 		asset.Type, asset.Name, strings.TrimSpace(asset.ParentAssetID), asset.Algorithm, asset.KeySize, asset.CommonName, mustJSON(asset.DNSNames), mustJSON(asset.IPAddresses), asset.Fingerprint, asset.certificateText, privateKeyCiphertext, asset.PublicKey, string(metadataJSON), formatOptionalTime(asset.NotBefore), formatOptionalTime(asset.NotAfter), formatTime(asset.UpdatedAt), asset.ID)
 	return err
 }
@@ -1569,7 +1570,7 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,spec_yaml,reverse_proxy_json FROM applications`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,spec_yaml,reverse_proxy_json FROM applications`)
 	if err != nil {
 		return nil, err
 	}
@@ -1623,7 +1624,7 @@ func (s *Service) assetInUse(ctx context.Context, assetID string) (bool, error) 
 }
 
 func (s *Service) listStoredAssetsByType(ctx context.Context, assetType string) ([]storedAsset, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+assetColumns+` FROM key_assets WHERE type=? ORDER BY name`, assetType)
+	rows, err := orm.Raw(ctx, s.db, `SELECT `+assetColumns+` FROM key_assets WHERE type=? ORDER BY name`, assetType)
 	if err != nil {
 		return nil, err
 	}
@@ -1651,7 +1652,7 @@ func appendAssetReference(references []AssetReference, candidate AssetReference)
 }
 
 func (s *Service) childCounts(ctx context.Context) (map[string]int, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT parent_asset_id,COUNT(*) FROM key_assets WHERE parent_asset_id<>'' GROUP BY parent_asset_id`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT parent_asset_id,COUNT(*) FROM key_assets WHERE parent_asset_id<>'' GROUP BY parent_asset_id`)
 	if err != nil {
 		return nil, err
 	}
@@ -1726,18 +1727,6 @@ func importIDPrefix(assetType string) string {
 	default:
 		return "ssh"
 	}
-}
-
-func withTx(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
 }
 
 func firstNonEmpty(values ...string) string {

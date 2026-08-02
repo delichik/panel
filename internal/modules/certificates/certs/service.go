@@ -20,6 +20,7 @@ import (
 	"panel/internal/modules/keyassets"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
@@ -448,7 +449,7 @@ func writeCertificateTemp(target string, content []byte) (string, error) {
 }
 
 func (s *Service) List(ctx context.Context) ([]Certificate, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT `+certificateColumns+` FROM certificates ORDER BY created_at DESC`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT `+certificateColumns+` FROM certificates ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err
 	}
@@ -469,15 +470,24 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	args := []any{}
 	if query != "" {
 		filter = "(name LIKE ? ESCAPE '\\' OR domain LIKE ? ESCAPE '\\')"
-		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
+		term := orm.LikeEscaped(query)
 		args = append(args, term, term)
 	}
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificates WHERE `+filter, args...).Scan(&total); err != nil {
+	countQuery := orm.New(s.db).From("certificates")
+	if query != "" {
+		term := orm.LikeEscaped(query)
+		countQuery.WhereGroup(func(c *orm.Condition) {
+			c.Where("name LIKE ? ESCAPE '\\'", term)
+			c.Or("domain LIKE ? ESCAPE '\\'", term)
+		})
+	}
+	total64, err := countQuery.Count(ctx)
+	if err != nil {
 		return httpx.ListPage[CertificateSummary]{}, err
 	}
+	total := int(total64)
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,domain_id,domain,prefix,scope,domains_json,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at FROM certificates WHERE `+filter+` ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, listArgs...)
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,domain_id,domain,prefix,scope,domains_json,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at FROM certificates WHERE `+filter+` ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
 		return httpx.ListPage[CertificateSummary]{}, err
 	}
@@ -504,7 +514,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 }
 
 func (s *Service) Get(ctx context.Context, certID string) (Certificate, error) {
-	cert, err := scanCertificate(s.db.QueryRowContext(ctx, `SELECT `+certificateColumns+` FROM certificates WHERE id=?`, certID))
+	cert, err := scanCertificate(orm.RawRow(ctx, s.db, `SELECT `+certificateColumns+` FROM certificates WHERE id=?`, certID))
 	if err == sql.ErrNoRows {
 		return Certificate{}, panelerr.NotFound("certificate")
 	}
@@ -521,7 +531,7 @@ func (s *Service) Delete(ctx context.Context, certID string) error {
 	} else if used {
 		return panelerr.Conflict("certificate_in_use", "Certificate is still used by an application or reverse proxy")
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM certificates WHERE id=?`, certID)
+	res, err := orm.RawExec(ctx, s.db, `DELETE FROM certificates WHERE id=?`, certID)
 	if err != nil {
 		return err
 	}
@@ -666,7 +676,7 @@ func certificateInternalFilePath(cert Certificate, kind string) (string, string,
 }
 
 func (s *Service) certificateInUse(ctx context.Context, certID string, domains []string, variableName string) (bool, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT spec_yaml,reverse_proxy_json FROM applications`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT spec_yaml,reverse_proxy_json FROM applications`)
 	if err != nil {
 		return false, err
 	}
@@ -758,15 +768,19 @@ func (s *Service) insert(ctx context.Context, cert Certificate) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO certificates(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO certificates(id,name,domain_id,domain,prefix,scope,domains_json,variable_name,certificate_path,private_key_path,issuer,status,last_error,auto_renew,next_renew_at,not_before,not_after,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		cert.ID, cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.CertificatePath, cert.PrivateKeyPath, cert.Issuer, cert.Status, cert.LastError, boolInt(cert.AutoRenew), formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.CreatedAt), formatTime(cert.UpdatedAt))
 	return err
 }
 
 func (s *Service) updateRenewal(ctx context.Context, cert Certificate) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET not_before=?,not_after=?,next_renew_at=?,last_error=?,updated_at=? WHERE id=?`,
-		formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatOptionalTime(cert.NextRenewAt), cert.LastError, formatTime(cert.UpdatedAt), cert.ID)
-	return err
+	return orm.New(s.db).From("certificates").Where("id = ?", cert.ID).UpdateColumns(ctx, map[string]any{
+		"not_before":    formatOptionalTime(cert.NotBefore),
+		"not_after":     formatOptionalTime(cert.NotAfter),
+		"next_renew_at": formatOptionalTime(cert.NextRenewAt),
+		"last_error":    cert.LastError,
+		"updated_at":    formatTime(cert.UpdatedAt),
+	})
 }
 
 func (s *Service) updateIssuedCertificate(ctx context.Context, cert Certificate) error {
@@ -774,21 +788,37 @@ func (s *Service) updateIssuedCertificate(ctx context.Context, cert Certificate)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE certificates SET name=?,domain_id=?,domain=?,prefix=?,scope=?,domains_json=?,variable_name=?,issuer=?,status=?,last_error=?,next_renew_at=?,not_before=?,not_after=?,updated_at=? WHERE id=?`,
-		cert.Name, cert.DomainID, cert.Domain, cert.Prefix, cert.Scope, string(domains), cert.VariableName, cert.Issuer, cert.Status, cert.LastError, formatOptionalTime(cert.NextRenewAt), formatOptionalTime(cert.NotBefore), formatOptionalTime(cert.NotAfter), formatTime(cert.UpdatedAt), cert.ID)
-	return err
+	return orm.New(s.db).From("certificates").Where("id = ?", cert.ID).UpdateColumns(ctx, map[string]any{
+		"name":          cert.Name,
+		"domain_id":     cert.DomainID,
+		"domain":        cert.Domain,
+		"prefix":        cert.Prefix,
+		"scope":         cert.Scope,
+		"domains_json":  string(domains),
+		"variable_name": cert.VariableName,
+		"issuer":        cert.Issuer,
+		"status":        cert.Status,
+		"last_error":    cert.LastError,
+		"next_renew_at": formatOptionalTime(cert.NextRenewAt),
+		"not_before":    formatOptionalTime(cert.NotBefore),
+		"not_after":     formatOptionalTime(cert.NotAfter),
+		"updated_at":    formatTime(cert.UpdatedAt),
+	})
 }
 
 func (s *Service) updateStatus(ctx context.Context, certID, status, lastError string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET status=?,last_error=?,updated_at=? WHERE id=?`,
-		status, lastError, formatTime(time.Now().UTC()), certID)
-	return err
+	return orm.New(s.db).From("certificates").Where("id = ?", certID).UpdateColumns(ctx, map[string]any{
+		"status":     status,
+		"last_error": lastError,
+		"updated_at": formatTime(time.Now().UTC()),
+	})
 }
 
 func (s *Service) updateLastError(ctx context.Context, certID, lastError string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE certificates SET last_error=?,updated_at=? WHERE id=?`,
-		lastError, formatTime(time.Now().UTC()), certID)
-	return err
+	return orm.New(s.db).From("certificates").Where("id = ?", certID).UpdateColumns(ctx, map[string]any{
+		"last_error": lastError,
+		"updated_at": formatTime(time.Now().UTC()),
+	})
 }
 
 func (s *Service) failRenewalTask(ctx context.Context, taskID string, err error) error {

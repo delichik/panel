@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
@@ -40,52 +42,38 @@ func NewService(db *sql.DB, secrets *secretstore.Store, taskServices ...*tasks.S
 }
 
 func (s *Service) ListDomains(ctx context.Context) ([]Domain, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,provider,created_at,updated_at FROM dns_domains ORDER BY name ASC`)
-	if err != nil {
+	rows := []domainRow{}
+	if err := orm.New(s.db).From("dns_domains").Select("id", "name", "provider", "created_at", "updated_at").OrderBy("name").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Domain{}
-	for rows.Next() {
-		domain, err := scanDomain(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, domain)
+	out := make([]Domain, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, row.domain())
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) ListDomainPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[Domain], error) {
-	filter := "1=1"
-	args := []any{}
+	countQuery := orm.New(s.db).From("dns_domains")
+	itemQuery := orm.New(s.db).From("dns_domains")
 	if query != "" {
-		filter = "name LIKE ? ESCAPE '\\'"
-		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
-		args = append(args, term)
+		term := orm.LikeEscaped(query)
+		countQuery.Where("name LIKE ? ESCAPE '\\'", term)
+		itemQuery.Where("name LIKE ? ESCAPE '\\'", term)
 	}
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dns_domains WHERE `+filter, args...).Scan(&total); err != nil {
-		return httpx.ListPage[Domain]{}, err
-	}
-	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,provider,created_at,updated_at FROM dns_domains WHERE `+filter+` ORDER BY name ASC,id ASC LIMIT ? OFFSET ?`, listArgs...)
+	total64, err := countQuery.Count(ctx)
 	if err != nil {
 		return httpx.ListPage[Domain]{}, err
 	}
-	defer rows.Close()
-	items := []Domain{}
-	for rows.Next() {
-		item, err := scanDomain(rows)
-		if err != nil {
-			return httpx.ListPage[Domain]{}, err
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
+	rows := []domainRow{}
+	if err := itemQuery.Select("id", "name", "provider", "created_at", "updated_at").OrderBy("name", "id").Limit(pageSize).Offset((page-1)*pageSize).All(ctx, &rows); err != nil {
 		return httpx.ListPage[Domain]{}, err
 	}
-	return httpx.ListPage[Domain]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
+	items := make([]Domain, 0, len(rows))
+	for _, row := range rows {
+		items = append(items, row.domain())
+	}
+	return httpx.ListPage[Domain]{Items: items, Total: int(total64), Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Service) CreateDomain(ctx context.Context, in SaveDomainRequest) (Domain, error) {
@@ -102,8 +90,15 @@ func (s *Service) CreateDomain(ctx context.Context, in SaveDomainRequest) (Domai
 	if err != nil {
 		return Domain{}, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO dns_domains(id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
-		domain.ID, domain.Name, domain.Provider, "{}", ciphertext, formatTime(now), formatTime(now))
+	err = orm.New(s.db).From("dns_domains").Insert(ctx, &models.DNSDomain{
+		ID:                       domain.ID,
+		Name:                     domain.Name,
+		Provider:                 domain.Provider,
+		ProviderConfigJSON:       map[string]any{},
+		ProviderSecretCiphertext: ciphertext,
+		CreatedAt:                now,
+		UpdatedAt:                now,
+	})
 	if err != nil {
 		return Domain{}, err
 	}
@@ -140,7 +135,7 @@ func (s *Service) UpdateDomain(ctx context.Context, domainID string, in SaveDoma
 	if err != nil {
 		return Domain{}, err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE dns_domains SET name=?,provider=?,provider_config_json=?,provider_secret_ciphertext=?,updated_at=? WHERE id=?`,
+	res, err := orm.RawExec(ctx, s.db, `UPDATE dns_domains SET name=?,provider=?,provider_config_json=?,provider_secret_ciphertext=?,updated_at=? WHERE id=?`,
 		prepared.Name, prepared.Provider, "{}", ciphertext, formatTime(now), domainID)
 	if err != nil {
 		return Domain{}, err
@@ -153,14 +148,14 @@ func (s *Service) UpdateDomain(ctx context.Context, domainID string, in SaveDoma
 }
 
 func (s *Service) DeleteDomain(ctx context.Context, domainID string) error {
-	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM certificates WHERE domain_id=?`, domainID).Scan(&count); err != nil {
+	count, err := orm.New(s.db).From("certificates").Where("domain_id = ?", domainID).Count(ctx)
+	if err != nil {
 		return err
 	}
 	if count > 0 {
 		return panelerr.Conflict("dns_domain_in_use", "DNS domain is still used by one or more certificates")
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM dns_domains WHERE id=?`, domainID)
+	res, err := orm.RawExec(ctx, s.db, `DELETE FROM dns_domains WHERE id=?`, domainID)
 	if err != nil {
 		return err
 	}
@@ -176,7 +171,7 @@ func (s *Service) ListRecords(ctx context.Context, domainID string) ([]Record, e
 		return nil, err
 	}
 	var raw string
-	err := s.db.QueryRowContext(ctx, `SELECT records_json FROM dns_record_snapshots WHERE domain_id=?`, domainID).Scan(&raw)
+	err := orm.New(s.db).From("dns_record_snapshots").Select("records_json").Where("domain_id = ?", domainID).ScanValue(ctx, &raw)
 	if err == sql.ErrNoRows {
 		return []Record{}, nil
 	}
@@ -195,7 +190,7 @@ func (s *Service) ListRecordSnapshot(ctx context.Context, domainID string) (Reco
 		return RecordSnapshot{}, err
 	}
 	var raw, observedRaw, lastError string
-	err := s.db.QueryRowContext(ctx, `SELECT records_json,observed_at,last_error FROM dns_record_snapshots WHERE domain_id=?`, domainID).Scan(&raw, &observedRaw, &lastError)
+	err := orm.RawRow(ctx, s.db, `SELECT records_json,observed_at,last_error FROM dns_record_snapshots WHERE domain_id=?`, domainID).Scan(&raw, &observedRaw, &lastError)
 	if err == sql.ErrNoRows {
 		return RecordSnapshot{Items: []Record{}, Stale: true}, nil
 	}
@@ -262,7 +257,7 @@ func (s *Service) refreshRecords(ctx context.Context, domainID string) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO dns_record_snapshots(domain_id,records_json,observed_at,last_error) VALUES(?,?,?,'') ON CONFLICT(domain_id) DO UPDATE SET records_json=excluded.records_json,observed_at=excluded.observed_at,last_error=''`, domainID, string(raw), formatTime(time.Now().UTC()))
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO dns_record_snapshots(domain_id,records_json,observed_at,last_error) VALUES(?,?,?,'') ON CONFLICT(domain_id) DO UPDATE SET records_json=excluded.records_json,observed_at=excluded.observed_at,last_error=''`, domainID, string(raw), formatTime(time.Now().UTC()))
 	return err
 }
 
@@ -317,32 +312,31 @@ func (s *Service) DeleteRecord(ctx context.Context, domainID, recordID string) e
 }
 
 func (s *Service) GetDomain(ctx context.Context, domainID string) (Domain, error) {
-	domain, err := scanDomain(s.db.QueryRowContext(ctx, `SELECT id,name,provider,created_at,updated_at FROM dns_domains WHERE id=?`, domainID))
+	var row domainRow
+	err := orm.New(s.db).From("dns_domains").Select("id", "name", "provider", "created_at", "updated_at").Where("id = ?", domainID).First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return Domain{}, panelerr.NotFound("dns_domain")
 	}
-	return domain, err
+	if err != nil {
+		return Domain{}, err
+	}
+	return row.domain(), nil
 }
 
 func (s *Service) ResolveDomain(ctx context.Context, domainID string) (ResolvedDomain, error) {
-	var out ResolvedDomain
-	var providerConfigJSON, providerSecretCiphertext string
-	var created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT id,name,provider,provider_config_json,provider_secret_ciphertext,created_at,updated_at FROM dns_domains WHERE id=?`, domainID).
-		Scan(&out.ID, &out.Name, &out.Provider, &providerConfigJSON, &providerSecretCiphertext, &created, &updated)
+	var row domainRow
+	err := orm.New(s.db).From("dns_domains").Select("id", "name", "provider", "provider_config_json", "provider_secret_ciphertext", "created_at", "updated_at").Where("id = ?", domainID).First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return ResolvedDomain{}, panelerr.NotFound("dns_domain")
 	}
 	if err != nil {
 		return ResolvedDomain{}, err
 	}
-	token, err := decryptProviderCredentials(s.secrets, out.ID, out.Provider, providerSecretCiphertext)
+	token, err := decryptProviderCredentials(s.secrets, row.ID, row.Provider, row.ProviderSecretCiphertext)
 	if err != nil {
 		return ResolvedDomain{}, err
 	}
-	out.APIToken = token
-	out.CreatedAt = parseTime(created)
-	out.UpdatedAt = parseTime(updated)
+	out := ResolvedDomain{Domain: row.domain(), APIToken: token}
 	return out, nil
 }
 
@@ -444,17 +438,26 @@ func supportedRecordType(value string) bool {
 	}
 }
 
-type domainScanner interface{ Scan(dest ...any) error }
+// domainRow 是 dns_domains 的本地行映射：created_at/updated_at 在遗留库中可能
+// 不是 RFC3339Nano（如迁移测试中的 'now'），必须按字符串透传并容错解析。
+type domainRow struct {
+	ID                       string
+	Name                     string
+	Provider                 string
+	ProviderConfigJSON       string
+	ProviderSecretCiphertext string
+	CreatedAt                string
+	UpdatedAt                string
+}
 
-func scanDomain(row domainScanner) (Domain, error) {
-	var domain Domain
-	var created, updated string
-	if err := row.Scan(&domain.ID, &domain.Name, &domain.Provider, &created, &updated); err != nil {
-		return Domain{}, err
+func (row domainRow) domain() Domain {
+	return Domain{
+		ID:        row.ID,
+		Name:      row.Name,
+		Provider:  row.Provider,
+		CreatedAt: parseTime(row.CreatedAt),
+		UpdatedAt: parseTime(row.UpdatedAt),
 	}
-	domain.CreatedAt = parseTime(created)
-	domain.UpdatedAt = parseTime(updated)
-	return domain, nil
 }
 
 func formatTime(value time.Time) string {

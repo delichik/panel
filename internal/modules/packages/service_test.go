@@ -60,10 +60,10 @@ func TestPackageServiceAcceptsRootPrivilegeWithoutSudo(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','root','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','root','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'root','cred','debian','12',1,0,'root','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'root','cred','debian','12',1,0,'root','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	taskSvc := tasks.NewService(store.LogDB())
@@ -90,11 +90,11 @@ func TestRefreshRecordsTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -152,11 +152,11 @@ func TestRefreshFailureRecordsFailedTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -207,11 +207,11 @@ func TestRefreshUsesUbuntuAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','ubuntu','24.04','Ubuntu 24.04 LTS',1,1,'passwordless_sudo','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','ubuntu','24.04','Ubuntu 24.04 LTS',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -255,11 +255,11 @@ func TestReplaceUpdates(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}

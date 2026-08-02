@@ -58,7 +58,7 @@ func TestDeleteCredentialInUseRejected(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du',?,'now','now')`, cred.ID)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,created_at,updated_at) VALUES('srv_1','s','127.0.0.1',22,'du',?,'2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, cred.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +139,7 @@ func TestEnsureLegacySecretsMigratedEncryptsAndDeletesPrivateKeyFile(t *testing.
 		t.Fatal(err)
 	}
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,password_secret,private_key_path,passphrase_secret,created_at,updated_at)
-		VALUES('cred_legacy','legacy','private_key','root','',?,'legacy-passphrase','now','now')`, keyPath); err != nil {
+		VALUES('cred_legacy','legacy','private_key','root','',?,'legacy-passphrase','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`, keyPath); err != nil {
 		t.Fatal(err)
 	}
 	secrets, err := secretstore.Open(cfg, store.AppDB())
@@ -176,7 +176,7 @@ func TestEnsureLegacySecretsMigratedEncryptsAndDeletesPrivateKeyFile(t *testing.
 func TestEnsureLegacySecretsMigratedEncryptsPassword(t *testing.T) {
 	svc, store := newCredentialService(t)
 	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,password_secret,created_at,updated_at)
-		VALUES('cred_legacy_password','legacy','password','root','legacy-password','now','now')`); err != nil {
+		VALUES('cred_legacy_password','legacy','password','root','legacy-password','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.EnsureLegacySecretsMigrated(context.Background()); err != nil {

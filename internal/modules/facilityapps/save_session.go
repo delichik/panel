@@ -14,6 +14,8 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -220,22 +222,12 @@ func (s *Service) CommitSaveSession(ctx context.Context, sessionID string, in Co
 	if err != nil {
 		return SaveSessionCommitResult{}, err
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		rollbackFiles()
-		return SaveSessionCommitResult{}, err
-	}
-	if err := replaceStaticAssetsTx(ctx, tx, session.Assets); err != nil {
-		_ = tx.Rollback()
-		rollbackFiles()
-		return SaveSessionCommitResult{}, err
-	}
-	if err := saveConfigTxIfVersion(ctx, tx, next, session.BaseVersion); err != nil {
-		_ = tx.Rollback()
-		rollbackFiles()
-		return SaveSessionCommitResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		if err := replaceStaticAssetsTx(ctx, tx, session.Assets); err != nil {
+			return err
+		}
+		return saveConfigTxIfVersion(ctx, tx, next, session.BaseVersion)
+	}); err != nil {
 		rollbackFiles()
 		return SaveSessionCommitResult{}, err
 	}
@@ -441,7 +433,7 @@ func (s *Service) installSessionAssets(session *facilitySaveSession) (func(), er
 }
 
 func replaceStaticAssetsTx(ctx context.Context, tx *sql.Tx, assets map[string]*stagedFacilityAsset) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM facility_static_assets`); err != nil {
+	if _, err := orm.RawExec(ctx, tx, `DELETE FROM facility_static_assets`); err != nil {
 		return err
 	}
 	items := make([]StaticAsset, 0, len(assets))
@@ -449,10 +441,12 @@ func replaceStaticAssetsTx(ctx context.Context, tx *sql.Tx, assets map[string]*s
 		items = append(items, staged.Asset)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	rows := make([]models.FacilityStaticAsset, 0, len(items))
 	for _, asset := range items {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, asset.ID, asset.Name, asset.Kind, asset.ContentMode, asset.Filename, asset.Size, asset.SHA256, formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt)); err != nil {
-			return err
-		}
+		rows = append(rows, models.FacilityStaticAsset{ID: asset.ID, Name: asset.Name, Kind: asset.Kind, ContentMode: asset.ContentMode, Filename: asset.Filename, Size: int(asset.Size), SHA256: asset.SHA256, CreatedAt: asset.CreatedAt, UpdatedAt: asset.UpdatedAt})
+	}
+	if err := orm.InsertBatch(ctx, tx, rows); err != nil {
+		return err
 	}
 	return nil
 }

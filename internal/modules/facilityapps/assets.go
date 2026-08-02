@@ -18,6 +18,8 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -30,20 +32,15 @@ const (
 )
 
 func (s *Service) listStaticAssets(ctx context.Context) ([]StaticAsset, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_static_assets ORDER BY created_at DESC`)
-	if err != nil {
+	var items []models.FacilityStaticAsset
+	if err := orm.New(s.db).From("facility_static_assets").OrderBy("created_at DESC").All(ctx, &items); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []StaticAsset{}
-	for rows.Next() {
-		asset, err := scanStaticAsset(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, asset)
+	out := make([]StaticAsset, 0, len(items))
+	for _, item := range items {
+		out = append(out, staticAssetFromModel(item))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) UploadStaticAsset(ctx context.Context, in StaticAssetUploadInput) (StaticAsset, error) {
@@ -56,8 +53,8 @@ func (s *Service) UploadStaticAsset(ctx context.Context, in StaticAssetUploadInp
 	if name == "" {
 		return StaticAsset{}, panelerr.Validation("facility_static_asset_name_required", "Static asset name is required")
 	}
-	var duplicate int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM facility_static_assets WHERE name=?`, name).Scan(&duplicate); err != nil {
+	duplicate, err := orm.New(s.db).From("facility_static_assets").Where("name=?", name).Count(ctx)
+	if err != nil {
 		return StaticAsset{}, err
 	}
 	if duplicate > 0 {
@@ -132,22 +129,16 @@ func (s *Service) DeleteStaticAsset(ctx context.Context, assetName string) error
 	if used {
 		return panelerr.Conflict("facility_static_asset_in_use", "Static asset is still used by reverse proxy")
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `DELETE FROM facility_static_assets WHERE id=?`, assetID)
-	if err != nil {
-		return err
-	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return panelerr.NotFound("static asset")
-	}
-	if err := bumpFacilityConfigVersionTx(ctx, tx); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		res, err := orm.RawExec(ctx, tx, `DELETE FROM facility_static_assets WHERE id=?`, assetID)
+		if err != nil {
+			return err
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			return panelerr.NotFound("static asset")
+		}
+		return bumpFacilityConfigVersionTx(ctx, tx)
+	}); err != nil {
 		return err
 	}
 	_ = os.RemoveAll(s.staticAssetDir(assetID))
@@ -174,19 +165,27 @@ func (s *Service) staticAssetInUse(ctx context.Context, assetID string) (bool, e
 }
 
 func (s *Service) getStaticAsset(ctx context.Context, assetID string) (StaticAsset, error) {
-	asset, err := scanStaticAsset(s.db.QueryRowContext(ctx, `SELECT id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_static_assets WHERE id=?`, assetID))
+	var item models.FacilityStaticAsset
+	err := orm.New(s.db).From("facility_static_assets").Where("id=?", assetID).First(ctx, &item)
 	if err == sql.ErrNoRows {
 		return StaticAsset{}, panelerr.NotFound("static asset")
 	}
-	return asset, err
+	if err != nil {
+		return StaticAsset{}, err
+	}
+	return staticAssetFromModel(item), nil
 }
 
 func (s *Service) getStaticAssetByName(ctx context.Context, name string) (StaticAsset, error) {
-	asset, err := scanStaticAsset(s.db.QueryRowContext(ctx, `SELECT id,name,kind,content_mode,filename,size,sha256,created_at,updated_at FROM facility_static_assets WHERE name=?`, strings.TrimSpace(name)))
+	var item models.FacilityStaticAsset
+	err := orm.New(s.db).From("facility_static_assets").Where("name=?", strings.TrimSpace(name)).First(ctx, &item)
 	if err == sql.ErrNoRows {
 		return StaticAsset{}, panelerr.NotFound("static asset")
 	}
-	return asset, err
+	if err != nil {
+		return StaticAsset{}, err
+	}
+	return staticAssetFromModel(item), nil
 }
 
 // getStaticAssetByRef keeps old physical-id callers working while all new
@@ -241,40 +240,29 @@ type appruntimeFile struct {
 }
 
 func (s *Service) insertStaticAsset(ctx context.Context, asset StaticAsset) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO facility_static_assets(id,name,kind,content_mode,filename,size,sha256,created_at,updated_at) VALUES(?,?,?,'binary',?,?,?,?,?)`,
-		asset.ID, asset.Name, asset.Kind, asset.Filename, asset.Size, asset.SHA256, formatTime(asset.CreatedAt), formatTime(asset.UpdatedAt))
-	if err != nil {
-		if strings.Contains(strings.ToLower(err.Error()), "unique") {
-			return panelerr.Validation("facility_static_asset_name_duplicate", "Static asset name must be unique within the facility")
+	if err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		model := models.FacilityStaticAsset{ID: asset.ID, Name: asset.Name, Kind: asset.Kind, ContentMode: "binary", Filename: asset.Filename, Size: int(asset.Size), SHA256: asset.SHA256, CreatedAt: asset.CreatedAt, UpdatedAt: asset.UpdatedAt}
+		if err := orm.Insert(ctx, tx, &model); err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "unique") {
+				return panelerr.Validation("facility_static_asset_name_duplicate", "Static asset name must be unique within the facility")
+			}
+			return err
 		}
+		return bumpFacilityConfigVersionTx(ctx, tx)
+	}); err != nil {
 		return err
 	}
-	if err := bumpFacilityConfigVersionTx(ctx, tx); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func bumpFacilityConfigVersionTx(ctx context.Context, tx *sql.Tx) error {
 	now := formatTime(time.Now().UTC())
-	_, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,1,'[]','{}','[]','',?) ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,updated_at=excluded.updated_at`, ReverseProxyID, now)
+	_, err := orm.RawExec(ctx, tx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,1,'[]','{}','[]','',?) ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,updated_at=excluded.updated_at`, ReverseProxyID, now)
 	return err
 }
 
-func scanStaticAsset(row interface{ Scan(dest ...any) error }) (StaticAsset, error) {
-	var asset StaticAsset
-	var created, updated string
-	if err := row.Scan(&asset.ID, &asset.Name, &asset.Kind, &asset.ContentMode, &asset.Filename, &asset.Size, &asset.SHA256, &created, &updated); err != nil {
-		return StaticAsset{}, err
-	}
-	asset.CreatedAt = parseTime(created)
-	asset.UpdatedAt = parseTime(updated)
-	return asset, nil
+func staticAssetFromModel(item models.FacilityStaticAsset) StaticAsset {
+	return StaticAsset{ID: item.ID, Name: item.Name, Kind: item.Kind, ContentMode: item.ContentMode, Filename: item.Filename, Size: int64(item.Size), SHA256: item.SHA256, CreatedAt: item.CreatedAt, UpdatedAt: item.UpdatedAt}
 }
 
 func (s *Service) staticAssetDir(assetID string) string {

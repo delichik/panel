@@ -15,6 +15,8 @@ import (
 
 	"panel/internal/modules/settings"
 	"panel/internal/platform/config"
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 )
 
@@ -122,11 +124,9 @@ func (s *Service) UpdateAccount(ctx context.Context, input AccountUpdate) (Sessi
 		nextHash = string(rawHash)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := s.db.ExecContext(ctx, `
-		UPDATE auth_accounts
-		SET username=?, password_hash=?, password_change_required=0, updated_at=?
-		WHERE id=?
-	`, username, nextHash, now, adminAccountID); err != nil {
+	if err := orm.New(s.db).From("auth_accounts").Where("id = ?", adminAccountID).UpdateColumns(ctx, map[string]any{
+		"username": username, "password_hash": nextHash, "password_change_required": 0, "updated_at": now,
+	}); err != nil {
 		return Session{}, err
 	}
 	if passwordChanging {
@@ -231,8 +231,8 @@ func (s *Service) jwtSecret() string {
 }
 
 func (s *Service) ensureAdminAccount(ctx context.Context) error {
-	var exists int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(1) FROM auth_accounts WHERE id=?`, adminAccountID).Scan(&exists); err != nil {
+	exists, err := orm.New(s.db).From("auth_accounts").Where("id = ?", adminAccountID).Count(ctx)
+	if err != nil {
 		return err
 	}
 	if exists > 0 {
@@ -250,20 +250,25 @@ func (s *Service) ensureAdminAccount(ctx context.Context) error {
 		}
 		passwordHash = string(rawHash)
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO auth_accounts(id, username, password_hash, password_change_required, created_at, updated_at)
-		VALUES (?, ?, ?, 1, ?, ?)
-	`, adminAccountID, username, passwordHash, now, now)
+	now := time.Now().UTC()
+	err = orm.New(s.db).Insert(ctx, &models.AuthAccount{
+		ID: adminAccountID, Username: username, PasswordHash: passwordHash,
+		PasswordChangeRequired: true, CreatedAt: now, UpdatedAt: now,
+	})
 	return err
 }
 
 func (s *Service) currentAdminAccount(ctx context.Context) (adminAccount, error) {
-	var account adminAccount
-	var passwordChangeRequired int
-	err := s.db.QueryRowContext(ctx, `SELECT username, password_hash, password_change_required FROM auth_accounts WHERE id=?`, adminAccountID).Scan(&account.Username, &account.PasswordHash, &passwordChangeRequired)
-	account.PasswordChangeRequired = passwordChangeRequired == 1
-	return account, err
+	var account models.AuthAccount
+	err := orm.New(s.db).From("auth_accounts").Where("id = ?", adminAccountID).First(ctx, &account)
+	if err != nil {
+		return adminAccount{}, err
+	}
+	return adminAccount{
+		Username:               account.Username,
+		PasswordHash:           account.PasswordHash,
+		PasswordChangeRequired: account.PasswordChangeRequired,
+	}, nil
 }
 
 func (s *Service) ensureTokenNonce(ctx context.Context) error {
@@ -279,7 +284,7 @@ func (s *Service) ensureTokenNonce(ctx context.Context) error {
 
 func (s *Service) currentTokenNonce(ctx context.Context) (string, error) {
 	var nonce string
-	err := s.db.QueryRowContext(ctx, `SELECT value FROM auth_state WHERE key=?`, tokenNonceStateKey).Scan(&nonce)
+	err := orm.New(s.db).From("auth_state").Where("key = ?", tokenNonceStateKey).Select("value").ScanValue(ctx, &nonce)
 	return nonce, err
 }
 
@@ -289,7 +294,7 @@ func (s *Service) rotateTokenNonce(ctx context.Context) error {
 		return err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = s.db.ExecContext(ctx, `
+	_, err = orm.RawExec(ctx, s.db, `
 		INSERT INTO auth_state(key, value, updated_at)
 		VALUES (?, ?, ?)
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
@@ -313,7 +318,7 @@ func (s *Service) tokenExpirationDuration(ctx context.Context) (time.Duration, e
 	if s.runtime != nil {
 		value = s.runtime.Runtime().TokenExpiration
 	} else {
-		err := s.db.QueryRowContext(ctx, `SELECT value FROM runtime_settings WHERE key=?`, settings.RuntimeSettingTokenExpiration).Scan(&value)
+		err := orm.New(s.db).From("runtime_settings").Where("key = ?", settings.RuntimeSettingTokenExpiration).Select("value").ScanValue(ctx, &value)
 		if err == sql.ErrNoRows {
 			value = settings.DefaultTokenExpiration
 		} else if err != nil {

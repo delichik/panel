@@ -19,6 +19,7 @@ import (
 	"panel/internal/modules/servers/ports"
 	serversqlite "panel/internal/modules/servers/store/sqlite"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
@@ -111,12 +112,12 @@ func (s *Service) latestLoadAverage(ctx context.Context, serverID string) string
 	if s.metricsDB == nil {
 		return ""
 	}
-	var load sql.NullString
-	err := s.metricsDB.QueryRowContext(ctx, `SELECT load_average FROM metrics_snapshots WHERE server_id=? ORDER BY time DESC LIMIT 1`, serverID).Scan(&load)
-	if err != nil || !load.Valid {
+	var loads []string
+	err := orm.New(s.metricsDB).From("metrics_snapshots").Where("server_id=?", serverID).OrderBy("time DESC").Limit(1).Pluck(ctx, "load_average", &loads)
+	if err != nil || len(loads) == 0 {
 		return ""
 	}
-	return load.String
+	return loads[0]
 }
 
 func (s *Service) prepareServerForRead(ctx context.Context, srv Server) Server {
@@ -654,21 +655,21 @@ func (s *Service) RecordMetricsReachability(ctx context.Context, serverID string
 
 func (s *Service) recordReachability(ctx context.Context, serverID string, reachable bool, message string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,last_checked_at=?,last_error=?,updated_at=? WHERE id=?`,
-		boolInt(reachable), now, message, now, serverID)
-	return err
+	return orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{
+		"reachable": reachable, "last_checked_at": now, "last_error": message, "updated_at": now,
+	})
 }
 
 func (s *Service) recordConnectivity(ctx context.Context, serverID string, reachable bool, mode string, message string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,privilege_mode=?,privilege_last_checked_at=?,last_checked_at=?,last_error=?,updated_at=? WHERE id=?`,
-		boolInt(reachable), mode, now, now, message, now, serverID)
-	return err
+	return orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{
+		"reachable": reachable, "privilege_mode": mode, "privilege_last_checked_at": now,
+		"last_checked_at": now, "last_error": message, "updated_at": now,
+	})
 }
 
 func (s *Service) rollbackInitialServer(ctx context.Context, serverID string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM servers WHERE id=?`, serverID)
-	return err
+	return orm.New(s.db).From("servers").Where("id=?", serverID).Delete(ctx)
 }
 
 func (s *Service) runInstallUFW(ctx context.Context, taskID string, srv Server, adapter linux.DistroAdapter) {
@@ -854,9 +855,12 @@ func (s *Service) markArchitecture(ctx context.Context, serverID string, archite
 	if s.db == nil || strings.TrimSpace(serverID) == "" {
 		return nil
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET architecture_os=?,architecture_arch=?,architecture_machine=?,updated_at=? WHERE id=?`,
-		architecture.OS, architecture.Arch, architecture.RawMachine, time.Now().UTC().Format(time.RFC3339Nano), serverID)
-	return err
+	return orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{
+		"architecture_os":      architecture.OS,
+		"architecture_arch":    architecture.Arch,
+		"architecture_machine": architecture.RawMachine,
+		"updated_at":           time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func (s *Service) detectOS(ctx context.Context, srv Server, target sshx.Target) (linux.OSRelease, error) {
@@ -958,29 +962,23 @@ func certificateTimeStatus(info agentsecurity.CertificateInfo, now time.Time) st
 }
 
 func (s *Service) setAgentAutoDeployBlocked(ctx context.Context, serverID string, blocked bool) error {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	if blocked {
 		traits[agentcontract.TraitAutoDeployBlocked] = "true"
 	} else {
 		delete(traits, agentcontract.TraitAutoDeployBlocked)
 	}
-	traitsJSON, _ := json.Marshal(traits)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
-	return err
+	return s.saveServerTraits(ctx, serverID, traits)
 }
 
 func (s *Service) markAgentStatus(ctx context.Context, serverID, status, version, msg string) error {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	traits[agentcontract.TraitStatus] = status
 	traits[agentcontract.TraitLastChecked] = time.Now().UTC().Format(time.RFC3339Nano)
 	if version != "" {
@@ -1004,43 +1002,52 @@ func (s *Service) markAgentStatus(ctx context.Context, serverID, status, version
 	} else {
 		delete(traits, agentcontract.TraitHealthSuccessStreak)
 	}
-	traitsJSON, _ := json.Marshal(traits)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)
-	return err
+	return s.saveServerTraits(ctx, serverID, traits)
 }
 
 func (s *Service) recordAgentAutoDeployFailure(ctx context.Context, serverID string) (int, error) {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return 0, err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	failures := traitInt(traits, agentcontract.TraitAutoDeployFailures) + 1
 	traits[agentcontract.TraitAutoDeployFailures] = strconv.Itoa(failures)
 	traits[agentcontract.TraitAutoDeployLastFailure] = time.Now().UTC().Format(time.RFC3339Nano)
 	delete(traits, agentcontract.TraitHealthSuccessStreak)
-	traitsJSON, _ := json.Marshal(traits)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
-	return failures, err
+	return failures, s.saveServerTraits(ctx, serverID, traits)
 }
 
 func (s *Service) resetAgentAutoDeployBackoffTime(ctx context.Context, serverID string) error {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	if traitInt(traits, agentcontract.TraitAutoDeployFailures) == 0 {
 		return nil
 	}
 	traits[agentcontract.TraitAutoDeployLastFailure] = time.Now().UTC().Format(time.RFC3339Nano)
 	delete(traits, agentcontract.TraitHealthSuccessStreak)
+	return s.saveServerTraits(ctx, serverID, traits)
+}
+
+func (s *Service) loadServerTraits(ctx context.Context, serverID string) (map[string]string, error) {
+	var raw []string
+	if err := orm.New(s.db).From("servers").Where("id=?", serverID).Pluck(ctx, "traits", &raw); err != nil {
+		return nil, err
+	}
+	traits := map[string]string{}
+	if len(raw) > 0 && raw[0] != "" {
+		_ = json.Unmarshal([]byte(raw[0]), &traits)
+	}
+	return traits, nil
+}
+
+func (s *Service) saveServerTraits(ctx context.Context, serverID string, traits map[string]string) error {
 	traitsJSON, _ := json.Marshal(traits)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
-	return err
+	return orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{
+		"traits":     string(traitsJSON),
+		"updated_at": time.Now().UTC().Format(time.RFC3339Nano),
+	})
 }
 
 func traitInt(traits map[string]string, key string) int {
@@ -1052,59 +1059,44 @@ func traitInt(traits map[string]string, key string) int {
 }
 
 func (s *Service) markAgentCertificate(ctx context.Context, serverID string, info agentsecurity.CertificateInfo) error {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	traits[agentcontract.TraitCertificateFingerprint] = info.Fingerprint
 	traits[agentcontract.TraitCertificateNotBefore] = info.NotBefore.UTC().Format(time.RFC3339Nano)
 	traits[agentcontract.TraitCertificateNotAfter] = info.NotAfter.UTC().Format(time.RFC3339Nano)
-	traitsJSON, _ := json.Marshal(traits)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
-	return err
+	return s.saveServerTraits(ctx, serverID, traits)
 }
 
 func (s *Service) clearAgentCertificate(ctx context.Context, serverID string) error {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	delete(traits, agentcontract.TraitCertificateFingerprint)
 	delete(traits, agentcontract.TraitCertificateNotBefore)
 	delete(traits, agentcontract.TraitCertificateNotAfter)
-	traitsJSON, _ := json.Marshal(traits)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), time.Now().UTC().Format(time.RFC3339Nano), serverID)
-	return err
+	return s.saveServerTraits(ctx, serverID, traits)
 }
 
 func (s *Service) markAgentConfigured(ctx context.Context, serverID, url string) error {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	traits[agentcontract.TraitEnabled] = "true"
 	traits[agentcontract.TraitURL] = strings.TrimSpace(url)
 	delete(traits, agentcontract.TraitLastError)
 	delete(traits, agentcontract.TraitAutoDeployBlocked)
-	traitsJSON, _ := json.Marshal(traits)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)
-	return err
+	return s.saveServerTraits(ctx, serverID, traits)
 }
 
 func (s *Service) RecordAgentReportStream(ctx context.Context, serverID string, connected bool, lastMessageAt time.Time, msg string) error {
-	var rawTraits string
-	if err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits); err != nil {
+	traits, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
 	}
-	traits := map[string]string{}
-	_ = json.Unmarshal([]byte(rawTraits), &traits)
 	if connected {
 		traits[agentcontract.TraitReportStatus] = agentcontract.ReportStatusConnected
 		delete(traits, agentcontract.TraitReportLastError)
@@ -1117,10 +1109,7 @@ func (s *Service) RecordAgentReportStream(ctx context.Context, serverID string, 
 	if !lastMessageAt.IsZero() {
 		traits[agentcontract.TraitReportLastMessageAt] = lastMessageAt.UTC().Format(time.RFC3339Nano)
 	}
-	traitsJSON, _ := json.Marshal(traits)
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `UPDATE servers SET traits=?,updated_at=? WHERE id=?`, string(traitsJSON), now, serverID)
-	return err
+	return s.saveServerTraits(ctx, serverID, traits)
 }
 
 func missingAgentCapabilities(values []string) []string {
@@ -1521,14 +1510,9 @@ func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool
 	}
 
 	// 首先拉取已有的 traits (包含用户打的 custom.env 等自定义特征)
-	var rawTraits string
-	err := s.db.QueryRowContext(ctx, `SELECT traits FROM servers WHERE id=?`, serverID).Scan(&rawTraits)
-	if err != nil && err != sql.ErrNoRows {
+	current, err := s.loadServerTraits(ctx, serverID)
+	if err != nil {
 		return err
-	}
-	current := map[string]string{}
-	if rawTraits != "" {
-		_ = json.Unmarshal([]byte(rawTraits), &current)
 	}
 
 	// 剔除之前可刷新的 sys. 特征，用本次新探测到的 sysTraits 覆盖。
@@ -1543,9 +1527,21 @@ func (s *Service) markCheck(ctx context.Context, serverID string, reachable bool
 
 	traitsJSON, _ := json.Marshal(current)
 
-	_, err = s.db.ExecContext(ctx, `UPDATE servers SET reachable=?,os_id=?,os_version_id=?,os_pretty_name=?,os_supported=?,sudo_passwordless=?,sudo_last_checked_at=?,privilege_mode=?,privilege_last_checked_at=?,last_checked_at=?,traits=?,last_error=?,updated_at=? WHERE id=?`,
-		boolInt(reachable), osInfo.ID, osInfo.VersionID, osInfo.PrettyName, boolInt(osInfo.Supported), boolInt(passwordless), sudoCheckedAt, privilegeMode, now, now, string(traitsJSON), msg, now, serverID)
-	return err
+	return orm.New(s.db).From("servers").Where("id=?", serverID).UpdateColumns(ctx, map[string]any{
+		"reachable":                 reachable,
+		"os_id":                     osInfo.ID,
+		"os_version_id":             osInfo.VersionID,
+		"os_pretty_name":            osInfo.PrettyName,
+		"os_supported":              osInfo.Supported,
+		"sudo_passwordless":         passwordless,
+		"sudo_last_checked_at":      sudoCheckedAt,
+		"privilege_mode":            privilegeMode,
+		"privilege_last_checked_at": now,
+		"last_checked_at":           now,
+		"traits":                    string(traitsJSON),
+		"last_error":                msg,
+		"updated_at":                now,
+	})
 }
 
 func serverTarget(srv Server) sshx.Target {
@@ -1617,12 +1613,6 @@ func normalizeServerVariables(variables, traits map[string]string) map[string]st
 	return out
 }
 
-func boolInt(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
-}
 
 func boolString(v bool) string {
 	if v {

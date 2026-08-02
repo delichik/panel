@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 )
 
@@ -18,6 +19,22 @@ type FacilityAssetDownload struct {
 	Root        string
 }
 
+type facilityEditSessionAssetRow struct {
+	Name          string
+	Kind          string
+	ContentMode   string
+	Filename      string
+	SourceAssetID string
+	BlobDir       string
+}
+
+type facilityStaticAssetRow struct {
+	Name        string
+	Kind        string
+	ContentMode string
+	Filename    string
+}
+
 func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, assetRef string) (FacilityAssetDownload, error) {
 	record, err := s.loadFacilityEditSession(ctx, strings.TrimSpace(sessionID))
 	if err != nil {
@@ -27,13 +44,13 @@ func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, a
 		return FacilityAssetDownload{}, panelerr.Conflict("facility_edit_session_state_invalid", "facility edit session is not readable")
 	}
 	var result FacilityAssetDownload
-	var sourceID, blobDir string
+	var row facilityEditSessionAssetRow
 	ref := strings.TrimSpace(assetRef)
-	err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename,source_asset_id,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND name=? AND state='ready'`, record.ID, ref).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename, &sourceID, &blobDir)
+	err = orm.New(s.db).From("facility_edit_session_assets").Select("name", "kind", "content_mode", "filename", "source_asset_id", "blob_dir").Where("session_id=?", record.ID).And("name=?", ref).And("state=?", "ready").First(ctx, &row)
 	if err == sql.ErrNoRows {
 		// Legacy edit sessions exposed the opaque asset key. Keep reads working
 		// while new clients address assets by name.
-		err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename,source_asset_id,blob_dir FROM facility_edit_session_assets WHERE session_id=? AND asset_key=? AND state='ready'`, record.ID, ref).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename, &sourceID, &blobDir)
+		err = orm.New(s.db).From("facility_edit_session_assets").Select("name", "kind", "content_mode", "filename", "source_asset_id", "blob_dir").Where("session_id=?", record.ID).And("asset_key=?", ref).And("state=?", "ready").First(ctx, &row)
 	}
 	if err == sql.ErrNoRows {
 		return FacilityAssetDownload{}, panelerr.NotFound("facility_edit_session_asset")
@@ -41,10 +58,14 @@ func (s *Service) GetFacilityEditAssetDownload(ctx context.Context, sessionID, a
 	if err != nil {
 		return FacilityAssetDownload{}, err
 	}
-	if strings.TrimSpace(blobDir) != "" {
-		result.Root = filepath.Join(blobDir, "content")
-	} else if strings.TrimSpace(sourceID) != "" {
-		result.Root = s.staticAssetContentDir(sourceID)
+	result.Name = row.Name
+	result.Kind = row.Kind
+	result.ContentMode = row.ContentMode
+	result.Filename = row.Filename
+	if strings.TrimSpace(row.BlobDir) != "" {
+		result.Root = filepath.Join(row.BlobDir, "content")
+	} else if strings.TrimSpace(row.SourceAssetID) != "" {
+		result.Root = s.staticAssetContentDir(row.SourceAssetID)
 	} else {
 		return FacilityAssetDownload{}, panelerr.NotFound("facility_edit_session_asset_content")
 	}
@@ -57,10 +78,15 @@ func (s *Service) GetStaticAssetDownload(ctx context.Context, assetRef string) (
 		return FacilityAssetDownload{}, err
 	}
 	var result FacilityAssetDownload
-	err = s.db.QueryRowContext(ctx, `SELECT name,kind,content_mode,filename FROM facility_static_assets WHERE id=?`, asset.ID).Scan(&result.Name, &result.Kind, &result.ContentMode, &result.Filename)
+	var row facilityStaticAssetRow
+	err = orm.New(s.db).From("facility_static_assets").Select("name", "kind", "content_mode", "filename").Where("id=?", asset.ID).First(ctx, &row)
 	if err != nil {
 		return FacilityAssetDownload{}, err
 	}
+	result.Name = row.Name
+	result.Kind = row.Kind
+	result.ContentMode = row.ContentMode
+	result.Filename = row.Filename
 	result.Root = s.staticAssetContentDir(asset.ID)
 	return validateFacilityAssetDownload(result)
 }

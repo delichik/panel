@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 
@@ -52,16 +53,11 @@ func readMaintenanceCredential(ctx context.Context, appDatabase string) (mainten
 	}
 	defer db.Close()
 
-	var username string
-	var passwordHash string
-	if err := db.QueryRowContext(ctx, `
-		SELECT username, password_hash
-		FROM auth_accounts
-		WHERE id=?
-	`, "admin").Scan(&username, &passwordHash); err != nil {
+	var credential maintenanceCredential
+	if err := orm.New(db).From("auth_accounts").Select("username", "password_hash").Where("id=?", "admin").First(ctx, &credential); err != nil {
 		return maintenanceCredential{}, err
 	}
-	return maintenanceCredential{Username: username, PasswordHash: passwordHash}, nil
+	return credential, nil
 }
 
 func newMaintenanceAuth(ctx context.Context, authContext maintenanceAuthContext, appDatabase string, fallbacks ...maintenanceCredential) (*maintenanceAuth, error) {

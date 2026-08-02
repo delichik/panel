@@ -7,811 +7,140 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 )
 
 func (s *Store) Migrate(ctx context.Context) error {
-	app := []string{
-		`PRAGMA foreign_keys = ON`,
-		`CREATE TABLE IF NOT EXISTS credentials (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			type TEXT NOT NULL CHECK(type IN ('password','private_key')),
-			username TEXT NOT NULL,
-			secret_ciphertext TEXT NOT NULL DEFAULT '',
-			password_secret TEXT NOT NULL DEFAULT '',
-			private_key_path TEXT NOT NULL DEFAULT '',
-			passphrase_secret TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS servers (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			host TEXT NOT NULL,
-			port INTEGER NOT NULL,
-			ssh_username TEXT NOT NULL DEFAULT '',
-			credential_id TEXT NOT NULL,
-			docker_host TEXT NOT NULL DEFAULT 'unix:///var/run/docker.sock',
-			traits TEXT NOT NULL DEFAULT '{}',
-			variables_json TEXT NOT NULL DEFAULT '{}',
-			notes TEXT NOT NULL DEFAULT '',
-			os_id TEXT NOT NULL DEFAULT '',
-			os_version_id TEXT NOT NULL DEFAULT '',
-			os_pretty_name TEXT NOT NULL DEFAULT '',
-			os_supported INTEGER NOT NULL DEFAULT 0,
-			architecture_os TEXT NOT NULL DEFAULT '',
-			architecture_arch TEXT NOT NULL DEFAULT '',
-			architecture_machine TEXT NOT NULL DEFAULT '',
-			reachable INTEGER NOT NULL DEFAULT 0,
-			sudo_passwordless INTEGER NOT NULL DEFAULT 0,
-			sudo_last_checked_at TEXT,
-			privilege_mode TEXT NOT NULL DEFAULT '',
-			privilege_last_checked_at TEXT,
-			last_checked_at TEXT,
-			last_error TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(credential_id) REFERENCES credentials(id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS panel_installation (
-			id TEXT PRIMARY KEY CHECK(id = 'default'),
-			host_server_id TEXT UNIQUE,
-			pending_server_id TEXT UNIQUE,
-			stage TEXT NOT NULL DEFAULT '',
-			last_error TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(host_server_id) REFERENCES servers(id),
-			FOREIGN KEY(pending_server_id) REFERENCES servers(id) ON DELETE SET NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS package_updates (
-			server_id TEXT NOT NULL,
-			name TEXT NOT NULL,
-			installed_version TEXT NOT NULL,
-			candidate_version TEXT NOT NULL,
-			source TEXT NOT NULL DEFAULT '',
-			refreshed_at TEXT NOT NULL,
-			PRIMARY KEY(server_id, name),
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS package_refreshes (
-			server_id TEXT PRIMARY KEY,
-			refreshed_at TEXT NOT NULL,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS fail2ban_configs (
-			server_id TEXT PRIMARY KEY,
-			config_yaml TEXT NOT NULL,
-			managed INTEGER NOT NULL DEFAULT 0,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS image_updates (
-			server_id TEXT NOT NULL,
-			reference TEXT NOT NULL,
-			local_digest TEXT NOT NULL DEFAULT '',
-			latest_digest TEXT NOT NULL DEFAULT '',
-			update_available INTEGER NOT NULL DEFAULT 0,
-			last_error TEXT NOT NULL DEFAULT '',
-			checked_at TEXT NOT NULL,
-			PRIMARY KEY(server_id, reference),
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS image_refreshes (
-			server_id TEXT PRIMARY KEY,
-			refreshed_at TEXT NOT NULL,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS application_reconcile_states (
-			instance_id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			server_id TEXT NOT NULL,
-			observed_at TEXT NOT NULL,
-			reconcile_failures INTEGER NOT NULL DEFAULT 0,
-			reconcile_next_run_at TEXT NOT NULL DEFAULT '',
-			reconcile_success_streak INTEGER NOT NULL DEFAULT 0,
-			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS container_observations (
-			server_id TEXT NOT NULL,
-			container_id TEXT NOT NULL,
-			sample_at TEXT NOT NULL,
-			container_json TEXT NOT NULL,
-			summary_json TEXT NOT NULL DEFAULT '{}',
-			managed INTEGER NOT NULL DEFAULT 0,
-			application_id TEXT NOT NULL DEFAULT '',
-			instance_id TEXT NOT NULL DEFAULT '',
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(server_id, container_id),
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_container_observations_server_sample ON container_observations(server_id, sample_at)`,
-		`CREATE TABLE IF NOT EXISTS docker_resource_snapshots (
-			server_id TEXT NOT NULL,
-			resource_type TEXT NOT NULL,
-			items_json TEXT NOT NULL DEFAULT '[]',
-			observed_at TEXT NOT NULL,
-			PRIMARY KEY(server_id, resource_type),
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS dns_record_snapshots (
-			domain_id TEXT PRIMARY KEY,
-			records_json TEXT NOT NULL DEFAULT '[]',
-			observed_at TEXT NOT NULL,
-			last_error TEXT NOT NULL DEFAULT '',
-			FOREIGN KEY(domain_id) REFERENCES dns_domains(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS applications (
-			id TEXT PRIMARY KEY,
-			version INTEGER NOT NULL DEFAULT 1,
-			kind TEXT NOT NULL DEFAULT 'application',
-			name TEXT NOT NULL,
-			enabled INTEGER NOT NULL DEFAULT 0,
-			deletion_requested INTEGER NOT NULL DEFAULT 0,
-			spec_yaml TEXT NOT NULL,
-			variables_json TEXT NOT NULL DEFAULT '{}',
-			resolved_variables_json TEXT NOT NULL DEFAULT '{}',
-			deployment_mode TEXT NOT NULL DEFAULT 'all',
-			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
-			reverse_proxy_json TEXT NOT NULL DEFAULT '[]',
-			generation INTEGER NOT NULL DEFAULT 1,
-			spec_hash TEXT NOT NULL DEFAULT '',
-			image_reference TEXT NOT NULL DEFAULT '',
-			image_digest TEXT NOT NULL DEFAULT '',
-			image_latest_digest TEXT NOT NULL DEFAULT '',
-			image_checked_at TEXT,
-			image_update_available INTEGER NOT NULL DEFAULT 0,
-			image_last_error TEXT NOT NULL DEFAULT '',
-			job_id TEXT NOT NULL,
-			namespace TEXT NOT NULL DEFAULT 'default',
-			last_eval_id TEXT NOT NULL DEFAULT '',
-			last_deployment_id TEXT NOT NULL DEFAULT '',
-			last_error TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			UNIQUE(name)
-		)`,
-		`CREATE TABLE IF NOT EXISTS application_edit_sessions (
-			id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL DEFAULT '',
-			owner_id TEXT NOT NULL,
-			client_draft_key TEXT NOT NULL DEFAULT '',
-			state TEXT NOT NULL,
-			base_resource_version INTEGER NOT NULL DEFAULT 0,
-			base_resource_updated_at TEXT NOT NULL DEFAULT '',
-			draft_json TEXT NOT NULL DEFAULT '{}',
-			revision INTEGER NOT NULL DEFAULT 1,
-			preview_token TEXT NOT NULL DEFAULT '',
-			preview_revision INTEGER NOT NULL DEFAULT 0,
-			preview_expires_at TEXT NOT NULL DEFAULT '',
-			commit_lease_owner TEXT NOT NULL DEFAULT '',
-			commit_lease_expires_at TEXT NOT NULL DEFAULT '',
-			commit_idempotency_key TEXT NOT NULL DEFAULT '',
-			commit_application_id TEXT NOT NULL DEFAULT '',
-			commit_result_json TEXT NOT NULL DEFAULT '',
-			conflict_json TEXT NOT NULL DEFAULT '',
-			idle_expires_at TEXT NOT NULL,
-			absolute_expires_at TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			committed_at TEXT NOT NULL DEFAULT ''
-		)`,
-		`DROP INDEX IF EXISTS idx_application_edit_sessions_recoverable`,
-		`CREATE INDEX IF NOT EXISTS idx_application_edit_sessions_expiry ON application_edit_sessions(state,idle_expires_at,absolute_expires_at)`,
-		`CREATE TABLE IF NOT EXISTS application_edit_session_files (
-			session_id TEXT NOT NULL,
-			file_key TEXT NOT NULL,
-			name TEXT NOT NULL,
-			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
-			content_type TEXT NOT NULL DEFAULT '',
-			size INTEGER NOT NULL DEFAULT 0,
-			sha256 TEXT NOT NULL DEFAULT '',
-			blob_path TEXT NOT NULL,
-			state TEXT NOT NULL DEFAULT 'ready',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(session_id,file_key),
-			UNIQUE(session_id,name),
-			FOREIGN KEY(session_id) REFERENCES application_edit_sessions(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS application_edit_session_operations (
-			session_id TEXT NOT NULL,
-			client_operation_id TEXT NOT NULL,
-			idempotency_key TEXT NOT NULL,
-			request_hash TEXT NOT NULL,
-			result_json TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			PRIMARY KEY(session_id,client_operation_id),
-			UNIQUE(session_id,idempotency_key),
-			FOREIGN KEY(session_id) REFERENCES application_edit_sessions(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS application_files (
-			id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			name TEXT NOT NULL,
-			kind TEXT NOT NULL CHECK(kind IN ('binary','template','archive')),
-			content_type TEXT NOT NULL DEFAULT '',
-			size INTEGER NOT NULL DEFAULT 0,
-			sha256 TEXT NOT NULL DEFAULT '',
-			content BLOB,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			UNIQUE(application_id, name),
-			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS application_instances (
-			id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			server_id TEXT NOT NULL,
-			container_name TEXT NOT NULL,
-			container_id TEXT NOT NULL DEFAULT '',
-			desired_state TEXT NOT NULL DEFAULT 'running',
-			status TEXT NOT NULL DEFAULT 'pending',
-			runtime_spec_json TEXT NOT NULL DEFAULT '{}',
-			last_deployed_generation INTEGER NOT NULL DEFAULT 0,
-			last_error TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			UNIQUE(application_id, server_id),
-			FOREIGN KEY(application_id) REFERENCES applications(id) ON DELETE CASCADE,
-			FOREIGN KEY(server_id) REFERENCES servers(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS facility_app_configs (
-			id TEXT PRIMARY KEY,
-			version INTEGER NOT NULL DEFAULT 1,
-			deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
-			panel_entry_json TEXT NOT NULL DEFAULT '{}',
-			domains_json TEXT NOT NULL DEFAULT '[]',
-			last_error TEXT NOT NULL DEFAULT '',
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS facility_static_assets (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			kind TEXT NOT NULL CHECK(kind IN ('uploaded_file','uploaded_bundle')),
-			content_mode TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary')),
-			filename TEXT NOT NULL DEFAULT '',
-			size INTEGER NOT NULL DEFAULT 0,
-			sha256 TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS facility_edit_sessions (
-			id TEXT PRIMARY KEY,
-			owner_id TEXT NOT NULL,
-			client_draft_key TEXT NOT NULL DEFAULT '',
-			state TEXT NOT NULL,
-			base_resource_version INTEGER NOT NULL DEFAULT 0,
-			draft_json TEXT NOT NULL DEFAULT '{}',
-			revision INTEGER NOT NULL DEFAULT 1,
-			preview_token TEXT NOT NULL DEFAULT '',
-			preview_revision INTEGER NOT NULL DEFAULT 0,
-			preview_expires_at TEXT NOT NULL DEFAULT '',
-			commit_lease_owner TEXT NOT NULL DEFAULT '',
-			commit_lease_expires_at TEXT NOT NULL DEFAULT '',
-			commit_idempotency_key TEXT NOT NULL DEFAULT '',
-			commit_result_json TEXT NOT NULL DEFAULT '',
-			manifest_path TEXT NOT NULL DEFAULT '',
-			conflict_json TEXT NOT NULL DEFAULT '',
-			idle_expires_at TEXT NOT NULL,
-			absolute_expires_at TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			committed_at TEXT NOT NULL DEFAULT ''
-		)`,
-		`DROP INDEX IF EXISTS idx_facility_edit_sessions_recoverable`,
-		`CREATE INDEX IF NOT EXISTS idx_facility_edit_sessions_expiry ON facility_edit_sessions(state,idle_expires_at,absolute_expires_at)`,
-		`CREATE TABLE IF NOT EXISTS facility_edit_session_assets (
-			session_id TEXT NOT NULL,
-			asset_key TEXT NOT NULL,
-			source_asset_id TEXT NOT NULL DEFAULT '',
-			name TEXT NOT NULL,
-			kind TEXT NOT NULL CHECK(kind IN ('uploaded_file','uploaded_bundle')),
-			content_mode TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary')),
-			filename TEXT NOT NULL DEFAULT '',
-			size INTEGER NOT NULL DEFAULT 0,
-			sha256 TEXT NOT NULL DEFAULT '',
-			content_sha256 TEXT NOT NULL DEFAULT '',
-			blob_dir TEXT NOT NULL DEFAULT '',
-			state TEXT NOT NULL DEFAULT 'ready',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			PRIMARY KEY(session_id,asset_key),
-			FOREIGN KEY(session_id) REFERENCES facility_edit_sessions(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS facility_edit_session_operations (
-			session_id TEXT NOT NULL,
-			client_operation_id TEXT NOT NULL,
-			idempotency_key TEXT NOT NULL,
-			request_hash TEXT NOT NULL,
-			result_json TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			PRIMARY KEY(session_id,client_operation_id),
-			UNIQUE(session_id,idempotency_key),
-			FOREIGN KEY(session_id) REFERENCES facility_edit_sessions(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS dns_domains (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL UNIQUE,
-			provider TEXT NOT NULL CHECK(provider IN ('cloudflare')),
-			provider_config_json TEXT NOT NULL DEFAULT '{}',
-			provider_secret_ciphertext TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS certificates (
-			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			domain_id TEXT NOT NULL DEFAULT '',
-			domain TEXT NOT NULL,
-			prefix TEXT NOT NULL DEFAULT '@',
-			scope TEXT NOT NULL CHECK(scope IN ('single','wildcard','prefixes')),
-			domains_json TEXT NOT NULL DEFAULT '[]',
-			variable_name TEXT NOT NULL UNIQUE,
-			certificate_path TEXT NOT NULL,
-			private_key_path TEXT NOT NULL,
-			issuer TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'pending',
-			last_error TEXT NOT NULL DEFAULT '',
-			auto_renew INTEGER NOT NULL DEFAULT 1,
-			next_renew_at TEXT NOT NULL DEFAULT '',
-			not_before TEXT NOT NULL DEFAULT '',
-			not_after TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			FOREIGN KEY(domain_id) REFERENCES dns_domains(id)
-		)`,
-		`CREATE TABLE IF NOT EXISTS self_signed_certificates (
-			id TEXT PRIMARY KEY,
-			parent_ca_id TEXT NOT NULL DEFAULT '',
-			kind TEXT NOT NULL CHECK(kind IN ('ca','leaf')),
-			name TEXT NOT NULL,
-			common_name TEXT NOT NULL,
-			dns_names_json TEXT NOT NULL DEFAULT '[]',
-			ip_addresses_json TEXT NOT NULL DEFAULT '[]',
-			certificate_path TEXT NOT NULL,
-			private_key_path TEXT NOT NULL,
-			public_key_path TEXT NOT NULL,
-			fingerprint TEXT NOT NULL DEFAULT '',
-			not_before TEXT NOT NULL DEFAULT '',
-			not_after TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS key_assets (
-			id TEXT PRIMARY KEY,
-			type TEXT NOT NULL CHECK(type IN ('ca_certificate','tls_certificate','ssh_key_pair')),
-			name TEXT NOT NULL,
-			parent_asset_id TEXT NOT NULL DEFAULT '',
-			algorithm TEXT NOT NULL DEFAULT '',
-			key_size INTEGER NOT NULL DEFAULT 0,
-			common_name TEXT NOT NULL DEFAULT '',
-			dns_names_json TEXT NOT NULL DEFAULT '[]',
-			ip_addresses_json TEXT NOT NULL DEFAULT '[]',
-			fingerprint TEXT NOT NULL DEFAULT '',
-			certificate_ciphertext TEXT NOT NULL DEFAULT '',
-			private_key_ciphertext TEXT NOT NULL DEFAULT '',
-			public_key TEXT NOT NULL DEFAULT '',
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			not_before TEXT NOT NULL DEFAULT '',
-			not_after TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_key_assets_name ON key_assets(name)`,
-		`CREATE INDEX IF NOT EXISTS idx_key_assets_type ON key_assets(type)`,
-		`CREATE INDEX IF NOT EXISTS idx_key_assets_parent_asset_id ON key_assets(parent_asset_id)`,
-		`CREATE TABLE IF NOT EXISTS overview_card_configurations (
-			id TEXT PRIMARY KEY CHECK(id = 'default'),
-			cards_json TEXT NOT NULL DEFAULT '[]',
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS runtime_settings (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS auth_state (
-			key TEXT PRIMARY KEY,
-			value TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE TABLE IF NOT EXISTS auth_accounts (
-			id TEXT PRIMARY KEY CHECK(id = 'admin'),
-			username TEXT NOT NULL,
-			password_hash TEXT NOT NULL,
-			password_change_required INTEGER NOT NULL DEFAULT 1,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
+	// 1. Drop legacy task tables before the ORM takes over the log DB: their
+	//    schema predates the task state machine and cannot be upgraded in
+	//    place.
+	if err := orm.RunSteps(ctx, s.logDB, []orm.Step{legacyResetTaskTablesStep}); err != nil {
+		return fmt.Errorf("reset legacy task tables: %w", err)
 	}
-	for _, stmt := range app {
-		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
-			return err
+	// 2. Per-database schema management: each library is migrated with the
+	//    model list of that library only, with destructive mode enabled.
+	dbs := []struct {
+		db     *sql.DB
+		models []any
+	}{
+		{s.appDB, models.AppModels()},
+		{s.logDB, models.LogModels()},
+		{s.metricsDB, models.MetricsModels()},
+	}
+	for _, pass := range dbs {
+		if _, err := orm.AutoMigrateModels(ctx, pass.db, pass.models, orm.WithDestructive(true)); err != nil {
+			return fmt.Errorf("auto migrate schema: %w", err)
 		}
 	}
-	if err := s.resetLegacyTaskTables(ctx); err != nil {
+	// 3. Cheap idempotent normalization that must re-run on every start so
+	//    rows inserted between restarts stay normalized.
+	if err := normalizeAppDefaultsOn(ctx, s.appDB); err != nil {
 		return err
 	}
-	task := []string{
-		`PRAGMA foreign_keys = ON`,
-		`CREATE TABLE IF NOT EXISTS tasks (
-			id TEXT PRIMARY KEY,
-			operation_id TEXT NOT NULL DEFAULT '',
-			type TEXT NOT NULL,
-			parent_task_id TEXT NOT NULL DEFAULT '',
-			child_index INTEGER NOT NULL DEFAULT 0,
-			child_count INTEGER NOT NULL DEFAULT 0,
-			execution_mode TEXT NOT NULL DEFAULT '',
-			concurrency_key TEXT NOT NULL DEFAULT '',
-			schedule_key TEXT NOT NULL DEFAULT '',
-			server_id TEXT NOT NULL DEFAULT '',
-			node_id TEXT NOT NULL DEFAULT '',
-			resource_type TEXT NOT NULL DEFAULT '',
-			resource_id TEXT NOT NULL DEFAULT '',
-			trigger_type TEXT NOT NULL DEFAULT '',
-			trigger_resource_type TEXT NOT NULL DEFAULT '',
-			trigger_resource_id TEXT NOT NULL DEFAULT '',
-			trigger_task_id TEXT NOT NULL DEFAULT '',
-			triggered_by TEXT NOT NULL DEFAULT '',
-			params_json TEXT NOT NULL DEFAULT '{}',
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			status TEXT NOT NULL,
-			stage TEXT NOT NULL DEFAULT '',
-			percentage REAL,
-			summary TEXT NOT NULL DEFAULT '',
-			error TEXT NOT NULL DEFAULT '',
-			retry_count INTEGER NOT NULL DEFAULT 0,
-			max_retries INTEGER NOT NULL DEFAULT 0,
-			next_run_at TEXT,
-			created_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT
-		)`,
-		`CREATE TABLE IF NOT EXISTS task_steps (
-			id TEXT PRIMARY KEY,
-			task_id TEXT NOT NULL,
-			step TEXT NOT NULL,
-			status TEXT NOT NULL,
-			percentage REAL NOT NULL DEFAULT 0,
-			metadata_json TEXT NOT NULL DEFAULT '{}',
-			started_at TEXT,
-			finished_at TEXT,
-			error TEXT NOT NULL DEFAULT '',
-			UNIQUE(task_id, step),
-			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS task_logs (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			task_id TEXT NOT NULL,
-			time TEXT NOT NULL,
-			stream TEXT NOT NULL,
-			line TEXT NOT NULL,
-			FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE IF NOT EXISTS application_revisions (
-			id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			generation INTEGER NOT NULL,
-			spec_hash TEXT NOT NULL,
-			spec_yaml TEXT NOT NULL,
-			job_json TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			UNIQUE(application_id, generation)
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_revisions_app_created ON application_revisions(application_id, created_at)`,
-		`CREATE TABLE IF NOT EXISTS application_lifecycle_operations (
-			id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			type TEXT NOT NULL,
-			status TEXT NOT NULL DEFAULT 'pending',
-			task_id TEXT NOT NULL DEFAULT '',
-			generation INTEGER NOT NULL DEFAULT 0,
-			spec_hash TEXT NOT NULL DEFAULT '',
-			trigger TEXT NOT NULL DEFAULT '',
-			error TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_operations_app_created ON application_lifecycle_operations(application_id, created_at)`,
-		`CREATE TABLE IF NOT EXISTS application_lifecycle_targets (
-			id TEXT PRIMARY KEY,
-			operation_id TEXT NOT NULL,
-			application_id TEXT NOT NULL,
-			server_id TEXT NOT NULL,
-			action TEXT NOT NULL DEFAULT 'apply',
-			state TEXT NOT NULL DEFAULT 'planned',
-			status TEXT NOT NULL DEFAULT 'pending',
-			target_key TEXT NOT NULL DEFAULT '',
-			desired_state TEXT NOT NULL DEFAULT 'running',
-			desired_generation INTEGER NOT NULL DEFAULT 0,
-			desired_spec_hash TEXT NOT NULL DEFAULT '',
-			priority INTEGER NOT NULL DEFAULT 0,
-			attempt INTEGER NOT NULL DEFAULT 0,
-			next_run_at TEXT NOT NULL DEFAULT '',
-			lease_owner TEXT NOT NULL DEFAULT '',
-			lease_expires_at TEXT NOT NULL DEFAULT '',
-			claimed_task_id TEXT NOT NULL DEFAULT '',
-			instance_id TEXT NOT NULL DEFAULT '',
-			container_name TEXT NOT NULL DEFAULT '',
-			container_id TEXT NOT NULL DEFAULT '',
-			stage TEXT NOT NULL DEFAULT '',
-			error TEXT NOT NULL DEFAULT '',
-			error_code TEXT NOT NULL DEFAULT '',
-			error_message TEXT NOT NULL DEFAULT '',
-			error_detail TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			started_at TEXT,
-			finished_at TEXT,
-			updated_at TEXT NOT NULL,
-			UNIQUE(operation_id, server_id),
-			FOREIGN KEY(operation_id) REFERENCES application_lifecycle_operations(id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation ON application_lifecycle_targets(operation_id, server_id)`,
-		`CREATE TABLE IF NOT EXISTS runtime_events (
-			id TEXT PRIMARY KEY,
-			event_type TEXT NOT NULL,
-			category TEXT NOT NULL,
-			subject_type TEXT NOT NULL DEFAULT '',
-			subject_id TEXT NOT NULL DEFAULT '',
-			operation_id TEXT NOT NULL DEFAULT '',
-			severity TEXT NOT NULL DEFAULT 'info',
-			source TEXT NOT NULL DEFAULT '',
-			source_module TEXT NOT NULL DEFAULT '',
-			source_type TEXT NOT NULL DEFAULT '',
-			source_id TEXT NOT NULL DEFAULT '',
-			dedupe_key TEXT NOT NULL DEFAULT '',
-			summary TEXT NOT NULL DEFAULT '',
-			occurred_at TEXT NOT NULL,
-			detail_available INTEGER NOT NULL DEFAULT 0,
-			detail_pruned_at TEXT,
-			created_at TEXT NOT NULL
-		)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_runtime_events_dedupe ON runtime_events(dedupe_key) WHERE dedupe_key <> ''`,
-		`CREATE INDEX IF NOT EXISTS idx_runtime_events_category_time ON runtime_events(category, occurred_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_runtime_events_subject_time ON runtime_events(subject_type, subject_id, occurred_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_runtime_events_operation_time ON runtime_events(operation_id, occurred_at)`,
-		`CREATE TABLE IF NOT EXISTS runtime_event_details (
-			event_id TEXT PRIMARY KEY,
-			payload TEXT NOT NULL DEFAULT '{}',
-			error TEXT NOT NULL DEFAULT '',
-			log_refs TEXT NOT NULL DEFAULT '[]',
-			task_refs TEXT NOT NULL DEFAULT '[]',
-			target_refs TEXT NOT NULL DEFAULT '[]',
-			created_at TEXT NOT NULL,
-			pruned_at TEXT,
-			FOREIGN KEY(event_id) REFERENCES runtime_events(id) ON DELETE CASCADE
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_runtime_event_details_created ON runtime_event_details(created_at)`,
-		`CREATE TABLE IF NOT EXISTS application_operation_records (
-			operation_id TEXT PRIMARY KEY,
-			application_id TEXT NOT NULL,
-			application_name_snapshot TEXT NOT NULL DEFAULT '',
-			action TEXT NOT NULL DEFAULT '',
-			source TEXT NOT NULL DEFAULT '',
-			triggered_by TEXT NOT NULL DEFAULT '',
-			trigger_reason TEXT NOT NULL DEFAULT '',
-			status TEXT NOT NULL DEFAULT 'queued',
-			started_at TEXT,
-			finished_at TEXT,
-			target_total INTEGER NOT NULL DEFAULT 0,
-			target_succeeded INTEGER NOT NULL DEFAULT 0,
-			target_failed INTEGER NOT NULL DEFAULT 0,
-			latest_event_at TEXT NOT NULL,
-			detail_available INTEGER NOT NULL DEFAULT 0,
-			failure_summary TEXT NOT NULL DEFAULT '',
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_operation_records_app_time ON application_operation_records(application_id, latest_event_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_operation_records_status_time ON application_operation_records(status, latest_event_at)`,
-		`CREATE TABLE IF NOT EXISTS key_asset_exports (
-			task_id TEXT PRIMARY KEY,
-			filename TEXT NOT NULL,
-			file_path TEXT NOT NULL,
-			expires_at TEXT NOT NULL,
-			created_at TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_key_asset_exports_expires_at ON key_asset_exports(expires_at)`,
-		`CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(type,status)`,
-		`CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_status ON tasks(concurrency_key,status)`,
-		`CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id,child_index)`,
+	// 4. One-time data migrations (recorded in orm_migrations; each step
+	//    keeps its original guard so it is a no-op on fresh databases).
+	if err := orm.RunSteps(ctx, s.appDB, appMigrationSteps()); err != nil {
+		return fmt.Errorf("app migration steps: %w", err)
 	}
-	for _, stmt := range task {
-		if _, err := s.logDB.ExecContext(ctx, stmt); err != nil {
-			return err
-		}
+	if err := orm.RunSteps(ctx, s.logDB, logMigrationSteps()); err != nil {
+		return fmt.Errorf("log migration steps: %w", err)
 	}
-	if err := s.ensureAppColumns(ctx, "credentials", map[string]string{
-		"name":              "TEXT NOT NULL DEFAULT ''",
-		"type":              "TEXT NOT NULL DEFAULT 'password'",
-		"username":          "TEXT NOT NULL DEFAULT ''",
-		"secret_ciphertext": "TEXT NOT NULL DEFAULT ''",
-		"password_secret":   "TEXT NOT NULL DEFAULT ''",
-		"private_key_path":  "TEXT NOT NULL DEFAULT ''",
-		"passphrase_secret": "TEXT NOT NULL DEFAULT ''",
-		"created_at":        "TEXT NOT NULL DEFAULT ''",
-		"updated_at":        "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "applications", map[string]string{
-		"version":                    "INTEGER NOT NULL DEFAULT 1",
-		"kind":                       "TEXT NOT NULL DEFAULT 'application'",
-		"deletion_requested":         "INTEGER NOT NULL DEFAULT 0",
-		"resolved_variables_json":    "TEXT NOT NULL DEFAULT '{}'",
-		"deployment_mode":            "TEXT NOT NULL DEFAULT 'all'",
-		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
-		"reverse_proxy_json":         "TEXT NOT NULL DEFAULT '[]'",
-		"image_reference":            "TEXT NOT NULL DEFAULT ''",
-		"image_digest":               "TEXT NOT NULL DEFAULT ''",
-		"image_latest_digest":        "TEXT NOT NULL DEFAULT ''",
-		"image_checked_at":           "TEXT",
-		"image_update_available":     "INTEGER NOT NULL DEFAULT 0",
-		"image_last_error":           "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "application_edit_sessions", map[string]string{
-		"base_resource_updated_at": "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
-	if err := s.migrateApplicationFileNames(ctx); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "application_reconcile_states", map[string]string{
-		"reconcile_failures":       "INTEGER NOT NULL DEFAULT 0",
-		"reconcile_next_run_at":    "TEXT NOT NULL DEFAULT ''",
-		"reconcile_success_streak": "INTEGER NOT NULL DEFAULT 0",
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "container_observations", map[string]string{
-		"summary_json": "TEXT NOT NULL DEFAULT '{}'",
-	}); err != nil {
-		return err
-	}
-	if _, err := s.appDB.ExecContext(ctx, `UPDATE container_observations SET summary_json=container_json WHERE summary_json='' OR summary_json='{}'`); err != nil {
-		return err
-	}
-	if err := s.migrateApplicationLifecycleTargets(ctx); err != nil {
-		return err
-	}
-	if err := s.migrateReverseProxyConfiguration(ctx); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "facility_app_configs", map[string]string{
-		"version":                    "INTEGER NOT NULL DEFAULT 1",
-		"deployment_server_ids_json": "TEXT NOT NULL DEFAULT '[]'",
-		"panel_entry_json":           "TEXT NOT NULL DEFAULT '{}'",
-		"domains_json":               "TEXT NOT NULL DEFAULT '[]'",
-		"last_error":                 "TEXT NOT NULL DEFAULT ''",
-		"updated_at":                 "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "facility_static_assets", map[string]string{
-		"content_mode": "TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary'))",
-		"name":         "TEXT NOT NULL DEFAULT ''",
-		"kind":         "TEXT NOT NULL DEFAULT 'uploaded_file'",
-		"filename":     "TEXT NOT NULL DEFAULT ''",
-		"size":         "INTEGER NOT NULL DEFAULT 0",
-		"sha256":       "TEXT NOT NULL DEFAULT ''",
-		"created_at":   "TEXT NOT NULL DEFAULT ''",
-		"updated_at":   "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "facility_edit_session_assets", map[string]string{
-		"content_sha256": "TEXT NOT NULL DEFAULT ''",
-		"content_mode":   "TEXT NOT NULL DEFAULT 'binary' CHECK(content_mode IN ('text','binary'))",
-	}); err != nil {
-		return err
-	}
-	if err := s.migrateFacilityAssetNames(ctx); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "fail2ban_configs", map[string]string{
-		"managed": "INTEGER NOT NULL DEFAULT 0",
-	}); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "servers", map[string]string{
-		"name":                      "TEXT NOT NULL DEFAULT ''",
-		"host":                      "TEXT NOT NULL DEFAULT ''",
-		"port":                      "INTEGER NOT NULL DEFAULT 22",
-		"ssh_username":              "TEXT NOT NULL DEFAULT ''",
-		"credential_id":             "TEXT NOT NULL DEFAULT ''",
-		"docker_host":               "TEXT NOT NULL DEFAULT 'unix:///var/run/docker.sock'",
-		"traits":                    "TEXT NOT NULL DEFAULT '{}'",
-		"variables_json":            "TEXT NOT NULL DEFAULT '{}'",
-		"notes":                     "TEXT NOT NULL DEFAULT ''",
-		"os_id":                     "TEXT NOT NULL DEFAULT ''",
-		"os_version_id":             "TEXT NOT NULL DEFAULT ''",
-		"os_pretty_name":            "TEXT NOT NULL DEFAULT ''",
-		"os_supported":              "INTEGER NOT NULL DEFAULT 0",
-		"architecture_os":           "TEXT NOT NULL DEFAULT ''",
-		"architecture_arch":         "TEXT NOT NULL DEFAULT ''",
-		"architecture_machine":      "TEXT NOT NULL DEFAULT ''",
-		"reachable":                 "INTEGER NOT NULL DEFAULT 0",
-		"sudo_passwordless":         "INTEGER NOT NULL DEFAULT 0",
-		"sudo_last_checked_at":      "TEXT",
-		"privilege_mode":            "TEXT NOT NULL DEFAULT ''",
-		"privilege_last_checked_at": "TEXT",
-		"last_checked_at":           "TEXT",
-		"last_error":                "TEXT NOT NULL DEFAULT ''",
-		"created_at":                "TEXT NOT NULL DEFAULT ''",
-		"updated_at":                "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
-	if err := s.normalizeAppDefaults(ctx); err != nil {
-		return err
-	}
-	if err := s.ensureAppColumns(ctx, "certificates", map[string]string{
-		"domain_id":     "TEXT NOT NULL DEFAULT ''",
-		"prefix":        "TEXT NOT NULL DEFAULT '@'",
-		"status":        "TEXT NOT NULL DEFAULT 'pending'",
-		"last_error":    "TEXT NOT NULL DEFAULT ''",
-		"auto_renew":    "INTEGER NOT NULL DEFAULT 1",
-		"next_renew_at": "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
+	// 5. Certificate scope constraint rebuild: it needs PRAGMA foreign_keys
+	//    toggled off around the table rebuild (legacy rows can carry a
+	//    dangling domain_id), which is not possible inside the RunSteps
+	//    transaction. Its guard makes it a no-op once applied.
 	if err := s.migrateCertificateScopeConstraint(ctx); err != nil {
-		return err
+		return fmt.Errorf("migrate certificate scope constraint: %w", err)
 	}
-	if err := s.ensureAppColumns(ctx, "dns_domains", map[string]string{
-		"provider_config_json":       "TEXT NOT NULL DEFAULT '{}'",
-		"provider_secret_ciphertext": "TEXT NOT NULL DEFAULT ''",
-	}); err != nil {
-		return err
-	}
-	metrics := []string{
-		`CREATE TABLE IF NOT EXISTS metrics_snapshots (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			server_id TEXT NOT NULL,
-			time TEXT NOT NULL,
-			cpu_usage_percent REAL NOT NULL,
-			memory_used_bytes INTEGER NOT NULL,
-			memory_total_bytes INTEGER NOT NULL,
-			disk_used_bytes INTEGER NOT NULL,
-			disk_total_bytes INTEGER NOT NULL,
-			network_rx_bps REAL NOT NULL,
-			network_tx_bps REAL NOT NULL,
-			load_average TEXT NOT NULL DEFAULT '',
-			load_1 REAL NOT NULL DEFAULT 0,
-			load_5 REAL NOT NULL DEFAULT 0,
-			load_15 REAL NOT NULL DEFAULT 0,
-			uptime_seconds INTEGER NOT NULL DEFAULT 0,
-			hostname TEXT NOT NULL DEFAULT '',
-			kernel_version TEXT NOT NULL DEFAULT '',
-			os_version TEXT NOT NULL DEFAULT ''
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_metrics_snapshots_server_time ON metrics_snapshots(server_id, time)`,
-	}
-	for _, stmt := range metrics {
-		if _, err := s.metricsDB.ExecContext(ctx, stmt); err != nil {
+	// 6. Idempotent extra index creation (composite/partial/composite UNIQUE
+	//    indexes that orm tags cannot express). Runs after the steps so
+	//    unique indexes only see deduplicated data.
+	for _, pass := range dbs {
+		if err := createExtraIndexes(ctx, pass.db, models.ExtraIndexDDLFor(pass.models)); err != nil {
 			return err
 		}
 	}
-	if err := ensureColumns(ctx, s.metricsDB, "metrics_snapshots", map[string]string{
-		"load_1":  "REAL NOT NULL DEFAULT 0",
-		"load_5":  "REAL NOT NULL DEFAULT 0",
-		"load_15": "REAL NOT NULL DEFAULT 0",
-	}); err != nil {
-		return err
+	// 7. Second AutoMigrateModels pass (non-destructive): recreates model
+	//    indexes lost by step table rebuilds and refreshes the orm_meta
+	//    snapshots those rebuilds invalidated. It must not drop columns:
+	//    legacy columns (e.g. dns_domains.api_token_secret) are consumed by
+	//    module-level one-time migrations that run after Open, and the ORM
+	//    would otherwise drop them before those migrations can read them.
+	for _, pass := range dbs {
+		if _, err := orm.AutoMigrateModels(ctx, pass.db, pass.models); err != nil {
+			return fmt.Errorf("auto migrate refresh: %w", err)
+		}
+	}
+	return nil
+}
+
+// legacyResetTaskTablesStep drops task history tables whose schema predates
+// the task state machine. It must run before AutoMigrateModels takes over
+// the log database.
+var legacyResetTaskTablesStep = orm.Step{
+	ID: "legacy_reset_task_tables",
+	Run: func(ctx context.Context, tx *sql.Tx) error {
+		return resetLegacyTaskTablesOn(ctx, tx)
+	},
+}
+
+// appMigrationSteps are the one-time data migrations for the app database.
+// Each keeps its original guard so it is a no-op once applied or on fresh
+// databases.
+func appMigrationSteps() []orm.Step {
+	return []orm.Step{
+		{ID: "legacy_migrate_application_file_names", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateApplicationFileNamesOn(ctx, tx)
+		}},
+		{ID: "legacy_migrate_reverse_proxy_configuration", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateReverseProxyConfigurationOn(ctx, tx)
+		}},
+		{ID: "legacy_migrate_facility_asset_names", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateFacilityAssetNamesOn(ctx, tx)
+		}},
+	}
+}
+
+// logMigrationSteps are the one-time data migrations for the log database.
+func logMigrationSteps() []orm.Step {
+	return []orm.Step{
+		{ID: "legacy_migrate_application_lifecycle_targets", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateApplicationLifecycleTargetsOn(ctx, tx)
+		}},
+	}
+}
+
+// migrationExecutor is satisfied by both *sql.DB and *sql.Tx so legacy
+// migration bodies can run against a database or inside a migration step.
+type migrationExecutor interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// createExtraIndexes idempotently creates the composite/partial/composite
+// UNIQUE indexes declared by models through ExtraIndexDDL (CREATE [UNIQUE]
+// INDEX IF NOT EXISTS). It runs after the data migration steps so unique
+// indexes only see deduplicated/normalized data.
+func createExtraIndexes(ctx context.Context, db *sql.DB, ddlByTable map[string][]string) error {
+	for table, ddlList := range ddlByTable {
+		for _, ddl := range ddlList {
+			if _, err := db.ExecContext(ctx, ddl); err != nil {
+				return fmt.Errorf("create extra index on %s: %w", table, err)
+			}
+		}
 	}
 	return nil
 }
 
 func (s *Store) resetLegacyTaskTables(ctx context.Context) error {
-	rows, err := s.logDB.QueryContext(ctx, `PRAGMA table_info(tasks)`)
+	return resetLegacyTaskTablesOn(ctx, s.logDB)
+}
+
+func resetLegacyTaskTablesOn(ctx context.Context, q migrationExecutor) error {
+	rows, err := q.QueryContext(ctx, `PRAGMA table_info(tasks)`)
 	if err != nil {
 		return err
 	}
@@ -848,19 +177,23 @@ func (s *Store) resetLegacyTaskTables(ctx context.Context) error {
 	}
 	for _, found := range requiredColumns {
 		if !found {
-			return s.dropTaskTables(ctx)
+			return dropTaskTablesOn(ctx, q)
 		}
 	}
 	return nil
 }
 
 func (s *Store) dropTaskTables(ctx context.Context) error {
+	return dropTaskTablesOn(ctx, s.logDB)
+}
+
+func dropTaskTablesOn(ctx context.Context, q migrationExecutor) error {
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS task_logs`,
 		`DROP TABLE IF EXISTS task_steps`,
 		`DROP TABLE IF EXISTS tasks`,
 	} {
-		if _, err := s.logDB.ExecContext(ctx, stmt); err != nil {
+		if _, err := q.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -868,6 +201,10 @@ func (s *Store) dropTaskTables(ctx context.Context) error {
 }
 
 func (s *Store) normalizeAppDefaults(ctx context.Context) error {
+	return normalizeAppDefaultsOn(ctx, s.appDB)
+}
+
+func normalizeAppDefaultsOn(ctx context.Context, q migrationExecutor) error {
 	nowExpr := `strftime('%Y-%m-%dT%H:%M:%SZ','now')`
 	statements := []string{
 		`UPDATE credentials SET
@@ -920,7 +257,7 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 			updated_at=COALESCE(NULLIF(updated_at, ''), NULLIF(created_at, ''), ` + nowExpr + `)`,
 	}
 	for _, stmt := range statements {
-		if _, err := s.appDB.ExecContext(ctx, stmt); err != nil {
+		if _, err := q.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -928,7 +265,11 @@ func (s *Store) normalizeAppDefaults(ctx context.Context) error {
 }
 
 func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
-	if err := s.ensureLogColumns(ctx, "application_lifecycle_targets", map[string]string{
+	return migrateApplicationLifecycleTargetsOn(ctx, s.logDB)
+}
+
+func migrateApplicationLifecycleTargetsOn(ctx context.Context, q migrationExecutor) error {
+	if err := ensureColumnsOn(ctx, q, "application_lifecycle_targets", map[string]string{
 		"action":             "TEXT NOT NULL DEFAULT 'apply'",
 		"state":              "TEXT NOT NULL DEFAULT 'planned'",
 		"target_key":         "TEXT NOT NULL DEFAULT ''",
@@ -1017,7 +358,7 @@ func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
 			ON application_lifecycle_targets(operation_id, server_id)`,
 	}
 	for _, stmt := range statements {
-		if _, err := s.logDB.ExecContext(ctx, stmt); err != nil {
+		if _, err := q.ExecContext(ctx, stmt); err != nil {
 			return err
 		}
 	}
@@ -1065,18 +406,25 @@ type migratedAnyAccess struct {
 }
 
 func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
-	columns, err := databaseTableColumns(ctx, s.appDB, "facility_app_configs")
+	tx, err := s.appDB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := migrateReverseProxyConfigurationOn(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
+	columns, err := databaseTableColumnsOn(ctx, tx, "facility_app_configs")
 	if err != nil {
 		return err
 	}
 	if !columns["image"] && !columns["static_sites_json"] && !columns["domain_policies_json"] {
 		return nil
 	}
-	tx, err := s.appDB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
 
 	type facilityRow struct {
 		ID, ServersRaw, PanelRaw, StaticRaw, PoliciesRaw, LastError, UpdatedAt string
@@ -1288,19 +636,23 @@ func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `ALTER TABLE facility_app_configs_new RENAME TO facility_app_configs`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (s *Store) migrateApplicationFileNames(ctx context.Context) error {
+	return migrateApplicationFileNamesOn(ctx, s.appDB)
+}
+
+func migrateApplicationFileNamesOn(ctx context.Context, q migrationExecutor) error {
 	for _, table := range []string{"application_files", "application_edit_session_files"} {
-		columns, err := databaseTableColumns(ctx, s.appDB, table)
+		columns, err := databaseTableColumnsOn(ctx, q, table)
 		if err != nil {
 			return err
 		}
 		if columns["name"] || !columns["path"] {
 			continue
 		}
-		if _, err := s.appDB.ExecContext(ctx, `ALTER TABLE `+table+` RENAME COLUMN path TO name`); err != nil {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE `+table+` RENAME COLUMN path TO name`); err != nil {
 			return fmt.Errorf("rename %s.path to name: %w", table, err)
 		}
 	}
@@ -1313,7 +665,13 @@ func (s *Store) migrateFacilityAssetNames(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := migrateFacilityAssetNamesOn(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 
+func migrateFacilityAssetNamesOn(ctx context.Context, tx *sql.Tx) error {
 	if err := makeFacilityAssetNamesUnique(ctx, tx, "facility_static_assets", "id", ""); err != nil {
 		return err
 	}
@@ -1326,7 +684,7 @@ func (s *Store) migrateFacilityAssetNames(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_facility_edit_session_assets_name ON facility_edit_session_assets(session_id,name)`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func makeFacilityAssetNamesUnique(ctx context.Context, tx *sql.Tx, table, idColumn, scopeColumn string) error {
@@ -1412,6 +770,23 @@ func (s *Store) migrateCertificateScopeConstraint(ctx context.Context) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := migrateCertificateScopeConstraintOn(ctx, tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func migrateCertificateScopeConstraintOn(ctx context.Context, tx *sql.Tx) error {
+	var createSQL string
+	if err := tx.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='certificates'`).Scan(&createSQL); err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	if strings.Contains(createSQL, "'prefixes'") {
+		return nil
+	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE certificates_new (
 		id TEXT PRIMARY KEY,
 		name TEXT NOT NULL,
@@ -1446,11 +821,15 @@ func (s *Store) migrateCertificateScopeConstraint(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `ALTER TABLE certificates_new RENAME TO certificates`); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func databaseTableColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	return databaseTableColumnsOn(ctx, db, table)
+}
+
+func databaseTableColumnsOn(ctx context.Context, q migrationExecutor, table string) (map[string]bool, error) {
+	rows, err := q.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return nil, err
 	}
@@ -1547,7 +926,11 @@ func (s *Store) ensureLogColumns(ctx context.Context, table string, columns map[
 }
 
 func ensureColumns(ctx context.Context, db *sql.DB, table string, columns map[string]string) error {
-	rows, err := db.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
+	return ensureColumnsOn(ctx, db, table, columns)
+}
+
+func ensureColumnsOn(ctx context.Context, q migrationExecutor, table string, columns map[string]string) error {
+	rows, err := q.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
 		return err
 	}
@@ -1570,7 +953,7 @@ func ensureColumns(ctx context.Context, db *sql.DB, table string, columns map[st
 		if existing[name] {
 			continue
 		}
-		if _, err := db.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition); err != nil {
+		if _, err := q.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition); err != nil {
 			return err
 		}
 	}

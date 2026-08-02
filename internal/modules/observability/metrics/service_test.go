@@ -77,11 +77,11 @@ func TestCollectRequiresAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','ubuntu','24.04','Ubuntu 24.04 LTS',1,'now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','ubuntu','24.04','Ubuntu 24.04 LTS',1,'2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,12 +109,12 @@ func TestCollectUsesAgentWhenConfigured(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`, traits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,12 +161,12 @@ func TestCollectFailsWhenConfiguredAgentFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`, traits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,12 +202,12 @@ func TestCollectMarksAgentCertificateTimeError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','now','now')`)
+	_, err = store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`)
 	if err != nil {
 		t.Fatal(err)
 	}
 	traits := `{"agent.enabled":"true","agent.url":"https://127.0.0.1:9786","agent.status":"compatible"}`
-	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'now','now')`, traits)
+	_, err = store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,os_id,os_version_id,os_pretty_name,os_supported,created_at,updated_at) VALUES('srv','s','h',22,'du','cred',?,'debian','13','Debian GNU/Linux 13',1,'2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`, traits)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,7 @@ import (
 	"panel/internal/modules/observability/metrics"
 	"panel/internal/modules/packages"
 	"panel/internal/modules/servers"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 )
 
@@ -108,7 +109,7 @@ func (s *Service) GetCards(ctx context.Context) (CardConfigurationSet, error) {
 		return CardConfigurationSet{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := orm.RawExec(ctx, s.db, `
 		INSERT INTO overview_card_configurations(id, cards_json, updated_at)
 		VALUES(?, ?, ?)
 		ON CONFLICT(id) DO NOTHING
@@ -117,9 +118,7 @@ func (s *Service) GetCards(ctx context.Context) (CardConfigurationSet, error) {
 	}
 
 	var raw string
-	if err := s.db.QueryRowContext(ctx, `
-		SELECT cards_json FROM overview_card_configurations WHERE id=?
-	`, cardConfigurationID).Scan(&raw); err != nil {
+	if err := orm.New(s.db).From("overview_card_configurations").Where("id = ?", cardConfigurationID).Select("cards_json").ScanValue(ctx, &raw); err != nil {
 		return CardConfigurationSet{}, err
 	}
 	var cards []CardConfiguration
@@ -144,7 +143,7 @@ func (s *Service) UpdateCards(ctx context.Context, input CardConfigurationSet) (
 		return CardConfigurationSet{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	if _, err := s.db.ExecContext(ctx, `
+	if _, err := orm.RawExec(ctx, s.db, `
 		INSERT INTO overview_card_configurations(id, cards_json, updated_at)
 		VALUES(?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET cards_json=excluded.cards_json, updated_at=excluded.updated_at

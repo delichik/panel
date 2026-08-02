@@ -4,10 +4,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"time"
 
+	"panel/internal/platform/database/models"
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
@@ -43,58 +46,44 @@ func (s *Service) Create(ctx context.Context, req CreateRequest) (Credential, er
 	if err != nil {
 		return Credential{}, err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO credentials(id,name,type,username,secret_ciphertext,created_at,updated_at) VALUES(?,?,?,?,?,?,?)`,
-		cred.ID, cred.Name, cred.Type, cred.Username, ciphertext, now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
+	err = orm.New(s.db).Insert(ctx, &models.Credential{
+		ID: cred.ID, Name: cred.Name, Type: cred.Type, Username: cred.Username,
+		SecretCiphertext: ciphertext, CreatedAt: now, UpdatedAt: now,
+	})
 	return cred, err
 }
 
 func (s *Service) List(ctx context.Context) ([]Credential, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,username,created_at,updated_at FROM credentials ORDER BY created_at DESC`)
-	if err != nil {
+	var rows []models.Credential
+	if err := orm.New(s.db).From("credentials").OrderBy("created_at DESC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Credential
-	for rows.Next() {
-		c, err := scanCredential(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, c)
+	out := make([]Credential, 0, len(rows))
+	for i := range rows {
+		out = append(out, toDomainCredential(rows[i]))
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Service) ListPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[Credential], error) {
-	filter := "1=1"
-	args := []any{}
+	q := orm.New(s.db).From("credentials")
 	if query != "" {
-		filter = "(name LIKE ? ESCAPE '\\' OR username LIKE ? ESCAPE '\\')"
-		term := "%" + strings.NewReplacer("\\", "\\\\", "%", "\\%", "_", "\\_").Replace(query) + "%"
-		args = append(args, term, term)
+		term := orm.LikeEscaped(query)
+		q.AndLike("name", term).OrLike("username", term)
 	}
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM credentials WHERE `+filter, args...).Scan(&total); err != nil {
-		return httpx.ListPage[Credential]{}, err
-	}
-	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,name,type,username,created_at,updated_at FROM credentials WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
+	total, err := q.Count(ctx)
 	if err != nil {
 		return httpx.ListPage[Credential]{}, err
 	}
-	defer rows.Close()
-	items := []Credential{}
-	for rows.Next() {
-		item, err := scanCredential(rows)
-		if err != nil {
-			return httpx.ListPage[Credential]{}, err
-		}
-		items = append(items, item)
-	}
-	if err := rows.Err(); err != nil {
+	var rows []models.Credential
+	if err := q.OrderBy("created_at DESC", "id ASC").Limit(pageSize).Offset((page-1)*pageSize).All(ctx, &rows); err != nil {
 		return httpx.ListPage[Credential]{}, err
 	}
-	return httpx.ListPage[Credential]{Items: items, Total: total, Page: page, PageSize: pageSize}, nil
+	items := make([]Credential, 0, len(rows))
+	for i := range rows {
+		items = append(items, toDomainCredential(rows[i]))
+	}
+	return httpx.ListPage[Credential]{Items: items, Total: int(total), Page: page, PageSize: pageSize}, nil
 }
 
 func (s *Service) Update(ctx context.Context, credentialID string, req UpdateRequest) (Credential, error) {
@@ -136,7 +125,7 @@ func (s *Service) Update(ctx context.Context, credentialID string, req UpdateReq
 	if err != nil {
 		return Credential{}, err
 	}
-	res, err := s.db.ExecContext(ctx, `UPDATE credentials SET name=?,type=?,username=?,secret_ciphertext=?,password_secret='',private_key_path='',passphrase_secret='',updated_at=? WHERE id=?`,
+	res, err := orm.RawExec(ctx, s.db, `UPDATE credentials SET name=?,type=?,username=?,secret_ciphertext=?,password_secret='',private_key_path='',passphrase_secret='',updated_at=? WHERE id=?`,
 		req.Name, req.Type, req.Username, ciphertext, now.Format(time.RFC3339Nano), credentialID)
 	if err != nil {
 		return Credential{}, err
@@ -149,28 +138,31 @@ func (s *Service) Update(ctx context.Context, credentialID string, req UpdateReq
 }
 
 func (s *Service) Get(ctx context.Context, credentialID string) (Credential, error) {
-	c, err := scanCredential(s.db.QueryRowContext(ctx, `SELECT id,name,type,username,created_at,updated_at FROM credentials WHERE id=?`, credentialID))
-	if err == sql.ErrNoRows {
+	var row models.Credential
+	err := orm.New(s.db).From("credentials").Where("id=?", credentialID).First(ctx, &row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return Credential{}, panelerr.NotFound("credential")
 	}
-	return c, err
+	if err != nil {
+		return Credential{}, err
+	}
+	return toDomainCredential(row), nil
 }
 
 func (s *Service) Resolve(ctx context.Context, credentialID string) (ResolvedCredential, error) {
-	var r ResolvedCredential
-	var ciphertext string
-	err := s.db.QueryRowContext(ctx, `SELECT id,type,username,secret_ciphertext FROM credentials WHERE id=?`, credentialID).
-		Scan(&r.ID, &r.Type, &r.Username, &ciphertext)
-	if err == sql.ErrNoRows {
+	var row models.Credential
+	err := orm.New(s.db).From("credentials").Where("id=?", credentialID).First(ctx, &row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ResolvedCredential{}, panelerr.NotFound("credential")
 	}
 	if err != nil {
 		return ResolvedCredential{}, err
 	}
-	secret, err := s.decrypt(r.ID, r.Type, ciphertext)
+	secret, err := s.decrypt(row.ID, row.Type, row.SecretCiphertext)
 	if err != nil {
 		return ResolvedCredential{}, err
 	}
+	r := ResolvedCredential{ID: row.ID, Type: row.Type, Username: row.Username}
 	r.Password = secret.Password
 	r.PrivateKey = []byte(secret.PrivateKey)
 	r.Passphrase = secret.Passphrase
@@ -178,14 +170,14 @@ func (s *Service) Resolve(ctx context.Context, credentialID string) (ResolvedCre
 }
 
 func (s *Service) Delete(ctx context.Context, credentialID string) error {
-	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE credential_id=?`, credentialID).Scan(&count); err != nil {
+	count, err := orm.New(s.db).From("servers").Where("credential_id=?", credentialID).Count(ctx)
+	if err != nil {
 		return err
 	}
 	if count > 0 {
 		return panelerr.Conflict("credential_in_use", "Credential is still used by one or more servers")
 	}
-	res, err := s.db.ExecContext(ctx, `DELETE FROM credentials WHERE id=?`, credentialID)
+	res, err := orm.RawExec(ctx, s.db, `DELETE FROM credentials WHERE id=?`, credentialID)
 	if err != nil {
 		return err
 	}
@@ -197,27 +189,12 @@ func (s *Service) Delete(ctx context.Context, credentialID string) error {
 }
 
 func (s *Service) EnsureLegacySecretsMigrated(ctx context.Context) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,type,secret_ciphertext,password_secret,private_key_path,passphrase_secret FROM credentials`)
-	if err != nil {
+	var rows []models.Credential
+	if err := orm.New(s.db).From("credentials").All(ctx, &rows); err != nil {
 		return err
 	}
-	defer rows.Close()
-	type legacyCredential struct {
-		id, typ, ciphertext, password, keyPath, passphrase string
-	}
-	var credentials []legacyCredential
-	for rows.Next() {
-		var item legacyCredential
-		if err := rows.Scan(&item.id, &item.typ, &item.ciphertext, &item.password, &item.keyPath, &item.passphrase); err != nil {
-			return err
-		}
-		credentials = append(credentials, item)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	for _, item := range credentials {
-		if err := s.migrateLegacySecret(ctx, item.id, item.typ, item.ciphertext, item.password, item.keyPath, item.passphrase); err != nil {
+	for _, item := range rows {
+		if err := s.migrateLegacySecret(ctx, item.ID, item.Type, item.SecretCiphertext, item.PasswordSecret, item.PrivateKeyPath, item.PassphraseSecret); err != nil {
 			return err
 		}
 	}
@@ -245,8 +222,10 @@ func (s *Service) migrateLegacySecret(ctx context.Context, credentialID, typ, ci
 		if err != nil {
 			return err
 		}
-		if _, err := s.db.ExecContext(ctx, `UPDATE credentials SET secret_ciphertext=?,updated_at=? WHERE id=?`,
-			ciphertext, time.Now().UTC().Format(time.RFC3339Nano), credentialID); err != nil {
+		if err := orm.New(s.db).From("credentials").Where("id=?", credentialID).UpdateColumns(ctx, map[string]any{
+			"secret_ciphertext": ciphertext,
+			"updated_at":        time.Now().UTC().Format(time.RFC3339Nano),
+		}); err != nil {
 			return err
 		}
 	}
@@ -259,9 +238,12 @@ func (s *Service) migrateLegacySecret(ctx context.Context, credentialID, typ, ci
 		}
 	}
 	if hasLegacy {
-		_, err := s.db.ExecContext(ctx, `UPDATE credentials SET password_secret='',private_key_path='',passphrase_secret='',updated_at=? WHERE id=?`,
-			time.Now().UTC().Format(time.RFC3339Nano), credentialID)
-		return err
+		return orm.New(s.db).From("credentials").Where("id=?", credentialID).UpdateColumns(ctx, map[string]any{
+			"password_secret":   "",
+			"private_key_path":  "",
+			"passphrase_secret": "",
+			"updated_at":        time.Now().UTC().Format(time.RFC3339Nano),
+		})
 	}
 	return nil
 }
@@ -308,15 +290,6 @@ func validateSave(name, typ, username, password, privateKey string, requireSecre
 	return nil
 }
 
-type credScanner interface{ Scan(dest ...any) error }
-
-func scanCredential(row credScanner) (Credential, error) {
-	var c Credential
-	var created, updated string
-	if err := row.Scan(&c.ID, &c.Name, &c.Type, &c.Username, &created, &updated); err != nil {
-		return Credential{}, err
-	}
-	c.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
-	c.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
-	return c, nil
+func toDomainCredential(m models.Credential) Credential {
+	return Credential{ID: m.ID, Name: m.Name, Type: m.Type, Username: m.Username, CreatedAt: m.CreatedAt, UpdatedAt: m.UpdatedAt}
 }

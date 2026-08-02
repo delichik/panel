@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
 )
@@ -37,33 +38,40 @@ func (s *Service) Write(ctx context.Context, in WriteEventInput) (Event, bool, e
 	}
 	severity := firstNonEmpty(in.Severity, SeverityInfo)
 	detailAvailable := in.Detail != nil
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Event{}, false, err
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO runtime_events(id,event_type,category,subject_type,subject_id,operation_id,severity,source,source_module,source_type,source_id,dedupe_key,summary,occurred_at,detail_available,detail_pruned_at,created_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		eventID, strings.TrimSpace(in.EventType), strings.TrimSpace(in.Category), strings.TrimSpace(in.SubjectType), strings.TrimSpace(in.SubjectID), strings.TrimSpace(in.OperationID),
-		severity, strings.TrimSpace(in.Source), strings.TrimSpace(in.SourceModule), strings.TrimSpace(in.SourceType), strings.TrimSpace(in.SourceID), strings.TrimSpace(in.DedupeKey),
-		strings.TrimSpace(in.Summary), formatTime(occurredAt), boolInt(detailAvailable), nil, formatTime(now))
-	if err != nil {
-		return Event{}, false, err
-	}
-	affected, _ := res.RowsAffected()
-	inserted := affected > 0
-	if inserted && in.Detail != nil {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO runtime_event_details(event_id,payload,error,log_refs,task_refs,target_refs,created_at,pruned_at) VALUES(?,?,?,?,?,?,?,?)`,
-			eventID, jsonOrDefault(in.Detail.PayloadJSON, "{}"), strings.TrimSpace(in.Detail.Error), jsonOrDefault(in.Detail.LogRefsJSON, "[]"), jsonOrDefault(in.Detail.TaskRefsJSON, "[]"), jsonOrDefault(in.Detail.TargetRefsJSON, "[]"), formatTime(now), nil); err != nil {
-			return Event{}, false, err
+	var inserted bool
+	err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		res, err := orm.RawExec(ctx, tx, `INSERT OR IGNORE INTO runtime_events(id,event_type,category,subject_type,subject_id,operation_id,severity,source,source_module,source_type,source_id,dedupe_key,summary,occurred_at,detail_available,detail_pruned_at,created_at)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			eventID, strings.TrimSpace(in.EventType), strings.TrimSpace(in.Category), strings.TrimSpace(in.SubjectType), strings.TrimSpace(in.SubjectID), strings.TrimSpace(in.OperationID),
+			severity, strings.TrimSpace(in.Source), strings.TrimSpace(in.SourceModule), strings.TrimSpace(in.SourceType), strings.TrimSpace(in.SourceID), strings.TrimSpace(in.DedupeKey),
+			strings.TrimSpace(in.Summary), formatTime(occurredAt), boolInt(detailAvailable), nil, formatTime(now))
+		if err != nil {
+			return err
 		}
-	}
-	if inserted && in.Application != nil {
-		if err := upsertApplicationOperation(ctx, tx, in.OperationID, occurredAt, detailAvailable, *in.Application); err != nil {
-			return Event{}, false, err
+		affected, _ := res.RowsAffected()
+		inserted = affected > 0
+		if inserted && in.Detail != nil {
+			detail := &eventDetailRow{
+				EventID:    eventID,
+				Payload:    jsonOrDefault(in.Detail.PayloadJSON, "{}"),
+				Error:      strings.TrimSpace(in.Detail.Error),
+				LogRefs:    jsonOrDefault(in.Detail.LogRefsJSON, "[]"),
+				TaskRefs:   jsonOrDefault(in.Detail.TaskRefsJSON, "[]"),
+				TargetRefs: jsonOrDefault(in.Detail.TargetRefsJSON, "[]"),
+				CreatedAt:  now,
+			}
+			if err := orm.New(tx).From("runtime_event_details").Insert(ctx, detail); err != nil {
+				return err
+			}
 		}
-	}
-	if err := tx.Commit(); err != nil {
+		if inserted && in.Application != nil {
+			if err := upsertApplicationOperation(ctx, tx, in.OperationID, occurredAt, detailAvailable, *in.Application); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return Event{}, false, err
 	}
 	if !inserted && strings.TrimSpace(in.DedupeKey) != "" {
@@ -97,7 +105,7 @@ func upsertApplicationOperation(ctx context.Context, tx *sql.Tx, operationID str
 	source := firstNonEmpty(in.Source, "system")
 	now := formatTime(time.Now().UTC())
 	latest := formatTime(eventAt)
-	_, err := tx.ExecContext(ctx, `INSERT INTO application_operation_records(operation_id,application_id,application_name_snapshot,action,source,triggered_by,trigger_reason,status,started_at,finished_at,target_total,target_succeeded,target_failed,latest_event_at,detail_available,failure_summary,created_at,updated_at)
+	_, err := orm.RawExec(ctx, tx, `INSERT INTO application_operation_records(operation_id,application_id,application_name_snapshot,action,source,triggered_by,trigger_reason,status,started_at,finished_at,target_total,target_succeeded,target_failed,latest_event_at,detail_available,failure_summary,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(operation_id) DO UPDATE SET
 			application_id=COALESCE(NULLIF(excluded.application_id,''), application_operation_records.application_id),
@@ -123,34 +131,28 @@ func upsertApplicationOperation(ctx context.Context, tx *sql.Tx, operationID str
 
 func (s *Service) ListApplicationOperations(ctx context.Context, filter ListFilter) (ListResult[OperationRecord], error) {
 	filter = normalizeFilter(filter)
-	conditions := []string{}
-	args := []any{}
-	appendCondition(&conditions, &args, "application_id", filter.ApplicationID)
-	appendCondition(&conditions, &args, "action", filter.Action)
-	appendCondition(&conditions, &args, "source", filter.Source)
-	appendCondition(&conditions, &args, "status", filter.Status)
-	appendTimeRange(&conditions, &args, "latest_event_at", filter.From, filter.To)
-	where := whereClause(conditions)
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM application_operation_records`+where, args...).Scan(&total); err != nil {
-		return ListResult[OperationRecord]{}, err
-	}
-	queryArgs := append([]any{}, args...)
-	queryArgs = append(queryArgs, filter.Limit, filter.Offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT operation_id,application_id,application_name_snapshot,action,source,triggered_by,trigger_reason,status,started_at,finished_at,target_total,target_succeeded,target_failed,latest_event_at,detail_available,failure_summary,created_at,updated_at FROM application_operation_records`+where+` ORDER BY latest_event_at DESC, operation_id DESC LIMIT ? OFFSET ?`, queryArgs...)
+	q := orm.New(s.db).From("application_operation_records")
+	appendFilter(q, "application_id", filter.ApplicationID)
+	appendFilter(q, "action", filter.Action)
+	appendFilter(q, "source", filter.Source)
+	appendFilter(q, "status", filter.Status)
+	appendTimeFilter(q, "latest_event_at", filter.From, filter.To)
+	total, err := q.Count(ctx)
 	if err != nil {
 		return ListResult[OperationRecord]{}, err
 	}
-	defer rows.Close()
+	q = orm.New(s.db).From("application_operation_records")
+	appendFilter(q, "application_id", filter.ApplicationID)
+	appendFilter(q, "action", filter.Action)
+	appendFilter(q, "source", filter.Source)
+	appendFilter(q, "status", filter.Status)
+	appendTimeFilter(q, "latest_event_at", filter.From, filter.To)
+	q.OrderBy("latest_event_at DESC", "operation_id DESC").Limit(filter.Limit).Offset(filter.Offset)
 	items := []OperationRecord{}
-	for rows.Next() {
-		item, err := scanOperation(rows)
-		if err != nil {
-			return ListResult[OperationRecord]{}, err
-		}
-		items = append(items, item)
+	if err := q.All(ctx, &items); err != nil {
+		return ListResult[OperationRecord]{}, err
 	}
-	return ListResult[OperationRecord]{Items: items, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, rows.Err()
+	return ListResult[OperationRecord]{Items: items, Total: int(total), PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 }
 
 func (s *Service) GetApplicationOperation(ctx context.Context, operationID string) (ApplicationOperationDetail, error) {
@@ -172,8 +174,8 @@ func (s *Service) ListSystemEvents(ctx context.Context, filter ListFilter) (List
 }
 
 func (s *Service) GetEvent(ctx context.Context, eventID string) (Event, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,event_type,category,subject_type,subject_id,operation_id,severity,source,source_module,source_type,source_id,summary,occurred_at,detail_available,detail_pruned_at,created_at FROM runtime_events WHERE id=?`, strings.TrimSpace(eventID))
-	event, err := scanEvent(row)
+	var event Event
+	err := orm.New(s.db).From("runtime_events").Where("id = ?", strings.TrimSpace(eventID)).First(ctx, &event)
 	if err == sql.ErrNoRows {
 		return Event{}, panelerr.NotFound("runtime_event")
 	}
@@ -188,9 +190,15 @@ func (s *Service) GetEventDetail(ctx context.Context, eventID string) (EventDeta
 	if !event.DetailAvailable {
 		return EventDetail{Event: event, PayloadJSON: "{}", LogRefsJSON: "[]", TaskRefsJSON: "[]", TargetRefsJSON: "[]"}, nil
 	}
-	row := s.db.QueryRowContext(ctx, `SELECT payload,error,log_refs,task_refs,target_refs FROM runtime_event_details WHERE event_id=? AND pruned_at IS NULL`, event.ID)
+	var row eventDetailRow
+	err = orm.New(s.db).From("runtime_event_details").Select("payload", "error", "log_refs", "task_refs", "target_refs").
+		Where("event_id = ?", event.ID).AndNull("pruned_at").First(ctx, &row)
 	detail := EventDetail{Event: event}
-	err = row.Scan(&detail.PayloadJSON, &detail.Error, &detail.LogRefsJSON, &detail.TaskRefsJSON, &detail.TargetRefsJSON)
+	detail.PayloadJSON = row.Payload
+	detail.Error = row.Error
+	detail.LogRefsJSON = row.LogRefs
+	detail.TaskRefsJSON = row.TaskRefs
+	detail.TargetRefsJSON = row.TargetRefs
 	if err == sql.ErrNoRows {
 		event.DetailAvailable = false
 		detail.Event = event
@@ -227,94 +235,83 @@ func (s *Service) Cleanup(ctx context.Context, retentionDays, detailRetentionDay
 	now := time.Now().UTC()
 	detailCutoff := formatTime(now.AddDate(0, 0, -detailRetentionDays))
 	recordCutoff := formatTime(now.AddDate(0, 0, -retentionDays))
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CleanupResult{}, err
-	}
-	defer tx.Rollback()
 	prunedAt := formatTime(now)
-	res, err := tx.ExecContext(ctx, `UPDATE runtime_event_details SET payload='{}', error='', log_refs='[]', task_refs='[]', target_refs='[]', pruned_at=?
-		WHERE pruned_at IS NULL
-		  AND event_id IN (SELECT id FROM runtime_events WHERE occurred_at<?)`, prunedAt, detailCutoff)
+	var detailsPruned, operationsDeleted, eventsDeleted int64
+	err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		res, err := orm.RawExec(ctx, tx, `UPDATE runtime_event_details SET payload='{}', error='', log_refs='[]', task_refs='[]', target_refs='[]', pruned_at=?
+			WHERE pruned_at IS NULL
+			  AND event_id IN (SELECT id FROM runtime_events WHERE occurred_at<?)`, prunedAt, detailCutoff)
+		if err != nil {
+			return err
+		}
+		detailsPruned, _ = res.RowsAffected()
+		if _, err := orm.RawExec(ctx, tx, `UPDATE runtime_events SET detail_available=0, detail_pruned_at=? WHERE detail_available=1 AND id IN (SELECT event_id FROM runtime_event_details WHERE pruned_at=?)`, prunedAt, prunedAt); err != nil {
+			return err
+		}
+		if _, err := orm.RawExec(ctx, tx, `UPDATE application_operation_records SET detail_available=0 WHERE detail_available=1 AND operation_id NOT IN (SELECT DISTINCT operation_id FROM runtime_events WHERE operation_id<>'' AND detail_available=1)`); err != nil {
+			return err
+		}
+		res, err = orm.RawExec(ctx, tx, `DELETE FROM application_operation_records WHERE latest_event_at<?`, recordCutoff)
+		if err != nil {
+			return err
+		}
+		operationsDeleted, _ = res.RowsAffected()
+		res, err = orm.RawExec(ctx, tx, `DELETE FROM runtime_events WHERE occurred_at<?`, recordCutoff)
+		if err != nil {
+			return err
+		}
+		eventsDeleted, _ = res.RowsAffected()
+		return nil
+	})
 	if err != nil {
-		return CleanupResult{}, err
-	}
-	detailsPruned, _ := res.RowsAffected()
-	if _, err := tx.ExecContext(ctx, `UPDATE runtime_events SET detail_available=0, detail_pruned_at=? WHERE detail_available=1 AND id IN (SELECT event_id FROM runtime_event_details WHERE pruned_at=?)`, prunedAt, prunedAt); err != nil {
-		return CleanupResult{}, err
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE application_operation_records SET detail_available=0 WHERE detail_available=1 AND operation_id NOT IN (SELECT DISTINCT operation_id FROM runtime_events WHERE operation_id<>'' AND detail_available=1)`); err != nil {
-		return CleanupResult{}, err
-	}
-	res, err = tx.ExecContext(ctx, `DELETE FROM application_operation_records WHERE latest_event_at<?`, recordCutoff)
-	if err != nil {
-		return CleanupResult{}, err
-	}
-	operationsDeleted, _ := res.RowsAffected()
-	res, err = tx.ExecContext(ctx, `DELETE FROM runtime_events WHERE occurred_at<?`, recordCutoff)
-	if err != nil {
-		return CleanupResult{}, err
-	}
-	eventsDeleted, _ := res.RowsAffected()
-	if err := tx.Commit(); err != nil {
 		return CleanupResult{}, err
 	}
 	return CleanupResult{DetailsPruned: int(detailsPruned), EventsDeleted: int(eventsDeleted), OperationsDeleted: int(operationsDeleted)}, nil
 }
 
 func (s *Service) listEvents(ctx context.Context, filter ListFilter) (ListResult[Event], error) {
-	conditions := []string{}
-	args := []any{}
-	appendCondition(&conditions, &args, "category", filter.Category)
-	appendCondition(&conditions, &args, "subject_type", filter.SubjectType)
-	appendCondition(&conditions, &args, "subject_id", filter.SubjectID)
-	appendCondition(&conditions, &args, "source", filter.Source)
-	appendCondition(&conditions, &args, "severity", filter.Severity)
-	appendCondition(&conditions, &args, "event_type", filter.EventType)
-	appendTimeRange(&conditions, &args, "occurred_at", filter.From, filter.To)
-	where := whereClause(conditions)
-	var total int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM runtime_events`+where, args...).Scan(&total); err != nil {
-		return ListResult[Event]{}, err
-	}
-	queryArgs := append([]any{}, args...)
-	queryArgs = append(queryArgs, filter.Limit, filter.Offset)
-	rows, err := s.db.QueryContext(ctx, `SELECT id,event_type,category,subject_type,subject_id,operation_id,severity,source,source_module,source_type,source_id,summary,occurred_at,detail_available,detail_pruned_at,created_at FROM runtime_events`+where+` ORDER BY occurred_at DESC, id DESC LIMIT ? OFFSET ?`, queryArgs...)
+	q := orm.New(s.db).From("runtime_events")
+	appendFilter(q, "category", filter.Category)
+	appendFilter(q, "subject_type", filter.SubjectType)
+	appendFilter(q, "subject_id", filter.SubjectID)
+	appendFilter(q, "source", filter.Source)
+	appendFilter(q, "severity", filter.Severity)
+	appendFilter(q, "event_type", filter.EventType)
+	appendTimeFilter(q, "occurred_at", filter.From, filter.To)
+	total, err := q.Count(ctx)
 	if err != nil {
 		return ListResult[Event]{}, err
 	}
-	defer rows.Close()
+	q = orm.New(s.db).From("runtime_events")
+	appendFilter(q, "category", filter.Category)
+	appendFilter(q, "subject_type", filter.SubjectType)
+	appendFilter(q, "subject_id", filter.SubjectID)
+	appendFilter(q, "source", filter.Source)
+	appendFilter(q, "severity", filter.Severity)
+	appendFilter(q, "event_type", filter.EventType)
+	appendTimeFilter(q, "occurred_at", filter.From, filter.To)
+	q.OrderBy("occurred_at DESC", "id DESC").Limit(filter.Limit).Offset(filter.Offset)
 	items := []Event{}
-	for rows.Next() {
-		event, err := scanEvent(rows)
-		if err != nil {
-			return ListResult[Event]{}, err
-		}
-		items = append(items, event)
+	if err := q.All(ctx, &items); err != nil {
+		return ListResult[Event]{}, err
 	}
-	return ListResult[Event]{Items: items, Total: total, PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, rows.Err()
+	return ListResult[Event]{Items: items, Total: int(total), PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 }
 
 func (s *Service) eventsByOperation(ctx context.Context, operationID string) ([]Event, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,event_type,category,subject_type,subject_id,operation_id,severity,source,source_module,source_type,source_id,summary,occurred_at,detail_available,detail_pruned_at,created_at FROM runtime_events WHERE operation_id=? ORDER BY occurred_at ASC, id ASC`, strings.TrimSpace(operationID))
-	if err != nil {
+	items := []Event{}
+	if err := orm.New(s.db).From("runtime_events").
+		Where("operation_id = ?", strings.TrimSpace(operationID)).
+		OrderBy("occurred_at ASC", "id ASC").
+		All(ctx, &items); err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	items := []Event{}
-	for rows.Next() {
-		event, err := scanEvent(rows)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, event)
-	}
-	return items, rows.Err()
+	return items, nil
 }
 
 func (s *Service) eventByDedupeKey(ctx context.Context, dedupeKey string) (Event, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,event_type,category,subject_type,subject_id,operation_id,severity,source,source_module,source_type,source_id,summary,occurred_at,detail_available,detail_pruned_at,created_at FROM runtime_events WHERE dedupe_key=?`, strings.TrimSpace(dedupeKey))
-	event, err := scanEvent(row)
+	var event Event
+	err := orm.New(s.db).From("runtime_events").Where("dedupe_key = ?", strings.TrimSpace(dedupeKey)).First(ctx, &event)
 	if err == sql.ErrNoRows {
 		return Event{}, panelerr.NotFound("runtime_event")
 	}
@@ -322,8 +319,8 @@ func (s *Service) eventByDedupeKey(ctx context.Context, dedupeKey string) (Event
 }
 
 func (s *Service) operation(ctx context.Context, operationID string) (OperationRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT operation_id,application_id,application_name_snapshot,action,source,triggered_by,trigger_reason,status,started_at,finished_at,target_total,target_succeeded,target_failed,latest_event_at,detail_available,failure_summary,created_at,updated_at FROM application_operation_records WHERE operation_id=?`, strings.TrimSpace(operationID))
-	op, err := scanOperation(row)
+	var op OperationRecord
+	err := orm.New(s.db).From("application_operation_records").Where("operation_id = ?", strings.TrimSpace(operationID)).First(ctx, &op)
 	if err == sql.ErrNoRows {
 		return OperationRecord{}, panelerr.NotFound("application_operation")
 	}
@@ -340,77 +337,35 @@ func normalizeFilter(filter ListFilter) ListFilter {
 	return filter
 }
 
-func appendCondition(conditions *[]string, args *[]any, column, value string) {
+func appendFilter(q *orm.Query, column, value string) {
 	value = strings.TrimSpace(value)
 	if value == "" || value == "all" {
 		return
 	}
-	*conditions = append(*conditions, column+"=?")
-	*args = append(*args, value)
+	q.And(column+" = ?", value)
 }
 
-func appendTimeRange(conditions *[]string, args *[]any, column string, from, to *time.Time) {
+func appendTimeFilter(q *orm.Query, column string, from, to *time.Time) {
 	if from != nil {
-		*conditions = append(*conditions, column+">=?")
-		*args = append(*args, formatTime(from.UTC()))
+		q.And(column+" >= ?", formatTime(from.UTC()))
 	}
 	if to != nil {
-		*conditions = append(*conditions, column+"<=?")
-		*args = append(*args, formatTime(to.UTC()))
+		q.And(column+" <= ?", formatTime(to.UTC()))
 	}
 }
 
-func whereClause(conditions []string) string {
-	if len(conditions) == 0 {
-		return ""
-	}
-	return " WHERE " + strings.Join(conditions, " AND ")
-}
-
-func scanEvent(row interface{ Scan(...any) error }) (Event, error) {
-	var event Event
-	var detailAvailable int
-	var occurredAt, createdAt string
-	var detailPruned sql.NullString
-	if err := row.Scan(&event.ID, &event.EventType, &event.Category, &event.SubjectType, &event.SubjectID, &event.OperationID, &event.Severity, &event.Source, &event.SourceModule, &event.SourceType, &event.SourceID, &event.Summary, &occurredAt, &detailAvailable, &detailPruned, &createdAt); err != nil {
-		return Event{}, err
-	}
-	event.OccurredAt, _ = time.Parse(time.RFC3339Nano, occurredAt)
-	event.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	event.DetailAvailable = detailAvailable == 1
-	if detailPruned.Valid && strings.TrimSpace(detailPruned.String) != "" {
-		t, _ := time.Parse(time.RFC3339Nano, detailPruned.String)
-		event.DetailPrunedAt = &t
-	}
-	return event, nil
-}
-
-func scanOperation(row interface{ Scan(...any) error }) (OperationRecord, error) {
-	var op OperationRecord
-	var startedAt, finishedAt sql.NullString
-	var latestAt, createdAt, updatedAt string
-	var detailAvailable int
-	if err := row.Scan(&op.OperationID, &op.ApplicationID, &op.ApplicationNameSnapshot, &op.Action, &op.Source, &op.TriggeredBy, &op.TriggerReason, &op.Status, &startedAt, &finishedAt, &op.TargetTotal, &op.TargetSucceeded, &op.TargetFailed, &latestAt, &detailAvailable, &op.FailureSummary, &createdAt, &updatedAt); err != nil {
-		return OperationRecord{}, err
-	}
-	op.StartedAt = parseOptionalTime(startedAt)
-	op.FinishedAt = parseOptionalTime(finishedAt)
-	op.LatestEventAt, _ = time.Parse(time.RFC3339Nano, latestAt)
-	op.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	op.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
-	op.DetailAvailable = detailAvailable == 1
-	return op, nil
-}
-
-func parseOptionalTime(value sql.NullString) *time.Time {
-	if !value.Valid || strings.TrimSpace(value.String) == "" {
-		return nil
-	}
-	t, err := time.Parse(time.RFC3339Nano, value.String)
-	if err != nil {
-		return nil
-	}
-	return &t
+// eventDetailRow 是 runtime_event_details 的本地行映射：payload/refs 列必须按
+// 原始文本往返（写入端可能收到非法 JSON，models.RuntimeEventDetail 的 map
+// JSON 语义无法承载）。
+type eventDetailRow struct {
+	EventID    string
+	Payload    string
+	Error      string
+	LogRefs    string
+	TaskRefs   string
+	TargetRefs string
+	CreatedAt  time.Time
+	PrunedAt   *time.Time
 }
 
 func nullableTime(value *time.Time) any {
