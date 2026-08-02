@@ -116,6 +116,27 @@ describe('application editor model', () => {
     expect(diffFacility(base, draft)).toMatchObject({ added: 1, changed: 2 });
   });
 
+  it('defaults the panel server to the registered host node', () => {
+    const base = {
+      id: 'reverse_proxy',
+      version: 1,
+      deploymentServers: ['srv-host'],
+      panelEntry: { enabled: true, serverId: 'srv-host', domain: 'panel.example.test' },
+      panelHostServerId: 'srv-host',
+      domains: [],
+      staticAssets: [],
+      routeSummaries: [],
+      applicationRoutes: [],
+      updatedAt: '',
+      routes: 1,
+      enabledServers: ['srv-host'],
+    } satisfies ReverseProxyConfig;
+    const draft = facilityDraftFromConfig(base);
+    expect(draft.panelServerId).toBe('srv-host');
+    expect(draft.panelHostServerId).toBe('srv-host');
+    expect(draft.panelDomain).toBe('panel.example.test');
+  });
+
   it('keeps generated YAML parseable for changed runtime fields', () => {
     const draft = draftFromApplication(app);
     draft.mounts.push({ id: 'm1', type: 'persistent', source: '', target: '/data', readOnly: false, mode: '0755' });

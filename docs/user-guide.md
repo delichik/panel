@@ -29,7 +29,7 @@ Restrict `9786/tcp` to the Panel host where possible. You do not need to expose 
 
 ## 1. First Login
 
-First run `docker exec -it panel /app/panel setup` on the Panel host. It enrolls the current host over SSH, installs the Agent, records the singleton Panel host, and deploys Panel's own domain entrance. Sign in using the URL printed by the command.
+First run `docker exec -it panel /app/panel setup` on the Panel host. It enrolls the current host over SSH, installs the Agent, records the singleton Panel host, and deploys Panel's own domain entrance. Sign in using the URL printed by the command. Setup is a convenience path: you can also skip it and enable the Panel access entry in **Applications → Facility Apps**, choosing a server and domain; the first save registers the chosen server as the Panel host node.
 
 Open the Panel URL and sign in with the initial account:
 

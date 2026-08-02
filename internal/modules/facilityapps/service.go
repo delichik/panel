@@ -63,6 +63,7 @@ type CertificateProvider interface {
 
 type PanelHostProvider interface {
 	HostServerID(ctx context.Context) (string, error)
+	RegisterHostServer(ctx context.Context, serverID string) error
 }
 
 type Service struct {
@@ -176,6 +177,9 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	if err := s.validateRouteConflicts(ctx, next); err != nil {
 		return ReverseProxyConfig{}, err
 	}
+	if err := s.ensurePanelHostRegistered(ctx, next); err != nil {
+		return ReverseProxyConfig{}, err
+	}
 	if err := s.saveConfig(ctx, next); err != nil {
 		return ReverseProxyConfig{}, err
 	}
@@ -200,12 +204,37 @@ func (s *Service) validatePanelHost(ctx context.Context, cfg ReverseProxyConfig)
 		return err
 	}
 	if strings.TrimSpace(hostServerID) == "" {
-		return panelerr.Validation("panel_host_server_required", "Panel host server must be configured before enabling the Panel entry")
+		// 尚未登记宿主节点时允许校验通过，保存链路会把入口服务器登记为宿主节点。
+		return nil
 	}
 	if cfg.PanelEntry.ServerID != hostServerID {
 		return panelerr.Validation("facility_panel_entry_host_required", "Panel entry must use the configured Panel host server")
 	}
 	return nil
+}
+
+// ensurePanelHostRegistered 在 Panel 入口启用且尚未登记宿主节点时，把入口服务器登记为宿主节点。
+func (s *Service) ensurePanelHostRegistered(ctx context.Context, cfg ReverseProxyConfig) error {
+	if !cfg.PanelEntry.Enabled || s.panelHost == nil {
+		return nil
+	}
+	hostServerID, err := s.panelHost.HostServerID(ctx)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(hostServerID) != "" || strings.TrimSpace(cfg.PanelEntry.ServerID) == "" {
+		return nil
+	}
+	return s.panelHost.RegisterHostServer(ctx, cfg.PanelEntry.ServerID)
+}
+
+// ensurePanelHostRegisteredForDraft 是编辑会话提交路径使用的登记入口。
+func (s *Service) ensurePanelHostRegisteredForDraft(ctx context.Context, draft ReverseProxySaveInput) error {
+	normalized, err := normalizeInput(draft)
+	if err != nil {
+		return err
+	}
+	return s.ensurePanelHostRegistered(ctx, normalized)
 }
 
 func (s *Service) syncReverseProxyTraits(ctx context.Context, previous, next []string) error {

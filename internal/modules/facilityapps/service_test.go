@@ -298,3 +298,51 @@ func (p facilityTestServers) Get(_ context.Context, id string) (server.Server, e
 	}
 	return item, nil
 }
+
+type facilityPanelHostFake struct {
+	hostServerID string
+	registered   []string
+}
+
+func (f *facilityPanelHostFake) HostServerID(context.Context) (string, error) {
+	return f.hostServerID, nil
+}
+
+func (f *facilityPanelHostFake) RegisterHostServer(_ context.Context, serverID string) error {
+	f.registered = append(f.registered, serverID)
+	f.hostServerID = serverID
+	return nil
+}
+
+func TestSaveReverseProxyRegistersUnregisteredPanelHost(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	host := &facilityPanelHostFake{}
+	svc.panelHost = host
+	ctx := context.Background()
+	cfg, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(host.registered, []string{"srv-a"}) {
+		t.Fatalf("registered=%v want [srv-a]", host.registered)
+	}
+	if cfg.PanelHostServerID != "srv-a" {
+		t.Fatalf("panelHostServerId=%q want srv-a", cfg.PanelHostServerID)
+	}
+}
+
+func TestSaveReverseProxyRequiresRegisteredPanelHostWhenSet(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	svc.panelHost = &facilityPanelHostFake{hostServerID: "srv-host"}
+	ctx := context.Background()
+	_, err := svc.SaveReverseProxy(ctx, ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
+	})
+	assertFacilityPanelError(t, err, "facility_panel_entry_host_required")
+}

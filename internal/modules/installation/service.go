@@ -81,6 +81,12 @@ func (s *Service) SetHostServer(ctx context.Context, serverID string) (State, er
 	return s.Get(ctx)
 }
 
+// RegisterHostServer 把 serverID 登记为唯一 Panel 宿主节点；已登记为同一节点时幂等。
+func (s *Service) RegisterHostServer(ctx context.Context, serverID string) error {
+	_, err := s.SetHostServer(ctx, serverID)
+	return err
+}
+
 func (s *Service) SetPendingServer(ctx context.Context, serverID, stage string) (State, error) {
 	serverID = strings.TrimSpace(serverID)
 	if serverID == "" {

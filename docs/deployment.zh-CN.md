@@ -62,7 +62,7 @@ docker compose logs --tail=100 panel
 docker exec -it panel /app/panel setup
 ```
 
-按提示输入宿主机 SSH 地址、端口、用户、凭据和 Panel 域名。Panel 会从容器通过 SSH 纳管当前宿主机、安装 Agent、将其登记为唯一 Panel 宿主节点，并部署 Panel 自身的 Nginx 入口。setup 成功后访问命令输出的 `http://<Panel域名>`。
+按提示输入宿主机 SSH 地址、端口、用户、凭据和 Panel 域名。Panel 会从容器通过 SSH 纳管当前宿主机、安装 Agent、将其登记为唯一 Panel 宿主节点，并部署 Panel 自身的 Nginx 入口。setup 成功后访问命令输出的 `http://<Panel域名>`。setup 只是便捷路径；也可以登录界面后在 **应用 → 设施应用** 中配置 Panel 访问入口，首次保存时会把所选服务器登记为宿主节点。
 
 setup 可重复执行；Agent 或入口部署失败时，再次执行会从已保存的阶段继续。SSH 密码和私钥口令通过交互输入，不应写入命令参数。
 

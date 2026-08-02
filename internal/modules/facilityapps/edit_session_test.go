@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -993,6 +994,31 @@ type successfulFacilityReconciler struct{}
 
 func (successfulFacilityReconciler) TriggerApplicationReconcile(context.Context, tasks.PeriodicTrigger) (tasks.Task, bool, error) {
 	return tasks.Task{ID: "operation"}, true, nil
+}
+
+func TestFacilityEditCommitRegistersUnregisteredPanelHost(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	host := &facilityPanelHostFake{}
+	svc.panelHost = host
+	ctx := context.Background()
+	session, err := svc.BeginFacilityEditSession(ctx, BeginFacilityEditSessionInput{Draft: &ReverseProxySaveInput{
+		DeploymentServers: []string{"srv-a"},
+		PanelEntry:        PanelEntry{Enabled: true, ServerID: "srv-a", Domain: "panel.example.test"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewFacilityEditSession(ctx, session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CommitFacilityEditSession(ctx, session.ID, "commit-host-1", CommitFacilityEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(host.registered, []string{"srv-a"}) {
+		t.Fatalf("registered=%v want [srv-a]", host.registered)
+	}
 }
 
 func newFacilityEditTestService(t *testing.T) (*Service, *storage.Store, func()) {

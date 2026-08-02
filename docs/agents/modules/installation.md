@@ -20,6 +20,7 @@
 - setup 复用现有凭据加密、服务器首次 bootstrap、Agent 部署和设施应用保存/协调。SSH 密码、私钥和口令不得进入命令参数、任务参数或日志。
 - `panel_installation` 使用固定 `default` 记录。`pending_server_id` 保存可恢复的初始化节点，Agent compatible 后提升为唯一 `host_server_id`；普通服务器删除流程禁止删除宿主节点。
 - Panel 入口必须绑定 `host_server_id`，并确保该节点属于设施全局网关节点。首次 setup 以 HTTP 域名入口部署成功为完成基线，不新增证书签发流程。
+- 宿主节点首次登记不限于 setup：设施应用网关配置启用 Panel 入口且尚未登记宿主节点时，保存会把所选入口服务器登记为唯一宿主节点；已登记后入口服务器必须与宿主节点一致。
 - setup 可重复执行。服务器 bootstrap 失败时清理本次未使用凭据；Agent 失败保留 pending 节点；入口失败保留已经确认的宿主关系并从代理阶段恢复。
 
 ## 验证

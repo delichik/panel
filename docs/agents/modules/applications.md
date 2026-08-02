@@ -117,6 +117,7 @@
 - 应用反向代理规则对话框必须通过明确 DTO 克隆函数创建独立草稿，不能对 Vue reactive Proxy 直接调用 `structuredClone`；只有点击保存才替换 `form.reverseProxy` 中对应规则，新建或编辑后取消不得留下空规则、空 Path 或高级选项修改。每个 Path 的高级字段复用 `RoutePathAdvancedFields.vue`。
 - 应用反向代理规则使用 `originServerIds` 和 `anyAccess`。源站候选必须同时属于应用部署节点和设施全局网关节点；后端保存时重新校验。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
 - 应用反向代理域名在设施路由、其他应用代理规则和 Panel 入口之间全局唯一；同一规则下可配置多个 Path，不允许通过多个所有者共享域名。
+- Panel 访问入口启用时，入口服务器必须是已登记的 Panel 宿主节点；尚未登记时，首次保存会将该服务器登记为宿主节点，已登记后入口服务器不允许再选择其他服务器。
 - 应用详情的“反向代理路由”分区只读展示源站、AnyAccess、流量策略、主源站和每个 Path 的高级设置。
 - 应用编辑器可视化页必须往返保存 appspec `capAdd` 列表；输入项保存时按 Docker capability 稳定值大写化，不保存翻译文案。
 - 应用编辑器的可视化挂载区在页面正文只展示挂载摘要列表：类型、来源、容器路径、只读状态以及编辑/删除动作。新增或编辑挂载必须打开对话框承载完整字段，包含 Docker 只读挂载开关，以及按类型可用的节点文件权限字段：`file` / `panel_file` / `persistent` 支持 `uid`、`gid`，`file` 支持“可执行”开关，`persistent` 支持任意 `mode`，`panel_file` 不显示 mode。

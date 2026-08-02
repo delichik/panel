@@ -503,6 +503,9 @@ func (s *Service) CommitFacilityEditSession(ctx context.Context, sessionID, idem
 	if facilityDiagnosticsBlock(diagnostics) {
 		return FacilityEditCommitResult{}, panelerr.WithDetails(panelerr.Validation("facility_reverse_proxy_invalid", "facility edit session is invalid"), map[string]any{"diagnostics": diagnostics})
 	}
+	if err := s.ensurePanelHostRegisteredForDraft(ctx, record.Draft); err != nil {
+		return FacilityEditCommitResult{}, err
+	}
 	manifest, err := s.prepareFacilityCommitManifest(record)
 	if err != nil {
 		return FacilityEditCommitResult{}, err

@@ -213,6 +213,9 @@ func (s *Service) CommitSaveSession(ctx context.Context, sessionID string, in Co
 	if err := s.validateRouteConflicts(ctx, next); err != nil {
 		return SaveSessionCommitResult{}, err
 	}
+	if err := s.ensurePanelHostRegistered(ctx, next); err != nil {
+		return SaveSessionCommitResult{}, err
+	}
 	rollbackFiles, err := s.installSessionAssets(session)
 	if err != nil {
 		return SaveSessionCommitResult{}, err

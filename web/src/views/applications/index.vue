@@ -1465,8 +1465,10 @@ onBeforeUnmount(() => {
                 <div class="section-copy"><h3>{{ t('applicationsPage.panelEntry') }}</h3><p>{{ t('applicationsPage.panelEntryHint') }}</p></div>
                 <label class="switch-field">{{ t('applicationsPage.panelEntry') }}<Switch v-model="facilityDraft.panelEnabled" :label="t('applicationsPage.panelEntry')" @click="markDirty" /></label>
                 <template v-if="facilityDraft.panelEnabled">
-                  <label class="field">{{ t('applicationsPage.panelServer') }}<ServerContextSelector v-model="facilityDraft.panelServerId" :servers="serverOptions" :label="t('applicationsPage.panelServer')" @update:model-value="markDirty" /></label>
+                  <label class="field">{{ t('applicationsPage.panelServer') }}<ServerContextSelector v-model="facilityDraft.panelServerId" :servers="serverOptions" :disabled="Boolean(facilityDraft.panelHostServerId)" :label="t('applicationsPage.panelServer')" @update:model-value="markDirty" /></label>
                   <label class="field">{{ t('applicationsPage.panelDomain') }}<Input v-model="facilityDraft.panelDomain" :invalid="Boolean(facilityErrors.panelDomain)" @input="markDirty" /></label>
+                  <p v-if="facilityDraft.panelHostServerId" class="text-xs text-muted-foreground">{{ t('applicationsPage.panelHostRegisteredHint') }}</p>
+                  <p v-else class="text-xs text-warning">{{ t('applicationsPage.panelHostNotRegisteredHint') }}</p>
                 </template>
               </section>
   

@@ -51,6 +51,7 @@ export interface FacilityDraftUi {
   deploymentServers: string[];
   panelEnabled: boolean;
   panelServerId: string;
+  panelHostServerId: string;
   panelDomain: string;
   domains: FacilityRouteDomain[];
 }
@@ -227,8 +228,9 @@ export function facilityDraftFromConfig(config?: ReverseProxyConfig | null): Fac
   return {
     deploymentServers: [...(config?.deploymentServers ?? [])],
     panelEnabled: Boolean(config?.panelEntry?.enabled),
-    panelServerId: config?.panelEntry?.serverId ?? config?.panelHostServerId ?? '',
+    panelServerId: config?.panelHostServerId ?? config?.panelEntry?.serverId ?? '',
     panelDomain: config?.panelEntry?.domain ?? '',
+    panelHostServerId: config?.panelHostServerId ?? '',
     domains: cloneFacilityDomains(config?.domains ?? []),
   };
 }
