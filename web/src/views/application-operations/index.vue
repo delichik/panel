@@ -178,7 +178,6 @@ onMounted(load);
         <template #applicationNameSnapshot="{ row }">
           <div class="grid min-w-0 gap-1">
             <strong class="truncate text-foreground">{{ row.applicationNameSnapshot || t('common.notAvailable') }}</strong>
-            <span class="truncate text-xs text-muted-foreground">{{ row.applicationId }}</span>
           </div>
         </template>
         <template #action="{ row }">{{ t(`applicationOperationsPage.action.${row.action}`) }}</template>
@@ -203,7 +202,7 @@ onMounted(load);
     </template>
   </ListPage>
 
-  <Dialog v-model:open="detailOpen" :title="detail?.operation.applicationNameSnapshot || t('applicationOperationsPage.detailTitle')" :description="detail?.operation.operationId" :close-label="t('common.close')">
+  <Dialog v-model:open="detailOpen" :title="detail?.operation.applicationNameSnapshot || t('applicationOperationsPage.detailTitle')" :close-label="t('common.close')">
     <div v-if="detailLoading" class="text-sm text-muted-foreground">{{ t('applicationOperationsPage.loadingDetail') }}</div>
     <div v-else-if="detail" class="grid gap-4">
       <section class="grid gap-2 rounded-xl border border-border p-3 text-sm">

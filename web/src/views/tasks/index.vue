@@ -208,7 +208,7 @@ onBeforeUnmount(() => {
               <strong class="min-w-0 truncate text-sm text-foreground">{{ group.title }}</strong>
               <StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="group.status" domain="task" :label="t(`tasksPage.status.${group.status}`)" />
             </div>
-            <span class="min-w-0 truncate text-xs text-muted-foreground">{{ group.operationId }}</span>
+            <span class="min-w-0 truncate text-xs text-muted-foreground">{{ group.type }}</span>
             <div class="flex min-w-0 flex-wrap gap-1.5 overflow-hidden"><Badge class="max-w-full shrink-0 whitespace-nowrap" tone="info">{{ group.tasks.length }} {{ t('tasksPage.tasks') }}</Badge><Badge v-if="group.failed" class="max-w-full shrink-0 whitespace-nowrap" tone="danger">{{ group.failed }} {{ t('tasksPage.failed') }}</Badge><Badge v-if="group.running" class="max-w-full shrink-0 whitespace-nowrap" tone="info">{{ group.running }} {{ t('tasksPage.running') }}</Badge></div>
           </button>
         </div>
@@ -228,7 +228,7 @@ onBeforeUnmount(() => {
           <header class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-border p-5 max-lg:grid-cols-1">
             <div class="min-w-0 overflow-hidden">
               <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><h2 class="m-0 min-w-0 truncate text-xl font-semibold">{{ selectedGroup.title }}</h2><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="selectedGroup.status" domain="task" :label="t(`tasksPage.status.${selectedGroup.status}`)" /></div>
-              <p class="m-0 mt-1 min-w-0 truncate text-sm text-muted-foreground">{{ selectedGroup.type }} / {{ selectedGroup.operationId }}</p>
+              <p class="m-0 mt-1 min-w-0 truncate text-sm text-muted-foreground">{{ selectedGroup.type }}</p>
             </div>
             <div class="flex min-w-0 flex-wrap justify-end gap-2 max-lg:justify-start">
               <Button v-if="selectedTask?.allowRunNow" size="sm" :loading="pending === `run-now:${selectedTask.id}`" @click="runTaskAction('run-now', selectedTask)"><Play />{{ t('common.runNow') }}</Button>
@@ -243,8 +243,8 @@ onBeforeUnmount(() => {
             <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
               <h3 class="m-0 mb-3 flex min-w-0 items-center gap-2 text-sm font-semibold"><ListFilter class="size-4 shrink-0" /><span class="min-w-0 truncate">{{ t('tasksPage.executionItems') }}</span></h3>
               <button v-for="task in selectedGroup.tasks" :key="task.id" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-1 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedTaskId === task.id ? 'border-border-strong bg-card' : 'border-border'" :aria-current="selectedTaskId === task.id ? 'true' : undefined" @click="selectedTaskId = task.id">
-                <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ task.id }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" /></div>
-                <span class="min-w-0 truncate text-xs text-muted-foreground">{{ task.summary }}</span>
+                <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ task.summary }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" /></div>
+                <span class="min-w-0 truncate text-xs text-muted-foreground">{{ task.type }}</span>
               </button>
             </section>
             <section class="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-background p-4">

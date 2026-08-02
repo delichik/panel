@@ -28,7 +28,7 @@
 - “操作记录”是“应用”一级菜单下的产品入口，展示用户主动操作和系统自动协调产生的应用变更，不复用旧 `/tasks` 页面；路由保持 `/application-operations`。
 - “系统事件”用于诊断，展示后端提供的运行事件类型、严重级别、关联对象、来源、摘要和详情引用，不承担应用工作进度页职责。
 - 旧 `/tasks` 路由可保留兼容，但不在主导航、概览快捷入口或应用详情入口中出现，也不重定向到新页面。
-- 应用详情的操作记录入口跳转到 `/application-operations?applicationId=<id>`，由应用操作投影查询承载最近操作，不维护独立应用操作历史逻辑。
+- 应用详情的操作记录入口跳转到 `/application-operations?applicationId=<id>`，由应用操作投影查询承载最近操作，不维护独立应用操作历史逻辑。操作记录列表与详情面向用户展示可读信息：列表应用列使用 `applicationNameSnapshot`，详情标题使用应用名称快照，不直接展示 `applicationId` / `operationId` 原始 id。
 - 详情保留和记录保留是不同配置。详情已清理时列表仍显示摘要，详情按钮必须禁用并提示 `详情已清理` / `Detail has been cleaned up`。
 - 前端不假设独立告警服务。系统事件页只按 `system-events` API 返回的 `category` / `eventType` / `severity` 展示。
 - 事件 `category` 只使用 `application`、`task`、`alert`、`log`、`runtime`、`system`。任务事件写入 `task`，任务日志引用写入 `log`，应用操作事件写入 `application`。
