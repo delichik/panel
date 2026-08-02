@@ -6,15 +6,18 @@ import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { MaintenanceStatus } from '@/types/maintenance';
 
 const { t } = useI18n();
+const notifyError = useErrorToast();
 
 const status = ref<MaintenanceStatus | null>(null);
 const authenticated = ref(Boolean(maintenanceApi.storedToken('export') || maintenanceApi.storedToken('restore')));
 const loading = ref(false);
 const pending = ref('');
+const loggingOut = ref(false);
 const error = ref('');
 const feedback = ref('');
 const mode = ref<'export' | 'restore'>('export');
@@ -37,6 +40,7 @@ async function login() {
     await load();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('maintenancePage.loginFailed');
+    notifyError(err instanceof Error ? err.message : t('maintenancePage.loginFailed'));
   } finally {
     pending.value = '';
   }
@@ -50,6 +54,7 @@ async function load() {
     status.value = mode.value === 'export' ? await maintenanceApi.exportStatus() : await maintenanceApi.restoreStatus();
   } catch (err) {
     const message = err instanceof Error ? err.message : t('maintenancePage.loadFailed');
+    notifyError(message);
     if (mode.value === 'export') {
       mode.value = 'restore';
       try {
@@ -79,15 +84,21 @@ async function command(name: 'start' | 'password' | 'retry' | 'clear' | 'exit') 
     feedback.value = t('maintenancePage.commandAccepted');
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
 }
 
 async function logout() {
-  await maintenanceApi.logout(mode.value);
-  authenticated.value = false;
-  status.value = null;
+  loggingOut.value = true;
+  try {
+    await maintenanceApi.logout(mode.value);
+    authenticated.value = false;
+    status.value = null;
+  } finally {
+    loggingOut.value = false;
+  }
 }
 
 async function downloadArchive() {
@@ -98,6 +109,7 @@ async function downloadArchive() {
     saveBlobDownload(await maintenanceApi.downloadExport(status.value));
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -127,7 +139,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         </div>
         <div v-if="authenticated" class="flex flex-wrap gap-2">
           <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-          <Button @click="logout"><LogOut />{{ t('layout.logout') }}</Button>
+          <Button :loading="loggingOut" @click="logout"><LogOut />{{ t('layout.logout') }}</Button>
         </div>
       </header>
 
@@ -135,7 +147,6 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <div class="flex items-center gap-3"><ShieldCheck class="size-5 text-muted-foreground" /><h2 class="m-0 text-lg font-semibold">{{ t('maintenancePage.signIn') }}</h2></div>
         <label class="grid gap-1 text-sm">{{ t('auth.username') }}<Input v-model="form.username" autocomplete="username" /></label>
         <label class="grid gap-1 text-sm">{{ t('auth.password') }}<Input v-model="form.password" type="password" autocomplete="current-password" /></label>
-        <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
         <Button variant="primary" :loading="pending === 'login'" @click="login">{{ t('auth.signIn') }}</Button>
       </section>
 
@@ -156,7 +167,6 @@ onBeforeUnmount(() => window.clearInterval(timer));
           </div>
           <div v-if="status?.error || status?.errorDetail" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ status.errorDetail?.message || status.error }}</div>
           <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-          <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
         </article>
 
         <aside class="grid content-start gap-4">

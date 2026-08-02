@@ -6,6 +6,7 @@ import Badge from '@/components/ui/Badge.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
 import IconButton from '@/components/ui/IconButton.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useI18n } from '@/i18n';
 import { useThemeMode, type ThemeMode } from '@/design/theme';
 import { useSessionStore } from '@/stores/session';
@@ -18,6 +19,7 @@ const { t, locale, setLocale } = useI18n();
 const { mode, resolved, setMode } = useThemeMode();
 const collapsed = ref(localStorage.getItem('panel.nav.collapsed') === 'true');
 const drawerOpen = ref(false);
+const signingOut = ref(false);
 const activeKey = computed(() => activeNavKey(route.path));
 const title = computed(() => t(String(route.meta.titleKey || 'app.name')));
 
@@ -33,13 +35,19 @@ const themeItems: Array<{ key: ThemeMode; labelKey: string }> = [
 ];
 
 async function signOut() {
-  await session.logout();
-  await router.push('/login');
+  signingOut.value = true;
+  try {
+    await session.logout();
+    await router.push('/login');
+  } finally {
+    signingOut.value = false;
+  }
 }
 </script>
 
 <template>
-  <div class="grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
+  <div class="relative grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
+    <LoadingOverlay v-if="signingOut" />
     <aside class="hidden min-h-0 flex-col border-r border-border bg-card lg:flex">
       <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
         <div class="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground">P</div>

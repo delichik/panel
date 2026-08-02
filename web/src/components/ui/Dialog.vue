@@ -78,7 +78,7 @@ onBeforeUnmount(() => restoreFocusTo?.focus());
 
 <template>
   <Teleport to="body">
-    <div v-if="open" class="motion-overlay fixed inset-0 z-50 grid place-items-center bg-overlay p-4" role="presentation" @click.self="close">
+    <div v-if="open" class="motion-overlay fixed inset-0 z-50 grid place-items-center bg-overlay p-4" role="presentation">
       <section ref="dialog" class="motion-popover grid w-full grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-popover text-popover-foreground shadow-2xl" :class="size === 'large' ? 'h-[min(820px,calc(100dvh-32px))] max-w-5xl' : 'max-h-[min(720px,calc(100dvh-32px))] max-w-lg'" role="dialog" aria-modal="true" :aria-labelledby="titleId" :aria-describedby="description ? descriptionId : undefined" tabindex="-1" @keydown="onKeydown">
         <header class="flex min-h-0 items-start justify-between gap-4 border-b border-border px-5 py-4">
           <div class="min-w-0">

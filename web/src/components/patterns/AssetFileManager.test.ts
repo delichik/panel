@@ -33,4 +33,11 @@ describe('AssetFileManager', () => {
     expect(item.kind).toBe('archive');
     expect(typeof adapter.saveText).toBe('function');
   });
+
+  it('derives the download filename from the reference name for new text assets', () => {
+    expect(source).toContain('filenameTouched');
+    expect(source).toContain('textFilename.value.trim() || textName.value.trim()');
+    expect(source).toContain('@update:model-value="textFilename = $event; filenameTouched = true"');
+    expect(source).toContain('watch(textName,');
+  });
 });

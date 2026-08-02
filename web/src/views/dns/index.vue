@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { CheckCircle2, Cloud, Plus, RefreshCcw, ShieldAlert, Trash2 } from '@lucide/vue';
+import { CheckCircle2, Cloud, Plus, RefreshCcw, Trash2 } from '@lucide/vue';
 import { dnsApi } from '@/api/dns';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
@@ -13,6 +13,7 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -22,6 +23,7 @@ import { domainTone, normalizeRecordName } from './model';
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 const domains = ref<DnsDomainDto[]>([]);
 const records = ref<DnsRecordDto[]>([]);
@@ -85,6 +87,7 @@ async function loadDomains() {
     selectedId.value = domains.value.some((item) => item.id === queryDomain) ? queryDomain : selectedId.value || domains.value[0]?.id || '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('dnsPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('dnsPage.loadFailed'));
   } finally {
     loadingDomains.value = false;
   }
@@ -102,6 +105,7 @@ async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
   } catch (err) {
     if (signal?.aborted) return;
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
+    notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'));
     providerErrorDomainId.value = domainId;
   } finally {
     if (!signal?.aborted) loadingRecords.value = false;
@@ -119,6 +123,7 @@ async function syncRecords() {
     await loadRecords(selectedId.value);
   } catch (err) {
     recordsError.value = err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed');
+    notifyError(err instanceof Error ? err.message : t('dnsPage.recordsLoadFailed'));
   } finally {
     loadingRecords.value = false;
   }
@@ -148,6 +153,7 @@ async function saveDomain() {
     await loadDomains();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     saving.value = false;
   }
@@ -178,6 +184,7 @@ async function saveRecord() {
     await loadRecords();
   } catch (err) {
     recordsError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     saving.value = false;
   }
@@ -194,6 +201,7 @@ async function deleteDomain() {
     await loadDomains();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     saving.value = false;
   }
@@ -209,6 +217,7 @@ async function deleteRecord() {
     await loadRecords();
   } catch (err) {
     recordsError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     saving.value = false;
   }
@@ -266,8 +275,7 @@ async function deleteRecord() {
 
       <template #detail>
       <main class="grid min-h-0 min-w-0">
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
-        <EmptyState v-else-if="!selectedDomain" :title="t('dnsPage.selectDomain')" :description="t('dnsPage.selectDomainHint')" />
+        <EmptyState v-if="!selectedDomain" :title="t('dnsPage.selectDomain')" :description="t('dnsPage.selectDomainHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div>
@@ -283,9 +291,8 @@ async function deleteRecord() {
               <Button size="sm" variant="danger" @click="deleteTarget = selectedDomain; deleteDialog = true"><Trash2 />{{ t('common.delete') }}</Button>
             </div>
           </header>
-          <div v-if="feedback || recordsError" class="grid gap-2 border-b border-border p-4">
+          <div v-if="feedback" class="grid gap-2 border-b border-border p-4">
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success"><CheckCircle2 class="mr-2 inline size-4" />{{ feedback }}</div>
-            <div v-if="recordsError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger"><ShieldAlert class="mr-2 inline size-4" />{{ recordsError }}</div>
           </div>
           <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] p-5">
             <div class="mb-3 flex items-center justify-between gap-3">
@@ -301,6 +308,7 @@ async function deleteRecord() {
                   <tr><th class="px-3 py-2 text-left">{{ t('common.type') }}</th><th class="px-3 py-2 text-left">{{ t('common.name') }}</th><th class="px-3 py-2 text-left">{{ t('dnsPage.content') }}</th><th class="px-3 py-2 text-left">TTL</th><th class="px-3 py-2 text-right">{{ t('common.actions') }}</th></tr>
                 </thead>
                 <tbody class="divide-y divide-border bg-background">
+                  <tr v-if="loadingRecords && !records.length"><td colspan="5" class="px-3 py-3"><div class="grid gap-2"><Skeleton v-for="item in 4" :key="item" class="h-8" /></div></td></tr>
                   <tr v-if="!records.length && !loadingRecords"><td colspan="5" class="px-3 py-8"><EmptyState :title="t('dnsPage.noRecords')" :description="t('dnsPage.noRecordsHint')" /></td></tr>
                   <tr v-for="record in records" :key="record.id" class="hover:bg-accent/60">
                     <td class="px-3 py-2"><Badge tone="info">{{ record.type }}</Badge></td>

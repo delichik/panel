@@ -17,6 +17,7 @@ import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Tabs from '@/components/ui/Tabs.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -29,6 +30,7 @@ import { assetTone, certificateState, certificateTone, selfSignedTone } from './
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 const domains = ref<DnsDomainDto[]>([]);
 const certs = ref<DomainCertificateDto[]>([]);
@@ -100,6 +102,7 @@ async function load() {
     selectedId.value = list.some((item) => item.id === selectedId.value) ? selectedId.value : list[0]?.id ?? '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('certificatesPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('certificatesPage.loadFailed'));
   } finally {
     loading.value = false;
   }
@@ -134,6 +137,7 @@ async function issueCertificate() {
     await load();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     saving.value = false;
   }
@@ -164,6 +168,7 @@ async function saveSelf() {
     await load();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     saving.value = false;
   }
@@ -203,6 +208,7 @@ async function saveAsset() {
     await load();
   } catch (err) {
     const message = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(message);
     if (assetDialog === 'asset-import') assetActionError.value = message;
     else error.value = message;
   } finally {
@@ -269,6 +275,7 @@ async function run(action: () => Promise<void>) {
     await action();
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     saving.value = false;
   }
@@ -439,8 +446,7 @@ function onFile(event: Event) {
 
         <template #detail>
         <main class="grid min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-card">
-          <section v-if="error || feedback" class="border-b border-border p-4">
-            <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
+          <section v-if="feedback" class="border-b border-border p-4">
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
           </section>
 
@@ -450,8 +456,8 @@ function onFile(event: Event) {
               <div><h2 class="m-0 text-xl font-semibold">{{ selectedCert.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedCert.domain }} / {{ selectedCert.issuer }}</p></div>
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" @click="openReissue(selectedCert)"><RotateCcw />{{ t('certificatesPage.adjustReissue') }}</Button>
-                <Button size="sm" @click="renewCertificate(selectedCert)"><RotateCcw />{{ t('certificatesPage.renew') }}</Button>
-                <Button size="sm" variant="danger" @click="confirmDelete = true"><Trash2 />{{ t('common.delete') }}</Button>
+                <Button size="sm" :loading="saving" @click="renewCertificate(selectedCert)"><RotateCcw />{{ t('certificatesPage.renew') }}</Button>
+                <Button size="sm" variant="danger" :loading="saving" @click="confirmDelete = true"><Trash2 />{{ t('common.delete') }}</Button>
               </div>
             </header>
             <div class="min-h-0 overflow-auto p-5">
@@ -476,8 +482,8 @@ function onFile(event: Event) {
               <div><h2 class="m-0 text-xl font-semibold">{{ selectedSelf.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedSelf.commonName }}</p></div>
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" @click="openSelf('self-leaf')"><Plus />{{ t('certificatesPage.generateLeaf') }}</Button>
-                <Button size="sm" @click="renewSelf(selectedSelf)"><RotateCcw />{{ t('certificatesPage.reissue') }}</Button>
-                <Button size="sm" variant="danger" @click="confirmDelete = true"><Trash2 />{{ t('common.delete') }}</Button>
+                <Button size="sm" :loading="saving" @click="renewSelf(selectedSelf)"><RotateCcw />{{ t('certificatesPage.reissue') }}</Button>
+                <Button size="sm" variant="danger" :loading="saving" @click="confirmDelete = true"><Trash2 />{{ t('common.delete') }}</Button>
               </div>
             </header>
             <div class="min-h-0 overflow-auto p-5">
@@ -499,8 +505,8 @@ function onFile(event: Event) {
                 <Button size="sm" @click="openAsset('asset-tls')">{{ t('certificatesPage.generateTls') }}</Button>
                 <Button size="sm" @click="openAsset('asset-import')">{{ t('certificatesPage.importAsset') }}</Button>
                 <Button size="sm" @click="openAsset('asset-export')"><FileArchive />{{ t('certificatesPage.exportAsset') }}</Button>
-                <Button size="sm" :disabled="!selectedAsset.canReissue && !selectedAsset.canRegenerate" @click="reissueAsset(selectedAsset)"><RotateCcw />{{ selectedAsset.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</Button>
-                <Button size="sm" variant="danger" :disabled="!selectedAsset.canDelete" @click="confirmDelete = true"><Trash2 />{{ t('common.delete') }}</Button>
+                <Button size="sm" :disabled="!selectedAsset.canReissue && !selectedAsset.canRegenerate" :loading="saving" @click="reissueAsset(selectedAsset)"><RotateCcw />{{ selectedAsset.type === 'ssh_key_pair' ? t('certificatesPage.regenerate') : t('certificatesPage.reissue') }}</Button>
+                <Button size="sm" variant="danger" :disabled="!selectedAsset.canDelete" :loading="saving" @click="confirmDelete = true"><Trash2 />{{ t('common.delete') }}</Button>
               </div>
             </header>
             <div class="min-h-0 overflow-auto p-5">
@@ -514,7 +520,7 @@ function onFile(event: Event) {
                 <aside class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold">{{ t('certificatesPage.downloads') }}</h3>
                   <div class="mt-3 grid gap-2">
-                    <Button v-for="kind in selectedAsset.downloadKinds" :key="kind" size="sm" @click="downloadAssetFile(selectedAsset, kind)"><Download />{{ kind }}</Button>
+                    <Button v-for="kind in selectedAsset.downloadKinds" :key="kind" size="sm" :loading="saving" @click="downloadAssetFile(selectedAsset, kind)"><Download />{{ kind }}</Button>
                   </div>
                 </aside>
               </div>
@@ -557,7 +563,6 @@ function onFile(event: Event) {
     <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :size="dialog === 'asset-import' ? 'large' : 'default'" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
       <div class="grid gap-3" :class="dialog === 'asset-import' ? 'h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]' : ''">
         <div :class="dialog === 'asset-import' ? 'grid gap-3 md:grid-cols-2' : 'contents'">
-          <div v-if="dialog === 'asset-import' && assetActionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger md:col-span-2">{{ assetActionError }}</div>
           <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="assetForm.type" :options="assetTypeOptions" /></label>
           <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="assetForm.name" /></label>
           <label v-if="dialog === 'asset-tls' || (dialog === 'asset-import' && assetForm.type === 'tls_certificate')" class="grid gap-1 text-sm">CA<Select v-model="assetForm.parentAssetId" :options="caAssets" /></label>

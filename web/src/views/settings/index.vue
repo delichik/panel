@@ -13,6 +13,8 @@ import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import SettingsPage from '@/components/templates/SettingsPage.vue';
 import { useI18n } from '@/i18n';
@@ -24,6 +26,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
+const notifyError = useErrorToast();
 
 const runtime = ref<RuntimeSettings | null>(null);
 const version = ref<VersionInfo | null>(null);
@@ -103,6 +106,7 @@ async function load() {
     hydrate(settings, variables);
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('settingsPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('settingsPage.loadFailed'));
   } finally {
     loading.value = false;
   }
@@ -211,7 +215,7 @@ async function run(name: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -326,16 +330,16 @@ onMounted(load);
       <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
 
-    <div class="grid h-full min-h-[640px] grid-cols-[260px_minmax(0,1fr)] gap-4 max-lg:grid-cols-1">
+    <div class="relative grid h-full min-h-[640px] grid-cols-[260px_minmax(0,1fr)] gap-4 max-lg:grid-cols-1">
       <aside class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-2">
         <button v-for="section in sections" :key="section.key" type="button" class="mb-1 flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-sm hover:bg-accent" :class="activeSection === section.key ? 'bg-background text-foreground' : 'text-muted-foreground'" @click="router.push(section.to)">
           {{ section.label }}
           <Badge v-if="section.key === 'backups' && (exportPending || restorePending)" tone="warning">{{ restarting ? t('settingsPage.restarting') : t('settingsPage.pending') }}</Badge>
         </button>
       </aside>
+      <LoadingOverlay v-if="loading && !runtime" />
 
       <SettingsPage>
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
         <section v-if="feedback || actionError" class="grid gap-2">
           <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
           <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
@@ -450,8 +454,11 @@ onMounted(load);
             <section class="grid gap-3 rounded-xl border border-border p-4">
               <h3>{{ t('settingsPage.restore') }}</h3>
               <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.restorePassword" type="password" /></label>
-              <input type="file" accept=".panel-backup,application/octet-stream" class="text-sm" @change="handleRestoreFile" />
-              <div v-if="preflight" class="rounded-xl border border-border p-3 text-sm">{{ t('settingsPage.restoreManifest', { version: preflight.manifest.panelVersion, count: preflight.manifest.files.length }) }}</div>
+              <div class="relative grid gap-3">
+                <input type="file" accept=".panel-backup,application/octet-stream" class="text-sm" @change="handleRestoreFile" />
+                <div v-if="preflight" class="rounded-xl border border-border p-3 text-sm">{{ t('settingsPage.restoreManifest', { version: preflight.manifest.panelVersion, count: preflight.manifest.files.length }) }}</div>
+                <LoadingOverlay v-if="pending === 'preflight'" />
+              </div>
               <label class="flex items-start gap-2 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><input v-model="form.restoreConfirm" class="mt-1" type="checkbox" />{{ t('settingsPage.confirmRestoreOverwrite') }}</label>
               <Button variant="danger" :disabled="!restoreFile || !preflight || !form.restoreConfirm" :loading="pending === 'restore'" @click="openConfirm('restore')"><UploadCloud />{{ t('settingsPage.confirmRestore') }}</Button>
             </section>

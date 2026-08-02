@@ -21,6 +21,8 @@ import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import Textarea from '@/components/ui/Textarea.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
@@ -77,6 +79,7 @@ import { archiveName } from './archivePath';
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 let pageLoadController: AbortController | null = null;
 let runtimeController: AbortController | null = null;
@@ -100,6 +103,7 @@ const pageSize = 50;
 const totalApplications = ref(0);
 const loading = ref(false);
 const detailLoading = ref(false);
+const editorLoading = ref(false);
 const facilitiesLoaded = ref(true);
 const facilities = [{ kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' }];
 const error = ref('');
@@ -108,6 +112,7 @@ const actionError = ref('');
 const pending = ref('');
 const logsOpen = ref(false);
 const logsText = ref('');
+const logsLoading = ref(false);
 const confirmOpen = ref(false);
 const confirmKind = ref<'delete' | 'stop'>('delete');
 const confirmTarget = ref('');
@@ -491,6 +496,7 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -512,6 +518,7 @@ async function loadFacilityData() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
   } finally {
     if (requestId === pageLoadRequestId) loading.value = false;
   }
@@ -542,7 +549,7 @@ async function loadApplicationDetail(applicationId: string) {
     applicationFiles.value = { ...applicationFiles.value, [applicationId]: files };
   } catch (err) {
     if (isAbortError(err)) return;
-    actionError.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.loadFailed'));
   } finally {
     if (requestId === applicationDetailRequestId) detailLoading.value = false;
   }
@@ -569,7 +576,7 @@ async function loadRuntime(applicationId: string) {
     runtimes.value = { ...runtimes.value, [applicationId]: runtime };
   } catch (err) {
     if (isAbortError(err)) return;
-    actionError.value = err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable');
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'));
   } finally {
     if (requestId === runtimeRequestId) detailLoading.value = false;
   }
@@ -583,7 +590,7 @@ async function runOperation(name: string, action: () => Promise<unknown>, succes
     feedback.value = t(successKey, taskParams(result));
     await load();
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -596,11 +603,16 @@ function taskParams(result: unknown) {
 
 async function showLogs(app: ApplicationDto) {
   logsOpen.value = true;
-  logsText.value = t('applicationsPage.logsLoading');
+  logsText.value = '';
+  logsLoading.value = true;
   try {
     logsText.value = (await applicationsApi.logs(app.id, { tail: 240 })).logs;
   } catch (err) {
-    logsText.value = err instanceof Error ? err.message : t('applicationsPage.logsFailed');
+    const message = err instanceof Error ? err.message : t('applicationsPage.logsFailed');
+    notifyError(message);
+    logsText.value = t('applicationsPage.logsFailed');
+  } finally {
+    logsLoading.value = false;
   }
 }
 
@@ -635,6 +647,15 @@ async function restorePersistentData(fileOrFiles: File | File[]) {
 }
 
 async function startApplicationEditor() {
+  editorLoading.value = true;
+  try {
+    await startApplicationEditorCore();
+  } finally {
+    editorLoading.value = false;
+  }
+}
+
+async function startApplicationEditorCore() {
   const appId = String(route.params.applicationId ?? '');
   editorQueryController?.abort();
   const requestId = ++editorQueryRequestId;
@@ -662,7 +683,7 @@ async function startApplicationEditor() {
     Object.assign(appDraft, draftFromApplication({ ...(app ?? emptyApplication()), ...editSession.value.draft }));
   } catch (err) {
     if (isAbortError(err)) return;
-    actionError.value = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.editorStartFailed'));
   }
 }
 
@@ -711,6 +732,15 @@ async function commitApplication() {
 }
 
 async function startFacilityEditor() {
+  editorLoading.value = true;
+  try {
+    await startFacilityEditorCore();
+  } finally {
+    editorLoading.value = false;
+  }
+}
+
+async function startFacilityEditorCore() {
   editorQueryController?.abort();
   const requestId = ++editorQueryRequestId;
   const controller = new AbortController();
@@ -731,7 +761,7 @@ async function startFacilityEditor() {
     Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, panelEntry: facilitySession.value.draft.panelEntry, domains: facilitySession.value.draft.domains }));
   } catch (err) {
     if (isAbortError(err)) return;
-    actionError.value = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
+    notifyError(err instanceof Error ? err.message : t('applicationsPage.editorStartFailed'));
   }
 }
 
@@ -775,7 +805,6 @@ async function reloadApplicationEditor() {
     actionError.value = '';
     await startApplicationEditor();
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
     throw err;
   } finally {
     pending.value = '';
@@ -792,7 +821,7 @@ async function reloadFacilityEditor() {
     await loadFacilityData();
     await startFacilityEditor();
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -855,7 +884,7 @@ async function runEditorAction(action: () => Promise<void>, name = 'editor') {
   try {
     await action();
   } catch (err) {
-    actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
     saveStage.value = 'idle';
@@ -1084,7 +1113,7 @@ async function runFileAction(key: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    fileActionErrors.value = { ...fileActionErrors.value, [key]: err instanceof Error ? err.message : t('common.operationFailed') };
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     fileActionPending.value = '';
   }
@@ -1102,7 +1131,7 @@ async function runAssetAction(key: string, action: () => Promise<void>) {
   try {
     await action();
   } catch (err) {
-    assetActionErrors.value = { ...assetActionErrors.value, [key]: err instanceof Error ? err.message : t('common.operationFailed') };
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     assetActionPending.value = '';
   }
@@ -1240,8 +1269,7 @@ onBeforeUnmount(() => {
 
       <template #detail>
       <main class="grid min-h-0 min-w-0">
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
-        <article v-else-if="loading && !applications.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-if="loading && !applications.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="border-b border-border p-5">
             <div class="motion-skeleton h-7 w-48 rounded bg-muted animate-pulse" />
             <div class="motion-skeleton mt-3 h-4 w-80 max-w-full rounded bg-muted animate-pulse" />
@@ -1261,7 +1289,8 @@ onBeforeUnmount(() => {
           </div>
         </article>
         <EmptyState v-else-if="!currentApplicationSummary" :title="t('applicationsPage.selectApplication')" :description="t('applicationsPage.selectApplicationHint')" />
-        <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-else class="relative grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <LoadingOverlay v-if="detailLoading && !applicationDetails[selectedId]" />
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
@@ -1277,7 +1306,6 @@ onBeforeUnmount(() => {
               <Button variant="danger" :disabled="!selectedApplication.enabled" @click="ask('stop', selectedApplication.id)"><Square />{{ t('applicationsPage.disable') }}</Button>
             </div>
           </header>
-          <div v-if="actionError" class="border-b border-danger-border bg-danger-bg px-5 py-3 text-sm text-danger">{{ actionError }}</div>
           <div v-if="feedback" class="border-b border-success-border bg-success-bg px-5 py-3 text-sm text-success">{{ feedback }}</div>
           <div class="min-h-0 overflow-auto p-5">
             <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
@@ -1325,7 +1353,6 @@ onBeforeUnmount(() => {
                         <div class="row-actions">
                           <DownloadButton size="sm" :loading="fileActionPending === `committed:${file.name}`" :label="t('common.download')" @click="downloadCommittedApplicationFile(file)" />
                         </div>
-                        <div v-if="fileActionErrors[`committed:${file.name}`]" class="row-error">{{ fileActionErrors[`committed:${file.name}`] }}</div>
                       </div>
                       <EmptyState v-if="!(applicationFiles[selectedApplication.id] || []).length" :title="t('applicationsPage.noFiles')" :description="t('applicationsPage.noCommittedFilesHint')" />
                     </div>
@@ -1339,7 +1366,7 @@ onBeforeUnmount(() => {
                     <Button :loading="pending === 'image-check'" @click="runOperation('image-check', () => applicationsApi.checkImage(selectedApplication.id), 'applicationsPage.imageChecked')"><RefreshCcw />{{ t('applicationsPage.checkImage') }}</Button>
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
                     <Button @click="router.push({ path: '/application-operations', query: { applicationId: selectedApplication.id } })"><ClipboardList />{{ t('applicationsPage.operationRecords') }}</Button>
-                    <Button @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
+                    <Button :loading="logsLoading" @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
                   </div>
                 </section>
@@ -1436,6 +1463,7 @@ onBeforeUnmount(() => {
     </template>
     <template v-if="facilityEditingView">
       <EditorPage>
+        <LoadingOverlay v-if="editorLoading && !facilitySession" />
         <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
         <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
           <span class="text-danger">{{ actionError }}</span>
@@ -1549,6 +1577,9 @@ onBeforeUnmount(() => {
     <div v-else class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
         <EmptyState v-if="!currentFacilitySummary" :title="t('applicationsPage.facilityUnavailable')" :description="t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind })" />
+        <div v-else-if="loading && !facility" class="relative grid min-h-64 place-items-center">
+          <LoadingOverlay />
+        </div>
         <div v-else-if="facility" class="grid gap-4">
           <div class="grid grid-cols-4 gap-3 max-lg:grid-cols-2 max-sm:grid-cols-1">
             <div class="rounded-2xl border border-border bg-background p-4"><span>{{ t('applicationsPage.gatewayNodes') }}</span><strong>{{ facilityConfigSummary.gateways }}</strong></div>
@@ -1572,7 +1603,6 @@ onBeforeUnmount(() => {
               <div v-for="asset in facility.staticAssets" :key="asset.name" class="item-row">
                 <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
                 <DownloadButton size="sm" :loading="assetActionPending === `committed:${asset.name}`" :label="t('common.download')" @click="downloadCommittedFacilityAsset(asset)" />
-                <div v-if="assetActionErrors[`committed:${asset.name}`]" class="row-error">{{ assetActionErrors[`committed:${asset.name}`] }}</div>
               </div>
               <EmptyState v-if="!facility.staticAssets.length" :title="t('applicationsPage.noAssets')" :description="t('applicationsPage.noAssetsHint')" />
             </div>
@@ -1593,6 +1623,7 @@ onBeforeUnmount(() => {
 
   <ConsolePage v-else-if="isAppEditor" :back-label="t('common.back')" @back="router.push('/applications/apps')" :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')" :description="t('applicationsPage.applicationEditorDescription')">
     <EditorPage>
+      <LoadingOverlay v-if="editorLoading && !editSession" />
       <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
       <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
         <span class="text-danger">{{ actionError }}</span>
@@ -1726,7 +1757,10 @@ onBeforeUnmount(() => {
   </ConsolePage>
 
   <Dialog v-model:open="logsOpen" :title="t('applicationsPage.logs')" :close-label="t('common.close')">
-    <pre class="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-background p-3 text-xs text-foreground">{{ logsText }}</pre>
+    <div class="relative">
+      <pre class="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-xl border border-border bg-background p-3 text-xs text-foreground">{{ logsText }}</pre>
+      <LoadingOverlay v-if="logsLoading" :label="t('applicationsPage.logsLoading')" />
+    </div>
   </Dialog>
 
   <Dialog v-model:open="dialogOpen" :title="t(`applicationsPage.dialog.${dialogKind}`)" :close-label="t('common.close')">

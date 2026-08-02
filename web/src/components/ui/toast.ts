@@ -24,3 +24,8 @@ export function useToast() {
   if (!toast) throw new Error('ToastProvider is missing.');
   return toast;
 }
+
+export function useErrorToast() {
+  const toast = useToast();
+  return (title: string) => toast.push({ title, tone: 'danger' });
+}

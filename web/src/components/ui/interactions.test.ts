@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import Dialog from './Dialog.vue';
 import Dropdown from './Dropdown.vue';
 import DropdownItem from './DropdownItem.vue';
+import LoadingOverlay from './LoadingOverlay.vue';
 import Select from './Select.vue';
 import Tabs from './Tabs.vue';
 
@@ -39,6 +40,11 @@ describe('Dialog', () => {
     expect(renderedDialog?.getAttribute('aria-describedby')).toBeTruthy();
     expect(document.activeElement?.getAttribute('aria-label')).toBe('Close');
 
+    const overlay = document.querySelector<HTMLElement>('[role="presentation"]')!;
+    overlay.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await nextTick();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
     const footer = document.querySelector<HTMLButtonElement>('#footer-action')!;
     footer.focus();
     footer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
@@ -49,6 +55,14 @@ describe('Dialog', () => {
     await flushPromises();
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+});
+
+describe('LoadingOverlay', () => {
+  it('renders a spinner with an optional label', () => {
+    const wrapper = mount(LoadingOverlay, { props: { label: 'Loading' } });
+    expect(wrapper.find('[role="status"]').exists()).toBe(true);
+    expect(wrapper.text()).toContain('Loading');
   });
 });
 

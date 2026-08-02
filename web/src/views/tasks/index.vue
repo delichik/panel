@@ -12,6 +12,8 @@ import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Tabs from '@/components/ui/Tabs.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -22,6 +24,7 @@ import { groupTasksByOperation } from './model';
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 const tasks = ref<TaskDto[]>([]);
 const selectedOperationId = ref(String(route.query.operation ?? ''));
@@ -119,6 +122,7 @@ async function load(silent = false) {
   } catch (err) {
     if (!listRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('tasksPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('tasksPage.loadFailed'));
   } finally {
     if (listRequests.isCurrent(requestId)) {
       listInFlight = false;
@@ -146,6 +150,7 @@ async function loadDetail(taskId: string, resetLogs = false) {
   } catch (err) {
     if (!detailRequests.isCurrent(requestId) || selectedTask.value?.id !== taskId) return;
     actionError.value = err instanceof Error ? err.message : t('tasksPage.detailLoadFailed');
+    notifyError(err instanceof Error ? err.message : t('tasksPage.detailLoadFailed'));
   } finally {
     if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
   }
@@ -161,6 +166,7 @@ async function runTaskAction(kind: 'retry' | 'run-now', task: TaskDto) {
     await load(true);
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -222,8 +228,7 @@ onBeforeUnmount(() => {
 
       <template #detail>
       <main class="grid min-h-0 min-w-0 overflow-hidden">
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
-        <EmptyState v-else-if="!selectedGroup" :title="t('tasksPage.selectOperation')" :description="t('tasksPage.selectOperationHint')" />
+        <EmptyState v-if="!selectedGroup" :title="t('tasksPage.selectOperation')" :description="t('tasksPage.selectOperationHint')" />
         <article v-else class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-border p-5 max-lg:grid-cols-1">
             <div class="min-w-0 overflow-hidden">
@@ -235,9 +240,8 @@ onBeforeUnmount(() => {
               <Button v-if="selectedTask?.allowRetry" size="sm" variant="primary" :loading="pending === `retry:${selectedTask.id}`" @click="runTaskAction('retry', selectedTask)"><RotateCcw />{{ t('common.retry') }}</Button>
             </div>
           </header>
-          <div v-if="feedback || actionError" class="grid min-w-0 gap-2 overflow-hidden border-b border-border p-4">
+          <div v-if="feedback" class="grid min-w-0 gap-2 overflow-hidden border-b border-border p-4">
             <div v-if="feedback" class="min-w-0 break-words rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-            <div v-if="actionError" class="min-w-0 break-words rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
           </div>
           <div class="grid min-h-0 min-w-0 grid-cols-[minmax(0,280px)_minmax(0,1fr)] gap-4 overflow-hidden p-4 max-lg:grid-cols-1">
             <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
@@ -250,14 +254,22 @@ onBeforeUnmount(() => {
             <section class="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-background p-4">
               <Tabs v-model="tab" class="h-full min-h-0" :tabs="[{ label: t('tasksPage.steps'), value: 'steps' }, { label: t('tasksPage.logs'), value: 'logs' }, { label: t('tasksPage.error'), value: 'error' }]">
                 <div v-if="tab === 'steps'" class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
-                  <div v-for="step in steps" :key="step.id" class="mb-2 grid min-w-0 gap-2 overflow-hidden rounded-xl border border-border p-3 text-sm">
-                    <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ step.step }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="step.status" domain="task" /></div>
-                    <div class="h-2 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary" :style="{ width: `${step.percentage}%` }" /></div>
-                    <p v-if="step.error" class="m-0 min-w-0 break-words text-danger">{{ step.error }}</p>
+                  <div v-if="detailLoading && !steps.length" class="relative grid min-h-48 place-items-center">
+                    <LoadingOverlay :label="t('tasksPage.loadingDetail')" />
                   </div>
-                  <EmptyState v-if="!steps.length" :title="t('tasksPage.noSteps')" :description="detailLoading ? t('tasksPage.loadingDetail') : t('tasksPage.noStepsHint')" />
+                  <template v-else>
+                    <div v-for="step in steps" :key="step.id" class="mb-2 grid min-w-0 gap-2 overflow-hidden rounded-xl border border-border p-3 text-sm">
+                      <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ step.step }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="step.status" domain="task" /></div>
+                      <div class="h-2 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary" :style="{ width: `${step.percentage}%` }" /></div>
+                      <p v-if="step.error" class="m-0 min-w-0 break-words text-danger">{{ step.error }}</p>
+                    </div>
+                    <EmptyState v-if="!steps.length" :title="t('tasksPage.noSteps')" :description="t('tasksPage.noStepsHint')" />
+                  </template>
                 </div>
-                <pre v-else-if="tab === 'logs'" class="h-full min-h-[420px] min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-xl border border-border bg-card p-3 text-xs [overflow-wrap:anywhere]">{{ logs.map((line) => `[${line.stream}] ${line.line}`).join('\n') || t('tasksPage.noLogs') }}</pre>
+                <div v-else-if="tab === 'logs'" class="relative h-full min-h-[420px] min-w-0">
+                  <pre class="h-full min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-xl border border-border bg-card p-3 text-xs [overflow-wrap:anywhere]">{{ logs.map((line) => `[${line.stream}] ${line.line}`).join('\n') || t('tasksPage.noLogs') }}</pre>
+                  <LoadingOverlay v-if="detailLoading && !logs.length" :label="t('tasksPage.loadingDetail')" />
+                </div>
                 <div v-else class="min-w-0 break-words rounded-xl border p-4 text-sm [overflow-wrap:anywhere]" :class="selectedTask?.error ? 'border-danger-border bg-danger-bg text-danger' : 'border-border text-muted-foreground'">{{ selectedTask?.error || t('tasksPage.noError') }}</div>
               </Tabs>
             </section>

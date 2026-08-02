@@ -14,6 +14,8 @@ import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Textarea from '@/components/ui/Textarea.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -24,6 +26,7 @@ import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, s
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 const servers = ref<ServerDto[]>([]);
 const serverDetails = ref<Record<string, ServerDto>>({});
@@ -35,6 +38,7 @@ const pageSize = 50;
 const totalServers = ref(0);
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const loading = ref(false);
+const detailLoading = ref(false);
 const error = ref('');
 const credentialError = ref('');
 const feedback = ref('');
@@ -43,6 +47,8 @@ const serverDialog = ref(false);
 const confirmDialog = ref(false);
 const saving = ref(false);
 const probing = ref(false);
+const testing = ref(false);
+const openingEdit = ref(false);
 const probeResult = ref<ServerProbeResult | null>(null);
 const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
@@ -106,11 +112,15 @@ watch(selectedId, () => {
 async function loadServerDetail() {
   const id = selectedId.value;
   if (!id || serverDetails.value[id]) return;
+  detailLoading.value = true;
   try {
     const detail = await serversApi.get(id);
     serverDetails.value = { ...serverDetails.value, [id]: detail };
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+  } finally {
+    detailLoading.value = false;
   }
 }
 
@@ -132,12 +142,14 @@ async function load() {
           : nextServers[0]?.id || '';
     } else {
       error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
+      notifyError(serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed'));
     }
     if (credentialsResult.status === 'fulfilled') {
       credentials.value = credentialsResult.value;
     } else {
       credentials.value = [];
       credentialError.value = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed');
+      notifyError(credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('serversPage.credentialsLoadFailed'));
     }
   } finally {
     loading.value = false;
@@ -154,6 +166,7 @@ async function loadServers() {
     selectedId.value = result.items.some((item) => item.id === selectedId.value) ? selectedId.value : result.items[0]?.id ?? '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('serversPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
   } finally {
     loading.value = false;
   }
@@ -168,6 +181,7 @@ async function loadMetrics() {
     metrics.value = await serversApi.metrics(selectedId.value, '1h');
   } catch (err) {
     metricsError.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'));
   } finally {
     metricsLoading.value = false;
   }
@@ -191,23 +205,30 @@ function openCreate() {
 }
 
 async function openEdit(server: ServerDto) {
-  const detail = serverDetails.value[server.id] ?? await serversApi.get(server.id);
-  serverDetails.value = { ...serverDetails.value, [server.id]: detail };
-  server = detail;
-  editing.value = server;
-  probeResult.value = null;
-  Object.assign(form, {
-    name: server.name,
-    host: server.host,
-    port: String(server.port || 22),
-    sshUsername: server.sshUsername ?? '',
-    credentialId: server.credentialId,
-    dockerHost: server.dockerHost || 'unix:///var/run/docker.sock',
-    traits: stringifyPairs(server.traits),
-    variables: stringifyPairs(server.variables),
-    notes: server.notes ?? '',
-  });
-  serverDialog.value = true;
+  openingEdit.value = true;
+  try {
+    const detail = serverDetails.value[server.id] ?? await serversApi.get(server.id);
+    serverDetails.value = { ...serverDetails.value, [server.id]: detail };
+    server = detail;
+    editing.value = server;
+    probeResult.value = null;
+    Object.assign(form, {
+      name: server.name,
+      host: server.host,
+      port: String(server.port || 22),
+      sshUsername: server.sshUsername ?? '',
+      credentialId: server.credentialId,
+      dockerHost: server.dockerHost || 'unix:///var/run/docker.sock',
+      traits: stringifyPairs(server.traits),
+      variables: stringifyPairs(server.variables),
+      notes: server.notes ?? '',
+    });
+    serverDialog.value = true;
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('serversPage.loadFailed'));
+  } finally {
+    openingEdit.value = false;
+  }
 }
 
 async function probe() {
@@ -218,6 +239,7 @@ async function probe() {
     probeResult.value = await serversApi.probe(formPayload.value);
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('serversPage.probeFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.probeFailed'));
   } finally {
     probing.value = false;
   }
@@ -235,17 +257,23 @@ async function saveServer() {
     await load();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('serversPage.saveFailed');
+    notifyError(err instanceof Error ? err.message : t('serversPage.saveFailed'));
   } finally {
     saving.value = false;
   }
 }
 
 async function testConnection(server: ServerDto) {
-  await runInline(async () => {
-    const tested = await serversApi.test(server.id);
-    feedback.value = t('serversPage.testSucceeded', { name: tested.name });
-    await load();
-  });
+  testing.value = true;
+  try {
+    await runInline(async () => {
+      const tested = await serversApi.test(server.id);
+      feedback.value = t('serversPage.testSucceeded', { name: tested.name });
+      await load();
+    });
+  } finally {
+    testing.value = false;
+  }
 }
 
 function confirmDelete(server: ServerDto) {
@@ -295,6 +323,7 @@ async function runInline(action: () => Promise<void>, operation = 'default') {
     await action();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pendingOperation.value = '';
   }
@@ -393,8 +422,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
       <template #detail>
       <main class="grid min-h-0 min-w-0">
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
-        <article v-else-if="loading && !servers.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-if="loading && !servers.length" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="border-b border-border p-5">
             <Skeleton class="h-7 w-48" />
             <Skeleton class="mt-3 h-4 w-72 max-w-full" />
@@ -416,7 +444,8 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           </div>
         </article>
         <EmptyState v-else-if="!selectedServer" :title="t('serversPage.selectServer')" :description="t('serversPage.selectServerHint')" />
-        <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+        <article v-else class="relative grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+          <LoadingOverlay v-if="detailLoading && !serverDetails[selectedId]" />
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div class="min-w-0">
               <div class="flex flex-wrap items-center gap-2">
@@ -427,16 +456,14 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedServer.host }}:{{ selectedServer.port }} / {{ selectedServer.os?.prettyName || t('common.notAvailable') }}</p>
             </div>
             <div class="flex flex-wrap justify-end gap-2">
-              <Button size="sm" @click="testConnection(selectedServer)"><Cable />{{ t('serversPage.testConnection') }}</Button>
-              <Button size="sm" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
+              <Button size="sm" :loading="testing" @click="testConnection(selectedServer)"><Cable />{{ t('serversPage.testConnection') }}</Button>
+              <Button size="sm" :loading="openingEdit" @click="openEdit(selectedServer)"><Wrench />{{ t('common.edit') }}</Button>
               <Button size="sm" variant="danger" @click="confirmDelete(selectedServer)"><Trash2 />{{ t('common.delete') }}</Button>
             </div>
           </header>
 
-          <div v-if="feedback || actionError || credentialError || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
+          <div v-if="feedback || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-            <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
-            <div v-if="credentialError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('serversPage.credentialsLoadFailed') }} {{ credentialError }}</div>
             <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
           </div>
 
@@ -457,7 +484,6 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
                     <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.metrics') }}</h3>
                     <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics"><RefreshCcw />{{ t('common.refresh') }}</Button>
                   </div>
-                  <div v-if="metricsError" class="mt-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ metricsError }}</div>
                   <dl class="mt-3 grid grid-cols-3 gap-3 text-sm max-md:grid-cols-1">
                     <div><dt>CPU</dt><dd>{{ percent(latestMetrics.cpu?.usagePercent) }}</dd></div>
                     <div><dt>{{ t('serversPage.memory') }}</dt><dd>{{ bytes(latestMetrics.memory?.usedBytes) }} / {{ bytes(latestMetrics.memory?.totalBytes) }}</dd></div>
@@ -502,7 +528,6 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
     <Dialog v-model:open="serverDialog" :title="editing ? t('serversPage.editServer') : t('serversPage.createServer')" :description="t('serversPage.formDescription')" :close-label="t('common.close')">
       <div class="grid gap-4">
-        <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
         <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
           <label class="grid gap-1 text-sm">{{ t('serversPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
           <label class="grid gap-1 text-sm">{{ t('serversPage.host') }}<Input v-model="form.host" :invalid="Boolean(validation.host)" /></label>

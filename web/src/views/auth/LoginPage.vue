@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { settingsApi } from '@/api/settings';
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import { useSessionStore } from '@/stores/session';
 
@@ -11,6 +12,7 @@ const router = useRouter();
 const route = useRoute();
 const session = useSessionStore();
 const { t } = useI18n();
+const notifyError = useErrorToast();
 const username = ref('');
 const password = ref('');
 const accountUsername = ref('');
@@ -55,7 +57,7 @@ async function submit() {
     }
     await router.push(String(route.query.redirect || '/overview'));
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('auth.signInFailed');
+    notifyError(err instanceof Error ? err.message : t('auth.signInFailed'));
   } finally {
     loading.value = false;
   }
@@ -84,7 +86,7 @@ async function updateAccount() {
     });
     await router.push(String(route.query.redirect || '/overview'));
   } catch (err) {
-    error.value = err instanceof Error ? err.message : t('auth.changePasswordFailed');
+    notifyError(err instanceof Error ? err.message : t('auth.changePasswordFailed'));
   } finally {
     loading.value = false;
   }

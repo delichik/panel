@@ -12,7 +12,9 @@
 - `StatusBadge`：集中维护状态到 tone 的映射。支持 `generic`、`server`、`task`、`certificate`、`resource`、`operation` domain；页面只有在确有业务差异时才传入显式 `tone`。
 - `Select`：用于单选下拉。交付形态必须是 Panel 自有 combobox + listbox 浮层，使用 popover 表面、统一 hover/selected/focus/motion 状态和暗色主题 token；不得把浏览器原生 `<option>` 展开菜单作为用户可见交互形态。
 - `Dropdown`：菜单 Teleport 到 `body`，使用 fixed 定位、视口边界收敛和上下碰撞选择，不能留在业务容器内被 `overflow` 裁切；继续支持方向键、Home/End、Escape 和焦点恢复。
-- `Dialog`：普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
+- `Dialog`：不响应遮罩点击关闭，只能通过关闭按钮、取消操作或 Escape 关闭；普通和 large 尺寸的 body 都必须有可靠的内部纵向滚动，页脚保持在弹窗网格底部；业务正文不能依赖外层页面滚动才能到达。
+- `ToastProvider`：全局顶部 toast；页面和组件内 catch 到的异常统一以 danger toast 展示，字段校验与结构化诊断仍就地展示。
+- `LoadingOverlay`：用于对话框正文、文本编辑区、卡片或区块等待网络响应时的统一加载覆盖；不得用裸文字代替加载效果。
 - `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。
 
 ## Pattern components
@@ -22,7 +24,7 @@
 - `ServerMultiPicker`：用于应用部署、设施覆盖节点、批量任务等服务器多选。支持禁用 id 与禁用原因，选中态、禁用态和能力标签保持一致。
 - `MasterList`：用于主从布局左侧列表容器，统一选中态、空态、加载骨架、滚动边界和 item slot。详情区标题与动作应由页面自己的 detail header 承载。
 - `EditorSectionRail`：用于编辑器左侧分区导航。支持 complete、error、dirty badge 和二级 child item list；编辑器页面不得再自造不同视觉的分区 rail，badge 文案由页面 i18n 传入。
-- `AssetFileManager`：用于应用文件和设施静态资产这两类同构的文件工作区。顶部只提供一个上传入口，弹窗内选择文本文件、普通文件或文件夹归档；文本类型显示编辑器，普通文件和归档显示文件选择控件。组件还统一提供文本编辑、替换、下载、删除、错误行展示和并发冲突重载；页面只通过 `AssetFileAdapter` 注入领域 API 和文案。`items[].key` 必须是应用内或设施内唯一的 `name`，不把物理 `id`、`fileKey` 或 `assetKey` 暴露给组件。
+- `AssetFileManager`：用于应用文件和设施静态资产这两类同构的文件工作区。顶部只提供一个上传入口，弹窗内选择文本文件、普通文件或文件夹归档；文本类型显示编辑器，普通文件和归档显示文件选择控件。新建文本资产时下载文件名自动跟随引用名称，仍可单独修改，留空保存时使用引用名称；组件还统一提供文本编辑、替换、下载、删除、错误行展示和并发冲突重载；页面只通过 `AssetFileAdapter` 注入领域 API 和文案。`items[].key` 必须是应用内或设施内唯一的 `name`，不把物理 `id`、`fileKey` 或 `assetKey` 暴露给组件。
 
 ## 使用规则
 

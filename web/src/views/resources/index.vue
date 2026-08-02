@@ -13,6 +13,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -37,6 +38,7 @@ import {
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 const resourceTabs: ResourceTab[] = ['packages', 'containers', 'images', 'networks', 'volumes'];
 let serversController: AbortController | null = null;
@@ -131,6 +133,7 @@ async function loadServers() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('resourcesPage.loadServersFailed');
+    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadServersFailed'));
   } finally {
     if (requestId === serversRequestId) loadingServers.value = false;
   }
@@ -180,6 +183,7 @@ async function loadResource() {
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
+    notifyError(err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed'));
     clearResource(tab);
   } finally {
     if (requestId === resourceRequestId) loadingResource.value = false;
@@ -312,6 +316,7 @@ async function run(operation: string, action: () => Promise<void>) {
     await action();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -385,8 +390,7 @@ onBeforeUnmount(() => {
 
       <template #detail>
       <main class="grid min-h-0 min-w-0">
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
-        <EmptyState v-else-if="!selectedServer" :title="t('resourcesPage.selectServer')" :description="t('resourcesPage.selectServerHint')" />
+        <EmptyState v-if="!selectedServer" :title="t('resourcesPage.selectServer')" :description="t('resourcesPage.selectServerHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-lg:grid">
             <div>
@@ -403,9 +407,8 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div v-if="feedback || actionError || (activeTab === 'packages' && packageBlockReason(selectedServer)) || (activeTab !== 'packages' && dockerBlockReason(selectedServer))" class="grid gap-2 border-b border-border p-4">
+          <div v-if="feedback || (activeTab === 'packages' && packageBlockReason(selectedServer)) || (activeTab !== 'packages' && dockerBlockReason(selectedServer))" class="grid gap-2 border-b border-border p-4">
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-            <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
             <div v-if="activeTab === 'packages' && packageBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(packageBlockReason(selectedServer)) }}</div>
             <div v-if="activeTab !== 'packages' && dockerBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(dockerBlockReason(selectedServer)) }}</div>
           </div>
@@ -485,7 +488,7 @@ onBeforeUnmount(() => {
                   <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'start'))" :loading="pending === `start-${item.id}`" @click="containerAction(item, 'start')"><Play />{{ t('resourcesPage.start') }}</Button>
                   <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'stop'))" :loading="pending === `stop-${item.id}`" @click="containerAction(item, 'stop')"><Square />{{ t('resourcesPage.stop') }}</Button>
                   <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'restart'))" :loading="pending === `restart-${item.id}`" @click="containerAction(item, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</Button>
-                  <Button size="sm" @click="openLogs(item)"><FileText />{{ t('resourcesPage.logs') }}</Button>
+                  <Button size="sm" :loading="pending === `logs-${item.id}`" @click="openLogs(item)"><FileText />{{ t('resourcesPage.logs') }}</Button>
                   <Button size="sm" variant="danger" :disabled="Boolean(containerActionDisabled(item, 'delete'))" @click="confirm('container', item.id, containerName(item))"><Trash2 />{{ t('common.delete') }}</Button>
                 </footer>
               </article>

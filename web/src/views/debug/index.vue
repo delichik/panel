@@ -5,14 +5,17 @@ import { debugApi } from '@/api/debug';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import WorkspacePage from '@/components/templates/WorkspacePage.vue';
 import { useI18n } from '@/i18n';
 import type { DebugDatabase, DebugSnapshot, DebugTaskDefinition } from '@/types/debug';
 
 const { t } = useI18n();
+const notifyError = useErrorToast();
 
 const snapshot = ref<DebugSnapshot | null>(null);
 const lastGoodSnapshot = ref<DebugSnapshot | null>(null);
@@ -122,6 +125,7 @@ async function load() {
     lastGoodSnapshot.value = next;
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('debugPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('debugPage.loadFailed'));
     snapshot.value = null;
   } finally {
     loading.value = false;
@@ -183,11 +187,13 @@ onBeforeUnmount(() => window.clearInterval(timer));
             <Badge :tone="stale ? 'warning' : 'success'">{{ stale ? t('debugPage.staleSnapshot') : t('debugPage.liveSnapshot') }}</Badge>
             <Badge tone="info">{{ view?.collectedAt || t('common.never') }}</Badge>
           </div>
-          <div v-if="error" class="rounded-xl border border-warning-border bg-warning-bg px-3 py-2 text-sm text-warning">{{ error }}</div>
         </div>
       </template>
 
-      <EmptyState v-if="!view" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
+      <div v-if="loading && !view" class="relative grid min-h-[600px] place-items-center">
+        <LoadingOverlay />
+      </div>
+      <EmptyState v-else-if="!view" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
       <Tabs v-else v-model="activeTab" class="h-full min-h-[600px]" :tabs="tabs">
         <section v-if="activeTab === 'runtime'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div class="grid gap-4 md:grid-cols-3">

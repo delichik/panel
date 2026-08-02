@@ -12,6 +12,8 @@ import Select from '@/components/ui/Select.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Table from '@/components/ui/Table.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ListPage from '@/components/templates/ListPage.vue';
 import { translateRuntimeEventType, useI18n } from '@/i18n';
 import type { SystemEventDetailDto, SystemEventDto } from '@/types/systemEvents';
@@ -22,6 +24,7 @@ type EventRow = SystemEventDto & Record<string, unknown>;
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 const rows = ref<SystemEventDto[]>([]);
 const total = ref(0);
@@ -111,6 +114,7 @@ async function load() {
   } catch (err) {
     if (!listRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('systemEventsPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('systemEventsPage.loadFailed'));
     rows.value = [];
     total.value = 0;
   } finally {
@@ -131,6 +135,7 @@ async function openDetail(row: SystemEventDto) {
   } catch (err) {
     if (!detailRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('systemEventsPage.detailLoadFailed');
+    notifyError(err instanceof Error ? err.message : t('systemEventsPage.detailLoadFailed'));
     detailOpen.value = false;
   } finally {
     if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
@@ -179,7 +184,6 @@ onMounted(load);
     </template>
 
     <div class="grid min-h-full gap-3">
-      <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
       <Table v-if="rows.length || loading" :columns="columns" :rows="rows as EventRow[]" row-key="id" :loading="loading" :loading-label="t('systemEventsPage.loading')">
         <template #occurredAt="{ row }">{{ formatDateTime(row.occurredAt) }}</template>
         <template #severity="{ row }"><StatusBadge :status="row.severity" :tone="row.severity === 'error' || row.severity === 'critical' ? 'danger' : row.severity === 'warning' ? 'warning' : 'info'" :label="severityLabel(row.severity)" /></template>
@@ -210,7 +214,9 @@ onMounted(load);
   </ListPage>
 
   <Dialog v-model:open="detailOpen" :title="detail ? eventTypeLabel(detail.event.eventType) : t('systemEventsPage.detailTitle')" :description="detail?.event.id" :close-label="t('common.close')">
-    <div v-if="detailLoading" class="text-sm text-muted-foreground">{{ t('systemEventsPage.loadingDetail') }}</div>
+    <div v-if="detailLoading" class="relative grid min-h-64 place-items-center">
+      <LoadingOverlay :label="t('systemEventsPage.loadingDetail')" />
+    </div>
     <div v-else-if="detail" class="grid gap-4">
       <section class="grid gap-2 rounded-xl border border-border p-3 text-sm">
         <div><span class="text-muted-foreground">{{ t('systemEventsPage.column.time') }}</span> <strong>{{ formatDateTime(detail.event.occurredAt) }}</strong></div>

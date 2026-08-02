@@ -13,6 +13,7 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -22,6 +23,7 @@ import { credentialReferences } from '@/views/servers/model';
 import { secretPayload, validateCredentialInput } from './model';
 
 const { t } = useI18n();
+const notifyError = useErrorToast();
 
 const credentials = ref<CredentialDto[]>([]);
 const servers = ref<ServerDto[]>([]);
@@ -75,6 +77,7 @@ async function load() {
     selectedId.value = selectedId.value && nextCredentials.items.some((item) => item.id === selectedId.value) ? selectedId.value : nextCredentials.items[0]?.id || '';
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('credentialsPage.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.loadFailed'));
   } finally {
     loading.value = false;
   }
@@ -107,6 +110,7 @@ async function saveCredential() {
     await load();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.saveFailed');
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -128,6 +132,7 @@ async function deleteCredential() {
     await load();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.deleteFailed');
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.deleteFailed'));
   }
 }
 
@@ -141,6 +146,7 @@ async function testCredential(credential: CredentialDto) {
     feedback.value = t('credentialsPage.testSucceeded', { name: ref.name });
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.testFailed');
+    notifyError(err instanceof Error ? err.message : t('credentialsPage.testFailed'));
   } finally {
     testing.value = false;
   }
@@ -198,8 +204,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
       <template #detail>
       <main class="grid min-h-0 min-w-0">
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
-        <EmptyState v-else-if="!selectedCredential" :title="t('credentialsPage.selectCredential')" :description="t('credentialsPage.selectCredentialHint')" />
+        <EmptyState v-if="!selectedCredential" :title="t('credentialsPage.selectCredential')" :description="t('credentialsPage.selectCredentialHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-md:grid">
             <div class="min-w-0">
@@ -216,9 +221,8 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
             </div>
           </header>
 
-          <div v-if="feedback || actionError" class="grid gap-2 border-b border-border p-4">
+          <div v-if="feedback" class="grid gap-2 border-b border-border p-4">
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-            <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
           </div>
 
           <div class="min-h-0 overflow-auto p-5">
@@ -255,7 +259,6 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 
     <Dialog v-model:open="dialogOpen" :size="form.type === 'private_key' ? 'large' : 'default'" :title="editing ? t('credentialsPage.editCredential') : t('credentialsPage.createCredential')" :description="editing ? t('credentialsPage.editDescription') : t('credentialsPage.createDescription')" :close-label="t('common.close')">
       <div v-if="form.type === 'password'" class="grid gap-4">
-        <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
         <label class="grid gap-1 text-sm">{{ t('credentialsPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
         <label class="grid gap-1 text-sm">{{ t('credentialsPage.type') }}<Select v-model="form.type" :options="typeOptions" /></label>
         <label class="grid gap-1 text-sm">{{ t('credentialsPage.username') }}<Input v-model="form.username" :invalid="Boolean(validation.username)" /></label>
@@ -270,7 +273,6 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
       </div>
       <div v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
         <div class="grid gap-3 md:grid-cols-2">
-          <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger md:col-span-2">{{ actionError }}</div>
           <label class="grid gap-1 text-sm">{{ t('credentialsPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
           <label class="grid gap-1 text-sm">{{ t('credentialsPage.type') }}<Select v-model="form.type" :options="typeOptions" /></label>
           <label class="grid gap-1 text-sm">{{ t('credentialsPage.username') }}<Input v-model="form.username" :invalid="Boolean(validation.username)" /></label>

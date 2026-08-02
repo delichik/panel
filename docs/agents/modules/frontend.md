@@ -34,11 +34,13 @@
 - 禁止新增 `naive-ui`、Vuetify 或旧 UI 框架依赖。
 - 复杂无样式交互可使用 headless 组件库；业务页面仍必须通过 Panel 自有 primitives 暴露一致样式。
 - `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch。
+- 等待网络接口响应的加载效果统一使用 `web/src/components/ui/LoadingOverlay.vue` 或既有骨架/按钮 loading；文本加载位置不得只显示文字。
 - 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 FilterBar、ServerContextSelector、ServerMultiPicker、MasterList、EditorSectionRail；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
 - `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`、`web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue` 已开始接入统一 patterns：搜索使用 `SearchInput`，任务分页使用 `PaginationBar`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，安全/资源服务器上下文使用单一 `ServerContextSelector`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。后续页面修改不得在 `ServerContextSelector` 上方叠加服务器 Select 下拉。
 - 图标统一使用 `@lucide/vue`。
 - 主题只支持 `system` / `light` / `dark`，通过 `data-theme` 和 CSS 变量运行。
 - 中大屏 AppShell 必须填满视口并禁止页面级滚动；滚动限制在模板正文、表格、详情、日志或编辑正文内部。
+- 异常消息统一通过 `ToastProvider` 以顶部 toast 展示；`Dialog` 不因点击遮罩关闭，只能通过显式关闭、取消或 Escape 关闭。
 
 ## 页面族边界
 
@@ -97,7 +99,7 @@
 - 创建/编辑应用走隐藏路由 `/applications/apps/create` 与 `/applications/apps/:applicationId/edit`，使用 `EditorPage` 与 `/api/v1/application-edit-sessions` durable 会话；编辑器是分层 header + 连续纵向配置流 + 摘要区，不得恢复分区切换或等宽分页卡片。基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件按顺序全部展开，正文统一滚动；窄屏字段单列组织，禁止横向裁切。AppSpec 只有一个“YAML source / 源码”视图。文件区固定为一个上传入口，弹窗内选择文本文件、普通文件或文件夹压缩包：文本 JSON PUT 固定保存为 `template`，普通文件通过 `/uploads/{name}` multipart 固定保存为 `binary`，文件夹压缩包通过 `/archives` 保存为单个 `archive` 条目；类型和 MIME 不由用户填写。三类文件都支持会话态下载，binary/archive 替换必须保留原 `name`，正式详情支持已提交文件下载。文件工作区必须复用 `AssetFileManager`，不在应用页另写文件行交互。编辑器提交按钮点击时自动执行服务端检查并展示诊断，不再提供单独的「检查配置」按钮；修改草稿后自动清除过期的检查结果。
 - 设施应用页 `/applications/facility-apps` 是独立入口，不再通过应用/设施应用顶层 tabs 互切，也不暴露隐藏 `facility-reverse-proxy` 应用。设施类型由前端内置适配器固定提供，不调用设施 list API；当前唯一内置设施是 `reverse-proxy`，页面直接使用其专属详情与配置 API。新增设施类型时新增自己的类型、配置和 API adapter。
 - 设施应用目录以带大图标和路由数等摘要的卡片按两列网格展示，点击卡片直接进入设施详情 `/applications/facility-apps/:facilityKind`；详情读取 `/api/v1/facility-apps/reverse-proxy`，展示网关节点、路由摘要、静态资产、应用路由、Panel 入口和当前 lifecycle operation。详情页“编辑”按钮在同一页就地展开编辑器，不再跳转独立配置页；兼容深链 `/applications/facility-apps/:facilityKind/config` 仍可直达编辑态。编辑器走 `/api/v1/facility-apps/reverse-proxy/edit-sessions`，与应用编辑器统一为连续纵向配置流 + sticky 摘要；网关服务器、域名和路由、Panel 访问入口和静态文件按顺序全部展开，正文统一滚动；域名和 Path 使用列表 + 对话框；域名对话框可配置负载均衡策略（轮询 / IP 哈希 / 主备切换及主源服务器），location 对话框可配置 gzip、请求体上限、代理超时、代理缓冲、WebSocket 模式、来源信息转发和自定义请求/响应头；服务器选择与展示统一使用服务器名称（名称来自 `/api/v1/servers`，未知 ID 回退为原值），Panel 入口服务器使用单选选择器。提交或取消后回到详情视图（提交后刷新设施数据）。静态文件新增/同 name 替换使用 `PUT .../assets/{assetName}` multipart，会话态和正式态分别通过对应 `/content` 接口下载；冲突时提供放弃当前修改并重新加载正式配置的明确入口。静态文件与应用文件共用 `AssetFileManager` 和请求封装，设施 adapter 只负责映射自己的配置契约。Path 弹窗保存时前端即时校验 path、跳转 URL、代理目标并内联报错；提交按钮点击时自动执行检查并展示诊断，不再提供单独的「检查配置」按钮；修改草稿后自动清除过期的检查结果。
-- The facility asset workspace exposes one upload action. The upload dialog chooses text file, regular file, or folder archive; text selection opens the editor, while regular files and bundles use the upload control. Existing text assets open the same dialog in fixed editor mode. Only assets returned with `contentMode=text` can open the code editor; binary files and bundles remain replace/download/delete only, regardless of filename extension.
+- The facility asset workspace exposes one upload action. The upload dialog chooses text file, regular file, or folder archive; text selection opens the editor, while regular files and bundles use the upload control. New text assets derive the download filename from the reference name by default, still allow a separate download filename, and fall back to the reference name when it is left empty. Existing text assets open the same dialog in fixed editor mode. Only assets returned with `contentMode=text` can open the code editor; binary files and bundles remain replace/download/delete only, regardless of filename extension.
 - Mock 模式覆盖同名正式路径，包含持久化数据 zip 下载/恢复、应用 archive 上传、设施静态资产上传/删除、正常应用、空/删除后状态、保存冲突、部署中、日志错误和长配置诊断；未实现路径继续返回 `mock_route_not_found`。
 
 ### 阶段 7：任务 + 设置 + 维护 + 诊断

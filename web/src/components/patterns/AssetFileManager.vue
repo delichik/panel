@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { UploadCloud } from '@lucide/vue';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
@@ -11,10 +11,13 @@ import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Tabs from '@/components/ui/Tabs.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import type { CodeEditorLanguage } from '@/components/ui/codeEditorLanguage';
 import type { AssetFileAdapter, AssetFileItem, AssetFileKind, AssetFileManagerLabels, SaveTextAssetInput, UploadAssetInput } from './assetFileManager';
 
 const archiveAccept = '.zip,.tar,.tar.gz,.tgz,application/zip,application/x-tar,application/gzip';
+const notifyError = useErrorToast();
 
 const props = withDefaults(defineProps<{
   items: AssetFileItem[];
@@ -46,6 +49,7 @@ const textError = ref('');
 const textConflict = ref(false);
 const textName = ref('');
 const textFilename = ref('');
+const filenameTouched = ref(false);
 const textContent = ref('');
 const textLanguage = ref<CodeEditorLanguage>(props.defaultLanguage);
 const loadGeneration = ref(0);
@@ -66,7 +70,7 @@ const binaryUploadKind = computed<Exclude<AssetFileItem['kind'], 'text'>>(() => 
 const assetTitle = computed(() => textEditing.value
   ? props.labels.textTitle
   : uploadMode.value === 'text' ? props.labels.newTextTitle : props.labels.uploadAssetTitle);
-const textSaveDisabled = computed(() => textLoading.value || textSaving.value || Boolean(textError.value && !textContent.value) || !textName.value.trim() || (props.showFilename && !textFilename.value.trim()));
+const textSaveDisabled = computed(() => textLoading.value || textSaving.value || Boolean(textError.value && !textContent.value) || !textName.value.trim() || (props.showFilename && !(textFilename.value.trim() || textName.value.trim())));
 
 function itemKey(item: AssetFileItem) {
   return item.key;
@@ -83,7 +87,9 @@ function firstFile(value: File | File[]) {
 }
 
 function setError(key: string, error: unknown) {
-  errors.value = { ...errors.value, [key]: error instanceof Error && error.message ? error.message : props.labels.operationFailed };
+  const message = error instanceof Error && error.message ? error.message : props.labels.operationFailed;
+  notifyError(message);
+  errors.value = { ...errors.value, [key]: message };
 }
 
 async function run(key: string, action: () => Promise<unknown>) {
@@ -130,6 +136,7 @@ function openUpload() {
   textKey.value = `asset-${Date.now()}`;
   textName.value = '';
   textFilename.value = '';
+  filenameTouched.value = false;
   textContent.value = '';
   textLanguage.value = props.defaultLanguage;
   textError.value = '';
@@ -148,6 +155,7 @@ async function openText(item: AssetFileItem) {
   textKey.value = item.key;
   textName.value = item.name;
   textFilename.value = item.filename ?? item.name.split('/').at(-1) ?? item.name;
+  filenameTouched.value = true;
   textContent.value = '';
   textLanguage.value = props.inferLanguage?.(item.name, item.filename) ?? props.defaultLanguage;
   textError.value = '';
@@ -163,7 +171,11 @@ async function openText(item: AssetFileItem) {
     if (loaded.filename !== undefined) textFilename.value = loaded.filename;
     if (loaded.language) textLanguage.value = loaded.language;
   } catch (error) {
-    if (generation === loadGeneration.value) textError.value = error instanceof Error ? error.message : props.labels.loadFailed;
+    if (generation === loadGeneration.value) {
+      const message = error instanceof Error ? error.message : props.labels.loadFailed;
+      notifyError(message);
+      textError.value = message;
+    }
   } finally {
     if (generation === loadGeneration.value) textLoading.value = false;
   }
@@ -178,7 +190,7 @@ async function saveText() {
     key: textKey.value,
     item: textEditing.value,
     name: textName.value.trim(),
-    filename: props.showFilename ? textFilename.value.trim() : undefined,
+    filename: props.showFilename ? (textFilename.value.trim() || textName.value.trim()) : undefined,
     content: textContent.value,
     language: textLanguage.value,
   };
@@ -186,22 +198,35 @@ async function saveText() {
     await props.adapter.saveText(input);
     assetOpen.value = false;
   } catch (error) {
-    textError.value = error instanceof Error ? error.message : props.labels.loadFailed;
+    const message = error instanceof Error ? error.message : props.labels.loadFailed;
+    notifyError(message);
+    textError.value = message;
     textConflict.value = (error as { code?: string })?.code === 'edit_session_revision_conflict';
   } finally {
     textSaving.value = false;
   }
 }
 
+watch(textName, (value) => {
+  if (!textEditing.value && props.showFilename && !filenameTouched.value) {
+    textFilename.value = value;
+  }
+});
+
 async function reloadText() {
   if (!props.adapter.reload) return;
+  textLoading.value = true;
   try {
     await props.adapter.reload();
     assetOpen.value = false;
     textError.value = '';
     textConflict.value = false;
   } catch (error) {
-    textError.value = error instanceof Error ? error.message : props.labels.loadFailed;
+    const message = error instanceof Error ? error.message : props.labels.loadFailed;
+    notifyError(message);
+    textError.value = message;
+  } finally {
+    textLoading.value = false;
   }
 }
 
@@ -240,7 +265,6 @@ async function confirmDelete() {
         <DownloadButton size="sm" :loading="pending === item.key" :disabled="disabled" :label="labels.download" @click="download(item)" />
         <Button size="sm" variant="danger" :loading="pending === item.key" :disabled="disabled" @click="openDelete(item)">{{ labels.delete }}</Button>
       </div>
-      <div v-if="errors[item.key]" class="row-error">{{ errors[item.key] }}</div>
     </div>
     <EmptyState v-if="!items.length" :title="labels.noAssets" :description="labels.noAssetsHint" />
   </section>
@@ -258,19 +282,18 @@ async function confirmDelete() {
             </label>
             <label v-if="showFilename" class="field">
               <span>{{ labels.filename }}</span>
-              <Input v-model="textFilename" />
+              <Input :model-value="textFilename" @update:model-value="textFilename = $event; filenameTouched = true" />
               <span v-if="labels.filenameHint" class="text-xs leading-5 text-muted-foreground">{{ labels.filenameHint }}</span>
             </label>
             <label v-if="languageOptions.length" class="field">{{ labels.language }}<Select v-model="textLanguage" :options="languageOptions" /></label>
           </div>
-          <div class="min-h-0">
-            <div v-if="textLoading" class="grid h-full place-items-center text-sm text-muted-foreground">{{ labels.loading }}</div>
-            <div v-else-if="textError && !textContent" class="rounded-md border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ labels.loadFailed }} {{ textError }}</div>
+          <div class="relative min-h-0">
+            <LoadingOverlay v-if="textLoading" :label="labels.loading" />
+            <div v-else-if="textError && !textContent" class="rounded-md border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ labels.loadFailed }}</div>
             <CodeEditor v-else v-model="textContent" :language="textLanguage" :editor-label="labels.content" />
           </div>
-          <div v-if="textError" role="alert" class="row-error">
-            {{ textError }}
-            <Button v-if="textConflict && adapter.reload" size="sm" variant="secondary" @click="reloadText">{{ labels.reload }}</Button>
+          <div v-if="textConflict && adapter.reload" role="alert" class="row-error">
+            <Button size="sm" variant="secondary" @click="reloadText">{{ labels.reload }}</Button>
           </div>
         </div>
         <div v-else class="grid min-h-0 place-items-start gap-3">
@@ -283,7 +306,6 @@ async function confirmDelete() {
             :label="uploadMode === 'archive' ? labels.uploadArchive : labels.uploadFile"
             @change="upload($event, binaryUploadKind, '__new-asset')"
           />
-          <div v-if="errors['__new-asset']" role="alert" class="row-error">{{ errors['__new-asset'] }}</div>
         </div>
       </Tabs>
     </div>

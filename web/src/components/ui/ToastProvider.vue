@@ -40,7 +40,7 @@ provide(toastKey, { push, remove });
           'border-danger-border': toast.tone === 'danger',
           'border-info-border': toast.tone === 'info',
         }"
-        role="status"
+        :role="toast.tone === 'danger' ? 'alert' : 'status'"
       >
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">

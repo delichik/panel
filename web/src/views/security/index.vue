@@ -12,6 +12,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -22,6 +23,7 @@ import { fail2BanPreset, fail2BanTone, jailsToYaml, parseSimpleJailsFromYaml, se
 const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 let serversController: AbortController | null = null;
 let panelController: AbortController | null = null;
@@ -111,6 +113,7 @@ async function loadServers() {
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('securityPage.loadServersFailed');
+    notifyError(err instanceof Error ? err.message : t('securityPage.loadServersFailed'));
   } finally {
     if (requestId === serversRequestId) loadingServers.value = false;
   }
@@ -154,6 +157,7 @@ async function loadPanel(options: { clear?: boolean } = {}) {
   } catch (err) {
     if (isAbortError(err)) return;
     actionError.value = err instanceof Error ? err.message : t('securityPage.loadPanelFailed');
+    notifyError(err instanceof Error ? err.message : t('securityPage.loadPanelFailed'));
     if (tab === 'ufw') ufwState.value = null;
     else fail2banState.value = null;
   } finally {
@@ -257,6 +261,7 @@ async function run(operation: string, action: () => Promise<void>) {
     await action();
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
+    notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
   }
@@ -325,8 +330,7 @@ onBeforeUnmount(() => {
 
       <template #detail>
       <main class="grid min-h-0 min-w-0">
-        <section v-if="error" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">{{ error }}</section>
-        <EmptyState v-else-if="!selectedServer" :title="t('securityPage.selectServer')" :description="t('securityPage.selectServerHint')" />
+        <EmptyState v-if="!selectedServer" :title="t('securityPage.selectServer')" :description="t('securityPage.selectServerHint')" />
         <article v-else class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="flex items-start justify-between gap-4 border-b border-border p-5 max-lg:grid">
             <div>
@@ -342,9 +346,8 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div v-if="feedback || actionError" class="grid gap-2 border-b border-border p-4">
+          <div v-if="feedback" class="grid gap-2 border-b border-border p-4">
             <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-            <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
           </div>
 
           <div class="min-h-0 p-5">

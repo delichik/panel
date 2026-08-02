@@ -9,7 +9,9 @@ import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
+import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useI18n } from '@/i18n';
 import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries } from '@/types/overview';
@@ -19,6 +21,7 @@ const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue
 
 const { t } = useI18n();
 const router = useRouter();
+const notifyError = useErrorToast();
 
 const overview = ref<OverviewDto>({ servers: [] });
 const cards = ref<OverviewCardConfiguration[]>([]);
@@ -93,6 +96,7 @@ async function load() {
     await Promise.all(cards.value.map((card) => loadCard(card.id)));
   } catch (err) {
     pageError.value = err instanceof Error ? err.message : t('common.loadFailed');
+    notifyError(err instanceof Error ? err.message : t('common.loadFailed'));
   } finally {
     loading.value = false;
   }
@@ -117,7 +121,9 @@ async function loadCard(cardId: string) {
     cardValues.value = { ...cardValues.value, [cardId]: metricValue(card, data) };
     if (!cardHasData(card, data)) cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardEmpty') };
   } catch (err) {
-    cardErrors.value = { ...cardErrors.value, [cardId]: err instanceof Error ? err.message : t('overviewPage.cardFailed') };
+    const message = err instanceof Error ? err.message : t('overviewPage.cardFailed');
+    notifyError(message);
+    cardErrors.value = { ...cardErrors.value, [cardId]: t('overviewPage.cardFailed') };
   } finally {
     const nextLoading = { ...cardLoading.value };
     delete nextLoading[cardId];
@@ -161,6 +167,7 @@ async function saveCards() {
     await Promise.all(cards.value.map((card) => loadCard(card.id)));
   } catch (err) {
     saveError.value = err instanceof Error ? err.message : t('overviewPage.saveFailed');
+    notifyError(err instanceof Error ? err.message : t('overviewPage.saveFailed'));
   } finally {
     saving.value = false;
   }
@@ -438,10 +445,6 @@ onBeforeUnmount(stopResize);
 
     <div class="overview-layout grid h-full min-h-0 min-w-0 gap-4 overflow-hidden max-xl:overflow-x-hidden max-xl:overflow-y-auto">
       <main class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] gap-4">
-        <div v-if="pageError" class="rounded-2xl border border-danger-border bg-danger-bg p-4 text-sm text-danger">
-          {{ pageError }}
-        </div>
-
         <section class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))]">
           <article class="motion-card rounded-2xl border border-border bg-card p-4">
             <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.healthSummary') }}</span>
@@ -482,7 +485,6 @@ onBeforeUnmount(stopResize);
             <Button @click="addCard"><Plus />{{ t('overviewPage.addCard') }}</Button>
             <Button variant="ghost" @click="resetCards">{{ t('overviewPage.resetCards') }}</Button>
           </div>
-          <div v-if="saveError" class="mb-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ saveError }}</div>
           <div v-if="overview.servers.length > 0" ref="overviewGrid" class="overview-card-grid grid min-w-0 gap-3" :class="editMode ? 'is-editing' : undefined">
             <article
               v-for="card in cards"
@@ -524,8 +526,8 @@ onBeforeUnmount(stopResize);
                 </div>
                 <Badge v-if="!editMode" :tone="cardTone(card)">{{ cardErrors[card.id] ? t('overviewPage.partial') : t('overviewPage.live') }}</Badge>
               </div>
-              <div class="overview-card-body grid min-h-0 gap-3 overflow-hidden" :class="shouldShowChart(card) ? 'is-chart-primary' : 'is-value-primary'">
-                <span v-if="cardLoading[card.id]" class="text-sm text-muted-foreground">{{ t('overviewPage.loadingCard') }}</span>
+              <div class="overview-card-body relative grid min-h-0 gap-3 overflow-hidden" :class="shouldShowChart(card) ? 'is-chart-primary' : 'is-value-primary'">
+                <LoadingOverlay v-if="cardLoading[card.id]" :label="t('overviewPage.loadingCard')" />
                 <span v-else-if="cardErrors[card.id]" class="line-clamp-2 text-sm leading-6 text-danger">{{ cardErrors[card.id] }}</span>
                 <template v-else>
                   <div v-if="shouldShowChart(card) && cardChartSeries(card).length" class="overview-chart-stage min-h-0 min-w-0">
