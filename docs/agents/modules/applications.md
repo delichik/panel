@@ -51,6 +51,7 @@
 
 - 应用保存、计划、部署、迁移、刷新、镜像更新和重部署流程遇到 appspec/YAML 校验失败时，不能只返回泛化的 `application_invalid` 文案。API 错误响应保持 `code=application_invalid`，`error.message` 显示第一条 `<field>: <message>`，并在 `error.details.issues` 返回完整 `{ field, message }` 列表，字段结构与 `/validate` 接口一致；`message` 和每条 issue 的 `message` 必须按当前语言翻译，`field` 保持稳定路径用于定位。
 
+- 编辑会话 `/validate` 与 `/preview` 响应的 `diagnostics` 必须是数组（可为空数组），后端不得把 Go 的 nil 切片序列化成 JSON `null`（设施校验无问题时返回空切片）；前端赋值时也会把 `null` 归一化为空数组，避免摘要面板读取 `diagnostics.length` 崩溃。
 ## 数据与行为约定
 
 - 主要业务表包括 `applications`、`application_files`、`application_instances`，保存在 `Store.AppDB()`；应用配置修订记录 `application_revisions` 和高增长的部署 lifecycle 历史表 `application_lifecycle_operations`、`application_lifecycle_targets` 保存在 `Store.LogDB()`。`application_revisions` 从 AppDB 移出后不迁移旧历史，也不读取旧 AppDB 表兼容。

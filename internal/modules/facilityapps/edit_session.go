@@ -647,7 +647,7 @@ func (s *Service) validateFacilityEditDraft(ctx context.Context, record facility
 	if err := s.validateRouteConflicts(ctx, normalized); err != nil {
 		return facilityDiagnosticForError(err)
 	}
-	return nil
+	return []applications.Diagnostic{}
 }
 
 func facilityTopologyDiagnostics(draft ReverseProxySaveInput) []applications.Diagnostic {

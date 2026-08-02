@@ -685,7 +685,7 @@ async function previewApplication() {
   if (!editSession.value) return;
   await runEditorAction(async () => {
     preview.value = await applicationsApi.previewEditSession(editSession.value!.id, editSession.value!.revision);
-    diagnostics.value = preview.value.diagnostics;
+    diagnostics.value = preview.value.diagnostics ?? [];
   }, 'preview');
 }
 
@@ -813,7 +813,7 @@ async function previewFacilityConfig() {
   if (!facilitySession.value) return;
   await runEditorAction(async () => {
     facilityPreview.value = await reverseProxyFacilityApi.previewEdit(facilitySession.value!.id, facilitySession.value!.revision);
-    facilityDiagnostics.value = facilityPreview.value.diagnostics;
+    facilityDiagnostics.value = facilityPreview.value.diagnostics ?? [];
   }, 'preview');
 }
 
