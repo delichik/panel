@@ -16,7 +16,6 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/save-sessions/{id}/commit", auth(http.HandlerFunc(h.CommitSaveSession)))
 	mux.Handle("DELETE /api/v1/facility-apps/reverse-proxy/save-sessions/{id}", auth(http.HandlerFunc(h.DiscardSaveSession)))
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/edit-sessions", auth(http.HandlerFunc(h.BeginFacilityEditSession)))
-	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/edit-sessions/recoverable", auth(http.HandlerFunc(h.RecoverableFacilityEditSessions)))
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}", auth(http.HandlerFunc(h.GetFacilityEditSession)))
 	mux.Handle("PATCH /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/draft", auth(http.HandlerFunc(h.PatchFacilityEditSession)))
 	mux.Handle("PUT /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/assets/{assetName}", auth(http.HandlerFunc(h.PutFacilityEditAsset)))

@@ -652,9 +652,7 @@ async function startApplicationEditor() {
   isDirty.value = false;
   editorMode.value = 'configure';
   try {
-    const recovered = await applicationsApi.recoverableEditSessions(appId || undefined, { signal: controller.signal });
-    if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
-    editSession.value = recovered[0] ?? await applicationsApi.beginEditSession(appId || undefined, saveInputFromDraft(appDraft));
+    editSession.value = await applicationsApi.beginEditSession(appId || undefined, saveInputFromDraft(appDraft));
     if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
     Object.assign(appDraft, draftFromApplication({ ...(app ?? emptyApplication()), ...editSession.value.draft }));
   } catch (err) {

@@ -71,7 +71,6 @@ type applicationSummaryListService interface {
 
 type applicationEditSessionService interface {
 	BeginEditSession(context.Context, string, BeginEditSessionInput) (ApplicationEditSession, error)
-	RecoverableEditSessions(context.Context, string, string, string) ([]ApplicationEditSession, error)
 	GetEditSession(context.Context, string, string) (ApplicationEditSession, error)
 	PatchEditSession(context.Context, string, string, PatchEditSessionInput) (ApplicationEditSession, error)
 	PutEditSessionFile(context.Context, string, string, string, string, EditSessionFileInput) (ApplicationEditSession, error)
@@ -131,20 +130,6 @@ func (h *Handler) BeginEditSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) RecoverableEditSessions(w http.ResponseWriter, r *http.Request) {
-	service, err := h.editSessions()
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	result, err := service.RecoverableEditSessions(r.Context(), editSessionOwner(r.Context()), r.URL.Query().Get("applicationId"), r.URL.Query().Get("clientDraftKey"))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) GetEditSession(w http.ResponseWriter, r *http.Request) {

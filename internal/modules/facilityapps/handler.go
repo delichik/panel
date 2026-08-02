@@ -23,7 +23,6 @@ type service interface {
 	CommitSaveSession(ctx context.Context, sessionID string, in CommitSaveSessionInput) (SaveSessionCommitResult, error)
 	DiscardSaveSession(sessionID string)
 	BeginFacilityEditSession(context.Context, BeginFacilityEditSessionInput) (FacilityEditSession, error)
-	RecoverableFacilityEditSessions(context.Context, string) ([]FacilityEditSession, error)
 	GetFacilityEditSession(context.Context, string) (FacilityEditSession, error)
 	PatchFacilityEditSession(context.Context, string, PatchFacilityEditSessionInput) (FacilityEditSession, error)
 	PutFacilityEditAsset(context.Context, string, string, string, FacilityEditAssetInput) (FacilityEditSession, error)
@@ -45,15 +44,6 @@ func (h *Handler) BeginFacilityEditSession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httpx.JSON(w, http.StatusCreated, result)
-}
-
-func (h *Handler) RecoverableFacilityEditSessions(w http.ResponseWriter, r *http.Request) {
-	result, err := h.service.RecoverableFacilityEditSessions(r.Context(), r.URL.Query().Get("clientDraftKey"))
-	if err != nil {
-		httpx.Error(w, err)
-		return
-	}
-	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) GetFacilityEditSession(w http.ResponseWriter, r *http.Request) {

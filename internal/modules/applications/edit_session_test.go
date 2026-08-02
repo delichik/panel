@@ -98,13 +98,6 @@ func TestApplicationEditSessionPersistsAndRecovers(t *testing.T) {
 	if session.Revision != 3 || len(session.Files) != 1 || session.Files[0].SHA256 == "" {
 		t.Fatalf("session files = %#v", session)
 	}
-	recovered, err := svc.RecoverableEditSessions(ctx, "admin", "", "new-web")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(recovered) != 1 || recovered[0].ID != session.ID || recovered[0].Draft.Name != "web-2" {
-		t.Fatalf("recovered = %#v", recovered)
-	}
 	if err := svc.DiscardEditSession(ctx, "admin", session.ID); err != nil {
 		t.Fatal(err)
 	}

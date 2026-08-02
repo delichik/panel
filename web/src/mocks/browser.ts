@@ -556,7 +556,6 @@ export function installMockApi() {
       return result ? json(result, 202) : error('application_not_found', 'Application was not found.', 404);
     }
 
-    if (url.pathname === '/api/v1/application-edit-sessions/recoverable') return json([]);
     if (url.pathname === '/api/v1/application-edit-sessions' && method(init) === 'POST') {
       const input = await body<{ applicationId?: string }>(init);
       return json(beginAppSession(input.applicationId), 201);
@@ -638,7 +637,6 @@ export function installMockApi() {
 
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy' && method(init) === 'GET') return json(mockFacility);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/reconcile' && method(init) === 'POST') return json({ config: mockFacility }, 202);
-    if (url.pathname === '/api/v1/facility-apps/reverse-proxy/edit-sessions/recoverable') return json([]);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/edit-sessions' && method(init) === 'POST') return json(beginFacilitySession(), 201);
     const facilitySessionMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/edit-sessions\/([^/]+)$/);
     if (facilitySessionMatch && method(init) === 'GET') {

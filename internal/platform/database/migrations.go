@@ -197,7 +197,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL,
 			committed_at TEXT NOT NULL DEFAULT ''
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_edit_sessions_recoverable ON application_edit_sessions(owner_id,application_id,state,updated_at)`,
+		`DROP INDEX IF EXISTS idx_application_edit_sessions_recoverable`,
 		`CREATE INDEX IF NOT EXISTS idx_application_edit_sessions_expiry ON application_edit_sessions(state,idle_expires_at,absolute_expires_at)`,
 		`CREATE TABLE IF NOT EXISTS application_edit_session_files (
 			session_id TEXT NOT NULL,
@@ -300,7 +300,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 			updated_at TEXT NOT NULL,
 			committed_at TEXT NOT NULL DEFAULT ''
 		)`,
-		`CREATE INDEX IF NOT EXISTS idx_facility_edit_sessions_recoverable ON facility_edit_sessions(owner_id,client_draft_key,state,updated_at)`,
+		`DROP INDEX IF EXISTS idx_facility_edit_sessions_recoverable`,
 		`CREATE INDEX IF NOT EXISTS idx_facility_edit_sessions_expiry ON facility_edit_sessions(state,idle_expires_at,absolute_expires_at)`,
 		`CREATE TABLE IF NOT EXISTS facility_edit_session_assets (
 			session_id TEXT NOT NULL,

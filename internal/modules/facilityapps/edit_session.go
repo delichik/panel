@@ -133,28 +133,6 @@ func (s *Service) BeginFacilityEditSession(ctx context.Context, in BeginFacility
 	return s.GetFacilityEditSession(ctx, sessionID)
 }
 
-func (s *Service) RecoverableFacilityEditSessions(ctx context.Context, clientDraftKey string) ([]FacilityEditSession, error) {
-	now := formatTime(time.Now().UTC())
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM facility_edit_sessions WHERE owner_id=? AND client_draft_key=? AND ((state IN (?,?) AND idle_expires_at>? AND absolute_expires_at>?) OR (state=? AND commit_lease_expires_at>?)) ORDER BY updated_at DESC`,
-		facilityEditOwner, strings.TrimSpace(clientDraftKey), FacilityEditSessionActive, FacilityEditSessionConflict, now, now, FacilityEditSessionCommitting, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	result := []FacilityEditSession{}
-	for rows.Next() {
-		var sessionID string
-		if err := rows.Scan(&sessionID); err != nil {
-			return nil, err
-		}
-		session, err := s.GetFacilityEditSession(ctx, sessionID)
-		if err == nil {
-			result = append(result, session)
-		}
-	}
-	return result, rows.Err()
-}
-
 func (s *Service) GetFacilityEditSession(ctx context.Context, sessionID string) (FacilityEditSession, error) {
 	record, err := s.loadFacilityEditSession(ctx, sessionID)
 	if err != nil {

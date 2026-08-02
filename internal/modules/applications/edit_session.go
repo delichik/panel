@@ -112,33 +112,6 @@ func (s *Service) BeginEditSession(ctx context.Context, owner string, in BeginEd
 	return s.GetEditSession(ctx, owner, sessionID)
 }
 
-func (s *Service) RecoverableEditSessions(ctx context.Context, owner, applicationID, clientDraftKey string) ([]ApplicationEditSession, error) {
-	owner = normalizeEditOwner(owner)
-	now := formatTime(time.Now().UTC())
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM application_edit_sessions WHERE owner_id=? AND application_id=? AND client_draft_key=? AND state IN (?,?,?) AND idle_expires_at>? AND absolute_expires_at>? ORDER BY updated_at DESC`,
-		owner, strings.TrimSpace(applicationID), strings.TrimSpace(clientDraftKey), EditSessionStateActive, EditSessionStateConflict, EditSessionStateCommitting, now, now)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []ApplicationEditSession{}
-	for rows.Next() {
-		var sessionID string
-		if err := rows.Scan(&sessionID); err != nil {
-			return nil, err
-		}
-		session, err := s.GetEditSession(ctx, owner, sessionID)
-		if err != nil {
-			if isNotFound(err) {
-				continue
-			}
-			return nil, err
-		}
-		out = append(out, session)
-	}
-	return out, rows.Err()
-}
-
 func (s *Service) GetEditSession(ctx context.Context, owner, sessionID string) (ApplicationEditSession, error) {
 	record, err := s.loadEditSession(ctx, normalizeEditOwner(owner), sessionID)
 	if err != nil {
@@ -276,7 +249,7 @@ func (s *Service) GetEditSessionFile(ctx context.Context, owner, sessionID, file
 
 // resolveEditSessionFileKey translates the public name reference to the
 // storage key used by older edit sessions. New requests never need to know
-// that key, but the fallback keeps pre-name sessions recoverable.
+// that key, but the fallback keeps pre-name sessions addressable by name.
 func (s *Service) resolveEditSessionFileKey(ctx context.Context, sessionID, ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {

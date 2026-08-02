@@ -111,12 +111,6 @@ export const applicationsApi = {
       draft,
     });
   },
-  recoverableEditSessions(applicationId?: string, options?: ApiRequestOptions) {
-    const query = new URLSearchParams();
-    query.set('clientDraftKey', applicationId ? `application:${applicationId}` : 'application:create');
-    if (applicationId) query.set('applicationId', applicationId);
-    return apiClient.get<ApplicationEditSession[]>(`/application-edit-sessions/recoverable?${query}`, options);
-  },
   patchEditSession(sessionId: string, revision: number, draft: ApplicationSaveInput) {
     return apiClient.patch<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/draft`, { revision, draft });
   },

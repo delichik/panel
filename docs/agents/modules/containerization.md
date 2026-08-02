@@ -37,7 +37,7 @@
 
 Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`；容器日志使用 `GET /api/v1/servers/{serverId}/containers/{containerId}/logs`，tail 行数最大为 10000；批量 Application 镜像更新使用 `/api/v1/images/upgrade-selected|upgrade-all`。
 
-设施类型没有通用目录 API；前后端按设施分别内置适配器。当前入口代理设施直接使用 `reverse-proxy` 专属配置与 `/facility-apps/reverse-proxy` 端点。新事务编辑器使用持久 `/edit-sessions` API：创建、recoverable 查询、详情、draft patch、按设施内唯一 `assetName` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetName}/content` 解析当前 blob；未替换的既有资产回退读取内部 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetName}/content` 下载，bundle 目录即时打包为 zip。物理 asset key/id 只用于存储、提交 manifest 和旧数据兼容。
+设施类型没有通用目录 API；前后端按设施分别内置适配器。当前入口代理设施直接使用 `reverse-proxy` 专属配置与 `/facility-apps/reverse-proxy` 端点。新事务编辑器使用持久 `/edit-sessions` API：创建、详情、draft patch、按设施内唯一 `assetName` PUT/DELETE 资产、validate、preview、commit 和 discard；会话由稳定单管理员主体持有，idle TTL 为 24 小时、absolute TTL 为 7 天，draft/资产操作使用 revision，资产操作和 commit 使用幂等键。session 资产下载通过 `GET .../assets/{assetName}/content` 解析当前 blob；未替换的既有资产回退读取内部 `source_asset_id` 正式目录。正式资产通过 `GET .../static-assets/{assetName}/content` 下载，bundle 目录即时打包为 zip。物理 asset key/id 只用于存储、提交 manifest 和旧数据兼容。
 
 持久设施会话中的既有资产只保存 `source_asset_id` 和 metadata，不复制正文；新增或替换资产写入唯一 blob 目录。路由草稿在编辑期间以 `assetName` 引用资产，commit manifest 决定内部最终 asset id 并在写数据库前统一改写。删除仍被 route 引用的资产、移除仍被 origin/AnyAccess primary/Panel Entry 使用的 gateway、或把 Panel Entry 绑定到非 setup Panel host 都是阻断诊断，服务端不得静默修剪。
 
@@ -47,7 +47,7 @@ Panel API 挂在 `/api/v1/servers/{serverId}/containers|images|networks|volumes`
 
 commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_asset_id` 的正式 content 目录，并与 session 创建/上传时记录的 `content_sha256` 比较；缺失或漂移会阻断 commit。恢复只在 config version 精确等于 `base+1` 且配置及全部资产 ID/sha256 匹配 manifest 时认定 DB 已提交。恢复会实际重新请求 traits 同步和 application reconcile；失败时 `applyRequested=false` 并返回 warning，不能把“已恢复配置”谎报成“已请求应用”。commit、recovery 和 cleanup 使用同一资源锁，长文件阶段续期 commit lease；活跃 lease 即使超过普通 TTL 也保护 workspace。
 
-上传 handler 使用 64 MiB request 上限并清理 multipart 临时文件。bundle 解包限制最多 10000 个文件、32 层路径、256 MiB 解包总量和 100 倍压缩比。当前版本明确暂缓独立 heartbeat API、每管理员/全局草稿配额、`confirmedDiagnosticCodes` warning 确认协议、commit/recovery 专用结构化日志和 recoverable 会话摘要投影；客户端可通过现有 draft/asset mutation、validate 和 preview 延长 idle TTL，GET 只执行 TTL/lease 状态检查，recoverable 暂时返回完整会话 DTO，阻断错误仍不能绕过。
+上传 handler 使用 64 MiB request 上限并清理 multipart 临时文件。bundle 解包限制最多 10000 个文件、32 层路径、256 MiB 解包总量和 100 倍压缩比。当前版本明确暂缓独立 heartbeat API、每管理员/全局草稿配额、`confirmedDiagnosticCodes` warning 确认协议和 commit/recovery 专用结构化日志；客户端可通过现有 draft/asset mutation、validate 和 preview 延长 idle TTL，GET 只执行 TTL/lease 状态检查，阻断错误仍不能绕过。
 
 ## 设施应用
 
