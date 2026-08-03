@@ -64,7 +64,7 @@ Open **Servers → Node**, then select **Add server**.
 Enter:
 
 - A display name.
-- The hostname or IP address reachable from the Panel host.
+- An IPv4 and/or IPv6 literal (at least one; the connection address is derived from IPv4 first).
 - The SSH port.
 - The credential created in the previous step.
 - An optional SSH username override.
@@ -161,6 +161,8 @@ Recommended order:
 8. Save and apply, then watch the application and gateway operations until they settle.
 
 Certificate issuance and gateway updates are asynchronous. If issuance fails, inspect the task stages for provider authentication, DNS challenge propagation, authorization, cleanup, or finalization errors.
+
+Every gateway save checks the DNS state of all current domains: managed domains whose servers have IPv4/IPv6 configured get their A/AAAA records created or corrected asynchronously, while records that are already effective and unchanged are verified without being rewritten. The gateway page shows per-domain status (not synced / syncing / synced / failed / skipped), and failed entries can be inspected and retried from the task center.
 
 ## 8. Daily Operations
 

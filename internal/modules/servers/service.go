@@ -23,7 +23,10 @@ import (
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
+	"panel/internal/platform/logging"
 	"panel/internal/platform/ssh"
+
+	"go.uber.org/zap"
 )
 
 const connectivitySudoTimeout = 8 * time.Second
@@ -65,6 +68,9 @@ type Service struct {
 	agentKeys agentTLSProvider
 	tasks     *tasks.Service
 	hostGuard PanelHostGuard
+	// dnsSyncTrigger notifies the reverse proxy facility when server
+	// addresses change so affected proxy domains can resync their records.
+	dnsSyncTrigger func(context.Context, []string) error
 }
 
 type PanelHostGuard interface {
@@ -100,12 +106,25 @@ func WithPanelHostGuard(guard PanelHostGuard) Option {
 	return func(s *Service) { s.hostGuard = guard }
 }
 
+func (s *Service) SetDNSSyncTrigger(trigger func(context.Context, []string) error) {
+	s.dnsSyncTrigger = trigger
+}
+
 func NewService(db *sql.DB, exec sshx.RemoteExecutor, taskSvc *tasks.Service, opts ...Option) *Service {
 	s := &Service{db: db, repo: serversqlite.NewServerRepository(db), exec: exec, tasks: taskSvc}
 	for _, opt := range opts {
 		opt(s)
 	}
 	return s
+}
+
+func (s *Service) notifyDNSSync(ctx context.Context, serverID string, changed bool) {
+	if !changed || s.dnsSyncTrigger == nil {
+		return
+	}
+	if err := s.dnsSyncTrigger(ctx, []string{serverID}); err != nil {
+		logging.L().Warn("reverse proxy DNS sync trigger failed", zap.String("server_id", serverID), zap.Error(err))
+	}
 }
 
 func (s *Service) latestLoadAverage(ctx context.Context, serverID string) string {
@@ -444,7 +463,7 @@ func (s *Service) ProbeConnectivity(ctx context.Context, req SaveRequest) (Probe
 	}
 
 	target := sshx.Target{
-		Host:         req.Host,
+		Host:         derivedServerHost(req),
 		Port:         req.Port,
 		Username:     req.SSHUsername,
 		CredentialID: req.CredentialID,
@@ -1565,8 +1584,11 @@ func (s *Service) detectPrivilege(ctx context.Context, target sshx.Target) (stri
 }
 
 func validateSave(req SaveRequest) error {
-	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Host) == "" || strings.TrimSpace(req.CredentialID) == "" {
-		return panelerr.Validation("server_invalid", "Server name, host, and credentialId are required")
+	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.CredentialID) == "" {
+		return panelerr.Validation("server_invalid", "Server name and credentialId are required")
+	}
+	if err := validateServerAddress(req); err != nil {
+		return err
 	}
 	if req.Port <= 0 || req.Port > 65535 {
 		return panelerr.Validation("server_port_invalid", "Server port must be between 1 and 65535")
@@ -1578,13 +1600,60 @@ func validateSave(req SaveRequest) error {
 }
 
 func validateProbe(req SaveRequest) error {
-	if strings.TrimSpace(req.Host) == "" || strings.TrimSpace(req.CredentialID) == "" {
-		return panelerr.Validation("server_invalid", "Server host and credentialId are required")
+	if strings.TrimSpace(req.CredentialID) == "" {
+		return panelerr.Validation("server_invalid", "Server credentialId is required")
+	}
+	if err := validateServerAddress(req); err != nil {
+		return err
 	}
 	if req.Port <= 0 || req.Port > 65535 {
 		return panelerr.Validation("server_port_invalid", "Server port must be between 1 and 65535")
 	}
 	return nil
+}
+
+func validateServerAddress(req SaveRequest) error {
+	if strings.TrimSpace(req.Host) != "" {
+		return panelerr.Validation("server_host_derived", "Server host is derived from ipv4/ipv6 and cannot be set directly")
+	}
+	ipv4 := strings.TrimSpace(req.IPv4)
+	ipv6 := strings.TrimSpace(req.IPv6)
+	if ipv4 == "" && ipv6 == "" {
+		return panelerr.Validation("server_address_required", "At least one of ipv4 or ipv6 is required")
+	}
+	if ipv4 != "" {
+		parsed := net.ParseIP(ipv4)
+		if parsed == nil || parsed.To4() == nil {
+			return panelerr.Validation("server_ipv4_invalid", "ipv4 must be a valid IPv4 address")
+		}
+	}
+	if ipv6 != "" {
+		parsed := net.ParseIP(ipv6)
+		if parsed == nil || parsed.To4() != nil {
+			return panelerr.Validation("server_ipv6_invalid", "ipv6 must be a valid IPv6 address")
+		}
+	}
+	return nil
+}
+
+func derivedServerHost(req SaveRequest) string {
+	if strings.TrimSpace(req.IPv4) != "" {
+		return strings.TrimSpace(req.IPv4)
+	}
+	return strings.TrimSpace(req.IPv6)
+}
+
+// SplitAddress maps a connection address into ipv4/ipv6 literals. Hostnames
+// intentionally return empty values: server addresses must be IP literals.
+func SplitAddress(value string) (ipv4, ipv6 string) {
+	parsed := net.ParseIP(strings.TrimSpace(value))
+	if parsed == nil {
+		return "", ""
+	}
+	if parsed.To4() != nil {
+		return parsed.String(), ""
+	}
+	return "", parsed.String()
 }
 
 func normalizeDockerHost(value string) string {

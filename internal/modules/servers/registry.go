@@ -23,7 +23,9 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 	srv := Server{
 		ID:           id.New("srv"),
 		Name:         req.Name,
-		Host:         req.Host,
+		Host:         derivedServerHost(req),
+		IPv4:         strings.TrimSpace(req.IPv4),
+		IPv6:         strings.TrimSpace(req.IPv6),
 		Port:         req.Port,
 		SSHUsername:  req.SSHUsername,
 		CredentialID: req.CredentialID,
@@ -59,9 +61,14 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	if err != nil {
 		return Server{}, err
 	}
-	if strings.TrimSpace(current.Host) != strings.TrimSpace(req.Host) && serverHasAgentConfigured(current, current.Traits) {
+	nextHost := derivedServerHost(req)
+	nextIPv4 := strings.TrimSpace(req.IPv4)
+	nextIPv6 := strings.TrimSpace(req.IPv6)
+	previousIPv4 := strings.TrimSpace(current.IPv4)
+	previousIPv6 := strings.TrimSpace(current.IPv6)
+	if strings.TrimSpace(current.Host) != nextHost && serverHasAgentConfigured(current, current.Traits) {
 		current.Traits[agentcontract.TraitEnabled] = "true"
-		current.Traits[agentcontract.TraitURL] = agentDefaultURL(req.Host)
+		current.Traits[agentcontract.TraitURL] = agentDefaultURL(nextHost)
 		current.Traits[agentcontract.TraitStatus] = agentcontract.StatusIncompatible
 		current.Traits[agentcontract.TraitLastError] = "server host changed; agent redeployment required"
 		delete(current.Traits, agentcontract.TraitCertificateFingerprint)
@@ -69,7 +76,9 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 		delete(current.Traits, agentcontract.TraitCertificateNotAfter)
 	}
 	current.Name = req.Name
-	current.Host = req.Host
+	current.Host = nextHost
+	current.IPv4 = nextIPv4
+	current.IPv6 = nextIPv6
 	current.Port = req.Port
 	current.SSHUsername = req.SSHUsername
 	current.CredentialID = req.CredentialID
@@ -85,6 +94,7 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 			return Server{}, err
 		}
 	}
+	s.notifyDNSSync(ctx, serverID, previousIPv4 != nextIPv4 || previousIPv6 != nextIPv6)
 	return s.Get(ctx, serverID)
 }
 
@@ -132,6 +142,7 @@ func (s *Service) Delete(ctx context.Context, serverID string) error {
 			return err
 		}
 	}
+	s.notifyDNSSync(ctx, serverID, true)
 	return nil
 }
 

@@ -201,8 +201,11 @@ export let mockServers: ServerDto[] = [
 ];
 
 export function createServer(input: ServerSaveInput): ServerDto {
+  const host = input.ipv4 || input.ipv6;
   const item = {
-    ...server(`srv-${Date.now()}`, input.name, input.host, input.credentialId, true, input.traits ?? {}),
+    ...server(`srv-${Date.now()}`, input.name, host, input.credentialId, true, input.traits ?? {}),
+    ipv4: input.ipv4,
+    ipv6: input.ipv6,
     port: input.port,
     sshUsername: input.sshUsername,
     dockerHost: input.dockerHost,
@@ -218,7 +221,7 @@ export function updateServer(id: string, input: ServerSaveInput): ServerDto | nu
   let saved: ServerDto | null = null;
   mockServers = mockServers.map((item) => {
     if (item.id !== id) return item;
-    saved = { ...item, ...input, updatedAt: new Date().toISOString() };
+    saved = { ...item, ...input, host: input.ipv4 || input.ipv6, updatedAt: new Date().toISOString() };
     return saved;
   });
   return saved;
@@ -231,7 +234,8 @@ export function deleteServer(id: string): boolean {
 }
 
 export function probeServer(input: ServerSaveInput): ServerProbeResult {
-  const unreachable = input.host.includes('198.51.100') || input.host.includes('timeout');
+  const host = input.ipv4 || input.ipv6;
+  const unreachable = host.includes('198.51.100') || host.includes('timeout');
   return {
     reachable: !unreachable,
     passwordlessSudo: !unreachable && input.sshUsername !== 'readonly',
@@ -334,6 +338,8 @@ function server(id: string, name: string, host: string, credentialId: string, re
     id,
     name,
     host,
+    ipv4: host.includes(':') ? '' : host,
+    ipv6: host.includes(':') ? host : '',
     port: 22,
     sshUsername: '',
     credentialId,

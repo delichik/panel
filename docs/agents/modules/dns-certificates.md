@@ -55,6 +55,8 @@
 - 域名左侧选择行只负责切换域名；编辑和删除操作放在右侧已选域名详情标题区，不在选择行中显示更多菜单。
 - 前端 DNS 记录表和证书列表在桌面端作为满高表格卡片展示；表格体独立滚动并吸收剩余高度，分页固定在卡片底部。域名/证书详情操作和记录行操作使用 `AppActionButton` / `AppActionGroup`；记录行编辑、删除使用带文字的小按钮，刷新和新增记录位于记录标题区。
 - `GET /api/v1/dns/domains/{domainId}/records` 只读取 `dns_record_snapshots`，不得同步访问 DNS Provider。`POST .../records/refresh` 创建 `dns_records_refresh` 任务并异步替换快照；首次未刷新返回空数组。记录创建、更新、删除仍同步调用 Provider，成功后重建本地快照。
+- 入口代理与 DNS 联动通过 `dns.SyncProxyRecords` 实现：按 zone 聚合期望记录，只增删改带 `comment=panel:reverse-proxy` 标记的记录，绝不修改用户自建记录；每个目标 zone 独立尝试，单 zone 失败不阻断其他 zone。记录类型为 A（IPv4）和 AAAA（IPv6），TTL 默认 120、`proxied=false`。
+- 同步失败不会回滚入口代理配置；失败信息写入 `facility_app_configs.dns_sync_json` 的对应域名状态，并可经 `dns_proxy_records_sync` 任务重试。
 
 ## 证书行为
 

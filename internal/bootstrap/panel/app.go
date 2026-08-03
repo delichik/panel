@@ -159,7 +159,10 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithCertificateProvider(certSvc),
 		facilityapps.WithApplicationReconcileTrigger(containerSvc),
 		facilityapps.WithPanelHostProvider(installationSvc),
+		facilityapps.WithDNSProvider(dnsSvc),
+		facilityapps.WithTaskService(taskSvc),
 	)
+	serverSvc.SetDNSSyncTrigger(facilitySvc.SyncServersDNSEntries)
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)

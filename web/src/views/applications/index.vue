@@ -90,6 +90,7 @@ let runtimeRequestId = 0;
 let applicationDetailRequestId = 0;
 let editorQueryRequestId = 0;
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
+let dnsPollTimer: ReturnType<typeof setTimeout> | null = null;
 
 const applications = ref<ApplicationSummaryDto[]>([]);
 const applicationDetails = ref<Record<string, ApplicationDto>>({});
@@ -184,6 +185,18 @@ const servers = ref<ServerDto[]>([]);
 const serverNameMap = computed(() => new Map(servers.value.map((server) => [server.id, server.name])));
 function serverDisplayName(id: string) {
   return serverNameMap.value.get(id) || id;
+}
+function facilityDnsStatus(domain: string) {
+  return facility.value?.dnsSync?.[domain.toLowerCase()]?.state ?? '';
+}
+function facilityDnsError(domain: string) {
+  return facility.value?.dnsSync?.[domain.toLowerCase()]?.error ?? '';
+}
+function facilityDnsTone(state: string): 'success' | 'warning' | 'danger' | 'neutral' {
+  if (state === 'synced') return 'success';
+  if (state === 'failed') return 'danger';
+  if (state === 'pending' || state === 'skipped') return 'warning';
+  return 'neutral';
 }
 const serverOptions = computed(() => {
   const byId = new Map(servers.value.map((server) => [server.id, server]));
@@ -594,6 +607,7 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
 
 async function loadFacilityData() {
   pageLoadController?.abort();
+  if (dnsPollTimer) clearTimeout(dnsPollTimer);
   const requestId = ++pageLoadRequestId;
   const controller = new AbortController();
   pageLoadController = controller;
@@ -605,6 +619,10 @@ async function loadFacilityData() {
     if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
     facility.value = primaryFacility;
     facilitiesLoaded.value = true;
+    const pendingDns = primaryFacility?.dnsSync ? Object.values(primaryFacility.dnsSync).some((state) => state.state === 'pending') : false;
+    if (pendingDns && !facilityEditingView.value) {
+      dnsPollTimer = setTimeout(() => { void loadFacilityData(); }, 3000);
+    }
   } catch (err) {
     if (isAbortError(err)) return;
     error.value = err instanceof Error ? err.message : t('applicationsPage.loadFailed');
@@ -1358,6 +1376,7 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
+  if (dnsPollTimer) clearTimeout(dnsPollTimer);
   window.removeEventListener('beforeunload', handleBeforeUnload);
   pageLoadController?.abort();
   cancelRuntimeLoad();
@@ -1638,6 +1657,7 @@ onBeforeUnmount(() => {
                         <Globe2 class="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                         <strong class="facility-domain-name">{{ domain.domain || t('applicationsPage.unnamedDomain') }}</strong>
                         <Badge v-if="domain.anyAccess?.enabled" tone="info">{{ t(`applicationsPage.loadBalancingStrategy.${domain.anyAccess?.strategy || 'round_robin'}`) }}</Badge>
+                        <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
                       </div>
                       <span class="facility-domain-servers">{{ t('applicationsPage.originServers', { count: domain.originServerIds.length }) }} · {{ domain.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</span>
                     </div>
@@ -1739,6 +1759,20 @@ onBeforeUnmount(() => {
                 <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.map((id) => serverDisplayName(id)).join(', ') }}</span>
               </div>
               <EmptyState v-if="!facility.routeSummaries.length" :title="t('applicationsPage.noGatewayRoutes')" :description="t('applicationsPage.noGatewayRoutesHint')" />
+            </div>
+          </section>
+          <section class="rounded-2xl border border-border bg-background p-4">
+            <h3>{{ t('applicationsPage.dnsSyncTitle') }}</h3>
+            <div class="mt-3 grid gap-2">
+              <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
+                <strong>{{ domain.domain }}</strong>
+                <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
+              </div>
+              <div v-if="facility.panelEntry.enabled && facility.panelEntry.domain" class="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
+                <strong>{{ facility.panelEntry.domain }} <span class="text-xs text-muted-foreground">{{ t('applicationsPage.panelEntry') }}</span></strong>
+                <Badge :tone="facilityDnsTone(facilityDnsStatus(facility.panelEntry.domain))" :title="facilityDnsError(facility.panelEntry.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(facility.panelEntry.domain) || 'unknown'}`) }}</Badge>
+              </div>
+              <EmptyState v-if="!facility.domains.length && !(facility.panelEntry.enabled && facility.panelEntry.domain)" :title="t('applicationsPage.noDomains')" :description="t('applicationsPage.noDomainsHint')" />
             </div>
           </section>
           <section class="rounded-2xl border border-border bg-background p-4">

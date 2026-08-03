@@ -35,7 +35,21 @@ const (
 	HTTPSDomainCertificate = "domain_certificate"
 	HTTPSSelfSigned        = "self_signed_certificate"
 	HTTPSDisabled          = "disabled"
+
+	dnsSyncTaskType = "dns_proxy_records_sync"
+
+	DNSSyncPending = "pending"
+	DNSSyncSynced  = "synced"
+	DNSSyncFailed  = "failed"
+	DNSSyncSkipped = "skipped"
 )
+
+// DNSSyncState is the per-domain reverse proxy DNS sync status.
+type DNSSyncState struct {
+	State     string `json:"state"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+	Error     string `json:"error,omitempty"`
+}
 
 type ReverseProxyConfig struct {
 	ID                string                                       `json:"id"`
@@ -52,6 +66,7 @@ type ReverseProxyConfig struct {
 	UpdatedAt         time.Time                                    `json:"updatedAt"`
 	Routes            int                                          `json:"routes"`
 	EnabledServers    []string                                     `json:"enabledServers"`
+	DNSSync           map[string]DNSSyncState                      `json:"dnsSync,omitempty"`
 }
 
 type ReverseProxySaveInput struct {

@@ -40,7 +40,7 @@ func TestPackageServiceBlocksUnsupportedServer(t *testing.T) {
 	taskSvc := tasks.NewService(store.LogDB())
 	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
-	srv, _ := serverSvc.Create(ctx, server.SaveRequest{Name: "s", Host: "h", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
+	srv, _ := serverSvc.Create(ctx, server.SaveRequest{Name: "s", IPv4: "10.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
 	registerPackageTestTasks(taskSvc, svc)
 	if _, err := svc.Refresh(ctx, srv.ID); err == nil {

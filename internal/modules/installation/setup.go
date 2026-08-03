@@ -93,8 +93,9 @@ func (s *SetupService) Run(ctx context.Context, input SetupInput) (SetupResult, 
 			return SetupResult{}, createErr
 		}
 		createdCredentialID = cred.ID
+		ipv4, ipv6 := server.SplitAddress(input.Host)
 		srv, err = s.servers.Create(ctx, server.SaveRequest{
-			Name: input.ServerName, Host: input.Host, Port: input.Port, SSHUsername: input.Username,
+			Name: input.ServerName, IPv4: ipv4, IPv6: ipv6, Port: input.Port, SSHUsername: input.Username,
 			CredentialID: cred.ID, DockerHost: agentcontract.DefaultDockerHost,
 		})
 		if err != nil {

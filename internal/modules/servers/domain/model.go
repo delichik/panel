@@ -10,6 +10,8 @@ type Server struct {
 	ID            string            `json:"id"`
 	Name          string            `json:"name"`
 	Host          string            `json:"host"`
+	IPv4          string            `json:"ipv4,omitempty"`
+	IPv6          string            `json:"ipv6,omitempty"`
 	Port          int               `json:"port"`
 	SSHUsername   string            `json:"sshUsername"`
 	CredentialID  string            `json:"credentialId"`
@@ -63,7 +65,11 @@ type PrivilegeState struct {
 
 type SaveRequest struct {
 	Name         string            `json:"name"`
+	// Host is rejected on purpose: the connection address is derived from
+	// ipv4/ipv6 so callers cannot supply a free-form hostname anymore.
 	Host         string            `json:"host"`
+	IPv4         string            `json:"ipv4"`
+	IPv6         string            `json:"ipv6"`
 	Port         int               `json:"port"`
 	SSHUsername  string            `json:"sshUsername"`
 	CredentialID string            `json:"credentialId"`

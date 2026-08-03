@@ -62,7 +62,7 @@ After startup, make sure the Panel domain points to this host, then run on the h
 docker exec -it panel /app/panel setup
 ```
 
-Enter the host SSH address, port, user, credential, and Panel domain. Panel connects back to the host over SSH, enrolls it, installs the Agent, records it as the singleton Panel host, and deploys Panel's own Nginx entrance. When setup completes, open the reported `http://<panel-domain>` URL. Setup is a convenience path; you can also sign in to the UI and enable the Panel access entry under **Applications → Facility Apps**, where the first save registers the chosen server as the host node.
+Enter the host IP literal (IPv4 or IPv6), port, user, credential, and Panel domain. Panel connects back to the host over SSH, enrolls it, installs the Agent, records it as the singleton Panel host, and deploys Panel's own Nginx entrance. When setup completes, open the reported `http://<panel-domain>` URL. Setup is a convenience path; you can also sign in to the UI and enable the Panel access entry under **Applications → Facility Apps**, where the first save registers the chosen server as the host node.
 
 Setup is resumable. If Agent or entrance deployment fails, run the command again to continue from the saved stage. Passwords and private-key passphrases are read interactively and should not be passed as command arguments.
 

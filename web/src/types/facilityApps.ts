@@ -78,6 +78,13 @@ export interface ReverseProxyConfig {
   updatedAt: string;
   routes: number;
   enabledServers: string[];
+  dnsSync?: Record<string, FacilityDnsSyncState>;
+}
+
+export interface FacilityDnsSyncState {
+  state: 'pending' | 'synced' | 'failed' | 'skipped' | string;
+  updatedAt?: string;
+  error?: string;
 }
 
 export interface ReverseProxySaveInput {

@@ -9,6 +9,7 @@ type Record struct {
 	Value   string `json:"value"`
 	TTL     int    `json:"ttl,omitempty"`
 	Proxied bool   `json:"proxied,omitempty"`
+	Comment string `json:"comment,omitempty"`
 }
 
 type RecordInput struct {
@@ -17,6 +18,7 @@ type RecordInput struct {
 	Value   string `json:"value"`
 	TTL     int    `json:"ttl,omitempty"`
 	Proxied *bool  `json:"proxied,omitempty"`
+	Comment string `json:"comment,omitempty"`
 }
 
 type Provider interface {

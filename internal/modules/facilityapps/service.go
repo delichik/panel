@@ -17,6 +17,7 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/applications"
 	appruntime "panel/internal/modules/applications/runtime"
+	"panel/internal/modules/certificates/dns"
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/servers"
 	"panel/internal/modules/tasks"
@@ -45,8 +46,16 @@ type facilityConfigRow struct {
 	DeploymentServerIDsJSON string `orm:"column:deployment_server_ids_json"`
 	PanelEntryJSON          string `orm:"column:panel_entry_json"`
 	DomainsJSON             string `orm:"column:domains_json"`
+	DNSSyncJSON             string `orm:"column:dns_sync_json"`
 	LastError               string
 	UpdatedAt               string
+}
+
+// DNSProxySyncer is the DNS provider surface used by the reverse proxy sync
+// task. It is implemented by the certificate DNS service.
+type DNSProxySyncer interface {
+	ListDomains(ctx context.Context) ([]dns.Domain, error)
+	SyncProxyRecords(ctx context.Context, targets []dns.ProxyRecordTarget) ([]dns.ProxyZoneResult, error)
 }
 
 type AgentRuntimeClient interface {
@@ -98,6 +107,8 @@ type Service struct {
 	queue           ContainerOperationQueue
 	reconciler      ApplicationReconcileTrigger
 	panelHost       PanelHostProvider
+	dns             DNSProxySyncer
+	tasks           *tasks.Service
 	sessionMu       sync.Mutex
 	saveSessions    map[string]*facilitySaveSession
 	cleanupOnce     sync.Once
@@ -131,6 +142,14 @@ func WithPanelHostProvider(provider PanelHostProvider) Option {
 	return func(s *Service) { s.panelHost = provider }
 }
 
+func WithDNSProvider(provider DNSProxySyncer) Option {
+	return func(s *Service) { s.dns = provider }
+}
+
+func WithTaskService(taskSvc *tasks.Service) Option {
+	return func(s *Service) { s.tasks = taskSvc }
+}
+
 func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, apps ApplicationProvider, opts ...Option) *Service {
 	s := &Service{db: db, agent: agent, servers: servers, apps: apps, saveSessions: map[string]*facilitySaveSession{}}
 	if handler, ok := servers.(AgentErrorHandler); ok {
@@ -141,6 +160,15 @@ func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, ap
 	}
 	s.sessionDir = filepath.Join(s.dataRoot, "tmp", "facility-reverse-proxy-save-sessions")
 	s.editSessionDir = filepath.Join(s.dataRoot, "tmp", "facility-reverse-proxy-edit-sessions")
+	if s.tasks != nil {
+		s.tasks.MustRegister(tasks.Definition{
+			Type:        dnsSyncTaskType,
+			Summary:     "Syncing reverse proxy DNS records",
+			AllowRunNow: true,
+			AllowRetry:  true,
+			Execute:     s.RunDNSSyncTask,
+		})
+	}
 	s.recoverFacilityEditSessions(context.Background())
 	s.startSaveSessionCleanup()
 	s.startFacilityEditSessionCleanup()
@@ -209,6 +237,11 @@ func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput
 	}
 	if err := s.triggerReverseProxyReconcile(ctx, "facility_app", removedServers(previous.DeploymentServers, next.DeploymentServers)); err != nil {
 		_ = s.setLastError(ctx, err.Error())
+	}
+	if affected := dnsSyncDomainsOnSave(previous, next); len(affected) > 0 {
+		if _, err := s.triggerDNSSync(ctx, affected, "facility_app"); err != nil {
+			_ = s.setLastError(ctx, err.Error())
+		}
 	}
 	return s.GetReverseProxy(ctx)
 }
@@ -1066,7 +1099,7 @@ func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstrea
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: []string{}, Domains: []FacilityRouteDomain{}}
 	var row facilityConfigRow
-	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "panel_entry_json", "domains_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
+	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "panel_entry_json", "domains_json", "dns_sync_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
 		if err == sql.ErrNoRows {
 			return cfg, nil
 		}
@@ -1077,12 +1110,16 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	_ = json.Unmarshal([]byte(row.DeploymentServerIDsJSON), &cfg.DeploymentServers)
 	_ = json.Unmarshal([]byte(row.PanelEntryJSON), &cfg.PanelEntry)
 	_ = json.Unmarshal([]byte(row.DomainsJSON), &cfg.Domains)
+	_ = json.Unmarshal([]byte(row.DNSSyncJSON), &cfg.DNSSync)
 	if cfg.DeploymentServers == nil {
 		cfg.DeploymentServers = []string{}
 	}
 	cfg.PanelEntry = normalizeStoredPanelEntry(cfg.PanelEntry)
 	if cfg.Domains == nil {
 		cfg.Domains = []FacilityRouteDomain{}
+	}
+	if cfg.DNSSync == nil {
+		cfg.DNSSync = map[string]DNSSyncState{}
 	}
 	for i := range cfg.Domains {
 		cfg.Domains[i].Domain = strings.ToLower(strings.TrimSpace(cfg.Domains[i].Domain))
@@ -1141,11 +1178,18 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 	if err != nil {
 		return err
 	}
+	dnsSyncRaw, err := json.Marshal(cfg.DNSSync)
+	if err != nil {
+		return err
+	}
+	if cfg.DNSSync == nil {
+		dnsSyncRaw = []byte("{}")
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = orm.RawExec(ctx, s.db, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at)
-		VALUES(?,1,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
-		ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), cfg.LastError, now)
+	_, err = orm.RawExec(ctx, s.db, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,dns_sync_json,last_error,updated_at)
+		VALUES(?,1,?,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,dns_sync_json=excluded.dns_sync_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
+		ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), string(dnsSyncRaw), cfg.LastError, now)
 	return err
 }
 

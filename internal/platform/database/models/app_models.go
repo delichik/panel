@@ -32,6 +32,8 @@ type Server struct {
 	ID                     string         `orm:"primary_key"`
 	Name                   string         `orm:"not_null"`
 	Host                   string         `orm:"not_null"`
+	IPv4                   string         `orm:"not_null;default:'';column:ipv4"`
+	IPv6                   string         `orm:"not_null;default:'';column:ipv6"`
 	Port                   int            `orm:"not_null"`
 	SSHUsername            string         `orm:"not_null;default:''"`
 	CredentialID           string         `orm:"not_null;references:credentials(id)"`
@@ -374,6 +376,7 @@ type FacilityAppConfig struct {
 	DeploymentServerIDsJSON []string         `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
 	PanelEntryJSON          map[string]any   `orm:"json;not_null;default:'{}'"`
 	DomainsJSON             []map[string]any `orm:"json;not_null;default:'[]'"`
+	DNSSyncJSON             map[string]any   `orm:"json;not_null;default:'{}';column:dns_sync_json"`
 	LastError               string           `orm:"not_null;default:''"`
 	UpdatedAt               time.Time        `orm:"not_null"`
 }

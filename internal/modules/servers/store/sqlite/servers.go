@@ -151,8 +151,8 @@ func (r *ServerRepository) Update(ctx context.Context, srv domain.Server) error 
 	if err != nil {
 		return err
 	}
-	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,port=?,ssh_username=?,credential_id=?,docker_host=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
-		srv.Name, srv.Host, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, string(traits), string(variables), srv.Notes,
+	result, err := orm.RawExec(ctx, r.db, `UPDATE servers SET name=?,host=?,ipv4=?,ipv6=?,port=?,ssh_username=?,credential_id=?,docker_host=?,traits=?,variables_json=?,notes=?,updated_at=? WHERE id=?`,
+		srv.Name, srv.Host, srv.IPv4, srv.IPv6, srv.Port, srv.SSHUsername, srv.CredentialID, srv.DockerHost, string(traits), string(variables), srv.Notes,
 		srv.UpdatedAt.UTC().Format(time.RFC3339Nano), srv.ID)
 	if err != nil {
 		return err
@@ -189,6 +189,8 @@ func toDomainServer(m models.Server) domain.Server {
 		ID:            m.ID,
 		Name:          m.Name,
 		Host:          m.Host,
+		IPv4:          m.IPv4,
+		IPv6:          m.IPv6,
 		Port:          m.Port,
 		SSHUsername:   m.SSHUsername,
 		CredentialID:  m.CredentialID,
@@ -222,6 +224,8 @@ func fromDomainServer(srv domain.Server) *models.Server {
 		ID:                     srv.ID,
 		Name:                   srv.Name,
 		Host:                   srv.Host,
+		IPv4:                   srv.IPv4,
+		IPv6:                   srv.IPv6,
 		Port:                   srv.Port,
 		SSHUsername:            srv.SSHUsername,
 		CredentialID:           srv.CredentialID,

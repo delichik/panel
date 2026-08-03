@@ -26,6 +26,8 @@ export interface ServerDto {
   id: string;
   name: string;
   host: string;
+  ipv4?: string;
+  ipv6?: string;
   port: number;
   sshUsername?: string;
   credentialId: string;
@@ -48,7 +50,8 @@ export interface ServerDto {
 
 export interface ServerSaveInput {
   name: string;
-  host: string;
+  ipv4: string;
+  ipv6: string;
   port: number;
   sshUsername: string;
   credentialId: string;

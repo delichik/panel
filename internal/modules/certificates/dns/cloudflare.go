@@ -48,6 +48,7 @@ type cloudflareRecord struct {
 	Content string `json:"content"`
 	TTL     int    `json:"ttl"`
 	Proxied bool   `json:"proxied"`
+	Comment string `json:"comment"`
 }
 
 func NewCloudflareProvider(apiToken string, httpClient *http.Client) *CloudflareProvider {
@@ -239,7 +240,7 @@ func (p *CloudflareProvider) do(ctx context.Context, method, endpoint string, bo
 }
 
 func cloudflareRecordToRecord(record cloudflareRecord) Record {
-	return Record{ID: record.ID, Name: record.Name, Type: record.Type, Value: record.Content, TTL: record.TTL, Proxied: record.Proxied}
+	return Record{ID: record.ID, Name: record.Name, Type: record.Type, Value: record.Content, TTL: record.TTL, Proxied: record.Proxied, Comment: record.Comment}
 }
 
 func cloudflareRecordBody(zone string, record RecordInput) map[string]any {
@@ -250,6 +251,9 @@ func cloudflareRecordBody(zone string, record RecordInput) map[string]any {
 	body := map[string]any{"type": record.Type, "name": cloudflareRecordName(zone, record.Name), "content": record.Value, "ttl": ttl}
 	if record.Proxied != nil {
 		body["proxied"] = *record.Proxied
+	}
+	if strings.TrimSpace(record.Comment) != "" {
+		body["comment"] = strings.TrimSpace(record.Comment)
 	}
 	return body
 }

@@ -21,7 +21,7 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
-import { agentTone, canInstallUfw, canRunPrivilegedOperation, credentialLabel, serverReachabilityTone, validateServerInput } from './model';
+import { agentTone, canInstallUfw, canRunPrivilegedOperation, connectionHost, credentialLabel, serverReachabilityTone, validateServerInput } from './model';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 
 const { t } = useI18n();
@@ -65,7 +65,8 @@ const metricsError = ref('');
 
 const form = reactive({
   name: '',
-  host: '',
+  ipv4: '',
+  ipv6: '',
   port: '22',
   sshUsername: '',
   credentialId: '',
@@ -79,7 +80,8 @@ const selectedServer = computed(() => serverDetails.value[selectedId.value] ?? s
 const credentialOptions = computed(() => credentials.value.map((item) => ({ label: `${item.name} / ${item.username}`, value: item.id })));
 const formPayload = computed<ServerSaveInput>(() => ({
   name: form.name,
-  host: form.host,
+  ipv4: form.ipv4,
+  ipv6: form.ipv6,
   port: Number(form.port),
   sshUsername: form.sshUsername,
   credentialId: form.credentialId,
@@ -220,7 +222,8 @@ function openCreate() {
   probeResult.value = null;
   Object.assign(form, {
     name: '',
-    host: '',
+    ipv4: '',
+    ipv6: '',
     port: '22',
     sshUsername: '',
     credentialId: credentials.value[0]?.id ?? '',
@@ -241,7 +244,8 @@ async function openEdit(server: ServerDto) {
     probeResult.value = null;
     Object.assign(form, {
       name: server.name,
-      host: server.host,
+      ipv4: server.ipv4 ?? '',
+      ipv6: server.ipv6 ?? '',
       port: String(server.port || 22),
       sshUsername: server.sshUsername ?? '',
       credentialId: server.credentialId,
@@ -564,7 +568,9 @@ onBeforeUnmount(() => {
       <div class="grid gap-4">
         <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
           <label class="grid gap-1 text-sm">{{ t('serversPage.name') }}<Input v-model="form.name" :invalid="Boolean(validation.name)" /></label>
-          <label class="grid gap-1 text-sm">{{ t('serversPage.host') }}<Input v-model="form.host" :invalid="Boolean(validation.host)" /></label>
+          <label class="grid gap-1 text-sm">{{ t('serversPage.ipv4') }}<Input v-model="form.ipv4" :invalid="Boolean(validation.ipv4)" placeholder="203.0.113.10" /></label>
+          <label class="grid gap-1 text-sm">{{ t('serversPage.ipv6') }}<Input v-model="form.ipv6" :invalid="Boolean(validation.ipv6)" placeholder="2001:db8::10" /></label>
+          <p class="col-span-2 m-0 text-xs text-muted-foreground">{{ t('serversPage.addressHint') }} <span class="panel-mono">{{ connectionHost(form) || t('common.notAvailable') }}</span></p>
           <label class="grid gap-1 text-sm">{{ t('serversPage.port') }}<Input v-model="form.port" type="number" :invalid="Boolean(validation.port)" /></label>
           <label class="grid gap-1 text-sm">{{ t('serversPage.credential') }}<Select v-model="form.credentialId" :options="credentialOptions" :placeholder="t('serversPage.selectCredential')" /></label>
           <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.sshUsername') }}<Input v-model="form.sshUsername" :placeholder="t('serversPage.sshUsernameHint')" /></label>

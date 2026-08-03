@@ -207,11 +207,11 @@ func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
 		t.Fatalf("insert credential: %v", err)
 	}
 	serverSvc := serverpkg.NewService(store.AppDB(), nil, tasks.NewService(store.LogDB()), serverpkg.WithMetricsDB(store.MetricsDB()))
-	first, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Alpha", Host: "10.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
+	first, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Alpha", IPv4: "10.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
 	if err != nil {
 		t.Fatalf("create first server: %v", err)
 	}
-	second, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Beta", Host: "10.0.0.2", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
+	second, err := serverSvc.Create(context.Background(), serverpkg.SaveRequest{Name: "Beta", IPv4: "10.0.0.2", Port: 22, SSHUsername: "root", CredentialID: "cred-test"})
 	if err != nil {
 		t.Fatalf("create second server: %v", err)
 	}

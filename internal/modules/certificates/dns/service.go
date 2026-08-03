@@ -394,6 +394,18 @@ func (s *Service) resolveProvider(ctx context.Context, domainID string) (Resolve
 	return domain, s.providerFactory(domain), nil
 }
 
+func (s *Service) resolveProviderByName(ctx context.Context, zone string) (ResolvedDomain, Provider, error) {
+	var id string
+	err := orm.RawRow(ctx, s.db, `SELECT id FROM dns_domains WHERE name=?`, strings.ToLower(strings.TrimSuffix(strings.TrimSpace(zone), "."))).Scan(&id)
+	if err == sql.ErrNoRows {
+		return ResolvedDomain{}, nil, panelerr.NotFound("dns_domain")
+	}
+	if err != nil {
+		return ResolvedDomain{}, nil, err
+	}
+	return s.resolveProvider(ctx, id)
+}
+
 func validateRecordInput(in RecordInput) (RecordInput, error) {
 	name := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(in.Name), "."))
 	if !recordNamePattern.MatchString(name) {
@@ -417,7 +429,7 @@ func validateRecordInput(in RecordInput) (RecordInput, error) {
 		}
 		proxied = nil
 	}
-	return RecordInput{Name: name, Type: recordType, Value: value, TTL: in.TTL, Proxied: proxied}, nil
+	return RecordInput{Name: name, Type: recordType, Value: value, TTL: in.TTL, Proxied: proxied, Comment: strings.TrimSpace(in.Comment)}, nil
 }
 
 func supportsProxy(value string) bool {

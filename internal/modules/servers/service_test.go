@@ -76,11 +76,26 @@ func TestServerValidation(t *testing.T) {
 	if err := validateSave(SaveRequest{Port: 22}); err == nil {
 		t.Fatal("expected validation error")
 	}
-	if err := validateSave(SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, CredentialID: "cred"}); err != nil {
+	if err := validateSave(SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, CredentialID: "cred"}); err != nil {
 		t.Fatalf("server username should be optional: %v", err)
 	}
-	if err := validateSave(SaveRequest{Name: "s", Host: "127.0.0.1", Port: 70000, CredentialID: "cred"}); err == nil {
+	if err := validateSave(SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 70000, CredentialID: "cred"}); err == nil {
 		t.Fatal("expected port validation error")
+	}
+	if err := validateSave(SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, CredentialID: "cred"}); err == nil {
+		t.Fatal("expected direct host to be rejected")
+	}
+	if err := validateSave(SaveRequest{Name: "s", IPv4: "example.com", Port: 22, CredentialID: "cred"}); err == nil {
+		t.Fatal("expected invalid ipv4 to be rejected")
+	}
+	if err := validateSave(SaveRequest{Name: "s", IPv6: "127.0.0.1", Port: 22, CredentialID: "cred"}); err == nil {
+		t.Fatal("expected IPv4 literal in ipv6 to be rejected")
+	}
+	if got := derivedServerHost(SaveRequest{IPv4: "203.0.113.5", IPv6: "2001:db8::5"}); got != "203.0.113.5" {
+		t.Fatalf("expected ipv4 to win, got %q", got)
+	}
+	if got := derivedServerHost(SaveRequest{IPv6: "2001:db8::5"}); got != "2001:db8::5" {
+		t.Fatalf("expected ipv6 fallback, got %q", got)
 	}
 }
 
@@ -103,7 +118,7 @@ func TestCreateListServer(t *testing.T) {
 	}
 	taskSvc := tasks.NewService(store.LogDB())
 	svc := newServerServiceForTest(store, nil, taskSvc)
-	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
+	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +149,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 	taskSvc := tasks.NewService(store.LogDB())
 	svc := newServerServiceForTest(store, nil, taskSvc)
 	svc.SetMetricsDB(store.MetricsDB())
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +176,7 @@ func TestListServersLoadsMetricsDBLoadAverage(t *testing.T) {
 func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
 	svc, taskSvc, store := testServerService(t, nil)
 	svc.SetMetricsDB(store.MetricsDB())
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +281,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 	taskSvc := tasks.NewService(store.LogDB())
 	exec := &connectivityFakeExec{}
 	svc := newServerServiceForTest(store, exec, taskSvc)
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +325,7 @@ func TestConnectivityUsesBoundedSudoTimeoutAndCompletes(t *testing.T) {
 
 func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
 	svc, _, _ := testServerService(t, &connectivityFakeExec{root: true})
-	result, err := svc.ProbeConnectivity(context.Background(), SaveRequest{Host: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
+	result, err := svc.ProbeConnectivity(context.Background(), SaveRequest{IPv4: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,7 +340,7 @@ func TestProbeConnectivityReturnsSynchronousResult(t *testing.T) {
 
 func TestInitialCollectionPersistsRootPrivilege(t *testing.T) {
 	svc, _, _ := testServerService(t, &connectivityFakeExec{root: true})
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "root", Host: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "root", IPv4: "127.0.0.1", Port: 22, SSHUsername: "root", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -338,7 +353,7 @@ func TestInitialCollectionPersistsRootPrivilege(t *testing.T) {
 func TestInstallUFWCreatesTaskAndRefreshesTraits(t *testing.T) {
 	exec := &ufwInstallFakeExec{}
 	svc, taskSvc, _ := testServerService(t, exec)
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -375,7 +390,7 @@ func TestInstallUFWMarksTaskRunningBeforeWorkerExecutes(t *testing.T) {
 	blockInstall := make(chan struct{})
 	exec := &ufwInstallFakeExec{blockInstall: blockInstall}
 	svc, taskSvc, _ := testServerService(t, exec)
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -405,7 +420,7 @@ func TestInstallUFWAllowsConfiguredSSHAndReverseProxyPorts(t *testing.T) {
 	svc, taskSvc, store := testServerService(t, exec)
 	srv, err := svc.Create(context.Background(), SaveRequest{
 		Name:         "s",
-		Host:         "127.0.0.1",
+		IPv4:         "127.0.0.1",
 		Port:         22022,
 		SSHUsername:  "du",
 		CredentialID: "cred_1",
@@ -730,7 +745,7 @@ func TestSynchronousConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	srv, err := createSvc.Create(context.Background(), SaveRequest{
 		Name:         "s",
-		Host:         "127.0.0.1",
+		IPv4:         "127.0.0.1",
 		Port:         22,
 		SSHUsername:  "du",
 		CredentialID: "cred_1",
@@ -843,7 +858,7 @@ func TestUpdateHostRefreshesAgentURLAndInvalidatesCertificate(t *testing.T) {
 
 	updated, err := svc.Update(context.Background(), "srv_agent", SaveRequest{
 		Name:         "s",
-		Host:         "203.0.113.10",
+		IPv4:         "203.0.113.10",
 		Port:         22,
 		SSHUsername:  "du",
 		CredentialID: "cred_1",
@@ -1041,7 +1056,7 @@ func TestAgentCertificateTimeErrorDeploysWhenAlreadyIncompatible(t *testing.T) {
 		agentcontract.TraitURL:     "https://127.0.0.1:9786",
 		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1100,7 +1115,7 @@ func TestSystemDetectionDeploysForIncompatibleAgent(t *testing.T) {
 
 func TestDeployAgentStartsExistingQueuedTask(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1145,7 +1160,7 @@ func TestSystemAgentDeployRespectsAutoDeployBackoff(t *testing.T) {
 		agentcontract.TraitAutoDeployFailures:    "1",
 		agentcontract.TraitAutoDeployLastFailure: time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1180,7 +1195,7 @@ func TestManualAgentDeployResetsAutoDeployBackoffTime(t *testing.T) {
 		agentcontract.TraitAutoDeployFailures:    "1",
 		agentcontract.TraitAutoDeployLastFailure: oldFailureAt.Format(time.RFC3339Nano),
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1255,7 +1270,7 @@ func TestAgentCertificateTimeErrorMarksUndeployableAfterAutoDeployFailures(t *te
 		agentcontract.TraitAutoDeployFailures:    fmt.Sprintf("%d", agentAutoDeployMaxFailures),
 		agentcontract.TraitAutoDeployLastFailure: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano),
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1509,7 +1524,7 @@ func assertNoDestructiveUFWCommands(t *testing.T, command string) {
 
 func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 	svc, taskSvc, _ := testServerService(t, &connectivityFakeExec{})
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1544,7 +1559,7 @@ func TestCreateServerAutomaticallyStartsInitialInfoTask(t *testing.T) {
 
 func TestCreateServerInitialInfoFailureRollsBackServer(t *testing.T) {
 	svc, taskSvc, _ := testServerService(t, failingConnectivityExec{})
-	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := svc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1599,7 +1614,7 @@ func TestScheduledServerInfoFailureDoesNotRollbackServer(t *testing.T) {
 func TestListServersDoesNotCreateConnectivityTasks(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
 	for _, name := range []string{"s1", "s2"} {
-		if _, err := createSvc.Create(context.Background(), SaveRequest{Name: name, Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"}); err != nil {
+		if _, err := createSvc.Create(context.Background(), SaveRequest{Name: name, IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -1620,7 +1635,7 @@ func TestListServersDoesNotCreateConnectivityTasks(t *testing.T) {
 
 func TestSynchronousConnectivityFailureMarksServerUnreachable(t *testing.T) {
 	createSvc, taskSvc, store := testServerService(t, nil)
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { agentTone, canInstallUfw, credentialReferences, validateServerInput } from './model';
+import { agentTone, canInstallUfw, connectionHost, credentialReferences, validateServerInput } from './model';
 import type { ServerDto } from '@/types/servers';
 
 const server: ServerDto = {
@@ -25,12 +25,19 @@ describe('server model', () => {
   });
 
   it('validates server forms before API calls', () => {
-    expect(validateServerInput({ name: '', host: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', traits: {}, variables: {}, notes: '' })).toMatchObject({
+    expect(validateServerInput({ name: '', ipv4: '', ipv6: '', port: 70000, credentialId: '', sshUsername: '', dockerHost: '', traits: {}, variables: {}, notes: '' })).toMatchObject({
       name: 'serversPage.validationName',
-      host: 'serversPage.validationHost',
+      ipv4: 'serversPage.validationAddressRequired',
       port: 'serversPage.validationPort',
       credentialId: 'serversPage.validationCredential',
       dockerHost: 'serversPage.validationDocker',
     });
+  });
+
+  it('validates ipv4 and ipv6 literals and derives the connection host', () => {
+    expect(validateServerInput({ name: 'edge', ipv4: '999.0.0.1', ipv6: '', port: 22, credentialId: 'cred-1', sshUsername: '', dockerHost: 'unix:///var/run/docker.sock', traits: {}, variables: {}, notes: '' }).ipv4).toBe('serversPage.validationIpv4');
+    expect(validateServerInput({ name: 'edge', ipv4: '', ipv6: '2001:db8::1', port: 22, credentialId: 'cred-1', sshUsername: '', dockerHost: 'unix:///var/run/docker.sock', traits: {}, variables: {}, notes: '' })).toEqual({});
+    expect(connectionHost({ ipv4: '203.0.113.5', ipv6: '2001:db8::5' })).toBe('203.0.113.5');
+    expect(connectionHost({ ipv4: '', ipv6: '2001:db8::5' })).toBe('2001:db8::5');
   });
 });
