@@ -165,6 +165,7 @@
 - The application reverse proxy dialog exposes AnyAccess (kept untranslated) with load-balancing strategy and primary origin server, plus the shared HTTP route options (gzip, request body limit, timeouts, buffering, WebSocket, request/response headers) so application routes carry the same entrance-proxy options as facility paths. Origin servers default to the application's deployment targets intersected with gateway nodes; users can override manually when needed.
 - Application name, enabled state, deployment targets, reverse proxy rules, custom variables, and application files are application-level fields outside AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
 - 服务器选择器（部署目标、网关节点、源服务器、Panel 入口）展示全部服务器，不再只显示已被应用或设施引用的服务器；部署目标选择器对 agent 未兼容或不可达的服务器显示禁用原因，避免用户误选后到部署阶段才失败。
+- 编辑器确认放弃未保存修改并离开后，路由切换必须同步清理脏状态和弹窗状态，避免同一组件实例被复用后再次导航仍弹出放弃确认。
 - The editor must preserve local validation, patch draft, validate, preview, commit, and dirty guard behavior. File mutations still use application edit-session file/archive endpoints.
 
 ## Durable Application Edit Sessions

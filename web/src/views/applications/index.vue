@@ -491,6 +491,8 @@ watch(() => route.path, async () => {
   actionError.value = '';
   feedback.value = '';
   facilityEditing.value = false;
+  isDirty.value = false;
+  dialogOpen.value = false;
   await load();
   if (isAppEditor.value) await startApplicationEditor();
   if (isFacilityEditor.value) await startFacilityEditor();
