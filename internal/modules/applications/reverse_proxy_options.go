@@ -36,7 +36,11 @@ func NormalizeAnyAccessConfig(in AnyAccessConfig, originServerIDs []string) (Any
 	} else {
 		primary = ""
 	}
-	return AnyAccessConfig{Enabled: in.Enabled, Strategy: strategy, PrimaryOriginServerID: primary}, nil
+	relay := uniqueSortedStrings(in.RelayServerIDs)
+	if !in.Enabled {
+		relay = nil
+	}
+	return AnyAccessConfig{Enabled: in.Enabled, Strategy: strategy, PrimaryOriginServerID: primary, RelayServerIDs: relay}, nil
 }
 
 func uniqueSortedStrings(items []string) []string {

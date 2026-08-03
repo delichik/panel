@@ -59,7 +59,7 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 - 静态站点配置保存域名、路径和宿主机根目录；部署时作为只读 bind mount 挂入 nginx 容器。
 - 应用里的 `reverseProxy` 规则只会被下发到反向代理设施应用覆盖的服务器；未指定为设施应用部署目标的服务器忽略这些规则。
 - 每个设施域名必须显式选择至少一台入口节点，且入口节点必须属于设施全局网关节点；新保存请求不得把空选择解释为全部节点。读取旧配置时，旧 `deploymentServers` 为空仍按当时全部全局网关节点展开，多个旧 Path 使用不同节点集合时取并集，避免迁移缩小已有访问范围。
-- 域名开启上游模式后，入口节点成为上游并保留原始静态、重定向和手工代理 Path；其余全局网关节点只生成域名级 `/` 转发。策略支持轮询、主备和客户端 IP 哈希，固定 `max_fails=3 fail_timeout=30s`。匹配到域名证书时节点间使用 HTTPS、SNI 和证书校验，否则使用 HTTP；上游全部不可用时由 Nginx 返回 502，不回退本地处理。
+- 域名开启上游模式后，入口节点成为上游并保留原始静态、重定向和手工代理 Path；其余全局网关节点只生成域名级 `/` 转发。AnyAccess 的 `relayServerIds` 为空时转发节点为所有非源站全局网关节点；非空时只在指定节点生成转发，前端提供“所有未部署的服务器 / 指定服务器（多选）”两种范围。策略支持轮询、主备和客户端 IP 哈希，固定 `max_fails=3 fail_timeout=30s`。匹配到域名证书时节点间使用 HTTPS、SNI 和证书校验，否则使用 HTTP；上游全部不可用时由 Nginx 返回 502，不回退本地处理。
 - 上游模式域名由设施独占，不允许普通应用或 Panel 入口共享同一规范化域名。非上游模式仍按实际服务器上的精确 `domain + path` 检测设施、应用和 Panel 入口冲突。
 - 设施手工代理、普通应用代理、Panel 入口和跨节点转发的每个 Nginx location 都必须显式写入 `proxy_cache off;`。Panel 不管理客户端缓存 Header；用户如通过通用响应 Header 设置 `Cache-Control` 等字段，其语义由用户负责。
 - 设施应用部署和普通 Docker/Application 写操作共享每服务器容器操作队列。
@@ -116,7 +116,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 
 - `facility_app_configs` 只持久化 `deployment_server_ids_json`、`panel_entry_json` 和 `domains_json`。`domains_json` 按域名保存 `originServerIds`、`anyAccess` 与嵌套 Path；旧 `image`、`static_sites_json`、`domain_policies_json` 在启动迁移中一次性转换并通过 SQLite 重建表删除。
 - 设施入口网关镜像固定为 `nginx:1.28-alpine`，API 和前端不提供镜像设置。
-- 每个设施域名至少选择一个源站节点，且源站必须属于全局网关节点。AnyAccess 关闭时只有源站节点开放域名；开启时其他全局网关作为转发节点，按轮询、主备或客户端 IP 哈希连接源站入口网关。
+- 每个设施域名至少选择一个源站节点，且源站必须属于全局网关节点。AnyAccess 关闭时只有源站节点开放域名；开启时其他全局网关作为转发节点（`relayServerIds` 为空表示全部非源站网关节点，非空表示指定子集），按轮询、主备或客户端 IP 哈希连接源站入口网关。转发节点必须属于全局网关节点且不能是源站节点。
 - 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。
 - 手工代理、应用代理、Panel 入口和 AnyAccess 转发均明确生成 `proxy_cache off;`；Panel 不管理客户端缓存 Header。
 

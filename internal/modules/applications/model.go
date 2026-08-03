@@ -138,9 +138,10 @@ type ReverseProxyRule struct {
 }
 
 type AnyAccessConfig struct {
-	Enabled               bool   `json:"enabled"`
-	Strategy              string `json:"strategy"`
-	PrimaryOriginServerID string `json:"primaryOriginServerId,omitempty"`
+	Enabled               bool     `json:"enabled"`
+	Strategy              string   `json:"strategy"`
+	PrimaryOriginServerID string   `json:"primaryOriginServerId,omitempty"`
+	RelayServerIDs        []string `json:"relayServerIds,omitempty"`
 }
 
 type ReverseProxyPath struct {

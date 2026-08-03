@@ -349,8 +349,44 @@ func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicati
 		if _, err := applications.NormalizeAnyAccessConfig(rule.AnyAccess, origins); err != nil {
 			return err
 		}
+		normalized, _ := applications.NormalizeAnyAccessConfig(rule.AnyAccess, origins)
+		if err := validateAnyAccessRelay(normalized, stringSetValues(cfg.DeploymentServers), origins); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func validateAnyAccessRelay(anyAccess applications.AnyAccessConfig, gatewaySet map[string]struct{}, origins []string) error {
+	if !anyAccess.Enabled || len(anyAccess.RelayServerIDs) == 0 {
+		return nil
+	}
+	originSet := stringSetValues(origins)
+	for _, serverID := range anyAccess.RelayServerIDs {
+		if _, ok := gatewaySet[serverID]; !ok {
+			return panelerr.Validation("reverse_proxy_any_access_relay_invalid", "AnyAccess relay server must be a global gateway node")
+		}
+		if _, ok := originSet[serverID]; ok {
+			return panelerr.Validation("reverse_proxy_any_access_relay_invalid", "AnyAccess relay server cannot be an origin server")
+		}
+	}
+	return nil
+}
+
+func anyAccessRouteServerIDs(anyAccess applications.AnyAccessConfig, origins, gateways []string) []string {
+	if !anyAccess.Enabled {
+		return uniqueSorted(origins)
+	}
+	relay := append([]string(nil), anyAccess.RelayServerIDs...)
+	if len(relay) == 0 {
+		originSet := stringSetValues(origins)
+		for _, id := range gateways {
+			if _, ok := originSet[id]; !ok {
+				relay = append(relay, id)
+			}
+		}
+	}
+	return uniqueSorted(append(append([]string{}, origins...), relay...))
 }
 
 func (s *Service) ReconcileReverseProxyNow(ctx context.Context) (ReconcileResult, error) {
@@ -471,7 +507,8 @@ func (s *Service) routesByServer(ctx context.Context, serverIDs []string) (map[s
 			selected := app
 			selected.Routes = nil
 			for _, route := range app.Routes {
-				if containsString(route.OriginServerIDs, serverID) || route.AnyAccess.Enabled {
+				if containsString(route.OriginServerIDs, serverID) ||
+					(route.AnyAccess.Enabled && (len(route.AnyAccess.RelayServerIDs) == 0 || containsString(route.AnyAccess.RelayServerIDs, serverID))) {
 					selected.Routes = append(selected.Routes, route)
 				}
 			}
@@ -543,6 +580,9 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		if !domain.AnyAccess.Enabled || containsString(domain.OriginServerIDs, serverID) {
 			continue
 		}
+		if len(domain.AnyAccess.RelayServerIDs) > 0 && !containsString(domain.AnyAccess.RelayServerIDs, serverID) {
+			continue
+		}
 		relay, err := s.buildProxyRelay(ctx, domain.Domain, domain.OriginServerIDs, domain.AnyAccess)
 		if err != nil {
 			return "", nil, nil, err
@@ -600,7 +640,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 				host.Proxy = append(host.Proxy, route)
 				continue
 			}
-			if route.AnyAccess.Enabled {
+			if route.AnyAccess.Enabled && (len(route.AnyAccess.RelayServerIDs) == 0 || containsString(route.AnyAccess.RelayServerIDs, serverID)) {
 				relay, err := s.buildProxyRelay(ctx, route.Domain, route.OriginServerIDs, route.AnyAccess)
 				if err != nil {
 					return "", nil, nil, err
@@ -1392,6 +1432,9 @@ func normalizeInput(in ReverseProxySaveInput) (ReverseProxyConfig, error) {
 		if err != nil {
 			return ReverseProxyConfig{}, err
 		}
+		if err := validateAnyAccessRelay(anyAccess, serverSet, origins); err != nil {
+			return ReverseProxyConfig{}, err
+		}
 		if len(item.Paths) == 0 {
 			return ReverseProxyConfig{}, panelerr.Validation("facility_domain_without_routes", "Reverse proxy domain requires at least one route")
 		}
@@ -1831,10 +1874,7 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([
 		if domain == "" {
 			continue
 		}
-		serverIDs := routeDomain.OriginServerIDs
-		if routeDomain.AnyAccess.Enabled {
-			serverIDs = cfg.DeploymentServers
-		}
+		serverIDs := anyAccessRouteServerIDs(routeDomain.AnyAccess, routeDomain.OriginServerIDs, cfg.DeploymentServers)
 		for _, path := range routeDomain.Paths {
 			out = append(out, routeSummary(domain, firstNonEmpty(path.Path, "/"), "facility", serverIDs, certificates))
 		}
@@ -1846,10 +1886,7 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([
 		for _, app := range apps {
 			for _, route := range app.Routes {
 				for _, routePath := range route.Paths {
-					serverIDs := route.OriginServerIDs
-					if route.AnyAccess.Enabled {
-						serverIDs = cfg.DeploymentServers
-					}
+					serverIDs := anyAccessRouteServerIDs(route.AnyAccess, route.OriginServerIDs, cfg.DeploymentServers)
 					summary := routeSummary(route.Domain, firstNonEmpty(routePath.Path, "/"), "application", serverIDs, certificates)
 					summary.ApplicationID = app.ApplicationID
 					summary.ApplicationName = app.ApplicationName

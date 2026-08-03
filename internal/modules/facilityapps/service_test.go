@@ -143,6 +143,77 @@ func TestRenderApplicationAnyAccessUsesOriginAndRelay(t *testing.T) {
 	}
 }
 
+func TestRenderNginxConfigHonorsSpecifiedRelayServers(t *testing.T) {
+	svc := &Service{servers: facilityTestServers{items: map[string]server.Server{
+		"srv-origin":  {ID: "srv-origin", Host: "10.0.0.31"},
+		"srv-relay-1": {ID: "srv-relay-1", Host: "10.0.0.32"},
+		"srv-relay-2": {ID: "srv-relay-2", Host: "10.0.0.33"},
+	}}}
+	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-origin", "srv-relay-1", "srv-relay-2"}, Domains: []FacilityRouteDomain{{
+		Domain: "example.test", OriginServerIDs: []string{"srv-origin"}, AnyAccess: applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyRoundRobin, RelayServerIDs: []string{"srv-relay-1"}}, Paths: []FacilityRoutePath{{
+			Path: "/api", RuleType: StaticRuleProxyPass, ProxyURL: "http://127.0.0.1:8080", ProxySourceMode: ProxySourcePreserve,
+		}},
+	}}}
+	_, _, selectedFiles, err := svc.renderNginxConfig(context.Background(), "srv-relay-1", cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relay := managedConfigText(selectedFiles); !strings.Contains(relay, "upstream panel_domain_example.test") || !strings.Contains(relay, "server 10.0.0.31:80") {
+		t.Fatalf("selected relay config:\n%s", relay)
+	}
+	_, _, excludedFiles, err := svc.renderNginxConfig(context.Background(), "srv-relay-2", cfg, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relay := managedConfigText(excludedFiles); strings.Contains(relay, "panel_domain_example") {
+		t.Fatalf("unselected relay server must not render the domain:\n%s", relay)
+	}
+}
+
+func TestRenderApplicationAnyAccessHonorsSpecifiedRelayServers(t *testing.T) {
+	svc := &Service{servers: facilityTestServers{items: map[string]server.Server{
+		"srv-origin":  {ID: "srv-origin", Host: "10.0.0.41"},
+		"srv-relay-1": {ID: "srv-relay-1", Host: "10.0.0.42"},
+		"srv-relay-2": {ID: "srv-relay-2", Host: "10.0.0.43"},
+	}}}
+	route := applications.ReverseProxyRoute{
+		Domain: "app.example.test", TargetType: applications.ReverseProxyTargetLocal, TargetPort: 8080,
+		OriginServerIDs: []string{"srv-origin"},
+		AnyAccess:       applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyRoundRobin, RelayServerIDs: []string{"srv-relay-1"}},
+		Paths:           []applications.ReverseProxyPath{{Path: "/"}},
+	}
+	app := applications.ApplicationReverseProxyConfig{ApplicationID: "app-1", ApplicationName: "app", Routes: []applications.ReverseProxyRoute{route}}
+	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-origin", "srv-relay-1", "srv-relay-2"}}
+	_, _, selectedFiles, err := svc.renderNginxConfig(context.Background(), "srv-relay-1", cfg, []applications.ApplicationReverseProxyConfig{app}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relay := managedConfigText(selectedFiles); !strings.Contains(relay, "upstream panel_domain_app.example.test") || !strings.Contains(relay, "server 10.0.0.41:80") {
+		t.Fatalf("selected relay config:\n%s", relay)
+	}
+	_, _, excludedFiles, err := svc.renderNginxConfig(context.Background(), "srv-relay-2", cfg, []applications.ApplicationReverseProxyConfig{app}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if relay := managedConfigText(excludedFiles); strings.Contains(relay, "panel_domain_app.example.test") {
+		t.Fatalf("unselected relay server must not render the route:\n%s", relay)
+	}
+}
+
+func TestNormalizeInputRejectsInvalidAnyAccessRelay(t *testing.T) {
+	base := ReverseProxySaveInput{DeploymentServers: []string{"srv-a", "srv-b"}, Domains: []FacilityRouteDomain{{
+		Domain: "example.test", OriginServerIDs: []string{"srv-a"}, Paths: []FacilityRoutePath{{Path: "/", RuleType: StaticRuleRedirect, RedirectURL: "https://target.example.test"}},
+	}}}
+	base.Domains[0].AnyAccess = applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyRoundRobin, RelayServerIDs: []string{"srv-outside"}}
+	if _, err := normalizeInput(base); err == nil || !strings.Contains(err.Error(), "AnyAccess relay server must be a global gateway node") {
+		t.Fatalf("expected non-gateway relay to be rejected, got %v", err)
+	}
+	base.Domains[0].AnyAccess = applications.AnyAccessConfig{Enabled: true, Strategy: applications.AnyAccessStrategyRoundRobin, RelayServerIDs: []string{"srv-a"}}
+	if _, err := normalizeInput(base); err == nil || !strings.Contains(err.Error(), "AnyAccess relay server cannot be an origin server") {
+		t.Fatalf("expected origin relay to be rejected, got %v", err)
+	}
+}
+
 func TestProxySpecUsesFixedSupportedImage(t *testing.T) {
 	svc := &Service{}
 	spec, err := svc.proxySpec(context.Background(), "srv-a", ReverseProxyConfig{}, nil, nil)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyYamlToDraft,
   cloneFacilityDomains,
+  cloneProxyRules,
   diffFacility,
   draftFromApplication,
   facilityDraftFromConfig,
@@ -77,6 +78,13 @@ describe('application editor model', () => {
 
     expect(domain.domain).toBe('static.example.test');
     expect(draftCopy.domain).toBe('changed.example.test');
+  });
+
+  it('preserves AnyAccess relay servers when cloning rules and domains', () => {
+    const rule = cloneProxyRules([{ domain: 'api.example.test', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: true, strategy: 'round_robin', relayServerIds: ['srv-2'] }, paths: [{ path: '/' }] }])[0];
+    expect(rule.anyAccess.relayServerIds).toEqual(['srv-2']);
+    const domain = cloneFacilityDomains([{ domain: 'example.test', originServerIds: ['srv-1'], anyAccess: { enabled: true, strategy: 'round_robin', relayServerIds: ['srv-2'] }, paths: [] }])[0];
+    expect(domain.anyAccess.relayServerIds).toEqual(['srv-2']);
   });
 
   it('validates application sections before preview and commit', () => {

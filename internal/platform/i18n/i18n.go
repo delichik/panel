@@ -214,6 +214,7 @@ var (
 			"reverse_proxy_origin_server_invalid":                    "源站节点必须部署该应用并属于全局网关节点",
 			"reverse_proxy_any_access_strategy_invalid":              "AnyAccess 流量分配策略无效",
 			"reverse_proxy_any_access_primary_origin_invalid":        "主备策略必须选择有效的主源站",
+			"reverse_proxy_any_access_relay_invalid":                 "AnyAccess 转发节点必须属于全局网关节点且不能是源站节点",
 			"reverse_proxy_domain_owner_conflict":                    "该域名已被其他反向代理入口使用",
 			"reverse_proxy_domain_duplicate":                         "同一应用内的反向代理域名不能重复",
 			"application_file_archive_invalid":                       "\u5e94\u7528\u6587\u4ef6\u5939\u538b\u7f29\u5305\u65e0\u6548",

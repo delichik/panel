@@ -364,7 +364,7 @@ export function makeMountRow(type = 'persistent'): MountRow {
 }
 
 export function makeProxyRule(): ReverseProxyRule {
-  return { domain: '', targetType: undefined, targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', primaryOriginServerId: '' }, paths: [] };
+  return { domain: '', targetType: undefined, targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', primaryOriginServerId: '', relayServerIds: [] }, paths: [] };
 }
 
 export function makeProxyPath(): ReverseProxyPath {
@@ -372,7 +372,7 @@ export function makeProxyPath(): ReverseProxyPath {
 }
 
 export function makeFacilityDomain(): FacilityRouteDomain {
-  return { domain: '', originServerIds: [], anyAccess: { enabled: false, strategy: 'round_robin' }, paths: [makeFacilityPath()] };
+  return { domain: '', originServerIds: [], anyAccess: { enabled: false, strategy: 'round_robin', relayServerIds: [] }, paths: [makeFacilityPath()] };
 }
 
 export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoutePath {
@@ -385,7 +385,7 @@ export function cloneProxyRules(rules: ReverseProxyRule[]) {
     targetType: rule.targetType || 'local',
     targetPort: Number(rule.targetPort || 0),
     originServerIds: [...(rule.originServerIds ?? [])],
-    anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', primaryOriginServerId: rule.anyAccess?.primaryOriginServerId || '' },
+    anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', primaryOriginServerId: rule.anyAccess?.primaryOriginServerId || '', relayServerIds: [...(rule.anyAccess?.relayServerIds ?? [])] },
     paths: (rule.paths ?? []).map((path) => ({ path: path.path || '/', webSocket: Boolean(path.webSocket), options: { ...defaultRouteOptions(), ...(path.options ?? {}) } })),
   }));
 }
@@ -394,7 +394,7 @@ export function cloneFacilityDomains(domains: FacilityRouteDomain[]) {
   return domains.map((domain) => ({
     domain: domain.domain,
     originServerIds: [...(domain.originServerIds ?? [])],
-    anyAccess: { enabled: Boolean(domain.anyAccess?.enabled), strategy: domain.anyAccess?.strategy || 'round_robin', primaryOriginServerId: domain.anyAccess?.primaryOriginServerId || '' },
+    anyAccess: { enabled: Boolean(domain.anyAccess?.enabled), strategy: domain.anyAccess?.strategy || 'round_robin', primaryOriginServerId: domain.anyAccess?.primaryOriginServerId || '', relayServerIds: [...(domain.anyAccess?.relayServerIds ?? [])] },
     paths: (domain.paths ?? []).map((path) => ({ ...makeFacilityPath((path.ruleType as StaticRuleType) || 'static'), ...path, options: { ...defaultRouteOptions(), ...(path.options ?? {}) } })),
   }));
 }

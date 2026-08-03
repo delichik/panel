@@ -261,6 +261,30 @@ const proxyAnyAccessModel = computed({
   get: () => Boolean(proxyDraft.anyAccess.enabled),
   set: (value: boolean) => { proxyDraft.anyAccess.enabled = value; },
 });
+const proxyRelayScope = ref<'all' | 'selected'>('all');
+const facilityRelayScope = ref<'all' | 'selected'>('all');
+const anyAccessRelayScopeOptions = computed(() => [
+  { label: t('applicationsPage.anyAccessRelayAll'), value: 'all' },
+  { label: t('applicationsPage.anyAccessRelaySelected'), value: 'selected' },
+]);
+const proxyRelayServerOptions = computed(() => {
+  const origins = proxyDraft.originManual ? new Set(proxyDraft.originServerIds) : new Set(proxyAutoOriginIds.value);
+  const gateways = new Set(facility.value?.deploymentServers ?? []);
+  return serverOptions.value.filter((item) => gateways.has(item.id) && !origins.has(item.id));
+});
+const facilityRelayServerOptions = computed(() => {
+  const origins = new Set(facilityDomainDraft.originServerIds);
+  const gateways = new Set(facility.value?.deploymentServers ?? []);
+  return serverOptions.value.filter((item) => gateways.has(item.id) && !origins.has(item.id));
+});
+const proxyRelayServerIdsModel = computed({
+  get: () => proxyDraft.anyAccess.relayServerIds ?? [],
+  set: (value: string[]) => { proxyDraft.anyAccess.relayServerIds = value; },
+});
+const facilityRelayServerIdsModel = computed({
+  get: () => facilityDomainDraft.anyAccess.relayServerIds ?? [],
+  set: (value: string[]) => { facilityDomainDraft.anyAccess.relayServerIds = value; },
+});
 const facilityRedirectCode = computed({
   get: () => String(facilityPathDraft.redirectCode ?? 302),
   set: (value: string) => { facilityPathDraft.redirectCode = Number(value); },
@@ -1060,6 +1084,7 @@ function openProxyDialog(index = -1) {
     ...base,
     originManual: index >= 0 && Boolean(appDraft.reverseProxy[index].originServerIds.length),
   });
+  proxyRelayScope.value = base.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
   dialogOpen.value = true;
 }
 
@@ -1089,6 +1114,7 @@ function saveProxyDialog() {
       enabled: Boolean(proxyDraft.anyAccess.enabled),
       strategy: proxyDraft.anyAccess.enabled ? (proxyDraft.anyAccess.strategy || 'round_robin') : '',
       primaryOriginServerId: proxyDraft.anyAccess.enabled ? (proxyDraft.anyAccess.primaryOriginServerId || '') : '',
+      relayServerIds: proxyDraft.anyAccess.enabled && proxyRelayScope.value === 'selected' ? [...(proxyDraft.anyAccess.relayServerIds ?? [])] : [],
     },
     paths: proxyDraft.paths.map((path) => ({
       path: path.path.trim() || '/',
@@ -1137,6 +1163,7 @@ function openFacilityDomainDialog(index = -1) {
   dialogIndex.value = index;
   Object.keys(facilityDomainErrors).forEach((key) => delete facilityDomainErrors[key]);
   Object.assign(facilityDomainDraft, index >= 0 ? cloneFacilityDomains([facilityDraft.domains[index]])[0] : makeFacilityDomain());
+  facilityRelayScope.value = facilityDomainDraft.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
   dialogOpen.value = true;
 }
 
@@ -1150,6 +1177,7 @@ function saveFacilityDomainDialog() {
   Object.assign(facilityDomainErrors, nextErrors);
   if (Object.keys(facilityDomainErrors).length) return;
   const next = cloneFacilityDomains([facilityDomainDraft])[0];
+  next.anyAccess.relayServerIds = facilityDomainDraft.anyAccess.enabled && facilityRelayScope.value === 'selected' ? [...(facilityDomainDraft.anyAccess.relayServerIds ?? [])] : [];
   if (dialogIndex.value >= 0) facilityDraft.domains[dialogIndex.value] = next;
   else facilityDraft.domains.push(next);
   dialogOpen.value = false;
@@ -1921,6 +1949,8 @@ onBeforeUnmount(() => {
         <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
         <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>
         <div v-if="proxyDraft.anyAccess.enabled" class="grid gap-3">
+          <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="proxyRelayScope" :options="anyAccessRelayScopeOptions" /></label>
+          <ServerMultiPicker v-if="proxyRelayScope === 'selected'" v-model="proxyRelayServerIdsModel" :servers="proxyRelayServerOptions" :label="t('applicationsPage.anyAccessRelayServers', { count: proxyDraft.anyAccess.relayServerIds?.length ?? 0 })" />
           <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="proxyDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
           <label v-if="proxyDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="proxyDraft.anyAccess.primaryOriginServerId" :options="proxyPrimaryOriginOptions" /></label>
         </div>
@@ -1964,9 +1994,11 @@ onBeforeUnmount(() => {
       <ServerMultiPicker v-model="facilityDomainOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: facilityDomainDraft.originServerIds.length })" @update:model-value="clearFacilityDomainError('originServers')" />
       <p v-if="facilityDomainErrors.originServers" class="m-0 text-sm text-danger">{{ t(facilityDomainErrors.originServers) }}</p>
       <div class="options-block">
-        <div class="section-copy"><h3>{{ t('applicationsPage.loadBalancing') }}</h3><p>{{ t('applicationsPage.loadBalancingHint') }}</p></div>
+        <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
         <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="facilityDomainDraft.anyAccess.enabled" :label="t('applicationsPage.anyAccess')" /></label>
         <div v-if="facilityDomainDraft.anyAccess.enabled" class="grid gap-3">
+          <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="facilityRelayScope" :options="anyAccessRelayScopeOptions" /></label>
+          <ServerMultiPicker v-if="facilityRelayScope === 'selected'" v-model="facilityRelayServerIdsModel" :servers="facilityRelayServerOptions" :label="t('applicationsPage.anyAccessRelayServers', { count: facilityDomainDraft.anyAccess.relayServerIds?.length ?? 0 })" />
           <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="facilityDomainDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
           <label v-if="facilityDomainDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="facilityDomainDraft.anyAccess.primaryOriginServerId" :options="facilityDomainOriginOptions" /></label>
         </div>
