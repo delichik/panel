@@ -3404,9 +3404,9 @@ func (s *Service) supersedeLifecycleTargetIfActive(ctx context.Context, targetID
 			lease_expires_at='',
 			finished_at=COALESCE(finished_at, ?),
 			updated_at=?
-		WHERE id=? AND state IN (?,?,?,?)`,
+		WHERE id=? AND state IN (?,?,?,?,?)`,
 		LifecycleTargetStateSuperseded, LifecycleTargetStatusSuperseded, message, "superseded", message, message, "superseded", now, now, targetID,
-		LifecycleTargetStatePlanned, LifecycleTargetStateReady, LifecycleTargetStateClaimed, LifecycleTargetStatePreparing)
+		LifecycleTargetStatePlanned, LifecycleTargetStateReady, LifecycleTargetStateClaimed, LifecycleTargetStatePreparing, LifecycleTargetStateFailedRetryable)
 	return err
 }
 
@@ -4281,7 +4281,7 @@ func (s *Service) activeLifecycleTarget(ctx context.Context, appID, serverID str
 
 func lifecycleTargetCanBeSupersededBeforeMutation(state string) bool {
 	switch strings.TrimSpace(state) {
-	case LifecycleTargetStatePlanned, LifecycleTargetStateReady, LifecycleTargetStateClaimed, LifecycleTargetStatePreparing:
+	case LifecycleTargetStatePlanned, LifecycleTargetStateReady, LifecycleTargetStateClaimed, LifecycleTargetStatePreparing, LifecycleTargetStateFailedRetryable:
 		return true
 	default:
 		return false

@@ -3,6 +3,7 @@ package applications
 import (
 	"context"
 	"testing"
+	"time"
 
 	appruntime "panel/internal/modules/applications/runtime"
 )
@@ -157,6 +158,73 @@ func TestPlanApplicationDeploymentPurgeReplacesEarlyApply(t *testing.T) {
 	}
 	if oldTarget.State != LifecycleTargetStateSuperseded {
 		t.Fatalf("old apply target should be superseded, got %#v", oldTarget)
+	}
+}
+
+func TestPlanApplicationDeploymentRemovedServerPurgesRetryableApply(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           false,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := appruntime.Spec{
+		InstanceID:    runtimeInstanceID(app.ID, "srv-a"),
+		ContainerName: runtimeContainerName(app),
+		Generation:    app.Generation,
+		SpecHash:      app.SpecHash,
+	}
+	if err := svc.upsertRuntimeInstance(ctx, app.ID, "srv-a", spec, appruntime.DesiredRunning, appruntime.StatusRunning, "container-srv-a", ""); err != nil {
+		t.Fatal(err)
+	}
+	app.Enabled = true
+	if err := svc.updateApplication(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	applyPlan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(applyPlan.CreatedTargets) != 1 {
+		t.Fatalf("expected one apply target, got %#v", applyPlan)
+	}
+	applyTarget := applyPlan.CreatedTargets[0]
+	if applyTarget.Action != LifecycleTargetActionApply {
+		t.Fatalf("expected apply target, got %#v", applyTarget)
+	}
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?,status=?,lease_owner='',lease_expires_at='',next_run_at=?,updated_at=?
+		WHERE id=?`,
+		LifecycleTargetStateFailedRetryable, LifecycleTargetStatusFailed, formatTime(time.Now().UTC().Add(time.Minute)), formatTime(time.Now().UTC()), applyTarget.ID); err != nil {
+		t.Fatal(err)
+	}
+	app.DeploymentServers = []string{"srv-b"}
+	if err := svc.updateApplication(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, Force: true, TriggerType: "application_save"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.SupersededTargets) != 1 || plan.SupersededTargets[0].ID != applyTarget.ID {
+		t.Fatalf("expected retryable apply on removed server to be superseded, got %#v", plan)
+	}
+	foundPurge := false
+	for _, target := range plan.CreatedTargets {
+		if target.ServerID == "srv-a" && target.Action == LifecycleTargetActionPurge {
+			foundPurge = true
+		}
+	}
+	if !foundPurge {
+		t.Fatalf("expected purge target for removed server, got %#v", plan)
 	}
 }
 
