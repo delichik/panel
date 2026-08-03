@@ -71,7 +71,7 @@
 ## 数据与行为约定
 
 - v3 页面经 `web/src/api/servers.ts` typed client 接真实后端；保存与 probe 语义分离（`POST /servers/probe` 只在添加/编辑对话框内预检，不落库）。
-- 详情错误横幅 `agent.last_error` 优先于 `lastError`；`sys.*` traits 只读展示不进编辑表单，自定义 traits 以 `custom.*` 前缀提交。
+- 详情错误横幅 `agent.last_error` 优先于 `lastError`；traits 对用户只读，编辑表单不展示也不提交 traits，后端保存接口忽略用户传入的 traits，服务器特征完全由系统探测、Agent 和设施/应用协调维护。旧数据中 `sudo_passwordless=1` 但 `privilege_mode=none` 的记录由一次性迁移修正为 `passwordless_sudo`，读取层兜底识别 `sudo.passwordless`。
 - 凭据 secret 只提交非空值，编辑时留空代表保留既有 secret；删除前用已加载服务器列表做引用预检并列出引用服务器，后端 409 `credential_in_use` 兜底。
 - 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；新诊断入口应使用系统事件或后端返回的稳定任务引用，不能新增 `/tasks?task=<id>` 产品链接。
 - 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。

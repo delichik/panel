@@ -61,6 +61,17 @@ func setServerArchitecture(t *testing.T, store *storage.Store, serverID string) 
 	}
 }
 
+func setServerTraits(t *testing.T, store *storage.Store, serverID string, traits map[string]string) {
+	t.Helper()
+	raw, err := json.Marshal(traits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`UPDATE servers SET traits=? WHERE id=?`, string(raw), serverID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestServerValidation(t *testing.T) {
 	if err := validateSave(SaveRequest{Port: 22}); err == nil {
 		t.Fatal("expected validation error")
@@ -92,7 +103,7 @@ func TestCreateListServer(t *testing.T) {
 	}
 	taskSvc := tasks.NewService(store.LogDB())
 	svc := newServerServiceForTest(store, nil, taskSvc)
-	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID, Traits: map[string]string{"custom.env": "prod"}})
+	_, err = svc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: cred.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +111,7 @@ func TestCreateListServer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(servers) != 1 || servers[0].Traits["custom.env"] != "prod" {
+	if len(servers) != 1 || len(servers[0].Traits) != 0 {
 		t.Fatalf("unexpected servers: %#v", servers)
 	}
 }
@@ -391,15 +402,19 @@ func TestInstallUFWMarksTaskRunningBeforeWorkerExecutes(t *testing.T) {
 
 func TestInstallUFWAllowsConfiguredSSHAndReverseProxyPorts(t *testing.T) {
 	exec := &ufwInstallFakeExec{}
-	svc, taskSvc, _ := testServerService(t, exec)
+	svc, taskSvc, store := testServerService(t, exec)
 	srv, err := svc.Create(context.Background(), SaveRequest{
 		Name:         "s",
 		Host:         "127.0.0.1",
 		Port:         22022,
 		SSHUsername:  "du",
 		CredentialID: "cred_1",
-		Traits:       map[string]string{reverseProxyEnabledTrait: "true"},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setServerTraits(t, store, srv.ID, map[string]string{reverseProxyEnabledTrait: "true"})
+	srv, err = svc.Get(context.Background(), srv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -719,15 +734,15 @@ func TestSynchronousConnectivityDoesNotRedeployCompatibleAgent(t *testing.T) {
 		Port:         22,
 		SSHUsername:  "du",
 		CredentialID: "cred_1",
-		Traits: map[string]string{
-			agentcontract.TraitEnabled: "true",
-			agentcontract.TraitURL:     "https://127.0.0.1:9786",
-			agentcontract.TraitStatus:  agentcontract.StatusCompatible,
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	setServerTraits(t, store, srv.ID, map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusCompatible,
+	})
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
 		t.Fatal(err)
@@ -1026,10 +1041,11 @@ func TestAgentCertificateTimeErrorDeploysWhenAlreadyIncompatible(t *testing.T) {
 		agentcontract.TraitURL:     "https://127.0.0.1:9786",
 		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	setServerTraits(t, store, srv.ID, traits)
 	setServerArchitecture(t, store, srv.ID)
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -1129,10 +1145,11 @@ func TestSystemAgentDeployRespectsAutoDeployBackoff(t *testing.T) {
 		agentcontract.TraitAutoDeployFailures:    "1",
 		agentcontract.TraitAutoDeployLastFailure: time.Now().UTC().Format(time.RFC3339Nano),
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	setServerTraits(t, store, srv.ID, traits)
 	setServerArchitecture(t, store, srv.ID)
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -1163,10 +1180,11 @@ func TestManualAgentDeployResetsAutoDeployBackoffTime(t *testing.T) {
 		agentcontract.TraitAutoDeployFailures:    "1",
 		agentcontract.TraitAutoDeployLastFailure: oldFailureAt.Format(time.RFC3339Nano),
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	setServerTraits(t, store, srv.ID, traits)
 	setServerArchitecture(t, store, srv.ID)
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -1237,10 +1255,11 @@ func TestAgentCertificateTimeErrorMarksUndeployableAfterAutoDeployFailures(t *te
 		agentcontract.TraitAutoDeployFailures:    fmt.Sprintf("%d", agentAutoDeployMaxFailures),
 		agentcontract.TraitAutoDeployLastFailure: time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano),
 	}
-	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", Traits: traits})
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", Host: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
 	if err != nil {
 		t.Fatal(err)
 	}
+	setServerTraits(t, store, srv.ID, traits)
 	setServerArchitecture(t, store, srv.ID)
 	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
 	if err != nil {

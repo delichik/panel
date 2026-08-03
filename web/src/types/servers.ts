@@ -53,7 +53,7 @@ export interface ServerSaveInput {
   sshUsername: string;
   credentialId: string;
   dockerHost: string;
-  traits: Record<string, string>;
+  traits?: Record<string, string>;
   variables: Record<string, string>;
   notes: string;
 }

@@ -207,7 +207,11 @@ func toDomainServer(m models.Server) domain.Server {
 	}
 	srv.Privilege = domain.PrivilegeState{Mode: m.PrivilegeMode, LastCheckedAt: m.PrivilegeLastCheckedAt}
 	if srv.Privilege.Mode == "" {
-		srv.Privilege.Mode = "none"
+		if m.SudoPasswordless {
+			srv.Privilege.Mode = "passwordless_sudo"
+		} else {
+			srv.Privilege.Mode = "none"
+		}
 	}
 	srv.Privilege.Privileged = srv.Privilege.Mode == "root" || srv.Privilege.Mode == "passwordless_sudo"
 	return srv

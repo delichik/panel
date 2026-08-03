@@ -70,7 +70,6 @@ const form = reactive({
   sshUsername: '',
   credentialId: '',
   dockerHost: 'unix:///var/run/docker.sock',
-  traits: '',
   variables: '',
   notes: '',
 });
@@ -85,7 +84,6 @@ const formPayload = computed<ServerSaveInput>(() => ({
   sshUsername: form.sshUsername,
   credentialId: form.credentialId,
   dockerHost: form.dockerHost,
-  traits: parsePairs(form.traits),
   variables: parsePairs(form.variables),
   notes: form.notes,
 }));
@@ -227,7 +225,6 @@ function openCreate() {
     sshUsername: '',
     credentialId: credentials.value[0]?.id ?? '',
     dockerHost: 'unix:///var/run/docker.sock',
-    traits: '',
     variables: '',
     notes: '',
   });
@@ -249,7 +246,6 @@ async function openEdit(server: ServerDto) {
       sshUsername: server.sshUsername ?? '',
       credentialId: server.credentialId,
       dockerHost: server.dockerHost || 'unix:///var/run/docker.sock',
-      traits: stringifyPairs(server.traits),
       variables: stringifyPairs(server.variables),
       notes: server.notes ?? '',
     });
@@ -573,7 +569,6 @@ onBeforeUnmount(() => {
           <label class="grid gap-1 text-sm">{{ t('serversPage.credential') }}<Select v-model="form.credentialId" :options="credentialOptions" :placeholder="t('serversPage.selectCredential')" /></label>
           <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.sshUsername') }}<Input v-model="form.sshUsername" :placeholder="t('serversPage.sshUsernameHint')" /></label>
           <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.dockerHost') }}<Input v-model="form.dockerHost" :invalid="Boolean(validation.dockerHost)" /></label>
-          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.traits') }}<Textarea v-model="form.traits" :placeholder="t('serversPage.pairsHint')" /></label>
           <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.notes') }}<Textarea v-model="form.notes" /></label>
         </div>
         <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">

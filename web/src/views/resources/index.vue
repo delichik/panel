@@ -469,7 +469,7 @@ onBeforeUnmount(() => {
                 </article>
               </template>
               <EmptyState v-else-if="!containers.length" :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
-              <article v-for="item in containers" v-else :key="item.id" class="grid min-h-[220px] grid-rows-[auto_minmax(0,1fr)_auto] rounded-2xl border border-border bg-background">
+              <article v-for="item in containers" v-else :key="item.id" class="grid grid-rows-[auto_auto_auto] rounded-2xl border border-border bg-background">
                 <header class="border-b border-border p-4">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
@@ -479,10 +479,10 @@ onBeforeUnmount(() => {
                     <Badge :tone="containerTone(item)">{{ item.managed ? t('resourcesPage.managed') : item.state }}</Badge>
                   </div>
                 </header>
-                <div class="min-h-0 overflow-auto p-4 text-sm text-muted-foreground">
+                <div class="p-4 text-sm text-muted-foreground">
                   <p class="m-0">{{ item.status }}</p>
                   <p class="m-0 mt-2 truncate">{{ item.ports.map((port) => `${port.publicPort || port.privatePort}:${port.privatePort}/${port.type}`).join(', ') || t('common.notAvailable') }}</p>
-                  <p v-if="item.managed" class="mt-3 rounded-xl border border-info-border bg-info-bg p-2 text-xs text-info">{{ t('resourcesPage.managedContainerBlocked') }}</p>
+                  <p v-if="item.managed" class="mt-3 rounded-xl border border-info-border bg-info-bg p-2 text-xs text-info">{{ t('resourcesPage.managedContainerHint') }}</p>
                 </div>
                 <footer class="flex flex-wrap gap-2 border-t border-border p-3">
                   <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'start'))" :loading="pending === `start-${item.id}`" @click="containerAction(item, 'start')"><Play />{{ t('resourcesPage.start') }}</Button>

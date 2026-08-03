@@ -209,14 +209,14 @@ func TestContainerActionRejectsManagedApplicationContainer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := svc.ContainerAction(context.Background(), "server-1", "container-1", "restart"); err == nil {
-		t.Fatal("expected managed application container action to be rejected")
+	if _, err := svc.ContainerAction(context.Background(), "server-1", "container-1", "restart"); err != nil {
+		t.Fatalf("managed application container action should be allowed: %v", err)
 	}
 	fakeAgent.mu.Lock()
 	actions := append([]string(nil), fakeAgent.actions...)
 	fakeAgent.mu.Unlock()
-	if len(actions) != 0 {
-		t.Fatalf("managed application container should not be mutated directly, got %#v", actions)
+	if len(actions) == 0 {
+		t.Fatal("managed application container should be mutated directly")
 	}
 }
 

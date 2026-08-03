@@ -515,6 +515,7 @@ var (
 				"Cloudflare API error ": "Cloudflare API 错误 ",
 			},
 			"application_runtime_operation_failed": {
+				"runtime container configuration does not match the expected configuration": "容器配置与期望不一致",
 				"Application runtime operation failed: deployment failed on ": "应用运行时操作失败：部署失败目标 ",
 				"Application runtime operation failed: ":                      "应用运行时操作失败：",
 			},
@@ -526,6 +527,7 @@ var (
 
 	prefixCodeTranslations = map[string]map[string]string{
 		LocaleSimplifiedChinese: {
+			"runtime container configuration does not match the expected configuration": "容器配置与期望不一致",
 			"Application runtime operation failed: deployment failed on ": "应用运行时操作失败：部署失败目标 ",
 			"Application runtime operation failed: ":                      "应用运行时操作失败：",
 		},

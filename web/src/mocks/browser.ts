@@ -905,13 +905,11 @@ export function installMockApi() {
     const containerActionMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/containers\/([^/]+)\/(start|stop|restart)$/);
     if (containerActionMatch && method(init) === 'POST') {
       const result = mockContainerAction(decodeURIComponent(containerActionMatch[1]), decodeURIComponent(containerActionMatch[2]), containerActionMatch[3]);
-      if (result === 'managed') return error('container_managed_by_application', 'Managed application containers must be changed from the application lifecycle.', 409);
       return result === 'ok' ? json({}) : error('container_not_found', 'Container was not found.', 404);
     }
     const containerDeleteMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/containers\/([^/]+)$/);
     if (containerDeleteMatch && method(init) === 'DELETE') {
       const result = mockDeleteContainer(decodeURIComponent(containerDeleteMatch[1]), decodeURIComponent(containerDeleteMatch[2]));
-      if (result === 'managed') return error('container_managed_by_application', 'Managed application containers must be changed from the application lifecycle.', 409);
       return result === 'ok' ? json({}) : error('container_not_found', 'Container was not found.', 404);
     }
 

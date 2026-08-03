@@ -18,6 +18,11 @@ export interface PortRow {
   staticPort: string;
 }
 
+export interface CommandRow {
+  id: string;
+  value: string;
+}
+
 export interface MountRow {
   id: string;
   type: string;
@@ -27,11 +32,15 @@ export interface MountRow {
   mode: string;
 }
 
+export interface ProxyRuleDraft extends ReverseProxyRule {
+  originManual: boolean;
+}
+
 export interface ApplicationDraftUi {
   name: string;
   enabled: boolean;
   image: string;
-  commandText: string;
+  commandRows: CommandRow[];
   networkMode: 'bridge' | 'host';
   cpu: string;
   memoryMb: string;
@@ -104,11 +113,12 @@ export function statusTone(status: string) {
 
 export function draftFromApplication(app?: ApplicationDto | null): ApplicationDraftUi {
   const parsed = parseSpec(app?.specYaml || defaultSpecYaml);
+  const command = arrayValue(parsed.command).map((item) => String(item)).filter((item) => item.trim() !== '');
   return {
     name: app?.name || stringValue(parsed.name) || '',
     enabled: app?.enabled ?? true,
     image: stringValue(parsed.image),
-    commandText: arrayValue(parsed.command).map((item) => String(item)).join('\n'),
+    commandRows: command.map((value) => ({ id: makeId('cmd'), value })),
     networkMode: stringValue(parsed.networkMode) === 'host' ? 'host' : 'bridge',
     cpu: stringValue(objectValue(parsed.resources)?.cpu),
     memoryMb: stringValue(objectValue(parsed.resources)?.memoryMb),
@@ -136,7 +146,7 @@ export function applyYamlToDraft(draft: ApplicationDraftUi): { ok: boolean; erro
     const parsed = parseSpec(draft.specYaml);
     const next = draftFromApplication({ ...emptyApp(), name: draft.name, enabled: draft.enabled, specYaml: draft.specYaml, variables: recordFromPairs(draft.variables), deploymentMode: draft.deploymentMode, deploymentServers: draft.deploymentServers, reverseProxy: draft.reverseProxy });
     draft.image = next.image;
-    draft.commandText = next.commandText;
+    draft.commandRows = next.commandRows;
     draft.networkMode = next.networkMode;
     draft.cpu = next.cpu;
     draft.memoryMb = next.memoryMb;
@@ -163,7 +173,7 @@ export function specYamlFromDraft(draft: ApplicationDraftUi) {
     image: draft.image || 'nginx:1.28-alpine',
     networkMode: draft.networkMode,
   };
-  const command = lines(draft.commandText);
+  const command = draft.commandRows.map((row) => row.value.trim()).filter(Boolean);
   if (command.length) doc.command = command;
   const env = recordFromPairs(draft.env);
   if (Object.keys(env).length) doc.env = env;
@@ -200,7 +210,7 @@ export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors
   if (draft.env.some((row) => !row.key.trim())) errors.env = 'applicationsPage.validationEnv';
   if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
   if (draft.mounts.some((row) => !row.target.trim())) errors.mounts = 'applicationsPage.validationMounts';
-  if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.paths.length || !rule.targetPort)) errors.reverseProxy = 'applicationsPage.validationReverseProxy';
+  if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetType || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxy';
   if (draft.yamlDirty) {
     try {
       parseSpec(draft.specYaml);
@@ -257,7 +267,7 @@ export function validateFacilityDraft(draft: FacilityDraftUi): FieldErrors {
 export function validateFacilityPathFields(path: FacilityRoutePath): FieldErrors {
   const errors: FieldErrors = {};
   const pathValue = (path.path ?? '').trim();
-  if (pathValue !== '' && (!pathValue.startsWith('/') || /[\s;{}#"\\']/.test(pathValue))) {
+  if (pathValue === '' || !pathValue.startsWith('/') || /[\s;{}#"\\']/.test(pathValue)) {
     errors.path = 'applicationsPage.validationPath';
   }
   if (path.ruleType === 'redirect') {
@@ -346,19 +356,19 @@ export function makeKeyValueRow(key = '', value = ''): KeyValueRow {
 }
 
 export function makePortRow(): PortRow {
-  return { id: makeId('port'), label: 'http', to: '80', staticPort: '' };
+  return { id: makeId('port'), label: '', to: '', staticPort: '' };
 }
 
 export function makeMountRow(type = 'persistent'): MountRow {
-  return { id: makeId('mount'), type, source: '', target: '/data', readOnly: type === 'file' || type === 'panel_file', mode: '' };
+  return { id: makeId('mount'), type, source: '', target: '', readOnly: type === 'file' || type === 'panel_file', mode: '' };
 }
 
 export function makeProxyRule(): ReverseProxyRule {
-  return { domain: '', targetType: 'local', targetPort: 80, originServerIds: [], anyAccess: { enabled: false, strategy: 'round_robin' }, paths: [{ path: '/', webSocket: false, options: defaultRouteOptions() }] };
+  return { domain: '', targetType: undefined, targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', primaryOriginServerId: '' }, paths: [] };
 }
 
 export function makeProxyPath(): ReverseProxyPath {
-  return { path: '/', webSocket: false, options: defaultRouteOptions() };
+  return { path: '', webSocket: false, options: defaultRouteOptions() };
 }
 
 export function makeFacilityDomain(): FacilityRouteDomain {
@@ -366,16 +376,16 @@ export function makeFacilityDomain(): FacilityRouteDomain {
 }
 
 export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoutePath {
-  return { path: '/', ruleType: type, sourceType: 'host_path', rootPath: '/srv/www', assetName: '', redirectUrl: '', redirectCode: 302, proxyUrl: '', proxySourceMode: 'preserve_source', options: defaultRouteOptions() };
+  return { path: '', ruleType: type, sourceType: 'host_path', rootPath: '', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
 }
 
 export function cloneProxyRules(rules: ReverseProxyRule[]) {
   return rules.map((rule) => ({
     domain: rule.domain,
     targetType: rule.targetType || 'local',
-    targetPort: Number(rule.targetPort || 80),
+    targetPort: Number(rule.targetPort || 0),
     originServerIds: [...(rule.originServerIds ?? [])],
-    anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || 'round_robin', primaryOriginServerId: rule.anyAccess?.primaryOriginServerId || '' },
+    anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', primaryOriginServerId: rule.anyAccess?.primaryOriginServerId || '' },
     paths: (rule.paths ?? []).map((path) => ({ path: path.path || '/', webSocket: Boolean(path.webSocket), options: { ...defaultRouteOptions(), ...(path.options ?? {}) } })),
   }));
 }
@@ -431,10 +441,6 @@ function objectValue(value: unknown) {
 function stringValue(value: unknown) {
   if (value === undefined || value === null) return '';
   return String(value);
-}
-
-function lines(raw: string) {
-  return raw.split('\n').map((line) => line.trim()).filter(Boolean);
 }
 
 function numberOrString(raw: string) {

@@ -91,6 +91,9 @@ var legacyResetTaskTablesStep = orm.Step{
 // databases.
 func appMigrationSteps() []orm.Step {
 	return []orm.Step{
+		{ID: "legacy_backfill_server_privilege_mode", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return backfillServerPrivilegeModeOn(ctx, tx)
+		}},
 		{ID: "legacy_migrate_application_file_names", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateApplicationFileNamesOn(ctx, tx)
 		}},
@@ -101,6 +104,20 @@ func appMigrationSteps() []orm.Step {
 			return migrateFacilityAssetNamesOn(ctx, tx)
 		}},
 	}
+}
+
+// backfillServerPrivilegeModeOn fixes servers that were inherited from older
+// versions with sudo_passwordless=1 but privilege_mode left at 'none'. The
+// mode is the source of truth for privileged operations, so these rows must
+// be promoted to passwordless_sudo.
+func backfillServerPrivilegeModeOn(ctx context.Context, q migrationExecutor) error {
+	_, err := q.ExecContext(ctx, `UPDATE servers
+		SET privilege_mode='passwordless_sudo',
+			privilege_last_checked_at=COALESCE(privilege_last_checked_at, sudo_last_checked_at, last_checked_at),
+			updated_at=COALESCE(NULLIF(updated_at, ''), strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+		WHERE sudo_passwordless=1
+		  AND (privilege_mode IS NULL OR privilege_mode='' OR privilege_mode='none')`)
+	return err
 }
 
 // logMigrationSteps are the one-time data migrations for the log database.

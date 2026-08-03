@@ -20,7 +20,6 @@ import Select from '@/components/ui/Select.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Tabs from '@/components/ui/Tabs.vue';
-import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
@@ -71,6 +70,7 @@ import {
   type KeyValueRow,
   type MountRow,
   type PortRow,
+  type ProxyRuleDraft,
   type SaveStage,
 } from './model';
 import { inferTemplateLanguage, type TemplateLanguage } from './templateLanguage';
@@ -137,7 +137,10 @@ const dialogParentIndex = ref(-1);
 const rowDraft = reactive<KeyValueRow>(makeKeyValueRow());
 const portDraft = reactive<PortRow>(makePortRow());
 const mountDraft = reactive<MountRow>(makeMountRow());
-const proxyDraft = reactive<ReverseProxyRule>(makeProxyRule());
+const proxyDraft = reactive<ProxyRuleDraft>({
+  ...makeProxyRule(),
+  originManual: false,
+});
 const proxyPathDraft = reactive(makeProxyPath());
 const facilityDomainDraft = reactive<FacilityRouteDomain>(makeFacilityDomain());
 const facilityPathDraft = reactive<FacilityRoutePath>(makeFacilityPath());
@@ -145,6 +148,8 @@ const facilityPathErrors = reactive<FieldErrors>({});
 const facilityDomainErrors = reactive<FieldErrors>({});
 const facilityRequestHeaders = ref<KeyValueRow[]>([]);
 const facilityResponseHeaders = ref<KeyValueRow[]>([]);
+const proxyRequestHeaders = ref<KeyValueRow[]>([]);
+const proxyResponseHeaders = ref<KeyValueRow[]>([]);
 
 const mode = computed(() => routeMode(route.path, route.params));
 const facilityKind = computed(() => String(route.params.facilityKind ?? ''));
@@ -232,6 +237,17 @@ const proxyPathWebSocket = computed({
   get: () => Boolean(proxyPathDraft.webSocket),
   set: (value: boolean) => { proxyPathDraft.webSocket = value; },
 });
+const proxyOriginAutoModel = computed({
+  get: () => !proxyDraft.originManual,
+  set: (value: boolean) => {
+    proxyDraft.originManual = !value;
+    if (value) proxyDraft.originServerIds = [];
+  },
+});
+const proxyAnyAccessModel = computed({
+  get: () => Boolean(proxyDraft.anyAccess.enabled),
+  set: (value: boolean) => { proxyDraft.anyAccess.enabled = value; },
+});
 const facilityRedirectCode = computed({
   get: () => String(facilityPathDraft.redirectCode ?? 302),
   set: (value: string) => { facilityPathDraft.redirectCode = Number(value); },
@@ -265,6 +281,41 @@ const facilityClientMaxBodySizeMb = facilityPathNumberOption('clientMaxBodySizeM
 const facilityConnectTimeoutSeconds = facilityPathNumberOption('connectTimeoutSeconds');
 const facilityReadTimeoutSeconds = facilityPathNumberOption('readTimeoutSeconds');
 const facilitySendTimeoutSeconds = facilityPathNumberOption('sendTimeoutSeconds');
+
+function proxyPathNumberOption(field: 'clientMaxBodySizeMb' | 'connectTimeoutSeconds' | 'readTimeoutSeconds' | 'sendTimeoutSeconds') {
+  return computed({
+    get: () => String(proxyPathDraft.options?.[field] ?? ''),
+    set: (value: string) => {
+      if (!proxyPathDraft.options) return;
+      const parsed = Number(value);
+      proxyPathDraft.options[field] = value.trim() === '' ? 0 : Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+    },
+  });
+}
+function proxyPathStringOption(field: 'gzipMode' | 'bufferingMode' | 'webSocketMode') {
+  return computed({
+    get: () => proxyPathDraft.options?.[field] ?? '',
+    set: (value: string) => { if (proxyPathDraft.options) proxyPathDraft.options[field] = value; },
+  });
+}
+const proxyGzipMode = proxyPathStringOption('gzipMode');
+const proxyBufferingMode = proxyPathStringOption('bufferingMode');
+const proxyWebSocketMode = proxyPathStringOption('webSocketMode');
+const proxyClientMaxBodySizeMb = proxyPathNumberOption('clientMaxBodySizeMb');
+const proxyConnectTimeoutSeconds = proxyPathNumberOption('connectTimeoutSeconds');
+const proxyReadTimeoutSeconds = proxyPathNumberOption('readTimeoutSeconds');
+const proxySendTimeoutSeconds = proxyPathNumberOption('sendTimeoutSeconds');
+const proxyPrimaryOriginOptions = computed(() => proxyDraft.originServerIds.map((id) => ({ label: serverDisplayName(id), value: id })));
+const proxyAutoOriginIds = computed(() => {
+  const deployed = new Set<string>();
+  if (selectedApplication.value?.id) {
+    (runtimes.value[selectedApplication.value.id]?.instances ?? []).forEach((instance) => {
+      if (instance.serverId) deployed.add(instance.serverId);
+    });
+  }
+  if (appDraft.deploymentMode === 'selected') appDraft.deploymentServers.forEach((id) => deployed.add(id));
+  return (facility.value?.deploymentServers ?? []).filter((id) => deployed.has(id));
+});
 
 const applicationAssetAdapter: AssetFileAdapter = {
   async upload({ file, kind }) {
@@ -989,12 +1040,50 @@ function saveMountDialog() {
 function openProxyDialog(index = -1) {
   dialogKind.value = 'proxy';
   dialogIndex.value = index;
-  Object.assign(proxyDraft, index >= 0 ? cloneProxyRules([appDraft.reverseProxy[index]])[0] : makeProxyRule());
+  const base = index >= 0 ? cloneProxyRules([appDraft.reverseProxy[index]])[0] : makeProxyRule();
+  Object.assign(proxyDraft, {
+    ...base,
+    originManual: index >= 0 && Boolean(appDraft.reverseProxy[index].originServerIds.length),
+  });
   dialogOpen.value = true;
 }
 
+function addCommandRow() {
+  appDraft.commandRows.push({ id: `cmd-${Date.now()}-${appDraft.commandRows.length}`, value: '' });
+  markAppStructuredDirty();
+}
+
+function removeCommandRow(id: string) {
+  const index = appDraft.commandRows.findIndex((row) => row.id === id);
+  if (index >= 0) {
+    appDraft.commandRows.splice(index, 1);
+    markAppStructuredDirty();
+  }
+}
+
 function saveProxyDialog() {
-  const next = cloneProxyRules([proxyDraft])[0];
+  const origins = proxyDraft.originManual ? [...proxyDraft.originServerIds] : [...proxyAutoOriginIds.value];
+  const port = Number(proxyDraft.targetPort);
+  const targetType = proxyDraft.targetType === 'local' || proxyDraft.targetType === 'container' ? proxyDraft.targetType : undefined;
+  const next: ReverseProxyRule = {
+    domain: proxyDraft.domain.trim().toLowerCase(),
+    targetType,
+    targetPort: Number.isFinite(port) && port > 0 ? port : 0,
+    originServerIds: origins,
+    anyAccess: {
+      enabled: Boolean(proxyDraft.anyAccess.enabled),
+      strategy: proxyDraft.anyAccess.enabled ? (proxyDraft.anyAccess.strategy || 'round_robin') : '',
+      primaryOriginServerId: proxyDraft.anyAccess.enabled ? (proxyDraft.anyAccess.primaryOriginServerId || '') : '',
+    },
+    paths: proxyDraft.paths.map((path) => ({
+      path: path.path.trim() || '/',
+      webSocket: Boolean(path.webSocket),
+      options: {
+        ...defaultRouteOptions(),
+        ...(path.options ?? {}),
+      },
+    })),
+  };
   if (dialogIndex.value >= 0) appDraft.reverseProxy[dialogIndex.value] = next;
   else appDraft.reverseProxy.push(next);
   dialogOpen.value = false;
@@ -1006,11 +1095,22 @@ function openProxyPathDialog(index = -1) {
   dialogParentIndex.value = dialogIndex.value;
   dialogIndex.value = index;
   Object.assign(proxyPathDraft, index >= 0 ? proxyDraft.paths[index] : makeProxyPath());
+  if (!proxyPathDraft.options) Object.assign(proxyPathDraft, { options: defaultRouteOptions() });
+  proxyRequestHeaders.value = (proxyPathDraft.options?.requestHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
+  proxyResponseHeaders.value = (proxyPathDraft.options?.responseHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
   dialogOpen.value = true;
 }
 
 function saveProxyPathDialog() {
-  const next = { ...proxyPathDraft, options: { ...defaultRouteOptions(), ...(proxyPathDraft.options ?? {}) } };
+  const next = {
+    ...proxyPathDraft,
+    options: {
+      ...defaultRouteOptions(),
+      ...(proxyPathDraft.options ?? {}),
+      requestHeaders: proxyRequestHeaders.value.filter((row) => row.key.trim() || row.value.trim()).map((row) => ({ name: row.key.trim(), value: row.value })),
+      responseHeaders: proxyResponseHeaders.value.filter((row) => row.key.trim() || row.value.trim()).map((row) => ({ name: row.key.trim(), value: row.value })),
+    },
+  };
   if (dialogIndex.value >= 0) proxyDraft.paths[dialogIndex.value] = next;
   else proxyDraft.paths.push(next);
   dialogKind.value = 'proxy';
@@ -1341,7 +1441,7 @@ onBeforeUnmount(() => {
                   <section v-else-if="appTab === 'routes'" class="grid gap-3">
                     <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="rounded-2xl border border-border bg-background p-4">
                       <div class="flex items-center justify-between gap-2"><strong>{{ rule.domain }}</strong><Badge tone="info">{{ rule.targetPort }}</Badge></div>
-                      <p class="text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }}</p>
+                      <p class="text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }} · {{ rule.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
                       <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="path in rule.paths" :key="path.path" tone="neutral">{{ path.path }}</Badge></div>
                     </div>
                     <EmptyState v-if="!selectedApplication.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.noRoutesHint')" />
@@ -1470,7 +1570,8 @@ onBeforeUnmount(() => {
           <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
         </div>
         <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-        <div class="app-editor-layout">
+        <div class="relative app-editor-layout">
+          <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
           <section class="app-editor-shell">
             <div class="app-editor-header">
               <p class="editor-flow-hint">{{ t('applicationsPage.gatewayEditorFlowHint') }}</p>
@@ -1630,7 +1731,8 @@ onBeforeUnmount(() => {
       </div>
       <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
 
-      <div class="app-editor-layout">
+      <div class="relative app-editor-layout">
+        <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
         <section class="app-editor-shell">
           <div class="app-editor-header">
             <div class="app-editor-title-row">
@@ -1662,7 +1764,16 @@ onBeforeUnmount(() => {
                 <label class="field">{{ t('applicationsPage.networkMode') }}<Select v-model="appDraft.networkMode" :options="[{ label: 'bridge', value: 'bridge' }, { label: 'host', value: 'host' }]" @change="markAppStructuredDirty" /></label>
                 <label class="field">{{ t('applicationsPage.cpu') }}<Input v-model="appDraft.cpu" placeholder="0.5" @input="markAppStructuredDirty" /></label>
                 <label class="field">{{ t('applicationsPage.memoryMb') }}<Input v-model="appDraft.memoryMb" placeholder="512" @input="markAppStructuredDirty" /></label>
-                <label class="field wide-field">{{ t('applicationsPage.command') }}<Textarea v-model="appDraft.commandText" :placeholder="t('applicationsPage.commandHint')" @input="markAppStructuredDirty" /></label>
+                <div class="field wide-field">
+                  <span>{{ t('applicationsPage.command') }}</span>
+                  <div class="grid gap-2">
+                    <div v-for="row in appDraft.commandRows" :key="row.id" class="header-row">
+                      <Input v-model="row.value" :placeholder="t('applicationsPage.commandArgument')" @input="markAppStructuredDirty" />
+                      <Button size="sm" variant="danger" class="shrink-0" @click="removeCommandRow(row.id)"><Trash2 /></Button>
+                    </div>
+                    <Button size="sm" class="justify-self-start" @click="addCommandRow"><Plus />{{ t('common.add') }}</Button>
+                  </div>
+                </div>
                 <label class="switch-field wide-field">{{ t('applicationsPage.privileged') }}<Switch v-model="appDraft.privileged" :label="t('applicationsPage.privileged')" @click="markAppStructuredDirty" /></label>
               </div>
             </section>
@@ -1784,13 +1895,53 @@ onBeforeUnmount(() => {
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="proxyDraft.domain" /></label>
       <label class="field">{{ t('applicationsPage.targetPort') }}<Input v-model="proxyDraft.targetPort" /></label>
       <label class="field">{{ t('applicationsPage.targetType') }}<Select v-model="proxyDraft.targetType" :options="[{ label: 'local', value: 'local' }, { label: 'container', value: 'container' }]" /></label>
-      <ServerMultiPicker v-model="proxyOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: proxyDraft.originServerIds.length })" />
+      <div class="options-block">
+        <div class="section-copy"><h3>{{ t('applicationsPage.originServers') }}</h3><p>{{ t('applicationsPage.proxyOriginHint') }}</p></div>
+        <label class="switch-field">{{ t('applicationsPage.proxyOriginAuto') }}<Switch v-model="proxyOriginAutoModel" :label="t('applicationsPage.proxyOriginAuto')" /></label>
+        <p v-if="!proxyDraft.originManual" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.proxyOriginAutoSummary', { count: proxyAutoOriginIds.length }) }} · {{ proxyAutoOriginIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
+        <p v-if="!proxyDraft.originManual && !proxyAutoOriginIds.length" class="m-0 text-sm text-danger">{{ t('applicationsPage.validationOriginServers') }}</p>
+        <ServerMultiPicker v-else v-model="proxyOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: proxyDraft.originServerIds.length })" />
+      </div>
+      <div class="options-block">
+        <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
+        <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>
+        <div v-if="proxyDraft.anyAccess.enabled" class="grid gap-3">
+          <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="proxyDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
+          <label v-if="proxyDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="proxyDraft.anyAccess.primaryOriginServerId" :options="proxyPrimaryOriginOptions" /></label>
+        </div>
+      </div>
       <div class="section-heading"><strong>{{ t('common.path') }}</strong><Button size="sm" @click="openProxyPathDialog()"><Plus />{{ t('common.addPath') }}</Button></div>
       <div v-for="(path, index) in proxyDraft.paths" :key="`${path.path}-${index}`" class="item-row"><div><strong>{{ path.path }}</strong><span>WebSocket: {{ path.webSocket ? 'on' : 'off' }}</span></div><div class="row-actions"><Button size="sm" @click="openProxyPathDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="proxyDraft.paths.splice(index, 1)">{{ t('common.delete') }}</Button></div></div>
     </div>
     <div v-else-if="dialogKind === 'proxyPath'" class="grid gap-3">
       <label class="field">{{ t('common.path') }}<Input v-model="proxyPathDraft.path" /></label>
       <label class="field">{{ t('applicationsPage.webSocket') }}<Switch v-model="proxyPathWebSocket" :label="t('applicationsPage.webSocket')" /></label>
+      <div class="options-block">
+        <div class="section-copy"><h3>{{ t('applicationsPage.advancedOptions') }}</h3><p>{{ t('applicationsPage.advancedOptionsHint') }}</p></div>
+        <label class="field">{{ t('applicationsPage.gzipMode') }}<Select v-model="proxyGzipMode" :options="httpModeOptions" /></label>
+        <div class="form-grid">
+          <label class="field">{{ t('applicationsPage.clientMaxBodySizeMb') }}<Input v-model="proxyClientMaxBodySizeMb" type="number" min="0" /></label>
+          <label class="field">{{ t('applicationsPage.connectTimeoutSeconds') }}<Input v-model="proxyConnectTimeoutSeconds" type="number" min="0" /></label>
+          <label class="field">{{ t('applicationsPage.readTimeoutSeconds') }}<Input v-model="proxyReadTimeoutSeconds" type="number" min="0" /></label>
+          <label class="field">{{ t('applicationsPage.sendTimeoutSeconds') }}<Input v-model="proxySendTimeoutSeconds" type="number" min="0" /></label>
+          <label class="field">{{ t('applicationsPage.bufferingMode') }}<Select v-model="proxyBufferingMode" :options="httpModeOptions" /></label>
+          <label class="field">{{ t('applicationsPage.webSocketMode') }}<Select v-model="proxyWebSocketMode" :options="webSocketModeOptions" /></label>
+        </div>
+        <div class="options-subheading">{{ t('applicationsPage.requestHeaders') }}</div>
+        <div v-for="(row, index) in proxyRequestHeaders" :key="row.id" class="header-row">
+          <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
+          <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
+          <Button size="sm" variant="danger" class="shrink-0" @click="proxyRequestHeaders.splice(index, 1)"><Trash2 /></Button>
+        </div>
+        <Button size="sm" class="justify-self-start" @click="proxyRequestHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
+        <div class="options-subheading">{{ t('applicationsPage.responseHeaders') }}</div>
+        <div v-for="(row, index) in proxyResponseHeaders" :key="row.id" class="header-row">
+          <Input v-model="row.key" :placeholder="t('applicationsPage.headerName')" />
+          <Input v-model="row.value" :placeholder="t('applicationsPage.headerValue')" />
+          <Button size="sm" variant="danger" class="shrink-0" @click="proxyResponseHeaders.splice(index, 1)"><Trash2 /></Button>
+        </div>
+        <Button size="sm" class="justify-self-start" @click="proxyResponseHeaders.push(makeKeyValueRow())"><Plus />{{ t('common.add') }}</Button>
+      </div>
     </div>
     <div v-else-if="dialogKind === 'facilityDomain'" class="grid gap-3">
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityDomainDraft.domain" :invalid="Boolean(facilityDomainErrors.domain)" @input="clearFacilityDomainError('domain')" /></label>

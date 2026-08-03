@@ -2968,8 +2968,8 @@ func (s *Service) verifyLifecycleTargetNow(ctx context.Context, targetID string)
 			return err
 		}
 		if strings.TrimSpace(target.DesiredSpecHash) != "" && strings.TrimSpace(instance.RuntimeSpec.SpecHash) != strings.TrimSpace(target.DesiredSpecHash) {
-			err := fmt.Errorf("runtime spec hash %s does not match desired spec hash %s", instance.RuntimeSpec.SpecHash, target.DesiredSpecHash)
-			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, false)
+			err := fmt.Errorf("runtime container configuration does not match the expected configuration (spec hash mismatch: running %s, expected %s)", instance.RuntimeSpec.SpecHash, target.DesiredSpecHash)
+			_ = s.failLifecycleTargetExecution(ctx, target.ID, "verify", "verify_failed", err, true)
 			return err
 		}
 	case LifecycleTargetActionStop, LifecycleTargetActionPurge:
@@ -3082,11 +3082,15 @@ func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, oper
 	for _, t := range targets {
 		total++
 		serverID, state, errText := t.ServerID, t.State, t.Error
+		targetName := serverNameForImageTarget(ctx, s.servers, serverID)
+		if targetName == "" {
+			targetName = serverID
+		}
 		switch state {
 		case LifecycleTargetStateFailed, LifecycleTargetStateCancelled:
 			failed++
 			if strings.TrimSpace(errText) != "" {
-				failures = append(failures, runtimeDeploymentFailure{targetName: serverID, err: errors.New(errText)})
+				failures = append(failures, runtimeDeploymentFailure{targetName: targetName, err: errors.New(errText)})
 			}
 		case LifecycleTargetStateSuperseded:
 			superseded++

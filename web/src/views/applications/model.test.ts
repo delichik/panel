@@ -181,9 +181,9 @@ describe('facility path dialog validation', () => {
     expect(errors.path).toBe('applicationsPage.validationPath');
   });
 
-  it('treats an empty path as valid (defaults to /)', () => {
+  it('rejects an empty path', () => {
     const errors = validateFacilityPathFields({ path: '', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' });
-    expect(errors).toEqual({});
+    expect(errors.path).toBe('applicationsPage.validationPath');
   });
 });
 describe('facility domain dialog validation', () => {

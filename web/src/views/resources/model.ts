@@ -52,7 +52,6 @@ export function containerTone(container: ContainerDto): Tone {
 }
 
 export function containerActionDisabled(container: ContainerDto, action: 'start' | 'stop' | 'restart' | 'delete') {
-  if (container.managed) return 'resourcesPage.managedContainerBlocked';
   if (action === 'start' && container.state === 'running') return 'resourcesPage.containerAlreadyRunning';
   if ((action === 'stop' || action === 'restart') && container.state !== 'running') return 'resourcesPage.containerNotRunning';
   return '';

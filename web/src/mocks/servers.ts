@@ -202,7 +202,7 @@ export let mockServers: ServerDto[] = [
 
 export function createServer(input: ServerSaveInput): ServerDto {
   const item = {
-    ...server(`srv-${Date.now()}`, input.name, input.host, input.credentialId, true, input.traits),
+    ...server(`srv-${Date.now()}`, input.name, input.host, input.credentialId, true, input.traits ?? {}),
     port: input.port,
     sshUsername: input.sshUsername,
     dockerHost: input.dockerHost,

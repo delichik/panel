@@ -343,9 +343,6 @@ func (s *Service) ContainerAction(ctx context.Context, serverID, containerID, ac
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.ensureContainerActionAllowed(ctx, serverID, containerID); err != nil {
-		return OperationResult{}, err
-	}
 	if err := s.Execute(ctx, serverID, func(runCtx context.Context) error {
 		err := s.agent.DockerContainerAction(runCtx, baseURL, containerID, action)
 		if err != nil {
@@ -363,9 +360,6 @@ func (s *Service) DeleteContainer(ctx context.Context, serverID, containerID str
 	if err != nil {
 		return OperationResult{}, err
 	}
-	if err := s.ensureContainerActionAllowed(ctx, serverID, containerID); err != nil {
-		return OperationResult{}, err
-	}
 	if err := s.Execute(ctx, serverID, func(runCtx context.Context) error {
 		err := s.agent.DockerContainerDelete(runCtx, baseURL, containerID)
 		if err != nil {
@@ -376,25 +370,6 @@ func (s *Service) DeleteContainer(ctx context.Context, serverID, containerID str
 		return OperationResult{}, err
 	}
 	return s.refreshOperationResult(ctx, serverID, "containers")
-}
-
-func (s *Service) ensureContainerActionAllowed(ctx context.Context, serverID, containerID string) error {
-	containerID = strings.TrimSpace(containerID)
-	if s == nil || s.db == nil || strings.TrimSpace(serverID) == "" || containerID == "" {
-		return nil
-	}
-	var row containerObservationRow
-	err := orm.New(s.db).From("container_observations").Select("application_id").
-		Where("server_id = ?", serverID).And("container_id = ?", containerID).
-		And("managed = 1").And("application_id <> ''").OrderBy("sample_at DESC").
-		First(ctx, &row)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	return panelerr.Conflict("container_managed_by_application", "Managed application containers must be changed from the application lifecycle")
 }
 
 func (s *Service) Images(ctx context.Context, serverID string) (ImageList, error) {

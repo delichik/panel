@@ -58,9 +58,10 @@ describe('resources model', () => {
     expect(selectedPackageNames({ openssl: true, nginx: false })).toEqual(['openssl']);
   });
 
-  it('blocks direct mutations for managed application containers', () => {
+  it('allows direct mutations for managed application containers', () => {
     expect(containerActionDisabled(container, 'stop')).toBe('');
-    expect(containerActionDisabled({ ...container, managed: true }, 'stop')).toBe('resourcesPage.managedContainerBlocked');
+    expect(containerActionDisabled({ ...container, managed: true }, 'stop')).toBe('');
+    expect(containerActionDisabled({ ...container, managed: true }, 'delete')).toBe('');
     expect(containerActionDisabled({ ...container, state: 'exited' }, 'restart')).toBe('resourcesPage.containerNotRunning');
   });
 

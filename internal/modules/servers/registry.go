@@ -28,8 +28,8 @@ func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
 		SSHUsername:  req.SSHUsername,
 		CredentialID: req.CredentialID,
 		DockerHost:   normalizeDockerHost(req.DockerHost),
-		Traits:       req.Traits,
-		Variables:    normalizeServerVariables(req.Variables, req.Traits),
+		Traits:       map[string]string{},
+		Variables:    normalizeServerVariables(req.Variables, map[string]string{}),
 		Notes:        req.Notes,
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -59,17 +59,14 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	if err != nil {
 		return Server{}, err
 	}
-	if req.Traits == nil {
-		req.Traits = map[string]string{}
-	}
-	if strings.TrimSpace(current.Host) != strings.TrimSpace(req.Host) && serverHasAgentConfigured(current, req.Traits) {
-		req.Traits[agentcontract.TraitEnabled] = "true"
-		req.Traits[agentcontract.TraitURL] = agentDefaultURL(req.Host)
-		req.Traits[agentcontract.TraitStatus] = agentcontract.StatusIncompatible
-		req.Traits[agentcontract.TraitLastError] = "server host changed; agent redeployment required"
-		delete(req.Traits, agentcontract.TraitCertificateFingerprint)
-		delete(req.Traits, agentcontract.TraitCertificateNotBefore)
-		delete(req.Traits, agentcontract.TraitCertificateNotAfter)
+	if strings.TrimSpace(current.Host) != strings.TrimSpace(req.Host) && serverHasAgentConfigured(current, current.Traits) {
+		current.Traits[agentcontract.TraitEnabled] = "true"
+		current.Traits[agentcontract.TraitURL] = agentDefaultURL(req.Host)
+		current.Traits[agentcontract.TraitStatus] = agentcontract.StatusIncompatible
+		current.Traits[agentcontract.TraitLastError] = "server host changed; agent redeployment required"
+		delete(current.Traits, agentcontract.TraitCertificateFingerprint)
+		delete(current.Traits, agentcontract.TraitCertificateNotBefore)
+		delete(current.Traits, agentcontract.TraitCertificateNotAfter)
 	}
 	current.Name = req.Name
 	current.Host = req.Host
@@ -77,8 +74,7 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 	current.SSHUsername = req.SSHUsername
 	current.CredentialID = req.CredentialID
 	current.DockerHost = normalizeDockerHost(req.DockerHost)
-	current.Traits = req.Traits
-	current.Variables = normalizeServerVariables(req.Variables, req.Traits)
+	current.Variables = normalizeServerVariables(req.Variables, current.Traits)
 	current.Notes = req.Notes
 	current.UpdatedAt = time.Now().UTC()
 	if err := s.repo.Update(ctx, current); err != nil {
