@@ -187,12 +187,8 @@ function serverDisplayName(id: string) {
 }
 const serverOptions = computed(() => {
   const byId = new Map(servers.value.map((server) => [server.id, server]));
-  const ids = new Set<string>();
-  Object.values(applicationDetails.value).forEach((app) => app.deploymentServers.forEach((id) => ids.add(id)));
-  appDraft.deploymentServers.forEach((id) => ids.add(id));
-  facility.value?.deploymentServers.forEach((id) => ids.add(id));
-  facility.value?.enabledServers.forEach((id) => ids.add(id));
-  return Array.from(ids).map((id) => {
+  return servers.value.map((item) => {
+    const id = item.id;
     const server = byId.get(id);
     return {
       id,
@@ -203,6 +199,23 @@ const serverOptions = computed(() => {
     };
   });
 });
+const deploymentDisabledIds = computed(() => servers.value.filter((server) => !serverCanDeploy(server)).map((server) => server.id));
+const deploymentDisabledReasons = computed(() => {
+  const out: Record<string, string> = {};
+  servers.value.forEach((server) => {
+    const reason = serverDeployBlockReason(server);
+    if (reason) out[server.id] = reason;
+  });
+  return out;
+});
+function serverCanDeploy(server: ServerDto) {
+  return server.traits?.['agent.status'] === 'compatible' && Boolean(server.traits?.['agent.url']);
+}
+function serverDeployBlockReason(server: ServerDto) {
+  if (server.traits?.['agent.status'] === 'compatible' && server.traits?.['agent.url']) return '';
+  if (!server.reachable) return t('resourcesPage.blockUnreachable');
+  return t('resourcesPage.blockAgent');
+}
 const assetOptions = computed(() => [
   ...(facility.value?.staticAssets ?? []).map((asset) => ({ value: asset.name, label: `${asset.name} / ${asset.filename}` })),
   ...(facilitySession.value?.assets ?? []).map((asset) => ({ value: asset.name, label: `${asset.name} / ${asset.filename}` })),
@@ -1803,7 +1816,7 @@ onBeforeUnmount(() => {
               <div class="section-copy"><h3>{{ t('applicationsPage.panelDeployment') }}</h3><p>{{ t('applicationsPage.deployHint') }}</p></div>
               <label class="field">{{ t('applicationsPage.deploymentMode') }}<Select v-model="appDraft.deploymentMode" :options="[{ label: t('applicationsPage.allServers'), value: 'all' }, { label: t('applicationsPage.selectedServers'), value: 'selected' }]" @change="markAppStructuredDirty" /></label>
               <div v-if="appDraft.deploymentMode === 'selected'" class="server-picker-grid">
-                <ServerMultiPicker v-model="appDeploymentServersModel" :servers="serverOptions" :label="t('applicationsPage.deploymentServers')" />
+                <ServerMultiPicker v-model="appDeploymentServersModel" :servers="serverOptions" :disabled-ids="deploymentDisabledIds" :disabled-reasons="deploymentDisabledReasons" :label="t('applicationsPage.deploymentServers')" />
               </div>
             </section>
 
