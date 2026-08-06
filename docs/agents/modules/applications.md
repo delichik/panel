@@ -4,6 +4,7 @@
 
 - `GET /api/v1/applications` returns `ListPage<ApplicationSummary>` and accepts only `page`, `pageSize`, and `q`.
 - The summary query reads list columns only, limits runtime aggregation to current-page IDs, and never parses application YAML/JSON or contacts nodes and registries.
+- The summary includes `instanceCount` aggregated from the current-page `application_instances` rows in the same batch query, so the left list does not issue per-application runtime calls.
 - Complete application and runtime data is loaded by separate ID-based endpoints.
 
 ## 适用场景
@@ -87,8 +88,9 @@
 - 设施 runtime provider 可额外实现逐次更新规划。默认和未知结果均为 recreate；只有设施为当前新旧 spec 明确返回 reload strategy，且应用层确认镜像、命令、环境、网络、端口、挂载、权限、资源和 restart 等容器结构完全一致时，才调用 Agent `RuntimeReload`。validate 失败保留旧容器并使 target 失败；reload 或 reload 后状态确认失败时在同一服务器操作队列内回退现有 recreate 流程。
 - Docker labels 在创建后不可修改。Agent 在 recreate 或 reload 成功后写入实例 `applied-state.json`，容器报告仅在 container ID/name 匹配时用动态 generation/spec hash 覆盖静态 labels，避免成功 reload 后被协调器误判为旧版本。
 - 应用目标任务在任务中心展示为“应用目标应用 / 停止 / 清理”，表示 Panel 已完成一次目标收敛请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
-- 应用列表接口使用 `ApplicationSummary[]`，只包含首屏必要字段：`id`、`name`、`enabled`、`imageReference`、`jobId`、`namespace`、`runtimeStatus`、`imageUpdateAvailable`、`lastError`、`updatedAt`。列表必须走专用摘要查询，只读取摘要列，并用固定数量的本地批量查询合并运行时实例状态和最近 lifecycle operation targets；不得调用完整应用 scanner、解析 appspec/YAML/配置 JSON，也不得逐应用、逐实例或逐节点查询。`specYaml`、`variables`、`reverseProxy`、`deploymentServers`、`persistentPath`、`imageUpdateTargets`、`specHash`、`generation`、`lastEvalId`、`lastDeploymentId` 等详情/诊断字段只从 `GET /api/v1/applications/{id}` 获取。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。
+- 应用列表接口使用 `ApplicationSummary[]`，只包含首屏必要字段：`id`、`name`、`enabled`、`imageReference`、`instanceCount`、`jobId`、`namespace`、`runtimeStatus`、`imageUpdateAvailable`、`lastError`、`updatedAt`。列表必须走专用摘要查询，只读取摘要列，并用固定数量的本地批量查询合并运行时实例状态、实例数量（`instanceCount`）和最近 lifecycle operation targets；不得调用完整应用 scanner、解析 appspec/YAML/配置 JSON，也不得逐应用、逐实例或逐节点查询。`specYaml`、`variables`、`reverseProxy`、`deploymentServers`、`persistentPath`、`imageUpdateTargets`、`specHash`、`generation`、`lastEvalId`、`lastDeploymentId` 等详情/诊断字段只从 `GET /api/v1/applications/{id}` 获取。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。
 - 普通应用页首屏只加载应用列表必要数据，不加载设施接口，也不预拉多个应用的 runtime；当前选中应用的 runtime 在列表可用后异步按需加载。设施目录、详情和配置页进入对应模式时再加载设施数据；直达设施 URL 必须先加载设施目录后再判断是否支持该 `facilityKind`。
+- 左侧列表行的镜像与实例数量来自摘要，列表加载或刷新期间行内显示骨架动画，不使用 `jobId` 或 0 占位。摘要缺少 `imageReference` 的历史应用，前端按行异步读取详情补齐镜像，补齐范围只限当前页缺少镜像引用的行，不得扩大到全部应用，也不得改为预拉多个应用的 runtime。
 - 应用页面在桌面端是满高主从布局，左侧选择器和右侧详情正文内部滚动。创建/编辑应用使用隐藏独立页和连续纵向配置流，宽屏为主体 + sticky 摘要，中屏摘要下移，窄屏恢复页面级滚动并保持提交栏可达；不得恢复左 rail、分页卡片或依赖横向滚动。部署、停止和删除操作位于详情标题或操作区，不放在选择行中。
 - 应用、设施应用、创建/编辑应用中的操作入口必须复用 `AppActionButton` 和 `AppActionGroup`：详情级编辑、同步、停用、重启等位于详情标题区；挂载、反向代理、文件和路由摘要行的编辑/删除位于行尾并使用带文字的小按钮；完整编辑表单进入标准 dialog，避免在页面正文下方展开一组容易误解的操作区。
 - 应用页面不展示应用总数、已启用和需要关注摘要卡，页面级提示后直接进入主从工作区。

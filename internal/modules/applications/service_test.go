@@ -68,6 +68,10 @@ func TestListSummariesDoesNotLoadApplicationDetails(t *testing.T) {
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, "instance-1", app.ID, "srv-a", "panel-web", "container-1", "running", appruntime.StatusRunning, "not-json", 1, "", now, now); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, "instance-2", app.ID, "srv-b", "panel-web", "container-2", "running", appruntime.StatusRunning, "not-json", 1, "", now, now); err != nil {
+		t.Fatal(err)
+	}
 
 	page, err := svc.ListSummaries(ctx, 1, 50, "")
 	if err != nil {
@@ -79,6 +83,9 @@ func TestListSummariesDoesNotLoadApplicationDetails(t *testing.T) {
 	}
 	if summaries[0].ID != app.ID || summaries[0].RuntimeStatus != appruntime.StatusRunning || !summaries[0].ImageUpdateAvailable {
 		t.Fatalf("summary = %#v", summaries[0])
+	}
+	if summaries[0].InstanceCount != 2 {
+		t.Fatalf("summary instance count = %d", summaries[0].InstanceCount)
 	}
 }
 

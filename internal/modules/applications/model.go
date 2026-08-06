@@ -109,6 +109,7 @@ type ApplicationSummary struct {
 	Name                 string    `json:"name"`
 	Enabled              bool      `json:"enabled"`
 	ImageReference       string    `json:"imageReference,omitempty"`
+	InstanceCount        int       `json:"instanceCount"`
 	JobID                string    `json:"jobId"`
 	Namespace            string    `json:"namespace"`
 	RuntimeStatus        string    `json:"runtimeStatus,omitempty"`

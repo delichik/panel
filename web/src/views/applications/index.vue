@@ -96,6 +96,8 @@ const applications = ref<ApplicationSummaryDto[]>([]);
 const applicationDetails = ref<Record<string, ApplicationDto>>({});
 const applicationFiles = ref<Record<string, ApplicationFile[]>>({});
 const runtimes = ref<Record<string, ApplicationRuntime>>({});
+const rowImageLoading = ref<Record<string, boolean>>({});
+const rowImageControllers = new Map<string, AbortController>();
 const facility = ref<ReverseProxyConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
 const search = ref(String(route.query.search ?? ''));
@@ -524,6 +526,7 @@ watch(selectedId, async (value) => {
 watch(() => route.path, async () => {
   cancelRuntimeLoad();
   cancelApplicationDetailLoad();
+  cancelRowImageLoads();
   cancelEditorQuery();
   actionError.value = '';
   feedback.value = '';
@@ -553,6 +556,7 @@ async function load() {
   if (currentMode !== 'apps') {
     cancelRuntimeLoad();
     cancelApplicationDetailLoad();
+    cancelRowImageLoads();
   }
   if (currentMode === 'apps') {
     await loadApplications({ loadSelectedRuntime: true });
@@ -575,8 +579,36 @@ async function loadServers() {
   }
 }
 
+function rowImageReference(app: ApplicationSummaryDto) {
+  return applicationDetails.value[app.id]?.imageReference || app.imageReference || '';
+}
+
+function cancelRowImageLoads() {
+  rowImageControllers.forEach((controller) => controller.abort());
+  rowImageControllers.clear();
+  rowImageLoading.value = {};
+}
+
+async function loadRowImageDetail(applicationId: string) {
+  const controller = new AbortController();
+  rowImageControllers.set(applicationId, controller);
+  try {
+    const app = await applicationsApi.get(applicationId, { signal: controller.signal });
+    if (rowImageControllers.get(applicationId) !== controller || mode.value !== 'apps') return;
+    applicationDetails.value = { ...applicationDetails.value, [applicationId]: app };
+  } catch {
+    // Keep the summary or job fallback when the image cannot be resolved.
+  } finally {
+    if (rowImageControllers.get(applicationId) === controller) {
+      rowImageControllers.delete(applicationId);
+      rowImageLoading.value = { ...rowImageLoading.value, [applicationId]: false };
+    }
+  }
+}
+
 async function loadApplications(options: { loadSelectedRuntime?: boolean } = {}) {
   pageLoadController?.abort();
+  cancelRowImageLoads();
   const requestId = ++pageLoadRequestId;
   const controller = new AbortController();
   pageLoadController = controller;
@@ -589,6 +621,14 @@ async function loadApplications(options: { loadSelectedRuntime?: boolean } = {})
     const apps = result.items;
     applications.value = apps;
     totalApplications.value = result.total;
+    if (modeAtStart === 'apps') {
+      const missing: Record<string, boolean> = {};
+      apps.forEach((app) => {
+        if (!app.imageReference) missing[app.id] = true;
+      });
+      rowImageLoading.value = missing;
+      Object.keys(missing).forEach((id) => { void loadRowImageDetail(id); });
+    }
     const appIds = new Set(apps.map((item) => item.id));
     applicationDetails.value = Object.fromEntries(Object.entries(applicationDetails.value).filter(([id]) => appIds.has(id)));
     selectedId.value = apps.some((item) => item.id === selectedId.value) ? selectedId.value : apps[0]?.id ?? '';
@@ -1385,6 +1425,7 @@ onBeforeUnmount(() => {
   pageLoadController?.abort();
   cancelRuntimeLoad();
   cancelApplicationDetailLoad();
+  cancelRowImageLoads();
   cancelEditorQuery();
 });
 </script>
@@ -1422,9 +1463,11 @@ onBeforeUnmount(() => {
               <strong class="truncate text-sm text-foreground">{{ row.app.name }}</strong>
               <StatusBadge :status="applicationStatus(row.app, runtimes[row.app.id])" :tone="statusTone(applicationStatus(row.app, runtimes[row.app.id]))" :label="t(`applicationsPage.status.${applicationStatus(row.app, runtimes[row.app.id])}`)" />
             </div>
-            <span class="truncate text-xs text-muted-foreground">{{ row.app.imageReference || row.app.jobId }}</span>
+            <span v-if="!loading && !(rowImageLoading[row.app.id] && !rowImageReference(row.app))" class="truncate text-xs text-muted-foreground">{{ rowImageReference(row.app) || row.app.jobId }}</span>
+            <div v-else class="motion-skeleton h-3 w-56 max-w-full rounded bg-muted animate-pulse" aria-hidden="true" />
             <div class="flex flex-wrap gap-1.5">
-              <Badge tone="info">{{ t('applicationsPage.instancesCount', { count: row.summary.total }) }}</Badge>
+              <Badge v-if="!loading" tone="info">{{ t('applicationsPage.instancesCount', { count: row.app.instanceCount ?? row.summary.total }) }}</Badge>
+              <div v-else class="motion-skeleton h-5 w-16 rounded-full bg-muted animate-pulse" aria-hidden="true" />
               <Badge :tone="row.app.imageUpdateAvailable ? 'warning' : 'neutral'">{{ row.app.imageUpdateAvailable ? t('applicationsPage.imageUpdate') : t('applicationsPage.imageCurrent') }}</Badge>
             </div>
           </button>
@@ -1605,18 +1648,25 @@ onBeforeUnmount(() => {
               <p class="m-0 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
             </div>
             <div class="facility-card-stats">
-              <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
-              <div class="facility-card-stat"><strong>{{ facility?.deploymentServers.length ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayNodes') }}</span></div>
-              <div class="facility-card-stat"><strong>{{ facility?.staticAssets.length ?? '—' }}</strong><span>{{ t('applicationsPage.staticAssets') }}</span></div>
+              <template v-if="loading">
+                <div v-for="stat in 3" :key="stat" class="facility-card-stat" aria-hidden="true">
+                  <div class="motion-skeleton h-6 w-12 rounded bg-muted animate-pulse" />
+                  <div class="motion-skeleton mt-1 h-3 w-20 rounded bg-muted animate-pulse" />
+                </div>
+              </template>
+              <template v-else>
+                <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
+                <div class="facility-card-stat"><strong>{{ facility?.deploymentServers.length ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayNodes') }}</span></div>
+                <div class="facility-card-stat"><strong>{{ facility?.staticAssets.length ?? '—' }}</strong><span>{{ t('applicationsPage.staticAssets') }}</span></div>
+              </template>
             </div>
             <div class="flex flex-wrap gap-2">
               <Button size="sm" @click.stop="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
             </div>
           </article>
           <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
-        </template>
       </div>
-    </section>
+    </div>
   </ConsolePage>
 
   <ConsolePage v-else-if="mode === 'facilityDetail' || mode === 'facilityConfig'" :back-label="t('common.back')" @back="goBackFromFacilityPage" :title="facilityEditingView ? t('applicationsPage.gatewayEditor') : (currentFacilitySummary ? t(currentFacilitySummary.titleKey) : t('applicationsPage.facilityUnavailable'))" :description="facilityEditingView ? t('applicationsPage.gatewayEditorDescription') : (currentFacilitySummary ? t(currentFacilitySummary.descriptionKey) : t('applicationsPage.facilityUnavailableDescription', { kind: facilityKind }))">

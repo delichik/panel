@@ -91,6 +91,7 @@ export interface ApplicationSummaryDto {
   name: string;
   enabled: boolean;
   imageReference?: string;
+  instanceCount?: number;
   jobId: string;
   namespace: string;
   runtimeStatus?: string;

@@ -444,6 +444,7 @@ export function mockApplicationSummaries(): ApplicationSummaryDto[] {
     name: app.name,
     enabled: app.enabled,
     imageReference: app.imageReference,
+    instanceCount: runtimes[app.id]?.instances.length ?? 0,
     jobId: app.jobId,
     namespace: app.namespace,
     runtimeStatus: app.runtimeStatus,

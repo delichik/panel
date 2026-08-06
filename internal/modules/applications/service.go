@@ -390,12 +390,14 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 		pageIDs = append(pageIDs, summary.ID)
 	}
 	statuses := make(map[string][]appruntime.InstanceStatus, len(summaries))
+	instanceCounts := make(map[string]int, len(summaries))
 	var instanceRows []models.ApplicationInstance
 	if err := orm.New(s.db).From("application_instances").Select("application_id", "status").AndIn("application_id", pageIDs).All(ctx, &instanceRows); err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
 	}
 	for _, m := range instanceRows {
 		statuses[m.ApplicationID] = append(statuses[m.ApplicationID], appruntime.InstanceStatus{Status: m.Status})
+		instanceCounts[m.ApplicationID]++
 	}
 
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(pageIDs)), ",")
@@ -427,6 +429,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 
 	for i := range summaries {
 		summaries[i].RuntimeStatus = aggregateRuntimeStatus(summaries[i].Enabled, statuses[summaries[i].ID])
+		summaries[i].InstanceCount = instanceCounts[summaries[i].ID]
 	}
 	return httpx.ListPage[ApplicationSummary]{Items: summaries, Total: total, Page: page, PageSize: pageSize}, nil
 }
