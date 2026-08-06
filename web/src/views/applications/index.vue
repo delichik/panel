@@ -134,7 +134,7 @@ const facilityDiagnostics = ref<Diagnostic[]>([]);
 const isDirty = ref(false);
 const saveStage = ref<SaveStage>('idle');
 const dialogOpen = ref(false);
-const dialogKind = ref<'variable' | 'env' | 'port' | 'mount' | 'proxy' | 'proxyPath' | 'facilityDomain' | 'facilityPath'>('variable');
+const dialogKind = ref<'env' | 'port' | 'mount' | 'proxy' | 'proxyPath' | 'facilityDomain' | 'facilityPath'>('env');
 const dialogIndex = ref(-1);
 const dialogParentIndex = ref(-1);
 const rowDraft = reactive<KeyValueRow>(makeKeyValueRow());
@@ -1087,15 +1087,15 @@ function applyYamlToForm() {
   feedback.value = t('applicationsPage.yamlApplied');
 }
 
-function openRowDialog(kind: 'variable' | 'env', index = -1) {
-  dialogKind.value = kind;
+function openRowDialog(index = -1) {
+  dialogKind.value = 'env';
   dialogIndex.value = index;
-  Object.assign(rowDraft, index >= 0 ? (kind === 'variable' ? appDraft.variables[index] : appDraft.env[index]) : makeKeyValueRow());
+  Object.assign(rowDraft, index >= 0 ? appDraft.env[index] : makeKeyValueRow());
   dialogOpen.value = true;
 }
 
 function saveRowDialog() {
-  const rows = dialogKind.value === 'variable' ? appDraft.variables : appDraft.env;
+  const rows = appDraft.env;
   const next = { ...rowDraft };
   if (dialogIndex.value >= 0) rows[dialogIndex.value] = next;
   else rows.push(next);
@@ -1103,8 +1103,8 @@ function saveRowDialog() {
   markAppStructuredDirty();
 }
 
-function removeRow(kind: 'variable' | 'env', index: number) {
-  (kind === 'variable' ? appDraft.variables : appDraft.env).splice(index, 1);
+function removeRow(index: number) {
+  appDraft.env.splice(index, 1);
   markAppStructuredDirty();
 }
 
@@ -1366,7 +1366,7 @@ function facilityPathTargetLabel(path: FacilityRoutePath) {
 }
 
 function emptyApplication(): ApplicationDto {
-  return { id: '', version: 0, kind: 'application', name: '', enabled: true, specYaml: '', variables: {}, deploymentMode: 'all', deploymentServers: [], reverseProxy: [], generation: 0, specHash: '', imageUpdateAvailable: false, jobId: '', namespace: '', createdAt: '', updatedAt: '' };
+  return { id: '', version: 0, kind: 'application', name: '', enabled: true, specYaml: '', deploymentMode: 'all', deploymentServers: [], reverseProxy: [], generation: 0, specHash: '', imageUpdateAvailable: false, jobId: '', namespace: '', createdAt: '', updatedAt: '' };
 }
 
 function applicationFromSummary(app?: ApplicationSummaryDto | null): ApplicationDto | null {
@@ -1935,12 +1935,10 @@ onBeforeUnmount(() => {
             <section class="workspace-panel">
               <div class="section-heading"><div class="section-copy"><h3>{{ t('applicationsPage.panelStorage') }}</h3><p>{{ t('applicationsPage.storageHint') }}</p></div><Button size="sm" @click="openMountDialog()"><Plus />{{ t('applicationsPage.addMount') }}</Button></div>
               <div class="grid gap-3">
-                <div class="flex items-center justify-between gap-3"><strong>{{ t('applicationsPage.variables') }}</strong><Button size="sm" @click="openRowDialog('variable')"><Plus />{{ t('common.add') }}</Button></div>
-                <div v-for="(row, index) in appDraft.variables" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog('variable', index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow('variable', index)">{{ t('common.delete') }}</Button></div></div>
-                <div class="flex items-center justify-between gap-3"><strong>{{ t('applicationsPage.containerEnv') }}</strong><Button size="sm" @click="openRowDialog('env')"><Plus />{{ t('common.add') }}</Button></div>
-                <div v-for="(row, index) in appDraft.env" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog('env', index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow('env', index)">{{ t('common.delete') }}</Button></div></div>
+                <div class="flex items-center justify-between gap-3"><strong>{{ t('applicationsPage.containerEnv') }}</strong><Button size="sm" @click="openRowDialog()"><Plus />{{ t('common.add') }}</Button></div>
+                <div v-for="(row, index) in appDraft.env" :key="row.id" class="item-row"><div><strong>{{ row.key }}</strong><span>{{ row.value || t('common.empty') }}</span></div><div class="row-actions"><Button size="sm" @click="openRowDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeRow(index)">{{ t('common.delete') }}</Button></div></div>
                 <div v-for="(mount, index) in appDraft.mounts" :key="mount.id" class="item-row"><div><strong>{{ t('applicationsPage.mountSummary', { type: mount.type, target: mount.target }) }}</strong><span>{{ mount.source || t('applicationsPage.panelManagedSource') }}</span></div><div class="row-actions"><Button size="sm" @click="openMountDialog(index)">{{ t('common.edit') }}</Button><Button size="sm" variant="danger" @click="removeAt(appDraft.mounts, index)">{{ t('common.delete') }}</Button></div></div>
-                <EmptyState v-if="!appDraft.variables.length && !appDraft.env.length && !appDraft.mounts.length" :title="t('applicationsPage.noStorageConfig')" :description="t('applicationsPage.noStorageConfigHint')" />
+                <EmptyState v-if="!appDraft.env.length && !appDraft.mounts.length" :title="t('applicationsPage.noStorageConfig')" :description="t('applicationsPage.noStorageConfigHint')" />
               </div>
             </section>
 
@@ -2020,7 +2018,7 @@ onBeforeUnmount(() => {
   </Dialog>
 
   <Dialog v-model:open="dialogOpen" :title="t(`applicationsPage.dialog.${dialogKind}`)" :close-label="t('common.close')">
-    <div v-if="dialogKind === 'variable' || dialogKind === 'env'" class="grid gap-3">
+    <div v-if="dialogKind === 'env'" class="grid gap-3">
       <label class="field">{{ t('common.name') }}<Input v-model="rowDraft.key" /></label>
       <label class="field">{{ t('common.value') }}<Input v-model="rowDraft.value" /></label>
     </div>
@@ -2157,7 +2155,7 @@ onBeforeUnmount(() => {
     </div>
     <template #footer>
       <Button variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</Button>
-      <Button v-if="dialogKind === 'variable' || dialogKind === 'env'" variant="primary" @click="saveRowDialog">{{ t('common.save') }}</Button>
+      <Button v-if="dialogKind === 'env'" variant="primary" @click="saveRowDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'port'" variant="primary" @click="savePortDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'mount'" variant="primary" @click="saveMountDialog">{{ t('common.save') }}</Button>
       <Button v-else-if="dialogKind === 'proxy'" variant="primary" @click="saveProxyDialog">{{ t('common.save') }}</Button>

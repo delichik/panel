@@ -61,8 +61,6 @@ export interface ApplicationDto {
   enabled: boolean;
   deletionRequested?: boolean;
   specYaml: string;
-  variables: Record<string, string>;
-  resolvedVariables?: Record<string, unknown>;
   persistentPath?: string;
   deploymentMode: DeploymentMode | string;
   deploymentServers: string[];
@@ -104,7 +102,6 @@ export interface ApplicationSaveInput {
   name: string;
   enabled: boolean;
   specYaml: string;
-  variables: Record<string, string>;
   deploymentMode: DeploymentMode;
   deploymentServers: string[];
   reverseProxy: ReverseProxyRule[];

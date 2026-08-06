@@ -60,8 +60,8 @@ func TestListSummariesDoesNotLoadApplicationDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET enabled=1,spec_yaml=?,variables_json=?,reverse_proxy_json=?,image_update_available=1 WHERE id=?`,
-		"not: [valid", "not-json", "not-json", app.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET enabled=1,spec_yaml=?,reverse_proxy_json=?,image_update_available=1 WHERE id=?`,
+		"not: [valid", "not-json", app.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.db.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
@@ -618,9 +618,8 @@ func TestTemplateVariablesRenderIntoRuntimeSpec(t *testing.T) {
 	svc.SetBuiltinVariableResolver(registry)
 
 	app, err := svc.Create(context.Background(), SaveInput{
-		Name:      "web",
-		SpecYAML:  "name: web\nimage: '{{ .vars.image }}'\nenv:\n  APP_NAME: '{{ .app.name }}'\n  TLS_CERT: '{{ .certs.example_com.certificatePem }}'\n",
-		Variables: map[string]string{"image": "nginx:1.27"},
+		Name:     "web",
+		SpecYAML: "name: web\nimage: 'nginx:1.27'\nenv:\n  APP_NAME: '{{ .app.name }}'\n  TLS_CERT: '{{ .certs.example_com.certificatePem }}'\n",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -634,9 +633,6 @@ func TestTemplateVariablesRenderIntoRuntimeSpec(t *testing.T) {
 	}
 	if spec.Image != "nginx:1.27" || spec.Env["APP_NAME"] != "web" || spec.Env["TLS_CERT"] != "CERT" {
 		t.Fatalf("rendered spec = %#v", spec)
-	}
-	if app.ResolvedVariables["image"] != "nginx:1.27" || app.ResolvedVariables["app"] == nil || app.ResolvedVariables["certs"] == nil {
-		t.Fatalf("resolved variables = %#v", app.ResolvedVariables)
 	}
 }
 
@@ -656,16 +652,15 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	file, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
 		Name:          "config/app.conf",
 		Kind:          "template",
-		ContentBase64: base64.StdEncoding.EncodeToString([]byte("server={{ .vars.server }}")),
+		ContentBase64: base64.StdEncoding.EncodeToString([]byte("server={{ .app.name }}")),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Update(ctx, app.ID, SaveInput{
-		Name:      "web",
-		Enabled:   true,
-		SpecYAML:  app.SpecYAML,
-		Variables: map[string]string{"server": "localhost"},
+		Name:     "web",
+		Enabled:  true,
+		SpecYAML: app.SpecYAML,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -674,7 +669,7 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	}
 	spec := runtime.deploys[0].Spec
 	allocation := applicationFileAllocationName(file.ID)
-	if len(spec.Files) != 1 || spec.Files[0].Path != allocation || string(spec.Files[0].Content) != "server=localhost" {
+	if len(spec.Files) != 1 || spec.Files[0].Path != allocation || string(spec.Files[0].Content) != "server=web" {
 		t.Fatalf("files = %#v", spec.Files)
 	}
 	if spec.Files[0].Mode != "0755" || spec.Files[0].UID == nil || *spec.Files[0].UID != 1000 || spec.Files[0].GID == nil || *spec.Files[0].GID != 1001 {
@@ -845,7 +840,6 @@ func TestPersistentPathIsDerivedAfterUpdate(t *testing.T) {
 		Name:              app.Name,
 		Enabled:           app.Enabled,
 		SpecYAML:          app.SpecYAML,
-		Variables:         app.Variables,
 		DeploymentMode:    app.DeploymentMode,
 		DeploymentServers: app.DeploymentServers,
 		ReverseProxy:      app.ReverseProxy,

@@ -79,8 +79,6 @@ type Application struct {
 	Enabled              bool                `json:"enabled"`
 	DeletionRequested    bool                `json:"deletionRequested,omitempty"`
 	SpecYAML             string              `json:"specYaml"`
-	Variables            map[string]string   `json:"variables"`
-	ResolvedVariables    map[string]any      `json:"resolvedVariables,omitempty"`
 	PersistentPath       string              `json:"persistentPath,omitempty"`
 	DeploymentMode       string              `json:"deploymentMode"`
 	DeploymentServers    []string            `json:"deploymentServers"`
@@ -443,7 +441,6 @@ type SaveInput struct {
 	Name              string             `json:"name"`
 	Enabled           bool               `json:"enabled"`
 	SpecYAML          string             `json:"specYaml"`
-	Variables         map[string]string  `json:"variables"`
 	DeploymentMode    string             `json:"deploymentMode"`
 	DeploymentServers []string           `json:"deploymentServers"`
 	ReverseProxy      []ReverseProxyRule `json:"reverseProxy"`

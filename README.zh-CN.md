@@ -16,7 +16,7 @@ Panel 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规
 - 使用 mTLS 为服务器部署 panel-agent，并配置 Docker host。
 - 检查 agent 兼容性、Docker 健康状态和应用运行时状态。
 - 通过 panel-agent 调用 Docker Engine API 部署 Docker 应用。
-- 配置应用文件、变量、挂载、端口、调度位置、运行时操作、日志和反向代理路由。
+- 配置应用文件、挂载、端口、调度位置、运行时操作、日志和反向代理路由。
 - 管理 Cloudflare 域名并签发 ACME 证书。
 - 查看后台任务和任务日志。
 - 在英文和简体中文界面之间切换。

@@ -192,8 +192,8 @@ func TestContainerActionRejectsManagedApplicationContainer(t *testing.T) {
 		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at)
-		VALUES('app-1','web',1,'name: web\nimage: nginx\n','{}','{}','all','[]','[]',1,'hash-1','panel-web','apps','now','now')`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at)
+		VALUES('app-1','web',1,'name: web\nimage: nginx\n','all','[]','[]',1,'hash-1','panel-web','apps','now','now')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppDB().Exec(`INSERT INTO container_observations(server_id,container_id,sample_at,container_json,managed,application_id,instance_id,updated_at)
@@ -639,8 +639,8 @@ func insertReconcileFixtureRows(t *testing.T, store *storage.Store, app applicat
 		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, app.Name, boolInt(app.Enabled), "name: web\nimage: nginx\n", "{}", "{}", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		app.ID, app.Name, boolInt(app.Enabled), "name: web\nimage: nginx\n", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppDB().Exec(`INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,status,runtime_spec_json,created_at,updated_at)

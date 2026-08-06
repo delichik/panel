@@ -165,7 +165,7 @@ func TestIssuedCertificatesExposeApplicationInternalFiles(t *testing.T) {
 	if _, _, err := svc.OpenInternalFile(ctx, "certificate:"+unavailableResult.Certificate.ID+":certificate"); err == nil {
 		t.Fatal("expected unissued certificate internal file read to be rejected")
 	}
-	if _, err := svc.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,variables_json,resolved_variables_json,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_cert_file','cert file app',0,?,'{}','{}','all','[]','[]',1,'hash','job','default','now','now')`,
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_cert_file','cert file app',0,?,'all','[]','[]',1,'hash','job','default','now','now')`,
 		"name: cert-file\nimage: nginx\nmounts:\n  - type: panel_file\n    source: certificate:"+issuedResult.Certificate.ID+":private_key\n    target: /etc/ssl/private/key.pem\n"); err != nil {
 		t.Fatal(err)
 	}

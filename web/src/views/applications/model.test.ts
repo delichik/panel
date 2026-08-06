@@ -27,7 +27,6 @@ const app = {
   name: 'api',
   enabled: true,
   specYaml: 'name: api\nimage: nginx\nports:\n  - label: http\n    to: 8080\n',
-  variables: { NODE_ENV: 'production' },
   deploymentMode: 'selected',
   deploymentServers: ['srv-1'],
   reverseProxy: [{ domain: 'api.example.test', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/' }] }],
@@ -48,7 +47,6 @@ describe('application editor model', () => {
     const input = saveInputFromDraft(draft);
 
     expect(input.name).toBe('api');
-    expect(input.variables.NODE_ENV).toBe('production');
     expect(input.deploymentServers).toEqual(['srv-1']);
     expect(input.reverseProxy[0].domain).toBe('api.example.test');
     expect(input.specYaml).toContain('PORT: "8080"');
@@ -78,7 +76,6 @@ describe('application editor model', () => {
     expect(draft.ports).toEqual([]);
     expect(draft.commandRows).toEqual([]);
     expect(draft.env).toEqual([]);
-    expect(draft.variables).toEqual([]);
     expect(draft.mounts).toEqual([]);
     expect(draft.reverseProxy).toEqual([]);
 

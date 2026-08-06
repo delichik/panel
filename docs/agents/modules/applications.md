@@ -9,7 +9,7 @@
 
 ## 适用场景
 
-修改应用创建、编辑、appspec、变量解析、应用文件、编辑会话、修订、部署、停止、重启、日志、运行时状态、镜像更新或应用反向代理字段时，先读本文档。
+修改应用创建、编辑、appspec、模板变量解析、应用文件、编辑会话、修订、部署、停止、重启、日志、运行时状态、镜像更新或应用反向代理字段时，先读本文档。
 
 ## 后端入口
 
@@ -64,7 +64,7 @@
 - 删除服务器会通过服务器模块修剪应用 `deployment_server_ids_json` 中的对应 ID；该修剪属于用户配置变化，必须同时递增应用 `version` 和配置 `updated_at`。数据库外键会级联删除该服务器上的 `application_instances` 和协调状态；如果 `selected` 应用因此没有部署目标，后续部署/计划应保持校验失败，直到用户重新选择目标服务器。
 - 不含 `persistent`、host/bind 挂载和 Docker volume 挂载，且当前只有一个来源运行实例的应用可执行无损迁移。迁移要求来源实例正在运行、目标服务器 agent 兼容且没有该应用实例；Panel 将部署目标切换为目标服务器并部署新实例，成功后删除来源服务器上的容器和该实例运行目录，并移除来源 `application_instances` 记录。
 - `persistent` 挂载支持在单条 mount 上配置 `uid`、`gid` 和目录 `mode`（如 `"0755"`），部署写入托管文件阶段会确保对应宿主机持久化子目录存在并应用权限，解决非 root 容器进程写入持久化目录的问题。`file` 和 `panel_file` 挂载也支持 `uid`/`gid`，用于 Panel 写入节点 runtime 文件后的 chown；`file` 挂载额外支持 `mode`，前端可视化编辑只暴露“可执行”开关并写为 `0755`。Agent 写入普通 managed file 后必须显式 chmod 到解析后的 mode，确保重新部署能覆盖既有文件权限；普通 managed file 的父目录固定为 `0755`，保证以非 root 用户运行的容器（如 Nginx worker）可以进入挂载目录读取文件，文件本身的 mode 仍由 managed file 控制。`panel_file` 不允许用户配置 mode，其权限来自内部文件来源。`readOnly` 只表示 Docker bind mount 的 `:ro`，不等同于节点文件权限。权限字段不得用于 host/global bind 或 Docker volume，避免 Panel 修改用户自管宿主机目录或 Docker 管理卷。
-- 应用变量、部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。
+- 应用不保存应用级自定义变量；部署模式、反向代理配置等持久化字段必须保存稳定结构，不保存已翻译展示文案。容器环境变量属于 AppSpec YAML 的 `env` 字段。
 - 应用持久化目录不保存为数据库字段；是否启用 persistent 由 appspec 的 `mounts.type=persistent` 派生，详情响应里的 `persistentPath` 只读生成自 `applicationPersistentDir(app.ID)`，保存 DTO 不包含 `persistentPath`。
 - 应用 `reverseProxy` 字段描述应用希望暴露的域名、Path、目标端口、目标类型和结构化 Path 选项，不代表所有部署节点都会启用反向代理。`targetType` 支持 `local` 与 `container`：旧数据或空值按 `local` 处理，代理到目标节点本地端口；`container` 代理到同节点 Application 容器名和目标端口。实际生效范围由容器化中的“设施应用 / 反向代理”部署服务器决定：只有设施应用覆盖且应用实际部署到的服务器才会接收对应反向代理配置。
 - 入口代理保存后会自动联动 DNS：当前配置的全部域名（含 Panel 访问入口域名和已删除域名）进入异步 `dns_proxy_records_sync` 任务检查生效状态；已生效且未变化的记录只比对不写入，只有与期望记录不一致时才创建/更新/删除。域名 A/AAAA 记录指向其生效服务器列表（anyAccess 关闭时用 `originServerIds`，开启时用全部网关节点），服务器未配置 IPv4/IPv6 时跳过该域名并标记提示。每域名同步状态（pending/synced/failed/skipped）持久化在 `facility_app_configs.dns_sync_json` 并通过 `ReverseProxyConfig.dnsSync` 返回。
@@ -88,7 +88,7 @@
 - 设施 runtime provider 可额外实现逐次更新规划。默认和未知结果均为 recreate；只有设施为当前新旧 spec 明确返回 reload strategy，且应用层确认镜像、命令、环境、网络、端口、挂载、权限、资源和 restart 等容器结构完全一致时，才调用 Agent `RuntimeReload`。validate 失败保留旧容器并使 target 失败；reload 或 reload 后状态确认失败时在同一服务器操作队列内回退现有 recreate 流程。
 - Docker labels 在创建后不可修改。Agent 在 recreate 或 reload 成功后写入实例 `applied-state.json`，容器报告仅在 container ID/name 匹配时用动态 generation/spec hash 覆盖静态 labels，避免成功 reload 后被协调器误判为旧版本。
 - 应用目标任务在任务中心展示为“应用目标应用 / 停止 / 清理”，表示 Panel 已完成一次目标收敛请求和实例记录更新，不等于容器长期健康；实际容器健康必须通过运行时面板刷新展示。
-- 应用列表接口使用 `ApplicationSummary[]`，只包含首屏必要字段：`id`、`name`、`enabled`、`imageReference`、`instanceCount`、`jobId`、`namespace`、`runtimeStatus`、`imageUpdateAvailable`、`lastError`、`updatedAt`。列表必须走专用摘要查询，只读取摘要列，并用固定数量的本地批量查询合并运行时实例状态、实例数量（`instanceCount`）和最近 lifecycle operation targets；不得调用完整应用 scanner、解析 appspec/YAML/配置 JSON，也不得逐应用、逐实例或逐节点查询。`specYaml`、`variables`、`reverseProxy`、`deploymentServers`、`persistentPath`、`imageUpdateTargets`、`specHash`、`generation`、`lastEvalId`、`lastDeploymentId` 等详情/诊断字段只从 `GET /api/v1/applications/{id}` 获取。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。
+- 应用列表接口使用 `ApplicationSummary[]`，只包含首屏必要字段：`id`、`name`、`enabled`、`imageReference`、`instanceCount`、`jobId`、`namespace`、`runtimeStatus`、`imageUpdateAvailable`、`lastError`、`updatedAt`。列表必须走专用摘要查询，只读取摘要列，并用固定数量的本地批量查询合并运行时实例状态、实例数量（`instanceCount`）和最近 lifecycle operation targets；不得调用完整应用 scanner、解析 appspec/YAML/配置 JSON，也不得逐应用、逐实例或逐节点查询。`specYaml`、`reverseProxy`、`deploymentServers`、`persistentPath`、`imageUpdateTargets`、`specHash`、`generation`、`lastEvalId`、`lastDeploymentId` 等详情/诊断字段只从 `GET /api/v1/applications/{id}` 获取。实时运行时刷新留给详情页 `GET /api/v1/applications/{id}/runtime`。
 - 普通应用页首屏只加载应用列表必要数据，不加载设施接口，也不预拉多个应用的 runtime；当前选中应用的 runtime 在列表可用后异步按需加载。设施目录、详情和配置页进入对应模式时再加载设施数据；直达设施 URL 必须先加载设施目录后再判断是否支持该 `facilityKind`。
 - 左侧列表行的镜像与实例数量来自摘要，列表加载或刷新期间行内显示骨架动画，不使用 `jobId` 或 0 占位。摘要缺少 `imageReference` 的历史应用，前端按行异步读取详情补齐镜像，补齐范围只限当前页缺少镜像引用的行，不得扩大到全部应用，也不得改为预拉多个应用的 runtime。
 - 应用页面在桌面端是满高主从布局，左侧选择器和右侧详情正文内部滚动。创建/编辑应用使用隐藏独立页和连续纵向配置流，宽屏为主体 + sticky 摘要，中屏摘要下移，窄屏恢复页面级滚动并保持提交栏可达；不得恢复左 rail、分页卡片或依赖横向滚动。部署、停止和删除操作位于详情标题或操作区，不放在选择行中。
@@ -99,7 +99,8 @@
 - 应用保存、停止、删除、部署、镜像更新等需要刷新设施反向代理时，只触发 `application_reconcile` 周期任务并指定隐藏应用 `facility-reverse-proxy`，不得在当前请求内同步执行远端 Docker 操作；协调任务中的反向代理 runtime 错误仍必须包装为 `application_runtime_operation_failed` 并保留原始 Agent/Docker 诊断。设施反向代理重建前必须清理旧 `panel-facility-reverse-proxy` 容器，避免同名容器导致后续创建冲突。
 - 应用日志按 `instanceId` 和可选 `containerName` 读取。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。运行时实例响应同时返回 `serverId`、`serverName` 和 lifecycle `stage`，前端优先展示服务器名称，并保留 ID 作为辅助信息；没有容器的 pending/failed target 不提供日志入口。
 - 应用运行时实例状态支持 `missing`，表示期望存在的托管容器在目标 Docker 中已找不到。Agent runtime status 遇到 Docker not found 必须返回 `missing`，不得映射为普通 `stopped`；前端以“缺失”展示，用于区分外部删除容器和正常停止。
-- 模板目录提供 `app.id`、`app.name`、`app.namespace`、`app.generation` 等应用变量，可用于 appspec YAML 和应用文件模板。
+- 模板目录提供 `app.id`、`app.name`、`app.namespace`、`app.generation` 等内置模板变量，可用于 appspec YAML 和应用文件模板；应用不再提供应用级自定义变量。
+- 已删除的应用级自定义变量不再参与模板渲染；旧模板若引用这些变量，渲染会以 missing variable 校验错误失败，需改用 `server.variables.<key>` 或内置模板变量。
 - 模板目录提供 `server.id`、`server.name`、`server.host`、`server.ssh_host`、`server.ssh_port`、`server.ssh_username`、`server.variables.<key>` 等节点变量；appspec YAML 中的节点差异仍通过 `${node.meta.panel_*}` 和容器内 `PANEL_SERVER_*` 环境变量表达，应用文件模板在部署到每台目标服务器前会用实际目标服务器上下文重新渲染，因此同一应用在不同服务器会得到不同文件内容。
 - `panel_file` 挂载通过应用侧内部文件 registry 分发，来源模块必须在装配阶段显式注册自己的 source scheme；当前注册 `key_asset:<asset-id>:<kind>`（用户域自签 CA/TLS 与 SSH 密钥资产）和 `certificate:<cert-id>:certificate|private_key`（已签发的域名 HTTPS 证书）。
 - 内部文件读取接口使用 `OpenInternalFile` 流式打开，registry 只负责按 source scheme 分发；当前 agent managed-file 契约仍在应用部署组装阶段读取为内存内容后下发。
@@ -115,7 +116,7 @@
 - `command` 表示完整容器命令数组，包含可执行文件、flag 和参数值；运行时写入 Docker `Cmd`，不得翻译成 `Entrypoint`。
 - 后端 appspec 校验允许多个非空 `command` 项，空 command 项会正规化为未设置，避免不填写 command 时阻塞保存。
 - 应用编辑器使用隐藏独立 `EditorPage`：正文按基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件顺序连续展开，右侧 sticky 摘要展示保存前检查、变更数量、编辑状态和检查结果；顶部只保留表单/YAML 源码编辑方式，不提供分区切换。创建页强调名称和镜像的起步配置；编辑页强调当前修改和保存结果。
-- 应用编辑器的可视化草稿必须是结构化数据，不得把变量、环境变量、部署服务器、端口、挂载或反向代理规则压成 JSON/多行文本作为主要交互。复杂重复项使用“摘要列表 + 新增/编辑对话框 + 删除确认”，对话框内使用独立克隆草稿，取消不得污染主草稿。
+- 应用编辑器的可视化草稿必须是结构化数据，不得把容器环境变量、部署服务器、端口、挂载或反向代理规则压成 JSON/多行文本作为主要交互。复杂重复项使用“摘要列表 + 新增/编辑对话框 + 删除确认”，对话框内使用独立克隆草稿，取消不得污染主草稿。
 - 应用反向代理规则对话框必须通过明确 DTO 克隆函数创建独立草稿，不能对 Vue reactive Proxy 直接调用 `structuredClone`；只有点击保存才替换 `form.reverseProxy` 中对应规则，新建或编辑后取消不得留下空规则、空 Path 或高级选项修改。每个 Path 的高级字段复用 `RoutePathAdvancedFields.vue`。
 - 应用反向代理规则使用 `originServerIds` 和 `anyAccess`。源站候选必须同时属于应用部署节点和设施全局网关节点；后端保存时重新校验。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；`anyAccess.relayServerIds` 为空表示所有非源站全局网关节点，非空表示只在这些指定节点生成转发。转发节点必须属于全局网关节点且不能是源站节点。策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
 - 应用反向代理域名在设施路由、其他应用代理规则和 Panel 入口之间全局唯一；同一规则下可配置多个 Path，不允许通过多个所有者共享域名。
@@ -128,7 +129,7 @@
 - 普通应用编辑页使用 `/api/v1/application-edit-sessions` durable 会话：进入时查询可恢复编辑，首次修改后懒创建会话；修改和文件操作串行携带 revision。保存主流程为本地校验 → 服务端检查 → 预览变更 → 保存并应用，提交期间禁用离开和重复提交；成功只表示配置已保存并请求应用，部署完成仍通过任务中心和运行时区观察。
 - v3 编辑页有路由离开和浏览器关闭保护；离开默认保留可恢复草稿，取消按钮会显式 discard 当前会话后返回列表。
 - `mounts` / `volumes` 属于 appspec YAML，必须支持 YAML source 编辑；结构化页也要继续提供挂载编辑入口并与源码往返同步。源码视图不是第二个高级配置区，只能提供“重新生成源码”和“应用到草稿”两个同步动作；校验失败要定位到源码视图。应用文件模板是应用级文件内容，不属于 appspec YAML，不能混入源码编辑。
-- YAML source 只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则、变量和应用文件是应用级保存字段，必须留在结构化面板与保存输入中，不能只出现在 YAML source 内。
+- YAML source 只编辑 appspec YAML；应用名称、启用状态、部署目标、反向代理规则和应用文件是应用级保存字段，必须留在结构化面板与保存输入中，不能只出现在 YAML source 内。容器环境变量属于 appspec YAML 的 `env`。
 - 前端 appspec YAML 解析和输出使用标准 YAML 库，不能再在组件内手写轻量 parser。`command` 中以冒号开头或包含冒号的值（例如 `:9443`、`--listen=:9443`）必须按字符串往返。
 - 应用同步由 planner 创建 lifecycle operation 与 per-server target；HTTP 同步入口只启用应用并触发协调。deployment dispatcher 在 target 被条件 claim 后创建私有 `application_target_apply|stop|purge` 任务作为执行和日志锚点，不再由 collector 创建 `application_target_batch` 父任务或目标子任务。每个目标任务只能处理一个应用在一个服务器上的一个动作，并使用 `application:target:<appId>:<serverId>` 的 `ConcurrencyResourceQueue` key；同一 app/server 的 apply、stop、purge 是否可创建由 lifecycle target planner 决定，任务队列只负责执行期串行。planner 先创建 lifecycle operation 和 `ready` target，并由 dispatcher 把 lifecycle operation/target ID 写入目标任务参数；目标任务只更新自己的 target，aggregation worker 负责把聚合状态收敛为 deployed、failed 或 partially_deployed。Agent 返回“already has requested state”这类已达到目标状态的 stop/purge 响应时必须按幂等成功处理，不能把该目标标为失败并进入下一轮协调。
 - `application_refresh` 和 `application_image_update` executor 自身已经占用应用生命周期并发 key；在任务框架支持“当前生命周期任务完成后触发协调”前，这两个 executor 仍可在任务内部直接执行 runtime apply，以避免在 executor 内创建同应用目标任务被并发准入阻塞。HTTP 保存、同步、停用、删除和设施应用保存不得使用该例外。
@@ -165,9 +166,9 @@
 - The AppSpec source view uses the shared CodeMirror editor with YAML highlighting, line numbers, undo history, and editor-internal scrolling. Editing marks the source dirty immediately but must not automatically apply, format, or save it; synchronization with the structured draft remains explicit.
 - Structured editing must remain complete. Image, command, env, ports, mounts, reverse proxy, deployment targets, and session files cannot be hidden behind YAML-only editing.
 - Command is edited as a list of arguments, not a textarea. New dialog rows (command, port, mount, proxy rule, proxy path, facility path) start empty; the UI validates required values instead of pre-filling misleading defaults.
-- The create editor starts with a blank draft: application name, image, source YAML, ports, env, variables, mounts, and reverse proxy rules are not pre-filled with sample values; required fields are validated before preview and commit.
+- The create editor starts with a blank draft: application name, image, source YAML, ports, env, mounts, and reverse proxy rules are not pre-filled with sample values; required fields are validated before preview and commit.
 - The application reverse proxy dialog exposes AnyAccess (kept untranslated) with load-balancing strategy and primary origin server, plus the shared HTTP route options (gzip, request body limit, timeouts, buffering, WebSocket, request/response headers) so application routes carry the same entrance-proxy options as facility paths. Origin servers default to the application's deployment targets intersected with gateway nodes; users can override manually when needed.
-- Application name, enabled state, deployment targets, reverse proxy rules, custom variables, and application files are application-level fields outside AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
+- Application name, enabled state, deployment targets, reverse proxy rules, and application files are application-level fields outside AppSpec YAML. Container environment variables belong to AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
 - 服务器选择器（部署目标、网关节点、源服务器、Panel 入口）展示全部服务器，不再只显示已被应用或设施引用的服务器；部署目标选择器对 agent 未兼容或不可达的服务器显示禁用原因，避免用户误选后到部署阶段才失败。
 - 编辑器确认放弃未保存修改并离开后，路由切换必须同步清理脏状态和弹窗状态，避免同一组件实例被复用后再次导航仍弹出放弃确认。
 - The editor must preserve local validation, patch draft, validate, preview, commit, and dirty guard behavior. File mutations still use application edit-session file/archive endpoints.

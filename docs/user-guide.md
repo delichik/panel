@@ -126,7 +126,7 @@ The application editor supports visual configuration and YAML. Common sections i
 
 - Container image and command.
 - CPU, memory, privilege, and Linux capability settings.
-- Environment variables and reusable Panel variables.
+- Container environment variables.
 - Port mappings and network mode.
 - Host, Docker volume, managed file, and persistent mounts.
 - Application files and templates.

@@ -47,7 +47,6 @@ export interface ApplicationDraftUi {
   privileged: boolean;
   specYaml: string;
   yamlDirty: boolean;
-  variables: KeyValueRow[];
   env: KeyValueRow[];
   ports: PortRow[];
   mounts: MountRow[];
@@ -125,7 +124,6 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     privileged: Boolean(parsed.privileged),
     specYaml: app?.specYaml || '',
     yamlDirty: false,
-    variables: pairsFromRecord(app?.variables),
     env: pairsFromRecord(objectToStringRecord(objectValue(parsed.env))),
     ports: arrayValue(parsed.ports).map((item, index) => {
       const port = objectValue(item);
@@ -144,7 +142,7 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
 export function applyYamlToDraft(draft: ApplicationDraftUi): { ok: boolean; error?: string } {
   try {
     const parsed = parseSpec(draft.specYaml);
-    const next = draftFromApplication({ ...emptyApp(), name: draft.name, enabled: draft.enabled, specYaml: draft.specYaml, variables: recordFromPairs(draft.variables), deploymentMode: draft.deploymentMode, deploymentServers: draft.deploymentServers, reverseProxy: draft.reverseProxy });
+    const next = draftFromApplication({ ...emptyApp(), name: draft.name, enabled: draft.enabled, specYaml: draft.specYaml, deploymentMode: draft.deploymentMode, deploymentServers: draft.deploymentServers, reverseProxy: draft.reverseProxy });
     draft.image = next.image;
     draft.commandRows = next.commandRows;
     draft.networkMode = next.networkMode;
@@ -193,7 +191,6 @@ export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveIn
     name: draft.name.trim(),
     enabled: draft.enabled,
     specYaml,
-    variables: recordFromPairs(draft.variables),
     deploymentMode: draft.deploymentMode,
     deploymentServers: draft.deploymentMode === 'selected' ? [...draft.deploymentServers] : [],
     reverseProxy: cloneProxyRules(draft.reverseProxy),
@@ -206,7 +203,6 @@ export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors
   if (draft.yamlDirty && !draft.specYaml.trim()) errors.specYaml = 'applicationsPage.validationSpec';
   if (!draft.yamlDirty && !draft.image.trim()) errors.image = 'applicationsPage.validationImage';
   if (draft.deploymentMode === 'selected' && !draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationDeploymentServers';
-  if (draft.variables.some((row) => !row.key.trim())) errors.variables = 'applicationsPage.validationVariables';
   if (draft.env.some((row) => !row.key.trim())) errors.env = 'applicationsPage.validationEnv';
   if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
   if (draft.mounts.some((row) => !row.target.trim())) errors.mounts = 'applicationsPage.validationMounts';
@@ -227,7 +223,7 @@ export function applicationSections(draft: ApplicationDraftUi, errors: FieldErro
     { id: 'identity', complete: Boolean(draft.name.trim() && draft.enabled !== undefined), error: Boolean(errors.name) },
     { id: 'runtime', complete: draft.yamlDirty ? Boolean(draft.specYaml.trim()) : Boolean(draft.image.trim()), error: Boolean(errors.image || errors.specYaml) },
     { id: 'networking', complete: true, error: Boolean(errors.ports || errors.reverseProxy) },
-    { id: 'storage', complete: true, error: Boolean(errors.variables || errors.env || errors.mounts) },
+    { id: 'storage', complete: true, error: Boolean(errors.env || errors.mounts) },
     { id: 'deployment', complete: draft.deploymentMode === 'all' || draft.deploymentServers.length > 0, error: Boolean(errors.deploymentServers) },
     { id: 'files', complete: true },
     { id: 'source', complete: Boolean(draft.specYaml.trim()), dirty: draft.yamlDirty, error: Boolean(errors.specYaml) },
@@ -314,7 +310,6 @@ export function diffApplications(base?: ApplicationDto | null, draft?: Applicati
     name: base.name,
     enabled: base.enabled,
     specYaml: base.specYaml,
-    variables: base.variables,
     deploymentMode: base.deploymentMode,
     deploymentServers: base.deploymentServers,
     reverseProxy: base.reverseProxy,
@@ -473,5 +468,5 @@ function makeId(prefix: string) {
 }
 
 function emptyApp(): ApplicationDto {
-  return { id: '', version: 0, kind: 'application', name: '', enabled: true, specYaml: '', variables: {}, deploymentMode: 'all', deploymentServers: [], reverseProxy: [], generation: 0, specHash: '', imageUpdateAvailable: false, jobId: '', namespace: '', createdAt: '', updatedAt: '' };
+  return { id: '', version: 0, kind: 'application', name: '', enabled: true, specYaml: '', deploymentMode: 'all', deploymentServers: [], reverseProxy: [], generation: 0, specHash: '', imageUpdateAvailable: false, jobId: '', namespace: '', createdAt: '', updatedAt: '' };
 }

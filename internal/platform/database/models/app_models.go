@@ -196,8 +196,6 @@ type Application struct {
 	Enabled                 bool             `orm:"not_null;default:0"`
 	DeletionRequested       bool             `orm:"not_null;default:0"`
 	SpecYAML                string           `orm:"not_null"`
-	VariablesJSON           map[string]any   `orm:"json;not_null;default:'{}'"`
-	ResolvedVariablesJSON   map[string]any   `orm:"json;not_null;default:'{}'"`
 	DeploymentMode          string           `orm:"not_null;default:'all'"`
 	DeploymentServerIDsJSON []string         `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
 	ReverseProxyJSON        []map[string]any `orm:"json;not_null;default:'[]'"`

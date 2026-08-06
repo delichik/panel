@@ -25,8 +25,6 @@ func toDomainApplication(m models.Application) Application {
 		Enabled:              m.Enabled,
 		DeletionRequested:    m.DeletionRequested,
 		SpecYAML:             m.SpecYAML,
-		Variables:            stringMapValue(m.VariablesJSON),
-		ResolvedVariables:    m.ResolvedVariablesJSON,
 		DeploymentMode:       m.DeploymentMode,
 		DeploymentServers:    m.DeploymentServerIDsJSON,
 		ReverseProxy:         reverseProxyFromMaps(m.ReverseProxyJSON),
@@ -49,12 +47,6 @@ func toDomainApplication(m models.Application) Application {
 	if app.DeploymentMode == "" {
 		app.DeploymentMode = DeploymentModeAll
 	}
-	if app.Variables == nil {
-		app.Variables = map[string]string{}
-	}
-	if app.ResolvedVariables == nil {
-		app.ResolvedVariables = map[string]any{}
-	}
 	if app.DeploymentServers == nil {
 		app.DeploymentServers = []string{}
 	}
@@ -74,8 +66,6 @@ func fromDomainApplication(app Application) *models.Application {
 		Enabled:                 app.Enabled,
 		DeletionRequested:       app.DeletionRequested,
 		SpecYAML:                app.SpecYAML,
-		VariablesJSON:           anyStringMap(app.Variables),
-		ResolvedVariablesJSON:   app.ResolvedVariables,
 		DeploymentMode:          app.DeploymentMode,
 		DeploymentServerIDsJSON: app.DeploymentServers,
 		ReverseProxyJSON:        reverseProxyToMaps(app.ReverseProxy),
@@ -95,29 +85,6 @@ func fromDomainApplication(app Application) *models.Application {
 		CreatedAt:               app.CreatedAt,
 		UpdatedAt:               app.UpdatedAt,
 	}
-}
-
-// stringMapValue 复刻原 scanApplication 对 variables_json 的容错解析：
-// 非字符串值/非法 JSON 视为空 map。
-func stringMapValue(m map[string]any) map[string]string {
-	out := map[string]string{}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		return out
-	}
-	_ = json.Unmarshal(raw, &out)
-	return out
-}
-
-func anyStringMap(m map[string]string) map[string]any {
-	if m == nil {
-		return nil
-	}
-	out := make(map[string]any, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
-	return out
 }
 
 func reverseProxyFromMaps(items []map[string]any) []ReverseProxyRule {

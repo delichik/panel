@@ -101,17 +101,17 @@ func TestRenderApplicationSpecAsRuntimeSpec(t *testing.T) {
 	}
 }
 
-func TestHashIsStableAcrossVariableMapOrder(t *testing.T) {
+func TestHashIsStable(t *testing.T) {
 	spec, issues := DecodeYAML(sampleSpecYAML)
 	if len(issues) > 0 {
 		t.Fatalf("decode issues = %#v", issues)
 	}
 
-	first, err := Hash(spec, map[string]string{"B": "2", "A": "1"})
+	first, err := Hash(spec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Hash(spec, map[string]string{"A": "1", "B": "2"})
+	second, err := Hash(spec)
 	if err != nil {
 		t.Fatal(err)
 	}

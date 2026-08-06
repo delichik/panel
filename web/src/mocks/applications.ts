@@ -12,7 +12,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'storefront',
     enabled: true,
     specYaml: 'name: storefront\nimage: ghcr.io/example/storefront:1.9.0\nports:\n  - label: http\n    to: 8080\nmounts:\n  - type: persistent\n    target: /data\n',
-    variables: { NODE_ENV: 'production', FEATURE_FLAG: 'checkout-v2' },
     persistentPath: '/opt/panel/apps/app-storefront/persistent',
     deploymentMode: 'selected',
     deploymentServers: ['srv-edge-sgp', 'srv-api-hkg'],
@@ -39,7 +38,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'long-running-worker-with-a-very-long-display-name-for-layout',
     enabled: true,
     specYaml: 'name: worker\nimage: ghcr.io/example/worker:2.0.0\nrestart:\n  policy: unless-stopped\n',
-    variables: { QUEUE: 'critical' },
     deploymentMode: 'all',
     deploymentServers: [],
     reverseProxy: [],
@@ -60,7 +58,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'public-api',
     enabled: true,
     specYaml: 'name: public-api\nimage: ghcr.io/example/public-api:4.6.1\nports:\n  - label: http\n    to: 9000\nchecks:\n  - name: readiness\n    type: http\n    path: /ready\n',
-    variables: { NODE_ENV: 'production', REGION: 'apac' },
     deploymentMode: 'selected',
     deploymentServers: ['srv-api-hkg', 'srv-api-hkg-02'],
     reverseProxy: [{ domain: 'api.example.test', targetType: 'local', targetPort: 9000, originServerIds: ['srv-api-hkg', 'srv-api-hkg-02'], anyAccess: { enabled: true, strategy: 'least_conn' }, paths: [{ path: '/v1', webSocket: false }, { path: '/events', webSocket: true }] }],
@@ -85,7 +82,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'analytics-pipeline',
     enabled: true,
     specYaml: 'name: analytics-pipeline\nimage: ghcr.io/example/analytics:3.2.0\nrestart:\n  policy: unless-stopped\nenv:\n  - CLICKHOUSE_URL\n',
-    variables: { CLICKHOUSE_URL: 'http://analytics-db:8123', BATCH_SIZE: '5000' },
     deploymentMode: 'selected',
     deploymentServers: ['srv-worker-nrt', 'srv-batch-iad'],
     reverseProxy: [],
@@ -108,7 +104,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'internal-docs',
     enabled: true,
     specYaml: 'name: internal-docs\nimage: ghcr.io/example/docs:2026.07\nports:\n  - label: http\n    to: 8080\n',
-    variables: { SITE_MODE: 'internal' },
     persistentPath: '/opt/panel/apps/app-internal-docs/persistent',
     deploymentMode: 'selected',
     deploymentServers: ['srv-observability-ams'],
@@ -130,7 +125,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'disabled-preview',
     enabled: false,
     specYaml: 'name: disabled-preview\nimage: nginx:1.28-alpine\n',
-    variables: {},
     deploymentMode: 'all',
     deploymentServers: [],
     reverseProxy: [],
@@ -150,7 +144,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'billing-portal',
     enabled: true,
     specYaml: 'name: billing-portal\nimage: ghcr.io/example/billing:5.1.2\nports:\n  - label: http\n    to: 8088\nmounts:\n  - type: persistent\n    target: /var/lib/billing\n',
-    variables: { BILLING_MODE: 'live', STRIPE_REGION: 'ap' },
     persistentPath: '/opt/panel/apps/app-billing/persistent',
     deploymentMode: 'selected',
     deploymentServers: ['srv-api-hkg', 'srv-edge-sgp'],
@@ -177,7 +170,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'webhook-ingress',
     enabled: true,
     specYaml: 'name: webhook-ingress\nimage: ghcr.io/example/webhooks:1.4.0\nports:\n  - label: http\n    to: 8091\n',
-    variables: { MAX_BODY_MB: '8', SIGNATURE_REQUIRED: 'true' },
     deploymentMode: 'selected',
     deploymentServers: ['srv-edge-sgp', 'srv-edge-lax'],
     reverseProxy: [{ domain: 'hooks.example.test', targetType: 'local', targetPort: 8091, originServerIds: ['srv-edge-sgp', 'srv-edge-lax'], anyAccess: { enabled: true, strategy: 'round_robin' }, paths: [{ path: '/v1/hooks', webSocket: false }] }],
@@ -199,7 +191,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'media-transcoder',
     enabled: true,
     specYaml: 'name: media-transcoder\nimage: ghcr.io/example/transcoder:0.12.3\nrestart:\n  policy: unless-stopped\nresources:\n  gpu: 1\n',
-    variables: { FFMPEG_PRESET: 'slow', OUTPUT_BUCKET: 's3://media-output' },
     persistentPath: '/opt/panel/apps/app-media/persistent',
     deploymentMode: 'selected',
     deploymentServers: ['srv-media-syd', 'srv-gpu-nrt'],
@@ -222,7 +213,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'redis-sidecar',
     enabled: true,
     specYaml: 'name: redis-sidecar\nimage: redis:7.4-alpine\nports:\n  - label: redis\n    to: 6379\n',
-    variables: { MAXMEMORY: '2gb' },
     deploymentMode: 'selected',
     deploymentServers: ['srv-cache-sfo'],
     reverseProxy: [],
@@ -243,7 +233,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'checkout-canary',
     enabled: true,
     specYaml: 'name: checkout-canary\nimage: ghcr.io/example/checkout:canary-2026.08.01\nports:\n  - label: http\n    to: 8080\n',
-    variables: { CANARY_WEIGHT: '5' },
     deploymentMode: 'selected',
     deploymentServers: ['srv-api-hkg-02'],
     reverseProxy: [{ domain: 'checkout-canary.example.test', targetType: 'local', targetPort: 8080, originServerIds: ['srv-api-hkg-02'], anyAccess: { enabled: false }, paths: [{ path: '/', webSocket: false }] }],
@@ -265,7 +254,6 @@ export const mockApplications: ApplicationDto[] = [
     name: 'backup-agent',
     enabled: true,
     specYaml: 'name: backup-agent\nimage: ghcr.io/example/backup-agent:2.1.0\nschedule: "0 2 * * *"\n',
-    variables: { RETENTION_DAYS: '30', TARGET: 's3://panel-backups' },
     deploymentMode: 'selected',
     deploymentServers: ['srv-backup-fra', 'srv-db-fra'],
     reverseProxy: [],
@@ -546,15 +534,6 @@ export function listAppFiles(applicationId: string): ApplicationFile[] | null {
       createdAt: app.createdAt,
       updatedAt: app.updatedAt,
     },
-    {
-      name: 'env.template',
-      kind: 'template',
-      contentType: 'text/plain',
-      size: Object.entries(app.variables ?? {}).reduce((sum, [name, value]) => sum + name.length + value.length + 2, 0),
-      sha256: `sha-env-${applicationId}`,
-      createdAt: app.createdAt,
-      updatedAt: app.updatedAt,
-    },
   ];
   if (app.persistentPath) {
     files.push({
@@ -574,10 +553,6 @@ export function deployedAppFileContent(applicationId: string, fileName: string):
   const app = mockApplications.find((item) => item.id === applicationId);
   if (!app) return null;
   if (fileName === 'app.yaml') return { name: fileName, contentType: 'text/yaml', content: app.specYaml };
-  if (fileName === 'env.template') {
-    const lines = Object.entries(app.variables ?? {}).map(([name, value]) => `${name}=${value}`);
-    return { name: fileName, contentType: 'text/plain', content: lines.length ? `${lines.join('\n')}\n` : '' };
-  }
   return null;
 }
 
@@ -593,7 +568,6 @@ export function beginAppSession(applicationId?: string): ApplicationEditSession 
       name: app?.name ?? '',
       enabled: app?.enabled ?? true,
       specYaml: app?.specYaml ?? '',
-      variables: app?.variables ?? {},
       deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
       deploymentServers: app?.deploymentServers ?? [],
       reverseProxy: app?.reverseProxy ?? [],
@@ -718,7 +692,6 @@ export function commitAppSession(id: string) {
     name: session.draft.name,
     enabled: session.draft.enabled,
     specYaml: session.draft.specYaml,
-    variables: session.draft.variables,
     deploymentMode: session.draft.deploymentMode,
     deploymentServers: session.draft.deploymentServers,
     reverseProxy: session.draft.reverseProxy,

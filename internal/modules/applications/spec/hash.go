@@ -6,16 +6,11 @@ import (
 	"encoding/json"
 )
 
-func Hash(spec Spec, variables map[string]string) (string, error) {
+func Hash(spec Spec) (string, error) {
 	payload := struct {
-		Spec      Spec              `json:"spec"`
-		Variables map[string]string `json:"variables"`
+		Spec Spec `json:"spec"`
 	}{
-		Spec:      Normalize(spec),
-		Variables: variables,
-	}
-	if payload.Variables == nil {
-		payload.Variables = map[string]string{}
+		Spec: Normalize(spec),
 	}
 	raw, err := json.Marshal(payload)
 	if err != nil {

@@ -508,8 +508,6 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 		Name:              in.Name,
 		Enabled:           in.Enabled,
 		SpecYAML:          in.SpecYAML,
-		Variables:         prepared.variables,
-		ResolvedVariables: prepared.resolvedVariables,
 		PersistentPath:    prepared.persistentPath,
 		DeploymentMode:    prepared.deploymentMode,
 		DeploymentServers: prepared.deploymentServers,
@@ -618,8 +616,6 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	}
 	app.Enabled = in.Enabled
 	app.SpecYAML = in.SpecYAML
-	app.Variables = prepared.variables
-	app.ResolvedVariables = prepared.resolvedVariables
 	app.PersistentPath = prepared.persistentPath
 	app.DeploymentMode = prepared.deploymentMode
 	app.DeploymentServers = prepared.deploymentServers
@@ -1161,7 +1157,6 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 		Name:              app.Name,
 		Enabled:           app.Enabled,
 		SpecYAML:          app.SpecYAML,
-		Variables:         app.Variables,
 		DeploymentMode:    DeploymentModeSelected,
 		DeploymentServers: []string{targetServerID},
 		ReverseProxy:      app.ReverseProxy,
@@ -1182,8 +1177,6 @@ func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) 
 	migrated.DeploymentMode = prepared.deploymentMode
 	migrated.DeploymentServers = prepared.deploymentServers
 	migrated.PersistentPath = prepared.persistentPath
-	migrated.Variables = prepared.variables
-	migrated.ResolvedVariables = prepared.resolvedVariables
 	migrated.ReverseProxy = prepared.reverseProxy
 	migrated.Generation = generation
 	migrated.SpecHash = prepared.hash
@@ -1826,8 +1819,6 @@ func (s *Service) RestorePersistentData(ctx context.Context, appID string, conte
 
 type preparedApplication struct {
 	spec              appspec.Spec
-	variables         map[string]string
-	resolvedVariables map[string]any
 	persistentPath    string
 	deploymentMode    string
 	deploymentServers []string
@@ -1849,12 +1840,8 @@ func (s *Service) prepare(ctx context.Context, in SaveInput, generation int, app
 }
 
 func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation int, appID string, files []ApplicationFile) (preparedApplication, error) {
-	variables := in.Variables
-	if variables == nil {
-		variables = map[string]string{}
-	}
 	appContext := Application{ID: appID, Name: in.Name, Generation: generation, Namespace: s.currentConfig().Namespace, DeploymentMode: in.DeploymentMode}
-	data, err := s.templateData(ctx, appContext, variables, files, nil)
+	data, err := s.templateData(ctx, appContext, files, nil)
 	if err != nil {
 		return preparedApplication{}, err
 	}
@@ -1887,7 +1874,7 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 			return preparedApplication{}, err
 		}
 	}
-	hash, err := applicationHash(spec, variables, deploymentMode, deploymentServers, resolvedReverseProxy, files, data)
+	hash, err := applicationHash(spec, deploymentMode, deploymentServers, resolvedReverseProxy, files, data)
 	if err != nil {
 		return preparedApplication{}, err
 	}
@@ -1904,7 +1891,7 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	if len(renderIssues) > 0 {
 		return preparedApplication{}, applicationValidationError(validationIssuesFromSpecIssues(renderIssues))
 	}
-	return preparedApplication{spec: spec, variables: variables, resolvedVariables: data, persistentPath: persistentPath, deploymentMode: deploymentMode, deploymentServers: deploymentServers, reverseProxy: reverseProxy, hash: hash, job: job}, nil
+	return preparedApplication{spec: spec, persistentPath: persistentPath, deploymentMode: deploymentMode, deploymentServers: deploymentServers, reverseProxy: reverseProxy, hash: hash, job: job}, nil
 }
 
 func (s *Service) renderApplication(ctx context.Context, app Application) (appruntime.Spec, []ValidationIssue, error) {
@@ -1919,7 +1906,7 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 			return appruntime.Spec{}, nil, err
 		}
 	}
-	data, err := s.templateData(ctx, app, app.Variables, files, nil)
+	data, err := s.templateData(ctx, app, files, nil)
 	if err != nil {
 		return appruntime.Spec{}, nil, err
 	}
@@ -1963,14 +1950,6 @@ func (s *Service) renderApplicationWithFiles(ctx context.Context, app Applicatio
 	return job, issues, nil
 }
 
-func (s *Service) renderSpecYAML(ctx context.Context, source string, variables map[string]string) (string, error) {
-	data, err := s.templateData(ctx, Application{}, variables, nil, nil)
-	if err != nil {
-		return "", err
-	}
-	return s.renderTemplate(ctx, source, data)
-}
-
 func (s *Service) resolveApplicationImage(ctx context.Context, app Application) (ImageDigestResult, time.Time, error) {
 	checkedAt := time.Now().UTC()
 	if s.imageResolver == nil {
@@ -1980,7 +1959,7 @@ func (s *Service) resolveApplicationImage(ctx context.Context, app Application) 
 	if err != nil {
 		return ImageDigestResult{}, checkedAt, err
 	}
-	data, err := s.templateData(ctx, app, app.Variables, files, nil)
+	data, err := s.templateData(ctx, app, files, nil)
 	if err != nil {
 		return ImageDigestResult{}, checkedAt, err
 	}
@@ -2006,14 +1985,8 @@ func (s *Service) renderTemplate(ctx context.Context, source string, data map[st
 	return s.renderer.Render(ctx, source, data)
 }
 
-func (s *Service) templateData(ctx context.Context, app Application, variables map[string]string, files []ApplicationFile, target *server.Server) (map[string]any, error) {
+func (s *Service) templateData(ctx context.Context, app Application, files []ApplicationFile, target *server.Server) (map[string]any, error) {
 	data := map[string]any{}
-	varMap := map[string]any{}
-	for key, value := range variables {
-		data[key] = value
-		varMap[key] = value
-	}
-	data["vars"] = varMap
 	data["files"] = fileVariables(files)
 	if s.builtinResolver != nil {
 		builtins, err := s.builtinResolver.BuiltinVariables(ctx, ApplicationVariableContext{Application: app, Config: s.currentConfig(), Server: target})
@@ -3777,14 +3750,6 @@ func (s *Service) insertApplication(ctx context.Context, app Application) error 
 }
 
 func (s *Service) updateApplication(ctx context.Context, app Application) error {
-	variables, err := json.Marshal(app.Variables)
-	if err != nil {
-		return err
-	}
-	resolved, err := json.Marshal(app.ResolvedVariables)
-	if err != nil {
-		return err
-	}
 	deploymentServers, err := json.Marshal(app.DeploymentServers)
 	if err != nil {
 		return err
@@ -3793,8 +3758,8 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 	if err != nil {
 		return err
 	}
-	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -3807,25 +3772,20 @@ func (s *Service) updateApplicationDerived(ctx context.Context, app Application)
 }
 
 func updateApplicationDerivedWithExec(ctx context.Context, exec orm.Executor, app Application) error {
-	resolved, err := json.Marshal(app.ResolvedVariables)
-	if err != nil {
-		return err
-	}
 	return orm.New(exec).From("applications").Where("id=?", app.ID).UpdateColumns(ctx, map[string]any{
-		"resolved_variables_json": string(resolved),
-		"generation":              app.Generation,
-		"spec_hash":               app.SpecHash,
-		"image_reference":         app.ImageReference,
-		"image_digest":            app.ImageDigest,
-		"image_latest_digest":     app.ImageLatestDigest,
-		"image_checked_at":        nullableTime(app.ImageCheckedAt),
-		"image_update_available":  boolInt(app.ImageUpdateAvailable),
-		"image_last_error":        app.ImageLastError,
-		"job_id":                  app.JobID,
-		"namespace":               app.Namespace,
-		"last_eval_id":            app.LastEvalID,
-		"last_deployment_id":      app.LastDeploymentID,
-		"last_error":              app.LastError,
+		"generation":             app.Generation,
+		"spec_hash":              app.SpecHash,
+		"image_reference":        app.ImageReference,
+		"image_digest":           app.ImageDigest,
+		"image_latest_digest":    app.ImageLatestDigest,
+		"image_checked_at":       nullableTime(app.ImageCheckedAt),
+		"image_update_available": boolInt(app.ImageUpdateAvailable),
+		"image_last_error":       app.ImageLastError,
+		"job_id":                 app.JobID,
+		"namespace":              app.Namespace,
+		"last_eval_id":           app.LastEvalID,
+		"last_deployment_id":     app.LastDeploymentID,
+		"last_error":             app.LastError,
 	})
 }
 
@@ -3880,14 +3840,6 @@ func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Appli
 }
 
 func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *sql.Tx, app Application, expectedVersion int) error {
-	variables, err := json.Marshal(app.Variables)
-	if err != nil {
-		return err
-	}
-	resolved, err := json.Marshal(app.ResolvedVariables)
-	if err != nil {
-		return err
-	}
 	deploymentServers, err := json.Marshal(app.DeploymentServers)
 	if err != nil {
 		return err
@@ -3896,8 +3848,8 @@ func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *
 	if err != nil {
 		return err
 	}
-	result, err := orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
+	result, err := orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
 	if err != nil {
 		return err
 	}
@@ -3922,14 +3874,6 @@ func (s *Service) insertApplicationWithExec(ctx context.Context, exec orm.Execut
 }
 
 func (s *Service) updateApplicationWithExec(ctx context.Context, exec orm.Executor, app Application) error {
-	variables, err := json.Marshal(app.Variables)
-	if err != nil {
-		return err
-	}
-	resolved, err := json.Marshal(app.ResolvedVariables)
-	if err != nil {
-		return err
-	}
 	deploymentServers, err := json.Marshal(app.DeploymentServers)
 	if err != nil {
 		return err
@@ -3938,8 +3882,8 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec orm.Execut
 	if err != nil {
 		return err
 	}
-	_, err = orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,variables_json=?,resolved_variables_json=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, string(variables), string(resolved), app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+	_, err = orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -4780,7 +4724,7 @@ func (s *Service) renderManagedFilesForServer(ctx context.Context, app Applicati
 	for _, file := range files {
 		filesByAllocation[applicationFileAllocationName(file.ID)] = file
 	}
-	data, err := s.templateData(ctx, app, app.Variables, files, &srv)
+	data, err := s.templateData(ctx, app, files, &srv)
 	if err != nil {
 		return nil, err
 	}
@@ -5488,7 +5432,7 @@ func (s *Service) renderReverseProxyConfig(ctx context.Context, app Application,
 	if len(app.ReverseProxy) == 0 {
 		return "", "", nil
 	}
-	data, err := s.templateData(ctx, app, app.Variables, files, nil)
+	data, err := s.templateData(ctx, app, files, nil)
 	if err != nil {
 		return "", "", err
 	}
@@ -5559,7 +5503,7 @@ func (s *Service) ApplicationReverseProxyConfigs(ctx context.Context) ([]Applica
 		if err != nil {
 			return nil, err
 		}
-		data, err := s.templateData(ctx, app, app.Variables, files, nil)
+		data, err := s.templateData(ctx, app, files, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -5660,7 +5604,6 @@ func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Applic
 		Name:              current.Name,
 		Enabled:           current.Enabled,
 		SpecYAML:          current.SpecYAML,
-		Variables:         current.Variables,
 		DeploymentMode:    current.DeploymentMode,
 		DeploymentServers: current.DeploymentServers,
 		ReverseProxy:      current.ReverseProxy,
@@ -5679,8 +5622,6 @@ func (s *Service) refreshApplicationSnapshot(ctx context.Context, current Applic
 		}
 	}
 	app := current
-	app.Variables = prepared.variables
-	app.ResolvedVariables = prepared.resolvedVariables
 	app.PersistentPath = prepared.persistentPath
 	app.DeploymentMode = prepared.deploymentMode
 	app.DeploymentServers = prepared.deploymentServers
@@ -5726,7 +5667,7 @@ func fileVariables(files []ApplicationFile) map[string]any {
 	return map[string]any{"items": items, "byName": byName}
 }
 
-func applicationHash(spec appspec.Spec, variables map[string]string, deploymentMode string, deploymentServers []string, reverseProxy []ReverseProxyRule, files []ApplicationFile, resolved map[string]any) (string, error) {
+func applicationHash(spec appspec.Spec, deploymentMode string, deploymentServers []string, reverseProxy []ReverseProxyRule, files []ApplicationFile, resolved map[string]any) (string, error) {
 	fileRefs := make([]map[string]any, 0, len(files))
 	for _, file := range files {
 		fileRefs = append(fileRefs, map[string]any{
@@ -5737,9 +5678,8 @@ func applicationHash(spec appspec.Spec, variables map[string]string, deploymentM
 		})
 	}
 	payload := map[string]any{
-		"spec":      appspec.Normalize(spec),
-		"variables": variables,
-		"resolved":  stableResolvedVariables(resolved),
+		"spec":     appspec.Normalize(spec),
+		"resolved": stableResolvedVariables(resolved),
 		"deployment": map[string]any{
 			"mode":    deploymentMode,
 			"servers": deploymentServers,
@@ -5871,14 +5811,6 @@ func (s *Service) Package(ctx context.Context, appID string) (PackageResult, err
 		"reverseProxy":      app.ReverseProxy,
 	}, "", "  ")
 	if err := writeZipFile("application.json", metadata); err != nil {
-		return PackageResult{}, err
-	}
-	variables, _ := json.MarshalIndent(app.Variables, "", "  ")
-	if err := writeZipFile("variables.json", variables); err != nil {
-		return PackageResult{}, err
-	}
-	resolved, _ := json.MarshalIndent(app.ResolvedVariables, "", "  ")
-	if err := writeZipFile("resolved_variables.json", resolved); err != nil {
 		return PackageResult{}, err
 	}
 	for _, file := range files {

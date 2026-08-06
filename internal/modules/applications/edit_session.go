@@ -64,7 +64,7 @@ type editSessionRecord struct {
 func (s *Service) BeginEditSession(ctx context.Context, owner string, in BeginEditSessionInput) (ApplicationEditSession, error) {
 	owner = normalizeEditOwner(owner)
 	now := time.Now().UTC()
-	draft := SaveInput{Variables: map[string]string{}, DeploymentMode: DeploymentModeAll, DeploymentServers: []string{}, ReverseProxy: []ReverseProxyRule{}}
+	draft := SaveInput{DeploymentMode: DeploymentModeAll, DeploymentServers: []string{}, ReverseProxy: []ReverseProxyRule{}}
 	baseVersion := 0
 	var baseUpdatedAt time.Time
 	applicationID := strings.TrimSpace(in.ApplicationID)
@@ -850,20 +850,18 @@ func (s *Service) applicationMatchesEditDraft(ctx context.Context, app Applicati
 		Name              string
 		Enabled           bool
 		SpecYAML          string
-		Variables         map[string]string
 		DeploymentMode    string
 		DeploymentServers []string
 		ReverseProxy      []ReverseProxyRule
-	}{wantName, draft.Enabled, draft.SpecYAML, prepared.variables, prepared.deploymentMode, deploymentServers, reverseProxy}
+	}{wantName, draft.Enabled, draft.SpecYAML, prepared.deploymentMode, deploymentServers, reverseProxy}
 	got := struct {
 		Name              string
 		Enabled           bool
 		SpecYAML          string
-		Variables         map[string]string
 		DeploymentMode    string
 		DeploymentServers []string
 		ReverseProxy      []ReverseProxyRule
-	}{app.Name, app.Enabled, app.SpecYAML, app.Variables, app.DeploymentMode, app.DeploymentServers, app.ReverseProxy}
+	}{app.Name, app.Enabled, app.SpecYAML, app.DeploymentMode, app.DeploymentServers, app.ReverseProxy}
 	wantRaw, err1 := json.Marshal(want)
 	gotRaw, err2 := json.Marshal(got)
 	return err1 == nil && err2 == nil && string(wantRaw) == string(gotRaw)
@@ -1073,13 +1071,10 @@ func editSessionWorkspaceStale(dir string, now time.Time) bool {
 }
 
 func saveInputFromApplication(app Application) SaveInput {
-	return normalizeEditDraft(SaveInput{Name: app.Name, Enabled: app.Enabled, SpecYAML: app.SpecYAML, Variables: app.Variables, DeploymentMode: app.DeploymentMode, DeploymentServers: app.DeploymentServers, ReverseProxy: app.ReverseProxy})
+	return normalizeEditDraft(SaveInput{Name: app.Name, Enabled: app.Enabled, SpecYAML: app.SpecYAML, DeploymentMode: app.DeploymentMode, DeploymentServers: app.DeploymentServers, ReverseProxy: app.ReverseProxy})
 }
 
 func normalizeEditDraft(in SaveInput) SaveInput {
-	if in.Variables == nil {
-		in.Variables = map[string]string{}
-	}
 	if strings.TrimSpace(in.DeploymentMode) == "" {
 		in.DeploymentMode = DeploymentModeAll
 	}

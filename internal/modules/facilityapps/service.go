@@ -1210,8 +1210,6 @@ func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg Reverse
 			Name:                    "__panel_facility_reverse_proxy__",
 			Enabled:                 len(cfg.DeploymentServers) > 0,
 			SpecYAML:                facilitySpecYAML(cfg),
-			VariablesJSON:           map[string]any{},
-			ResolvedVariablesJSON:   map[string]any{},
 			DeploymentMode:          applications.DeploymentModeSelected,
 			DeploymentServerIDsJSON: cfg.DeploymentServers,
 			ReverseProxyJSON:        []map[string]any{},
