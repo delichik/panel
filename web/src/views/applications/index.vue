@@ -730,12 +730,13 @@ async function loadRuntime(applicationId: string) {
   }
 }
 
-async function runOperation(name: string, action: () => Promise<unknown>, successKey: string) {
+async function runOperation(name: string, action: () => Promise<unknown>, successKey: string, successKeyWithoutId = '') {
   pending.value = name;
   actionError.value = '';
   try {
     const result = await action();
-    feedback.value = t(successKey, taskParams(result));
+    const params = taskParams(result);
+    feedback.value = params ? t(successKey, params) : t(successKeyWithoutId || successKey);
     await load();
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
@@ -746,7 +747,8 @@ async function runOperation(name: string, action: () => Promise<unknown>, succes
 
 function taskParams(result: unknown) {
   const record = result as { taskId?: string; deploymentId?: string; evalId?: string };
-  return { taskId: record?.taskId || record?.deploymentId || record?.evalId || t('common.notAvailable') };
+  const taskId = record?.taskId || record?.deploymentId || record?.evalId;
+  return taskId ? { taskId } : null;
 }
 
 async function showLogs(app: ApplicationDto) {
@@ -776,7 +778,7 @@ async function confirmAction() {
   if (confirmKind.value === 'delete') {
     await runOperation('delete', () => applicationsApi.delete(app.id), 'applicationsPage.deleted');
   } else {
-    await runOperation('stop', () => applicationsApi.stop(app.id), 'applicationsPage.stopAccepted');
+    await runOperation('stop', () => applicationsApi.stop(app.id), 'applicationsPage.stopAccepted', 'applicationsPage.stopAcceptedWithoutId');
   }
   confirmOpen.value = false;
 }
@@ -791,7 +793,7 @@ async function downloadPersistentData(app: ApplicationDto) {
 async function restorePersistentData(fileOrFiles: File | File[]) {
   const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
   if (!file || !currentApplicationSummary.value) return;
-  await runOperation('persistent-restore', () => applicationsApi.restorePersistentData(selectedApplication.value.id, file), 'applicationsPage.restoreAccepted');
+  await runOperation('persistent-restore', () => applicationsApi.restorePersistentData(selectedApplication.value.id, file), 'applicationsPage.restoreAccepted', 'applicationsPage.restoreAcceptedWithoutId');
 }
 
 async function startApplicationEditor() {
@@ -1511,7 +1513,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="flex flex-wrap gap-2">
               <Button @click="router.push(`/applications/apps/${encodeURIComponent(selectedApplication.id)}/edit`)"><Wrench />{{ t('common.edit') }}</Button>
-              <Button :loading="pending === 'deploy'" @click="runOperation('deploy', () => applicationsApi.deploy(selectedApplication.id), 'applicationsPage.deployAccepted')"><Rocket />{{ t('applicationsPage.sync') }}</Button>
+              <Button :loading="pending === 'deploy'" @click="runOperation('deploy', () => applicationsApi.deploy(selectedApplication.id), 'applicationsPage.deployAccepted', 'applicationsPage.deployAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.sync') }}</Button>
               <Button variant="danger" :disabled="!selectedApplication.enabled" @click="ask('stop', selectedApplication.id)"><Square />{{ t('applicationsPage.disable') }}</Button>
             </div>
           </header>
@@ -1573,7 +1575,7 @@ onBeforeUnmount(() => {
                   <h3>{{ t('applicationsPage.operations') }}</h3>
                   <div class="mt-3 grid gap-2">
                     <Button :loading="pending === 'image-check'" @click="runOperation('image-check', () => applicationsApi.checkImage(selectedApplication.id), 'applicationsPage.imageChecked')"><RefreshCcw />{{ t('applicationsPage.checkImage') }}</Button>
-                    <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
+                    <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
                     <Button @click="router.push({ path: '/application-operations', query: { applicationId: selectedApplication.id } })"><ClipboardList />{{ t('applicationsPage.operationRecords') }}</Button>
                     <Button :loading="logsLoading" @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
                     <Button variant="danger" @click="ask('delete', selectedApplication.id)"><Trash2 />{{ t('common.delete') }}</Button>
@@ -1643,7 +1645,7 @@ onBeforeUnmount(() => {
               </template>
             </div>
             <div class="flex flex-wrap gap-2">
-              <Button size="sm" @click.stop="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+              <Button size="sm" @click.stop="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
             </div>
           </article>
           <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
@@ -1655,7 +1657,7 @@ onBeforeUnmount(() => {
     <template #actions>
       <template v-if="!facilityEditingView">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button v-if="currentFacilitySummary" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+        <Button v-if="currentFacilitySummary" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
         <Button v-if="currentFacilitySummary" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
       </template>
     </template>
