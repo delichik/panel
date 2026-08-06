@@ -121,7 +121,7 @@
 
 `web/src/views/application-operations/` 与 `web/src/views/system-events/` 是统一运行事件能力的两个前端页面族：
 
-- 操作记录读取 `/api/v1/application-operations`，主体是应用 operation 投影，支持按应用 ID、来源和状态筛选。列表应用列只展示应用名称快照，详情标题使用应用名称快照，用户可见位置不直接展示 `applicationId` / `operationId` 原始 id。详情可用时打开详情弹窗展示 targets 和 events；失败或部分失败记录在列表和详情中直接展示失败摘要；详情已清理时详情按钮禁用并显示清理提示。
+- 操作记录读取 `/api/v1/application-operations`，主体是应用 operation 投影，支持按应用 ID、来源和状态筛选。列表应用列只展示应用名称快照，详情标题使用应用名称快照，用户可见位置不直接展示 `applicationId` / `operationId` 原始 id。列表状态列只展示状态徽标，失败或部分失败的摘要只在详情弹窗中展示；详情已清理时详情按钮禁用并显示清理提示。
 - 系统事件读取 `/api/v1/system-events`，主体是诊断事件，支持按关联对象 ID、级别和类别筛选。页面只展示后端提供的事件类型与类别，不假设独立 alert 服务。
 - 两个页面均使用 `ListPage`、`SearchInput`、`Select`、`Table`、`PaginationBar`、`StatusBadge` 和 `Dialog`，保持桌面内部滚动，不恢复页面级滚动。
 - Mock 模式覆盖同名正式路径，包含详情可用、详情已清理、分页和筛选样本。

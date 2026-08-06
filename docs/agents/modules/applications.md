@@ -193,7 +193,7 @@
 ## Managed Facility Application Identity
 
 - Facility applications can reserve hidden application identities for lifecycle records. The reverse proxy facility app uses `facility-reverse-proxy`; it exists so `application_lifecycle_operations` and `application_lifecycle_targets` keep normal application ID query semantics even though lifecycle rows live in `Store.LogDB()` and use soft references.
-- `applications.Service.List` and normal application pages must filter this identity out. Facility pages should read their own config endpoint and render the embedded lifecycle operation instead of exposing the managed identity as a user-editable application.
+- `applications.Service.List`, the operation records list, and normal application pages must filter this identity out. Facility pages should read their own config endpoint and render the embedded lifecycle operation instead of exposing the managed identity as a user-editable application.
 
 ## Deployment Coordination Ownership
 

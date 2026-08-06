@@ -77,6 +77,56 @@ func TestWriteIsIdempotentAndCreatesOperationProjection(t *testing.T) {
 	}
 }
 
+func TestListApplicationOperationsHidesFacilityReverseProxy(t *testing.T) {
+	svc, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	records := []struct {
+		applicationID string
+		nameSnapshot  string
+	}{
+		{applicationID: "app-1", nameSnapshot: "App One"},
+		{applicationID: "facility-reverse-proxy", nameSnapshot: "__panel_facility_reverse_proxy__"},
+	}
+	for _, record := range records {
+		_, _, err := svc.Write(ctx, WriteEventInput{
+			EventType:   EventApplicationOperationCreated,
+			Category:    CategoryApplication,
+			SubjectType: "application",
+			SubjectID:   record.applicationID,
+			OperationID: "op-" + record.applicationID,
+			Severity:    SeverityInfo,
+			Source:      "manual",
+			DedupeKey:   "dedupe-" + record.applicationID,
+			Summary:     "Application operation created",
+			OccurredAt:  now,
+			Detail:      &EventDetailInput{PayloadJSON: `{}`},
+			Application: &ApplicationOperationInput{
+				ApplicationID:           record.applicationID,
+				ApplicationNameSnapshot: record.nameSnapshot,
+				Action:                  "apply",
+				Source:                  "manual",
+				Status:                  "running",
+				StartedAt:               &now,
+				TargetTotal:             1,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	result, err := svc.ListApplicationOperations(ctx, ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ApplicationID != "app-1" {
+		t.Fatalf("facility operation must be hidden from operation records: %#v", result.Items)
+	}
+}
+
 func TestSystemEventsFilterAndDetailWrapper(t *testing.T) {
 	svc, closeStore := newTestService(t)
 	defer closeStore()

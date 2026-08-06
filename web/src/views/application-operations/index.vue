@@ -187,10 +187,7 @@ onMounted(load);
         <template #action="{ row }">{{ t(`applicationOperationsPage.action.${row.action}`) }}</template>
         <template #source="{ row }">{{ sourceLabel(row.source) }}</template>
         <template #status="{ row }">
-          <div class="grid min-w-0 gap-1">
-            <StatusBadge class="shrink-0 justify-self-start" :status="row.status" domain="operation" :label="statusLabel(row.status)" />
-            <span v-if="row.failureSummary" class="line-clamp-2 min-w-0 break-words text-xs leading-5 text-danger" :title="row.failureSummary">{{ row.failureSummary }}</span>
-          </div>
+          <StatusBadge class="shrink-0 justify-self-start" :status="row.status" domain="operation" :label="statusLabel(row.status)" />
         </template>
         <template #targetTotal="{ row }">{{ targetProgress(row) }}</template>
         <template #latestEventAt="{ row }">{{ formatDateTime(row.latestEventAt) }}</template>
@@ -211,7 +208,7 @@ onMounted(load);
     </template>
   </ListPage>
 
-  <Dialog v-model:open="detailOpen" :title="detail?.operation.applicationNameSnapshot || t('applicationOperationsPage.detailTitle')" :close-label="t('common.close')">
+  <Dialog v-model:open="detailOpen" size="large" :title="detail?.operation.applicationNameSnapshot || t('applicationOperationsPage.detailTitle')" :close-label="t('common.close')">
     <div v-if="detailLoading" class="relative grid min-h-64 place-items-center">
       <LoadingOverlay :label="t('applicationOperationsPage.loadingDetail')" />
     </div>

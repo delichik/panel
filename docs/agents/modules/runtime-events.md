@@ -29,7 +29,8 @@
 - “系统事件”用于诊断，展示后端提供的运行事件类型、严重级别、关联对象、来源、摘要和详情引用，不承担应用工作进度页职责。
 - 旧 `/tasks` 路由可保留兼容，但不在主导航、概览快捷入口或应用详情入口中出现，也不重定向到新页面。
 - 应用详情的操作记录入口跳转到 `/application-operations?applicationId=<id>`，由应用操作投影查询承载最近操作，不维护独立应用操作历史逻辑。操作记录列表与详情面向用户展示可读信息：列表应用列使用 `applicationNameSnapshot`，详情标题使用应用名称快照，不直接展示 `applicationId` / `operationId` 原始 id。
-- 失败或部分失败的操作记录在列表与详情中直接展示 `failureSummary` 失败摘要，详情中的失败摘要保留完整换行与折行，便于用户看到具体失败内容；摘要为空时不展示失败信息。
+- 失败或部分失败的操作记录只在详情弹窗中展示 `failureSummary` 失败摘要，详情中的失败摘要保留完整换行与折行；摘要为空时不展示失败信息。
+- 操作记录列表不展示设施隐藏身份 `facility-reverse-proxy` 的操作投影；设施反向代理的部署记录只在设施应用详情页展示，不出现在普通操作记录列表中。
 - 详情保留和记录保留是不同配置。详情已清理时列表仍显示摘要，详情按钮必须禁用并提示 `详情已清理` / `Detail has been cleaned up`。
 - 前端不假设独立告警服务。系统事件页只按 `system-events` API 返回的 `category` / `eventType` / `severity` 展示。
 - 事件 `category` 只使用 `application`、`task`、`alert`、`log`、`runtime`、`system`。任务事件写入 `task`，任务日志引用写入 `log`，应用操作事件写入 `application`。
