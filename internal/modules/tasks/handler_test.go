@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"panel/internal/platform/http"
+	httpx "panel/internal/platform/http"
 )
 
 type recordingRunner struct {
@@ -138,6 +138,43 @@ func TestHandlerRetryDispatchesRunnableFailedTask(t *testing.T) {
 	}
 	if runner.task.ID == "" || runner.task.ID == task.ID || runner.task.TriggerTaskID != task.ID {
 		t.Fatalf("expected runner to receive retry task, got %#v", runner.task)
+	}
+}
+
+func TestHandlerDecoratesAllowCancelFromDefinition(t *testing.T) {
+	svc := newTestService(t)
+	blocked, err := svc.Create(context.Background(), CreateInput{Type: "package_upgrade_selected", Status: StatusQueued})
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowed, err := svc.Create(context.Background(), CreateInput{Type: "package_refresh", Status: StatusQueued})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(svc)
+
+	rec := serveTaskRoute(handler, http.MethodGet, "/api/v1/tasks/"+blocked.ID)
+	var response struct {
+		Data Task `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	got := response.Data
+	if got.AllowCancel {
+		t.Fatalf("expected non-cancellable task to expose allowCancel=false, got %#v", got)
+	}
+
+	rec = serveTaskRoute(handler, http.MethodGet, "/api/v1/tasks/"+allowed.ID)
+	response = struct {
+		Data Task `json:"data"`
+	}{}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	got = response.Data
+	if !got.AllowCancel {
+		t.Fatalf("expected cancellable task to expose allowCancel=true, got %#v", got)
 	}
 }
 

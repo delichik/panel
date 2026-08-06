@@ -98,6 +98,7 @@
 - SSH 密码、私钥和私钥口令统一封装到 `credentials.secret_ciphertext`，并通过 `internal/platform/secrets` 加密；不得通过 API 响应或任务日志返回秘密内容。
 - `internal/platform/linux/remoteops/` 仅用于 Agent bootstrap、安装、证书验证和恢复路径中的 SSH 特权操作。
 - 软件包维护基于 APT，只对支持的系统执行；刷新和升级必须通过兼容 Agent 使用固定 `apt-get`/`apt` 可执行文件及参数调用，不拼接 shell，也不回退 SSH。
+- 软件包升级在 agent 端必须与 RPC 请求 context 隔离并保留独立超时，避免 Panel 重启或连接断开中断 apt 事务后留下 dpkg/Docker 半升级状态；对应 Panel 升级任务必须声明不可取消，删除服务器也不得取消正在运行的升级。
 - `POST /api/v1/servers/{id}/packages/refresh` 创建或复用 `package_refresh` 任务并返回 `taskId`；调度器一轮多服务器刷新必须共享同一个 `operationId`。
 - 周期性指标采集依赖 agent，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器创建 `metrics_collect` 任务；不再因旧 `reachable=false` 跳过，以便恢复成功时重新标记可达。同一轮多服务器采集共享一个 `operationId`，任务中心默认常用类型会隐藏该高频类型。指标快照除 CPU、内存、磁盘和网络外，结构化保存 Linux 标准的 1、5、15 分钟负载 `load1`、`load5`、`load15`。
 - 指标历史清理由 `internal/modules/observability/metrics/cleanup_worker.go` 自主管理，按运行时设置中的保留天数和清理周期执行，不属于 tasks 内部 worker。

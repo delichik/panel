@@ -22,6 +22,7 @@ export interface TaskDto {
   finishedAt?: string;
   allowRunNow: boolean;
   allowRetry: boolean;
+  allowCancel: boolean;
 }
 
 export interface TaskListResult {

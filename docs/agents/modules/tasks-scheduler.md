@@ -44,7 +44,8 @@
 - 注册方通过任务定义声明参数校验、执行函数、`BeforeStart`、完成 hook、失败 hook、重试/手动运行能力、并发策略、一次性 worker 排队超时清理能力和周期配置。
 - 业务模块的 `tasks.go` 必须保持声明式：`Execute` 直接绑定接受 `tasks.TaskContext` 的具名方法，`CollectInputs` 直接绑定具名 collector。禁止使用只为转调另一函数而存在的匿名 executor，也禁止在任务定义中内联节流、扫描和批量输入组装等大段逻辑。
 - 多个周期任务共用的时间节流使用 `tasks.NewIntervalCollector`；业务模块仍负责提供实际输入 collector，tasks 框架只管理调用间隔和上次成功产出时间。
-- `Hidden`、`AllowRunNow`、`AllowRetry`、`DefaultMaxRetries`、`StaleQueuedAfter`、并发策略、executor 和周期配置都属于任务定义的一部分；这些能力随业务模块注册，不由任务中心或任务内部 worker 根据 task type 字符串另行维护。没有注册 `Execute` 的记录型任务不得声明 `AllowRunNow` 或 `AllowRetry`，避免任务中心暴露无法真正执行的手动运行或重试入口。
+- `Hidden`、`AllowRunNow`、`AllowRetry`、`DisallowCancel`、`DefaultMaxRetries`、`StaleQueuedAfter`、并发策略、executor 和周期配置都属于任务定义的一部分；这些能力随业务模块注册，不由任务中心或任务内部 worker 根据 task type 字符串另行维护。没有注册 `Execute` 的记录型任务不得声明 `AllowRunNow` 或 `AllowRetry`，避免任务中心暴露无法真正执行的手动运行或重试入口。
+- 注册方可通过 `DisallowCancel` 声明任务不可取消；不可取消任务不能被 `Cancel` 或 `CancelByServer` 取消，任务 API 返回 `allowCancel=false`，删除服务器也不会终止这类任务。
 - 任务列表、详情、重试和手动运行 API 返回任务时，会根据当前注册定义补充 `allowRunNow` 与 `allowRetry`。前端必须使用这两个响应字段决定操作入口，不得维护 task type 白名单；即使定义误声明能力但没有 executor，API 也必须返回不可操作。
 - 周期任务类型通过 `Periodic.CollectInputs` 收集本轮自动触发需要的参数，并决定是否创建任务实例。返回 `shouldRun=false` 时不创建任务、不执行、不写日志、不进入任务中心；返回 `shouldRun=true` 时交给任务 manager 创建任务。单个输入创建普通任务，多个输入创建一个父任务和多个子任务；collector 可以返回负责展示/编排的 `batch.Type` 和实际执行 handler 的 `CreateInput.Type`，但应用协调是例外：它只请求应用 planner 创建或复用 durable target，生产路径不返回 `application_target_*` 输入，目标任务由 deployment dispatcher 在 claim target 后创建。父任务负责编排、等待子任务终态并汇总结果。手动执行周期任务仍按普通任务语义处理，调用方必须显式传入参数，不会调用 `CollectInputs` 自动补齐。周期 collector 面向多个资源时必须共享一个 `operation_id`，每个资源生成独立任务输入。
 - 外部业务可以通过 `tasks.Manager.TriggerPeriodicNow` 按任务类型立即触发一次周期任务 collector。该入口会传入 `tasks.PeriodicTrigger`，其中 `Payload any` 是本次 collector 调用的内存上下文，用于额外过滤或补充输入，不自动落库；collector 产出的 `CreateInput` 才是持久化任务输入。定时器触发时使用 `Type=scheduler` 的空 payload；外部触发必须继续走 manager 的创建、并发和执行流程，不得绕开 task 框架手写 executor goroutine。
@@ -91,7 +92,7 @@
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。新建证书签发在任务持久化后由证书模块主动调用 manager 启动，正常路径不依赖 worker 的周期扫描；worker 仍负责重启恢复和兜底唤醒。
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。该任务的注册 executor 必须同步执行到任务终态；业务 API 需要快速返回时只能在创建并标记 running 后使用模块内显式后台启动 helper。
 - 启用服务器 agent 后，`metrics_collect` 与普通 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、`metrics_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
-- 软件包刷新/升级、UFW 写操作、fail2ban 安装/接管/应用/取消接管和服务器重启必须路由到兼容 Agent，不允许回退 SSH。长耗时 APT 请求使用独立 Agent maintenance gRPC 超时并把命令输出写入 Panel 任务日志；SSH 只保留 Agent bootstrap、安装、修复和证书恢复。
+- 软件包刷新/升级、UFW 写操作、fail2ban 安装/接管/应用/取消接管和服务器重启必须路由到兼容 Agent，不允许回退 SSH。长耗时 APT 请求使用独立 Agent maintenance gRPC 超时并把命令输出写入 Panel 任务日志；软件包升级任务声明 `DisallowCancel`，Panel 重启、连接断开或删除服务器都不会取消远端 apt。SSH 只保留 Agent bootstrap、安装、修复和证书恢复。
 
 ## 密钥资产任务
 

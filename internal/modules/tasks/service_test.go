@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -30,6 +32,8 @@ func newTestService(t *testing.T) *Service {
 		{Type: "sample_task", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
 		{Type: "sample_restart", AllowRetry: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
 		{Type: "package_refresh", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
+		{Type: "package_upgrade_selected", DisallowCancel: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
+		{Type: "package_upgrade_all", DisallowCancel: true, ConcurrencyPolicy: ConcurrencyParallelAllowed},
 		{Type: "metrics_collect", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "server_connectivity_test", Hidden: true, AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
 		{Type: "server_info_collect", AllowRunNow: true, AllowRetry: true, ConcurrencyPolicy: ConcurrencyResourceExclusive},
@@ -40,6 +44,71 @@ func newTestService(t *testing.T) *Service {
 		svc.MustRegister(def)
 	}
 	return svc
+}
+
+func TestCancelRejectsNonCancellableTask(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "package_upgrade_selected", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = svc.Cancel(ctx, task.ID, "user requested")
+	var pe *panelerr.Error
+	if !errors.As(err, &pe) || pe.Code != "task_cancel_unsupported" {
+		t.Fatalf("expected non-cancellable task to be rejected, got %v", err)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusRunning {
+		t.Fatalf("expected task to stay running, got %s", got.Status)
+	}
+}
+
+func TestCancelByServerSkipsNonCancellableTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	blocked, err := svc.Create(ctx, CreateInput{Type: "package_upgrade_all", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !svc.isCancellationBlocked("package_upgrade_all") || !svc.isCancellationBlocked(blocked.Type) {
+		t.Fatalf("package_upgrade_all should be registered as non-cancellable, got %q", blocked.Type)
+	}
+	blockedFromDB, err := svc.Get(ctx, blocked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !svc.isCancellationBlocked(blockedFromDB.Type) {
+		t.Fatalf("loaded task type %q should be non-cancellable", blockedFromDB.Type)
+	}
+	cancellable, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := svc.CancelByServer(ctx, "srv_1", "server removed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected only the cancellable task to be cancelled, got %d", count)
+	}
+	gotBlocked, err := svc.Get(ctx, blocked.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotBlocked.Status != StatusRunning {
+		t.Fatalf("expected non-cancellable task to stay running, got %s", gotBlocked.Status)
+	}
+	gotCancellable, err := svc.Get(ctx, cancellable.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotCancellable.Status != StatusCancelled {
+		t.Fatalf("expected cancellable task to be cancelled, got %s", gotCancellable.Status)
+	}
 }
 
 func TestTaskLifecycleAndLogs(t *testing.T) {

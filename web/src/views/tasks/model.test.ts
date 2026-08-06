@@ -15,6 +15,7 @@ function task(id: string, operationId: string, status: string): TaskDto {
     createdAt: id.endsWith('2') ? '2026-07-21T08:02:00.000Z' : '2026-07-21T08:01:00.000Z',
     allowRunNow: status === 'queued',
     allowRetry: status === 'failed',
+    allowCancel: true,
   };
 }
 

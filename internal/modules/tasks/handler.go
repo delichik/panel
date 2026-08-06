@@ -171,7 +171,12 @@ func (h *Handler) decorateTask(task *Task) {
 		return
 	}
 	def, ok := h.service.Registry().Definition(task.Type)
-	if !ok || def.Execute == nil {
+	if !ok {
+		task.AllowCancel = true
+		return
+	}
+	task.AllowCancel = !def.DisallowCancel
+	if def.Execute == nil {
 		return
 	}
 	task.AllowRunNow = def.AllowRunNow

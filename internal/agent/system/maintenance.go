@@ -49,7 +49,9 @@ func (LocalCollector) UpgradePackages(ctx context.Context, req agentcontract.Pac
 			args = append(args, name)
 		}
 	}
-	return runCommand(ctx, time.Hour, "apt-get", args...)
+	// Package upgrades must survive Panel disconnects; killing apt mid-transaction
+	// can leave dpkg/Docker in an inconsistent state.
+	return runCommand(context.WithoutCancel(ctx), time.Hour, "apt-get", args...)
 }
 
 func (c LocalCollector) InstallUFW(ctx context.Context, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {

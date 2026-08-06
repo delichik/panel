@@ -514,10 +514,18 @@ func (s *Service) CountByServerStatuses(ctx context.Context, serverID string, st
 
 func (s *Service) CancelByServer(ctx context.Context, serverID, message string) (int, error) {
 	activeStatuses := []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}
-	taskIDs := []string{}
+	rows := []string{}
 	if err := orm.New(s.db).From("tasks").Where("server_id = ?", serverID).
-		AndIn("status", activeStatuses).Pluck(ctx, "id", &taskIDs); err != nil {
+		AndIn("status", activeStatuses).Pluck(ctx, "id", &rows); err != nil {
 		return 0, err
+	}
+	taskIDs := []string{}
+	for _, taskID := range rows {
+		task, getErr := s.Get(ctx, taskID)
+		if getErr == nil && s.isCancellationBlocked(task.Type) {
+			continue
+		}
+		taskIDs = append(taskIDs, taskID)
 	}
 	if len(taskIDs) == 0 {
 		return 0, nil
@@ -526,9 +534,10 @@ func (s *Service) CancelByServer(ctx context.Context, serverID, message string) 
 		message = "Task cancelled because the server was removed"
 	}
 	finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
-	updateArgs := []any{StatusCancelled, "cancelled", Redact(message), finishedAt, serverID}
+	updateArgs := []any{StatusCancelled, "cancelled", Redact(message), finishedAt}
+	updateArgs = append(updateArgs, stringArgs(taskIDs)...)
 	updateArgs = append(updateArgs, stringArgs(activeStatuses)...)
-	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE server_id=? AND status IN (`+placeholders(len(activeStatuses))+`)`, updateArgs...)
+	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id IN (`+placeholders(len(taskIDs))+`) AND status IN (`+placeholders(len(activeStatuses))+`)`, updateArgs...)
 	if err != nil {
 		return 0, err
 	}
@@ -551,6 +560,9 @@ func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
 	if strings.TrimSpace(message) == "" {
 		message = "Task cancelled"
 	}
+	if task, getErr := s.Get(ctx, taskID); getErr == nil && s.isCancellationBlocked(task.Type) {
+		return panelerr.Validation("task_cancel_unsupported", "This task type cannot be cancelled")
+	}
 	finishedAt := time.Now().UTC().Format(time.RFC3339Nano)
 	res, err := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, stage=?, error=?, next_run_at=NULL, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`,
 		append([]any{StatusCancelled, "cancelled", Redact(message), finishedAt, taskID}, stringArgs(terminalStatuses)...)...)
@@ -572,6 +584,11 @@ func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
 	delete(s.runningExecutions, taskID)
 	s.runningMu.Unlock()
 	return nil
+}
+
+func (s *Service) isCancellationBlocked(taskType string) bool {
+	def, ok := s.Registry().Definition(taskType)
+	return ok && def.DisallowCancel
 }
 
 func (s *Service) SetTriggeredBy(ctx context.Context, taskID, triggeredBy string) error {

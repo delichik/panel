@@ -117,6 +117,7 @@ export function task(id: string, operationId: string, type: string, status: stri
     finishedAt: ['completed', 'failed'].includes(status) ? new Date(now.getTime() - 120000).toISOString() : undefined,
     allowRetry,
     allowRunNow,
+    allowCancel: true,
   };
 }
 

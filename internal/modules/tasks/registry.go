@@ -60,6 +60,7 @@ type Definition struct {
 	Hidden            bool
 	AllowRunNow       bool
 	AllowRetry        bool
+	DisallowCancel    bool
 	DefaultMaxRetries int
 	StaleQueuedAfter  time.Duration
 	ConcurrencyPolicy string
