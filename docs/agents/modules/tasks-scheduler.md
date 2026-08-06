@@ -87,6 +87,7 @@
 - 应用同步、停止收敛、清理收敛、重启、镜像检查和镜像更新依赖本模块记录任务；保存、停用、删除等业务入口只写 desired state 并触发 `application_reconcile`，协调器先请求应用 planner 创建或复用 lifecycle target。生产路径不再由 collector 产出可见父任务 `application_target_batch` 或私有目标任务；`application_target_apply`、`application_target_stop` 和 `application_target_purge` 只能由 deployment dispatcher 在 claim target 后创建。每个目标任务只能处理一个应用在一个服务器上的一个动作，并使用 `application:target:<appId>:<serverId>` 队列 key 串行运行。
 - 容器启动、停止、重启、删除，镜像拉取、删除、删除未使用，以及卷删除、删除未使用由容器化模块同步串行执行，不再创建操作任务；容器状态由 Agent report stream 更新缓存，镜像和卷操作成功后会立即创建 `image_refresh` 或 `volume_refresh` 刷新任务。
 - 手动镜像刷新、Application 镜像升级和 Application 协调恢复仍依赖本模块记录任务；同服务器 Docker 写操作由容器化模块串行执行。
+- 网络和卷资源页首次打开且本地尚无快照时，前端会提交一次 `network_refresh` 或 `volume_refresh` 任务；刷新任务按任务类型、服务器和资源复用活跃任务。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。新建证书签发在任务持久化后由证书模块主动调用 manager 启动，正常路径不依赖 worker 的周期扫描；worker 仍负责重启恢复和兜底唤醒。
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。该任务的注册 executor 必须同步执行到任务终态；业务 API 需要快速返回时只能在创建并标记 running 后使用模块内显式后台启动 helper。
 - 启用服务器 agent 后，`metrics_collect` 与普通 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、`metrics_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。

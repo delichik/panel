@@ -45,6 +45,7 @@ let serversController: AbortController | null = null;
 let resourceController: AbortController | null = null;
 let serversRequestId = 0;
 let resourceRequestId = 0;
+const autoRefreshing = new Set<string>();
 
 const servers = ref<ServerDto[]>([]);
 const selectedId = ref(String(route.query.server ?? ''));
@@ -151,6 +152,7 @@ async function loadResource() {
   const controller = new AbortController();
   resourceController = controller;
   const tab = activeTab.value;
+  let snapshotNeedsRefresh: { serverId: string; tab: 'networks' | 'volumes' } | null = null;
   loadingResource.value = true;
   actionError.value = '';
   try {
@@ -174,11 +176,13 @@ async function loadResource() {
       const result = await containersApi.networks(server.id, { signal: controller.signal });
       if (requestId !== resourceRequestId || tab !== activeTab.value) return;
       networks.value = result.items;
+      if (result.stale && !result.observedAt) snapshotNeedsRefresh = { serverId: server.id, tab: 'networks' };
     }
     if (tab === 'volumes') {
       const result = await containersApi.volumes(server.id, { signal: controller.signal });
       if (requestId !== resourceRequestId || tab !== activeTab.value) return;
       volumes.value = result.items;
+      if (result.stale && !result.observedAt) snapshotNeedsRefresh = { serverId: server.id, tab: 'volumes' };
     }
   } catch (err) {
     if (isAbortError(err)) return;
@@ -187,6 +191,9 @@ async function loadResource() {
     clearResource(tab);
   } finally {
     if (requestId === resourceRequestId) loadingResource.value = false;
+  }
+  if (snapshotNeedsRefresh) {
+    await ensureSnapshot(snapshotNeedsRefresh.serverId, snapshotNeedsRefresh.tab);
   }
 }
 
@@ -231,6 +238,27 @@ async function refreshCurrent() {
     }
     await loadResource();
   });
+}
+
+async function ensureSnapshot(serverId: string, tab: 'networks' | 'volumes') {
+  const key = `${serverId}:${tab}`;
+  if (autoRefreshing.has(key)) return;
+  autoRefreshing.add(key);
+  loadingResource.value = true;
+  try {
+    const accepted = tab === 'networks' ? await containersApi.refreshNetworks(serverId) : await containersApi.refreshVolumes(serverId);
+    await waitForTask(accepted.taskId);
+    await loadResource();
+  } catch (err) {
+    if (!isAbortError(err)) {
+      const message = err instanceof Error ? err.message : t('resourcesPage.loadResourceFailed');
+      actionError.value = message;
+      notifyError(message);
+    }
+  } finally {
+    autoRefreshing.delete(key);
+    loadingResource.value = false;
+  }
 }
 
 async function upgradeSelectedPackages() {
@@ -536,7 +564,11 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
                   </article>
                 </div>
-                <EmptyState v-else-if="!networks.length" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')" />
+                <EmptyState v-else-if="!networks.length" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')">
+                  <template #actions>
+                    <Button size="sm" :loading="pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                  </template>
+                </EmptyState>
                 <article v-for="item in networks" v-else :key="item.id" class="mb-2 rounded-xl border border-border p-4">
                   <div class="flex items-start justify-between gap-3">
                     <div>
@@ -570,7 +602,11 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
-                <EmptyState v-else-if="!volumes.length" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')" />
+                <EmptyState v-else-if="!volumes.length" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')">
+                  <template #actions>
+                    <Button size="sm" :loading="pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                  </template>
+                </EmptyState>
                 <div v-for="item in volumes" v-else :key="item.name" class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-border p-3">
                   <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">

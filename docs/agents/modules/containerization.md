@@ -5,6 +5,7 @@
 - Container list reads deserialize `container_observations.summary_json`, not full `container_json`. Reports persist both forms and migration backfills old observations.
 - Container, image, network, and volume GET responses use `items`, `observedAt`, `stale`, `refreshing`, optional `refreshTaskId`, and optional `lastRefreshError`.
 - Image, network, and volume refreshes are async task POSTs. Resource GET handlers never contact the Agent, and the frontend reloads snapshots after successful task completion.
+- When a network or volume page first opens with no local snapshot, the frontend automatically submits one `network_refresh` / `volume_refresh` task and waits for it before showing the empty state; failures keep the empty state and manual refresh remains available.
 
 ## 适用场景
 
