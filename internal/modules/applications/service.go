@@ -951,7 +951,15 @@ func (s *Service) markApplicationImageTargetsCurrent(ctx context.Context, app Ap
 }
 
 func (s *Service) Deploy(ctx context.Context, appID string) (OperationResult, error) {
-	app, _, err := s.prepareDeploy(ctx, appID)
+	app, err := s.Get(ctx, appID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	app, err = s.enableApplicationForDeploy(ctx, app)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	app, _, err = s.prepareDeploy(ctx, appID)
 	if err != nil {
 		return OperationResult{}, err
 	}
@@ -1017,6 +1025,21 @@ func (s *Service) RunDeployTask(tc tasks.TaskContext) error {
 		}
 		return nil
 	}
+	if opts.action == "apply" {
+		app, err := s.Get(ctx, appID)
+		if err != nil {
+			return err
+		}
+		if deploymentTaskSuperseded(app, opts) {
+			if err := s.supersedeLifecycleTargetForTask(ctx, task, "application is not enabled or deletion was requested before this target started"); err != nil {
+				return err
+			}
+			if s.tasks != nil && task.ID != "" {
+				_ = s.tasks.Complete(ctx, task.ID, "Application target superseded")
+			}
+			return nil
+		}
+	}
 	app, job, err := s.prepareDeploy(ctx, appID)
 	if err != nil {
 		return err
@@ -1074,12 +1097,31 @@ func (s *Service) prepareDeploy(ctx context.Context, appID string) (Application,
 	if len(targets) == 0 {
 		return Application{}, appruntime.Spec{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
+	return app, job, nil
+}
+
+func (s *Service) enableApplicationForDeploy(ctx context.Context, app Application) (Application, error) {
+	if app.Enabled {
+		return app, nil
+	}
+	if app.DeletionRequested {
+		return app, panelerr.Conflict("application_deletion_requested", "Application deletion is already requested")
+	}
 	app.Enabled = true
 	app.UpdatedAt = time.Now().UTC()
-	if err := s.updateApplication(ctx, app); err != nil {
-		return Application{}, appruntime.Spec{}, err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return app, err
 	}
-	return app, job, nil
+	defer func() { _ = tx.Rollback() }()
+	if err := s.updateApplicationWithExecIfVersion(ctx, tx, app, app.Version); err != nil {
+		return app, err
+	}
+	if err := tx.Commit(); err != nil {
+		return app, err
+	}
+	app.Version++
+	return app, nil
 }
 
 func (s *Service) runDeployTask(ctx context.Context, taskID string, app Application, job appruntime.Spec, targetIDs []string, lifecycleOperationID string) error {
@@ -2053,7 +2095,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 		previous = current
 		previousContainerName = current.ContainerName
 	}
-	if err := s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
+	if err := s.upsertRuntimeInstancePreservingContainerName(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
 		_ = s.failLifecycleTargetExecution(ctx, targetID, "prepare_instance", "render_failed", err, false)
 		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
 		return err
@@ -2110,6 +2152,9 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 				if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "remove previous container", func(context.Context) error {
 					return s.runtimeClient.DockerContainerDelete(runCtx, baseURL, previousContainerName)
 				}); err != nil {
+					return deploymentStageError{stage: "remove_previous_container", code: "remove_container_failed", retryable: true, err: err}
+				}
+				if err := s.upsertRuntimeInstance(runCtx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
 					return deploymentStageError{stage: "remove_previous_container", code: "remove_container_failed", retryable: true, err: err}
 				}
 			}
@@ -2186,7 +2231,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 		}
 		stageErr := normalizeDeploymentStageError(err, "apply", "application_runtime_operation_failed", true)
 		_ = s.handleAgentError(ctx, target, stageErr.err)
-		_ = s.upsertRuntimeInstance(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", stageErr.err.Error())
+		_ = s.upsertRuntimeInstancePreservingContainerName(ctx, app.ID, target.ID, instanceSpec, appruntime.DesiredRunning, appruntime.StatusFailed, "", stageErr.err.Error())
 		_ = s.failLifecycleTargetExecution(ctx, targetID, stageErr.stage, stageErr.code, stageErr.err, stageErr.retryable)
 		_ = s.enqueueDeploymentAggregate(ctx, targetRow.OperationID)
 		if s.tasks != nil && taskID != "" {
@@ -2610,23 +2655,17 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 		StartedAt:     &now,
 		UpdatedAt:     now,
 	}
-	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_operations").Insert(ctx, fromDomainLifecycleOperation(operation)); err != nil {
-		return LifecycleOperation{}, err
-	}
 	serverIDs = uniqueStringItems(serverIDs)
 	actionForOperation := firstNonEmpty(opts.Action, lifecycleActionForDesiredState(firstNonEmpty(opts.DesiredState, appruntime.DesiredRunning)))
-	if err := s.writeApplicationOperationEvent(ctx, runtimeevents.EventApplicationOperationCreated, operation, app, LifecycleTarget{}, runtimeevents.ApplicationOperationInput{
-		ApplicationID:           app.ID,
-		ApplicationNameSnapshot: app.Name,
-		Action:                  actionForOperation,
-		Source:                  operation.Trigger,
-		TriggeredBy:             operation.Trigger,
-		Status:                  "running",
-		StartedAt:               operation.StartedAt,
-		TargetTotal:             len(serverIDs),
-	}); err != nil {
+	tx, err := s.lifecycleDB().BeginTx(ctx, nil)
+	if err != nil {
 		return LifecycleOperation{}, err
 	}
+	defer func() { _ = tx.Rollback() }()
+	if err := orm.New(tx).From("application_lifecycle_operations").Insert(ctx, fromDomainLifecycleOperation(operation)); err != nil {
+		return LifecycleOperation{}, err
+	}
+	targets := make([]LifecycleTarget, 0, len(serverIDs))
 	for _, serverID := range serverIDs {
 		targetID := lifecycleTargetID(operation.ID, serverID)
 		instanceID := runtimeInstanceID(app.ID, serverID)
@@ -2659,7 +2698,7 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			CreatedAt:         now,
 			UpdatedAt:         now,
 		})
-		if err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Insert(ctx, &targetRow); err != nil {
+		if err := orm.New(tx).From("application_lifecycle_targets").Insert(ctx, &targetRow); err != nil {
 			return LifecycleOperation{}, err
 		}
 		target := LifecycleTarget{
@@ -2680,6 +2719,25 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			CreatedAt:         now,
 			UpdatedAt:         now,
 		}
+		targets = append(targets, target)
+	}
+	if err := tx.Commit(); err != nil {
+		return LifecycleOperation{}, err
+	}
+	operation.Targets = targets
+	if err := s.writeApplicationOperationEvent(ctx, runtimeevents.EventApplicationOperationCreated, operation, app, LifecycleTarget{}, runtimeevents.ApplicationOperationInput{
+		ApplicationID:           app.ID,
+		ApplicationNameSnapshot: app.Name,
+		Action:                  actionForOperation,
+		Source:                  operation.Trigger,
+		TriggeredBy:             operation.Trigger,
+		Status:                  "running",
+		StartedAt:               operation.StartedAt,
+		TargetTotal:             len(serverIDs),
+	}); err != nil {
+		return LifecycleOperation{}, err
+	}
+	for _, target := range targets {
 		if err := s.writeApplicationTargetEvent(ctx, runtimeevents.EventApplicationOperationTargetQueued, operation, app, target, "Application target queued", runtimeevents.SeverityInfo); err != nil {
 			return LifecycleOperation{}, err
 		}
@@ -3339,6 +3397,9 @@ func (s *Service) FailPlannedLifecycleTargets(ctx context.Context, inputs []task
 }
 
 func deploymentTaskSuperseded(app Application, opts deployTaskRunOptions) bool {
+	if !app.Enabled || app.DeletionRequested {
+		return true
+	}
 	if opts.desiredGeneration > 0 && app.Generation != opts.desiredGeneration {
 		return true
 	}
@@ -3960,6 +4021,14 @@ func isApplicationNameConflict(err error) bool {
 	return strings.Contains(msg, "unique constraint failed: applications.name") || strings.Contains(msg, "constraint failed: applications.name")
 }
 
+func isLifecycleTargetActiveConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "application_lifecycle_targets.target_key") || strings.Contains(msg, "idx_application_lifecycle_targets_active_key")
+}
+
 func (s *Service) recordTask(ctx context.Context, taskType, appID, summary string) (string, error) {
 	if s.tasks == nil {
 		return "", nil
@@ -4197,7 +4266,26 @@ func (s *Service) planTargetActions(ctx context.Context, app Application, spec a
 		Trigger:      triggerType,
 	})
 	if err != nil {
-		return result, err
+		if !isLifecycleTargetActiveConflict(err) {
+			return result, err
+		}
+		for _, serverID := range createIDs {
+			active, found, activeErr := s.activeLifecycleTarget(ctx, app.ID, serverID)
+			if activeErr != nil {
+				return result, activeErr
+			}
+			if !found {
+				return result, err
+			}
+			if active.Action == action && active.DesiredGeneration == spec.Generation && strings.TrimSpace(active.DesiredSpecHash) == strings.TrimSpace(spec.SpecHash) {
+				result.ReusedTargetIDs = append(result.ReusedTargetIDs, active.ID)
+				result.ReusedTargets = append(result.ReusedTargets, active)
+				continue
+			}
+			result.BlockedTargetIDs = append(result.BlockedTargetIDs, active.ID)
+			result.BlockedTargets = append(result.BlockedTargets, active)
+		}
+		return result, nil
 	}
 	result.OperationIDs = append(result.OperationIDs, operation.ID)
 	created, err := s.lifecycleTargets(ctx, operation.ID)
@@ -4776,23 +4864,35 @@ func sanitizeRuntimeName(value string) string {
 }
 
 func (s *Service) upsertRuntimeInstance(ctx context.Context, appID, serverID string, spec appruntime.Spec, desired, status, containerID, lastErr string) error {
+	return s.upsertRuntimeInstanceWithContainerNamePolicy(ctx, appID, serverID, spec, desired, status, containerID, lastErr, false)
+}
+
+func (s *Service) upsertRuntimeInstancePreservingContainerName(ctx context.Context, appID, serverID string, spec appruntime.Spec, desired, status, containerID, lastErr string) error {
+	return s.upsertRuntimeInstanceWithContainerNamePolicy(ctx, appID, serverID, spec, desired, status, containerID, lastErr, true)
+}
+
+func (s *Service) upsertRuntimeInstanceWithContainerNamePolicy(ctx context.Context, appID, serverID string, spec appruntime.Spec, desired, status, containerID, lastErr string, preserveContainerName bool) error {
 	raw, err := json.Marshal(spec)
 	if err != nil {
 		return err
 	}
 	now := formatTime(time.Now().UTC())
-	_, err = orm.RawExec(ctx, s.db, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
+	containerNameExpr := "excluded.container_name"
+	if preserveContainerName {
+		containerNameExpr = "COALESCE(NULLIF(application_instances.container_name, ''), excluded.container_name)"
+	}
+	_, err = orm.RawExec(ctx, s.db, fmt.Sprintf(`INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(application_id,server_id) DO UPDATE SET
 			id=excluded.id,
-			container_name=excluded.container_name,
+			container_name=%s,
 			container_id=excluded.container_id,
 			desired_state=excluded.desired_state,
 			status=excluded.status,
 			runtime_spec_json=excluded.runtime_spec_json,
 			last_deployed_generation=excluded.last_deployed_generation,
 			last_error=excluded.last_error,
-			updated_at=excluded.updated_at`,
+			updated_at=excluded.updated_at`, containerNameExpr),
 		spec.InstanceID, appID, serverID, spec.ContainerName, containerID, desired, status, string(raw), spec.Generation, lastErr, now, now)
 	return err
 }

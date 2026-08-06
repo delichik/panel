@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
+	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/modules/tasks"
 )
 
@@ -124,6 +125,206 @@ func TestRunDeployTaskSkipsTargetClaimedByAnotherWorker(t *testing.T) {
 	if target.ClaimedTaskID != "other-task" || target.LeaseOwner != "other-worker" {
 		t.Fatalf("foreign claim should remain untouched, got %#v", target)
 	}
+}
+
+func TestRunDeployTaskSupersedesDisabledAndDeletedApply(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, svc *Service) Application
+	}{
+		{
+			name: "disabled",
+			prepare: func(t *testing.T, svc *Service) Application {
+				t.Helper()
+				app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return app
+			},
+		},
+		{
+			name: "deletion requested",
+			prepare: func(t *testing.T, svc *Service) Application {
+				t.Helper()
+				app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				app.Enabled = true
+				app.DeletionRequested = true
+				app.UpdatedAt = time.Now().UTC()
+				if err := svc.updateApplication(ctx, app); err != nil {
+					t.Fatal(err)
+				}
+				return app
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, runtime, _, closeStore := newTestService(t)
+			defer closeStore()
+			app := tc.prepare(t, svc)
+			runtime.deploys = nil
+			spec := appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}
+			operation, err := svc.createLifecycleOperationForServerIDsWithOptions(ctx, app, spec, "", LifecycleTypeDeploy, []string{"srv-a"}, lifecycleOperationCreateOptions{
+				DesiredState: appruntime.DesiredRunning,
+				Action:       LifecycleTargetActionApply,
+				InitialState: LifecycleTargetStateReady,
+				Trigger:      "test",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			target, err := svc.lifecycleTargetByID(ctx, lifecycleTargetID(operation.ID, "srv-a"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			task, err := svc.tasks.Create(ctx, targetTaskInputForTest(t, target, "Syncing application web", "test"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			def, ok := svc.tasks.Registry().Definition(TaskTypeTargetApply)
+			if !ok || def.Execute == nil {
+				t.Fatal("expected target apply executor")
+			}
+			if err := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks}); err != nil {
+				t.Fatal(err)
+			}
+			if len(runtime.deploys) != 0 {
+				t.Fatalf("apply executor must not deploy a disabled or deleted application, got %#v", runtime.deploys)
+			}
+			got, err := svc.lifecycleTargetByID(ctx, target.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.State != LifecycleTargetStateSuperseded {
+				t.Fatalf("expected superseded lifecycle target, got %#v", got)
+			}
+			storedTask, err := svc.tasks.Get(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if storedTask.Status != tasks.StatusCompleted {
+				t.Fatalf("expected superseded deploy task to complete, got %#v", storedTask)
+			}
+		})
+	}
+}
+
+func TestApplyRetryRemovesPreviousContainerAfterDeleteFailure(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "old-name", "name: old-name\nimage: nginx\n")
+
+	oldContainerName := runtimeContainerName(app)
+	oldSpec := appruntime.Spec{
+		InstanceID:    runtimeInstanceID(app.ID, "srv-a"),
+		ContainerName: oldContainerName,
+		Name:          app.Name,
+		Image:         "nginx",
+		Generation:    app.Generation,
+		SpecHash:      app.SpecHash,
+	}
+	if err := svc.upsertRuntimeInstance(ctx, app.ID, "srv-a", oldSpec, appruntime.DesiredRunning, appruntime.StatusRunning, "old-container", ""); err != nil {
+		t.Fatal(err)
+	}
+	current, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.Name = "new-name"
+	current.SpecYAML = "name: new-name\nimage: nginx\n"
+	current.UpdatedAt = time.Now().UTC()
+	if err := svc.updateApplication(ctx, current); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.CreatedTargets) != 1 {
+		t.Fatalf("expected one apply target, got %#v", plan)
+	}
+	target := plan.CreatedTargets[0]
+	task, err := svc.tasks.Create(ctx, targetTaskInputForTest(t, target, "Syncing application new-name", "test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.deleteFailures = 1
+	def, ok := svc.tasks.Registry().Definition(TaskTypeTargetApply)
+	if !ok || def.Execute == nil {
+		t.Fatal("expected target apply executor")
+	}
+	runErr := def.Execute(tasks.TaskContext{Context: ctx, Task: task, Service: svc.tasks})
+	if runErr == nil {
+		t.Fatal("expected first apply attempt to fail while removing the previous container")
+	}
+	if err := svc.tasks.Fail(ctx, task.ID, runErr); err != nil {
+		t.Fatal(err)
+	}
+	failedTarget, err := svc.lifecycleTargetByID(ctx, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failedTarget.State != LifecycleTargetStateFailedRetryable || failedTarget.ErrorCode != "remove_container_failed" {
+		t.Fatalf("expected retryable remove_previous_container failure, got %#v", failedTarget)
+	}
+	instance, err := svc.runtimeInstanceForServer(ctx, app.ID, "srv-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if instance.ContainerName != oldContainerName {
+		t.Fatalf("failed retry must preserve the previous container name, got %q want %q", instance.ContainerName, oldContainerName)
+	}
+
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET next_run_at=? WHERE id=?`,
+		formatTime(time.Now().UTC().Add(-time.Second)), target.ID); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := NewDeploymentDispatcher(svc, WithDeploymentDispatcherQueueSize(8)).(*deploymentDispatcher)
+	if err := dispatcher.Recover(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := dispatcher.processExecuteTarget(ctx, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		stored, err := svc.lifecycleTargetByID(ctx, target.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.State == LifecycleTargetStateSucceeded {
+			oldDeleteCount := 0
+			for _, deleted := range runtime.deletes {
+				if deleted == oldContainerName {
+					oldDeleteCount++
+				}
+			}
+			if oldDeleteCount < 2 {
+				t.Fatalf("retry should try to remove the old container again, deletes=%#v", runtime.deletes)
+			}
+			finalInstance, err := svc.runtimeInstanceForServer(ctx, app.ID, "srv-a")
+			if err != nil {
+				t.Fatal(err)
+			}
+			newContainerName := runtimeContainerName(current)
+			if finalInstance.ContainerName != newContainerName {
+				t.Fatalf("successful apply should switch the instance to the new container name, got %q want %q", finalInstance.ContainerName, newContainerName)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stored, err := svc.lifecycleTargetByID(ctx, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("retry apply did not succeed, target=%#v deletes=%#v", stored, runtime.deletes)
 }
 
 func TestRunDeployTaskStopsWhenLeaseLostBeforeRemoteMutation(t *testing.T) {

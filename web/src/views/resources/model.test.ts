@@ -69,4 +69,9 @@ describe('resources model', () => {
     const image: ImageDto = { id: 'sha256:abcdef123456', repoTags: [], repoDigests: [], created: 0, size: 0, containers: 0, reference: '', checkable: false, updateAvailable: false, inUse: false, applicationIds: [], upgradeable: false };
     expect(imageLabel(image)).toBe('sha256:abcde');
   });
+
+  it('labels untagged images when Docker reports null repoTags', () => {
+    const image: ImageDto = { id: 'sha256:abcdef123456', repoTags: null, repoDigests: [], created: 0, size: 0, containers: 0, reference: '', checkable: false, updateAvailable: false, inUse: false, applicationIds: [], upgradeable: false };
+    expect(imageLabel(image)).toBe('sha256:abcde');
+  });
 });

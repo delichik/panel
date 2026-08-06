@@ -556,6 +556,7 @@ func (d *deploymentDispatcher) createClaimTask(ctx context.Context, target Lifec
 	if err != nil {
 		return tasks.Task{}, err
 	}
+	nextRunAt := time.Now().UTC().Add(d.leaseTTL)
 	task, _, err := tasks.NewManager(d.service.tasks).Create(ctx, tasks.CreateInput{
 		Type:         targetTaskTypeForAction(firstNonEmpty(target.Action, LifecycleTargetActionApply)),
 		ServerID:     target.ServerID,
@@ -564,6 +565,8 @@ func (d *deploymentDispatcher) createClaimTask(ctx context.Context, target Lifec
 		ParamsJSON:   string(params),
 		MetadataJSON: string(metadata),
 		Summary:      "Claiming application deployment target",
+		Status:       tasks.StatusScheduled,
+		NextRunAt:    &nextRunAt,
 	}, tasks.Trigger{Type: "deployment_dispatcher"})
 	return task, err
 }

@@ -65,7 +65,7 @@ export function imageTone(image: ImageDto): Tone {
 }
 
 export function imageLabel(image: ImageDto) {
-  return image.reference || image.repoTags[0] || image.id.slice(0, 12);
+  return image.reference || image.repoTags?.[0] || image.id.slice(0, 12);
 }
 
 export function volumeTone(volume: VolumeDto): Tone {

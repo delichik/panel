@@ -54,6 +54,78 @@ func TestDeploymentDispatcherClaimExecuteIsConditional(t *testing.T) {
 	}
 }
 
+func TestDeploymentDispatcherClaimTaskIsScheduledUntilBound(t *testing.T) {
+	svc, runtime, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := plan.CreatedTargets[0]
+	dispatcher := NewDeploymentDispatcher(svc, WithDeploymentDispatcherQueueSize(8)).(*deploymentDispatcher)
+	task, err := dispatcher.createClaimTask(ctx, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task.Status != tasks.StatusScheduled || task.NextRunAt == nil || !task.NextRunAt.After(time.Now().UTC()) {
+		t.Fatalf("dispatcher-created task must stay invisible to the polling worker until it is bound, got %#v", task)
+	}
+	now := time.Now().UTC()
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?, status=?, lease_owner=?, lease_expires_at=?, claimed_task_id=?, updated_at=?
+		WHERE id=?`,
+		LifecycleTargetStateClaimed,
+		lifecycleStatusForState(LifecycleTargetStateClaimed),
+		lifecycleTaskLeaseOwner(task.ID),
+		formatTime(now.Add(time.Minute)),
+		task.ID,
+		formatTime(now),
+		target.ID); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher.runClaimedTask(task.ID)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		stored, err := svc.lifecycleTargetByID(ctx, target.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if stored.State == LifecycleTargetStateSucceeded {
+			if stored.ClaimedTaskID != task.ID {
+				t.Fatalf("bound task should own the lifecycle target, got %#v", stored)
+			}
+			taskDeadline := time.Now().Add(2 * time.Second)
+			for time.Now().Before(taskDeadline) {
+				storedTask, err := svc.tasks.Get(ctx, task.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if storedTask.Status == tasks.StatusCompleted {
+					if len(runtime.deploys) != 1 {
+						t.Fatalf("bound dispatcher task should run immediately, got %#v", runtime.deploys)
+					}
+					return
+				}
+				time.Sleep(10 * time.Millisecond)
+			}
+			storedTask, err := svc.tasks.Get(ctx, task.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("bound dispatcher task should complete after execution, got %#v", storedTask)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	stored, err := svc.lifecycleTargetByID(ctx, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Fatalf("bound dispatcher task did not finish, target=%#v", stored)
+}
+
 func TestDeploymentDispatcherStartReturnsRecoveryError(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()

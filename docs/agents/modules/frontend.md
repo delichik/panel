@@ -89,7 +89,7 @@
 `web/src/views/security/` 与 `web/src/views/resources/` 已替换阶段占位：
 
 - 防火墙与 Fail2Ban 归入“资源”一级菜单。`/resources/firewall` 使用 UFW 规则/状态矩阵；`/resources/fail2ban` 仅 dev 构建可直达和展示，非 dev 访问会跳回 `/resources/firewall`。旧 `/security/*` 只保留重定向。正式 API 使用 `/api/v1/servers/{id}/ufw`、`/ufw/rules`、`/ufw/enable`、`/ufw/install`、`/fail2ban`、`/fail2ban/enable`、`/fail2ban/release`、`/fail2ban/install`。
-- 资源页是服务器上下文资源维护台：软件包、容器、镜像、网络、卷是 `/resources/packages|containers|images|networks|volumes` 独立路由页面，不使用页内 tabs。容器、镜像、网络、卷 GET 只读本地快照；镜像、网络、卷刷新按钮分别提交 `/images/refresh`、`/networks/refresh`、`/volumes/refresh` 异步任务，不得通过重复 GET 隐式访问节点。镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。容器页对应用托管容器直接开放 start/stop/restart/delete，并展示“由应用托管，协调可能自动恢复”提示；卡片操作行换行时不得溢出隐藏。
+- 资源页是服务器上下文资源维护台：软件包、容器、镜像、网络、卷是 `/resources/packages|containers|images|networks|volumes` 独立路由页面，不使用页内 tabs。容器、镜像、网络、卷 GET 只读本地快照；镜像、网络、卷刷新按钮分别提交 `/images/refresh`、`/networks/refresh`、`/volumes/refresh` 异步任务，不得通过重复 GET 隐式访问节点。镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。镜像标签需兼容 Docker 悬空镜像 `repoTags` 为 `null` 的情况，回退到 `reference` 或镜像 ID。容器页对应用托管容器直接开放 start/stop/restart/delete，并展示“由应用托管，协调可能自动恢复”提示；卡片操作行换行时不得溢出隐藏。
 - 网络资源当前后端只提供列表接口，页面只读展示拓扑并禁用删除，不使用 Mock 伪装不存在的能力。
 - Mock 模式覆盖同名正式路径，包含正常、空、错误、权限不足、Agent 不兼容、不可达、长日志和危险确认状态；未实现路径继续返回 `mock_route_not_found`。
 

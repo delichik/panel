@@ -1600,40 +1600,22 @@ onBeforeUnmount(() => {
     <template #actions>
       <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
     </template>
-    <section class="h-full min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
-      <div class="mb-4">
+    <div class="grid gap-4">
+      <div>
         <h2 class="m-0 text-lg font-semibold text-foreground">{{ t('applicationsPage.facilityCatalogTitle') }}</h2>
         <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.facilityCatalogHint') }}</p>
       </div>
       <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
-        <template v-if="loading && !facilities.length">
-          <article v-for="item in 3" :key="item" class="grid gap-4 rounded-2xl border border-border bg-background p-5" aria-hidden="true">
-            <div class="flex items-start justify-between gap-3">
-              <div class="motion-skeleton size-12 rounded-2xl bg-muted animate-pulse" />
-              <div class="motion-skeleton h-6 w-20 rounded-full bg-muted animate-pulse" />
-            </div>
-            <div class="grid gap-2">
-              <div class="motion-skeleton h-5 w-2/3 rounded bg-muted animate-pulse" />
-              <div class="motion-skeleton h-4 w-full rounded bg-muted animate-pulse" />
-              <div class="motion-skeleton h-4 w-3/4 rounded bg-muted animate-pulse" />
-            </div>
-            <div class="grid grid-cols-3 gap-2">
-              <div v-for="stat in 3" :key="stat" class="motion-skeleton h-12 rounded-xl bg-muted animate-pulse" />
-            </div>
-            <div class="motion-skeleton h-8 w-28 rounded bg-muted animate-pulse" />
-          </article>
-        </template>
-        <template v-else>
-          <article
-            v-for="item in facilities"
-            :key="item.kind"
-            role="link"
-            tabindex="0"
-            class="motion-list-item grid cursor-pointer gap-4 rounded-2xl border border-border bg-background p-5 transition-colors hover:bg-accent"
-            @click="router.push(`/applications/facility-apps/${item.kind}`)"
-            @keydown.enter="router.push(`/applications/facility-apps/${item.kind}`)"
-            @keydown.space.prevent="router.push(`/applications/facility-apps/${item.kind}`)"
-          >
+        <article
+          v-for="item in facilities"
+          :key="item.kind"
+          role="link"
+          tabindex="0"
+          class="motion-list-item grid cursor-pointer gap-4 rounded-2xl border border-border bg-background p-5 transition-colors hover:bg-accent"
+          @click="router.push(`/applications/facility-apps/${item.kind}`)"
+          @keydown.enter="router.push(`/applications/facility-apps/${item.kind}`)"
+          @keydown.space.prevent="router.push(`/applications/facility-apps/${item.kind}`)"
+        >
             <div class="flex items-start justify-between gap-3">
               <div class="grid size-12 place-items-center rounded-2xl border border-border bg-muted/40 text-foreground">
                 <component :is="item.icon" class="size-6" aria-hidden="true" />

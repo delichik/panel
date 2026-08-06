@@ -46,6 +46,36 @@ func TestCreateDisabledAppStoresRowAndDoesNotDeployRuntime(t *testing.T) {
 	}
 }
 
+func TestDeployEnablesDisabledApplicationWithVersionCAS(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{
+		Name:     "web",
+		Enabled:  false,
+		SpecYAML: "name: web\nimage: nginx\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeVersion := app.Version
+	result, err := svc.Deploy(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.TaskID == "" {
+		t.Fatal("expected deploy to trigger an application reconcile task")
+	}
+	after, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Enabled || after.Version != beforeVersion+1 {
+		t.Fatalf("HTTP deploy should explicitly persist enable intent with version bump, before=%d after=%#v", beforeVersion, after)
+	}
+}
+
 func TestListSummariesDoesNotLoadApplicationDetails(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -2074,6 +2104,7 @@ type fakeRuntimeClient struct {
 	deployErr            error
 	deployErrByServer    map[string]error
 	stopErr              error
+	deleteFailures       int
 	createEntered        chan struct{}
 	createRelease        chan struct{}
 	createOnce           sync.Once
@@ -2108,6 +2139,10 @@ func (f *fakeRuntimeClient) DockerImagePull(ctx context.Context, baseURL, refere
 
 func (f *fakeRuntimeClient) DockerContainerDelete(ctx context.Context, baseURL, id string) error {
 	f.deletes = append(f.deletes, id)
+	if f.deleteFailures > 0 {
+		f.deleteFailures--
+		return errors.New("container delete failed")
+	}
 	return nil
 }
 

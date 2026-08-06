@@ -77,7 +77,7 @@ export interface SnapshotList<T> { items: T[]; observedAt?: string | null; stale
 export interface ImageDto {
   id: string;
   parentId?: string;
-  repoTags: string[];
+  repoTags: string[] | null;
   repoDigests: string[];
   created: number;
   size: number;

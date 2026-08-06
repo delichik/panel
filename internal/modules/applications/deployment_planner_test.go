@@ -2,6 +2,7 @@ package applications
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,6 +51,126 @@ func TestPlanApplicationDeploymentReusesActiveTarget(t *testing.T) {
 	}
 	if len(second.CreatedTargets) != 0 || len(second.ReusedTargets) != 1 || second.ReusedTargets[0].ID != first.CreatedTargets[0].ID {
 		t.Fatalf("expected second plan to reuse active target, got %#v after %#v", second, first)
+	}
+}
+
+func TestPlanApplicationDeploymentDoesNotBumpApplicationVersion(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+
+	before, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeVersion := before.Version
+	beforeUpdatedAt := before.UpdatedAt
+	if _, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-a"}, Force: true, TriggerType: "scheduler"}); err != nil {
+		t.Fatal(err)
+	}
+	after, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Version != beforeVersion || !after.UpdatedAt.Equal(beforeUpdatedAt) {
+		t.Fatalf("planning should not bump user configuration version, before=%d/%s after=%#v", beforeVersion, beforeUpdatedAt.Format(time.RFC3339Nano), after)
+	}
+	if !after.Enabled {
+		t.Fatalf("enabled application should remain enabled after planning, got %#v", after)
+	}
+}
+
+func TestCreateLifecycleOperationRollsBackOnActiveTargetConflict(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+	spec := appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}
+
+	if _, err := svc.createLifecycleOperationForServerIDsWithOptions(ctx, app, spec, "", LifecycleTypeDeploy, []string{"srv-a"}, lifecycleOperationCreateOptions{
+		DesiredState: appruntime.DesiredRunning,
+		Action:       LifecycleTargetActionApply,
+		InitialState: LifecycleTargetStateReady,
+		Trigger:      "test",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := svc.createLifecycleOperationForServerIDsWithOptions(ctx, app, spec, "", LifecycleTypeDeploy, []string{"srv-a"}, lifecycleOperationCreateOptions{
+		DesiredState: appruntime.DesiredRunning,
+		Action:       LifecycleTargetActionApply,
+		InitialState: LifecycleTargetStateReady,
+		Trigger:      "test",
+	})
+	if err == nil || !isLifecycleTargetActiveConflict(err) {
+		t.Fatalf("expected active target conflict, got %v", err)
+	}
+	var operationCount int
+	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_operations WHERE application_id=?`, app.ID).Scan(&operationCount); err != nil {
+		t.Fatal(err)
+	}
+	var targetCount int
+	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_targets WHERE application_id=?`, app.ID).Scan(&targetCount); err != nil {
+		t.Fatal(err)
+	}
+	if operationCount != 1 || targetCount != 1 {
+		t.Fatalf("conflicting create must roll back operation and targets, operations=%d targets=%d", operationCount, targetCount)
+	}
+}
+
+func TestPlanTargetActionsConcurrentConflictReusesExistingTarget(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+	current, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := appruntime.Spec{Generation: current.Generation, SpecHash: current.SpecHash}
+
+	start := make(chan struct{})
+	type planOutcome struct {
+		created int
+		reused  int
+		err     error
+	}
+	results := make(chan planOutcome, 2)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			result, planErr := svc.planTargetActions(ctx, current, spec, []string{"srv-a"}, LifecycleTargetActionApply, appruntime.DesiredRunning, "test")
+			results <- planOutcome{created: len(result.CreatedTargets), reused: len(result.ReusedTargets), err: planErr}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	createdTotal, reusedTotal := 0, 0
+	for outcome := range results {
+		if outcome.err != nil {
+			t.Fatalf("concurrent planning returned error: %v", outcome.err)
+		}
+		createdTotal += outcome.created
+		reusedTotal += outcome.reused
+	}
+	if createdTotal != 1 || reusedTotal != 1 {
+		t.Fatalf("concurrent planning should create once and reuse once, created=%d reused=%d", createdTotal, reusedTotal)
+	}
+	var operationCount int
+	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_operations WHERE application_id=?`, app.ID).Scan(&operationCount); err != nil {
+		t.Fatal(err)
+	}
+	var targetCount int
+	if err := svc.lifecycleDB().QueryRowContext(ctx, `SELECT COUNT(*) FROM application_lifecycle_targets WHERE application_id=?`, app.ID).Scan(&targetCount); err != nil {
+		t.Fatal(err)
+	}
+	if operationCount != 1 || targetCount != 1 {
+		t.Fatalf("concurrent planning must not leave orphan operations, operations=%d targets=%d", operationCount, targetCount)
 	}
 }
 
