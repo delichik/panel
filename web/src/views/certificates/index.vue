@@ -17,7 +17,7 @@ import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Tabs from '@/components/ui/Tabs.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -32,6 +32,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const domains = ref<DnsDomainDto[]>([]);
 const certs = ref<DomainCertificateDto[]>([]);
@@ -42,7 +43,6 @@ const loading = ref(false);
 const listRequests = createLatestRequestGuard();
 const error = ref('');
 const assetActionError = ref('');
-const feedback = ref('');
 const dialog = ref<'issue' | 'self-ca' | 'self-leaf' | 'asset-ca' | 'asset-tls' | 'asset-ssh' | 'asset-import' | 'asset-export' | 'asset-preflight' | ''>('');
 const confirmDelete = ref(false);
 const saving = ref(false);
@@ -167,7 +167,7 @@ async function issueCertificate() {
     const prefixes = issuePrefixes();
     const input = { name: issueForm.name, domainId: issueForm.domainId, prefixes: prefixes.length ? prefixes : ['@'] };
     const result = editingCertificateId.value ? await certificatesApi.reissue(editingCertificateId.value, input) : await certificatesApi.issue(input);
-    feedback.value = result.taskId ? t('certificatesPage.issueTask', { taskId: result.taskId }) : t('certificatesPage.issued');
+    notifySuccess(result.taskId ? t('certificatesPage.issueTask', { taskId: result.taskId }) : t('certificatesPage.issued'));
     selectedId.value = result.certificate.id;
     editingCertificateId.value = '';
     dialog.value = '';
@@ -183,7 +183,7 @@ async function issueCertificate() {
 async function renewCertificate(cert: DomainCertificateDto) {
   await run(async () => {
     await certificatesApi.renew(cert.id);
-    feedback.value = t('certificatesPage.renewAccepted');
+    notifySuccess(t('certificatesPage.renewAccepted'));
     await load();
   });
 }
@@ -200,7 +200,7 @@ async function saveSelf() {
       ? await certificatesApi.createSelfSignedCa({ name: selfForm.name, commonName: selfForm.commonName, years: Number(selfForm.years) || 5 })
       : await certificatesApi.createSelfSignedLeaf({ name: selfForm.name, caId: selfForm.caId, commonName: selfForm.commonName, dnsNames: cleanEntries(selfForm.dnsNames), ipAddresses: cleanEntries(selfForm.ipAddresses), days: Number(selfForm.days) || 90 });
     selectedId.value = saved.id;
-    feedback.value = t('certificatesPage.selfSaved');
+    notifySuccess(t('certificatesPage.selfSaved'));
     dialog.value = '';
     await load();
   } catch (err) {
@@ -215,7 +215,7 @@ async function renewSelf(cert: SelfSignedCertificateDto) {
   await run(async () => {
     const renewed = await certificatesApi.renewSelfSigned(cert.id);
     selectedId.value = renewed.id;
-    feedback.value = t('certificatesPage.selfRenewed');
+    notifySuccess(t('certificatesPage.selfRenewed'));
     await load();
   });
 }
@@ -240,7 +240,7 @@ async function saveAsset() {
     if (dialog.value === 'asset-ssh') result = await keyAssetsApi.generateSsh({ name: assetForm.name, algorithm: assetForm.algorithm as 'ed25519' | 'rsa', keySize: Number(assetForm.keySize) || 0, comment: assetForm.comment });
     if (dialog.value === 'asset-import') result = await keyAssetsApi.importOne({ type: assetForm.type, name: assetForm.name, parentAssetId: assetForm.parentAssetId, commonName: assetForm.commonName, algorithm: assetForm.algorithm, keySize: Number(assetForm.keySize) || 0, certificatePem: assetForm.certificatePem, privateKeyPem: assetForm.privateKeyPem, publicKey: assetForm.publicKey });
     selectedId.value = result?.asset?.id ?? selectedId.value;
-    feedback.value = t('certificatesPage.assetSaved');
+    notifySuccess(t('certificatesPage.assetSaved'));
     dialog.value = '';
     await load();
   } catch (err) {
@@ -256,7 +256,7 @@ async function saveAsset() {
 async function reissueAsset(asset: KeyAssetDto) {
   await run(async () => {
     const result = asset.type === 'ssh_key_pair' ? await keyAssetsApi.regenerate(asset.id) : await keyAssetsApi.reissue(asset.id);
-    feedback.value = result.taskId ? t('certificatesPage.assetTask', { taskId: result.taskId }) : t('certificatesPage.assetSaved');
+    notifySuccess(result.taskId ? t('certificatesPage.assetTask', { taskId: result.taskId }) : t('certificatesPage.assetSaved'));
     await load();
   });
 }
@@ -264,7 +264,7 @@ async function reissueAsset(asset: KeyAssetDto) {
 async function createExport() {
   await run(async () => {
     const result = await keyAssetsApi.createExport({ assetIds: selectedAsset.value ? [selectedAsset.value.id] : userAssets.value.map((item) => item.id), password: assetForm.password });
-    feedback.value = t('certificatesPage.exportTask', { taskId: result.taskId });
+    notifySuccess(t('certificatesPage.exportTask', { taskId: result.taskId }));
     saveBlobDownload(await keyAssetsApi.downloadExport(result.taskId));
     dialog.value = '';
   });
@@ -287,7 +287,7 @@ async function executeImport(confirmDanger = false) {
   if (!importPlan.value) return;
   await run(async () => {
     const result = await keyAssetsApi.executeImport(importPlan.value!.planId, { strategy: 'overwrite', confirmOverwriteInUse: confirmDanger, confirmDangerousOverwrite: confirmDanger, resolutions: [] });
-    feedback.value = t('certificatesPage.importTask', { taskId: result.taskId });
+    notifySuccess(t('certificatesPage.importTask', { taskId: result.taskId }));
     dialog.value = '';
     await load();
   });
@@ -298,7 +298,7 @@ async function deleteSelected() {
     if (mode.value === 'domains' && selectedCert.value) await certificatesApi.delete(selectedCert.value.id);
     if (mode.value === 'self' && selectedSelf.value) await certificatesApi.deleteSelfSigned(selectedSelf.value.id);
     if (mode.value === 'keys' && selectedAsset.value) await keyAssetsApi.delete(selectedAsset.value.id);
-    feedback.value = t('certificatesPage.deleted');
+    notifySuccess(t('certificatesPage.deleted'));
     selectedId.value = '';
     confirmDelete.value = false;
     await load();
@@ -483,10 +483,6 @@ function onFile(event: Event) {
 
         <template #detail>
         <main class="grid min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-card">
-          <section v-if="feedback" class="border-b border-border p-4">
-            <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-          </section>
-
           <EmptyState v-if="mode === 'domains' && !selectedCert" :title="t('certificatesPage.selectCertificate')" :description="t('certificatesPage.selectCertificateHint')" />
           <article v-else-if="mode === 'domains' && selectedCert" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header class="flex items-start justify-between gap-3 border-b border-border p-5 max-md:grid">

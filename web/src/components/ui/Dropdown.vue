@@ -9,6 +9,7 @@ const trigger = ref<HTMLElement | null>(null);
 const menu = ref<HTMLElement | null>(null);
 const menuId = useId();
 const menuStyle = ref<Record<string, string>>({});
+const MIN_WIDTH = 160;
 let suppressSyntheticClick = false;
 let syntheticClickTimer: number | undefined;
 
@@ -48,7 +49,8 @@ function updateMenuPosition() {
   const rect = control.getBoundingClientRect();
   const gap = 8;
   const padding = 16;
-  const width = Math.max(208, menu.value?.offsetWidth ?? 208);
+  const maxWidth = window.innerWidth - padding * 2;
+  const width = Math.min(maxWidth, Math.max(MIN_WIDTH, menu.value?.offsetWidth ?? MIN_WIDTH));
   const left = props.align === 'left'
     ? Math.min(rect.left, window.innerWidth - width - padding)
     : Math.max(padding, rect.right - width);
@@ -61,8 +63,8 @@ function updateMenuPosition() {
     right: 'auto',
     top: placeAbove ? 'auto' : `${rect.bottom + gap}px`,
     bottom: placeAbove ? `${window.innerHeight - rect.top + gap}px` : 'auto',
-    minWidth: `${Math.min(width, window.innerWidth - padding * 2)}px`,
-    maxWidth: `${window.innerWidth - padding * 2}px`,
+    minWidth: `${width}px`,
+    maxWidth: `${maxWidth}px`,
     maxHeight: `${Math.max(96, Math.min(320, placeAbove ? availableAbove : availableBelow))}px`,
   };
 }
@@ -131,7 +133,7 @@ onBeforeUnmount(() => {
         v-if="open"
         :id="menuId"
         ref="menu"
-        class="motion-popover z-50 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+        class="motion-popover z-50 w-max overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
         :style="menuStyle"
         role="menu"
         @click="setOpen(false, 'trigger')"

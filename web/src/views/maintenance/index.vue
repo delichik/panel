@@ -6,12 +6,13 @@ import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import Input from '@/components/ui/Input.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { MaintenanceStatus } from '@/types/maintenance';
 
 const { t } = useI18n();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const status = ref<MaintenanceStatus | null>(null);
 const authenticated = ref(Boolean(maintenanceApi.storedToken('export') || maintenanceApi.storedToken('restore')));
@@ -19,7 +20,6 @@ const loading = ref(false);
 const pending = ref('');
 const loggingOut = ref(false);
 const error = ref('');
-const feedback = ref('');
 const mode = ref<'export' | 'restore'>('export');
 const form = reactive({ username: '', password: '', archivePassword: '' });
 let timer: number | undefined;
@@ -84,14 +84,13 @@ async function command(name: 'start' | 'password' | 'retry' | 'clear' | 'exit') 
   statusRequestId += 1;
   pending.value = name;
   error.value = '';
-  feedback.value = '';
   try {
     if (name === 'start') status.value = await maintenanceApi.startExport(status.value);
     if (name === 'password') status.value = mode.value === 'export' ? await maintenanceApi.submitExportPassword(status.value, form.archivePassword) : await maintenanceApi.submitRestorePassword(status.value, form.archivePassword);
     if (name === 'retry') status.value = await maintenanceApi.retryRestore(status.value);
     if (name === 'clear') status.value = await maintenanceApi.clearRestorePending(status.value);
     if (name === 'exit') status.value = await maintenanceApi.exitExport();
-    feedback.value = t('maintenancePage.commandAccepted');
+    notifySuccess(t('maintenancePage.commandAccepted'));
   } catch (err) {
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
@@ -193,7 +192,6 @@ onBeforeUnmount(stopPolling);
             <div class="rounded-xl border border-border bg-background p-3"><span>{{ t('maintenancePage.restart') }}</span><strong>{{ status?.restartSupported ? t('state.healthy') : t('common.notAvailable') }}</strong></div>
           </div>
           <div v-if="status?.error || status?.errorDetail" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ status.errorDetail?.message || status.error }}</div>
-          <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
         </article>
 
         <aside class="grid content-start gap-4">

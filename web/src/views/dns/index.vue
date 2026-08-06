@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { CheckCircle2, Cloud, Plus, RefreshCcw, Trash2 } from '@lucide/vue';
+import { Cloud, Plus, RefreshCcw, Trash2 } from '@lucide/vue';
 import { dnsApi } from '@/api/dns';
 import { waitForTask } from '@/api/taskWait';
 import Badge from '@/components/ui/Badge.vue';
@@ -13,7 +13,7 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -25,6 +25,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const domains = ref<DnsDomainDto[]>([]);
 const records = ref<DnsRecordDto[]>([]);
@@ -40,7 +41,6 @@ const loadingDomains = ref(false);
 const loadingRecords = ref(false);
 const error = ref('');
 const recordsError = ref('');
-const feedback = ref('');
 const providerErrorDomainId = ref('');
 const domainDialog = ref(false);
 const recordDialog = ref(false);
@@ -130,7 +130,7 @@ async function syncRecords() {
   recordsError.value = '';
   try {
     const result = await dnsApi.refreshRecords(domainId);
-    feedback.value = t('resourcesPage.taskAccepted', { taskId: result.taskId });
+    notifySuccess(t('resourcesPage.taskAccepted', { taskId: result.taskId }));
     await waitForTask(result.taskId);
     if (selectedId.value !== domainId) return;
     await loadRecords(domainId);
@@ -161,7 +161,7 @@ async function saveDomain() {
     const input = { name: domainForm.name, provider: 'cloudflare' as const, apiToken: domainForm.apiToken || undefined };
     const saved = editingDomain.value ? await dnsApi.updateDomain(editingDomain.value.id, input) : await dnsApi.createDomain(input);
     selectedId.value = saved.id;
-    feedback.value = t(editingDomain.value ? 'dnsPage.domainUpdated' : 'dnsPage.domainCreated');
+    notifySuccess(t(editingDomain.value ? 'dnsPage.domainUpdated' : 'dnsPage.domainCreated'));
     domainDialog.value = false;
     await loadDomains();
   } catch (err) {
@@ -192,7 +192,7 @@ async function saveRecord() {
     const input = { type: recordForm.type, name: normalizeRecordName(recordForm.name), value: recordForm.value, ttl: Number(recordForm.ttl) || 300, proxied: recordForm.proxied === 'true' };
     if (editingRecord.value) await dnsApi.updateRecord(selectedDomain.value.id, editingRecord.value.id, input);
     else await dnsApi.createRecord(selectedDomain.value.id, input);
-    feedback.value = t(editingRecord.value ? 'dnsPage.recordUpdated' : 'dnsPage.recordCreated');
+    notifySuccess(t(editingRecord.value ? 'dnsPage.recordUpdated' : 'dnsPage.recordCreated'));
     recordDialog.value = false;
     await loadRecords();
   } catch (err) {
@@ -208,7 +208,7 @@ async function deleteDomain() {
   saving.value = true;
   try {
     await dnsApi.deleteDomain(deleteTarget.value.id);
-    feedback.value = t('dnsPage.domainDeleted');
+    notifySuccess(t('dnsPage.domainDeleted'));
     selectedId.value = '';
     deleteDialog.value = false;
     await loadDomains();
@@ -225,7 +225,7 @@ async function deleteRecord() {
   saving.value = true;
   try {
     await dnsApi.deleteRecord(selectedDomain.value.id, recordDeleteTarget.value.id);
-    feedback.value = t('dnsPage.recordDeleted');
+    notifySuccess(t('dnsPage.recordDeleted'));
     recordDeleteDialog.value = false;
     await loadRecords();
   } catch (err) {
@@ -304,9 +304,6 @@ async function deleteRecord() {
               <Button size="sm" variant="danger" @click="deleteTarget = selectedDomain; deleteDialog = true"><Trash2 />{{ t('common.delete') }}</Button>
             </div>
           </header>
-          <div v-if="feedback" class="grid gap-2 border-b border-border p-4">
-            <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success"><CheckCircle2 class="mr-2 inline size-4" />{{ feedback }}</div>
-          </div>
           <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] p-5">
             <div class="mb-3 flex items-center justify-between gap-3">
               <div>

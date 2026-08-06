@@ -21,7 +21,7 @@ import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast, useToast } from '@/components/ui/toast';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
@@ -80,6 +80,8 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
+const notify = useToast();
 
 let pageLoadController: AbortController | null = null;
 let runtimeController: AbortController | null = null;
@@ -110,7 +112,6 @@ const editorLoading = ref(false);
 const facilitiesLoaded = ref(true);
 const facilities = [{ kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' }];
 const error = ref('');
-const feedback = ref('');
 const actionError = ref('');
 const pending = ref('');
 const logsOpen = ref(false);
@@ -529,7 +530,6 @@ watch(() => route.path, async () => {
   cancelRowImageLoads();
   cancelEditorQuery();
   actionError.value = '';
-  feedback.value = '';
   facilityEditing.value = false;
   isDirty.value = false;
   dialogOpen.value = false;
@@ -736,7 +736,7 @@ async function runOperation(name: string, action: () => Promise<unknown>, succes
   try {
     const result = await action();
     const params = taskParams(result);
-    feedback.value = params ? t(successKey, params) : t(successKeyWithoutId || successKey);
+    notifySuccess(params ? t(successKey, params) : t(successKeyWithoutId || successKey));
     await load();
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
@@ -871,12 +871,12 @@ async function commitApplication() {
   await previewApplication();
   if (!editSession.value || !preview.value) return;
   if (hasBlockingAppDiagnostics.value) {
-    feedback.value = t('applicationsPage.validationFound');
+    notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
     return;
   }
   await runEditorAction(async () => {
     const result = await applicationsApi.commitEditSession(editSession.value!, preview.value!);
-    feedback.value = result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed');
+    notifySuccess(result.applyRequested ? t('applicationsPage.committedAndApplied') : t('applicationsPage.committed'));
     isDirty.value = false;
     await router.push({ path: '/applications/apps', query: { application: result.application.id } });
     await load();
@@ -923,7 +923,6 @@ async function startInPlaceFacilityEdit() {
   if (facilityEditingView.value) return;
   facilityEditing.value = true;
   actionError.value = '';
-  feedback.value = '';
   await startFacilityEditor();
 }
 
@@ -933,7 +932,6 @@ function cancelFacilityEdit() {
   facilityPreview.value = null;
   facilityDiagnostics.value = [];
   actionError.value = '';
-  feedback.value = '';
   isDirty.value = false;
   if (mode.value === 'facilityConfig') {
     void router.push(`/applications/facility-apps/${facilityKind.value}`);
@@ -1013,13 +1011,13 @@ async function commitFacilityConfig() {
   await previewFacilityConfig();
   if (!facilitySession.value || !facilityPreview.value) return;
   if (hasBlockingFacilityDiagnostics.value) {
-    feedback.value = t('applicationsPage.validationFound');
+    notify.push({ title: t('applicationsPage.validationFound'), tone: 'warning' });
     return;
   }
   await runEditorAction(async () => {
     const result = await reverseProxyFacilityApi.commitEdit(facilitySession.value!, facilityPreview.value!);
     facility.value = result.config;
-    feedback.value = result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted');
+    notifySuccess(result.applyRequested ? t('applicationsPage.gatewayCommittedAndApplied') : t('applicationsPage.gatewayCommitted'));
     isDirty.value = false;
     if (mode.value === 'facilityConfig') {
       await router.replace(`/applications/facility-apps/${facilityKind.value}`);
@@ -1074,7 +1072,7 @@ function markSpecDirty() {
 function syncYamlFromForm() {
   syncDraftToYaml(appDraft);
   markDirty();
-  feedback.value = t('applicationsPage.yamlSynced');
+  notifySuccess(t('applicationsPage.yamlSynced'));
 }
 
 function applyYamlToForm() {
@@ -1086,7 +1084,7 @@ function applyYamlToForm() {
   }
   editorMode.value = 'configure';
   markDirty();
-  feedback.value = t('applicationsPage.yamlApplied');
+  notifySuccess(t('applicationsPage.yamlApplied'));
 }
 
 function openRowDialog(index = -1) {
@@ -1517,7 +1515,6 @@ onBeforeUnmount(() => {
               <Button variant="danger" :disabled="!selectedApplication.enabled" @click="ask('stop', selectedApplication.id)"><Square />{{ t('applicationsPage.disable') }}</Button>
             </div>
           </header>
-          <div v-if="feedback" class="border-b border-success-border bg-success-bg px-5 py-3 text-sm text-success">{{ feedback }}</div>
           <div class="min-h-0 overflow-auto p-5">
             <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
               <div class="min-w-0">
@@ -1676,7 +1673,6 @@ onBeforeUnmount(() => {
           <span class="text-danger">{{ actionError }}</span>
           <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
         </div>
-        <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
         <div v-if="facilitySession" class="relative app-editor-layout">
           <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
           <section class="app-editor-shell">
@@ -1858,8 +1854,6 @@ onBeforeUnmount(() => {
       <div v-if="editSession && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
         <span class="text-danger">{{ actionError }}</span>
       </div>
-      <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-
       <div v-if="editSession" class="relative app-editor-layout">
         <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
         <section class="app-editor-shell">

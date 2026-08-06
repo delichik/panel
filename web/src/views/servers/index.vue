@@ -15,7 +15,7 @@ import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -28,6 +28,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const servers = ref<ServerDto[]>([]);
 const serverDetails = ref<Record<string, ServerDto>>({});
@@ -47,7 +48,6 @@ const loading = ref(false);
 const detailLoading = ref(false);
 const error = ref('');
 const credentialError = ref('');
-const feedback = ref('');
 const actionError = ref('');
 const serverDialog = ref(false);
 const confirmDialog = ref(false);
@@ -282,7 +282,7 @@ async function saveServer() {
   try {
     const saved = editing.value ? await serversApi.update(editing.value.id, formPayload.value) : await serversApi.create(formPayload.value);
     selectedId.value = saved.id;
-    feedback.value = saved.initialTaskId ? t('serversPage.createdWithTask', { taskId: saved.initialTaskId }) : t(editing.value ? 'serversPage.updated' : 'serversPage.created');
+    notifySuccess(saved.initialTaskId ? t('serversPage.createdWithTask', { taskId: saved.initialTaskId }) : t(editing.value ? 'serversPage.updated' : 'serversPage.created'));
     serverDialog.value = false;
     await load();
   } catch (err) {
@@ -298,7 +298,7 @@ async function testConnection(server: ServerDto) {
   try {
     await runInline(async () => {
       const tested = await serversApi.test(server.id);
-      feedback.value = t('serversPage.testSucceeded', { name: tested.name });
+      notifySuccess(t('serversPage.testSucceeded', { name: tested.name }));
       await load();
     });
   } finally {
@@ -316,7 +316,7 @@ async function deleteSelected() {
   if (!target) return;
   await runInline(async () => {
     await serversApi.delete(target.id);
-    feedback.value = t('serversPage.deleted', { name: target.name });
+    notifySuccess(t('serversPage.deleted', { name: target.name }));
     confirmDialog.value = false;
     selectedId.value = '';
     await load();
@@ -326,7 +326,7 @@ async function deleteSelected() {
 async function deployAgent(server: ServerDto) {
   await runInline(async () => {
     const accepted = await serversApi.deployAgent(server.id);
-    feedback.value = t('serversPage.agentTaskAccepted', { taskId: accepted.taskId });
+    notifySuccess(t('serversPage.agentTaskAccepted', { taskId: accepted.taskId }));
   }, 'agent');
 }
 
@@ -334,7 +334,7 @@ async function restartServer(server: ServerDto) {
   if (!canRunPrivilegedOperation(server)) return;
   await runInline(async () => {
     const accepted = await serversApi.restart(server.id);
-    feedback.value = t('serversPage.restartAccepted', { taskId: accepted.taskId });
+    notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }));
   }, 'restart');
 }
 
@@ -342,7 +342,7 @@ async function installUfw(server: ServerDto) {
   if (!canInstallUfw(server)) return;
   await runInline(async () => {
     const accepted = await serversApi.installUfw(server.id);
-    feedback.value = t('serversPage.ufwAccepted', { taskId: accepted.taskId });
+    notifySuccess(t('serversPage.ufwAccepted', { taskId: accepted.taskId }));
   }, 'ufw');
 }
 
@@ -500,8 +500,7 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div v-if="feedback || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
-            <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
+          <div v-if="selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
             <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
           </div>
 

@@ -13,7 +13,7 @@ import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -25,6 +25,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const tasks = ref<TaskDto[]>([]);
 const selectedOperationId = ref(String(route.query.operation ?? ''));
@@ -43,7 +44,6 @@ const detailLoading = ref(false);
 const polling = ref(true);
 const error = ref('');
 const actionError = ref('');
-const feedback = ref('');
 const pending = ref('');
 let timer: number | undefined;
 let listInFlight = false;
@@ -159,10 +159,9 @@ async function loadDetail(taskId: string, resetLogs = false) {
 async function runTaskAction(kind: 'retry' | 'run-now', task: TaskDto) {
   pending.value = `${kind}:${task.id}`;
   actionError.value = '';
-  feedback.value = '';
   try {
     const result = kind === 'retry' ? await tasksApi.retry(task.id) : await tasksApi.runNow(task.id);
-    feedback.value = t(kind === 'retry' ? 'tasksPage.retryAccepted' : 'tasksPage.runNowAccepted', { taskId: result.id });
+    notifySuccess(t(kind === 'retry' ? 'tasksPage.retryAccepted' : 'tasksPage.runNowAccepted', { taskId: result.id }));
     await load(true);
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('common.operationFailed');
@@ -240,9 +239,6 @@ onBeforeUnmount(() => {
               <Button v-if="selectedTask?.allowRetry" size="sm" variant="primary" :loading="pending === `retry:${selectedTask.id}`" @click="runTaskAction('retry', selectedTask)"><RotateCcw />{{ t('common.retry') }}</Button>
             </div>
           </header>
-          <div v-if="feedback" class="grid min-w-0 gap-2 overflow-hidden border-b border-border p-4">
-            <div v-if="feedback" class="min-w-0 break-words rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-          </div>
           <div class="grid min-h-0 min-w-0 grid-cols-[minmax(0,280px)_minmax(0,1fr)] gap-4 overflow-hidden p-4 max-lg:grid-cols-1">
             <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
               <h3 class="m-0 mb-3 flex min-w-0 items-center gap-2 text-sm font-semibold"><ListFilter class="size-4 shrink-0" /><span class="min-w-0 truncate">{{ t('tasksPage.executionItems') }}</span></h3>

@@ -29,3 +29,8 @@ export function useErrorToast() {
   const toast = useToast();
   return (title: string) => toast.push({ title, tone: 'danger' });
 }
+
+export function useSuccessToast() {
+  const toast = useToast();
+  return (title: string) => toast.push({ title, tone: 'success' });
+}

@@ -12,7 +12,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -24,6 +24,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 let serversController: AbortController | null = null;
 let panelController: AbortController | null = null;
@@ -37,7 +38,6 @@ const loadingServers = ref(false);
 const loadingPanel = ref(false);
 const error = ref('');
 const actionError = ref('');
-const feedback = ref('');
 const pending = ref('');
 
 const ufwState = ref<UfwState | null>(null);
@@ -187,7 +187,7 @@ async function addRule() {
   if (!selectedServer.value || Object.keys(ruleValidation.value).length) return;
   await run('add-rule', async () => {
     ufwState.value = await securityApi.addUfwRule(selectedServer.value!.id, { port: Number(ruleForm.port), protocol: ruleForm.protocol, from: ruleForm.from });
-    feedback.value = t('securityPage.ruleAdded');
+    notifySuccess(t('securityPage.ruleAdded'));
     ruleDialog.value = false;
   });
 }
@@ -206,23 +206,23 @@ async function confirmAction() {
   await run(kind || 'confirm', async () => {
     if (kind === 'enable-ufw') {
       const accepted = await securityApi.enableUfw(server.id);
-      feedback.value = t('securityPage.taskAccepted', { taskId: accepted.taskId });
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
     }
     if (kind === 'install-ufw') {
       const accepted = await securityApi.installUfw(server.id);
-      feedback.value = t('securityPage.taskAccepted', { taskId: accepted.taskId });
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
     }
     if (kind === 'delete-rule' && targetRule.value) {
       ufwState.value = await securityApi.deleteUfwRule(server.id, targetRule.value.number);
-      feedback.value = t('securityPage.ruleDeleted');
+      notifySuccess(t('securityPage.ruleDeleted'));
     }
     if (kind === 'enable-fail2ban') {
       const accepted = await securityApi.enableFail2Ban(server.id, { configYaml: yamlDraft.value, confirmTakeover: takeoverConfirmed.value });
-      feedback.value = t('securityPage.taskAccepted', { taskId: accepted.taskId });
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
     }
     if (kind === 'release-fail2ban') {
       const accepted = await securityApi.releaseFail2Ban(server.id);
-      feedback.value = t('securityPage.taskAccepted', { taskId: accepted.taskId });
+      notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
     }
     confirmDialog.value = false;
     await loadPanel();
@@ -235,7 +235,7 @@ async function saveFail2BanDraft() {
     fail2banState.value = await securityApi.saveFail2Ban(selectedServer.value!.id, yamlDraft.value);
     yamlDraft.value = fail2banState.value.configYaml;
     jailDrafts.value = fail2banState.value.config.jails ?? [];
-    feedback.value = t('securityPage.draftSaved');
+    notifySuccess(t('securityPage.draftSaved'));
   });
 }
 
@@ -243,7 +243,7 @@ async function installFail2Ban() {
   if (!selectedServer.value) return;
   await run('install-fail2ban', async () => {
     const accepted = await securityApi.installFail2Ban(selectedServer.value!.id);
-    feedback.value = t('securityPage.taskAccepted', { taskId: accepted.taskId });
+    notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
   });
 }
 
@@ -262,7 +262,6 @@ function removeJail(name: string) {
 async function run(operation: string, action: () => Promise<void>) {
   pending.value = operation;
   actionError.value = '';
-  feedback.value = '';
   try {
     await action();
   } catch (err) {
@@ -351,10 +350,6 @@ onBeforeUnmount(() => {
               <Button v-else size="sm" variant="primary" :disabled="!hasYamlChanges" :loading="pending === 'save-fail2ban'" @click="saveFail2BanDraft"><Save />{{ t('securityPage.saveDraft') }}</Button>
             </div>
           </header>
-
-          <div v-if="feedback" class="grid gap-2 border-b border-border p-4">
-            <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-          </div>
 
           <div class="min-h-0 p-5">
             <div v-if="activeTab === 'ufw'" class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">

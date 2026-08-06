@@ -13,7 +13,7 @@ import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -39,6 +39,7 @@ const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const resourceTabs: ResourceTab[] = ['packages', 'containers', 'images', 'networks', 'volumes'];
 let serversController: AbortController | null = null;
@@ -55,7 +56,6 @@ const loadingServers = ref(false);
 const loadingResource = ref(false);
 const error = ref('');
 const actionError = ref('');
-const feedback = ref('');
 const pending = ref('');
 
 const packageList = ref<PackageUpdateList | null>(null);
@@ -218,23 +218,23 @@ async function refreshCurrent() {
   await run('refresh', async () => {
     if (activeTab.value === 'packages') {
       const result = await packagesApi.refresh(server.id);
-      feedback.value = result.taskId ? t('resourcesPage.taskAccepted', { taskId: result.taskId }) : t('resourcesPage.refreshing');
+      notifySuccess(result.taskId ? t('resourcesPage.taskAccepted', { taskId: result.taskId }) : t('resourcesPage.refreshing'));
       if (result.taskId) await waitForTask(result.taskId);
     } else if (activeTab.value === 'images') {
       const accepted = await containersApi.refreshImages(server.id);
-      feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
       await waitForTask(accepted.taskId);
     } else if (activeTab.value === 'networks') {
       const accepted = await containersApi.refreshNetworks(server.id);
-      feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
       await waitForTask(accepted.taskId);
     } else if (activeTab.value === 'volumes') {
       const accepted = await containersApi.refreshVolumes(server.id);
-      feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
       await waitForTask(accepted.taskId);
     } else {
       await loadResource();
-      feedback.value = t('resourcesPage.refreshed');
+      notifySuccess(t('resourcesPage.refreshed'));
     }
     await loadResource();
   });
@@ -265,7 +265,7 @@ async function upgradeSelectedPackages() {
   if (!selectedServer.value || !selectedPackages.value.length) return;
   await run('upgrade-selected', async () => {
     const accepted = await packagesApi.upgradeSelected(selectedServer.value!.id, selectedPackages.value);
-    feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
     await loadResource();
   });
 }
@@ -274,7 +274,7 @@ async function upgradeAllPackages() {
   if (!selectedServer.value) return;
   await run('upgrade-all', async () => {
     const accepted = await packagesApi.upgradeAll(selectedServer.value!.id);
-    feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
     await loadResource();
   });
 }
@@ -283,7 +283,7 @@ async function containerAction(container: ContainerDto, action: 'start' | 'stop'
   if (!selectedServer.value || containerActionDisabled(container, action)) return;
   await run(`${action}-${container.id}`, async () => {
     await containersApi.containerAction(selectedServer.value!.id, container.id, action);
-    feedback.value = t('resourcesPage.operationCompleted');
+    notifySuccess(t('resourcesPage.operationCompleted'));
     await loadResource();
   });
 }
@@ -313,7 +313,7 @@ async function confirmDanger() {
     if (target.kind === 'image-prune') await containersApi.deleteUnusedImages(server.id);
     if (target.kind === 'volume' && target.id) await containersApi.deleteVolume(server.id, target.id);
     if (target.kind === 'volume-prune') await containersApi.deleteUnusedVolumes(server.id);
-    feedback.value = t('resourcesPage.operationCompleted');
+    notifySuccess(t('resourcesPage.operationCompleted'));
     confirmDialog.value = false;
     await loadResource();
   });
@@ -323,7 +323,7 @@ async function pullImage() {
   if (!selectedServer.value || !pullForm.reference.trim()) return;
   await run('pull-image', async () => {
     await containersApi.pullImage(selectedServer.value!.id, pullForm.reference);
-    feedback.value = t('resourcesPage.imagePulled');
+    notifySuccess(t('resourcesPage.imagePulled'));
     pullDialog.value = false;
     await loadResource();
   });
@@ -332,14 +332,13 @@ async function pullImage() {
 async function upgradeImages(selected: boolean) {
   await run(selected ? 'upgrade-images-selected' : 'upgrade-images-all', async () => {
     const accepted = selected ? await containersApi.upgradeSelectedImages(imageUpgradeIds.value) : await containersApi.upgradeAllImages();
-    feedback.value = t('resourcesPage.taskAccepted', { taskId: accepted.taskId });
+    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
   });
 }
 
 async function run(operation: string, action: () => Promise<void>) {
   pending.value = operation;
   actionError.value = '';
-  feedback.value = '';
   try {
     await action();
   } catch (err) {
@@ -435,8 +434,7 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div v-if="feedback || (activeTab === 'packages' && packageBlockReason(selectedServer)) || (activeTab !== 'packages' && dockerBlockReason(selectedServer))" class="grid gap-2 border-b border-border p-4">
-            <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
+          <div v-if="(activeTab === 'packages' && packageBlockReason(selectedServer)) || (activeTab !== 'packages' && dockerBlockReason(selectedServer))" class="grid gap-2 border-b border-border p-4">
             <div v-if="activeTab === 'packages' && packageBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(packageBlockReason(selectedServer)) }}</div>
             <div v-if="activeTab !== 'packages' && dockerBlockReason(selectedServer)" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(dockerBlockReason(selectedServer)) }}</div>
           </div>

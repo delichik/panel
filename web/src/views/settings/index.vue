@@ -14,7 +14,7 @@ import Select from '@/components/ui/Select.vue';
 import Switch from '@/components/ui/Switch.vue';
 import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import SettingsPage from '@/components/templates/SettingsPage.vue';
 import { useI18n } from '@/i18n';
@@ -28,6 +28,7 @@ const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const runtime = ref<RuntimeSettings | null>(null);
 const version = ref<VersionInfo | null>(null);
@@ -38,7 +39,6 @@ const loading = ref(false);
 const listRequests = createLatestRequestGuard();
 const pending = ref('');
 const error = ref('');
-const feedback = ref('');
 const actionError = ref('');
 const confirmOpen = ref(false);
 const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate'>('export');
@@ -163,7 +163,7 @@ async function resetJwtSecret() {
     await session.updateJwtSecret(form.jwtSecret.trim());
     if (runtime.value) runtime.value.jwtSecretConfigured = true;
     form.jwtSecret = '';
-    feedback.value = t('settingsPage.jwtSecretReset');
+    notifySuccess(t('settingsPage.jwtSecretReset'));
   });
 }
 
@@ -172,7 +172,7 @@ async function resetSystemCertificate() {
   if (!cert) return;
   await run(`system-certificate-${cert.id}`, async () => {
     const result = await keyAssetsApi.resetSystemCertificate(cert.id);
-    feedback.value = t('settingsPage.systemCertificateResetAccepted', { taskId: result.taskId });
+    notifySuccess(t('settingsPage.systemCertificateResetAccepted', { taskId: result.taskId }));
     confirmOpen.value = false;
     selectedSystemCertificate.value = null;
   });
@@ -187,14 +187,14 @@ async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' 
   await run(`save-${kind}`, async () => {
     runtime.value = await settingsApi.updateRuntime(buildRuntimeUpdate(kind));
     hydrate(runtime.value, serverVariables.value);
-    feedback.value = t(`settingsPage.saved.${kind}`);
+    notifySuccess(t(`settingsPage.saved.${kind}`));
   });
 }
 
 async function saveVariables() {
   await run('save-system', async () => {
     serverVariables.value = await settingsApi.updateServerVariables(parseVariables(form.variablesText));
-    feedback.value = t('settingsPage.saved.system');
+    notifySuccess(t('settingsPage.saved.system'));
   });
 }
 
@@ -202,7 +202,7 @@ async function startBackup() {
   await run('export', async () => {
     const result = await settingsApi.startBackupExport({ encrypt: form.exportEncrypt, password: form.exportPassword || undefined });
     exportPending.value = true;
-    feedback.value = t('settingsPage.backupStarted', { exportId: result.exportId });
+    notifySuccess(t('settingsPage.backupStarted', { exportId: result.exportId }));
     confirmOpen.value = false;
   });
 }
@@ -223,14 +223,13 @@ async function confirmRestore() {
     await settingsApi.confirmRestore(restoreFile.value!, form.restorePassword, form.restoreConfirm);
     restorePending.value = true;
     restarting.value = true;
-    feedback.value = t('settingsPage.restorePending');
+    notifySuccess(t('settingsPage.restorePending'));
     confirmOpen.value = false;
   });
 }
 
 async function run(name: string, action: () => Promise<void>) {
   pending.value = name;
-  feedback.value = '';
   actionError.value = '';
   try {
     await action();
@@ -360,8 +359,7 @@ onMounted(load);
       <LoadingOverlay v-if="loading && !runtime" />
 
       <SettingsPage>
-        <section v-if="feedback || actionError" class="grid gap-2">
-          <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
+        <section v-if="actionError" class="grid gap-2">
           <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
         </section>
 

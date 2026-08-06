@@ -92,6 +92,24 @@ describe('Select', () => {
 });
 
 describe('Dropdown', () => {
+  it('keeps the menu compact instead of stretching it to the viewport', async () => {
+    const wrapper = mount(Dropdown, {
+      attachTo: document.body,
+      slots: {
+        trigger: '<button id="compact-trigger">Menu</button>',
+        default: '<DropdownItem>First</DropdownItem>',
+      },
+      global: { components: { DropdownItem } },
+    });
+    await wrapper.get('#compact-trigger').trigger('click');
+    await flushPromises();
+
+    const menu = document.querySelector<HTMLElement>('[role="menu"]')!;
+    expect(menu.classList.contains('w-max')).toBe(true);
+    expect(menu.style.minWidth).toBe('160px');
+    wrapper.unmount();
+  });
+
 	 it('does not close from the synthetic click after keyboard activation', async () => {
 		const wrapper = mount(Dropdown, { attachTo: document.body, slots: { trigger: '<button id="keyboard-trigger">Menu</button>', default: '<DropdownItem>First</DropdownItem>' }, global: { components: { DropdownItem } } });
 		const trigger = wrapper.get('#keyboard-trigger');

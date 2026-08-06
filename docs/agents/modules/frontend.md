@@ -47,7 +47,7 @@
 - 图标统一使用 `@lucide/vue`。
 - 主题只支持 `system` / `light` / `dark`，通过 `data-theme` 和 CSS 变量运行。
 - 中大屏 AppShell 必须填满视口并禁止页面级滚动；滚动限制在模板正文、表格、详情、日志或编辑正文内部。
-- 异常消息统一通过 `ToastProvider` 以顶部 toast 展示；`Dialog` 不因点击遮罩关闭，只能通过显式关闭、取消或 Escape 关闭。
+- 异常消息和操作成功提示统一通过 `ToastProvider` 以顶部 toast 展示，不再使用页面内成功横幅或内联操作错误条；表单校验、结构化诊断和状态型错误仍就地展示。`Dialog` 不因点击遮罩关闭，只能通过显式关闭、取消或 Escape 关闭。
 
 ## 页面族边界
 

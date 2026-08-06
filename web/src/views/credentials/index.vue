@@ -13,7 +13,7 @@ import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
-import { useErrorToast } from '@/components/ui/toast';
+import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
@@ -25,6 +25,7 @@ import { secretPayload, validateCredentialInput } from './model';
 
 const { t } = useI18n();
 const notifyError = useErrorToast();
+const notifySuccess = useSuccessToast();
 
 const credentials = ref<CredentialDto[]>([]);
 const servers = ref<ServerDto[]>([]);
@@ -38,7 +39,6 @@ const listRequests = createLatestRequestGuard();
 const loading = ref(false);
 const error = ref('');
 const actionError = ref('');
-const feedback = ref('');
 const dialogOpen = ref(false);
 const confirmOpen = ref(false);
 const saving = ref(false);
@@ -125,7 +125,7 @@ async function saveCredential() {
     const payload = secretPayload(form, Boolean(editing.value));
     const saved = editing.value ? await credentialsApi.update(editing.value.id, payload) : await credentialsApi.create(payload);
     selectedId.value = saved.id;
-    feedback.value = t(editing.value ? 'credentialsPage.updated' : 'credentialsPage.created');
+    notifySuccess(t(editing.value ? 'credentialsPage.updated' : 'credentialsPage.created'));
     dialogOpen.value = false;
     await load();
   } catch (err) {
@@ -147,7 +147,7 @@ async function deleteCredential() {
   actionError.value = '';
   try {
     await credentialsApi.delete(target.id);
-    feedback.value = t('credentialsPage.deleted');
+    notifySuccess(t('credentialsPage.deleted'));
     confirmOpen.value = false;
     await load();
   } catch (err) {
@@ -163,7 +163,7 @@ async function testCredential(credential: CredentialDto) {
   actionError.value = '';
   try {
     await serversApi.test(ref.id);
-    feedback.value = t('credentialsPage.testSucceeded', { name: ref.name });
+    notifySuccess(t('credentialsPage.testSucceeded', { name: ref.name }));
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.testFailed');
     notifyError(err instanceof Error ? err.message : t('credentialsPage.testFailed'));
@@ -240,10 +240,6 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
               <Button size="sm" variant="danger" @click="confirmDelete(selectedCredential)"><Trash2 />{{ t('common.delete') }}</Button>
             </div>
           </header>
-
-          <div v-if="feedback" class="grid gap-2 border-b border-border p-4">
-            <div v-if="feedback" class="rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-          </div>
 
           <div class="min-h-0 overflow-auto p-5">
             <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
