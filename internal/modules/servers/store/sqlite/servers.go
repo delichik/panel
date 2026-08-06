@@ -38,7 +38,7 @@ func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
 
 func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSummary, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
-		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
+		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
 		FROM servers ORDER BY created_at DESC,id ASC`)
 	if err != nil {
@@ -50,14 +50,14 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var item domain.ServerSummary
 		var reachable, sudo int
 		var lastChecked sql.NullString
-		var updatedAt, agentEnabled, agentStatus, ufwSupported, ufwInstalled string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
 		item.Sudo.Passwordless = sudo == 1
 		item.Privilege.Privileged = item.Privilege.Mode == "root" || item.Privilege.Mode == "passwordless_sudo"
-		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
+		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
 		if lastChecked.Valid {
 			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
 			if !parsed.IsZero() {
@@ -84,7 +84,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 	}
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
 	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
-		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
+		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
 		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
 	if err != nil {
@@ -96,13 +96,13 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var item domain.ServerSummary
 		var reachable, sudo int
 		var lastChecked sql.NullString
-		var updatedAt, agentEnabled, agentStatus, ufwSupported, ufwInstalled string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
 		item.Privilege.Privileged = item.Privilege.Mode == "root" || item.Privilege.Mode == "passwordless_sudo"
-		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
+		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
 		if lastChecked.Valid {
 			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
 			if !parsed.IsZero() {

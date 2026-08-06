@@ -334,6 +334,9 @@ function server(id: string, name: string, host: string, credentialId: string, re
     : id === 'srv-backup-fra' ? 'Immutable backup vault; package upgrades are intentionally frozen.'
     : readonly ? 'Read-only credential intentionally blocks privileged task buttons in the demo.'
     : '';
+  const resolvedTraits = traits['agent.enabled'] === 'true'
+    ? { ...traits, 'agent.url': `https://${host}:9786` }
+    : traits;
   return {
     id,
     name,
@@ -344,7 +347,7 @@ function server(id: string, name: string, host: string, credentialId: string, re
     sshUsername: '',
     credentialId,
     dockerHost: 'unix:///var/run/docker.sock',
-    traits,
+    traits: resolvedTraits,
     variables: {
       PUBLIC_ADDRESS: host,
       AVAILABILITY_ZONE: zone,

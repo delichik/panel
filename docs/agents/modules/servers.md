@@ -3,7 +3,7 @@
 ## List API Contract
 
 - `GET /api/v1/servers` returns `ListPage<ServerSummary>` and accepts only `page`, `pageSize`, and `q`.
-- List rows exclude credentials, notes, variables, full traits, operating-system detail, and metrics. `GET /api/v1/servers/{id}` owns the complete view.
+- List rows exclude credentials, notes, variables, full traits, operating-system detail, and metrics; the only trait signals returned are `agent.enabled`, `agent.url`, `agent.status`, and UFW flags. `GET /api/v1/servers/{id}` owns the complete view.
 - `GET /api/v1/credentials` follows the same `ListPage` and strict `page`/`pageSize`/`q` contract and never selects encrypted secret columns.
 
 ## 适用场景

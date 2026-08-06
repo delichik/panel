@@ -135,6 +135,45 @@ func TestServerRepositoryPersistsCRUDAndJSONFields(t *testing.T) {
 	}
 }
 
+func TestServerRepositorySummariesExposeAgentURL(t *testing.T) {
+	repo, db, closeStore := newServerRepositoryTestStore(t)
+	defer closeStore()
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	traits := `{"agent.enabled":"true","agent.url":"https://10.0.0.1:9786","agent.status":"compatible","sys.ufw_supported":"true","sys.ufw_installed":"false","custom.role":"edge"}`
+	if _, err := db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
+		"srv-agent", "Agent Host", "10.0.0.1", 22, "root", "cred-1", "unix:///var/run/docker.sock", traits, "{}", now, now); err != nil {
+		t.Fatalf("insert server: %v", err)
+	}
+
+	items, err := repo.ListSummaries(ctx)
+	if err != nil {
+		t.Fatalf("list summaries: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("summary count = %d, want 1", len(items))
+	}
+	got := items[0].Traits
+	if got["agent.enabled"] != "true" || got["agent.url"] != "https://10.0.0.1:9786" || got["agent.status"] != "compatible" || got["sys.ufw_supported"] != "true" {
+		t.Fatalf("summary traits = %#v, want agent traits and ufw flags", got)
+	}
+	if _, ok := got["custom.role"]; ok {
+		t.Fatalf("summary traits = %#v, want unrelated traits omitted", got)
+	}
+
+	page, err := repo.ListSummaryPage(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatalf("list summary page: %v", err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 {
+		t.Fatalf("summary page = %#v, want one item", page)
+	}
+	got = page.Items[0].Traits
+	if got["agent.url"] != "https://10.0.0.1:9786" || got["agent.status"] != "compatible" {
+		t.Fatalf("summary page traits = %#v, want agent.url and agent.status", got)
+	}
+}
+
 func TestServerRepositoryPrivilegeCompatibilityAndNotFound(t *testing.T) {
 	repo, db, closeStore := newServerRepositoryTestStore(t)
 	defer closeStore()
