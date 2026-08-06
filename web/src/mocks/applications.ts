@@ -591,7 +591,7 @@ export function beginAppSession(applicationId?: string): ApplicationEditSession 
     draft: {
       name: app?.name ?? '',
       enabled: app?.enabled ?? true,
-      specYaml: app?.specYaml ?? 'name: new-app\nimage: nginx:1.28-alpine\nports:\n  - label: http\n    to: 80\n',
+      specYaml: app?.specYaml ?? '',
       variables: app?.variables ?? {},
       deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
       deploymentServers: app?.deploymentServers ?? [],

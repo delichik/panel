@@ -70,6 +70,23 @@ describe('application editor model', () => {
     expect(draft.ports[0].to).toBe('6379');
   });
 
+  it('starts create drafts blank without sample defaults', () => {
+    const draft = draftFromApplication();
+    expect(draft.name).toBe('');
+    expect(draft.image).toBe('');
+    expect(draft.specYaml).toBe('');
+    expect(draft.ports).toEqual([]);
+    expect(draft.commandRows).toEqual([]);
+    expect(draft.env).toEqual([]);
+    expect(draft.variables).toEqual([]);
+    expect(draft.mounts).toEqual([]);
+    expect(draft.reverseProxy).toEqual([]);
+
+    const yaml = specYamlFromDraft(draft);
+    expect(yaml).not.toContain('nginx');
+    expect(yaml).not.toContain('name: web');
+  });
+
   it('keeps dialog drafts independent until saved', () => {
     const domain = makeFacilityDomain();
     domain.domain = 'static.example.test';

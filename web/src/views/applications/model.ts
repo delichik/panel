@@ -112,7 +112,7 @@ export function statusTone(status: string) {
 }
 
 export function draftFromApplication(app?: ApplicationDto | null): ApplicationDraftUi {
-  const parsed = parseSpec(app?.specYaml || defaultSpecYaml);
+  const parsed = parseSpec(app?.specYaml || '');
   const command = arrayValue(parsed.command).map((item) => String(item)).filter((item) => item.trim() !== '');
   return {
     name: app?.name || stringValue(parsed.name) || '',
@@ -123,7 +123,7 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     cpu: stringValue(objectValue(parsed.resources)?.cpu),
     memoryMb: stringValue(objectValue(parsed.resources)?.memoryMb),
     privileged: Boolean(parsed.privileged),
-    specYaml: app?.specYaml || defaultSpecYaml,
+    specYaml: app?.specYaml || '',
     yamlDirty: false,
     variables: pairsFromRecord(app?.variables),
     env: pairsFromRecord(objectToStringRecord(objectValue(parsed.env))),
@@ -169,8 +169,8 @@ export function syncDraftToYaml(draft: ApplicationDraftUi) {
 
 export function specYamlFromDraft(draft: ApplicationDraftUi) {
   const doc: Record<string, unknown> = {
-    name: draft.name || 'web',
-    image: draft.image || 'nginx:1.28-alpine',
+    name: draft.name,
+    image: draft.image,
     networkMode: draft.networkMode,
   };
   const command = draft.commandRows.map((row) => row.value.trim()).filter(Boolean);
@@ -475,11 +475,3 @@ function makeId(prefix: string) {
 function emptyApp(): ApplicationDto {
   return { id: '', version: 0, kind: 'application', name: '', enabled: true, specYaml: '', variables: {}, deploymentMode: 'all', deploymentServers: [], reverseProxy: [], generation: 0, specHash: '', imageUpdateAvailable: false, jobId: '', namespace: '', createdAt: '', updatedAt: '' };
 }
-
-const defaultSpecYaml = `name: web
-image: nginx:1.28-alpine
-networkMode: bridge
-ports:
-  - label: http
-    to: 80
-`;
