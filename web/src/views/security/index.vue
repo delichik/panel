@@ -357,7 +357,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="min-h-0 p-5">
-            <div v-if="activeTab === 'ufw'" class="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div v-if="activeTab === 'ufw'" class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
               <section class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
                 <div class="flex items-center justify-between gap-3 border-b border-border p-4">
                   <div class="flex items-center gap-3">
@@ -414,7 +414,7 @@ onBeforeUnmount(() => {
               </aside>
             </div>
 
-            <div v-else class="grid min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div v-else class="grid h-full min-h-0 grid-rows-[minmax(0,1fr)] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
               <section class="grid min-h-0 grid-rows-[auto_auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
                 <div class="flex items-center justify-between gap-3 border-b border-border p-4">
                   <div>
