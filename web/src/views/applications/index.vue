@@ -791,7 +791,9 @@ async function startApplicationEditorCore() {
     Object.assign(appDraft, draftFromApplication({ ...(app ?? emptyApplication()), ...editSession.value.draft }));
   } catch (err) {
     if (isAbortError(err)) return;
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.editorStartFailed'));
+    const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
+    actionError.value = message;
+    notifyError(message);
   }
 }
 
@@ -869,7 +871,9 @@ async function startFacilityEditorCore() {
     Object.assign(facilityDraft, facilityDraftFromConfig({ ...(facility.value ?? emptyFacility()), deploymentServers: facilitySession.value.draft.deploymentServers, panelEntry: facilitySession.value.draft.panelEntry, domains: facilitySession.value.draft.domains }));
   } catch (err) {
     if (isAbortError(err)) return;
-    notifyError(err instanceof Error ? err.message : t('applicationsPage.editorStartFailed'));
+    const message = err instanceof Error ? err.message : t('applicationsPage.editorStartFailed');
+    actionError.value = message;
+    notifyError(message);
   }
 }
 
@@ -1625,14 +1629,21 @@ onBeforeUnmount(() => {
     </template>
     <template v-if="facilityEditingView">
       <EditorPage>
-        <LoadingOverlay v-if="editorLoading && !facilitySession" />
+        <div v-if="!facilitySession" class="relative grid min-h-64 place-items-center">
+          <LoadingOverlay v-if="editorLoading || !actionError" />
+          <div v-else class="grid max-w-md justify-items-center gap-3 text-center">
+            <AlertTriangle class="size-6 text-danger" aria-hidden="true" />
+            <p class="m-0 text-sm text-danger">{{ actionError }}</p>
+            <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('common.retry') }}</Button>
+          </div>
+        </div>
         <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-        <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+        <div v-if="facilitySession && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
           <span class="text-danger">{{ actionError }}</span>
           <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadFacilityEditor">{{ t('applicationsPage.reloadFacilityDraft') }}</Button>
         </div>
         <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
-        <div class="relative app-editor-layout">
+        <div v-if="facilitySession" class="relative app-editor-layout">
           <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
           <section class="app-editor-shell">
             <div class="app-editor-header">
@@ -1731,8 +1742,8 @@ onBeforeUnmount(() => {
             <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
             <div class="flex flex-wrap gap-2">
               <Button variant="secondary" :disabled="saving" @click="cancelFacilityEdit">{{ t('common.cancel') }}</Button>
-              <Button variant="secondary" :loading="pending === 'preview'" :disabled="saving" @click="previewFacilityConfig">{{ t('applicationsPage.preview') }}</Button>
-              <Button variant="primary" :loading="pending === 'commit'" :disabled="saving" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
+              <Button variant="secondary" :loading="pending === 'preview'" :disabled="!facilitySession || saving" @click="previewFacilityConfig">{{ t('applicationsPage.preview') }}</Button>
+              <Button variant="primary" :loading="pending === 'commit'" :disabled="!facilitySession || saving" @click="commitFacilityConfig"><Save />{{ t('applicationsPage.commit') }}</Button>
             </div>
           </div>
         </template>
@@ -1801,14 +1812,21 @@ onBeforeUnmount(() => {
 
   <ConsolePage v-else-if="isAppEditor" :back-label="t('common.back')" @back="router.push('/applications/apps')" :title="isCreateMode ? t('applicationsPage.createApplication') : t('applicationsPage.applicationEditor')" :description="t('applicationsPage.applicationEditorDescription')">
     <EditorPage>
-      <LoadingOverlay v-if="editorLoading && !editSession" />
+      <div v-if="!editSession" class="relative grid min-h-64 place-items-center">
+        <LoadingOverlay v-if="editorLoading || !actionError" />
+        <div v-else class="grid max-w-md justify-items-center gap-3 text-center">
+          <AlertTriangle class="size-6 text-danger" aria-hidden="true" />
+          <p class="m-0 text-sm text-danger">{{ actionError }}</p>
+          <Button size="sm" :loading="pending === 'editor-reload'" @click="reloadApplicationEditor">{{ t('common.retry') }}</Button>
+        </div>
+      </div>
       <div v-if="saving" class="mb-4 rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t(`applicationsPage.saveStage.${saveStage}`) }}</div>
-      <div v-if="actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+      <div v-if="editSession && actionError" class="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
         <span class="text-danger">{{ actionError }}</span>
       </div>
       <div v-if="feedback" class="mb-4 rounded-xl border border-success-border bg-success-bg p-3 text-sm text-success">{{ feedback }}</div>
 
-      <div class="relative app-editor-layout">
+      <div v-if="editSession" class="relative app-editor-layout">
         <LoadingOverlay v-if="saving" :label="t(`applicationsPage.saveStage.${saveStage}`)" />
         <section class="app-editor-shell">
           <div class="app-editor-header">
@@ -1936,8 +1954,8 @@ onBeforeUnmount(() => {
           <div class="text-sm text-muted-foreground">{{ isDirty ? t('applicationsPage.unsavedChanges') : t('applicationsPage.readyToCommit') }}</div>
           <div class="flex flex-wrap gap-2">
             <Button variant="secondary" :disabled="saving" @click="router.back()">{{ t('common.cancel') }}</Button>
-            <Button variant="secondary" :loading="pending === 'preview'" :disabled="saving" @click="previewApplication()">{{ t('applicationsPage.preview') }}</Button>
-            <Button variant="primary" :loading="pending === 'commit'" :disabled="saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
+            <Button variant="secondary" :loading="pending === 'preview'" :disabled="!editSession || saving" @click="previewApplication()">{{ t('applicationsPage.preview') }}</Button>
+            <Button variant="primary" :loading="pending === 'commit'" :disabled="!editSession || saving" @click="commitApplication()"><Save />{{ t('applicationsPage.commit') }}</Button>
           </div>
         </div>
       </template>
