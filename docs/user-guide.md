@@ -1,42 +1,42 @@
-# Using Panel
+# Using Seamark
 
 English | [简体中文](user-guide.zh-CN.md)
 
-This guide follows the shortest path from a new Panel installation to a running container application. It is task-oriented rather than a complete reference for every field.
+This guide follows the shortest path from a new Seamark installation to a running container application. It is task-oriented rather than a complete reference for every field.
 
-If Panel is not running yet, start with [Deploy Panel](deployment.md).
+If Seamark is not running yet, start with [Deploy Seamark](deployment.md).
 
 ## Understand the Three Layers
 
-- **Panel host:** the machine running the Panel container and the `panel-data` volume.
-- **Target server:** a Debian or Ubuntu server registered in Panel and managed over SSH and panel-agent.
-- **Application container:** the workload that Panel creates through the target server's Docker Engine.
+- **Seamark host:** the machine running the Seamark container and the `panel-data` volume.
+- **Target server:** a Debian or Ubuntu server registered in Seamark and managed over SSH and panel-agent.
+- **Application container:** the workload that Seamark creates through the target server's Docker Engine.
 
-Panel does not need the target server's Docker Socket mounted into the Panel container. Panel installs its agent on the target server, then connects to that agent over mutual TLS.
+Seamark does not need the target server's Docker Socket mounted into the Seamark container. Seamark installs its agent on the target server, then connects to that agent over mutual TLS.
 
 ## Prepare a Target Server
 
 Before adding a server, confirm that it meets these requirements:
 
 - It runs one of the Debian or Ubuntu versions listed in the project README.
-- The Panel host can reach its SSH address and port.
+- The Seamark host can reach its SSH address and port.
 - The selected SSH account is `root` or has passwordless `sudo`.
 - Docker is installed and running before you deploy container applications.
-- The Panel host can reach TCP port `9786` on the target server after the agent is installed.
+- The Seamark host can reach TCP port `9786` on the target server after the agent is installed.
 - The target server can reach the container registries used by your applications.
 
-Restrict `9786/tcp` to the Panel host where possible. You do not need to expose the target Docker Engine over TCP; the default Docker host is the local Unix Socket `unix:///var/run/docker.sock`.
+Restrict `9786/tcp` to the Seamark host where possible. You do not need to expose the target Docker Engine over TCP; the default Docker host is the local Unix Socket `unix:///var/run/docker.sock`.
 
 ## 1. First Login
 
-First run `docker exec -it panel /app/panel setup` on the Panel host. It enrolls the current host over SSH, installs the Agent, records the singleton Panel host, and deploys Panel's own domain entrance. Sign in using the URL printed by the command. Setup is a convenience path: you can also skip it and enable the Panel access entry in **Applications → Facility Apps**, choosing a server and domain; the first save registers the chosen server as the Panel host node.
+First run `docker exec -it panel /app/panel setup` on the Seamark host. It enrolls the current host over SSH, installs the Agent, records the singleton Seamark host, and deploys Seamark's own domain entrance. Sign in using the URL printed by the command. Setup is a convenience path: you can also skip it and enable the Seamark access entry in **Applications → Facility Apps**, choosing a server and domain; the first save registers the chosen server as the Seamark host node.
 
-Open the Panel URL and sign in with the initial account:
+Open the Seamark URL and sign in with the initial account:
 
 - Username: `admin`
 - Password: `admin`
 
-Panel immediately requires a different password. The password change also rotates the JWT signing secret, so complete this step before adding infrastructure.
+Seamark immediately requires a different password. The password change also rotates the JWT signing secret, so complete this step before adding infrastructure.
 
 After login, review these optional settings:
 
@@ -48,7 +48,7 @@ After login, review these optional settings:
 
 Open **Servers → Credentials**, then select **Add credential**.
 
-Panel supports:
+Seamark supports:
 
 - Username and password.
 - Username and private key, with an optional key passphrase.
@@ -70,9 +70,9 @@ Enter:
 - An optional SSH username override.
 - The Docker host. Keep `unix:///var/run/docker.sock` unless Docker uses a different endpoint on that target server.
 
-When the server is saved, Panel starts an initial bootstrap operation that checks SSH access, the operating system, CPU architecture, and privileged command capability. If this first bootstrap fails before the server is initialized, Panel removes the incomplete server entry so you can correct the connection details and add it again.
+When the server is saved, Seamark starts an initial bootstrap operation that checks SSH access, the operating system, CPU architecture, and privileged command capability. If this first bootstrap fails before the server is initialized, Seamark removes the incomplete server entry so you can correct the connection details and add it again.
 
-After a successful bootstrap, Panel automatically schedules panel-agent installation when the server has the required privileges.
+After a successful bootstrap, Seamark automatically schedules panel-agent installation when the server has the required privileges.
 
 ## 4. Confirm Agent and Docker Health
 
@@ -86,7 +86,7 @@ Open the new server's details and wait for the initial operations to finish. Bef
 
 Agent installation creates a service on the target server and listens on TCP port `9786`. If the agent cannot become healthy, check:
 
-- The target firewall and cloud security rules allow the Panel host to reach `9786/tcp`.
+- The target firewall and cloud security rules allow the Seamark host to reach `9786/tcp`.
 - Docker is running on the target server.
 - The configured Docker host is correct.
 - The SSH account still has the required privileges.
@@ -133,7 +133,7 @@ The application editor supports visual configuration and YAML. Common sections i
 - Deployment to all healthy servers or selected servers.
 - Reverse-proxy routes.
 
-For the first production application, prefer a single selected server until the image, files, ports, and health behavior are confirmed. Applications with a Panel-managed persistent mount can only target one server.
+For the first production application, prefer a single selected server until the image, files, ports, and health behavior are confirmed. Applications with a Seamark-managed persistent mount can only target one server.
 
 Use the application detail actions for later changes:
 
@@ -147,7 +147,7 @@ Use the runtime log action to inspect container output. If a container starts an
 
 ## 7. Configure a Domain and HTTPS
 
-Panel currently manages DNS records through Cloudflare and uses ACME DNS-01 challenges for public certificates.
+Seamark currently manages DNS records through Cloudflare and uses ACME DNS-01 challenges for public certificates.
 
 Recommended order:
 
@@ -176,11 +176,11 @@ Use **Resources → Packages** to refresh APT updates and run selected or full u
 
 ### Firewall
 
-Use **Security → Firewall** to install or manage UFW. When enabling UFW, Panel preserves the configured SSH port first. Review every rule before applying it to a remote server.
+Use **Security → Firewall** to install or manage UFW. When enabling UFW, Seamark preserves the configured SSH port first. Review every rule before applying it to a remote server.
 
 ### Docker resources
 
-Use **Resources → Containers, Images, Networks,** and **Volumes** to inspect target Docker resources. Resources managed by a Panel application should normally be changed through **Applications**, because direct Docker changes can be reconciled back to the application's desired state.
+Use **Resources → Containers, Images, Networks,** and **Volumes** to inspect target Docker resources. Resources managed by a Seamark application should normally be changed through **Applications**, because direct Docker changes can be reconciled back to the application's desired state.
 
 ### Tasks and logs
 
@@ -194,12 +194,12 @@ For export:
 
 1. Keep encryption enabled unless you have a specific reason not to.
 2. Request the full export.
-3. Panel switches to a maintenance page.
+3. Seamark switches to a maintenance page.
 4. Sign in, provide the backup password when requested, and start the export.
 5. Download the archive after completion.
-6. Exit maintenance mode and wait for Panel to return to normal service.
+6. Exit maintenance mode and wait for Seamark to return to normal service.
 
-For restore, upload an existing Panel backup and complete the preflight and confirmation flow. Restore replaces the current instance data; it does not automatically preserve the old state. Create a separate backup before confirming a restore.
+For restore, upload an existing Seamark backup and complete the preflight and confirmation flow. Restore replaces the current instance data; it does not automatically preserve the old state. Create a separate backup before confirming a restore.
 
 Keep the backup password separate from the encrypted archive. Losing either the archive or its password makes the backup unusable.
 
@@ -209,9 +209,9 @@ Follow the [deployment upgrade instructions](deployment.md#upgrade-panel):
 
 1. Create a fresh full backup.
 2. Pull the new image.
-3. Recreate the Panel container with the same `panel-data` volume.
+3. Recreate the Seamark container with the same `panel-data` volume.
 4. Check container health and logs.
-5. Open **Task Center** and server details. A Panel version change may schedule agent updates so that managed servers use the matching agent version.
+5. Open **Task Center** and server details. A Seamark version change may schedule agent updates so that managed servers use the matching agent version.
 
 ## Common Problems
 
@@ -219,12 +219,12 @@ Follow the [deployment upgrade instructions](deployment.md#upgrade-panel):
 | --- | --- |
 | The default login no longer works | Use the password set during the mandatory first-login change. Restoring or replacing the data volume also changes which account database is active. |
 | A new server disappears after saving | The initial SSH/bootstrap operation failed. Check Task Center, then correct the host, port, credential, supported OS, or privilege setup and add it again. |
-| Agent is unavailable | Confirm Panel-to-server access on `9786/tcp`, target firewall rules, Docker health, and the server's configured host address. |
+| Agent is unavailable | Confirm Seamark-to-server access on `9786/tcp`, target firewall rules, Docker health, and the server's configured host address. |
 | Docker is unhealthy | Start Docker on the target server and verify the configured Docker host, normally `unix:///var/run/docker.sock`. |
 | Application deployment stays pending or fails | Open the application runtime target and its task logs. Check agent health, registry access, image name, port conflicts, files, mounts, and container output. |
 | The application runs but cannot be reached | Check the target host port, UFW/cloud firewall, DNS record, and reverse-proxy gateway status. |
 | Certificate issuance fails | Verify the Cloudflare token permissions, zone name, DNS propagation, ACME email, and task-stage diagnostics. |
-| Metrics or Docker resources are stale | Confirm the server's Agent and Docker status and that the Panel host can maintain the agent connection. |
+| Metrics or Docker resources are stale | Confirm the server's Agent and Docker status and that the Seamark host can maintain the agent connection. |
 
 ## First-Use Checklist
 
@@ -235,5 +235,5 @@ Follow the [deployment upgrade instructions](deployment.md#upgrade-panel):
 - [ ] Confirm Agent and Docker health.
 - [ ] Deploy a single-server test application.
 - [ ] Confirm application logs and network access.
-- [ ] Configure HTTPS before exposing Panel or applications publicly.
+- [ ] Configure HTTPS before exposing Seamark or applications publicly.
 - [ ] Review Task Center after upgrades or failed operations.

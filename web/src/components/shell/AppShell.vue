@@ -50,7 +50,7 @@ async function signOut() {
     <LoadingOverlay v-if="signingOut" />
     <aside class="hidden min-h-0 flex-col border-r border-border bg-card lg:flex">
       <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
-        <div class="grid size-9 shrink-0 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground">P</div>
+        <img src="/favicon.svg" class="size-9 shrink-0 rounded-xl" alt="" aria-hidden="true" />
         <div v-if="!collapsed" class="min-w-0">
           <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
           <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
@@ -124,7 +124,7 @@ async function signOut() {
       <div v-if="drawerOpen" class="fixed inset-0 z-50 bg-overlay lg:hidden" @click.self="drawerOpen = false">
         <aside class="flex h-full w-[292px] max-w-[86vw] flex-col border-r border-border bg-card">
           <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
-            <div class="grid size-9 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground">P</div>
+            <img src="/favicon.svg" class="size-9 rounded-xl" alt="" aria-hidden="true" />
             <div class="min-w-0">
               <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
               <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>

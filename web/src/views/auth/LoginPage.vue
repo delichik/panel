@@ -94,10 +94,10 @@ async function updateAccount() {
 </script>
 
 <template>
-  <main class="grid min-h-dvh place-items-center bg-background p-6">
+  <main class="grid min-h-dvh place-items-center bg-background p-6 pb-24">
     <section class="w-full max-w-[420px] rounded-2xl border border-border bg-card p-6 shadow-2xl shadow-black/[0.04]">
       <div class="mb-6 flex items-center gap-3">
-        <div class="grid size-10 place-items-center rounded-xl bg-primary text-sm font-bold text-primary-foreground">P</div>
+        <img src="/favicon.svg" class="size-10 rounded-xl" alt="" aria-hidden="true" />
         <div>
           <strong class="block text-sm font-semibold text-foreground">{{ title }}</strong>
           <span class="block text-xs text-muted-foreground">{{ subtitle }}</span>
@@ -138,5 +138,9 @@ async function updateAccount() {
         <Button type="submit" variant="primary" :loading="loading">{{ t('auth.updatePassword') }}</Button>
       </form>
     </section>
+    <footer class="fixed bottom-5 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2">
+      <img src="/favicon.svg" class="size-7 rounded-lg" alt="" aria-hidden="true" />
+      <span class="text-[13px] font-semibold text-foreground/70">{{ t('app.name') }}</span>
+    </footer>
   </main>
 </template>

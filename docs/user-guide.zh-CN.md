@@ -1,42 +1,42 @@
-# 使用 Panel
+# 使用 Seamark
 
 [English](user-guide.md) | 简体中文
 
-本说明按照“从全新 Panel 到第一个正常运行的容器应用”组织，是面向任务的新用户指南，不是所有字段的完整参考手册。
+本说明按照“从全新 Seamark 到第一个正常运行的容器应用”组织，是面向任务的新用户指南，不是所有字段的完整参考手册。
 
-如果 Panel 还没有运行，请先阅读[部署 Panel](deployment.zh-CN.md)。
+如果 Seamark 还没有运行，请先阅读[部署 Seamark](deployment.zh-CN.md)。
 
 ## 先理解三个层次
 
-- **Panel 主机：**运行 Panel 容器并保存 `panel-data` 数据卷的主机。
-- **目标服务器：**登记到 Panel 中，由 Panel 通过 SSH 和 panel-agent 管理的 Debian 或 Ubuntu 服务器。
-- **应用容器：**Panel 通过目标服务器上的 Docker Engine 创建的实际工作负载。
+- **Seamark 主机：**运行 Seamark 容器并保存 `panel-data` 数据卷的主机。
+- **目标服务器：**登记到 Seamark 中，由 Seamark 通过 SSH 和 panel-agent 管理的 Debian 或 Ubuntu 服务器。
+- **应用容器：**Seamark 通过目标服务器上的 Docker Engine 创建的实际工作负载。
 
-Panel 不需要把目标服务器的 Docker Socket 挂载到 Panel 容器。Panel 会在目标服务器安装 Agent，然后通过双向 TLS 主动连接该 Agent。
+Seamark 不需要把目标服务器的 Docker Socket 挂载到 Seamark 容器。Seamark 会在目标服务器安装 Agent，然后通过双向 TLS 主动连接该 Agent。
 
 ## 准备目标服务器
 
 添加服务器前，请确认：
 
 - 系统是项目 README 列出的 Debian 或 Ubuntu 版本。
-- Panel 主机能够访问目标服务器的 SSH 地址和端口。
+- Seamark 主机能够访问目标服务器的 SSH 地址和端口。
 - SSH 账号是 `root`，或者具备免密 `sudo`。
 - 部署容器应用前，目标服务器已经安装并运行 Docker。
-- Agent 安装后，Panel 主机能够访问目标服务器的 `9786/tcp`。
+- Agent 安装后，Seamark 主机能够访问目标服务器的 `9786/tcp`。
 - 目标服务器能够访问应用使用的容器镜像仓库。
 
-条件允许时，应只允许 Panel 主机访问 `9786/tcp`。不需要通过 TCP 暴露目标服务器的 Docker Engine；默认 Docker Host 是本机 Unix Socket：`unix:///var/run/docker.sock`。
+条件允许时，应只允许 Seamark 主机访问 `9786/tcp`。不需要通过 TCP 暴露目标服务器的 Docker Engine；默认 Docker Host 是本机 Unix Socket：`unix:///var/run/docker.sock`。
 
 ## 1. 首次登录
 
-推荐先在 Panel 宿主机执行 `docker exec -it panel /app/panel setup`：该命令通过 SSH 将当前宿主机纳管、安装 Agent、登记唯一 Panel 宿主节点，并部署 Panel 自身的域名入口，完成后使用命令输出的 URL 登录。setup 只是便捷路径——也可以跳过它，在 **应用 → 设施应用** 的入口网关里启用 Panel 访问入口并选择服务器与域名；首次保存时，所选服务器会被登记为 Panel 宿主节点。
+推荐先在 Seamark 宿主机执行 `docker exec -it panel /app/panel setup`：该命令通过 SSH 将当前宿主机纳管、安装 Agent、登记唯一 Seamark 宿主节点，并部署 Seamark 自身的域名入口，完成后使用命令输出的 URL 登录。setup 只是便捷路径——也可以跳过它，在 **应用 → 设施应用** 的入口网关里启用 Seamark 访问入口并选择服务器与域名；首次保存时，所选服务器会被登记为 Seamark 宿主节点。
 
-打开 Panel 地址，使用初始账号登录：
+打开 Seamark 地址，使用初始账号登录：
 
 - 用户名：`admin`
 - 密码：`admin`
 
-Panel 会立即要求设置不同的新密码。修改密码时还会轮换 JWT 签名密钥，因此应先完成此步骤，再添加基础设施。
+Seamark 会立即要求设置不同的新密码。修改密码时还会轮换 JWT 签名密钥，因此应先完成此步骤，再添加基础设施。
 
 登录后，可以先检查以下设置：
 
@@ -48,7 +48,7 @@ Panel 会立即要求设置不同的新密码。修改密码时还会轮换 JWT 
 
 打开 **服务器 → 凭据**，选择 **新增凭据**。
 
-Panel 支持：
+Seamark 支持：
 
 - 用户名和密码。
 - 用户名和私钥，可选私钥口令。
@@ -70,9 +70,9 @@ Panel 支持：
 - 可选的 SSH 用户名覆盖值。
 - Docker Host。除非目标服务器使用其他端点，否则保持 `unix:///var/run/docker.sock`。
 
-保存服务器后，Panel 会启动首次初始化操作，检查 SSH、操作系统、CPU 架构和特权命令能力。如果首次初始化在服务器完成登记前失败，Panel 会删除未完成的服务器记录，让你修正连接信息后重新添加。
+保存服务器后，Seamark 会启动首次初始化操作，检查 SSH、操作系统、CPU 架构和特权命令能力。如果首次初始化在服务器完成登记前失败，Seamark 会删除未完成的服务器记录，让你修正连接信息后重新添加。
 
-首次初始化成功且服务器具备所需权限后，Panel 会自动安排安装 panel-agent。
+首次初始化成功且服务器具备所需权限后，Seamark 会自动安排安装 panel-agent。
 
 ## 4. 确认 Agent 和 Docker 状态
 
@@ -86,7 +86,7 @@ Panel 支持：
 
 Agent 安装后会作为目标服务器上的服务运行，并监听 TCP `9786`。如果 Agent 无法恢复正常，请检查：
 
-- 目标服务器防火墙和云安全规则允许 Panel 主机访问 `9786/tcp`。
+- 目标服务器防火墙和云安全规则允许 Seamark 主机访问 `9786/tcp`。
 - 目标服务器上的 Docker 正在运行。
 - Docker Host 配置正确。
 - SSH 账号仍具有所需权限。
@@ -133,7 +133,7 @@ http://<目标服务器地址>:8081
 - 部署到全部正常服务器或指定服务器。
 - 反向代理路由。
 
-第一个正式应用建议先只选择一台服务器，确认镜像、文件、端口和运行行为后再扩大范围。使用 Panel 托管持久化挂载的应用只能部署到一台服务器。
+第一个正式应用建议先只选择一台服务器，确认镜像、文件、端口和运行行为后再扩大范围。使用 Seamark 托管持久化挂载的应用只能部署到一台服务器。
 
 后续通过应用详情操作：
 
@@ -147,7 +147,7 @@ http://<目标服务器地址>:8081
 
 ## 7. 配置域名和 HTTPS
 
-Panel 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证签发公网证书。
+Seamark 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证签发公网证书。
 
 推荐顺序：
 
@@ -176,11 +176,11 @@ Panel 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证�
 
 ### 防火墙
 
-使用 **安全 → 防火墙**安装或管理 UFW。启用 UFW 时，Panel 会先保留当前配置的 SSH 端口。对远程服务器应用规则前仍应逐条检查。
+使用 **安全 → 防火墙**安装或管理 UFW。启用 UFW 时，Seamark 会先保留当前配置的 SSH 端口。对远程服务器应用规则前仍应逐条检查。
 
 ### Docker 资源
 
-使用 **资源 → 容器、镜像、网络、卷**查看目标服务器上的 Docker 资源。由 Panel 应用管理的资源通常应从 **应用**修改，因为直接操作 Docker 后，Panel 可能按照应用期望状态重新协调。
+使用 **资源 → 容器、镜像、网络、卷**查看目标服务器上的 Docker 资源。由 Seamark 应用管理的资源通常应从 **应用**修改，因为直接操作 Docker 后，Seamark 可能按照应用期望状态重新协调。
 
 ### 任务和日志
 
@@ -194,12 +194,12 @@ Panel 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证�
 
 1. 除非有明确原因，否则保持加密开启。
 2. 请求全量导出。
-3. Panel 会切换到维护页面。
+3. Seamark 会切换到维护页面。
 4. 在维护页登录，按要求提供备份密码并开始导出。
 5. 完成后下载归档。
-6. 退出维护模式，等待 Panel 恢复正常服务。
+6. 退出维护模式，等待 Seamark 恢复正常服务。
 
-还原时，上传已有的 Panel 备份，并完成预检和确认流程。还原会覆盖当前实例数据，不会自动保留旧状态，因此确认还原前应额外创建一份备份。
+还原时，上传已有的 Seamark 备份，并完成预检和确认流程。还原会覆盖当前实例数据，不会自动保留旧状态，因此确认还原前应额外创建一份备份。
 
 备份密码和加密归档应分别保存。丢失归档或密码中的任何一个，备份都会失去作用。
 
@@ -209,9 +209,9 @@ Panel 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证�
 
 1. 创建新的全量备份。
 2. 拉取新镜像。
-3. 使用同一个 `panel-data` 数据卷重新创建 Panel 容器。
+3. 使用同一个 `panel-data` 数据卷重新创建 Seamark 容器。
 4. 检查容器状态和日志。
-5. 打开 **任务中心**和服务器详情。Panel 版本变化后，系统可能自动安排 Agent 更新，使目标服务器使用匹配版本的 Agent。
+5. 打开 **任务中心**和服务器详情。Seamark 版本变化后，系统可能自动安排 Agent 更新，使目标服务器使用匹配版本的 Agent。
 
 ## 常见问题
 
@@ -219,12 +219,12 @@ Panel 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证�
 | --- | --- |
 | 默认账号无法登录 | 使用首次登录时设置的新密码。还原或替换数据卷后，实际使用的账号数据库也会变化。 |
 | 新增服务器保存后消失 | 首次 SSH/初始化操作失败。查看任务中心，然后修正地址、端口、凭据、系统版本或特权设置后重新添加。 |
-| Agent 不可用 | 确认 Panel 到目标服务器的 `9786/tcp` 连通、目标防火墙、Docker 状态和服务器地址配置。 |
+| Agent 不可用 | 确认 Seamark 到目标服务器的 `9786/tcp` 连通、目标防火墙、Docker 状态和服务器地址配置。 |
 | Docker 状态异常 | 启动目标服务器上的 Docker，并检查 Docker Host；默认通常为 `unix:///var/run/docker.sock`。 |
 | 应用部署长期等待或失败 | 打开应用运行目标和任务日志，检查 Agent、镜像仓库、镜像名、端口冲突、文件、挂载和容器输出。 |
 | 应用运行但无法访问 | 检查目标主机端口、UFW/云防火墙、DNS 记录和反向代理入口状态。 |
 | 证书签发失败 | 检查 Cloudflare Token 权限、Zone 名称、DNS 传播、ACME 邮箱和任务阶段诊断。 |
-| 指标或 Docker 资源长时间不更新 | 检查服务器的 Agent 和 Docker 状态，以及 Panel 主机能否维持 Agent 连接。 |
+| 指标或 Docker 资源长时间不更新 | 检查服务器的 Agent 和 Docker 状态，以及 Seamark 主机能否维持 Agent 连接。 |
 
 ## 首次使用检查清单
 
@@ -235,5 +235,5 @@ Panel 当前通过 Cloudflare 管理 DNS 记录，并使用 ACME DNS-01 验证�
 - [ ] 确认 Agent 和 Docker 状态正常。
 - [ ] 部署一个单服务器测试应用。
 - [ ] 检查应用日志和网络访问。
-- [ ] 在公开 Panel 或应用前配置 HTTPS。
+- [ ] 在公开 Seamark 或应用前配置 HTTPS。
 - [ ] 升级或操作失败后检查任务中心。

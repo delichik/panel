@@ -364,10 +364,17 @@ func TestContainerProxyTargetDefersUpstreamResolution(t *testing.T) {
 	if !strings.Contains(mainConfig, "resolver 127.0.0.11 valid=10s ipv6=off;") {
 		t.Fatalf("nginx main config missing Docker DNS resolver:\n%s", mainConfig)
 	}
+	if strings.Contains(mainConfig, "panel_error_language") {
+		t.Fatalf("nginx main config must not map error page language after merging pages:\n%s", mainConfig)
+	}
 	text := managedConfigText(files)
 	for _, want := range []string{
 		"set $panel_proxy_upstream panel-cpa-private;",
 		"proxy_pass http://$panel_proxy_upstream:8080;",
+		"error_page 502 504 @panel_upstream_unavailable;",
+		"location @panel_upstream_unavailable {",
+		"root /etc/panel-nginx/errors;",
+		"try_files /upstream-unavailable.html =404;",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("nginx config missing %q:\n%s", want, text)
@@ -375,6 +382,39 @@ func TestContainerProxyTargetDefersUpstreamResolution(t *testing.T) {
 	}
 	if strings.Contains(text, "proxy_pass http://panel-cpa-private:8080;") {
 		t.Fatalf("nginx config must not resolve container upstream at parse time:\n%s", text)
+	}
+	page := ""
+	for _, file := range files {
+		if file.Path == proxyErrorPagePath {
+			page = string(file.Content)
+		}
+	}
+	if page == "" {
+		t.Fatalf("nginx upstream unavailable pages missing from managed files: %#v", files)
+	}
+	if page != string(proxyUpstreamUnavailablePageContent()) {
+		t.Fatalf("upstream unavailable page missing expected copy:\n%s", page)
+	}
+	if !strings.Contains(page, "Service temporarily unavailable") || !strings.Contains(page, "\u8bf7\u7a0d\u540e\u91cd\u8bd5") {
+		t.Fatalf("upstream unavailable page must contain both languages:\n%s", page)
+	}
+	for _, want := range []string{
+		"Seamark",
+		`<symbol id="seamark-icon"`,
+		`class="brand-bottom"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("upstream unavailable page missing %q:\n%s", want, page)
+		}
+	}
+	if strings.Contains(page, "bg-mark") || strings.Contains(page, "seamark-mark") || strings.Contains(page, "watermark") {
+		t.Fatalf("upstream unavailable page must not include a watermark:\n%s", page)
+	}
+	if strings.Contains(page, "brand-tagline") || strings.Contains(page, "Always online") || strings.Contains(page, "\u59cb\u7ec8\u5728\u822a") {
+		t.Fatalf("upstream unavailable page must not show a slogan:\n%s", page)
+	}
+	if strings.Contains(page, "502") || strings.Contains(page, "nginx") {
+		t.Fatalf("upstream unavailable page must not expose technical details:\n%s", page)
 	}
 }
 

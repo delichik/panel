@@ -1,5 +1,11 @@
 # 前端模块
 
+## 品牌
+
+- 产品名已改为 Seamark（仅英文），界面内不再使用中文名称；品牌图标位于 `web/public/favicon.svg`，用于登录页、侧栏和 favicon。
+- 登录页底部与入口网关提示页底部保持一致的 Seamark 品牌 footer：图标 + 名称，固定于视口底部居中。
+- 内部标识如 `panel-agent`、`cmd/panel` 和 `--panel-*` token 暂未重命名，后续是否统一改名需另行确认。
+
 ## List And Refresh Contracts
 
 - Applications, servers, domain certificates, self-signed certificates, and key assets consume server-side `ListPage` responses.

@@ -53,7 +53,7 @@ const fail2banStates: Record<string, Fail2BanState> = {
     managed: false,
     panelConfigPresent: false,
     jails: ['sshd'],
-    raw: 'Existing fail2ban service is active. Confirm takeover before Panel writes panel.local.',
+    raw: 'Existing fail2ban service is active. Confirm takeover before Seamark writes panel.local.',
     configYaml: defaultYaml,
     config: { jails: [{ name: 'sshd', enabled: true, preset: 'ssh', filter: 'sshd', port: 'ssh', logpath: '/var/log/auth.log', backend: 'systemd', maxretry: 5 }] },
   },

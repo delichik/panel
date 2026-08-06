@@ -804,7 +804,7 @@ export function facilityStaticAssetContent(assetName: string): { name: string; c
 export function facilityDiagnostics(session: FacilityEditSession): Diagnostic[] {
   const issues: Diagnostic[] = [];
   if (!session.draft.deploymentServers.length) issues.push({ code: 'facility_gateway_servers_required', severity: 'error', field: 'deploymentServers', message: 'At least one gateway server is required.' });
-  if (session.draft.panelEntry.enabled && !session.draft.panelEntry.domain) issues.push({ code: 'facility_panel_entry_domain_invalid', severity: 'error', field: 'panelEntry.domain', message: 'Panel entry domain is required.' });
+  if (session.draft.panelEntry.enabled && !session.draft.panelEntry.domain) issues.push({ code: 'facility_panel_entry_domain_invalid', severity: 'error', field: 'panelEntry.domain', message: 'Seamark entry domain is required.' });
   if (session.draft.domains.some((domain) => domain.domain.includes('conflict'))) issues.push({ code: 'facility_domain_owner_conflict', severity: 'error', message: 'Domain is already used by another route.' });
   if (JSON.stringify(session.draft).length > 1200) issues.push({ code: 'facility_long_config', severity: 'warning', message: 'Gateway configuration is long.' });
   return issues;

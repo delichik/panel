@@ -1,8 +1,8 @@
-# Panel
+# Seamark
 
 [English](README.md) | 简体中文
 
-Panel 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规模自有服务器。它可以通过 SSH 接入 Debian 和 Ubuntu 服务器，查看基础健康状态，执行软件包维护，通过 panel-agent 和 Docker Engine API 部署容器应用，并在同一个 Web 界面里管理 DNS 和 ACME 证书。
+Seamark 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规模自有服务器。它可以通过 SSH 接入 Debian 和 Ubuntu 服务器，查看基础健康状态，执行软件包维护，通过 panel-agent 和 Docker Engine API 部署容器应用，并在同一个 Web 界面里管理 DNS 和 ACME 证书。
 
 这个项目面向两类人：想把服务器管得更省心的普通用户，以及愿意一起读代码、改代码、分享代码的人类协作者。它的技术结构尽量保持直接：Go 后端、Vue 前端、本地 SQLite 数据，以及一组容易运行的 Task 命令。
 
@@ -23,11 +23,11 @@ Panel 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小规
 
 ## 当前状态
 
-Panel 目前仍处于 alpha 阶段。它已经具备一些可用工作流，但配置、数据库迁移和界面行为仍可能随着项目发展而变化。建议先在开发环境或非关键服务器上试用；如果用于真实工作，请备份 Panel 数据卷。
+Seamark 目前仍处于 alpha 阶段。它已经具备一些可用工作流，但配置、数据库迁移和界面行为仍可能随着项目发展而变化。建议先在开发环境或非关键服务器上试用；如果用于真实工作，请备份 Seamark 数据卷。
 
 ## 支持的目标系统
 
-Panel 的系统支持范围是显式列出的，后续会逐步扩展。
+Seamark 的系统支持范围是显式列出的，后续会逐步扩展。
 
 当前支持：
 
@@ -43,7 +43,7 @@ Panel 的系统支持范围是显式列出的，后续会逐步扩展。
 
 说明：
 
-- Panel 通过 SSH 管理服务器。
+- Seamark 通过 SSH 管理服务器。
 - 支持密码和私钥两种 SSH 凭据。
 - 很多维护操作需要 root 或免密 sudo。
 - 软件包维护基于 APT。
@@ -51,16 +51,16 @@ Panel 的系统支持范围是显式列出的，后续会逐步扩展。
 
 ## 开始使用
 
-普通用户只通过容器部署 Panel：
+普通用户只通过容器部署 Seamark：
 
-- [使用 Docker Compose 或 Docker 部署 Panel](docs/deployment.zh-CN.md)
+- [使用 Docker Compose 或 Docker 部署 Seamark](docs/deployment.zh-CN.md)
 - [按照首次使用和应用部署说明完成配置](docs/user-guide.zh-CN.md)
 
 部署说明包含持久化、首次登录、HTTPS、备份、升级和常见问题；使用说明按照凭据、服务器、panel-agent、Docker 状态、第一个应用、域名证书、任务和日常维护的顺序介绍。
 
 ## 开发
 
-以下内容用于从源码开发 Panel，普通部署不需要这些工具或命令。
+以下内容用于从源码开发 Seamark，普通部署不需要这些工具或命令。
 
 ### 环境要求
 
@@ -111,7 +111,7 @@ task run:web
 
 ### 开发配置
 
-Panel 按以下顺序加载配置：
+Seamark 按以下顺序加载配置：
 
 1. 内置默认值。
 2. `PANEL_CONFIG` 指向的 JSON 配置文件。
@@ -122,7 +122,7 @@ Panel 按以下顺序加载配置：
 | 配置项 | 用途 | 默认值 |
 | --- | --- | --- |
 | `listenAddress` | 后端监听地址 | `127.0.0.1:8080` |
-| `dataRoot` | Panel 数据根目录 | `data` |
+| `dataRoot` | Seamark 数据根目录 | `data` |
 | `appDatabase` | 主 SQLite 数据库 | `data/db/app.db` |
 | `metricsDatabase` | 指标 SQLite 数据库 | `data/db/metrics.db` |
 | `certificates.acmeDirectoryUrl` | ACME 目录地址 | Let's Encrypt 正式环境 |
@@ -178,7 +178,7 @@ Dockerfile             生产容器构建
 
 ## 修改文案
 
-Panel 的界面文案支持英文和简体中文。修改应用内用户可见文案时，请遵守 `docs/agents/i18n-guide.md`，并同步更新 `docs/agents/i18n-translation-status.md`。
+Seamark 的界面文案支持英文和简体中文。修改应用内用户可见文案时，请遵守 `docs/agents/i18n-guide.md`，并同步更新 `docs/agents/i18n-translation-status.md`。
 
 ## 许可证
 

@@ -1,10 +1,10 @@
-# Deploy Panel
+# Deploy Seamark
 
 English | [简体中文](deployment.zh-CN.md)
 
-Panel is distributed as a container image. Use Docker Compose or Docker to run it.
+Seamark is distributed as a container image. Use Docker Compose or Docker to run it.
 
-> Panel is alpha software. Back up the Panel data volume before upgrades, and test important changes on non-critical systems first.
+> Seamark is alpha software. Back up the Seamark data volume before upgrades, and test important changes on non-critical systems first.
 
 ## Requirements
 
@@ -13,7 +13,7 @@ Panel is distributed as a container image. Use Docker Compose or Docker to run i
 - A supported host architecture: `amd64` or `arm64`.
 - An available TCP port for the web UI. The examples use port `8080`.
 
-The host running Panel is separate from the target servers that Panel manages. You do not need to mount the Panel host's Docker Socket into the Panel container.
+The host running Seamark is separate from the target servers that Seamark manages. You do not need to mount the Seamark host's Docker Socket into the Seamark container.
 
 ## Deploy with Docker Compose
 
@@ -42,7 +42,7 @@ volumes:
     name: panel-data
 ```
 
-Pull the image and start Panel:
+Pull the image and start Seamark:
 
 ```bash
 docker compose pull
@@ -56,13 +56,13 @@ docker compose ps
 docker compose logs --tail=100 panel
 ```
 
-After startup, make sure the Panel domain points to this host, then run on the host over SSH:
+After startup, make sure the Seamark domain points to this host, then run on the host over SSH:
 
 ```bash
 docker exec -it panel /app/panel setup
 ```
 
-Enter the host IP literal (IPv4 or IPv6), port, user, credential, and Panel domain. Panel connects back to the host over SSH, enrolls it, installs the Agent, records it as the singleton Panel host, and deploys Panel's own Nginx entrance. When setup completes, open the reported `http://<panel-domain>` URL. Setup is a convenience path; you can also sign in to the UI and enable the Panel access entry under **Applications → Facility Apps**, where the first save registers the chosen server as the host node.
+Enter the host IP literal (IPv4 or IPv6), port, user, credential, and Seamark domain. Seamark connects back to the host over SSH, enrolls it, installs the Agent, records it as the singleton Seamark host, and deploys Seamark's own Nginx entrance. When setup completes, open the reported `http://<panel-domain>` URL. Setup is a convenience path; you can also sign in to the UI and enable the Seamark access entry under **Applications → Facility Apps**, where the first save registers the chosen server as the host node.
 
 Setup is resumable. If Agent or entrance deployment fails, run the command again to continue from the saved stage. Passwords and private-key passphrases are read interactively and should not be passed as command arguments.
 
@@ -71,7 +71,7 @@ Default account:
 - Username: `admin`
 - Password: `admin`
 
-Panel requires a password change after the first login. Change it immediately before continuing with the [user guide](user-guide.md).
+Seamark requires a password change after the first login. Change it immediately before continuing with the [user guide](user-guide.md).
 
 ## Deploy with Docker
 
@@ -81,7 +81,7 @@ Create the persistent data volume:
 docker volume create panel-data
 ```
 
-Start Panel:
+Start Seamark:
 
 ```bash
 docker run -d \
@@ -103,29 +103,29 @@ Run `docker exec -it panel /app/panel setup`, then sign in to the reported domai
 
 ## Data Persistence
 
-All persistent Panel state is stored under `/app/data`, including:
+All persistent Seamark state is stored under `/app/data`, including:
 
 - Application, task, and metrics databases.
-- SSH credentials and provider credentials stored by Panel.
+- SSH credentials and provider credentials stored by Seamark.
 - Certificate and key assets.
-- Panel security settings and generated master keys.
+- Seamark security settings and generated master keys.
 - Backup and restore working data.
 
 The examples map `/app/data` to the named volume `panel-data`. Recreating or upgrading the container is safe only when the same volume is reused.
 
-Do not remove `panel-data` unless you intentionally want to erase the Panel instance.
+Do not remove `panel-data` unless you intentionally want to erase the Seamark instance.
 
-## Back Up Panel
+## Back Up Seamark
 
-The recommended backup path is **Settings → Backup and restore** in the Panel UI. A full export includes the databases, key material, and required metadata. Keep encrypted backup archives and their passwords in separate safe locations.
+The recommended backup path is **Settings → Backup and restore** in the Seamark UI. A full export includes the databases, key material, and required metadata. Keep encrypted backup archives and their passwords in separate safe locations.
 
-The export workflow temporarily switches Panel into a maintenance page. Sign in there, start the export, download the completed archive, and exit maintenance mode to return to normal operation.
+The export workflow temporarily switches Seamark into a maintenance page. Sign in there, start the export, download the completed archive, and exit maintenance mode to return to normal operation.
 
-Before an image upgrade, make a fresh full export. For an additional host-level snapshot, stop Panel and back up the `panel-data` Docker volume with your normal infrastructure backup tooling.
+Before an image upgrade, make a fresh full export. For an additional host-level snapshot, stop Seamark and back up the `panel-data` Docker volume with your normal infrastructure backup tooling.
 
-## Upgrade Panel
+## Upgrade Seamark
 
-Back up Panel before every upgrade. Database migrations run when the new version starts.
+Back up Seamark before every upgrade. Database migrations run when the new version starts.
 
 ### Docker Compose
 
@@ -157,7 +157,7 @@ docker run -d \
 
 Removing the container does not remove the named volume. Do not run `docker volume rm panel-data` during an upgrade.
 
-## Stop and Start Panel
+## Stop and Start Seamark
 
 With Docker Compose:
 
@@ -175,9 +175,9 @@ docker start panel
 
 ## Network and HTTPS
 
-The examples publish Panel port `8080` only on the host loopback interface. The public Panel entrance is deployed by the entrance gateway after `panel setup`; the raw Panel port does not need to be exposed publicly.
+The examples publish Seamark port `8080` only on the host loopback interface. The public Seamark entrance is deployed by the entrance gateway after `panel setup`; the raw Seamark port does not need to be exposed publicly.
 
-For a reverse proxy running on the same host, you can bind Panel to loopback instead:
+For a reverse proxy running on the same host, you can bind Seamark to loopback instead:
 
 ```yaml
 ports:
@@ -206,7 +206,7 @@ Confirm that the `panel-data` volume is writable and that the host architecture 
 
 ### Port 8080 is already in use
 
-Change only the host side of the port mapping. For example, publish Panel on host port `9080`:
+Change only the host side of the port mapping. For example, publish Seamark on host port `9080`:
 
 ```yaml
 ports:
@@ -217,7 +217,7 @@ Then open `http://<panel-host>:9080`.
 
 ### The page is not reachable from another machine
 
-Check the container status, host firewall, cloud security-group rules, and the published host port. If the mapping uses `127.0.0.1`, it is intentionally reachable only from the Panel host or a local reverse proxy.
+Check the container status, host firewall, cloud security-group rules, and the published host port. If the mapping uses `127.0.0.1`, it is intentionally reachable only from the Seamark host or a local reverse proxy.
 
 ### Data disappeared after recreating the container
 
@@ -228,4 +228,4 @@ docker inspect panel --format '{{json .Mounts}}'
 docker volume inspect panel-data
 ```
 
-Continue with [Using Panel](user-guide.md).
+Continue with [Using Seamark](user-guide.md).

@@ -136,8 +136,8 @@ function systemCertificates(): SystemCertificateDto[] {
     {
       id: 'agent-ca',
       type: 'ca_certificate',
-      name: 'Panel Agent CA',
-      commonName: 'Panel Agent Root CA',
+      name: 'Seamark Agent CA',
+      commonName: 'Seamark Agent Root CA',
       fingerprint: 'SHA256:3A:8F:42:19:CA:77:ED:0B:20:66:92:31:91:8B:AC',
       notBefore: '2026-01-01T00:00:00.000Z',
       notAfter: '2031-01-01T00:00:00.000Z',
@@ -148,7 +148,7 @@ function systemCertificates(): SystemCertificateDto[] {
     {
       id: 'agent-panel-client',
       type: 'tls_certificate',
-      name: 'Panel Agent client',
+      name: 'Seamark Agent client',
       commonName: 'panel-agent-client',
       fingerprint: 'SHA256:9C:12:DE:88:4A:11:07:C4:E2:58:D0:34:91:AB:71',
       notBefore: '2026-01-01T00:00:00.000Z',

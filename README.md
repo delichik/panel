@@ -1,12 +1,12 @@
-# Panel
+# Seamark
 
 English | [简体中文](README.zh-CN.md)
 
-Panel is an alpha-stage server operations panel for small Linux fleets. It helps you connect Debian and Ubuntu servers over SSH, see their health at a glance, run package maintenance, deploy container applications through panel-agent and Docker Engine API, and manage DNS and ACME certificates from one web UI.
+Seamark is an alpha-stage server operations panel for small Linux fleets. It helps you connect Debian and Ubuntu servers over SSH, see their health at a glance, run package maintenance, deploy container applications through panel-agent and Docker Engine API, and manage DNS and ACME certificates from one web UI.
 
 The project is built for people who run their own servers and for humans sharing code with each other. It aims to stay understandable: a Go backend, a Vue frontend, local SQLite data, and task commands that are easy to run.
 
-## What Panel Can Do
+## What Seamark Can Do
 
 - Add SSH credentials and register servers.
 - Probe server reachability, OS details, system traits, and passwordless sudo support.
@@ -23,11 +23,11 @@ The project is built for people who run their own servers and for humans sharing
 
 ## Status
 
-Panel is currently alpha software. It already has useful workflows, but you should expect changes in configuration, database migrations, and UI behavior as the project grows. Use it first on development or non-critical servers, and keep backups of the Panel data volume if you run it for real work.
+Seamark is currently alpha software. It already has useful workflows, but you should expect changes in configuration, database migrations, and UI behavior as the project grows. Use it first on development or non-critical servers, and keep backups of the Seamark data volume if you run it for real work.
 
 ## Supported Target Systems
 
-Panel support is intentionally explicit and will expand over time.
+Seamark support is intentionally explicit and will expand over time.
 
 Current supported systems:
 
@@ -51,16 +51,16 @@ Notes:
 
 ## Get Started
 
-Panel deployment is container-only for end users:
+Seamark deployment is container-only for end users:
 
-- [Deploy Panel with Docker Compose or Docker](docs/deployment.md)
+- [Deploy Seamark with Docker Compose or Docker](docs/deployment.md)
 - [Follow the first-use and application deployment guide](docs/user-guide.md)
 
 The deployment guide covers persistent storage, first login, HTTPS, backup, upgrades, and troubleshooting. The user guide walks through credentials, servers, panel-agent, Docker health, the first application, domains, certificates, tasks, and daily maintenance.
 
 ## Development
 
-The commands below are for working on Panel from source. They are not required for a normal deployment.
+The commands below are for working on Seamark from source. They are not required for a normal deployment.
 
 ### Requirements
 
@@ -107,11 +107,11 @@ task run:web
 
 Open `http://127.0.0.1:5173`. Vite proxies `/api` requests to the backend.
 
-The local development login is `admin/admin`. Panel requires a password change on first use.
+The local development login is `admin/admin`. Seamark requires a password change on first use.
 
 ### Development Configuration
 
-Panel loads configuration in this order:
+Seamark loads configuration in this order:
 
 1. Built-in defaults.
 2. The JSON file pointed to by `PANEL_CONFIG`.
@@ -122,7 +122,7 @@ Common config values:
 | Key | Purpose | Default |
 | --- | --- | --- |
 | `listenAddress` | Backend listen address | `127.0.0.1:8080` |
-| `dataRoot` | Root directory for Panel data | `data` |
+| `dataRoot` | Root directory for Seamark data | `data` |
 | `appDatabase` | Main SQLite database | `data/db/app.db` |
 | `metricsDatabase` | Metrics SQLite database | `data/db/metrics.db` |
 | `certificates.acmeDirectoryUrl` | ACME directory URL | Let's Encrypt production |
@@ -178,7 +178,7 @@ Useful entry points:
 
 ## Working With Text
 
-Panel has English and Simplified Chinese UI strings. When changing user-visible text in the application, follow the i18n guide in `docs/agents/i18n-guide.md` and keep `docs/agents/i18n-translation-status.md` up to date.
+Seamark has English and Simplified Chinese UI strings. When changing user-visible text in the application, follow the i18n guide in `docs/agents/i18n-guide.md` and keep `docs/agents/i18n-translation-status.md` up to date.
 
 ## License
 

@@ -1,10 +1,10 @@
-# 部署 Panel
+# 部署 Seamark
 
 [English](deployment.md) | 简体中文
 
-Panel 通过容器镜像发布。请使用 Docker Compose 或 Docker 运行。
+Seamark 通过容器镜像发布。请使用 Docker Compose 或 Docker 运行。
 
-> Panel 仍处于 alpha 阶段。升级前请备份 Panel 数据卷，重要变更建议先在非关键环境验证。
+> Seamark 仍处于 alpha 阶段。升级前请备份 Seamark 数据卷，重要变更建议先在非关键环境验证。
 
 ## 环境要求
 
@@ -13,7 +13,7 @@ Panel 通过容器镜像发布。请使用 Docker Compose 或 Docker 运行。
 - 主机架构为 `amd64` 或 `arm64`。
 - 一个可用于 Web 界面的 TCP 端口，本文示例使用 `8080`。
 
-运行 Panel 的主机与被 Panel 管理的目标服务器是两个概念。Panel 容器不需要挂载 Panel 主机的 Docker Socket。
+运行 Seamark 的主机与被 Seamark 管理的目标服务器是两个概念。Seamark 容器不需要挂载 Seamark 主机的 Docker Socket。
 
 ## 使用 Docker Compose 部署
 
@@ -42,7 +42,7 @@ volumes:
     name: panel-data
 ```
 
-拉取镜像并启动 Panel：
+拉取镜像并启动 Seamark：
 
 ```bash
 docker compose pull
@@ -56,13 +56,13 @@ docker compose ps
 docker compose logs --tail=100 panel
 ```
 
-启动后，先确认 Panel 域名已经指向当前宿主机，并通过 SSH 在宿主机执行：
+启动后，先确认 Seamark 域名已经指向当前宿主机，并通过 SSH 在宿主机执行：
 
 ```bash
 docker exec -it panel /app/panel setup
 ```
 
-按提示输入宿主机 IP 地址（IPv4 或 IPv6，必须是 IP 字面量）、端口、用户、凭据和 Panel 域名。Panel 会从容器通过 SSH 纳管当前宿主机、安装 Agent、将其登记为唯一 Panel 宿主节点，并部署 Panel 自身的 Nginx 入口。setup 成功后访问命令输出的 `http://<Panel域名>`。setup 只是便捷路径；也可以登录界面后在 **应用 → 设施应用** 中配置 Panel 访问入口，首次保存时会把所选服务器登记为宿主节点。
+按提示输入宿主机 IP 地址（IPv4 或 IPv6，必须是 IP 字面量）、端口、用户、凭据和 Seamark 域名。Seamark 会从容器通过 SSH 纳管当前宿主机、安装 Agent、将其登记为唯一 Seamark 宿主节点，并部署 Seamark 自身的 Nginx 入口。setup 成功后访问命令输出的 `http://<Seamark域名>`。setup 只是便捷路径；也可以登录界面后在 **应用 → 设施应用** 中配置 Seamark 访问入口，首次保存时会把所选服务器登记为宿主节点。
 
 setup 可重复执行；Agent 或入口部署失败时，再次执行会从已保存的阶段继续。SSH 密码和私钥口令通过交互输入，不应写入命令参数。
 
@@ -71,7 +71,7 @@ setup 可重复执行；Agent 或入口部署失败时，再次执行会从已�
 - 用户名：`admin`
 - 密码：`admin`
 
-Panel 会在首次登录后强制修改密码。完成修改后，再继续阅读[使用说明](user-guide.zh-CN.md)。
+Seamark 会在首次登录后强制修改密码。完成修改后，再继续阅读[使用说明](user-guide.zh-CN.md)。
 
 ## 使用 Docker 部署
 
@@ -81,7 +81,7 @@ Panel 会在首次登录后强制修改密码。完成修改后，再继续阅�
 docker volume create panel-data
 ```
 
-启动 Panel：
+启动 Seamark：
 
 ```bash
 docker run -d \
@@ -99,33 +99,33 @@ docker ps --filter name=panel
 docker logs --tail=100 panel
 ```
 
-运行 `docker exec -it panel /app/panel setup` 完成宿主节点和 Panel 入口初始化，再使用 `admin/admin` 登录命令输出的域名，并按提示修改密码。
+运行 `docker exec -it panel /app/panel setup` 完成宿主节点和 Seamark 入口初始化，再使用 `admin/admin` 登录命令输出的域名，并按提示修改密码。
 
 ## 数据持久化
 
-Panel 的所有持久化状态都保存在 `/app/data` 下，包括：
+Seamark 的所有持久化状态都保存在 `/app/data` 下，包括：
 
 - 应用、任务和指标数据库。
-- Panel 保存的 SSH 凭据和服务商凭据。
+- Seamark 保存的 SSH 凭据和服务商凭据。
 - 证书与密钥资产。
-- Panel 安全设置和自动生成的主密钥。
+- Seamark 安全设置和自动生成的主密钥。
 - 备份与还原工作数据。
 
 本文示例把 `/app/data` 映射到命名卷 `panel-data`。重新创建或升级容器时，必须继续使用同一个数据卷。
 
-除非确定要清空整个 Panel 实例，否则不要删除 `panel-data`。
+除非确定要清空整个 Seamark 实例，否则不要删除 `panel-data`。
 
-## 备份 Panel
+## 备份 Seamark
 
-推荐从 Panel 界面的 **设置 → 备份与还原** 执行备份。全量导出会包含数据库、密钥材料和必要元数据。加密备份文件和备份密码应分别保存在安全位置。
+推荐从 Seamark 界面的 **设置 → 备份与还原** 执行备份。全量导出会包含数据库、密钥材料和必要元数据。加密备份文件和备份密码应分别保存在安全位置。
 
-导出期间 Panel 会暂时进入维护页面。请在维护页登录、开始导出、下载完成的归档，然后退出维护模式以恢复正常运行。
+导出期间 Seamark 会暂时进入维护页面。请在维护页登录、开始导出、下载完成的归档，然后退出维护模式以恢复正常运行。
 
-升级镜像前应创建一份新的全量导出。如果还需要宿主机级快照，请先停止 Panel，再使用现有基础设施备份工具备份 Docker 的 `panel-data` 数据卷。
+升级镜像前应创建一份新的全量导出。如果还需要宿主机级快照，请先停止 Seamark，再使用现有基础设施备份工具备份 Docker 的 `panel-data` 数据卷。
 
-## 升级 Panel
+## 升级 Seamark
 
-每次升级前都应备份 Panel。新版本启动时会自动执行数据库迁移。
+每次升级前都应备份 Seamark。新版本启动时会自动执行数据库迁移。
 
 ### Docker Compose
 
@@ -157,7 +157,7 @@ docker run -d \
 
 删除容器不会删除命名卷。升级过程中不要执行 `docker volume rm panel-data`。
 
-## 停止与启动 Panel
+## 停止与启动 Seamark
 
 Docker Compose：
 
@@ -175,7 +175,7 @@ docker start panel
 
 ## 网络与 HTTPS
 
-本文示例只把 Panel 的 `8080` 端口发布到宿主机回环地址。Panel 自身的公网入口由 `panel setup` 纳管宿主机后部署的入口网关提供，不需要公开裸露的 8080 端口。
+本文示例只把 Seamark 的 `8080` 端口发布到宿主机回环地址。Seamark 自身的公网入口由 `panel setup` 纳管宿主机后部署的入口网关提供，不需要公开裸露的 8080 端口。
 
 如果反向代理运行在同一台主机，可以只绑定本机回环地址：
 
@@ -213,11 +213,11 @@ ports:
   - "9080:8080"
 ```
 
-之后访问 `http://<Panel主机地址>:9080`。
+之后访问 `http://<Seamark主机地址>:9080`。
 
 ### 其他设备无法打开页面
 
-检查容器状态、宿主机防火墙、云安全组和发布的宿主机端口。如果映射使用 `127.0.0.1`，Panel 将只能从本机或本机反向代理访问。
+检查容器状态、宿主机防火墙、云安全组和发布的宿主机端口。如果映射使用 `127.0.0.1`，Seamark 将只能从本机或本机反向代理访问。
 
 ### 重新创建容器后数据消失
 
@@ -228,4 +228,4 @@ docker inspect panel --format '{{json .Mounts}}'
 docker volume inspect panel-data
 ```
 
-继续阅读[使用 Panel](user-guide.zh-CN.md)。
+继续阅读[使用 Seamark](user-guide.zh-CN.md)。

@@ -31,6 +31,12 @@ const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
 
 const proxyBridgeLocalHost = "host.docker.internal"
 
+const (
+	proxyErrorPageDirectory     = proxyConfigRoot + "/errors"
+	proxyErrorPageContainerRoot = proxyContainerRoot + "/errors"
+	proxyErrorPagePath          = proxyConfigRoot + "/errors/upstream-unavailable.html"
+)
+
 // applicationReverseProxyRow 保持 reverse_proxy_json 原始字节，
 // 与存量行解析逻辑（[]applications.ReverseProxyRule）逐字节一致。
 type applicationReverseProxyRow struct {
@@ -716,6 +722,7 @@ func (s *Service) renderNginxConfig(ctx context.Context, serverID string, cfg Re
 		}
 		appendManagedFile(&files, appruntime.ManagedFile{Path: nginxDomainConfigPath(domain), Content: []byte(domainConfig.String()), Mode: "0644"})
 	}
+	appendManagedFile(&files, appruntime.ManagedFile{Path: proxyErrorPagePath, Content: proxyUpstreamUnavailablePageContent(), Mode: "0644"})
 	return mainConfig, mounts, files, nil
 }
 
@@ -905,8 +912,10 @@ func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, server
 		b.WriteString("        ssl_certificate_key " + certPath(serverCert.ID, "private-key") + ";\n")
 		b.WriteString("        add_header Alt-Svc 'h3=\":443\"; ma=86400' always;\n")
 	}
+	b.WriteString("    error_page 502 504 @panel_upstream_unavailable;\n")
 	if host.Relay != nil {
 		writeRelayLocation(b, domain, host.Relay, relayCert)
+		writeProxyErrorLocation(b)
 		b.WriteString("    }\n")
 		return
 	}
@@ -924,6 +933,17 @@ func writeProxyServer(b *strings.Builder, domain string, host *proxyHost, server
 	for _, route := range proxyRoutes {
 		writeProxyLocations(b, route, https, localUpstreamHost)
 	}
+	writeProxyErrorLocation(b)
+	b.WriteString("    }\n")
+}
+
+func writeProxyErrorLocation(b *strings.Builder) {
+	b.WriteString("    location @panel_upstream_unavailable {\n")
+	b.WriteString("        root " + proxyErrorPageContainerRoot + ";\n")
+	b.WriteString("        default_type text/html;\n")
+	b.WriteString("        charset utf-8;\n")
+	b.WriteString("        add_header Cache-Control \"no-store\" always;\n")
+	b.WriteString("        try_files /upstream-unavailable.html =404;\n")
 	b.WriteString("    }\n")
 }
 
