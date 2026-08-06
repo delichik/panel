@@ -758,6 +758,8 @@ http {
     client_header_buffer_size 32k;
     large_client_header_buffers 4 32k;
 
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
 
@@ -1015,7 +1017,7 @@ func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRout
 		}
 		options, _ := applications.NormalizeHTTPRouteOptions(routePath.Options, true, true, defaultWebSocketMode)
 		b.WriteString("        location " + pathValue + " {\n")
-		b.WriteString("            proxy_pass " + applicationProxyUpstream(route, localUpstreamHost) + ";\n")
+		writeApplicationProxyPass(b, route, localUpstreamHost)
 		b.WriteString("            proxy_set_header Host $host;\n")
 		b.WriteString("            proxy_set_header X-Real-IP $remote_addr;\n")
 		b.WriteString("            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n")
@@ -1028,6 +1030,19 @@ func writeProxyLocations(b *strings.Builder, route applications.ReverseProxyRout
 		applications.WriteNginxWebSocketOptions(b, options.WebSocketMode, "            ")
 		b.WriteString("        }\n")
 	}
+}
+
+func writeApplicationProxyPass(b *strings.Builder, route applications.ReverseProxyRoute, localUpstreamHost string) {
+	if strings.TrimSpace(route.TargetType) == applications.ReverseProxyTargetContainer {
+		container := strings.TrimSpace(route.TargetContainer)
+		if container != "" && validNginxValue(container) {
+			// Resolve at request time so Nginx can start before the target container exists.
+			b.WriteString("            set $panel_proxy_upstream " + container + ";\n")
+			b.WriteString("            proxy_pass http://$panel_proxy_upstream:" + strconv.Itoa(route.TargetPort) + ";\n")
+			return
+		}
+	}
+	b.WriteString("            proxy_pass " + applicationProxyUpstream(route, localUpstreamHost) + ";\n")
 }
 
 func writeRelayUpstream(b *strings.Builder, relay *proxyRelay, tls bool) {

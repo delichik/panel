@@ -56,6 +56,7 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 - 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
 - Panel 托管的 Nginx 配置目录只读挂载到独立的 `/etc/panel-nginx`，容器以 `nginx -c /etc/panel-nginx/nginx.conf` 显式启动；不得挂载或覆盖镜像原生 `/etc/nginx`，以保留 `mime.types` 等镜像资产。不能把主配置作为单文件 bind mount，否则宿主机原子 rename 后运行容器仍可能引用旧 inode。证书 managed directory 独立只读挂载到 `/etc/panel-certs`。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可使用显式指定 `/etc/panel-nginx/nginx.conf` 的 validate/reload，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
 - 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。
+- 容器目标的应用代理 location 使用 `$panel_proxy_upstream` 变量延迟解析，主配置固定写入 `resolver 127.0.0.11`。目标容器暂时不存在或未运行时，Nginx 仍能启动、校验和重载；请求会返回 502，容器恢复后可自动重新解析连通，无需再次保存或同步入口网关。
 - Panel 入口同样遵循入口容器网络模式：host network 使用 `127.0.0.1:8080`，`panel-apps` bridge 使用 `host.docker.internal:8080`。不得在 bridge 模式继续把 Panel upstream 指向入口容器自身的回环地址。
 - 静态站点配置保存域名、路径和宿主机根目录；部署时作为只读 bind mount 挂入 nginx 容器。
 - 应用里的 `reverseProxy` 规则只会被下发到反向代理设施应用覆盖的服务器；未指定为设施应用部署目标的服务器忽略这些规则。

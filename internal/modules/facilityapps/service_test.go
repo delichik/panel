@@ -350,6 +350,34 @@ func TestPanelEntryUsesHostGatewayInBridgeMode(t *testing.T) {
 	}
 }
 
+func TestContainerProxyTargetDefersUpstreamResolution(t *testing.T) {
+	svc := &Service{}
+	cfg := ReverseProxyConfig{DeploymentServers: []string{"srv-a"}}
+	apps := []applications.ApplicationReverseProxyConfig{{Routes: []applications.ReverseProxyRoute{{
+		Domain: "app.example.test", TargetType: applications.ReverseProxyTargetContainer, TargetContainer: "panel-cpa-private", TargetPort: 8080,
+		OriginServerIDs: []string{"srv-a"}, Paths: []applications.ReverseProxyPath{{Path: "/"}},
+	}}}}
+	mainConfig, _, files, err := svc.renderNginxConfig(context.Background(), "srv-a", cfg, apps, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(mainConfig, "resolver 127.0.0.11 valid=10s ipv6=off;") {
+		t.Fatalf("nginx main config missing Docker DNS resolver:\n%s", mainConfig)
+	}
+	text := managedConfigText(files)
+	for _, want := range []string{
+		"set $panel_proxy_upstream panel-cpa-private;",
+		"proxy_pass http://$panel_proxy_upstream:8080;",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("nginx config missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "proxy_pass http://panel-cpa-private:8080;") {
+		t.Fatalf("nginx config must not resolve container upstream at parse time:\n%s", text)
+	}
+}
+
 func TestReverseProxyFacilityPlansReload(t *testing.T) {
 	svc := &Service{}
 	plan := svc.PlanRuntimeUpdate(context.Background(), applications.Application{ID: proxyApplicationID}, server.Server{}, appruntime.Spec{}, appruntime.Spec{})
