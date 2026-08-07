@@ -20,6 +20,7 @@ AppShell
 - 导航定义在 `web/src/components/shell/navModel.ts`；新增导航项必须同步 i18n 和模块文档。
 - 侧边导航只放页面族入口，不展开页面内部 tab：例如安全只保留“安全”，资源只保留“资源”，证书只保留“证书”，应用只保留“应用”。`/security/firewall`、`/resources/containers`、`/certificates/keys` 等深链路继续由路由支持并在页面内切换 tab，但不得作为独立侧边菜单项。
 - 全局顶部条只承载当前路由标题、alpha 标识、主题、语言、账户和移动抽屉入口。页面主操作放 PageHeader actions，对象级操作放详情区。
+- 窄屏抽屉以 dialog 语义呈现（`role="dialog"` / `aria-modal` / `aria-label`），支持 Escape 关闭、焦点圈定与恢复、背景滚动锁定；打开后焦点自动移入抽屉，关闭后回到触发按钮。
 
 ## PageHeader
 

@@ -98,5 +98,6 @@
 - 溢出菜单承载次要/危险操作；Tooltip 用于解释图标按钮与截断文本，不承载关键信息。
 - 对话框、菜单、消息等浮层视觉由主题 token 统一（见 [visual-tokens.md](visual-tokens.md)），页面不自造浮层样式。
 - 对话框采用固定 header/footer 与唯一可滚动 body，打开后移动焦点、圈定 Tab、支持 Escape 关闭并恢复触发点焦点；不因点击遮罩关闭，只能通过关闭按钮、取消操作或 Escape 关闭。
+- 对话框与移动端侧边抽屉共享 `web/src/composables/useOverlayBehavior.ts` 的焦点圈定、Escape 关闭与焦点恢复逻辑；抽屉另以 dialog 语义呈现并锁定背景滚动。
 - Select 等可能出现在滚动容器中的浮层传送至顶层并按触发控件定位，避免被容器裁切。
 - `menu` / `tablist` 等 ARIA 角色必须同步实现对应方向键、Home/End、Escape（适用时）与焦点模型；Tabs 在中窄屏允许标签栏横向滚动。

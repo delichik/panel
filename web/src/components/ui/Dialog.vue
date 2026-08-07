@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { X } from '@lucide/vue';
-import { nextTick, onBeforeUnmount, ref, useId, watch } from 'vue';
+import { ref, useId } from 'vue';
 import { useI18n } from '@/i18n';
+import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import IconButton from './IconButton.vue';
 
 const props = defineProps<{
@@ -17,63 +18,16 @@ const { t } = useI18n();
 const dialog = ref<HTMLElement | null>(null);
 const titleId = useId();
 const descriptionId = useId();
-let restoreFocusTo: HTMLElement | null = null;
-
-const focusableSelector = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
 
 function close() {
   emit('update:open', false);
 }
 
-function focusableElements() {
-  return dialog.value ? Array.from(dialog.value.querySelectorAll<HTMLElement>(focusableSelector)) : [];
-}
-
-function onKeydown(event: KeyboardEvent) {
-  if (event.key === 'Escape') {
-    event.preventDefault();
-    close();
-    return;
-  }
-  if (event.key !== 'Tab') return;
-
-  const elements = focusableElements();
-  if (!elements.length) {
-    event.preventDefault();
-    dialog.value?.focus();
-    return;
-  }
-  const first = elements[0];
-  const last = elements[elements.length - 1];
-  if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.value)) {
-    event.preventDefault();
-    last?.focus();
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault();
-    first?.focus();
-  }
-}
-
-watch(() => props.open, async (open) => {
-  if (open) {
-    restoreFocusTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    await nextTick();
-    (focusableElements()[0] ?? dialog.value)?.focus();
-    return;
-  }
-  await nextTick();
-  restoreFocusTo?.focus();
-  restoreFocusTo = null;
-}, { immediate: true });
-
-onBeforeUnmount(() => restoreFocusTo?.focus());
+const { onKeydown } = useOverlayBehavior({
+  open: () => props.open,
+  containerRef: dialog,
+  onClose: close,
+});
 </script>
 
 <template>

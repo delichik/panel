@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Languages, Menu, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserCircle } from '@lucide/vue';
+import { Languages, Menu, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserCircle, X } from '@lucide/vue';
+import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import Badge from '@/components/ui/Badge.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
 import DropdownItem from '@/components/ui/DropdownItem.vue';
@@ -18,7 +19,23 @@ const session = useSessionStore();
 const { t, locale, setLocale } = useI18n();
 const { mode, resolved, setMode } = useThemeMode();
 const collapsed = ref(localStorage.getItem('panel.nav.collapsed') === 'true');
+const drawerId = useId();
 const drawerOpen = ref(false);
+const drawer = ref<HTMLElement | null>(null);
+const { onKeydown: onDrawerKeydown } = useOverlayBehavior({
+  open: () => drawerOpen.value,
+  containerRef: drawer,
+  onClose: () => {
+    drawerOpen.value = false;
+  },
+  lockScroll: true,
+});
+const lgQuery = typeof window.matchMedia === 'function' ? window.matchMedia('(min-width: 1024px)') : null;
+function closeDrawerOnDesktop(event: MediaQueryListEvent) {
+  if (event.matches) drawerOpen.value = false;
+}
+lgQuery?.addEventListener('change', closeDrawerOnDesktop);
+onBeforeUnmount(() => lgQuery?.removeEventListener('change', closeDrawerOnDesktop));
 const signingOut = ref(false);
 const activeKey = computed(() => activeNavKey(route.path));
 const title = computed(() => t(String(route.meta.titleKey || 'app.name')));
@@ -46,7 +63,7 @@ async function signOut() {
 </script>
 
 <template>
-  <div class="relative grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
+  <div class="relative grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :inert="drawerOpen || undefined" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
     <LoadingOverlay v-if="signingOut" />
     <aside class="hidden min-h-0 flex-col border-r border-border bg-card lg:flex">
       <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
@@ -78,7 +95,7 @@ async function signOut() {
     <main class="grid min-h-dvh min-w-0 grid-rows-[56px_auto] lg:min-h-0 lg:grid-rows-[56px_minmax(0,1fr)]">
       <header class="flex min-w-0 items-center justify-between gap-3 border-b border-border bg-background px-4">
         <div class="flex min-w-0 items-center gap-2">
-          <IconButton class="lg:hidden" :label="t('layout.nav.open')" @click="drawerOpen = true">
+          <IconButton class="lg:hidden" :label="t('layout.nav.open')" :aria-expanded="drawerOpen" :aria-controls="drawerId" aria-haspopup="dialog" @click="drawerOpen = true">
             <Menu />
           </IconButton>
           <IconButton class="hidden lg:inline-grid" :label="t('layout.nav.collapse')" @click="collapsed = !collapsed">
@@ -122,13 +139,27 @@ async function signOut() {
 
     <Teleport to="body">
       <div v-if="drawerOpen" class="fixed inset-0 z-50 bg-overlay lg:hidden" @click.self="drawerOpen = false">
-        <aside class="flex h-full w-[292px] max-w-[86vw] flex-col border-r border-border bg-card">
-          <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
-            <img src="/favicon.svg" class="size-9 rounded-xl" alt="" aria-hidden="true" />
-            <div class="min-w-0">
-              <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
-              <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+        <aside
+          :id="drawerId"
+          ref="drawer"
+          role="dialog"
+          aria-modal="true"
+          :aria-label="t('layout.main')"
+          tabindex="-1"
+          class="flex h-full w-[292px] max-w-[86vw] flex-col border-r border-border bg-card"
+          @keydown="onDrawerKeydown"
+        >
+          <div class="flex min-h-16 items-center justify-between gap-3 border-b border-border px-4">
+            <div class="flex min-w-0 items-center gap-3">
+              <img src="/favicon.svg" class="size-9 rounded-xl" alt="" aria-hidden="true" />
+              <div class="min-w-0">
+                <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
+                <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+              </div>
             </div>
+            <IconButton :label="t('common.close')" @click="drawerOpen = false">
+              <X />
+            </IconButton>
           </div>
           <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
             <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
