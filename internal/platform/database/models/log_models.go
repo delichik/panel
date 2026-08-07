@@ -50,6 +50,7 @@ func (*Task) ExtraIndexDDL() map[string][]string {
 			"CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(type, status)",
 			"CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_status ON tasks(concurrency_key, status)",
 			"CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id, child_index)",
+			"CREATE INDEX IF NOT EXISTS idx_tasks_status_next_run ON tasks(status, next_run_at)",
 		},
 	}
 }

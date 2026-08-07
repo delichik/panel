@@ -103,7 +103,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 ## 镜像更新
 
 - `image_updates` 保存每服务器镜像引用、本地摘要、远端摘要、状态、错误和检查时间。
-- `image_refreshes` 保存最近刷新时间。
+- `image_refreshes` 保存最近刷新时间。镜像更新状态由 Panel 每 30 分钟主动检查一次；Agent 发现 Docker image 事件时直接在 report stream 推送镜像快照（`images` 字段），Panel 落库 `docker_resource_snapshots`，作为周期检查之外的实时补充。
 - 镜像刷新必须在数据库事务外完成所有远端 registry digest 查询；结果准备完成后再用短事务原子替换 `image_updates` 并更新 `image_refreshes`，禁止在持有 SQLite 写锁时等待网络请求。
 - containers 模块注册的镜像检查周期与软件包刷新一致。
 - 所有带标签且可解析的镜像都显示更新状态；普通容器镜像不提供升级操作。
@@ -156,7 +156,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 ## Agent Report Cache
 
 - Container list reads use the latest `container_observations` snapshot saved from the agent report stream. They no longer pull `DockerContainers` during normal list or application reconciliation paths.
-- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report.
+- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report. Report 快照只包含协调与列表展示所需字段（id、names、image、state、status、ports、labels），不再携带 command/created/image_id/mounts；完整详情仍可按需通过 Docker 原子接口获取。
 - Application reconciliation collectors read cached observations only. A server that reports a failed container, stale generation/spec hash, or managed file manifest drift can cause the application planner to create or reuse a lifecycle target for that server without redeploying other servers that are already healthy.
 - `application_reconcile_states` keeps the exponential backoff state. Automatic reconciliation must honor `reconcile_next_run_at`; healthy observations clear failures only after the configured success streak.
 - Agent reports and forced/manual reconciliation triggers must not create another application target while the same app/server conflict domain already has an active lifecycle target. The application planner owns that durable in-flight check before lifecycle rows and task rows are created; report collectors only provide the requested app/server scope.

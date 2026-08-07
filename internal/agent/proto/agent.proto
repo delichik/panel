@@ -60,6 +60,8 @@ message AgentReport {
   MetricsSnapshotResponse metrics = 2;
   DockerContainersResponse containers = 3;
   string reason = 4;
+  PackageUpdatesResponse package_updates = 5;
+  DockerImagesResponse images = 6;
 }
 
 message AgentReportConfig {

@@ -232,13 +232,29 @@ func (r *LocalRuntime) ContainerEvents(ctx context.Context) (<-chan struct{}, <-
 	return events, errs
 }
 
+func (r *LocalRuntime) ImageEvents(ctx context.Context) (<-chan struct{}, <-chan error) {
+	events := make(chan struct{}, 16)
+	errs := make(chan error, 1)
+	go func() {
+		defer close(events)
+		defer close(errs)
+		if r == nil || r.client == nil {
+			errs <- errors.New("runtime is not configured")
+			return
+		}
+		if err := r.client.watchImageEvents(ctx, events); err != nil && ctx.Err() == nil {
+			errs <- err
+		}
+	}()
+	return events, errs
+}
+
 func (r *LocalRuntime) ContainerLogs(ctx context.Context, id string, tail int) (string, error) {
 	if r == nil || r.client == nil {
 		return "", errors.New("runtime is not configured")
 	}
 	return r.client.containerLogs(ctx, id, normalizeLogTail(tail))
 }
-
 func (r *LocalRuntime) PersistentArchive(ctx context.Context, applicationID string) ([]byte, error) {
 	if r == nil {
 		return nil, errors.New("runtime is not configured")
@@ -2034,6 +2050,46 @@ func (c *dockerAPIClient) watchContainerEvents(ctx context.Context, out chan<- s
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return dockerError(res, "watch container events")
+	}
+	decoder := json.NewDecoder(res.Body)
+	for ctx.Err() == nil {
+		var event map[string]any
+		if err := decoder.Decode(&event); err != nil {
+			if errors.Is(err, io.EOF) && ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		select {
+		case out <- struct{}{}:
+		default:
+		}
+	}
+	return ctx.Err()
+}
+
+func (c *dockerAPIClient) watchImageEvents(ctx context.Context, out chan<- struct{}) error {
+	filters, _ := json.Marshal(map[string][]string{
+		"type":  {"image"},
+		"event": {"pull", "tag", "untag", "delete", "import", "load", "save"},
+	})
+	query := url.Values{}
+	query.Set("filters", string(filters))
+	req, err := c.newRequest(ctx, http.MethodGet, "/events?"+query.Encode(), nil)
+	if err != nil {
+		return err
+	}
+	client := c.eventClient
+	if client == nil {
+		client = c.client
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerError(res, "watch image events")
 	}
 	decoder := json.NewDecoder(res.Body)
 	for ctx.Err() == nil {

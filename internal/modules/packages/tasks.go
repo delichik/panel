@@ -21,8 +21,8 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 		AllowRetry:  true,
 		Execute:     s.RunRefreshTask,
 		Periodic: &tasks.Periodic{
-			Interval:      time.Second,
-			CollectInputs: tasks.NewIntervalCollector(time.Minute, collectionInterval, s.CollectScheduledPackageRefreshInputs),
+			Interval:      30 * time.Minute,
+			CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectScheduledPackageRefreshInputs),
 		},
 	})
 	taskSvc.MustRegister(tasks.Definition{Type: "package_upgrade_selected", DisallowCancel: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed})

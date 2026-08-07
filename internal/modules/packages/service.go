@@ -87,6 +87,20 @@ func (s *Service) RefreshScheduled(ctx context.Context, serverID string, operati
 	return s.refresh(ctx, serverID, "scheduler", true, operationID)
 }
 
+// SaveReportedUpdates persists package update snapshots pushed by the agent
+// after a dpkg change, keeping the resources page near real-time without a
+// Panel-triggered refresh.
+func (s *Service) SaveReportedUpdates(ctx context.Context, serverID string, updates []linux.PackageUpdate) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	if err := s.replaceUpdates(ctx, serverID, updates); err != nil {
+		return err
+	}
+	_, err := orm.RawExec(ctx, s.db, `INSERT INTO package_refreshes(server_id,refreshed_at) VALUES(?,?) ON CONFLICT(server_id) DO UPDATE SET refreshed_at=excluded.refreshed_at`, serverID, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
 func (s *Service) refresh(ctx context.Context, serverID string, triggerType string, skipRecentFailure bool, operationID string) (RefreshResult, error) {
 	srv, err := s.ensurePackageAllowed(ctx, serverID, false)
 	if err != nil {

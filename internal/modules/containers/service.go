@@ -641,6 +641,16 @@ func (s *Service) RefreshImages(ctx context.Context, serverID, triggerType, oper
 	return task, nil
 }
 
+// SaveReportedImages persists image snapshots pushed by the agent after image
+// events (pull/tag/delete), keeping the resources page near real-time without a
+// Panel-triggered refresh.
+func (s *Service) SaveReportedImages(ctx context.Context, serverID string, items []agentcontract.DockerImage) error {
+	if s == nil {
+		return nil
+	}
+	return s.replaceResourceSnapshot(ctx, serverID, "images", items)
+}
+
 func (s *Service) RefreshAllScheduled(ctx context.Context) error {
 	servers, err := s.servers.List(ctx)
 	if err != nil {

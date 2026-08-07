@@ -629,6 +629,51 @@ func (s *Service) CountFailuresSinceLastSuccess(ctx context.Context, taskType, r
 	return int(failures), nil
 }
 
+// CleanupRetained deletes terminal task history older than retention in batches.
+// Child rows in task_steps/task_logs are removed explicitly so cleanup works
+// even without enforced foreign key cascades.
+func (s *Service) CleanupRetained(ctx context.Context, retention time.Duration) (int64, error) {
+	if retention <= 0 {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().Add(-retention).Format(time.RFC3339Nano)
+	var deleted int64
+	for {
+		ids := []string{}
+		if err := orm.New(s.db).From("tasks").
+			Where("status IN (?,?,?,?,?)", StatusCompleted, StatusFailed, StatusFailedRetryable, StatusBlocked, StatusCancelled).
+			And("COALESCE(finished_at,'') <> ''").
+			And("finished_at < ?", cutoff).
+			Limit(500).
+			Pluck(ctx, "id", &ids); err != nil {
+			return deleted, err
+		}
+		if len(ids) == 0 {
+			return deleted, nil
+		}
+		ph := placeholders(len(ids))
+		args := stringArgs(ids)
+		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_steps WHERE task_id IN (`+ph+`)`, args); err != nil {
+			return deleted, err
+		}
+		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_logs WHERE task_id IN (`+ph+`)`, args); err != nil {
+			return deleted, err
+		}
+		res, err := orm.RawExec(ctx, s.db, `DELETE FROM tasks WHERE id IN (`+ph+`)`, args)
+		if err != nil {
+			return deleted, err
+		}
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return deleted, err
+		}
+		deleted += affected
+		if len(ids) < 500 {
+			return deleted, nil
+		}
+	}
+}
+
 func (s *Service) Get(ctx context.Context, taskID string) (Task, error) {
 	var row taskRow
 	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).Where("id = ?", taskID).First(ctx, &row)

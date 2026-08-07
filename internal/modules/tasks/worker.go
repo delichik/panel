@@ -9,9 +9,9 @@ import (
 )
 
 const (
-	defaultQueuePollInterval   = time.Second
-	defaultCleanupInterval     = time.Second
-	defaultOrphanCheckInterval = 5 * time.Second
+	defaultQueuePollInterval   = 30 * time.Second
+	defaultCleanupInterval     = 30 * time.Second
+	defaultOrphanCheckInterval = 30 * time.Second
 )
 
 type Worker struct {

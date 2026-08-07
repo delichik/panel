@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -154,6 +155,8 @@ func (h *reportHub) run() {
 	eventCtx, stopEvents := context.WithCancel(context.Background())
 	defer stopEvents()
 	go h.watchContainerEvents(eventCtx)
+	go h.watchImageEvents(eventCtx)
+	go h.watchPackageEvents(eventCtx)
 	for {
 		watchers := h.snapshot()
 		if len(watchers) == 0 {
@@ -259,6 +262,135 @@ func (h *reportHub) watchContainerEvents(ctx context.Context) {
 		if backoff < 30*time.Second {
 			backoff *= 2
 		}
+	}
+}
+
+const (
+	imagePushMinInterval   = 30 * time.Second
+	packagePushMinInterval = 10 * time.Minute
+)
+
+func (h *reportHub) watchImageEvents(ctx context.Context) {
+	if h.runtime == nil {
+		return
+	}
+	backoff := time.Second
+	var lastPush time.Time
+	for ctx.Err() == nil {
+		events, errs := h.runtime.ImageEvents(ctx)
+		for events != nil || errs != nil {
+			select {
+			case <-ctx.Done():
+				return
+			case _, ok := <-events:
+				if !ok {
+					events = nil
+					continue
+				}
+				if time.Since(lastPush) < imagePushMinInterval {
+					continue
+				}
+				lastPush = time.Now()
+				h.pushImages(ctx, "image_change")
+			case err, ok := <-errs:
+				if !ok {
+					errs = nil
+					continue
+				}
+				if err != nil && ctx.Err() == nil {
+					logging.L().Warn("agent report image event watch failed", zap.Error(err))
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(backoff):
+		}
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+}
+
+const packageStatusPath = "/var/lib/dpkg/status"
+
+func (h *reportHub) watchPackageEvents(ctx context.Context) {
+	var lastMod time.Time
+	var lastPush time.Time
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		info, err := os.Stat(packageStatusPath)
+		if err != nil {
+			continue
+		}
+		mod := info.ModTime().UTC().Truncate(time.Second)
+		if lastMod.IsZero() {
+			lastMod = mod
+			continue
+		}
+		if !mod.After(lastMod) {
+			continue
+		}
+		lastMod = mod
+		if time.Since(lastPush) < packagePushMinInterval {
+			continue
+		}
+		lastPush = time.Now()
+		h.pushPackageUpdates(ctx)
+	}
+}
+
+func (h *reportHub) pushImages(ctx context.Context, reason string) {
+	pushCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	items, err := h.runtime.Images(pushCtx)
+	if err != nil {
+		logging.L().Warn("agent report image push failed", zap.Error(err))
+		return
+	}
+	out := make([]*agentpb.DockerImage, 0, len(items))
+	for _, item := range items {
+		out = append(out, pbDockerImage(item))
+	}
+	h.broadcastReport(&agentpb.AgentReport{
+		SampleAt: timestamppb.New(time.Now().UTC().Truncate(time.Second)),
+		Reason:   reason,
+		Images:   &agentpb.DockerImagesResponse{Items: out},
+	})
+}
+
+func (h *reportHub) pushPackageUpdates(ctx context.Context) {
+	pushCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+	defer cancel()
+	items, err := h.collector.PackageUpdates(pushCtx)
+	if err != nil {
+		logging.L().Warn("agent report package push failed", zap.Error(err))
+		return
+	}
+	h.broadcastReport(&agentpb.AgentReport{
+		SampleAt:       timestamppb.New(time.Now().UTC().Truncate(time.Second)),
+		Reason:         "package_change",
+		PackageUpdates: &agentpb.PackageUpdatesResponse{Items: pbPackageUpdates(items)},
+	})
+}
+
+func (h *reportHub) broadcastReport(report *agentpb.AgentReport) {
+	if report == nil {
+		return
+	}
+	watchers := h.snapshot()
+	for _, watcher := range watchers {
+		if watcher.cfg.serverID == "" {
+			continue
+		}
+		sendReport(watcher.ch, report)
 	}
 }
 
@@ -382,7 +514,7 @@ func (h *reportHub) reportContainers(ctx context.Context) ([]*agentpb.DockerCont
 	out := make([]*agentpb.DockerContainer, 0, len(items))
 	hash := sha256.New()
 	for _, item := range items {
-		out = append(out, pbDockerContainer(item))
+		out = append(out, pbDockerContainerSlim(item))
 		hashDockerContainer(hash, item)
 	}
 	return out, hex.EncodeToString(hash.Sum(nil)), nil

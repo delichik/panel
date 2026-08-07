@@ -42,11 +42,13 @@ type ReportConfig struct {
 }
 
 type AgentReport struct {
-	SampleAt      time.Time
-	Metrics       *linux.MetricsSnapshot
-	Containers    []agentcontract.DockerContainer
-	HasContainers bool
-	Reason        string
+	SampleAt       time.Time
+	Metrics        *linux.MetricsSnapshot
+	Containers     []agentcontract.DockerContainer
+	HasContainers  bool
+	Reason         string
+	PackageUpdates []linux.PackageUpdate
+	Images         []agentcontract.DockerImage
 }
 
 func NewGRPCClient(tlsAssets *agentsecurity.TLSAssets, timeout time.Duration) (*GRPCClient, error) {
@@ -474,6 +476,15 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 			report.Containers = make([]agentcontract.DockerContainer, 0, len(msg.Containers.Items))
 			for _, item := range msg.Containers.Items {
 				report.Containers = append(report.Containers, agentrpc.GoDockerContainer(item))
+			}
+		}
+		if msg.PackageUpdates != nil {
+			report.PackageUpdates = agentrpc.GoPackageUpdates(msg.PackageUpdates.Items)
+		}
+		if msg.Images != nil {
+			report.Images = make([]agentcontract.DockerImage, 0, len(msg.Images.Items))
+			for _, item := range msg.Images.Items {
+				report.Images = append(report.Images, agentrpc.GoDockerImage(item))
 			}
 		}
 		if handle != nil {

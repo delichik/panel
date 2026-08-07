@@ -45,6 +45,7 @@ type App struct {
 	mux            *http.ServeMux
 	auth           *auth.Service
 	tasks          *tasks.Worker
+	tasksCleanup   *tasks.CleanupWorker
 	metricsCleanup *metrics.CleanupWorker
 	eventCleanup   *runtimeevents.CleanupWorker
 	system         *systeminfo.Service
@@ -177,6 +178,7 @@ func New(cfg config.Config) (*App, error) {
 	systemSvc := systeminfo.NewService(nil)
 	systemSvc.Start(context.Background())
 	taskWorker := tasks.NewWorker(taskSvc)
+	taskCleanup := tasks.NewCleanupWorker(taskSvc)
 	diagnosticsSvc := diagnostics.NewServiceWithTaskRuntime(
 		taskWorker,
 		diagnostics.DatabaseSource{Name: "app", DB: store.AppDB(), Path: cfg.AppDatabase},
@@ -206,13 +208,14 @@ func New(cfg config.Config) (*App, error) {
 		MetricsDatabase: cfg.MetricsDatabase,
 		PanelVersion:    systemSvc.Version().Version,
 	})
-	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc)
+	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc, packageSvc)
 	a := &App{
 		cfg:            cfg,
 		store:          store,
 		mux:            http.NewServeMux(),
 		auth:           authSvc,
 		tasks:          taskWorker,
+		tasksCleanup:   taskCleanup,
 		metricsCleanup: metricsCleanup,
 		eventCleanup:   eventCleanup,
 		system:         systemSvc,
@@ -228,6 +231,7 @@ func New(cfg config.Config) (*App, error) {
 		return nil, err
 	}
 	taskWorker.Start(context.Background())
+	taskCleanup.Start(context.Background())
 	metricsCleanup.Start(context.Background())
 	eventCleanup.Start(context.Background())
 	reportCollector.Start(context.Background())
@@ -237,6 +241,7 @@ func New(cfg config.Config) (*App, error) {
 		controlServer, err = installation.StartControlServer(cfg.DataRoot, setupSvc)
 		if err != nil {
 			taskWorker.Stop()
+			taskCleanup.Stop()
 			metricsCleanup.Stop()
 			eventCleanup.Stop()
 			reportCollector.Stop()
@@ -261,6 +266,9 @@ func (a *App) Close() error {
 	}
 	if a.tasks != nil {
 		a.tasks.Stop()
+	}
+	if a.tasksCleanup != nil {
+		a.tasksCleanup.Stop()
 	}
 	if a.metricsCleanup != nil {
 		a.metricsCleanup.Stop()

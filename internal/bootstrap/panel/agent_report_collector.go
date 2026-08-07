@@ -13,6 +13,7 @@ import (
 	server "panel/internal/modules/servers"
 	"panel/internal/modules/settings"
 	"panel/internal/modules/tasks"
+	"panel/internal/platform/linux"
 	"panel/internal/platform/logging"
 
 	"go.uber.org/zap"
@@ -29,9 +30,15 @@ type agentReportCollector struct {
 	settings   *settings.Service
 	metrics    *metrics.Service
 	containers *containerization.Service
-	cancel     context.CancelFunc
-	mu         sync.Mutex
-	streams    map[string]*agentReportStream
+	images     interface {
+		SaveReportedImages(context.Context, string, []agentcontract.DockerImage) error
+	}
+	packages interface {
+		SaveReportedUpdates(context.Context, string, []linux.PackageUpdate) error
+	}
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	streams map[string]*agentReportStream
 }
 
 type agentReportStream struct {
@@ -44,13 +51,16 @@ type agentReportStream struct {
 
 func newAgentReportCollector(serverSvc interface {
 	List(context.Context) ([]server.Server, error)
-}, client *agentclient.GRPCClient, settingsSvc *settings.Service, metricsSvc *metrics.Service, containerSvc *containerization.Service) *agentReportCollector {
+}, client *agentclient.GRPCClient, settingsSvc *settings.Service, metricsSvc *metrics.Service, containerSvc *containerization.Service, packageSvc interface {
+	SaveReportedUpdates(context.Context, string, []linux.PackageUpdate) error
+}) *agentReportCollector {
 	c := &agentReportCollector{
 		servers:    serverSvc,
 		client:     client,
 		settings:   settingsSvc,
 		metrics:    metricsSvc,
 		containers: containerSvc,
+		packages:   packageSvc,
 		streams:    map[string]*agentReportStream{},
 	}
 	if recorder, ok := serverSvc.(interface {
@@ -86,7 +96,7 @@ func (c *agentReportCollector) Stop() {
 }
 
 func (c *agentReportCollector) run(ctx context.Context) {
-	ticker := time.NewTicker(time.Second)
+	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 	for {
 		c.sync(ctx)
@@ -258,9 +268,35 @@ func (c *agentReportCollector) runServerStream(ctx context.Context, srv server.S
 	}
 }
 
+func (c *agentReportCollector) saveReportedImages(ctx context.Context, serverID string, images []agentcontract.DockerImage) error {
+	if c.images == nil {
+		return nil
+	}
+	if err := c.images.SaveReportedImages(ctx, serverID, images); err != nil {
+		logging.L().Warn("agent image report save failed", zap.String("server_id", serverID), zap.Error(err))
+	}
+	return nil
+}
+
+func (c *agentReportCollector) savePackageUpdates(ctx context.Context, serverID string, updates []linux.PackageUpdate) error {
+	if c.packages == nil {
+		return nil
+	}
+	if err := c.packages.SaveReportedUpdates(ctx, serverID, updates); err != nil {
+		logging.L().Warn("agent package report save failed", zap.String("server_id", serverID), zap.Error(err))
+	}
+	return nil
+}
+
 func (c *agentReportCollector) handleReport(ctx context.Context, serverID string, report agentclient.AgentReport) error {
 	if report.SampleAt.IsZero() {
 		report.SampleAt = time.Now().UTC().Truncate(time.Second)
+	}
+	if len(report.PackageUpdates) > 0 {
+		c.savePackageUpdates(ctx, serverID, report.PackageUpdates)
+	}
+	if len(report.Images) > 0 {
+		c.saveReportedImages(ctx, serverID, report.Images)
 	}
 	rt := c.settings.Runtime()
 	if report.Metrics != nil && sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {

@@ -398,6 +398,14 @@ func pbDockerContainer(in agentcontract.DockerContainer) *agentpb.DockerContaine
 	return &agentpb.DockerContainer{Id: in.ID, Names: append([]string(nil), in.Names...), Image: in.Image, ImageId: in.ImageID, Command: in.Command, Created: in.Created, State: in.State, Status: in.Status, Ports: ports, Labels: cloneMap(in.Labels), Mounts: mounts}
 }
 
+func pbDockerContainerSlim(in agentcontract.DockerContainer) *agentpb.DockerContainer {
+	ports := make([]*agentpb.DockerPort, 0, len(in.Ports))
+	for _, item := range in.Ports {
+		ports = append(ports, &agentpb.DockerPort{Ip: item.IP, PrivatePort: int32(item.PrivatePort), PublicPort: int32(item.PublicPort), Type: item.Type})
+	}
+	return &agentpb.DockerContainer{Id: in.ID, Names: append([]string(nil), in.Names...), Image: in.Image, State: in.State, Status: in.Status, Ports: ports, Labels: cloneMap(in.Labels)}
+}
+
 func goDockerContainer(in *agentpb.DockerContainer) agentcontract.DockerContainer {
 	if in == nil {
 		return agentcontract.DockerContainer{}

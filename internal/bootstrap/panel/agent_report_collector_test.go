@@ -24,7 +24,7 @@ func TestSampleAligned(t *testing.T) {
 
 func TestAgentReportStreamEndpointChangeKeepsNewEntry(t *testing.T) {
 	recorder := &fakeReportServerProvider{servers: []server.Server{reportReadyServer("srv-1", "https://127.0.0.1:9786")}}
-	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil)
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
 	ctx := context.Background()
 
 	collector.ensureStream(ctx, recorder.servers[0])
@@ -47,7 +47,7 @@ func TestAgentReportStreamEndpointChangeKeepsNewEntry(t *testing.T) {
 
 func TestAgentReportAuditMarksSilentStreamDisconnected(t *testing.T) {
 	recorder := &fakeReportServerProvider{}
-	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil)
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
 	cancelled := false
 	collector.streams["srv-1"] = &agentReportStream{
 		serverID:  "srv-1",
@@ -74,7 +74,7 @@ func TestAgentReportAuditMarksSilentStreamDisconnected(t *testing.T) {
 
 func TestAgentReportMarkConnectedUpdatesLastMessage(t *testing.T) {
 	recorder := &fakeReportServerProvider{}
-	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil)
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
 	entry := &agentReportStream{serverID: "srv-1", endpoint: "https://127.0.0.1:9786", cancel: func() {}, startedAt: time.Now().UTC()}
 	collector.streams["srv-1"] = entry
 	sampleAt := time.Unix(30, 0).UTC()

@@ -67,13 +67,15 @@
 - Debug 快照会只读导出任务注册定义的稳定诊断字段，包括隐藏、执行器、周期配置、手动运行/重试、默认重试、并发策略和 stale queued 超时；不得导出任务参数、collector 输入或业务数据。
 - 任务进入 `completed`、`failed`、`failed_retryable`、`blocked` 或 `cancelled` 等终态后，后台 worker 后续的完成/失败/重试写入不得覆盖既有终态；服务器删除会把该服务器的 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务标记为 `cancelled`，避免卡住删除或被调度器继续捡起。
 - `FinishExecution` 只在数据库中的任务状态已经不再是 `running` 时清理内存执行对象；如果终态写库失败导致数据库仍为 `running`，必须保留 execution，避免 orphan 检查误判。
-- Panel 启动时以及 tasks 内部 worker 运行期间每 5 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
+- Panel 启动时以及 tasks 内部 worker 运行期间每 30 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用、fail2ban 应用，必须在 API 返回前先标记为 `running`。`server_agent_deploy` 虽然也由内存 goroutine 执行，但必须接入调度器 `run-now` / `retry`，用于恢复旧的排队部署任务并重新同步 agent 证书。
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - tasks 内部 worker 负责驱动注册的周期任务、唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。
-- tasks 内部 worker 每 1 秒扫描一次 `queued`、`scheduled` 和到期 `failed_retryable` 任务作为兜底唤醒；业务模块如果已经有自己的即时 dispatcher，仍应在创建任务后主动启动执行，不能依赖轮询满足低延迟契约。
+- tasks 内部 worker 每 30 秒扫描一次 `queued`、`scheduled` 和到期 `failed_retryable` 任务作为兜底唤醒；队列唤醒、stale queued 清理和 orphan 检查统一为 30 秒一次，业务模块如果已经有自己的即时 dispatcher，仍应在创建任务后主动启动执行，不能依赖轮询满足低延迟契约。
+- 终态任务历史默认保留 30 天：`tasks.CleanupWorker` 每小时按 `finished_at` 分批删除超期 `tasks`/`task_steps`/`task_logs`；`tasks` 表维护 `(status, next_run_at)` 索引支撑到期查询与 orphan 检查，防止任务表无限增长拖慢轮询。
+- 证书续签、镜像刷新和软件包刷新的周期采集统一为 30 分钟一次；`application_reconcile` 保持 5 秒采集频率以满足容器变化即时性。
 - 全量备份导出不在正常业务运行期执行。设置页只写 pending export 并提示重启；下一次启动进入备份导出维护模式，此时正常 tasks worker 与周期驱动尚未启动，导出进度本身不依赖任务系统。
 - 到期队列唤醒直接扫描注册表中带 executor 的定义，并统一调用 `tasks.Manager.Run`；不得注册或持久化 `task_queue_drain`，不得直接调用 `Definition.Execute` 绕过任务启动、execution registry、hook、完成和失败落库。
 - 业务是否需要周期执行以及本轮执行参数由对应任务定义的 `Periodic.CollectInputs` 判断和生成；任务执行函数只消费已经落到任务输入中的参数，不在执行阶段重新扫描本轮资源列表。

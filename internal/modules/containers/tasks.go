@@ -23,8 +23,8 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 			AllowRetry: true,
 			Execute:    s.RunImageRefreshTask,
 			Periodic: &tasks.Periodic{
-				Interval:      5 * time.Second,
-				CollectInputs: tasks.NewIntervalCollector(time.Minute, collectionInterval, s.CollectImageRefreshInputs),
+				Interval:      30 * time.Minute,
+				CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectImageRefreshInputs),
 			},
 		},
 		{

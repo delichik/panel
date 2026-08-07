@@ -32,8 +32,8 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
 			Execute:           s.RenewTask,
 			Periodic: &tasks.Periodic{
-				Interval:      5 * time.Second,
-				CollectInputs: tasks.NewIntervalCollector(time.Hour, nil, s.CollectRenewInputs),
+				Interval:      30 * time.Minute,
+				CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectRenewInputs),
 			},
 		},
 		{Type: TaskTypeSelfSignedRenew, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},

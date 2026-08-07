@@ -231,9 +231,6 @@ func (s *Service) List(ctx context.Context) ([]Server, error) {
 	for i := range out {
 		out[i] = s.prepareServerForRead(ctx, out[i])
 	}
-	for i := range out {
-		out[i].LoadAverage = s.latestLoadAverage(ctx, out[i].ID)
-	}
 	return out, nil
 }
 
