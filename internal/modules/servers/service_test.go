@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1938,13 +1939,16 @@ type errString string
 func (e errString) Error() string { return string(e) }
 
 type serverFakeAgentClient struct {
-	ufwURL       string
-	ufw          remoteops.UFWStatus
-	health       agentcontract.HealthResponse
-	osRelease    linux.OSRelease
-	systemTraits map[string]string
-	err          error
-	allowedRule  remoteops.UFWRule
+	ufwURL              string
+	ufw                 remoteops.UFWStatus
+	health              agentcontract.HealthResponse
+	osRelease           linux.OSRelease
+	systemTraits        map[string]string
+	err                 error
+	allowedRule         remoteops.UFWRule
+	capabilities        []string
+	prepareRestartErr   error
+	prepareRestartCalls int
 }
 
 func agentHealth(version string) agentcontract.HealthResponse {
@@ -1960,6 +1964,9 @@ func agentHealth(version string) agentcontract.HealthResponse {
 func (f *serverFakeAgentClient) Health(context.Context, string) (agentcontract.HealthResponse, error) {
 	if f.health.Version == "" {
 		f.health = agentHealth(agentcontract.Version)
+	}
+	if f.capabilities != nil {
+		f.health.Capabilities = f.capabilities
 	}
 	return f.health, f.err
 }
@@ -2012,6 +2019,11 @@ func (f *serverFakeAgentClient) ReleaseFail2Ban(context.Context, string) (agentc
 }
 func (f *serverFakeAgentClient) RestartSystem(context.Context, string) error {
 	return f.err
+}
+
+func (f *serverFakeAgentClient) PrepareRestart(context.Context, string) error {
+	f.prepareRestartCalls++
+	return f.prepareRestartErr
 }
 
 type failingConnectivityExec struct{}
@@ -2093,4 +2105,257 @@ func waitServerReady(t *testing.T, svc *Service, serverID string) Server {
 	}
 	t.Fatalf("server did not become ready: %#v", srv)
 	return Server{}
+}
+
+func waitDeployTaskTerminal(t *testing.T, taskSvc *tasks.Service, taskID string) tasks.Task {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		task, err := taskSvc.Get(context.Background(), taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if task.Status == tasks.StatusCompleted || task.Status == tasks.StatusFailed || task.Status == tasks.StatusFailedRetryable || task.Status == tasks.StatusBlocked || task.Status == tasks.StatusCancelled {
+			return task
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("deploy task did not finish")
+	return tasks.Task{}
+}
+func agentHealthWithPrepareRestart(version string) agentcontract.HealthResponse {
+	health := agentHealth(version)
+	health.Capabilities = append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart)
+	return health
+}
+
+type trackingAgentDeployExec struct {
+	agentArchFakeExec
+	uploads int
+}
+
+func (f *trackingAgentDeployExec) Upload(ctx context.Context, target sshx.Target, spec sshx.UploadSpec) error {
+	f.uploads++
+	return nil
+}
+
+func withAgentBundleRoot(t *testing.T, root string) {
+	t.Helper()
+	old := agentBundleRoot
+	agentBundleRoot = root
+	t.Cleanup(func() { agentBundleRoot = old })
+}
+
+func newDeployTestService(t *testing.T, traits map[string]string) (*Service, *tasks.Service, string, *trackingAgentDeployExec, *serverFakeAgentClient) {
+	t.Helper()
+	createSvc, taskSvc, store := testServerService(t, nil)
+	srv, err := createSvc.Create(context.Background(), SaveRequest{Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setServerTraits(t, store, srv.ID, traits)
+	setServerArchitecture(t, store, srv.ID)
+	assets, err := agentsecurity.EnsureTLSAssets(filepath.Join(t.TempDir(), "data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &trackingAgentDeployExec{agentArchFakeExec: agentArchFakeExec{arch: "x86_64"}}
+	svc := newServerServiceForTest(store, exec, taskSvc)
+	svc.SetAgentTLSAssets(assets)
+	agent := &serverFakeAgentClient{}
+	svc.SetAgentClient(agent)
+	return svc, taskSvc, srv.ID, exec, agent
+}
+
+func writeAgentBundle(t *testing.T) {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "linux-amd64"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "linux-amd64", "panel-agent"), []byte("test binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	withAgentBundleRoot(t, root)
+}
+
+func TestAgentDeployVersionMismatchWaitsForReadyBeforeUpgrade(t *testing.T) {
+	traits := map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
+		agentcontract.TraitVersion: "0.1.0",
+	}
+	svc, taskSvc, serverID, exec, agent := newDeployTestService(t, traits)
+	agent.health = agentHealthWithPrepareRestart(agentcontract.Version)
+	writeAgentBundle(t)
+
+	task, err := svc.DeployAgent(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitDeployTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed deploy, got %#v", finished)
+	}
+	if agent.prepareRestartCalls != 1 {
+		t.Fatalf("expected restart readiness check for version mismatch, got %d", agent.prepareRestartCalls)
+	}
+	if exec.uploads != 1 {
+		t.Fatalf("expected binary upload for version mismatch, got %d", exec.uploads)
+	}
+}
+
+func TestAgentDeployRestartOnlyDoesNotUploadBinary(t *testing.T) {
+	traits := map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
+		agentcontract.TraitVersion: agentcontract.Version,
+	}
+	svc, taskSvc, serverID, exec, agent := newDeployTestService(t, traits)
+	agent.health = agentHealthWithPrepareRestart(agentcontract.Version)
+
+	task, err := svc.DeployAgent(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitDeployTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed restart-only deploy, got %#v", finished)
+	}
+	if agent.prepareRestartCalls != 1 {
+		t.Fatalf("expected restart readiness check before restart, got %d", agent.prepareRestartCalls)
+	}
+	if exec.uploads != 0 {
+		t.Fatalf("expected no binary upload for restart-only deploy, got %d", exec.uploads)
+	}
+}
+
+func TestAgentDeploySkipsReadinessCheckForOldAgent(t *testing.T) {
+	traits := map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
+		agentcontract.TraitVersion: "0.1.0",
+	}
+	svc, taskSvc, serverID, exec, agent := newDeployTestService(t, traits)
+	// Old agent health advertises only the legacy capabilities, so the
+	// readiness RPC must not be attempted and the deploy proceeds directly.
+	agent.health = agentHealth(agentcontract.Version)
+	writeAgentBundle(t)
+
+	task, err := svc.DeployAgent(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitDeployTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusCompleted {
+		t.Fatalf("expected completed deploy, got %#v", finished)
+	}
+	if agent.prepareRestartCalls != 0 {
+		t.Fatalf("expected no readiness check for old agent, got %d", agent.prepareRestartCalls)
+	}
+	if exec.uploads != 1 {
+		t.Fatalf("expected binary upload for version mismatch, got %d", exec.uploads)
+	}
+}
+
+func TestAgentDeployProceedsWhenReadinessCheckFails(t *testing.T) {
+	traits := map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
+		agentcontract.TraitVersion: "0.1.0",
+	}
+	svc, taskSvc, serverID, exec, agent := newDeployTestService(t, traits)
+	agent.health = agentHealthWithPrepareRestart(agentcontract.Version)
+	agent.prepareRestartErr = errString("readiness stream failed")
+	writeAgentBundle(t)
+
+	task, err := svc.DeployAgent(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finished := waitDeployTaskTerminal(t, taskSvc, task.ID)
+	if finished.Status != tasks.StatusCompleted {
+		t.Fatalf("expected deploy to proceed after readiness check failure, got %#v", finished)
+	}
+	if agent.prepareRestartCalls != 1 {
+		t.Fatalf("expected readiness check to be attempted, got %d", agent.prepareRestartCalls)
+	}
+	if exec.uploads != 1 {
+		t.Fatalf("expected binary upload after readiness failure, got %d", exec.uploads)
+	}
+}
+
+func TestAgentNeedsBinaryUpgrade(t *testing.T) {
+	base := map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
+		agentcontract.TraitVersion: agentcontract.Version,
+	}
+	serverWith := func(traits map[string]string) Server {
+		return Server{Host: "127.0.0.1", Traits: traits}
+	}
+	if agentNeedsBinaryUpgrade(serverWith(base)) {
+		t.Fatal("expected matching configured agent to use restart-only path")
+	}
+	mismatch := serverWith(cloneTraits(base))
+	mismatch.Traits[agentcontract.TraitVersion] = "0.1.0"
+	if !agentNeedsBinaryUpgrade(mismatch) {
+		t.Fatal("expected version mismatch to require binary upgrade")
+	}
+	noURL := serverWith(map[string]string{agentcontract.TraitEnabled: "true"})
+	if !agentNeedsBinaryUpgrade(noURL) {
+		t.Fatal("expected unconfigured agent to require full install")
+	}
+	unhealthy := serverWith(cloneTraits(base))
+	unhealthy.Traits[agentcontract.TraitStatus] = agentcontract.StatusUnavailable
+	if !agentNeedsBinaryUpgrade(unhealthy) {
+		t.Fatal("expected unavailable agent to require full install")
+	}
+	noVersion := serverWith(cloneTraits(base))
+	delete(noVersion.Traits, agentcontract.TraitVersion)
+	if !agentNeedsBinaryUpgrade(noVersion) {
+		t.Fatal("expected missing version to require full install")
+	}
+}
+
+func cloneTraits(in map[string]string) map[string]string {
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func TestPrepareAgentRestartGatesOnCapability(t *testing.T) {
+	svc, _, serverID, _, _ := newDeployTestService(t, map[string]string{
+		agentcontract.TraitEnabled: "true",
+		agentcontract.TraitURL:     "https://127.0.0.1:9786",
+		agentcontract.TraitStatus:  agentcontract.StatusIncompatible,
+		agentcontract.TraitVersion: agentcontract.Version,
+	})
+	srv, err := svc.Get(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAgentClient(&serverFakeAgentClient{health: agentHealth(agentcontract.Version)})
+	if err := svc.prepareAgentRestart(context.Background(), srv); err != nil {
+		t.Fatalf("expected old agent without capability to skip readiness check: %v", err)
+	}
+	agent := &serverFakeAgentClient{health: agentHealthWithPrepareRestart(agentcontract.Version)}
+	svc.SetAgentClient(agent)
+	if err := svc.prepareAgentRestart(context.Background(), srv); err != nil {
+		t.Fatalf("expected readiness check to pass: %v", err)
+	}
+	if agent.prepareRestartCalls != 1 {
+		t.Fatalf("expected readiness RPC to be called, got %d", agent.prepareRestartCalls)
+	}
+	agent.prepareRestartErr = errString("readiness failed")
+	if err := svc.prepareAgentRestart(context.Background(), srv); err == nil {
+		t.Fatal("expected readiness failure to propagate")
+	}
 }

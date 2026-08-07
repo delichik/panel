@@ -40,6 +40,11 @@ const (
 	ReportStatusDisconnected = "disconnected"
 
 	DefaultDockerHost = "unix:///var/run/docker.sock"
+
+	CapabilityPrepareRestart = "prepare-restart"
+
+	PrepareRestartStateHoldOn = "holdon"
+	PrepareRestartStateReady  = "ready"
 )
 
 var (
@@ -53,6 +58,14 @@ type Client interface {
 	SystemTraits(ctx context.Context, url string) (map[string]string, error)
 	MetricsSnapshot(ctx context.Context, url string, serverID string) (linux.MetricsSnapshot, error)
 	UFWStatus(ctx context.Context, url string) (remoteops.UFWStatus, error)
+}
+
+// RestartReadinessClient coordinates with a running agent before Panel stops or
+// restarts it. PrepareRestart returns nil once the agent confirms it is safe to
+// restart (state "ready"); it blocks while the agent reports "holdon" and
+// returns when the stream ends or the context is cancelled.
+type RestartReadinessClient interface {
+	PrepareRestart(ctx context.Context, url string) error
 }
 
 type MaintenanceClient interface {

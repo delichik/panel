@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
@@ -276,21 +277,37 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	defer s.tasks.FinishExecution(taskID)
 	runner := remoteops.Runner{Exec: s.exec, Target: serverTarget(srv), Log: serverTaskLogSink{s.tasks, taskID}}
 	_ = s.tasks.Advance(ctx, taskID, "preparing", "preparing panel agent deployment")
+	// Before any stop/restart action, ask the running agent whether it is safe
+	// to restart. Agents too old to support the RPC, or unreachable agents,
+	// fall back to proceeding directly; cancellation aborts the deployment.
+	if _, configured := agentURL(srv); configured {
+		_ = s.tasks.Advance(ctx, taskID, "checking", "waiting for agent restart readiness")
+		if err := s.prepareAgentRestart(ctx, srv); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			_ = s.tasks.AppendLog(ctx, taskID, "system", "agent restart readiness check skipped: "+err.Error())
+		}
+	}
 	bundle, err := s.IssueAgentCertificate(ctx, srv.ID)
 	if err != nil {
 		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
-	executable, err := s.agentBinaryPath(ctx, srv)
-	if err != nil {
-		s.failAgentDeployTask(ctx, taskID, srv, err)
-		return
-	}
-	remoteTmp := "/tmp/panel-agent-" + taskID
-	_ = s.tasks.Advance(ctx, taskID, "uploading", "uploading panel agent binary")
-	if err := s.exec.Upload(ctx, serverTarget(srv), sshx.UploadSpec{LocalPath: executable, RemotePath: remoteTmp}); err != nil {
-		s.failAgentDeployTask(ctx, taskID, srv, err)
-		return
+	upgrade := agentNeedsBinaryUpgrade(srv)
+	var remoteTmp string
+	if upgrade {
+		executable, err := s.agentBinaryPath(ctx, srv)
+		if err != nil {
+			s.failAgentDeployTask(ctx, taskID, srv, err)
+			return
+		}
+		remoteTmp = "/tmp/panel-agent-" + taskID
+		_ = s.tasks.Advance(ctx, taskID, "uploading", "uploading panel agent binary")
+		if err := s.exec.Upload(ctx, serverTarget(srv), sshx.UploadSpec{LocalPath: executable, RemotePath: remoteTmp}); err != nil {
+			s.failAgentDeployTask(ctx, taskID, srv, err)
+			return
+		}
 	}
 	_ = s.tasks.Advance(ctx, taskID, "configuring", "installing panel agent configuration")
 	files := []struct {
@@ -314,10 +331,18 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
-	_ = s.tasks.Advance(ctx, taskID, "starting", "starting panel agent service")
-	if _, err := runner.RunSudoLogged(ctx, agentInstallScript(remoteTmp), agentDeployTimeout); err != nil {
-		s.failAgentDeployTask(ctx, taskID, srv, err)
-		return
+	if upgrade {
+		_ = s.tasks.Advance(ctx, taskID, "starting", "starting panel agent service")
+		if _, err := runner.RunSudoLogged(ctx, agentInstallScript(remoteTmp), agentDeployTimeout); err != nil {
+			s.failAgentDeployTask(ctx, taskID, srv, err)
+			return
+		}
+	} else {
+		_ = s.tasks.Advance(ctx, taskID, "restarting", "restarting panel agent service")
+		if _, err := runner.RunSudoLogged(ctx, agentRestartScript(), agentDeployTimeout); err != nil {
+			s.failAgentDeployTask(ctx, taskID, srv, err)
+			return
+		}
 	}
 	if err := verifyRemoteAgentServedCertificate(ctx, runner, bundle); err != nil {
 		s.failAgentDeployTask(ctx, taskID, srv, err)
@@ -364,6 +389,62 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 	_ = s.tasks.Complete(ctx, taskID, "Panel agent deployed")
 }
 
+// agentNeedsBinaryUpgrade reports whether the deploy task must upload a new
+// agent binary. Fresh installs, unknown or mismatched versions, and agents in
+// an unhealthy state take the full install path; certificate and URL renewals
+// of a healthy matching agent only need a service restart.
+func agentNeedsBinaryUpgrade(srv Server) bool {
+	if _, configured := agentURL(srv); !configured {
+		return true
+	}
+	version := strings.TrimSpace(srv.Traits[agentcontract.TraitVersion])
+	if version == "" || version != agentcontract.Version {
+		return true
+	}
+	switch srv.Traits[agentcontract.TraitStatus] {
+	case agentcontract.StatusCompatible, agentcontract.StatusIncompatible:
+		return false
+	default:
+		return true
+	}
+}
+
+func hasAgentCapability(capabilities []string, capability string) bool {
+	for _, value := range capabilities {
+		if strings.TrimSpace(value) == capability {
+			return true
+		}
+	}
+	return false
+}
+
+// prepareAgentRestart asks the running agent whether it is safe to restart it.
+// It returns nil when the agent reports ready, when the agent is too old to
+// support the RPC, or when the configured client does not implement the
+// readiness interface, so deployments can proceed for older or unreachable
+// agents. Other errors (network, TLS, agent failures) are returned and logged
+// by the caller, which still proceeds with the deployment.
+func (s *Service) prepareAgentRestart(ctx context.Context, srv Server) error {
+	if s.agent == nil {
+		return nil
+	}
+	baseURL, ok := agentURL(srv)
+	if !ok {
+		return nil
+	}
+	health, err := s.agent.Health(ctx, baseURL)
+	if err != nil {
+		return err
+	}
+	if !hasAgentCapability(health.Capabilities, agentcontract.CapabilityPrepareRestart) {
+		return nil
+	}
+	readiness, ok := s.agent.(agentcontract.RestartReadinessClient)
+	if !ok {
+		return nil
+	}
+	return readiness.PrepareRestart(ctx, baseURL)
+}
 func (s *Service) failAgentDeployTask(ctx context.Context, taskID string, srv Server, cause error) {
 	_ = s.tasks.Fail(ctx, taskID, cause)
 	task, err := s.tasks.Get(ctx, taskID)

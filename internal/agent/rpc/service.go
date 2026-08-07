@@ -21,6 +21,7 @@ type Handler struct {
 	collector agentsystem.LocalCollector
 	runtime   *agentdocker.LocalRuntime
 	reports   *reportHub
+	upgrades  packageUpgradeTracker
 }
 
 type HandlerConfig struct {
@@ -64,7 +65,8 @@ func (h *Handler) Health(ctx context.Context, _ *agentpb.Empty) (*agentpb.Health
 	if h.runtime != nil {
 		docker = h.runtime.DockerHealth(ctx)
 	}
-	return pbHealth(agentcontract.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: agentcontract.Version, Capabilities: agentcontract.RequiredCapabilities, ContractHash: agentcontract.CurrentHash(), Docker: docker}), nil
+	capabilities := append(append([]string(nil), agentcontract.RequiredCapabilities...), agentcontract.CapabilityPrepareRestart)
+	return pbHealth(agentcontract.HealthResponse{Status: "ok", Time: time.Now().UTC().Format(time.RFC3339Nano), Version: agentcontract.Version, Capabilities: capabilities, ContractHash: agentcontract.CurrentHash(), Docker: docker}), nil
 }
 
 func (h *Handler) OSRelease(ctx context.Context, _ *agentpb.Empty) (*agentpb.OSReleaseResponse, error) {
@@ -88,6 +90,8 @@ func (h *Handler) PackageUpdates(ctx context.Context, _ *agentpb.Empty) (*agentp
 }
 
 func (h *Handler) UpgradePackages(ctx context.Context, req *agentpb.PackageUpgradeRequest) (*agentpb.CommandResponse, error) {
+	h.upgrades.begin()
+	defer h.upgrades.end()
 	output, err := h.collector.UpgradePackages(ctx, agentcontract.PackageUpgradeRequest{Names: append([]string(nil), req.Names...), All: req.All})
 	return &agentpb.CommandResponse{Output: output}, remoteError(err)
 }

@@ -157,6 +157,33 @@ func (c *GRPCClient) UpgradePackages(ctx context.Context, endpoint string, req a
 	return agentcontract.CommandResponse{Output: out.Output}, err
 }
 
+// PrepareRestart opens the agent restart-readiness stream and blocks until the
+// agent reports "ready" or the stream/context ends. Agents that do not support
+// the RPC return an error so callers can fall back to proceeding directly.
+func (c *GRPCClient) PrepareRestart(ctx context.Context, endpoint string) error {
+	conn, err := c.dial(endpoint)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	stream, err := agentpb.NewAgentServiceClient(conn).PrepareRestart(ctx, &agentpb.Empty{})
+	if err != nil {
+		return wrapAgentError(err)
+	}
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+			return wrapAgentError(err)
+		}
+		if msg.GetState() == agentcontract.PrepareRestartStateReady {
+			return nil
+		}
+	}
+}
+
 func (c *GRPCClient) UFWInstall(ctx context.Context, endpoint string, req agentcontract.UFWInstallRequest) (remoteops.UFWStatus, error) {
 	rules := make([]*agentpb.UFWRule, 0, len(req.Rules))
 	for _, rule := range req.Rules {

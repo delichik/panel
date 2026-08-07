@@ -129,6 +129,13 @@
 - Panel 固定从 `/app/panel-agents/<goos>-<goarch>/panel-agent` 读取 agent bundle，并根据目标服务器结构化 `architecture.os`/`architecture.arch` 选择 `linux-amd64` 或 `linux-arm64`；结构化架构缺失时先探测目标节点并持久化结果。该位置不可通过配置或环境变量修改；发布镜像会把随 Panel 构建的 agent bundle 复制到 `/app/panel-agents`，部署任务每次直接读取对应文件并上传到目标机。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
+## Agent 重启就绪检查（PrepareRestart）
+
+- Agent 新增流式 gRPC 接口 `PrepareRestart(Empty) returns (stream PrepareRestartResponse)`，响应 `state` 取值 `holdon` 或 `ready`；服务端实现位于 `internal/agent/rpc/prepare_restart.go`，Panel 侧客户端调用在 `internal/agent/client`，契约常量在 `internal/agent/contract`。
+- Agent 在 `HealthResponse.capabilities` 中额外声明可选能力 `prepare-restart`；它不加入 `RequiredCapabilities`，不作为兼容性门槛，旧 agent 缺失该能力时 Panel 直接继续部署。
+- Agent 进程内通过 `packageUpgradeTracker`（引用计数 + done channel）跟踪经 agent 发起的软件包升级（`UpgradePackages`）。`PrepareRestart` 在升级进行中每秒返回一次 `holdon`；升级结束后返回 `ready` 并关闭流；Panel 断开或取消（流上下文结束）时直接退出、不返回 ready。该检查只感知 agent 自己发起的升级，不检查外部 apt/dpkg 状态。
+- Panel 执行 agent 部署（`runDeployAgent`）时，只要 `agent.url` 已配置，就在任何停止/重启动作前先调用 `Health` 读取能力：能力包含 `prepare-restart` 且客户端实现 `RestartReadinessClient` 时调用 `PrepareRestart`，收到 `ready` 才继续；能力缺失（旧 agent）、Health 或调用失败时记录日志后直接继续；任务取消时中止部署。
+- 部署任务按 `agentNeedsBinaryUpgrade` 拆分两条路径：需要完整安装/升级（未配置 URL、版本缺失或与 Panel 不一致、agent 状态非 compatible/incompatible）时上传二进制并执行 `agentInstallScript`；证书续期、URL 修正等仅需重启的场景只重写证书/env/systemd 配置并执行 `agentRestartScript`，不传输二进制。二进制 bundle 根路径仍固定为 `/app/panel-agents`。
 ## 验证
 
 - 后端服务器、凭据、agent、指标、软件包、UFW 或 fail2ban 行为改动运行 `task test:backend`。

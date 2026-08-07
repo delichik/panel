@@ -53,7 +53,11 @@ const defaultAgentPort = 9786
 const agentRemoteBinaryPath = "/usr/local/bin/panel-agent"
 const agentRemoteConfigDir = "/etc/panel-agent"
 const agentRemoteServicePath = "/etc/systemd/system/panel-agent.service"
-const agentBundleRoot = "/app/panel-agents"
+
+// agentBundleRoot is the fixed panel-agent bundle location. It is a var only
+// so tests can point it at a temporary directory; it is not configurable.
+var agentBundleRoot = "/app/panel-agents"
+
 const agentBundleBinaryName = "panel-agent"
 
 var reverseProxyTCPPorts = []int{80, 443}
@@ -1174,7 +1178,6 @@ WantedBy=multi-user.target
 }
 
 func agentInstallScript(remoteTmp string) string {
-	port := strconv.Itoa(defaultAgentPort)
 	return strings.Join([]string{
 		"set -eu",
 		`if ! command -v systemctl >/dev/null 2>&1; then`,
@@ -1189,6 +1192,30 @@ func agentInstallScript(remoteTmp string) string {
 		"install -m 0755 " + remoteops.ShellQuote(remoteTmp) + " " + remoteops.ShellQuote(agentRemoteBinaryPath),
 		"rm -f " + remoteops.ShellQuote(remoteTmp),
 		remoteops.MustUFWAllowScript(remoteops.UFWRule{Port: defaultAgentPort, Protocol: "tcp"}),
+		agentServiceStartScript(),
+	}, "\n")
+}
+
+// agentRestartScript restarts an already-installed panel-agent without touching
+// the binary on disk. It is used when only configuration changes (certificates
+// or the listen URL) need to be picked up.
+func agentRestartScript() string {
+	return strings.Join([]string{
+		"set -eu",
+		"systemctl stop panel-agent.service >/dev/null 2>&1 || true",
+		`if command -v pkill >/dev/null 2>&1; then`,
+		`  pkill -x panel-agent >/dev/null 2>&1 || true`,
+		`  pkill -f '^/usr/local/bin/panel-agent($| )' >/dev/null 2>&1 || true`,
+		`fi`,
+		agentServiceStartScript(),
+	}, "\n")
+}
+
+// agentServiceStartScript enables and starts panel-agent and waits until the
+// service is active and listening on the default agent port.
+func agentServiceStartScript() string {
+	port := strconv.Itoa(defaultAgentPort)
+	return strings.Join([]string{
 		"systemctl daemon-reload",
 		`if ! systemctl enable panel-agent.service; then`,
 		`  echo "[panel] failed to enable panel-agent.service" >&2`,
@@ -1232,7 +1259,6 @@ func agentInstallScript(remoteTmp string) string {
 		`echo "[panel] panel-agent service started"`,
 	}, "\n")
 }
-
 func verifyRemoteAgentCertificateFile(ctx context.Context, runner remoteops.Runner, certificatePEM []byte) error {
 	sum := sha256.Sum256(certificatePEM)
 	script := strings.Join([]string{
@@ -1681,7 +1707,6 @@ func normalizeServerVariables(variables, traits map[string]string) map[string]st
 	}
 	return out
 }
-
 
 func boolString(v bool) string {
 	if v {

@@ -25,6 +25,7 @@ const (
 	AgentService_MetricsSnapshot_FullMethodName          = "/panel.agent.v1.AgentService/MetricsSnapshot"
 	AgentService_PackageUpdates_FullMethodName           = "/panel.agent.v1.AgentService/PackageUpdates"
 	AgentService_UpgradePackages_FullMethodName          = "/panel.agent.v1.AgentService/UpgradePackages"
+	AgentService_PrepareRestart_FullMethodName           = "/panel.agent.v1.AgentService/PrepareRestart"
 	AgentService_UFWStatus_FullMethodName                = "/panel.agent.v1.AgentService/UFWStatus"
 	AgentService_UFWInstall_FullMethodName               = "/panel.agent.v1.AgentService/UFWInstall"
 	AgentService_UFWEnable_FullMethodName                = "/panel.agent.v1.AgentService/UFWEnable"
@@ -65,6 +66,7 @@ type AgentServiceClient interface {
 	MetricsSnapshot(ctx context.Context, in *MetricsSnapshotRequest, opts ...grpc.CallOption) (*MetricsSnapshotResponse, error)
 	PackageUpdates(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*PackageUpdatesResponse, error)
 	UpgradePackages(ctx context.Context, in *PackageUpgradeRequest, opts ...grpc.CallOption) (*CommandResponse, error)
+	PrepareRestart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PrepareRestartResponse], error)
 	UFWStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*UFWStatusResponse, error)
 	UFWInstall(ctx context.Context, in *UFWInstallRequest, opts ...grpc.CallOption) (*UFWStatusResponse, error)
 	UFWEnable(ctx context.Context, in *UFWEnableRequest, opts ...grpc.CallOption) (*UFWStatusResponse, error)
@@ -162,6 +164,25 @@ func (c *agentServiceClient) UpgradePackages(ctx context.Context, in *PackageUpg
 	}
 	return out, nil
 }
+
+func (c *agentServiceClient) PrepareRestart(ctx context.Context, in *Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PrepareRestartResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &AgentService_ServiceDesc.Streams[0], AgentService_PrepareRestart_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[Empty, PrepareRestartResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_PrepareRestartClient = grpc.ServerStreamingClient[PrepareRestartResponse]
 
 func (c *agentServiceClient) UFWStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*UFWStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -453,6 +474,7 @@ type AgentServiceServer interface {
 	MetricsSnapshot(context.Context, *MetricsSnapshotRequest) (*MetricsSnapshotResponse, error)
 	PackageUpdates(context.Context, *Empty) (*PackageUpdatesResponse, error)
 	UpgradePackages(context.Context, *PackageUpgradeRequest) (*CommandResponse, error)
+	PrepareRestart(*Empty, grpc.ServerStreamingServer[PrepareRestartResponse]) error
 	UFWStatus(context.Context, *Empty) (*UFWStatusResponse, error)
 	UFWInstall(context.Context, *UFWInstallRequest) (*UFWStatusResponse, error)
 	UFWEnable(context.Context, *UFWEnableRequest) (*UFWStatusResponse, error)
@@ -508,6 +530,9 @@ func (UnimplementedAgentServiceServer) PackageUpdates(context.Context, *Empty) (
 }
 func (UnimplementedAgentServiceServer) UpgradePackages(context.Context, *PackageUpgradeRequest) (*CommandResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UpgradePackages not implemented")
+}
+func (UnimplementedAgentServiceServer) PrepareRestart(*Empty, grpc.ServerStreamingServer[PrepareRestartResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method PrepareRestart not implemented")
 }
 func (UnimplementedAgentServiceServer) UFWStatus(context.Context, *Empty) (*UFWStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method UFWStatus not implemented")
@@ -721,6 +746,17 @@ func _AgentService_UpgradePackages_Handler(srv interface{}, ctx context.Context,
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _AgentService_PrepareRestart_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(Empty)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(AgentServiceServer).PrepareRestart(m, &grpc.GenericServerStream[Empty, PrepareRestartResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type AgentService_PrepareRestartServer = grpc.ServerStreamingServer[PrepareRestartResponse]
 
 func _AgentService_UFWStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(Empty)
@@ -1370,7 +1406,13 @@ var AgentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _AgentService_RuntimePersistentRestore_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "PrepareRestart",
+			Handler:       _AgentService_PrepareRestart_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "agent.proto",
 }
 
