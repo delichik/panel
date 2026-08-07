@@ -182,6 +182,7 @@ onBeforeUnmount(stopPolling);
             <div>
               <h2 class="m-0 text-xl font-semibold">{{ mode === 'export' ? t('maintenancePage.exportMode') : t('maintenancePage.restoreMode') }}</h2>
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ status?.mode || t('state.unknown') }}</p>
+              <p class="m-0 mt-1 text-xs text-muted-foreground">{{ t('maintenancePage.modeHint') }}</p>
             </div>
             <Badge :tone="phaseTone">{{ status?.phase || t('state.unknown') }}</Badge>
           </div>

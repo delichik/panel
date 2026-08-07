@@ -41,7 +41,6 @@ AppShell
 
 - `DashboardPage`：指标、图表、风险队列等概览。
 - `ListPage`：工具栏 + 表格内部滚动 + 固定分页。
-- `MasterDetailPage`：左选择、右详情，适合服务器、DNS、证书等对象管理。
 - `MasterDetailLayout`：一级对象选择工作台的轻量双栏几何。默认单列，`xl` 及以上使用 `360px minmax(0, 1fr)`，统一 `gap-4`、两侧 `min-width/min-height: 0` 和横向溢出保护；页面通过 `master` / `detail` named slots 保留自己的边框、背景、padding 与业务滚动。不得通过页面 class 或公共 API覆盖左栏宽度。settings 分区导航、任务详情内层 `280px` 列表和 AppShell 导航不适用。
 - `EditorPage`：复杂创建/编辑，正文内部滚动，底部固定提交栏。
 - `SettingsPage`：分区短表单，最大宽度收敛，分区独立保存。

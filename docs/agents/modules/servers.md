@@ -35,7 +35,7 @@
 ## 前端入口
 
 - 服务器页面位于 `web/src/views/servers/index.vue`，SSH 凭据独立页面位于 `web/src/views/credentials/index.vue`；分别通过 `/servers` 与 `/credentials` 进入，不共享页面内 tab。
-- 节点 tab（MasterDetailPage：搜索 + 列表 + 分页 / 四区详情）：`web/src/views/servers/ServersNodesView.vue`、`ServerDetail.vue`。
+- 节点 tab（MasterDetailLayout：搜索 + 列表 + 分页 / 四区详情）：`web/src/views/servers/ServersNodesView.vue`、`ServerDetail.vue`。
 - 服务器添加/编辑由 `web/src/views/servers/index.vue` 内的表单对话框承载（含 `POST /servers/probe`）；凭据添加/编辑由 `web/src/views/credentials/index.vue` 内的表单对话框承载。凭据按 password/private_key 类型裁剪字段，编辑时 secret 留空 = 不更新；私钥类型使用 large Dialog 和共享 plain CodeMirror，password 类型仍使用普通输入与默认 Dialog。
 - 凭据 tab 表格：`CredentialsView.vue`（删除前客户端引用预检 + 409 `credential_in_use` 兜底）。
 - 纯函数逻辑：`serverTraits.ts`（traits/网卡解析、Agent/UFW 状态判定）、`serverProbe.ts`（probe 结果映射）、`serverInitPolling.ts`（创建后初始化轮询状态机）、`credentialUsage.ts`（引用预检）、`useTaskMessage.ts`（任务反馈 + "查看任务"跳转）。
@@ -47,7 +47,7 @@
 
 ## 前端布局约定
 
-- 节点 tab 使用 MasterDetailPage 模板：左列固定 280px，搜索为客户端过滤（name/host）并同步进 URL query `q`，初始化中的服务器显示"初始化中"进度态；右列详情分头部（可达性 + 操作组 + 错误横幅，`agent.last_error` 优先）与状态 / 系统 / 运行时 / 访问四区。
+- 节点 tab 使用 MasterDetailLayout 模板：左列固定 280px，搜索为客户端过滤（name/host）并同步进 URL query `q`，初始化中的服务器显示"初始化中"进度态；右列详情分头部（可达性 + 操作组 + 错误横幅，`agent.last_error` 优先）与状态 / 系统 / 运行时 / 访问四区。
 - 凭据 tab 使用 ListPage 模板：表格体内部滚动，分页固定底部并同步进 URL query `page`。
 - 创建服务器保存成功即关对话框：新记录插入列表顶部，前端轮询 `initialTaskId`（1.5s × 90 上限）到终态；成功刷新数据，失败显示原因与"服务器记录已回滚"提示。
 - 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈只承诺任务已提交；旧 `/tasks` 兼容路由不再作为产品入口，后续诊断应优先通过系统事件或后端提供的任务引用查看。

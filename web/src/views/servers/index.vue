@@ -438,6 +438,11 @@ onBeforeUnmount(() => {
           <div v-if="loading && !servers.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
+          <EmptyState v-else-if="error && !servers.length" :title="t('common.loadFailed')" :description="error">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
           <EmptyState v-else-if="!servers.length" :title="t('serversPage.noServers')" :description="t('serversPage.noServersHint')" />
           <button
             v-for="server in servers"

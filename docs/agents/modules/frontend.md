@@ -11,6 +11,7 @@
 - Applications, servers, domain certificates, self-signed certificates, and key assets consume server-side `ListPage` responses.
 - Searchable master lists send `q` to the backend and reset to page 1 when the query changes.
 - Async resource and DNS refresh actions wait for task completion and then reload the local snapshot. GET lists are never implicit refresh commands.
+- 主列表页（servers、credentials、applications、dns、certificates、tasks、application-operations、system-events）加载失败时在列表区显示错误空态（common.loadFailed + 错误详情 + 重试按钮），不得把加载失败伪装成“暂无数据”。
 
 > **状态说明（2026-07-21）：前端基础设施已进入 v4。** 上一版“统一 CollectionPage + Naive UI”的重构判定不合格，当前已移除 Naive UI，不恢复 Vuetify。新标准为 Vue 3 + Vite + Vue Router + Pinia + Tailwind + Panel 自有 UI primitives + lucide + ECharts + YAML。`tmp/v1-archive/` 只能作为业务能力参照，禁止复制视觉、布局、操作流或旧 UI 组件写法。
 
@@ -74,7 +75,7 @@
 ### 认证与 API Client
 
 - 普通控制台认证使用真实后端 `/api/v1/auth/login|logout|session|account|jwt-secret`。登录成功和 session 恢复返回的 Bearer token 保存在 `web/src/stores/session.ts`，`web/src/api/client.ts` 通过 token provider 为受保护请求注入 `Authorization: Bearer <token>`；`/auth/login` 和 `/settings/public-branding` 使用 `skipAuth`。
-- 前端启动时必须先恢复 `/api/v1/auth/session`，路由守卫不得默认已登录。未认证访问普通控制台路由跳转 `/login?redirect=...`；如果 session 返回 `passwordChangeRequired`，登录页必须显示 `/api/v1/auth/account` 改密表单，普通控制台路由继续重定向回登录页直到改密完成；维护模式 `/maintenance/backup` 使用独立维护 token，不与普通 session 混用。
+- 前端启动时必须先恢复 `/api/v1/auth/session`，路由守卫不得默认已登录。未认证访问普通控制台路由跳转 `/login?redirect=...`；如果 session 返回 `passwordChangeRequired`，登录页必须显示 `/api/v1/auth/account` 改密表单，普通控制台路由继续重定向回登录页直到改密完成；维护模式 `/maintenance/backup` 使用独立维护 token，不与普通 session 混用。登录页用户名输入框自动聚焦，登录失败时清空密码输入，避免直接重提错误密码。
 - 非 ApiClient 的 blob、multipart 和 DELETE body fetch helper 也必须复用 `authHeaders()`，包括应用/设施编辑资产、密钥资产导入、备份恢复和下载路径，避免真实环境下绕过 token 注入。
 - `/api/v1/settings/public-branding` 是公共 branding 接口，登录页可使用它覆盖本地 `app.name` / `app.subtitle` fallback；设置页安全分区展示并提交 `/api/v1/auth/jwt-secret` 的 JWT 密钥重置；设置页系统分区展示 `/api/v1/system/version` 的版本、通道、最新版本和更新状态；服务器详情指标卡展示 `/api/v1/servers/{id}/metrics` 的最新 CPU、内存、磁盘、网络收发和负载，API client 的默认 range 必须是后端支持的 `1h`。`/api/v1/servers/{id}/agent/certificate` 应在 API 层保留 typed client，但该接口返回私钥材料，新增 UI 入口前必须明确使用场景和权限提示。
 - v4 应用与设施配置已使用 durable edit-session 工作流。`application-save-sessions/*`、`facility-apps/reverse-proxy/save-sessions/*`、`PUT /facility-apps/reverse-proxy`、`static-assets/*` 上传/删除、`application-template-catalog` 以及 `/applications/{id}/files|package|plan|validate|migrate` 等 legacy/低层接口已从后端移除，前端不得重新暴露；生产工作流统一走 edit-session。
@@ -95,7 +96,7 @@
 `web/src/views/security/` 与 `web/src/views/resources/` 已替换阶段占位：
 
 - 防火墙与 Fail2Ban 归入“资源”一级菜单。`/resources/firewall` 使用 UFW 规则/状态矩阵；`/resources/fail2ban` 仅 dev 构建可直达和展示，非 dev 访问会跳回 `/resources/firewall`。旧 `/security/*` 只保留重定向。正式 API 使用 `/api/v1/servers/{id}/ufw`、`/ufw/rules`、`/ufw/enable`、`/ufw/install`、`/fail2ban`、`/fail2ban/enable`、`/fail2ban/release`、`/fail2ban/install`。
-- 资源页是服务器上下文资源维护台：软件包、容器、镜像、网络、卷是 `/resources/packages|containers|images|networks|volumes` 独立路由页面，不使用页内 tabs。容器、镜像、网络、卷 GET 只读本地快照；镜像、网络、卷刷新按钮分别提交 `/images/refresh`、`/networks/refresh`、`/volumes/refresh` 异步任务，不得通过重复 GET 隐式访问节点。网络和卷首次打开且尚无本地快照时，前端会自动提交一次对应刷新任务，避免首屏把“尚未刷新”误报成“服务器未上报”。镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。镜像标签需兼容 Docker 悬空镜像 `repoTags` 为 `null` 的情况，回退到 `reference` 或镜像 ID。容器页对应用托管容器直接开放 start/stop/restart/delete，并展示“由应用托管，协调可能自动恢复”提示；卡片操作行换行时不得溢出隐藏。
+- 资源页是服务器上下文资源维护台：软件包、容器、镜像、网络、卷是 `/resources/packages|containers|images|networks|volumes` 独立路由页面，不使用页内 tabs。容器、镜像、网络、卷 GET 只读本地快照；镜像、网络、卷刷新按钮分别提交 `/images/refresh`、`/networks/refresh`、`/volumes/refresh` 异步任务，不得通过重复 GET 隐式访问节点。网络和卷首次打开且尚无本地快照时，前端会自动提交一次对应刷新任务，避免首屏把“尚未刷新”误报成“服务器未上报”。镜像应用升级接 `/api/v1/images/upgrade-selected|upgrade-all`。镜像标签需兼容 Docker 悬空镜像 `repoTags` 为 `null` 的情况，回退到 `reference` 或镜像 ID。容器页对应用托管容器直接开放 start/stop/restart/delete，并展示“由应用托管，协调可能自动恢复”提示；卡片操作行换行时不得溢出隐藏。软件包升级批量操作只在存在选中项时出现（无选中时隐藏“升级已选”按钮与已选计数），符合“无选中即消失”的批量操作约定。
 - 网络资源当前后端只提供列表接口，页面只读展示拓扑并禁用删除，不使用 Mock 伪装不存在的能力。
 - Mock 模式覆盖同名正式路径，包含正常、空、错误、权限不足、Agent 不兼容、不可达、长日志和危险确认状态；未实现路径继续返回 `mock_route_not_found`。
 
@@ -120,7 +121,7 @@
 - 旧任务中心 `/tasks` 保留兼容路由，但不再作为产品导航入口；诊断页 `/debug` 也保留直达但不显示在菜单中。新的产品入口是“应用”一级菜单下的 `/application-operations` 操作记录与 `/system-events`：应用详情和概览快捷入口应跳转到操作记录，系统诊断事件通过系统事件页展示。
 - 任务中心按 `operationId` 聚合，左侧保留操作组搜索、状态筛选和 URL query 恢复，右侧展示具体任务、步骤、日志、错误、重试和立即运行。任务执行项以 `summary` 为标题、`type` 为副标题，操作组副标题展示 `type`，用户可见位置不直接展示任务/操作原始 id；原始 id 仍用于搜索与 URL 恢复。正式 API 使用 `/api/v1/tasks`、`/api/v1/tasks/{id}`、`/logs`、`/steps`、`/retry`、`/run-now`。
 - 设置页按 Runtime、安全、证书、系统、系统证书、备份还原分区独立保存，不提供全局保存。正式 API 使用 `/api/v1/settings/runtime`、`/api/v1/settings/server-variables`、`/api/v1/auth/jwt-secret`、`/api/v1/system/version`、`/api/v1/key-assets/system`、`/api/v1/key-assets/system/{id}/reset`、`/api/v1/backups/export`、`/api/v1/backups/restore/preflight`、`/api/v1/backups/restore/confirm`；系统版本只读展示，不和 Runtime 设置保存混在一起。由于 `/settings/runtime` 后端仍接收完整 runtime payload，前端保存某个分区时必须以已加载的 runtime 当前值为基底，只合入当前分区表单，避免提交其他分区尚未保存的脏值。系统证书分区展示 Panel 侧 Agent CA、Panel Agent client 证书以及服务器上报的 Agent 服务端证书，重置操作通过后台任务执行。
-- 维护页是独立 shell，不走全局 AppShell；导出和还原维护 token 分别保存在 `sessionStorage.panel.maintenance.export.token` 与 `sessionStorage.panel.maintenance.restore.token`，二者和普通登录 session 隔离。正式 API 使用维护模式下的 `/api/v1/auth/*`、`/api/v1/backups/export/current|start|password|exit|{id}/download`、`/api/v1/restore/status|password|retry|clear-pending`；导出归档下载通过带 Authorization header 的 blob 请求完成。
+- 维护页是独立 shell，不走全局 AppShell；导出和还原维护 token 分别保存在 `sessionStorage.panel.maintenance.export.token` 与 `sessionStorage.panel.maintenance.restore.token`，二者和普通登录 session 隔离。正式 API 使用维护模式下的 `/api/v1/auth/*`、`/api/v1/backups/export/current|start|password|exit|{id}/download`、`/api/v1/restore/status|password|retry|clear-pending`；导出归档下载通过带 Authorization header 的 blob 请求完成。维护页当前模式由后端维护状态决定、不可手动切换，页面显示对应模式说明文案。
 - 诊断页使用 Runtime / Tasks / Database tabs，支持暂停/恢复轮询和手动刷新；刷新失败时保留上一份可用快照。Tasks tab 将运行时计数与任务定义分开呈现，任务定义必须使用可滚动表格展示，禁止直接把对象数组字符串化为 `[object Object]`。正式 API 使用 `/api/v1/debug/snapshot`。
 - Mock 模式覆盖同名正式路径，包含正常、失败、长日志、维护中、保存冲突、诊断失败保留旧快照和任务中心多页分页样本；未实现路径继续返回 `mock_route_not_found`。
 

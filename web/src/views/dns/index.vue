@@ -264,6 +264,11 @@ async function deleteRecord() {
           <div v-if="loadingDomains && !domains.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>
+          <EmptyState v-else-if="error && !domains.length" :title="t('common.loadFailed')" :description="error">
+            <template #actions>
+              <Button size="sm" :loading="loadingDomains" @click="loadDomains"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
           <EmptyState v-else-if="!domains.length" :title="t('dnsPage.noDomains')" :description="t('dnsPage.noDomainsHint')" />
           <button
             v-for="domain in domains"

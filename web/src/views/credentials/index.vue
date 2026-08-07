@@ -199,6 +199,11 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           <div v-if="loading && !credentials.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
+          <EmptyState v-else-if="error && !credentials.length" :title="t('common.loadFailed')" :description="error">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
           <EmptyState v-else-if="!credentials.length" :title="t('credentialsPage.noCredentials')" :description="t('credentialsPage.noCredentialsHint')" />
           <button
             v-for="credential in credentials"

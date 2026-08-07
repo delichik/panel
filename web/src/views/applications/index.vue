@@ -512,8 +512,8 @@ watch(search, (value) => {
   void router.replace({ query: { ...route.query, search: value || undefined } });
   if (searchTimer) clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
-    page.value = 1;
-    if (mode.value === 'apps') void loadApplications({ loadSelectedRuntime: true });
+    if (page.value !== 1) page.value = 1;
+    else if (mode.value === 'apps') void loadApplications({ loadSelectedRuntime: true });
   }, 250);
 });
 
@@ -1508,6 +1508,11 @@ onBeforeUnmount(() => {
               </div>
             </div>
           </div>
+          <EmptyState v-else-if="error && !appRows.length" :title="t('common.loadFailed')" :description="error">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
           <EmptyState v-else-if="!appRows.length" :title="t('applicationsPage.emptyApplications')" :description="t('applicationsPage.emptyApplicationsHint')" />
           <button v-for="row in appRows" v-else :key="row.app.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left transition-colors hover:bg-accent" :class="selectedId === row.app.id ? 'border-border-strong bg-background' : 'border-transparent bg-transparent'" @click="selectedId = row.app.id">
             <div class="flex items-center justify-between gap-2">

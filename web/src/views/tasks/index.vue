@@ -207,6 +207,11 @@ onBeforeUnmount(() => {
           <div v-if="loading && !groups.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
+          <EmptyState v-else-if="error && !groups.length" :title="t('common.loadFailed')" :description="error">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="load()"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
           <EmptyState v-else-if="!groups.length" :title="t('tasksPage.empty')" :description="t('tasksPage.emptyHint')" />
           <button v-for="group in groups" v-else :key="group.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left hover:bg-accent" :class="selectedOperationId === group.operationId ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedOperationId === group.operationId ? 'true' : undefined" @click="selectedOperationId = group.operationId">
             <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1">

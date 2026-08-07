@@ -203,6 +203,11 @@ onMounted(load);
           <Button v-else size="sm" :loading="detailLoadingId === row.id" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
         </template>
       </Table>
+      <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+        <template #actions>
+          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+        </template>
+      </EmptyState>
       <EmptyState v-else :title="t('systemEventsPage.empty')" :description="t('systemEventsPage.emptyHint')" />
     </div>
 

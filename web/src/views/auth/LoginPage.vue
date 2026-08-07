@@ -58,6 +58,7 @@ async function submit() {
     await router.push(String(route.query.redirect || '/overview'));
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('auth.signInFailed'));
+    password.value = '';
   } finally {
     loading.value = false;
   }
@@ -108,7 +109,7 @@ async function updateAccount() {
       <form v-if="!changingPassword" class="mt-6 grid gap-4" @submit.prevent="submit">
         <label class="grid gap-1.5 text-sm font-medium text-foreground">
           {{ t('auth.username') }}
-          <Input v-model="username" autocomplete="username" />
+          <Input v-model="username" autocomplete="username" autofocus />
         </label>
         <label class="grid gap-1.5 text-sm font-medium text-foreground">
           {{ t('auth.password') }}

@@ -429,7 +429,7 @@ onBeforeUnmount(() => {
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedServer.host }} · {{ selectedServer.dockerHost || t('common.notAvailable') }}</p>
             </div>
             <div class="flex flex-wrap gap-2">
-              <Button v-if="activeTab === 'packages'" size="sm" variant="primary" :disabled="!selectedPackages.length || !canMaintainPackages(selectedServer)" :loading="pending === 'upgrade-selected'" @click="upgradeSelectedPackages"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
+              <Button v-if="activeTab === 'packages' && selectedPackages.length" size="sm" variant="primary" :disabled="!canMaintainPackages(selectedServer)" :loading="pending === 'upgrade-selected'" @click="upgradeSelectedPackages"><Package />{{ t('resourcesPage.upgradeSelected') }}</Button>
               <Button v-if="activeTab === 'images'" size="sm" variant="primary" :disabled="!canUseDockerResources(selectedServer)" @click="pullDialog = true"><DownloadCloud />{{ t('resourcesPage.pullImage') }}</Button>
             </div>
           </header>
@@ -462,6 +462,11 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
+                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                  <template #actions>
+                    <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
+                  </template>
+                </EmptyState>
                 <EmptyState v-else-if="!packageRows.length" :title="t('resourcesPage.noPackages')" :description="t('resourcesPage.noPackagesHint')" />
                 <label v-for="item in packageRows" v-else :key="item.name" class="mb-2 grid grid-cols-[auto_minmax(0,1fr)_minmax(160px,auto)] items-center gap-3 rounded-xl border border-border p-3">
                   <input v-model="packageSelection[item.name]" type="checkbox" :disabled="!canMaintainPackages(selectedServer)" />
@@ -474,7 +479,7 @@ onBeforeUnmount(() => {
               </div>
               <footer class="flex items-center justify-between border-t border-border p-3 text-sm text-muted-foreground">
                 <span>{{ t('resourcesPage.lastRefresh') }}: {{ packageList?.lastRefreshedAt || t('common.never') }}</span>
-                <span>{{ selectedPackages.length }} {{ t('resourcesPage.selectedCount') }}</span>
+                <span v-if="selectedPackages.length">{{ selectedPackages.length }} {{ t('resourcesPage.selectedCount') }}</span>
               </footer>
             </section>
 
@@ -494,6 +499,11 @@ onBeforeUnmount(() => {
                   </footer>
                 </article>
               </template>
+              <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                <template #actions>
+                  <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
+                </template>
+              </EmptyState>
               <EmptyState v-else-if="!containers.length" :title="t('resourcesPage.noContainers')" :description="t('resourcesPage.noContainersHint')" />
               <article v-for="item in containers" v-else :key="item.id" class="grid grid-rows-[auto_auto_auto] rounded-2xl border border-border bg-background">
                 <header class="border-b border-border p-4">
@@ -539,6 +549,11 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
+                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                  <template #actions>
+                    <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
+                  </template>
+                </EmptyState>
                 <EmptyState v-else-if="!images?.items.length" :title="t('resourcesPage.noImages')" :description="t('resourcesPage.noImagesHint')" />
                 <div v-for="item in images?.items" v-else :key="item.id" class="mb-2 grid grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-border p-3">
                   <div class="min-w-0">
@@ -562,6 +577,11 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
                   </article>
                 </div>
+                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                  <template #actions>
+                    <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
+                  </template>
+                </EmptyState>
                 <EmptyState v-else-if="!networks.length" :title="t('resourcesPage.noNetworks')" :description="t('resourcesPage.noNetworksHint')">
                   <template #actions>
                     <Button size="sm" :loading="pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('common.refresh') }}</Button>
@@ -600,6 +620,11 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
+                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                  <template #actions>
+                    <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
+                  </template>
+                </EmptyState>
                 <EmptyState v-else-if="!volumes.length" :title="t('resourcesPage.noVolumes')" :description="t('resourcesPage.noVolumesHint')">
                   <template #actions>
                     <Button size="sm" :loading="pending === 'refresh'" @click="refreshCurrent"><RefreshCcw />{{ t('common.refresh') }}</Button>

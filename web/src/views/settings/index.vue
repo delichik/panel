@@ -192,7 +192,7 @@ async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' 
 }
 
 async function saveVariables() {
-  await run('save-system', async () => {
+  await run('save-variables', async () => {
     serverVariables.value = await settingsApi.updateServerVariables(parseVariables(form.variablesText));
     notifySuccess(t('settingsPage.saved.system'));
   });
@@ -457,7 +457,7 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.loginSubtitle') }}<Input v-model="form.loginSubtitle" /></label>
           </div>
           <label class="grid gap-1 text-sm">{{ t('settingsPage.serverVariables') }}<Textarea v-model="form.variablesText" class="min-h-[180px] font-mono" :placeholder="t('settingsPage.serverVariablesHint')" /></label>
-          <div class="flex flex-wrap gap-2"><Button :loading="pending === 'save-system'" variant="primary" @click="saveRuntimeSection('system')"><Save />{{ t('settingsPage.saveBranding') }}</Button><Button :loading="pending === 'save-system'" @click="saveVariables"><Save />{{ t('settingsPage.saveVariables') }}</Button></div>
+          <div class="flex flex-wrap gap-2"><Button :loading="pending === 'save-system'" variant="primary" @click="saveRuntimeSection('system')"><Save />{{ t('settingsPage.saveBranding') }}</Button><Button :loading="pending === 'save-variables'" @click="saveVariables"><Save />{{ t('settingsPage.saveVariables') }}</Button></div>
         </section>
 
         <section v-else class="grid gap-4 rounded-2xl border border-border bg-card p-5">
