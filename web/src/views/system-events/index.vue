@@ -35,7 +35,7 @@ const eventType = ref(String(route.query.eventType || ''));
 const severity = ref(String(route.query.severity || ''));
 const category = ref(String(route.query.category || ''));
 const loading = ref(false);
-const detailLoading = ref(false);
+const detailLoadingId = ref('');
 const error = ref('');
 const detail = ref<SystemEventDetailDto | null>(null);
 const detailOpen = ref(false);
@@ -125,7 +125,7 @@ async function load() {
 async function openDetail(row: SystemEventDto) {
   if (!row.detailAvailable) return;
   const requestId = detailRequests.begin();
-  detailLoading.value = true;
+  detailLoadingId.value = row.id;
   detailOpen.value = true;
   detail.value = null;
   try {
@@ -138,7 +138,7 @@ async function openDetail(row: SystemEventDto) {
     notifyError(err instanceof Error ? err.message : t('systemEventsPage.detailLoadFailed'));
     detailOpen.value = false;
   } finally {
-    if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
+    if (detailRequests.isCurrent(requestId)) detailLoadingId.value = '';
   }
 }
 
@@ -200,7 +200,7 @@ onMounted(load);
           <Tooltip v-if="!row.detailAvailable" :text="t('systemEventsPage.detailPruned')">
             <Button size="sm" disabled><Eye />{{ t('common.view') }}</Button>
           </Tooltip>
-          <Button v-else size="sm" :loading="detailLoading" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
+          <Button v-else size="sm" :loading="detailLoadingId === row.id" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
         </template>
       </Table>
       <EmptyState v-else :title="t('systemEventsPage.empty')" :description="t('systemEventsPage.emptyHint')" />
@@ -214,7 +214,7 @@ onMounted(load);
   </ListPage>
 
   <Dialog v-model:open="detailOpen" :title="detail ? eventTypeLabel(detail.event.eventType) : t('systemEventsPage.detailTitle')" :description="detail?.event.id" :close-label="t('common.close')">
-    <div v-if="detailLoading" class="relative grid min-h-64 place-items-center">
+    <div v-if="detailLoadingId !== ''" class="relative grid min-h-64 place-items-center">
       <LoadingOverlay :label="t('systemEventsPage.loadingDetail')" />
     </div>
     <div v-else-if="detail" class="grid gap-4">

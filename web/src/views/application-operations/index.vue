@@ -34,7 +34,7 @@ const search = ref(String(route.query.applicationId || ''));
 const status = ref(String(route.query.status || ''));
 const source = ref(String(route.query.source || ''));
 const loading = ref(false);
-const detailLoading = ref(false);
+const detailLoadingId = ref('');
 const error = ref('');
 const detail = ref<ApplicationOperationDetailDto | null>(null);
 const detailOpen = ref(false);
@@ -121,7 +121,7 @@ async function load() {
 async function openDetail(row: ApplicationOperationDto) {
   if (!row.detailAvailable) return;
   const requestId = detailRequests.begin();
-  detailLoading.value = true;
+  detailLoadingId.value = row.operationId;
   detailOpen.value = true;
   detail.value = null;
   try {
@@ -134,7 +134,7 @@ async function openDetail(row: ApplicationOperationDto) {
     notifyError(err instanceof Error ? err.message : t('applicationOperationsPage.detailLoadFailed'));
     detailOpen.value = false;
   } finally {
-    if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
+    if (detailRequests.isCurrent(requestId)) detailLoadingId.value = '';
   }
 }
 
@@ -195,7 +195,7 @@ onMounted(load);
           <Tooltip v-if="!row.detailAvailable" :text="t('applicationOperationsPage.detailPruned')">
             <Button size="sm" disabled><Eye />{{ t('common.view') }}</Button>
           </Tooltip>
-          <Button v-else size="sm" :loading="detailLoading" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
+          <Button v-else size="sm" :loading="detailLoadingId === row.operationId" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
         </template>
       </Table>
       <EmptyState v-else :title="t('applicationOperationsPage.empty')" :description="t('applicationOperationsPage.emptyHint')" />
@@ -209,7 +209,7 @@ onMounted(load);
   </ListPage>
 
   <Dialog v-model:open="detailOpen" size="large" :title="detail?.operation.applicationNameSnapshot || t('applicationOperationsPage.detailTitle')" :close-label="t('common.close')">
-    <div v-if="detailLoading" class="relative grid min-h-64 place-items-center">
+    <div v-if="detailLoadingId !== ''" class="relative grid min-h-64 place-items-center">
       <LoadingOverlay :label="t('applicationOperationsPage.loadingDetail')" />
     </div>
     <div v-else-if="detail" class="grid gap-4">
