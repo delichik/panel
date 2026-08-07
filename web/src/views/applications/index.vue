@@ -108,6 +108,7 @@ const pageSize = 50;
 const totalApplications = ref(0);
 const loading = ref(false);
 const detailLoading = ref(false);
+const runtimeLoading = ref(false);
 const editorLoading = ref(false);
 const facilitiesLoaded = ref(true);
 const facilities = [{ kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' }];
@@ -709,15 +710,18 @@ async function loadRuntime(applicationId: string) {
   const modeAtStart = mode.value;
   if (!applicationId) {
     detailLoading.value = false;
+    runtimeLoading.value = false;
     return;
   }
   if (modeAtStart !== 'apps') {
     detailLoading.value = false;
+    runtimeLoading.value = false;
     return;
   }
   const controller = new AbortController();
   runtimeController = controller;
   detailLoading.value = true;
+  runtimeLoading.value = true;
   try {
     const runtime = await applicationsApi.runtime(applicationId, { signal: controller.signal });
     if (requestId !== runtimeRequestId || mode.value !== modeAtStart || applicationId !== selectedId.value) return;
@@ -726,7 +730,10 @@ async function loadRuntime(applicationId: string) {
     if (isAbortError(err)) return;
     notifyError(err instanceof Error ? err.message : t('applicationsPage.runtimeUnavailable'));
   } finally {
-    if (requestId === runtimeRequestId) detailLoading.value = false;
+    if (requestId === runtimeRequestId) {
+      detailLoading.value = false;
+      runtimeLoading.value = false;
+    }
   }
 }
 
@@ -1398,6 +1405,7 @@ function cancelRuntimeLoad() {
   runtimeController?.abort();
   runtimeRequestId += 1;
   detailLoading.value = false;
+  runtimeLoading.value = false;
 }
 
 function cancelApplicationDetailLoad() {
@@ -1527,14 +1535,14 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="rounded-2xl border border-border bg-background p-4">
                       <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
-                      <div v-if="currentRuntime?.instances?.length" class="mt-3 grid gap-2">
+                      <div v-if="!runtimeLoading && currentRuntime?.instances?.length" class="mt-3 grid gap-2">
                         <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
                           <div class="flex items-center justify-between gap-2"><strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong><StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instance.status || instance.state || t('common.notAvailable')" /></div>
                           <span class="text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
                           <span v-if="instance.error" class="text-danger">{{ instance.error }}</span>
                         </div>
                       </div>
-                      <div v-else-if="detailLoading && !currentRuntime" class="mt-3 grid gap-2" aria-hidden="true">
+                      <div v-else-if="runtimeLoading" class="mt-3 grid gap-2" aria-hidden="true">
                         <div v-for="item in 4" :key="item" class="grid gap-2 rounded-xl border border-border p-3">
                           <div class="flex items-center justify-between gap-2">
                             <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
