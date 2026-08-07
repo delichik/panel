@@ -173,6 +173,7 @@
 - Application name, enabled state, deployment targets, reverse proxy rules, and application files are application-level fields outside AppSpec YAML. Container environment variables belong to AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
 - 服务器选择器（部署目标、网关节点、源服务器、Panel 入口）展示全部服务器，不再只显示已被应用或设施引用的服务器；部署目标选择器对 agent 未兼容或不可达的服务器显示禁用原因，避免用户误选后到部署阶段才失败。
 - 编辑器确认放弃未保存修改并离开后，路由切换必须同步清理脏状态和弹窗状态，避免同一组件实例被复用后再次导航仍弹出放弃确认。
+- 应用与设施编辑器有未保存修改时的离开/取消保护统一使用 `web/src/components/ui/ConfirmDialog.vue`，不再使用浏览器原生 `window.confirm`；路由离开保护先取消导航并弹出确认框，确认后再按原目标路径继续导航，取消则保持当前编辑状态。
 - The editor must preserve local validation, patch draft, validate, preview, commit, and dirty guard behavior. File mutations still use application edit-session file/archive endpoints.
 
 ## Durable Application Edit Sessions

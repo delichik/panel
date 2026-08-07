@@ -9,6 +9,7 @@ import { reverseProxyFacilityApi } from '@/api/facilityApps';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import CodeEditor from '@/components/ui/CodeEditor.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import DownloadButton from '@/components/ui/DownloadButton.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
@@ -121,6 +122,10 @@ const logsLoading = ref(false);
 const confirmOpen = ref(false);
 const confirmKind = ref<'delete' | 'stop'>('delete');
 const confirmTarget = ref('');
+const discardDialogOpen = ref(false);
+let pendingLeaveTarget: string | null = null;
+let pendingFacilityCancel = false;
+let allowLeave = false;
 const appTab = ref('runtime');
 const editorMode = ref<'configure' | 'source'>('configure');
 const fileActionErrors = ref<Record<string, string>>({});
@@ -538,10 +543,13 @@ watch(() => route.path, async () => {
   if (isFacilityEditor.value) await startFacilityEditor();
 });
 
-onBeforeRouteLeave(() => {
+onBeforeRouteLeave((to) => {
   if (saving.value) return false;
-  if (!isDirty.value) return true;
-  return window.confirm(t('applicationsPage.leaveDirty'));
+  if (allowLeave || !isDirty.value) return true;
+  pendingFacilityCancel = false;
+  pendingLeaveTarget = to.fullPath;
+  discardDialogOpen.value = true;
+  return false;
 });
 
 function handleBeforeUnload(event: BeforeUnloadEvent) {
@@ -934,7 +942,16 @@ async function startInPlaceFacilityEdit() {
 }
 
 function cancelFacilityEdit() {
-  if (isDirty.value && !window.confirm(t('applicationsPage.leaveDirty'))) return;
+  if (!isDirty.value) {
+    performCancelFacilityEdit();
+    return;
+  }
+  pendingLeaveTarget = null;
+  pendingFacilityCancel = true;
+  discardDialogOpen.value = true;
+}
+
+function performCancelFacilityEdit() {
   facilitySession.value = null;
   facilityPreview.value = null;
   facilityDiagnostics.value = [];
@@ -945,6 +962,30 @@ function cancelFacilityEdit() {
     return;
   }
   facilityEditing.value = false;
+}
+
+function confirmDiscard() {
+  discardDialogOpen.value = false;
+  if (pendingFacilityCancel) {
+    pendingFacilityCancel = false;
+    performCancelFacilityEdit();
+    return;
+  }
+  const target = pendingLeaveTarget;
+  pendingLeaveTarget = null;
+  if (!target) return;
+  allowLeave = true;
+  void router.push(target).finally(() => {
+    allowLeave = false;
+  });
+}
+
+function handleDiscardOpenChange(open: boolean) {
+  discardDialogOpen.value = open;
+  if (!open) {
+    pendingFacilityCancel = false;
+    pendingLeaveTarget = null;
+  }
 }
 
 function goBackFromFacilityPage() {
@@ -2160,6 +2201,17 @@ onBeforeUnmount(() => {
             <Button variant="danger" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.confirm') }}</Button>
     </template>
   </Dialog>
+
+  <ConfirmDialog
+    :open="discardDialogOpen"
+    :title="t('applicationsPage.unsavedChanges')"
+    :impact="t('applicationsPage.leaveDirty')"
+    :confirm-label="t('common.discard')"
+    :cancel-label="t('common.cancel')"
+    checkbox-label=""
+    @confirm="confirmDiscard"
+    @update:open="handleDiscardOpenChange"
+  />
 </template>
 
 <style scoped>
