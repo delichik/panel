@@ -407,7 +407,7 @@ func defaultRuntimeSettings(cfg config.Config) RuntimeSettings {
 		RuntimeEventRetentionDays:        30,
 		RuntimeEventDetailRetentionDays:  7,
 		MetricsCollectionIntervalSeconds: 60,
-		ContainerReportIntervalSeconds:   5,
+		ContainerReportIntervalSeconds:   30,
 		CleanupSchedule:                  "daily",
 		RuntimeEventCleanupSchedule:      "daily",
 		TokenExpiration:                  DefaultTokenExpiration,

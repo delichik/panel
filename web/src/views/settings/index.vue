@@ -52,7 +52,7 @@ const restarting = ref(false);
 const form = reactive({
   metricsRetentionDays: '14',
   metricsCollectionIntervalSeconds: '60',
-  containerReportIntervalSeconds: '5',
+  containerReportIntervalSeconds: '30',
   cleanupSchedule: 'daily',
   runtimeEventRetentionDays: '30',
   runtimeEventDetailRetentionDays: '7',

@@ -7,7 +7,7 @@ export let mockRuntimeSettings: RuntimeSettings = {
   dataRoot: 'data',
   metricsRetentionDays: 14,
   metricsCollectionIntervalSeconds: 60,
-  containerReportIntervalSeconds: 5,
+  containerReportIntervalSeconds: 30,
   cleanupSchedule: 'daily',
   runtimeEventRetentionDays: 30,
   runtimeEventDetailRetentionDays: 7,

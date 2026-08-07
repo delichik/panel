@@ -518,6 +518,9 @@ func (r *LocalRuntime) writeManagedFiles(spec appruntime.Spec) error {
 		return err
 	}
 	manifest := managedFilesManifest{Entries: []managedFileManifestEntry{}}
+	// Fingerprints are an optimization cache; stale entries self-heal on the
+	// next drift check, so invalidation failures must not fail the deploy.
+	_ = r.invalidateFingerprints(spec.ApplicationID, spec.InstanceID)
 	for _, file := range spec.Files {
 		if strings.TrimSpace(file.Kind) == appruntime.ManagedFileKindArchive {
 			entry, err := r.writeManagedArchive(spec, file)
@@ -617,43 +620,22 @@ func (r *LocalRuntime) writeManagedArchive(spec appruntime.Spec, file appruntime
 	if err != nil {
 		return managedFileManifestEntry{}, err
 	}
-	entries, err := managedArchiveEntries(file.Content)
-	if err != nil {
-		return managedFileManifestEntry{}, err
-	}
 	expected := sha256Hex(file.Content)
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0o700); err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	if err := os.WriteFile(archivePath, file.Content, 0o600); err != nil {
+		return managedFileManifestEntry{}, err
+	}
+	if err := os.Chmod(archivePath, 0o600); err != nil {
+		return managedFileManifestEntry{}, err
+	}
 	current, err := fileSHA256Hex(archivePath)
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return managedFileManifestEntry{}, err
-	}
-	if current != expected {
-		if err := os.MkdirAll(filepath.Dir(archivePath), 0o700); err != nil {
-			return managedFileManifestEntry{}, err
-		}
-		if err := os.WriteFile(archivePath, file.Content, 0o600); err != nil {
-			return managedFileManifestEntry{}, err
-		}
-		if err := os.Chmod(archivePath, 0o600); err != nil {
-			return managedFileManifestEntry{}, err
-		}
-		current, err = fileSHA256Hex(archivePath)
-		if err != nil {
-			return managedFileManifestEntry{}, err
-		}
-	}
-	if current != expected {
-		return managedFileManifestEntry{}, fmt.Errorf("managed archive sha256 mismatch for %s", file.Path)
-	}
-	archiveContent, err := os.ReadFile(archivePath)
 	if err != nil {
 		return managedFileManifestEntry{}, err
 	}
-	if sha256Hex(archiveContent) != expected {
+	if current != expected {
 		return managedFileManifestEntry{}, fmt.Errorf("managed archive sha256 mismatch for %s", file.Path)
-	}
-	entries, err = managedArchiveEntries(archiveContent)
-	if err != nil {
-		return managedFileManifestEntry{}, err
 	}
 	if err := os.RemoveAll(targetDir); err != nil {
 		return managedFileManifestEntry{}, err
@@ -661,35 +643,9 @@ func (r *LocalRuntime) writeManagedArchive(spec appruntime.Spec, file appruntime
 	if err := os.MkdirAll(targetDir, 0o700); err != nil {
 		return managedFileManifestEntry{}, err
 	}
-	for _, entry := range entries {
-		target, err := safeArchiveTarget(targetDir, entry.Name)
-		if err != nil {
-			return managedFileManifestEntry{}, err
-		}
-		if entry.Dir {
-			if err := os.MkdirAll(target, entry.Mode); err != nil {
-				return managedFileManifestEntry{}, err
-			}
-			if err := os.Chmod(target, entry.Mode); err != nil {
-				return managedFileManifestEntry{}, err
-			}
-			if err := applyOwnership(target, file.UID, file.GID); err != nil {
-				return managedFileManifestEntry{}, err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
-			return managedFileManifestEntry{}, err
-		}
-		if err := os.WriteFile(target, entry.Content, entry.Mode); err != nil {
-			return managedFileManifestEntry{}, err
-		}
-		if err := os.Chmod(target, entry.Mode); err != nil {
-			return managedFileManifestEntry{}, err
-		}
-		if err := applyOwnership(target, file.UID, file.GID); err != nil {
-			return managedFileManifestEntry{}, err
-		}
+	entries, err := extractManagedArchive(file.Content, targetDir, managedArchiveOwner{UID: file.UID, GID: file.GID})
+	if err != nil {
+		return managedFileManifestEntry{}, err
 	}
 	return managedFileManifestEntry{
 		Kind:     appruntime.ManagedFileKindArchive,
@@ -762,6 +718,83 @@ func applyOwnership(path string, uidValue, gidValue *int) error {
 
 type managedFilesManifest struct {
 	Entries []managedFileManifestEntry `json:"entries"`
+}
+
+const managedFingerprintsPath = "managed-files.fingerprint.json"
+
+// managedFileFingerprint is a cheap stat-based fingerprint used to skip
+// expensive SHA-256 drift checks when file metadata is unchanged.
+type managedFileFingerprint struct {
+	Size          int64 `json:"size"`
+	MTimeUnixNano int64 `json:"mtimeUnixNano"`
+	Dir           bool  `json:"dir,omitempty"`
+}
+
+type managedFilesFingerprints struct {
+	Files map[string]managedFileFingerprint            `json:"files"`
+	Trees map[string]map[string]managedFileFingerprint `json:"trees,omitempty"`
+}
+
+func (r *LocalRuntime) fingerprintsPath(appID, instanceID string) (string, error) {
+	return safeRuntimePath(r.root, appID, instanceID, "state", managedFingerprintsPath)
+}
+
+func (r *LocalRuntime) readFingerprints(appID, instanceID string) managedFilesFingerprints {
+	cache := managedFilesFingerprints{Files: map[string]managedFileFingerprint{}}
+	target, err := r.fingerprintsPath(appID, instanceID)
+	if err != nil {
+		return cache
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil {
+		return cache
+	}
+	_ = json.Unmarshal(raw, &cache)
+	if cache.Files == nil {
+		cache.Files = map[string]managedFileFingerprint{}
+	}
+	return cache
+}
+
+func (r *LocalRuntime) writeFingerprints(appID, instanceID string, cache managedFilesFingerprints) error {
+	target, err := r.fingerprintsPath(appID, instanceID)
+	if err != nil {
+		return err
+	}
+	raw, err := json.Marshal(cache)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(target, raw, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(target, 0o600)
+}
+
+func (r *LocalRuntime) invalidateFingerprints(appID, instanceID string) error {
+	target, err := r.fingerprintsPath(appID, instanceID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func fingerprintOf(info os.FileInfo) managedFileFingerprint {
+	return managedFileFingerprint{
+		Size:          info.Size(),
+		MTimeUnixNano: info.ModTime().UnixNano(),
+		Dir:           info.IsDir(),
+	}
+}
+
+func fingerprintEqual(a, b managedFileFingerprint) bool {
+	return a.Size == b.Size && a.MTimeUnixNano == b.MTimeUnixNano && a.Dir == b.Dir
 }
 
 type managedFileManifestEntry struct {
@@ -993,85 +1026,169 @@ func (r *LocalRuntime) managedFilesDrift(appID, instanceID string) (string, bool
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		return sha256Hex(raw), true, err
 	}
-	for _, entry := range manifest.Entries {
-		drifted, err := r.managedFileEntryDrift(appID, instanceID, entry)
+	cache := r.readFingerprints(appID, instanceID)
+	cacheDirty := false
+	for i := range manifest.Entries {
+		entry := &manifest.Entries[i]
+		updated, drifted, err := r.managedFileEntryDrift(appID, instanceID, entry, &cache)
 		if err != nil || drifted {
 			return sha256Hex(raw), true, err
 		}
+		cacheDirty = cacheDirty || updated
+	}
+	if cacheDirty {
+		// The fingerprint cache is an optimization; a write failure only means
+		// the next drift check falls back to full hashing.
+		_ = r.writeFingerprints(appID, instanceID, cache)
 	}
 	return sha256Hex(raw), false, nil
 }
 
-func (r *LocalRuntime) managedFileEntryDrift(appID, instanceID string, entry managedFileManifestEntry) (bool, error) {
+func (r *LocalRuntime) managedFileEntryDrift(appID, instanceID string, entry *managedFileManifestEntry, cache *managedFilesFingerprints) (bool, bool, error) {
 	switch strings.TrimSpace(entry.Kind) {
 	case appruntime.ManagedFileKindArchive:
+		archiveKey := "archives/" + strings.TrimPrefix(entry.Path, "/") + ".archive"
 		archivePath, err := safeRuntimePath(r.root, appID, instanceID, "archives", entry.Path+".archive")
 		if err != nil {
-			return true, err
+			return false, true, err
 		}
-		got, err := fileSHA256Hex(archivePath)
+		archiveInfo, err := os.Stat(archivePath)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return true, nil
+				return false, true, nil
 			}
-			return true, err
+			return false, true, err
 		}
-		if got != entry.SHA256 {
-			return true, nil
-		}
+		archiveFP := fingerprintOf(archiveInfo)
 		targetDir, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
 		if err != nil {
-			return true, err
+			return false, true, err
+		}
+		treeFPs, err := snapshotTreeFingerprints(targetDir)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return false, true, nil
+			}
+			return false, true, err
+		}
+		if fingerprintEqual(cache.Files[archiveKey], archiveFP) && fingerprintTreeEqual(cache.Trees[archiveKey], treeFPs) {
+			return false, false, nil
 		}
 		treeHash, err := directoryTreeHash(targetDir)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return true, nil
+				return false, true, nil
 			}
-			return true, err
+			return false, true, err
 		}
-		return treeHash != entry.TreeHash, nil
+		if treeHash != entry.TreeHash {
+			return false, true, nil
+		}
+		if cache.Trees == nil {
+			cache.Trees = map[string]map[string]managedFileFingerprint{}
+		}
+		cache.Files[archiveKey] = archiveFP
+		cache.Trees[archiveKey] = treeFPs
+		return true, false, nil
 	default:
+		key := "files/" + strings.TrimPrefix(entry.Path, "/")
 		target, err := safeRuntimePath(r.root, appID, instanceID, "files", entry.Path)
 		if err != nil {
-			return true, err
-		}
-		got, err := fileSHA256Hex(target)
-		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				return true, nil
-			}
-			return true, err
-		}
-		if got != entry.SHA256 {
-			return true, nil
+			return false, true, err
 		}
 		info, err := os.Stat(target)
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
-				return true, nil
+				return false, true, nil
 			}
-			return true, err
+			return false, true, err
+		}
+		fp := fingerprintOf(info)
+		updated := false
+		if !fingerprintEqual(cache.Files[key], fp) {
+			got, err := fileSHA256Hex(target)
+			if err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return false, true, nil
+				}
+				return false, true, err
+			}
+			if got != entry.SHA256 {
+				return false, true, nil
+			}
+			cache.Files[key] = fp
+			updated = true
 		}
 		if entry.Mode != "" && formatFileMode(info.Mode()) != entry.Mode {
-			return true, nil
+			return false, true, nil
 		}
 		ownerMatches, err := fileOwnerMatches(info, entry.UID, entry.GID)
 		if err != nil {
-			return true, err
+			return false, true, err
 		}
-		return !ownerMatches, nil
+		if !ownerMatches {
+			return false, true, nil
+		}
+		return updated, false, nil
 	}
 }
 
-type managedArchiveEntry struct {
-	Name    string
-	Dir     bool
-	Mode    os.FileMode
-	Content []byte
+func snapshotTreeFingerprints(root string) (map[string]managedFileFingerprint, error) {
+	out := map[string]managedFileFingerprint{}
+	err := filepath.WalkDir(root, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if filePath == root {
+			return nil
+		}
+		rel, err := filepath.Rel(root, filePath)
+		if err != nil {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		out[filepath.ToSlash(rel)] = fingerprintOf(info)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
-func managedArchiveEntries(content []byte) ([]managedArchiveEntry, error) {
+func fingerprintTreeEqual(a, b map[string]managedFileFingerprint) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key, fp := range a {
+		other, ok := b[key]
+		if !ok || !fingerprintEqual(fp, other) {
+			return false
+		}
+	}
+	return true
+}
+
+type managedArchiveEntry struct {
+	Name   string
+	Dir    bool
+	Mode   os.FileMode
+	SHA256 string
+}
+
+type managedArchiveOwner struct {
+	UID *int
+	GID *int
+}
+
+// extractManagedArchive validates and extracts an archive into targetDir in a
+// single pass, writing each file directly to disk while computing its SHA-256.
+// Only entry metadata is kept in memory, so peak memory stays close to the size
+// of the compressed archive itself.
+func extractManagedArchive(content []byte, targetDir string, owner managedArchiveOwner) ([]managedArchiveEntry, error) {
 	if len(content) == 0 {
 		return nil, errors.New("managed archive content is required")
 	}
@@ -1080,19 +1197,19 @@ func managedArchiveEntries(content []byte) ([]managedArchiveEntry, error) {
 		if err != nil {
 			return nil, fmt.Errorf("managed archive zip is invalid: %w", err)
 		}
-		return managedZipEntries(reader, int64(len(content)))
+		return extractManagedZip(reader, targetDir, int64(len(content)), owner)
 	}
 	if gzipReader, err := gzip.NewReader(bytes.NewReader(content)); err == nil {
 		defer gzipReader.Close()
-		return managedTarEntries(tar.NewReader(gzipReader), int64(len(content)))
+		return extractManagedTar(tar.NewReader(gzipReader), targetDir, int64(len(content)), owner)
 	}
-	if entries, err := managedTarEntries(tar.NewReader(bytes.NewReader(content)), int64(len(content))); err == nil {
+	if entries, err := extractManagedTar(tar.NewReader(bytes.NewReader(content)), targetDir, int64(len(content)), owner); err == nil {
 		return entries, nil
 	}
 	return nil, errors.New("managed archive must be zip, tar, tar.gz, or tgz")
 }
 
-func managedZipEntries(reader *zip.Reader, compressedSize int64) ([]managedArchiveEntry, error) {
+func extractManagedZip(reader *zip.Reader, targetDir string, compressedSize int64, owner managedArchiveOwner) ([]managedArchiveEntry, error) {
 	out := []managedArchiveEntry{}
 	entries := 0
 	var extracted int64
@@ -1113,6 +1230,9 @@ func managedZipEntries(reader *zip.Reader, compressedSize int64) ([]managedArchi
 			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
 				return nil, err
 			}
+			if err := makeManagedArchiveDir(targetDir, name, archiveEntryMode(info.Mode(), true), owner); err != nil {
+				return nil, err
+			}
 			out = append(out, managedArchiveEntry{Name: name, Dir: true, Mode: archiveEntryMode(info.Mode(), true)})
 			continue
 		}
@@ -1127,20 +1247,20 @@ func managedZipEntries(reader *zip.Reader, compressedSize int64) ([]managedArchi
 		if err != nil {
 			return nil, err
 		}
-		content, readErr := io.ReadAll(rc)
+		entry, writeErr := writeManagedArchiveEntry(targetDir, name, archiveEntryMode(info.Mode(), false), rc, owner)
 		closeErr := rc.Close()
-		if readErr != nil {
-			return nil, readErr
+		if writeErr != nil {
+			return nil, writeErr
 		}
 		if closeErr != nil {
 			return nil, closeErr
 		}
-		out = append(out, managedArchiveEntry{Name: name, Mode: archiveEntryMode(info.Mode(), false), Content: content})
+		out = append(out, entry)
 	}
 	return nonEmptyManagedArchive(out)
 }
 
-func managedTarEntries(reader *tar.Reader, compressedSize int64) ([]managedArchiveEntry, error) {
+func extractManagedTar(reader *tar.Reader, targetDir string, compressedSize int64, owner managedArchiveOwner) ([]managedArchiveEntry, error) {
 	out := []managedArchiveEntry{}
 	entries := 0
 	var extracted int64
@@ -1168,6 +1288,9 @@ func managedTarEntries(reader *tar.Reader, compressedSize int64) ([]managedArchi
 			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
 				return nil, err
 			}
+			if err := makeManagedArchiveDir(targetDir, name, archiveEntryMode(header.FileInfo().Mode(), true), owner); err != nil {
+				return nil, err
+			}
 			out = append(out, managedArchiveEntry{Name: name, Dir: true, Mode: archiveEntryMode(header.FileInfo().Mode(), true)})
 		case tar.TypeReg, tar.TypeRegA:
 			if header.Size < 0 {
@@ -1177,16 +1300,57 @@ func managedTarEntries(reader *tar.Reader, compressedSize int64) ([]managedArchi
 			if err := validateManagedArchiveLimits(name, entries, extracted, compressedSize); err != nil {
 				return nil, err
 			}
-			content, err := io.ReadAll(reader)
+			entry, err := writeManagedArchiveEntry(targetDir, name, archiveEntryMode(header.FileInfo().Mode(), false), reader, owner)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, managedArchiveEntry{Name: name, Mode: archiveEntryMode(header.FileInfo().Mode(), false), Content: content})
+			out = append(out, entry)
 		default:
 			continue
 		}
 	}
 	return nonEmptyManagedArchive(out)
+}
+
+func makeManagedArchiveDir(targetDir, name string, mode os.FileMode, owner managedArchiveOwner) error {
+	dir := filepath.Join(targetDir, filepath.FromSlash(name))
+	if err := os.MkdirAll(dir, mode); err != nil {
+		return err
+	}
+	if err := os.Chmod(dir, mode); err != nil {
+		return err
+	}
+	return applyOwnership(dir, owner.UID, owner.GID)
+}
+
+func writeManagedArchiveEntry(targetDir, name string, mode os.FileMode, content io.Reader, owner managedArchiveOwner) (managedArchiveEntry, error) {
+	target, err := safeArchiveTarget(targetDir, name)
+	if err != nil {
+		return managedArchiveEntry{}, err
+	}
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		return managedArchiveEntry{}, err
+	}
+	file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
+	if err != nil {
+		return managedArchiveEntry{}, err
+	}
+	hasher := sha256.New()
+	if _, err := io.Copy(io.MultiWriter(file, hasher), content); err != nil {
+		_ = file.Close()
+		return managedArchiveEntry{}, err
+	}
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
+		return managedArchiveEntry{}, err
+	}
+	if err := file.Close(); err != nil {
+		return managedArchiveEntry{}, err
+	}
+	if err := applyOwnership(target, owner.UID, owner.GID); err != nil {
+		return managedArchiveEntry{}, err
+	}
+	return managedArchiveEntry{Name: name, Mode: mode, SHA256: hex.EncodeToString(hasher.Sum(nil))}, nil
 }
 
 func validateManagedArchiveLimits(name string, count int, extracted, compressed int64) error {
@@ -1221,7 +1385,7 @@ func managedArchiveTreeHash(entries []managedArchiveEntry) string {
 		addImplicitTreeDirs(items, entry.Name)
 		item := treeHashItem{Name: entry.Name, Dir: entry.Dir, Mode: entry.Mode.Perm()}
 		if !entry.Dir {
-			item.SHA256 = sha256Hex(entry.Content)
+			item.SHA256 = entry.SHA256
 		}
 		items[entry.Name] = item
 	}
@@ -1812,11 +1976,7 @@ func (c *dockerAPIClient) containerLogs(ctx context.Context, name string, tail i
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return "", dockerError(res, "read container logs")
 	}
-	raw, err := io.ReadAll(res.Body)
-	if err != nil {
-		return "", err
-	}
-	return decodeDockerLogs(raw), nil
+	return decodeDockerLogsReader(res.Body)
 }
 
 func (c *dockerAPIClient) emptyPost(ctx context.Context, endpoint, action string) error {
@@ -2249,22 +2409,56 @@ func isDockerNotModified(err error) bool {
 }
 
 func decodeDockerLogs(raw []byte) string {
-	if len(raw) < 8 {
-		return string(raw)
-	}
-	var out bytes.Buffer
-	for len(raw) >= 8 {
-		size := int(binary.BigEndian.Uint32(raw[4:8]))
-		if size < 0 || len(raw) < 8+size {
-			return string(raw)
+	out, _ := decodeDockerLogsReader(bytes.NewReader(raw))
+	return out
+}
+
+// maxDockerLogsBytes is the absolute hard ceiling for one log fetch. It is a
+// guard against a misbehaving daemon, not a working buffer size: normal Docker
+// log frames are far smaller and frames are streamed with their own sanity cap.
+const maxDockerLogsBytes = 16 << 20
+
+// maxDockerLogFrameBytes mirrors the project's command-output limit and is far
+// above Docker's default 16 KiB per log line; a frame larger than this is
+// treated as malformed and the fetch stops instead of ballooning memory.
+const maxDockerLogFrameBytes = 1024 * 1024
+
+// decodeDockerLogsReader streams Docker's 8-byte framed log format directly
+// into a string instead of buffering the whole response in memory first. The
+// total decoded size is bounded by maxDockerLogsBytes; when that ceiling is
+// reached the remaining frames are dropped.
+func decodeDockerLogsReader(r io.Reader) (string, error) {
+	var out strings.Builder
+	var header [8]byte
+	for out.Len() < maxDockerLogsBytes {
+		n, err := io.ReadFull(r, header[:])
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			if errors.Is(err, io.ErrUnexpectedEOF) {
+				out.Write(header[:n])
+				rest, readErr := io.ReadAll(io.LimitReader(r, int64(maxDockerLogsBytes-out.Len())))
+				out.Write(rest)
+				return out.String(), readErr
+			}
+			return out.String(), err
 		}
-		out.Write(raw[8 : 8+size])
-		raw = raw[8+size:]
+		size := int(binary.BigEndian.Uint32(header[4:8]))
+		if size < 0 || size > maxDockerLogFrameBytes {
+			return out.String(), nil
+		}
+		if size > maxDockerLogsBytes-out.Len() {
+			return out.String(), nil
+		}
+		if _, err := io.CopyN(&out, r, int64(size)); err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				break
+			}
+			return out.String(), err
+		}
 	}
-	if len(raw) > 0 {
-		out.Write(raw)
-	}
-	return out.String()
+	return out.String(), nil
 }
 
 func sanitizeContainerPart(value string) string {

@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,6 +17,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	agentcontract "panel/internal/agent/contract"
 	appruntime "panel/internal/modules/applications/runtime"
@@ -58,7 +60,7 @@ func TestManagedArchiveRejectsEmptyDirectoryFlood(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := managedZipEntries(zr, int64(raw.Len())); err == nil {
+	if _, err := extractManagedZip(zr, t.TempDir(), int64(raw.Len()), managedArchiveOwner{}); err == nil {
 		t.Fatal("expected entry limit error")
 	}
 }
@@ -74,7 +76,7 @@ func TestManagedTarRejectsEmptyDirectoryFlood(t *testing.T) {
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := managedTarEntries(tar.NewReader(bytes.NewReader(raw.Bytes())), int64(raw.Len())); err == nil {
+	if _, err := extractManagedTar(tar.NewReader(bytes.NewReader(raw.Bytes())), t.TempDir(), int64(raw.Len()), managedArchiveOwner{}); err == nil {
 		t.Fatal("expected entry limit error")
 	}
 }
@@ -90,7 +92,7 @@ func TestManagedTarRejectsIgnoredHeaderFlood(t *testing.T) {
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := managedTarEntries(tar.NewReader(bytes.NewReader(raw.Bytes())), int64(raw.Len())); err == nil {
+	if _, err := extractManagedTar(tar.NewReader(bytes.NewReader(raw.Bytes())), t.TempDir(), int64(raw.Len()), managedArchiveOwner{}); err == nil {
 		t.Fatal("expected entry limit error")
 	}
 }
@@ -458,5 +460,94 @@ func TestPreparePersistentMountsRejectsEscapedDirectory(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected escaped persistent mount path to be rejected")
+	}
+}
+
+func TestManagedFilesDriftUsesFingerprintCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("managed-file mode semantics differ on Windows")
+	}
+	root := t.TempDir()
+	r := &LocalRuntime{root: root}
+	spec := appruntime.Spec{
+		ApplicationID: "app-1",
+		InstanceID:    "app-1-srv-a",
+		Files: []appruntime.ManagedFile{
+			{Path: "bin/start.sh", Content: []byte("#!/bin/sh\n"), Mode: "0755"},
+			{Kind: appruntime.ManagedFileKindArchive, Path: "public", Content: testZipArchive(t, map[string]string{"index.html": "<h1>ok</h1>"})},
+		},
+	}
+	if err := r.writeManagedFiles(spec); err != nil {
+		t.Fatal(err)
+	}
+	if _, drifted, err := r.managedFilesDrift("app-1", "app-1-srv-a"); err != nil || drifted {
+		t.Fatalf("expected healthy after write: drifted=%v err=%v", drifted, err)
+	}
+	cachePath := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "state", managedFingerprintsPath)
+	if _, err := os.Stat(cachePath); err != nil {
+		t.Fatalf("fingerprint cache should exist after first drift check: %v", err)
+	}
+	// A metadata-only touch must not count as drift and must refresh the cache.
+	target := filepath.Join(root, "app-1", "instances", "app-1-srv-a", "files", "bin", "start.sh")
+	now := time.Now()
+	if err := os.Chtimes(target, now, now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, drifted, err := r.managedFilesDrift("app-1", "app-1-srv-a"); err != nil || drifted {
+		t.Fatalf("touch should not count as drift: drifted=%v err=%v", drifted, err)
+	}
+	// A content change must still be detected.
+	if err := os.WriteFile(target, []byte("changed\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, drifted, err := r.managedFilesDrift("app-1", "app-1-srv-a"); err != nil || !drifted {
+		t.Fatalf("content change should be detected: drifted=%v err=%v", drifted, err)
+	}
+}
+
+func TestDecodeDockerLogsReaderStreamsFrames(t *testing.T) {
+	var raw bytes.Buffer
+	for _, payload := range [][]byte{[]byte("hello"), []byte("world")} {
+		header := make([]byte, 8)
+		binary.BigEndian.PutUint32(header[4:8], uint32(len(payload)))
+		raw.Write(header)
+		raw.Write(payload)
+	}
+	got, err := decodeDockerLogsReader(bytes.NewReader(raw.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "helloworld" {
+		t.Fatalf("decoded = %q, want %q", got, "helloworld")
+	}
+}
+
+func TestDecodeDockerLogsReaderStopsOnOversizedFrame(t *testing.T) {
+	var raw bytes.Buffer
+	header := make([]byte, 8)
+	binary.BigEndian.PutUint32(header[4:8], uint32(maxDockerLogFrameBytes+1))
+	raw.Write(header)
+	raw.Write(make([]byte, 16))
+	got, err := decodeDockerLogsReader(bytes.NewReader(raw.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "" {
+		t.Fatalf("decoded = %q, want empty when frame exceeds per-frame cap", got)
+	}
+}
+
+func TestDecodeDockerLogsReaderReturnsPartialOnTruncatedFrame(t *testing.T) {
+	var raw bytes.Buffer
+	header := make([]byte, 8)
+	binary.BigEndian.PutUint32(header[4:8], 100)
+	raw.Write(header)
+	raw.Write([]byte("short"))
+	got, err := decodeDockerLogsReader(bytes.NewReader(raw.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "short" {
+		t.Fatalf("decoded = %q, want %q", got, "short")
 	}
 }

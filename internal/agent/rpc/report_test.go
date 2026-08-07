@@ -65,3 +65,18 @@ func TestReportIntervalDueUsesUnixBoundary(t *testing.T) {
 		t.Fatal("13 should not be due for a 3 second interval")
 	}
 }
+
+func TestReportHubKeepsSchedulingWhenWatchersChurn(t *testing.T) {
+	hub := newReportHub(agentsystem.LocalCollector{}, nil)
+	w := hub.add(reportConfig{serverID: "s1", metricsInterval: 1 * time.Second})
+	defer hub.remove(w.id)
+	for i := 0; i < 50; i++ {
+		other := hub.add(reportConfig{serverID: "s2", containerInterval: 1 * time.Second})
+		hub.remove(other.id)
+	}
+	select {
+	case <-w.ch:
+	case <-time.After(3 * time.Second):
+		t.Fatal("watcher starved; hub did not keep scheduling reports")
+	}
+}

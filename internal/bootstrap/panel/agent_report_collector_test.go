@@ -53,7 +53,7 @@ func TestAgentReportAuditMarksSilentStreamDisconnected(t *testing.T) {
 		serverID:  "srv-1",
 		endpoint:  "https://127.0.0.1:9786",
 		cancel:    func() { cancelled = true },
-		startedAt: time.Now().UTC().Add(-time.Minute),
+		startedAt: time.Now().UTC().Add(-3 * time.Minute),
 	}
 
 	collector.auditSilentStreams()
