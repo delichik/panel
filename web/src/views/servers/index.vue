@@ -60,6 +60,7 @@ const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
 const pendingOperation = ref('');
 const metrics = ref<ServerMetricsSeries | null>(null);
+const metricsServerId = ref('');
 const metricsLoading = ref(false);
 const metricsError = ref('');
 
@@ -195,8 +196,12 @@ async function loadMetrics() {
   metricsController?.abort();
   const requestId = ++metricsRequestId;
   const id = selectedId.value;
-  metrics.value = null;
   metricsError.value = '';
+  // 切换服务器时立即清空旧数据；同服务器刷新保留旧数据，避免闪跳
+  if (metricsServerId.value !== id) {
+    metrics.value = null;
+    metricsServerId.value = '';
+  }
   if (!id) {
     metricsLoading.value = false;
     return;
@@ -208,6 +213,7 @@ async function loadMetrics() {
     const next = await serversApi.metrics(id, '1h', { signal: controller.signal });
     if (requestId !== metricsRequestId || selectedId.value !== id) return;
     metrics.value = next;
+    metricsServerId.value = id;
   } catch (err) {
     if (isAbortError(err)) return;
     metricsError.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
@@ -521,7 +527,8 @@ onBeforeUnmount(() => {
                     <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.metrics') }}</h3>
                     <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics"><RefreshCcw />{{ t('common.refresh') }}</Button>
                   </div>
-                  <dl class="mt-3 grid grid-cols-3 gap-3 text-sm max-md:grid-cols-1">
+                  <dl class="relative mt-3 grid grid-cols-3 gap-3 text-sm max-md:grid-cols-1">
+                    <LoadingOverlay v-if="metricsLoading && !metrics" />
                     <div><dt>CPU</dt><dd>{{ percent(latestMetrics.cpu?.usagePercent) }}</dd></div>
                     <div><dt>{{ t('serversPage.memory') }}</dt><dd>{{ bytes(latestMetrics.memory?.usedBytes) }} / {{ bytes(latestMetrics.memory?.totalBytes) }}</dd></div>
                     <div><dt>{{ t('serversPage.disk') }}</dt><dd>{{ bytes(latestMetrics.disk?.usedBytes) }} / {{ bytes(latestMetrics.disk?.totalBytes) }}</dd></div>
