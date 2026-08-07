@@ -120,7 +120,7 @@
 - 应用编辑器使用隐藏独立 `EditorPage`：正文按基本信息、运行设置、网络与访问、环境与存储、部署目标、应用文件顺序连续展开，右侧 sticky 摘要展示保存前检查、变更数量、编辑状态和检查结果；顶部只保留表单/YAML 源码编辑方式，不提供分区切换。创建页强调名称和镜像的起步配置；编辑页强调当前修改和保存结果。
 - 应用编辑器的可视化草稿必须是结构化数据，不得把容器环境变量、部署服务器、端口、挂载或反向代理规则压成 JSON/多行文本作为主要交互。复杂重复项使用“摘要列表 + 新增/编辑对话框 + 删除确认”，对话框内使用独立克隆草稿，取消不得污染主草稿。
 - 应用反向代理规则对话框必须通过明确 DTO 克隆函数创建独立草稿，不能对 Vue reactive Proxy 直接调用 `structuredClone`；只有点击保存才替换 `form.reverseProxy` 中对应规则，新建或编辑后取消不得留下空规则、空 Path 或高级选项修改。每个 Path 的高级字段复用 `RoutePathAdvancedFields.vue`。
-- 应用反向代理规则使用 `originServerIds` 和 `anyAccess`。源站候选必须同时属于应用部署节点和设施全局网关节点；后端保存时重新校验。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；`anyAccess.relayServerIds` 为空表示所有非源站全局网关节点，非空表示只在这些指定节点生成转发。转发节点必须属于全局网关节点且不能是源站节点。策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
+- 应用反向代理规则使用 `originServerIds` 和 `anyAccess`。源站候选必须同时属于应用部署节点和设施全局网关节点；后端保存时重新校验。前端不提供手动覆盖：应用代理规则对话框只读展示自动源站，源服务器始终跟随部署目标（`selected` 模式取部署服务器，`all` 模式取全部全局网关节点，再与网关节点求交）；无可用的源站时提示选择属于网关节点的部署目标。`AnyAccess` 开启后所有全局网关节点都部署域名，非源站节点通过入口网关转发到源站；`anyAccess.relayServerIds` 为空表示所有非源站全局网关节点，非空表示只在这些指定节点生成转发。转发节点必须属于全局网关节点且不能是源站节点。策略只允许 `round_robin`、`primary_backup`、`ip_hash`。
 - 应用反向代理域名在设施路由、其他应用代理规则和 Panel 入口之间全局唯一；同一规则下可配置多个 Path，不允许通过多个所有者共享域名。
 - Panel 访问入口启用时，入口服务器必须是已登记的 Panel 宿主节点；尚未登记时，首次保存会将该服务器登记为宿主节点，已登记后入口服务器不允许再选择其他服务器。
 - 应用详情的“反向代理路由”分区只读展示源站、AnyAccess、流量策略、主源站和每个 Path 的高级设置。
@@ -169,7 +169,7 @@
 - Structured editing must remain complete. Image, command, env, ports, mounts, reverse proxy, deployment targets, and session files cannot be hidden behind YAML-only editing.
 - Command is edited as a list of arguments, not a textarea. New dialog rows (command, port, mount, proxy rule, proxy path, facility path) start empty; the UI validates required values instead of pre-filling misleading defaults.
 - The create editor starts with a blank draft: application name, image, source YAML, ports, env, mounts, and reverse proxy rules are not pre-filled with sample values; required fields are validated before preview and commit.
-- The application reverse proxy dialog exposes AnyAccess (kept untranslated) with load-balancing strategy and primary origin server, plus the shared HTTP route options (gzip, request body limit, timeouts, buffering, WebSocket, request/response headers) so application routes carry the same entrance-proxy options as facility paths. Origin servers default to the application's deployment targets intersected with gateway nodes; users can override manually when needed.
+- The application reverse proxy dialog exposes AnyAccess (kept untranslated) with load-balancing strategy and primary origin server, plus the shared HTTP route options (gzip, request body limit, timeouts, buffering, WebSocket, request/response headers) so application routes carry the same entrance-proxy options as facility paths. Origin servers always follow the application's deployment targets intersected with gateway nodes; the dialog shows them read-only and does not offer a manual override.
 - Application name, enabled state, deployment targets, reverse proxy rules, and application files are application-level fields outside AppSpec YAML. Container environment variables belong to AppSpec YAML. They remain part of the same durable edit session and commit flow even when the user opens the source view.
 - 服务器选择器（部署目标、网关节点、源服务器、Panel 入口）展示全部服务器，不再只显示已被应用或设施引用的服务器；部署目标选择器对 agent 未兼容或不可达的服务器显示禁用原因，避免用户误选后到部署阶段才失败。
 - 编辑器确认放弃未保存修改并离开后，路由切换必须同步清理脏状态和弹窗状态，避免同一组件实例被复用后再次导航仍弹出放弃确认。
@@ -191,7 +191,7 @@
 - 前端设施应用入口使用前后端内置的设施适配器，不调用通用设施 list API；当前 `reverse-proxy` 详情与配置直接使用其专属 API。新增设施类型时应新增自己的类型、配置和 API adapter，而不是把所有设施抽象成共享 summary。
 - 前端设施 API adapter 按设施提供 `getConfig`、`reconcile`、`beginEdit` 等专属域语义，直接映射到 `/api/v1/facility-apps/reverse-proxy`；不提供 `listFacilities` 目录方法。新增设施时新增自己的 adapter 和配置契约。设施静态资产同样通过设施配置/编辑会话返回自己的 `assets` 集合，客户端按设施内唯一 `name` 操作，不新增通用资产目录 API。
 - 前端入口代理设施配置页必须是独立编辑页：正文按网关服务器、域名和路由、Panel 访问入口、静态文件顺序连续展开，右侧 sticky 摘要展示新增、修改、删除数量与检查结果；不提供左侧分区导航，域名、Path、静态文件和 Panel 入口不得合并成 JSON 大文本框。
-- 设施域名和 Path 编辑使用“列表 + 对话框”模式：域名对话框编辑域名和源站节点，Path 对话框按 `static` / `redirect` / `proxy_pass` 展示不同字段；复杂项取消时不得污染主草稿。保存仍走 `/api/v1/facility-apps/reverse-proxy/edit-sessions/*` 的 patch、validate、preview、commit 路径，不新增 mock-only endpoint。
+- 设施域名和 Path 编辑使用“列表 + 对话框”模式：域名对话框编辑域名和源站节点，Path 对话框按 `static` / `redirect` / `proxy_pass` 展示不同字段；复杂项取消时不得污染主草稿。域名源服务器选择器只展示当前草稿已选择的网关节点，避免选出后端不允许的非网关源站；取消网关节点时前端同步清理受影响域名的源服务器、AnyAccess 主源站和转发节点并给出提示。保存仍走 `/api/v1/facility-apps/reverse-proxy/edit-sessions/*` 的 patch、validate、preview、commit 路径，不新增 mock-only endpoint。
 
 ## Managed Facility Application Identity
 

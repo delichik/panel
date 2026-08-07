@@ -32,9 +32,7 @@ export interface MountRow {
   mode: string;
 }
 
-export interface ProxyRuleDraft extends ReverseProxyRule {
-  originManual: boolean;
-}
+export type ProxyRuleDraft = ReverseProxyRule;
 
 export interface ApplicationDraftUi {
   name: string;

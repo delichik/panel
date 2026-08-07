@@ -144,7 +144,6 @@ const portDraft = reactive<PortRow>(makePortRow());
 const mountDraft = reactive<MountRow>(makeMountRow());
 const proxyDraft = reactive<ProxyRuleDraft>({
   ...makeProxyRule(),
-  originManual: false,
 });
 const proxyPathDraft = reactive(makeProxyPath());
 const facilityDomainDraft = reactive<FacilityRouteDomain>(makeFacilityDomain());
@@ -267,13 +266,7 @@ const proxyPathWebSocket = computed({
   get: () => Boolean(proxyPathDraft.webSocket),
   set: (value: boolean) => { proxyPathDraft.webSocket = value; },
 });
-const proxyOriginAutoModel = computed({
-  get: () => !proxyDraft.originManual,
-  set: (value: boolean) => {
-    proxyDraft.originManual = !value;
-    if (value) proxyDraft.originServerIds = [];
-  },
-});
+
 const proxyAnyAccessModel = computed({
   get: () => Boolean(proxyDraft.anyAccess.enabled),
   set: (value: boolean) => { proxyDraft.anyAccess.enabled = value; },
@@ -285,13 +278,13 @@ const anyAccessRelayScopeOptions = computed(() => [
   { label: t('applicationsPage.anyAccessRelaySelected'), value: 'selected' },
 ]);
 const proxyRelayServerOptions = computed(() => {
-  const origins = proxyDraft.originManual ? new Set(proxyDraft.originServerIds) : new Set(proxyAutoOriginIds.value);
+  const origins = new Set(proxyAutoOriginIds.value);
   const gateways = new Set(facility.value?.deploymentServers ?? []);
   return serverOptions.value.filter((item) => gateways.has(item.id) && !origins.has(item.id));
 });
 const facilityRelayServerOptions = computed(() => {
   const origins = new Set(facilityDomainDraft.originServerIds);
-  const gateways = new Set(facility.value?.deploymentServers ?? []);
+  const gateways = new Set(facilityDraft.deploymentServers);
   return serverOptions.value.filter((item) => gateways.has(item.id) && !origins.has(item.id));
 });
 const proxyRelayServerIdsModel = computed({
@@ -311,6 +304,8 @@ const httpModeOptions = computed(() => (['inherit', 'on', 'off'] as const).map((
 const webSocketModeOptions = computed(() => (['auto', 'on', 'off'] as const).map((value) => ({ label: t(`applicationsPage.httpMode.${value}`), value })));
 const proxySourceModeOptions = computed(() => (['preserve_source', 'hide_source'] as const).map((value) => ({ label: t(`applicationsPage.proxySourceMode.${value}`), value })));
 const facilityDomainOriginOptions = computed(() => facilityDomainDraft.originServerIds.map((id) => ({ label: serverDisplayName(id), value: id })));
+const facilityGatewayIdSet = computed(() => new Set(facilityDraft.deploymentServers));
+const facilityDomainOriginServerOptions = computed(() => serverOptions.value.filter((item) => facilityGatewayIdSet.value.has(item.id)));
 
 function facilityPathNumberOption(field: 'clientMaxBodySizeMb' | 'connectTimeoutSeconds' | 'readTimeoutSeconds' | 'sendTimeoutSeconds') {
   return computed({
@@ -359,16 +354,11 @@ const proxyClientMaxBodySizeMb = proxyPathNumberOption('clientMaxBodySizeMb');
 const proxyConnectTimeoutSeconds = proxyPathNumberOption('connectTimeoutSeconds');
 const proxyReadTimeoutSeconds = proxyPathNumberOption('readTimeoutSeconds');
 const proxySendTimeoutSeconds = proxyPathNumberOption('sendTimeoutSeconds');
-const proxyPrimaryOriginOptions = computed(() => proxyDraft.originServerIds.map((id) => ({ label: serverDisplayName(id), value: id })));
+const proxyPrimaryOriginOptions = computed(() => proxyAutoOriginIds.value.map((id) => ({ label: serverDisplayName(id), value: id })));
 const proxyAutoOriginIds = computed(() => {
-  const deployed = new Set<string>();
-  if (selectedApplication.value?.id) {
-    (runtimes.value[selectedApplication.value.id]?.instances ?? []).forEach((instance) => {
-      if (instance.serverId) deployed.add(instance.serverId);
-    });
-  }
-  if (appDraft.deploymentMode === 'selected') appDraft.deploymentServers.forEach((id) => deployed.add(id));
-  return (facility.value?.deploymentServers ?? []).filter((id) => deployed.has(id));
+  const gateways = new Set(facility.value?.deploymentServers ?? []);
+  const deployed = appDraft.deploymentMode === 'selected' ? appDraft.deploymentServers : (facility.value?.deploymentServers ?? []);
+  return deployed.filter((id) => gateways.has(id));
 });
 
 const applicationAssetAdapter: AssetFileAdapter = {
@@ -485,17 +475,26 @@ const appDeploymentServersModel = computed({
 const facilityDeploymentServersModel = computed({
   get: () => facilityDraft.deploymentServers,
   set: (value: string[]) => {
+    const removed = facilityDraft.deploymentServers.filter((id) => !value.includes(id));
     facilityDraft.deploymentServers = value;
+    if (removed.length) {
+      const gatewaySet = new Set(value);
+      let pruned = 0;
+      facilityDraft.domains.forEach((domain) => {
+        const before = domain.originServerIds.length;
+        domain.originServerIds = domain.originServerIds.filter((id) => gatewaySet.has(id));
+        pruned += before - domain.originServerIds.length;
+        if (domain.anyAccess.primaryOriginServerId && !gatewaySet.has(domain.anyAccess.primaryOriginServerId)) {
+          domain.anyAccess.primaryOriginServerId = '';
+        }
+        domain.anyAccess.relayServerIds = (domain.anyAccess.relayServerIds ?? []).filter((id) => gatewaySet.has(id));
+      });
+      if (pruned > 0) notify.push({ title: t('applicationsPage.gatewayPrunedOrigins', { count: pruned }), tone: 'warning' });
+    }
     markDirty();
   },
 });
-const proxyOriginServersModel = computed({
-  get: () => proxyDraft.originServerIds,
-  set: (value: string[]) => {
-    proxyDraft.originServerIds = value;
-    markAppStructuredDirty();
-  },
-});
+
 const facilityDomainOriginServersModel = computed({
   get: () => facilityDomainDraft.originServerIds,
   set: (value: string[]) => {
@@ -820,6 +819,7 @@ async function startApplicationEditorCore() {
   editorQueryController = controller;
   const modeAtStart = mode.value;
   await ensureApplicationsLoaded();
+  await ensureFacilityLoaded();
   if (requestId !== editorQueryRequestId || mode.value !== modeAtStart || String(route.params.applicationId ?? '') !== appId) return;
   let app: ApplicationDto | null = null;
   if (appId) {
@@ -1149,10 +1149,7 @@ function openProxyDialog(index = -1) {
   dialogKind.value = 'proxy';
   dialogIndex.value = index;
   const base = index >= 0 ? cloneProxyRules([appDraft.reverseProxy[index]])[0] : makeProxyRule();
-  Object.assign(proxyDraft, {
-    ...base,
-    originManual: index >= 0 && Boolean(appDraft.reverseProxy[index].originServerIds.length),
-  });
+  Object.assign(proxyDraft, { ...base });
   proxyRelayScope.value = base.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
   dialogOpen.value = true;
 }
@@ -1171,7 +1168,7 @@ function removeCommandRow(id: string) {
 }
 
 function saveProxyDialog() {
-  const origins = proxyDraft.originManual ? [...proxyDraft.originServerIds] : [...proxyAutoOriginIds.value];
+  const origins = [...proxyAutoOriginIds.value];
   const port = Number(proxyDraft.targetPort);
   const targetType = proxyDraft.targetType === 'local' || proxyDraft.targetType === 'container' ? proxyDraft.targetType : undefined;
   const next: ReverseProxyRule = {
@@ -1232,6 +1229,11 @@ function openFacilityDomainDialog(index = -1) {
   dialogIndex.value = index;
   Object.keys(facilityDomainErrors).forEach((key) => delete facilityDomainErrors[key]);
   Object.assign(facilityDomainDraft, index >= 0 ? cloneFacilityDomains([facilityDraft.domains[index]])[0] : makeFacilityDomain());
+  const domainGatewaySet = new Set(facilityDraft.deploymentServers);
+  facilityDomainDraft.originServerIds = facilityDomainDraft.originServerIds.filter((id) => domainGatewaySet.has(id));
+  const domainPrimaryOrigin = facilityDomainDraft.anyAccess.primaryOriginServerId || '';
+  facilityDomainDraft.anyAccess.primaryOriginServerId = domainPrimaryOrigin && facilityDomainDraft.originServerIds.includes(domainPrimaryOrigin) ? domainPrimaryOrigin : '';
+  facilityDomainDraft.anyAccess.relayServerIds = (facilityDomainDraft.anyAccess.relayServerIds ?? []).filter((id) => domainGatewaySet.has(id));
   facilityRelayScope.value = facilityDomainDraft.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
   dialogOpen.value = true;
 }
@@ -2026,10 +2028,8 @@ onBeforeUnmount(() => {
       <label class="field">{{ t('applicationsPage.targetType') }}<Select v-model="proxyDraft.targetType" :options="[{ label: 'local', value: 'local' }, { label: 'container', value: 'container' }]" /></label>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.originServers') }}</h3><p>{{ t('applicationsPage.proxyOriginHint') }}</p></div>
-        <label class="switch-field">{{ t('applicationsPage.proxyOriginAuto') }}<Switch v-model="proxyOriginAutoModel" :label="t('applicationsPage.proxyOriginAuto')" /></label>
-        <p v-if="!proxyDraft.originManual" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.proxyOriginAutoSummary', { count: proxyAutoOriginIds.length }) }} · {{ proxyAutoOriginIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
-        <p v-if="!proxyDraft.originManual && !proxyAutoOriginIds.length" class="m-0 text-sm text-danger">{{ t('applicationsPage.validationOriginServers') }}</p>
-        <ServerMultiPicker v-else v-model="proxyOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: proxyDraft.originServerIds.length })" />
+        <p class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: proxyAutoOriginIds.length }) }} · {{ proxyAutoOriginIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
+        <p v-if="!proxyAutoOriginIds.length" class="m-0 text-sm text-danger">{{ t('applicationsPage.proxyOriginEmptyHint') }}</p>
       </div>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
@@ -2037,6 +2037,7 @@ onBeforeUnmount(() => {
         <div v-if="proxyDraft.anyAccess.enabled" class="grid gap-3">
           <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="proxyRelayScope" :options="anyAccessRelayScopeOptions" /></label>
           <ServerMultiPicker v-if="proxyRelayScope === 'selected'" v-model="proxyRelayServerIdsModel" :servers="proxyRelayServerOptions" :label="t('applicationsPage.anyAccessRelayServers', { count: proxyDraft.anyAccess.relayServerIds?.length ?? 0 })" />
+          <p v-if="proxyRelayScope === 'selected' && !proxyRelayServerOptions.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
           <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="proxyDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
           <label v-if="proxyDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="proxyDraft.anyAccess.primaryOriginServerId" :options="proxyPrimaryOriginOptions" /></label>
         </div>
@@ -2077,7 +2078,7 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'facilityDomain'" class="grid gap-3">
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="facilityDomainDraft.domain" :invalid="Boolean(facilityDomainErrors.domain)" @input="clearFacilityDomainError('domain')" /></label>
       <p v-if="facilityDomainErrors.domain" class="m-0 text-sm text-danger">{{ t(facilityDomainErrors.domain) }}</p>
-      <ServerMultiPicker v-model="facilityDomainOriginServersModel" :servers="serverOptions" :label="t('applicationsPage.originServers', { count: facilityDomainDraft.originServerIds.length })" @update:model-value="clearFacilityDomainError('originServers')" />
+      <ServerMultiPicker v-model="facilityDomainOriginServersModel" :servers="facilityDomainOriginServerOptions" :label="t('applicationsPage.originServers', { count: facilityDomainDraft.originServerIds.length })" @update:model-value="clearFacilityDomainError('originServers')" />
       <p v-if="facilityDomainErrors.originServers" class="m-0 text-sm text-danger">{{ t(facilityDomainErrors.originServers) }}</p>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
@@ -2085,6 +2086,7 @@ onBeforeUnmount(() => {
         <div v-if="facilityDomainDraft.anyAccess.enabled" class="grid gap-3">
           <label class="field">{{ t('applicationsPage.anyAccessRelayScope') }}<Select v-model="facilityRelayScope" :options="anyAccessRelayScopeOptions" /></label>
           <ServerMultiPicker v-if="facilityRelayScope === 'selected'" v-model="facilityRelayServerIdsModel" :servers="facilityRelayServerOptions" :label="t('applicationsPage.anyAccessRelayServers', { count: facilityDomainDraft.anyAccess.relayServerIds?.length ?? 0 })" />
+          <p v-if="facilityRelayScope === 'selected' && !facilityRelayServerOptions.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
           <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="facilityDomainDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
           <label v-if="facilityDomainDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="facilityDomainDraft.anyAccess.primaryOriginServerId" :options="facilityDomainOriginOptions" /></label>
         </div>
