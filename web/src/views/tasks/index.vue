@@ -174,7 +174,7 @@ async function runTaskAction(kind: 'retry' | 'run-now', task: TaskDto) {
 function startPolling() {
   window.clearInterval(timer);
   timer = window.setInterval(() => {
-    if (polling.value) void load(true);
+    if (polling.value && document.visibilityState === 'visible') void load(true);
   }, 5000);
 }
 

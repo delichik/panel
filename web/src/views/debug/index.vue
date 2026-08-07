@@ -162,7 +162,7 @@ function dbTone(db: DebugDatabase) {
 
 function startPolling() {
   timer = window.setInterval(() => {
-    if (!paused.value) void load();
+    if (!paused.value && !loading.value) void load();
   }, 8000);
 }
 
