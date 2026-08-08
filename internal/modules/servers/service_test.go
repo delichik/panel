@@ -100,6 +100,43 @@ func TestServerValidation(t *testing.T) {
 	}
 }
 
+func TestLegacyServerReadDerivesIPv4IPv6FromHost(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_legacy','legacy','203.0.113.7',22,'du','cred_1','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(context.Background(), "srv_legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.IPv4 != "203.0.113.7" || got.IPv6 != "" {
+		t.Fatalf("expected ipv4 derived from host, got ipv4=%q ipv6=%q", got.IPv4, got.IPv6)
+	}
+
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,created_at,updated_at) VALUES('srv_legacy6','legacy6','2001:db8::7',22,'du','cred_1','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	got6, err := svc.Get(context.Background(), "srv_legacy6")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got6.IPv4 != "" || got6.IPv6 != "2001:db8::7" {
+		t.Fatalf("expected ipv6 derived from host, got ipv4=%q ipv6=%q", got6.IPv4, got6.IPv6)
+	}
+
+	// Stored ipv4/ipv6 always win over host-derived values.
+	if _, err := store.AppDB().Exec(`UPDATE servers SET ipv4='192.0.2.1', ipv6='2001:db8::1' WHERE id='srv_legacy'`); err != nil {
+		t.Fatal(err)
+	}
+	gotStored, err := svc.Get(context.Background(), "srv_legacy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotStored.IPv4 != "192.0.2.1" || gotStored.IPv6 != "2001:db8::1" {
+		t.Fatalf("expected stored ipv4/ipv6 to win, got ipv4=%q ipv6=%q", gotStored.IPv4, gotStored.IPv6)
+	}
+}
+
 func TestCreateListServer(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

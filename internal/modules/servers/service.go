@@ -147,6 +147,12 @@ func (s *Service) prepareServerForRead(ctx context.Context, srv Server) Server {
 	srv.DockerHost = normalizeDockerHost(srv.DockerHost)
 	applyDistroSystemTraits(srv.OS, srv.Traits)
 	srv.LoadAverage = s.latestLoadAverage(ctx, srv.ID)
+	// Legacy servers registered before ipv4/ipv6 were persisted only carry the
+	// derived host; split it back so edit forms and DNS sync can use the stored
+	// addresses without waiting for a re-save.
+	if strings.TrimSpace(srv.IPv4) == "" && strings.TrimSpace(srv.IPv6) == "" {
+		srv.IPv4, srv.IPv6 = SplitAddress(srv.Host)
+	}
 	return srv
 }
 
