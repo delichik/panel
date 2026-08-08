@@ -13,6 +13,7 @@ export const mockApplicationOperations: ApplicationOperationDto[] = [
   operation('op-canary-failed', 'app-canary-broken', 'checkout-canary', 'apply', 'user', 'failed', 1, 0, 1, true, 'Canary probe failed: /ready returned 503'),
   operation('op-analytics-retry', 'app-analytics', 'analytics-pipeline', 'recover', 'scheduler', 'partial_failed', 2, 1, 1, true, 'worker-nrt-queue-a OOM killed'),
   operation('op-backup-stop', 'app-backup-agent', 'backup-agent', 'stop', 'user', 'succeeded', 2, 2, 0, true, ''),
+  operation('op-facility-deploy', 'facility-reverse-proxy', '__panel_facility_reverse_proxy__', 'apply', 'user', 'succeeded', 2, 2, 0, true, ''),
   ...Array.from({ length: 48 }, (_, index) => {
     const statuses = ['queued', 'running', 'succeeded', 'failed', 'partial_failed', 'cancelled'];
     const actions = ['apply', 'sync', 'stop', 'purge'];

@@ -27,6 +27,15 @@ const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
 
+const FACILITY_REVERSE_PROXY_APPLICATION_ID = 'facility-reverse-proxy';
+
+function applicationLabel(operation: Pick<ApplicationOperationDto, 'applicationId' | 'applicationNameSnapshot'>): string {
+  if (operation.applicationId === FACILITY_REVERSE_PROXY_APPLICATION_ID) {
+    return t('applicationsPage.entranceProxyFacility');
+  }
+  return operation.applicationNameSnapshot || t('common.notAvailable');
+}
+
 const rows = ref<ApplicationOperationDto[]>([]);
 const total = ref(0);
 const page = ref(normalizePage(route.query.page));
@@ -176,7 +185,7 @@ onMounted(load);
       <Table v-if="rows.length || loading" :columns="columns" :rows="rows as OperationRow[]" row-key="operationId" :loading="loading" :loading-label="t('applicationOperationsPage.loading')">
         <template #applicationNameSnapshot="{ row }">
           <div class="grid min-w-0 gap-1">
-            <strong class="truncate text-foreground">{{ row.applicationNameSnapshot || t('common.notAvailable') }}</strong>
+            <strong class="truncate text-foreground">{{ applicationLabel(row) }}</strong>
           </div>
         </template>
         <template #action="{ row }">{{ t(`applicationOperationsPage.action.${row.action}`) }}</template>
@@ -208,7 +217,7 @@ onMounted(load);
     </template>
   </ListPage>
 
-  <Dialog v-model:open="detailOpen" size="large" :title="detail?.operation.applicationNameSnapshot || t('applicationOperationsPage.detailTitle')" :close-label="t('common.close')">
+  <Dialog v-model:open="detailOpen" size="large" :title="detail ? applicationLabel(detail.operation) : t('applicationOperationsPage.detailTitle')" :close-label="t('common.close')">
     <div v-if="detailLoadingId !== ''" class="relative grid min-h-64 place-items-center">
       <LoadingOverlay :label="t('applicationOperationsPage.loadingDetail')" />
     </div>

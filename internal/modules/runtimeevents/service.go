@@ -17,12 +17,6 @@ type Service struct {
 	subjectNames SubjectNameResolver
 }
 
-// facilityReverseProxyApplicationID is the hidden facility reverse-proxy
-// application identity. Its operation projection must not appear in the
-// user-facing operation records list; the facility page renders its own
-// lifecycle operation instead.
-const facilityReverseProxyApplicationID = "facility-reverse-proxy"
-
 func NewService(db *sql.DB) *Service {
 	return &Service{db: db}
 }
@@ -144,7 +138,7 @@ func upsertApplicationOperation(ctx context.Context, tx *sql.Tx, operationID str
 
 func (s *Service) ListApplicationOperations(ctx context.Context, filter ListFilter) (ListResult[OperationRecord], error) {
 	filter = normalizeFilter(filter)
-	q := orm.New(s.db).From("application_operation_records").Where("application_id<>?", facilityReverseProxyApplicationID)
+	q := orm.New(s.db).From("application_operation_records")
 	appendFilter(q, "application_id", filter.ApplicationID)
 	appendFilter(q, "action", filter.Action)
 	appendFilter(q, "source", filter.Source)
@@ -154,7 +148,7 @@ func (s *Service) ListApplicationOperations(ctx context.Context, filter ListFilt
 	if err != nil {
 		return ListResult[OperationRecord]{}, err
 	}
-	q = orm.New(s.db).From("application_operation_records").Where("application_id<>?", facilityReverseProxyApplicationID)
+	q = orm.New(s.db).From("application_operation_records")
 	appendFilter(q, "application_id", filter.ApplicationID)
 	appendFilter(q, "action", filter.Action)
 	appendFilter(q, "source", filter.Source)

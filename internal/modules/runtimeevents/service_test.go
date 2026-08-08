@@ -77,7 +77,7 @@ func TestWriteIsIdempotentAndCreatesOperationProjection(t *testing.T) {
 	}
 }
 
-func TestListApplicationOperationsHidesFacilityReverseProxy(t *testing.T) {
+func TestListApplicationOperationsIncludesFacilityReverseProxy(t *testing.T) {
 	svc, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
@@ -122,8 +122,15 @@ func TestListApplicationOperationsHidesFacilityReverseProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ApplicationID != "app-1" {
-		t.Fatalf("facility operation must be hidden from operation records: %#v", result.Items)
+	if result.Total != 2 || len(result.Items) != 2 {
+		t.Fatalf("expected both application and facility operations: %#v", result.Items)
+	}
+	filtered, err := svc.ListApplicationOperations(ctx, ListFilter{ApplicationID: "facility-reverse-proxy"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Total != 1 || len(filtered.Items) != 1 || filtered.Items[0].ApplicationID != "facility-reverse-proxy" {
+		t.Fatalf("facility operation must be filterable: %#v", filtered.Items)
 	}
 }
 
