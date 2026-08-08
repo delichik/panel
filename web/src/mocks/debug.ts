@@ -1,4 +1,4 @@
-import type { DebugSnapshot } from '@/types/debug';
+import type { DebugPprofStatus, DebugSnapshot } from '@/types/debug';
 
 let failNextSnapshot = false;
 
@@ -22,4 +22,15 @@ export function debugSnapshot(): DebugSnapshot {
       { name: 'metrics', healthy: true, fileSizeBytes: 8100000, pageSizeBytes: 4096, pageCount: 2100, freePageCount: 40, usedBytes: 8437760, freeBytes: 163840, connections: { openConnections: 1, inUse: 0, idle: 1 }, tables: [{ name: 'metrics_snapshots', rowCount: 28000, dataSizeBytes: 6200000, indexSizeBytes: 900000, totalSizeBytes: 7100000, databasePercent: 84.1 }] },
     ],
   };
+}
+
+let pprofEnabled = false;
+
+export function debugPprofStatus(): DebugPprofStatus {
+  return { enabled: pprofEnabled, address: '127.0.0.1:6060' };
+}
+
+export function setDebugPprof(enabled: boolean): DebugPprofStatus {
+  pprofEnabled = enabled;
+  return debugPprofStatus();
 }

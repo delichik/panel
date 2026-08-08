@@ -6,13 +6,14 @@ import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import Switch from '@/components/ui/Switch.vue';
 import Table from '@/components/ui/Table.vue';
 import Tabs from '@/components/ui/Tabs.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import WorkspacePage from '@/components/templates/WorkspacePage.vue';
 import { useI18n } from '@/i18n';
-import type { DebugDatabase, DebugSnapshot, DebugTaskDefinition } from '@/types/debug';
+import type { DebugDatabase, DebugPprofStatus, DebugSnapshot, DebugTaskDefinition } from '@/types/debug';
 
 const { t } = useI18n();
 const notifyError = useErrorToast();
@@ -25,6 +26,8 @@ const paused = ref(false);
 const error = ref('');
 let timer: number | undefined;
 let snapshotRequestId = 0;
+const pprof = ref<DebugPprofStatus | null>(null);
+const pprofPending = ref(false);
 
 type TaskMetricRow = { key: string; label: string; value: string };
 type TaskDefinitionRow = {
@@ -71,6 +74,8 @@ const taskDefinitionRows = computed<TaskDefinitionRow[]>(() => (view.value?.task
   staleQueuedAfter: formatSeconds(definition.staleQueuedAfterSeconds),
   periodicInterval: definition.periodic ? formatSeconds(definition.periodicIntervalSeconds) : t('common.notAvailable'),
 })));
+const pprofUrl = computed(() => (pprof.value?.enabled && pprof.value?.address) ? `http://${pprof.value.address}/debug/pprof/` : null);
+
 const databaseTotals = computed(() => {
   const dbs = view.value?.databases ?? [];
   return {
@@ -115,6 +120,26 @@ function formatTaskActions(definition: DebugTaskDefinition) {
     definition.allowRetry ? t('common.retry') : '',
   ].filter(Boolean);
   return actions.length ? actions.join(' / ') : t('common.notAvailable');
+}
+
+async function loadPprof() {
+  try {
+    pprof.value = await debugApi.pprofStatus();
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('debugPage.pprofLoadFailed'));
+  }
+}
+
+async function togglePprof(enabled: boolean) {
+  if (pprofPending.value) return;
+  pprofPending.value = true;
+  try {
+    pprof.value = await debugApi.setPprof(enabled);
+  } catch (err) {
+    notifyError(err instanceof Error ? err.message : t('debugPage.pprofToggleFailed'));
+  } finally {
+    pprofPending.value = false;
+  }
 }
 
 async function load() {
@@ -168,6 +193,7 @@ function startPolling() {
 
 onMounted(async () => {
   await load();
+  void loadPprof();
   startPolling();
 });
 onBeforeUnmount(() => window.clearInterval(timer));
@@ -193,6 +219,19 @@ onBeforeUnmount(() => window.clearInterval(timer));
           </div>
         </div>
       </template>
+
+      <section class="mb-4 rounded-2xl border border-border bg-card p-5">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div class="grid gap-1">
+            <h3><Activity class="size-4" />{{ t('debugPage.pprof') }}</h3>
+            <p class="text-sm text-muted-foreground">{{ pprof?.enabled ? t('debugPage.pprofEnabledHint') : t('debugPage.pprofDisabledHint') }}</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <a v-if="pprofUrl" class="text-xs text-muted-foreground transition-colors hover:text-foreground" :href="pprofUrl" target="_blank" rel="noreferrer">{{ pprofUrl }}</a>
+            <Switch :model-value="pprof?.enabled ?? false" :disabled="pprofPending" :label="t('debugPage.pprof')" @update:model-value="togglePprof" />
+          </div>
+        </div>
+      </section>
 
       <div v-if="loading && !view" class="relative grid min-h-[600px] place-items-center">
         <LoadingOverlay />

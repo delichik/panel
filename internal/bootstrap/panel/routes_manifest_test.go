@@ -32,8 +32,8 @@ func TestAPIRouteManifestUnchanged(t *testing.T) {
 	}
 
 	patterns := routePatterns(t, files)
-	const wantCount = 144
-	const wantHash = "46506d2837d9eeb8b92fdbf686c73e8428bc2ee24e10a2e325d1d8c408169ae3"
+	const wantCount = 146
+	const wantHash = "95f567fb49f1e774ff2846d9c4159aaf08374bc5deb6735262ea0cfaf30ebc59"
 	manifest := strings.Join(patterns, "\n") + "\n"
 	gotHash := fmt.Sprintf("%x", sha256.Sum256([]byte(manifest)))
 	if len(patterns) != wantCount || gotHash != wantHash {

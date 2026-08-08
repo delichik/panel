@@ -52,6 +52,7 @@ type App struct {
 	agentReports   *agentReportCollector
 	deployments    applications.DeploymentDispatcher
 	control        *installation.ControlServer
+	diagnostics    *diagnostics.Service
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -221,6 +222,7 @@ func New(cfg config.Config) (*App, error) {
 		system:         systemSvc,
 		agentReports:   reportCollector,
 		deployments:    deploymentDispatcher,
+		diagnostics:    diagnosticsSvc,
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -284,6 +286,9 @@ func (a *App) Close() error {
 	}
 	if a.deployments != nil {
 		_ = a.deployments.Stop(context.Background())
+	}
+	if a.diagnostics != nil {
+		_ = a.diagnostics.Close()
 	}
 	return a.store.Close()
 }

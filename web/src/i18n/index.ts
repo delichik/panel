@@ -2353,6 +2353,11 @@ Object.assign(messages.en, {
   'debugPage.size': 'Size',
   'debugPage.databaseSummary': 'Database summary',
   'debugPage.healthyDatabases': 'Healthy databases',
+  'debugPage.pprof': 'pprof profiling',
+  'debugPage.pprofEnabledHint': 'pprof server is running and only reachable from this machine.',
+  'debugPage.pprofDisabledHint': 'Enable the pprof server to collect runtime performance profiles.',
+  'debugPage.pprofLoadFailed': 'Unable to load pprof status.',
+  'debugPage.pprofToggleFailed': 'Unable to update pprof status.',
 });
 
 Object.assign(messages['zh-CN'], {
@@ -2646,6 +2651,11 @@ Object.assign(messages['zh-CN'], {
   'debugPage.size': '大小',
   'debugPage.databaseSummary': '数据库摘要',
   'debugPage.healthyDatabases': '健康数据库',
+  'debugPage.pprof': 'pprof 性能分析',
+  'debugPage.pprofEnabledHint': 'pprof 服务已启用，仅本机可访问。',
+  'debugPage.pprofDisabledHint': '启用后将在本机启动 pprof 服务，用于采集运行时性能数据。',
+  'debugPage.pprofLoadFailed': '无法加载 pprof 状态。',
+  'debugPage.pprofToggleFailed': '无法更新 pprof 状态。',
 });
 
 const state = reactive({ locale: (globalThis.localStorage?.getItem('panel.locale') as Locale) || 'zh-CN' });

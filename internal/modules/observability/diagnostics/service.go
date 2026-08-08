@@ -25,6 +25,7 @@ type Service struct {
 	startedAt   time.Time
 	databases   []DatabaseSource
 	taskRuntime TaskRuntimeProvider
+	pprof       *PprofServer
 }
 
 type Snapshot struct {
@@ -109,11 +110,11 @@ type TableStats struct {
 }
 
 func NewService(databases ...DatabaseSource) *Service {
-	return &Service{startedAt: time.Now().UTC(), databases: databases}
+	return &Service{startedAt: time.Now().UTC(), databases: databases, pprof: NewPprofServer(DefaultPprofAddress)}
 }
 
 func NewServiceWithTaskRuntime(taskRuntime TaskRuntimeProvider, databases ...DatabaseSource) *Service {
-	return &Service{startedAt: time.Now().UTC(), databases: databases, taskRuntime: taskRuntime}
+	return &Service{startedAt: time.Now().UTC(), databases: databases, taskRuntime: taskRuntime, pprof: NewPprofServer(DefaultPprofAddress)}
 }
 
 func (s *Service) Snapshot(ctx context.Context) Snapshot {
@@ -342,4 +343,21 @@ func sqliteFilePath(value string) (string, error) {
 		path = path[1:]
 	}
 	return filepath.FromSlash(path), nil
+}
+
+func (s *Service) PprofStatus() PprofStatus {
+	return s.pprof.Status()
+}
+
+func (s *Service) EnablePprof() error {
+	return s.pprof.Enable()
+}
+
+func (s *Service) DisablePprof() error {
+	return s.pprof.Disable()
+}
+
+// Close stops the optional pprof listener. It is safe to call multiple times.
+func (s *Service) Close() error {
+	return s.pprof.Disable()
 }

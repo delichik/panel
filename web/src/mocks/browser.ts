@@ -109,7 +109,7 @@ import { completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTa
 import { applicationOperationDetail, mockApplicationOperations, mockSystemEvents, systemEventDetail } from './runtimeEvents';
 import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
-import { debugSnapshot } from './debug';
+import { debugPprofStatus, debugSnapshot, setDebugPprof } from './debug';
 
 const nativeFetch = window.fetch.bind(window);
 const mockAuthToken = 'panel_mock_admin_token';
@@ -853,6 +853,11 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/restore/retry' && method(init) === 'POST') return json({ ...restoreStatus(), phase: 'password_required', progress: 10 }, 202);
     if (url.pathname === '/api/v1/restore/clear-pending' && method(init) === 'POST') return json({ ...restoreStatus(), phase: 'completed', progress: 100 });
 
+    if (url.pathname === '/api/v1/debug/pprof' && method(init) === 'GET') return json(debugPprofStatus());
+    if (url.pathname === '/api/v1/debug/pprof' && method(init) === 'PUT') {
+      const input = await body<{ enabled?: boolean }>(init);
+      return json(setDebugPprof(input.enabled === true));
+    }
     if (url.pathname === '/api/v1/debug/snapshot') {
       try {
         return json(debugSnapshot());

@@ -63,3 +63,8 @@ export interface DebugTable {
   databasePercent: number;
   errorCode?: string;
 }
+
+export interface DebugPprofStatus {
+  enabled: boolean;
+  address: string;
+}

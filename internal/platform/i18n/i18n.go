@@ -96,6 +96,8 @@ var (
 			"download_not_implemented":                               "SFTP 下载将在后续阶段支持",
 			"remote_path_invalid":                                    "远程路径必须为绝对路径",
 			"remote_file_mode_invalid":                               "远程文件权限模式无效",
+			"pprof_start_failed":                                     "无法启动 pprof 服务",
+			"pprof_stop_failed":                                      "无法停止 pprof 服务",
 			"private_key_invalid":                                    "私钥无法解析",
 			"passwordless_sudo_required":                             "需要免密 sudo",
 			"privileged_access_required":                             "需要 root 或免密 sudo 权限",
