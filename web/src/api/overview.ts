@@ -11,7 +11,8 @@ export const overviewApi = {
   updateCards(input: OverviewCardConfigurationSet) {
     return apiPut<OverviewCardConfigurationSet>('/overview/cards', input);
   },
-  getCardData(cardId: string) {
-    return apiGet<OverviewCardData>(`/overview/cards/${encodeURIComponent(cardId)}/data`);
+  getCardData(cardId: string, since?: string) {
+    const query = since ? `?since=${encodeURIComponent(since)}` : '';
+    return apiGet<OverviewCardData>(`/overview/cards/${encodeURIComponent(cardId)}/data${query}`);
   },
 };

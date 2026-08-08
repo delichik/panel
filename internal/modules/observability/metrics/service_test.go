@@ -65,6 +65,60 @@ func TestMetricsSaveQueryCleanup(t *testing.T) {
 	}
 }
 
+func TestQueryAfterReturnsOnlyNewerPoints(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := NewService(store.MetricsDB(), nil, nil)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	older := base.Add(-2 * time.Minute)
+	newer := base.Add(-30 * time.Second)
+	for _, snap := range []linux.MetricsSnapshot{
+		{ServerID: "srv", Time: older, CPUUsagePercent: 10},
+		{ServerID: "srv", Time: newer, CPUUsagePercent: 20},
+	} {
+		if err := svc.Save(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := svc.Query(ctx, "srv", "1h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.CPU) != 2 {
+		t.Fatalf("full query length = %d, want 2", len(all.CPU))
+	}
+
+	after, err := svc.QueryAfter(ctx, "srv", "1h", older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after.CPU) != 1 || after.CPU[0].UsagePercent != 20 {
+		t.Fatalf("delta query = %#v, want only the newer point", after.CPU)
+	}
+
+	empty, err := svc.QueryAfter(ctx, "srv", "1h", newer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty.CPU) != 0 {
+		t.Fatalf("delta after newest point = %#v, want empty", empty.CPU)
+	}
+
+	if _, err := svc.QueryAfter(ctx, "srv", "bogus", older); err == nil {
+		t.Fatal("expected invalid range error")
+	}
+}
 func TestCollectRequiresAgent(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

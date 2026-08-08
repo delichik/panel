@@ -159,6 +159,52 @@ func TestGetCardDataExpandsEmptyServerSelection(t *testing.T) {
 	}
 }
 
+func TestGetCardDataSinceReturnsOnlyNewerPoints(t *testing.T) {
+	svc, serverIDs, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	if _, err := svc.UpdateCards(context.Background(), CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-cpu",
+		Kind:             CardKindCPU,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	marker := time.Now().UTC().Add(time.Second)
+	for i, serverID := range serverIDs {
+		if err := svc.metrics.Save(context.Background(), linux.MetricsSnapshot{
+			ServerID:        serverID,
+			Time:            marker,
+			CPUUsagePercent: 99 + float64(i),
+		}); err != nil {
+			t.Fatalf("save newer metrics: %v", err)
+		}
+	}
+
+	since := marker.Add(-500 * time.Millisecond)
+	got, err := svc.GetCardDataSince(context.Background(), "card-cpu", &since)
+	if err != nil {
+		t.Fatalf("get card data since: %v", err)
+	}
+	for i, serverID := range serverIDs {
+		series := got.MetricsByServer[serverID]
+		if len(series.CPU) != 1 || series.CPU[0].UsagePercent != 99+float64(i) {
+			t.Fatalf("server %s delta series = %#v, want only the newer point", serverID, series.CPU)
+		}
+	}
+
+	all, err := svc.GetCardData(context.Background(), "card-cpu")
+	if err != nil {
+		t.Fatalf("get card data: %v", err)
+	}
+	if len(all.MetricsByServer[serverIDs[0]].CPU) != 2 {
+		t.Fatalf("full series length = %d, want 2", len(all.MetricsByServer[serverIDs[0]].CPU))
+	}
+}
 func TestGetCardDataRejectsUnknownCard(t *testing.T) {
 	svc, _, closeStore := newCardDataTestService(t)
 	defer closeStore()

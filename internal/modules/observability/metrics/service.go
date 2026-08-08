@@ -190,13 +190,27 @@ func (s *Service) SaveReported(ctx context.Context, serverID string, sampleAt ti
 }
 
 func (s *Service) Query(ctx context.Context, serverID, rng string) (Series, error) {
+	return s.querySince(ctx, serverID, rng, false, time.Time{})
+}
+
+// QueryAfter returns only snapshots in the range that are strictly newer than
+// after. It backs the overview auto-refresh flow, which appends just the points
+// collected since the last loaded point instead of reloading the whole range.
+func (s *Service) QueryAfter(ctx context.Context, serverID, rng string, after time.Time) (Series, error) {
+	return s.querySince(ctx, serverID, rng, true, after)
+}
+
+func (s *Service) querySince(ctx context.Context, serverID, rng string, hasAfter bool, after time.Time) (Series, error) {
 	duration := map[string]time.Duration{"1h": time.Hour, "6h": 6 * time.Hour, "1d": 24 * time.Hour, "24h": 24 * time.Hour, "7d": 7 * 24 * time.Hour}[rng]
 	if duration == 0 {
 		return Series{}, panelerr.Validation("range_invalid", "Range must be 1h, 6h, 1d, or 7d")
 	}
-	since := time.Now().UTC().Add(-duration).Format(time.RFC3339Nano)
+	query := orm.New(s.db).From("metrics_snapshots").Where("server_id = ?", serverID).And("time >= ?", time.Now().UTC().Add(-duration).Format(time.RFC3339Nano))
+	if hasAfter {
+		query = query.And("time > ?", after.UTC().Truncate(time.Second).Format(time.RFC3339Nano))
+	}
 	var rows []models.MetricsSnapshot
-	if err := orm.New(s.db).From("metrics_snapshots").Where("server_id = ?", serverID).And("time >= ?", since).OrderBy("time").All(ctx, &rows); err != nil {
+	if err := query.OrderBy("time").All(ctx, &rows); err != nil {
 		return Series{}, err
 	}
 	series := Series{Range: rng, CPU: []CPUPoint{}, Memory: []MemoryPoint{}, Disk: []DiskPoint{}, Network: []NetPoint{}, Load: []LoadPoint{}}

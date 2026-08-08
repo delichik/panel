@@ -38,13 +38,26 @@ export function setOverviewCards(input: OverviewCardConfigurationSet): OverviewC
   return getOverviewCards();
 }
 
-export function getOverviewCardData(cardId: string, servers: ServerDto[]): OverviewCardData | null {
+export function getOverviewCardData(cardId: string, servers: ServerDto[], since?: string): OverviewCardData | null {
   const found = overviewCards.find((item) => item.id === cardId);
   if (!found) return null;
   const selected = new Set(found.serverIds);
   const targetServers = servers.filter((server) => selected.size === 0 || selected.has(server.id));
-  const metricsByServer = Object.fromEntries(targetServers.map((server, index) => [server.id, series(index)]));
+  const metricsByServer = Object.fromEntries(targetServers.map((server, index) => {
+    const full = series(index);
+    return [server.id, {
+      cpu: after(full.cpu ?? [], since),
+      memory: after(full.memory ?? [], since),
+      disk: after(full.disk ?? [], since),
+      network: after(full.network ?? [], since),
+    }];
+  }));
   return { card: { ...found, serverIds: [...found.serverIds] }, metricsByServer };
+}
+
+function after<T extends { time: string }>(points: T[], since: string | undefined): T[] {
+  if (!since) return points;
+  return points.filter((point) => point.time > since);
 }
 
 function card(id: string, kind: OverviewCardConfiguration['kind'], range: OverviewCardConfiguration['range'], width: number, height: number): OverviewCardConfiguration {

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
+	"time"
 )
 
 func TestCardsHandlersGetAndUpdate(t *testing.T) {
@@ -36,6 +38,31 @@ func TestCardsHandlersGetAndUpdate(t *testing.T) {
 	}
 }
 
+func TestGetCardDataHandlerAcceptsSinceParam(t *testing.T) {
+	svc, _, closeStore := newCardDataTestService(t)
+	defer closeStore()
+	if _, err := svc.UpdateCards(httptest.NewRequest(http.MethodGet, "/", nil).Context(), CardConfigurationSet{Cards: []CardConfiguration{{
+		ID:               "card-cpu",
+		Kind:             CardKindCPU,
+		Width:            3,
+		Height:           2,
+		Range:            "1h",
+		NetworkDirection: "both",
+		ServerIDs:        []string{},
+	}}}); err != nil {
+		t.Fatalf("update cards: %v", err)
+	}
+
+	recorder := serveOverviewRoute(NewHandler(svc), http.MethodGet, "/api/v1/overview/cards/card-cpu/data?since="+url.QueryEscape(time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)), nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", recorder.Code, recorder.Body.String())
+	}
+
+	bad := serveOverviewRoute(NewHandler(svc), http.MethodGet, "/api/v1/overview/cards/card-cpu/data?since=not-a-time", nil)
+	if bad.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid since status = %d body=%s", bad.Code, bad.Body.String())
+	}
+}
 func serveOverviewRoute(handler *Handler, method, target string, body *bytes.Buffer) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux, func(next http.Handler) http.Handler { return next })

@@ -154,6 +154,14 @@ func (s *Service) UpdateCards(ctx context.Context, input CardConfigurationSet) (
 }
 
 func (s *Service) GetCardData(ctx context.Context, cardID string) (CardData, error) {
+	return s.GetCardDataSince(ctx, cardID, nil)
+}
+
+// GetCardDataSince returns card data optionally limited to points strictly newer
+// than since. It backs the overview auto-refresh flow: the client appends only
+// the points collected after the last loaded point instead of reloading the
+// whole range. A nil since keeps the original full-range behavior.
+func (s *Service) GetCardDataSince(ctx context.Context, cardID string, since *time.Time) (CardData, error) {
 	cardID = strings.TrimSpace(cardID)
 	if cardID == "" {
 		return CardData{}, panelerr.NotFound("overview_card")
@@ -192,7 +200,13 @@ func (s *Service) GetCardData(ctx context.Context, cardID string) (CardData, err
 				continue
 			}
 		}
-		series, err := s.metrics.Query(ctx, srv.ID, target.Range)
+		var series metrics.Series
+		var err error
+		if since != nil {
+			series, err = s.metrics.QueryAfter(ctx, srv.ID, target.Range, *since)
+		} else {
+			series, err = s.metrics.Query(ctx, srv.ID, target.Range)
+		}
 		if err != nil {
 			return CardData{}, err
 		}

@@ -213,7 +213,7 @@ export function installMockApi() {
     const cardMatch = url.pathname.match(/^\/api\/v1\/overview\/cards\/([^/]+)\/data$/);
     if (cardMatch) {
       try {
-        const data = getOverviewCardData(decodeURIComponent(cardMatch[1]), mockServers);
+        const data = getOverviewCardData(decodeURIComponent(cardMatch[1]), mockServers, url.searchParams.get("since") ?? undefined);
         return data ? json(data) : error('overview_card_not_found', 'Overview card was not found.', 404);
       } catch (err) {
         return error('overview_card_data_failed', err instanceof Error ? err.message : 'Unable to load card data.', 503);

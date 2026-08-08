@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { Activity, AlertTriangle, BarChart3, Boxes, Check, Grip, Gauge, Pencil, Plus, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
 import { overviewApi } from '@/api/overview';
@@ -8,6 +8,7 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Select from '@/components/ui/Select.vue';
+import Switch from '@/components/ui/Switch.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
@@ -15,7 +16,7 @@ import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import { useI18n } from '@/i18n';
 import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries } from '@/types/overview';
-import { cardHasData, createOverviewCard, defaultOverviewCards, overviewRisks, summarizeOverview } from './model';
+import { cardHasData, createOverviewCard, defaultOverviewCards, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange } from './model';
 
 const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue'));
 
@@ -52,6 +53,10 @@ const resizeState = ref<{
   columnWidth: number;
   rowHeight: number;
 } | null>(null);
+const autoRefresh = ref(false);
+const autoRefreshInterval = ref<'5' | '10'>('5');
+let autoRefreshTimer: number | undefined;
+let autoRefreshInFlight = false;
 
 const summary = computed(() => summarizeOverview(overview.value));
 const risks = computed(() => overviewRisks(overview.value.servers));
@@ -83,6 +88,10 @@ const directionOptions = computed(() => [
   { value: 'both', label: t('overviewPage.rxTx') },
   { value: 'rx', label: t('overviewPage.rx') },
   { value: 'tx', label: t('overviewPage.tx') },
+]);
+const autoRefreshIntervalOptions = computed(() => [
+  { value: '5', label: t('overviewPage.autoRefresh5s') },
+  { value: '10', label: t('overviewPage.autoRefresh10s') },
 ]);
 const widthOptions = computed(() => Array.from({ length: 6 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
 const heightOptions = computed(() => Array.from({ length: 4 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
@@ -466,13 +475,104 @@ function formatBytes(value: number) {
   return `${(value / 1024 / 1024).toFixed(1)} MB/s`;
 }
 
+function startAutoRefresh() {
+  stopAutoRefresh();
+  if (!autoRefresh.value) return;
+  autoRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshCardDeltas();
+  }, Number(autoRefreshInterval.value) * 1000);
+}
+
+function stopAutoRefresh() {
+  if (autoRefreshTimer !== undefined) {
+    window.clearInterval(autoRefreshTimer);
+    autoRefreshTimer = undefined;
+  }
+}
+
+function latestPointTime(card: OverviewCardConfiguration, data: OverviewCardData): string | undefined {
+  let latest: string | undefined;
+  for (const series of Object.values(data.metricsByServer)) {
+    const points = card.kind === 'cpu' ? series.cpu : card.kind === 'memory' ? series.memory : card.kind === 'disk' ? series.disk : series.network;
+    for (const point of points ?? []) {
+      if (!latest || Date.parse(point.time) > Date.parse(latest)) latest = point.time;
+    }
+  }
+  return latest;
+}
+
+async function refreshCardDeltas() {
+  if (autoRefreshInFlight || editMode.value || cardEditorOpen.value) return;
+  autoRefreshInFlight = true;
+  try {
+    for (const card of cards.value) {
+      if (!isMetricCard(card) || cardLoading.value[card.id] || !cardData.value[card.id]) continue;
+      const data = cardData.value[card.id];
+      if (!data || !cardHasData(card, data)) continue;
+      const since = latestPointTime(card, data);
+      if (!since) continue;
+      const cardAtStart = {
+        kind: card.kind,
+        range: card.range,
+        networkDirection: card.networkDirection,
+        serverIds: [...card.serverIds],
+      };
+      const requestId = ++cardRequestSeq;
+      cardRequests.set(card.id, requestId);
+      try {
+        const delta = await overviewApi.getCardData(card.id, since);
+        if (cardRequests.get(card.id) !== requestId) continue;
+        const currentCard = cards.value.find((item) => item.id === card.id);
+        if (!currentCard || !sameCardConfig(currentCard, cardAtStart)) continue;
+        const merged = mergeCardData(cardData.value[card.id], delta);
+        const trimmed = trimCardDataToRange(merged);
+        if (latestPointTime(card, merged) && !latestPointTime(card, trimmed)) {
+          // The whole visible window expired without fresh points; reload the range once.
+          void loadCard(card.id);
+          continue;
+        }
+        cardData.value = { ...cardData.value, [card.id]: trimmed };
+        cardValues.value = { ...cardValues.value, [card.id]: metricValue(card, trimmed) };
+        if (cardErrors.value[card.id] && cardHasData(card, trimmed)) {
+          const nextErrors = { ...cardErrors.value };
+          delete nextErrors[card.id];
+          cardErrors.value = nextErrors;
+        }
+      } catch {
+        // Keep the existing points and retry on the next tick.
+      } finally {
+        if (cardRequests.get(card.id) === requestId) cardRequests.delete(card.id);
+      }
+    }
+  } finally {
+    autoRefreshInFlight = false;
+  }
+}
+
+watch([autoRefresh, autoRefreshInterval], startAutoRefresh);
+watch(editMode, (editing) => {
+  if (editing) {
+    stopAutoRefresh();
+  } else if (autoRefresh.value) {
+    startAutoRefresh();
+  }
+});
+
 onMounted(load);
-onBeforeUnmount(stopResize);
+onBeforeUnmount(() => {
+  stopResize();
+  stopAutoRefresh();
+});
 </script>
 
 <template>
   <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
     <template #actions>
+      <div class="flex items-center gap-2 rounded-xl border border-border bg-card px-2.5 py-1.5" :title="t('overviewPage.autoRefreshHint')">
+        <Switch v-model="autoRefresh" :label="t('overviewPage.autoRefresh')" />
+        <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.autoRefresh') }}</span>
+        <Select v-if="autoRefresh" v-model="autoRefreshInterval" :options="autoRefreshIntervalOptions" class="w-16" />
+      </div>
       <Button size="sm" :loading="loading" @click="load">
         <RefreshCcw />
         {{ t('common.refresh') }}

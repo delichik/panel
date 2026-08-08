@@ -1,4 +1,4 @@
-import type { OverviewCardConfiguration, OverviewCardData, OverviewDto, OverviewServerSummary } from '@/types/overview';
+import type { OverviewCardConfiguration, OverviewCardData, OverviewDto, OverviewMetricsSeries, OverviewCardRange, OverviewServerSummary } from '@/types/overview';
 
 export interface OverviewRisk {
   id: string;
@@ -66,4 +66,60 @@ export function createOverviewCard(
     networkDirection: 'both',
     serverIds: [],
   };
+}
+
+export function mergeMetricPoints<T extends { time: string }>(existing: T[] | undefined, incoming: T[] | undefined): T[] {
+  if (!incoming?.length) return existing ? [...existing] : [];
+  if (!existing?.length) return [...incoming];
+  return [...existing, ...incoming];
+}
+
+export function mergeMetricSeries(existing: OverviewMetricsSeries | undefined, incoming: OverviewMetricsSeries | undefined): OverviewMetricsSeries {
+  return {
+    cpu: mergeMetricPoints(existing?.cpu, incoming?.cpu),
+    memory: mergeMetricPoints(existing?.memory, incoming?.memory),
+    disk: mergeMetricPoints(existing?.disk, incoming?.disk),
+    network: mergeMetricPoints(existing?.network, incoming?.network),
+  };
+}
+
+export function mergeCardData(existing: OverviewCardData | undefined, delta: OverviewCardData): OverviewCardData {
+  const serverIds = new Set([...Object.keys(existing?.metricsByServer ?? {}), ...Object.keys(delta.metricsByServer)]);
+  const metricsByServer: Record<string, OverviewMetricsSeries> = {};
+  for (const serverId of serverIds) {
+    metricsByServer[serverId] = mergeMetricSeries(existing?.metricsByServer[serverId], delta.metricsByServer[serverId]);
+  }
+  return { card: delta.card, metricsByServer };
+}
+
+const RANGE_DURATIONS_MS: Record<OverviewCardRange, number> = {
+  '1h': 60 * 60 * 1000,
+  '6h': 6 * 60 * 60 * 1000,
+  '1d': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+};
+
+export function trimMetricPoints<T extends { time: string }>(points: T[] | undefined, sinceMs: number): T[] {
+  if (!points?.length) return [];
+  return points.filter((point) => Date.parse(point.time) >= sinceMs);
+}
+
+export function trimMetricSeries(series: OverviewMetricsSeries | undefined, sinceMs: number): OverviewMetricsSeries {
+  return {
+    cpu: trimMetricPoints(series?.cpu, sinceMs),
+    memory: trimMetricPoints(series?.memory, sinceMs),
+    disk: trimMetricPoints(series?.disk, sinceMs),
+    network: trimMetricPoints(series?.network, sinceMs),
+  };
+}
+
+export function trimCardDataToRange(data: OverviewCardData, now: Date = new Date()): OverviewCardData {
+  const durationMs = RANGE_DURATIONS_MS[data.card.range];
+  if (!durationMs) return data;
+  const sinceMs = now.getTime() - durationMs;
+  const metricsByServer: Record<string, OverviewMetricsSeries> = {};
+  for (const [serverId, series] of Object.entries(data.metricsByServer)) {
+    metricsByServer[serverId] = trimMetricSeries(series, sinceMs);
+  }
+  return { ...data, metricsByServer };
 }
