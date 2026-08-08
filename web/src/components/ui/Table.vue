@@ -14,6 +14,10 @@ withDefaults(defineProps<{
 
 const skeletonWidths = ['w-24', 'w-32', 'w-40', 'w-28', 'w-48'];
 
+function staggerStyle(index: number): Record<string, string> {
+  return { '--panel-stagger': `${Math.min(index, 6) * 20}ms` };
+}
+
 function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | 'right') {
   return [
     'motion-skeleton h-4 rounded bg-muted animate-pulse',
@@ -41,7 +45,7 @@ function skeletonClass(rowIndex: number, columnIndex: number, align?: 'left' | '
               </td>
             </tr>
           </template>
-          <tr v-for="(row, index) in rows" v-else :key="rowKey ? String(row[rowKey]) : index" class="motion-table-row hover:bg-accent/60">
+          <tr v-for="(row, index) in rows" v-else :key="rowKey ? String(row[rowKey]) : index" class="motion-table-row hover:bg-accent/60" :style="staggerStyle(index)">
             <td v-for="column in columns" :key="column.key" class="px-3 py-2 text-foreground/80" :class="column.align === 'right' ? 'text-right' : 'text-left'">
               <slot :name="column.key" :row="row" :value="row[column.key]">
                 {{ row[column.key] }}

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { flushPromises, mount } from '@vue/test-utils';
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils';
 import { createPinia } from 'pinia';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,6 +43,10 @@ function makeRouter(): Router {
   });
 }
 
+// AppShell teleports the mobile drawer to <body>; unmount every mounted shell
+// after each test so no stale teleported DOM leaks into the next test.
+const mountedWrappers: VueWrapper[] = [];
+
 async function mountShell() {
   const { default: AppShell } = await import('./AppShell.vue');
   const router = makeRouter();
@@ -52,6 +56,7 @@ async function mountShell() {
     attachTo: document.body,
     global: { plugins: [createPinia(), router] },
   });
+  mountedWrappers.push(wrapper);
   await flushPromises();
   return { wrapper, router };
 }
@@ -82,6 +87,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  while (mountedWrappers.length) mountedWrappers.pop()!.unmount();
   document.body.innerHTML = '';
   document.body.style.overflow = '';
   localStorage.clear();

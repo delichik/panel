@@ -129,18 +129,20 @@ onBeforeUnmount(() => {
       <slot name="trigger" :open="open" />
     </div>
     <Teleport to="body">
-      <div
-        v-if="open"
-        :id="menuId"
-        ref="menu"
-        class="motion-popover z-50 w-max overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
-        :style="menuStyle"
-        role="menu"
-        @click="setOpen(false, 'trigger')"
-        @keydown="onMenuKeydown"
-      >
-        <slot />
-      </div>
+      <Transition name="menu">
+        <div
+          v-if="open"
+          :id="menuId"
+          ref="menu"
+          class="z-50 w-max overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+          :style="menuStyle"
+          role="menu"
+          @click="setOpen(false, 'trigger')"
+          @keydown="onMenuKeydown"
+        >
+          <slot />
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

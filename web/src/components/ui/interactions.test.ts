@@ -84,7 +84,8 @@ describe('Select', () => {
     await nextTick();
 
     const listbox = document.querySelector<HTMLElement>('[role="listbox"]')!;
-    expect(listbox.parentElement).toBe(document.body);
+    // The listbox is teleported to <body>; the Transition stub wraps it in tests.
+    expect(document.body.contains(listbox)).toBe(true);
     expect(listbox.style.position).toBe('fixed');
     expect(listbox.style.width).toBe('200px');
     expect(listbox.style.left).toBe('20px');

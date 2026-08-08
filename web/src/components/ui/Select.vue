@@ -237,16 +237,17 @@ onBeforeUnmount(() => {
     </button>
 
     <Teleport to="body">
-      <div
-        v-if="open"
-        :id="`${id}-listbox`"
-        ref="listbox"
-        class="motion-popover z-50 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
-        :style="listboxStyle"
-        role="listbox"
-        :aria-labelledby="attrs.id as string | undefined"
-        @keydown="onKeydown"
-      >
+      <Transition name="menu">
+        <div
+          v-if="open"
+          :id="`${id}-listbox`"
+          ref="listbox"
+          class="z-50 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+          :style="listboxStyle"
+          role="listbox"
+          :aria-labelledby="attrs.id as string | undefined"
+          @keydown="onKeydown"
+        >
       <button
         v-for="(option, index) in options"
         :id="`${id}-option-${index}`"
@@ -266,7 +267,8 @@ onBeforeUnmount(() => {
         <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
         <Check v-if="modelValue === option.value" class="size-4 shrink-0 text-foreground" aria-hidden="true" />
       </button>
-      </div>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>

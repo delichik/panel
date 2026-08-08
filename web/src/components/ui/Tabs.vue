@@ -55,8 +55,12 @@ function onKeydown(event: KeyboardEvent, value: string) {
         {{ tab.label }}
       </button>
     </div>
-    <div :id="`${id}-tabpanel`" class="motion-enter min-h-0 pt-4" role="tabpanel" :aria-labelledby="tabId(modelValue)" tabindex="0">
-      <slot />
+    <div :id="`${id}-tabpanel`" class="min-h-0 pt-4" role="tabpanel" :aria-labelledby="tabId(modelValue)" tabindex="0">
+      <Transition name="tab-panel" mode="out-in">
+        <div :key="modelValue" class="h-full min-h-0">
+          <slot />
+        </div>
+      </Transition>
     </div>
   </div>
 </template>

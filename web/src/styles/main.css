@@ -211,6 +211,7 @@ button:disabled { cursor: not-allowed; }
 .motion-list-item,
 .motion-table-row {
   animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
+  animation-delay: var(--panel-stagger, 0ms);
 }
 
 .motion-overlay {
@@ -242,6 +243,135 @@ button:disabled { cursor: not-allowed; }
 
 .motion-skeleton {
   animation-duration: 1.45s;
+}
+/* ---- Vue <Transition> 进出场：退场与进场成对，统一经 motion token ---- */
+
+/* 对话框：遮罩淡入淡出 + 面板轻微上浮/下落 */
+.dialog-enter-active,
+.dialog-leave-active {
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+}
+.dialog-enter-active .dialog-panel,
+.dialog-leave-active .dialog-panel {
+  transition:
+    opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+}
+.dialog-enter-from,
+.dialog-leave-to {
+  opacity: 0;
+}
+.dialog-enter-from .dialog-panel,
+.dialog-leave-to .dialog-panel {
+  opacity: 0;
+  transform: translateY(var(--panel-motion-enter-y)) scale(0.98);
+}
+
+/* 下拉菜单 / 下拉选择：淡入淡出 + 轻微上下滑动 */
+.menu-enter-active,
+.menu-leave-active {
+  transition:
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+}
+.menu-enter-from,
+.menu-leave-to {
+  opacity: 0;
+  transform: translateY(calc(var(--panel-motion-enter-y) * -1));
+}
+
+/* 移动端侧边抽屉：遮罩淡入淡出 + 面板左右滑入滑出 */
+.drawer-enter-active,
+.drawer-leave-active {
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+}
+.drawer-enter-active .drawer-panel,
+.drawer-leave-active .drawer-panel {
+  transition: transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+}
+.drawer-enter-from,
+.drawer-leave-to {
+  opacity: 0;
+}
+.drawer-enter-from .drawer-panel,
+.drawer-leave-to .drawer-panel {
+  transform: translateX(-100%);
+}
+
+/* Toast：从上方淡入、向下淡出，列表重排平滑 */
+.toast-stack-enter-active {
+  transition:
+    opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-base) var(--panel-motion-ease-emphasized);
+}
+.toast-stack-leave-active {
+  transition:
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+}
+.toast-stack-enter-from {
+  opacity: 0;
+  transform: translateY(calc(var(--panel-motion-enter-y) * -1));
+}
+.toast-stack-leave-to {
+  opacity: 0;
+  transform: translateY(var(--panel-motion-enter-y));
+}
+.toast-stack-move {
+  transition: transform var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+}
+
+/* 路由内容切换：仅淡入淡出，避免 transform 影响页面内 fixed 元素 */
+.route-enter-active,
+.route-leave-active {
+  transition: opacity var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
+}
+.route-enter-from,
+.route-leave-to {
+  opacity: 0;
+}
+
+/* Tab 内容切换：淡入 + 轻微上移 */
+.tab-panel-enter-active,
+.tab-panel-leave-active {
+  transition:
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+}
+.tab-panel-enter-from {
+  opacity: 0;
+  transform: translateY(var(--panel-motion-enter-y));
+}
+.tab-panel-leave-to {
+  opacity: 0;
+}
+
+/* 状态徽标变化：轻微缩放淡入淡出 */
+.status-enter-active,
+.status-leave-active {
+  transition:
+    opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard),
+    transform var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+}
+.status-enter-from {
+  opacity: 0;
+  transform: scale(0.9);
+}
+.status-leave-to {
+  opacity: 0;
+}
+
+/* 侧边栏折叠文字淡入（收起时随宽度收缩即时隐藏，不播放退场） */
+.fade-enter-active {
+  transition: opacity var(--panel-motion-duration-fast) var(--panel-motion-ease-standard);
+}
+.fade-enter-from {
+  opacity: 0;
+}
+
+/* 侧边栏折叠/展开：导航列宽平滑过渡 */
+.shell-grid {
+  transition: grid-template-columns var(--panel-motion-duration-base) var(--panel-motion-ease-standard);
 }
 
 @keyframes panel-motion-enter {
@@ -282,7 +412,19 @@ button:disabled { cursor: not-allowed; }
   .motion-overlay,
   .motion-toast,
   .motion-enter,
-  .motion-tooltip {
+  .motion-tooltip,
+  .dialog-panel,
+  .drawer-panel,
+  .menu-enter-from,
+  .menu-leave-to,
+  .toast-stack-enter-from,
+  .toast-stack-leave-to,
+  .tab-panel-enter-from,
+  .tab-panel-leave-to,
+  .status-enter-from,
+  .status-leave-to,
+  .route-enter-from,
+  .route-leave-to {
     transform: none !important;
   }
 

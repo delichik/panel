@@ -38,10 +38,11 @@
 
 ## Motion
 
-- 动效只服务工作台反馈：hover / focus / pressed / selected / menu-dialog-toast enter / tab content enter / skeleton loading。
-- 统一经 `web/src/styles/main.css` 中的 `--panel-motion-*` token 与 `motion-*` utility；业务页面不要自造 duration、easing、translate、scale 或 shadow 常量。
+- 动效只服务工作台反馈：hover / focus / pressed / selected / 浮层进出场 / 路由内容切换 / tab 内容切换 / 状态变化 / skeleton loading。不做装饰性、循环性或大幅位移动画。
+- 统一经 `web/src/styles/main.css` 中的 `--panel-motion-*` token 与 `motion-*` utility；业务页面不要自造 duration、easing、translate、scale 或 shadow 常量，也不要自建同名过渡类。
 - 常规反馈控制在 150-220ms；位移只允许 1-2px 或轻微 scale，必须使用 `transform`，不能改变尺寸、间距或滚动结构。
-- `motion-control` / `motion-icon-control` 用于 Button 和 IconButton；`motion-field` 用于 Input / Select / Textarea；`motion-tab`、`motion-menu-item`、`motion-list-item`、`motion-card` 分别用于 tab、菜单项、列表/选择项、卡片；表格行使用只变色不位移的 `motion-table-row`；遮罩层使用只淡入的 `motion-overlay`，浮层本体使用 `motion-popover` / `motion-toast`。
+- `motion-control` / `motion-icon-control` 用于 Button 和 IconButton；`motion-field` 用于 Input / Select / Textarea；`motion-tab`、`motion-menu-item`、`motion-list-item`、`motion-card` 分别用于 tab、菜单项、列表/选择项、卡片；表格行使用只变色不位移的 `motion-table-row`，并支持 `--panel-stagger` 变量做交错入场（每行延迟上限约 6 行，仅首屏/新增行播放，刷新不重放）；`motion-overlay` / `motion-popover` / `motion-toast` 保留为元素挂载时的入场动画工具类。
+- 浮层进出场成对实现（进场与退场都在）：Dialog、Dropdown、Select 下拉、移动端侧边抽屉、Toast 经 Vue `<Transition>` / `<TransitionGroup>`，统一类名 `dialog-*`、`menu-*`、`drawer-*`、`toast-stack-*`；路由内容切换用 `route-*`（仅淡入淡出，避免 transform 影响页面内 fixed 元素）；Tab 内容切换用 `tab-panel-*`；状态徽标变化用 `status-*`；侧边栏折叠文字淡入用 `fade-*`、导航列宽过渡用 `shell-grid`。
 - 必须支持 `prefers-reduced-motion: reduce`：关闭位移和骨架动画，将 transition / animation 降到近似无动画。新增动效前先确认该降级规则覆盖到对应元素。
 
 ## 断点与滚动

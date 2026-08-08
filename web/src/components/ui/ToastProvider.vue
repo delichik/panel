@@ -33,7 +33,7 @@ provide(toastKey, { push, remove });
       <section
         v-for="toast in toasts"
         :key="toast.id"
-        class="motion-toast rounded-2xl border bg-popover p-4 text-sm text-popover-foreground shadow-xl"
+        class="rounded-2xl border bg-popover p-4 text-sm text-popover-foreground shadow-xl"
         :class="{
           'border-success-border': toast.tone === 'success',
           'border-warning-border': toast.tone === 'warning',

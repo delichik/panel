@@ -105,7 +105,9 @@ const resolvedLabel = computed(() => props.label ?? props.status);
 </script>
 
 <template>
-  <Badge :tone="resolvedTone">
-    <slot :tone="resolvedTone" :label="resolvedLabel">{{ resolvedLabel }}</slot>
-  </Badge>
+  <Transition name="status" mode="out-in">
+    <Badge :key="`${normalized}-${resolvedTone}`" :tone="resolvedTone">
+      <slot :tone="resolvedTone" :label="resolvedLabel">{{ resolvedLabel }}</slot>
+    </Badge>
+  </Transition>
 </template>

@@ -63,20 +63,24 @@ async function signOut() {
 </script>
 
 <template>
-  <div class="relative grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :inert="drawerOpen || undefined" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
+  <div class="shell-grid relative grid min-h-dvh w-full overflow-visible bg-background lg:h-dvh lg:min-h-0 lg:overflow-hidden lg:grid-cols-[var(--shell-nav)_minmax(0,1fr)]" :inert="drawerOpen || undefined" :style="{ '--shell-nav': collapsed ? '76px' : '260px' }">
     <LoadingOverlay v-if="signingOut" />
     <aside class="hidden min-h-0 flex-col border-r border-border bg-card lg:flex">
       <div class="flex min-h-16 items-center gap-3 border-b border-border px-4">
         <img src="/favicon.svg" class="size-9 shrink-0 rounded-xl" alt="" aria-hidden="true" />
-        <div v-if="!collapsed" class="min-w-0">
-          <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
-          <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
-        </div>
+        <Transition name="fade">
+          <div v-if="!collapsed" class="min-w-0">
+            <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
+            <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+          </div>
+        </Transition>
       </div>
       <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
         <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
-          <div v-if="!collapsed" class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
-          <div v-else-if="group.key !== navGroups[0]?.key" class="mx-2 my-3 h-px bg-border" />
+          <Transition name="fade">
+            <div v-if="!collapsed" class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
+          </Transition>
+          <div v-if="collapsed && group.key !== navGroups[0]?.key" class="mx-2 my-3 h-px bg-border" />
           <RouterLink
             v-for="item in group.items"
             :key="item.key"
@@ -86,7 +90,9 @@ async function signOut() {
             :class="[activeKey === item.key ? 'bg-accent text-foreground' : '', collapsed ? 'justify-center px-0' : 'gap-3']"
           >
             <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
-            <span v-if="!collapsed" class="truncate">{{ t(item.titleKey) }}</span>
+            <Transition name="fade">
+              <span v-if="!collapsed" class="truncate">{{ t(item.titleKey) }}</span>
+            </Transition>
           </RouterLink>
         </section>
       </nav>
@@ -99,8 +105,10 @@ async function signOut() {
             <Menu />
           </IconButton>
           <IconButton class="hidden lg:inline-grid" :label="t('layout.nav.collapse')" @click="collapsed = !collapsed">
-            <PanelLeftOpen v-if="collapsed" />
-            <PanelLeftClose v-else />
+            <Transition name="fade" mode="out-in">
+              <PanelLeftOpen v-if="collapsed" />
+              <PanelLeftClose v-else />
+            </Transition>
           </IconButton>
           <h1 class="truncate text-base font-semibold text-foreground">{{ title }}</h1>
           <Badge>{{ t('layout.alpha') }}</Badge>
@@ -133,51 +141,57 @@ async function signOut() {
         </div>
       </header>
       <section class="min-h-0 min-w-0 overflow-visible lg:overflow-hidden">
-        <RouterView />
+        <RouterView v-slot="{ Component }">
+          <Transition name="route" mode="out-in">
+            <component :is="Component" />
+          </Transition>
+        </RouterView>
       </section>
     </main>
 
     <Teleport to="body">
-      <div v-if="drawerOpen" class="fixed inset-0 z-50 bg-overlay lg:hidden" @click.self="drawerOpen = false">
-        <aside
-          :id="drawerId"
-          ref="drawer"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="t('layout.main')"
-          tabindex="-1"
-          class="flex h-full w-[292px] max-w-[86vw] flex-col border-r border-border bg-card"
-          @keydown="onDrawerKeydown"
-        >
-          <div class="flex min-h-16 items-center justify-between gap-3 border-b border-border px-4">
-            <div class="flex min-w-0 items-center gap-3">
-              <img src="/favicon.svg" class="size-9 rounded-xl" alt="" aria-hidden="true" />
-              <div class="min-w-0">
-                <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
-                <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+      <Transition name="drawer">
+        <div v-if="drawerOpen" class="fixed inset-0 z-50 bg-overlay lg:hidden" @click.self="drawerOpen = false">
+          <aside
+            :id="drawerId"
+            ref="drawer"
+            role="dialog"
+            aria-modal="true"
+            :aria-label="t('layout.main')"
+            tabindex="-1"
+            class="drawer-panel flex h-full w-[292px] max-w-[86vw] flex-col border-r border-border bg-card"
+            @keydown="onDrawerKeydown"
+          >
+            <div class="flex min-h-16 items-center justify-between gap-3 border-b border-border px-4">
+              <div class="flex min-w-0 items-center gap-3">
+                <img src="/favicon.svg" class="size-9 rounded-xl" alt="" aria-hidden="true" />
+                <div class="min-w-0">
+                  <strong class="block truncate text-sm font-semibold text-foreground">{{ t('app.name') }}</strong>
+                  <span class="block truncate text-xs text-muted-foreground">{{ t('app.subtitle') }}</span>
+                </div>
               </div>
+              <IconButton :label="t('common.close')" @click="drawerOpen = false">
+                <X />
+              </IconButton>
             </div>
-            <IconButton :label="t('common.close')" @click="drawerOpen = false">
-              <X />
-            </IconButton>
-          </div>
-          <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
-            <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
-              <div class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
-              <RouterLink
-                v-for="item in group.items"
-                :key="item.key"
-                :to="item.to"
-                class="mb-1 flex h-9 items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                :class="activeKey === item.key ? 'bg-accent text-foreground' : ''"
-              >
-                <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
-                <span class="truncate">{{ t(item.titleKey) }}</span>
-              </RouterLink>
-            </section>
-          </nav>
-        </aside>
-      </div>
+            <nav class="min-h-0 flex-1 overflow-auto px-3 py-3" :aria-label="t('layout.main')">
+              <section v-for="group in navGroups" :key="group.key" class="mb-5 last:mb-0">
+                <div class="mb-2 px-2 text-[11px] font-semibold uppercase text-muted-foreground">{{ t(group.titleKey) }}</div>
+                <RouterLink
+                  v-for="item in group.items"
+                  :key="item.key"
+                  :to="item.to"
+                  class="mb-1 flex h-9 items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                  :class="activeKey === item.key ? 'bg-accent text-foreground' : ''"
+                >
+                  <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
+                  <span class="truncate">{{ t(item.titleKey) }}</span>
+                </RouterLink>
+              </section>
+            </nav>
+          </aside>
+        </div>
+      </Transition>
     </Teleport>
   </div>
 </template>
