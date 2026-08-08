@@ -54,4 +54,4 @@
 
 ## 主题运行时
 
-主题模式为 `system` / `light` / `dark`，由 `web/src/design/theme.ts` 管理，偏好存 localStorage `panel.theme.mode`。运行时通过 `document.documentElement.dataset.theme` 和 CSS 变量切换，不再通过 UI 框架 provider 注入主题。
+主题模式为 `system` / `light` / `dark`，由 `web/src/design/theme.ts` 管理，偏好存 localStorage `panel.theme.mode`。运行时通过 `document.documentElement.dataset.theme` 和 CSS 变量切换，不再通过 UI 框架 provider 注入主题。 为消除首屏白闪，`web/index.html` 内联脚本会在首帧渲染前按 `panel.theme.mode` / `prefers-color-scheme` 预置 `data-theme`，启动遮罩使用与 `--panel-bg`、`--panel-border-strong`、`--panel-primary` 一致的内联色值。
