@@ -22,14 +22,23 @@ const border = ref('');
 const text = ref('');
 let themeObserver: MutationObserver | undefined;
 
-const MAX_POINTS = 120;
+const host = ref<HTMLElement | null>(null);
+const chartWidth = ref(0);
+let resizeObserver: ResizeObserver | undefined;
+
+const targetPoints = computed(() => {
+  const width = chartWidth.value;
+  if (width < 480) return 60;
+  if (width < 960) return 120;
+  return 360;
+});
 
 function bucketBounds(length: number, index: number, count: number): [number, number] {
   return [Math.floor((index * length) / count), Math.floor(((index + 1) * length) / count)];
 }
 
-function sampleLabels(labels: string[]): string[] {
-  const count = Math.min(labels.length, MAX_POINTS);
+function sampleLabels(labels: string[], maxPoints: number): string[] {
+  const count = Math.min(labels.length, maxPoints);
   if (count === labels.length) return labels;
   const result: string[] = [];
   for (let i = 0; i < count; i += 1) {
@@ -39,8 +48,8 @@ function sampleLabels(labels: string[]): string[] {
   return result;
 }
 
-function sampleValues(values: number[], length: number): number[] {
-  const count = Math.min(length, MAX_POINTS);
+function sampleValues(values: number[], length: number, maxPoints: number): number[] {
+  const count = Math.min(length, maxPoints);
   if (count === values.length) return values;
   const result: number[] = [];
   for (let i = 0; i < count; i += 1) {
@@ -59,15 +68,15 @@ function sampleValues(values: number[], length: number): number[] {
 }
 
 const option = computed<EChartsOption>(() => {
-  const sampledLabels = sampleLabels(props.labels);
-  const sampledSeries = props.series.map((item) => ({ ...item, values: sampleValues(item.values, props.labels.length) }));
+  const sampledLabels = sampleLabels(props.labels, targetPoints.value);
+  const sampledSeries = props.series.map((item) => ({ ...item, values: sampleValues(item.values, props.labels.length, targetPoints.value) }));
   return ({
   animation: false,
   color: palette.value,
   grid: { left: 3, right: 3, top: 5, bottom: 3, containLabel: false },
   tooltip: {
     trigger: 'axis',
-    confine: true,
+    appendToBody: true,
     className: 'overview-metric-tooltip',
     renderMode: 'html',
     backgroundColor: surface.value,
@@ -153,13 +162,26 @@ onMounted(() => {
   readTheme();
   themeObserver = new MutationObserver(readTheme);
   themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  if (host.value) {
+    const measure = () => {
+      chartWidth.value = host.value?.clientWidth ?? 0;
+    };
+    measure();
+    resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(host.value);
+  }
 });
 
-onBeforeUnmount(() => themeObserver?.disconnect());
+onBeforeUnmount(() => {
+  themeObserver?.disconnect();
+  resizeObserver?.disconnect();
+});
 </script>
 
 <template>
-  <VChart class="h-full min-h-16 w-full" :option="option" autoresize />
+  <div ref="host" class="h-full min-h-16 w-full">
+    <VChart class="h-full w-full" :option="option" autoresize />
+  </div>
 </template>
 
 <style>
