@@ -270,6 +270,18 @@ func (s *Service) CreateRecord(ctx context.Context, domainID string, in RecordIn
 	if err != nil {
 		return Record{}, err
 	}
+	if existing, listErr := provider.ListRecords(ctx, domain.Name); listErr == nil {
+		if conflict := hostConflict(existing, domain.Name, record, ""); conflict != nil {
+			if strings.EqualFold(strings.TrimSpace(conflict.Type), record.Type) {
+				updated, err := provider.UpdateRecord(ctx, domain.Name, conflict.ID, record)
+				if err == nil {
+					_ = s.refreshRecords(ctx, domainID)
+				}
+				return updated, err
+			}
+			return Record{}, recordConflictError(record, *conflict)
+		}
+	}
 	created, err := provider.CreateRecord(ctx, domain.Name, record)
 	if err == nil {
 		_ = s.refreshRecords(ctx, domainID)
@@ -288,6 +300,11 @@ func (s *Service) UpdateRecord(ctx context.Context, domainID, recordID string, i
 	record, err := validateRecordInput(in)
 	if err != nil {
 		return Record{}, err
+	}
+	if existing, listErr := provider.ListRecords(ctx, domain.Name); listErr == nil {
+		if conflict := hostConflict(existing, domain.Name, record, recordID); conflict != nil {
+			return Record{}, recordConflictError(record, *conflict)
+		}
 	}
 	updated, err := provider.UpdateRecord(ctx, domain.Name, recordID, record)
 	if err == nil {
@@ -444,6 +461,48 @@ func supportsProxy(value string) bool {
 func supportedRecordType(value string) bool {
 	switch value {
 	case "A", "AAAA", "CNAME", "TXT", "MX", "SRV", "CAA", "NS":
+		return true
+	default:
+		return false
+	}
+}
+
+// hostConflict returns the existing record that conflicts with the desired
+// record on the same hostname, or nil. Cloudflare allows only one CNAME per
+// hostname, and a CNAME cannot share a hostname with an A/AAAA record.
+// excludeID is the record being updated.
+func hostConflict(existing []Record, zone string, record RecordInput, excludeID string) *Record {
+	for i := range existing {
+		current := &existing[i]
+		if excludeID != "" && current.ID == excludeID {
+			continue
+		}
+		if !strings.EqualFold(proxyFullName(zone, current.Name), proxyFullName(zone, record.Name)) {
+			continue
+		}
+		recordType := strings.ToUpper(strings.TrimSpace(record.Type))
+		currentType := strings.ToUpper(strings.TrimSpace(current.Type))
+		if (recordType == "CNAME" && cnameHostConflictType(currentType)) || (currentType == "CNAME" && cnameHostConflictType(recordType)) {
+			return current
+		}
+	}
+	return nil
+}
+
+// recordConflictError returns a friendly error for a record that cannot
+// coexist with the given existing record on the same hostname.
+func recordConflictError(record RecordInput, conflict Record) *panelerr.Error {
+	if strings.EqualFold(strings.TrimSpace(conflict.Type), "CNAME") {
+		return panelerr.Conflict("dns_record_cname_exists", "A CNAME record with that host already exists")
+	}
+	return panelerr.Conflict("dns_record_conflict", "A record with a different type already exists for this host")
+}
+
+// cnameHostConflictType reports whether the record type participates in
+// Cloudflare's one-CNAME-per-hostname constraint.
+func cnameHostConflictType(value string) bool {
+	switch strings.ToUpper(strings.TrimSpace(value)) {
+	case "A", "AAAA", "CNAME":
 		return true
 	default:
 		return false

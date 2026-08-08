@@ -130,6 +130,11 @@ func (s *Service) syncProxyZone(ctx context.Context, target ProxyRecordTarget) (
 			}
 			continue
 		}
+		if conflict := hostConflict(existing, domain.Name, record, ""); conflict != nil {
+			conflictErr := recordConflictError(record, *conflict)
+			result.Error = conflictErr.Error()
+			return result, conflictErr
+		}
 		created, createErr := provider.CreateRecord(ctx, domain.Name, record)
 		if createErr != nil {
 			result.Error = createErr.Error()

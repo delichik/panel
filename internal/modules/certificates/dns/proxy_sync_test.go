@@ -2,14 +2,15 @@ package dns
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
 type statefulFakeProvider struct {
-	records  []Record
-	created  int
-	updated  int
-	deleted  int
+	records []Record
+	created int
+	updated int
+	deleted int
 }
 
 func (p *statefulFakeProvider) ListRecords(ctx context.Context, zone string) ([]Record, error) {
@@ -112,6 +113,31 @@ func TestSyncProxyRecordsUpdatesValueAndCleansRemovedNames(t *testing.T) {
 	}
 	if len(provider.records) != 1 || provider.records[0].Value != "203.0.113.10" {
 		t.Fatalf("records after sync = %#v", provider.records)
+	}
+}
+
+func TestSyncProxyRecordsDetectsUserCNAMEConflict(t *testing.T) {
+	provider := &statefulFakeProvider{records: []Record{
+		{ID: "user_cname", Name: "app.example.com", Type: "CNAME", Value: "target.example.com", TTL: 300},
+	}}
+	svc := newProxySyncService(t, provider)
+
+	proxied := false
+	results, err := svc.SyncProxyRecords(context.Background(), []ProxyRecordTarget{{
+		Zone:  "example.com",
+		Names: []string{"app.example.com"},
+		Records: []RecordInput{
+			{Name: "app", Type: "A", Value: "203.0.113.10", TTL: 120, Proxied: &proxied, Comment: ProxyManagedRecordComment},
+		},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "CNAME") {
+		t.Fatalf("error = %v, want CNAME conflict", err)
+	}
+	if provider.created != 0 {
+		t.Fatalf("provider created %d records, want 0", provider.created)
+	}
+	if len(results) != 1 || results[0].Error == "" {
+		t.Fatalf("results = %#v", results)
 	}
 }
 

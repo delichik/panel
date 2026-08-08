@@ -54,8 +54,9 @@
 - 切换域名时立即清空旧记录并展示加载状态，只接受当前域名请求的响应。
 - 域名左侧选择行只负责切换域名；编辑和删除操作放在右侧已选域名详情标题区，不在选择行中显示更多菜单。
 - 前端 DNS 记录表和证书列表在桌面端作为满高表格卡片展示；表格体独立滚动并吸收剩余高度，分页固定在卡片底部。域名/证书详情操作和记录行操作使用 `AppActionButton` / `AppActionGroup`；记录行编辑、删除使用带文字的小按钮，刷新和新增记录位于记录标题区。
-- `GET /api/v1/dns/domains/{domainId}/records` 只读取 `dns_record_snapshots`，不得同步访问 DNS Provider。`POST .../records/refresh` 创建 `dns_records_refresh` 任务并异步替换快照；首次未刷新返回空数组。记录创建、更新、删除仍同步调用 Provider，成功后重建本地快照。
-- 入口代理与 DNS 联动通过 `dns.SyncProxyRecords` 实现：按 zone 聚合期望记录，只增删改带 `comment=panel:reverse-proxy` 标记的记录，绝不修改用户自建记录；每个目标 zone 独立尝试，单 zone 失败不阻断其他 zone。记录类型为 A（IPv4）和 AAAA（IPv6），TTL 默认 120、`proxied=false`。
+- `GET /api/v1/dns/domains/{domainId}/records` 只读取 `dns_record_snapshots`，不得同步访问 DNS Provider。`POST .../records/refresh` 创建 `dns_records_refresh` 任务并异步替换快照；首次未刷新返回空数组。记录创建、更新、删除仍同步调用 Provider，成功后重建本地快照。新增记录前，后端会先拉取目标 zone 现有记录做主机名冲突预检：目标主机名已存在同类型记录（如 CNAME）时自动改为更新该已有记录，不阻塞新增流程；CNAME 与 A/AAAA 互斥的跨类型冲突仍返回“该主机名已存在 CNAME 记录”等友好提示；预检拉取失败不阻断原创建流程。
+- 入口代理与 DNS 联动通过 `dns.SyncProxyRecords` 实现：按 zone 聚合期望记录，只增删改带 `comment=panel:reverse-proxy` 标记的记录，绝不修改用户自建记录；每个目标 zone 独立尝试，单 zone 失败不阻断其他 zone。记录类型为 A（IPv4）和 AAAA（IPv6），TTL 默认 120、`proxied=false`。创建 A/AAAA 前会预检目标主机名是否已有用户自建 CNAME，冲突时不创建并标记该 zone 失败、显示冲突原因，绝不修改用户自建记录。
+- Cloudflare 返回 81054（主机名已存在 CNAME）时统一映射为友好冲突错误。
 - 同步失败不会回滚入口代理配置；失败信息写入 `facility_app_configs.dns_sync_json` 的对应域名状态，并可经 `dns_proxy_records_sync` 任务重试。
 
 ## 证书行为

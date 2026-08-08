@@ -9,6 +9,7 @@ import (
 
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/secrets"
 )
 
@@ -135,6 +136,57 @@ func TestRecordInputValidation(t *testing.T) {
 	}
 }
 
+func TestRecordOperationsRejectConflictingHostnames(t *testing.T) {
+	svc, closeStore := newDomainTestService(t)
+	defer closeStore()
+
+	domain, err := svc.CreateDomain(context.Background(), SaveDomainRequest{Name: "example.com", Provider: ProviderCloudflare, APIToken: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake := &fakeDNSProvider{records: []Record{
+		{ID: "cname_1", Name: "app.example.com", Type: "CNAME", Value: "target.example.com", TTL: 120},
+		{ID: "a_1", Name: "www.example.com", Type: "A", Value: "192.0.2.1", TTL: 120},
+	}}
+	svc.providerFactory = func(ResolvedDomain) Provider { return fake }
+
+	assertConflict := func(err error, code string) {
+		t.Helper()
+		var panelErr *panelerr.Error
+		if !errors.As(err, &panelErr) || panelErr.Code != code {
+			t.Fatalf("error = %v, want code %s", err, code)
+		}
+	}
+
+	_, err = svc.CreateRecord(context.Background(), domain.ID, RecordInput{Name: "app", Type: "A", Value: "192.0.2.9"})
+	assertConflict(err, "dns_record_cname_exists")
+	_, err = svc.CreateRecord(context.Background(), domain.ID, RecordInput{Name: "www", Type: "CNAME", Value: "target.example.com"})
+	assertConflict(err, "dns_record_conflict")
+	if fake.createCalls != 0 {
+		t.Fatalf("provider CreateRecord was called %d times, want 0", fake.createCalls)
+	}
+
+	// Adding a CNAME whose host already has a CNAME updates the existing record instead of blocking.
+	upserted, err := svc.CreateRecord(context.Background(), domain.ID, RecordInput{Name: "app", Type: "CNAME", Value: "other.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if upserted.ID != "cname_1" || upserted.Value != "other.example.com" {
+		t.Fatalf("upserted = %#v, want existing record cname_1 updated", upserted)
+	}
+	if fake.updateCalls != 1 {
+		t.Fatalf("provider UpdateRecord was called %d times, want 1", fake.updateCalls)
+	}
+
+	updated, err := svc.UpdateRecord(context.Background(), domain.ID, "cname_1", RecordInput{Name: "app", Type: "CNAME", Value: "new.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.ID != "cname_1" {
+		t.Fatalf("updated = %#v", updated)
+	}
+}
+
 func boolPtr(value bool) *bool {
 	return &value
 }
@@ -162,9 +214,11 @@ func newDomainTestService(t *testing.T) (*Service, func()) {
 }
 
 type fakeDNSProvider struct {
-	records   []Record
-	deletedID string
-	listErr   error
+	records     []Record
+	deletedID   string
+	listErr     error
+	createCalls int
+	updateCalls int
 }
 
 func (p *fakeDNSProvider) ListRecords(ctx context.Context, zone string) ([]Record, error) {
@@ -175,10 +229,12 @@ func (p *fakeDNSProvider) ListRecords(ctx context.Context, zone string) ([]Recor
 }
 
 func (p *fakeDNSProvider) CreateRecord(ctx context.Context, zone string, record RecordInput) (Record, error) {
+	p.createCalls++
 	return Record{ID: "rec_new", Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Proxied: record.Proxied != nil && *record.Proxied}, nil
 }
 
 func (p *fakeDNSProvider) UpdateRecord(ctx context.Context, zone string, id string, record RecordInput) (Record, error) {
+	p.updateCalls++
 	return Record{ID: id, Name: record.Name, Type: record.Type, Value: record.Value, TTL: record.TTL, Proxied: record.Proxied != nil && *record.Proxied}, nil
 }
 

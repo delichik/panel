@@ -3,11 +3,14 @@ package dns
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	panelerr "panel/internal/platform/errors"
 )
 
 func TestCloudflareListRecordsReadsEveryPage(t *testing.T) {
@@ -91,6 +94,32 @@ func TestCloudflareErrorUsesOfficialEnvelope(t *testing.T) {
 	_, err := provider.ListRecords(context.Background(), "example.com")
 	if err == nil || !strings.Contains(err.Error(), "10000: Authentication error") {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestCloudflareCNAMEConflictReturnsFriendlyError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/zones":
+			writeCloudflareJSON(t, w, map[string]any{"success": true, "result": []map[string]any{{"id": "zone_1", "name": "example.com"}}})
+		case "/zones/zone_1/dns_records":
+			w.WriteHeader(http.StatusBadRequest)
+			writeCloudflareJSON(t, w, map[string]any{
+				"success": false,
+				"errors":  []map[string]any{{"code": 81054, "message": "A CNAME record with that host already exists"}},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	provider := NewCloudflareProvider("secret", server.Client())
+	provider.baseURL = server.URL
+	_, err := provider.CreateRecord(context.Background(), "example.com", RecordInput{Name: "app", Type: "CNAME", Value: "target.example.com"})
+	var panelErr *panelerr.Error
+	if !errors.As(err, &panelErr) || panelErr.Code != "dns_record_cname_exists" || panelErr.HTTPStatus != http.StatusConflict {
+		t.Fatalf("error = %v, want conflict dns_record_cname_exists", err)
 	}
 }
 

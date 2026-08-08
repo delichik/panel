@@ -221,6 +221,9 @@ func (p *CloudflareProvider) do(ctx context.Context, method, endpoint string, bo
 		return err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if cloudflareErrorCode(raw) == 81054 {
+			return panelerr.Conflict("dns_record_cname_exists", "A CNAME record with that host already exists")
+		}
 		message := cloudflareErrorMessage(raw)
 		if message == "" {
 			message = strings.TrimSpace(string(raw))
@@ -276,6 +279,17 @@ func cloudflareError(out any) string {
 		return ""
 	}
 	return cloudflareErrorMessage(raw)
+}
+
+func cloudflareErrorCode(raw []byte) int {
+	var envelope struct {
+		Success bool                 `json:"success"`
+		Errors  []cloudflareAPIError `json:"errors"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil || envelope.Success || len(envelope.Errors) == 0 {
+		return 0
+	}
+	return envelope.Errors[0].Code
 }
 
 func cloudflareErrorMessage(raw []byte) string {
