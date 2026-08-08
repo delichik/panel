@@ -421,6 +421,29 @@ function displayEntries(entries: string[]) {
   return next.length ? next.join(', ') : t('common.notAvailable');
 }
 
+function selfSignedKindLabel(kind: string) {
+  return kind === 'ca' ? t('certificatesPage.kindCa') : t('certificatesPage.kindLeaf');
+}
+
+function assetTypeLabel(type: string) {
+  switch (type) {
+    case 'ca_certificate': return t('certificatesPage.assetCa');
+    case 'tls_certificate': return t('certificatesPage.assetTls');
+    case 'ssh_key_pair': return t('certificatesPage.assetSsh');
+    default: return type;
+  }
+}
+
+function fileKindLabel(kind: string) {
+  switch (kind) {
+    case 'certificate': return t('certificatesPage.fileCertificate');
+    case 'private_key': return t('certificatesPage.filePrivateKey');
+    case 'public_key': return t('certificatesPage.filePublicKey');
+    case 'ssh_public_key': return t('certificatesPage.fileSshPublicKey');
+    default: return kind;
+  }
+}
+
 function addEntry(entries: string[]) {
   entries.push('');
 }
@@ -472,13 +495,13 @@ function onFile(event: Event) {
 
             <EmptyState v-if="!error && mode === 'self' && !selfSigned.length" :title="t('certificatesPage.noSelf')" :description="t('certificatesPage.noSelfHint')" />
             <button v-for="cert in mode === 'self' ? selfSigned : []" :key="cert.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === cert.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === cert.id ? 'true' : undefined" @click="selectedId = cert.id">
-              <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="selfSignedTone(cert)">{{ cert.kind }}</Badge></div>
+              <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ cert.name }}</strong><Badge :tone="selfSignedTone(cert)">{{ selfSignedKindLabel(cert.kind) }}</Badge></div>
               <span class="truncate text-xs text-muted-foreground">{{ cert.commonName }}</span>
             </button>
 
             <EmptyState v-if="!error && mode === 'keys' && !userAssets.length" :title="t('certificatesPage.noAssets')" :description="t('certificatesPage.noAssetsHint')" />
             <button v-for="asset in mode === 'keys' ? userAssets : []" :key="asset.id" type="button" class="motion-list-item mb-2 grid w-full gap-2 rounded-xl border p-3 text-left hover:bg-accent" :class="selectedId === asset.id ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedId === asset.id ? 'true' : undefined" @click="selectedId = asset.id">
-              <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ asset.name }}</strong><Badge :tone="assetTone(asset)">{{ asset.type }}</Badge></div>
+              <div class="flex items-center justify-between gap-2"><strong class="truncate text-sm">{{ asset.name }}</strong><Badge :tone="assetTone(asset)">{{ assetTypeLabel(asset.type) }}</Badge></div>
               <span class="truncate text-xs text-muted-foreground">{{ asset.fingerprint || t('common.notAvailable') }}</span>
             </button>
           </template>
@@ -527,7 +550,7 @@ function onFile(event: Event) {
             </header>
             <div class="min-h-0 overflow-auto p-5">
               <div class="grid gap-3 md:grid-cols-2">
-                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('common.type') }}</div><strong>{{ selectedSelf.kind }}</strong></div>
+                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('common.type') }}</div><strong>{{ selfSignedKindLabel(selectedSelf.kind) }}</strong></div>
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedSelf.fingerprint }}</strong></div>
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedSelf.notAfter) }}</strong></div>
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.dnsNames') }}</div><strong>{{ displayEntries(selectedSelf.dnsNames) }}</strong></div>
@@ -538,7 +561,7 @@ function onFile(event: Event) {
           <EmptyState v-if="mode === 'keys' && !selectedAsset" :title="t('certificatesPage.selectAsset')" :description="t('certificatesPage.selectAssetHint')" />
           <article v-else-if="mode === 'keys' && selectedAsset" class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
             <header class="flex items-start justify-between gap-3 border-b border-border p-5 max-md:grid">
-              <div><h2 class="m-0 text-xl font-semibold">{{ selectedAsset.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedAsset.type }} / {{ selectedAsset.algorithm }}</p></div>
+              <div><h2 class="m-0 text-xl font-semibold">{{ selectedAsset.name }}</h2><p class="m-0 mt-1 text-sm text-muted-foreground">{{ assetTypeLabel(selectedAsset.type) }} / {{ selectedAsset.algorithm }}</p></div>
               <div class="flex flex-wrap gap-2">
                 <Button size="sm" @click="openAsset('asset-ca')">{{ t('certificatesPage.generateCa') }}</Button>
                 <Button size="sm" @click="openAsset('asset-tls')">{{ t('certificatesPage.generateTls') }}</Button>
@@ -559,7 +582,7 @@ function onFile(event: Event) {
                 <aside class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold">{{ t('certificatesPage.downloads') }}</h3>
                   <div class="mt-3 grid gap-2">
-                    <Button v-for="kind in selectedAsset.downloadKinds" :key="kind" size="sm" :loading="saving" @click="downloadAssetFile(selectedAsset, kind)"><Download />{{ kind }}</Button>
+                    <Button v-for="kind in selectedAsset.downloadKinds" :key="kind" size="sm" :loading="saving" @click="downloadAssetFile(selectedAsset, kind)"><Download />{{ fileKindLabel(kind) }}</Button>
                   </div>
                 </aside>
               </div>
@@ -595,7 +618,7 @@ function onFile(event: Event) {
     </Dialog>
 
     <Dialog :open="dialog === 'self-ca' || dialog === 'self-leaf'" :title="dialog === 'self-ca' ? t('certificatesPage.generateCa') : t('certificatesPage.generateLeaf')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
-      <div class="grid gap-3"><label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="selfForm.name" /></label><label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">CA<Select v-model="selfForm.caId" :options="selfCas" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="selfForm.commonName" /></label><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div><div v-for="(_, index) in selfForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.dnsNames)"><Plus />{{ t('certificatesPage.addDnsName') }}</Button></div><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.ipAddresses') }}</div><div v-for="(_, index) in selfForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button></div><label v-if="dialog === 'self-ca'" class="grid gap-1 text-sm">{{ t('certificatesPage.years') }}<Input v-model="selfForm.years" type="number" /></label><label v-else class="grid gap-1 text-sm">{{ t('certificatesPage.days') }}<Input v-model="selfForm.days" type="number" /></label></div>
+      <div class="grid gap-3"><label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="selfForm.name" /></label><label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">{{ t('certificatesPage.kindCa') }}<Select v-model="selfForm.caId" :options="selfCas" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="selfForm.commonName" /></label><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div><div v-for="(_, index) in selfForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.dnsNames)"><Plus />{{ t('certificatesPage.addDnsName') }}</Button></div><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.ipAddresses') }}</div><div v-for="(_, index) in selfForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button></div><label v-if="dialog === 'self-ca'" class="grid gap-1 text-sm">{{ t('certificatesPage.years') }}<Input v-model="selfForm.years" type="number" /></label><label v-else class="grid gap-1 text-sm">{{ t('certificatesPage.days') }}<Input v-model="selfForm.days" type="number" /></label></div>
       <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfForm.name || !selfForm.commonName" @click="saveSelf">{{ t('common.create') }}</Button></template>
     </Dialog>
 
@@ -604,7 +627,7 @@ function onFile(event: Event) {
         <div :class="dialog === 'asset-import' ? 'grid gap-3 md:grid-cols-2' : 'contents'">
           <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="assetForm.type" :options="assetTypeOptions" /></label>
           <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="assetForm.name" /></label>
-          <label v-if="dialog === 'asset-tls' || (dialog === 'asset-import' && assetForm.type === 'tls_certificate')" class="grid gap-1 text-sm">CA<Select v-model="assetForm.parentAssetId" :options="caAssets" /></label>
+          <label v-if="dialog === 'asset-tls' || (dialog === 'asset-import' && assetForm.type === 'tls_certificate')" class="grid gap-1 text-sm">{{ t('certificatesPage.kindCa') }}<Select v-model="assetForm.parentAssetId" :options="caAssets" /></label>
           <label v-if="dialog !== 'asset-ssh'" class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="assetForm.commonName" /></label>
           <label class="grid gap-1 text-sm">{{ t('certificatesPage.algorithm') }}<Select v-model="assetForm.algorithm" :options="algorithmOptions" /></label>
           <label v-if="assetForm.algorithm === 'rsa'" class="grid gap-1 text-sm">{{ t('certificatesPage.keySize') }}<Input v-model="assetForm.keySize" type="number" /></label>

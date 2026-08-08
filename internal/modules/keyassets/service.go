@@ -297,7 +297,7 @@ func (s *Service) List(ctx context.Context) ([]Asset, error) {
 
 func (s *Service) ListSummaries(ctx context.Context) ([]Asset, error) {
 	rows, err := orm.Raw(ctx, s.db, `SELECT id,type,name,parent_asset_id,algorithm,key_size,common_name,dns_names_json,ip_addresses_json,fingerprint,
-		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets ORDER BY type,name,id`)
+		CASE WHEN public_key<>'' THEN 1 ELSE 0 END,not_before,not_after,created_at,updated_at FROM key_assets WHERE `+userVisibleAssetsFilter+` ORDER BY type,name,id`)
 	if err != nil {
 		return nil, err
 	}
@@ -349,7 +349,7 @@ func (s *Service) ListSummaryPageByTypes(ctx context.Context, page, pageSize int
 }
 
 func (s *Service) listSummaryPage(ctx context.Context, page, pageSize int, query string, types []string) (httpx.ListPage[Asset], error) {
-	filter := "1=1"
+	filter := userVisibleAssetsFilter
 	args := []any{}
 	if len(types) > 0 {
 		filter += " AND type IN (" + strings.TrimSuffix(strings.Repeat("?,", len(types)), ",") + ")"
@@ -362,7 +362,7 @@ func (s *Service) listSummaryPage(ctx context.Context, page, pageSize int, query
 		term := orm.LikeEscaped(query)
 		args = append(args, term, term, term)
 	}
-	countQuery := orm.New(s.db).From("key_assets")
+	countQuery := orm.New(s.db).From("key_assets").Where(userVisibleAssetsFilter)
 	if len(types) > 0 {
 		countQuery.AndIn("type", types)
 	}
@@ -1708,6 +1708,11 @@ func decorateAsset(asset Asset, references []AssetReference, childCount int) Ass
 func isSystemManagedAsset(asset Asset) bool {
 	return asset.Metadata[systemManagedKey] == true
 }
+
+// userVisibleAssetsFilter restricts user-facing summaries to non-system assets.
+// Panel built-in agent TLS assets are system managed and shown on the dedicated
+// system certificates page instead of the self-signed certificates / keys lists.
+const userVisibleAssetsFilter = `json_extract(metadata_json,'$.systemManaged') IS NOT 1 AND COALESCE(json_extract(metadata_json,'$.systemScope'),'') <> 'agent_tls'`
 
 func panelFileMode(kind string) string {
 	switch strings.TrimSpace(kind) {

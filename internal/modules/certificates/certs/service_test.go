@@ -227,6 +227,49 @@ func TestSelfSignedCAIsReusableAndProtectedWhileChildrenExist(t *testing.T) {
 	}
 }
 
+func TestSelfSignedListsExcludeSystemManagedAssets(t *testing.T) {
+	svc, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	keyAssetSvc, ok := svc.keyAssets.(*keyassets.Service)
+	if !ok {
+		t.Fatalf("keyAssets provider = %T, want *keyassets.Service", svc.keyAssets)
+	}
+	if _, err := keyAssetSvc.EnsureAgentTLSAssets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateSelfSignedCA(ctx, SelfSignedCARequest{Name: "Internal CA", CommonName: "panel.internal", Years: 5}); err != nil {
+		t.Fatal(err)
+	}
+
+	items, err := svc.ListSelfSigned(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range items {
+		if item.ID == keyassets.SystemAgentCAAssetID || item.ID == keyassets.SystemAgentClientAssetID {
+			t.Fatalf("system managed asset leaked into ListSelfSigned: %#v", item)
+		}
+	}
+	if len(items) != 1 {
+		t.Fatalf("ListSelfSigned count = %d, want 1 user CA", len(items))
+	}
+
+	page, err := svc.ListSelfSignedPage(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range page.Items {
+		if item.ID == keyassets.SystemAgentCAAssetID || item.ID == keyassets.SystemAgentClientAssetID {
+			t.Fatalf("system managed asset leaked into ListSelfSignedPage: %#v", item)
+		}
+	}
+	if page.Total != 1 {
+		t.Fatalf("ListSelfSignedPage total = %d, want 1", page.Total)
+	}
+}
+
 func TestReverseProxyCertificatesReturnsOnlyIssuedPEM(t *testing.T) {
 	svc, fake, closeStore := newTestService(t)
 	defer closeStore()

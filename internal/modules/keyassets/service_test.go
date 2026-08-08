@@ -111,6 +111,69 @@ func TestSystemManagedAssetsAreNotApplicationInternalFiles(t *testing.T) {
 	}
 }
 
+func TestSummariesExcludeSystemManagedAssets(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	if _, err := svc.EnsureAgentTLSAssets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Internal CA", CommonName: "panel.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateTLS(ctx, CreateTLSRequest{Name: "Web", ParentAssetID: ca.ID, DNSNames: []string{"web.internal"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.GenerateSSH(ctx, GenerateSSHRequest{Name: "Deploy", Algorithm: AlgorithmEd25519}); err != nil {
+		t.Fatal(err)
+	}
+
+	isSystem := func(asset Asset) bool {
+		return asset.ID == SystemAgentCAAssetID || asset.ID == SystemAgentClientAssetID || strings.HasPrefix(asset.ID, "agent-server-")
+	}
+
+	summaries, err := svc.ListSummaries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range summaries {
+		if isSystem(asset) {
+			t.Fatalf("system managed asset leaked into ListSummaries: %#v", asset)
+		}
+	}
+	if len(summaries) != 3 {
+		t.Fatalf("ListSummaries count = %d, want 3 user assets", len(summaries))
+	}
+
+	page, err := svc.ListSummaryPage(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range page.Items {
+		if isSystem(asset) {
+			t.Fatalf("system managed asset leaked into ListSummaryPage: %#v", asset)
+		}
+	}
+	if page.Total != 3 {
+		t.Fatalf("ListSummaryPage total = %d, want 3", page.Total)
+	}
+
+	certPage, err := svc.ListSummaryPageByTypes(ctx, 1, 50, "", []string{TypeCACertificate, TypeTLSCertificate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, asset := range certPage.Items {
+		if isSystem(asset) {
+			t.Fatalf("system managed asset leaked into ListSummaryPageByTypes: %#v", asset)
+		}
+	}
+	if certPage.Total != 2 {
+		t.Fatalf("ListSummaryPageByTypes total = %d, want 2 user CA/TLS assets", certPage.Total)
+	}
+}
+
 func TestListReportsExactPanelFileAndReverseProxyReferences(t *testing.T) {
 	svc, store, closeFn := newTestService(t)
 	defer closeFn()
