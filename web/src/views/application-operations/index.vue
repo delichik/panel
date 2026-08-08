@@ -18,6 +18,7 @@ import ListPage from '@/components/templates/ListPage.vue';
 import { translateRuntimeEventType, useI18n } from '@/i18n';
 import type { ApplicationOperationDetailDto, ApplicationOperationDto } from '@/types/applicationOperations';
 import { createLatestRequestGuard, normalizePage } from '@/views/_shared/requestState';
+import { formatDateTime } from '@/utils/datetime';
 
 type OperationRow = ApplicationOperationDto & Record<string, unknown>;
 
@@ -138,12 +139,6 @@ async function openDetail(row: ApplicationOperationDto) {
   }
 }
 
-function formatDateTime(value?: string) {
-  if (!value) return t('common.notAvailable');
-  const time = new Date(value);
-  return Number.isNaN(time.getTime()) ? value : time.toLocaleString();
-}
-
 function statusLabel(value: string) {
   return t(`applicationOperationsPage.status.${value}`);
 }
@@ -190,7 +185,7 @@ onMounted(load);
           <StatusBadge class="shrink-0 justify-self-start" :status="row.status" domain="operation" :label="statusLabel(row.status)" />
         </template>
         <template #targetTotal="{ row }">{{ targetProgress(row) }}</template>
-        <template #latestEventAt="{ row }">{{ formatDateTime(row.latestEventAt) }}</template>
+        <template #latestEventAt="{ row }">{{ formatDateTime(row.latestEventAt, t('common.notAvailable')) }}</template>
         <template #operationId="{ row }">
           <Tooltip v-if="!row.detailAvailable" :text="t('applicationOperationsPage.detailPruned')">
             <Button size="sm" disabled><Eye />{{ t('common.view') }}</Button>
@@ -238,7 +233,7 @@ onMounted(load);
         <h3 class="m-0 mb-2 text-sm font-semibold">{{ t('applicationOperationsPage.events') }}</h3>
         <div class="grid gap-2">
           <div v-for="event in detail.events" :key="event.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
-            <div class="flex items-center justify-between gap-2"><strong>{{ eventTypeLabel(event.eventType) }}</strong><span class="text-xs text-muted-foreground">{{ formatDateTime(event.occurredAt) }}</span></div>
+            <div class="flex items-center justify-between gap-2"><strong>{{ eventTypeLabel(event.eventType) }}</strong><span class="text-xs text-muted-foreground">{{ formatDateTime(event.occurredAt, t('common.notAvailable')) }}</span></div>
             <p class="m-0 text-muted-foreground">{{ event.summary }}</p>
           </div>
         </div>

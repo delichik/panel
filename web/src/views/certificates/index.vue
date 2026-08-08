@@ -27,6 +27,7 @@ import type { ImportPreflightDto, KeyAssetDto, KeyAssetType } from '@/types/keyA
 import { assetImportHasCertificate, initialAssetImportMaterialTab, type AssetImportMaterialTab } from './assetImportEditor';
 import { assetTone, certificateState, certificateTone, selfSignedTone } from './model';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
+import { formatDateTime } from '@/utils/datetime';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -507,7 +508,7 @@ function onFile(event: Event) {
                 </section>
                 <aside class="grid content-start gap-3">
                   <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('common.status') }}</div><strong>{{ t(certificateState(selectedCert)) }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ selectedCert.notAfter || t('common.notAvailable') }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedCert.notAfter) || t('common.notAvailable') }}</strong></div>
                   <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.taskEntry') }}</div><strong>{{ selectedCert.status === 'issuing' ? t('certificatesPage.openTaskCenter') : t('certificatesPage.noActiveTask') }}</strong></div>
                 </aside>
               </div>
@@ -528,7 +529,7 @@ function onFile(event: Event) {
               <div class="grid gap-3 md:grid-cols-2">
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('common.type') }}</div><strong>{{ selectedSelf.kind }}</strong></div>
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedSelf.fingerprint }}</strong></div>
-                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ selectedSelf.notAfter }}</strong></div>
+                <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedSelf.notAfter) }}</strong></div>
                 <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.dnsNames') }}</div><strong>{{ displayEntries(selectedSelf.dnsNames) }}</strong></div>
               </div>
             </div>
@@ -553,7 +554,7 @@ function onFile(event: Event) {
                   <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.fingerprint') }}</div><strong>{{ selectedAsset.fingerprint }}</strong></div>
                   <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.references') }}</div><strong>{{ selectedAsset.referenceCount }}</strong></div>
                   <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.children') }}</div><strong>{{ selectedAsset.childCount }}</strong></div>
-                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ selectedAsset.notAfter || t('common.notAvailable') }}</strong></div>
+                  <div class="rounded-2xl border border-border bg-background p-4 text-sm"><div class="text-muted-foreground">{{ t('certificatesPage.expiresAt') }}</div><strong>{{ formatDateTime(selectedAsset.notAfter) || t('common.notAvailable') }}</strong></div>
                 </section>
                 <aside class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold">{{ t('certificatesPage.downloads') }}</h3>

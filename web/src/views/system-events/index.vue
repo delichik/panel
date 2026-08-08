@@ -18,6 +18,7 @@ import ListPage from '@/components/templates/ListPage.vue';
 import { translateRuntimeEventType, useI18n } from '@/i18n';
 import type { SystemEventDetailDto, SystemEventDto } from '@/types/systemEvents';
 import { createLatestRequestGuard, normalizePage } from '@/views/_shared/requestState';
+import { formatDateTime } from '@/utils/datetime';
 
 type EventRow = SystemEventDto & Record<string, unknown>;
 
@@ -142,12 +143,6 @@ async function openDetail(row: SystemEventDto) {
   }
 }
 
-function formatDateTime(value?: string) {
-  if (!value) return t('common.notAvailable');
-  const time = new Date(value);
-  return Number.isNaN(time.getTime()) ? value : time.toLocaleString();
-}
-
 function severityLabel(value: string) {
   const key = `systemEventsPage.severity.${value}`;
   const label = t(key);
@@ -203,7 +198,7 @@ onMounted(load);
 
     <div class="grid min-h-full gap-3">
       <Table v-if="rows.length || loading" :columns="columns" :rows="rows as EventRow[]" row-key="id" fixed :loading="loading" :loading-label="t('systemEventsPage.loading')">
-        <template #occurredAt="{ row }"><span class="block whitespace-nowrap">{{ formatDateTime(row.occurredAt) }}</span></template>
+        <template #occurredAt="{ row }"><span class="block whitespace-nowrap">{{ formatDateTime(row.occurredAt, t('common.notAvailable')) }}</span></template>
         <template #severity="{ row }"><StatusBadge :status="row.severity" :tone="row.severity === 'error' || row.severity === 'critical' ? 'danger' : row.severity === 'warning' ? 'warning' : 'info'" :label="severityLabel(row.severity)" /></template>
         <template #eventType="{ row }">
           <div class="grid min-w-0 gap-1">
@@ -266,7 +261,7 @@ onMounted(load);
           </div>
           <div class="grid min-w-0 gap-0.5">
             <dt class="text-xs text-muted-foreground">{{ t('systemEventsPage.column.time') }}</dt>
-            <dd class="m-0 break-words">{{ formatDateTime(detail.event.occurredAt) }}</dd>
+            <dd class="m-0 break-words">{{ formatDateTime(detail.event.occurredAt, t('common.notAvailable')) }}</dd>
           </div>
           <div class="grid min-w-0 gap-0.5">
             <dt class="text-xs text-muted-foreground">{{ t('systemEventsPage.column.subject') }}</dt>

@@ -22,6 +22,7 @@ import { useSessionStore } from '@/stores/session';
 import type { SystemCertificateDto } from '@/types/keyAssets';
 import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVariableDefinition } from '@/types/settings';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
+import { formatDateTime } from '@/utils/datetime';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -313,13 +314,6 @@ function certificateType(type: string) {
   return type ? t(`settingsPage.certificateType.${type}`) : t('common.notAvailable');
 }
 
-function formatDate(value?: string) {
-  if (!value) return t('common.notAvailable');
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString();
-}
-
 function sectionFromPath(path: string) {
   return path.split('/').filter(Boolean).at(-1) || 'general';
 }
@@ -427,11 +421,11 @@ onMounted(load);
                 </div>
                 <div>
                   <span class="text-muted-foreground">{{ t('settingsPage.systemCertificateNotBefore') }}</span>
-                  <strong class="block text-foreground">{{ formatDate(cert.notBefore) }}</strong>
+                  <strong class="block text-foreground">{{ formatDateTime(cert.notBefore, t('common.notAvailable')) }}</strong>
                 </div>
                 <div>
                   <span class="text-muted-foreground">{{ t('settingsPage.systemCertificateNotAfter') }}</span>
-                  <strong class="block text-foreground">{{ formatDate(cert.notAfter) }}</strong>
+                  <strong class="block text-foreground">{{ formatDateTime(cert.notAfter, t('common.notAvailable')) }}</strong>
                 </div>
               </div>
               <div class="flex flex-wrap items-center justify-between gap-3">

@@ -18,6 +18,7 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { Fail2BanJail, Fail2BanState, UfwRule, UfwState } from '@/types/security';
+import { formatDateTime } from '@/utils/datetime';
 import { fail2BanPreset, fail2BanTone, jailsToYaml, parseSimpleJailsFromYaml, serverOptionState, ufwTone, validateUfwRule } from './model';
 
 const { t } = useI18n();
@@ -473,7 +474,7 @@ onBeforeUnmount(() => {
                     <div><dt>{{ t('securityPage.installed') }}</dt><dd>{{ fail2banState?.installed ? t('state.healthy') : t('state.warning') }}</dd></div>
                     <div><dt>{{ t('securityPage.active') }}</dt><dd>{{ fail2banState?.active ? t('state.healthy') : t('state.warning') }}</dd></div>
                     <div><dt>{{ t('securityPage.panelConfig') }}</dt><dd>{{ fail2banState?.panelConfigPresent ? t('state.healthy') : t('state.unknown') }}</dd></div>
-                    <div><dt>{{ t('securityPage.updatedAt') }}</dt><dd>{{ fail2banState?.updatedAt || t('common.never') }}</dd></div>
+                    <div><dt>{{ t('securityPage.updatedAt') }}</dt><dd>{{ formatDateTime(fail2banState?.updatedAt) || t('common.never') }}</dd></div>
                   </dl>
                 </section>
                 <section class="rounded-2xl border border-border bg-background p-4">

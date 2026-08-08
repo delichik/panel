@@ -6,6 +6,7 @@ import { LineChart } from 'echarts/charts';
 import { GridComponent, TooltipComponent } from 'echarts/components';
 import { CanvasRenderer } from 'echarts/renderers';
 import type { EChartsOption } from 'echarts';
+import { formatDateTime } from '@/utils/datetime';
 
 use([CanvasRenderer, LineChart, GridComponent, TooltipComponent]);
 
@@ -37,7 +38,7 @@ const option = computed<EChartsOption>(() => ({
     textStyle: { color: text.value, fontSize: 12 },
     formatter(params) {
       const rows = Array.isArray(params) ? params : [params];
-      const time = rows[0]?.name ? formatTime(String(rows[0].name)) : '';
+      const time = rows[0]?.name ? formatDateTime(String(rows[0].name)) : '';
       return `<div class="overview-metric-tooltip__body">${time ? `<div class="overview-metric-tooltip__time">${escapeHtml(time)}</div>` : ''}${rows.map((row) => {
         const value = Array.isArray(row.value) ? Number(row.value.at(-1)) : Number(row.value);
         return `<div class="overview-metric-tooltip__row">${row.marker ?? ''}<span class="overview-metric-tooltip__name">${escapeHtml(String(row.seriesName ?? ''))}</span><span class="overview-metric-tooltip__value">${formatValue(value)}</span></div>`;
@@ -76,13 +77,6 @@ function formatValue(value: number) {
   if (!value) return '0 B/s';
   if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB/s`;
   return `${(value / 1024 / 1024).toFixed(1)} MB/s`;
-}
-
-function formatTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  const pad = (number: number) => String(number).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function escapeHtml(value: string) {

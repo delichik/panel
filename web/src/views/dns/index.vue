@@ -19,6 +19,7 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { DnsDomainDto, DnsRecordDto } from '@/types/dns';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
+import { formatDateTime } from '@/utils/datetime';
 import { domainTone, normalizeRecordName } from './model';
 
 const { t } = useI18n();
@@ -284,7 +285,7 @@ async function deleteRecord() {
               <strong class="truncate text-sm text-foreground">{{ domain.name }}</strong>
               <Badge :tone="domainTone(domain, providerErrorDomainId)">{{ domain.provider }}</Badge>
             </div>
-            <span class="truncate text-xs text-muted-foreground">{{ t('dnsPage.updatedAt') }} {{ domain.updatedAt }}</span>
+            <span class="truncate text-xs text-muted-foreground">{{ t('dnsPage.updatedAt') }} {{ formatDateTime(domain.updatedAt) }}</span>
           </button>
         </div>
         <PaginationBar v-model:page="page" class="px-3" :page-size="pageSize" :total="totalDomains" :loading="loadingDomains" :previous-label="t('common.previous')" :next-label="t('common.next')" />

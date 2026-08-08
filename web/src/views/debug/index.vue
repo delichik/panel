@@ -14,6 +14,7 @@ import ConsolePage from '@/components/templates/ConsolePage.vue';
 import WorkspacePage from '@/components/templates/WorkspacePage.vue';
 import { useI18n } from '@/i18n';
 import type { DebugDatabase, DebugPprofStatus, DebugSnapshot, DebugTaskDefinition } from '@/types/debug';
+import { formatDateTime } from '@/utils/datetime';
 
 const { t } = useI18n();
 const notifyError = useErrorToast();
@@ -215,7 +216,7 @@ onBeforeUnmount(() => window.clearInterval(timer));
         <div class="flex flex-wrap items-center justify-between gap-3">
           <div class="flex flex-wrap gap-2">
             <Badge :tone="stale ? 'warning' : 'success'">{{ stale ? t('debugPage.staleSnapshot') : t('debugPage.liveSnapshot') }}</Badge>
-            <Badge tone="info">{{ view?.collectedAt || t('common.never') }}</Badge>
+            <Badge tone="info">{{ formatDateTime(view?.collectedAt) || t('common.never') }}</Badge>
           </div>
         </div>
       </template>

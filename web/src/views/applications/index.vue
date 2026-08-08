@@ -34,6 +34,7 @@ import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule } from '@/types/applications';
 import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset } from '@/types/facilityApps';
 import type { ServerDto } from '@/types/servers';
+import { formatDateTime } from '@/utils/datetime';
 import {
   applicationStatus,
   applyYamlToDraft,
@@ -1888,7 +1889,7 @@ onBeforeUnmount(() => {
         <h3>{{ t('applicationsPage.gatewayDetails') }}</h3>
         <div v-if="facility" class="grid gap-3 text-sm">
           <div><span>{{ t('applicationsPage.panelEntry') }}</span><strong>{{ facility.panelEntry.enabled ? facility.panelEntry.domain : t('applicationsPage.panelEntryDisabled') }}</strong></div>
-          <div><span>{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ facility.updatedAt || t('common.never') }}</strong></div>
+          <div><span>{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ formatDateTime(facility.updatedAt) || t('common.never') }}</strong></div>
           <div v-if="facility.operation"><span>{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
           <div v-if="facility.lastError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-danger">{{ facility.lastError }}</div>
         </div>

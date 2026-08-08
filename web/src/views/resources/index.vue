@@ -19,6 +19,7 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { ContainerDto, ImageDto, ImageList, NetworkDto, PackageUpdateList, VolumeDto } from '@/types/resources';
+import { formatDateTime } from '@/utils/datetime';
 import {
   canMaintainPackages,
   canUseDockerResources,
@@ -478,7 +479,7 @@ onBeforeUnmount(() => {
                 </label>
               </div>
               <footer class="flex items-center justify-between border-t border-border p-3 text-sm text-muted-foreground">
-                <span>{{ t('resourcesPage.lastRefresh') }}: {{ packageList?.lastRefreshedAt || t('common.never') }}</span>
+                <span>{{ t('resourcesPage.lastRefresh') }}: {{ formatDateTime(packageList?.lastRefreshedAt) || t('common.never') }}</span>
                 <span v-if="selectedPackages.length">{{ selectedPackages.length }} {{ t('resourcesPage.selectedCount') }}</span>
               </footer>
             </section>
@@ -532,7 +533,7 @@ onBeforeUnmount(() => {
 
             <section v-else-if="activeTab === 'images'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background">
               <div class="flex flex-wrap items-center justify-between gap-2 border-b border-border p-4">
-                <div class="flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ images?.observedAt || t('common.never') }}</div>
+                <div class="flex items-center gap-2 text-sm text-muted-foreground"><Boxes class="size-4" />{{ formatDateTime(images?.observedAt) || t('common.never') }}</div>
                 <div class="flex flex-wrap gap-2">
                   <Button size="sm" :disabled="!imageUpgradeIds.length" :loading="pending === 'upgrade-images-selected'" @click="upgradeImages(true)">{{ t('resourcesPage.upgradeApplications') }}</Button>
                   <Button size="sm" :loading="pending === 'upgrade-images-all'" @click="upgradeImages(false)">{{ t('resourcesPage.upgradeAllApplications') }}</Button>

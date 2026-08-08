@@ -23,6 +23,7 @@ import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
 import { agentTone, canInstallUfw, canRunPrivilegedOperation, connectionHost, credentialLabel, serverReachabilityTone, validateServerInput } from './model';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
+import { formatDateTime } from '@/utils/datetime';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -545,8 +546,8 @@ onBeforeUnmount(() => {
                 <section class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
                   <div class="mt-3 grid gap-2 text-sm text-muted-foreground">
-                    <span>{{ t('serversPage.lastChecked') }}: {{ selectedServer.lastCheckedAt || t('common.never') }}</span>
-                    <span>{{ t('serversPage.updatedAt') }}: {{ selectedServer.updatedAt || t('common.never') }}</span>
+                    <span>{{ t('serversPage.lastChecked') }}: {{ formatDateTime(selectedServer.lastCheckedAt) || t('common.never') }}</span>
+                    <span>{{ t('serversPage.updatedAt') }}: {{ formatDateTime(selectedServer.updatedAt) || t('common.never') }}</span>
                     <span v-if="selectedServer.initialTaskId">{{ t('serversPage.initialTask') }}: {{ selectedServer.initialTaskId }}</span>
                   </div>
                 </section>
