@@ -37,6 +37,7 @@ type ServerSummary struct {
 	Name          string            `json:"name"`
 	Host          string            `json:"host"`
 	Port          int               `json:"port"`
+	CredentialID  string            `json:"credentialId"`
 	Traits        map[string]string `json:"traits"`
 	Sudo          SudoState         `json:"sudo"`
 	Privilege     PrivilegeState    `json:"privilege"`
@@ -64,7 +65,7 @@ type PrivilegeState struct {
 }
 
 type SaveRequest struct {
-	Name         string            `json:"name"`
+	Name string `json:"name"`
 	// Host is rejected on purpose: the connection address is derived from
 	// ipv4/ipv6 so callers cannot supply a free-form hostname anymore.
 	Host         string            `json:"host"`

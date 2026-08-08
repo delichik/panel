@@ -29,6 +29,15 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, creds)
 }
 
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
+	cred, err := h.service.GetWithSummary(r.Context(), credentialIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, cred)
+}
+
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	var req CreateRequest
 	if !httpx.Decode(w, r, &req) {

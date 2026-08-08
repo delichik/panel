@@ -23,3 +23,14 @@ export interface CredentialInput {
 export interface CredentialWithReferences extends CredentialDto {
   references: ServerReference[];
 }
+
+export interface KeySummary {
+  algorithm?: string;
+  bits?: number;
+  fingerprint?: string;
+  comment?: string;
+}
+
+export interface CredentialDetailDto extends CredentialDto {
+  keySummary?: KeySummary;
+}

@@ -2,11 +2,16 @@ package credential
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/ssh"
 
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
@@ -195,5 +200,58 @@ func TestEnsureLegacySecretsMigratedEncryptsPassword(t *testing.T) {
 	}
 	if legacyPassword != "" {
 		t.Fatal("legacy password plaintext was not cleared")
+	}
+}
+
+func TestCredentialDetailIncludesKeySummary(t *testing.T) {
+	svc, _ := newCredentialService(t)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, err := ssh.MarshalPrivateKey(priv, "deploy@example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cred, err := svc.Create(context.Background(), CreateRequest{
+		Name: "prod", Type: TypePrivateKey, Username: "root", PrivateKey: string(pem.EncodeToMemory(block)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := svc.GetWithSummary(context.Background(), cred.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.KeySummary == nil {
+		t.Fatal("expected key summary for private key credential")
+	}
+	if detail.KeySummary.Algorithm != "ED25519" || detail.KeySummary.Bits != 256 {
+		t.Fatalf("key summary = %#v, want ED25519/256", detail.KeySummary)
+	}
+	if detail.KeySummary.Comment != "deploy@example" {
+		t.Fatalf("key comment = %q, want deploy@example", detail.KeySummary.Comment)
+	}
+	if !strings.HasPrefix(detail.KeySummary.Fingerprint, "SHA256:") {
+		t.Fatalf("fingerprint = %q, want SHA256 prefix", detail.KeySummary.Fingerprint)
+	}
+	b, _ := json.Marshal(detail)
+	if strings.Contains(string(b), "PRIVATE KEY") {
+		t.Fatalf("credential detail leaked private key material: %s", b)
+	}
+}
+
+func TestCredentialDetailPasswordHasNoKeySummary(t *testing.T) {
+	svc, _ := newCredentialService(t)
+	cred, err := svc.Create(context.Background(), CreateRequest{Name: "lab", Type: TypePassword, Username: "du", Password: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail, err := svc.GetWithSummary(context.Background(), cred.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.KeySummary != nil {
+		t.Fatalf("password credential should not carry a key summary: %#v", detail.KeySummary)
 	}
 }

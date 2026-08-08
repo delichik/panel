@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { Cable, KeyRound, LockKeyhole, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
+import { Cable, KeyRound, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
@@ -17,7 +17,7 @@ import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
-import type { CredentialDto, CredentialInput, CredentialType } from '@/types/credentials';
+import type { CredentialDetailDto, CredentialDto, CredentialInput, CredentialType } from '@/types/credentials';
 import type { ServerDto } from '@/types/servers';
 import { credentialReferences } from '@/views/servers/model';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
@@ -30,6 +30,8 @@ const notifySuccess = useSuccessToast();
 const credentials = ref<CredentialDto[]>([]);
 const servers = ref<ServerDto[]>([]);
 const selectedId = ref('');
+const credentialDetail = ref<CredentialDetailDto | null>(null);
+const detailLoading = ref(false);
 const search = ref('');
 const page = ref(1);
 const pageSize = 50;
@@ -83,6 +85,11 @@ async function load() {
       credentials.value = credentialsResult.value.items;
       total.value = credentialsResult.value.total;
       selectedId.value = selectedId.value && credentialsResult.value.items.some((item) => item.id === selectedId.value) ? selectedId.value : credentialsResult.value.items[0]?.id || '';
+      if (selectedId.value) {
+        void loadDetail(selectedId.value);
+      } else {
+        credentialDetail.value = null;
+      }
     } else {
       firstError = credentialsResult.reason instanceof Error ? credentialsResult.reason.message : t('credentialsPage.loadFailed');
     }
@@ -100,6 +107,23 @@ async function load() {
     notifyError(err instanceof Error ? err.message : t('credentialsPage.loadFailed'));
   } finally {
     if (listRequests.isCurrent(requestId)) loading.value = false;
+  }
+}
+
+async function loadDetail(id: string) {
+  if (!id) {
+    credentialDetail.value = null;
+    detailLoading.value = false;
+    return;
+  }
+  detailLoading.value = true;
+  try {
+    const detail = await credentialsApi.get(id);
+    if (selectedId.value === id) credentialDetail.value = detail;
+  } catch {
+    if (selectedId.value === id) credentialDetail.value = null;
+  } finally {
+    if (selectedId.value === id) detailLoading.value = false;
   }
 }
 
@@ -178,6 +202,7 @@ function typeTone(type: CredentialType) {
 
 watch(search, () => { if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(() => { if (page.value !== 1) page.value = 1; else void load(); }, 250); });
 watch(page, () => { void load(); });
+watch(selectedId, (id) => { void loadDetail(id); });
 onMounted(load);
 onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 </script>
@@ -249,17 +274,26 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           <div class="min-h-0 overflow-auto p-5">
             <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
               <section class="rounded-2xl border border-border bg-background p-4">
-                <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('credentialsPage.secretPolicy') }}</h3>
-                <div class="mt-4 grid gap-3 text-sm">
-                  <div class="flex items-center gap-3 rounded-xl border border-border p-3">
-                    <KeyRound class="size-4 text-muted-foreground" />
-                    <span>{{ selectedCredential.type === 'private_key' ? t('credentialsPage.privateKeyStored') : t('credentialsPage.passwordStored') }}</span>
+                <h3 class="flex items-center gap-2 text-sm font-semibold text-foreground"><KeyRound class="size-4 text-muted-foreground" />{{ t('credentialsPage.keySummary') }}</h3>
+                <div v-if="detailLoading" class="mt-4 grid gap-2">
+                  <Skeleton v-for="item in 3" :key="item" class="h-10" />
+                </div>
+                <div v-else-if="selectedCredential.type === 'private_key' && credentialDetail?.keySummary" class="mt-4 grid gap-2 text-sm">
+                  <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
+                    <span class="text-muted-foreground">{{ t('credentialsPage.keyName') }}</span>
+                    <strong class="truncate text-foreground">{{ credentialDetail.keySummary.comment || selectedCredential.name }}</strong>
                   </div>
-                  <div class="flex items-center gap-3 rounded-xl border border-border p-3">
-                    <LockKeyhole class="size-4 text-muted-foreground" />
-                    <span>{{ t('credentialsPage.secretHidden') }}</span>
+                  <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
+                    <span class="text-muted-foreground">{{ t('credentialsPage.algorithm') }}</span>
+                    <strong class="text-foreground">{{ credentialDetail.keySummary.algorithm }}<template v-if="credentialDetail.keySummary.bits"> / {{ credentialDetail.keySummary.bits }}</template></strong>
+                  </div>
+                  <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
+                    <span class="text-muted-foreground">{{ t('credentialsPage.fingerprint') }}</span>
+                    <strong class="break-all text-right text-foreground">{{ credentialDetail.keySummary.fingerprint }}</strong>
                   </div>
                 </div>
+                <p v-else-if="selectedCredential.type === 'private_key'" class="m-0 mt-4 text-sm text-muted-foreground">{{ t('credentialsPage.keySummaryUnavailable') }}</p>
+                <p v-else class="m-0 mt-4 text-sm text-muted-foreground">{{ t('credentialsPage.passwordCredentialSummary', { username: selectedCredential.username }) }}</p>
               </section>
               <aside class="rounded-2xl border border-border bg-background p-4">
                 <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('credentialsPage.references') }}</h3>

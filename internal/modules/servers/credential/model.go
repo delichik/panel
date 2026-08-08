@@ -22,6 +22,15 @@ type Credential struct {
 
 type ResolvedCredential = sshx.ResolvedCredential
 
+type KeySummary = sshx.KeySummary
+
+// CredentialDetail is the single-credential view: it carries the same fields
+// as Credential plus a non-secret key summary computed on demand.
+type CredentialDetail struct {
+	Credential
+	KeySummary *KeySummary `json:"keySummary,omitempty"`
+}
+
 type CreateRequest struct {
 	Name       string `json:"name"`
 	Type       string `json:"type"`

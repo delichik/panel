@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { CredentialDto, CredentialInput } from '@/types/credentials';
+import type { CredentialDetailDto, CredentialDto, CredentialInput } from '@/types/credentials';
 import type { ListPage } from '@/types/pagination';
 
 export const credentialsApi = {
@@ -16,6 +16,9 @@ export const credentialsApi = {
   },
   update(id: string, input: CredentialInput) {
     return apiClient.put<CredentialDto>(`/credentials/${encodeURIComponent(id)}`, input);
+  },
+  get(id: string) {
+    return apiClient.get<CredentialDetailDto>(`/credentials/${encodeURIComponent(id)}`);
   },
   delete(id: string) {
     return apiClient.delete<void>(`/credentials/${encodeURIComponent(id)}`);

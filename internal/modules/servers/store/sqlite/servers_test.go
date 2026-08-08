@@ -153,6 +153,9 @@ func TestServerRepositorySummariesExposeAgentURL(t *testing.T) {
 	if len(items) != 1 {
 		t.Fatalf("summary count = %d, want 1", len(items))
 	}
+	if items[0].CredentialID != "cred-1" {
+		t.Fatalf("summary credentialId = %q, want cred-1", items[0].CredentialID)
+	}
 	got := items[0].Traits
 	if got["agent.enabled"] != "true" || got["agent.url"] != "https://10.0.0.1:9786" || got["agent.status"] != "compatible" || got["sys.ufw_supported"] != "true" {
 		t.Fatalf("summary traits = %#v, want agent traits and ufw flags", got)
@@ -167,6 +170,9 @@ func TestServerRepositorySummariesExposeAgentURL(t *testing.T) {
 	}
 	if page.Total != 1 || len(page.Items) != 1 {
 		t.Fatalf("summary page = %#v, want one item", page)
+	}
+	if page.Items[0].CredentialID != "cred-1" {
+		t.Fatalf("summary page credentialId = %q, want cred-1", page.Items[0].CredentialID)
 	}
 	got = page.Items[0].Traits
 	if got["agent.url"] != "https://10.0.0.1:9786" || got["agent.status"] != "compatible" {

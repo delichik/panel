@@ -37,7 +37,7 @@ func (r *ServerRepository) List(ctx context.Context) ([]domain.Server, error) {
 }
 
 func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSummary, error) {
-	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
+	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
 		FROM servers ORDER BY created_at DESC,id ASC`)
@@ -51,7 +51,7 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		var reachable, sudo int
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
 			return nil, err
 		}
 		item.Reachable = reachable == 1
@@ -83,7 +83,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		return httpx.ListPage[domain.ServerSummary]{}, err
 	}
 	listArgs := append(append([]any{}, args...), pageSize, (page-1)*pageSize)
-	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
+	rows, err := r.db.QueryContext(ctx, `SELECT id,name,host,port,credential_id,reachable,sudo_passwordless,privilege_mode,last_checked_at,last_error,updated_at,
 		COALESCE(json_extract(traits,'$."agent.enabled"'),''),COALESCE(json_extract(traits,'$."agent.url"'),''),COALESCE(json_extract(traits,'$."agent.status"'),''),
 		COALESCE(json_extract(traits,'$."sys.ufw_supported"'),''),COALESCE(json_extract(traits,'$."sys.ufw_installed"'),'')
 		FROM servers WHERE `+filter+` ORDER BY created_at DESC,id ASC LIMIT ? OFFSET ?`, listArgs...)
@@ -97,7 +97,7 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 		var reachable, sudo int
 		var lastChecked sql.NullString
 		var updatedAt, agentEnabled, agentURL, agentStatus, ufwSupported, ufwInstalled string
-		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.Host, &item.Port, &item.CredentialID, &reachable, &sudo, &item.Privilege.Mode, &lastChecked, &item.LastError, &updatedAt, &agentEnabled, &agentURL, &agentStatus, &ufwSupported, &ufwInstalled); err != nil {
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1

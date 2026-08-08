@@ -15,6 +15,7 @@ import (
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
 	"panel/internal/platform/secrets"
+	sshx "panel/internal/platform/ssh"
 )
 
 type Service struct {
@@ -147,6 +148,28 @@ func (s *Service) Get(ctx context.Context, credentialID string) (Credential, err
 		return Credential{}, err
 	}
 	return toDomainCredential(row), nil
+}
+
+func (s *Service) GetWithSummary(ctx context.Context, credentialID string) (CredentialDetail, error) {
+	var row models.Credential
+	err := orm.New(s.db).From("credentials").Where("id=?", credentialID).First(ctx, &row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CredentialDetail{}, panelerr.NotFound("credential")
+	}
+	if err != nil {
+		return CredentialDetail{}, err
+	}
+	detail := CredentialDetail{Credential: toDomainCredential(row)}
+	if row.Type == TypePrivateKey {
+		secret, err := s.decrypt(row.ID, row.Type, row.SecretCiphertext)
+		if err != nil {
+			return CredentialDetail{}, err
+		}
+		if summary, ok := sshx.SummarizePrivateKey([]byte(secret.PrivateKey), secret.Passphrase); ok {
+			detail.KeySummary = &summary
+		}
+	}
+	return detail, nil
 }
 
 func (s *Service) Resolve(ctx context.Context, credentialID string) (ResolvedCredential, error) {

@@ -329,6 +329,13 @@ export function installMockApi() {
       return json(createCredential({ id: `cred-${Date.now()}`, name: input.name, type: input.type, username: input.username, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }), 201);
     }
     const credentialMatch = url.pathname.match(/^\/api\/v1\/credentials\/([^/]+)$/);
+    if (credentialMatch && method(init) === 'GET') {
+      const cred = mockCredentials.find((item) => item.id === decodeURIComponent(credentialMatch[1]));
+      if (!cred) return error('credential_not_found', 'Credential was not found.', 404);
+      return json(cred.type === 'private_key'
+        ? { ...cred, keySummary: { algorithm: 'ED25519', bits: 256, fingerprint: 'SHA256:mock-key-fingerprint', comment: 'deploy@example' } }
+        : cred);
+    }
     if (credentialMatch && method(init) === 'PUT') {
       const input = await body<CredentialInput>(init);
       const saved = updateCredential(decodeURIComponent(credentialMatch[1]), { name: input.name, type: input.type, username: input.username, createdAt: '', updatedAt: new Date().toISOString() });

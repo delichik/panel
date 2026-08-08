@@ -3,7 +3,7 @@
 ## List API Contract
 
 - `GET /api/v1/servers` returns `ListPage<ServerSummary>` and accepts only `page`, `pageSize`, and `q`.
-- List rows exclude credentials, notes, variables, full traits, operating-system detail, and metrics; the only trait signals returned are `agent.enabled`, `agent.url`, `agent.status`, and UFW flags. `GET /api/v1/servers/{id}` owns the complete view.
+- List rows include only the `credentialId` reference (never credential secret content) and exclude notes, variables, full traits, operating-system detail, and metrics; the only trait signals returned are `agent.enabled`, `agent.url`, `agent.status`, and UFW flags. `GET /api/v1/servers/{id}` owns the complete view.
 - `GET /api/v1/credentials` follows the same `ListPage` and strict `page`/`pageSize`/`q` contract and never selects encrypted secret columns.
 
 ## 适用场景
@@ -37,24 +37,25 @@
 - 服务器页面位于 `web/src/views/servers/index.vue`，SSH 凭据独立页面位于 `web/src/views/credentials/index.vue`；分别通过 `/servers` 与 `/credentials` 进入，不共享页面内 tab。
 - 节点 tab（MasterDetailLayout：搜索 + 列表 + 分页 / 四区详情）：`web/src/views/servers/ServersNodesView.vue`、`ServerDetail.vue`。
 - 服务器添加/编辑由 `web/src/views/servers/index.vue` 内的表单对话框承载（含 `POST /servers/probe`）；凭据添加/编辑由 `web/src/views/credentials/index.vue` 内的表单对话框承载。凭据按 password/private_key 类型裁剪字段，编辑时 secret 留空 = 不更新；私钥类型使用 large Dialog 和共享 plain CodeMirror，password 类型仍使用普通输入与默认 Dialog。
-- 凭据 tab 表格：`CredentialsView.vue`（删除前客户端引用预检 + 409 `credential_in_use` 兜底）。
-- 纯函数逻辑：`serverTraits.ts`（traits/网卡解析、Agent/UFW 状态判定）、`serverProbe.ts`（probe 结果映射）、`serverInitPolling.ts`（创建后初始化轮询状态机）、`credentialUsage.ts`（引用预检）、`useTaskMessage.ts`（任务反馈 + "查看任务"跳转）。
+- 凭据页面：`web/src/views/credentials/index.vue`（MasterDetailLayout：搜索 + 列表 + 分页 / 详情）；列表引用计数、详情引用列表与删除前引用预检都基于已加载服务器摘要中的 `credentialId` 客户端匹配，后端 409 `credential_in_use` 兜底；详情展示密钥摘要（私钥的算法、长度、SHA256 指纹与密钥注释/名称）和引用服务器列表，不再展示“密钥策略”卡片。
+- 纯函数逻辑：`serverTraits.ts`（traits/网卡解析、Agent/UFW 状态判定）、`serverProbe.ts`（probe 结果映射）、`serverInitPolling.ts`（创建后初始化轮询状态机）、`credentialReferences`（引用预检，位于 `web/src/views/servers/model.ts`）、`useTaskMessage.ts`（任务反馈 + "查看任务"跳转）。
 - 防火墙与 Fail2Ban 页面（v4 阶段 4A）：`web/src/views/security/index.vue`；`/resources/firewall` 与 dev-only `/resources/fail2ban` 共享服务器选择器和 URL `server` query，但作为资源菜单下的独立页面呈现，不使用页内 tabs。旧 `/security/*` 只保留重定向。UFW 右侧为规则/状态矩阵、添加规则、删除规则、启用/安装确认；Fail2Ban 右侧为托管状态、检测到的 jail、预设、可视草稿、使用共享 CodeMirror 的 YAML 高级模式、保存草稿、应用/安装/释放接管确认。YAML 编辑仅更新草稿，仍需显式保存或启用，不自动格式化；纯函数和 `parseSimpleJailsFromYaml` 边界保持在 `web/src/views/security/model.ts`。
 - 软件包页（v4 阶段 4A）：软件包维护位于独立路由 `/resources/packages`，由 `web/src/views/resources/index.vue` 按当前资源页面渲染；支持服务器选择、客户端搜索、刷新 metadata、升级已选/全部和 root/免密 sudo 准入阻断。纯函数在 `web/src/views/resources/model.ts`。
 - 概览页面（v4）：`web/src/views/overview/index.vue`；概览卡片布局使用 6 列整数网格，卡片配置中的 `width`/`height` 分别对应 1x1 方格跨度，宽度上限 6、高度上限 4；浏览态只展示指标内容，编辑态支持带实时顺序预览的拖动重排、拖拽缩放、添加/删除和单卡属性编辑。卡片可通过 `serverIds` 选择一台或多台服务器，空数组表示全部服务器；卡片元信息显示服务器数量，多服务器指标通过 ECharts 独立 series 和悬停 tooltip 标识服务器与数值，tooltip 挂到 body 并使用 Panel popover token，不能受卡片 `overflow` 裁切；`networkDirection` 只在网络卡片编辑时展示。保存时继续通过 `PUT /api/v1/overview/cards` 持久化有序卡片配置；容器、镜像、网络、卷等资源页面由 `web/src/views/resources/index.vue` 承载独立路由页面。
+- 概览折线图自动刷新：页头刷新按钮旁提供 `Switch` + 5s/10s 间隔 `Select` 组合（见前端规范「自动刷新模式」），开启后只对 CPU/内存/磁盘/网络折线卡片生效。轮询防重入、标签页不可见暂停、编辑态或卡片加载中跳过；每次请求 `GET /api/v1/overview/cards/{cardId}/data?since=<RFC3339Nano>` 只拉取上次数据点之后的新指标点，前端按服务器追加到现有序列，不重新加载整段范围。`since` 缺省时保持原全量行为；非法时间戳返回 422；后端按秒对齐 `since` 后再比较，避免 SQLite 文本时间精度问题。 自动刷新失败时静默保留旧数据并下个周期重试，不弹 toast。
 - API：`web/src/api/servers.ts`、`web/src/api/security.ts`、`web/src/api/packages.ts`、`web/src/api/containers.ts`、`web/src/api/overview.ts`
 - 类型：`web/src/types/api.ts`
 
 ## 前端布局约定
 
 - 节点 tab 使用 MasterDetailLayout 模板：左列固定 280px，搜索为客户端过滤（name/host）并同步进 URL query `q`，初始化中的服务器显示"初始化中"进度态；右列详情分头部（可达性 + 操作组 + 错误横幅，`agent.last_error` 优先）与状态 / 系统 / 运行时 / 访问四区。
-- 凭据 tab 使用 ListPage 模板：表格体内部滚动，分页固定底部并同步进 URL query `page`。
+- 凭据页使用 MasterDetailLayout 模板：左列搜索为客户端过滤（name/username），分页固定底部并同步进 URL query `page`；右列详情展示密钥摘要与服务器引用，选择凭据时按需加载 `GET /api/v1/credentials/{id}`。
 - 创建服务器保存成功即关对话框：新记录插入列表顶部，前端轮询 `initialTaskId`（1.5s × 90 上限）到终态；成功刷新数据，失败显示原因与"服务器记录已回滚"提示。
 - 任务类操作（Agent 部署 / 重启 / UFW 安装）反馈只承诺任务已提交；旧 `/tasks` 兼容路由不再作为产品入口，后续诊断应优先通过系统事件或后端提供的任务引用查看。
 
 ## API 范围
 
-- 凭据：`GET/POST /api/v1/credentials`，`PUT/DELETE /api/v1/credentials/{id}`
+- 凭据：`GET/POST /api/v1/credentials`，`GET/PUT/DELETE /api/v1/credentials/{id}`
 - 服务器：`GET/POST /api/v1/servers`，`POST /api/v1/servers/probe`，`PUT/DELETE /api/v1/servers/{id}`
 - Agent 部署：`POST /api/v1/servers/{id}/agent/deploy`，Agent 证书包：`POST /api/v1/servers/{id}/agent/certificate`
 - Agent 系统证书：`GET /api/v1/key-assets/system`，重置：`POST /api/v1/key-assets/system/{id}/reset`
@@ -72,12 +73,12 @@
 
 - v3 页面经 `web/src/api/servers.ts` typed client 接真实后端；保存与 probe 语义分离（`POST /servers/probe` 只在添加/编辑对话框内预检，不落库）。
 - 详情错误横幅 `agent.last_error` 优先于 `lastError`；traits 对用户只读，编辑表单不展示也不提交 traits，后端保存接口忽略用户传入的 traits，服务器特征完全由系统探测、Agent 和设施/应用协调维护。旧数据中 `sudo_passwordless=1` 但 `privilege_mode=none` 的记录由一次性迁移修正为 `passwordless_sudo`，读取层兜底识别 `sudo.passwordless`。
-- 凭据 secret 只提交非空值，编辑时留空代表保留既有 secret；删除前用已加载服务器列表做引用预检并列出引用服务器，后端 409 `credential_in_use` 兜底。
+- 凭据 secret 只提交非空值，编辑时留空代表保留既有 secret；删除前用已加载服务器列表做引用预检并列出引用服务器，后端 409 `credential_in_use` 兜底。\n- `GET /api/v1/credentials/{id}` 对私钥类型凭据按需解密并返回非敏感密钥摘要（算法、位长、SHA256 指纹、密钥注释/名称），密码类型不返回摘要；摘要解析失败时仅省略摘要字段，任何响应都不返回秘密内容。
 - 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；新诊断入口应使用系统事件或后端返回的稳定任务引用，不能新增 `/tasks?task=<id>` 产品链接。
 - 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。
 
 - `servers` 和 `credentials` 在应用数据库，指标快照在指标数据库。
-- `GET /api/v1/servers` 只返回服务器摘要：身份、地址、可达状态以及列表展示所需的 Agent/UFW/权限信号；不得读取完整 traits、variables、notes、凭据、Docker 配置、完整 OS/架构或逐服务器指标。`GET /api/v1/servers/{id}` 按需返回完整详情，前端选择或编辑服务器时使用详情接口。服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。
+- `GET /api/v1/servers` 只返回服务器摘要：身份、地址、可达状态以及列表展示所需的 Agent/UFW/权限信号；不得读取完整 traits、variables、notes、凭据 secret 内容、Docker 配置、完整 OS/架构或逐服务器指标；仅返回 `credentialId` 引用 ID 供凭据页解析引用。`GET /api/v1/servers/{id}` 按需返回完整详情，前端选择或编辑服务器时使用详情接口。服务器列表、详情、新增和更新持久化通过 `internal/modules/servers/ports` 中的 `ServerRepository`；SQLite 实现在 `store/sqlite`。跨应用目标和概览配置的服务器删除事务暂由服务器用例协调，迁移时必须保持现有原子性。
 - `service.go` 保留服务器运维、探测和 UFW 等流程；服务器资源 CRUD 放在 `registry.go`，Agent 部署和健康检查分别放在 `agent_deployment.go` 与 `agent_health.go`，fail2ban 配置放在 `fail2ban.go`，新增代码不要重新揉回主 service 文件。
 - 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。修剪应用部署节点属于应用配置变化，必须在同一删除事务中递增对应应用的 `version` 和配置 `updated_at`。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
