@@ -227,14 +227,14 @@ onBeforeUnmount(stopPolling);
 <style scoped>
 span {
   display: block;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 12px;
 }
 
 strong {
   display: block;
   overflow-wrap: anywhere;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 13px;
 }
 </style>

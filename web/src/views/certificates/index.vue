@@ -477,7 +477,7 @@ function onFile(event: Event) {
       <MasterDetailLayout class="min-h-0">
         <template #master>
         <aside class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-card">
-          <div class="min-h-0 overflow-auto p-2">
+          <div class="motion-stagger min-h-0 overflow-auto p-2">
           <div v-if="loading && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>

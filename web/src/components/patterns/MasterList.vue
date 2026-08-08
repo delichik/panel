@@ -31,7 +31,7 @@ defineEmits<{ select: [item: T] }>();
         <slot name="emptyActions" />
       </template>
     </EmptyState>
-    <div v-else class="min-h-0 overflow-auto rounded-xl border border-border bg-background">
+    <div v-else class="motion-stagger min-h-0 overflow-auto rounded-xl border border-border bg-background">
       <button
         v-for="item in items"
         :key="item.id"

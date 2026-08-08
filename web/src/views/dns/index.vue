@@ -261,7 +261,7 @@ async function deleteRecord() {
             <strong class="mt-1 block text-foreground">{{ totalDomains }}</strong>
           </div>
         </div>
-        <div class="min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2">
           <div v-if="loadingDomains && !domains.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
           </div>
@@ -323,10 +323,10 @@ async function deleteRecord() {
                 <thead class="sticky top-0 bg-muted text-xs uppercase text-muted-foreground">
                   <tr><th class="px-3 py-2 text-left">{{ t('common.type') }}</th><th class="px-3 py-2 text-left">{{ t('common.name') }}</th><th class="px-3 py-2 text-left">{{ t('dnsPage.content') }}</th><th class="px-3 py-2 text-left">TTL</th><th class="px-3 py-2 text-right">{{ t('common.actions') }}</th></tr>
                 </thead>
-                <tbody class="divide-y divide-border bg-background">
+                <tbody class="motion-stagger divide-y divide-border bg-background">
                   <tr v-if="loadingRecords && !records.length"><td colspan="5" class="px-3 py-3"><div class="grid gap-2"><Skeleton v-for="item in 4" :key="item" class="h-8" /></div></td></tr>
                   <tr v-if="!records.length && !loadingRecords"><td colspan="5" class="px-3 py-8"><EmptyState :title="t('dnsPage.noRecords')" :description="t('dnsPage.noRecordsHint')" /></td></tr>
-                  <tr v-for="record in records" :key="record.id" class="hover:bg-accent/60">
+                  <tr v-for="record in records" :key="record.id" class="motion-table-row hover:bg-accent/60">
                     <td class="px-3 py-2"><Badge tone="info">{{ record.type }}</Badge></td>
                     <td class="px-3 py-2 font-medium">{{ record.name }}</td>
                     <td class="max-w-md truncate px-3 py-2 text-muted-foreground">{{ record.value }}</td>

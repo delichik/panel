@@ -38,7 +38,7 @@ function toggle(id: string) {
 </script>
 
 <template>
-  <section class="grid gap-2" :aria-label="label">
+  <section class="grid gap-2 motion-stagger" :aria-label="label">
     <button
       v-for="server in servers"
       :key="server.id"

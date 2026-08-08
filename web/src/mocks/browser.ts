@@ -227,7 +227,8 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/servers/probe' && method(init) === 'POST') return json(probeServer(await body<ServerSaveInput>(init)));
     const metricsMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/metrics$/);
     if (metricsMatch && method(init) === 'GET') {
-      const series = mockServerMetrics(decodeURIComponent(metricsMatch[1]));
+      const range = url.searchParams.get('range') ?? '1h';
+      const series = mockServerMetrics(decodeURIComponent(metricsMatch[1]), range);
       return series ? json(series) : error('server_not_found', 'Server was not found.', 404);
     }
     const agentCertMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/agent\/certificate$/);

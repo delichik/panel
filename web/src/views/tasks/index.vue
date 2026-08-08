@@ -203,7 +203,7 @@ onBeforeUnmount(() => {
           <SearchInput v-model="search" clearable :placeholder="t('tasksPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
           <label class="grid gap-1 text-xs text-muted-foreground">{{ t('tasksPage.statusFilter') }}<Select v-model="statusFilter" :options="statusOptions" /></label>
         </div>
-        <div class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-2">
+        <div class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-2">
           <div v-if="loading && !groups.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
@@ -245,7 +245,7 @@ onBeforeUnmount(() => {
             </div>
           </header>
           <div class="grid min-h-0 min-w-0 grid-cols-[minmax(0,280px)_minmax(0,1fr)] gap-4 overflow-hidden p-4 max-lg:grid-cols-1">
-            <section class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
+            <section class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
               <h3 class="m-0 mb-3 flex min-w-0 items-center gap-2 text-sm font-semibold"><ListFilter class="size-4 shrink-0" /><span class="min-w-0 truncate">{{ t('tasksPage.executionItems') }}</span></h3>
               <button v-for="task in selectedGroup.tasks" :key="task.id" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-1 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedTaskId === task.id ? 'border-border-strong bg-card' : 'border-border'" :aria-current="selectedTaskId === task.id ? 'true' : undefined" @click="selectedTaskId = task.id">
                 <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ task.summary }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" /></div>
@@ -254,12 +254,12 @@ onBeforeUnmount(() => {
             </section>
             <section class="min-h-0 min-w-0 overflow-hidden rounded-2xl border border-border bg-background p-4">
               <Tabs v-model="tab" class="h-full min-h-0" :tabs="[{ label: t('tasksPage.steps'), value: 'steps' }, { label: t('tasksPage.logs'), value: 'logs' }, { label: t('tasksPage.error'), value: 'error' }]">
-                <div v-if="tab === 'steps'" class="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
+                <div v-if="tab === 'steps'" class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">
                   <div v-if="detailLoading && !steps.length" class="relative grid min-h-48 place-items-center">
                     <LoadingOverlay :label="t('tasksPage.loadingDetail')" />
                   </div>
                   <template v-else>
-                    <div v-for="step in steps" :key="step.id" class="mb-2 grid min-w-0 gap-2 overflow-hidden rounded-xl border border-border p-3 text-sm">
+                    <div v-for="step in steps" :key="step.id" class="motion-reveal mb-2 grid min-w-0 gap-2 overflow-hidden rounded-xl border border-border p-3 text-sm">
                       <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ step.step }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="step.status" domain="task" /></div>
                       <div class="h-2 overflow-hidden rounded-full bg-muted"><div class="h-full bg-primary" :style="{ width: `${step.percentage}%` }" /></div>
                       <p v-if="step.error" class="m-0 min-w-0 break-words text-danger">{{ step.error }}</p>

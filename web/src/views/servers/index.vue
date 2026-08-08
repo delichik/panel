@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { AlertTriangle, Cable, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
-import { serversApi, type ServerMetricsSeries } from '@/api/servers';
+import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
@@ -17,7 +17,9 @@ import Textarea from '@/components/ui/Textarea.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
+import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { CredentialDto } from '@/types/credentials';
 import type { ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
@@ -26,10 +28,12 @@ import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 
 const { t } = useI18n();
+const MetricLineChart = defineAsyncComponent(() => import('@/views/overview/MetricLineChart.vue'));
 const route = useRoute();
 const router = useRouter();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
+const { mode: autoRefreshMode, enabled: autoRefreshEnabled, intervalMs: autoRefreshIntervalMs } = useAutoRefresh();
 
 const servers = ref<ServerDto[]>([]);
 const serverDetails = ref<Record<string, ServerDto>>({});
@@ -44,6 +48,7 @@ let detailController: AbortController | null = null;
 let metricsController: AbortController | null = null;
 let detailRequestId = 0;
 let metricsRequestId = 0;
+let metricsAutoRefreshTimer: number | undefined;
 const listRequests = createLatestRequestGuard();
 const loading = ref(false);
 const detailLoading = ref(false);
@@ -64,6 +69,13 @@ const metrics = ref<ServerMetricsSeries | null>(null);
 const metricsServerId = ref('');
 const metricsLoading = ref(false);
 const metricsError = ref('');
+const metricsRange = ref<ServerMetricsRange>('1h');
+const metricsRangeOptions = [
+  { value: '1h', label: '1h' },
+  { value: '6h', label: '6h' },
+  { value: '1d', label: '1d' },
+  { value: '7d', label: '7d' },
+];
 
 const form = reactive({
   name: '',
@@ -103,6 +115,23 @@ const latestMetrics = computed(() => {
   };
 });
 
+const metricChartPanels = computed(() => {
+  const series = metrics.value;
+  if (!series) return [];
+  const serverName = selectedServer.value?.name ?? '';
+  const single = (values: number[]) => [{ id: selectedId.value, name: serverName, values }];
+  const percentValues = (points: Array<{ usedBytes?: number; totalBytes?: number }>) => points.map((point) => (point.totalBytes ? ((point.usedBytes ?? 0) / point.totalBytes) * 100 : 0));
+  return [
+    { key: 'cpu', label: 'CPU', current: percent(latestMetrics.value.cpu?.usagePercent), valueKind: 'percent' as const, labels: series.cpu.map((point) => point.time), series: single(series.cpu.map((point) => point.usagePercent)) },
+    { key: 'memory', label: t('serversPage.memory'), current: `${bytes(latestMetrics.value.memory?.usedBytes)} / ${bytes(latestMetrics.value.memory?.totalBytes)}`, valueKind: 'percent' as const, labels: series.memory.map((point) => point.time), series: single(percentValues(series.memory)) },
+    { key: 'disk', label: t('serversPage.disk'), current: `${bytes(latestMetrics.value.disk?.usedBytes)} / ${bytes(latestMetrics.value.disk?.totalBytes)}`, valueKind: 'percent' as const, labels: series.disk.map((point) => point.time), series: single(percentValues(series.disk)) },
+    { key: 'network', label: t('serversPage.network'), current: `${bytesPerSecond(latestMetrics.value.network?.rxBytesPerSecond)} / ${bytesPerSecond(latestMetrics.value.network?.txBytesPerSecond)}`, valueKind: 'bytes' as const, labels: series.network.map((point) => point.time), series: [
+      { id: `${selectedId.value}-rx`, name: t('serversPage.networkRx'), values: series.network.map((point) => point.rxBytesPerSecond ?? 0) },
+      { id: `${selectedId.value}-tx`, name: t('serversPage.networkTx'), values: series.network.map((point) => point.txBytesPerSecond ?? 0) },
+    ] },
+  ];
+});
+
 watch(search, (value) => {
   void router.replace({ query: { ...route.query, search: value || undefined } });
   if (searchTimer) clearTimeout(searchTimer);
@@ -114,6 +143,9 @@ watch(search, (value) => {
 watch(page, () => { void loadServers(); });
 watch(selectedId, () => {
   void loadServerDetail();
+  void loadMetrics();
+});
+watch(metricsRange, () => {
   void loadMetrics();
 });
 
@@ -211,7 +243,7 @@ async function loadMetrics() {
   metricsController = controller;
   metricsLoading.value = true;
   try {
-    const next = await serversApi.metrics(id, '1h', { signal: controller.signal });
+    const next = await serversApi.metrics(id, metricsRange.value, { signal: controller.signal });
     if (requestId !== metricsRequestId || selectedId.value !== id) return;
     metrics.value = next;
     metricsServerId.value = id;
@@ -223,6 +255,23 @@ async function loadMetrics() {
     if (requestId === metricsRequestId) metricsLoading.value = false;
   }
 }
+
+function startMetricsAutoRefresh() {
+  stopMetricsAutoRefresh();
+  if (!autoRefreshEnabled.value) return;
+  metricsAutoRefreshTimer = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void loadMetrics();
+  }, autoRefreshIntervalMs.value);
+}
+
+function stopMetricsAutoRefresh() {
+  if (metricsAutoRefreshTimer !== undefined) {
+    window.clearInterval(metricsAutoRefreshTimer);
+    metricsAutoRefreshTimer = undefined;
+  }
+}
+
+watch(autoRefreshMode, startMetricsAutoRefresh, { immediate: true });
 
 function openCreate() {
   editing.value = null;
@@ -407,7 +456,16 @@ function bytes(value?: number) {
 }
 
 function bytesPerSecond(value?: number) {
-  return typeof value === 'number' ? `${bytes(value)}/s` : t('common.notAvailable');
+  if (typeof value !== 'number') return t('common.notAvailable');
+  if (!value) return '0 B/s';
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+  let unitIndex = 0;
+  let scaled = value;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+  return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function isAbortError(error: unknown) {
@@ -419,6 +477,7 @@ onBeforeUnmount(() => {
   if (searchTimer) clearTimeout(searchTimer);
   detailController?.abort();
   metricsController?.abort();
+  stopMetricsAutoRefresh();
 });
 </script>
 
@@ -435,7 +494,7 @@ onBeforeUnmount(() => {
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('serversPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
-        <div class="min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2">
           <div v-if="loading && !servers.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>
@@ -478,7 +537,7 @@ onBeforeUnmount(() => {
             <Skeleton class="mt-3 h-4 w-72 max-w-full" />
           </header>
           <div class="min-h-0 overflow-auto p-5">
-            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
               <div class="grid gap-4">
                 <section v-for="item in 3" :key="item" class="rounded-2xl border border-border bg-background p-4">
                   <Skeleton class="h-4 w-32" />
@@ -517,7 +576,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="min-h-0 overflow-auto p-5">
-            <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div class="grid gap-4 2xl:grid-cols-[minmax(0,1fr)_320px]">
               <div class="grid gap-4">
                 <section class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.connection') }}</h3>
@@ -529,19 +588,35 @@ onBeforeUnmount(() => {
                   </dl>
                 </section>
                 <section class="rounded-2xl border border-border bg-background p-4">
-                  <div class="flex items-center justify-between gap-3">
+                  <div class="flex flex-wrap items-center justify-between gap-3">
                     <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.metrics') }}</h3>
-                    <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                    <div class="flex flex-wrap items-center gap-2">
+                      <Select v-model="metricsRange" :options="metricsRangeOptions" class="w-24" />
+                      <AutoRefreshControl
+                        :off-label="t('autoRefresh.off')"
+                        :short-label="t('autoRefresh.5s')"
+                        :long-label="t('autoRefresh.10s')"
+                        :hint-label="t('autoRefresh.hint')"
+                      />
+                      <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                    </div>
                   </div>
-                  <dl class="relative mt-3 grid grid-cols-3 gap-3 text-sm max-md:grid-cols-1">
-                    <LoadingOverlay v-if="metricsLoading && !metrics" />
-                    <div><dt>CPU</dt><dd>{{ percent(latestMetrics.cpu?.usagePercent) }}</dd></div>
-                    <div><dt>{{ t('serversPage.memory') }}</dt><dd>{{ bytes(latestMetrics.memory?.usedBytes) }} / {{ bytes(latestMetrics.memory?.totalBytes) }}</dd></div>
-                    <div><dt>{{ t('serversPage.disk') }}</dt><dd>{{ bytes(latestMetrics.disk?.usedBytes) }} / {{ bytes(latestMetrics.disk?.totalBytes) }}</dd></div>
-                    <div><dt>{{ t('serversPage.networkRx') }}</dt><dd>{{ bytesPerSecond(latestMetrics.network?.rxBytesPerSecond) }}</dd></div>
-                    <div><dt>{{ t('serversPage.networkTx') }}</dt><dd>{{ bytesPerSecond(latestMetrics.network?.txBytesPerSecond) }}</dd></div>
-                    <div><dt>{{ t('serversPage.loadAverage') }}</dt><dd>{{ latestMetrics.load ? `${latestMetrics.load.load1.toFixed(2)} ${latestMetrics.load.load5.toFixed(2)} ${latestMetrics.load.load15.toFixed(2)}` : selectedServer.loadAverage || t('common.notAvailable') }}</dd></div>
-                  </dl>
+                  <LoadingOverlay v-if="metricsLoading && !metrics" />
+                  <p v-else-if="metricsError && !metrics" class="mt-3 text-sm text-danger">{{ metricsError }}</p>
+                  <template v-else-if="metrics">
+
+                    <div class="mt-4 grid gap-3 xl:grid-cols-2">
+                      <div v-for="panel in metricChartPanels" :key="panel.key" class="rounded-xl border border-border bg-card p-3">
+                        <div class="flex items-center justify-between gap-3">
+                          <span class="text-xs font-medium text-muted-foreground">{{ panel.label }}</span>
+                          <span class="truncate text-sm font-semibold text-foreground">{{ panel.current }}</span>
+                        </div>
+                        <div class="mt-2 h-28 min-w-0">
+                          <MetricLineChart :labels="panel.labels" :series="panel.series" :value-kind="panel.valueKind" />
+                        </div>
+                      </div>
+                    </div>
+                  </template>
                 </section>
                 <section class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.recentOperations') }}</h3>
@@ -620,14 +695,14 @@ onBeforeUnmount(() => {
 <style scoped>
 dt {
   margin: 0 0 4px;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 12px;
 }
 
 dd {
   margin: 0;
   overflow-wrap: anywhere;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-weight: 600;
 }
 </style>

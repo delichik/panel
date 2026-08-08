@@ -229,9 +229,9 @@ onMounted(load);
       </section>
       <section>
         <h3 class="m-0 mb-2 text-sm font-semibold">{{ t('applicationOperationsPage.targets') }}</h3>
-        <div class="grid gap-2">
+        <div class="grid gap-2 motion-stagger">
           <EmptyState v-if="!detail.targets.length" :title="t('applicationOperationsPage.noTargets')" :description="t('applicationOperationsPage.noTargetsHint')" />
-          <div v-for="target in detail.targets" :key="target.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
+          <div v-for="target in detail.targets" :key="target.id" class="motion-reveal grid gap-1 rounded-xl border border-border p-3 text-sm">
             <div class="flex items-center justify-between gap-2"><strong>{{ target.serverName || target.serverId || target.id }}</strong><StatusBadge :status="target.status" domain="operation" :label="target.status" /></div>
             <span class="text-muted-foreground">{{ target.stage || target.action }}</span>
             <span v-if="target.error" class="text-danger">{{ target.error }}</span>
@@ -240,8 +240,8 @@ onMounted(load);
       </section>
       <section>
         <h3 class="m-0 mb-2 text-sm font-semibold">{{ t('applicationOperationsPage.events') }}</h3>
-        <div class="grid gap-2">
-          <div v-for="event in detail.events" :key="event.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
+        <div class="grid gap-2 motion-stagger">
+          <div v-for="event in detail.events" :key="event.id" class="motion-reveal grid gap-1 rounded-xl border border-border p-3 text-sm">
             <div class="flex items-center justify-between gap-2"><strong>{{ eventTypeLabel(event.eventType) }}</strong><span class="text-xs text-muted-foreground">{{ formatDateTime(event.occurredAt, t('common.notAvailable')) }}</span></div>
             <p class="m-0 text-muted-foreground">{{ event.summary }}</p>
           </div>

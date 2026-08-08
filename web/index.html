@@ -11,6 +11,10 @@
       (function () {
         try {
           var mode = localStorage.getItem('panel.theme.mode');
+          var scheme = localStorage.getItem('panel.theme.scheme');
+          if (scheme === 'ocean' || scheme === 'lighthouse') {
+            document.documentElement.dataset.scheme = scheme;
+          }
           var media = typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
           var dark = mode === 'dark' || (mode !== 'light' && !!media && media.matches);
           document.documentElement.dataset.theme = dark ? 'dark' : 'light';
@@ -22,20 +26,30 @@
     </script>
     <style>
       :root {
-        --boot-bg: #ffffff;
-        --boot-track: #d7d7d7;
-        --boot-accent: rgba(0, 0, 0, 0.92);
+        --boot-bg: #f6f4ef;
+        --boot-track: #e0d9ca;
+        --boot-accent: #0e6b52;
+      }
+      :root[data-scheme='ocean'] {
+        --boot-bg: #eff5fa;
+        --boot-track: #c9deef;
+        --boot-accent: #1b4a78;
       }
       :root[data-theme='dark'] {
-        --boot-bg: #000000;
-        --boot-track: rgba(255, 255, 255, 0.16);
-        --boot-accent: #ffffff;
+        --boot-bg: #0e151c;
+        --boot-track: rgba(154, 196, 228, 0.2);
+        --boot-accent: #46e89c;
+      }
+      :root[data-theme='dark'][data-scheme='ocean'] {
+        --boot-bg: #0a1626;
+        --boot-track: rgba(120, 175, 220, 0.22);
+        --boot-accent: #38c6d9;
       }
       @media (prefers-color-scheme: dark) {
         :root:not([data-theme]) {
-          --boot-bg: #000000;
-          --boot-track: rgba(255, 255, 255, 0.16);
-          --boot-accent: #ffffff;
+          --boot-bg: #0e151c;
+          --boot-track: rgba(154, 196, 228, 0.2);
+          --boot-accent: #46e89c;
         }
       }
       .boot-screen {

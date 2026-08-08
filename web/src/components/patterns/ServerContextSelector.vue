@@ -33,7 +33,7 @@ defineEmits<{ 'update:modelValue': [value: string] }>();
 </script>
 
 <template>
-  <section class="grid gap-2" role="radiogroup" :aria-label="label" :aria-busy="loading ? 'true' : undefined">
+  <section class="grid gap-2 motion-stagger" role="radiogroup" :aria-label="label" :aria-busy="loading ? 'true' : undefined">
     <div v-if="loading && !servers.length" class="grid gap-2">
       <div v-for="item in loadingRows" :key="item" class="grid min-h-20 gap-2 rounded-xl border border-border bg-background p-3" aria-hidden="true">
         <div class="flex items-start gap-3">

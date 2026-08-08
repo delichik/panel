@@ -1,4 +1,4 @@
-# 前端模块
+﻿# 前端模块
 
 ## 品牌
 
@@ -42,12 +42,13 @@
 - 复杂无样式交互可使用 headless 组件库；业务页面仍必须通过 Panel 自有 primitives 暴露一致样式。
 - `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch。
 - 等待网络接口响应的加载效果统一使用 `web/src/components/ui/LoadingOverlay.vue` 或既有骨架/按钮 loading；文本加载位置不得只显示文字。
+- 所有异步数据列表统一为「骨架/加载态 → 内容交错填充」：加载期按页面结构显示 Skeleton（`Table` 自带表格骨架行），数据就绪后经 `motion-stagger` + `motion-reveal` / `motion-table-row` 播放逐项进场动效（与 system-events 列表一致）；已有内容刷新不重放。
 - 列表、详情、轮询等异步加载必须使用 `createLatestRequestGuard` 或 AbortController 丢弃过期响应；轮询必须防重入、标签页不可见时暂停轮询，刷新按钮应覆盖其对应面板的全部数据源。
 - 新增或替换跨页面同类交互时，优先复用 `web/src/components/ui/` 的 SearchInput、PaginationBar、ConfirmDialog、FileUploadButton、DownloadButton、StatusBadge，以及 `web/src/components/patterns/` 的 FilterBar、ServerContextSelector、ServerMultiPicker、MasterList、EditorSectionRail；适用边界见 `docs/agents/specifications/frontend/interaction-patterns.md`。
 - `web/src/views/applications/index.vue`、`web/src/views/tasks/index.vue`、`web/src/views/security/index.vue` 与 `web/src/views/resources/index.vue` 已开始接入统一 patterns：搜索使用 `SearchInput`，任务分页使用 `PaginationBar`，任务/应用状态使用 `StatusBadge`，应用/设施服务器多选使用 `ServerMultiPicker`，安全/资源服务器上下文使用单一 `ServerContextSelector`，持久化与文件内容操作使用 `DownloadButton` / `FileUploadButton`。应用和设施编辑器采用同一连续纵向瀑布流：所有配置区在一个编辑正文中按业务顺序展开，正文独立滚动，右侧保留摘要；不得恢复分区切换、分页卡片或隐藏其他配置区的交互。后续页面修改不得在 `ServerContextSelector` 上方叠加服务器 Select 下拉。
 - 图标统一使用 `@lucide/vue`。
-- 主题只支持 `system` / `light` / `dark`，通过 `data-theme` 和 CSS 变量运行。
-- 首次加载的启动遮罩（web/index.html 内联 boot-screen）在首帧渲染前按 panel.theme.mode 与 prefers-color-scheme 应用主题，避免深色模式先闪白屏；内联色值与 --panel-bg / --panel-border-strong / --panel-primary 保持一致。
+- 主题支持 `system` / `light` / `dark` 明暗模式，以及 `lighthouse`（灯塔，默认）/ `ocean`（蔚蓝）两套配色方案，分别通过 `data-theme` / `data-scheme` 和 CSS 变量运行；配色偏好保存在 localStorage `panel.theme.scheme`。
+- 首次加载的启动遮罩（web/index.html 内联 boot-screen）在首帧渲染前按 panel.theme.mode、panel.theme.scheme 与 prefers-color-scheme 应用主题与配色，避免深色模式先闪白屏；内联色值与各方案 --panel-bg / --panel-border-strong / --panel-primary 保持一致。
 - 中大屏 AppShell 必须填满视口并禁止页面级滚动；滚动限制在模板正文、表格、详情、日志或编辑正文内部。
 - 窄屏 AppShell 侧边抽屉以 dialog 语义呈现（`role="dialog"` / `aria-modal` / `aria-label`），复用 `web/src/composables/useOverlayBehavior.ts` 的焦点圈定、Escape 关闭与焦点恢复，提供可见关闭按钮，锁定背景滚动并把背景置为 inert；跨入 `lg`（1024px）断点时自动关闭。
 - 异常消息和操作成功提示统一通过 `ToastProvider` 以顶部 toast 展示，不再使用页面内成功横幅或内联操作错误条；表单校验、结构化诊断和状态型错误仍就地展示。`Dialog` 不因点击遮罩关闭，只能通过显式关闭、取消或 Escape 关闭。

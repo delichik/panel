@@ -48,7 +48,7 @@ function onKeydown(event: KeyboardEvent, value: string) {
         :aria-controls="`${id}-tabpanel`"
         :tabindex="modelValue === tab.value ? 0 : -1"
         :disabled="tab.disabled"
-        class="motion-tab h-8 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-45 aria-selected:bg-background aria-selected:text-foreground aria-selected:shadow-sm"
+        class="motion-tab h-8 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 disabled:pointer-events-none disabled:opacity-45 aria-selected:bg-brand-bg aria-selected:text-brand"
         @click="$emit('update:modelValue', tab.value)"
         @keydown="onKeydown($event, tab.value)"
       >

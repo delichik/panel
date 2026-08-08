@@ -402,8 +402,8 @@ onMounted(load);
           <h2>{{ t('settingsPage.section.systemCertificates') }}</h2>
           <p class="m-0 text-sm text-muted-foreground">{{ t('settingsPage.systemCertificatesHint') }}</p>
           <EmptyState v-if="!systemCertificates.length" :title="t('settingsPage.systemCertificatesEmpty')" :description="t('settingsPage.systemCertificatesEmptyHint')" />
-          <div v-else class="grid gap-3">
-            <article v-for="cert in systemCertificates" :key="cert.id" class="grid gap-3 rounded-xl border border-border bg-background p-4">
+          <div v-else class="grid gap-3 motion-stagger">
+            <article v-for="cert in systemCertificates" :key="cert.id" class="motion-reveal grid gap-3 rounded-xl border border-border bg-background p-4">
               <div class="flex min-w-0 flex-wrap items-start justify-between gap-3">
                 <div class="min-w-0">
                   <h3 class="truncate">{{ cert.name }}</h3>
@@ -494,7 +494,7 @@ onMounted(load);
 h2,
 h3 {
   margin: 0;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-weight: 650;
 }
 </style>

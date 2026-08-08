@@ -242,7 +242,7 @@ onBeforeUnmount(() => {
           v-if="open"
           :id="`${id}-listbox`"
           ref="listbox"
-          class="z-50 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
+          class="z-50 overflow-y-auto overflow-x-hidden rounded-xl border border-border bg-popover p-1 text-popover-foreground shadow-xl"
           :style="listboxStyle"
           role="listbox"
           :aria-labelledby="attrs.id as string | undefined"
@@ -256,16 +256,16 @@ onBeforeUnmount(() => {
         role="option"
         :aria-selected="modelValue === option.value"
         :disabled="option.disabled"
-        class="motion-menu-item flex w-full min-w-0 items-center gap-2 rounded-xl px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
+        class="motion-menu-item flex w-full min-w-0 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40"
         :class="[
-          modelValue === option.value ? 'bg-accent text-foreground' : 'text-foreground/72 hover:bg-accent hover:text-foreground',
+          modelValue === option.value ? 'bg-brand-bg text-brand' : 'text-foreground/72 hover:bg-accent hover:text-foreground',
           activeIndex === index && modelValue !== option.value ? 'bg-accent text-foreground' : undefined,
         ]"
         @mouseenter="setActiveFromPointer(option, index)"
         @click="choose(option)"
       >
         <span class="min-w-0 flex-1 truncate">{{ option.label }}</span>
-        <Check v-if="modelValue === option.value" class="size-4 shrink-0 text-foreground" aria-hidden="true" />
+        <Check v-if="modelValue === option.value" class="size-4 shrink-0 text-brand" aria-hidden="true" />
       </button>
         </div>
       </Transition>

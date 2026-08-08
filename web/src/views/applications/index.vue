@@ -1495,7 +1495,7 @@ onBeforeUnmount(() => {
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('applicationsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
-        <div class="min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2">
           <div v-if="loading && !applications.length" class="grid gap-2" aria-hidden="true">
             <div v-for="item in 7" :key="item" class="grid gap-2 rounded-xl border border-border bg-background p-3">
               <div class="flex items-center justify-between gap-2">
@@ -1603,8 +1603,8 @@ onBeforeUnmount(() => {
                       <EmptyState v-else :title="t('applicationsPage.noRuntime')" :description="t('applicationsPage.noRuntimeHint')" />
                     </div>
                   </section>
-                  <section v-else-if="appTab === 'routes'" class="grid gap-3">
-                    <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="rounded-2xl border border-border bg-background p-4">
+                  <section v-else-if="appTab === 'routes'" class="grid gap-3 motion-stagger">
+                    <div v-for="rule in selectedApplication.reverseProxy" :key="rule.domain" class="motion-reveal rounded-2xl border border-border bg-background p-4">
                       <div class="flex items-center justify-between gap-2"><strong>{{ rule.domain }}</strong><Badge tone="info">{{ rule.targetPort }}</Badge></div>
                       <p class="text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: rule.originServerIds.length }) }} · {{ rule.originServerIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
                       <div class="mt-2 flex flex-wrap gap-2"><Badge v-for="path in rule.paths" :key="path.path" tone="neutral">{{ path.path }}</Badge></div>
@@ -1612,8 +1612,8 @@ onBeforeUnmount(() => {
                     <EmptyState v-if="!selectedApplication.reverseProxy.length" :title="t('applicationsPage.noRoutes')" :description="t('applicationsPage.noRoutesHint')" />
                   </section>
                   <section v-else class="rounded-2xl border border-border bg-background p-4">
-                    <div class="grid gap-3">
-                      <div v-for="file in applicationFiles[selectedApplication.id] || []" :key="file.name" class="item-row">
+                    <div class="grid gap-3 motion-stagger">
+                      <div v-for="file in applicationFiles[selectedApplication.id] || []" :key="file.name" class="item-row motion-reveal">
                         <div><strong>{{ file.name }}</strong><span>{{ file.size }} {{ t('applicationsPage.bytes') }}</span></div>
                         <div class="row-actions">
                           <DownloadButton size="sm" :loading="fileActionPending === `committed:${file.name}`" :label="t('common.download')" @click="downloadCommittedApplicationFile(file)" />
@@ -1661,35 +1661,27 @@ onBeforeUnmount(() => {
         <h2 class="m-0 text-lg font-semibold text-foreground">{{ t('applicationsPage.facilityCatalogTitle') }}</h2>
         <p class="m-0 mt-1 text-sm text-muted-foreground">{{ t('applicationsPage.facilityCatalogHint') }}</p>
       </div>
-      <div class="grid grid-cols-2 gap-3 max-sm:grid-cols-1">
+            <div class="grid gap-3 motion-stagger">
         <article
           v-for="item in facilities"
           :key="item.kind"
-          role="link"
-          tabindex="0"
-          class="motion-list-item grid cursor-pointer gap-4 rounded-2xl border border-border bg-background p-5 transition-colors hover:bg-accent"
-          @click="router.push(`/applications/facility-apps/${item.kind}`)"
-          @keydown.enter="router.push(`/applications/facility-apps/${item.kind}`)"
-          @keydown.space.prevent="router.push(`/applications/facility-apps/${item.kind}`)"
+          class="motion-list-item grid gap-5 rounded-2xl border border-border bg-background p-5 lg:grid-cols-[auto_minmax(0,1fr)_auto]"
         >
-            <div class="flex items-start justify-between gap-3">
-              <div class="grid size-12 place-items-center rounded-2xl border border-border bg-muted/40 text-foreground">
-                <component :is="item.icon" class="size-6" aria-hidden="true" />
-              </div>
-              <div class="flex flex-wrap items-center justify-end gap-2">
-                <Badge tone="info">{{ t(item.categoryKey) }}</Badge>
-                <StatusBadge :status="item.status" :tone="item.status === 'degraded' ? 'danger' : 'success'" :label="t(`applicationsPage.facilityStatus.${item.status}`)" />
-              </div>
-            </div>
-            <div class="grid gap-1.5">
+          <div class="grid size-14 shrink-0 place-items-center rounded-2xl border border-border bg-muted/40 text-foreground">
+            <component :is="item.icon" class="size-6" aria-hidden="true" />
+          </div>
+          <div class="min-w-0">
+            <div class="flex flex-wrap items-center gap-2">
               <h3 class="m-0 text-base font-semibold text-foreground">{{ t(item.titleKey) }}</h3>
-              <p class="m-0 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
+              <Badge tone="info">{{ t(item.categoryKey) }}</Badge>
+              <StatusBadge :status="item.status" :tone="item.status === 'degraded' ? 'danger' : 'success'" :label="t(`applicationsPage.facilityStatus.${item.status}`)" />
             </div>
-            <div class="facility-card-stats">
+            <p class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ t(item.descriptionKey) }}</p>
+            <div class="facility-card-stats mt-4">
               <template v-if="loading">
                 <div v-for="stat in 3" :key="stat" class="facility-card-stat" aria-hidden="true">
-                  <div class="motion-skeleton h-6 w-12 rounded bg-muted animate-pulse" />
-                  <div class="motion-skeleton mt-1 h-3 w-20 rounded bg-muted animate-pulse" />
+                  <div class="motion-skeleton h-5 w-10 rounded bg-muted animate-pulse" />
+                  <div class="motion-skeleton mt-1 h-3 w-16 rounded bg-muted animate-pulse" />
                 </div>
               </template>
               <template v-else>
@@ -1698,11 +1690,13 @@ onBeforeUnmount(() => {
                 <div class="facility-card-stat"><strong>{{ facility?.staticAssets.length ?? '—' }}</strong><span>{{ t('applicationsPage.staticAssets') }}</span></div>
               </template>
             </div>
-            <div class="flex flex-wrap gap-2">
-              <Button size="sm" @click.stop="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
-            </div>
-          </article>
-          <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
+          </div>
+          <div class="flex flex-wrap items-start gap-2 lg:justify-end">
+            <Button size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${item.kind}`)"><Wrench />{{ t('applicationsPage.manageFacility') }}</Button>
+            <Button size="sm" variant="secondary" :loading="pending === `facility-reconcile-${item.kind}`" @click="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+          </div>
+        </article>
+        <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
       </div>
     </div>
   </ConsolePage>
@@ -1851,8 +1845,8 @@ onBeforeUnmount(() => {
           </div>
           <section class="rounded-2xl border border-border bg-background p-4">
             <h3>{{ t('applicationsPage.routeSummaries') }}</h3>
-            <div class="mt-3 grid gap-2">
-              <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
+            <div class="mt-3 grid gap-2 motion-stagger">
+              <div v-for="summary in facility.routeSummaries" :key="`${summary.domain}-${summary.path}-${summary.source}`" class="motion-reveal grid gap-1 rounded-xl border border-border p-3 text-sm">
                 <div class="flex items-center justify-between"><strong>{{ summary.domain }}{{ summary.path }}</strong><StatusBadge :status="summary.httpsStatus" :tone="summary.httpsStatus === 'disabled' ? 'warning' : 'success'" /></div>
                 <span class="text-muted-foreground">{{ summary.source }} / {{ summary.serverIds.map((id) => serverDisplayName(id)).join(', ') }}</span>
               </div>
@@ -1861,8 +1855,8 @@ onBeforeUnmount(() => {
           </section>
           <section class="rounded-2xl border border-border bg-background p-4">
             <h3>{{ t('applicationsPage.dnsSyncTitle') }}</h3>
-            <div class="mt-3 grid gap-2">
-              <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
+            <div class="mt-3 grid gap-2 motion-stagger">
+              <div v-for="domain in facility.domains" :key="`dns-${domain.domain}`" class="motion-reveal flex items-center justify-between gap-3 rounded-xl border border-border p-3 text-sm">
                 <strong>{{ domain.domain }}</strong>
                 <Badge :tone="facilityDnsTone(facilityDnsStatus(domain.domain))" :title="facilityDnsError(domain.domain) || undefined">{{ t(`applicationsPage.dnsSync.${facilityDnsStatus(domain.domain) || 'unknown'}`) }}</Badge>
               </div>
@@ -1875,8 +1869,8 @@ onBeforeUnmount(() => {
           </section>
           <section class="rounded-2xl border border-border bg-background p-4">
             <h3>{{ t('applicationsPage.staticAssets') }}</h3>
-            <div class="mt-3 grid gap-2">
-              <div v-for="asset in facility.staticAssets" :key="asset.name" class="item-row">
+            <div class="mt-3 grid gap-2 motion-stagger">
+              <div v-for="asset in facility.staticAssets" :key="asset.name" class="item-row motion-reveal">
                 <div><strong>{{ asset.name }}</strong><span>{{ asset.filename }} · {{ asset.size }} {{ t('applicationsPage.bytes') }}</span></div>
                 <DownloadButton size="sm" :loading="assetActionPending === `committed:${asset.name}`" :label="t('common.download')" @click="downloadCommittedFacilityAsset(asset)" />
               </div>
@@ -2223,26 +2217,26 @@ onBeforeUnmount(() => {
 <style scoped>
 h3 {
   margin: 0;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 14px;
   font-weight: 650;
 }
 
 span {
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 12px;
 }
 
 strong {
   display: block;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   overflow-wrap: anywhere;
 }
 
 .field {
   display: grid;
   gap: 0.35rem;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 0.875rem;
 }
 
@@ -2254,7 +2248,7 @@ strong {
 
 .section-copy p {
   margin: 0;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -2269,7 +2263,7 @@ strong {
 .editor-flow-hint {
   margin: 0;
   align-self: center;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -2289,17 +2283,17 @@ strong {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 1rem;
-  background: hsl(var(--card));
+  background: var(--panel-surface);
 }
 
 .app-editor-header {
   display: grid;
   gap: 1rem;
   min-width: 0;
-  border-bottom: 1px solid hsl(var(--border));
-  background: hsl(var(--card));
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--panel-surface);
   padding: 1rem 1.125rem;
 }
 
@@ -2315,9 +2309,9 @@ strong {
   display: inline-flex;
   width: max-content;
   max-width: 100%;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: hsl(var(--background));
+  background: var(--panel-bg);
   padding: 0.25rem;
 }
 
@@ -2334,7 +2328,7 @@ strong {
 .editor-flow-hint {
   margin: 0;
   align-self: center;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -2359,7 +2353,7 @@ strong {
   border: 0;
   border-radius: 0.625rem;
   background: transparent;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   padding: 0 0.75rem;
   font-size: 0.8125rem;
   font-weight: 650;
@@ -2379,9 +2373,9 @@ strong {
 }
 
 .mode-button.active {
-  background: hsl(var(--card));
-  color: hsl(var(--foreground));
-  box-shadow: 0 1px 2px hsl(var(--foreground) / 0.08);
+  background: var(--panel-surface);
+  color: var(--panel-text);
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--panel-text) 8%, transparent);
 }
 
 .workspace-panel {
@@ -2390,9 +2384,9 @@ strong {
   min-width: 0;
   width: 100%;
   max-width: 70rem;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 1rem;
-  background: hsl(var(--background));
+  background: var(--panel-bg);
   padding: 1rem;
   animation: panel-motion-enter var(--panel-motion-duration-slow) var(--panel-motion-ease-emphasized) both;
 }
@@ -2416,10 +2410,10 @@ strong {
   justify-content: space-between;
   gap: 0.75rem;
   min-width: 0;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 0.75rem;
   padding: 0.75rem;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 0.875rem;
 }
 
@@ -2435,7 +2429,7 @@ strong {
 }
 
 .source-panel {
-  background: linear-gradient(180deg, hsl(var(--background)), hsl(var(--muted) / 0.35));
+  background: linear-gradient(180deg, var(--panel-bg), color-mix(in srgb, var(--panel-muted) 35%, transparent));
 }
 
 .item-row {
@@ -2444,9 +2438,9 @@ strong {
   gap: 0.75rem;
   align-items: center;
   min-width: 0;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: hsl(var(--background));
+  background: var(--panel-bg);
   padding: 0.75rem;
   transition:
     background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
@@ -2456,8 +2450,8 @@ strong {
 }
 
 .item-row:hover {
-  border-color: hsl(var(--border) / 0.92);
-  background: hsl(var(--muted) / 0.34);
+  border-color: color-mix(in srgb, var(--panel-border) 92%, transparent);
+  background: color-mix(in srgb, var(--panel-muted) 34%, transparent);
   transform: translateY(var(--panel-motion-hover-y));
   box-shadow: var(--panel-motion-shadow-raised);
 }
@@ -2472,10 +2466,10 @@ strong {
 .row-error {
   grid-column: 1 / -1;
   min-width: 0;
-  border: 1px solid hsl(var(--danger-border));
+  border: 1px solid var(--panel-danger-border);
   border-radius: 0.5rem;
-  background: hsl(var(--danger-bg));
-  color: hsl(var(--danger));
+  background: var(--panel-danger-bg);
+  color: var(--panel-danger);
   padding: 0.5rem 0.625rem;
   font-size: 0.75rem;
   overflow-wrap: anywhere;
@@ -2486,9 +2480,9 @@ strong {
   display: grid;
   gap: 0.875rem;
   min-width: 0;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: hsl(var(--muted) / 0.3);
+  background: color-mix(in srgb, var(--panel-muted) 30%, transparent);
   padding: 0.875rem;
 }
 
@@ -2502,7 +2496,7 @@ strong {
 
 .facility-domain-name {
   display: inline;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 0.9375rem;
   font-weight: 700;
   overflow-wrap: anywhere;
@@ -2511,7 +2505,7 @@ strong {
 .facility-domain-servers {
   display: block;
   margin-top: 0.25rem;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -2522,7 +2516,7 @@ strong {
   gap: 0.5rem;
   min-width: 0;
   padding-top: 0.875rem;
-  border-top: 1px dashed hsl(var(--border));
+  border-top: 1px dashed var(--panel-border);
 }
 
 .facility-path-row {
@@ -2531,16 +2525,16 @@ strong {
   gap: 0.5rem 0.75rem;
   align-items: center;
   min-width: 0;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 0.75rem;
-  background: hsl(var(--background));
+  background: var(--panel-bg);
   padding: 0.625rem 0.75rem;
 }
 
 .facility-path-target {
   display: block;
   margin-top: 0.25rem;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
@@ -2548,10 +2542,10 @@ strong {
 
 .facility-paths-empty {
   margin: 0;
-  border: 1px dashed hsl(var(--border));
+  border: 1px dashed var(--panel-border);
   border-radius: 0.625rem;
   padding: 0.5rem 0.75rem;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -2560,15 +2554,15 @@ strong {
   display: grid;
   gap: 0.75rem;
   min-width: 0;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: hsl(var(--muted) / 0.3);
+  background: color-mix(in srgb, var(--panel-muted) 30%, transparent);
   padding: 0.875rem;
 }
 
 .options-subheading {
   margin: 0;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 0.8125rem;
   font-weight: 650;
 }
@@ -2582,31 +2576,27 @@ strong {
 }
 
 .facility-card-stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 0.5rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem 1.25rem;
 }
 
 .facility-card-stat {
   display: grid;
   gap: 0.125rem;
   min-width: 0;
-  border: 1px solid hsl(var(--border));
-  border-radius: 0.75rem;
-  background: hsl(var(--background));
-  padding: 0.625rem 0.75rem;
 }
 
 .facility-card-stat strong {
   display: block;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 1.125rem;
   font-weight: 700;
   line-height: 1.25;
 }
 
 .facility-card-stat span {
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.75rem;
   line-height: 1.4;
 }

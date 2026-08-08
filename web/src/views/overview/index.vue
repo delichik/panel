@@ -8,12 +8,13 @@ import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Select from '@/components/ui/Select.vue';
-import Switch from '@/components/ui/Switch.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
+import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
+import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries } from '@/types/overview';
 import { cardHasData, createOverviewCard, defaultOverviewCards, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange } from './model';
@@ -21,6 +22,7 @@ import { cardHasData, createOverviewCard, defaultOverviewCards, mergeCardData, o
 const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue'));
 
 const { t } = useI18n();
+const { mode: autoRefreshMode, enabled: autoRefreshEnabled, intervalMs: autoRefreshIntervalMs } = useAutoRefresh();
 const router = useRouter();
 const notifyError = useErrorToast();
 
@@ -53,8 +55,6 @@ const resizeState = ref<{
   columnWidth: number;
   rowHeight: number;
 } | null>(null);
-const autoRefresh = ref(false);
-const autoRefreshInterval = ref<'5' | '10'>('5');
 let autoRefreshTimer: number | undefined;
 let autoRefreshInFlight = false;
 
@@ -89,10 +89,7 @@ const directionOptions = computed(() => [
   { value: 'rx', label: t('overviewPage.rx') },
   { value: 'tx', label: t('overviewPage.tx') },
 ]);
-const autoRefreshIntervalOptions = computed(() => [
-  { value: '5', label: t('overviewPage.autoRefresh5s') },
-  { value: '10', label: t('overviewPage.autoRefresh10s') },
-]);
+
 const widthOptions = computed(() => Array.from({ length: 6 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
 const heightOptions = computed(() => Array.from({ length: 4 }, (_, index) => ({ value: String(index + 1), label: `${index + 1}` })));
 
@@ -471,16 +468,22 @@ function defaultHeight(kind: OverviewCardKind) {
 
 function formatBytes(value: number) {
   if (!value) return '0 B/s';
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB/s`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB/s`;
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+  let unitIndex = 0;
+  let scaled = value;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+  return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function startAutoRefresh() {
   stopAutoRefresh();
-  if (!autoRefresh.value) return;
+  if (!autoRefreshEnabled.value) return;
   autoRefreshTimer = window.setInterval(() => {
     if (document.visibilityState === 'visible') void refreshCardDeltas();
-  }, Number(autoRefreshInterval.value) * 1000);
+  }, autoRefreshIntervalMs.value);
 }
 
 function stopAutoRefresh() {
@@ -549,11 +552,11 @@ async function refreshCardDeltas() {
   }
 }
 
-watch([autoRefresh, autoRefreshInterval], startAutoRefresh);
+watch(autoRefreshMode, startAutoRefresh, { immediate: true });
 watch(editMode, (editing) => {
   if (editing) {
     stopAutoRefresh();
-  } else if (autoRefresh.value) {
+  } else if (autoRefreshEnabled.value) {
     startAutoRefresh();
   }
 });
@@ -568,11 +571,12 @@ onBeforeUnmount(() => {
 <template>
   <ConsolePage :title="t('routes.overview.title')" :description="t('routes.overview.description')">
     <template #actions>
-      <div class="flex items-center gap-2 rounded-xl border border-border bg-card px-2.5 py-1.5" :title="t('overviewPage.autoRefreshHint')">
-        <Switch v-model="autoRefresh" :label="t('overviewPage.autoRefresh')" />
-        <span class="text-xs font-medium text-muted-foreground">{{ t('overviewPage.autoRefresh') }}</span>
-        <Select v-if="autoRefresh" v-model="autoRefreshInterval" :options="autoRefreshIntervalOptions" class="w-16" />
-      </div>
+      <AutoRefreshControl
+        :off-label="t('autoRefresh.off')"
+        :short-label="t('autoRefresh.5s')"
+        :long-label="t('autoRefresh.10s')"
+        :hint-label="t('autoRefresh.hint')"
+      />
       <Button size="sm" :loading="loading" @click="load">
         <RefreshCcw />
         {{ t('common.refresh') }}
@@ -626,11 +630,11 @@ onBeforeUnmount(() => {
             <Button @click="addCard"><Plus />{{ t('overviewPage.addCard') }}</Button>
             <Button variant="ghost" @click="resetCards">{{ t('overviewPage.resetCards') }}</Button>
           </div>
-          <div v-if="overview.servers.length > 0" ref="overviewGrid" class="overview-card-grid grid min-w-0 gap-3" :class="editMode ? 'is-editing' : undefined">
+          <div v-if="overview.servers.length > 0" ref="overviewGrid" class="motion-stagger overview-card-grid grid min-w-0 gap-3" :class="editMode ? 'is-editing' : undefined">
             <article
               v-for="card in cards"
               :key="card.id"
-              class="motion-card overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background p-4"
+              class="motion-card motion-reveal overview-card relative grid min-h-0 grid-rows-[auto_minmax(0,1fr)] rounded-2xl border border-border bg-background p-4"
               :class="[
                 card.kind === 'placeholder' ? 'border-dashed bg-muted/30' : '',
                 editMode ? 'cursor-move ring-1 ring-primary/20' : '',
@@ -671,7 +675,7 @@ onBeforeUnmount(() => {
                 <LoadingOverlay v-if="cardLoading[card.id]" :label="t('overviewPage.loadingCard')" />
                 <span v-else-if="cardErrors[card.id]" class="line-clamp-2 text-sm leading-6 text-danger">{{ cardErrors[card.id] }}</span>
                 <template v-else>
-                  <div v-if="shouldShowChart(card) && cardChartSeries(card).length" class="overview-chart-stage min-h-0 min-w-0">
+                  <div v-if="shouldShowChart(card) && (cardChartSeries(card).length || cardData[card.id])" class="overview-chart-stage min-h-0 min-w-0">
                     <MetricLineChart
                       :labels="cardChartLabels(card)"
                       :series="cardChartSeries(card)"
@@ -706,7 +710,7 @@ onBeforeUnmount(() => {
               <h2 class="m-0 text-sm font-semibold text-foreground">{{ t('overviewPage.riskQueue') }}</h2>
               <Badge :tone="risks.some((item) => item.tone === 'danger') ? 'danger' : risks.length ? 'warning' : 'success'">{{ risks.length }}</Badge>
             </div>
-            <div v-if="risks.length" class="grid gap-2">
+            <div v-if="risks.length" class="grid gap-2 motion-stagger">
               <button v-for="risk in risks" :key="risk.id" type="button" class="motion-list-item grid min-w-0 rounded-xl border border-border bg-background p-3 text-left hover:bg-accent" @click="router.push(risk.to)">
                 <div class="flex min-w-0 items-center justify-between gap-2">
                   <strong class="truncate text-sm text-foreground">{{ risk.title }}</strong>

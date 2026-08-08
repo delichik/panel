@@ -262,14 +262,18 @@ export function accepted(prefix: string): OperationAccepted {
   return { taskId: `${prefix}-${Date.now()}` };
 }
 
-export function mockServerMetrics(id: string): ServerMetricsSeries | null {
+export function mockServerMetrics(id: string, range: string = '1h'): ServerMetricsSeries | null {
   const serverIndex = mockServers.findIndex((server) => server.id === id);
   if (serverIndex < 0) return null;
+  const durations: Record<string, number> = { '1h': 3_600_000, '6h': 21_600_000, '1d': 86_400_000, '7d': 604_800_000 };
+  const duration = durations[range] ?? 3_600_000;
+  const count = range === '7d' ? 28 : 24;
+  const step = duration / (count - 1);
   const now = Date.now();
-  const points = Array.from({ length: 24 }, (_, index) => new Date(now - (23 - index) * 5 * 60_000).toISOString());
+  const points = Array.from({ length: count }, (_, index) => new Date(now - (count - 1 - index) * step).toISOString());
   const seed = serverIndex + 1;
   return {
-    range: '1h',
+    range,
     cpu: points.map((time, index) => ({ time, usagePercent: Math.min(96, 12 + seed * 3 + index * 1.7) })),
     memory: points.map((time, index) => ({ time, usedBytes: (3.5 + seed * 0.7 + index * 0.09) * 1024 ** 3, totalBytes: (8 + seed * 2) * 1024 ** 3 })),
     disk: points.map((time, index) => ({ time, usedBytes: (34 + seed * 7 + index * 0.35) * 1024 ** 3, totalBytes: (120 + seed * 40) * 1024 ** 3 })),

@@ -220,7 +220,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
         <div class="border-b border-border p-4">
           <SearchInput v-model="search" clearable :placeholder="t('credentialsPage.searchPlaceholder')" :label="t('common.search')" :clear-label="t('common.clearSearch')" />
         </div>
-        <div class="min-h-0 overflow-auto p-2">
+        <div class="motion-stagger min-h-0 overflow-auto p-2">
           <div v-if="loading && !credentials.length" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-20" />
           </div>

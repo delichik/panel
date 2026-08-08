@@ -1,7 +1,9 @@
 import type { OverviewCardConfiguration, OverviewCardConfigurationSet, OverviewCardData, OverviewDto, OverviewMetricsSeries } from '@/types/overview';
 import type { ServerDto } from '@/types/servers';
 
-const now = '2026-08-01T08:00:00.000Z';
+function nowIso(): string {
+  return new Date().toISOString();
+}
 
 export function overviewFromServers(servers: ServerDto[]): OverviewDto {
   return {
@@ -14,8 +16,8 @@ export function overviewFromServers(servers: ServerDto[]): OverviewDto {
       metricsFresh: server.reachable && index !== 2,
       packageUpdateCount: Number(server.traits?.['mock.package_updates'] ?? (index === 1 ? 14 : index === 3 ? 3 : 0)),
       loadAverage: server.loadAverage ?? (index === 1 ? '3.80 3.62 3.44' : '0.42 0.38 0.36'),
-      lastMetricsAt: index === 2 ? null : now,
-      lastPackageRefreshAt: now,
+      lastMetricsAt: index === 2 ? null : nowIso(),
+      lastPackageRefreshAt: nowIso(),
     })),
   };
 }
@@ -65,9 +67,10 @@ function card(id: string, kind: OverviewCardConfiguration['kind'], range: Overvi
 }
 
 function series(seed: number): OverviewMetricsSeries {
-  const points = Array.from({ length: 24 }, (_, index) => ({
-    time: new Date(Date.parse(now) - (23 - index) * 5 * 60 * 1000).toISOString(),
-    index,
+  const end = Date.now();
+  const points = Array.from({ length: 360 }, (_, index) => ({
+    time: new Date(end - (359 - index) * 5 * 1000).toISOString(),
+    index: index % 24,
   }));
   return {
     cpu: points.map((point) => ({ time: point.time, usagePercent: 18 + seed * 12 + point.index * 2 })),

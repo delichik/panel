@@ -18,4 +18,9 @@ describe('theme runtime', () => {
     expect(themeSource).toContain('document.documentElement.dataset.theme');
     expect(themeSource).toContain('document.documentElement.style.colorScheme');
   });
+  it('persists the lighthouse/ocean color scheme contract', () => {
+    expect(themeSource).toContain("export type ThemeScheme = 'lighthouse' | 'ocean'");
+    expect(themeSource).toContain("const SCHEME_STORAGE_KEY = 'panel.theme.scheme'");
+    expect(themeSource).toContain('document.documentElement.dataset.scheme');
+  });
 });

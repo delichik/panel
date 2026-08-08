@@ -313,21 +313,21 @@ h3 {
   align-items: center;
   gap: 8px;
   margin: 0;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 14px;
   font-weight: 650;
 }
 
 span,
 dt {
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 12px;
 }
 
 strong,
 dd {
   margin: 0;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   overflow-wrap: anywhere;
 }
 </style>

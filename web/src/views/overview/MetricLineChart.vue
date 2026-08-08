@@ -22,7 +22,46 @@ const border = ref('');
 const text = ref('');
 let themeObserver: MutationObserver | undefined;
 
-const option = computed<EChartsOption>(() => ({
+const MAX_POINTS = 120;
+
+function bucketBounds(length: number, index: number, count: number): [number, number] {
+  return [Math.floor((index * length) / count), Math.floor(((index + 1) * length) / count)];
+}
+
+function sampleLabels(labels: string[]): string[] {
+  const count = Math.min(labels.length, MAX_POINTS);
+  if (count === labels.length) return labels;
+  const result: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const [start] = bucketBounds(labels.length, i, count);
+    result.push(labels[start]);
+  }
+  return result;
+}
+
+function sampleValues(values: number[], length: number): number[] {
+  const count = Math.min(length, MAX_POINTS);
+  if (count === values.length) return values;
+  const result: number[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const [start, end] = bucketBounds(length, i, count);
+    let sum = 0;
+    let n = 0;
+    for (let j = start; j < end; j += 1) {
+      if (values[j] !== undefined) {
+        sum += values[j];
+        n += 1;
+      }
+    }
+    result.push(n ? sum / n : 0);
+  }
+  return result;
+}
+
+const option = computed<EChartsOption>(() => {
+  const sampledLabels = sampleLabels(props.labels);
+  const sampledSeries = props.series.map((item) => ({ ...item, values: sampleValues(item.values, props.labels.length) }));
+  return ({
   animation: false,
   color: palette.value,
   grid: { left: 3, right: 3, top: 5, bottom: 3, containLabel: false },
@@ -48,7 +87,7 @@ const option = computed<EChartsOption>(() => ({
   xAxis: {
     type: 'category',
     boundaryGap: false,
-    data: props.labels,
+    data: sampledLabels,
     show: false,
   },
   yAxis: {
@@ -57,7 +96,7 @@ const option = computed<EChartsOption>(() => ({
     min: props.valueKind === 'percent' ? 0 : undefined,
     max: props.valueKind === 'percent' ? 100 : undefined,
   },
-  series: props.series.map((item) => ({
+  series: sampledSeries.map((item) => ({
     id: item.id,
     name: item.name,
     type: 'line',
@@ -70,13 +109,19 @@ const option = computed<EChartsOption>(() => ({
       lineStyle: { width: 3 },
     },
   })),
-}));
+  });
+});
 
 function formatValue(value: number) {
-  if (props.valueKind === 'percent') return `${Math.round(value)}%`;
   if (!value) return '0 B/s';
-  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB/s`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB/s`;
+  const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
+  let unitIndex = 0;
+  let scaled = value;
+  while (scaled >= 1024 && unitIndex < units.length - 1) {
+    scaled /= 1024;
+    unitIndex += 1;
+  }
+  return `${scaled >= 100 ? scaled.toFixed(0) : scaled.toFixed(1)} ${units[unitIndex]}`;
 }
 
 function escapeHtml(value: string) {

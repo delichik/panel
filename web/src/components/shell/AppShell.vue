@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, useId, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Languages, Menu, Moon, PanelLeftClose, PanelLeftOpen, Sun, UserCircle, X } from '@lucide/vue';
+import { Languages, Menu, Moon, Palette, PanelLeftClose, PanelLeftOpen, Sun, UserCircle, X } from '@lucide/vue';
 import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import Badge from '@/components/ui/Badge.vue';
 import Dropdown from '@/components/ui/Dropdown.vue';
@@ -9,7 +9,7 @@ import DropdownItem from '@/components/ui/DropdownItem.vue';
 import IconButton from '@/components/ui/IconButton.vue';
 import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useI18n } from '@/i18n';
-import { useThemeMode, type ThemeMode } from '@/design/theme';
+import { useThemeMode, type ThemeMode, type ThemeScheme } from '@/design/theme';
 import { useSessionStore } from '@/stores/session';
 import { activeNavKey, navGroups } from './navModel';
 
@@ -17,7 +17,7 @@ const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
 const { t, locale, setLocale } = useI18n();
-const { mode, resolved, setMode } = useThemeMode();
+const { mode, resolved, setMode, scheme, setScheme } = useThemeMode();
 const collapsed = ref(localStorage.getItem('panel.nav.collapsed') === 'true');
 const drawerId = useId();
 const drawerOpen = ref(false);
@@ -49,6 +49,10 @@ const themeItems: Array<{ key: ThemeMode; labelKey: string }> = [
   { key: 'system', labelKey: 'layout.theme.system' },
   { key: 'light', labelKey: 'layout.theme.light' },
   { key: 'dark', labelKey: 'layout.theme.dark' },
+];
+const schemeItems: Array<{ key: ThemeScheme; labelKey: string }> = [
+  { key: 'lighthouse', labelKey: 'layout.scheme.lighthouse' },
+  { key: 'ocean', labelKey: 'layout.scheme.ocean' },
 ];
 
 async function signOut() {
@@ -87,7 +91,7 @@ async function signOut() {
             :to="item.to"
             :title="collapsed ? t(item.titleKey) : undefined"
             class="mb-1 flex h-9 items-center rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-            :class="[activeKey === item.key ? 'bg-accent text-foreground' : '', collapsed ? 'justify-center px-0' : 'gap-3']"
+            :class="[activeKey === item.key ? 'bg-brand-bg text-brand' : '', collapsed ? 'justify-center px-0' : 'gap-3']"
           >
             <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
             <Transition name="fade">
@@ -123,6 +127,17 @@ async function signOut() {
             </template>
             <DropdownItem v-for="item in themeItems" :key="item.key" @click="setMode(item.key)">
               <span class="w-3">{{ mode === item.key ? '*' : '' }}</span>
+              {{ t(item.labelKey) }}
+            </DropdownItem>
+          </Dropdown>
+          <Dropdown>
+            <template #trigger>
+              <IconButton :label="t('layout.scheme')">
+                <Palette />
+              </IconButton>
+            </template>
+            <DropdownItem v-for="item in schemeItems" :key="item.key" @click="setScheme(item.key)">
+              <span class="w-3">{{ scheme === item.key ? '*' : '' }}</span>
               {{ t(item.labelKey) }}
             </DropdownItem>
           </Dropdown>
@@ -187,7 +202,7 @@ async function signOut() {
                   :key="item.key"
                   :to="item.to"
                   class="mb-1 flex h-9 items-center gap-3 rounded-xl px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-                  :class="activeKey === item.key ? 'bg-accent text-foreground' : ''"
+                  :class="activeKey === item.key ? 'bg-brand-bg text-brand' : ''"
                 >
                   <component :is="item.icon" class="size-4 shrink-0" aria-hidden="true" />
                   <span class="truncate">{{ t(item.titleKey) }}</span>

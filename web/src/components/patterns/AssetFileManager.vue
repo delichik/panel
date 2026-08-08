@@ -339,14 +339,14 @@ async function confirmDelete() {
 
 .section-copy h3 {
   margin: 0;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 14px;
   font-weight: 650;
 }
 
 .section-copy p {
   margin: 0;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.8125rem;
   line-height: 1.5;
 }
@@ -357,9 +357,9 @@ async function confirmDelete() {
   gap: 0.75rem;
   align-items: center;
   min-width: 0;
-  border: 1px solid hsl(var(--border));
+  border: 1px solid var(--panel-border);
   border-radius: 0.875rem;
-  background: hsl(var(--background));
+  background: var(--panel-bg);
   padding: 0.75rem;
   transition:
     background-color var(--panel-motion-duration-base) var(--panel-motion-ease-standard),
@@ -369,14 +369,14 @@ async function confirmDelete() {
 }
 
 .item-row:hover {
-  border-color: hsl(var(--border) / 0.92);
-  background: hsl(var(--muted) / 0.34);
+  border-color: color-mix(in srgb, var(--panel-border) 92%, transparent);
+  background: color-mix(in srgb, var(--panel-muted) 34%, transparent);
   transform: translateY(var(--panel-motion-hover-y));
   box-shadow: var(--panel-motion-shadow-raised);
 }
 
 .asset-name {
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 0.875rem;
   font-weight: 650;
   overflow-wrap: anywhere;
@@ -385,7 +385,7 @@ async function confirmDelete() {
 .asset-meta {
   display: block;
   margin-top: 0.25rem;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.75rem;
   line-height: 1.5;
 }
@@ -400,10 +400,10 @@ async function confirmDelete() {
 .row-error {
   grid-column: 1 / -1;
   min-width: 0;
-  border: 1px solid hsl(var(--danger-border));
+  border: 1px solid var(--panel-danger-border);
   border-radius: 0.5rem;
-  background: hsl(var(--danger-bg));
-  color: hsl(var(--danger));
+  background: var(--panel-danger-bg);
+  color: var(--panel-danger);
   padding: 0.5rem 0.625rem;
   font-size: 0.75rem;
   overflow-wrap: anywhere;
@@ -412,12 +412,12 @@ async function confirmDelete() {
 .field {
   display: grid;
   gap: 0.35rem;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-size: 0.875rem;
 }
 
 .field > span {
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 0.75rem;
   line-height: 1.5;
 }

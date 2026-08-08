@@ -365,7 +365,7 @@ onBeforeUnmount(() => {
                   </div>
                   <Badge :tone="ufwTone(ufwState)">{{ ufwState?.status || t('state.unknown') }}</Badge>
                 </div>
-                <div class="min-h-0 overflow-auto p-3">
+                <div class="motion-stagger min-h-0 overflow-auto p-3">
                   <div v-if="loadingPanel && !ufwState" class="grid gap-2" aria-hidden="true">
                     <div v-for="item in 6" :key="item" class="grid grid-cols-[56px_minmax(0,1fr)_80px] items-center gap-3 rounded-xl border border-border p-3">
                       <div class="motion-skeleton h-4 w-8 rounded bg-muted animate-pulse" />
@@ -377,7 +377,7 @@ onBeforeUnmount(() => {
                     </div>
                   </div>
                   <EmptyState v-else-if="!ufwState?.rules.length" :title="t('securityPage.noRules')" :description="t('securityPage.noRulesHint')" />
-                  <div v-for="rule in ufwState?.rules" v-else :key="rule.number" class="mb-2 grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border p-3">
+                  <div v-for="rule in ufwState?.rules" v-else :key="rule.number" class="motion-reveal mb-2 grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border p-3">
                     <span class="text-xs font-semibold text-muted-foreground">#{{ rule.number }}</span>
                     <div class="min-w-0">
                       <strong class="block truncate text-sm text-foreground">{{ rule.action }} · {{ rule.to }}</strong>
@@ -543,14 +543,14 @@ onBeforeUnmount(() => {
 <style scoped>
 dt {
   margin: 0 0 4px;
-  color: hsl(var(--muted-foreground));
+  color: var(--panel-text-muted);
   font-size: 12px;
 }
 
 dd {
   margin: 0;
   overflow-wrap: anywhere;
-  color: hsl(var(--foreground));
+  color: var(--panel-text);
   font-weight: 600;
 }
 </style>
