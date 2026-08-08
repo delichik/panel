@@ -30,6 +30,7 @@
 
 - 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”只是当前唯一设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。
 - 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。
+- 容器卡片端口行在没有发布端口时显示「无端口映射」，不使用「不可用」，避免与容器故障状态混淆。
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
 - 网络只读。
 - 卷支持查询、单个删除和批量删除未使用卷，必须展示使用状态；批量删除执行时需重新查询使用状态，只删除执行瞬间仍未使用的卷。
@@ -156,7 +157,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 ## Agent Report Cache
 
 - Container list reads use the latest `container_observations` snapshot saved from the agent report stream. They no longer pull `DockerContainers` during normal list or application reconciliation paths.
-- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report. Report 快照只包含协调与列表展示所需字段（id、names、image、state、status、ports、labels），不再携带 command/created/image_id/mounts；完整详情仍可按需通过 Docker 原子接口获取。
+- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report. Report 快照只包含协调与列表展示所需字段（id、names、image、image_id、state、status、ports、labels），不再携带 command/created/mounts；完整详情仍可按需通过 Docker 原子接口获取。镜像页的使用状态与关联 Application 依赖快照中的 image_id 与镜像 id 精确匹配。
 - Application reconciliation collectors read cached observations only. A server that reports a failed container, stale generation/spec hash, or managed file manifest drift can cause the application planner to create or reuse a lifecycle target for that server without redeploying other servers that are already healthy.
 - `application_reconcile_states` keeps the exponential backoff state. Automatic reconciliation must honor `reconcile_next_run_at`; healthy observations clear failures only after the configured success streak.
 - Agent reports and forced/manual reconciliation triggers must not create another application target while the same app/server conflict domain already has an active lifecycle target. The application planner owns that durable in-flight check before lifecycle rows and task rows are created; report collectors only provide the requested app/server scope.

@@ -517,7 +517,7 @@ onBeforeUnmount(() => {
                 </header>
                 <div class="p-4 text-sm text-muted-foreground">
                   <p class="m-0">{{ item.status }}</p>
-                  <p class="m-0 mt-2 truncate">{{ item.ports.map((port) => `${port.publicPort || port.privatePort}:${port.privatePort}/${port.type}`).join(', ') || t('common.notAvailable') }}</p>
+                  <p class="m-0 mt-2 truncate">{{ item.ports.map((port) => `${port.publicPort || port.privatePort}:${port.privatePort}/${port.type}`).join(', ') || t('resourcesPage.noPortsMapped') }}</p>
                   <p v-if="item.managed" class="mt-3 rounded-xl border border-info-border bg-info-bg p-2 text-xs text-info">{{ t('resourcesPage.managedContainerHint') }}</p>
                 </div>
                 <footer class="flex flex-wrap gap-2 border-t border-border p-3">

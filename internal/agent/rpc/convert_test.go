@@ -240,6 +240,30 @@ func TestDockerResourcesRoundTrip(t *testing.T) {
 	assertDeepEqual(t, goDockerVolume(pbDockerVolume(volume)), volume)
 }
 
+func TestDockerContainerSlimCarriesImageID(t *testing.T) {
+	in := agentcontract.DockerContainer{
+		ID:      "container-1",
+		Names:   []string{"/demo"},
+		Image:   "example/demo:latest",
+		ImageID: "sha256:image",
+		Command: "demo --serve",
+		Created: 1782921600,
+		State:   "running",
+		Status:  "Up 10 minutes",
+		Labels:  map[string]string{"app": "demo"},
+	}
+	pb := pbDockerContainerSlim(in)
+	if pb.ImageId != in.ImageID {
+		t.Fatalf("slim container must carry imageId for image usage tracking: got %q want %q", pb.ImageId, in.ImageID)
+	}
+	if pb.Command != "" || pb.Created != 0 || len(pb.Mounts) != 0 {
+		t.Fatalf("slim container must stay slim otherwise: %#v", pb)
+	}
+	got := goDockerContainer(pb)
+	if got.ImageID != in.ImageID {
+		t.Fatalf("goDockerContainer(slim) imageId = %q, want %q", got.ImageID, in.ImageID)
+	}
+}
 func assertDeepEqual[T any](t *testing.T, got, want T) {
 	t.Helper()
 	if !reflect.DeepEqual(got, want) {

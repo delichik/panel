@@ -663,6 +663,67 @@ func TestContainerLogsClampsTail(t *testing.T) {
 	}
 }
 
+func TestImagesMarkInUseFromReportedContainerImageIDs(t *testing.T) {
+	svc, _, _, store := newContainerizationTestService(t)
+	ctx := context.Background()
+	insertReconcileFixtureRows(t, store, applications.Application{ID: "app-1", Name: "web", Enabled: true, Generation: 1, SpecHash: "hash"})
+	usedID := "sha256:used"
+	unusedID := "sha256:unused"
+	if err := svc.replaceResourceSnapshot(ctx, "server-1", "images", []agentcontract.DockerImage{
+		{ID: usedID, RepoTags: []string{"example/app:1"}, RepoDigests: []string{"example/app@sha256:abc"}},
+		{ID: unusedID, RepoTags: []string{"example/tool:2"}, RepoDigests: []string{"example/tool@sha256:def"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	saveReportedContainers(t, svc, "server-1", []agentcontract.DockerContainer{
+		{
+			ID:      "container-1",
+			Names:   []string{"/app-1"},
+			Image:   "example/app:1",
+			ImageID: usedID,
+			State:   "running",
+			Status:  "Up 1 hour",
+			Labels: map[string]string{
+				"panel.application.managed":     "true",
+				"panel.application.id":          "app-1",
+				"panel.application.instance.id": "instance-1",
+			},
+		},
+	})
+
+	list, err := svc.Images(ctx, "server-1")
+	if err != nil {
+		t.Fatalf("images: %v", err)
+	}
+	if len(list.Items) != 2 {
+		t.Fatalf("images = %d, want 2", len(list.Items))
+	}
+	var used, unused *Image
+	for i := range list.Items {
+		switch list.Items[i].ID {
+		case usedID:
+			used = &list.Items[i]
+		case unusedID:
+			unused = &list.Items[i]
+		}
+	}
+	if used == nil || unused == nil {
+		t.Fatalf("expected both images in listing: %#v", list.Items)
+	}
+	if !used.InUse {
+		t.Fatalf("image %s inUse = false, want true", usedID)
+	}
+	if unused.InUse {
+		t.Fatalf("image %s inUse = true, want false", unusedID)
+	}
+	if len(used.ApplicationIDs) != 1 || used.ApplicationIDs[0] != "app-1" {
+		t.Fatalf("applicationIds = %#v, want [app-1]", used.ApplicationIDs)
+	}
+	if !used.Upgradeable {
+		t.Fatal("upgradeable = false, want true for managed application image")
+	}
+}
+
 func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	svc, taskSvc, _, _ := newContainerizationTestService(t)
 	taskSvc.MustRegister(tasks.Definition{
