@@ -371,8 +371,6 @@ func migrateApplicationLifecycleTargetsOn(ctx context.Context, q migrationExecut
 			ON application_lifecycle_targets(state, next_run_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_app_server
 			ON application_lifecycle_targets(application_id, server_id, state)`,
-		`CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation
-			ON application_lifecycle_targets(operation_id, server_id)`,
 	}
 	for _, stmt := range statements {
 		if _, err := q.ExecContext(ctx, stmt); err != nil {

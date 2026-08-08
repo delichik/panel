@@ -143,6 +143,15 @@ type ApplicationReconcileState struct {
 
 func (*ApplicationReconcileState) TableName() string { return "application_reconcile_states" }
 
+// ExtraIndexDDL returns the application_reconcile_states index that orm tags cannot express.
+func (*ApplicationReconcileState) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"application_reconcile_states": {
+			"CREATE INDEX IF NOT EXISTS idx_application_reconcile_states_application ON application_reconcile_states(application_id)",
+		},
+	}
+}
+
 // ContainerObservation 对应 container_observations。
 type ContainerObservation struct {
 	ServerID      string         `orm:"primary_key;not_null;references:servers(id);on_delete:CASCADE"`
@@ -157,15 +166,6 @@ type ContainerObservation struct {
 }
 
 func (*ContainerObservation) TableName() string { return "container_observations" }
-
-// ExtraIndexDDL 返回 container_observations 表无法用 orm tag 表达的复合索引。
-func (*ContainerObservation) ExtraIndexDDL() map[string][]string {
-	return map[string][]string{
-		"container_observations": {
-			"CREATE INDEX IF NOT EXISTS idx_container_observations_server_sample ON container_observations(server_id, sample_at)",
-		},
-	}
-}
 
 // DockerResourceSnapshot 对应 docker_resource_snapshots。
 type DockerResourceSnapshot struct {
@@ -363,6 +363,7 @@ func (*ApplicationInstance) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
 		"application_instances": {
 			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_instances_application_server ON application_instances(application_id, server_id)",
+			"CREATE INDEX IF NOT EXISTS idx_application_instances_server_desired ON application_instances(server_id, desired_state)",
 		},
 	}
 }

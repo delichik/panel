@@ -4303,6 +4303,7 @@ func (s *Service) activeLifecycleTarget(ctx context.Context, appID, serverID str
 	var row lifecycleTargetRow
 	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").
 		Where("target_key=?", lifecycleTargetKey(appID, serverID)).
+		And("target_key <> ''").
 		And("state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')").
 		OrderBy("updated_at DESC", "created_at DESC", "id DESC").
 		First(ctx, &row); err != nil {

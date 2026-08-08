@@ -48,7 +48,7 @@ func (*Task) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
 		"tasks": {
 			"CREATE INDEX IF NOT EXISTS idx_tasks_type_status ON tasks(type, status)",
-			"CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_status ON tasks(concurrency_key, status)",
+			"CREATE INDEX IF NOT EXISTS idx_tasks_concurrency_status_created ON tasks(concurrency_key, status, created_at)",
 			"CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id, child_index)",
 			"CREATE INDEX IF NOT EXISTS idx_tasks_status_next_run ON tasks(status, next_run_at)",
 		},
@@ -89,6 +89,15 @@ type TaskLog struct {
 }
 
 func (*TaskLog) TableName() string { return "task_logs" }
+
+// ExtraIndexDDL returns the task_logs index that orm tags cannot express.
+func (*TaskLog) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"task_logs": {
+			"CREATE INDEX IF NOT EXISTS idx_task_logs_task_id ON task_logs(task_id)",
+		},
+	}
+}
 
 // ApplicationRevision 对应 application_revisions。
 type ApplicationRevision struct {
@@ -182,7 +191,6 @@ func (*ApplicationLifecycleTarget) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
 		"application_lifecycle_targets": {
 			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_lifecycle_targets_operation_server ON application_lifecycle_targets(operation_id, server_id)",
-			"CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_operation ON application_lifecycle_targets(operation_id, server_id)",
 			"CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_state_due ON application_lifecycle_targets(state, next_run_at)",
 			"CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_app_server ON application_lifecycle_targets(application_id, server_id, state)",
 			"CREATE UNIQUE INDEX IF NOT EXISTS idx_application_lifecycle_targets_active_key ON application_lifecycle_targets(target_key) WHERE target_key <> '' AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')",
@@ -233,7 +241,7 @@ type RuntimeEventDetail struct {
 	LogRefs    []map[string]any `orm:"json;not_null;default:'[]'"`
 	TaskRefs   []map[string]any `orm:"json;not_null;default:'[]'"`
 	TargetRefs []map[string]any `orm:"json;not_null;default:'[]'"`
-	CreatedAt  time.Time        `orm:"not_null;index"`
+	CreatedAt  time.Time        `orm:"not_null"`
 	PrunedAt   *time.Time
 }
 

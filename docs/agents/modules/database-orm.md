@@ -104,7 +104,7 @@
   - `log_models.go`：log 库 10 张（tasks、task_steps、task_logs、application_revisions、application_lifecycle_*、runtime_events、runtime_event_details、application_operation_records、key_asset_exports）。
   - `metrics_models.go`：metrics 库 1 张（metrics_snapshots）。
 - 命名约定：结构体名 = 表名 PascalCase，实现 `TableName() string` 返回真实表名；列名 = 存量 snake_case 列名，字段名 snake_case 与存量列名不一致时用 `column:xxx` 显式指定（如 `os_id`、`load_1`、`deployment_server_ids_json`）；类型/默认值/not_null/unique/index/primary_key/references 与 migrations.go DDL 逐一对应；时间列一律 `time.Time`（TEXT RFC3339Nano，不写 `time_format`），可空列用 `*T`，布尔用 `bool`（INTEGER 0/1），JSON 列用 `orm:"json"` + map/slice/struct。
-- 模型扩展接口补齐无法用 orm tag 表达的元素：`TableConstraints()` 声明原始表级约束子句（12 处 CHECK，如 `CHECK(type IN ('password','private_key'))`），建表时拼入并在重建时保留；`ExtraIndexDDL()` 按表名声明 28 个索引（17 复合索引 + 2 部分索引 + 9 复合 UNIQUE），由 `Store.Migrate` 以 `CREATE [UNIQUE] INDEX IF NOT EXISTS` 幂等创建。
+- 模型扩展接口补齐无法用 orm tag 表达的元素：`TableConstraints()` 声明原始表级约束子句（12 处 CHECK，如 `CHECK(type IN ('password','private_key'))`），建表时拼入并在重建时保留；`ExtraIndexDDL()` 按表名声明 30 个索引（17 复合索引 + 2 部分索引 + 9 复合 UNIQUE + 2 单列普通索引），由 `Store.Migrate` 以 `CREATE [UNIQUE] INDEX IF NOT EXISTS` 幂等创建。
 - 接管验证：`models_test.go` 用临时目录构造全新库跑完 `Store.Migrate` 后，以 `orm.Register(全部模型) + orm.AutoMigrate(WithDestructive(false))` 做非破坏接管，断言对存量表零 drift（CHECK/复合/部分/复合 UNIQUE 已被 `TableConstraints()`/`ExtraIndexDDL()` 覆盖，Pending 为空、无增删列/索引）；并额外校验模型建出的表与存量 schema 逐列一致（类型/默认值/非空/主键），以及 `ExtraIndexDDL` 注册表按“表 + 列 + 唯一 + 部分”形状完整覆盖所有无法表达的存量索引。
 - 注意：`AutoMigrateModels` 提供严格按库隔离——只处理传入清单的表，不会跨库为其他库模型建表（`Store.Migrate` 的三库迁移即走该入口）；`AutoMigrate`（全局注册表路径）仍会处理全部已注册模型。
 

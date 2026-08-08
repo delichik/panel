@@ -317,7 +317,7 @@ func (s *Service) eventsByOperation(ctx context.Context, operationID string) ([]
 
 func (s *Service) eventByDedupeKey(ctx context.Context, dedupeKey string) (Event, error) {
 	var event Event
-	err := orm.New(s.db).From("runtime_events").Where("dedupe_key = ?", strings.TrimSpace(dedupeKey)).First(ctx, &event)
+	err := orm.New(s.db).From("runtime_events").Where("dedupe_key = ? AND dedupe_key <> ''", strings.TrimSpace(dedupeKey)).First(ctx, &event)
 	if err == sql.ErrNoRows {
 		return Event{}, panelerr.NotFound("runtime_event")
 	}

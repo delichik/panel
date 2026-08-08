@@ -54,6 +54,13 @@ func (b *applicationContainerBridge) List(ctx context.Context) ([]applications.A
 	return b.apps.List(ctx)
 }
 
+func (b *applicationContainerBridge) ListForReconcile(ctx context.Context) ([]applications.Application, error) {
+	if b.apps == nil {
+		return nil, errors.New("application service is not initialized")
+	}
+	return b.apps.ListForReconcile(ctx)
+}
+
 func (b *applicationContainerBridge) UpdateImage(ctx context.Context, id string) (applications.OperationResult, error) {
 	if b.apps == nil {
 		return applications.OperationResult{}, errors.New("application service is not initialized")
