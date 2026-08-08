@@ -70,6 +70,9 @@ func New(cfg config.Config) (*App, error) {
 	}
 	taskSvc := tasks.NewService(store.LogDB())
 	eventSvc := runtimeevents.NewService(store.LogDB())
+	eventSvc.SetSubjectNameResolver(func(ctx context.Context, subjectType, subjectID string) string {
+		return resolveSystemEventSubjectName(ctx, store, subjectType, subjectID)
+	})
 	taskSvc.SetRuntimeEvents(eventSvc)
 	installationSvc := installation.NewService(store.AppDB())
 	certBridge := &applicationCertificateBridge{}

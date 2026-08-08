@@ -13,7 +13,8 @@ import (
 )
 
 type Service struct {
-	db *sql.DB
+	db           *sql.DB
+	subjectNames SubjectNameResolver
 }
 
 // facilityReverseProxyApplicationID is the hidden facility reverse-proxy
@@ -24,6 +25,12 @@ const facilityReverseProxyApplicationID = "facility-reverse-proxy"
 
 func NewService(db *sql.DB) *Service {
 	return &Service{db: db}
+}
+
+// SetSubjectNameResolver installs a resolver used to enrich system events
+// with the display name of their related object at read time.
+func (s *Service) SetSubjectNameResolver(resolver SubjectNameResolver) {
+	s.subjectNames = resolver
 }
 
 func (s *Service) Write(ctx context.Context, in WriteEventInput) (Event, bool, error) {
@@ -176,7 +183,12 @@ func (s *Service) GetApplicationOperation(ctx context.Context, operationID strin
 func (s *Service) ListSystemEvents(ctx context.Context, filter ListFilter) (ListResult[Event], error) {
 	filter = normalizeFilter(filter)
 	filter.ApplicationID = ""
-	return s.listEvents(ctx, filter)
+	result, err := s.listEvents(ctx, filter)
+	if err != nil {
+		return ListResult[Event]{}, err
+	}
+	s.resolveSubjectNames(ctx, result.Items)
+	return result, nil
 }
 
 func (s *Service) GetEvent(ctx context.Context, eventID string) (Event, error) {
@@ -222,13 +234,39 @@ func (s *Service) GetSystemEventDetail(ctx context.Context, eventID string) (Sys
 	if err != nil {
 		return SystemEventDetail{}, err
 	}
+	events := []Event{detail.Event}
+	s.resolveSubjectNames(ctx, events)
 	return SystemEventDetail{
-		Event:      detail.Event,
+		Event:      events[0],
 		Payload:    parsePayload(detail.PayloadJSON),
+		Error:      detail.Error,
 		LogRefs:    parseJSONArray(detail.LogRefsJSON),
 		TaskRefs:   parseJSONArray(detail.TaskRefsJSON),
 		TargetRefs: parseJSONArray(detail.TargetRefsJSON),
 	}, nil
+}
+
+// resolveSubjectNames fills SubjectName for events whose subject can be
+// resolved by the installed resolver. Lookups are cached per subject so a
+// page only queries each distinct (type, id) once.
+func (s *Service) resolveSubjectNames(ctx context.Context, events []Event) {
+	if s == nil || s.subjectNames == nil || len(events) == 0 {
+		return
+	}
+	cache := map[string]string{}
+	for i := range events {
+		event := &events[i]
+		if strings.TrimSpace(event.SubjectType) == "" || strings.TrimSpace(event.SubjectID) == "" {
+			continue
+		}
+		key := event.SubjectType + "\x00" + event.SubjectID
+		name, ok := cache[key]
+		if !ok {
+			name = s.subjectNames(ctx, event.SubjectType, event.SubjectID)
+			cache[key] = name
+		}
+		event.SubjectName = name
+	}
 }
 
 func (s *Service) Cleanup(ctx context.Context, retentionDays, detailRetentionDays int) (CleanupResult, error) {

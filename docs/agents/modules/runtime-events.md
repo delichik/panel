@@ -37,13 +37,14 @@
 - 新事件系统不迁移旧任务历史；空态必须说明只显示启用后产生的新记录。
 - 操作记录和系统事件页的筛选变化必须先把页码归一到第一页，并只发起一次有效列表加载；非法 URL 页码回退为第一页。列表与详情只允许最新请求提交状态，避免快速筛选、翻页或切换详情时旧响应覆盖当前内容。
 - 操作记录和系统事件列表的详情按钮 loading 按行记录（记录当前加载的行 id），只对点击的行显示 loading，不影响整列按钮。
+- 系统事件列表与详情的 `event` 包含 `subjectName` 字段：后端在读取时按 `subjectType` 实时解析正式名称（应用、服务器、证书、DNS 域名、密钥资产、任务摘要、操作记录名称），不落库、不保存快照；解析不到时前端回退显示“类型标签 + id”。前端“关联对象”列与详情按“类型标签 + 名称”展示。
 
 ## 后端实现入口
 
 - 后端运行事件模块位于 `internal/modules/runtimeevents/`，包含事件写入服务、应用操作投影查询、系统事件查询、HTTP handler 和独立清理 worker。
 - 事件摘要表 `runtime_events`、详情表 `runtime_event_details`、应用操作投影表 `application_operation_records` 都位于 `Store.LogDB()`，通过 `internal/platform/database/migrations.go` 创建；runtime settings 仍位于 `Store.AppDB()` 的 `runtime_settings`。
 - `/api/v1/application-operations` 查询 `application_operation_records` 投影，不实时扫描事件流聚合；详情接口返回 `{ operation, events, targets }`，当前无专门 target 明细投影时 `targets` 返回空数组。
-- `/api/v1/system-events` 查询 `runtime_events`，默认不固定 `category=system`；详情接口返回 `{ event, payload, logRefs, taskRefs, targetRefs }`，详情过期后引用字段返回空数组并保留摘要事件。
+- `/api/v1/system-events` 查询 `runtime_events`，默认不固定 `category=system`；详情接口返回 `{ event, payload, error, logRefs, taskRefs, targetRefs }`，`error` 携带详情中保存的错误信息；详情过期后引用字段返回空数组并保留摘要事件。
 - `runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 通过 `/api/v1/settings/runtime` 暴露。记录保留时间必须大于或等于详情保留时间，校验失败不自动吞掉错误配置。
 - `runtimeevents.CleanupWorker` 独立于 metrics cleanup：先清理详情并把事件与应用操作投影标记为详情不可用，再按记录保留时间删除摘要和投影。
 

@@ -7,6 +7,7 @@ export interface SystemEventDto {
   severity: SystemEventSeverity;
   subjectType?: string;
   subjectId?: string;
+  subjectName?: string;
   source?: string;
   sourceModule?: string;
   summary: string;
@@ -25,6 +26,7 @@ export interface SystemEventLogRefDto {
 export interface SystemEventDetailDto {
   event: SystemEventDto;
   payload?: unknown;
+  error?: string;
   logRefs?: SystemEventLogRefDto[];
   taskRefs?: string[];
   targetRefs?: string[];

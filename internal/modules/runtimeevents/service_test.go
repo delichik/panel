@@ -144,6 +144,7 @@ func TestSystemEventsFilterAndDetailWrapper(t *testing.T) {
 		OccurredAt:  now,
 		Detail: &EventDetailInput{
 			PayloadJSON:    `{"taskId":"task-1"}`,
+			Error:          "task failed",
 			TaskRefsJSON:   `["task-1"]`,
 			LogRefsJSON:    `["log-1"]`,
 			TargetRefsJSON: `["target-1"]`,
@@ -166,6 +167,10 @@ func TestSystemEventsFilterAndDetailWrapper(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	svc.SetSubjectNameResolver(func(_ context.Context, subjectType, subjectID string) string {
+		return "resolved-" + subjectType + "-" + subjectID
+	})
 
 	result, err := svc.ListSystemEvents(ctx, ListFilter{Category: CategoryTask, SubjectID: "task-1"})
 	if err != nil {
@@ -203,6 +208,36 @@ func TestSystemEventsFilterAndDetailWrapper(t *testing.T) {
 	}
 	if badDetail.Payload != `{bad` || len(badDetail.TaskRefs) != 0 {
 		t.Fatalf("invalid detail should degrade safely: %#v", badDetail)
+	}
+}
+
+func TestSystemEventsWithoutResolverKeepSubjectNameEmpty(t *testing.T) {
+	svc, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	_, _, err := svc.Write(ctx, WriteEventInput{
+		EventType:   EventTaskCreated,
+		Category:    CategoryTask,
+		SubjectType: "task",
+		SubjectID:   "task-1",
+		Severity:    SeverityInfo,
+		Source:      "task",
+		Summary:     "Task created",
+		OccurredAt:  now,
+		Detail:      &EventDetailInput{PayloadJSON: `{}`},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.ListSystemEvents(ctx, ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Items) != 1 || result.Items[0].SubjectName != "" {
+		t.Fatalf("subject name must stay empty without resolver: %#v", result.Items)
 	}
 }
 

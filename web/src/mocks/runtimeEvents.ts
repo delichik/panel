@@ -36,15 +36,15 @@ export const mockApplicationOperations: ApplicationOperationDto[] = [
 ];
 
 export const mockSystemEvents: SystemEventDto[] = [
-  event('evt-task-failed', 'task.failed', 'task', 'error', 'task', 'task-agent-rollout-1', 'tasks', 'Agent rollout failed and can be retried.', true),
-  event('evt-log-attached', 'log.attached', 'log', 'info', 'application', 'app-storefront', 'applications', 'Runtime log reference attached to application operation.', true),
-  event('evt-warning-pruned', 'event.detail.pruned', 'runtime', 'warning', 'operation', 'op-stop-preview', 'runtime-events', 'Event detail was cleaned after retention elapsed.', false),
-  event('evt-canary-failed', 'application.operation.failed', 'application', 'error', 'operation', 'op-canary-failed', 'applications', 'checkout-canary deployment failed readiness checks.', true),
-  event('evt-media-progress', 'application.operation.target.started', 'application', 'info', 'operation', 'op-media-deploy', 'applications', 'media-transcoder deploy started on gpu-nrt-render.', true),
-  event('evt-billing-image', 'application.image.updated', 'application', 'info', 'application', 'app-billing', 'applications', 'billing-portal image update completed on both targets.', true),
-  event('evt-agent-degraded', 'server.agent.degraded', 'alert', 'warning', 'server', 'srv-edge-lax', 'servers', 'edge-lax-01 agent report stream is delayed by 12 minutes.', true),
-  event('evt-cert-renewing', 'certificate.renewing', 'system', 'info', 'certificate', 'cert-hooks-renewing', 'certificates', 'hooks.example.test certificate renewal started.', true),
-  event('evt-package-pending', 'packages.updates_available', 'alert', 'warning', 'server', 'srv-worker-nrt', 'packages', 'worker-nrt-queue-a has 22 package updates pending.', true),
+  event('evt-task-failed', 'task.failed', 'task', 'error', 'task', 'task-agent-rollout-1', 'tasks', 'Agent rollout failed and can be retried.', true, 'Agent rollout'),
+  event('evt-log-attached', 'log.attached', 'log', 'info', 'application', 'app-storefront', 'applications', 'Runtime log reference attached to application operation.', true, 'storefront'),
+  event('evt-warning-pruned', 'event.detail.pruned', 'runtime', 'warning', 'operation', 'op-stop-preview', 'runtime-events', 'Event detail was cleaned after retention elapsed.', false, 'disabled-preview'),
+  event('evt-canary-failed', 'application.operation.failed', 'application', 'error', 'application', 'app-canary-broken', 'applications', 'checkout-canary deployment failed readiness checks.', true, 'checkout-canary'),
+  event('evt-media-progress', 'application.operation.target.started', 'application', 'info', 'application', 'app-media', 'applications', 'media-transcoder deploy started on gpu-nrt-render.', true, 'media-transcoder'),
+  event('evt-billing-image', 'application.image.updated', 'application', 'info', 'application', 'app-billing', 'applications', 'billing-portal image update completed on both targets.', true, 'billing-portal'),
+  event('evt-agent-degraded', 'server.agent.degraded', 'alert', 'warning', 'server', 'srv-edge-lax', 'servers', 'edge-lax-01 agent report stream is delayed by 12 minutes.', true, 'edge-lax-01'),
+  event('evt-cert-renewing', 'certificate.renewing', 'system', 'info', 'certificate', 'cert-hooks-renewing', 'certificates', 'hooks.example.test certificate renewal started.', true, 'hooks.example.test'),
+  event('evt-package-pending', 'packages.updates_available', 'alert', 'warning', 'server', 'srv-worker-nrt', 'packages', 'worker-nrt-queue-a has 22 package updates pending.', true, 'worker-nrt-queue-a'),
   ...Array.from({ length: 56 }, (_, index) => {
     const categories = ['application', 'task', 'alert', 'log', 'runtime', 'system'];
     const severities = ['info', 'warning', 'error'];
@@ -58,6 +58,7 @@ export const mockSystemEvents: SystemEventDto[] = [
       categories[index % categories.length],
       `Sample diagnostic event ${index + 1}`,
       index % 6 !== 0,
+      index % 2 === 0 ? `Server ${index + 1}` : `Sample app ${(index % 8) + 1}`,
     );
   }),
 ];
@@ -99,15 +100,21 @@ export function applicationOperationDetail(operationId: string): ApplicationOper
   };
 }
 
+const mockDetailErrors: Record<string, string> = {
+  'evt-task-failed': 'Agent rollout failed and can be retried.',
+  'evt-canary-failed': 'Canary probe failed: /ready returned 503',
+};
+
 export function systemEventDetail(eventId: string): SystemEventDetailDto | null {
   const found = mockSystemEvents.find((item) => item.id === eventId);
   if (!found || !found.detailAvailable) return null;
   return {
     event: found,
-    payload: { category: found.category, subjectType: found.subjectType, subjectId: found.subjectId },
+    payload: { category: found.category, subjectType: found.subjectType, subjectId: found.subjectId, subjectName: found.subjectName },
+    error: mockDetailErrors[eventId] || (found.severity === 'error' ? found.summary : ''),
     logRefs: found.category === 'log' ? [{ label: 'runtime log', source: found.sourceModule || found.source }] : [],
     taskRefs: found.category === 'task' && found.subjectType === 'task' && found.subjectId ? [found.subjectId] : [],
-    targetRefs: found.subjectType === 'operation' && found.subjectId ? [found.subjectId] : [],
+    targetRefs: found.category === 'application' && found.subjectId ? [found.subjectId] : [],
   };
 }
 
@@ -157,6 +164,7 @@ function event(
   sourceModule: string,
   summary: string,
   detailAvailable: boolean,
+  subjectName?: string,
 ): SystemEventDto {
   const seed = numericSeed(id);
   return {
@@ -166,6 +174,7 @@ function event(
     severity,
     subjectType,
     subjectId,
+    subjectName,
     source: sourceModule,
     sourceModule,
     summary,

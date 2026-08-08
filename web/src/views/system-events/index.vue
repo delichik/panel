@@ -42,14 +42,14 @@ const detailOpen = ref(false);
 const listRequests = createLatestRequestGuard();
 const detailRequests = createLatestRequestGuard();
 
-const columns = computed<Array<{ key: keyof EventRow & string; label: string; align?: 'left' | 'right' }>>(() => [
-  { key: 'occurredAt', label: t('systemEventsPage.column.time') },
-  { key: 'severity', label: t('systemEventsPage.column.severity') },
-  { key: 'eventType', label: t('common.type') },
-  { key: 'summary', label: t('systemEventsPage.column.summary') },
-  { key: 'subjectId', label: t('systemEventsPage.column.subject') },
-  { key: 'source', label: t('systemEventsPage.column.source') },
-  { key: 'id', label: t('common.actions'), align: 'right' },
+const columns = computed<Array<{ key: keyof EventRow & string; label: string; align?: 'left' | 'right'; width?: string; nowrap?: boolean }>>(() => [
+  { key: 'occurredAt', label: t('systemEventsPage.column.time'), width: 'w-40', nowrap: true },
+  { key: 'severity', label: t('systemEventsPage.column.severity'), width: 'w-24', nowrap: true },
+  { key: 'eventType', label: t('common.type'), width: 'w-36' },
+  { key: 'summary', label: t('systemEventsPage.column.summary'), width: 'w-[34%]' },
+  { key: 'subjectId', label: t('systemEventsPage.column.subject'), width: 'w-36' },
+  { key: 'source', label: t('systemEventsPage.column.source'), width: 'w-24' },
+  { key: 'id', label: t('common.actions'), align: 'right', width: 'w-20', nowrap: true },
 ]);
 
 const severityOptions = computed(() => [
@@ -164,8 +164,26 @@ function eventTypeLabel(value: string) {
   return translateRuntimeEventType(t, value);
 }
 
+function subjectTypeLabel(value?: string) {
+  if (!value) return t('common.notAvailable');
+  const key = `systemEventsPage.subjectType.${value}`;
+  const label = t(key);
+  return label === key ? value : label;
+}
+
 function subjectLabel(row: SystemEventDto) {
-  return row.subjectType && row.subjectId ? `${row.subjectType}:${row.subjectId}` : t('common.notAvailable');
+  if (!row.subjectType && !row.subjectId) return t('common.notAvailable');
+  const type = subjectTypeLabel(row.subjectType);
+  if (row.subjectName) return `${type} · ${row.subjectName}`;
+  return row.subjectId ? `${type} · ${row.subjectId}` : type;
+}
+
+function subjectDetailLabel(row: SystemEventDto) {
+  if (!row.subjectType && !row.subjectId) return t('common.notAvailable');
+  if (row.subjectName && row.subjectName !== row.subjectId) {
+    return `${subjectTypeLabel(row.subjectType)} · ${row.subjectName} (${row.subjectId})`;
+  }
+  return subjectLabel(row);
 }
 
 onMounted(load);
@@ -184,18 +202,26 @@ onMounted(load);
     </template>
 
     <div class="grid min-h-full gap-3">
-      <Table v-if="rows.length || loading" :columns="columns" :rows="rows as EventRow[]" row-key="id" :loading="loading" :loading-label="t('systemEventsPage.loading')">
-        <template #occurredAt="{ row }">{{ formatDateTime(row.occurredAt) }}</template>
+      <Table v-if="rows.length || loading" :columns="columns" :rows="rows as EventRow[]" row-key="id" fixed :loading="loading" :loading-label="t('systemEventsPage.loading')">
+        <template #occurredAt="{ row }"><span class="block whitespace-nowrap">{{ formatDateTime(row.occurredAt) }}</span></template>
         <template #severity="{ row }"><StatusBadge :status="row.severity" :tone="row.severity === 'error' || row.severity === 'critical' ? 'danger' : row.severity === 'warning' ? 'warning' : 'info'" :label="severityLabel(row.severity)" /></template>
         <template #eventType="{ row }">
           <div class="grid min-w-0 gap-1">
             <strong class="truncate text-foreground">{{ eventTypeLabel(row.eventType) }}</strong>
-            <span class="text-xs text-muted-foreground">{{ categoryLabel(row.category) }}</span>
+            <span class="truncate text-xs text-muted-foreground">{{ categoryLabel(row.category) }}</span>
           </div>
         </template>
-        <template #summary="{ row }"><span class="line-clamp-2">{{ row.summary }}</span></template>
-        <template #subjectId="{ row }">{{ subjectLabel(row) }}</template>
-        <template #source="{ row }">{{ row.sourceModule || row.source || t('common.notAvailable') }}</template>
+        <template #summary="{ row }">
+          <Tooltip trigger-class="block min-w-0 w-full" :text="row.summary">
+            <span class="block min-w-0 max-w-full truncate">{{ row.summary }}</span>
+          </Tooltip>
+        </template>
+        <template #subjectId="{ row }">
+          <Tooltip trigger-class="block min-w-0 w-full" :text="subjectLabel(row)">
+            <span class="block min-w-0 max-w-full truncate">{{ subjectLabel(row) }}</span>
+          </Tooltip>
+        </template>
+        <template #source="{ row }"><span class="block min-w-0 truncate">{{ row.sourceModule || row.source || t('common.notAvailable') }}</span></template>
         <template #id="{ row }">
           <Tooltip v-if="!row.detailAvailable" :text="t('systemEventsPage.detailPruned')">
             <Button size="sm" disabled><Eye />{{ t('common.view') }}</Button>
@@ -223,24 +249,58 @@ onMounted(load);
       <LoadingOverlay :label="t('systemEventsPage.loadingDetail')" />
     </div>
     <div v-else-if="detail" class="grid gap-4">
-      <section class="grid gap-2 rounded-xl border border-border p-3 text-sm">
-        <div><span class="text-muted-foreground">{{ t('systemEventsPage.column.time') }}</span> <strong>{{ formatDateTime(detail.event.occurredAt) }}</strong></div>
-        <div><span class="text-muted-foreground">{{ t('systemEventsPage.column.severity') }}</span> <StatusBadge :status="detail.event.severity" :label="severityLabel(detail.event.severity)" /></div>
-        <div><span class="text-muted-foreground">{{ t('systemEventsPage.column.subject') }}</span> <strong>{{ subjectLabel(detail.event) }}</strong></div>
-        <p class="m-0 text-muted-foreground">{{ detail.event.summary }}</p>
+      <section class="grid gap-3 rounded-xl border border-border p-3 text-sm">
+        <div class="grid gap-1">
+          <span class="text-xs text-muted-foreground">{{ t('systemEventsPage.column.summary') }}</span>
+          <strong class="break-words text-foreground">{{ detail.event.summary }}</strong>
+        </div>
+        <div v-if="detail.error" class="whitespace-pre-wrap break-words rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">{{ detail.error }}</div>
+        <dl class="m-0 grid gap-x-4 gap-y-2 sm:grid-cols-2">
+          <div class="grid min-w-0 gap-0.5">
+            <dt class="text-xs text-muted-foreground">{{ t('systemEventsPage.column.severity') }}</dt>
+            <dd class="m-0"><StatusBadge :status="detail.event.severity" :label="severityLabel(detail.event.severity)" /></dd>
+          </div>
+          <div class="grid min-w-0 gap-0.5">
+            <dt class="text-xs text-muted-foreground">{{ t('common.type') }}</dt>
+            <dd class="m-0 break-words">{{ eventTypeLabel(detail.event.eventType) }} <span class="text-muted-foreground">· {{ categoryLabel(detail.event.category) }}</span></dd>
+          </div>
+          <div class="grid min-w-0 gap-0.5">
+            <dt class="text-xs text-muted-foreground">{{ t('systemEventsPage.column.time') }}</dt>
+            <dd class="m-0 break-words">{{ formatDateTime(detail.event.occurredAt) }}</dd>
+          </div>
+          <div class="grid min-w-0 gap-0.5">
+            <dt class="text-xs text-muted-foreground">{{ t('systemEventsPage.column.subject') }}</dt>
+            <dd class="m-0 break-words">{{ subjectDetailLabel(detail.event) }}</dd>
+          </div>
+          <div class="grid min-w-0 gap-0.5">
+            <dt class="text-xs text-muted-foreground">{{ t('systemEventsPage.column.source') }}</dt>
+            <dd class="m-0 break-words">{{ detail.event.sourceModule || detail.event.source || t('common.notAvailable') }}</dd>
+          </div>
+          <div class="grid min-w-0 gap-0.5">
+            <dt class="text-xs text-muted-foreground">{{ t('systemEventsPage.detail.eventId') }}</dt>
+            <dd class="m-0 break-words font-mono text-xs">{{ detail.event.id }}</dd>
+          </div>
+        </dl>
       </section>
       <section v-if="detail.logRefs?.length">
         <h3 class="m-0 mb-2 text-sm font-semibold">{{ t('systemEventsPage.logRefs') }}</h3>
         <div class="grid gap-2">
           <div v-for="logRef in detail.logRefs" :key="`${logRef.label}-${logRef.source}`" class="rounded-xl border border-border p-3 text-sm">
-            <strong>{{ logRef.label }}</strong>
-            <p class="m-0 text-muted-foreground">{{ logRef.source || t('common.notAvailable') }}</p>
+            <strong class="break-words">{{ logRef.label }}</strong>
+            <p class="m-0 mt-1 break-words text-muted-foreground">{{ logRef.source || t('common.notAvailable') }}</p>
+            <p v-if="logRef.from || logRef.to" class="m-0 mt-1 break-words text-xs text-muted-foreground">{{ logRef.from || t('common.notAvailable') }} → {{ logRef.to || t('common.notAvailable') }}</p>
           </div>
         </div>
       </section>
       <section v-if="detail.taskRefs?.length || detail.targetRefs?.length" class="grid gap-2 rounded-xl border border-border p-3 text-sm">
-        <div v-if="detail.taskRefs?.length"><span class="text-muted-foreground">{{ t('systemEventsPage.taskRefs') }}</span> <strong>{{ detail.taskRefs.join(', ') }}</strong></div>
-        <div v-if="detail.targetRefs?.length"><span class="text-muted-foreground">{{ t('systemEventsPage.targetRefs') }}</span> <strong>{{ detail.targetRefs.join(', ') }}</strong></div>
+        <div v-if="detail.taskRefs?.length" class="grid gap-1">
+          <span class="text-xs text-muted-foreground">{{ t('systemEventsPage.taskRefs') }}</span>
+          <strong class="break-words">{{ detail.taskRefs.join(', ') }}</strong>
+        </div>
+        <div v-if="detail.targetRefs?.length" class="grid gap-1">
+          <span class="text-xs text-muted-foreground">{{ t('systemEventsPage.targetRefs') }}</span>
+          <strong class="break-words">{{ detail.targetRefs.join(', ') }}</strong>
+        </div>
       </section>
       <pre v-if="detail.payload" class="max-h-64 overflow-auto rounded-xl border border-border bg-muted p-3 text-xs">{{ JSON.stringify(detail.payload, null, 2) }}</pre>
     </div>

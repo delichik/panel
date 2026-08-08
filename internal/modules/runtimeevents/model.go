@@ -1,6 +1,9 @@
 package runtimeevents
 
-import "time"
+import (
+	"context"
+	"time"
+)
 
 const (
 	CategoryApplication = "application"
@@ -79,6 +82,7 @@ type Event struct {
 	EventType       string     `json:"eventType"`
 	Category        string     `json:"category"`
 	SubjectType     string     `json:"subjectType,omitempty"`
+	SubjectName     string     `json:"subjectName,omitempty"`
 	SubjectID       string     `json:"subjectId,omitempty"`
 	OperationID     string     `json:"operationId,omitempty"`
 	Severity        string     `json:"severity"`
@@ -109,12 +113,17 @@ type ApplicationOperationDetail struct {
 }
 
 type SystemEventDetail struct {
-	Event      Event `json:"event"`
-	Payload    any   `json:"payload"`
-	LogRefs    []any `json:"logRefs"`
-	TaskRefs   []any `json:"taskRefs"`
-	TargetRefs []any `json:"targetRefs"`
+	Event      Event  `json:"event"`
+	Payload    any    `json:"payload"`
+	Error      string `json:"error,omitempty"`
+	LogRefs    []any  `json:"logRefs"`
+	TaskRefs   []any  `json:"taskRefs"`
+	TargetRefs []any  `json:"targetRefs"`
 }
+
+// SubjectNameResolver resolves the display name of an event subject at read
+// time. It returns an empty string when no formal name can be found.
+type SubjectNameResolver func(ctx context.Context, subjectType, subjectID string) string
 
 type OperationRecord struct {
 	OperationID             string     `json:"operationId"`

@@ -35,6 +35,7 @@ AppShell
 - 源码：`web/src/components/ui/Table.vue`。
 - `Table` 根容器自身承担滚动；页面可通过 `h-*` / `max-h-*` 约束高度，表头在该滚动区内 sticky。
 - 根容器保留圆角和边框，不得在外层限高后再依赖内层百分比高度建立滚动区。
+- 列定义支持可选 `width` / `nowrap`，并可通过 `fixed` 开启 `table-fixed`：需要稳定单行的列（时间、级别、操作）用 `nowrap`，长文本列用 `truncate` 截断，需要悬浮完整内容时配合 `Tooltip`。
 
 ## 页面模板
 
