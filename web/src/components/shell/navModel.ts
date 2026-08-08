@@ -45,6 +45,15 @@ export const navGroups: NavGroup[] = [
     ],
   },
   {
+    key: 'delivery',
+    titleKey: 'layout.nav.applications',
+    items: [
+      { key: 'applications', titleKey: 'routes.applications.title', to: '/applications/apps', icon: AppWindow },
+      { key: 'facility-apps', titleKey: 'routes.facilityApps.title', to: '/applications/facility-apps', icon: FolderKanban },
+      { key: 'application-operations', titleKey: 'routes.applicationOperations.title', to: '/application-operations', icon: ListChecks },
+    ],
+  },
+  {
     key: 'resources',
     titleKey: 'layout.nav.resources',
     items: [
@@ -55,15 +64,6 @@ export const navGroups: NavGroup[] = [
       { key: 'volumes', titleKey: 'routes.volumes.title', to: '/resources/volumes', icon: HardDrive },
       { key: 'firewall', titleKey: 'routes.firewall.title', to: '/resources/firewall', icon: Shield },
       ...(import.meta.env.DEV ? [{ key: 'fail2ban', titleKey: 'routes.fail2ban.title', to: '/resources/fail2ban', icon: ShieldPlus }] : []),
-    ],
-  },
-  {
-    key: 'delivery',
-    titleKey: 'layout.nav.applications',
-    items: [
-      { key: 'applications', titleKey: 'routes.applications.title', to: '/applications/apps', icon: AppWindow },
-      { key: 'facility-apps', titleKey: 'routes.facilityApps.title', to: '/applications/facility-apps', icon: FolderKanban },
-      { key: 'application-operations', titleKey: 'routes.applicationOperations.title', to: '/application-operations', icon: ListChecks },
     ],
   },
   {
