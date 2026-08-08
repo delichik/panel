@@ -143,7 +143,12 @@ async function signOut() {
       <section class="min-h-0 min-w-0 overflow-visible lg:overflow-hidden">
         <RouterView v-slot="{ Component }">
           <Transition name="route" mode="out-in">
-            <component :is="Component" />
+            <!-- 路由组件可能含多个根节点（如 ListPage + Dialog），包一层单一根元素才能做过渡动画；
+                 按 route.path 作 key：每次路径切换都重挂载页面并播放淡出淡入（含网络/卷等同组件路由）；
+                 仅查询参数变化（分页、筛选）不重挂载，保持 URL 状态行为 -->
+            <div :key="route.path" class="h-full min-h-0">
+              <component :is="Component" />
+            </div>
           </Transition>
         </RouterView>
       </section>

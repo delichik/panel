@@ -38,6 +38,7 @@ function makeRouter(): Router {
     routes: [
       { path: '/', component: { template: '<div />' } },
       { path: '/servers', component: { template: '<div />' } },
+      { path: '/fragment', component: { template: '<div /><section />' } },
       { path: '/:pathMatch(.*)*', component: { template: '<div />' } },
     ],
   });
@@ -170,6 +171,19 @@ describe('AppShell mobile nav drawer', () => {
 
     expect(router.currentRoute.value.path).toBe('/servers');
     expect(document.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it('does not warn when a multi-root page enters the route transition', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const { router } = await mountShell();
+      await router.push('/fragment');
+      await flushPromises();
+      const warned = warnSpy.mock.calls.some((args) => String(args[0]).includes('non-element root node'));
+      expect(warned).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('closes automatically when crossing into the desktop breakpoint', async () => {
