@@ -7,6 +7,8 @@ import Button from '@/components/ui/Button.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
+import DateTimeRangePicker from '@/components/ui/DateTimeRangePicker.vue';
+import type { DateTimeRangeValue } from '@/components/ui/dateTimeRange';
 import Select from '@/components/ui/Select.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
 import Table from '@/components/ui/Table.vue';
@@ -31,8 +33,7 @@ const page = ref(normalizePage(route.query.page));
 const pageSize = 20;
 const eventType = ref(String(route.query.eventType || ''));
 const severity = ref(String(route.query.severity || ''));
-const fromValue = ref(toLocalInput(String(route.query.from || '')) || toLocalInput(new Date(Date.now() - 24 * 3600 * 1000).toISOString()));
-const toValue = ref(toLocalInput(String(route.query.to || '')) || toLocalInput(new Date().toISOString()));
+const range = ref<DateTimeRangeValue>(initialRange());
 const loading = ref(false);
 const error = ref('');
 const listRequests = createLatestRequestGuard();
@@ -52,7 +53,7 @@ const severityOptions = computed(() => [
   { label: t('systemEventsPage.severity.error'), value: 'error' },
 ]);
 
-watch([eventType, severity, fromValue, toValue], () => {
+watch([eventType, severity, range], () => {
   if (page.value !== 1) {
     page.value = 1;
     return;
@@ -62,32 +63,28 @@ watch([eventType, severity, fromValue, toValue], () => {
 
 watch(page, syncQueryAndLoad);
 
+function initialRange(): DateTimeRangeValue {
+  const from = String(route.query.from || '');
+  const to = String(route.query.to || '');
+  if (from && to) return { from, to };
+  return {
+    from: new Date(Date.now() - 24 * 3600 * 1000).toISOString(),
+    to: new Date().toISOString(),
+  };
+}
+
 function syncQueryAndLoad() {
   void router.replace({
     query: {
       ...route.query,
       eventType: eventType.value || undefined,
       severity: severity.value || undefined,
-      from: localInputToIso(fromValue.value) || undefined,
-      to: localInputToIso(toValue.value) || undefined,
+      from: range.value.from || undefined,
+      to: range.value.to || undefined,
       page: page.value > 1 ? String(page.value) : undefined,
     },
   });
   void load();
-}
-
-function toLocalInput(iso?: string): string {
-  if (!iso) return '';
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  const pad = (value: number) => String(value).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function localInputToIso(value: string): string | undefined {
-  if (!value) return undefined;
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 async function load() {
@@ -98,8 +95,8 @@ async function load() {
     const result = await systemEventsApi.list({
       eventType: eventType.value,
       severity: severity.value,
-      from: localInputToIso(fromValue.value),
-      to: localInputToIso(toValue.value),
+      from: range.value.from,
+      to: range.value.to,
       page: page.value,
       pageSize,
     });
@@ -138,11 +135,10 @@ onMounted(load);
 <template>
   <ListPage>
     <template #toolbar>
-      <div class="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_220px_220px_auto]">
+      <div class="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_300px_auto]">
         <SearchInput v-model="eventType" clearable :label="t('systemEventsPage.typeFilter')" :placeholder="t('systemEventsPage.typeFilterPlaceholder')" :clear-label="t('common.clearSearch')" />
         <Select v-model="severity" :options="severityOptions" :placeholder="t('systemEventsPage.column.severity')" />
-        <label class="grid gap-1 text-xs text-muted-foreground">{{ t('systemEventsPage.range.from') }}<input v-model="fromValue" type="datetime-local" class="motion-field h-9 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background" /></label>
-        <label class="grid gap-1 text-xs text-muted-foreground">{{ t('systemEventsPage.range.to') }}<input v-model="toValue" type="datetime-local" class="motion-field h-9 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background" /></label>
+        <DateTimeRangePicker v-model="range" />
         <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
       </div>
     </template>

@@ -1,4 +1,4 @@
-﻿# 统一交互组件模式
+# 统一交互组件模式
 
 > 本规范记录跨页面复用的交互 primitives 和 patterns。业务页面遇到同类问题时必须优先复用这些组件，避免在页面内手写视觉相近但行为不同的控件。
 
@@ -18,6 +18,8 @@
 - `Table`：用于表格型列表。首次加载且没有旧数据时传入 `loading` 与本地化 `loadingLabel`，由组件渲染表格骨架行；已有数据刷新时保留当前 rows，只让刷新入口或分页入口显示 loading。 表格行由组件统一加 `motion-table-row` 交错入场（`--panel-stagger`，仅首屏/新增行播放）。
 
 ## Pattern components
+
+- `DateTimeRangePicker`（`web/src/components/ui/DateTimeRangePicker.vue`）：时间范围选择器。触发器样式与 Select/Input 一致（h-9、同边框/圆角/背景），点开弹层内“开始/结束”一起设置，带最近 24 小时/7 天/30 天快捷预设和应用/取消；值以 ISO `{ from, to }` 双向绑定。
 
 - `FilterBar`：用于列表页顶部筛选区，组合搜索、状态筛选和操作槽。业务页仍负责 query 同步、过滤条件命名和空态区分。
 - `ServerContextSelector`：用于安全、资源、调试等单服务器上下文页面，是单一服务器选择器。组件只呈现服务器列表/卡片选择，不再叠加 Select 下拉；卡片负责展示 capability badge、状态和不可用原因；首次加载时传入 `loading` 显示服务器卡片骨架。
