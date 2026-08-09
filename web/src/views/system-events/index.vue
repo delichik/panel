@@ -31,7 +31,8 @@ const page = ref(normalizePage(route.query.page));
 const pageSize = 20;
 const eventType = ref(String(route.query.eventType || ''));
 const severity = ref(String(route.query.severity || ''));
-const range = ref(String(route.query.range || ''));
+const fromValue = ref(toLocalInput(String(route.query.from || '')) || toLocalInput(new Date(Date.now() - 24 * 3600 * 1000).toISOString()));
+const toValue = ref(toLocalInput(String(route.query.to || '')) || toLocalInput(new Date().toISOString()));
 const loading = ref(false);
 const error = ref('');
 const listRequests = createLatestRequestGuard();
@@ -51,14 +52,7 @@ const severityOptions = computed(() => [
   { label: t('systemEventsPage.severity.error'), value: 'error' },
 ]);
 
-const rangeOptions = computed(() => [
-  { label: t('systemEventsPage.range.all'), value: '' },
-  { label: t('systemEventsPage.range.h24'), value: '24h' },
-  { label: t('systemEventsPage.range.d7'), value: '7d' },
-  { label: t('systemEventsPage.range.d30'), value: '30d' },
-]);
-
-watch([eventType, severity, range], () => {
+watch([eventType, severity, fromValue, toValue], () => {
   if (page.value !== 1) {
     page.value = 1;
     return;
@@ -74,17 +68,26 @@ function syncQueryAndLoad() {
       ...route.query,
       eventType: eventType.value || undefined,
       severity: severity.value || undefined,
-      range: range.value || undefined,
+      from: localInputToIso(fromValue.value) || undefined,
+      to: localInputToIso(toValue.value) || undefined,
       page: page.value > 1 ? String(page.value) : undefined,
     },
   });
   void load();
 }
 
-function rangeToFromTo(value: string): { from?: string; to?: string } {
-  const hours = value === '24h' ? 24 : value === '7d' ? 7 * 24 : value === '30d' ? 30 * 24 : 0;
-  if (!hours) return {};
-  return { from: new Date(Date.now() - hours * 3600 * 1000).toISOString() };
+function toLocalInput(iso?: string): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (value: number) => String(value).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function localInputToIso(value: string): string | undefined {
+  if (!value) return undefined;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
 async function load() {
@@ -92,12 +95,11 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const timeRange = rangeToFromTo(range.value);
     const result = await systemEventsApi.list({
       eventType: eventType.value,
       severity: severity.value,
-      from: timeRange.from,
-      to: timeRange.to,
+      from: localInputToIso(fromValue.value),
+      to: localInputToIso(toValue.value),
       page: page.value,
       pageSize,
     });
@@ -136,10 +138,11 @@ onMounted(load);
 <template>
   <ListPage>
     <template #toolbar>
-      <div class="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px_auto]">
+      <div class="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_220px_220px_auto]">
         <SearchInput v-model="eventType" clearable :label="t('systemEventsPage.typeFilter')" :placeholder="t('systemEventsPage.typeFilterPlaceholder')" :clear-label="t('common.clearSearch')" />
         <Select v-model="severity" :options="severityOptions" :placeholder="t('systemEventsPage.column.severity')" />
-        <Select v-model="range" :options="rangeOptions" :placeholder="t('systemEventsPage.range.placeholder')" />
+        <label class="grid gap-1 text-xs text-muted-foreground">{{ t('systemEventsPage.range.from') }}<input v-model="fromValue" type="datetime-local" class="motion-field h-9 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background" /></label>
+        <label class="grid gap-1 text-xs text-muted-foreground">{{ t('systemEventsPage.range.to') }}<input v-model="toValue" type="datetime-local" class="motion-field h-9 w-full rounded-xl border border-input bg-background px-3 text-sm text-foreground transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:ring-offset-2 focus-visible:ring-offset-background" /></label>
         <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
       </div>
     </template>

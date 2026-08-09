@@ -195,7 +195,7 @@ function event(
     source: sourceModule,
     sourceModule,
     summary,
-    occurredAt: new Date(now.getTime() - seed * 45000).toISOString(),
+    occurredAt: new Date(Date.now() - seed * 45000).toISOString(),
   };
 }
 
