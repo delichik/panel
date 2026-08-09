@@ -10,6 +10,26 @@ import (
 	id "panel/internal/platform/identity"
 )
 
+// finishTargetRunningStages closes every still-running stage row of a target.
+// exceptStage (optional) keeps one stage open, e.g. the stage that is about to
+// start or the stage that just failed. This prevents earlier steps from
+// remaining "running" forever in operation records once a target moves on.
+func (s *Service) finishTargetRunningStages(ctx context.Context, targetID, status string, finishedAt *time.Time, exceptStage string) error {
+	if s == nil || strings.TrimSpace(targetID) == "" {
+		return nil
+	}
+	finish := time.Now().UTC()
+	if finishedAt != nil {
+		finish = *finishedAt
+	}
+	exceptStage = strings.TrimSpace(exceptStage)
+	_, err := orm.RawExec(ctx, s.lifecycleDB(), `UPDATE application_target_stages
+		SET status=?, finished_at=COALESCE(finished_at, ?), updated_at=?
+		WHERE target_id=? AND status='running' AND (?='' OR stage<>?)`,
+		strings.TrimSpace(status), formatTime(finish), formatTime(finish), targetID, exceptStage, exceptStage)
+	return err
+}
+
 // recordTargetStage upserts one step row into application_target_stages for a
 // lifecycle target. The same (target, stage) pair is updated in place so a
 // stage that starts and later finishes keeps its original started_at.

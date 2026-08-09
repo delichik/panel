@@ -2348,19 +2348,17 @@ func (s *Service) runStopLifecycleTargetTask(ctx context.Context, task tasks.Tas
 		}
 		_ = s.tasks.AppendLog(ctx, taskID, "system", verb+" "+app.Name+" on "+targetName)
 	}
-	err = s.executeContainerOperation(ctx, targetRow.ServerID, func(runCtx context.Context) error {
-		return s.withLifecycleTargetLeaseHeartbeat(runCtx, targetID, taskID, func(runCtx context.Context) error {
-			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
-				return err
-			}
-			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: state, Stage: stage, OwnerTaskID: taskID}); err != nil {
-				return err
-			}
-			if state == LifecycleTargetStatePurging {
-				return s.purgeRuntimeInstanceForServer(runCtx, taskID, app.ID, targetRow.ServerID, removeApplicationData)
-			}
-			return s.stopRuntimeInstanceForServer(runCtx, taskID, app.ID, targetRow.ServerID)
-		})
+	err = s.withLifecycleTargetLeaseHeartbeat(ctx, targetID, taskID, func(runCtx context.Context) error {
+		if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
+			return err
+		}
+		if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: state, Stage: stage, OwnerTaskID: taskID}); err != nil {
+			return err
+		}
+		if state == LifecycleTargetStatePurging {
+			return s.purgeRuntimeInstanceForServer(runCtx, taskID, app.ID, targetRow.ServerID, removeApplicationData)
+		}
+		return s.stopRuntimeInstanceForServer(runCtx, taskID, app.ID, targetRow.ServerID)
 	})
 	if err != nil {
 		if errors.Is(err, errLifecycleTargetLeaseLost) {
@@ -2903,6 +2901,9 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 			finished := time.Now().UTC()
 			finishedAt = &finished
 		}
+		if err := s.finishTargetRunningStages(ctx, targetID, "succeeded", nil, in.Stage); err != nil {
+			return err
+		}
 		if err := s.recordTargetStage(ctx, targetID, in.Stage, stageStatus, detail, nil, finishedAt); err != nil {
 			return err
 		}
@@ -2958,7 +2959,13 @@ func (s *Service) failLifecycleTargetExecution(ctx context.Context, targetID, st
 		return err
 	}
 	_, err = res.RowsAffected()
-	return err
+	if err != nil {
+		return err
+	}
+	if err := s.finishTargetRunningStages(ctx, targetID, "succeeded", nil, stage); err != nil {
+		return err
+	}
+	return s.recordTargetStage(ctx, targetID, stage, "failed", cause.Error(), nil, &now)
 }
 
 func (s *Service) enqueueLifecycleTargetVerification(ctx context.Context, targetID, operationID string) error {
@@ -3094,7 +3101,7 @@ func (s *Service) verifyLifecycleTargetNow(ctx context.Context, targetID string)
 	if err != nil {
 		return err
 	}
-	return err
+	return s.finishTargetRunningStages(ctx, target.ID, "succeeded", nil, "")
 }
 
 func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, status string, cause error) error {
