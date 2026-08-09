@@ -7,7 +7,6 @@ import (
 	"time"
 
 	appruntime "panel/internal/modules/applications/runtime"
-	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 )
@@ -387,9 +386,21 @@ func (s *Service) mergeConsistentServers(ctx context.Context, op LifecycleOperat
 	return out
 }
 
+// targetStageRow 是 application_target_stages 的字符串行映射：started_at /
+// finished_at 在库中以空串表示“未开始/未结束”，不能直接用 time.Time 扫描。
+type targetStageRow struct {
+	ID         string  `orm:"column:id"`
+	TargetID   string  `orm:"column:target_id"`
+	Stage      string  `orm:"column:stage"`
+	Status     string  `orm:"column:status"`
+	Detail     string  `orm:"column:detail"`
+	StartedAt  *string `orm:"column:started_at"`
+	FinishedAt *string `orm:"column:finished_at"`
+}
+
 // stagesByOperation 读取一次操作内所有目标的步骤日志，按目标分组、按开始时间排序。
 func (s *Service) stagesByOperation(ctx context.Context, operationID string) (map[string][]OperationRecordStage, error) {
-	var rows []models.ApplicationTargetStage
+	var rows []targetStageRow
 	if err := orm.New(s.lifecycleDB()).From("application_target_stages").
 		Where("operation_id = ?", strings.TrimSpace(operationID)).
 		OrderBy("started_at ASC", "created_at ASC", "id ASC").
@@ -403,8 +414,8 @@ func (s *Service) stagesByOperation(ctx context.Context, operationID string) (ma
 			Stage:      row.Stage,
 			Status:     row.Status,
 			Detail:     row.Detail,
-			StartedAt:  row.StartedAt,
-			FinishedAt: row.FinishedAt,
+			StartedAt:  parseOptionalStringTimePtr(row.StartedAt),
+			FinishedAt: parseOptionalStringTimePtr(row.FinishedAt),
 		})
 	}
 	return out, nil

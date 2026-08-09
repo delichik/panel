@@ -1796,6 +1796,39 @@ func TestDecorateDeploymentTasksProjectsLifecycleDiagnostics(t *testing.T) {
 	}
 }
 
+func TestGetApplicationOperationRecordHandlesEmptyStageTimes(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	if _, err := svc.lifecycleDB().Exec(`INSERT INTO application_lifecycle_operations(id, application_id, type, status, task_id, generation, spec_hash, trigger, error, created_at, started_at, finished_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"op-1", "app-1", "deploy", "deploying", "", 3, "hash", "user", "", formatTime(now), formatTime(now), nil, formatTime(now)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.lifecycleDB().Exec(`INSERT INTO application_lifecycle_targets(id, operation_id, application_id, server_id, action, state, status, target_key, desired_state, desired_generation, desired_spec_hash, priority, attempt, next_run_at, lease_owner, lease_expires_at, claimed_task_id, instance_id, container_name, container_id, stage, error, error_code, error_message, error_detail, observed_state, observed_exit_code, observed_error, observed_generation, observed_spec_hash, observed_image, observed_at, created_at, started_at, finished_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"tgt-1", "op-1", "app-1", "srv-1", "apply", "applying", "deploying", "app-1/srv-1", "running", 3, "hash", 0, 0, "", "", "", "", "inst-1", "c-1", "", "write_files", "", "", "", "", "stopped", "", "OOMKilled", 2, "oldhash", "img:1.8", formatTime(now), formatTime(now), nil, nil, formatTime(now)); err != nil {
+		t.Fatal(err)
+	}
+	// 未结束的步骤：finished_at 在库里是空字符串，不是 NULL。
+	if _, err := svc.lifecycleDB().Exec(`INSERT INTO application_target_stages(id, operation_id, target_id, application_id, server_id, stage, status, detail, started_at, finished_at, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"stg-1", "op-1", "tgt-1", "app-1", "srv-1", "write_files", "running", "detail", formatTime(now), "", formatTime(now), formatTime(now)); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := svc.GetApplicationOperationRecord(ctx, "op-1")
+	if err != nil {
+		t.Fatalf("GetApplicationOperationRecord should tolerate empty stage time: %v", err)
+	}
+	if len(detail.Targets) != 1 || len(detail.Targets[0].Stages) != 1 {
+		t.Fatalf("unexpected detail targets/stages: %#v", detail.Targets)
+	}
+	stage := detail.Targets[0].Stages[0]
+	if stage.StartedAt == nil || stage.FinishedAt != nil {
+		t.Fatalf("empty finished_at should scan as nil: %#v", stage)
+	}
+}
+
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
 	t.Helper()
 	dir := t.TempDir()
