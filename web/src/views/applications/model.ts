@@ -311,14 +311,10 @@ export function diffApplications(base?: ApplicationDto | null, draft?: Applicati
   if (!draft) return { added: 0, changed: 0, removed: 0, warnings: 0 };
   if (!base?.id) return { added: 1 + draft.reverseProxy.length + draft.mounts.length + draft.ports.length, changed: 0, removed: 0, warnings: 0 };
   const input = saveInputFromDraft(draft);
-  const baseComparable = {
-    name: base.name,
-    enabled: base.enabled,
-    specYaml: base.specYaml,
-    deploymentMode: base.deploymentMode,
-    deploymentServers: base.deploymentServers,
-    reverseProxy: base.reverseProxy,
-  };
+  // Normalize the saved application through the same draft pipeline so that
+  // YAML round-trip formatting and defaulted route options do not surface as
+  // a fake "changed" entry on a freshly opened editor.
+  const baseComparable = saveInputFromDraft(draftFromApplication(base));
   return diffObjects(baseComparable, input);
 }
 

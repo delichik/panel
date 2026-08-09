@@ -4,6 +4,7 @@ import {
   applyYamlToDraft,
   cloneFacilityDomains,
   cloneProxyRules,
+  diffApplications,
   diffFacility,
   draftFromApplication,
   facilityDraftFromConfig,
@@ -77,6 +78,28 @@ describe('application editor model', () => {
     expect(draft.ports[0].to).toBe('6379');
   });
 
+  it('reports no pending changes for a freshly opened editor', () => {
+    const draft = draftFromApplication(app);
+    expect(diffApplications(app, draft)).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
+  });
+
+  it('ignores YAML formatting differences when comparing the saved app', () => {
+    const formatted = { ...app, specYaml: 'name: api\n\nimage: nginx\n\nports:\n  - label: http\n    to: 8080\n\n' };
+    const draft = draftFromApplication(formatted);
+    expect(diffApplications(formatted, draft)).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
+  });
+
+  it('reports a change when a route option is edited', () => {
+    const draft = draftFromApplication(app);
+    draft.reverseProxy[0].paths[0].options!.gzipMode = 'off';
+    expect(diffApplications(app, draft).changed).toBe(1);
+  });
+
+  it('reports a change when a deployment server is removed', () => {
+    const draft = draftFromApplication(app);
+    draft.deploymentServers = [];
+    expect(diffApplications(app, draft).changed).toBe(1);
+  });
   it('starts create drafts blank without sample defaults', () => {
     const draft = draftFromApplication();
     expect(draft.name).toBe('');

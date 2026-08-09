@@ -349,6 +349,55 @@ func TestPlanApplicationDeploymentRemovedServerPurgesRetryableApply(t *testing.T
 	}
 }
 
+func TestPlanApplicationDeploymentScopedSyncStillPurgesRemovedServer(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{
+		Name:              "web",
+		Enabled:           false,
+		SpecYAML:          "name: web\nimage: nginx\n",
+		DeploymentMode:    DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := appruntime.Spec{
+		InstanceID:    runtimeInstanceID(app.ID, "srv-a"),
+		ContainerName: runtimeContainerName(app),
+		Generation:    app.Generation,
+		SpecHash:      app.SpecHash,
+	}
+	if err := svc.upsertRuntimeInstance(ctx, app.ID, "srv-a", spec, appruntime.DesiredRunning, appruntime.StatusRunning, "container-srv-a", ""); err != nil {
+		t.Fatal(err)
+	}
+	app.Enabled = true
+	if err := svc.updateApplication(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	app.DeploymentServers = []string{"srv-b"}
+	if err := svc.updateApplication(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+
+	// A scoped sync triggered by the remaining desired server must still clean
+	// up the instance left on the server that was removed from the app.
+	plan, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{ApplicationID: app.ID, ServerIDs: []string{"srv-b"}, Force: true, TriggerType: "application_sync"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundPurge := false
+	for _, target := range plan.CreatedTargets {
+		if target.ServerID == "srv-a" && target.Action == LifecycleTargetActionPurge {
+			foundPurge = true
+		}
+	}
+	if !foundPurge {
+		t.Fatalf("expected purge target for removed server in scoped sync, got %#v", plan)
+	}
+}
+
 func TestPlanApplicationDeploymentSkipsAutoDriftWhenReconcileStopped(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()

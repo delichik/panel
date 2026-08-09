@@ -3194,7 +3194,6 @@ func (s *Service) writeApplicationOperationEvent(ctx context.Context, eventType 
 	})
 }
 
-
 func lifecycleOperationAction(op LifecycleOperation) string {
 	for _, target := range op.Targets {
 		if strings.TrimSpace(target.Action) != "" {
@@ -4140,7 +4139,7 @@ func (s *Service) planApplicationDeployment(ctx context.Context, req DeploymentP
 	if err != nil {
 		return DeploymentPlanResult{}, err
 	}
-	stopTargets, err := s.reconcileRemovedTargets(ctx, app, targetIDs)
+	stopTargets, err := s.reconcileRemovedTargets(ctx, app)
 	if err != nil {
 		return DeploymentPlanResult{}, err
 	}
@@ -4337,7 +4336,7 @@ func (s *Service) reconcileStopTargets(ctx context.Context, app Application, tar
 	return uniqueStringItems(out), nil
 }
 
-func (s *Service) reconcileRemovedTargets(ctx context.Context, app Application, targetIDs []string) ([]string, error) {
+func (s *Service) reconcileRemovedTargets(ctx context.Context, app Application) ([]string, error) {
 	instances, err := s.runtimeInstances(ctx, app.ID)
 	if err != nil {
 		return nil, err
@@ -4353,12 +4352,8 @@ func (s *Service) reconcileRemovedTargets(ctx context.Context, app Application, 
 			desired[target.ID] = true
 		}
 	}
-	filter := stringBoolSet(targetIDs)
 	out := []string{}
 	for _, instance := range instances {
-		if len(filter) > 0 && !filter[instance.ServerID] {
-			continue
-		}
 		if !desired[instance.ServerID] {
 			out = append(out, instance.ServerID)
 		}
