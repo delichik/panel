@@ -1061,9 +1061,9 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 	}
 	finishedAt := now.UTC().Format(time.RFC3339Nano)
 	cutoff := now.UTC().Add(-maxAge).Format(time.RFC3339Nano)
-	message := "Task stayed queued past the worker startup timeout and was marked failed; retry the operation if it is still needed"
-	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status=? AND created_at<=? AND type IN (` + strings.Join(placeholders, ",") + `)`
-	updateArgs := []any{StatusFailed, message, finishedAt, StatusQueued, cutoff}
+	message := "Task stayed queued or scheduled past the worker startup timeout and was marked failed; retry the operation if it is still needed"
+	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status IN (?,?) AND created_at<=? AND type IN (` + strings.Join(placeholders, ",") + `)`
+	updateArgs := []any{StatusFailed, message, finishedAt, StatusQueued, StatusScheduled, cutoff}
 	updateArgs = append(updateArgs, args...)
 	res, err := orm.RawExec(ctx, s.db, query, updateArgs...)
 	if err != nil {

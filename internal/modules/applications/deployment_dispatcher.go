@@ -182,7 +182,21 @@ func (d *deploymentDispatcher) Recover(ctx context.Context) error {
 	if err := d.enqueueTargets(ctx, `state='verifying'`, nil, d.EnqueueVerify); err != nil {
 		return err
 	}
-	return d.enqueueTerminalOperations(ctx)
+	if err := d.enqueueTerminalOperations(ctx); err != nil {
+		return err
+	}
+	// 幽灵锚点清理属于维护性动作，失败不应阻塞恢复主流程。
+	_ = d.reconcileStaleTargetAnchors(ctx)
+	return nil
+}
+
+// reconcileStaleTargetAnchors 清理已经没有存活生命周期目标的目标任务锚点，
+// 避免幽灵锚点永久占住服务器的部署并发键。
+func (d *deploymentDispatcher) reconcileStaleTargetAnchors(ctx context.Context) error {
+	if d == nil || d.service == nil {
+		return nil
+	}
+	return d.service.FailStaleTargetTaskAnchors(ctx)
 }
 
 func (d *deploymentDispatcher) Stop(context.Context) error {
@@ -459,6 +473,7 @@ func (d *deploymentDispatcher) repairLoop(ctx context.Context) {
 			if d.planQueue.takeDirty() {
 				_ = d.processPlanScope(ctx, PlanScope{TriggerType: "deployment_dispatcher", Reason: "plan_queue_overflow"})
 			}
+			_ = d.reconcileStaleTargetAnchors(ctx)
 			_ = d.Recover(ctx)
 		}
 	}

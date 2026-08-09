@@ -738,3 +738,34 @@ func TestCleanupRetainedDeletesOldTerminalHistory(t *testing.T) {
 		t.Fatalf("expected recent task to remain, got %v", err)
 	}
 }
+
+func TestExpireStaleQueuedFailsOldScheduledTasks(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	svc.MustRegister(Definition{Type: "scheduled_stale", StaleQueuedAfter: time.Minute})
+	future := now.Add(time.Hour)
+	task, err := svc.Create(ctx, CreateInput{Type: "scheduled_stale", Status: StatusScheduled, NextRunAt: &future})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET created_at=? WHERE id=?`, old, task.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	expired, err := svc.ExpireStaleQueued(ctx, now, 10*time.Minute, []string{"scheduled_stale"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("expected one stale scheduled task to expire, got %d", expired)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusFailed || got.FinishedAt == nil || !strings.Contains(got.Error, "worker startup timeout") {
+		t.Fatalf("expected stale scheduled task to fail, got %#v", got)
+	}
+}

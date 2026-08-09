@@ -480,3 +480,71 @@ func TestDeploymentAggregatorKeepsRetryableTargetsActive(t *testing.T) {
 		t.Fatalf("retryable target should keep operation active, status=%s finished=%v", status, finishedAt.Valid)
 	}
 }
+
+func TestFailStaleTargetTaskAnchorsCancelsObsoleteAnchors(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: false, SpecYAML: "name: web\nimage: nginx\n", DeploymentMode: DeploymentModeAll})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := svc.createLifecycleOperationForServerIDs(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, "", LifecycleTypeDeploy, []string{"srv-a", "srv-b"}, appruntime.DesiredRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var obsoleteTarget, liveTarget LifecycleTarget
+	for _, target := range operation.Targets {
+		if target.ServerID == "srv-a" {
+			obsoleteTarget = target
+		} else {
+			liveTarget = target
+		}
+	}
+	if err := svc.supersedeLifecycleTargetIfActive(ctx, obsoleteTarget.ID, "obsolete before start"); err != nil {
+		t.Fatal(err)
+	}
+
+	manager := tasks.NewManager(svc.tasks)
+	obsoleteAnchor, _, err := manager.Create(ctx, targetTaskInputForTest(t, obsoleteTarget, "obsolete anchor", "test"), tasks.Trigger{Type: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveAnchor, _, err := manager.Create(ctx, targetTaskInputForTest(t, liveTarget, "live anchor", "test"), tasks.Trigger{Type: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := svc.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets
+		SET state=?, status=?, lease_owner=?, lease_expires_at=?, claimed_task_id=?, updated_at=?
+		WHERE id=?`,
+		LifecycleTargetStateClaimed,
+		lifecycleStatusForState(LifecycleTargetStateClaimed),
+		lifecycleTaskLeaseOwner(liveAnchor.ID),
+		formatTime(now.Add(time.Minute)),
+		liveAnchor.ID,
+		formatTime(now),
+		liveTarget.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := svc.FailStaleTargetTaskAnchors(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	gotObsolete, err := svc.tasks.Get(ctx, obsoleteAnchor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotObsolete.Status != tasks.StatusCancelled {
+		t.Fatalf("obsolete anchor should be cancelled, got %#v", gotObsolete)
+	}
+	gotLive, err := svc.tasks.Get(ctx, liveAnchor.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotLive.Status != tasks.StatusQueued {
+		t.Fatalf("live anchor should stay queued, got %#v", gotLive)
+	}
+}

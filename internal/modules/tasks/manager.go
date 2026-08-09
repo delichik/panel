@@ -13,6 +13,12 @@ import (
 	id "panel/internal/platform/identity"
 )
 
+// defaultQueueTurnWait 是并发队列轮次的等待上限。超过后任务留在原状态，
+// 由 worker 的过期清理回收，避免等待 goroutine 无限堆积。
+const defaultQueueTurnWait = 5 * time.Minute
+
+var errQueueTurnTimeout = errors.New("task waited too long for its concurrency queue turn")
+
 type Manager struct {
 	service *Service
 }
@@ -217,6 +223,9 @@ func (m *Manager) Run(ctx context.Context, task Task) error {
 	}
 	if def.ConcurrencyPolicy == ConcurrencyResourceQueue {
 		if err := m.waitForQueueTurn(ctx, task); err != nil {
+			if errors.Is(err, errQueueTurnTimeout) {
+				return nil
+			}
 			return err
 		}
 	}
@@ -280,6 +289,8 @@ func (m *Manager) waitForQueueTurn(ctx context.Context, task Task) error {
 	}
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	timeout := time.NewTimer(defaultQueueTurnWait)
+	defer timeout.Stop()
 	for {
 		first, ok, err := m.service.FirstActiveByConcurrencyKey(ctx, task.ConcurrencyKey)
 		if err != nil {
@@ -298,6 +309,8 @@ func (m *Manager) waitForQueueTurn(ctx context.Context, task Task) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+		case <-timeout.C:
+			return errQueueTurnTimeout
 		}
 	}
 }

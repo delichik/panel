@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -169,10 +170,41 @@ func (w *Worker) runDueTasks(ctx context.Context) {
 		if task.Status == StatusRunning && w.service.HasRunningExecution(task.ID) {
 			continue
 		}
+		if !w.isAtFrontOfQueue(ctx, task) {
+			continue
+		}
 		if err := w.RunNow(ctx, task); err != nil {
 			log.Printf("task worker run task %s: %v", task.ID, err)
 		}
 	}
+}
+
+// isAtFrontOfQueue 返回任务是否位于其并发队列队首。worker 只运行队首任务，
+// 非队首任务留到后续轮次再处理，避免某个并发键被阻塞时拖死整个 worker 循环。
+func (w *Worker) isAtFrontOfQueue(ctx context.Context, task Task) bool {
+	if w == nil || w.service == nil {
+		return true
+	}
+	def, ok := w.service.Registry().Definition(task.Type)
+	if !ok {
+		return true
+	}
+	switch def.ConcurrencyPolicy {
+	case ConcurrencyResourceQueue, ConcurrencyResourceExclusive:
+	default:
+		return true
+	}
+	if strings.TrimSpace(task.ConcurrencyKey) == "" {
+		return true
+	}
+	first, ok, err := w.service.FirstActiveByConcurrencyKey(ctx, task.ConcurrencyKey)
+	if err != nil {
+		return false
+	}
+	if !ok {
+		return true
+	}
+	return first.ID == task.ID
 }
 
 func (w *Worker) dueTasks(ctx context.Context) []Task {
@@ -202,6 +234,9 @@ func (w *Worker) dueTasks(ctx context.Context) []Task {
 			}
 		}
 	}
+	// 按创建时间从旧到新处理，保证并发队列队首任务先被运行；
+	// 否则 worker 一直取最新任务，会永远排在队首任务之后无法推进。
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out
 }
 

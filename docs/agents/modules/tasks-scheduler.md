@@ -53,6 +53,7 @@
 - 多组同类型参数会创建父任务和多个子任务。父任务负责串行或并行编排与汇总，子任务执行同一注册定义；在任务中心语义中，`operation_id` 对应一次“操作”聚合，子任务对应操作中的具体执行任务。任一子任务结束为 `failed`、`failed_retryable`、`blocked` 或 `cancelled` 时，父任务必须汇总为失败，不能因为 executor 已经完成落库而把操作误标为 completed。
 - batch 支持混合子任务类型；每个子任务按自己的注册定义计算并发 key、执行器和权限。父任务类型只用于聚合展示，不得覆盖子任务真实类型。
 - `ConcurrencyResourceQueue` 表示同一 concurrency key 的任务可以全部创建，但运行时必须按创建顺序串行等待队首；`ConcurrencyResourceExclusive` 仍表示已存在 active 任务时复用/拒绝创建新任务。需要“同一资源同一时间只运行一种动作，其余排队”的业务必须使用 `ConcurrencyResourceQueue`，不能用 exclusive 跳过后续任务。
+- 并发队列的等待不是无限期的：`waitForQueueTurn` 最多等待 5 分钟，超时后任务保持原状态返回，由后续轮次或过期清理接管，避免等待 goroutine 无限堆积。worker 的到期扫描按创建时间从旧到新处理，并且只运行“位于并发队列队首”的任务，非队首任务跳过等下一轮；这样可以保证队首任务先被运行，也避免某个并发键被阻塞时拖死整个 worker 循环。
 - `tasks.Service.FirstActiveByConcurrencyKey` 为资源队列等待提供进程内缓存：每个 concurrency key 只缓存当前队首任务 ID，缓存命中时不再查库，等待循环每 250ms 只做一次内存读。任务进入终态（完成/失败/blocked/取消）、`CancelByServer`、`ExpireStaleQueued`、`FailRunningWithoutExecution` 或历史清理删除了队首任务时会使缓存失效并回填一次数据库查询。该缓存只在本进程内有效，单实例部署下成立；不允许依赖它做跨进程共享数据库的一致性。
 - 父任务汇总必须对已结束子任务保持幂等：子任务已是 `completed` 时应视为已经完成并跳过执行，不能把再次触碰已完成子任务产生的 `task_not_runnable` 记录成父任务失败；只有失败、可重试失败、阻塞或取消等终态才应让父任务失败。
 - 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移并同步前端。
@@ -71,11 +72,11 @@
 - Panel 启动时以及 tasks 内部 worker 运行期间每 30 秒检查数据库中的 `running` 任务；如果任务 ID 无法在当前进程 execution registry 中找到，会立即标记为失败并记录为 orphaned。
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，例如服务器重启、UFW 安装/启用、fail2ban 应用，必须在 API 返回前先标记为 `running`。`server_agent_deploy` 虽然也由内存 goroutine 执行，但必须接入调度器 `run-now` / `retry`，用于恢复旧的排队部署任务并重新同步 agent 证书。
 - `server_agent_deploy` 自动触发失败达到上限后不得继续自动排队或启动新任务；任务中心和服务器详情仍允许用户手动重试。
-- 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。
+- 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued`/`scheduled` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。过期清理同时覆盖 `queued` 与 `scheduled` 两种状态，避免旧版本遗留或等待轮次超时的任务锚点永久占住并发键。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - tasks 内部 worker 负责驱动注册的周期任务、唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。
 - tasks 内部 worker 每 30 秒扫描一次 `queued`、`scheduled` 和到期 `failed_retryable` 任务作为兜底唤醒；队列唤醒、stale queued 清理和 orphan 检查统一为 30 秒一次，业务模块如果已经有自己的即时 dispatcher，仍应在创建任务后主动启动执行，不能依赖轮询满足低延迟契约。
-- 终态任务历史默认保留 30 天：`tasks.CleanupWorker` 每小时按 `finished_at` 分批删除超期 `tasks`/`task_steps`/`task_logs`；`tasks` 表维护 `(status, next_run_at)` 索引支撑到期查询与 orphan 检查，防止任务表无限增长拖慢轮询。
+- 终态任务（completed/failed/failed_retryable/blocked/cancelled）历史默认保留 24 小时：任务记录不暴露在产品导航界面，`tasks.CleanupWorker` 每小时按 `finished_at` 分批删除超期 `tasks`/`task_steps`/`task_logs`；`tasks` 表维护 `(status, next_run_at)` 索引支撑到期查询与 orphan 检查，防止任务表无限增长拖慢轮询。应用协调记录在协调库中独立保留，不随任务表清理而丢失。
 - 证书续签、镜像刷新和软件包刷新的周期采集统一为 30 分钟一次；`application_reconcile` 保持 5 秒采集频率以满足容器变化即时性。
 - 全量备份导出不在正常业务运行期执行。设置页只写 pending export 并提示重启；下一次启动进入备份导出维护模式，此时正常 tasks worker 与周期驱动尚未启动，导出进度本身不依赖任务系统。
 - 到期队列唤醒直接扫描注册表中带 executor 的定义，并统一调用 `tasks.Manager.Run`；不得注册或持久化 `task_queue_drain`，不得直接调用 `Definition.Execute` 绕过任务启动、execution registry、hook、完成和失败落库。

@@ -3274,6 +3274,79 @@ func applicationOperationSummary(eventType string, app Application, op Lifecycle
 	return summary
 }
 
+// FailStaleTargetTaskAnchors 取消仍处于 queued/scheduled/failed_retryable、
+// 但其生命周期目标已不存在、已终态或不再由该任务持有的目标任务锚点。
+// 这类幽灵锚点不会自行结束，会永久占住服务器的部署并发键，必须定期清理。
+func (s *Service) FailStaleTargetTaskAnchors(ctx context.Context) error {
+	if s == nil || s.tasks == nil {
+		return nil
+	}
+	var joined error
+	for _, taskType := range []string{TaskTypeTargetApply, TaskTypeTargetStop, TaskTypeTargetPurge} {
+		offset := 0
+		for {
+			result, err := s.tasks.List(ctx, tasks.ListFilter{
+				Type:            taskType,
+				Statuses:        []string{tasks.StatusQueued, tasks.StatusScheduled, tasks.StatusFailedRetryable},
+				Limit:           200,
+				Offset:          offset,
+				IncludeInternal: true,
+			})
+			if err != nil {
+				joined = errors.Join(joined, err)
+				break
+			}
+			for _, task := range result.Items {
+				if err := s.cancelStaleTargetAnchor(ctx, task); err != nil {
+					joined = errors.Join(joined, err)
+				}
+			}
+			offset += len(result.Items)
+			if len(result.Items) == 0 || offset >= result.Total {
+				break
+			}
+		}
+	}
+	return joined
+}
+
+func (s *Service) cancelStaleTargetAnchor(ctx context.Context, task tasks.Task) error {
+	opts := deployTaskOptions(task)
+	targetID := strings.TrimSpace(opts.lifecycleTargetID)
+	if targetID == "" && strings.TrimSpace(opts.lifecycleOperationID) != "" && len(opts.targetIDs) == 1 {
+		targetID = lifecycleTargetID(opts.lifecycleOperationID, opts.targetIDs[0])
+	}
+	if targetID == "" {
+		return s.cancelObsoleteTargetAnchor(ctx, task, "Application target task has no lifecycle target")
+	}
+	target, err := s.lifecycleTargetByID(ctx, targetID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return s.cancelObsoleteTargetAnchor(ctx, task, "Application lifecycle target no longer exists")
+		}
+		return err
+	}
+	switch target.State {
+	case LifecycleTargetStateSucceeded,
+		LifecycleTargetStateFailed,
+		LifecycleTargetStateFailedRetryable,
+		LifecycleTargetStateSuperseded,
+		LifecycleTargetStateCancelled:
+		return s.cancelObsoleteTargetAnchor(ctx, task, "Application lifecycle target already finished")
+	}
+	if strings.TrimSpace(target.ClaimedTaskID) != "" && strings.TrimSpace(target.ClaimedTaskID) != task.ID {
+		return s.cancelObsoleteTargetAnchor(ctx, task, "Application lifecycle target is owned by another task")
+	}
+	return nil
+}
+
+func (s *Service) cancelObsoleteTargetAnchor(ctx context.Context, task tasks.Task, message string) error {
+	if s == nil || s.tasks == nil {
+		return nil
+	}
+	return s.tasks.Cancel(ctx, task.ID, message)
+}
+
 func (s *Service) ReconcileInterruptedLifecycleTasks(ctx context.Context) error {
 	if s.tasks == nil {
 		return nil

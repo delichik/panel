@@ -2,6 +2,7 @@ package applications
 
 import (
 	"strings"
+	"time"
 
 	"panel/internal/modules/tasks"
 )
@@ -22,6 +23,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Hidden:            true,
 			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
 			ConcurrencyKey:    applicationTargetConcurrencyKey,
+			StaleQueuedAfter:  5 * time.Minute,
 			Execute:           s.RunDeployTask,
 			OnFailure:         s.handleTargetTaskFailure,
 		},
@@ -30,6 +32,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Hidden:            true,
 			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
 			ConcurrencyKey:    applicationTargetConcurrencyKey,
+			StaleQueuedAfter:  5 * time.Minute,
 			Execute:           s.RunDeployTask,
 			OnFailure:         s.handleTargetTaskFailure,
 		},
@@ -38,6 +41,7 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 			Hidden:            true,
 			ConcurrencyPolicy: tasks.ConcurrencyResourceQueue,
 			ConcurrencyKey:    applicationTargetConcurrencyKey,
+			StaleQueuedAfter:  5 * time.Minute,
 			Execute:           s.RunDeployTask,
 			OnFailure:         s.handleTargetTaskFailure,
 		},

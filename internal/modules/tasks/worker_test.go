@@ -226,3 +226,47 @@ func TestWorkerTaskRuntimeSummarizesRegistryAndExecutions(t *testing.T) {
 		t.Fatalf("unexpected periodic definition stats: %#v", periodic)
 	}
 }
+
+func TestWorkerDoesNotRunTaskBehindAnotherActiveTask(t *testing.T) {
+	svc := newTestService(t)
+	svc.MustRegister(Definition{
+		Type:              "serial_due",
+		ConcurrencyPolicy: ConcurrencyResourceQueue,
+		ConcurrencyKey: func(CreateInput) string {
+			return "serial-due-key"
+		},
+		Execute: func(TaskContext) error { return nil },
+	})
+	ctx := context.Background()
+	first, err := svc.Create(ctx, CreateInput{Type: "serial_due"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := svc.Create(ctx, CreateInput{Type: "serial_due"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate the queue head still executing: first is running with an
+	// in-process execution, so the worker must not start the second task
+	// (which would block on waitForQueueTurn and wedge the whole loop).
+	if err := svc.Start(ctx, first.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	NewWorker(svc).runDueTasks(ctx)
+
+	gotFirst, err := svc.Get(ctx, first.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotFirst.Status != StatusRunning || !svc.HasRunningExecution(first.ID) {
+		t.Fatalf("queue head should stay running, got %#v", gotFirst)
+	}
+	gotSecond, err := svc.Get(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSecond.Status != StatusQueued {
+		t.Fatalf("second task must not run while the queue head is active, got %#v", gotSecond)
+	}
+}

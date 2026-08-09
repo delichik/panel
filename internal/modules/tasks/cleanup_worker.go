@@ -8,9 +8,11 @@ import (
 )
 
 // defaultTaskRetention is how long terminal task history (tasks, task_steps,
-// task_logs) is kept before retention cleanup removes it. The tables otherwise
-// grow without bound, which makes every queue scan and orphan check slower.
-const defaultTaskRetention = 30 * 24 * time.Hour
+// task_logs) is kept before retention cleanup removes it. Terminal tasks are
+// not exposed in the product UI, so a short 24h retention keeps the tables
+// small and prevents invisible ghosts from slowing every queue scan and
+// orphan check. The tables otherwise grow without bound.
+const defaultTaskRetention = 24 * time.Hour
 
 type CleanupWorker struct {
 	service *Service
