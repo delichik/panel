@@ -71,6 +71,30 @@ func NewLocalRuntime(dockerHost string) (*LocalRuntime, error) {
 	return &LocalRuntime{dockerHost: dockerHost, root: defaultRuntimeRoot, client: client}, nil
 }
 
+// ApplicationHome returns the application workspace root directory.
+func (r *LocalRuntime) ApplicationHome(applicationID string) (string, error) {
+	if r == nil || r.client == nil {
+		return "", errors.New("runtime is not configured")
+	}
+	return safeApplicationRootDir(r.root, applicationID)
+}
+
+// InstanceDir returns the per-instance runtime directory.
+func (r *LocalRuntime) InstanceDir(applicationID, instanceID string) (string, error) {
+	if r == nil || r.client == nil {
+		return "", errors.New("runtime is not configured")
+	}
+	return safeApplicationInstanceDir(r.root, applicationID, instanceID)
+}
+
+// PersistentDir returns the application persistent data directory.
+func (r *LocalRuntime) PersistentDir(applicationID string) (string, error) {
+	if r == nil || r.client == nil {
+		return "", errors.New("runtime is not configured")
+	}
+	return safeApplicationRuntimeDir(r.root, applicationID, "persistent")
+}
+
 func (r *LocalRuntime) DockerHealth(ctx context.Context) agentcontract.DockerHealth {
 	if r == nil || r.client == nil {
 		return agentcontract.DockerHealth{Host: agentcontract.DefaultDockerHost, Status: agentcontract.StatusUnavailable, Error: "runtime is not configured"}
@@ -1596,6 +1620,27 @@ func safeApplicationRootDir(root, appID string) (string, error) {
 	}
 	if cleanTarget != cleanRoot && !strings.HasPrefix(cleanTarget, cleanRoot+string(os.PathSeparator)) {
 		return "", errors.New("runtime application path escapes the runtime root")
+	}
+	return cleanTarget, nil
+}
+
+func safeApplicationInstanceDir(root, appID, instanceID string) (string, error) {
+	appID = strings.TrimSpace(appID)
+	instanceID = strings.TrimSpace(instanceID)
+	if appID == "" || strings.ContainsAny(appID, `/\`) || instanceID == "" || strings.ContainsAny(instanceID, `/\`) {
+		return "", errors.New("runtime application path is invalid")
+	}
+	base, err := safeApplicationRootDir(root, appID)
+	if err != nil {
+		return "", err
+	}
+	target := filepath.Join(base, "instances", instanceID)
+	cleanTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", err
+	}
+	if cleanTarget != base && !strings.HasPrefix(cleanTarget, base+string(os.PathSeparator)) {
+		return "", errors.New("runtime application path escapes the application workspace")
 	}
 	return cleanTarget, nil
 }

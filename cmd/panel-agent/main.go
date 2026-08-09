@@ -9,12 +9,16 @@ import (
 	"syscall"
 	"time"
 
+	agentcli "panel/internal/agent/cli"
 	agentbootstrap "panel/internal/bootstrap/agent"
 
 	"google.golang.org/grpc"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--cli" {
+		os.Exit(agentcli.Run(os.Args[2:]))
+	}
 	cfg := agentbootstrap.LoadConfig()
 	server, err := agentbootstrap.NewServer(cfg)
 	if err != nil {

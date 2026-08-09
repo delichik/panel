@@ -1,4 +1,4 @@
-# Seamark
+﻿# Seamark
 
 [English](README.md) | 简体中文
 
@@ -16,6 +16,7 @@ Seamark 是一个 alpha 阶段的 Linux 服务器运维面板，适合管理小�
 - 使用 mTLS 为服务器部署 panel-agent，并配置 Docker host。
 - 检查 agent 兼容性、Docker 健康状态和应用运行时状态。
 - 通过 panel-agent 调用 Docker Engine API 部署 Docker 应用。
+- 通过只读的 panel-agent CLI（`panel-agent --cli apps list|inspect|where|cd`）在节点上查看 Panel 管理的容器信息。
 - 配置应用文件、挂载、端口、调度位置、运行时操作、日志和反向代理路由。
 - 管理 Cloudflare 域名并签发 ACME 证书。
 - 查看后台任务和任务日志。

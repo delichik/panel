@@ -1,4 +1,4 @@
-# 服务器、凭据、指标与软件包
+﻿# 服务器、凭据、指标与软件包
 
 ## List API Contract
 
@@ -137,6 +137,19 @@
 - Agent 进程内通过 `packageUpgradeTracker`（引用计数 + done channel）跟踪经 agent 发起的软件包升级（`UpgradePackages`）。`PrepareRestart` 在升级进行中每秒返回一次 `holdon`；升级结束后返回 `ready` 并关闭流；Panel 断开或取消（流上下文结束）时直接退出、不返回 ready。该检查只感知 agent 自己发起的升级，不检查外部 apt/dpkg 状态。
 - Panel 执行 agent 部署（`runDeployAgent`）时，只要 `agent.url` 已配置，就在任何停止/重启动作前先调用 `Health` 读取能力：能力包含 `prepare-restart` 且客户端实现 `RestartReadinessClient` 时调用 `PrepareRestart`，收到 `ready` 才继续；能力缺失（旧 agent）、Health 或调用失败时记录日志后直接继续；任务取消时中止部署。
 - 部署任务按 `agentNeedsBinaryUpgrade` 拆分两条路径：需要完整安装/升级（未配置 URL、版本缺失或与 Panel 不一致、agent 状态非 compatible/incompatible）时上传二进制并执行 `agentInstallScript`；证书续期、URL 修正等仅需重启的场景只重写证书/env/systemd 配置并执行 `agentRestartScript`，不传输二进制。二进制 bundle 根路径仍固定为 `/app/panel-agents`。
+## Agent 只读 CLI（--cli apps）
+
+- `panel-agent` 支持 `--cli` 命令行入口：`panel-agent --cli apps <command>`，用于在节点上直接读取本机 Docker 中 Panel 管理的容器信息；不带 `--cli` 时行为完全不变，仍启动 gRPC 服务。实现位于 `internal/agent/cli`，入口在 `cmd/panel-agent/main.go`。
+- 命令：
+  - `apps list [--json] [--docker-host <host>]`：列出 Panel 管理容器（标签 `panel.application.managed=true`），默认表格输出，`--json` 输出完整 `DockerContainer` 数组；
+  - `apps inspect <selector> [--json]`：单个容器详情，含 Panel 关联字段（application/instance id、generation、spec hash、apply mode、managed files 观测字段）与路径（应用 home、实例目录、persistent 目录）；
+  - `apps where <selector>`：打印应用主目录 `/opt/panel/apps/<appID>`（目录必须存在）；
+  - `apps cd <selector>`：在应用主目录下启动交互式子 shell（优先 `$SHELL`，回退 `sh`）。
+- selector 按 容器名 > 实例 ID > 应用 ID 匹配；应用 ID 对应多个实例时报错，提示使用容器名或实例 ID。
+- Docker host 优先级：`--docker-host` > `PANEL_AGENT_DOCKER_HOST` > `unix:///var/run/docker.sock`。
+- 退出码：0 成功；1 运行错误（Docker 不可达、selector 找不到/歧义、home 不存在）；2 用法错误。错误写 stderr，帮助写 stdout。
+- 该 CLI 只在本机读取 Docker，不接入 gRPC，不提供任何容器变更操作。
+
 ## 验证
 
 - 后端服务器、凭据、agent、指标、软件包、UFW 或 fail2ban 行为改动运行 `task test:backend`。

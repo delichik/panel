@@ -1,4 +1,4 @@
-# 容器化资源管理
+﻿# 容器化资源管理
 
 ## List And Snapshot Contracts
 
@@ -86,6 +86,13 @@ Agent 上报托管容器快照时会在返回给 Panel 的 Label map 中补充�
 Application bridge 网络容器由 Agent 创建时自动放入受管 Docker 网络 `panel-apps`；该网络不存在时由 Agent 创建。该网络用于入口网关在容器目标模式下解析并访问 Application 容器名。
 
 Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并在创建容器时写入 Docker `HostConfig.CapAdd`。缺省或空数组不下发任何 capability；该字段仅表示用户显式追加的 Linux capability，可与 `Privileged` 同时出现。
+
+## Agent 只读 CLI（--cli apps）
+
+- 节点上可直接运行 `panel-agent --cli apps ...` 读取 Panel 管理的容器信息（判定标准：`panel.application.managed=true`），用于排查与脚本化；命令、selector 规则与退出码见 `docs/agents/modules/servers.md` 的 Agent 只读 CLI 小节。
+- `apps list` / `apps inspect` 直接查询节点 Docker Engine（复用 `internal/agent/docker`），不走 `container_observations` 快照。
+- `apps where` / `apps cd` 的应用主目录固定为 `/opt/panel/apps/<appID>`，实例目录为 `/opt/panel/apps/<appID>/instances/<instanceID>`，persistent 目录为 `/opt/panel/apps/<appID>/persistent`。
+- CLI 只读，不提供容器、镜像、网络或卷的任何变更操作。
 
 ## 队列、同步操作与协调
 
