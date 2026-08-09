@@ -19,7 +19,8 @@
 
 ## Pattern components
 
-- `DateTimeRangePicker`（`web/src/components/ui/DateTimeRangePicker.vue`）：时间范围选择器。触发器样式与 Select/Input 一致（h-9、同边框/圆角/背景），点开弹层内“开始/结束”一起设置，带最近 24 小时/7 天/30 天快捷预设和应用/取消；值以 ISO `{ from, to }` 双向绑定。
+- `DateTimeRangePicker`（`web/src/components/ui/DateTimeRangePicker.vue`）：时间范围选择器。触发器样式与 Select/Input 一致（h-9、同边框/圆角/背景），点开是左右联动的双月历（支持跨月/跨年）：先点开始日期、再点结束日期，仅高亮起止之间的日期并带 hover 预览；开始/结束的 时:分:秒 用 `TimeSegmentInput`（无弹层的纯数字输入框）设置在同一行；带最近 24 小时/7 天/30 天快捷预设和应用/取消；无弹层套弹层。值以 ISO `{ from, to }` 双向绑定。
+- `TimeSegmentInput`（`web/src/components/ui/TimeSegmentInput.vue`）：两位数数字输入框。无弹层、无滚动条，直接输入数字、键盘上下键或滚轮微调，失焦自动补零；用于时分秒等数字段。
 
 - `FilterBar`：用于列表页顶部筛选区，组合搜索、状态筛选和操作槽。业务页仍负责 query 同步、过滤条件命名和空态区分。
 - `ServerContextSelector`：用于安全、资源、调试等单服务器上下文页面，是单一服务器选择器。组件只呈现服务器列表/卡片选择，不再叠加 Select 下拉；卡片负责展示 capability badge、状态和不可用原因；首次加载时传入 `loading` 显示服务器卡片骨架。

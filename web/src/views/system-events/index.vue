@@ -135,7 +135,7 @@ onMounted(load);
 <template>
   <ListPage>
     <template #toolbar>
-      <div class="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_300px_auto]">
+      <div class="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_420px_auto]">
         <SearchInput v-model="eventType" clearable :label="t('systemEventsPage.typeFilter')" :placeholder="t('systemEventsPage.typeFilterPlaceholder')" :clear-label="t('common.clearSearch')" />
         <Select v-model="severity" :options="severityOptions" :placeholder="t('systemEventsPage.column.severity')" />
         <DateTimeRangePicker v-model="range" />

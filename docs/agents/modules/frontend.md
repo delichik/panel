@@ -40,7 +40,7 @@
 
 - 禁止新增 `naive-ui`、Vuetify 或旧 UI 框架依赖。
 - 复杂无样式交互可使用 headless 组件库；业务页面仍必须通过 Panel 自有 primitives 暴露一致样式。
-- `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch、DateTimeRangePicker。
+- `web/src/components/ui/` 当前基础组件：Button、IconButton、Input、Textarea、Select、Dialog、Dropdown、DropdownItem、Tabs、Badge、Table、ToastProvider/useToast、Skeleton、EmptyState、Tooltip、Switch、DateTimeRangePicker、TimeSegmentInput。
 - 等待网络接口响应的加载效果统一使用 `web/src/components/ui/LoadingOverlay.vue` 或既有骨架/按钮 loading；文本加载位置不得只显示文字。
 - 所有异步数据列表统一为「骨架/加载态 → 内容交错填充」：加载期按页面结构显示 Skeleton（`Table` 自带表格骨架行），数据就绪后经 `motion-stagger` + `motion-reveal` / `motion-table-row` 播放逐项进场动效（与 system-events 列表一致）；已有内容刷新不重放。
 - 列表、详情、轮询等异步加载必须使用 `createLatestRequestGuard` 或 AbortController 丢弃过期响应；轮询必须防重入、标签页不可见时暂停轮询，刷新按钮应覆盖其对应面板的全部数据源。
