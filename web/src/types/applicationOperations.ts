@@ -1,50 +1,71 @@
-export type ApplicationOperationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'partial_failed' | 'cancelled' | string;
+export type ApplicationOperationStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'partial_failed' | 'cancelled' | 'superseded' | 'consistent' | string;
 
 export interface ApplicationOperationDto {
   operationId: string;
   applicationId: string;
-  applicationNameSnapshot: string;
+  applicationName: string;
   action: string;
   source: string;
   triggeredBy?: string;
-  triggerReason?: string;
   status: ApplicationOperationStatus;
-  startedAt: string;
+  startedAt?: string;
   finishedAt?: string;
   targetTotal: number;
   targetSucceeded: number;
   targetFailed: number;
-  latestEventAt: string;
-  detailAvailable: boolean;
-  detailPrunedAt?: string;
+  targetServers?: string[];
+  latestAt: string;
   failureSummary?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ApplicationOperationStageDto {
+  id: string;
+  stage: string;
+  status: string;
+  detail?: string;
+  startedAt?: string;
+  finishedAt?: string;
 }
 
 export interface ApplicationOperationTargetDto {
   id: string;
+  operationId?: string;
+  applicationId?: string;
   serverId?: string;
   serverName?: string;
-  action: string;
+  action?: string;
+  state?: string;
   status: string;
   stage?: string;
-  error?: string;
-  logRef?: string;
+  attempt?: number;
+  nextRunAt?: string;
+  claimedTaskId?: string;
+  containerName?: string;
+  desiredState?: string;
+  desiredGeneration?: number;
+  desiredSpecHash?: string;
+  observedState?: string;
+  observedExitCode?: string;
+  observedError?: string;
+  observedGeneration?: number;
+  observedSpecHash?: string;
+  observedImage?: string;
+  observedAt?: string;
+  errorCode?: string;
+  errorMessage?: string;
+  errorDetail?: string;
+  createdAt?: string;
+  startedAt?: string;
+  finishedAt?: string;
   updatedAt?: string;
-}
-
-export interface ApplicationOperationEventDto {
-  id: string;
-  eventType: string;
-  severity: string;
-  summary: string;
-  occurredAt: string;
-  detailAvailable: boolean;
+  stages: ApplicationOperationStageDto[];
 }
 
 export interface ApplicationOperationDetailDto {
   operation: ApplicationOperationDto;
   targets: ApplicationOperationTargetDto[];
-  events: ApplicationOperationEventDto[];
 }
 
 export interface ApplicationOperationListResult {
@@ -56,9 +77,8 @@ export interface ApplicationOperationListResult {
 
 export interface ApplicationOperationListParams {
   applicationId?: string;
-  action?: string;
-  source?: string;
   status?: string;
+  source?: string;
   from?: string;
   to?: string;
   page?: number;

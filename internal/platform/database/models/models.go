@@ -1,9 +1,9 @@
 package models
 
-// AllModels 返回三库全部存量表（42 张）对应的模型注册清单，
+// AllModels 返回四库全部存量表对应的模型注册清单，
 // 父表先于子表排列，保证跨库建表时外键目标已存在。
 func AllModels() []any {
-	return append(append(append([]any{}, AppModels()...), LogModels()...), MetricsModels()...)
+	return append(append(append(append([]any{}, AppModels()...), LogModels()...), CoordinationModels()...), MetricsModels()...)
 }
 
 // AppModels 返回 app 库 31 张表的模型注册清单。
@@ -24,12 +24,18 @@ func AppModels() []any {
 	}
 }
 
-// LogModels 返回 log 库 10 张表的模型注册清单。
+// LogModels 返回 log 库 7 张表的模型注册清单（事件与任务日志）。
 func LogModels() []any {
 	return []any{
 		&Task{}, &TaskStep{}, &TaskLog{}, &ApplicationRevision{},
-		&ApplicationLifecycleOperation{}, &ApplicationLifecycleTarget{}, &RuntimeEvent{},
-		&RuntimeEventDetail{}, &ApplicationOperationRecord{}, &KeyAssetExport{},
+		&RuntimeEvent{}, &RuntimeEventDetail{}, &KeyAssetExport{},
+	}
+}
+
+// CoordinationModels 返回协调库 3 张表的模型注册清单。
+func CoordinationModels() []any {
+	return []any{
+		&ApplicationLifecycleOperation{}, &ApplicationLifecycleTarget{}, &ApplicationTargetStage{},
 	}
 }
 

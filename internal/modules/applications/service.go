@@ -69,6 +69,7 @@ type AgentErrorHandler interface {
 type Service struct {
 	db               *sql.DB
 	logDB            *sql.DB
+	coordDB          *sql.DB
 	runtimeClient    AgentRuntimeClient
 	servers          ServerProvider
 	agentErrors      AgentErrorHandler
@@ -217,6 +218,15 @@ func WithLogDB(db *sql.DB) Option {
 	}
 }
 
+// WithCoordDB 注入协调库（lifecycle 操作/目标/步骤日志）。
+func WithCoordDB(db *sql.DB) Option {
+	return func(s *Service) {
+		if db != nil {
+			s.coordDB = db
+		}
+	}
+}
+
 func WithRuntimeEvents(events *runtimeevents.Service) Option {
 	return func(s *Service) { s.events = events }
 }
@@ -246,6 +256,9 @@ func (s *Service) SetFacilityRuntimeProvider(provider FacilityRuntimeProvider) {
 }
 
 func (s *Service) lifecycleDB() *sql.DB {
+	if s.coordDB != nil {
+		return s.coordDB
+	}
 	if s.logDB != nil {
 		return s.logDB
 	}
@@ -1539,6 +1552,41 @@ func (s *Service) latestLifecycleOperation(ctx context.Context, appID string) (L
 	return op, nil
 }
 
+func observedStateOf(instance *appruntime.Instance) string {
+	if instance == nil {
+		return ""
+	}
+	return strings.TrimSpace(instance.Status)
+}
+
+func observedErrorOf(instance *appruntime.Instance) string {
+	if instance == nil {
+		return ""
+	}
+	return strings.TrimSpace(instance.LastError)
+}
+
+func observedGenerationOf(instance *appruntime.Instance) int {
+	if instance == nil {
+		return 0
+	}
+	return instance.LastDeployedGeneration
+}
+
+func observedSpecHashOf(instance *appruntime.Instance) string {
+	if instance == nil {
+		return ""
+	}
+	return strings.TrimSpace(instance.RuntimeSpec.SpecHash)
+}
+
+func observedImageOf(instance *appruntime.Instance) string {
+	if instance == nil {
+		return ""
+	}
+	return strings.TrimSpace(instance.RuntimeSpec.Image)
+}
+
 func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]LifecycleTarget, error) {
 	var rows []lifecycleTargetRow
 	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_targets").Where("operation_id=?", operationID).OrderBy("server_id ASC").All(ctx, &rows); err != nil {
@@ -2124,7 +2172,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 				result = reloadResult
 				return nil
 			}
-			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "write_files", OwnerTaskID: taskID}); err != nil {
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "write_files", StageDetail: fmt.Sprintf("写入 %d 个文件", len(files)), OwnerTaskID: taskID}); err != nil {
 				return err
 			}
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
@@ -2135,7 +2183,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
 				return err
 			}
-			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "pull_image", OwnerTaskID: taskID}); err != nil {
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "pull_image", StageDetail: instanceSpec.Image, OwnerTaskID: taskID}); err != nil {
 				return err
 			}
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "pull image", func(context.Context) error {
@@ -2187,7 +2235,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
 				return err
 			}
-			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "start_container", ContainerID: created.ContainerID, OwnerTaskID: taskID}); err != nil {
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "start_container", StageDetail: "容器 " + instanceSpec.ContainerName, ContainerID: created.ContainerID, OwnerTaskID: taskID}); err != nil {
 				return err
 			}
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "start container", func(context.Context) error {
@@ -2578,6 +2626,7 @@ type lifecycleTargetUpdate struct {
 	State         string
 	Status        string
 	Stage         string
+	StageDetail   string
 	InstanceID    string
 	ContainerName string
 	ContainerID   string
@@ -2657,7 +2706,6 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 		UpdatedAt:     now,
 	}
 	serverIDs = uniqueStringItems(serverIDs)
-	actionForOperation := firstNonEmpty(opts.Action, lifecycleActionForDesiredState(firstNonEmpty(opts.DesiredState, appruntime.DesiredRunning)))
 	tx, err := s.lifecycleDB().BeginTx(ctx, nil)
 	if err != nil {
 		return LifecycleOperation{}, err
@@ -2677,48 +2725,65 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 		status := lifecycleStatusForState(state)
 		targetKey := lifecycleTargetKey(app.ID, serverID)
 		priority := lifecyclePriorityForAction(action)
-		if instance, err := s.runtimeInstanceForServer(ctx, app.ID, serverID); err == nil {
-			instanceID = instance.ID
-			containerName = instance.ContainerName
+		var instance *appruntime.Instance
+		if inst, err := s.runtimeInstanceForServer(ctx, app.ID, serverID); err == nil {
+			instance = &inst
+			instanceID = inst.ID
+			containerName = inst.ContainerName
 		}
+		observedAt := now
 		targetRow := fromDomainLifecycleTarget(LifecycleTarget{
-			ID:                targetID,
-			OperationID:       operation.ID,
-			ApplicationID:     app.ID,
-			ServerID:          serverID,
-			Action:            action,
-			State:             state,
-			Status:            status,
-			TargetKey:         targetKey,
-			DesiredState:      desiredState,
-			DesiredGeneration: spec.Generation,
-			DesiredSpecHash:   spec.SpecHash,
-			Priority:          priority,
-			InstanceID:        instanceID,
-			ContainerName:     containerName,
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			ID:                 targetID,
+			OperationID:        operation.ID,
+			ApplicationID:      app.ID,
+			ServerID:           serverID,
+			Action:             action,
+			State:              state,
+			Status:             status,
+			TargetKey:          targetKey,
+			DesiredState:       desiredState,
+			DesiredGeneration:  spec.Generation,
+			DesiredSpecHash:    spec.SpecHash,
+			Priority:           priority,
+			InstanceID:         instanceID,
+			ContainerName:      containerName,
+			ObservedState:      observedStateOf(instance),
+			ObservedExitCode:   "",
+			ObservedError:      observedErrorOf(instance),
+			ObservedGeneration: observedGenerationOf(instance),
+			ObservedSpecHash:   observedSpecHashOf(instance),
+			ObservedImage:      observedImageOf(instance),
+			ObservedAt:         &observedAt,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		})
 		if err := orm.New(tx).From("application_lifecycle_targets").Insert(ctx, &targetRow); err != nil {
 			return LifecycleOperation{}, err
 		}
 		target := LifecycleTarget{
-			ID:                targetID,
-			OperationID:       operation.ID,
-			ApplicationID:     app.ID,
-			ServerID:          serverID,
-			Action:            action,
-			State:             state,
-			Status:            status,
-			TargetKey:         targetKey,
-			DesiredState:      desiredState,
-			DesiredGeneration: spec.Generation,
-			DesiredSpecHash:   spec.SpecHash,
-			Priority:          priority,
-			InstanceID:        instanceID,
-			ContainerName:     containerName,
-			CreatedAt:         now,
-			UpdatedAt:         now,
+			ID:                 targetID,
+			OperationID:        operation.ID,
+			ApplicationID:      app.ID,
+			ServerID:           serverID,
+			Action:             action,
+			State:              state,
+			Status:             status,
+			TargetKey:          targetKey,
+			DesiredState:       desiredState,
+			DesiredGeneration:  spec.Generation,
+			DesiredSpecHash:    spec.SpecHash,
+			Priority:           priority,
+			InstanceID:         instanceID,
+			ContainerName:      containerName,
+			ObservedState:      observedStateOf(instance),
+			ObservedExitCode:   "",
+			ObservedError:      observedErrorOf(instance),
+			ObservedGeneration: observedGenerationOf(instance),
+			ObservedSpecHash:   observedSpecHashOf(instance),
+			ObservedImage:      observedImageOf(instance),
+			ObservedAt:         &observedAt,
+			CreatedAt:          now,
+			UpdatedAt:          now,
 		}
 		targets = append(targets, target)
 	}
@@ -2726,16 +2791,7 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 		return LifecycleOperation{}, err
 	}
 	operation.Targets = targets
-	if err := s.writeApplicationOperationEvent(ctx, runtimeevents.EventApplicationOperationCreated, operation, app, LifecycleTarget{}, runtimeevents.ApplicationOperationInput{
-		ApplicationID:           app.ID,
-		ApplicationNameSnapshot: app.Name,
-		Action:                  actionForOperation,
-		Source:                  operation.Trigger,
-		TriggeredBy:             operation.Trigger,
-		Status:                  "running",
-		StartedAt:               operation.StartedAt,
-		TargetTotal:             len(serverIDs),
-	}); err != nil {
+	if err := s.writeApplicationOperationEvent(ctx, runtimeevents.EventApplicationOperationCreated, operation, app, LifecycleTarget{}, "running", ""); err != nil {
 		return LifecycleOperation{}, err
 	}
 	for _, target := range targets {
@@ -2835,6 +2891,27 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 		}
 		if affected == 0 {
 			return errLifecycleTargetLeaseLost
+		}
+	}
+	if strings.TrimSpace(in.Stage) != "" && strings.TrimSpace(in.OwnerTaskID) != "" {
+		stageStatus := "running"
+		if in.State == LifecycleTargetStateSucceeded || (in.Finished && in.State == "") {
+			stageStatus = "succeeded"
+		}
+		if in.State == LifecycleTargetStateFailed || in.State == LifecycleTargetStateFailedRetryable || in.State == LifecycleTargetStateCancelled {
+			stageStatus = "failed"
+		}
+		detail := strings.TrimSpace(in.StageDetail)
+		if detail == "" {
+			detail = firstNonEmpty(in.ErrorMessage, in.ErrorDetail, in.Error)
+		}
+		var finishedAt *time.Time
+		if stageStatus == "succeeded" || stageStatus == "failed" {
+			finished := time.Now().UTC()
+			finishedAt = &finished
+		}
+		if err := s.recordTargetStage(ctx, targetID, in.Stage, stageStatus, detail, nil, finishedAt); err != nil {
+			return err
 		}
 	}
 	return err
@@ -3088,20 +3165,7 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 	if status == LifecycleStatusSuperseded {
 		projectedStatus = "cancelled"
 	}
-	return s.writeApplicationOperationEvent(ctx, eventType, op, app, LifecycleTarget{}, runtimeevents.ApplicationOperationInput{
-		ApplicationID:           app.ID,
-		ApplicationNameSnapshot: app.Name,
-		Action:                  lifecycleOperationAction(op),
-		Source:                  op.Trigger,
-		TriggeredBy:             op.Trigger,
-		Status:                  projectedStatus,
-		StartedAt:               op.StartedAt,
-		FinishedAt:              op.FinishedAt,
-		TargetTotal:             len(op.Targets),
-		TargetSucceeded:         countLifecycleTargets(op.Targets, LifecycleTargetStateSucceeded),
-		TargetFailed:            countLifecycleTargets(op.Targets, LifecycleTargetStateFailed, LifecycleTargetStateCancelled),
-		FailureSummary:          errText,
-	}, severity)
+	return s.writeApplicationOperationEvent(ctx, eventType, op, app, LifecycleTarget{}, projectedStatus, errText, severity)
 }
 
 func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, operationID string) error {
@@ -3150,7 +3214,7 @@ func (s *Service) finishDeploymentOperationFromTargets(ctx context.Context, oper
 	return s.finishLifecycleOperation(ctx, operationID, status, runtimeDeploymentError(total, failures))
 }
 
-func (s *Service) writeApplicationOperationEvent(ctx context.Context, eventType string, op LifecycleOperation, app Application, target LifecycleTarget, projection runtimeevents.ApplicationOperationInput, severityOpt ...string) error {
+func (s *Service) writeApplicationOperationEvent(ctx context.Context, eventType string, op LifecycleOperation, app Application, target LifecycleTarget, status, failureSummary string, severityOpt ...string) error {
 	if s == nil || s.events == nil {
 		return nil
 	}
@@ -3158,33 +3222,23 @@ func (s *Service) writeApplicationOperationEvent(ctx context.Context, eventType 
 	if len(severityOpt) > 0 && strings.TrimSpace(severityOpt[0]) != "" {
 		severity = severityOpt[0]
 	}
-	if projection.ApplicationID == "" {
-		projection.ApplicationID = app.ID
+	if strings.TrimSpace(status) == "" {
+		status = "running"
 	}
-	if projection.ApplicationNameSnapshot == "" {
-		projection.ApplicationNameSnapshot = app.Name
-	}
-	if projection.Action == "" {
-		projection.Action = lifecycleOperationAction(op)
-	}
-	if projection.Source == "" {
-		projection.Source = firstNonEmpty(op.Trigger, "system")
-	}
-	if projection.Status == "" {
-		projection.Status = "running"
-	}
+	action := lifecycleOperationAction(op)
+	source := firstNonEmpty(op.Trigger, "system")
 	payload, _ := json.Marshal(map[string]any{
 		"applicationId": app.ID,
 		"operationId":   op.ID,
 		"targetId":      target.ID,
-		"action":        projection.Action,
-		"status":        projection.Status,
+		"action":        action,
+		"status":        status,
 	})
 	taskRefs, _ := json.Marshal(nonEmptyStrings(op.TaskID))
 	targetRefs, _ := json.Marshal(lifecycleTargetIDs(op.Targets, target.ID))
 	detail := &runtimeevents.EventDetailInput{
 		PayloadJSON:    string(payload),
-		Error:          firstNonEmpty(target.Error, op.Error, projection.FailureSummary),
+		Error:          firstNonEmpty(target.Error, op.Error, failureSummary),
 		TaskRefsJSON:   string(taskRefs),
 		TargetRefsJSON: string(targetRefs),
 	}
@@ -3195,14 +3249,13 @@ func (s *Service) writeApplicationOperationEvent(ctx context.Context, eventType 
 		SubjectID:    app.ID,
 		OperationID:  op.ID,
 		Severity:     severity,
-		Source:       projection.Source,
+		Source:       source,
 		SourceModule: "applications",
 		SourceType:   "application_lifecycle_operation",
 		SourceID:     op.ID,
 		DedupeKey:    "application_operation:" + op.ID + ":" + eventType + ":" + target.ID,
 		Summary:      applicationOperationSummary(eventType, app, target),
 		Detail:       detail,
-		Application:  &projection,
 	})
 	return err
 }
@@ -3217,19 +3270,7 @@ func (s *Service) writeApplicationTargetEvent(ctx context.Context, eventType str
 	case runtimeevents.EventApplicationOperationTargetSucceeded:
 		status = "running"
 	}
-	return s.writeApplicationOperationEvent(ctx, eventType, op, app, target, runtimeevents.ApplicationOperationInput{
-		ApplicationID:           app.ID,
-		ApplicationNameSnapshot: app.Name,
-		Action:                  firstNonEmpty(target.Action, lifecycleOperationAction(op)),
-		Source:                  firstNonEmpty(op.Trigger, "system"),
-		TriggeredBy:             op.Trigger,
-		Status:                  status,
-		StartedAt:               op.StartedAt,
-		TargetTotal:             len(op.Targets),
-		TargetSucceeded:         countLifecycleTargets(op.Targets, LifecycleTargetStateSucceeded),
-		TargetFailed:            countLifecycleTargets(op.Targets, LifecycleTargetStateFailed, LifecycleTargetStateCancelled),
-		FailureSummary:          firstNonEmpty(target.ErrorMessage, target.Error),
-	}, severity)
+	return s.writeApplicationOperationEvent(ctx, eventType, op, app, target, status, firstNonEmpty(target.ErrorMessage, target.Error), severity)
 }
 
 func lifecycleOperationAction(op LifecycleOperation) string {

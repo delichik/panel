@@ -239,6 +239,16 @@ type fakeApplicationService struct {
 	sessionID                 string
 	checkedID                 string
 	updatedImageID            string
+	records                   OperationRecordListResult
+	recordDetail              OperationRecordDetail
+}
+
+func (f *fakeApplicationService) ListApplicationOperationRecords(_ context.Context, _ OperationRecordFilter) (OperationRecordListResult, error) {
+	return f.records, nil
+}
+
+func (f *fakeApplicationService) GetApplicationOperationRecord(_ context.Context, _ string) (OperationRecordDetail, error) {
+	return f.recordDetail, nil
 }
 
 func (f *fakeApplicationService) List(ctx context.Context) ([]Application, error) {

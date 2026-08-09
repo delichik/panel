@@ -20,6 +20,9 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("POST /api/v1/application-edit-sessions/{id}/commit", auth(http.HandlerFunc(h.CommitEditSession)))
 	mux.Handle("DELETE /api/v1/application-edit-sessions/{id}", auth(http.HandlerFunc(h.DiscardEditSession)))
 
+	mux.Handle("GET /api/v1/application-operations", auth(http.HandlerFunc(h.ListApplicationOperationRecords)))
+	mux.Handle("GET /api/v1/application-operations/{id}", auth(http.HandlerFunc(h.GetApplicationOperationRecord)))
+
 	mux.Handle("GET /api/v1/applications", auth(http.HandlerFunc(h.List)))
 	mux.Handle("GET /api/v1/applications/{id}", auth(http.HandlerFunc(h.Get)))
 	mux.Handle("DELETE /api/v1/applications/{id}", auth(http.HandlerFunc(h.Delete)))

@@ -219,8 +219,14 @@
 - Dispatcher startup must recover durable target state before accepting queue work. Expired leases before remote mutation return to `ready`; expired leases after mutation phases move to `failed_retryable` with `lease_lost`, increment `attempt`, and persist a future `next_run_at` so they do not remain active blockers forever.
 - Application restart is not a direct Agent/Docker restart path. HTTP restart and `application_restart` task execution force a planner pass that creates or reuses apply lifecycle targets; the dispatcher then owns target task creation and runtime mutation. Persistent data restore may write the uploaded archive through the Agent persistent-data API, but any post-restore application start/restart must force lifecycle planning rather than calling runtime restart directly.
 
-## Operation Records
+## Coordination Records（协调记录）
 
-- Application lifecycle writes into the unified runtime event system when operation rows are created, targets are queued/claimed/succeeded/failed, and operation aggregation reaches completed or failed states.
-- `application_operation_records` is a projection for the “操作记录” page and application-detail operation entry. It summarizes lifecycle operation status, target counts, latest event time and detail availability; it must not become the durable deployment state machine.
-- Application operation details may expire before the operation summary. When runtime event details are pruned, the projection keeps its summary and sets `detail_available=false`.
+- 协调记录页（原“操作记录”，路由 `/application-operations`）展示“应用在服务器上检测到状态不一致后执行变更”的记录，只读。
+- 记录列表/详情由应用模块提供（`GET /api/v1/application-operations`、`GET /api/v1/application-operations/{id}`），读取时直接聚合协调库 `application_lifecycle_operations` + `application_lifecycle_targets`，**不建投影表**；`application_operation_records` 已废弃（不建、不用）。
+- `application_lifecycle_operations`、`application_lifecycle_targets`、`application_target_stages` 位于独立协调库 `Store.CoordDB()`（默认 `data/db/coordination.db`）。
+- 目标表新增“观测快照”列（observed_state / observed_exit_code / observed_error / observed_generation / observed_spec_hash / observed_image / observed_at），在创建目标那一刻从服务器实例读取写入，用于详情展示“期望 vs 实际”；读不到实例则留空，前端显示“未知”。
+- `application_target_stages` 是目标步骤日志表：执行器每进入一个阶段写一行（status=running + started_at），阶段成功/失败时更新 status + finished_at + detail（复制了哪些文件、哪个容器、镜像、健康检查结果/错误等）。详情接口的 target 携带 `stages[]`。
+- 详情合并“一致”服务器：期望部署服务器中无 lifecycle target 的追加 status=consistent 行；应用已删除时只返回已有目标。
+- 事件（`runtimeevents`）仅作系统事件页诊断，协调记录不依赖事件、不返回事件。
+- 清理：`applications.StageCleanupWorker` 按 runtime 保留设置只清理 `application_target_stages`；生命周期操作/目标是 durable 协调事实，不删除。
+- Application lifecycle still writes into the unified runtime event system when operation rows are created, targets are queued/claimed/succeeded/failed, and operation aggregation reaches completed or failed states.

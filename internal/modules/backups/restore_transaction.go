@@ -122,6 +122,7 @@ func prepareRestoreTransaction(cfg config.Config, extracted string) (restoreTran
 		{[]string{filepath.Join(extracted, "databases", "app.db")}, cfg.AppDatabase},
 		{[]string{filepath.Join(extracted, "databases", "log.db"), filepath.Join(extracted, "databases", "tasks.db")}, cfg.LogDatabase},
 		{[]string{filepath.Join(extracted, "databases", "metrics.db")}, cfg.MetricsDatabase},
+		{[]string{filepath.Join(extracted, "databases", "coordination.db")}, cfg.CoordinationDatabase},
 	} {
 		source := firstExistingPath(item.sources)
 		if source == "" || item.target == "" {

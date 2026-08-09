@@ -27,6 +27,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}{
 		{s.appDB, models.AppModels()},
 		{s.logDB, models.LogModels()},
+		{s.coordDB, models.CoordinationModels()},
 		{s.metricsDB, models.MetricsModels()},
 	}
 	for _, pass := range dbs {
@@ -46,6 +47,9 @@ func (s *Store) Migrate(ctx context.Context) error {
 	}
 	if err := orm.RunSteps(ctx, s.logDB, logMigrationSteps()); err != nil {
 		return fmt.Errorf("log migration steps: %w", err)
+	}
+	if err := orm.RunSteps(ctx, s.coordDB, coordMigrationSteps()); err != nil {
+		return fmt.Errorf("coordination migration steps: %w", err)
 	}
 	// 5. Certificate scope constraint rebuild: it needs PRAGMA foreign_keys
 	//    toggled off around the table rebuild (legacy rows can carry a
@@ -122,6 +126,13 @@ func backfillServerPrivilegeModeOn(ctx context.Context, q migrationExecutor) err
 
 // logMigrationSteps are the one-time data migrations for the log database.
 func logMigrationSteps() []orm.Step {
+	return []orm.Step{}
+}
+
+// coordMigrationSteps are the one-time data migrations for the coordination
+// database. The lifecycle target normalization runs here because the
+// lifecycle tables now live in the coordination database.
+func coordMigrationSteps() []orm.Step {
 	return []orm.Step{
 		{ID: "legacy_migrate_application_lifecycle_targets", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateApplicationLifecycleTargetsOn(ctx, tx)

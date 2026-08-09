@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/http"
@@ -45,6 +46,8 @@ type applicationService interface {
 	Restart(ctx context.Context, id string) (OperationResult, error)
 	Runtime(ctx context.Context, id string) (ApplicationRuntime, error)
 	Logs(ctx context.Context, id string, in LogInput) (LogResult, error)
+	ListApplicationOperationRecords(ctx context.Context, filter OperationRecordFilter) (OperationRecordListResult, error)
+	GetApplicationOperationRecord(ctx context.Context, operationID string) (OperationRecordDetail, error)
 }
 
 type applicationRuntimeListService interface {
@@ -528,6 +531,58 @@ func (h *Handler) Logs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) ListApplicationOperationRecords(w http.ResponseWriter, r *http.Request) {
+	page, pageSize, err := httpx.ParseListPage(r, "applicationId", "status", "source", "from", "to")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	from, err := parseRecordQueryTime(r.URL.Query().Get("from"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	to, err := parseRecordQueryTime(r.URL.Query().Get("to"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	result, err := h.service.ListApplicationOperationRecords(r.Context(), OperationRecordFilter{
+		ApplicationID: r.URL.Query().Get("applicationId"),
+		Status:        r.URL.Query().Get("status"),
+		Source:        r.URL.Query().Get("source"),
+		From:          from,
+		To:            to,
+		Limit:         pageSize,
+		Offset:        (page - 1) * pageSize,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) GetApplicationOperationRecord(w http.ResponseWriter, r *http.Request) {
+	detail, err := h.service.GetApplicationOperationRecord(r.Context(), strings.TrimSpace(r.PathValue("id")))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, detail)
+}
+
+func parseRecordQueryTime(value string) (*time.Time, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	t, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		return nil, panelerr.BadRequest("time_invalid", "from and to must use RFC3339 format")
+	}
+	return &t, nil
 }
 
 func applicationIDFromRequest(r *http.Request) string {

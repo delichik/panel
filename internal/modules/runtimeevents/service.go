@@ -71,11 +71,6 @@ func (s *Service) Write(ctx context.Context, in WriteEventInput) (Event, bool, e
 				return err
 			}
 		}
-		if inserted && in.Application != nil {
-			if err := upsertApplicationOperation(ctx, tx, in.OperationID, occurredAt, detailAvailable, *in.Application); err != nil {
-				return err
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -101,82 +96,12 @@ func validateEventInput(in WriteEventInput) error {
 	if strings.TrimSpace(in.Summary) == "" {
 		return panelerr.Validation("runtime_event_summary_required", "Runtime event summary is required")
 	}
-	if in.Application != nil && strings.TrimSpace(in.OperationID) == "" {
-		return panelerr.Validation("runtime_event_operation_required", "Application operation event requires an operation id")
-	}
+
 	return nil
-}
-
-func upsertApplicationOperation(ctx context.Context, tx *sql.Tx, operationID string, eventAt time.Time, detailAvailable bool, in ApplicationOperationInput) error {
-	status := firstNonEmpty(in.Status, "running")
-	source := firstNonEmpty(in.Source, "system")
-	now := formatTime(time.Now().UTC())
-	latest := formatTime(eventAt)
-	_, err := orm.RawExec(ctx, tx, `INSERT INTO application_operation_records(operation_id,application_id,application_name_snapshot,action,source,triggered_by,trigger_reason,status,started_at,finished_at,target_total,target_succeeded,target_failed,latest_event_at,detail_available,failure_summary,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(operation_id) DO UPDATE SET
-			application_id=COALESCE(NULLIF(excluded.application_id,''), application_operation_records.application_id),
-			application_name_snapshot=COALESCE(NULLIF(excluded.application_name_snapshot,''), application_operation_records.application_name_snapshot),
-			action=COALESCE(NULLIF(excluded.action,''), application_operation_records.action),
-			source=COALESCE(NULLIF(excluded.source,''), application_operation_records.source),
-			triggered_by=COALESCE(NULLIF(excluded.triggered_by,''), application_operation_records.triggered_by),
-			trigger_reason=COALESCE(NULLIF(excluded.trigger_reason,''), application_operation_records.trigger_reason),
-			status=excluded.status,
-			started_at=COALESCE(application_operation_records.started_at, excluded.started_at),
-			finished_at=excluded.finished_at,
-			target_total=CASE WHEN excluded.target_total > 0 THEN excluded.target_total ELSE application_operation_records.target_total END,
-			target_succeeded=CASE WHEN excluded.target_succeeded > 0 OR excluded.status IN ('succeeded','failed','partial_failed') THEN excluded.target_succeeded ELSE application_operation_records.target_succeeded END,
-			target_failed=CASE WHEN excluded.target_failed > 0 OR excluded.status IN ('failed','partial_failed') THEN excluded.target_failed ELSE application_operation_records.target_failed END,
-			latest_event_at=excluded.latest_event_at,
-			detail_available=CASE WHEN excluded.detail_available=1 THEN 1 ELSE application_operation_records.detail_available END,
-			failure_summary=COALESCE(NULLIF(excluded.failure_summary,''), application_operation_records.failure_summary),
-			updated_at=excluded.updated_at`,
-		strings.TrimSpace(operationID), strings.TrimSpace(in.ApplicationID), strings.TrimSpace(in.ApplicationNameSnapshot), strings.TrimSpace(in.Action), source, strings.TrimSpace(in.TriggeredBy), strings.TrimSpace(in.TriggerReason),
-		status, nullableTime(in.StartedAt), nullableTime(in.FinishedAt), in.TargetTotal, in.TargetSucceeded, in.TargetFailed, latest, boolInt(detailAvailable), strings.TrimSpace(in.FailureSummary), now, now)
-	return err
-}
-
-func (s *Service) ListApplicationOperations(ctx context.Context, filter ListFilter) (ListResult[OperationRecord], error) {
-	filter = normalizeFilter(filter)
-	q := orm.New(s.db).From("application_operation_records")
-	appendFilter(q, "application_id", filter.ApplicationID)
-	appendFilter(q, "action", filter.Action)
-	appendFilter(q, "source", filter.Source)
-	appendFilter(q, "status", filter.Status)
-	appendTimeFilter(q, "latest_event_at", filter.From, filter.To)
-	total, err := q.Count(ctx)
-	if err != nil {
-		return ListResult[OperationRecord]{}, err
-	}
-	q = orm.New(s.db).From("application_operation_records")
-	appendFilter(q, "application_id", filter.ApplicationID)
-	appendFilter(q, "action", filter.Action)
-	appendFilter(q, "source", filter.Source)
-	appendFilter(q, "status", filter.Status)
-	appendTimeFilter(q, "latest_event_at", filter.From, filter.To)
-	q.OrderBy("latest_event_at DESC", "operation_id DESC").Limit(filter.Limit).Offset(filter.Offset)
-	items := []OperationRecord{}
-	if err := q.All(ctx, &items); err != nil {
-		return ListResult[OperationRecord]{}, err
-	}
-	return ListResult[OperationRecord]{Items: items, Total: int(total), PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
-}
-
-func (s *Service) GetApplicationOperation(ctx context.Context, operationID string) (ApplicationOperationDetail, error) {
-	op, err := s.operation(ctx, operationID)
-	if err != nil {
-		return ApplicationOperationDetail{}, err
-	}
-	events, err := s.eventsByOperation(ctx, operationID)
-	if err != nil {
-		return ApplicationOperationDetail{}, err
-	}
-	return ApplicationOperationDetail{Operation: op, Events: events, Targets: []any{}}, nil
 }
 
 func (s *Service) ListSystemEvents(ctx context.Context, filter ListFilter) (ListResult[Event], error) {
 	filter = normalizeFilter(filter)
-	filter.ApplicationID = ""
 	result, err := s.listEvents(ctx, filter)
 	if err != nil {
 		return ListResult[Event]{}, err
@@ -274,7 +199,7 @@ func (s *Service) Cleanup(ctx context.Context, retentionDays, detailRetentionDay
 	detailCutoff := formatTime(now.AddDate(0, 0, -detailRetentionDays))
 	recordCutoff := formatTime(now.AddDate(0, 0, -retentionDays))
 	prunedAt := formatTime(now)
-	var detailsPruned, operationsDeleted, eventsDeleted int64
+	var detailsPruned, eventsDeleted int64
 	err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
 		res, err := orm.RawExec(ctx, tx, `UPDATE runtime_event_details SET payload='{}', error='', log_refs='[]', task_refs='[]', target_refs='[]', pruned_at=?
 			WHERE pruned_at IS NULL
@@ -286,14 +211,7 @@ func (s *Service) Cleanup(ctx context.Context, retentionDays, detailRetentionDay
 		if _, err := orm.RawExec(ctx, tx, `UPDATE runtime_events SET detail_available=0, detail_pruned_at=? WHERE detail_available=1 AND id IN (SELECT event_id FROM runtime_event_details WHERE pruned_at=?)`, prunedAt, prunedAt); err != nil {
 			return err
 		}
-		if _, err := orm.RawExec(ctx, tx, `UPDATE application_operation_records SET detail_available=0 WHERE detail_available=1 AND operation_id NOT IN (SELECT DISTINCT operation_id FROM runtime_events WHERE operation_id<>'' AND detail_available=1)`); err != nil {
-			return err
-		}
-		res, err = orm.RawExec(ctx, tx, `DELETE FROM application_operation_records WHERE latest_event_at<?`, recordCutoff)
-		if err != nil {
-			return err
-		}
-		operationsDeleted, _ = res.RowsAffected()
+
 		res, err = orm.RawExec(ctx, tx, `DELETE FROM runtime_events WHERE occurred_at<?`, recordCutoff)
 		if err != nil {
 			return err
@@ -304,7 +222,7 @@ func (s *Service) Cleanup(ctx context.Context, retentionDays, detailRetentionDay
 	if err != nil {
 		return CleanupResult{}, err
 	}
-	return CleanupResult{DetailsPruned: int(detailsPruned), EventsDeleted: int(eventsDeleted), OperationsDeleted: int(operationsDeleted)}, nil
+	return CleanupResult{DetailsPruned: int(detailsPruned), EventsDeleted: int(eventsDeleted)}, nil
 }
 
 func (s *Service) listEvents(ctx context.Context, filter ListFilter) (ListResult[Event], error) {
@@ -336,17 +254,6 @@ func (s *Service) listEvents(ctx context.Context, filter ListFilter) (ListResult
 	return ListResult[Event]{Items: items, Total: int(total), PageSize: filter.Limit, Page: filter.Offset/filter.Limit + 1}, nil
 }
 
-func (s *Service) eventsByOperation(ctx context.Context, operationID string) ([]Event, error) {
-	items := []Event{}
-	if err := orm.New(s.db).From("runtime_events").
-		Where("operation_id = ?", strings.TrimSpace(operationID)).
-		OrderBy("occurred_at ASC", "id ASC").
-		All(ctx, &items); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 func (s *Service) eventByDedupeKey(ctx context.Context, dedupeKey string) (Event, error) {
 	var event Event
 	err := orm.New(s.db).From("runtime_events").Where("dedupe_key = ? AND dedupe_key <> ''", strings.TrimSpace(dedupeKey)).First(ctx, &event)
@@ -354,15 +261,6 @@ func (s *Service) eventByDedupeKey(ctx context.Context, dedupeKey string) (Event
 		return Event{}, panelerr.NotFound("runtime_event")
 	}
 	return event, err
-}
-
-func (s *Service) operation(ctx context.Context, operationID string) (OperationRecord, error) {
-	var op OperationRecord
-	err := orm.New(s.db).From("application_operation_records").Where("operation_id = ?", strings.TrimSpace(operationID)).First(ctx, &op)
-	if err == sql.ErrNoRows {
-		return OperationRecord{}, panelerr.NotFound("application_operation")
-	}
-	return op, err
 }
 
 func normalizeFilter(filter ListFilter) ListFilter {
@@ -404,13 +302,6 @@ type eventDetailRow struct {
 	TargetRefs string
 	CreatedAt  time.Time
 	PrunedAt   *time.Time
-}
-
-func nullableTime(value *time.Time) any {
-	if value == nil || value.IsZero() {
-		return nil
-	}
-	return formatTime(value.UTC())
 }
 
 func formatTime(t time.Time) string {

@@ -11,129 +11,6 @@ import (
 	"panel/internal/platform/database"
 )
 
-func TestWriteIsIdempotentAndCreatesOperationProjection(t *testing.T) {
-	svc, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	in := WriteEventInput{
-		EventType:   EventApplicationOperationCreated,
-		Category:    CategoryApplication,
-		SubjectType: "application",
-		SubjectID:   "app-1",
-		OperationID: "op-1",
-		Severity:    SeverityInfo,
-		Source:      "manual",
-		SourceID:    "op-1",
-		DedupeKey:   "dedupe-1",
-		Summary:     "Application operation created",
-		OccurredAt:  now,
-		Detail:      &EventDetailInput{PayloadJSON: `{"ok":true}`},
-		Application: &ApplicationOperationInput{
-			ApplicationID:           "app-1",
-			ApplicationNameSnapshot: "App One",
-			Action:                  "apply",
-			Source:                  "manual",
-			Status:                  "running",
-			StartedAt:               &now,
-			TargetTotal:             2,
-		},
-	}
-
-	event, inserted, err := svc.Write(ctx, in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !inserted || !event.DetailAvailable {
-		t.Fatalf("first write inserted/detail = %v/%v", inserted, event.DetailAvailable)
-	}
-	_, inserted, err = svc.Write(ctx, in)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if inserted {
-		t.Fatal("duplicate dedupe key must not insert a second event")
-	}
-
-	result, err := svc.ListApplicationOperations(ctx, ListFilter{ApplicationID: "app-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Total != 1 || len(result.Items) != 1 {
-		t.Fatalf("operation total/items = %d/%d", result.Total, len(result.Items))
-	}
-	op := result.Items[0]
-	if op.OperationID != "op-1" || op.ApplicationNameSnapshot != "App One" || !op.DetailAvailable || op.TargetTotal != 2 {
-		t.Fatalf("unexpected operation projection: %#v", op)
-	}
-
-	detail, err := svc.GetApplicationOperation(ctx, "op-1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if detail.Operation.OperationID != "op-1" || len(detail.Events) != 1 || detail.Events[0].EventType != EventApplicationOperationCreated || detail.Targets == nil || len(detail.Targets) != 0 {
-		t.Fatalf("unexpected application operation detail: %#v", detail)
-	}
-}
-
-func TestListApplicationOperationsIncludesFacilityReverseProxy(t *testing.T) {
-	svc, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	records := []struct {
-		applicationID string
-		nameSnapshot  string
-	}{
-		{applicationID: "app-1", nameSnapshot: "App One"},
-		{applicationID: "facility-reverse-proxy", nameSnapshot: "__panel_facility_reverse_proxy__"},
-	}
-	for _, record := range records {
-		_, _, err := svc.Write(ctx, WriteEventInput{
-			EventType:   EventApplicationOperationCreated,
-			Category:    CategoryApplication,
-			SubjectType: "application",
-			SubjectID:   record.applicationID,
-			OperationID: "op-" + record.applicationID,
-			Severity:    SeverityInfo,
-			Source:      "manual",
-			DedupeKey:   "dedupe-" + record.applicationID,
-			Summary:     "Application operation created",
-			OccurredAt:  now,
-			Detail:      &EventDetailInput{PayloadJSON: `{}`},
-			Application: &ApplicationOperationInput{
-				ApplicationID:           record.applicationID,
-				ApplicationNameSnapshot: record.nameSnapshot,
-				Action:                  "apply",
-				Source:                  "manual",
-				Status:                  "running",
-				StartedAt:               &now,
-				TargetTotal:             1,
-			},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	result, err := svc.ListApplicationOperations(ctx, ListFilter{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Total != 2 || len(result.Items) != 2 {
-		t.Fatalf("expected both application and facility operations: %#v", result.Items)
-	}
-	filtered, err := svc.ListApplicationOperations(ctx, ListFilter{ApplicationID: "facility-reverse-proxy"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if filtered.Total != 1 || len(filtered.Items) != 1 || filtered.Items[0].ApplicationID != "facility-reverse-proxy" {
-		t.Fatalf("facility operation must be filterable: %#v", filtered.Items)
-	}
-}
-
 func TestSystemEventsFilterAndDetailWrapper(t *testing.T) {
 	svc, closeStore := newTestService(t)
 	defer closeStore()
@@ -255,26 +132,15 @@ func TestCleanupPrunesDetailsBeforeDeletingRecords(t *testing.T) {
 	old := time.Now().UTC().AddDate(0, 0, -10)
 
 	event, _, err := svc.Write(ctx, WriteEventInput{
-		EventType:   EventApplicationOperationCreated,
-		Category:    CategoryApplication,
-		SubjectType: "application",
-		SubjectID:   "app-1",
-		OperationID: "op-old",
+		EventType:   EventTaskCreated,
+		Category:    CategoryTask,
+		SubjectType: "task",
+		SubjectID:   "task-1",
 		Severity:    SeverityInfo,
-		Source:      "manual",
-		DedupeKey:   "old",
+		Source:      "task",
 		Summary:     "Old event",
 		OccurredAt:  old,
 		Detail:      &EventDetailInput{PayloadJSON: `{"old":true}`},
-		Application: &ApplicationOperationInput{
-			ApplicationID:           "app-1",
-			ApplicationNameSnapshot: "App One",
-			Action:                  "apply",
-			Source:                  "manual",
-			Status:                  "running",
-			StartedAt:               &old,
-			TargetTotal:             1,
-		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +150,7 @@ func TestCleanupPrunesDetailsBeforeDeletingRecords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.DetailsPruned != 1 || result.EventsDeleted != 0 || result.OperationsDeleted != 0 {
+	if result.DetailsPruned != 1 || result.EventsDeleted != 0 {
 		t.Fatalf("cleanup result = %#v", result)
 	}
 	detail, err := svc.GetEventDetail(ctx, event.ID)
@@ -294,27 +160,20 @@ func TestCleanupPrunesDetailsBeforeDeletingRecords(t *testing.T) {
 	if detail.DetailAvailable || detail.PayloadJSON != "{}" {
 		t.Fatalf("detail should be pruned: %#v", detail)
 	}
-	ops, err := svc.ListApplicationOperations(ctx, ListFilter{ApplicationID: "app-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ops.Items) != 1 || ops.Items[0].DetailAvailable {
-		t.Fatalf("detail should be unavailable while summary remains: %#v", ops.Items)
-	}
 
 	result, err = svc.Cleanup(ctx, 1, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.EventsDeleted != 1 || result.OperationsDeleted != 1 {
+	if result.EventsDeleted != 1 {
 		t.Fatalf("record cleanup result = %#v", result)
 	}
-	ops, err = svc.ListApplicationOperations(ctx, ListFilter{ApplicationID: "app-1"})
+	events, err := svc.ListSystemEvents(ctx, ListFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ops.Total != 0 {
-		t.Fatalf("operations after retention cleanup = %#v", ops)
+	if events.Total != 0 {
+		t.Fatalf("events after retention cleanup = %#v", events)
 	}
 }
 
@@ -322,10 +181,11 @@ func newTestService(t *testing.T) (*Service, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := database.Open(config.Config{
-		DataRoot:        dir,
-		AppDatabase:     filepath.Join(dir, "app.db"),
-		LogDatabase:     filepath.Join(dir, "log.db"),
-		MetricsDatabase: filepath.Join(dir, "metrics.db"),
+		DataRoot:             dir,
+		AppDatabase:          filepath.Join(dir, "app.db"),
+		LogDatabase:          filepath.Join(dir, "log.db"),
+		CoordinationDatabase: filepath.Join(dir, "coordination.db"),
+		MetricsDatabase:      filepath.Join(dir, "metrics.db"),
 	})
 	if err != nil {
 		t.Fatal(err)

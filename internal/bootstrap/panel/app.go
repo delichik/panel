@@ -48,6 +48,7 @@ type App struct {
 	tasksCleanup   *tasks.CleanupWorker
 	metricsCleanup *metrics.CleanupWorker
 	eventCleanup   *runtimeevents.CleanupWorker
+	stageCleanup   *applications.StageCleanupWorker
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
 	deployments    applications.DeploymentDispatcher
@@ -134,6 +135,7 @@ func New(cfg config.Config) (*App, error) {
 		applications.WithInternalFileProvider(internalFileRegistry),
 		applications.WithContainerOperationQueue(containerBridge),
 		applications.WithLogDB(store.LogDB()),
+		applications.WithCoordDB(store.CoordDB()),
 		applications.WithRuntimeEvents(eventSvc),
 	)
 	certBridge.apps = applicationSvc
@@ -187,6 +189,7 @@ func New(cfg config.Config) (*App, error) {
 		taskWorker,
 		diagnostics.DatabaseSource{Name: "app", DB: store.AppDB(), Path: cfg.AppDatabase},
 		diagnostics.DatabaseSource{Name: "log", DB: store.LogDB(), Path: cfg.LogDatabase},
+		diagnostics.DatabaseSource{Name: "coord", DB: store.CoordDB(), Path: cfg.CoordinationDatabase},
 		diagnostics.DatabaseSource{Name: "metrics", DB: store.MetricsDB(), Path: cfg.MetricsDatabase},
 	)
 
@@ -205,12 +208,20 @@ func New(cfg config.Config) (*App, error) {
 			Schedule:            runtime.RuntimeEventCleanupSchedule,
 		}
 	})
+	stageCleanup := applications.NewStageCleanupWorker(applicationSvc, func() applications.StageCleanupSettings {
+		runtime := settingsSvc.Runtime()
+		return applications.StageCleanupSettings{
+			RetentionDays: runtime.RuntimeEventDetailRetentionDays,
+			Schedule:      runtime.RuntimeEventCleanupSchedule,
+		}
+	})
 	backupSvc := backups.NewService(backups.ArchiveConfig{
-		DataRoot:        cfg.DataRoot,
-		AppDatabase:     cfg.AppDatabase,
-		LogDatabase:     cfg.LogDatabase,
-		MetricsDatabase: cfg.MetricsDatabase,
-		PanelVersion:    systemSvc.Version().Version,
+		DataRoot:             cfg.DataRoot,
+		AppDatabase:          cfg.AppDatabase,
+		LogDatabase:          cfg.LogDatabase,
+		CoordinationDatabase: cfg.CoordinationDatabase,
+		MetricsDatabase:      cfg.MetricsDatabase,
+		PanelVersion:         systemSvc.Version().Version,
 	})
 	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc, packageSvc)
 	a := &App{
@@ -226,6 +237,7 @@ func New(cfg config.Config) (*App, error) {
 		agentReports:   reportCollector,
 		deployments:    deploymentDispatcher,
 		diagnostics:    diagnosticsSvc,
+		stageCleanup:   stageCleanup,
 	}
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -239,6 +251,7 @@ func New(cfg config.Config) (*App, error) {
 	taskCleanup.Start(context.Background())
 	metricsCleanup.Start(context.Background())
 	eventCleanup.Start(context.Background())
+	stageCleanup.Start(context.Background())
 	reportCollector.Start(context.Background())
 	var controlServer *installation.ControlServer
 	if goruntime.GOOS != "windows" {
@@ -280,6 +293,9 @@ func (a *App) Close() error {
 	}
 	if a.eventCleanup != nil {
 		a.eventCleanup.Stop()
+	}
+	if a.stageCleanup != nil {
+		a.stageCleanup.Stop()
 	}
 	if a.system != nil {
 		a.system.Close()

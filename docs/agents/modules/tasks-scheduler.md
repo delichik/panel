@@ -32,7 +32,7 @@
 
 ## 数据与行为约定
 
-- 任务与操作历史使用独立 SQLite 日志数据库 `Store.LogDB()`，默认文件是 `data/db/log.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。应用部署 lifecycle 的 `application_lifecycle_operations` 和 `application_lifecycle_targets` 也保存在该库中。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
+- 任务与任务日志使用独立 SQLite 日志数据库 `Store.LogDB()`，默认文件是 `data/db/log.db`；任务主表是 `tasks`，步骤表是 `task_steps`，日志表是 `task_logs`。应用部署 lifecycle 的 `application_lifecycle_operations`、`application_lifecycle_targets` 和 `application_target_stages`（目标步骤日志）已迁到独立协调库 `Store.CoordDB()`（默认 `data/db/coordination.db`）。任务参数写入 `tasks.params_json`，展示和诊断补充信息写入 `tasks.metadata_json`，步骤级执行详情写入 `task_steps.metadata_json`。
 - 当前 alpha 阶段任务历史不是稳定持久化契约；注册式任务系统重构会重建 `tasks`、`task_steps` 和 `task_logs`，旧任务中心历史可直接丢弃，但业务数据库和指标数据库不得受影响。
 - 任务系统建模使用“操作 + 任务”两层语义：操作是由用户、调度器、系统恢复或其他业务因素发起的一次聚合意图，使用同一个 `operation_id` 追踪；任务是操作中的具体执行对象，必须包含本次执行所需变量，例如目标服务器、资源 ID、参数 JSON、触发来源和资源类型。任务中心用户可见位置不直接展示任务/操作原始 id：操作组副标题展示 `type`，执行项以 `summary` 为标题、`type` 为副标题；原始 id 仍用于搜索与 URL 恢复。
 - 业务动作只要可能拆成多个变量不同的执行对象，就应优先按一个操作拆多个任务建模，而不是把所有目标藏进单个任务的 metadata 或业务私有 target 表。典型例子：一次应用协调面向服务器 A 和 B，应创建一个操作聚合，并在该操作下创建“应用目标应用 A”和“应用目标应用 B”两个私有目标任务。

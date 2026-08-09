@@ -50,7 +50,6 @@ type WriteEventInput struct {
 	Summary      string
 	OccurredAt   time.Time
 	Detail       *EventDetailInput
-	Application  *ApplicationOperationInput
 }
 
 type EventDetailInput struct {
@@ -59,22 +58,6 @@ type EventDetailInput struct {
 	LogRefsJSON    string
 	TaskRefsJSON   string
 	TargetRefsJSON string
-}
-
-type ApplicationOperationInput struct {
-	ApplicationID           string
-	ApplicationNameSnapshot string
-	Action                  string
-	Source                  string
-	TriggeredBy             string
-	TriggerReason           string
-	Status                  string
-	StartedAt               *time.Time
-	FinishedAt              *time.Time
-	TargetTotal             int
-	TargetSucceeded         int
-	TargetFailed            int
-	FailureSummary          string
 }
 
 type Event struct {
@@ -106,12 +89,6 @@ type EventDetail struct {
 	TargetRefsJSON string `json:"targetRefsJson"`
 }
 
-type ApplicationOperationDetail struct {
-	Operation OperationRecord `json:"operation"`
-	Events    []Event         `json:"events"`
-	Targets   []any           `json:"targets"`
-}
-
 type SystemEventDetail struct {
 	Event      Event  `json:"event"`
 	Payload    any    `json:"payload"`
@@ -125,41 +102,17 @@ type SystemEventDetail struct {
 // time. It returns an empty string when no formal name can be found.
 type SubjectNameResolver func(ctx context.Context, subjectType, subjectID string) string
 
-type OperationRecord struct {
-	OperationID             string     `json:"operationId"`
-	ApplicationID           string     `json:"applicationId"`
-	ApplicationNameSnapshot string     `json:"applicationNameSnapshot"`
-	Action                  string     `json:"action"`
-	Source                  string     `json:"source"`
-	TriggeredBy             string     `json:"triggeredBy,omitempty"`
-	TriggerReason           string     `json:"triggerReason,omitempty"`
-	Status                  string     `json:"status"`
-	StartedAt               *time.Time `json:"startedAt,omitempty"`
-	FinishedAt              *time.Time `json:"finishedAt,omitempty"`
-	TargetTotal             int        `json:"targetTotal"`
-	TargetSucceeded         int        `json:"targetSucceeded"`
-	TargetFailed            int        `json:"targetFailed"`
-	LatestEventAt           time.Time  `json:"latestEventAt"`
-	DetailAvailable         bool       `json:"detailAvailable"`
-	FailureSummary          string     `json:"failureSummary,omitempty"`
-	CreatedAt               time.Time  `json:"createdAt"`
-	UpdatedAt               time.Time  `json:"updatedAt"`
-}
-
 type ListFilter struct {
-	ApplicationID string
-	Action        string
-	Category      string
-	SubjectType   string
-	SubjectID     string
-	Source        string
-	Status        string
-	Severity      string
-	EventType     string
-	From          *time.Time
-	To            *time.Time
-	Limit         int
-	Offset        int
+	Category    string
+	SubjectType string
+	SubjectID   string
+	Source      string
+	Severity    string
+	EventType   string
+	From        *time.Time
+	To          *time.Time
+	Limit       int
+	Offset      int
 }
 
 type ListResult[T any] struct {
@@ -170,7 +123,6 @@ type ListResult[T any] struct {
 }
 
 type CleanupResult struct {
-	DetailsPruned     int
-	EventsDeleted     int
-	OperationsDeleted int
+	DetailsPruned int
+	EventsDeleted int
 }

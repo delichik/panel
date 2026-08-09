@@ -58,8 +58,8 @@ func (w *CleanupWorker) loop(ctx context.Context) {
 				continue
 			}
 			lastRun = time.Now()
-			if result.DetailsPruned > 0 || result.EventsDeleted > 0 || result.OperationsDeleted > 0 {
-				log.Printf("runtime event cleanup pruned_details=%d deleted_events=%d deleted_operations=%d", result.DetailsPruned, result.EventsDeleted, result.OperationsDeleted)
+			if result.DetailsPruned > 0 || result.EventsDeleted > 0 {
+				log.Printf("runtime event cleanup pruned_details=%d deleted_events=%d", result.DetailsPruned, result.EventsDeleted)
 			}
 		}
 	}

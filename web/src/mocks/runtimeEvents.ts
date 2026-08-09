@@ -1,19 +1,16 @@
-import type { ApplicationOperationDetailDto, ApplicationOperationDto } from '@/types/applicationOperations';
+import type { ApplicationOperationDetailDto, ApplicationOperationDto, ApplicationOperationStageDto, ApplicationOperationTargetDto } from '@/types/applicationOperations';
 import type { SystemEventDetailDto, SystemEventDto } from '@/types/systemEvents';
 
 const now = new Date('2026-08-01T08:00:00.000Z');
 
 export const mockApplicationOperations: ApplicationOperationDto[] = [
-  operation('op-apply-storefront', 'app-storefront', 'storefront', 'apply', 'user', 'running', 3, 1, 0, true, ''),
-  operation('op-recover-api', 'app-api', 'public-api', 'recover', 'system', 'partial_failed', 4, 2, 1, true, 'edge-2 failed health verification'),
-  operation('op-stop-preview', 'app-disabled', 'disabled-preview', 'stop', 'user', 'succeeded', 2, 2, 0, false, ''),
-  operation('op-billing-image', 'app-billing', 'billing-portal', 'image_update', 'user', 'succeeded', 2, 2, 0, true, ''),
-  operation('op-webhook-sync', 'app-webhook', 'webhook-ingress', 'sync', 'system', 'running', 2, 1, 0, true, ''),
-  operation('op-media-deploy', 'app-media', 'media-transcoder', 'apply', 'user', 'running', 2, 0, 0, true, ''),
-  operation('op-canary-failed', 'app-canary-broken', 'checkout-canary', 'apply', 'user', 'failed', 1, 0, 1, true, 'Canary probe failed: /ready returned 503'),
-  operation('op-analytics-retry', 'app-analytics', 'analytics-pipeline', 'recover', 'scheduler', 'partial_failed', 2, 1, 1, true, 'worker-nrt-queue-a OOM killed'),
-  operation('op-backup-stop', 'app-backup-agent', 'backup-agent', 'stop', 'user', 'succeeded', 2, 2, 0, true, ''),
-  operation('op-facility-deploy', 'facility-reverse-proxy', '__panel_facility_reverse_proxy__', 'apply', 'user', 'succeeded', 2, 2, 0, true, ''),
+  operation('op-apply-storefront', 'app-storefront', 'storefront', 'apply', 'user', 'partial_failed', 2, 1, 1, 'edge-02 health check failed: /ready returned 503'),
+  operation('op-recover-api', 'app-api', 'public-api', 'recover', 'system', 'failed', 2, 0, 1, 'worker-01 image pull timeout: registry 30s no response'),
+  operation('op-stop-preview', 'app-disabled', 'disabled-preview', 'stop', 'user', 'succeeded', 2, 2, 0, ''),
+  operation('op-billing-image', 'app-billing', 'billing-portal', 'image_update', 'user', 'succeeded', 2, 2, 0, ''),
+  operation('op-media-deploy', 'app-media', 'media-transcoder', 'apply', 'user', 'running', 1, 0, 0, ''),
+  operation('op-canary-failed', 'app-canary-broken', 'checkout-canary', 'apply', 'user', 'failed', 1, 0, 1, 'Canary probe failed: /ready returned 503'),
+  operation('op-facility-deploy', 'facility-reverse-proxy', '__panel_facility_reverse_proxy__', 'apply', 'user', 'succeeded', 2, 2, 0, ''),
   ...Array.from({ length: 48 }, (_, index) => {
     const statuses = ['queued', 'running', 'succeeded', 'failed', 'partial_failed', 'cancelled'];
     const actions = ['apply', 'sync', 'stop', 'purge'];
@@ -30,7 +27,6 @@ export const mockApplicationOperations: ApplicationOperationDto[] = [
       total,
       Math.max(0, total - failed - (statuses[index % statuses.length] === 'queued' ? total : 0)),
       failed,
-      index % 7 !== 0,
       failed ? 'Target reported a runtime error' : '',
     );
   }),
@@ -38,14 +34,10 @@ export const mockApplicationOperations: ApplicationOperationDto[] = [
 
 export const mockSystemEvents: SystemEventDto[] = [
   event('evt-task-failed', 'task.failed', 'task', 'error', 'task', 'task-agent-rollout-1', 'tasks', 'Agent rollout failed and can be retried.', true, 'Agent rollout'),
-  event('evt-log-attached', 'log.attached', 'log', 'info', 'application', 'app-storefront', 'applications', 'Runtime log reference attached to application operation.', true, 'storefront'),
-  event('evt-warning-pruned', 'event.detail.pruned', 'runtime', 'warning', 'operation', 'op-stop-preview', 'runtime-events', 'Event detail was cleaned after retention elapsed.', false, 'disabled-preview'),
   event('evt-canary-failed', 'application.operation.failed', 'application', 'error', 'application', 'app-canary-broken', 'applications', 'checkout-canary deployment failed readiness checks.', true, 'checkout-canary'),
   event('evt-media-progress', 'application.operation.target.started', 'application', 'info', 'application', 'app-media', 'applications', 'media-transcoder deploy started on gpu-nrt-render.', true, 'media-transcoder'),
-  event('evt-billing-image', 'application.image.updated', 'application', 'info', 'application', 'app-billing', 'applications', 'billing-portal image update completed on both targets.', true, 'billing-portal'),
   event('evt-agent-degraded', 'server.agent.degraded', 'alert', 'warning', 'server', 'srv-edge-lax', 'servers', 'edge-lax-01 agent report stream is delayed by 12 minutes.', true, 'edge-lax-01'),
   event('evt-cert-renewing', 'certificate.renewing', 'system', 'info', 'certificate', 'cert-hooks-renewing', 'certificates', 'hooks.example.test certificate renewal started.', true, 'hooks.example.test'),
-  event('evt-package-pending', 'packages.updates_available', 'alert', 'warning', 'server', 'srv-worker-nrt', 'packages', 'worker-nrt-queue-a has 22 package updates pending.', true, 'worker-nrt-queue-a'),
   ...Array.from({ length: 56 }, (_, index) => {
     const categories = ['application', 'task', 'alert', 'log', 'runtime', 'system'];
     const severities = ['info', 'warning', 'error'];
@@ -65,40 +57,91 @@ export const mockSystemEvents: SystemEventDto[] = [
 ];
 
 export function applicationOperationDetail(operationId: string): ApplicationOperationDetailDto | null {
-  const operation = mockApplicationOperations.find((item) => item.operationId === operationId);
-  if (!operation || !operation.detailAvailable) return null;
-  return {
-    operation,
-    targets: Array.from({ length: operation.targetTotal }, (_, index) => ({
-      id: `${operation.operationId}-target-${index + 1}`,
-      serverId: `srv-edge-${index + 1}`,
-      serverName: `edge-${index + 1}`,
-      action: operation.action,
-      status: index < operation.targetFailed ? 'failed' : index < operation.targetSucceeded ? 'succeeded' : operation.status === 'queued' ? 'queued' : 'running',
-      stage: index < operation.targetFailed ? 'verify' : 'apply',
-      error: index < operation.targetFailed ? operation.failureSummary || 'Target failed.' : '',
-      logRef: `log:${operation.operationId}:${index + 1}`,
-      updatedAt: operation.latestEventAt,
-    })),
-    events: [
-      {
-        id: `${operation.operationId}-created`,
-        eventType: 'application.operation.created',
-        severity: 'info',
-        summary: `${operation.applicationNameSnapshot} operation was created.`,
-        occurredAt: operation.startedAt,
-        detailAvailable: true,
-      },
-      {
-        id: `${operation.operationId}-latest`,
-        eventType: operation.status === 'failed' ? 'application.operation.failed' : 'application.operation.target.started',
-        severity: operation.targetFailed ? 'error' : 'info',
-        summary: operation.failureSummary || `${operation.applicationNameSnapshot} operation updated.`,
-        occurredAt: operation.latestEventAt,
-        detailAvailable: true,
-      },
-    ],
-  };
+  const found = mockApplicationOperations.find((item) => item.operationId === operationId);
+  if (!found) return null;
+  const startedAt = found.startedAt;
+  const endedAt = found.finishedAt || found.latestAt;
+  const targets: ApplicationOperationTargetDto[] = [];
+  for (let index = 0; index < found.targetTotal; index++) {
+    const failed = index < found.targetFailed;
+    const succeeded = !failed && index < found.targetSucceeded;
+    const status = failed ? 'failed' : succeeded ? 'succeeded' : found.status === 'queued' ? 'queued' : 'running';
+    const serverId = `srv-edge-${index + 1}`;
+    const serverName = `edge-${index + 1}`;
+    const stages: ApplicationOperationStageDto[] = stageSamples(found, index, status, failed, startedAt, endedAt);
+    targets.push({
+      id: `${operationId}-target-${index + 1}`,
+      operationId,
+      applicationId: found.applicationId,
+      serverId,
+      serverName,
+      action: found.action,
+      state: failed ? 'failed' : succeeded ? 'succeeded' : status === 'queued' ? 'ready' : 'applying',
+      status,
+      stage: failed ? 'verify' : status === 'queued' ? 'waiting' : 'verify',
+      claimedTaskId: `task-deploy-${index + 1}`,
+      desiredState: 'running',
+      desiredGeneration: 3,
+      desiredSpecHash: '8f2a1c9d',
+      observedState: found.action === 'stop' ? 'running' : index === 0 ? 'exited' : 'stopped',
+      observedExitCode: index === 0 ? '137' : '',
+      observedError: index === 0 ? 'OOMKilled' : '',
+      observedGeneration: 2,
+      observedSpecHash: 'c91b7e42',
+      observedImage: 'ghcr.io/example/storefront:1.8.0',
+      observedAt: startedAt,
+      errorCode: failed ? 'verify_failed' : '',
+      errorMessage: failed ? found.failureSummary || 'Target reported a runtime error.' : '',
+      errorDetail: failed ? 'Readiness probe timed out after 30s.' : '',
+      createdAt: startedAt,
+      startedAt,
+      finishedAt: status === 'succeeded' || failed ? endedAt : undefined,
+      updatedAt: status === 'succeeded' || failed ? endedAt : found.latestAt,
+      stages,
+    });
+  }
+  // 一台“一致”服务器样本
+  targets.push({
+    id: `${operationId}-consistent-edge-9`,
+    operationId,
+    applicationId: found.applicationId,
+    serverId: 'srv-edge-9',
+    serverName: 'edge-9',
+    state: 'consistent',
+    status: 'consistent',
+    desiredState: 'running',
+    desiredGeneration: 3,
+    createdAt: startedAt,
+    updatedAt: endedAt,
+    stages: [],
+  });
+  return { operation: found, targets };
+}
+
+function stageSamples(found: ApplicationOperationDto, index: number, status: string, failed: boolean, startedAt: string | undefined, endedAt: string): ApplicationOperationStageDto[] {
+  const base = new Date(startedAt ?? now.toISOString()).getTime();
+  const steps: Array<{ stage: string; seconds: number; detail: string }> = [
+    { stage: 'write_files', seconds: 36, detail: index === 0 ? '已写入 5 个文件：nginx.conf、app.env、docker-compose.yml、.env.production、health-check.sh' : '已写入 5 个文件：nginx.conf、app.env、docker-compose.yml、.env.production、health-check.sh' },
+    { stage: 'pull_image', seconds: 15, detail: '镜像 ghcr.io/example/storefront:1.9.0 已存在，跳过下载（digest abc123...）' },
+    { stage: 'create_container', seconds: 44, detail: `容器 storefront-edge${index + 1}（ID 8be2...d11）已创建，端口映射 3000:8080，内存 512MB` },
+    { stage: 'start_container', seconds: 12, detail: '容器已启动，状态 running' },
+    { stage: 'verify', seconds: 51, detail: failed ? 'GET /ready 返回 503 Service Unavailable，30 秒超时，错误码 verify_failed' : 'GET /ready 返回 200 OK，耗时 90ms' },
+  ];
+  let cursor = base;
+  return steps.map((step, stepIndex) => {
+    const start = cursor;
+    cursor += step.seconds * 1000;
+    const isLast = stepIndex === steps.length - 1;
+    const stepStatus = failed && isLast ? 'failed' : 'succeeded';
+    return {
+      id: `${found.operationId}-stage-${index + 1}-${stepIndex + 1}`,
+      stage: step.stage,
+      status: stepStatus,
+      detail: step.detail,
+      startedAt: new Date(start).toISOString(),
+      finishedAt: new Date(start + step.seconds * 1000).toISOString(),
+    };
+  });
 }
 
 const mockDetailErrors: Record<string, string> = {
@@ -122,14 +165,13 @@ export function systemEventDetail(eventId: string): SystemEventDetailDto | null 
 function operation(
   operationId: string,
   applicationId: string,
-  applicationNameSnapshot: string,
+  applicationName: string,
   action: string,
   source: string,
   status: string,
   targetTotal: number,
   targetSucceeded: number,
   targetFailed: number,
-  detailAvailable: boolean,
   failureSummary: string,
 ): ApplicationOperationDto {
   const seed = numericSeed(operationId);
@@ -137,21 +179,21 @@ function operation(
   return {
     operationId,
     applicationId,
-    applicationNameSnapshot,
+    applicationName,
     action,
     source,
     triggeredBy: source === 'user' ? 'admin' : source,
-    triggerReason: source === 'system' ? 'runtime drift detected' : '',
     status,
     startedAt: new Date(now.getTime() - seed * 90000).toISOString(),
     finishedAt: ['succeeded', 'failed', 'partial_failed', 'cancelled'].includes(status) ? latest : undefined,
     targetTotal,
     targetSucceeded,
     targetFailed,
-    latestEventAt: latest,
-    detailAvailable,
-    detailPrunedAt: detailAvailable ? undefined : new Date(now.getTime() - seed * 30000).toISOString(),
+    targetServers: Array.from({ length: targetTotal }, (_, index) => `edge-${index + 1}`).concat('edge-9'),
+    latestAt: latest,
     failureSummary,
+    createdAt: new Date(now.getTime() - seed * 95000).toISOString(),
+    updatedAt: latest,
   };
 }
 

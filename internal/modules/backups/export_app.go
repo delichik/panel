@@ -217,17 +217,18 @@ func (a *ExportApp) run(ctx context.Context, password string) {
 		return
 	}
 	a.setExportID(marker.ExportID)
-	if err := checkpointSQLiteFiles(ctx, a.cfg.AppDatabase, a.cfg.LogDatabase, a.cfg.MetricsDatabase); err != nil {
+	if err := checkpointSQLiteFiles(ctx, a.cfg.AppDatabase, a.cfg.LogDatabase, a.cfg.CoordinationDatabase, a.cfg.MetricsDatabase); err != nil {
 		a.fail("backup_checkpoint_failed", "Unable to checkpoint databases", false)
 		return
 	}
 	a.set(PhaseArchiving, 45, "")
 	plain, manifest, err := buildArchive(ArchiveConfig{
-		DataRoot:        a.cfg.DataRoot,
-		AppDatabase:     a.cfg.AppDatabase,
-		LogDatabase:     a.cfg.LogDatabase,
-		MetricsDatabase: a.cfg.MetricsDatabase,
-		PanelVersion:    buildinfo.Version,
+		DataRoot:             a.cfg.DataRoot,
+		AppDatabase:          a.cfg.AppDatabase,
+		LogDatabase:          a.cfg.LogDatabase,
+		CoordinationDatabase: a.cfg.CoordinationDatabase,
+		MetricsDatabase:      a.cfg.MetricsDatabase,
+		PanelVersion:         buildinfo.Version,
 	}, marker.Encrypt)
 	if err != nil {
 		a.fail("backup_archive_failed", "Unable to build backup archive", false)

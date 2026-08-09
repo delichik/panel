@@ -1,4 +1,4 @@
-﻿# 前端模块
+# 前端模块
 
 ## 品牌
 
@@ -130,14 +130,14 @@
 - 诊断页顶部提供 pprof 开关卡片，开启后展示本机 pprof 访问地址；状态与开关分别使用 `GET /api/v1/debug/pprof` 与 `PUT /api/v1/debug/pprof`。
 - Mock 模式覆盖同名正式路径，包含正常、失败、长日志、维护中、保存冲突、诊断失败保留旧快照和任务中心多页分页样本；未实现路径继续返回 `mock_route_not_found`。
 
-### 运行事件：操作记录 + 系统事件
+### 运行事件：协调记录 + 系统事件
 
-`web/src/views/application-operations/` 与 `web/src/views/system-events/` 是统一运行事件能力的两个前端页面族：
+`web/src/views/application-operations/`（协调记录）与 `web/src/views/system-events/`（系统事件）是两个独立页面族，不再共用同一套组件结构：
 
-- 操作记录读取 `/api/v1/application-operations`，主体是应用 operation 投影，支持按应用 ID、来源和状态筛选。列表应用列只展示应用名称快照，详情标题使用应用名称快照，用户可见位置不直接展示 `applicationId` / `operationId` 原始 id。列表状态列只展示状态徽标，失败或部分失败的摘要只在详情弹窗中展示；详情已清理时详情按钮禁用并显示清理提示。
+- 协调记录页（页面名“协调记录”，原“操作记录”）读取 `/api/v1/application-operations`，主体是协调库生命周期操作的读时聚合，支持按应用 ID、来源和状态筛选。页面为左列表 + 右详情：左侧每条显示应用/设施名、操作、结果徽标、涉及服务器（含“一致”服务器）、失败原因、时间/来源；右侧详情显示头部（结果与失败目标）、服务器列表（每台服务器的状态、不一致说明、期望 vs 实际、当前阶段、步骤日志按钮），“步骤日志”从右侧抽屉按时间展示每步（开始时间、耗时、结果、详情）。用户可见位置不展示 `applicationId` / `operationId` / `srv_xxx` 原始 id，设施统一显示“入口代理设施”。
 - 系统事件读取 `/api/v1/system-events`，主体是诊断事件，支持按关联对象 ID、级别和类别筛选。页面只展示后端提供的事件类型与类别，不假设独立 alert 服务。
-- 两个页面均使用 `ListPage`、`SearchInput`、`Select`、`Table`、`PaginationBar`、`StatusBadge` 和 `Dialog`，保持桌面内部滚动，不恢复页面级滚动。
-- Mock 模式覆盖同名正式路径，包含详情可用、详情已清理、分页和筛选样本。
+- 协调记录页使用 `MasterDetailLayout`、`SearchInput`、`Select`、`PaginationBar`、`StatusBadge`、`Badge` 和 `ConsolePage`，保持桌面内部滚动，不恢复页面级滚动；系统事件页保持原有列表结构。
+- Mock 模式覆盖同名正式路径，包含步骤日志、一致服务器、分页和筛选样本。
 
 ### 阶段 6：DNS + 证书 + 密钥资产
 

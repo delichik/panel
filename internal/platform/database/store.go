@@ -17,6 +17,7 @@ import (
 type Store struct {
 	appDB     *sql.DB
 	logDB     *sql.DB
+	coordDB   *sql.DB
 	metricsDB *sql.DB
 }
 
@@ -24,7 +25,7 @@ func Open(cfg config.Config) (*Store, error) {
 	if err := migrateLegacyLogDatabasePath(cfg.LogDatabase); err != nil {
 		return nil, err
 	}
-	for _, p := range []string{cfg.AppDatabase, cfg.LogDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
+	for _, p := range []string{cfg.AppDatabase, cfg.LogDatabase, cfg.CoordinationDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
 		dir := p
 		if filepath.Ext(p) != "" {
 			dir = filepath.Dir(p)
@@ -42,16 +43,24 @@ func Open(cfg config.Config) (*Store, error) {
 		_ = appDB.Close()
 		return nil, err
 	}
+	coordDB, err := sql.Open("sqlite", sqliteDSN(cfg.CoordinationDatabase))
+	if err != nil {
+		_ = logDB.Close()
+		_ = appDB.Close()
+		return nil, err
+	}
 	metricsDB, err := sql.Open("sqlite", sqliteDSN(cfg.MetricsDatabase))
 	if err != nil {
+		_ = coordDB.Close()
 		_ = logDB.Close()
 		_ = appDB.Close()
 		return nil, err
 	}
 	configureDB(appDB)
 	configureDB(logDB)
+	configureDB(coordDB)
 	configureDB(metricsDB)
-	s := &Store{appDB: appDB, logDB: logDB, metricsDB: metricsDB}
+	s := &Store{appDB: appDB, logDB: logDB, coordDB: coordDB, metricsDB: metricsDB}
 	if err := s.Migrate(context.Background()); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -140,6 +149,7 @@ func configureDB(db *sql.DB) {
 
 func (s *Store) AppDB() *sql.DB     { return s.appDB }
 func (s *Store) LogDB() *sql.DB     { return s.logDB }
+func (s *Store) CoordDB() *sql.DB   { return s.coordDB }
 func (s *Store) MetricsDB() *sql.DB { return s.metricsDB }
 
 func (s *Store) Close() error {
@@ -152,6 +162,11 @@ func (s *Store) Close() error {
 	}
 	if s.logDB != nil {
 		if e := s.logDB.Close(); err == nil {
+			err = e
+		}
+	}
+	if s.coordDB != nil {
+		if e := s.coordDB.Close(); err == nil {
 			err = e
 		}
 	}

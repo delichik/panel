@@ -25,34 +25,35 @@
 
 ## 数据与行为约定
 
-- “操作记录”是“应用”一级菜单下的产品入口，展示用户主动操作和系统自动协调产生的应用变更，不复用旧 `/tasks` 页面；路由保持 `/application-operations`。
+- “协调记录”（原“操作记录”）是“应用”一级菜单下的产品入口，展示“应用在服务器上检测到状态不一致后执行变更”的记录：改了什么、过程（步骤日志）、结果与失败原因；只读，不复用旧 `/tasks` 页面；路由保持 `/application-operations`。
 - “系统事件”用于诊断，展示后端提供的运行事件类型、严重级别、关联对象、来源、摘要和详情引用，不承担应用工作进度页职责。
 - 旧 `/tasks` 路由可保留兼容，但不在主导航、概览快捷入口或应用详情入口中出现，也不重定向到新页面。
-- 应用详情的操作记录入口跳转到 `/application-operations?applicationId=<id>`，由应用操作投影查询承载最近操作，不维护独立应用操作历史逻辑。操作记录列表与详情面向用户展示可读信息：列表应用列使用 `applicationNameSnapshot`，详情标题使用应用名称快照，不直接展示 `applicationId` / `operationId` 原始 id。
-- 失败或部分失败的操作记录只在详情弹窗中展示 `failureSummary` 失败摘要，详情中的失败摘要保留完整换行与折行；摘要为空时不展示失败信息。
-- 操作记录列表展示设施隐藏身份 `facility-reverse-proxy` 的部署/同步记录；前端按 `applicationId` 把应用列与详情标题显示为翻译后的“入口代理设施”，不展示内部快照名 `__panel_facility_reverse_proxy__`。设施应用详情页仍展示最近一次操作状态，不依赖操作记录列表。
-- 详情保留和记录保留是不同配置。详情已清理时列表仍显示摘要，详情按钮必须禁用并提示 `详情已清理` / `Detail has been cleaned up`。
+- 应用详情的协调记录入口跳转到 `/application-operations?applicationId=<id>`。记录列表与详情由应用模块读取时直接聚合协调库的 `application_lifecycle_operations` + `application_lifecycle_targets`，不建投影表；列表应用列使用解析出的应用名（应用已删除回退应用 id），不直接展示 `applicationId` / `operationId` 原始 id。
+- 失败或部分失败的记录在详情头部展示失败目标与 `failureSummary` 失败摘要（来自目标错误信息）；失败只标注在对应服务器上，不影响其他并行执行的服务器。
+- 协调记录列表展示设施隐藏身份 `facility-reverse-proxy` 的部署/同步记录；前端按 `applicationId` 把应用列与详情标题显示为翻译后的“入口代理设施”，不展示内部名 `__panel_facility_reverse_proxy__`。
+- 记录不依赖事件保留期：记录摘要与目标长期保留；仅目标步骤日志按保留设置清理（抽屉显示“暂无步骤日志”）。
 - 前端不假设独立告警服务。系统事件页只按 `system-events` API 返回的 `category` / `eventType` / `severity` 展示。
 - 事件 `category` 只使用 `application`、`task`、`alert`、`log`、`runtime`、`system`。任务事件写入 `task`，任务日志引用写入 `log`，应用操作事件写入 `application`。
 - 新事件系统不迁移旧任务历史；空态必须说明只显示启用后产生的新记录。
-- 操作记录和系统事件页的筛选变化必须先把页码归一到第一页，并只发起一次有效列表加载；非法 URL 页码回退为第一页。列表与详情只允许最新请求提交状态，避免快速筛选、翻页或切换详情时旧响应覆盖当前内容。
-- 操作记录和系统事件列表的详情按钮 loading 按行记录（记录当前加载的行 id），只对点击的行显示 loading，不影响整列按钮。
+- 协调记录页的筛选变化必须先把页码归一到第一页，并只发起一次有效列表加载；非法 URL 页码回退为第一页。列表与详情只允许最新请求提交状态，避免快速筛选、翻页或切换详情时旧响应覆盖当前内容。
+- 协调记录页为左列表 + 右详情 + 右侧“步骤日志”抽屉；抽屉在切换记录/筛选/翻页时关闭。
 - 系统事件列表与详情的 `event` 包含 `subjectName` 字段：后端在读取时按 `subjectType` 实时解析正式名称（应用、服务器、证书、DNS 域名、密钥资产、任务摘要、操作记录名称），不落库、不保存快照；解析不到时前端回退显示“类型标签 + id”。前端“关联对象”列与详情按“类型标签 + 名称”展示。
 
 ## 后端实现入口
 
-- 后端运行事件模块位于 `internal/modules/runtimeevents/`，包含事件写入服务、应用操作投影查询、系统事件查询、HTTP handler 和独立清理 worker。
-- 事件摘要表 `runtime_events`、详情表 `runtime_event_details`、应用操作投影表 `application_operation_records` 都位于 `Store.LogDB()`，通过 `internal/platform/database/migrations.go` 创建；runtime settings 仍位于 `Store.AppDB()` 的 `runtime_settings`。
-- `/api/v1/application-operations` 查询 `application_operation_records` 投影，不实时扫描事件流聚合；详情接口返回 `{ operation, events, targets }`，当前无专门 target 明细投影时 `targets` 返回空数组。
-- `/api/v1/system-events` 查询 `runtime_events`，默认不固定 `category=system`；详情接口返回 `{ event, payload, error, logRefs, taskRefs, targetRefs }`，`error` 携带详情中保存的错误信息；详情过期后引用字段返回空数组并保留摘要事件。
+- 后端运行事件模块位于 `internal/modules/runtimeevents/`，只负责系统事件的写入、查询、HTTP handler 和独立清理 worker；不再提供应用操作记录接口。
+- 事件摘要表 `runtime_events`、详情表 `runtime_event_details` 位于 `Store.LogDB()`；`application_operation_records` 投影已废弃（不建、不用）。
+- 协调库 `Store.CoordDB()`（默认 `data/db/coordination.db`）保存 `application_lifecycle_operations`、`application_lifecycle_targets`（含观测快照列）与 `application_target_stages`（步骤日志）。
+- `/api/v1/application-operations` 列表/详情由应用模块（`internal/modules/applications`）提供：列表/详情读取时直接聚合协调库生命周期表；详情返回 `{ operation, targets }`，targets 含每台服务器的期望 vs 观测快照、错误、`stages[]` 步骤日志；不再返回事件。
+- `/api/v1/system-events` 查询 `runtime_events`，默认不固定 `category=system`；详情接口返回 `{ event, payload, error, logRefs, taskRefs, targetRefs }`，`error` 携带详情中保存的错误信息；详情过期后引用字段返回空数组并保留摘要事件。系统事件的 `operation` 主体名称从协调库解析。
 - `runtimeEventRetentionDays`、`runtimeEventDetailRetentionDays`、`runtimeEventCleanupSchedule` 通过 `/api/v1/settings/runtime` 暴露。记录保留时间必须大于或等于详情保留时间，校验失败不自动吞掉错误配置。
 - `runtimeevents.CleanupWorker` 独立于 metrics cleanup：先清理详情并把事件与应用操作投影标记为详情不可用，再按记录保留时间删除摘要和投影。
 
 ## 首批写入点
 
-- `internal/modules/applications` 在 lifecycle operation 创建、target queued、dispatcher claim target、target succeeded/failed、operation completed/failed 时写入应用类事件并更新应用操作投影。
+- `internal/modules/applications` 在 lifecycle operation 创建、target queued、dispatcher claim target、target succeeded/failed、operation completed/failed 时写入应用类事件（仅作系统事件页诊断；协调记录不依赖这些事件）。
 - `internal/modules/tasks` 在任务创建、开始、完成、失败、可重试失败、取消、重试时写入任务类事件，任务日志引用写入日志类事件。日志事件只保存日志引用和摘要，不复制完整日志正文。
-- 应用 lifecycle 仍以 `application_lifecycle_operations` / `application_lifecycle_targets` 作为 durable 协调事实；操作记录是面向页面的投影，不替代 lifecycle 状态机。
+- 应用 lifecycle 以 `application_lifecycle_operations` / `application_lifecycle_targets` 作为 durable 协调事实（位于协调库）；协调记录页读取时直接聚合这两张表，不建投影。
 
 ## 验证
 

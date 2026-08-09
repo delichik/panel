@@ -122,82 +122,6 @@ func (*ApplicationRevision) ExtraIndexDDL() map[string][]string {
 	}
 }
 
-// ApplicationLifecycleOperation 对应 application_lifecycle_operations。
-type ApplicationLifecycleOperation struct {
-	ID            string    `orm:"primary_key"`
-	ApplicationID string    `orm:"not_null"`
-	Type          string    `orm:"not_null"`
-	Status        string    `orm:"not_null;default:'pending'"`
-	TaskID        string    `orm:"not_null;default:''"`
-	Generation    int       `orm:"not_null;default:0"`
-	SpecHash      string    `orm:"not_null;default:''"`
-	Trigger       string    `orm:"not_null;default:''"`
-	Error         string    `orm:"not_null;default:''"`
-	CreatedAt     time.Time `orm:"not_null"`
-	StartedAt     *time.Time
-	FinishedAt    *time.Time
-	UpdatedAt     time.Time `orm:"not_null"`
-}
-
-func (*ApplicationLifecycleOperation) TableName() string { return "application_lifecycle_operations" }
-
-// ExtraIndexDDL 返回 application_lifecycle_operations 表无法用 orm tag 表达的复合索引。
-func (*ApplicationLifecycleOperation) ExtraIndexDDL() map[string][]string {
-	return map[string][]string{
-		"application_lifecycle_operations": {
-			"CREATE INDEX IF NOT EXISTS idx_application_lifecycle_operations_app_created ON application_lifecycle_operations(application_id, created_at)",
-		},
-	}
-}
-
-// ApplicationLifecycleTarget 对应 application_lifecycle_targets。
-type ApplicationLifecycleTarget struct {
-	ID                string    `orm:"primary_key"`
-	OperationID       string    `orm:"not_null;references:application_lifecycle_operations(id);on_delete:CASCADE"`
-	ApplicationID     string    `orm:"not_null"`
-	ServerID          string    `orm:"not_null"`
-	Action            string    `orm:"not_null;default:'apply'"`
-	State             string    `orm:"not_null;default:'planned'"`
-	Status            string    `orm:"not_null;default:'pending'"`
-	TargetKey         string    `orm:"not_null;default:''"`
-	DesiredState      string    `orm:"not_null;default:'running'"`
-	DesiredGeneration int       `orm:"not_null;default:0"`
-	DesiredSpecHash   string    `orm:"not_null;default:''"`
-	Priority          int       `orm:"not_null;default:0"`
-	Attempt           int       `orm:"not_null;default:0"`
-	NextRunAt         time.Time `orm:"not_null;default:''"`
-	LeaseOwner        string    `orm:"not_null;default:''"`
-	LeaseExpiresAt    time.Time `orm:"not_null;default:''"`
-	ClaimedTaskID     string    `orm:"not_null;default:''"`
-	InstanceID        string    `orm:"not_null;default:''"`
-	ContainerName     string    `orm:"not_null;default:''"`
-	ContainerID       string    `orm:"not_null;default:''"`
-	Stage             string    `orm:"not_null;default:''"`
-	Error             string    `orm:"not_null;default:''"`
-	ErrorCode         string    `orm:"not_null;default:''"`
-	ErrorMessage      string    `orm:"not_null;default:''"`
-	ErrorDetail       string    `orm:"not_null;default:''"`
-	CreatedAt         time.Time `orm:"not_null"`
-	StartedAt         *time.Time
-	FinishedAt        *time.Time
-	UpdatedAt         time.Time `orm:"not_null"`
-}
-
-func (*ApplicationLifecycleTarget) TableName() string { return "application_lifecycle_targets" }
-
-// ExtraIndexDDL 返回 application_lifecycle_targets 表无法用 orm tag 表达的
-// 复合 UNIQUE、复合索引与部分唯一索引（活跃目标去重）。
-func (*ApplicationLifecycleTarget) ExtraIndexDDL() map[string][]string {
-	return map[string][]string{
-		"application_lifecycle_targets": {
-			"CREATE UNIQUE INDEX IF NOT EXISTS uq_application_lifecycle_targets_operation_server ON application_lifecycle_targets(operation_id, server_id)",
-			"CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_state_due ON application_lifecycle_targets(state, next_run_at)",
-			"CREATE INDEX IF NOT EXISTS idx_application_lifecycle_targets_app_server ON application_lifecycle_targets(application_id, server_id, state)",
-			"CREATE UNIQUE INDEX IF NOT EXISTS idx_application_lifecycle_targets_active_key ON application_lifecycle_targets(target_key) WHERE target_key <> '' AND state IN ('planned','ready','claimed','preparing','applying','stopping','purging','verifying','failed_retryable')",
-		},
-	}
-}
-
 // RuntimeEvent 对应 runtime_events。
 type RuntimeEvent struct {
 	ID              string    `orm:"primary_key"`
@@ -246,40 +170,6 @@ type RuntimeEventDetail struct {
 }
 
 func (*RuntimeEventDetail) TableName() string { return "runtime_event_details" }
-
-// ApplicationOperationRecord 对应 application_operation_records。
-type ApplicationOperationRecord struct {
-	OperationID             string `orm:"primary_key"`
-	ApplicationID           string `orm:"not_null"`
-	ApplicationNameSnapshot string `orm:"not_null;default:''"`
-	Action                  string `orm:"not_null;default:''"`
-	Source                  string `orm:"not_null;default:''"`
-	TriggeredBy             string `orm:"not_null;default:''"`
-	TriggerReason           string `orm:"not_null;default:''"`
-	Status                  string `orm:"not_null;default:'queued'"`
-	StartedAt               *time.Time
-	FinishedAt              *time.Time
-	TargetTotal             int       `orm:"not_null;default:0"`
-	TargetSucceeded         int       `orm:"not_null;default:0"`
-	TargetFailed            int       `orm:"not_null;default:0"`
-	LatestEventAt           time.Time `orm:"not_null"`
-	DetailAvailable         bool      `orm:"not_null;default:0"`
-	FailureSummary          string    `orm:"not_null;default:''"`
-	CreatedAt               time.Time `orm:"not_null"`
-	UpdatedAt               time.Time `orm:"not_null"`
-}
-
-func (*ApplicationOperationRecord) TableName() string { return "application_operation_records" }
-
-// ExtraIndexDDL 返回 application_operation_records 表无法用 orm tag 表达的复合索引。
-func (*ApplicationOperationRecord) ExtraIndexDDL() map[string][]string {
-	return map[string][]string{
-		"application_operation_records": {
-			"CREATE INDEX IF NOT EXISTS idx_application_operation_records_app_time ON application_operation_records(application_id, latest_event_at)",
-			"CREATE INDEX IF NOT EXISTS idx_application_operation_records_status_time ON application_operation_records(status, latest_event_at)",
-		},
-	}
-}
 
 // KeyAssetExport 对应 key_asset_exports。
 type KeyAssetExport struct {

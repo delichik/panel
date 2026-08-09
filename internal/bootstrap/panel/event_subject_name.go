@@ -32,7 +32,7 @@ func resolveSystemEventSubjectName(ctx context.Context, store *database.Store, s
 	case "key_asset":
 		return subjectNameFromAppDB(ctx, store, "key_assets", "name", subjectID)
 	case "operation":
-		return operationNameFromLogDB(ctx, store, subjectID)
+		return operationNameFromCoordDB(ctx, store, subjectID)
 	case "task", "task_batch":
 		return taskSummaryFromLogDB(ctx, store, subjectID)
 	default:
@@ -75,12 +75,12 @@ func applicationNamesFromIDs(ctx context.Context, store *database.Store, ids str
 	return strings.Join(names, ", ")
 }
 
-func operationNameFromLogDB(ctx context.Context, store *database.Store, operationID string) string {
-	var name string
-	if err := orm.New(store.LogDB()).From("application_operation_records").Select("application_name_snapshot").Where("operation_id = ?", operationID).ScanValue(ctx, &name); err != nil {
+func operationNameFromCoordDB(ctx context.Context, store *database.Store, operationID string) string {
+	var applicationID string
+	if err := orm.New(store.CoordDB()).From("application_lifecycle_operations").Select("application_id").Where("id = ?", operationID).ScanValue(ctx, &applicationID); err != nil {
 		return ""
 	}
-	return strings.TrimSpace(name)
+	return subjectNameFromAppDB(ctx, store, "applications", "name", strings.TrimSpace(applicationID))
 }
 
 func taskSummaryFromLogDB(ctx context.Context, store *database.Store, taskID string) string {

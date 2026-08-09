@@ -1,26 +1,24 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { Eye, RefreshCcw } from '@lucide/vue';
+import { RefreshCcw } from '@lucide/vue';
 import { applicationOperationsApi } from '@/api/applicationOperations';
+import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
-import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
 import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
+import Skeleton from '@/components/ui/Skeleton.vue';
 import StatusBadge from '@/components/ui/StatusBadge.vue';
-import Table from '@/components/ui/Table.vue';
-import Tooltip from '@/components/ui/Tooltip.vue';
-import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
+import ConsolePage from '@/components/templates/ConsolePage.vue';
+import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useErrorToast } from '@/components/ui/toast';
-import ListPage from '@/components/templates/ListPage.vue';
-import { translateRuntimeEventType, useI18n } from '@/i18n';
-import type { ApplicationOperationDetailDto, ApplicationOperationDto } from '@/types/applicationOperations';
+import { useI18n } from '@/i18n';
+import type { ApplicationOperationDetailDto, ApplicationOperationDto, ApplicationOperationTargetDto } from '@/types/applicationOperations';
 import { createLatestRequestGuard, normalizePage } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
-
-type OperationRow = ApplicationOperationDto & Record<string, unknown>;
 
 const { t } = useI18n();
 const route = useRoute();
@@ -29,11 +27,11 @@ const notifyError = useErrorToast();
 
 const FACILITY_REVERSE_PROXY_APPLICATION_ID = 'facility-reverse-proxy';
 
-function applicationLabel(operation: Pick<ApplicationOperationDto, 'applicationId' | 'applicationNameSnapshot'>): string {
+function applicationLabel(operation: Pick<ApplicationOperationDto, 'applicationId' | 'applicationName'>): string {
   if (operation.applicationId === FACILITY_REVERSE_PROXY_APPLICATION_ID) {
     return t('applicationsPage.entranceProxyFacility');
   }
-  return operation.applicationNameSnapshot || t('common.notAvailable');
+  return operation.applicationName || t('common.notAvailable');
 }
 
 const rows = ref<ApplicationOperationDto[]>([]);
@@ -44,22 +42,15 @@ const search = ref(String(route.query.applicationId || ''));
 const status = ref(String(route.query.status || ''));
 const source = ref(String(route.query.source || ''));
 const loading = ref(false);
-const detailLoadingId = ref('');
 const error = ref('');
+
+const selectedOperationId = ref(String(route.query.operationId || ''));
 const detail = ref<ApplicationOperationDetailDto | null>(null);
-const detailOpen = ref(false);
+const detailLoading = ref(false);
+const detailError = ref('');
+const drawerTarget = ref<ApplicationOperationTargetDto | null>(null);
 const listRequests = createLatestRequestGuard();
 const detailRequests = createLatestRequestGuard();
-
-const columns = computed<Array<{ key: keyof OperationRow & string; label: string; align?: 'left' | 'right' }>>(() => [
-  { key: 'applicationNameSnapshot', label: t('applicationOperationsPage.column.application') },
-  { key: 'action', label: t('applicationOperationsPage.column.action') },
-  { key: 'source', label: t('applicationOperationsPage.column.source') },
-  { key: 'status', label: t('common.status') },
-  { key: 'targetTotal', label: t('applicationOperationsPage.column.targets') },
-  { key: 'latestEventAt', label: t('applicationOperationsPage.column.latest') },
-  { key: 'operationId', label: t('common.actions'), align: 'right' },
-]);
 
 const statusOptions = computed(() => [
   { label: t('applicationOperationsPage.filter.allStatuses'), value: '' },
@@ -78,7 +69,110 @@ const sourceOptions = computed(() => [
   { label: t('applicationOperationsPage.source.scheduler'), value: 'scheduler' },
 ]);
 
+const failedTargets = computed<ApplicationOperationTargetDto[]>(() => {
+  const targets = detail.value?.targets ?? [];
+  return targets.filter((target) => target.status === 'failed' || target.errorCode || target.errorMessage || target.errorDetail);
+});
+
+const consistentTargets = computed<ApplicationOperationTargetDto[]>(() => {
+  const targets = detail.value?.targets ?? [];
+  return targets.filter((target) => target.status === 'consistent');
+});
+
+function actionLabel(value: string): string {
+  if (!value) return t('common.notAvailable');
+  const key = `applicationOperationsPage.action.${value}`;
+  const label = t(key);
+  return label === key ? value : label;
+}
+
+function sourceLabel(value: string): string {
+  const key = `applicationOperationsPage.source.${value}`;
+  const label = t(key);
+  return label === key ? value : label;
+}
+
+function statusLabel(value: string): string {
+  const key = `applicationOperationsPage.status.${value}`;
+  const label = t(key);
+  return label === key ? value : label;
+}
+
+function serverLabel(target: Pick<ApplicationOperationTargetDto, 'serverName' | 'serverId' | 'id'>): string {
+  return target.serverName || target.serverId || target.id || t('common.notAvailable');
+}
+
+function desiredStateLabel(value?: string): string {
+  if (!value) return t('common.notAvailable');
+  const key = `applicationOperationsPage.desiredState.${value}`;
+  const label = t(key);
+  return label === key ? value : label;
+}
+
+function stageLabel(value: string): string {
+  if (!value) return t('common.notAvailable');
+  const key = `applicationOperationsPage.stage.${value}`;
+  const label = t(key);
+  return label === key ? value : label;
+}
+
+function targetProgress(row: ApplicationOperationDto): string {
+  if (!row.targetTotal) return t('common.notAvailable');
+  return t('applicationOperationsPage.targetProgress', { succeeded: row.targetSucceeded, failed: row.targetFailed, total: row.targetTotal });
+}
+
+function isConsistent(target: ApplicationOperationTargetDto): boolean {
+  return target.status === 'consistent';
+}
+
+function mismatchText(target: ApplicationOperationTargetDto): string {
+  const parts: string[] = [];
+  const desired = target.desiredState;
+  const actual = target.observedState;
+  if (desired === 'running' && (actual === 'stopped' || actual === 'missing' || actual === 'failed' || actual === '')) {
+    if (actual === 'missing') {
+      parts.push(t('applicationOperationsPage.mismatch.neverDeployed'));
+    } else if (target.observedError) {
+      parts.push(t('applicationOperationsPage.mismatch.unexpectedExit', { error: target.observedError }));
+    } else {
+      parts.push(t('applicationOperationsPage.mismatch.notRunning'));
+    }
+  } else if (desired === 'stopped' && actual === 'running') {
+    parts.push(t('applicationOperationsPage.mismatch.shouldStop'));
+  }
+  if (target.desiredGeneration && target.observedGeneration && target.desiredGeneration !== target.observedGeneration) {
+    parts.push(t('applicationOperationsPage.mismatch.generation', { desired: target.desiredGeneration, actual: target.observedGeneration }));
+  } else if (target.desiredSpecHash && target.observedSpecHash && target.desiredSpecHash !== target.observedSpecHash) {
+    parts.push(t('applicationOperationsPage.mismatch.config'));
+  }
+  return parts.join('；');
+}
+
+function desiredActualText(target: ApplicationOperationTargetDto): string {
+  const desired = `${desiredStateLabel(target.desiredState)}${target.desiredGeneration ? t('applicationOperationsPage.mismatch.generationShort', { generation: target.desiredGeneration }) : ''}`;
+  const actual = target.observedState
+    ? `${desiredStateLabel(target.observedState)}${target.observedGeneration ? t('applicationOperationsPage.mismatch.generationShort', { generation: target.observedGeneration }) : ''}`
+    : t('common.notAvailable');
+  return `${t('applicationOperationsPage.desiredState')} ${desired} / ${t('applicationOperationsPage.mismatch.actual')} ${actual}`;
+}
+
+function targetErrorText(target: ApplicationOperationTargetDto): string {
+  return [target.errorMessage, target.errorDetail].map((value) => value?.trim()).filter(Boolean).join('\n');
+}
+
+function stageDuration(stage: { startedAt?: string; finishedAt?: string }): string {
+  if (!stage.startedAt || !stage.finishedAt) return '';
+  const seconds = Math.max(0, Math.round((Date.parse(stage.finishedAt) - Date.parse(stage.startedAt)) / 1000));
+  if (seconds < 60) return t('applicationOperationsPage.durationSeconds', { seconds });
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return t('applicationOperationsPage.durationMinutes', { minutes, seconds: rest });
+}
+
 watch([search, status, source], () => {
+  selectedOperationId.value = '';
+  detail.value = null;
+  drawerTarget.value = null;
   if (page.value !== 1) {
     page.value = 1;
     return;
@@ -86,7 +180,23 @@ watch([search, status, source], () => {
   syncQueryAndLoad();
 });
 
-watch(page, syncQueryAndLoad);
+watch(page, () => {
+  selectedOperationId.value = '';
+  detail.value = null;
+  drawerTarget.value = null;
+  syncQueryAndLoad();
+});
+
+watch(selectedOperationId, (operationId) => {
+  drawerTarget.value = null;
+  if (!operationId) {
+    detail.value = null;
+    detailError.value = '';
+    return;
+  }
+  const row = rows.value.find((item) => item.operationId === operationId);
+  if (row) void openDetail(row);
+});
 
 function syncQueryAndLoad() {
   void router.replace({
@@ -95,6 +205,7 @@ function syncQueryAndLoad() {
       applicationId: search.value || undefined,
       status: status.value || undefined,
       source: source.value || undefined,
+      operationId: selectedOperationId.value || undefined,
       page: page.value > 1 ? String(page.value) : undefined,
     },
   });
@@ -117,10 +228,16 @@ async function load() {
     rows.value = result.items;
     total.value = result.total;
     if (result.page && result.page !== page.value) page.value = result.page;
+    const selected = rows.value.find((item) => item.operationId === selectedOperationId.value);
+    if (selected && (!detail.value || detail.value.operation.operationId !== selected.operationId)) {
+      void openDetail(selected);
+    } else if (!selected) {
+      detail.value = null;
+    }
   } catch (err) {
     if (!listRequests.isCurrent(requestId)) return;
     error.value = err instanceof Error ? err.message : t('applicationOperationsPage.loadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationOperationsPage.loadFailed'));
+    notifyError(error.value);
     rows.value = [];
     total.value = 0;
   } finally {
@@ -129,124 +246,174 @@ async function load() {
 }
 
 async function openDetail(row: ApplicationOperationDto) {
-  if (!row.detailAvailable) return;
   const requestId = detailRequests.begin();
-  detailLoadingId.value = row.operationId;
-  detailOpen.value = true;
+  detailLoading.value = true;
+  detailError.value = '';
   detail.value = null;
+  drawerTarget.value = null;
   try {
     const result = await applicationOperationsApi.get(row.operationId);
     if (!detailRequests.isCurrent(requestId)) return;
     detail.value = result;
   } catch (err) {
     if (!detailRequests.isCurrent(requestId)) return;
-    error.value = err instanceof Error ? err.message : t('applicationOperationsPage.detailLoadFailed');
-    notifyError(err instanceof Error ? err.message : t('applicationOperationsPage.detailLoadFailed'));
-    detailOpen.value = false;
+    detailError.value = err instanceof Error ? err.message : t('applicationOperationsPage.detailLoadFailed');
+    notifyError(detailError.value);
   } finally {
-    if (detailRequests.isCurrent(requestId)) detailLoadingId.value = '';
+    if (detailRequests.isCurrent(requestId)) detailLoading.value = false;
   }
 }
 
-function statusLabel(value: string) {
-  return t(`applicationOperationsPage.status.${value}`);
-}
-
-function sourceLabel(value: string) {
-  const key = `applicationOperationsPage.source.${value}`;
-  const label = t(key);
-  return label === key ? value : label;
-}
-
-function eventTypeLabel(value: string) {
-  return translateRuntimeEventType(t, value);
-}
-
-function targetProgress(row: ApplicationOperationDto) {
-  if (!row.targetTotal) return t('common.notAvailable');
-  return t('applicationOperationsPage.targetProgress', { succeeded: row.targetSucceeded, failed: row.targetFailed, total: row.targetTotal });
+function retryDetail() {
+  const row = rows.value.find((item) => item.operationId === selectedOperationId.value);
+  if (row) void openDetail(row);
 }
 
 onMounted(load);
 </script>
 
 <template>
-  <ListPage>
-    <template #toolbar>
-      <div class="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_180px_180px_auto]">
-        <SearchInput v-model="search" clearable :label="t('applicationOperationsPage.applicationFilter')" :placeholder="t('applicationOperationsPage.applicationFilterPlaceholder')" :clear-label="t('common.clearSearch')" />
-        <Select v-model="status" :options="statusOptions" :placeholder="t('common.status')" />
-        <Select v-model="source" :options="sourceOptions" :placeholder="t('applicationOperationsPage.column.source')" />
-        <Button :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-      </div>
-    </template>
-
-    <div class="grid min-h-full gap-3">
-      <Table v-if="rows.length || loading" :columns="columns" :rows="rows as OperationRow[]" row-key="operationId" :loading="loading" :loading-label="t('applicationOperationsPage.loading')">
-        <template #applicationNameSnapshot="{ row }">
-          <div class="grid min-w-0 gap-1">
-            <strong class="truncate text-foreground">{{ applicationLabel(row) }}</strong>
+  <ConsolePage :title="t('routes.applicationOperations.title')" :description="t('routes.applicationOperations.description')">
+    <MasterDetailLayout class="h-full min-h-[640px]">
+      <template #master>
+        <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-card">
+          <div class="grid min-w-0 gap-3 border-b border-border p-4">
+            <SearchInput v-model="search" clearable :label="t('applicationOperationsPage.applicationFilter')" :placeholder="t('applicationOperationsPage.applicationFilterPlaceholder')" :clear-label="t('common.clearSearch')" />
+            <div class="grid grid-cols-2 gap-3">
+              <Select v-model="status" :options="statusOptions" :placeholder="t('common.status')" />
+              <Select v-model="source" :options="sourceOptions" :placeholder="t('applicationOperationsPage.column.source')" />
+            </div>
+            <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
           </div>
-        </template>
-        <template #action="{ row }">{{ t(`applicationOperationsPage.action.${row.action}`) }}</template>
-        <template #source="{ row }">{{ sourceLabel(row.source) }}</template>
-        <template #status="{ row }">
-          <StatusBadge class="shrink-0 justify-self-start" :status="row.status" domain="operation" :label="statusLabel(row.status)" />
-        </template>
-        <template #targetTotal="{ row }">{{ targetProgress(row) }}</template>
-        <template #latestEventAt="{ row }">{{ formatDateTime(row.latestEventAt, t('common.notAvailable')) }}</template>
-        <template #operationId="{ row }">
-          <Tooltip v-if="!row.detailAvailable" :text="t('applicationOperationsPage.detailPruned')">
-            <Button size="sm" disabled><Eye />{{ t('common.view') }}</Button>
-          </Tooltip>
-          <Button v-else size="sm" :loading="detailLoadingId === row.operationId" @click="openDetail(row)"><Eye />{{ t('common.view') }}</Button>
-        </template>
-      </Table>
-      <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
-        <template #actions>
-          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
-        </template>
-      </EmptyState>
-      <EmptyState v-else :title="t('applicationOperationsPage.empty')" :description="t('applicationOperationsPage.emptyHint')" />
-    </div>
-
-    <template #pagination>
-      <PaginationBar v-model:page="page" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')">
-        <template #summary="{ page: currentPage, pageCount, total: totalCount }">{{ t('applicationOperationsPage.paginationSummary', { page: currentPage, pages: pageCount, total: totalCount }) }}</template>
-      </PaginationBar>
-    </template>
-  </ListPage>
-
-  <Dialog v-model:open="detailOpen" size="large" :title="detail ? applicationLabel(detail.operation) : t('applicationOperationsPage.detailTitle')" :close-label="t('common.close')">
-    <div v-if="detailLoadingId !== ''" class="relative grid min-h-64 place-items-center">
-      <LoadingOverlay :label="t('applicationOperationsPage.loadingDetail')" />
-    </div>
-    <div v-else-if="detail" class="grid gap-4">
-      <section class="grid gap-2 rounded-xl border border-border p-3 text-sm">
-        <div><span class="text-muted-foreground">{{ t('common.status') }}</span> <StatusBadge :status="detail.operation.status" domain="operation" :label="statusLabel(detail.operation.status)" /></div>
-        <div><span class="text-muted-foreground">{{ t('applicationOperationsPage.column.targets') }}</span> <strong>{{ targetProgress(detail.operation) }}</strong></div>
-        <div v-if="detail.operation.failureSummary" class="whitespace-pre-wrap break-words rounded-lg border border-danger-border bg-danger-bg p-2 text-danger">{{ detail.operation.failureSummary }}</div>
-      </section>
-      <section>
-        <h3 class="m-0 mb-2 text-sm font-semibold">{{ t('applicationOperationsPage.targets') }}</h3>
-        <div class="grid gap-2 motion-stagger">
-          <EmptyState v-if="!detail.targets.length" :title="t('applicationOperationsPage.noTargets')" :description="t('applicationOperationsPage.noTargetsHint')" />
-          <div v-for="target in detail.targets" :key="target.id" class="motion-reveal grid gap-1 rounded-xl border border-border p-3 text-sm">
-            <div class="flex items-center justify-between gap-2"><strong>{{ target.serverName || target.serverId || target.id }}</strong><StatusBadge :status="target.status" domain="operation" :label="target.status" /></div>
-            <span class="text-muted-foreground">{{ target.stage || target.action }}</span>
-            <span v-if="target.error" class="text-danger">{{ target.error }}</span>
+          <div class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-2">
+            <div v-if="loading && !rows.length" class="grid gap-2">
+              <Skeleton v-for="item in 6" :key="item" class="h-24" />
+            </div>
+            <EmptyState v-else-if="error && !rows.length" :title="t('common.loadFailed')" :description="error">
+              <template #actions>
+                <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+              </template>
+            </EmptyState>
+            <EmptyState v-else-if="!rows.length" :title="t('applicationOperationsPage.empty')" :description="t('applicationOperationsPage.emptyHint')" />
+            <button v-for="row in rows" v-else :key="row.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedOperationId === row.operationId ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedOperationId === row.operationId ? 'true' : undefined" @click="selectedOperationId = row.operationId">
+              <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1">
+                <div class="grid min-w-0 gap-0.5">
+                  <strong class="min-w-0 truncate text-foreground">{{ applicationLabel(row) }}</strong>
+                  <span class="min-w-0 truncate text-xs text-muted-foreground">{{ actionLabel(row.action) }}</span>
+                </div>
+                <StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="row.status" domain="operation" :label="statusLabel(row.status)" />
+              </div>
+              <div v-if="row.targetServers?.length" class="flex min-w-0 flex-wrap gap-1">
+                <Badge v-for="server in row.targetServers" :key="server" class="max-w-full shrink-0 whitespace-nowrap">{{ server }}</Badge>
+              </div>
+              <div v-else class="min-w-0 truncate text-xs text-muted-foreground">{{ targetProgress(row) }}</div>
+              <p v-if="row.failureSummary" class="m-0 min-w-0 truncate text-xs text-danger">{{ row.failureSummary }}</p>
+              <div class="flex min-w-0 items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span class="min-w-0 truncate">{{ sourceLabel(row.source) }}</span>
+                <span class="shrink-0">{{ formatDateTime(row.latestAt, '') }}</span>
+              </div>
+            </button>
           </div>
+          <PaginationBar v-model:page="page" class="min-w-0 overflow-hidden px-3" :page-size="pageSize" :total="total" :loading="loading" :previous-label="t('common.previous')" :next-label="t('common.next')">
+            <template #summary="{ page: currentPage, pageCount }">
+              {{ t('applicationOperationsPage.paginationSummary', { page: currentPage, pages: pageCount, total }) }}
+            </template>
+          </PaginationBar>
+        </aside>
+      </template>
+
+      <template #detail>
+        <main class="grid min-h-0 min-w-0 overflow-hidden">
+          <EmptyState v-if="!selectedOperationId" :title="t('applicationOperationsPage.selectRecord')" :description="t('applicationOperationsPage.selectRecordHint')" />
+          <EmptyState v-else-if="detailError" :title="t('applicationOperationsPage.detailLoadFailed')" :description="detailError">
+            <template #actions>
+              <Button size="sm" :loading="detailLoading" @click="retryDetail"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
+          <div v-else-if="detailLoading" class="relative grid min-h-64 place-items-center">
+            <LoadingOverlay :label="t('applicationOperationsPage.loadingDetail')" />
+          </div>
+          <article v-else-if="detail" class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
+            <header class="grid min-w-0 gap-3 border-b border-border p-5">
+              <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1">
+                <h2 class="m-0 min-w-0 truncate text-xl font-semibold">{{ applicationLabel(detail.operation) }}</h2>
+                <StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="detail.operation.status" domain="operation" :label="statusLabel(detail.operation.status)" />
+              </div>
+              <p class="m-0 min-w-0 truncate text-sm text-muted-foreground">{{ actionLabel(detail.operation.action) }}，{{ sourceLabel(detail.operation.source) }}</p>
+              <p class="m-0 min-w-0 truncate text-xs text-muted-foreground">
+                {{ t('applicationOperationsPage.startedAt') }}：{{ formatDateTime(detail.operation.startedAt, t('common.notAvailable')) }}
+                <template v-if="detail.operation.finishedAt">，{{ t('applicationOperationsPage.finishedAt') }}：{{ formatDateTime(detail.operation.finishedAt, t('common.notAvailable')) }}</template>
+              </p>
+              <p class="m-0 min-w-0 truncate text-xs text-muted-foreground">{{ t('applicationOperationsPage.resultLine', { total: detail.operation.targetTotal, succeeded: detail.operation.targetSucceeded, failed: detail.operation.targetFailed }) }}</p>
+              <div v-if="failedTargets.length" class="grid min-w-0 gap-2 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+                <strong>{{ t('applicationOperationsPage.failedTargets') }}</strong>
+                <div v-for="target in failedTargets" :key="target.id" class="grid min-w-0 gap-0.5">
+                  <span class="font-medium">{{ serverLabel(target) }}</span>
+                  <span v-if="target.errorCode" class="text-xs">{{ t('applicationOperationsPage.errorCode') }}：{{ target.errorCode }}</span>
+                  <span v-if="target.errorMessage" class="[overflow-wrap:anywhere]">{{ target.errorMessage }}</span>
+                  <span v-if="target.errorDetail" class="text-xs [overflow-wrap:anywhere]">{{ target.errorDetail }}</span>
+                </div>
+              </div>
+            </header>
+
+            <div class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden p-4">
+              <section class="motion-reveal rounded-2xl border border-border bg-background p-4">
+                <h3 class="m-0 mb-3 text-sm font-semibold">{{ t('applicationOperationsPage.servers') }}</h3>
+                <div v-if="!detail.targets.length" class="grid gap-2">
+                  <EmptyState :title="t('applicationOperationsPage.noTargets')" :description="t('applicationOperationsPage.noTargetsHint')" />
+                </div>
+                <div v-for="target in detail.targets" :key="target.id" class="grid min-w-0 gap-2 border-t border-border py-3 text-sm first:border-t-0 first:pt-0" >
+                  <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
+                    <strong class="min-w-0 truncate">{{ serverLabel(target) }}</strong>
+                    <StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="target.status" domain="operation" :label="statusLabel(target.status)" />
+                  </div>
+                  <p v-if="mismatchText(target)" class="m-0 min-w-0 text-xs text-foreground [overflow-wrap:anywhere]">{{ mismatchText(target) }}</p>
+                  <p v-if="!isConsistent(target)" class="m-0 min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">{{ desiredActualText(target) }}</p>
+                  <p v-else class="m-0 min-w-0 text-xs text-success">{{ t('applicationOperationsPage.consistentHint', { generation: target.desiredGeneration || '' }) }}</p>
+                  <p v-if="!isConsistent(target)" class="m-0 min-w-0 text-xs text-muted-foreground">
+                    {{ t('applicationOperationsPage.stage') }}：{{ target.stage || t('common.notAvailable') }}
+                    <template v-if="target.attempt">，{{ t('applicationOperationsPage.attempt') }}：{{ target.attempt }}</template>
+                    <template v-if="target.nextRunAt">，{{ t('applicationOperationsPage.retryAt') }}：{{ formatDateTime(target.nextRunAt, '') }}</template>
+                  </p>
+                  <div v-if="targetErrorText(target)" class="min-w-0 whitespace-pre-wrap break-words rounded-lg border border-danger-border bg-danger-bg p-2 text-xs text-danger [overflow-wrap:anywhere]">
+                    <span v-if="target.errorCode" class="block font-medium">{{ t('applicationOperationsPage.errorCode') }}：{{ target.errorCode }}</span>
+                    {{ targetErrorText(target) }}
+                  </div>
+                  <Button v-if="!isConsistent(target)" size="sm" variant="secondary" class="justify-self-start" @click="drawerTarget = target">{{ t('applicationOperationsPage.stageLog') }}</Button>
+                </div>
+              </section>
+            </div>
+          </article>
+        </main>
+      </template>
+    </MasterDetailLayout>
+
+    <Teleport to="body">
+      <Transition name="drawer">
+        <div v-if="drawerTarget" class="fixed inset-0 z-50 bg-overlay" @click.self="drawerTarget = null">
+<aside class="drawer-panel absolute inset-y-0 right-0 grid w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] border-l border-border bg-card shadow-2xl">
+            <header class="flex items-center justify-between gap-3 border-b border-border p-4">
+              <h4 class="m-0 min-w-0 truncate text-sm font-semibold">{{ t('applicationOperationsPage.stageLogTitle', { server: serverLabel(drawerTarget) }) }}</h4>
+              <Button size="sm" variant="secondary" @click="drawerTarget = null">{{ t('common.close') }}</Button>
+            </header>
+            <div class="min-h-0 overflow-y-auto px-4 py-3">
+              <div v-if="!drawerTarget.stages?.length" class="grid h-full min-h-40 place-items-center">
+                <EmptyState :title="t('applicationOperationsPage.noStages')" :description="t('applicationOperationsPage.noStagesHint')" />
+              </div>
+              <div v-else class="grid gap-1">
+                <div v-for="stage in drawerTarget.stages" :key="stage.id" class="grid grid-cols-[130px_110px_minmax(0,1fr)] gap-3 border-b border-border py-3 text-xs last:border-b-0 max-sm:grid-cols-1" :class="stage.status === 'failed' ? 'text-danger' : ''">
+                  <span class="text-muted-foreground">{{ formatDateTime(stage.startedAt, '') }}</span>
+                  <span class="font-semibold">{{ stageLabel(stage.stage) }}（{{ statusLabel(stage.status) }}）<span v-if="stageDuration(stage)" class="block font-normal text-muted-foreground">{{ stageDuration(stage) }}</span></span>
+                  <span class="whitespace-pre-wrap text-muted-foreground [overflow-wrap:anywhere]">{{ stage.detail || t('applicationOperationsPage.noStageDetail') }}</span>
+                </div>
+              </div>
+            </div>
+            <footer class="flex justify-end border-t border-border p-4">
+              <Button size="sm" variant="secondary" @click="drawerTarget = null">{{ t('common.close') }}</Button>
+            </footer>
+          </aside>
         </div>
-      </section>
-      <section>
-        <h3 class="m-0 mb-2 text-sm font-semibold">{{ t('applicationOperationsPage.events') }}</h3>
-        <div class="grid gap-2 motion-stagger">
-          <div v-for="event in detail.events" :key="event.id" class="motion-reveal grid gap-1 rounded-xl border border-border p-3 text-sm">
-            <div class="flex items-center justify-between gap-2"><strong>{{ eventTypeLabel(event.eventType) }}</strong><span class="text-xs text-muted-foreground">{{ formatDateTime(event.occurredAt, t('common.notAvailable')) }}</span></div>
-            <p class="m-0 text-muted-foreground">{{ event.summary }}</p>
-          </div>
-        </div>
-      </section>
-    </div>
-  </Dialog>
+      </Transition>
+    </Teleport>
+  </ConsolePage>
 </template>

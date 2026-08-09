@@ -29,8 +29,11 @@ var appTables = []string{
 
 var logTables = []string{
 	"tasks", "task_steps", "task_logs", "application_revisions",
-	"application_lifecycle_operations", "application_lifecycle_targets", "runtime_events",
-	"runtime_event_details", "application_operation_records", "key_asset_exports",
+	"runtime_events", "runtime_event_details", "key_asset_exports",
+}
+
+var coordTables = []string{
+	"application_lifecycle_operations", "application_lifecycle_targets", "application_target_stages",
 }
 
 var metricsTables = []string{"metrics_snapshots"}
@@ -43,6 +46,7 @@ func openMigratedStore(t *testing.T) *database.Store {
 	cfg.AppDatabase = filepath.Join(dir, "app.db")
 	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
 	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
 	store, err := database.Open(cfg)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -190,6 +194,7 @@ func TestTakeoverAllLegacyTables(t *testing.T) {
 	}{
 		{"app", store.AppDB(), appTables},
 		{"log", store.LogDB(), logTables},
+		{"coord", store.CoordDB(), coordTables},
 		{"metrics", store.MetricsDB(), metricsTables},
 	}
 	for _, c := range cases {
@@ -288,6 +293,7 @@ func TestExtraIndexDDLCoversInexpressibleIndexes(t *testing.T) {
 	}{
 		{"app", store.AppDB(), appTables},
 		{"log", store.LogDB(), logTables},
+		{"coord", store.CoordDB(), coordTables},
 		{"metrics", store.MetricsDB(), metricsTables},
 	}
 	for _, c := range cases {
@@ -384,6 +390,9 @@ func TestModelDDLMatchesLegacyColumns(t *testing.T) {
 	}
 	for _, tb := range logTables {
 		tableDB[tb] = store.LogDB()
+	}
+	for _, tb := range coordTables {
+		tableDB[tb] = store.CoordDB()
 	}
 	for _, tb := range metricsTables {
 		tableDB[tb] = store.MetricsDB()
