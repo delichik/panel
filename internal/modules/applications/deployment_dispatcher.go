@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	"panel/internal/modules/runtimeevents"
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/database/orm"
 	id "panel/internal/platform/identity"
@@ -298,13 +297,6 @@ func (d *deploymentDispatcher) claimExecuteTarget(ctx context.Context, targetID 
 	target.LeaseOwner = lifecycleTaskLeaseOwner(task.ID)
 	target.LeaseExpiresAt = &leaseExpiresAt
 	target.ClaimedTaskID = task.ID
-	if op, opErr := d.service.lifecycleOperationByID(ctx, target.OperationID); opErr == nil {
-		if app, appErr := d.service.Get(ctx, target.ApplicationID); appErr == nil {
-			if err := d.service.writeApplicationTargetEvent(ctx, runtimeevents.EventApplicationOperationTargetStarted, op, app, target, "Application target started", runtimeevents.SeverityInfo); err != nil {
-				return LifecycleTarget{}, false, err
-			}
-		}
-	}
 	return target, true, nil
 }
 

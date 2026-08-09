@@ -1,5 +1,5 @@
 import type { ApplicationOperationDetailDto, ApplicationOperationDto, ApplicationOperationStageDto, ApplicationOperationTargetDto } from '@/types/applicationOperations';
-import type { SystemEventDetailDto, SystemEventDto } from '@/types/systemEvents';
+import type { SystemEventDto } from '@/types/systemEvents';
 
 const now = new Date('2026-08-01T08:00:00.000Z');
 
@@ -33,25 +33,23 @@ export const mockApplicationOperations: ApplicationOperationDto[] = [
 ];
 
 export const mockSystemEvents: SystemEventDto[] = [
-  event('evt-task-failed', 'task.failed', 'task', 'error', 'task', 'task-agent-rollout-1', 'tasks', 'Agent rollout failed and can be retried.', true, 'Agent rollout'),
-  event('evt-canary-failed', 'application.operation.failed', 'application', 'error', 'application', 'app-canary-broken', 'applications', 'checkout-canary deployment failed readiness checks.', true, 'checkout-canary'),
-  event('evt-media-progress', 'application.operation.target.started', 'application', 'info', 'application', 'app-media', 'applications', 'media-transcoder deploy started on gpu-nrt-render.', true, 'media-transcoder'),
-  event('evt-agent-degraded', 'server.agent.degraded', 'alert', 'warning', 'server', 'srv-edge-lax', 'servers', 'edge-lax-01 agent report stream is delayed by 12 minutes.', true, 'edge-lax-01'),
-  event('evt-cert-renewing', 'certificate.renewing', 'system', 'info', 'certificate', 'cert-hooks-renewing', 'certificates', 'hooks.example.test certificate renewal started.', true, 'hooks.example.test'),
+  event('evt-deploy-fail', 'application.operation.failed', 'application', 'error', 'applications', 'Deploy storefront failed: container startup timed out (120s)'),
+  event('evt-agent-down', 'agent.disconnected', 'system', 'warning', 'agent', 'Agent report stream disconnected: edge-lax-01: connection timed out'),
+  event('evt-deploy-done', 'application.operation.completed', 'application', 'info', 'applications', 'Deploy api-gateway completed (2/2 targets succeeded)'),
+  event('evt-cert-fail', 'task.failed', 'task', 'warning', 'tasks', 'ACME certificate renewal failed: connection timed out, will retry in 5 minutes'),
+  event('evt-agent-up', 'agent.connected', 'system', 'info', 'agent', 'Agent report stream connected: edge-lax-01'),
+  event('evt-task-done', 'task.completed', 'task', 'info', 'tasks', 'DNS record sync completed (3 records)'),
   ...Array.from({ length: 56 }, (_, index) => {
-    const categories = ['application', 'task', 'alert', 'log', 'runtime', 'system'];
+    const categories = ['application', 'task', 'system'];
     const severities = ['info', 'warning', 'error'];
+    const types = ['task.completed', 'task.failed', 'application.operation.completed', 'application.operation.failed', 'agent.connected', 'agent.disconnected'];
     return event(
       `evt-sample-${String(index + 1).padStart(2, '0')}`,
-      index % 5 === 0 ? 'task.failed' : index % 5 === 1 ? 'task.completed' : index % 5 === 2 ? 'log.attached' : index % 5 === 3 ? 'alert.raised' : 'task.started',
+      types[index % types.length],
       categories[index % categories.length],
       severities[index % severities.length],
-      index % 2 === 0 ? 'server' : 'application',
-      index % 2 === 0 ? `srv-${index + 1}` : `app-sample-${(index % 8) + 1}`,
-      categories[index % categories.length],
-      `Sample diagnostic event ${index + 1}`,
-      index % 6 !== 0,
-      index % 2 === 0 ? `Server ${index + 1}` : `Sample app ${(index % 8) + 1}`,
+      index % 3 === 0 ? 'applications' : index % 3 === 1 ? 'tasks' : 'agent',
+      `Sample system log ${index + 1}`,
     );
   }),
 ];
@@ -144,23 +142,6 @@ function stageSamples(found: ApplicationOperationDto, index: number, status: str
   });
 }
 
-const mockDetailErrors: Record<string, string> = {
-  'evt-task-failed': 'Agent rollout failed and can be retried.',
-  'evt-canary-failed': 'Canary probe failed: /ready returned 503',
-};
-
-export function systemEventDetail(eventId: string): SystemEventDetailDto | null {
-  const found = mockSystemEvents.find((item) => item.id === eventId);
-  if (!found || !found.detailAvailable) return null;
-  return {
-    event: found,
-    payload: { category: found.category, subjectType: found.subjectType, subjectId: found.subjectId, subjectName: found.subjectName },
-    error: mockDetailErrors[eventId] || (found.severity === 'error' ? found.summary : ''),
-    logRefs: found.category === 'log' ? [{ label: 'runtime log', source: found.sourceModule || found.source }] : [],
-    taskRefs: found.category === 'task' && found.subjectType === 'task' && found.subjectId ? [found.subjectId] : [],
-    targetRefs: found.category === 'application' && found.subjectId ? [found.subjectId] : [],
-  };
-}
 
 function operation(
   operationId: string,
@@ -202,12 +183,8 @@ function event(
   eventType: string,
   category: string,
   severity: string,
-  subjectType: string,
-  subjectId: string,
   sourceModule: string,
   summary: string,
-  detailAvailable: boolean,
-  subjectName?: string,
 ): SystemEventDto {
   const seed = numericSeed(id);
   return {
@@ -215,15 +192,10 @@ function event(
     eventType,
     category,
     severity,
-    subjectType,
-    subjectId,
-    subjectName,
     source: sourceModule,
     sourceModule,
     summary,
     occurredAt: new Date(now.getTime() - seed * 45000).toISOString(),
-    detailAvailable,
-    detailPrunedAt: detailAvailable ? undefined : new Date(now.getTime() - seed * 30000).toISOString(),
   };
 }
 

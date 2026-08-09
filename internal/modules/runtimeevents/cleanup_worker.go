@@ -7,9 +7,8 @@ import (
 )
 
 type CleanupSettings struct {
-	RetentionDays       int
-	DetailRetentionDays int
-	Schedule            string
+	RetentionDays int
+	Schedule      string
 }
 
 type CleanupWorker struct {
@@ -52,14 +51,14 @@ func (w *CleanupWorker) loop(ctx context.Context) {
 			if time.Since(lastRun) < cleanupInterval(settings.Schedule) {
 				continue
 			}
-			result, err := w.service.Cleanup(ctx, settings.RetentionDays, settings.DetailRetentionDays)
+			result, err := w.service.Cleanup(ctx, settings.RetentionDays)
 			if err != nil {
 				log.Printf("runtime event cleanup failed: %v", err)
 				continue
 			}
 			lastRun = time.Now()
-			if result.DetailsPruned > 0 || result.EventsDeleted > 0 {
-				log.Printf("runtime event cleanup pruned_details=%d deleted_events=%d", result.DetailsPruned, result.EventsDeleted)
+			if result.EventsDeleted > 0 {
+				log.Printf("runtime event cleanup deleted_events=%d", result.EventsDeleted)
 			}
 		}
 	}

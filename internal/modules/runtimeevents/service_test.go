@@ -3,7 +3,6 @@ package runtimeevents
 import (
 	"context"
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
 
@@ -11,169 +10,154 @@ import (
 	"panel/internal/platform/database"
 )
 
-func TestSystemEventsFilterAndDetailWrapper(t *testing.T) {
+func TestWriteCreatesSimpleEventAndDedupe(t *testing.T) {
 	svc, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
 	now := time.Now().UTC()
 
-	_, _, err := svc.Write(ctx, WriteEventInput{
+	in := WriteEventInput{
 		EventType:   EventTaskCreated,
 		Category:    CategoryTask,
-		SubjectType: "task",
-		SubjectID:   "task-1",
 		Severity:    SeverityInfo,
 		Source:      "task",
+		SourceModule: "tasks",
+		DedupeKey:   "dedupe-1",
 		Summary:     "Task created",
 		OccurredAt:  now,
-		Detail: &EventDetailInput{
-			PayloadJSON:    `{"taskId":"task-1"}`,
-			Error:          "task failed",
-			TaskRefsJSON:   `["task-1"]`,
-			LogRefsJSON:    `["log-1"]`,
-			TargetRefsJSON: `["target-1"]`,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, _, err = svc.Write(ctx, WriteEventInput{
-		EventType:   EventLogAttached,
-		Category:    CategoryLog,
-		SubjectType: "task",
-		SubjectID:   "task-1",
-		Severity:    SeverityInfo,
-		Source:      "task",
-		Summary:     "Task log attached",
-		OccurredAt:  now.Add(time.Second),
-		Detail:      &EventDetailInput{PayloadJSON: `{bad`, TaskRefsJSON: `{bad`},
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 
-	svc.SetSubjectNameResolver(func(_ context.Context, subjectType, subjectID string) string {
-		return "resolved-" + subjectType + "-" + subjectID
-	})
-
-	result, err := svc.ListSystemEvents(ctx, ListFilter{Category: CategoryTask, SubjectID: "task-1"})
+	event, inserted, err := svc.Write(ctx, in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].Category != CategoryTask {
-		t.Fatalf("unexpected filtered events: %#v", result)
+	if !inserted || event.EventType != EventTaskCreated || event.Summary != "Task created" {
+		t.Fatalf("first write inserted/event = %v/%#v", inserted, event)
 	}
-
-	detail, err := svc.GetSystemEventDetail(ctx, result.Items[0].ID)
+	_, inserted, err = svc.Write(ctx, in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.Event.ID != result.Items[0].ID {
-		t.Fatalf("event wrapper mismatch: %#v", detail)
-	}
-	payload, ok := detail.Payload.(map[string]any)
-	if !ok || payload["taskId"] != "task-1" {
-		t.Fatalf("unexpected payload: %#v", detail.Payload)
-	}
-	if !reflect.DeepEqual(detail.TaskRefs, []any{"task-1"}) || !reflect.DeepEqual(detail.LogRefs, []any{"log-1"}) || !reflect.DeepEqual(detail.TargetRefs, []any{"target-1"}) {
-		t.Fatalf("unexpected refs: %#v", detail)
-	}
-
-	logs, err := svc.ListSystemEvents(ctx, ListFilter{Category: CategoryLog, SubjectID: "task-1"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if logs.Total != 1 || len(logs.Items) != 1 {
-		t.Fatalf("unexpected log events: %#v", logs)
-	}
-	badDetail, err := svc.GetSystemEventDetail(ctx, logs.Items[0].ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if badDetail.Payload != `{bad` || len(badDetail.TaskRefs) != 0 {
-		t.Fatalf("invalid detail should degrade safely: %#v", badDetail)
-	}
-}
-
-func TestSystemEventsWithoutResolverKeepSubjectNameEmpty(t *testing.T) {
-	svc, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-	now := time.Now().UTC()
-
-	_, _, err := svc.Write(ctx, WriteEventInput{
-		EventType:   EventTaskCreated,
-		Category:    CategoryTask,
-		SubjectType: "task",
-		SubjectID:   "task-1",
-		Severity:    SeverityInfo,
-		Source:      "task",
-		Summary:     "Task created",
-		OccurredAt:  now,
-		Detail:      &EventDetailInput{PayloadJSON: `{}`},
-	})
-	if err != nil {
-		t.Fatal(err)
+	if inserted {
+		t.Fatal("duplicate dedupe key must not insert a second event")
 	}
 
 	result, err := svc.ListSystemEvents(ctx, ListFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Items) != 1 || result.Items[0].SubjectName != "" {
-		t.Fatalf("subject name must stay empty without resolver: %#v", result.Items)
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("event total/items = %d/%d", result.Total, len(result.Items))
+	}
+	item := result.Items[0]
+	if item.EventType != EventTaskCreated || item.Category != CategoryTask || item.Severity != SeverityInfo {
+		t.Fatalf("unexpected event: %#v", item)
 	}
 }
 
-func TestCleanupPrunesDetailsBeforeDeletingRecords(t *testing.T) {
+func TestListSystemEventsFilters(t *testing.T) {
 	svc, closeStore := newTestService(t)
 	defer closeStore()
 	ctx := context.Background()
-	old := time.Now().UTC().AddDate(0, 0, -10)
+	now := time.Now().UTC()
 
-	event, _, err := svc.Write(ctx, WriteEventInput{
-		EventType:   EventTaskCreated,
-		Category:    CategoryTask,
-		SubjectType: "task",
-		SubjectID:   "task-1",
-		Severity:    SeverityInfo,
-		Source:      "task",
-		Summary:     "Old event",
-		OccurredAt:  old,
-		Detail:      &EventDetailInput{PayloadJSON: `{"old":true}`},
+	_, _, err := svc.Write(ctx, WriteEventInput{
+		EventType: EventApplicationOperationCompleted, Category: CategoryApplication,
+		Severity: SeverityInfo, Source: "user", SourceModule: "applications",
+		Summary: "Application operation completed", OccurredAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = svc.Write(ctx, WriteEventInput{
+		EventType: EventTaskFailed, Category: CategoryTask,
+		Severity: SeverityError, Source: "task", SourceModule: "tasks",
+		Summary: "Task failed", OccurredAt: now.Add(time.Minute),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := svc.Cleanup(ctx, 30, 7)
+	result, err := svc.ListSystemEvents(ctx, ListFilter{Category: CategoryTask})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.DetailsPruned != 1 || result.EventsDeleted != 0 {
-		t.Fatalf("cleanup result = %#v", result)
+	if result.Total != 1 || result.Items[0].EventType != EventTaskFailed {
+		t.Fatalf("category filter mismatch: %#v", result.Items)
 	}
-	detail, err := svc.GetEventDetail(ctx, event.ID)
+	result, err = svc.ListSystemEvents(ctx, ListFilter{Severity: SeverityError})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.DetailAvailable || detail.PayloadJSON != "{}" {
-		t.Fatalf("detail should be pruned: %#v", detail)
+	if result.Total != 1 || result.Items[0].Severity != SeverityError {
+		t.Fatalf("severity filter mismatch: %#v", result.Items)
+	}
+	from := now.Add(time.Second)
+	result, err = svc.ListSystemEvents(ctx, ListFilter{From: &from})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Items[0].EventType != EventTaskFailed {
+		t.Fatalf("time filter mismatch: %#v", result.Items)
+	}
+}
+
+func TestBufferedWriterFlushesBatch(t *testing.T) {
+	svc, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	w := NewBufferedWriter(svc, time.Hour)
+	for i := 0; i < 10; i++ {
+		w.Log(ctx, WriteEventInput{
+			EventType: EventTaskStarted, Category: CategoryTask,
+			Severity: SeverityInfo, Source: "task", SourceModule: "tasks",
+			Summary: "Task started", OccurredAt: time.Now().UTC(),
+		})
+	}
+	w.flush()
+
+	result, err := svc.ListSystemEvents(ctx, ListFilter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 10 {
+		t.Fatalf("flushed events = %d, want 10", result.Total)
+	}
+}
+
+func TestCleanupDeletesOldEvents(t *testing.T) {
+	svc, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	old := time.Now().UTC().AddDate(0, 0, -10)
+
+	if _, _, err := svc.Write(ctx, WriteEventInput{
+		EventType: EventTaskCompleted, Category: CategoryTask, Severity: SeverityInfo,
+		Source: "task", SourceModule: "tasks", Summary: "Old event", OccurredAt: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.Write(ctx, WriteEventInput{
+		EventType: EventTaskCompleted, Category: CategoryTask, Severity: SeverityInfo,
+		Source: "task", SourceModule: "tasks", Summary: "Recent event", OccurredAt: time.Now().UTC(),
+	}); err != nil {
+		t.Fatal(err)
 	}
 
-	result, err = svc.Cleanup(ctx, 1, 1)
+	result, err := svc.Cleanup(ctx, 7)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.EventsDeleted != 1 {
-		t.Fatalf("record cleanup result = %#v", result)
+		t.Fatalf("cleanup deleted = %d, want 1", result.EventsDeleted)
 	}
-	events, err := svc.ListSystemEvents(ctx, ListFilter{})
+	list, err := svc.ListSystemEvents(ctx, ListFilter{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if events.Total != 0 {
-		t.Fatalf("events after retention cleanup = %#v", events)
+	if list.Total != 1 || list.Items[0].Summary != "Recent event" {
+		t.Fatalf("cleanup kept wrong events: %#v", list.Items)
 	}
 }
 
@@ -181,11 +165,11 @@ func newTestService(t *testing.T) (*Service, func()) {
 	t.Helper()
 	dir := t.TempDir()
 	store, err := database.Open(config.Config{
-		DataRoot:             dir,
-		AppDatabase:          filepath.Join(dir, "app.db"),
-		LogDatabase:          filepath.Join(dir, "log.db"),
-		CoordinationDatabase: filepath.Join(dir, "coordination.db"),
-		MetricsDatabase:      filepath.Join(dir, "metrics.db"),
+		DataRoot:            dir,
+		AppDatabase:         filepath.Join(dir, "app.db"),
+		LogDatabase:         filepath.Join(dir, "log.db"),
+		CoordinationDatabase: filepath.Join(dir, "coord.db"),
+		MetricsDatabase:     filepath.Join(dir, "metrics.db"),
 	})
 	if err != nil {
 		t.Fatal(err)

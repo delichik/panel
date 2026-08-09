@@ -3,7 +3,6 @@ package runtimeevents
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"strings"
 	"time"
 
@@ -13,18 +12,16 @@ import (
 )
 
 type Service struct {
-	db           *sql.DB
-	subjectNames SubjectNameResolver
+	db *sql.DB
 }
 
 func NewService(db *sql.DB) *Service {
 	return &Service{db: db}
 }
 
-// SetSubjectNameResolver installs a resolver used to enrich system events
-// with the display name of their related object at read time.
-func (s *Service) SetSubjectNameResolver(resolver SubjectNameResolver) {
-	s.subjectNames = resolver
+// Log 实现 EventWriter：同步直写一条日志，供测试或直写场景使用。
+func (s *Service) Log(ctx context.Context, in WriteEventInput) {
+	_, _, _ = s.Write(ctx, in)
 }
 
 func (s *Service) Write(ctx context.Context, in WriteEventInput) (Event, bool, error) {
@@ -44,33 +41,14 @@ func (s *Service) Write(ctx context.Context, in WriteEventInput) (Event, bool, e
 		eventID = id.New("revt")
 	}
 	severity := firstNonEmpty(in.Severity, SeverityInfo)
-	detailAvailable := in.Detail != nil
 	var inserted bool
 	err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		res, err := orm.RawExec(ctx, tx, `INSERT OR IGNORE INTO runtime_events(id,event_type,category,subject_type,subject_id,operation_id,severity,source,source_module,source_type,source_id,dedupe_key,summary,occurred_at,detail_available,detail_pruned_at,created_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			eventID, strings.TrimSpace(in.EventType), strings.TrimSpace(in.Category), strings.TrimSpace(in.SubjectType), strings.TrimSpace(in.SubjectID), strings.TrimSpace(in.OperationID),
-			severity, strings.TrimSpace(in.Source), strings.TrimSpace(in.SourceModule), strings.TrimSpace(in.SourceType), strings.TrimSpace(in.SourceID), strings.TrimSpace(in.DedupeKey),
-			strings.TrimSpace(in.Summary), formatTime(occurredAt), boolInt(detailAvailable), nil, formatTime(now))
+		res, err := insertEvent(ctx, tx, eventID, in, occurredAt, now, severity)
 		if err != nil {
 			return err
 		}
 		affected, _ := res.RowsAffected()
 		inserted = affected > 0
-		if inserted && in.Detail != nil {
-			detail := &eventDetailRow{
-				EventID:    eventID,
-				Payload:    jsonOrDefault(in.Detail.PayloadJSON, "{}"),
-				Error:      strings.TrimSpace(in.Detail.Error),
-				LogRefs:    jsonOrDefault(in.Detail.LogRefsJSON, "[]"),
-				TaskRefs:   jsonOrDefault(in.Detail.TaskRefsJSON, "[]"),
-				TargetRefs: jsonOrDefault(in.Detail.TargetRefsJSON, "[]"),
-				CreatedAt:  now,
-			}
-			if err := orm.New(tx).From("runtime_event_details").Insert(ctx, detail); err != nil {
-				return err
-			}
-		}
 		return nil
 	})
 	if err != nil {
@@ -82,6 +60,47 @@ func (s *Service) Write(ctx context.Context, in WriteEventInput) (Event, bool, e
 	}
 	event, err := s.GetEvent(ctx, eventID)
 	return event, inserted, err
+}
+
+// WriteBatch 在一个事务内批量写入多条日志（INSERT OR IGNORE），供缓冲写入器使用。
+func (s *Service) WriteBatch(ctx context.Context, inputs []WriteEventInput) (int, error) {
+	if len(inputs) == 0 {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	written := 0
+	err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
+		for _, in := range inputs {
+			if err := validateEventInput(in); err != nil {
+				continue
+			}
+			occurredAt := in.OccurredAt.UTC()
+			if occurredAt.IsZero() {
+				occurredAt = now
+			}
+			eventID := strings.TrimSpace(in.ID)
+			if eventID == "" {
+				eventID = id.New("revt")
+			}
+			res, err := insertEvent(ctx, tx, eventID, in, occurredAt, now, firstNonEmpty(in.Severity, SeverityInfo))
+			if err != nil {
+				return err
+			}
+			if affected, _ := res.RowsAffected(); affected > 0 {
+				written++
+			}
+		}
+		return nil
+	})
+	return written, err
+}
+
+func insertEvent(ctx context.Context, tx *sql.Tx, eventID string, in WriteEventInput, occurredAt, now time.Time, severity string) (sql.Result, error) {
+	return orm.RawExec(ctx, tx, `INSERT OR IGNORE INTO runtime_events(id,event_type,category,severity,source,source_module,dedupe_key,summary,occurred_at,created_at)
+		VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		eventID, strings.TrimSpace(in.EventType), strings.TrimSpace(in.Category), severity,
+		strings.TrimSpace(in.Source), strings.TrimSpace(in.SourceModule), strings.TrimSpace(in.DedupeKey),
+		strings.TrimSpace(in.Summary), formatTime(occurredAt), formatTime(now))
 }
 
 func validateEventInput(in WriteEventInput) error {
@@ -96,18 +115,12 @@ func validateEventInput(in WriteEventInput) error {
 	if strings.TrimSpace(in.Summary) == "" {
 		return panelerr.Validation("runtime_event_summary_required", "Runtime event summary is required")
 	}
-
 	return nil
 }
 
 func (s *Service) ListSystemEvents(ctx context.Context, filter ListFilter) (ListResult[Event], error) {
 	filter = normalizeFilter(filter)
-	result, err := s.listEvents(ctx, filter)
-	if err != nil {
-		return ListResult[Event]{}, err
-	}
-	s.resolveSubjectNames(ctx, result.Items)
-	return result, nil
+	return s.listEvents(ctx, filter)
 }
 
 func (s *Service) GetEvent(ctx context.Context, eventID string) (Event, error) {
@@ -119,100 +132,14 @@ func (s *Service) GetEvent(ctx context.Context, eventID string) (Event, error) {
 	return event, err
 }
 
-func (s *Service) GetEventDetail(ctx context.Context, eventID string) (EventDetail, error) {
-	event, err := s.GetEvent(ctx, eventID)
-	if err != nil {
-		return EventDetail{}, err
-	}
-	if !event.DetailAvailable {
-		return EventDetail{Event: event, PayloadJSON: "{}", LogRefsJSON: "[]", TaskRefsJSON: "[]", TargetRefsJSON: "[]"}, nil
-	}
-	var row eventDetailRow
-	err = orm.New(s.db).From("runtime_event_details").Select("payload", "error", "log_refs", "task_refs", "target_refs").
-		Where("event_id = ?", event.ID).AndNull("pruned_at").First(ctx, &row)
-	detail := EventDetail{Event: event}
-	detail.PayloadJSON = row.Payload
-	detail.Error = row.Error
-	detail.LogRefsJSON = row.LogRefs
-	detail.TaskRefsJSON = row.TaskRefs
-	detail.TargetRefsJSON = row.TargetRefs
-	if err == sql.ErrNoRows {
-		event.DetailAvailable = false
-		detail.Event = event
-		detail.PayloadJSON = "{}"
-		detail.LogRefsJSON = "[]"
-		detail.TaskRefsJSON = "[]"
-		detail.TargetRefsJSON = "[]"
-		return detail, nil
-	}
-	return detail, err
-}
-
-func (s *Service) GetSystemEventDetail(ctx context.Context, eventID string) (SystemEventDetail, error) {
-	detail, err := s.GetEventDetail(ctx, eventID)
-	if err != nil {
-		return SystemEventDetail{}, err
-	}
-	events := []Event{detail.Event}
-	s.resolveSubjectNames(ctx, events)
-	return SystemEventDetail{
-		Event:      events[0],
-		Payload:    parsePayload(detail.PayloadJSON),
-		Error:      detail.Error,
-		LogRefs:    parseJSONArray(detail.LogRefsJSON),
-		TaskRefs:   parseJSONArray(detail.TaskRefsJSON),
-		TargetRefs: parseJSONArray(detail.TargetRefsJSON),
-	}, nil
-}
-
-// resolveSubjectNames fills SubjectName for events whose subject can be
-// resolved by the installed resolver. Lookups are cached per subject so a
-// page only queries each distinct (type, id) once.
-func (s *Service) resolveSubjectNames(ctx context.Context, events []Event) {
-	if s == nil || s.subjectNames == nil || len(events) == 0 {
-		return
-	}
-	cache := map[string]string{}
-	for i := range events {
-		event := &events[i]
-		if strings.TrimSpace(event.SubjectType) == "" || strings.TrimSpace(event.SubjectID) == "" {
-			continue
-		}
-		key := event.SubjectType + "\x00" + event.SubjectID
-		name, ok := cache[key]
-		if !ok {
-			name = s.subjectNames(ctx, event.SubjectType, event.SubjectID)
-			cache[key] = name
-		}
-		event.SubjectName = name
-	}
-}
-
-func (s *Service) Cleanup(ctx context.Context, retentionDays, detailRetentionDays int) (CleanupResult, error) {
-	if retentionDays < 1 || detailRetentionDays < 1 {
+func (s *Service) Cleanup(ctx context.Context, retentionDays int) (CleanupResult, error) {
+	if retentionDays < 1 {
 		return CleanupResult{}, panelerr.Validation("runtime_event_retention_invalid", "Runtime event retention must be at least 1 day")
 	}
-	if retentionDays < detailRetentionDays {
-		return CleanupResult{}, panelerr.Validation("runtime_event_retention_order_invalid", "Runtime event retention must be greater than or equal to detail retention")
-	}
-	now := time.Now().UTC()
-	detailCutoff := formatTime(now.AddDate(0, 0, -detailRetentionDays))
-	recordCutoff := formatTime(now.AddDate(0, 0, -retentionDays))
-	prunedAt := formatTime(now)
-	var detailsPruned, eventsDeleted int64
+	recordCutoff := formatTime(time.Now().UTC().AddDate(0, 0, -retentionDays))
+	var eventsDeleted int64
 	err := orm.WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		res, err := orm.RawExec(ctx, tx, `UPDATE runtime_event_details SET payload='{}', error='', log_refs='[]', task_refs='[]', target_refs='[]', pruned_at=?
-			WHERE pruned_at IS NULL
-			  AND event_id IN (SELECT id FROM runtime_events WHERE occurred_at<?)`, prunedAt, detailCutoff)
-		if err != nil {
-			return err
-		}
-		detailsPruned, _ = res.RowsAffected()
-		if _, err := orm.RawExec(ctx, tx, `UPDATE runtime_events SET detail_available=0, detail_pruned_at=? WHERE detail_available=1 AND id IN (SELECT event_id FROM runtime_event_details WHERE pruned_at=?)`, prunedAt, prunedAt); err != nil {
-			return err
-		}
-
-		res, err = orm.RawExec(ctx, tx, `DELETE FROM runtime_events WHERE occurred_at<?`, recordCutoff)
+		res, err := orm.RawExec(ctx, tx, `DELETE FROM runtime_events WHERE occurred_at<?`, recordCutoff)
 		if err != nil {
 			return err
 		}
@@ -222,14 +149,12 @@ func (s *Service) Cleanup(ctx context.Context, retentionDays, detailRetentionDay
 	if err != nil {
 		return CleanupResult{}, err
 	}
-	return CleanupResult{DetailsPruned: int(detailsPruned), EventsDeleted: int(eventsDeleted)}, nil
+	return CleanupResult{EventsDeleted: int(eventsDeleted)}, nil
 }
 
 func (s *Service) listEvents(ctx context.Context, filter ListFilter) (ListResult[Event], error) {
 	q := orm.New(s.db).From("runtime_events")
 	appendFilter(q, "category", filter.Category)
-	appendFilter(q, "subject_type", filter.SubjectType)
-	appendFilter(q, "subject_id", filter.SubjectID)
 	appendFilter(q, "source", filter.Source)
 	appendFilter(q, "severity", filter.Severity)
 	appendFilter(q, "event_type", filter.EventType)
@@ -240,8 +165,6 @@ func (s *Service) listEvents(ctx context.Context, filter ListFilter) (ListResult
 	}
 	q = orm.New(s.db).From("runtime_events")
 	appendFilter(q, "category", filter.Category)
-	appendFilter(q, "subject_type", filter.SubjectType)
-	appendFilter(q, "subject_id", filter.SubjectID)
 	appendFilter(q, "source", filter.Source)
 	appendFilter(q, "severity", filter.Severity)
 	appendFilter(q, "event_type", filter.EventType)
@@ -290,29 +213,8 @@ func appendTimeFilter(q *orm.Query, column string, from, to *time.Time) {
 	}
 }
 
-// eventDetailRow 是 runtime_event_details 的本地行映射：payload/refs 列必须按
-// 原始文本往返（写入端可能收到非法 JSON，models.RuntimeEventDetail 的 map
-// JSON 语义无法承载）。
-type eventDetailRow struct {
-	EventID    string
-	Payload    string
-	Error      string
-	LogRefs    string
-	TaskRefs   string
-	TargetRefs string
-	CreatedAt  time.Time
-	PrunedAt   *time.Time
-}
-
 func formatTime(t time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
-}
-
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }
 
 func firstNonEmpty(values ...string) string {
@@ -324,39 +226,107 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func jsonOrDefault(value, fallback string) string {
-	if strings.TrimSpace(value) == "" {
-		return fallback
-	}
-	return value
+// BufferedWriter 是系统日志的专用批量写入器：生产者通过 Log 非阻塞入队，
+// 后台每 interval 秒 drain 一次，并以一个事务批量落库；Stop 时 flush 剩余。
+type BufferedWriter struct {
+	svc      *Service
+	ch       chan WriteEventInput
+	interval time.Duration
+	stop     chan struct{}
+	done     chan struct{}
 }
 
-func parsePayload(value string) any {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return map[string]any{}
+func NewBufferedWriter(svc *Service, interval time.Duration) *BufferedWriter {
+	if interval <= 0 {
+		interval = 5 * time.Second
 	}
-	var payload any
-	if err := json.Unmarshal([]byte(value), &payload); err != nil {
-		return value
+	return &BufferedWriter{
+		svc:      svc,
+		ch:       make(chan WriteEventInput, 1024),
+		interval: interval,
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
 	}
-	if payload == nil {
-		return map[string]any{}
-	}
-	return payload
 }
 
-func parseJSONArray(value string) []any {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return []any{}
+// Start 启动后台批量落库协程。
+func (w *BufferedWriter) Start(ctx context.Context) {
+	if w == nil {
+		return
 	}
-	var refs []any
-	if err := json.Unmarshal([]byte(value), &refs); err != nil {
-		return []any{}
+	go w.loop(ctx)
+}
+
+// Stop 停止后台协程并 flush 缓冲区内剩余日志；可重复调用。
+func (w *BufferedWriter) Stop() {
+	if w == nil {
+		return
 	}
-	if refs == nil {
-		return []any{}
+	select {
+	case <-w.done:
+		return
+	default:
 	}
-	return refs
+	close(w.stop)
+	<-w.done
+}
+
+// Log 非阻塞入队；缓冲区满时丢弃该条日志，不阻塞业务调用方。
+func (w *BufferedWriter) Log(_ context.Context, in WriteEventInput) {
+	if w == nil {
+		return
+	}
+	select {
+	case w.ch <- in:
+	default:
+	}
+}
+
+func (w *BufferedWriter) loop(ctx context.Context) {
+	defer close(w.done)
+	ticker := time.NewTicker(w.interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			w.flush()
+			return
+		case <-w.stop:
+			w.flush()
+			return
+		case <-ticker.C:
+			w.flush()
+		}
+	}
+}
+
+// flush 取出当前缓冲区的全部日志并批量写入；测试可在同包内直接调用。
+func (w *BufferedWriter) flush() {
+	if w == nil {
+		return
+	}
+	if w.svc == nil {
+		for {
+			select {
+			case <-w.ch:
+			default:
+				return
+			}
+		}
+	}
+	batch := make([]WriteEventInput, 0, 64)
+	for {
+		select {
+		case in := <-w.ch:
+			batch = append(batch, in)
+		default:
+			if len(batch) == 0 {
+				return
+			}
+			if _, err := w.svc.WriteBatch(context.Background(), batch); err != nil {
+				// 批量写入失败时丢弃本批日志，避免阻塞业务或无限重试。
+			}
+			return
+		}
+	}
 }

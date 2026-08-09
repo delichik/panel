@@ -3,7 +3,6 @@ package tasks
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -22,7 +21,7 @@ type Service struct {
 	registry          *Registry
 	runningMu         sync.Mutex
 	runningExecutions map[string]*RunningExecution
-	events            *runtimeevents.Service
+	events            runtimeevents.EventWriter
 }
 
 type ListFilter struct {
@@ -52,7 +51,7 @@ func NewService(db *sql.DB) *Service {
 	return &Service{db: db, registry: NewRegistry(), runningExecutions: map[string]*RunningExecution{}}
 }
 
-func (s *Service) SetRuntimeEvents(events *runtimeevents.Service) {
+func (s *Service) SetRuntimeEvents(events runtimeevents.EventWriter) {
 	s.events = events
 }
 
@@ -114,9 +113,9 @@ func (s *Service) create(ctx context.Context, in CreateInput, validate bool) (Ta
 		s.unregisterRunningExecutionLocked(registeredTaskID)
 	}
 	if err == nil {
-		err = s.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, task, task.Summary, runtimeevents.SeverityInfo, nil)
+		err = s.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, task, task.Summary, runtimeevents.SeverityInfo)
 		if err == nil && task.Status == StatusRunning {
-			err = s.writeTaskEvent(ctx, runtimeevents.EventTaskStarted, task, task.Summary, runtimeevents.SeverityInfo, nil)
+			err = s.writeTaskEvent(ctx, runtimeevents.EventTaskStarted, task, task.Summary, runtimeevents.SeverityInfo)
 		}
 	}
 	return task, err
@@ -270,7 +269,7 @@ func (s *Service) startExecution(ctx context.Context, taskID string) (bool, erro
 		return false, panelerr.Conflict("task_not_runnable", "Task is already finished")
 	}
 	if task, getErr := s.Get(ctx, taskID); getErr == nil {
-		if err := s.writeTaskEvent(ctx, runtimeevents.EventTaskStarted, task, task.Summary, runtimeevents.SeverityInfo, nil); err != nil {
+		if err := s.writeTaskEvent(ctx, runtimeevents.EventTaskStarted, task, task.Summary, runtimeevents.SeverityInfo); err != nil {
 			return false, err
 		}
 	}
@@ -296,15 +295,6 @@ func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) er
 	line = Redact(line)
 	log := models.TaskLog{TaskID: taskID, Time: time.Now().UTC(), Stream: stream, Line: line}
 	err := orm.Insert(ctx, s.db, &log)
-	if err == nil && s.events != nil {
-		cursor := log.ID
-		if task, getErr := s.Get(ctx, taskID); getErr == nil {
-			logRefs, _ := json.Marshal([]map[string]any{{"taskId": task.ID, "cursor": cursor, "stream": stream}})
-			_ = s.writeTaskEvent(ctx, runtimeevents.EventLogAttached, task, "Task log attached", runtimeevents.SeverityInfo, &runtimeevents.EventDetailInput{
-				LogRefsJSON: string(logRefs),
-			})
-		}
-	}
 	return err
 }
 
@@ -317,7 +307,7 @@ func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
 			if task, getErr := s.Get(ctx, taskID); getErr == nil {
-				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskCompleted, task, summary, runtimeevents.SeverityInfo, nil)
+				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskCompleted, task, summary, runtimeevents.SeverityInfo)
 			}
 		}
 	}
@@ -337,7 +327,7 @@ func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
 			if task, getErr := s.Get(ctx, taskID); getErr == nil {
-				updateErr = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError, &runtimeevents.EventDetailInput{Error: msg})
+				updateErr = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError)
 			}
 		}
 	}
@@ -369,7 +359,7 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
 			if task, getErr := s.Get(ctx, taskID); getErr == nil {
-				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityWarning, &runtimeevents.EventDetailInput{Error: msg})
+				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityWarning)
 			}
 		}
 	}
@@ -389,7 +379,7 @@ func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
 			if task, getErr := s.Get(ctx, taskID); getErr == nil {
-				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError, &runtimeevents.EventDetailInput{Error: msg})
+				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError)
 			}
 		}
 	}
@@ -573,7 +563,7 @@ func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
 		return nil
 	}
 	if task, getErr := s.Get(ctx, taskID); getErr == nil {
-		if err := s.writeTaskEvent(ctx, runtimeevents.EventTaskCancelled, task, message, runtimeevents.SeverityWarning, &runtimeevents.EventDetailInput{Error: Redact(message)}); err != nil {
+		if err := s.writeTaskEvent(ctx, runtimeevents.EventTaskCancelled, task, message, runtimeevents.SeverityWarning); err != nil {
 			return err
 		}
 	}
@@ -1114,38 +1104,29 @@ func (s *Service) Retry(ctx context.Context, taskID string) (Task, error) {
 		MaxRetries:          old.MaxRetries,
 	})
 	if err == nil {
-		err = s.writeTaskEvent(ctx, runtimeevents.EventTaskRetried, task, task.Summary, runtimeevents.SeverityInfo, nil)
+		err = s.writeTaskEvent(ctx, runtimeevents.EventTaskRetried, task, task.Summary, runtimeevents.SeverityInfo)
 	}
 	return task, err
 }
 
-func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Task, summary, severity string, detail *runtimeevents.EventDetailInput) error {
+func (s *Service) writeTaskEvent(ctx context.Context, eventType string, task Task, summary, severity string) error {
 	if s == nil || s.events == nil || task.ID == "" {
 		return nil
 	}
 	if summary == "" {
 		summary = task.Type
 	}
-	category := runtimeevents.CategoryTask
-	if eventType == runtimeevents.EventLogAttached {
-		category = runtimeevents.CategoryLog
-	}
-	_, _, err := s.events.Write(ctx, runtimeevents.WriteEventInput{
+	s.events.Log(ctx, runtimeevents.WriteEventInput{
 		EventType:    eventType,
-		Category:     category,
-		SubjectType:  firstNonEmpty(task.ResourceType, "task"),
-		SubjectID:    firstNonEmpty(task.ResourceID, task.ID),
-		OperationID:  task.OperationID,
+		Category:     runtimeevents.CategoryTask,
 		Severity:     severity,
 		Source:       firstNonEmpty(task.TriggerType, "task"),
 		SourceModule: "tasks",
-		SourceType:   "task",
-		SourceID:     task.ID,
 		DedupeKey:    "task:" + task.ID + ":" + eventType + ":" + strconv.Itoa(task.RetryCount),
 		Summary:      summary,
-		Detail:       detail,
+		OccurredAt:   time.Now().UTC(),
 	})
-	return err
+	return nil
 }
 
 const taskColumns = `id,operation_id,type,parent_task_id,child_index,child_count,execution_mode,concurrency_key,schedule_key,server_id,node_id,resource_type,resource_id,trigger_type,trigger_resource_type,trigger_resource_id,trigger_task_id,triggered_by,params_json,metadata_json,status,stage,percentage,summary,error,retry_count,max_retries,next_run_at,created_at,started_at,finished_at`

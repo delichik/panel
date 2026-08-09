@@ -48,6 +48,7 @@ type App struct {
 	tasksCleanup   *tasks.CleanupWorker
 	metricsCleanup *metrics.CleanupWorker
 	eventCleanup   *runtimeevents.CleanupWorker
+	eventLogs      *runtimeevents.BufferedWriter
 	stageCleanup   *applications.StageCleanupWorker
 	system         *systeminfo.Service
 	agentReports   *agentReportCollector
@@ -71,10 +72,8 @@ func New(cfg config.Config) (*App, error) {
 	}
 	taskSvc := tasks.NewService(store.LogDB())
 	eventSvc := runtimeevents.NewService(store.LogDB())
-	eventSvc.SetSubjectNameResolver(func(ctx context.Context, subjectType, subjectID string) string {
-		return resolveSystemEventSubjectName(ctx, store, subjectType, subjectID)
-	})
-	taskSvc.SetRuntimeEvents(eventSvc)
+	eventWriter := runtimeevents.NewBufferedWriter(eventSvc, 5*time.Second)
+	taskSvc.SetRuntimeEvents(eventWriter)
 	installationSvc := installation.NewService(store.AppDB())
 	certBridge := &applicationCertificateBridge{}
 	containerBridge := &applicationContainerBridge{}
@@ -136,7 +135,7 @@ func New(cfg config.Config) (*App, error) {
 		applications.WithContainerOperationQueue(containerBridge),
 		applications.WithLogDB(store.LogDB()),
 		applications.WithCoordDB(store.CoordDB()),
-		applications.WithRuntimeEvents(eventSvc),
+		applications.WithRuntimeEvents(eventWriter),
 	)
 	certBridge.apps = applicationSvc
 	containerBridge.apps = applicationSvc
@@ -203,9 +202,8 @@ func New(cfg config.Config) (*App, error) {
 	eventCleanup := runtimeevents.NewCleanupWorker(eventSvc, func() runtimeevents.CleanupSettings {
 		runtime := settingsSvc.Runtime()
 		return runtimeevents.CleanupSettings{
-			RetentionDays:       runtime.RuntimeEventRetentionDays,
-			DetailRetentionDays: runtime.RuntimeEventDetailRetentionDays,
-			Schedule:            runtime.RuntimeEventCleanupSchedule,
+			RetentionDays: runtime.RuntimeEventRetentionDays,
+			Schedule:      runtime.RuntimeEventCleanupSchedule,
 		}
 	})
 	stageCleanup := applications.NewStageCleanupWorker(applicationSvc, func() applications.StageCleanupSettings {
@@ -224,6 +222,7 @@ func New(cfg config.Config) (*App, error) {
 		PanelVersion:         systemSvc.Version().Version,
 	})
 	reportCollector := newAgentReportCollector(serverSvc, agentClient, settingsSvc, metricsSvc, containerSvc, packageSvc)
+	reportCollector.SetSystemLogs(eventWriter)
 	a := &App{
 		cfg:            cfg,
 		store:          store,
@@ -233,6 +232,7 @@ func New(cfg config.Config) (*App, error) {
 		tasksCleanup:   taskCleanup,
 		metricsCleanup: metricsCleanup,
 		eventCleanup:   eventCleanup,
+		eventLogs:      eventWriter,
 		system:         systemSvc,
 		agentReports:   reportCollector,
 		deployments:    deploymentDispatcher,
@@ -251,6 +251,7 @@ func New(cfg config.Config) (*App, error) {
 	taskCleanup.Start(context.Background())
 	metricsCleanup.Start(context.Background())
 	eventCleanup.Start(context.Background())
+	eventWriter.Start(context.Background())
 	stageCleanup.Start(context.Background())
 	reportCollector.Start(context.Background())
 	var controlServer *installation.ControlServer
@@ -262,6 +263,7 @@ func New(cfg config.Config) (*App, error) {
 			taskCleanup.Stop()
 			metricsCleanup.Stop()
 			eventCleanup.Stop()
+			eventWriter.Stop()
 			reportCollector.Stop()
 			systemSvc.Close()
 			_ = deploymentDispatcher.Stop(context.Background())
@@ -293,6 +295,9 @@ func (a *App) Close() error {
 	}
 	if a.eventCleanup != nil {
 		a.eventCleanup.Stop()
+	}
+	if a.eventLogs != nil {
+		a.eventLogs.Stop()
 	}
 	if a.stageCleanup != nil {
 		a.stageCleanup.Stop()

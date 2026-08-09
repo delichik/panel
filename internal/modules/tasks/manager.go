@@ -141,11 +141,11 @@ func (m *Manager) CreateBatch(ctx context.Context, batch CreateBatchInput, trigg
 	if err := tx.Commit(); err != nil {
 		return Task{}, nil, false, err
 	}
-	if err := m.service.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, parent, parent.Summary, runtimeevents.SeverityInfo, nil); err != nil {
+	if err := m.service.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, parent, parent.Summary, runtimeevents.SeverityInfo); err != nil {
 		return Task{}, nil, false, err
 	}
 	for _, child := range children {
-		if err := m.service.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, child, child.Summary, runtimeevents.SeverityInfo, nil); err != nil {
+		if err := m.service.writeTaskEvent(ctx, runtimeevents.EventTaskCreated, child, child.Summary, runtimeevents.SeverityInfo); err != nil {
 			return Task{}, nil, false, err
 		}
 	}

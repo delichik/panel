@@ -10,6 +10,7 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/containers"
 	"panel/internal/modules/observability/metrics"
+	"panel/internal/modules/runtimeevents"
 	server "panel/internal/modules/servers"
 	"panel/internal/modules/settings"
 	"panel/internal/modules/tasks"
@@ -36,6 +37,7 @@ type agentReportCollector struct {
 	packages interface {
 		SaveReportedUpdates(context.Context, string, []linux.PackageUpdate) error
 	}
+	logs    runtimeevents.EventWriter
 	cancel  context.CancelFunc
 	mu      sync.Mutex
 	streams map[string]*agentReportStream
@@ -43,10 +45,12 @@ type agentReportCollector struct {
 
 type agentReportStream struct {
 	serverID      string
+	serverName    string
 	endpoint      string
 	cancel        context.CancelFunc
 	startedAt     time.Time
 	lastMessageAt time.Time
+	connected     bool
 }
 
 func newAgentReportCollector(serverSvc interface {
@@ -145,7 +149,7 @@ func (c *agentReportCollector) ensureStream(ctx context.Context, srv server.Serv
 		delete(c.streams, srv.ID)
 	}
 	streamCtx, cancel := context.WithCancel(ctx)
-	entry := &agentReportStream{serverID: srv.ID, endpoint: endpoint, cancel: cancel, startedAt: time.Now().UTC()}
+	entry := &agentReportStream{serverID: srv.ID, serverName: strings.TrimSpace(srv.Name), endpoint: endpoint, cancel: cancel, startedAt: time.Now().UTC()}
 	c.streams[srv.ID] = entry
 	c.mu.Unlock()
 	if c.client == nil {
@@ -160,7 +164,11 @@ func (c *agentReportCollector) ensureStream(ctx context.Context, srv server.Serv
 func (c *agentReportCollector) auditSilentStreams() {
 	now := time.Now().UTC()
 	timeout := c.silentTimeout()
-	var disconnected []*agentReportStream
+	type streamDisconnect struct {
+		entry        *agentReportStream
+		wasConnected bool
+	}
+	var disconnected []streamDisconnect
 	c.mu.Lock()
 	for id, entry := range c.streams {
 		last := entry.lastMessageAt
@@ -171,14 +179,20 @@ func (c *agentReportCollector) auditSilentStreams() {
 			continue
 		}
 		entry.cancel()
+		wasConnected := entry.connected
+		entry.connected = false
 		delete(c.streams, id)
-		disconnected = append(disconnected, entry)
+		disconnected = append(disconnected, streamDisconnect{entry: entry, wasConnected: wasConnected})
 	}
 	c.mu.Unlock()
-	for _, entry := range disconnected {
+	for _, item := range disconnected {
+		entry := item.entry
 		msg := "agent report stream timed out after " + timeout.String()
 		logging.L().Warn("agent report stream timed out", zap.String("server_id", entry.serverID), zap.Duration("timeout", timeout))
 		c.recordReportStream(context.Background(), entry.serverID, false, entry.lastMessageAt, msg)
+		if item.wasConnected {
+			c.logStreamStatus(entry, false, msg)
+		}
 	}
 }
 
@@ -211,22 +225,68 @@ func (c *agentReportCollector) markConnected(entry *agentReportStream, at time.T
 		at = time.Now().UTC()
 	}
 	at = at.UTC().Truncate(time.Second)
+	wasConnected := false
 	c.mu.Lock()
 	if current := c.streams[entry.serverID]; current == entry {
+		wasConnected = entry.connected
+		entry.connected = true
 		entry.lastMessageAt = at
 	}
 	c.mu.Unlock()
 	c.recordReportStream(context.Background(), entry.serverID, true, at, "")
+	if !wasConnected {
+		c.logStreamStatus(entry, true, "")
+	}
 }
 
 func (c *agentReportCollector) markDisconnected(entry *agentReportStream, msg string) {
-	c.mu.Lock()
+	wasConnected := false
 	last := entry.lastMessageAt
+	c.mu.Lock()
 	current := c.streams[entry.serverID]
-	c.mu.Unlock()
 	if current == entry {
-		c.recordReportStream(context.Background(), entry.serverID, false, last, msg)
+		wasConnected = entry.connected
+		entry.connected = false
 	}
+	c.mu.Unlock()
+	if current != entry {
+		return
+	}
+	c.recordReportStream(context.Background(), entry.serverID, false, last, msg)
+	if wasConnected {
+		c.logStreamStatus(entry, false, msg)
+	}
+}
+
+// SetSystemLogs 安装系统日志写入器；Agent 连接/断开状态转换会写入系统日志。
+func (c *agentReportCollector) SetSystemLogs(logs runtimeevents.EventWriter) {
+	c.logs = logs
+}
+
+func (c *agentReportCollector) logStreamStatus(entry *agentReportStream, connected bool, msg string) {
+	if c.logs == nil || entry == nil {
+		return
+	}
+	eventType := runtimeevents.EventAgentConnected
+	severity := runtimeevents.SeverityInfo
+	summary := "Agent report stream connected: " + firstNonEmpty(entry.serverName, entry.serverID)
+	if !connected {
+		eventType = runtimeevents.EventAgentDisconnected
+		severity = runtimeevents.SeverityWarning
+		summary = "Agent report stream disconnected: " + firstNonEmpty(entry.serverName, entry.serverID)
+		if strings.TrimSpace(msg) != "" {
+			summary += ": " + strings.TrimSpace(msg)
+		}
+	}
+	c.logs.Log(context.Background(), runtimeevents.WriteEventInput{
+		EventType:    eventType,
+		Category:     runtimeevents.CategorySystem,
+		Severity:     severity,
+		Source:       "agent-report",
+		SourceModule: "agent",
+		Summary:      summary,
+		OccurredAt:   time.Now().UTC(),
+	})
 }
 
 func (c *agentReportCollector) recordReportStream(ctx context.Context, serverID string, connected bool, lastMessageAt time.Time, msg string) {

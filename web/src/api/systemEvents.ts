@@ -1,9 +1,5 @@
 import { apiClient } from './client';
-import type { SystemEventDetailDto, SystemEventListParams, SystemEventListResult } from '@/types/systemEvents';
-
-function id(value: string) {
-  return encodeURIComponent(value);
-}
+import type { SystemEventListParams, SystemEventListResult } from '@/types/systemEvents';
 
 function query(params: SystemEventListParams) {
   const search = new URLSearchParams();
@@ -16,8 +12,5 @@ function query(params: SystemEventListParams) {
 export const systemEventsApi = {
   list(params: SystemEventListParams = {}) {
     return apiClient.get<SystemEventListResult>(`/system-events${query(params)}`);
-  },
-  get(eventId: string) {
-    return apiClient.get<SystemEventDetailDto>(`/system-events/${id(eventId)}`);
   },
 };

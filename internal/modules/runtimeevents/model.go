@@ -17,102 +17,61 @@ const (
 	SeverityWarning = "warning"
 	SeverityError   = "error"
 
-	EventApplicationOperationCreated         = "application.operation.created"
-	EventApplicationOperationTargetQueued    = "application.operation.target.queued"
-	EventApplicationOperationTargetStarted   = "application.operation.target.started"
-	EventApplicationOperationTargetSucceeded = "application.operation.target.succeeded"
-	EventApplicationOperationTargetFailed    = "application.operation.target.failed"
-	EventApplicationOperationCompleted       = "application.operation.completed"
-	EventApplicationOperationFailed          = "application.operation.failed"
-	EventTaskCreated                         = "task.created"
-	EventTaskStarted                         = "task.started"
-	EventTaskCompleted                       = "task.completed"
-	EventTaskFailed                          = "task.failed"
-	EventTaskRetried                         = "task.retried"
-	EventTaskCancelled                       = "task.cancelled"
-	EventLogAttached                         = "log.attached"
-	EventDetailPruned                        = "event.detail.pruned"
+	EventApplicationOperationCreated   = "application.operation.created"
+	EventApplicationOperationCompleted = "application.operation.completed"
+	EventApplicationOperationFailed    = "application.operation.failed"
+	EventTaskCreated                   = "task.created"
+	EventTaskStarted                   = "task.started"
+	EventTaskCompleted                 = "task.completed"
+	EventTaskFailed                    = "task.failed"
+	EventTaskRetried                   = "task.retried"
+	EventTaskCancelled                 = "task.cancelled"
+	EventAgentConnected                = "agent.connected"
+	EventAgentDisconnected             = "agent.disconnected"
 )
 
+// WriteEventInput 是系统日志的一条待写入记录。系统日志只保留简单可读字段，
+// 不承载 payload、日志/任务/目标引用或关联对象。
 type WriteEventInput struct {
 	ID           string
 	EventType    string
 	Category     string
-	SubjectType  string
-	SubjectID    string
-	OperationID  string
 	Severity     string
 	Source       string
 	SourceModule string
-	SourceType   string
-	SourceID     string
 	DedupeKey    string
 	Summary      string
 	OccurredAt   time.Time
-	Detail       *EventDetailInput
 }
 
-type EventDetailInput struct {
-	PayloadJSON    string
-	Error          string
-	LogRefsJSON    string
-	TaskRefsJSON   string
-	TargetRefsJSON string
-}
-
+// Event 是系统日志对外返回的一条记录。
 type Event struct {
-	ID              string     `json:"id"`
-	EventType       string     `json:"eventType"`
-	Category        string     `json:"category"`
-	SubjectType     string     `json:"subjectType,omitempty"`
-	SubjectName     string     `json:"subjectName,omitempty"`
-	SubjectID       string     `json:"subjectId,omitempty"`
-	OperationID     string     `json:"operationId,omitempty"`
-	Severity        string     `json:"severity"`
-	Source          string     `json:"source,omitempty"`
-	SourceModule    string     `json:"sourceModule,omitempty"`
-	SourceType      string     `json:"sourceType,omitempty"`
-	SourceID        string     `json:"sourceId,omitempty"`
-	Summary         string     `json:"summary"`
-	OccurredAt      time.Time  `json:"occurredAt"`
-	DetailAvailable bool       `json:"detailAvailable"`
-	DetailPrunedAt  *time.Time `json:"detailPrunedAt,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
+	ID           string    `json:"id"`
+	EventType    string    `json:"eventType"`
+	Category     string    `json:"category"`
+	Severity     string    `json:"severity"`
+	Source       string    `json:"source,omitempty"`
+	SourceModule string    `json:"sourceModule,omitempty"`
+	Summary      string    `json:"summary"`
+	OccurredAt   time.Time `json:"occurredAt"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
-type EventDetail struct {
-	Event
-	PayloadJSON    string `json:"payloadJson"`
-	Error          string `json:"error,omitempty"`
-	LogRefsJSON    string `json:"logRefsJson"`
-	TaskRefsJSON   string `json:"taskRefsJson"`
-	TargetRefsJSON string `json:"targetRefsJson"`
+// EventWriter 是系统日志的专用写入接口。实现必须尽量非阻塞、可丢弃，
+// 由 BufferedWriter 提供后台批量落库；Service.Log 提供同步直写便于测试。
+type EventWriter interface {
+	Log(ctx context.Context, in WriteEventInput)
 }
-
-type SystemEventDetail struct {
-	Event      Event  `json:"event"`
-	Payload    any    `json:"payload"`
-	Error      string `json:"error,omitempty"`
-	LogRefs    []any  `json:"logRefs"`
-	TaskRefs   []any  `json:"taskRefs"`
-	TargetRefs []any  `json:"targetRefs"`
-}
-
-// SubjectNameResolver resolves the display name of an event subject at read
-// time. It returns an empty string when no formal name can be found.
-type SubjectNameResolver func(ctx context.Context, subjectType, subjectID string) string
 
 type ListFilter struct {
-	Category    string
-	SubjectType string
-	SubjectID   string
-	Source      string
-	Severity    string
-	EventType   string
-	From        *time.Time
-	To          *time.Time
-	Limit       int
-	Offset      int
+	Category  string
+	Source    string
+	Severity  string
+	EventType string
+	From      *time.Time
+	To        *time.Time
+	Limit     int
+	Offset    int
 }
 
 type ListResult[T any] struct {
@@ -123,6 +82,5 @@ type ListResult[T any] struct {
 }
 
 type CleanupResult struct {
-	DetailsPruned int
 	EventsDeleted int
 }

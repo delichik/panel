@@ -106,7 +106,7 @@ import {
   mockVolumes,
 } from './resources';
 import { completedTask, mockTasks, mockTaskLogs, mockTaskSteps, retryTask, runTaskNow } from './tasks';
-import { applicationOperationDetail, mockApplicationOperations, mockSystemEvents, systemEventDetail } from './runtimeEvents';
+import { applicationOperationDetail, mockApplicationOperations, mockSystemEvents } from './runtimeEvents';
 import { confirmRestore, mockRuntimeSettings, mockServerVariables, restorePreflight, saveRuntime, saveServerVariables, startExport } from './settings';
 import { advanceExport, exportStatus, resetExport, restoreStatus } from './maintenance';
 import { debugPprofStatus, debugSnapshot, setDebugPprof } from './debug';
@@ -758,29 +758,20 @@ export function installMockApi() {
     }
 
     if (url.pathname === '/api/v1/system-events' && method(init) === 'GET') {
-      const subjectId = url.searchParams.get('subjectId') || '';
       const eventType = url.searchParams.get('eventType') || '';
       const severity = url.searchParams.get('severity') || '';
-      const category = url.searchParams.get('category') || '';
       const from = url.searchParams.get('from') || '';
       const to = url.searchParams.get('to') || '';
       const page = Math.max(1, Number(url.searchParams.get('page') || 1));
       const pageSize = Math.max(1, Math.min(100, Number(url.searchParams.get('pageSize') || 20)));
       let items = mockSystemEvents;
-      if (subjectId) items = items.filter((item) => (item.subjectId || '').includes(subjectId));
       if (eventType) items = items.filter((item) => item.eventType.includes(eventType));
       if (severity) items = items.filter((item) => item.severity === severity);
-      if (category) items = items.filter((item) => item.category === category);
       if (from) items = items.filter((item) => item.occurredAt >= from);
       if (to) items = items.filter((item) => item.occurredAt <= to);
       const total = items.length;
       const start = (page - 1) * pageSize;
       return json({ items: items.slice(start, start + pageSize), total, page, pageSize });
-    }
-    const systemEventMatch = url.pathname.match(/^\/api\/v1\/system-events\/([^/]+)$/);
-    if (systemEventMatch && method(init) === 'GET') {
-      const found = systemEventDetail(decodeURIComponent(systemEventMatch[1]));
-      return found ? json(found) : error('system_event_detail_unavailable', 'System event detail is unavailable.', 404);
     }
 
     if (url.pathname === '/api/v1/settings/runtime' && method(init) === 'GET') {
