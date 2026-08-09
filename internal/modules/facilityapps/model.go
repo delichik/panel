@@ -62,6 +62,7 @@ type ReverseProxyConfig struct {
 	RouteSummaries    []RouteSummary                               `json:"routeSummaries"`
 	ApplicationRoutes []applications.ApplicationReverseProxyConfig `json:"applicationRoutes"`
 	Operation         *applications.LifecycleOperation             `json:"operation,omitempty"`
+	ReconcileStopped  bool                                         `json:"reconcileStopped,omitempty"`
 	LastError         string                                       `json:"lastError,omitempty"`
 	UpdatedAt         time.Time                                    `json:"updatedAt"`
 	Routes            int                                          `json:"routes"`

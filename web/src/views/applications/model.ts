@@ -94,6 +94,7 @@ export function routeMode(path: string, params: Record<string, unknown>): AppMod
 export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, runtime?: ApplicationRuntime | null) {
   const status = runtime?.status || app.runtimeStatus;
   if (!app.enabled) return 'disabled';
+  if (app.reconcileStopped) return 'attention';
   if (status === 'deploying' || status === 'pending') return 'deploying';
   if (status === 'failed' || app.lastError) return 'failed';
   if (status === 'partially_deployed') return 'partial';
@@ -103,7 +104,7 @@ export function applicationStatus(app: ApplicationDto | ApplicationSummaryDto, r
 
 export function statusTone(status: string) {
   if (['deployed', 'enabled', 'running'].includes(status)) return 'success';
-  if (['deploying', 'partial', 'warning', 'pending'].includes(status)) return 'warning';
+  if (['deploying', 'partial', 'warning', 'pending', 'attention'].includes(status)) return 'warning';
   if (['failed', 'disabled', 'error'].includes(status)) return 'danger';
   return 'neutral';
 }

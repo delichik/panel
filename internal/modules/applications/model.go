@@ -30,6 +30,8 @@ const (
 	HTTPRouteModeOff            = "off"
 	HTTPRouteWebSocketAuto      = "auto"
 
+	ReconcileStopAfterFailures = 10
+
 	ApplicationFileKindBinary   = "binary"
 	ApplicationFileKindTemplate = "template"
 	ApplicationFileKindArchive  = "archive"
@@ -77,6 +79,7 @@ type Application struct {
 	Kind                 string              `json:"kind"`
 	Name                 string              `json:"name"`
 	Enabled              bool                `json:"enabled"`
+	ReconcileStopped     bool                `json:"reconcileStopped,omitempty"`
 	DeletionRequested    bool                `json:"deletionRequested,omitempty"`
 	SpecYAML             string              `json:"specYaml"`
 	PersistentPath       string              `json:"persistentPath,omitempty"`
@@ -106,6 +109,7 @@ type ApplicationSummary struct {
 	ID                   string    `json:"id"`
 	Name                 string    `json:"name"`
 	Enabled              bool      `json:"enabled"`
+	ReconcileStopped     bool      `json:"reconcileStopped,omitempty"`
 	ImageReference       string    `json:"imageReference,omitempty"`
 	InstanceCount        int       `json:"instanceCount"`
 	JobID                string    `json:"jobId"`

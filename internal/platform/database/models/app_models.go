@@ -195,6 +195,7 @@ type Application struct {
 	Name                    string           `orm:"not_null;unique"`
 	Enabled                 bool             `orm:"not_null;default:0"`
 	DeletionRequested       bool             `orm:"not_null;default:0"`
+	ReconcileStopped        bool             `orm:"not_null;default:0"`
 	SpecYAML                string           `orm:"not_null"`
 	DeploymentMode          string           `orm:"not_null;default:'all'"`
 	DeploymentServerIDsJSON []string         `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`

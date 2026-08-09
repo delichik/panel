@@ -74,6 +74,7 @@ export interface ReverseProxyConfig {
   applicationRoutes: ApplicationRouteSummary[];
   operation?: LifecycleOperation;
   runtime?: ApplicationRuntime;
+  reconcileStopped?: boolean;
   lastError?: string;
   updatedAt: string;
   routes: number;

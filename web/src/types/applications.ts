@@ -1,4 +1,4 @@
-export type ApplicationStatus = 'enabled' | 'disabled' | 'deploying' | 'partial' | 'failed' | 'deployed' | 'unknown';
+export type ApplicationStatus = 'enabled' | 'disabled' | 'deploying' | 'partial' | 'failed' | 'deployed' | 'attention' | 'unknown';
 export type DeploymentMode = 'all' | 'selected';
 export type FileKind = 'binary' | 'template' | 'archive';
 export type ReverseProxyTargetType = 'local' | 'container';
@@ -60,6 +60,7 @@ export interface ApplicationDto {
   name: string;
   enabled: boolean;
   deletionRequested?: boolean;
+  reconcileStopped?: boolean;
   specYaml: string;
   persistentPath?: string;
   deploymentMode: DeploymentMode | string;
@@ -88,6 +89,7 @@ export interface ApplicationSummaryDto {
   id: string;
   name: string;
   enabled: boolean;
+  reconcileStopped?: boolean;
   imageReference?: string;
   instanceCount?: number;
   jobId: string;

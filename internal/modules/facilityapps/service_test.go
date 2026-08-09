@@ -509,3 +509,28 @@ func TestSaveReverseProxyRequiresRegisteredPanelHostWhenSet(t *testing.T) {
 	})
 	assertFacilityPanelError(t, err, "facility_panel_entry_host_required")
 }
+
+func TestGetReverseProxyExposesReconcileStopped(t *testing.T) {
+	svc, _, closeStore := newFacilityEditTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	cfg, err := svc.GetReverseProxy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ReconcileStopped {
+		t.Fatal("expected reconcileStopped=false without a stopped marker")
+	}
+	if _, err := svc.db.ExecContext(ctx, `INSERT INTO applications(id, name, spec_yaml, job_id, created_at, updated_at, reconcile_stopped)
+		VALUES(?, 'facility-reverse-proxy', 'kind: facility/reverse-proxy', 'facility-reverse-proxy', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 1)`, proxyApplicationID); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = svc.GetReverseProxy(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ReconcileStopped {
+		t.Fatal("expected reconcileStopped=true when applications.reconcile_stopped=1")
+	}
+}

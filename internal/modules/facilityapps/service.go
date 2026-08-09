@@ -212,7 +212,19 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 	if operation, err := s.latestLifecycleOperation(ctx); err == nil && operation.ID != "" {
 		cfg.Operation = &operation
 	}
+	cfg.ReconcileStopped = s.proxyReconcileStopped(ctx)
 	return cfg, nil
+}
+
+func (s *Service) proxyReconcileStopped(ctx context.Context) bool {
+	if s == nil || s.db == nil {
+		return false
+	}
+	var stopped int
+	if err := s.db.QueryRowContext(ctx, `SELECT reconcile_stopped FROM applications WHERE id=?`, proxyApplicationID).Scan(&stopped); err != nil {
+		return false
+	}
+	return stopped != 0
 }
 
 func (s *Service) SaveReverseProxy(ctx context.Context, in ReverseProxySaveInput) (ReverseProxyConfig, error) {

@@ -349,6 +349,114 @@ func TestPlanApplicationDeploymentRemovedServerPurgesRetryableApply(t *testing.T
 	}
 }
 
+func TestPlanApplicationDeploymentSkipsAutoDriftWhenReconcileStopped(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET reconcile_stopped=1 WHERE id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID:        app.ID,
+		ServerIDs:            []string{"srv-a"},
+		ObservedRuntimeDrift: true,
+		TriggerType:          "scheduler",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.CreatedTargets) != 0 || len(result.OperationIDs) != 0 {
+		t.Fatalf("auto drift must not create targets while reconcile is stopped, got %#v", result)
+	}
+	var stopped int
+	if err := svc.db.QueryRowContext(ctx, `SELECT reconcile_stopped FROM applications WHERE id=?`, app.ID).Scan(&stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 1 {
+		t.Fatalf("auto drift must keep the stopped flag, got %d", stopped)
+	}
+}
+
+func TestPlanApplicationDeploymentUserSyncResetsReconcileStopped(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET reconcile_stopped=1 WHERE id=?`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID: app.ID,
+		ServerIDs:     []string{"srv-a"},
+		Force:         true,
+		TriggerType:   "application_sync",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.CreatedTargets) != 1 {
+		t.Fatalf("expected user sync to create one target, got %#v", result)
+	}
+	var stopped int
+	if err := svc.db.QueryRowContext(ctx, `SELECT reconcile_stopped FROM applications WHERE id=?`, app.ID).Scan(&stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 0 {
+		t.Fatalf("user sync must clear the stopped flag, got %d", stopped)
+	}
+}
+
+func TestRecordApplicationReconcileFailureMarksStoppedAtTen(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app := enabledTestApplication(t, svc, "web", "name: web\nimage: nginx\n")
+	spec := appruntime.Spec{
+		InstanceID:    runtimeInstanceID(app.ID, "srv-a"),
+		ContainerName: runtimeContainerName(app),
+		Generation:    app.Generation,
+		SpecHash:      app.SpecHash,
+	}
+	if err := svc.upsertRuntimeInstance(ctx, app.ID, "srv-a", spec, appruntime.DesiredRunning, appruntime.StatusDeploying, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < ReconcileStopAfterFailures; i++ {
+		if err := svc.recordApplicationReconcileFailure(ctx, app.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var stopped int
+	if err := svc.db.QueryRowContext(ctx, `SELECT reconcile_stopped FROM applications WHERE id=?`, app.ID).Scan(&stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 1 {
+		t.Fatalf("expected stopped flag after %d failures, got %d", ReconcileStopAfterFailures, stopped)
+	}
+
+	// A user retry clears the flag and starts a fresh attempt.
+	result, err := svc.PlanApplicationDeployment(ctx, DeploymentPlanRequest{
+		ApplicationID: app.ID,
+		ServerIDs:     []string{"srv-a"},
+		Force:         true,
+		TriggerType:   "application_sync",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.CreatedTargets) != 1 {
+		t.Fatalf("expected user retry to create target, got %#v", result)
+	}
+	if err := svc.db.QueryRowContext(ctx, `SELECT reconcile_stopped FROM applications WHERE id=?`, app.ID).Scan(&stopped); err != nil {
+		t.Fatal(err)
+	}
+	if stopped != 0 {
+		t.Fatalf("expected user retry to clear stopped flag, got %d", stopped)
+	}
+}
+
 func enabledTestApplication(t *testing.T, svc *Service, name, specYAML string) Application {
 	t.Helper()
 	app, err := svc.Create(context.Background(), SaveInput{Name: name, Enabled: false, SpecYAML: specYAML, DeploymentMode: DeploymentModeAll})

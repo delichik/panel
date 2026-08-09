@@ -358,7 +358,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	}
 	total := int(total64)
 	var rows []models.Application
-	err = base.Select("id", "name", "enabled", "image_reference", "image_update_available", "job_id", "namespace", "last_error", "updated_at").
+	err = base.Select("id", "name", "enabled", "reconcile_stopped", "image_reference", "image_update_available", "job_id", "namespace", "last_error", "updated_at").
 		OrderBy("name ASC", "id ASC").Limit(pageSize).Offset((page-1)*pageSize).All(ctx, &rows)
 	if err != nil {
 		return httpx.ListPage[ApplicationSummary]{}, err
@@ -371,6 +371,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 			ID:                   m.ID,
 			Name:                 m.Name,
 			Enabled:              m.Enabled,
+			ReconcileStopped:     m.ReconcileStopped,
 			ImageReference:       m.ImageReference,
 			ImageUpdateAvailable: m.ImageUpdateAvailable,
 			JobID:                m.JobID,
@@ -4104,6 +4105,15 @@ func (s *Service) planApplicationDeployment(ctx context.Context, req DeploymentP
 	if err != nil {
 		return DeploymentPlanResult{}, err
 	}
+	autoDrift := req.ObservedRuntimeDrift && !req.Manual && !req.Force
+	if autoDrift && app.ReconcileStopped {
+		return DeploymentPlanResult{}, nil
+	}
+	if app.ReconcileStopped {
+		if err := s.resetApplicationReconcileStopped(ctx, app.ID); err != nil {
+			return DeploymentPlanResult{}, err
+		}
+	}
 	targetIDs := uniqueStringItems(req.ServerIDs)
 	stopRequestIDs := uniqueStringItems(append(append([]string{}, req.StopServers...), req.ServerIDs...))
 	triggerType := firstNonEmpty(req.TriggerType, "system")
@@ -5023,9 +5033,39 @@ func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID s
 		nextFailures = int(failures.Int64) + 1
 	}
 	nextRun := time.Now().UTC().Add(applicationReconcileFailureBackoff(nextFailures))
+	if nextFailures >= ReconcileStopAfterFailures {
+		if err := s.markApplicationReconcileStopped(ctx, appID); err != nil {
+			return err
+		}
+	}
 	return orm.New(s.db).From("application_reconcile_states").Where("application_id=?", appID).UpdateColumns(ctx, map[string]any{
 		"reconcile_failures":       nextFailures,
 		"reconcile_next_run_at":    nextRun.Format(time.RFC3339Nano),
+		"reconcile_success_streak": 0,
+	})
+}
+
+func (s *Service) markApplicationReconcileStopped(ctx context.Context, appID string) error {
+	return orm.New(s.db).From("applications").Where("id=?", appID).UpdateColumns(ctx, map[string]any{
+		"reconcile_stopped": 1,
+		"updated_at":        formatTime(time.Now().UTC()),
+	})
+}
+
+func (s *Service) resetApplicationReconcileStopped(ctx context.Context, appID string) error {
+	if err := s.resetApplicationReconcileFailures(ctx, appID); err != nil {
+		return err
+	}
+	return orm.New(s.db).From("applications").Where("id=?", appID).UpdateColumns(ctx, map[string]any{
+		"reconcile_stopped": 0,
+		"updated_at":        formatTime(time.Now().UTC()),
+	})
+}
+
+func (s *Service) resetApplicationReconcileFailures(ctx context.Context, appID string) error {
+	return orm.New(s.db).From("application_reconcile_states").Where("application_id=?", appID).UpdateColumns(ctx, map[string]any{
+		"reconcile_failures":       0,
+		"reconcile_next_run_at":    "",
 		"reconcile_success_streak": 0,
 	})
 }

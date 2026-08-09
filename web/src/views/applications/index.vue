@@ -1885,6 +1885,7 @@ onBeforeUnmount(() => {
           <div><span>{{ t('applicationsPage.panelEntry') }}</span><strong>{{ facility.panelEntry.enabled ? facility.panelEntry.domain : t('applicationsPage.panelEntryDisabled') }}</strong></div>
           <div><span>{{ t('applicationsPage.lastUpdated') }}</span><strong>{{ formatDateTime(facility.updatedAt) || t('common.never') }}</strong></div>
           <div v-if="facility.operation"><span>{{ t('applicationsPage.currentOperation') }}</span><StatusBadge :status="facility.operation.status" domain="operation" /></div>
+          <div v-if="facility.reconcileStopped"><StatusBadge :status="'needs_attention'" domain="operation" :label="t('applicationsPage.status.attention')" /></div>
           <div v-if="facility.lastError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-danger">{{ facility.lastError }}</div>
         </div>
       </aside>

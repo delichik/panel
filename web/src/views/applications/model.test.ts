@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applicationStatus,
   applyYamlToDraft,
   cloneFacilityDomains,
   cloneProxyRules,
@@ -11,6 +12,7 @@ import {
   makeKeyValueRow,
   saveInputFromDraft,
   specYamlFromDraft,
+  statusTone,
   syncDraftToYaml,
   validateApplicationDraft,
   validateFacilityDraft,
@@ -40,6 +42,12 @@ const app = {
 } satisfies ApplicationDto;
 
 describe('application editor model', () => {
+  it('marks stopped reconciliation as needing attention', () => {
+    expect(applicationStatus({ ...app, reconcileStopped: true })).toBe('attention');
+    expect(statusTone('attention')).toBe('warning');
+    expect(applicationStatus({ ...app, reconcileStopped: false })).toBe('enabled');
+  });
+
   it('builds save input from structured editor draft without storing display text', () => {
     const draft = draftFromApplication(app);
     draft.env.push(makeKeyValueRow('PORT', '8080'));
