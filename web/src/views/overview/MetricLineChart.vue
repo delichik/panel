@@ -122,6 +122,10 @@ const option = computed<EChartsOption>(() => {
 });
 
 function formatValue(value: number) {
+  if (props.valueKind === 'percent') {
+    if (!value) return '0%';
+    return `${value >= 100 ? value.toFixed(0) : value.toFixed(1)}%`;
+  }
   if (!value) return '0 B/s';
   const units = ['B/s', 'KB/s', 'MB/s', 'GB/s', 'TB/s'];
   let unitIndex = 0;
