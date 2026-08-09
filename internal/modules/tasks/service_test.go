@@ -693,3 +693,48 @@ func TestTaskOperationTriggerMetadataAndSteps(t *testing.T) {
 		t.Fatalf("unexpected retry task: %#v", retry)
 	}
 }
+
+func TestCleanupRetainedDeletesOldTerminalHistory(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+
+	old, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "old completed", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.AppendLog(ctx, old.ID, "stdout", "old log line"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-48*time.Hour).Format(time.RFC3339Nano), old.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	recent, err := svc.Create(ctx, CreateInput{Type: "test", Summary: "recent completed", Status: StatusCompleted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.db.ExecContext(ctx, `UPDATE tasks SET finished_at=? WHERE id=?`, time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano), recent.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	deleted, err := svc.CleanupRetained(ctx, 24*time.Hour)
+	if err != nil {
+		t.Fatalf("cleanup failed: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("expected exactly one old task to be deleted, got %d", deleted)
+	}
+	if _, err := svc.Get(ctx, old.ID); err == nil {
+		t.Fatal("expected old task to be removed")
+	}
+	var logCount int
+	if err := svc.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM task_logs WHERE task_id=?`, old.ID).Scan(&logCount); err != nil {
+		t.Fatal(err)
+	}
+	if logCount != 0 {
+		t.Fatalf("expected task logs for the old task to be removed, got %d", logCount)
+	}
+	if _, err := svc.Get(ctx, recent.ID); err != nil {
+		t.Fatalf("expected recent task to remain, got %v", err)
+	}
+}

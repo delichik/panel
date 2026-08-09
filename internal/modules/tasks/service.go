@@ -700,13 +700,13 @@ func (s *Service) CleanupRetained(ctx context.Context, retention time.Duration) 
 		}
 		ph := placeholders(len(ids))
 		args := stringArgs(ids)
-		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_steps WHERE task_id IN (`+ph+`)`, args); err != nil {
+		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_steps WHERE task_id IN (`+ph+`)`, args...); err != nil {
 			return deleted, err
 		}
-		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_logs WHERE task_id IN (`+ph+`)`, args); err != nil {
+		if _, err := orm.RawExec(ctx, s.db, `DELETE FROM task_logs WHERE task_id IN (`+ph+`)`, args...); err != nil {
 			return deleted, err
 		}
-		res, err := orm.RawExec(ctx, s.db, `DELETE FROM tasks WHERE id IN (`+ph+`)`, args)
+		res, err := orm.RawExec(ctx, s.db, `DELETE FROM tasks WHERE id IN (`+ph+`)`, args...)
 		if err != nil {
 			return deleted, err
 		}
