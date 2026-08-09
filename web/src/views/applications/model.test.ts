@@ -9,6 +9,7 @@ import {
   facilityDraftFromConfig,
   facilitySaveInputFromDraft,
   makeFacilityDomain,
+  makeFacilityPath,
   makeKeyValueRow,
   saveInputFromDraft,
   specYamlFromDraft,
@@ -175,6 +176,29 @@ describe('application editor model', () => {
 
     expect(specYamlFromDraft(draft)).toContain('mounts:');
   });
+
+  it('forces local proxy targets for host-network applications', () => {
+    const hostApp: ApplicationDto = {
+      ...app,
+      specYaml: 'name: api\nimage: nginx\nnetworkMode: host\n',
+      reverseProxy: [{ domain: 'api.example.test', targetType: 'container', targetPort: 8080, originServerIds: ['srv-1'], anyAccess: { enabled: false }, paths: [{ path: '/' }] }],
+    };
+    const draft = draftFromApplication(hostApp);
+
+    expect(draft.networkMode).toBe('host');
+    expect(draft.reverseProxy[0].targetType).toBe('local');
+
+    draft.reverseProxy[0].targetType = 'container';
+    expect(saveInputFromDraft(draft).reverseProxy[0].targetType).toBe('local');
+  });
+
+  it('keeps container targets for bridge-network applications', () => {
+    const draft = draftFromApplication(app);
+    expect(draft.networkMode).toBe('bridge');
+
+    draft.reverseProxy[0].targetType = 'container';
+    expect(saveInputFromDraft(draft).reverseProxy[0].targetType).toBe('container');
+  });
 });
 describe('facility path dialog validation', () => {
   it('accepts a clean redirect target', () => {
@@ -214,6 +238,38 @@ describe('facility path dialog validation', () => {
   it('rejects an empty path', () => {
     const errors = validateFacilityPathFields({ path: '', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' });
     expect(errors.path).toBe('applicationsPage.validationPath');
+  });
+
+  it('defaults new gateway paths to uploaded static files', () => {
+    const path = makeFacilityPath();
+    expect(path.ruleType).toBe('static');
+    expect(path.sourceType).toBe('uploaded_file');
+  });
+
+  it('normalizes legacy gateway proxy and host-directory paths', () => {
+    const domain = cloneFacilityDomains([{
+      domain: 'example.test',
+      originServerIds: ['srv-1'],
+      anyAccess: { enabled: false },
+      paths: [
+        { path: '/api', ruleType: 'proxy_pass', sourceType: 'uploaded_file', proxyUrl: 'http://127.0.0.1:8080', proxySourceMode: 'preserve_source' },
+        { path: '/static', ruleType: 'static', sourceType: 'host_path', rootPath: '/srv/www' },
+      ],
+    }])[0];
+
+    expect(domain.paths[0].ruleType).toBe('static');
+    expect(domain.paths[0].proxyUrl).toBe('');
+    expect(domain.paths[0].proxySourceMode).toBe('');
+    expect(domain.paths[1].sourceType).toBe('uploaded_file');
+    expect(domain.paths[1].rootPath).toBe('');
+  });
+
+  it('requires a static asset for uploaded file sources', () => {
+    const missing = validateFacilityPathFields({ path: '/p', ruleType: 'static', sourceType: 'uploaded_file', assetName: '' });
+    expect(missing.asset).toBe('applicationsPage.validationStaticAsset');
+
+    const selected = validateFacilityPathFields({ path: '/p', ruleType: 'static', sourceType: 'uploaded_file', assetName: 'index.html' });
+    expect(selected).toEqual({});
   });
 });
 describe('facility domain dialog validation', () => {

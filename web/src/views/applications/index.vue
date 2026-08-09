@@ -265,8 +265,13 @@ const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.valu
   editable: asset.contentMode === 'text',
 })));
 const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
-const routeTypeOptions = computed(() => ['static', 'redirect', 'proxy_pass'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
-const sourceTypeOptions = computed(() => ['host_path', 'uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
+const routeTypeOptions = computed(() => ['static', 'redirect'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
+const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
+const proxyTargetTypeOptions = computed(() => {
+  const options = [{ label: t('applicationsPage.targetType.local'), value: 'local' }];
+  if (appDraft.networkMode !== 'host') options.push({ label: t('applicationsPage.targetType.container'), value: 'container' });
+  return options;
+});
 const saving = computed(() => pending.value === 'preview' || pending.value === 'commit');
 const proxyPathWebSocket = computed({
   get: () => Boolean(proxyPathDraft.webSocket),
@@ -1187,11 +1192,19 @@ function saveMountDialog() {
   markAppStructuredDirty();
 }
 
+function onAppNetworkModeChange() {
+  if (appDraft.networkMode === 'host') {
+    appDraft.reverseProxy = appDraft.reverseProxy.map((rule) => ({ ...rule, targetType: 'local' }));
+  }
+  markAppStructuredDirty();
+}
+
 function openProxyDialog(index = -1) {
   dialogKind.value = 'proxy';
   dialogIndex.value = index;
   const base = index >= 0 ? cloneProxyRules([appDraft.reverseProxy[index]])[0] : makeProxyRule();
   Object.assign(proxyDraft, { ...base });
+  if (appDraft.networkMode === 'host') proxyDraft.targetType = 'local';
   proxyRelayScope.value = base.anyAccess?.relayServerIds?.length ? 'selected' : 'all';
   dialogOpen.value = true;
 }
@@ -1936,7 +1949,7 @@ onBeforeUnmount(() => {
               <div class="section-copy"><h3>{{ t('applicationsPage.panelRuntimeSource') }}</h3><p>{{ t('applicationsPage.sourceHint') }}</p></div>
               <div class="form-grid">
                 <label class="field wide-field">{{ t('applicationsPage.image') }}<Input v-model="appDraft.image" :invalid="Boolean(appErrors.image)" @input="markAppStructuredDirty" /></label>
-                <label class="field">{{ t('applicationsPage.networkMode') }}<Select v-model="appDraft.networkMode" :options="[{ label: 'bridge', value: 'bridge' }, { label: 'host', value: 'host' }]" @change="markAppStructuredDirty" /></label>
+                <label class="field">{{ t('applicationsPage.networkMode') }}<Select v-model="appDraft.networkMode" :options="[{ label: 'bridge', value: 'bridge' }, { label: 'host', value: 'host' }]" @change="onAppNetworkModeChange" /></label>
                 <label class="field">{{ t('applicationsPage.cpu') }}<Input v-model="appDraft.cpu" placeholder="0.5" @input="markAppStructuredDirty" /></label>
                 <label class="field">{{ t('applicationsPage.memoryMb') }}<Input v-model="appDraft.memoryMb" placeholder="512" @input="markAppStructuredDirty" /></label>
                 <div class="field wide-field">
@@ -2067,7 +2080,8 @@ onBeforeUnmount(() => {
     <div v-else-if="dialogKind === 'proxy'" class="grid gap-3">
       <label class="field">{{ t('applicationsPage.domain') }}<Input v-model="proxyDraft.domain" /></label>
       <label class="field">{{ t('applicationsPage.targetPort') }}<Input v-model="proxyDraft.targetPort" /></label>
-      <label class="field">{{ t('applicationsPage.targetType') }}<Select v-model="proxyDraft.targetType" :options="[{ label: 'local', value: 'local' }, { label: 'container', value: 'container' }]" /></label>
+      <label class="field">{{ t('applicationsPage.targetType') }}<Select v-model="proxyDraft.targetType" :options="proxyTargetTypeOptions" /></label>
+      <p v-if="appDraft.networkMode === 'host'" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.targetType.containerDisabledHint') }}</p>
       <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.originServers') }}</h3><p>{{ t('applicationsPage.proxyOriginHint') }}</p></div>
         <p class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: proxyAutoOriginIds.length }) }} · {{ proxyAutoOriginIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
@@ -2140,8 +2154,8 @@ onBeforeUnmount(() => {
       <label class="field">{{ t('common.type') }}<Select v-model="facilityPathDraft.ruleType" :options="routeTypeOptions" /></label>
       <template v-if="facilityPathDraft.ruleType === 'static'">
         <label class="field">{{ t('applicationsPage.sourceType') }}<Select v-model="facilityPathDraft.sourceType" :options="sourceTypeOptions" /></label>
-        <label v-if="facilityPathDraft.sourceType === 'host_path'" class="field">{{ t('applicationsPage.rootPath') }}<Input v-model="facilityPathDraft.rootPath" /></label>
-        <label v-else class="field">{{ t('applicationsPage.staticAsset') }}<Select v-model="facilityPathDraft.assetName" :options="assetOptions" /></label>
+        <label class="field">{{ t('applicationsPage.staticAsset') }}<Select v-model="facilityPathDraft.assetName" :options="assetOptions" @change="clearFacilityPathError('asset')" /></label>
+        <p v-if="facilityPathErrors.asset" class="m-0 text-sm text-danger">{{ t(facilityPathErrors.asset) }}</p>
       </template>
       <template v-else-if="facilityPathDraft.ruleType === 'redirect'">
         <label class="field">{{ t('applicationsPage.redirectUrl') }}<Input v-model="facilityPathDraft.redirectUrl" :invalid="Boolean(facilityPathErrors.redirectUrl)" @input="clearFacilityPathError('redirectUrl')" /></label>

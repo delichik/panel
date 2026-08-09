@@ -112,12 +112,13 @@ export function statusTone(status: string) {
 export function draftFromApplication(app?: ApplicationDto | null): ApplicationDraftUi {
   const parsed = parseSpec(app?.specYaml || '');
   const command = arrayValue(parsed.command).map((item) => String(item)).filter((item) => item.trim() !== '');
+  const networkMode: 'bridge' | 'host' = stringValue(parsed.networkMode) === 'host' ? 'host' : 'bridge';
   return {
     name: app?.name || stringValue(parsed.name) || '',
     enabled: app?.enabled ?? true,
     image: stringValue(parsed.image),
     commandRows: command.map((value) => ({ id: makeId('cmd'), value })),
-    networkMode: stringValue(parsed.networkMode) === 'host' ? 'host' : 'bridge',
+    networkMode,
     cpu: stringValue(objectValue(parsed.resources)?.cpu),
     memoryMb: stringValue(objectValue(parsed.resources)?.memoryMb),
     privileged: Boolean(parsed.privileged),
@@ -134,7 +135,7 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     }),
     deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
     deploymentServers: [...(app?.deploymentServers ?? [])],
-    reverseProxy: cloneProxyRules(app?.reverseProxy ?? []),
+    reverseProxy: cloneProxyRules(app?.reverseProxy ?? []).map((rule) => (networkMode === 'host' && rule.targetType === 'container' ? { ...rule, targetType: 'local' } : rule)),
   };
 }
 
@@ -192,7 +193,7 @@ export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveIn
     specYaml,
     deploymentMode: draft.deploymentMode,
     deploymentServers: draft.deploymentMode === 'selected' ? [...draft.deploymentServers] : [],
-    reverseProxy: cloneProxyRules(draft.reverseProxy),
+    reverseProxy: cloneProxyRules(draft.reverseProxy).map((rule) => (draft.networkMode === 'host' && rule.targetType === 'container' ? { ...rule, targetType: 'local' } : rule)),
   };
 }
 
@@ -275,6 +276,11 @@ export function validateFacilityPathFields(path: FacilityRoutePath): FieldErrors
     const lower = target.toLowerCase();
     if (!target || !(lower.startsWith('http://') || lower.startsWith('https://')) || /[\s\x00;{}#"\\']/.test(target)) {
       errors.proxyUrl = 'applicationsPage.validationProxyUrl';
+    }
+  } else if (path.ruleType === 'static') {
+    const source = (path.sourceType ?? '').trim();
+    if ((source === 'uploaded_file' || source === 'uploaded_bundle') && !(path.assetName ?? '').trim()) {
+      errors.asset = 'applicationsPage.validationStaticAsset';
     }
   }
   return errors;
@@ -370,7 +376,7 @@ export function makeFacilityDomain(): FacilityRouteDomain {
 }
 
 export function makeFacilityPath(type: StaticRuleType = 'static'): FacilityRoutePath {
-  return { path: '', ruleType: type, sourceType: 'host_path', rootPath: '', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
+  return { path: '', ruleType: type, sourceType: 'uploaded_file', rootPath: '', assetName: '', redirectUrl: '', redirectCode: 0, proxyUrl: '', proxySourceMode: '', options: defaultRouteOptions() };
 }
 
 export function cloneProxyRules(rules: ReverseProxyRule[]) {
@@ -384,17 +390,42 @@ export function cloneProxyRules(rules: ReverseProxyRule[]) {
   }));
 }
 
+export function normalizeFacilityPath(path: FacilityRoutePath): FacilityRoutePath {
+  const ruleType: StaticRuleType = path.ruleType === 'proxy_pass' ? 'static' : (path.ruleType as StaticRuleType) || 'static';
+  const sourceType: StaticSourceType = path.sourceType === 'host_path' ? 'uploaded_file' : (path.sourceType as StaticSourceType) || 'uploaded_file';
+  const normalized: FacilityRoutePath = {
+    ...makeFacilityPath(ruleType),
+    ...path,
+    ruleType,
+    sourceType,
+    options: { ...defaultRouteOptions(), ...(path.options ?? {}) },
+  };
+  normalized.rootPath = '';
+  if (normalized.ruleType !== 'proxy_pass') {
+    normalized.proxyUrl = '';
+    normalized.proxySourceMode = '';
+  }
+  if (normalized.ruleType !== 'redirect') {
+    normalized.redirectUrl = '';
+    normalized.redirectCode = 0;
+  }
+  if (normalized.ruleType !== 'static') {
+    normalized.assetName = '';
+  }
+  return normalized;
+}
+
 export function cloneFacilityDomains(domains: FacilityRouteDomain[]) {
   return domains.map((domain) => ({
     domain: domain.domain,
     originServerIds: [...(domain.originServerIds ?? [])],
     anyAccess: { enabled: Boolean(domain.anyAccess?.enabled), strategy: domain.anyAccess?.strategy || 'round_robin', primaryOriginServerId: domain.anyAccess?.primaryOriginServerId || '', relayServerIds: [...(domain.anyAccess?.relayServerIds ?? [])] },
-    paths: (domain.paths ?? []).map((path) => ({ ...makeFacilityPath((path.ruleType as StaticRuleType) || 'static'), ...path, options: { ...defaultRouteOptions(), ...(path.options ?? {}) } })),
+    paths: (domain.paths ?? []).map((path) => normalizeFacilityPath(path)),
   }));
 }
 
 export function cloneFacilityPath(path: FacilityRoutePath) {
-  return { ...makeFacilityPath((path.ruleType as StaticRuleType) || 'static'), ...path, options: { ...defaultRouteOptions(), ...(path.options ?? {}) } };
+  return normalizeFacilityPath(path);
 }
 
 export function defaultRouteOptions(): HttpRouteOptions {
