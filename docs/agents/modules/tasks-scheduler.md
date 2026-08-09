@@ -53,6 +53,7 @@
 - 多组同类型参数会创建父任务和多个子任务。父任务负责串行或并行编排与汇总，子任务执行同一注册定义；在任务中心语义中，`operation_id` 对应一次“操作”聚合，子任务对应操作中的具体执行任务。任一子任务结束为 `failed`、`failed_retryable`、`blocked` 或 `cancelled` 时，父任务必须汇总为失败，不能因为 executor 已经完成落库而把操作误标为 completed。
 - batch 支持混合子任务类型；每个子任务按自己的注册定义计算并发 key、执行器和权限。父任务类型只用于聚合展示，不得覆盖子任务真实类型。
 - `ConcurrencyResourceQueue` 表示同一 concurrency key 的任务可以全部创建，但运行时必须按创建顺序串行等待队首；`ConcurrencyResourceExclusive` 仍表示已存在 active 任务时复用/拒绝创建新任务。需要“同一资源同一时间只运行一种动作，其余排队”的业务必须使用 `ConcurrencyResourceQueue`，不能用 exclusive 跳过后续任务。
+- `tasks.Service.FirstActiveByConcurrencyKey` 为资源队列等待提供进程内缓存：每个 concurrency key 只缓存当前队首任务 ID，缓存命中时不再查库，等待循环每 250ms 只做一次内存读。任务进入终态（完成/失败/blocked/取消）、`CancelByServer`、`ExpireStaleQueued`、`FailRunningWithoutExecution` 或历史清理删除了队首任务时会使缓存失效并回填一次数据库查询。该缓存只在本进程内有效，单实例部署下成立；不允许依赖它做跨进程共享数据库的一致性。
 - 父任务汇总必须对已结束子任务保持幂等：子任务已是 `completed` 时应视为已经完成并跳过执行，不能把再次触碰已完成子任务产生的 `task_not_runnable` 记录成父任务失败；只有失败、可重试失败、阻塞或取消等终态才应让父任务失败。
 - 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移并同步前端。
 - 任务中心筛选控件清空时可能产生 `null`；前端页面应用筛选前、前端任务 API 组装查询参数前都应统一归一化空值和空白字符串，不发送空筛选参数。

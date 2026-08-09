@@ -285,7 +285,13 @@ func (m *Manager) waitForQueueTurn(ctx context.Context, task Task) error {
 		if err != nil {
 			return err
 		}
-		if !ok || first.ID == task.ID {
+		if !ok {
+			// No active task holds this key, which means the waiting task
+			// itself is no longer active (for example it was cancelled).
+			// Stop waiting instead of spinning forever.
+			return nil
+		}
+		if first.ID == task.ID {
 			return nil
 		}
 		select {

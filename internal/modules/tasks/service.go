@@ -22,6 +22,8 @@ type Service struct {
 	runningMu         sync.Mutex
 	runningExecutions map[string]*RunningExecution
 	events            runtimeevents.EventWriter
+	queueMu           sync.RWMutex
+	firstActiveByKey  map[string]string
 }
 
 type ListFilter struct {
@@ -48,11 +50,31 @@ type ListResult struct {
 }
 
 func NewService(db *sql.DB) *Service {
-	return &Service{db: db, registry: NewRegistry(), runningExecutions: map[string]*RunningExecution{}}
+	return &Service{db: db, registry: NewRegistry(), runningExecutions: map[string]*RunningExecution{}, firstActiveByKey: map[string]string{}}
 }
 
 func (s *Service) SetRuntimeEvents(events runtimeevents.EventWriter) {
 	s.events = events
+}
+
+// invalidateFirstActiveByKey removes the cached first active task for a
+// concurrency key. It is safe to call for keys that are not cached.
+func (s *Service) invalidateFirstActiveByKey(concurrencyKey string) {
+	concurrencyKey = strings.TrimSpace(concurrencyKey)
+	if concurrencyKey == "" {
+		return
+	}
+	s.queueMu.Lock()
+	delete(s.firstActiveByKey, concurrencyKey)
+	s.queueMu.Unlock()
+}
+
+// invalidateAllFirstActiveKeys clears the whole first-active cache. It is used
+// by bulk raw-SQL transitions that cannot know which concurrency keys changed.
+func (s *Service) invalidateAllFirstActiveKeys() {
+	s.queueMu.Lock()
+	clear(s.firstActiveByKey)
+	s.queueMu.Unlock()
 }
 
 func (s *Service) Registry() *Registry {
@@ -307,6 +329,7 @@ func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
 			if task, getErr := s.Get(ctx, taskID); getErr == nil {
+				s.invalidateFirstActiveByKey(task.ConcurrencyKey)
 				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskCompleted, task, summary, runtimeevents.SeverityInfo)
 			}
 		}
@@ -327,6 +350,7 @@ func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
 			if task, getErr := s.Get(ctx, taskID); getErr == nil {
+				s.invalidateFirstActiveByKey(task.ConcurrencyKey)
 				updateErr = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError)
 			}
 		}
@@ -379,6 +403,7 @@ func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
 		if affected, _ := res.RowsAffected(); affected > 0 {
 			s.unregisterRunningExecutionLocked(taskID)
 			if task, getErr := s.Get(ctx, taskID); getErr == nil {
+				s.invalidateFirstActiveByKey(task.ConcurrencyKey)
 				err = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError)
 			}
 		}
@@ -471,10 +496,33 @@ func (s *Service) ExistingActiveByConcurrencyKeyAndType(ctx context.Context, con
 	return row.toTask(), true, nil
 }
 
+// FirstActiveByConcurrencyKey returns the earliest active task for a
+// concurrency key. Results are cached in memory per key: while the cached
+// first task stays active, callers (the resource-queue wait loop) avoid the
+// database entirely. The cache is invalidated whenever a task with the key
+// reaches a terminal state or is deleted, so a cache hit is only ever one
+// queue handoff behind the database. On a cache hit the returned Task carries
+// only its ID; callers that need the full row must use Get.
 func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKey string) (Task, bool, error) {
 	concurrencyKey = strings.TrimSpace(concurrencyKey)
 	if concurrencyKey == "" {
 		return Task{}, false, nil
+	}
+	s.queueMu.RLock()
+	if taskID, ok := s.firstActiveByKey[concurrencyKey]; ok {
+		s.queueMu.RUnlock()
+		return Task{ID: taskID}, true, nil
+	}
+	s.queueMu.RUnlock()
+
+	// Cache miss. Refill under the write lock so a concurrent terminal
+	// transition can never interleave between the query and the cache write:
+	// it either invalidates before us (and the query already sees the new
+	// state) or after us (and removes the entry we just wrote).
+	s.queueMu.Lock()
+	defer s.queueMu.Unlock()
+	if taskID, ok := s.firstActiveByKey[concurrencyKey]; ok {
+		return Task{ID: taskID}, true, nil
 	}
 	var row taskRow
 	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
@@ -488,6 +536,7 @@ func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKe
 	if err != nil {
 		return Task{}, false, err
 	}
+	s.firstActiveByKey[concurrencyKey] = row.ID
 	return row.toTask(), true, nil
 }
 
@@ -510,12 +559,16 @@ func (s *Service) CancelByServer(ctx context.Context, serverID, message string) 
 		return 0, err
 	}
 	taskIDs := []string{}
+	keys := []string{}
 	for _, taskID := range rows {
 		task, getErr := s.Get(ctx, taskID)
 		if getErr == nil && s.isCancellationBlocked(task.Type) {
 			continue
 		}
 		taskIDs = append(taskIDs, taskID)
+		if getErr == nil {
+			keys = append(keys, task.ConcurrencyKey)
+		}
 	}
 	if len(taskIDs) == 0 {
 		return 0, nil
@@ -539,6 +592,9 @@ func (s *Service) CancelByServer(ctx context.Context, serverID, message string) 
 		delete(s.runningExecutions, taskID)
 	}
 	s.runningMu.Unlock()
+	for _, key := range keys {
+		s.invalidateFirstActiveByKey(key)
+	}
 	affected, err := res.RowsAffected()
 	if err != nil {
 		return 0, nil
@@ -563,6 +619,7 @@ func (s *Service) Cancel(ctx context.Context, taskID, message string) error {
 		return nil
 	}
 	if task, getErr := s.Get(ctx, taskID); getErr == nil {
+		s.invalidateFirstActiveByKey(task.ConcurrencyKey)
 		if err := s.writeTaskEvent(ctx, runtimeevents.EventTaskCancelled, task, message, runtimeevents.SeverityWarning); err != nil {
 			return err
 		}
@@ -658,6 +715,19 @@ func (s *Service) CleanupRetained(ctx context.Context, retention time.Duration) 
 			return deleted, err
 		}
 		deleted += affected
+		if len(ids) > 0 {
+			deletedSet := make(map[string]struct{}, len(ids))
+			for _, taskID := range ids {
+				deletedSet[taskID] = struct{}{}
+			}
+			s.queueMu.Lock()
+			for key, taskID := range s.firstActiveByKey {
+				if _, ok := deletedSet[taskID]; ok {
+					delete(s.firstActiveByKey, key)
+				}
+			}
+			s.queueMu.Unlock()
+		}
 		if len(ids) < 500 {
 			return deleted, nil
 		}
@@ -907,6 +977,9 @@ func (s *Service) FailRunningWithoutExecution(ctx context.Context, now time.Time
 			failed += int(affected)
 		}
 	}
+	if failed > 0 {
+		s.invalidateAllFirstActiveKeys()
+	}
 	return failed, nil
 }
 
@@ -999,6 +1072,9 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 	affected, err := res.RowsAffected()
 	if err != nil {
 		return 0, nil
+	}
+	if affected > 0 {
+		s.invalidateAllFirstActiveKeys()
 	}
 	return int(affected), nil
 }
