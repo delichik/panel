@@ -3,6 +3,7 @@ package facilityapps
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 	appruntime "panel/internal/modules/applications/runtime"
 	"panel/internal/modules/certificates/proxycert"
 	"panel/internal/modules/servers"
+	"panel/internal/platform/config"
+	storage "panel/internal/platform/database"
 )
 
 func TestNormalizeInputUsesDomainOriginsAndAnyAccess(t *testing.T) {
@@ -222,6 +225,45 @@ func TestProxySpecUsesFixedSupportedImage(t *testing.T) {
 	}
 	if spec.Image != supportedProxyImage {
 		t.Fatalf("image = %q", spec.Image)
+	}
+}
+
+func TestRuntimeSpecForServerUsesApplicationSpecHash(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{
+		"srv-a": {ID: "srv-a"},
+	}}, nil, WithDataRoot(cfg.DataRoot))
+	ctx := context.Background()
+	app := applications.Application{
+		ID:                proxyApplicationID,
+		Kind:              applications.ApplicationKindFacility,
+		Generation:        7,
+		SpecHash:          "application-spec-hash",
+		DeploymentMode:    applications.DeploymentModeSelected,
+		DeploymentServers: []string{"srv-a"},
+	}
+	spec, ok, err := svc.RuntimeSpecForServer(ctx, app, server.Server{ID: "srv-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected facility runtime spec")
+	}
+	if spec.Generation != 7 {
+		t.Fatalf("generation = %d, want 7", spec.Generation)
+	}
+	if spec.SpecHash != "application-spec-hash" {
+		t.Fatalf("spec hash = %q, want application-spec-hash so verify/drift checks match the application-level desired hash", spec.SpecHash)
 	}
 }
 

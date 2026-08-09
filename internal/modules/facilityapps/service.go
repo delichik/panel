@@ -473,6 +473,13 @@ func (s *Service) RuntimeSpecForServer(ctx context.Context, app applications.App
 		return appruntime.Spec{}, true, err
 	}
 	spec.Generation = app.Generation
+	// Use the application-level SpecHash for the facility runtime spec so that the
+	// lifecycle target expectation, the deploy verify step and the container drift
+	// detection all compare the same hash. Per-server rendered content stays in
+	// the managed-files layer only.
+	if strings.TrimSpace(app.SpecHash) != "" {
+		spec.SpecHash = app.SpecHash
+	}
 	return spec, true, nil
 }
 
