@@ -150,12 +150,12 @@ func (s *Service) staticAssetInUse(ctx context.Context, assetID string) (bool, e
 	if err != nil {
 		return false, err
 	}
+	asset, err := s.getStaticAsset(ctx, assetID)
+	if err != nil {
+		return false, err
+	}
 	for _, domain := range cfg.Domains {
 		for _, routePath := range domain.Paths {
-			asset, err := s.getStaticAsset(ctx, assetID)
-			if err != nil {
-				return false, err
-			}
 			if routePath.AssetName == asset.Name {
 				return true, nil
 			}

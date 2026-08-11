@@ -1,4 +1,4 @@
-import { ApiError, apiClient, authHeaders } from './client';
+import { apiClient, fetchJson } from './client';
 import { fetchDownload, type DownloadResult } from './download';
 import type {
   CreateCaAssetInput,
@@ -33,23 +33,14 @@ export const keyAssetsApi = {
   regenerate: (id: string) => apiClient.post<KeyAssetMutationResult>(`/key-assets/${encodeURIComponent(id)}/regenerate`),
   delete: (id: string) => apiClient.delete<void>(`/key-assets/${encodeURIComponent(id)}`),
   createExport: (input: ExportKeyAssetsInput) => apiClient.post<ExportKeyAssetsResult>('/key-assets/exports', input),
-  preflightImport: async (file: File, password: string) => {
+  preflightImport: (file: File, password: string) => {
     const data = new FormData();
     data.set('file', file);
     data.set('password', password);
-    const response = await fetch('/api/v1/key-assets/imports/preflight', {
+    return fetchJson<ImportPreflightDto>('/api/v1/key-assets/imports/preflight', {
       method: 'POST',
-      headers: authHeaders({ Accept: 'application/json' }),
       body: data,
     });
-    const envelope = await response.json().catch((error: unknown) => {
-      throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
-    }) as { data?: ImportPreflightDto; error?: { code?: string; message?: string; details?: unknown } };
-    if (!response.ok || envelope.error) {
-      throw new ApiError(envelope.error?.message ?? `Request failed with status ${response.status}.`, response.status, envelope.error?.code ?? 'api_error', envelope.error?.details);
-    }
-    if (!envelope.data) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
-    return envelope.data;
   },
   executeImport: (planId: string, input: ImportExecuteInput) => apiClient.post<ImportExecuteResult>(`/key-assets/imports/${encodeURIComponent(planId)}/execute`, input),
   systemCertificates: () => apiClient.get<SystemCertificateDto[]>('/key-assets/system'),

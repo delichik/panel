@@ -66,6 +66,17 @@ type importPlan struct {
 	ExpiresAt time.Time
 }
 
+// importPlanFile is the on-disk metadata written next to each preflight plan
+// so orphaned plan files can be identified and cleaned after a restart when
+// the in-memory importPlans map is gone.
+const importPlanFileSchemaVersion = 1
+
+type importPlanFile struct {
+	SchemaVersion int    `json:"schemaVersion"`
+	PlanID        string `json:"planId"`
+	ExpiresAt     string `json:"expiresAt"`
+}
+
 type Option func(*Service)
 
 func WithApplicationRefresher(refresher applicationRefresher) Option {
@@ -95,6 +106,7 @@ func NewService(db *sql.DB, cfg config.Config, secrets *secretstore.Store, taskS
 		opt(s)
 	}
 	s.cleanupExpiredExports(context.Background(), time.Now().UTC())
+	s.cleanupExpiredImportPlans(context.Background(), time.Now().UTC())
 	s.startExportCleanup()
 	return s
 }
@@ -485,7 +497,10 @@ func (s *Service) CreateCA(ctx context.Context, in CreateCARequest) (Asset, erro
 	if err != nil {
 		return Asset{}, err
 	}
-	template := newCertificateTemplate(commonName, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Duration(validityDays)*24*time.Hour), true, nil, nil)
+	template, err := newCertificateTemplate(commonName, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Duration(validityDays)*24*time.Hour), true, nil, nil)
+	if err != nil {
+		return Asset{}, err
+	}
 	certificatePEM, err := generateCertificate(template, template, key.public, key.private)
 	if err != nil {
 		return Asset{}, err
@@ -572,7 +587,10 @@ func (s *Service) CreateTLS(ctx context.Context, in CreateTLSRequest) (Asset, er
 			validityDays = 365
 		}
 	}
-	template := newCertificateTemplate(commonName, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Duration(validityDays)*24*time.Hour), false, dnsNames, ips)
+	template, err := newCertificateTemplate(commonName, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(time.Duration(validityDays)*24*time.Hour), false, dnsNames, ips)
+	if err != nil {
+		return Asset{}, err
+	}
 	certificatePEM, err := generateCertificate(template, parentCert, key.public, parentPrivateKey)
 	if err != nil {
 		return Asset{}, err
@@ -742,7 +760,11 @@ func (s *Service) ReissueTLS(ctx context.Context, assetID string) (ReissueResult
 	if duration <= 0 {
 		duration = 365 * 24 * time.Hour
 	}
-	template := newCertificateTemplate(stored.CommonName, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(duration), false, stored.DNSNames, ips)
+	template, err := newCertificateTemplate(stored.CommonName, time.Now().UTC().Add(-time.Hour), time.Now().UTC().Add(duration), false, stored.DNSNames, ips)
+	if err != nil {
+		_ = fail(err)
+		return ReissueResult{}, err
+	}
 	certificatePEM, err := generateCertificate(template, parentCert, key.public, parentPrivateKey)
 	if err != nil {
 		_ = fail(err)
@@ -1037,6 +1059,11 @@ func (s *Service) DownloadExport(ctx context.Context, taskID string) ([]byte, st
 		_ = os.Remove(export.FilePath)
 		return nil, "", panelerr.NotFound("key_asset_export")
 	}
+	if !pathWithinDir(s.exportDir, export.FilePath) {
+		// A stored export must live inside the export directory; reject any
+		// record whose file path escapes it (tampered DB or stale data).
+		return nil, "", panelerr.NotFound("key_asset_export")
+	}
 	content, err := os.ReadFile(export.FilePath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -1053,7 +1080,9 @@ func (s *Service) startExportCleanup() {
 			ticker := time.NewTicker(5 * time.Minute)
 			defer ticker.Stop()
 			for range ticker.C {
-				s.cleanupExpiredExports(context.Background(), time.Now().UTC())
+				now := time.Now().UTC()
+				s.cleanupExpiredExports(context.Background(), now)
+				s.cleanupExpiredImportPlans(context.Background(), now)
 			}
 		}()
 	})
@@ -1078,6 +1107,47 @@ func (s *Service) cleanupExpiredExports(ctx context.Context, now time.Time) {
 		}
 		_ = os.Remove(filePath)
 	}
+}
+
+// cleanupExpiredImportPlans removes persisted import plan metadata files that
+// have expired or are malformed. In-memory plans are lost on restart, so this
+// prevents orphaned plan files from accumulating forever in tmp/key-assets.
+func (s *Service) cleanupExpiredImportPlans(_ context.Context, now time.Time) {
+	entries, err := os.ReadDir(s.importDir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(s.importDir, entry.Name())
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		var meta importPlanFile
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			_ = os.Remove(path)
+			continue
+		}
+		expiresAt := parseTime(meta.ExpiresAt)
+		if expiresAt.IsZero() || !now.Before(expiresAt) {
+			_ = os.Remove(path)
+		}
+	}
+}
+
+func pathWithinDir(root, target string) bool {
+	root = filepath.Clean(strings.TrimSpace(root))
+	if root == "" || root == "." {
+		return false
+	}
+	rel, err := filepath.Rel(root, filepath.Clean(target))
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return false
+	}
+	return true
 }
 
 func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest) (ImportPreflightResult, error) {
@@ -1128,10 +1198,18 @@ func (s *Service) PreflightImport(ctx context.Context, in ImportPreflightRequest
 		return ImportPreflightResult{}, err
 	}
 	planPath := filepath.Join(s.importDir, planID+".json")
-	if err := os.WriteFile(planPath, archiveBytes, 0o600); err != nil {
+	expiresAt := now.Add(30 * time.Minute)
+	planMeta, err := json.MarshalIndent(importPlanFile{
+		SchemaVersion: importPlanFileSchemaVersion,
+		PlanID:        planID,
+		ExpiresAt:     formatTime(expiresAt),
+	}, "", "  ")
+	if err != nil {
 		return ImportPreflightResult{}, err
 	}
-	expiresAt := now.Add(30 * time.Minute)
+	if err := os.WriteFile(planPath, planMeta, 0o600); err != nil {
+		return ImportPreflightResult{}, err
+	}
 	s.planMu.Lock()
 	s.importPlans[planID] = &importPlan{ID: planID, FilePath: planPath, Assets: assets, Conflicts: conflicts, ExpiresAt: expiresAt}
 	s.planMu.Unlock()
@@ -1275,7 +1353,7 @@ func (s *Service) beginAssetTask(ctx context.Context, taskType, resourceID, summ
 	if s.tasks == nil {
 		return "", func(error) error { return nil }, func(string) error { return nil }, nil
 	}
-	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
 		Type:         taskType,
 		ResourceType: "key_asset",
 		ResourceID:   resourceID,
@@ -1284,6 +1362,13 @@ func (s *Service) beginAssetTask(ctx context.Context, taskType, resourceID, summ
 	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return "", nil, nil, err
+	}
+	if !created {
+		// An active task with the same concurrency key already exists (same
+		// asset or a global export). Key asset operations run inline in the
+		// request goroutine, so reject the duplicate instead of letting two
+		// writers race on the same asset.
+		return "", nil, nil, panelerr.Conflict("key_asset_operation_in_progress", "Another operation on the same key asset is already in progress")
 	}
 	taskID := task.ID
 	fail := func(err error) error {

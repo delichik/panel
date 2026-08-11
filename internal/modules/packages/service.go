@@ -3,6 +3,7 @@ package packages
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -169,7 +170,7 @@ func (s *Service) RunRefreshTask(tc tasks.TaskContext) error {
 		return nil
 	}
 	if !s.markRefreshing(serverID) {
-		return nil
+		return panelerr.Conflict("package_maintenance_in_progress", "Package refresh is already running for this server")
 	}
 	if task.Status != tasks.StatusRunning {
 		if err := s.tasks.Start(ctx, task.ID); err != nil {
@@ -205,25 +206,28 @@ func (s *Service) UpgradeSelected(ctx context.Context, serverID string, names []
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	adapter, err := s.adapterFor(srv)
-	if err != nil {
+	if _, err := s.adapterFor(srv); err != nil {
 		return tasks.Task{}, err
 	}
 	if len(names) == 0 {
 		return tasks.Task{}, panelerr.Validation("packages_required", "At least one package is required")
 	}
-	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	params, err := json.Marshal(map[string]any{"names": names})
+	if err != nil {
+		return tasks.Task{}, err
+	}
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         "package_upgrade_selected",
 		ServerID:     serverID,
 		ResourceType: "server",
 		ResourceID:   serverID,
 		TriggerType:  "user",
 		Summary:      "Upgrading selected packages",
+		ParamsJSON:   string(params),
 	}, tasks.Trigger{Type: "user", Manual: true})
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runUpgradeSelected(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter, names)
 	return task, nil
 }
 
@@ -232,11 +236,10 @@ func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	adapter, err := s.adapterFor(srv)
-	if err != nil {
+	if _, err := s.adapterFor(srv); err != nil {
 		return tasks.Task{}, err
 	}
-	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
+	task, _, err := tasks.NewManager(s.tasks).CreateAndRun(ctx, tasks.CreateInput{
 		Type:         "package_upgrade_all",
 		ServerID:     serverID,
 		ResourceType: "server",
@@ -247,7 +250,6 @@ func (s *Service) UpgradeAll(ctx context.Context, serverID string) (tasks.Task, 
 	if err != nil {
 		return tasks.Task{}, err
 	}
-	go s.runUpgradeAll(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter)
 	return task, nil
 }
 
@@ -296,58 +298,126 @@ func (s *Service) runRefreshTask(ctx context.Context, task tasks.Task, srv serve
 	_ = s.tasks.Complete(ctx, task.ID, "Package updates refreshed")
 }
 
-func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter, names []string) {
+func (s *Service) runUpgradeSelected(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter, names []string) error {
 	defer s.tasks.FinishExecution(taskID)
 	if err := ctx.Err(); err != nil {
-		return
+		return err
 	}
 	if err := s.tasks.Start(ctx, taskID); err != nil {
-		return
+		return err
 	}
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading selected packages")
-	err := s.upgradePackages(ctx, taskID, srv, adapter, names, false)
-	if err != nil {
+	if err := s.upgradePackages(ctx, taskID, srv, adapter, names, false); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
-		return
+		return err
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
 	updates, err := s.listUpgradeable(ctx, srv, adapter)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
-		return
+		return err
 	}
 	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
-		return
+		return err
 	}
-	_ = s.tasks.Complete(ctx, taskID, "Selected packages upgraded")
+	return s.tasks.Complete(ctx, taskID, "Selected packages upgraded")
 }
 
-func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter) {
+func (s *Service) runUpgradeAll(ctx context.Context, taskID string, srv server.Server, adapter packageAdapter) error {
 	defer s.tasks.FinishExecution(taskID)
 	if err := ctx.Err(); err != nil {
-		return
+		return err
 	}
 	if err := s.tasks.Start(ctx, taskID); err != nil {
-		return
+		return err
 	}
 	_ = s.tasks.Advance(ctx, taskID, "running", "upgrading all packages")
-	err := s.upgradePackages(ctx, taskID, srv, adapter, nil, true)
-	if err != nil {
+	if err := s.upgradePackages(ctx, taskID, srv, adapter, nil, true); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
-		return
+		return err
 	}
 	_ = s.tasks.Advance(ctx, taskID, "verifying", "refreshing package cache after upgrade")
 	updates, err := s.listUpgradeable(ctx, srv, adapter)
 	if err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
-		return
+		return err
 	}
 	if err := s.replaceUpdates(ctx, srv.ID, updates); err != nil {
 		_ = s.tasks.Fail(ctx, taskID, err)
-		return
+		return err
 	}
-	_ = s.tasks.Complete(ctx, taskID, "All packages upgraded")
+	return s.tasks.Complete(ctx, taskID, "All packages upgraded")
+}
+
+// RunUpgradeSelectedTask 是 package_upgrade_selected 的注册 executor：在
+// manager/worker 执行边界内完成升级并维护 per-server 互斥。重启后遗留的
+// queued 任务也能被 worker 正常恢复执行。
+func (s *Service) RunUpgradeSelectedTask(tc tasks.TaskContext) error {
+	return s.runUpgradeTask(tc, false)
+}
+
+// RunUpgradeAllTask 是 package_upgrade_all 的注册 executor。
+func (s *Service) RunUpgradeAllTask(tc tasks.TaskContext) error {
+	return s.runUpgradeTask(tc, true)
+}
+
+func (s *Service) runUpgradeTask(tc tasks.TaskContext, all bool) error {
+	ctx, task := tc.Context, tc.Task
+	if s.tasks == nil {
+		return panelerr.Validation("package_task_service_unavailable", "Package task service is unavailable")
+	}
+	serverID := firstNonEmpty(task.ServerID, task.ResourceID)
+	srv, err := s.ensurePackageAllowed(ctx, serverID, true)
+	if err != nil {
+		if isNotFoundError(err) {
+			_ = s.tasks.Cancel(ctx, task.ID, "Task cancelled because the server was removed")
+		}
+		return err
+	}
+	adapter, err := s.adapterFor(srv)
+	if err != nil {
+		return err
+	}
+	if task.Status == tasks.StatusRunning && s.tasks.HasRunningExecution(task.ID) {
+		return nil
+	}
+	// 与刷新共用 per-server 维护互斥：刷新或其它升级进行中时不再并发执行。
+	if !s.markRefreshing(serverID) {
+		return panelerr.Conflict("package_maintenance_in_progress", "Package maintenance is already running for this server")
+	}
+	defer s.clearRefreshing(serverID)
+	if all {
+		return s.runUpgradeAll(ctx, task.ID, srv, adapter)
+	}
+	names, err := upgradeNames(task)
+	if err != nil {
+		return err
+	}
+	return s.runUpgradeSelected(ctx, task.ID, srv, adapter, names)
+}
+
+func upgradeNames(task tasks.Task) ([]string, error) {
+	raw := strings.TrimSpace(task.ParamsJSON)
+	if raw == "" || raw == "{}" {
+		return nil, panelerr.Validation("packages_required", "At least one package is required")
+	}
+	var payload struct {
+		Names []string `json:"names"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return nil, err
+	}
+	names := []string{}
+	for _, name := range payload.Names {
+		if strings.TrimSpace(name) != "" {
+			names = append(names, name)
+		}
+	}
+	if len(names) == 0 {
+		return nil, panelerr.Validation("packages_required", "At least one package is required")
+	}
+	return names, nil
 }
 
 func (s *Service) listUpgradeable(ctx context.Context, srv server.Server, adapter packageAdapter) ([]linux.PackageUpdate, error) {

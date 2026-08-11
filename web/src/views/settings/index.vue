@@ -9,6 +9,7 @@ import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import Input from '@/components/ui/Input.vue';
 import Select from '@/components/ui/Select.vue';
 import Switch from '@/components/ui/Switch.vue';
@@ -24,7 +25,7 @@ import type { RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVa
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 
-const { t } = useI18n();
+const { t, setLocale } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const session = useSessionStore();
@@ -42,7 +43,7 @@ const pending = ref('');
 const error = ref('');
 const actionError = ref('');
 const confirmOpen = ref(false);
-const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate'>('export');
+const confirmKind = ref<'export' | 'restore' | 'system' | 'system-certificate' | 'jwt-secret'>('export');
 const selectedSystemCertificate = ref<SystemCertificateDto | null>(null);
 const preflight = ref<RestorePreflightResponse | null>(null);
 const restoreFile = ref<File | null>(null);
@@ -92,6 +93,19 @@ const runtimeEventRetentionValid = computed(() => {
   const detailRetention = Number(form.runtimeEventDetailRetentionDays);
   return Number.isFinite(retention) && Number.isFinite(detailRetention) && retention >= detailRetention;
 });
+const fieldErrors = computed<Record<string, string>>(() => {
+  const errors: Record<string, string> = {};
+  const positive: Array<keyof typeof form> = ['metricsRetentionDays', 'metricsCollectionIntervalSeconds', 'containerReportIntervalSeconds', 'runtimeEventRetentionDays', 'runtimeEventDetailRetentionDays', 'remoteCommandTimeoutSeconds'];
+  positive.forEach((key) => {
+    const value = Number(form[key]);
+    if (!Number.isFinite(value) || value < 1) errors[key] = 'settingsPage.validationPositiveNumber';
+  });
+  if (!Number.isFinite(Number(form.dnsPropagationDelaySeconds)) || Number(form.dnsPropagationDelaySeconds) < 0) {
+    errors.dnsPropagationDelaySeconds = 'settingsPage.validationNonNegativeNumber';
+  }
+  return errors;
+});
+const runtimeSectionValid = computed(() => !fieldErrors.value.metricsRetentionDays && !fieldErrors.value.metricsCollectionIntervalSeconds && !fieldErrors.value.containerReportIntervalSeconds && !fieldErrors.value.runtimeEventRetentionDays && !fieldErrors.value.runtimeEventDetailRetentionDays);
 
 watch(() => route.path, (path) => {
   activeSection.value = sectionFromPath(path);
@@ -155,15 +169,20 @@ function hydrate(settings: RuntimeSettings, variables: ServerVariableDefinition[
   });
 }
 
-async function resetJwtSecret() {
+function resetJwtSecret() {
   if (!jwtSecretValid.value) {
     actionError.value = t('settingsPage.jwtSecretValidation');
     return;
   }
+  openConfirm('jwt-secret');
+}
+
+async function confirmResetJwtSecret() {
   await run('jwt-secret', async () => {
     await session.updateJwtSecret(form.jwtSecret.trim());
     if (runtime.value) runtime.value.jwtSecretConfigured = true;
     form.jwtSecret = '';
+    confirmOpen.value = false;
     notifySuccess(t('settingsPage.jwtSecretReset'));
   });
 }
@@ -181,13 +200,22 @@ async function resetSystemCertificate() {
 
 async function saveRuntimeSection(kind: 'runtime' | 'security' | 'certificates' | 'system') {
   if (!runtime.value) return;
-  if (kind === 'runtime' && !runtimeEventRetentionValid.value) {
+  if (kind === 'runtime' && (!runtimeSectionValid.value || !runtimeEventRetentionValid.value)) {
     actionError.value = t('settingsPage.runtimeEventRetentionValidation');
+    return;
+  }
+  if (kind === 'security' && fieldErrors.value.remoteCommandTimeoutSeconds) {
+    actionError.value = t('settingsPage.validationPositiveNumber');
+    return;
+  }
+  if (kind === 'certificates' && fieldErrors.value.dnsPropagationDelaySeconds) {
+    actionError.value = t('settingsPage.validationNonNegativeNumber');
     return;
   }
   await run(`save-${kind}`, async () => {
     runtime.value = await settingsApi.updateRuntime(buildRuntimeUpdate(kind));
     hydrate(runtime.value, serverVariables.value);
+    if (kind === 'runtime') setLocale(runtime.value.language === 'zh-CN' ? 'zh-CN' : 'en');
     notifySuccess(t(`settingsPage.saved.${kind}`));
   });
 }
@@ -200,6 +228,10 @@ async function saveVariables() {
 }
 
 async function startBackup() {
+  if (form.exportEncrypt && !form.exportPassword.trim()) {
+    actionError.value = t('settingsPage.backupPasswordRequired');
+    return;
+  }
   await run('export', async () => {
     const result = await settingsApi.startBackupExport({ encrypt: form.exportEncrypt, password: form.exportPassword || undefined });
     exportPending.value = true;
@@ -208,13 +240,13 @@ async function startBackup() {
   });
 }
 
-async function handleRestoreFile(event: Event) {
-  const input = event.target as HTMLInputElement;
-  restoreFile.value = input.files?.[0] ?? null;
+async function handleRestoreFile(file: File | File[]) {
+  const selected = Array.isArray(file) ? file[0] : file;
+  restoreFile.value = selected ?? null;
   preflight.value = null;
-  if (!restoreFile.value) return;
+  if (!selected) return;
   await run('preflight', async () => {
-    preflight.value = await settingsApi.preflightRestore(restoreFile.value!, form.restorePassword);
+    preflight.value = await settingsApi.preflightRestore(selected, form.restorePassword);
   });
 }
 
@@ -331,6 +363,7 @@ function openSystemCertificateConfirm(cert: SystemCertificateDto) {
 function confirmAction() {
   if (confirmKind.value === 'restore') return confirmRestore();
   if (confirmKind.value === 'system-certificate') return resetSystemCertificate();
+  if (confirmKind.value === 'jwt-secret') return confirmResetJwtSecret();
   return startBackup();
 }
 
@@ -351,8 +384,13 @@ onMounted(load);
         </button>
       </aside>
       <LoadingOverlay v-if="loading && !runtime" />
+      <EmptyState v-else-if="error && !runtime" :title="t('common.loadFailed')" :description="error">
+        <template #actions>
+          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+        </template>
+      </EmptyState>
 
-      <SettingsPage>
+      <SettingsPage v-else>
         <section v-if="actionError" class="grid gap-2">
           <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
         </section>
@@ -360,25 +398,25 @@ onMounted(load);
         <section v-if="activeSection === 'general'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.runtime') }}</h2>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsRetention') }}<Input v-model="form.metricsRetentionDays" type="number" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsInterval') }}<Input v-model="form.metricsCollectionIntervalSeconds" type="number" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.containerInterval') }}<Input v-model="form.containerReportIntervalSeconds" type="number" /></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsRetention') }}<Input v-model="form.metricsRetentionDays" type="number" min="1" :invalid="Boolean(fieldErrors.metricsRetentionDays)" /><span v-if="fieldErrors.metricsRetentionDays" class="text-xs text-danger">{{ t(fieldErrors.metricsRetentionDays) }}</span></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.metricsInterval') }}<Input v-model="form.metricsCollectionIntervalSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.metricsCollectionIntervalSeconds)" /><span v-if="fieldErrors.metricsCollectionIntervalSeconds" class="text-xs text-danger">{{ t(fieldErrors.metricsCollectionIntervalSeconds) }}</span></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.containerInterval') }}<Input v-model="form.containerReportIntervalSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.containerReportIntervalSeconds)" /><span v-if="fieldErrors.containerReportIntervalSeconds" class="text-xs text-danger">{{ t(fieldErrors.containerReportIntervalSeconds) }}</span></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.cleanupSchedule') }}<Select v-model="form.cleanupSchedule" :options="cleanupOptions" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventRetention') }}<Input v-model="form.runtimeEventRetentionDays" type="number" min="1" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventDetailRetention') }}<Input v-model="form.runtimeEventDetailRetentionDays" type="number" min="1" /></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventRetention') }}<Input v-model="form.runtimeEventRetentionDays" type="number" min="1" :invalid="Boolean(fieldErrors.runtimeEventRetentionDays)" /><span v-if="fieldErrors.runtimeEventRetentionDays" class="text-xs text-danger">{{ t(fieldErrors.runtimeEventRetentionDays) }}</span></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventDetailRetention') }}<Input v-model="form.runtimeEventDetailRetentionDays" type="number" min="1" :invalid="Boolean(fieldErrors.runtimeEventDetailRetentionDays)" /><span v-if="fieldErrors.runtimeEventDetailRetentionDays" class="text-xs text-danger">{{ t(fieldErrors.runtimeEventDetailRetentionDays) }}</span></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.runtimeEventCleanupSchedule') }}<Select v-model="form.runtimeEventCleanupSchedule" :options="cleanupOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.language') }}<Select v-model="form.language" :options="languageOptions" /></label>
             <label class="grid gap-1 text-sm">{{ t('settingsPage.logLevel') }}<Select v-model="form.logLevel" :options="logOptions" /></label>
           </div>
           <p v-if="!runtimeEventRetentionValid" class="m-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ t('settingsPage.runtimeEventRetentionValidation') }}</p>
-          <Button class="w-fit" variant="primary" :disabled="!runtimeEventRetentionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+          <Button class="w-fit" variant="primary" :disabled="!runtimeSectionValid || !runtimeEventRetentionValid" :loading="pending === 'save-runtime'" @click="saveRuntimeSection('runtime')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
         <section v-else-if="activeSection === 'security'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.security') }}</h2>
           <div class="grid grid-cols-2 gap-3 max-md:grid-cols-1">
             <label class="grid gap-1 text-sm">{{ t('settingsPage.tokenExpiration') }}<Select v-model="form.tokenExpiration" :options="tokenOptions" /></label>
-            <label class="grid gap-1 text-sm">{{ t('settingsPage.remoteTimeout') }}<Input v-model="form.remoteCommandTimeoutSeconds" type="number" /></label>
+            <label class="grid gap-1 text-sm">{{ t('settingsPage.remoteTimeout') }}<Input v-model="form.remoteCommandTimeoutSeconds" type="number" min="1" :invalid="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" /><span v-if="fieldErrors.remoteCommandTimeoutSeconds" class="text-xs text-danger">{{ t(fieldErrors.remoteCommandTimeoutSeconds) }}</span></label>
           </div>
           <div class="grid gap-3 rounded-xl border border-border bg-background p-4">
             <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
@@ -388,14 +426,14 @@ onMounted(load);
             <label class="grid gap-1 text-sm">{{ t('settingsPage.jwtSecret') }}<Input v-model="form.jwtSecret" type="password" :placeholder="t('settingsPage.jwtSecretHint')" /></label>
             <Button class="w-fit" :disabled="!form.jwtSecret.trim()" :loading="pending === 'jwt-secret'" @click="resetJwtSecret"><KeyRound />{{ t('settingsPage.resetJwtSecret') }}</Button>
           </div>
-          <Button class="w-fit" variant="primary" :loading="pending === 'save-security'" @click="saveRuntimeSection('security')"><Shield />{{ t('settingsPage.saveSection') }}</Button>
+          <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.remoteCommandTimeoutSeconds)" :loading="pending === 'save-security'" @click="saveRuntimeSection('security')"><Shield />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
         <section v-else-if="activeSection === 'certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
           <h2>{{ t('settingsPage.section.certificates') }}</h2>
           <label class="grid gap-1 text-sm">{{ t('settingsPage.certificateEmail') }}<Input v-model="form.certificateEmail" /></label>
-          <label class="grid gap-1 text-sm">{{ t('settingsPage.dnsDelay') }}<Input v-model="form.dnsPropagationDelaySeconds" type="number" /></label>
-          <Button class="w-fit" variant="primary" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')"><Save />{{ t('settingsPage.saveSection') }}</Button>
+          <label class="grid gap-1 text-sm">{{ t('settingsPage.dnsDelay') }}<Input v-model="form.dnsPropagationDelaySeconds" type="number" min="0" :invalid="Boolean(fieldErrors.dnsPropagationDelaySeconds)" /><span v-if="fieldErrors.dnsPropagationDelaySeconds" class="text-xs text-danger">{{ t(fieldErrors.dnsPropagationDelaySeconds) }}</span></label>
+          <Button class="w-fit" variant="primary" :disabled="Boolean(fieldErrors.dnsPropagationDelaySeconds)" :loading="pending === 'save-certificates'" @click="saveRuntimeSection('certificates')"><Save />{{ t('settingsPage.saveSection') }}</Button>
         </section>
 
         <section v-else-if="activeSection === 'system-certificates'" class="grid gap-4 rounded-2xl border border-border bg-card p-5">
@@ -460,14 +498,15 @@ onMounted(load);
             <section class="grid gap-3 rounded-xl border border-border p-4">
               <h3>{{ t('settingsPage.backupExport') }}</h3>
               <label class="flex items-center justify-between gap-3 text-sm">{{ t('settingsPage.encryptExport') }}<Switch v-model="form.exportEncrypt" :label="t('settingsPage.encryptExport')" /></label>
-              <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.exportPassword" type="password" /></label>
-              <Button variant="primary" :loading="pending === 'export'" @click="openConfirm('export')"><DatabaseBackup />{{ t('settingsPage.startExport') }}</Button>
+              <div v-if="!form.exportEncrypt" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('settingsPage.unencryptedExportWarning') }}</div>
+              <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.exportPassword" type="password" :invalid="Boolean(form.exportEncrypt && !form.exportPassword.trim())" /><span v-if="form.exportEncrypt && !form.exportPassword.trim()" class="text-xs text-danger">{{ t('settingsPage.backupPasswordRequired') }}</span></label>
+              <Button variant="primary" :disabled="Boolean(form.exportEncrypt && !form.exportPassword.trim())" :loading="pending === 'export'" @click="openConfirm('export')"><DatabaseBackup />{{ t('settingsPage.startExport') }}</Button>
             </section>
             <section class="grid gap-3 rounded-xl border border-border p-4">
               <h3>{{ t('settingsPage.restore') }}</h3>
               <label class="grid gap-1 text-sm">{{ t('settingsPage.backupPassword') }}<Input v-model="form.restorePassword" type="password" /></label>
               <div class="relative grid gap-3">
-                <input type="file" accept=".panel-backup,application/octet-stream" class="text-sm" @change="handleRestoreFile" />
+                <FileUploadButton accept=".panel-backup,application/octet-stream" :loading="pending === 'preflight'" :label="restoreFile ? restoreFile.name : t('settingsPage.selectRestoreFile')" @change="handleRestoreFile" />
                 <div v-if="preflight" class="rounded-xl border border-border p-3 text-sm">{{ t('settingsPage.restoreManifest', { version: preflight.manifest.panelVersion, count: preflight.manifest.files.length }) }}</div>
                 <LoadingOverlay v-if="pending === 'preflight'" />
               </div>
@@ -484,7 +523,7 @@ onMounted(load);
       <div class="flex gap-3 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning"><AlertTriangle class="mt-0.5 size-4 shrink-0" />{{ t('settingsPage.confirmDanger') }}</div>
       <template #footer>
         <Button @click="confirmOpen = false">{{ t('common.cancel') }}</Button>
-        <Button :variant="confirmKind === 'restore' || confirmKind === 'system-certificate' ? 'danger' : 'primary'" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.apply') }}</Button>
+        <Button :variant="confirmKind === 'restore' || confirmKind === 'system-certificate' || confirmKind === 'jwt-secret' ? 'danger' : 'primary'" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.apply') }}</Button>
       </template>
     </Dialog>
   </ConsolePage>

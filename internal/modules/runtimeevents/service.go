@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strings"
+	"sync"
 	"time"
 
 	"panel/internal/platform/database/orm"
@@ -234,6 +235,8 @@ type BufferedWriter struct {
 	interval time.Duration
 	stop     chan struct{}
 	done     chan struct{}
+	mu       sync.Mutex
+	started  bool
 }
 
 func NewBufferedWriter(svc *Service, interval time.Duration) *BufferedWriter {
@@ -249,17 +252,31 @@ func NewBufferedWriter(svc *Service, interval time.Duration) *BufferedWriter {
 	}
 }
 
-// Start 启动后台批量落库协程。
+// Start 启动后台批量落库协程；重复调用会被幂等忽略。
 func (w *BufferedWriter) Start(ctx context.Context) {
 	if w == nil {
 		return
 	}
+	w.mu.Lock()
+	if w.started {
+		w.mu.Unlock()
+		return
+	}
+	w.started = true
+	w.mu.Unlock()
 	go w.loop(ctx)
 }
 
-// Stop 停止后台协程并 flush 缓冲区内剩余日志；可重复调用。
+// Stop 停止后台协程并 flush 缓冲区内剩余日志；可重复调用，未 Start 时直接
+// 返回（不会永久阻塞）。
 func (w *BufferedWriter) Stop() {
 	if w == nil {
+		return
+	}
+	w.mu.Lock()
+	started := w.started
+	w.mu.Unlock()
+	if !started {
 		return
 	}
 	select {

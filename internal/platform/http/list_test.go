@@ -19,6 +19,8 @@ func TestParseListPage(t *testing.T) {
 		{name: "unknown", url: "/items?extra=true", wantErr: true},
 		{name: "legacy limit", url: "/items?limit=10", wantErr: true},
 		{name: "invalid page", url: "/items?page=0", wantErr: true},
+		{name: "max page ok", url: "/items?page=10000", wantPage: 10000, wantPageSize: DefaultPageSize},
+		{name: "page too large", url: "/items?page=10001", wantErr: true},
 		{name: "oversized", url: "/items?pageSize=201", wantErr: true},
 	}
 	for _, tt := range tests {

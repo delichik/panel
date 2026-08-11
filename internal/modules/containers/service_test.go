@@ -441,7 +441,7 @@ func TestApplicationReconcilePlansWhenManagedContainerIsMissing(t *testing.T) {
 	insertReconcileFixtureRows(t, store, app)
 	updater := &fakeApplicationUpdater{apps: []applications.Application{app}}
 	svc.apps = updater
-	saveReportedContainers(t, svc, "server-1", nil)
+	saveReportedContainers(t, svc, "server-1", []agentcontract.DockerContainer{})
 
 	inputs, err := svc.CollectApplicationReconcileTasks(ctx, "op-1", tasks.PeriodicTrigger{Type: "scheduler"})
 	if err != nil {
@@ -537,7 +537,7 @@ func TestApplicationReconcileSkipsInstanceOutsideCurrentDesiredState(t *testing.
 			}
 			updater := &fakeApplicationUpdater{apps: []applications.Application{tt.app}}
 			svc.apps = updater
-			saveReportedContainers(t, svc, "server-1", nil)
+			saveReportedContainers(t, svc, "server-1", []agentcontract.DockerContainer{})
 
 			if _, err := svc.CollectApplicationReconcileTasks(context.Background(), "op-1", tasks.PeriodicTrigger{Type: "scheduler"}); err != nil {
 				t.Fatal(err)
@@ -624,6 +624,20 @@ func TestApplicationReconcileForcePlansDeployment(t *testing.T) {
 	}
 	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != app.ID || updater.plans[0].ServerIDs[0] != "server-1" || !updater.plans[0].Force {
 		t.Fatalf("deploy plan = %#v", updater.plans)
+	}
+}
+
+func insertReconcileServerRow(t *testing.T, store *storage.Store) {
+	t.Helper()
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO credentials(id,name,type,username,created_at,updated_at)
+		VALUES('credential-1','credential','password','root','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`
+		INSERT INTO servers(id,name,host,port,credential_id,docker_host,traits,created_at,updated_at)
+		VALUES('server-1','server','127.0.0.1',22,'credential-1','unix:///var/run/docker.sock','{}','now','now')`); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -910,5 +924,62 @@ func (r *blockingImageResolver) Resolve(ctx context.Context, _ string) (applicat
 		return applications.ImageDigestResult{}, ctx.Err()
 	case <-r.release:
 		return applications.ImageDigestResult{Digest: "sha256:latest"}, nil
+	}
+}
+
+func TestSaveReportedContainersNilKeepsExistingObservations(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	insertReconcileServerRow(t, store)
+	fakeAgent.containers = []agentcontract.DockerContainer{{ID: "container-1", Names: []string{"web"}, State: "running"}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+	items, observedAt, err := svc.reportedContainerSummaries(context.Background(), "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || observedAt == nil {
+		t.Fatalf("seed observations: items=%#v observedAt=%v", items, observedAt)
+	}
+	if err := svc.SaveReportedContainers(context.Background(), "server-1", time.Now().UTC(), nil); err != nil {
+		t.Fatal(err)
+	}
+	items, observedAt, err = svc.reportedContainerSummaries(context.Background(), "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "container-1" || observedAt == nil {
+		t.Fatalf("nil report must keep existing observations, got items=%#v observedAt=%v", items, observedAt)
+	}
+}
+
+func TestSaveReportedContainersEmptyListClearsObservations(t *testing.T) {
+	svc, _, fakeAgent, store := newContainerizationTestService(t)
+	insertReconcileServerRow(t, store)
+	fakeAgent.containers = []agentcontract.DockerContainer{{ID: "container-1", Names: []string{"web"}, State: "running"}}
+	saveReportedContainers(t, svc, "server-1", fakeAgent.containers)
+	if err := svc.SaveReportedContainers(context.Background(), "server-1", time.Now().UTC(), []agentcontract.DockerContainer{}); err != nil {
+		t.Fatal(err)
+	}
+	items, observedAt, err := svc.reportedContainerSummaries(context.Background(), "server-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 || observedAt != nil {
+		t.Fatalf("explicit empty list must clear observations, got items=%#v observedAt=%v", items, observedAt)
+	}
+}
+
+func TestRunQueueRecoversFromPanic(t *testing.T) {
+	svc := &Service{queues: map[string]*serverQueue{}}
+	q := svc.queue("server-1")
+	errs := make(chan error, 2)
+	q.jobs <- queueJob{run: func(context.Context) error { panic("boom") }, result: errs}
+	q.jobs <- queueJob{run: func(context.Context) error { return nil }, result: errs}
+	first := <-errs
+	if first == nil {
+		t.Fatal("panicked job must return an error")
+	}
+	second := <-errs
+	if second != nil {
+		t.Fatalf("second job must still run after a panic, got %v", second)
 	}
 }

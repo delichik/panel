@@ -16,7 +16,7 @@ import (
 	agentcontract "panel/internal/agent/contract"
 	agentdocker "panel/internal/agent/docker"
 	agentpb "panel/internal/agent/pb"
-	agentsystem "panel/internal/agent/system"
+	"panel/internal/platform/linux"
 	"panel/internal/platform/logging"
 
 	"go.uber.org/zap"
@@ -31,8 +31,15 @@ type reportConfig struct {
 	containerInterval time.Duration
 }
 
+// reportCollector is the subset of agentsystem.LocalCollector used by the
+// report hub; it exists so tests can inject failing collectors.
+type reportCollector interface {
+	MetricsSnapshot(ctx context.Context, serverID string) (linux.MetricsSnapshot, error)
+	PackageUpdates(ctx context.Context) ([]linux.PackageUpdate, error)
+}
+
 type reportHub struct {
-	collector agentsystem.LocalCollector
+	collector reportCollector
 	runtime   *agentdocker.LocalRuntime
 
 	mu                sync.Mutex
@@ -56,7 +63,7 @@ type reportWatcherSnapshot struct {
 	ch  chan *agentpb.AgentReport
 }
 
-func newReportHub(collector agentsystem.LocalCollector, runtime *agentdocker.LocalRuntime) *reportHub {
+func newReportHub(collector reportCollector, runtime *agentdocker.LocalRuntime) *reportHub {
 	return &reportHub{
 		collector: collector,
 		runtime:   runtime,
@@ -432,8 +439,9 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 		if err == nil {
 			metrics = pbSnapshot(snap)
 		} else {
+			// Keep the field nil so the panel never overwrites a previously
+			// collected snapshot with an empty one.
 			logging.L().Warn("agent report metrics collection failed", zap.String("server_id", serverID), zap.Error(err))
-			metrics = &agentpb.MetricsSnapshotResponse{}
 		}
 	}
 
@@ -453,8 +461,9 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 			h.lastContainerHash = hash
 			h.mu.Unlock()
 		} else {
+			// Keep the field nil so the panel never clears the last known
+			// container snapshot on a transient collection failure.
 			logging.L().Warn("agent report container collection failed", zap.Error(err))
-			containers = &agentpb.DockerContainersResponse{}
 		}
 	}
 

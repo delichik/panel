@@ -19,6 +19,7 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/secrets"
 )
 
@@ -552,8 +553,12 @@ func testCertificatePair(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	serial, err := randomSerial()
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
-		SerialNumber:          randomSerial(),
+		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "legacy.internal"},
 		NotBefore:             time.Now().UTC().Add(-time.Hour),
 		NotAfter:              time.Now().UTC().Add(24 * time.Hour),
@@ -579,4 +584,118 @@ func testPublicKeyPEM(t *testing.T, privateKeyPEM string) string {
 		t.Fatal(err)
 	}
 	return string(publicKeyPEM)
+}
+
+func TestBeginAssetTaskRejectsConcurrentSameResourceOperation(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	taskID, fail, _, err := svc.beginAssetTask(ctx, TaskTypeTLSReissue, "asset-1", "first reissue")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if taskID == "" {
+		t.Fatal("expected a task id")
+	}
+	// A second operation on the same asset must be rejected while the first
+	// task is still running (reissue and regenerate share the resource key).
+	_, _, _, err = svc.beginAssetTask(ctx, TaskTypeSSHRegenerate, "asset-1", "second regenerate")
+	if err == nil {
+		t.Fatal("expected concurrent same-resource operation to be rejected")
+	}
+	_ = fail(panelerr.Validation("test", "test"))
+}
+
+func TestDownloadExportRejectsPathOutsideExportDir(t *testing.T) {
+	svc, store, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	ca, err := svc.CreateCA(ctx, CreateCARequest{Name: "Root", CommonName: "root.internal"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported, err := svc.CreateExport(ctx, ExportRequest{AssetIDs: []string{ca.ID}, Password: "very-secret-12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "evil.panel")
+	if err := os.WriteFile(outside, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.LogDB().Exec(`UPDATE key_asset_exports SET file_path=? WHERE task_id=?`, outside, exported.TaskID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := svc.DownloadExport(ctx, exported.TaskID); err == nil {
+		t.Fatal("expected export path outside export dir to be rejected")
+	}
+}
+
+func TestImportPlanFilesPersistExpiryAndCleanup(t *testing.T) {
+	svc, _, closeFn := newTestService(t)
+	defer closeFn()
+	ctx := context.Background()
+
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyPEM, err := marshalPrivateKeyPEM(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := encryptArchive("correct horse battery staple", archivePayload{
+		Assets: []archiveAsset{{
+			ID: "asset-1", Type: TypeSSHKeyPair, Name: "key", Algorithm: AlgorithmEd25519, PrivateKeyPEM: string(privateKeyPEM),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := svc.PreflightImport(ctx, ImportPreflightRequest{
+		ArchiveBase64: base64.StdEncoding.EncodeToString(raw),
+		Password:      "correct horse battery staple",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	planPath := filepath.Join(svc.importDir, result.PlanID+".json")
+	metaRaw, err := os.ReadFile(planPath)
+	if err != nil {
+		t.Fatalf("expected persisted plan file: %v", err)
+	}
+	if !strings.Contains(string(metaRaw), result.PlanID) || !strings.Contains(string(metaRaw), `"expiresAt"`) {
+		t.Fatalf("persisted plan metadata missing fields: %s", string(metaRaw))
+	}
+
+	expiresAt := parseTime(metaExpiresAt(t, string(metaRaw)))
+	svc.cleanupExpiredImportPlans(ctx, expiresAt.Add(time.Minute))
+	if _, err := os.Stat(planPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired plan file should be removed, stat err=%v", err)
+	}
+
+	orphan := filepath.Join(svc.importDir, "orphan.json")
+	if err := os.WriteFile(orphan, []byte("{not json"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	svc.cleanupExpiredImportPlans(ctx, time.Now().UTC())
+	if _, err := os.Stat(orphan); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("malformed orphan plan file should be removed, stat err=%v", err)
+	}
+}
+
+func metaExpiresAt(t *testing.T, raw string) string {
+	t.Helper()
+	const marker = `"expiresAt": "`
+	idx := strings.Index(raw, marker)
+	if idx < 0 {
+		t.Fatalf("expiresAt not found in %s", raw)
+	}
+	rest := raw[idx+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		t.Fatalf("expiresAt value unterminated in %s", raw)
+	}
+	return rest[:end]
 }

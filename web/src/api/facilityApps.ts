@@ -45,14 +45,15 @@ export const reverseProxyFacilityApi = {
     }, { headers: { 'Idempotency-Key': key() } });
   },
   putEditAsset(sessionId: string, assetName: string, revision: number, input: { file: File; name: string; kind: string; contentMode?: 'text' | 'binary' }) {
+    const clientOperationId = key();
     const form = new FormData();
     form.set('file', input.file);
     form.set('revision', String(revision));
-    form.set('clientOperationId', key());
+    form.set('clientOperationId', clientOperationId);
     form.set('name', input.name);
     form.set('kind', input.kind);
     form.set('contentMode', input.contentMode ?? 'binary');
-    return multipartJson<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetName)}`, form, 'PUT');
+    return multipartJson<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetName)}`, form, 'PUT', clientOperationId);
   },
   downloadEditAsset(sessionId: string, assetName: string, filename: string): Promise<DownloadResult> {
     return fetchDownload(`/api/v1/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetName)}/content`, {}, filename);
@@ -61,10 +62,11 @@ export const reverseProxyFacilityApi = {
     return fetchDownload(`/api/v1/facility-apps/reverse-proxy/static-assets/${id(assetName)}/content`, {}, filename);
   },
   deleteEditAsset(sessionId: string, assetName: string, revision: number) {
+    const clientOperationId = key();
     return deleteJson<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/assets/${id(assetName)}`, {
       revision,
-      clientOperationId: key(),
-    });
+      clientOperationId,
+    }, clientOperationId);
   },
   discardEdit(sessionId: string) {
     return apiClient.delete<void>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}`);

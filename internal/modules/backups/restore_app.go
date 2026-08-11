@@ -29,7 +29,16 @@ type RestoreApp struct {
 }
 
 func PendingRestoreExists(dataRoot string) bool {
-	_ = resolvePendingPublication(dataRoot)
+	if err := resolvePendingPublication(dataRoot); err != nil {
+		// The pending publication could not be resolved to a known-good state.
+		// If any restore media is still present, fail closed by forcing restore
+		// mode instead of treating the error as "no restore pending" and
+		// starting normally with potentially torn or unverified media.
+		if pathExists(pendingDir(dataRoot)) || pathExists(restoreTransactionMediaDir(dataRoot)) || pathExists(restoreTransactionStatePath(dataRoot)) {
+			return true
+		}
+		return false
+	}
 	return pathExists(filepath.Join(pendingLocation(dataRoot), "pending.json")) || pathExists(restoreTransactionStatePath(dataRoot))
 }
 

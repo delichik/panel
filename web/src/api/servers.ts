@@ -73,6 +73,9 @@ export const serversApi = {
   test(id: string) {
     return apiClient.post<ServerDto>(`/servers/${encodeURIComponent(id)}/test`);
   },
+  trustHostKey(id: string) {
+    return apiClient.post<ServerDto>(`/servers/${encodeURIComponent(id)}/trust-host-key`);
+  },
   restart(id: string) {
     return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/restart`);
   },

@@ -76,3 +76,57 @@ describe('useOverlayBehavior', () => {
     expect(document.body.style.overflow).toBe('auto');
   });
 });
+  it('keeps body scroll locked until the last overlay closes (LIFO)', async () => {
+    const NestedHost = defineComponent({
+      setup() {
+        const firstOpen = ref(false);
+        const secondOpen = ref(false);
+        const first = ref<HTMLElement | null>(null);
+        const second = ref<HTMLElement | null>(null);
+        const firstBehavior = useOverlayBehavior({
+          open: () => firstOpen.value,
+          containerRef: first,
+          onClose: () => { firstOpen.value = false; },
+          lockScroll: true,
+        });
+        const secondBehavior = useOverlayBehavior({
+          open: () => secondOpen.value,
+          containerRef: second,
+          onClose: () => { secondOpen.value = false; },
+          lockScroll: true,
+        });
+        return {
+          firstOpen, secondOpen, first, second,
+          firstOnKeydown: firstBehavior.onKeydown,
+          secondOnKeydown: secondBehavior.onKeydown,
+        };
+      },
+      template: `
+        <button id="first-trigger" @click="firstOpen = true">First</button>
+        <button id="second-trigger" @click="secondOpen = true">Second</button>
+        <div v-if="firstOpen" id="first" ref="first" tabindex="-1" @keydown="firstOnKeydown"><a href="#">A</a></div>
+        <div v-if="secondOpen" id="second" ref="second" tabindex="-1" @keydown="secondOnKeydown"><a href="#">B</a></div>
+      `,
+    });
+
+    const wrapper = mount(NestedHost, { attachTo: document.body });
+    await wrapper.get('#first-trigger').trigger('click');
+    await nextTick();
+    expect(document.body.style.overflow).toBe('hidden');
+
+    await wrapper.get('#second-trigger').trigger('click');
+    await nextTick();
+    expect(document.body.style.overflow).toBe('hidden');
+
+    // Closing the first overlay while the second is still open must not unlock scroll.
+    document.getElementById('first')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(document.getElementById('first')).toBeNull();
+    expect(document.body.style.overflow).toBe('hidden');
+
+    document.getElementById('second')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(document.getElementById('second')).toBeNull();
+    expect(document.body.style.overflow).toBe('');
+    wrapper.unmount();
+  });

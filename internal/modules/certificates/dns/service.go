@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"net/http"
 	"regexp"
 	"strings"
 	"time"
@@ -30,7 +29,8 @@ type Service struct {
 
 func NewService(db *sql.DB, secrets *secretstore.Store, taskServices ...*tasks.Service) *Service {
 	s := &Service{db: db, secrets: secrets, providerFactory: func(domain ResolvedDomain) Provider {
-		return NewCloudflareProvider(domain.APIToken, http.DefaultClient)
+		// nil lets the provider install its default timed HTTP client.
+		return NewCloudflareProvider(domain.APIToken, nil)
 	}}
 	if len(taskServices) > 0 {
 		s.tasks = taskServices[0]
@@ -261,6 +261,12 @@ func (s *Service) refreshRecords(ctx context.Context, domainID string) error {
 	return err
 }
 
+// CreateRecord creates a DNS record at the provider. To keep the frontend
+// create flow non-blocking, it first lists the zone and, when the target host
+// already has a record of the same type, implicitly updates that existing
+// record ("create means upsert") instead of failing; only a cross-type
+// conflict (e.g. CNAME vs A/AAAA) is reported as an error. This behavior is
+// intentional and documented in the DNS module guide.
 func (s *Service) CreateRecord(ctx context.Context, domainID string, in RecordInput) (Record, error) {
 	domain, provider, err := s.resolveProvider(ctx, domainID)
 	if err != nil {

@@ -1,17 +1,8 @@
-import { ApiError, type ApiEnvelope, apiClient, authHeaders } from './client';
+import { apiClient, fetchJson } from './client';
 import type { BackupExportResponse, RestoreConfirmResponse, RestorePreflightResponse, RuntimeSettings, RuntimeUpdate, ServerVariableDefinition } from '@/types/settings';
 
 async function multipart<T>(path: string, form: FormData): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, { method: 'POST', headers: authHeaders({ Accept: 'application/json' }), body: form });
-  const envelope = await response.json().catch((error: unknown) => {
-    throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
-  }) as ApiEnvelope<T>;
-  if (!response.ok || envelope.error) {
-    const payload = envelope.error ?? {};
-    throw new ApiError(payload.message ?? `Request failed with status ${response.status}.`, response.status, payload.code ?? 'api_error', payload.details);
-  }
-  if (!('data' in envelope)) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
-  return envelope.data as T;
+  return fetchJson<T>(`/api/v1${path}`, { method: 'POST', body: form });
 }
 
 export const settingsApi = {

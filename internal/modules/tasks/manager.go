@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -322,7 +324,7 @@ func (m *Manager) CreateAndRun(ctx context.Context, in CreateInput, trigger Trig
 	}
 	go func() {
 		defer m.service.FinishExecution(task.ID)
-		_ = m.Run(context.Background(), task)
+		_ = m.runRecover(context.Background(), task)
 	}()
 	return task, true, nil
 }
@@ -334,7 +336,7 @@ func (m *Manager) CreateBatchAndRun(ctx context.Context, batch CreateBatchInput,
 	}
 	go func() {
 		defer m.service.FinishExecution(parent.ID)
-		_ = m.Run(context.Background(), parent)
+		_ = m.runRecover(context.Background(), parent)
 	}()
 	return parent, true, nil
 }
@@ -450,18 +452,19 @@ func batchParamsJSON(inputs []CreateInput) string {
 
 func (m *Manager) runChildrenParallel(ctx context.Context, children []Task) error {
 	var wg sync.WaitGroup
-	errs := make(chan error, len(children))
+	// 每个 goroutine 最多发送 2 条错误，容量必须能容纳全部发送，否则会死锁。
+	errs := make(chan error, 2*len(children))
 	for _, child := range children {
 		child := child
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			defer m.service.FinishExecution(child.ID)
-			if err := m.Run(ctx, child); err != nil {
-				errs <- err
+			if err := m.runRecover(ctx, child); err != nil {
+				sendErrNonBlocking(errs, err)
 			}
 			if err := m.childFailure(ctx, child.ID); err != nil {
-				errs <- err
+				sendErrNonBlocking(errs, err)
 			}
 		}()
 	}
@@ -472,6 +475,35 @@ func (m *Manager) runChildrenParallel(ctx context.Context, children []Task) erro
 		joined = errors.Join(joined, err)
 	}
 	return joined
+}
+
+// runRecover 在任务执行边界捕获 panic，把 panic 转为 Fail(taskID, ...) 并记录
+// 日志，避免单个任务 panic 拖垮整个进程。返回的 error 供调用方决定是否继续
+// 收集错误。
+func (m *Manager) runRecover(ctx context.Context, task Task) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("task %s panicked: %v", task.ID, recovered)
+			log.Printf("task worker recovered from panic while running task %s: %v", task.ID, recovered)
+			if m != nil && m.service != nil {
+				_ = m.service.Fail(ctx, task.ID, err)
+			}
+		}
+	}()
+	return m.Run(ctx, task)
+}
+
+// sendErrNonBlocking 向错误通道发送错误；通道已满时丢弃并记录日志，避免并发
+// 子任务收集路径再次死锁。
+func sendErrNonBlocking(errs chan<- error, err error) {
+	if err == nil {
+		return
+	}
+	select {
+	case errs <- err:
+	default:
+		log.Printf("task worker dropped child error because the error channel is full: %v", err)
+	}
 }
 
 func (m *Manager) childFailure(ctx context.Context, taskID string) error {

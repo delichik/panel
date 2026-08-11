@@ -195,3 +195,41 @@ func TestGRPCClientPrepareRestartCancelled(t *testing.T) {
 		t.Fatalf("expected context deadline exceeded, got %v", err)
 	}
 }
+
+func TestGRPCClientPrepareRestartAppliesInternalTimeout(t *testing.T) {
+	old := prepareRestartTimeout
+	prepareRestartTimeout = 200 * time.Millisecond
+	defer func() { prepareRestartTimeout = old }()
+	client, endpoint, stop := newPrepareRestartTestClient(t, &prepareRestartServerStub{block: true})
+	defer stop()
+	err := client.PrepareRestart(context.Background(), endpoint)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected internal deadline exceeded, got %v", err)
+	}
+}
+
+func TestWrapAgentErrorPreservesGRPCCodeSemantics(t *testing.T) {
+	cases := []struct {
+		name string
+		code codes.Code
+		want int
+	}{
+		{name: "invalid argument", code: codes.InvalidArgument, want: http.StatusUnprocessableEntity},
+		{name: "not found", code: codes.NotFound, want: http.StatusNotFound},
+		{name: "permission denied", code: codes.PermissionDenied, want: http.StatusForbidden},
+		{name: "deadline exceeded", code: codes.DeadlineExceeded, want: http.StatusGatewayTimeout},
+		{name: "internal stays bad gateway", code: codes.Internal, want: http.StatusBadGateway},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := wrapAgentError(status.Error(tc.code, "remote message"))
+			var domain *panelerr.Error
+			if !errors.As(err, &domain) {
+				t.Fatalf("expected platform error, got %T: %v", err, err)
+			}
+			if domain.HTTPStatus != tc.want {
+				t.Fatalf("http status = %d, want %d (%#v)", domain.HTTPStatus, tc.want, domain)
+			}
+		})
+	}
+}

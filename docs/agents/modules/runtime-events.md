@@ -31,6 +31,7 @@
 - 事件类型：
   - 应用操作：`application.operation.created` / `completed` / `failed`（不再写每个节点的 target 过程事件）；
   - 任务：`task.created` / `started` / `completed` / `failed` / `retried` / `cancelled`（不再写 `log.attached`）；
+  - 删除服务器时 `CancelByServer` 也会逐任务写 `task.cancelled` 事件（复用 `DedupeKey`，重复取消不会重复落库）。
   - Agent 状态：`agent.connected` / `agent.disconnected`（仅状态转换时写入，避免刷屏）。
 - 失败/错误原因直接并入日志“内容”字段（summary），列表行内即可读，无详情弹窗。
 - 页面列表只展示：时间 / 级别 / 类型 / 内容 / 来源；无“查看”按钮与详情接口。

@@ -55,6 +55,8 @@ type App struct {
 	deployments    applications.DeploymentDispatcher
 	control        *installation.ControlServer
 	diagnostics    *diagnostics.Service
+	checkCancel    context.CancelFunc
+	checkDone      chan struct{}
 }
 
 func New(cfg config.Config) (*App, error) {
@@ -113,7 +115,7 @@ func New(cfg config.Config) (*App, error) {
 	internalFileRegistry := applications.NewInternalFileRegistry()
 	internalFileRegistry.Register("key_asset", keyAssetSvc)
 	variableRegistry := applications.NewApplicationVariableRegistry()
-	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout)
+	executor := sshx.NewSSHExecutorWithTimeoutProvider(credSvc, cfg.RemoteTimeout(), settingsSvc.RemoteTimeout, sshx.WithKnownHosts(filepath.Join(cfg.DataRoot, "known_hosts")))
 	agentClient, err := agentclient.NewGRPCClient(agentTLS, cfg.RemoteTimeout())
 	if err != nil {
 		_ = store.Close()
@@ -160,6 +162,7 @@ func New(cfg config.Config) (*App, error) {
 		certs.WithApplicationRefresher(certBridge),
 	)
 	facilitySvc := facilityapps.NewService(store.AppDB(), agentClient, serverSvc, applicationSvc,
+		facilityapps.WithCoordDB(store.CoordDB()),
 		facilityapps.WithContainerOperationQueue(containerSvc),
 		facilityapps.WithDataRoot(cfg.DataRoot),
 		facilityapps.WithCertificateProvider(certSvc),
@@ -239,12 +242,19 @@ func New(cfg config.Config) (*App, error) {
 		diagnostics:    diagnosticsSvc,
 		stageCleanup:   stageCleanup,
 	}
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	checkDone := make(chan struct{})
+	a.checkCancel = checkCancel
+	a.checkDone = checkDone
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		serverSvc.CheckConfiguredAgents(ctx)
+		defer close(checkDone)
+		serverSvc.CheckConfiguredAgents(checkCtx)
 	}()
 	if err := deploymentDispatcher.Start(context.Background()); err != nil {
+		checkCancel()
+		<-checkDone
+		a.stopBackgroundServices()
+		_ = a.store.Close()
 		return nil, err
 	}
 	taskWorker.Start(context.Background())
@@ -259,15 +269,10 @@ func New(cfg config.Config) (*App, error) {
 		setupSvc := installation.NewSetupService(installationSvc, credSvc, serverSvc, taskSvc, facilitySvc)
 		controlServer, err = installation.StartControlServer(cfg.DataRoot, setupSvc)
 		if err != nil {
-			taskWorker.Stop()
-			taskCleanup.Stop()
-			metricsCleanup.Stop()
-			eventCleanup.Stop()
-			eventWriter.Stop()
-			reportCollector.Stop()
-			systemSvc.Close()
-			_ = deploymentDispatcher.Stop(context.Background())
-			_ = store.Close()
+			checkCancel()
+			<-checkDone
+			a.stopBackgroundServices()
+			_ = a.store.Close()
 			return nil, err
 		}
 		a.control = controlServer
@@ -281,6 +286,22 @@ func New(cfg config.Config) (*App, error) {
 }
 
 func (a *App) Close() error {
+	if a.checkCancel != nil {
+		a.checkCancel()
+		a.checkCancel = nil
+	}
+	if a.checkDone != nil {
+		<-a.checkDone
+		a.checkDone = nil
+	}
+	a.stopBackgroundServices()
+	return a.store.Close()
+}
+
+// stopBackgroundServices stops every started background worker in dependency
+// order. Every Stop/Close is nil-safe and idempotent, so it can be reused for
+// both startup failure cleanup and normal shutdown.
+func (a *App) stopBackgroundServices() {
 	if a.control != nil {
 		_ = a.control.Close()
 	}
@@ -314,7 +335,6 @@ func (a *App) Close() error {
 	if a.diagnostics != nil {
 		_ = a.diagnostics.Close()
 	}
-	return a.store.Close()
 }
 func (a *App) Handler() http.Handler {
 	return logging.HTTPMiddleware(a.mux)

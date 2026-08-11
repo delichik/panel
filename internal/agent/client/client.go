@@ -20,6 +20,7 @@ import (
 	"panel/internal/platform/linux/remoteops"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/peer"
@@ -34,6 +35,11 @@ type GRPCClient struct {
 
 const dockerImagePullTimeout = 15 * time.Minute
 const maintenanceTimeout = 65 * time.Minute
+
+// prepareRestartTimeout bounds how long PrepareRestart waits for the agent to
+// become ready to restart. It is a var so tests can lower it; production
+// behavior is fixed and not configurable.
+var prepareRestartTimeout = 10 * time.Minute
 
 type ReportConfig struct {
 	ServerID                  string
@@ -161,19 +167,24 @@ func (c *GRPCClient) UpgradePackages(ctx context.Context, endpoint string, req a
 // agent reports "ready" or the stream/context ends. Agents that do not support
 // the RPC return an error so callers can fall back to proceeding directly.
 func (c *GRPCClient) PrepareRestart(ctx context.Context, endpoint string) error {
-	conn, err := c.dial(endpoint)
+	// The readiness stream is expected to end quickly after a package upgrade,
+	// but a broken agent must not be able to hold a deployment open forever.
+	// The deadline covers both connection establishment and the stream.
+	waitCtx, cancel := context.WithTimeout(ctx, prepareRestartTimeout)
+	defer cancel()
+	conn, err := c.dial(waitCtx, endpoint)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	stream, err := agentpb.NewAgentServiceClient(conn).PrepareRestart(ctx, &agentpb.Empty{})
+	stream, err := agentpb.NewAgentServiceClient(conn).PrepareRestart(waitCtx, &agentpb.Empty{})
 	if err != nil {
 		return wrapAgentError(err)
 	}
 	for {
 		msg, err := stream.Recv()
 		if err != nil {
-			if ctxErr := ctx.Err(); ctxErr != nil {
+			if ctxErr := waitCtx.Err(); ctxErr != nil {
 				return ctxErr
 			}
 			return wrapAgentError(err)
@@ -439,7 +450,7 @@ func (c *GRPCClient) DockerVolumeDelete(ctx context.Context, endpoint, name stri
 }
 
 func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config func() ReportConfig, handle func(context.Context, AgentReport) error) error {
-	conn, err := c.dial(endpoint)
+	conn, err := c.dial(ctx, endpoint)
 	if err != nil {
 		return err
 	}
@@ -524,17 +535,17 @@ func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config 
 
 func callRPC[T any](c *GRPCClient, ctx context.Context, endpoint string, timeout time.Duration, fn func(context.Context, agentpb.AgentServiceClient) (T, error)) (T, error) {
 	var zero T
-	conn, err := c.dial(endpoint)
-	if err != nil {
-		return zero, err
-	}
-	defer conn.Close()
 	callCtx := ctx
 	cancel := func() {}
 	if timeout > 0 {
 		callCtx, cancel = context.WithTimeout(ctx, timeout)
 	}
 	defer cancel()
+	conn, err := c.dial(callCtx, endpoint)
+	if err != nil {
+		return zero, err
+	}
+	defer conn.Close()
 	out, err := fn(callCtx, agentpb.NewAgentServiceClient(conn))
 	if err != nil {
 		return zero, wrapAgentError(err)
@@ -542,7 +553,7 @@ func callRPC[T any](c *GRPCClient, ctx context.Context, endpoint string, timeout
 	return out, nil
 }
 
-func (c *GRPCClient) dial(endpoint string) (*grpc.ClientConn, error) {
+func (c *GRPCClient) dial(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
 	target, err := grpcTarget(endpoint)
 	if err != nil {
 		return nil, err
@@ -550,17 +561,28 @@ func (c *GRPCClient) dial(endpoint string) (*grpc.ClientConn, error) {
 	c.mu.RLock()
 	tlsAssets := c.tlsAssets
 	c.mu.RUnlock()
-	var transport grpc.DialOption
+	opts := []grpc.DialOption{
+		// grpc.NewClient dials lazily on the first RPC; an explicit context
+		// dialer makes connection establishment honor the call's deadline.
+		grpc.WithContextDialer(func(dialCtx context.Context, addr string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(dialCtx, "tcp", addr)
+		}),
+	}
 	if tlsAssets == nil {
-		transport = grpc.WithTransportCredentials(insecure.NewCredentials())
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	} else {
 		tlsConfig, err := tlsAssets.ClientTLSConfig()
 		if err != nil {
 			return nil, err
 		}
-		transport = grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig))
+		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)))
 	}
-	return grpc.NewClient(target, transport)
+	conn, err := grpc.NewClient(target, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return conn, nil
 }
 
 func grpcTarget(endpoint string) (string, error) {
@@ -588,9 +610,26 @@ func wrapAgentError(err error) error {
 	if err == nil {
 		return nil
 	}
+	st, ok := status.FromError(err)
 	message := err.Error()
-	if st, ok := status.FromError(err); ok && st.Message() != "" {
+	if ok && st.Message() != "" {
 		message = st.Message()
 	}
-	return panelerr.BadGateway("agent_request_failed", fmt.Sprintf("Agent request failed: %s", message))
+	if !ok {
+		return panelerr.BadGateway("agent_request_failed", fmt.Sprintf("Agent request failed: %s", message))
+	}
+	// Preserve the gRPC code semantics so clearly invalid or denied requests
+	// surface as client-side errors instead of always becoming a 502.
+	switch st.Code() {
+	case codes.InvalidArgument, codes.FailedPrecondition:
+		return panelerr.Validation("agent_request_invalid", fmt.Sprintf("Agent request invalid: %s", message))
+	case codes.NotFound:
+		return panelerr.NotFound("agent resource")
+	case codes.PermissionDenied:
+		return panelerr.Forbidden("agent_request_forbidden", fmt.Sprintf("Agent request forbidden: %s", message))
+	case codes.DeadlineExceeded:
+		return panelerr.Timeout(message)
+	default:
+		return panelerr.BadGateway("agent_request_failed", fmt.Sprintf("Agent request failed: %s", message))
+	}
 }

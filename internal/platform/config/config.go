@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
@@ -49,12 +50,23 @@ type CertConfig struct {
 
 const defaultAdminPassword = "admin"
 
+var (
+	defaultAdminHashOnce   sync.Once
+	defaultAdminHashCached string
+)
+
 func defaultAdminHash() string {
-	hash, err := bcrypt.GenerateFromPassword([]byte(defaultAdminPassword), bcrypt.DefaultCost)
-	if err != nil {
-		panic(err)
-	}
-	return string(hash)
+	// bcrypt is deliberately expensive; cache the well-known default hash so
+	// repeated Default()/Load() calls do not re-run it on every configuration
+	// load.
+	defaultAdminHashOnce.Do(func() {
+		hash, err := bcrypt.GenerateFromPassword([]byte(defaultAdminPassword), bcrypt.DefaultCost)
+		if err != nil {
+			panic(err)
+		}
+		defaultAdminHashCached = string(hash)
+	})
+	return defaultAdminHashCached
 }
 
 func Default() Config {

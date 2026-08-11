@@ -9,9 +9,14 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	panelerr "panel/internal/platform/errors"
 )
+
+// defaultProviderHTTPClient is used when no client is supplied. A timeout
+// prevents a hung Cloudflare request from blocking a handler forever.
+var defaultProviderHTTPClient = &http.Client{Timeout: 30 * time.Second}
 
 type CloudflareProvider struct {
 	apiToken   string
@@ -53,7 +58,7 @@ type cloudflareRecord struct {
 
 func NewCloudflareProvider(apiToken string, httpClient *http.Client) *CloudflareProvider {
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		httpClient = defaultProviderHTTPClient
 	}
 	return &CloudflareProvider{apiToken: apiToken, httpClient: httpClient, baseURL: "https://api.cloudflare.com/client/v4"}
 }

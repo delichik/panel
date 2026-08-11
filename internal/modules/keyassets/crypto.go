@@ -315,9 +315,13 @@ func defaultTLSCommonName(name string, dnsNames []string, ipAddresses []string) 
 	return strings.TrimSpace(name)
 }
 
-func newCertificateTemplate(commonName string, notBefore, notAfter time.Time, isCA bool, dnsNames []string, ips []net.IP) *x509.Certificate {
+func newCertificateTemplate(commonName string, notBefore, notAfter time.Time, isCA bool, dnsNames []string, ips []net.IP) (*x509.Certificate, error) {
+	serial, err := randomSerial()
+	if err != nil {
+		return nil, err
+	}
 	template := &x509.Certificate{
-		SerialNumber:          randomSerial(),
+		SerialNumber:          serial,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		BasicConstraintsValid: true,
@@ -326,26 +330,26 @@ func newCertificateTemplate(commonName string, notBefore, notAfter time.Time, is
 	if isCA {
 		template.IsCA = true
 		template.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature
-		return template
+		return template, nil
 	}
 	template.KeyUsage = x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment
 	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth}
 	template.DNSNames = dnsNames
 	template.IPAddresses = ips
-	return template
+	return template, nil
 }
 
 func pkixName(commonName string) pkix.Name {
 	return pkix.Name{CommonName: strings.TrimSpace(commonName), Organization: []string{"Panel"}}
 }
 
-func randomSerial() *big.Int {
+func randomSerial() (*big.Int, error) {
 	limit := new(big.Int).Lsh(big.NewInt(1), 128)
 	serial, err := rand.Int(rand.Reader, limit)
 	if err != nil {
-		return big.NewInt(time.Now().UnixNano())
+		return nil, err
 	}
-	return serial
+	return serial, nil
 }
 
 func fileKindsForAsset(assetType string) []string {

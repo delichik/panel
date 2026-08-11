@@ -18,18 +18,41 @@ const FOCUSABLE_SELECTOR = [
 ].join(',');
 
 /**
+ * Body scroll locks are reference-counted so nested overlays (for example a
+ * dialog opened above another dialog) restore the page scroll only when the
+ * last overlay closes, instead of each overlay clobbering the previous one.
+ */
+let bodyScrollLocks = 0;
+let savedBodyOverflow = '';
+
+function lockBodyScroll() {
+  if (bodyScrollLocks === 0) savedBodyOverflow = document.body.style.overflow;
+  bodyScrollLocks += 1;
+  document.body.style.overflow = 'hidden';
+}
+
+function unlockBodyScroll() {
+  bodyScrollLocks = Math.max(0, bodyScrollLocks - 1);
+  if (bodyScrollLocks === 0) document.body.style.overflow = savedBodyOverflow;
+}
+
+/**
  * Shared modal-overlay keyboard behavior used by Dialog and the mobile nav drawer:
  * moves focus into the overlay, traps Tab, closes on Escape, restores focus to the
  * trigger, and optionally locks background scrolling.
  */
 export function useOverlayBehavior({ open, containerRef, onClose, lockScroll = false }: OverlayBehaviorOptions) {
   let restoreFocusTo: HTMLElement | null = null;
-  let previousBodyOverflow = '';
+  let scrollLocked = false;
 
   function focusableElements() {
     return containerRef.value
       ? Array.from(containerRef.value.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
       : [];
+  }
+
+  function focusOverlay() {
+    (focusableElements()[0] ?? containerRef.value)?.focus();
   }
 
   function onKeydown(event: KeyboardEvent) {
@@ -61,25 +84,31 @@ export function useOverlayBehavior({ open, containerRef, onClose, lockScroll = f
     if (isOpen) {
       restoreFocusTo = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       if (lockScroll) {
-        previousBodyOverflow = document.body.style.overflow;
-        document.body.style.overflow = 'hidden';
+        lockBodyScroll();
+        scrollLocked = true;
       }
+      // The overlay DOM may be rendered one tick after the watcher fires,
+      // especially when the overlay starts already open (immediate branch).
       await nextTick();
-      (focusableElements()[0] ?? containerRef.value)?.focus();
+      if (!containerRef.value) await nextTick();
+      focusOverlay();
       return;
     }
-    if (lockScroll) {
-      document.body.style.overflow = previousBodyOverflow;
+    if (scrollLocked) {
+      unlockBodyScroll();
+      scrollLocked = false;
     }
     await nextTick();
-    restoreFocusTo?.focus();
+    if (restoreFocusTo?.isConnected) restoreFocusTo.focus();
     restoreFocusTo = null;
   }, { immediate: true });
 
   onBeforeUnmount(() => {
-    restoreFocusTo?.focus();
-    if (lockScroll) {
-      document.body.style.overflow = previousBodyOverflow;
+    if (restoreFocusTo?.isConnected) restoreFocusTo.focus();
+    restoreFocusTo = null;
+    if (scrollLocked) {
+      unlockBodyScroll();
+      scrollLocked = false;
     }
   });
 

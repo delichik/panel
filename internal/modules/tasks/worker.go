@@ -147,7 +147,7 @@ func (w *Worker) RunNow(ctx context.Context, task Task) error {
 		return nil
 	}
 	defer w.service.FinishExecution(task.ID)
-	return w.manager.Run(ctx, task)
+	return w.manager.runRecover(ctx, task)
 }
 
 func (w *Worker) queueLoop(ctx context.Context) {
@@ -166,6 +166,13 @@ func (w *Worker) queueLoop(ctx context.Context) {
 }
 
 func (w *Worker) runDueTasks(ctx context.Context) {
+	// 单次轮询内发生 panic 时只记录日志并退出本轮，避免整个 worker goroutine
+	// 崩溃后任务队列无人驱动。
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("task worker due-task loop recovered from panic: %v", recovered)
+		}
+	}()
 	for _, task := range w.dueTasks(ctx) {
 		if task.Status == StatusRunning && w.service.HasRunningExecution(task.ID) {
 			continue
@@ -217,7 +224,7 @@ func (w *Worker) dueTasks(ctx context.Context) []Task {
 			continue
 		}
 		for _, status := range []string{StatusQueued, StatusScheduled, StatusFailedRetryable} {
-			result, err := w.service.List(ctx, ListFilter{Type: taskType, Status: status, Limit: 50, IncludeInternal: true})
+			result, err := w.service.List(ctx, ListFilter{Type: taskType, Status: status, Limit: 50, IncludeInternal: true, SortOldestFirst: true})
 			if err != nil {
 				log.Printf("task worker list %s/%s: %v", taskType, status, err)
 				continue

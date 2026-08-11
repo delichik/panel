@@ -674,13 +674,13 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	app, err := svc.Create(ctx, SaveInput{
 		Name:     "web",
 		Enabled:  false,
-		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: config/app.conf\n    target: /etc/app.conf\n    uid: 1000\n    gid: 1001\n    mode: \"0755\"\n",
+		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: config-app.conf\n    target: /etc/app.conf\n    uid: 1000\n    gid: 1001\n    mode: \"0755\"\n",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	file, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
-		Name:          "config/app.conf",
+		Name:          "config-app.conf",
 		Kind:          "template",
 		ContentBase64: base64.StdEncoding.EncodeToString([]byte("server={{ .app.name }}")),
 	})
@@ -756,13 +756,13 @@ func TestApplicationFileTemplateRendersPerTargetServerVariables(t *testing.T) {
 	app, err := svc.Create(ctx, SaveInput{
 		Name:     "web",
 		Enabled:  false,
-		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: config/node.conf\n    target: /etc/node.conf\n",
+		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: config-node.conf\n    target: /etc/node.conf\n",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
-		Path:          "config/node.conf",
+		Path:          "config-node.conf",
 		Kind:          "template",
 		ContentBase64: base64.StdEncoding.EncodeToString([]byte("name={{ .server.name }} role={{ index .server.variables \"role\" }} app={{ .app.name }}")),
 	}); err != nil {
@@ -2301,4 +2301,144 @@ func (f fakeInternalFileProvider) InternalFileCatalog(ctx context.Context) ([]Pa
 func (f fakeInternalFileProvider) OpenInternalFile(ctx context.Context, source string) (io.ReadCloser, InternalFileInfo, error) {
 	content := append([]byte(nil), f.content...)
 	return io.NopCloser(bytes.NewReader(content)), InternalFileInfo{Mode: "0644", Size: int64(len(content))}, nil
+}
+
+func TestRuntimeStatusFromLifecycleTargetState(t *testing.T) {
+	cases := []struct {
+		state  string
+		action string
+		want   string
+	}{
+		{LifecycleTargetStateSucceeded, LifecycleTargetActionApply, appruntime.StatusRunning},
+		{LifecycleTargetStateSucceeded, LifecycleTargetActionStop, appruntime.StatusStopped},
+		{LifecycleTargetStateSucceeded, LifecycleTargetActionPurge, appruntime.StatusMissing},
+		{LifecycleTargetStateFailedRetryable, "", appruntime.StatusFailed},
+		{LifecycleTargetStateFailed, "", appruntime.StatusFailed},
+		{LifecycleTargetStateCancelled, "", appruntime.StatusFailed},
+		{LifecycleTargetStateApplying, "", appruntime.StatusDeploying},
+		{LifecycleTargetStateStopping, "", appruntime.StatusDeploying},
+		{LifecycleTargetStatePurging, "", appruntime.StatusDeploying},
+		{LifecycleTargetStateVerifying, "", appruntime.StatusDeploying},
+		{LifecycleTargetStateSuperseded, "", appruntime.StatusPending},
+		{LifecycleTargetStatePlanned, "", appruntime.StatusPending},
+	}
+	for _, c := range cases {
+		if got := runtimeStatusFromLifecycleTargetState(c.state, c.action); got != c.want {
+			t.Errorf("state=%q action=%q got=%q want=%q", c.state, c.action, got, c.want)
+		}
+	}
+}
+
+func TestMergeLifecycleTargetsIntoSynthesizedStopAndPurgeStatuses(t *testing.T) {
+	statuses := mergeLifecycleTargetsIntoStatuses(nil, []LifecycleTarget{
+		{InstanceID: "app-1-srv-a", ServerID: "srv-a", State: LifecycleTargetStateSucceeded, Action: LifecycleTargetActionStop, DesiredState: appruntime.DesiredStopped},
+		{InstanceID: "app-1-srv-b", ServerID: "srv-b", State: LifecycleTargetStateSucceeded, Action: LifecycleTargetActionPurge, DesiredState: appruntime.DesiredStopped},
+		{InstanceID: "app-1-srv-c", ServerID: "srv-c", State: LifecycleTargetStateSucceeded, Action: LifecycleTargetActionApply, DesiredState: appruntime.DesiredRunning},
+	})
+	if len(statuses) != 3 {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+	byServer := map[string]string{}
+	for _, status := range statuses {
+		byServer[status.ServerID] = status.Status
+	}
+	if byServer["srv-a"] != appruntime.StatusStopped || byServer["srv-b"] != appruntime.StatusMissing || byServer["srv-c"] != appruntime.StatusRunning {
+		t.Fatalf("statuses = %#v", statuses)
+	}
+}
+
+func TestLifecycleHeartbeatResultPrioritizesLeaseLost(t *testing.T) {
+	boom := errors.New("boom")
+	if got := lifecycleHeartbeatResult(errLifecycleTargetLeaseLost, boom); !errors.Is(got, errLifecycleTargetLeaseLost) {
+		t.Fatalf("lease lost must win over run error, got %v", got)
+	}
+	if got := lifecycleHeartbeatResult(errLifecycleTargetLeaseLost, nil); !errors.Is(got, errLifecycleTargetLeaseLost) {
+		t.Fatalf("lease lost must win over nil, got %v", got)
+	}
+	heartbeat := errors.New("heartbeat boom")
+	if got := lifecycleHeartbeatResult(heartbeat, nil); !errors.Is(got, heartbeat) {
+		t.Fatalf("heartbeat error should surface when run succeeded, got %v", got)
+	}
+	if got := lifecycleHeartbeatResult(heartbeat, boom); !errors.Is(got, boom) {
+		t.Fatalf("ordinary heartbeat error must not hide run error, got %v", got)
+	}
+}
+
+func TestLifecycleTargetObservedAtEmptyWithoutInstance(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := svc.createLifecycleOperationForServerIDs(ctx, app, appruntime.Spec{Generation: app.Generation, SpecHash: app.SpecHash}, "", LifecycleTypeDeploy, []string{"srv-missing"}, appruntime.DesiredRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(operation.Targets) != 1 {
+		t.Fatalf("targets = %#v", operation.Targets)
+	}
+	target := operation.Targets[0]
+	if target.ObservedAt != nil || target.ObservedState != "" {
+		t.Fatalf("expected empty observed snapshot without instance: %#v", target)
+	}
+}
+
+func TestReconcileStoppedDoesNotTouchApplicationUpdatedAt(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.markApplicationReconcileStopped(ctx, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	after, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ReconcileStopped {
+		t.Fatalf("reconcile_stopped = false")
+	}
+	if !after.UpdatedAt.Equal(before.UpdatedAt) {
+		t.Fatalf("updated_at changed: %v -> %v", before.UpdatedAt, after.UpdatedAt)
+	}
+	if after.Version != before.Version {
+		t.Fatalf("version changed: %d -> %d", before.Version, after.Version)
+	}
+}
+
+func TestStopDoesNotOverwriteConcurrentDerivedFields(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+	app, err := svc.Create(ctx, SaveInput{Name: "web", Enabled: true, SpecYAML: "name: web\nimage: nginx\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.ImageDigest = "sha256:concurrent"
+	app.ImageReference = "nginx:latest"
+	if err := svc.updateApplicationDerived(ctx, app); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Stop(ctx, app.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.Get(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ImageDigest != "sha256:concurrent" || got.ImageReference != "nginx:latest" {
+		t.Fatalf("stop clobbered derived fields: %#v", got)
+	}
+	if got.Enabled {
+		t.Fatalf("app should be disabled")
+	}
 }

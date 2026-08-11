@@ -39,6 +39,12 @@ onMounted(async () => {
   }
 });
 
+function safeRedirect(value: unknown): string {
+  if (typeof value !== 'string') return '/overview';
+  if (!value.startsWith('/') || value.startsWith('//')) return '/overview';
+  return value;
+}
+
 async function submit() {
   error.value = '';
   if (!username.value || !password.value) {
@@ -55,7 +61,7 @@ async function submit() {
       confirmPassword.value = '';
       return;
     }
-    await router.push(String(route.query.redirect || '/overview'));
+    await router.push(safeRedirect(route.query.redirect));
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('auth.signInFailed'));
     password.value = '';
@@ -85,7 +91,7 @@ async function updateAccount() {
       currentPassword: currentPassword.value,
       newPassword: newPassword.value,
     });
-    await router.push(String(route.query.redirect || '/overview'));
+    await router.push(safeRedirect(route.query.redirect));
   } catch (err) {
     notifyError(err instanceof Error ? err.message : t('auth.changePasswordFailed'));
   } finally {

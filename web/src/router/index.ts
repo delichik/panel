@@ -16,6 +16,8 @@ import SettingsPage from '@/views/settings/index.vue';
 import MaintenancePage from '@/views/maintenance/index.vue';
 import DebugPage from '@/views/debug/index.vue';
 import LoginPage from '@/views/auth/LoginPage.vue';
+import NotFoundPage from '@/components/templates/NotFoundPage.vue';
+import { setUnauthorizedHandler } from '@/api/client';
 import { useSessionStore } from '@/stores/session';
 
 const fail2BanRoute = import.meta.env.DEV
@@ -71,11 +73,27 @@ export const router = createRouter({
         { path: 'settings/system', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
         { path: 'settings/backups', component: SettingsPage, meta: { titleKey: 'routes.settings.title' } },
         { path: 'debug', component: DebugPage, meta: { titleKey: 'routes.debug.title' } },
+        // Catch-all inside the shell so unknown paths keep the app navigation.
+        { path: ':pathMatch(.*)*', component: NotFoundPage, meta: { titleKey: 'routes.notFound.title' } },
       ],
     },
-    { path: '/:pathMatch(.*)*', redirect: '/overview' },
   ],
 });
+
+function redirectToLogin() {
+  const session = useSessionStore();
+  session.onUnauthorized();
+  const current = router.currentRoute.value;
+  if (current.path !== '/login') {
+    const redirect = current.fullPath;
+    void router.push({ path: '/login', query: { redirect } }).catch(() => {
+      // The navigation may race with bootstrap; the router guard performs the
+      // same redirect when the session is not authenticated.
+    });
+  }
+}
+
+setUnauthorizedHandler(redirectToLogin);
 
 router.beforeEach(async (to) => {
   const session = useSessionStore();
@@ -84,7 +102,13 @@ router.beforeEach(async (to) => {
     if (to.path === '/login' && session.authenticated && !session.passwordChangeRequired) return '/overview';
     return true;
   }
-  if (!session.authenticated) return { path: '/login', query: { redirect: to.fullPath } };
+  if (!session.authenticated) {
+    // A stored token that could not be verified during restore (for example a
+    // transient network error) is kept and allowed through optimistically; a
+    // real 401 later clears the session and redirects to login.
+    if (session.token) return true;
+    return { path: '/login', query: { redirect: to.fullPath } };
+  }
   if (session.passwordChangeRequired) return { path: '/login', query: { redirect: to.fullPath } };
   return true;
 });

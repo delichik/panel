@@ -389,6 +389,26 @@ func serialNumber() *big.Int {
 	return n
 }
 
+// RejectServerAuthClientCertificates is a tls.Config.VerifyPeerCertificate hook
+// for the agent's mTLS server. Node certificates are issued with both
+// ServerAuth and ClientAuth so they can serve as the agent's TLS server
+// certificate, but under a CA-only client check that also makes them valid as
+// clients. Rejecting any client certificate that carries ServerAuth keeps node
+// certificates from being used for lateral agent-to-agent calls while still
+// accepting the Panel client certificate (ClientAuth only).
+func RejectServerAuthClientCertificates(_ [][]byte, verifiedChains [][]*x509.Certificate) error {
+	if len(verifiedChains) == 0 || len(verifiedChains[0]) == 0 {
+		return errors.New("agent client certificate is not verified")
+	}
+	leaf := verifiedChains[0][0]
+	for _, usage := range leaf.ExtKeyUsage {
+		if usage == x509.ExtKeyUsageServerAuth {
+			return errors.New("agent client certificate must not carry the server authentication extended key usage")
+		}
+	}
+	return nil
+}
+
 func ParseCertificateInfo(certificatePEM []byte) (CertificateInfo, error) {
 	block, _ := pem.Decode(certificatePEM)
 	if block == nil {

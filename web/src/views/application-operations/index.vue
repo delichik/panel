@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { RefreshCcw } from '@lucide/vue';
 import { applicationOperationsApi } from '@/api/applicationOperations';
@@ -17,6 +17,7 @@ import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
 import type { ApplicationOperationDetailDto, ApplicationOperationDto, ApplicationOperationTargetDto } from '@/types/applicationOperations';
+import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import { createLatestRequestGuard, normalizePage } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
 
@@ -51,6 +52,25 @@ const detailError = ref('');
 const drawerTarget = ref<ApplicationOperationTargetDto | null>(null);
 const listRequests = createLatestRequestGuard();
 const detailRequests = createLatestRequestGuard();
+let filterTimer: ReturnType<typeof setTimeout> | null = null;
+const drawer = ref<HTMLElement | null>(null);
+
+function closeDrawer() {
+  drawerTarget.value = null;
+}
+
+const { onKeydown: onDrawerKeydown } = useOverlayBehavior({
+  open: () => Boolean(drawerTarget.value),
+  containerRef: drawer,
+  onClose: closeDrawer,
+  lockScroll: true,
+});
+
+const selectedOperationMissing = computed(() => Boolean(selectedOperationId.value) && !rows.value.some((item) => item.operationId === selectedOperationId.value) && !detailLoading.value && !detailError.value);
+
+function clearSelectedOperation() {
+  selectedOperationId.value = '';
+}
 
 const statusOptions = computed(() => [
   { label: t('applicationOperationsPage.filter.allStatuses'), value: '' },
@@ -173,11 +193,14 @@ watch([search, status, source], () => {
   selectedOperationId.value = '';
   detail.value = null;
   drawerTarget.value = null;
-  if (page.value !== 1) {
-    page.value = 1;
-    return;
-  }
-  syncQueryAndLoad();
+  if (filterTimer) clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => {
+    if (page.value !== 1) {
+      page.value = 1;
+      return;
+    }
+    syncQueryAndLoad();
+  }, 250);
 });
 
 watch(page, () => {
@@ -270,6 +293,10 @@ function retryDetail() {
 }
 
 onMounted(load);
+
+onBeforeUnmount(() => {
+  if (filterTimer) clearTimeout(filterTimer);
+});
 </script>
 
 <template>
@@ -325,6 +352,11 @@ onMounted(load);
       <template #detail>
         <main class="grid min-h-0 min-w-0 overflow-hidden">
           <EmptyState v-if="!selectedOperationId" :title="t('applicationOperationsPage.selectRecord')" :description="t('applicationOperationsPage.selectRecordHint')" />
+          <EmptyState v-else-if="selectedOperationMissing" :title="t('applicationOperationsPage.operationNotOnPage')" :description="t('applicationOperationsPage.operationNotOnPageHint')">
+            <template #actions>
+              <Button size="sm" @click="clearSelectedOperation">{{ t('applicationOperationsPage.clearSelection') }}</Button>
+            </template>
+          </EmptyState>
           <EmptyState v-else-if="detailError" :title="t('applicationOperationsPage.detailLoadFailed')" :description="detailError">
             <template #actions>
               <Button size="sm" :loading="detailLoading" @click="retryDetail"><RefreshCcw />{{ t('common.retry') }}</Button>
@@ -390,8 +422,8 @@ onMounted(load);
 
     <Teleport to="body">
       <Transition name="drawer">
-        <div v-if="drawerTarget" class="fixed inset-0 z-50 bg-overlay" @click.self="drawerTarget = null">
-<aside class="drawer-panel absolute inset-y-0 right-0 grid w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] border-l border-border bg-card shadow-2xl">
+        <div v-if="drawerTarget" class="fixed inset-0 z-50 bg-overlay">
+<aside ref="drawer" tabindex="-1" class="drawer-panel absolute inset-y-0 right-0 grid w-full max-w-2xl grid-rows-[auto_minmax(0,1fr)_auto] border-l border-border bg-card shadow-2xl" @keydown="onDrawerKeydown">
             <header class="flex items-center justify-between gap-3 border-b border-border p-4">
               <h4 class="m-0 min-w-0 truncate text-sm font-semibold">{{ t('applicationOperationsPage.stageLogTitle', { server: serverLabel(drawerTarget) }) }}</h4>
               <Button size="sm" variant="secondary" @click="drawerTarget = null">{{ t('common.close') }}</Button>

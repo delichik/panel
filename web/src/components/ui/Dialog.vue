@@ -5,13 +5,17 @@ import { useI18n } from '@/i18n';
 import { useOverlayBehavior } from '@/composables/useOverlayBehavior';
 import IconButton from './IconButton.vue';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   open: boolean;
   title: string;
   description?: string;
   closeLabel?: string;
   size?: 'default' | 'large';
-}>();
+  /** While true the dialog cannot be dismissed by the close button or Escape (used during saves). */
+  closeDisabled?: boolean;
+}>(), {
+  closeDisabled: false,
+});
 const emit = defineEmits<{ 'update:open': [value: boolean] }>();
 const { t } = useI18n();
 
@@ -20,6 +24,7 @@ const titleId = useId();
 const descriptionId = useId();
 
 function close() {
+  if (props.closeDisabled) return;
   emit('update:open', false);
 }
 
@@ -40,7 +45,7 @@ const { onKeydown } = useOverlayBehavior({
               <h2 :id="titleId" class="m-0 text-base font-semibold text-foreground">{{ title }}</h2>
               <p v-if="description" :id="descriptionId" class="m-0 mt-1 text-sm leading-6 text-muted-foreground">{{ description }}</p>
             </div>
-            <IconButton :label="closeLabel || t('common.close')" size="sm" @click="close">
+            <IconButton :label="closeLabel || t('common.close')" size="sm" :disabled="closeDisabled" @click="close">
               <X />
             </IconButton>
           </header>

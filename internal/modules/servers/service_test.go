@@ -22,6 +22,7 @@ import (
 	"panel/internal/modules/tasks"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
+	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/linux"
 	"panel/internal/platform/linux/remoteops"
 	"panel/internal/platform/secrets"
@@ -2394,5 +2395,222 @@ func TestPrepareAgentRestartGatesOnCapability(t *testing.T) {
 	agent.prepareRestartErr = errString("readiness failed")
 	if err := svc.prepareAgentRestart(context.Background(), srv); err == nil {
 		t.Fatal("expected readiness failure to propagate")
+	}
+}
+
+func TestUpdatePersistsWhenConnectivityProbeFails(t *testing.T) {
+	createSvc, taskSvc, store := testServerService(t, nil)
+	srv, err := createSvc.Create(context.Background(), SaveRequest{
+		Name: "s", IPv4: "127.0.0.1", Port: 22, SSHUsername: "du", CredentialID: "cred_1", DockerHost: agentcontract.DefaultDockerHost,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc := newServerServiceForTest(store, failingConnectivityExec{}, taskSvc)
+	var synced []string
+	svc.SetDNSSyncTrigger(func(_ context.Context, ids []string) error {
+		synced = append(synced, ids...)
+		return nil
+	})
+
+	updated, err := svc.Update(context.Background(), srv.ID, SaveRequest{
+		Name: "renamed", IPv4: "203.0.113.5", Port: 22, SSHUsername: "du", CredentialID: "cred_1", DockerHost: agentcontract.DefaultDockerHost,
+	})
+	if err != nil {
+		t.Fatalf("update must succeed even when the connectivity probe fails: %v", err)
+	}
+	if updated.Name != "renamed" || updated.Host != "203.0.113.5" {
+		t.Fatalf("updated server = %#v", updated)
+	}
+	got, err := svc.Get(context.Background(), srv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Host != "203.0.113.5" || got.Name != "renamed" {
+		t.Fatalf("persisted server = %#v", got)
+	}
+	if got.Reachable {
+		t.Fatal("expected failed probe to mark the server unreachable")
+	}
+	if len(synced) != 1 || synced[0] != srv.ID {
+		t.Fatalf("dns sync ids = %#v, want server id", synced)
+	}
+}
+
+func TestHostKeyMismatchFlagOnReads(t *testing.T) {
+	svc, _, store := testServerService(t, nil)
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	mismatch := "ssh host key mismatch: host key for 203.0.113.7:22 has changed (stored SHA256:AAA, presented SHA256:BBB)"
+	rows := []struct {
+		id        string
+		lastError string
+	}{
+		{id: "srv_mismatch", lastError: mismatch},
+		{id: "srv_other", lastError: "SSH authentication failed"},
+		{id: "srv_clean", lastError: ""},
+	}
+	for _, row := range rows {
+		if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+			row.id, row.id, "203.0.113.7", 22, "du", "cred_1", "{}", row.lastError, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := svc.Get(ctx, "srv_mismatch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.HostKeyMismatch {
+		t.Fatalf("Get: expected hostKeyMismatch for mismatch error, got %#v", got)
+	}
+	other, err := svc.Get(ctx, "srv_other")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if other.HostKeyMismatch {
+		t.Fatalf("Get: unexpected hostKeyMismatch for %q", other.LastError)
+	}
+	clean, err := svc.Get(ctx, "srv_clean")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if clean.HostKeyMismatch {
+		t.Fatalf("Get: unexpected hostKeyMismatch for empty lastError")
+	}
+
+	list, err := svc.List(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertMismatchFlag(t, list, "srv_mismatch", true)
+
+	summaries, err := svc.ListSummaries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSummaryMismatchFlag(t, summaries, "srv_mismatch", true)
+
+	page, err := svc.ListSummaryPage(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSummaryMismatchFlag(t, page.Items, "srv_mismatch", true)
+}
+
+func assertMismatchFlag(t *testing.T, servers []Server, id string, want bool) {
+	t.Helper()
+	for _, srv := range servers {
+		if srv.ID == id {
+			if srv.HostKeyMismatch != want {
+				t.Fatalf("List: server %s hostKeyMismatch = %v, want %v", id, srv.HostKeyMismatch, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("List: server %s not found", id)
+}
+
+func assertSummaryMismatchFlag(t *testing.T, servers []ServerSummary, id string, want bool) {
+	t.Helper()
+	for _, srv := range servers {
+		if srv.ID == id {
+			if srv.HostKeyMismatch != want {
+				t.Fatalf("summary server %s hostKeyMismatch = %v, want %v", id, srv.HostKeyMismatch, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("summary server %s not found", id)
+}
+
+type trustHostKeyFakeExec struct {
+	*connectivityFakeExec
+	trustErr error
+	trusted  bool
+	targets  []sshx.Target
+}
+
+func (f *trustHostKeyFakeExec) TrustHostKey(_ context.Context, target sshx.Target) error {
+	f.trusted = true
+	f.targets = append(f.targets, target)
+	return f.trustErr
+}
+
+func insertServerWithError(t *testing.T, store *storage.Store, id, lastError string) {
+	t.Helper()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,traits,last_error,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		id, id, "203.0.113.7", 22, "du", "cred_1", "{}", lastError, now, now); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTrustHostKeyReplacesKeyAndRefreshesConnectivity(t *testing.T) {
+	exec := &trustHostKeyFakeExec{connectivityFakeExec: &connectivityFakeExec{}}
+	svc, _, store := testServerService(t, exec)
+	ctx := context.Background()
+	insertServerWithError(t, store, "srv_trust", "ssh host key mismatch: host key for 203.0.113.7:22 has changed (stored SHA256:AAA, presented SHA256:BBB)")
+
+	got, err := svc.TrustHostKey(ctx, "srv_trust")
+	if err != nil {
+		t.Fatalf("trust host key: %v", err)
+	}
+	if !exec.trusted || len(exec.targets) != 1 {
+		t.Fatalf("expected TrustHostKey call, trusted=%v targets=%#v", exec.trusted, exec.targets)
+	}
+	target := exec.targets[0]
+	if target.Host != "203.0.113.7" || target.Port != 22 || target.CredentialID != "cred_1" || target.Username != "du" {
+		t.Fatalf("unexpected trust target: %#v", target)
+	}
+	if !got.Reachable || got.LastError != "" || got.HostKeyMismatch {
+		t.Fatalf("expected refreshed reachable server without mismatch, got %#v", got)
+	}
+}
+
+func TestTrustHostKeyPropagatesExecutorError(t *testing.T) {
+	exec := &trustHostKeyFakeExec{
+		connectivityFakeExec: &connectivityFakeExec{},
+		trustErr:             panelerr.BadGateway("ssh_auth_failed", "SSH authentication failed"),
+	}
+	svc, _, store := testServerService(t, exec)
+	ctx := context.Background()
+	insertServerWithError(t, store, "srv_trust", "ssh host key mismatch: host key for 203.0.113.7:22 has changed (stored SHA256:AAA, presented SHA256:BBB)")
+
+	_, err := svc.TrustHostKey(ctx, "srv_trust")
+	var perr *panelerr.Error
+	if !errors.As(err, &perr) || perr.Code != "ssh_auth_failed" {
+		t.Fatalf("expected ssh_auth_failed, got %v", err)
+	}
+	if !exec.trusted {
+		t.Fatal("expected executor trust call")
+	}
+	var lastError string
+	if err := store.AppDB().QueryRow(`SELECT last_error FROM servers WHERE id=?`, "srv_trust").Scan(&lastError); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(lastError, "ssh host key mismatch") {
+		t.Fatalf("expected mismatch error to remain untouched after trust failure, got %q", lastError)
+	}
+}
+
+func TestTrustHostKeyRequiresExecutorCapability(t *testing.T) {
+	svc, _, store := testServerService(t, &connectivityFakeExec{})
+	ctx := context.Background()
+	insertServerWithError(t, store, "srv_trust", "ssh host key mismatch: host key for 203.0.113.7:22 has changed (stored SHA256:AAA, presented SHA256:BBB)")
+
+	_, err := svc.TrustHostKey(ctx, "srv_trust")
+	var perr *panelerr.Error
+	if !errors.As(err, &perr) || perr.Code != "host_key_trust_unavailable" {
+		t.Fatalf("expected host_key_trust_unavailable, got %v", err)
+	}
+}
+
+func TestTrustHostKeyUnavailableWithoutExecutor(t *testing.T) {
+	svc, _, _ := testServerService(t, nil)
+	_, err := svc.TrustHostKey(context.Background(), "srv_missing")
+	var perr *panelerr.Error
+	if !errors.As(err, &perr) || perr.Code != "server_executor_unavailable" {
+		t.Fatalf("expected server_executor_unavailable, got %v", err)
 	}
 }

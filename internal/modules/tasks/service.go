@@ -36,11 +36,21 @@ type ListFilter struct {
 	ExcludeScheduled bool
 	OperationID      string
 	OperationPage    bool
+	Q                string
+	SortOldestFirst  bool
 	Limit            int
 	Offset           int
 }
 
 var terminalStatuses = []string{StatusCompleted, StatusFailed, StatusBlocked, StatusCancelled}
+
+const (
+	// maxTaskLogLinesPerTask 是单任务最多保留的日志条数；超出后滚动删除最旧日志，
+	// 防止长任务无限膨胀。
+	maxTaskLogLinesPerTask = 1000
+	// maxTaskLogLineLength 是单条日志最多保留的 rune 数，超出部分截断。
+	maxTaskLogLineLength = 8192
+)
 
 type ListResult struct {
 	Items    []Task `json:"items"`
@@ -315,8 +325,26 @@ func (s *Service) Advance(ctx context.Context, taskID, stage, message string) er
 
 func (s *Service) AppendLog(ctx context.Context, taskID, stream, line string) error {
 	line = Redact(line)
+	if runes := []rune(line); len(runes) > maxTaskLogLineLength {
+		line = string(runes[:maxTaskLogLineLength])
+	}
 	log := models.TaskLog{TaskID: taskID, Time: time.Now().UTC(), Stream: stream, Line: line}
-	err := orm.Insert(ctx, s.db, &log)
+	if err := orm.Insert(ctx, s.db, &log); err != nil {
+		return err
+	}
+	return s.trimTaskLogs(ctx, taskID)
+}
+
+// trimTaskLogs 保证单任务日志条数不超过上限：超出时删除最旧日志。
+func (s *Service) trimTaskLogs(ctx context.Context, taskID string) error {
+	count, err := orm.New(s.db).From("task_logs").Where("task_id = ?", taskID).Count(ctx)
+	if err != nil {
+		return err
+	}
+	if count <= maxTaskLogLinesPerTask {
+		return nil
+	}
+	_, err = orm.RawExec(ctx, s.db, `DELETE FROM task_logs WHERE task_id=? AND id NOT IN (SELECT id FROM task_logs WHERE task_id=? ORDER BY id DESC LIMIT ?)`, taskID, taskID, maxTaskLogLinesPerTask)
 	return err
 }
 
@@ -340,22 +368,25 @@ func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
 func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
 	msg := Redact(err.Error())
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if logErr := s.AppendLog(ctx, taskID, "stderr", msg); logErr != nil {
-		return logErr
-	}
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
 	res, updateErr := orm.RawExec(ctx, s.db, `UPDATE tasks SET status=?, error=?, finished_at=? WHERE id=? AND status NOT IN (`+placeholders(len(terminalStatuses))+`)`, append([]any{StatusFailed, msg, now, taskID}, stringArgs(terminalStatuses)...)...)
-	if updateErr == nil {
-		if affected, _ := res.RowsAffected(); affected > 0 {
-			s.unregisterRunningExecutionLocked(taskID)
-			if task, getErr := s.Get(ctx, taskID); getErr == nil {
-				s.invalidateFirstActiveByKey(task.ConcurrencyKey)
-				updateErr = s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError)
-			}
+	if updateErr != nil {
+		return updateErr
+	}
+	affected, _ := res.RowsAffected()
+	if affected == 0 {
+		// 任务已是终态：直接短路，避免在已完成任务的日志流中追加误导性行。
+		return nil
+	}
+	s.unregisterRunningExecutionLocked(taskID)
+	if task, getErr := s.Get(ctx, taskID); getErr == nil {
+		s.invalidateFirstActiveByKey(task.ConcurrencyKey)
+		if eventErr := s.writeTaskEvent(ctx, runtimeevents.EventTaskFailed, task, msg, runtimeevents.SeverityError); eventErr != nil {
+			return eventErr
 		}
 	}
-	return updateErr
+	return s.AppendLog(ctx, taskID, "stderr", msg)
 }
 
 func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error) error {
@@ -597,7 +628,15 @@ func (s *Service) CancelByServer(ctx context.Context, serverID, message string) 
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return 0, nil
+		return 0, err
+	}
+	// 逐任务写 task.cancelled 事件；只对确实被本次批量取消的任务写，
+	// DedupeKey 由 writeTaskEvent 统一生成，重复写入会被 INSERT OR IGNORE 忽略。
+	for _, taskID := range taskIDs {
+		task, getErr := s.Get(ctx, taskID)
+		if getErr == nil && task.Status == StatusCancelled {
+			_ = s.writeTaskEvent(ctx, runtimeevents.EventTaskCancelled, task, message, runtimeevents.SeverityWarning)
+		}
 	}
 	return int(affected), nil
 }
@@ -770,8 +809,12 @@ func (s *Service) list(ctx context.Context, filter ListFilter, columns string) (
 		return ListResult{}, err
 	}
 	rows := []taskRow{}
+	order := []string{"created_at DESC", "id DESC"}
+	if filter.SortOldestFirst {
+		order = []string{"created_at ASC", "id ASC"}
+	}
 	if err := s.taskListQuery(parts).SelectExpr(columns).
-		OrderBy("created_at DESC", "id DESC").Limit(filter.Limit).Offset(filter.Offset).
+		OrderBy(order...).Limit(filter.Limit).Offset(filter.Offset).
 		All(ctx, &rows); err != nil {
 		return ListResult{}, err
 	}
@@ -819,6 +862,13 @@ func (s *Service) taskListWhereParts(filter ListFilter) []taskListCondition {
 	}
 	if filter.OperationID != "" {
 		parts = append(parts, taskListCondition{sql: "operation_id = ?", args: []any{filter.OperationID}})
+	}
+	if q := strings.TrimSpace(filter.Q); q != "" {
+		term := orm.LikeEscaped(q)
+		parts = append(parts, taskListCondition{
+			sql:  "(id LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR type LIKE ? ESCAPE '\\' OR COALESCE(error,'') LIKE ? ESCAPE '\\')",
+			args: []any{term, term, term, term},
+		})
 	}
 	return parts
 }
@@ -1062,8 +1112,8 @@ func (s *Service) ExpireStaleQueued(ctx context.Context, now time.Time, maxAge t
 	finishedAt := now.UTC().Format(time.RFC3339Nano)
 	cutoff := now.UTC().Add(-maxAge).Format(time.RFC3339Nano)
 	message := "Task stayed queued or scheduled past the worker startup timeout and was marked failed; retry the operation if it is still needed"
-	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status IN (?,?) AND created_at<=? AND type IN (` + strings.Join(placeholders, ",") + `)`
-	updateArgs := []any{StatusFailed, message, finishedAt, StatusQueued, StatusScheduled, cutoff}
+	query := `UPDATE tasks SET status=?, stage=CASE WHEN stage='' THEN 'expired' ELSE stage END, error=CASE WHEN error='' THEN ? ELSE error END, next_run_at=NULL, finished_at=? WHERE status IN (?,?) AND created_at<=? AND (next_run_at IS NULL OR next_run_at='' OR next_run_at<=?) AND type IN (` + strings.Join(placeholders, ",") + `)`
+	updateArgs := []any{StatusFailed, message, finishedAt, StatusQueued, StatusScheduled, cutoff, now.UTC().Format(time.RFC3339Nano)}
 	updateArgs = append(updateArgs, args...)
 	res, err := orm.RawExec(ctx, s.db, query, updateArgs...)
 	if err != nil {

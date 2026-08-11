@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"net"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,22 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const maintenanceSessionTTL = 2 * time.Hour
+const (
+	maintenanceSessionTTL = 2 * time.Hour
+
+	// maintenanceMaxSessions caps in-memory maintenance sessions; expired
+	// entries are swept before adding a new one and the oldest session is
+	// evicted if the map is still full.
+	maintenanceMaxSessions = 32
+
+	// Maintenance login rate limiting: after maintenanceLoginMaxAttempts
+	// failed attempts from the same IP within maintenanceLoginWindow, further
+	// attempts are rejected for maintenanceLoginLockout. A successful login
+	// resets the counter for that IP.
+	maintenanceLoginMaxAttempts = 5
+	maintenanceLoginWindow      = 15 * time.Minute
+	maintenanceLoginLockout     = 15 * time.Minute
+)
 
 type maintenanceAuthContext string
 
@@ -36,11 +52,20 @@ type maintenanceAuth struct {
 	sessions     map[string]maintenanceSession
 	context      maintenanceAuthContext
 	now          func() time.Time
+
+	loginMu       sync.Mutex
+	loginFailures map[string]loginFailure
 }
 
 type maintenanceSession struct {
 	username  string
 	expiresAt time.Time
+}
+
+type loginFailure struct {
+	attempts    int
+	windowStart time.Time
+	lockedUntil time.Time
 }
 
 func readMaintenanceCredential(ctx context.Context, appDatabase string) (maintenanceCredential, error) {
@@ -89,11 +114,12 @@ func trustedMaintenanceFallback(credential maintenanceCredential) bool {
 
 func newMaintenanceAuthWithCredential(authContext maintenanceAuthContext, credential maintenanceCredential) *maintenanceAuth {
 	return &maintenanceAuth{
-		username:     credential.Username,
-		passwordHash: credential.PasswordHash,
-		sessions:     make(map[string]maintenanceSession),
-		context:      authContext,
-		now:          func() time.Time { return time.Now().UTC() },
+		username:      credential.Username,
+		passwordHash:  credential.PasswordHash,
+		sessions:      make(map[string]maintenanceSession),
+		context:       authContext,
+		now:           func() time.Time { return time.Now().UTC() },
+		loginFailures: make(map[string]loginFailure),
 	}
 }
 
@@ -113,10 +139,17 @@ func (a *maintenanceAuth) loginAPI(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
+	key := loginClientKey(r)
+	if a.loginBlocked(key) {
+		httpx.Error(w, panelerr.New(http.StatusTooManyRequests, "auth_rate_limited", "Too many failed login attempts; try again later"))
+		return
+	}
 	if req.Username != a.username || bcrypt.CompareHashAndPassword([]byte(a.passwordHash), []byte(req.Password)) != nil {
+		a.recordLoginFailure(key)
 		httpx.Error(w, panelerr.Unauthorized("Authentication failed"))
 		return
 	}
+	a.clearLoginFailures(key)
 	token, err := randomMaintenanceToken(a.context)
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -124,9 +157,88 @@ func (a *maintenanceAuth) loginAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	session := maintenanceSession{username: a.username, expiresAt: a.now().Add(maintenanceSessionTTL)}
 	a.mu.Lock()
+	a.cleanupExpiredSessionsLocked()
+	if len(a.sessions) >= maintenanceMaxSessions {
+		evictOldestSessionLocked(a.sessions)
+	}
 	a.sessions[token] = session
 	a.mu.Unlock()
 	httpx.JSON(w, http.StatusOK, a.sessionPayload(token, session))
+}
+
+func loginClientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return host
+}
+
+func (a *maintenanceAuth) loginBlocked(key string) bool {
+	if key == "" {
+		return false
+	}
+	a.loginMu.Lock()
+	defer a.loginMu.Unlock()
+	failure := a.loginFailures[key]
+	now := a.now()
+	if now.Before(failure.lockedUntil) {
+		return true
+	}
+	if !failure.lockedUntil.IsZero() {
+		delete(a.loginFailures, key)
+	}
+	return false
+}
+
+func (a *maintenanceAuth) recordLoginFailure(key string) {
+	if key == "" {
+		return
+	}
+	a.loginMu.Lock()
+	defer a.loginMu.Unlock()
+	now := a.now()
+	failure := a.loginFailures[key]
+	if failure.windowStart.IsZero() || now.Sub(failure.windowStart) > maintenanceLoginWindow {
+		failure = loginFailure{windowStart: now}
+	}
+	failure.attempts++
+	if failure.attempts >= maintenanceLoginMaxAttempts {
+		failure.lockedUntil = now.Add(maintenanceLoginLockout)
+	}
+	a.loginFailures[key] = failure
+}
+
+func (a *maintenanceAuth) clearLoginFailures(key string) {
+	if key == "" {
+		return
+	}
+	a.loginMu.Lock()
+	delete(a.loginFailures, key)
+	a.loginMu.Unlock()
+}
+
+func (a *maintenanceAuth) cleanupExpiredSessionsLocked() {
+	now := a.now()
+	for token, session := range a.sessions {
+		if !now.Before(session.expiresAt) {
+			delete(a.sessions, token)
+		}
+	}
+}
+
+func evictOldestSessionLocked(sessions map[string]maintenanceSession) {
+	var oldestToken string
+	var oldestExpiry time.Time
+	for token, session := range sessions {
+		if oldestToken == "" || session.expiresAt.Before(oldestExpiry) {
+			oldestToken = token
+			oldestExpiry = session.expiresAt
+		}
+	}
+	if oldestToken != "" {
+		delete(sessions, oldestToken)
+	}
 }
 
 func (a *maintenanceAuth) logoutAPI(w http.ResponseWriter, r *http.Request) {
@@ -172,6 +284,7 @@ func (a *maintenanceAuth) validate(token string) (maintenanceSession, bool) {
 	if !strings.HasPrefix(token, maintenanceTokenPrefix(a.context)) || !a.now().Before(session.expiresAt) {
 		a.mu.Lock()
 		delete(a.sessions, token)
+		a.cleanupExpiredSessionsLocked()
 		a.mu.Unlock()
 		return maintenanceSession{}, false
 	}

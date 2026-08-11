@@ -10,6 +10,7 @@ import (
 
 	agentcontract "panel/internal/agent/contract"
 	agentrpc "panel/internal/agent/rpc"
+	agentsecurity "panel/internal/agent/security"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -90,5 +91,8 @@ func serverTLSConfig(cfg Config) (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    roots,
+		// Node certificates carry ServerAuth+ClientAuth; only the Panel client
+		// certificate (ClientAuth only) may call the agent.
+		VerifyPeerCertificate: agentsecurity.RejectServerAuthClientCertificates,
 	}, nil
 }

@@ -22,6 +22,12 @@
 - 只有同时存在 pending export 且启动参数为 `--maintenance-mode backup_export` 时，Panel 才进入备份导出维护模式；pending 文件本身不能触发维护逻辑。`ExportApp` 启动时只短暂打开 `app.db` 读取管理员用户名和 bcrypt 密码哈希，随后立即关闭连接；维护态登录和会话校验只使用内存中的哈希与 token。若数据库不可读，可回退到 Panel 配置中的管理员验证材料，但绝不开放匿名维护 API。
 - 导出维护页必须先登录。未加密导出在登录后由用户点击开始；加密导出在登录后输入备份密码并开始。真正开始导出后，`ExportApp` 会短暂打开 app/log/metrics SQLite 执行 WAL checkpoint，立即关闭连接，再归档稳定文件。
 - 导出维护页通过 `GET /api/v1/backups/export/current` 展示阶段、进度、开始时间、备份创建时间、是否加密和安全错误摘要；导出完成后通过下载接口取得归档，再通过退出维护接口清理 pending 标记并发送 `normal` 重启信号，让 `panel_init` 回到正常业务服务。
+- 导出退出保护：`DownloadAvailable` 为真但服务端未记录到任何下载请求时，退出接口返回 409 并保留归档与 pending，避免静默销毁唯一副本；下载接口成功响应即视为已确认下载（`downloadedAt` 仅存于服务端，不进入状态响应）。清理临时文件失败时向客户端返回错误并保持维护进程，不静默继续，也不发送重启信号。
+- 维护登录限流：同一来源 IP 连续 5 次登录失败后锁定 15 分钟，成功登录清零；内存会话数量上限 32，校验时会话过期即清理，防止会话表无限增长。
+- 备份加密头解析有长度上限校验：salt/nonce/ciphertext 段受 uint32 前缀与剩余输入字节双重约束，伪造超大 size 直接返回明确错误，不会触发大内存分配；写入端对超过 uint32 范围的段返回错误而不是截断。
+- 备份归档排除 `data/tmp` 下的 `key-assets`、`key-asset-exports`、`restore-pending.previous`（以及既有的 `backups`、`backup-export-pending`、`restore-pending`、`restore-staging`、`maintenance`），避免私钥密文材料被带入未加密备份、旧恢复介质被复活。
+- 启动判定 fail closed：pending 发布目录无法收敛确认且仍存在还原媒体（pending/事务状态/事务媒体）时，强制进入恢复模式，不当作“不存在”正常启动。
+- 正常运行期还原上传限制单次 8 GiB，超限返回 413 明确错误；`pending.json` 导出标记采用临时文件 + rename + fsync 原子写入，避免半写文件被误读。
 - 前端导出归档下载必须使用带 export maintenance token 的 blob 请求，不能用裸 `<a>` 访问下载 URL；导出和还原维护页分别持有独立 token，不能互相复用。
 - 还原上传只做预检和 pending 标记，再通过 `panel_init` 随机本地监听请求下一次子进程以 `--maintenance-mode restore` 启动；不在正常运行期覆盖数据。pending 文件位于 `data/tmp/restore-pending/`。确认恢复时会把当前管理员用户名和 bcrypt 哈希作为 `0600` pending 维护认证快照写入，使恢复进程即使无法读取损坏的 `app.db` 也仍能验证管理员密码；该快照不进入 API 响应或备份归档。
 - 只有同时存在 pending restore 且启动参数为 `--maintenance-mode restore` 时，Panel 才进入恢复模式 HTTP 页面；pending 文件本身不能触发维护逻辑。未加密归档自动执行；加密归档在恢复页要求重新输入密码。恢复页静态入口可公开以承载登录界面，但 restore status 和所有恢复命令必须先取得 restore maintenance token。

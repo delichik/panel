@@ -20,6 +20,9 @@ import (
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 const (
@@ -211,6 +214,10 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 	if serverID == "" {
 		return panelerr.Validation("server_required", "Server is required")
 	}
+	if items == nil {
+		// 上报未携带容器快照（nil）时保留既有观察，绝不把“没有快照”当成“没有容器”清空集合。
+		return nil
+	}
 	if sampleAt.IsZero() {
 		sampleAt = time.Now().UTC()
 	}
@@ -220,6 +227,7 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 		if err := orm.New(tx).From("container_observations").Where("server_id = ?", serverID).Delete(ctx); err != nil {
 			return err
 		}
+		currentManaged := map[string]struct{}{}
 		for _, item := range items {
 			if strings.TrimSpace(item.ID) == "" {
 				continue
@@ -254,11 +262,39 @@ func (s *Service) SaveReportedContainers(ctx context.Context, serverID string, s
 				return err
 			}
 			if managed {
+				currentManaged[instanceID] = struct{}{}
 				if _, err := orm.RawExec(ctx, tx, `INSERT INTO application_reconcile_states(instance_id,application_id,server_id,observed_at)
 					VALUES(?,?,?,?) ON CONFLICT(instance_id) DO UPDATE SET application_id=excluded.application_id,server_id=excluded.server_id,observed_at=excluded.observed_at`,
 					instanceID, appID, serverID, sampleAt.Format(time.RFC3339Nano)); err != nil {
 					return err
 				}
+			}
+		}
+		// 清理已消失实例的 reconcile 状态行，与 applications 侧删除实例时的行为一致。
+		previous, err := orm.Raw(ctx, tx, "SELECT instance_id FROM application_reconcile_states WHERE server_id=?", serverID)
+		if err != nil {
+			return err
+		}
+		var goneInstances []string
+		for previous.Next() {
+			var instanceID string
+			if err := previous.Scan(&instanceID); err != nil {
+				_ = previous.Close()
+				return err
+			}
+			if _, ok := currentManaged[instanceID]; !ok {
+				goneInstances = append(goneInstances, instanceID)
+			}
+		}
+		if err := previous.Err(); err != nil {
+			return err
+		}
+		if err := previous.Close(); err != nil {
+			return err
+		}
+		for _, instanceID := range goneInstances {
+			if err := orm.New(tx).From("application_reconcile_states").Where("instance_id = ?", instanceID).Delete(ctx); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -426,7 +462,8 @@ func (s *Service) Images(ctx context.Context, serverID string) (ImageList, error
 	if refreshedAt == nil {
 		refreshedAt = observedAt
 	}
-	return ImageList{Items: out, ObservedAt: refreshedAt, Stale: refreshedAt == nil, Refreshing: s.isRefreshing(serverID)}, nil
+	refresh := s.resourceRefreshStatus(ctx, serverID, TaskImageRefresh)
+	return ImageList{Items: out, ObservedAt: refreshedAt, Stale: refreshedAt == nil, Refreshing: s.isRefreshing(serverID) || refresh.Refreshing, RefreshTaskID: refresh.RefreshTaskID, LastRefreshError: refresh.LastRefreshError}, nil
 }
 
 func (s *Service) PullImage(ctx context.Context, serverID, reference string) (OperationResult, error) {
@@ -520,16 +557,43 @@ func (s *Service) DeleteUnusedImages(ctx context.Context, serverID string) (Oper
 	return s.refreshOperationResult(ctx, serverID, "images")
 }
 
+// resourceRefreshStatus 从活跃刷新任务推导 refreshing/refreshTaskId，并从最新刷新任务推导 lastRefreshError。
+func (s *Service) resourceRefreshStatus(ctx context.Context, serverID, taskType string) resourceRefreshStatus {
+	if s.tasks == nil {
+		return resourceRefreshStatus{}
+	}
+	var status resourceRefreshStatus
+	if result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, ServerID: serverID, Statuses: []string{tasks.StatusQueued, tasks.StatusRunning}, Limit: 1}); err == nil && len(result.Items) > 0 {
+		status.Refreshing = true
+		status.RefreshTaskID = result.Items[0].ID
+	}
+	if result, err := s.tasks.List(ctx, tasks.ListFilter{Type: taskType, ServerID: serverID, Limit: 1}); err == nil && len(result.Items) > 0 {
+		latest := result.Items[0]
+		if latest.Status == tasks.StatusFailed || latest.Status == tasks.StatusFailedRetryable {
+			status.LastRefreshError = latest.Error
+		}
+	}
+	return status
+}
+
+type resourceRefreshStatus struct {
+	Refreshing       bool
+	RefreshTaskID    string
+	LastRefreshError string
+}
+
 func (s *Service) Networks(ctx context.Context, serverID string) (SnapshotList[agentcontract.DockerNetwork], error) {
 	items := []agentcontract.DockerNetwork{}
 	observedAt, err := s.resourceSnapshot(ctx, serverID, "networks", &items)
-	return SnapshotList[agentcontract.DockerNetwork]{Items: items, ObservedAt: observedAt, Stale: observedAt == nil, Refreshing: s.isRefreshing(serverID)}, err
+	refresh := s.resourceRefreshStatus(ctx, serverID, TaskNetworkRefresh)
+	return SnapshotList[agentcontract.DockerNetwork]{Items: items, ObservedAt: observedAt, Stale: observedAt == nil, Refreshing: refresh.Refreshing, RefreshTaskID: refresh.RefreshTaskID, LastRefreshError: refresh.LastRefreshError}, err
 }
 
 func (s *Service) Volumes(ctx context.Context, serverID string) (SnapshotList[agentcontract.DockerVolume], error) {
 	items := []agentcontract.DockerVolume{}
 	observedAt, err := s.resourceSnapshot(ctx, serverID, "volumes", &items)
-	return SnapshotList[agentcontract.DockerVolume]{Items: items, ObservedAt: observedAt, Stale: observedAt == nil, Refreshing: s.isRefreshing(serverID)}, err
+	refresh := s.resourceRefreshStatus(ctx, serverID, TaskVolumeRefresh)
+	return SnapshotList[agentcontract.DockerVolume]{Items: items, ObservedAt: observedAt, Stale: observedAt == nil, Refreshing: refresh.Refreshing, RefreshTaskID: refresh.RefreshTaskID, LastRefreshError: refresh.LastRefreshError}, err
 }
 
 func (s *Service) DeleteVolume(ctx context.Context, serverID, name string) (OperationResult, error) {
@@ -766,6 +830,7 @@ func (s *Service) CollectApplicationReconcileTasks(ctx context.Context, _ string
 		}
 		containers, _, err := s.reportedContainers(ctx, srv.ID)
 		if err != nil {
+			logging.L().Warn("failed to read reported containers for reconcile scan", zap.String("server_id", srv.ID), zap.Error(err))
 			continue
 		}
 		observed := map[string]agentcontract.DockerContainer{}
@@ -1106,11 +1171,23 @@ func (s *Service) queue(serverID string) *serverQueue {
 func (s *Service) runQueue(q *serverQueue) {
 	for job := range q.jobs {
 		ctx := context.Background()
-		err := job.run(ctx)
+		err := s.runQueueJob(ctx, job)
 		if job.result != nil {
 			job.result <- err
 		}
 	}
+}
+
+// runQueueJob 单个 job 的 panic 不应带走整条队列：记录日志并将该
+// job 以错误结束，后续 job 继续处理。
+func (s *Service) runQueueJob(ctx context.Context, job queueJob) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			logging.L().Error("container queue job panicked", zap.Any("panic", recovered), zap.Stack("stack"))
+			err = fmt.Errorf("container queue job panicked: %v", recovered)
+		}
+	}()
+	return job.run(ctx)
 }
 
 func (s *Service) refreshOperationResult(ctx context.Context, serverID, resource string) (OperationResult, error) {
@@ -1396,11 +1473,17 @@ func managedLabels(labels map[string]string) (string, string, bool) {
 }
 
 func firstTaggedReference(tags []string) string {
+	candidates := make([]string, 0, len(tags))
 	for _, tag := range tags {
 		tag = strings.TrimSpace(tag)
 		if tag != "" && tag != "<none>:<none>" {
-			return tag
+			candidates = append(candidates, tag)
 		}
+	}
+	// 多 tag 时先规范化排序再取，避免随机取到第一个。
+	sort.Strings(candidates)
+	if len(candidates) > 0 {
+		return candidates[0]
 	}
 	return ""
 }

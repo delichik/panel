@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	httpx "panel/internal/platform/http"
 )
@@ -53,6 +54,21 @@ func (fakeDeploymentProvider) DecorateDeploymentTasks(ctx context.Context, items
 	return nil
 }
 
+// waitForRunnerTask 轮询等待异步分发的 RunNow 被 runner 接收（RunNow/Retry
+// 改为异步执行后，runner 调用发生在响应返回之后）。
+func waitForRunnerTask(t *testing.T, runner *recordingRunner, wantID string) Task {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if runner.task.ID != "" && (wantID == "" || runner.task.ID == wantID) {
+			return runner.task
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("runner did not receive task (want id %q)", wantID)
+	return Task{}
+}
+
 func serveTaskRoute(handler *Handler, method, target string) *httptest.ResponseRecorder {
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux, func(next http.Handler) http.Handler { return next })
@@ -76,9 +92,7 @@ func TestHandlerRunNowDispatchesQueuedTask(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected %d, got %d", http.StatusAccepted, rec.Code)
 	}
-	if runner.task.ID != task.ID {
-		t.Fatalf("expected runner to receive task %s, got %#v", task.ID, runner.task)
-	}
+	waitForRunnerTask(t, runner, task.ID)
 	if runner.task.Status != StatusQueued {
 		t.Fatalf("expected queued task, got %#v", runner.task)
 	}
@@ -136,8 +150,9 @@ func TestHandlerRetryDispatchesRunnableFailedTask(t *testing.T) {
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected retry to be accepted, got %d", rec.Code)
 	}
-	if runner.task.ID == "" || runner.task.ID == task.ID || runner.task.TriggerTaskID != task.ID {
-		t.Fatalf("expected runner to receive retry task, got %#v", runner.task)
+	retried := waitForRunnerTask(t, &runner.recordingRunner, "")
+	if retried.ID == "" || retried.ID == task.ID || retried.TriggerTaskID != task.ID {
+		t.Fatalf("expected runner to receive retry task, got %#v", retried)
 	}
 }
 

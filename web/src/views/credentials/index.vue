@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { Cable, KeyRound, Plus, RefreshCcw, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi } from '@/api/servers';
@@ -24,16 +25,19 @@ import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { secretPayload, validateCredentialInput } from './model';
 
 const { t } = useI18n();
+const route = useRoute();
+const router = useRouter();
 const notifyError = useErrorToast();
 const notifySuccess = useSuccessToast();
 
 const credentials = ref<CredentialDto[]>([]);
 const servers = ref<ServerDto[]>([]);
-const selectedId = ref('');
+const selectedId = ref(String(route.query.credential ?? ''));
 const credentialDetail = ref<CredentialDetailDto | null>(null);
 const detailLoading = ref(false);
-const search = ref('');
-const page = ref(1);
+const detailError = ref('');
+const search = ref(String(route.query.search ?? ''));
+const page = ref(Math.max(1, Number(route.query.page ?? 1) || 1));
 const pageSize = 50;
 const total = ref(0);
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
@@ -45,6 +49,8 @@ const dialogOpen = ref(false);
 const confirmOpen = ref(false);
 const saving = ref(false);
 const testing = ref(false);
+const testOpen = ref(false);
+const testTargetId = ref('');
 const editing = ref<CredentialDto | null>(null);
 const deleteTarget = ref<CredentialDto | null>(null);
 
@@ -60,7 +66,8 @@ const form = reactive<CredentialInput>({
 const selectedCredential = computed(() => credentials.value.find((item) => item.id === selectedId.value) ?? null);
 const references = computed(() => selectedCredential.value ? credentialReferences(selectedCredential.value.id, servers.value) : []);
 const deleteReferences = computed(() => deleteTarget.value ? credentialReferences(deleteTarget.value.id, servers.value) : []);
-const validation = computed(() => validateCredentialInput(form, Boolean(editing.value)));
+const typeChanged = computed(() => Boolean(editing.value && editing.value.type !== form.type));
+const validation = computed(() => validateCredentialInput(form, Boolean(editing.value), typeChanged.value));
 const privateKeyModel = computed({
   get: () => form.privateKey ?? '',
   set: (value: string) => { form.privateKey = value; },
@@ -114,14 +121,22 @@ async function loadDetail(id: string) {
   if (!id) {
     credentialDetail.value = null;
     detailLoading.value = false;
+    detailError.value = '';
     return;
   }
   detailLoading.value = true;
+  detailError.value = '';
   try {
     const detail = await credentialsApi.get(id);
-    if (selectedId.value === id) credentialDetail.value = detail;
-  } catch {
-    if (selectedId.value === id) credentialDetail.value = null;
+    if (selectedId.value === id) {
+      credentialDetail.value = detail;
+      detailError.value = '';
+    }
+  } catch (err) {
+    if (selectedId.value === id) {
+      credentialDetail.value = null;
+      detailError.value = err instanceof Error ? err.message : t('credentialsPage.loadFailed');
+    }
   } finally {
     if (selectedId.value === id) detailLoading.value = false;
   }
@@ -140,6 +155,14 @@ function openEdit(credential: CredentialDto) {
   actionError.value = '';
   dialogOpen.value = true;
 }
+
+watch(() => form.type, (next, previous) => {
+  if (dialogOpen.value && editing.value && next !== previous) {
+    form.password = '';
+    form.privateKey = '';
+    form.passphrase = '';
+  }
+});
 
 async function saveCredential() {
   if (Object.keys(validation.value).length) return;
@@ -180,13 +203,23 @@ async function deleteCredential() {
   }
 }
 
-async function testCredential(credential: CredentialDto) {
-  const ref = credentialReferences(credential.id, servers.value)[0];
-  if (!ref) return;
+function openTest(credential: CredentialDto) {
+  const refs = credentialReferences(credential.id, servers.value);
+  if (!refs.length) return;
+  testTargetId.value = refs[0].id;
+  testOpen.value = true;
+  actionError.value = '';
+}
+
+async function testCredential(credential: CredentialDto, serverId: string) {
+  if (!serverId) return;
   testing.value = true;
   actionError.value = '';
   try {
+    const ref = credentialReferences(credential.id, servers.value).find((item) => item.id === serverId);
+    if (!ref) return;
     await serversApi.test(ref.id);
+    testOpen.value = false;
     notifySuccess(t('credentialsPage.testSucceeded', { name: ref.name }));
   } catch (err) {
     actionError.value = err instanceof Error ? err.message : t('credentialsPage.testFailed');
@@ -200,9 +233,19 @@ function typeTone(type: CredentialType) {
   return type === 'private_key' ? 'info' : 'warning';
 }
 
-watch(search, () => { if (searchTimer) clearTimeout(searchTimer); searchTimer = setTimeout(() => { if (page.value !== 1) page.value = 1; else void load(); }, 250); });
-watch(page, () => { void load(); });
-watch(selectedId, (id) => { void loadDetail(id); });
+watch(search, () => {
+  void router.replace({ query: { ...route.query, search: search.value || undefined } });
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { if (page.value !== 1) page.value = 1; else void load(); }, 250);
+});
+watch(page, () => {
+  void router.replace({ query: { ...route.query, page: page.value > 1 ? page.value : undefined } });
+  void load();
+});
+watch(selectedId, (id) => {
+  void router.replace({ query: { ...route.query, credential: id || undefined } });
+  void loadDetail(id);
+});
 onMounted(load);
 onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
 </script>
@@ -265,7 +308,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
               <p class="m-0 mt-1 text-sm text-muted-foreground">{{ selectedCredential.username }}</p>
             </div>
             <div class="flex flex-wrap justify-end gap-2">
-              <Button size="sm" :disabled="references.length === 0" :loading="testing" @click="testCredential(selectedCredential)"><Cable />{{ t('credentialsPage.test') }}</Button>
+              <Button size="sm" :disabled="references.length === 0" @click="openTest(selectedCredential)"><Cable />{{ t('credentialsPage.test') }}</Button>
               <Button size="sm" @click="openEdit(selectedCredential)"><Wrench />{{ t('common.edit') }}</Button>
               <Button size="sm" variant="danger" @click="confirmDelete(selectedCredential)"><Trash2 />{{ t('common.delete') }}</Button>
             </div>
@@ -278,6 +321,11 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
                 <div v-if="detailLoading" class="mt-4 grid gap-2">
                   <Skeleton v-for="item in 3" :key="item" class="h-10" />
                 </div>
+                <EmptyState v-else-if="detailError" :title="t('common.loadFailed')" :description="detailError">
+                  <template #actions>
+                    <Button size="sm" :loading="detailLoading" @click="loadDetail(selectedId)"><RefreshCcw />{{ t('common.retry') }}</Button>
+                  </template>
+                </EmptyState>
                 <div v-else-if="selectedCredential.type === 'private_key' && credentialDetail?.keySummary" class="mt-4 grid gap-2 text-sm">
                   <div class="flex items-center justify-between gap-3 rounded-xl border border-border p-3">
                     <span class="text-muted-foreground">{{ t('credentialsPage.keyName') }}</span>
@@ -321,10 +369,12 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           {{ t('credentialsPage.password') }}
           <Input v-model="form.password" type="password" :placeholder="editing ? t('credentialsPage.leaveSecretBlank') : ''" :invalid="Boolean(validation.password)" />
         </label>
-        <div v-if="editing" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('credentialsPage.blankSecretKeepsCurrent') }}</div>
+        <div v-if="editing && typeChanged" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('credentialsPage.typeChangedRequiresSecret') }}</div>
+        <div v-else-if="editing" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('credentialsPage.blankSecretKeepsCurrent') }}</div>
         <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
           {{ t(Object.values(validation)[0] || 'credentialsPage.validationGeneric') }}
         </div>
+        <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
       </div>
       <div v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] gap-3">
         <div class="grid gap-3 md:grid-cols-2">
@@ -338,13 +388,29 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           <CodeEditor v-model="privateKeyModel" language="plain" :editor-label="t('credentialsPage.privateKey')" :invalid="Boolean(validation.privateKey)" />
         </label>
         <div class="grid gap-2">
-          <div v-if="editing" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('credentialsPage.blankSecretKeepsCurrent') }}</div>
+          <div v-if="editing && typeChanged" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('credentialsPage.typeChangedRequiresSecret') }}</div>
+          <div v-else-if="editing" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('credentialsPage.blankSecretKeepsCurrent') }}</div>
           <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(Object.values(validation)[0] || 'credentialsPage.validationGeneric') }}</div>
+          <div v-if="actionError" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
         </div>
       </div>
       <template #footer>
         <Button variant="secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</Button>
         <Button variant="primary" :loading="saving" :disabled="Boolean(Object.keys(validation).length)" @click="saveCredential">{{ editing ? t('common.save') : t('common.create') }}</Button>
+      </template>
+    </Dialog>
+
+    <Dialog v-model:open="testOpen" :title="t('credentialsPage.test')" :description="selectedCredential ? t('credentialsPage.testDescription', { name: selectedCredential.name }) : ''" :close-label="t('common.close')">
+      <div class="grid gap-2">
+        <p class="m-0 text-sm text-muted-foreground">{{ t('credentialsPage.testTargetHint') }}</p>
+        <button v-for="ref in references" :key="ref.id" type="button" class="grid gap-1 rounded-xl border border-border p-3 text-left hover:bg-accent" :class="testTargetId === ref.id ? 'border-border-strong bg-card' : ''" @click="testTargetId = ref.id">
+          <strong class="truncate text-sm text-foreground">{{ ref.name }}</strong>
+          <span class="text-xs text-muted-foreground">{{ ref.host }}</span>
+        </button>
+      </div>
+      <template #footer>
+        <Button variant="secondary" @click="testOpen = false">{{ t('common.cancel') }}</Button>
+        <Button variant="primary" :disabled="!testTargetId" :loading="testing" @click="selectedCredential && testCredential(selectedCredential, testTargetId)"><Cable />{{ t('credentialsPage.test') }}</Button>
       </template>
     </Dialog>
 

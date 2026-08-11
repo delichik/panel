@@ -66,7 +66,8 @@ func (r *PeriodicRunner) Wait() {
 func (r *PeriodicRunner) loop(ctx context.Context, def Definition) {
 	ticker := time.NewTicker(def.Periodic.Interval)
 	defer ticker.Stop()
-	r.run(ctx, def)
+	// 首 tick 前不立即执行，避免 Panel 重启瞬间所有周期任务同时触发（惊群）；
+	// 各周期类型首个执行统一推迟到第一个 interval 之后。
 	for {
 		select {
 		case <-ctx.Done():

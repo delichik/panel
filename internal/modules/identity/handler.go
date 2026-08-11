@@ -1,7 +1,9 @@
 package auth
 
 import (
+	"net"
 	"net/http"
+	"strings"
 
 	"panel/internal/platform/http"
 )
@@ -24,7 +26,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if !httpx.Decode(w, r, &req) {
 		return
 	}
-	sess, err := h.service.Login(r.Context(), req.Username, req.Password)
+	sess, err := h.service.LoginFrom(r.Context(), req.Username, req.Password, clientIP(r))
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -80,6 +82,14 @@ func (h *Handler) UpdateJWTSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, sessionPayload(sess, true))
+}
+
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err != nil || host == "" {
+		return strings.TrimSpace(r.RemoteAddr)
+	}
+	return host
 }
 
 func bearerToken(r *http.Request) string {

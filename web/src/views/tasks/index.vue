@@ -44,32 +44,49 @@ const detailLoading = ref(false);
 const polling = ref(true);
 const error = ref('');
 const actionError = ref('');
+const detailFailed = ref(false);
 const pending = ref('');
 let timer: number | undefined;
 let listInFlight = false;
 const listRequests = createLatestRequestGuard();
 const detailRequests = createLatestRequestGuard();
 
-const groups = computed(() => {
-  const term = search.value.trim().toLowerCase();
-  return groupTasksByOperation(tasks.value).filter((group) => {
-    const statusOk = statusFilter.value === 'all' || group.status === statusFilter.value || group.tasks.some((task) => task.status === statusFilter.value);
-    const searchOk = !term || [group.operationId, group.type, group.title, ...group.tasks.map((task) => `${task.id} ${task.summary} ${task.error}`)].some((value) => value.toLowerCase().includes(term));
-    return statusOk && searchOk;
-  });
-});
+const groups = computed(() => groupTasksByOperation(tasks.value).filter((group) => {
+  const statusOk = statusFilter.value === 'all' || group.status === statusFilter.value || group.tasks.some((task) => task.status === statusFilter.value);
+  return statusOk;
+}));
 const selectedGroup = computed<TaskOperationGroup | null>(() => groups.value.find((item) => item.operationId === selectedOperationId.value) ?? groups.value[0] ?? null);
 const selectedTask = computed(() => selectedGroup.value?.tasks.find((task) => task.id === selectedTaskId.value) ?? selectedGroup.value?.tasks[0] ?? null);
+function taskStatusLabel(status: string) {
+  return t(`tasksPage.status.${status}`);
+}
+
 const statusOptions = computed(() => [
   { label: t('tasksPage.filter.all'), value: 'all' },
   { label: t('tasksPage.status.running'), value: 'running' },
   { label: t('tasksPage.status.queued'), value: 'queued' },
+  { label: t('tasksPage.status.scheduled'), value: 'scheduled' },
   { label: t('tasksPage.status.failed'), value: 'failed' },
+  { label: t('tasksPage.status.failed_retryable'), value: 'failed_retryable' },
+  { label: t('tasksPage.status.blocked'), value: 'blocked' },
+  { label: t('tasksPage.status.cancelled'), value: 'cancelled' },
   { label: t('tasksPage.status.completed'), value: 'completed' },
 ]);
 
 watch([statusFilter, search, page, selectedOperationId, selectedTaskId], () => {
   void router.replace({ query: { ...route.query, status: statusFilter.value === 'all' ? undefined : statusFilter.value, search: search.value || undefined, page: page.value > 1 ? page.value : undefined, operation: selectedOperationId.value || undefined, task: selectedTaskId.value || undefined } });
+});
+
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+watch(search, () => {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    if (page.value !== 1) {
+      page.value = 1;
+      return;
+    }
+    void load();
+  }, 250);
 });
 
 watch(statusFilter, async () => {
@@ -100,6 +117,7 @@ watch(() => selectedTask.value?.id, async (taskId) => {
   logs.value = [];
   logCursor.value = 0;
   actionError.value = '';
+  detailFailed.value = false;
   if (taskId) await loadDetail(taskId, true);
 });
 
@@ -111,7 +129,7 @@ async function load(silent = false) {
   if (!silent) loading.value = true;
   error.value = '';
   try {
-    const result = await tasksApi.list({ operationPage: true, status: statusFilter.value === 'all' ? undefined : statusFilter.value, page: page.value, pageSize });
+    const result = await tasksApi.list({ operationPage: true, status: statusFilter.value === 'all' ? undefined : statusFilter.value, page: page.value, pageSize, q: search.value.trim() || undefined });
     if (!listRequests.isCurrent(requestId)) return;
     tasks.value = result.items;
     totalTasks.value = result.total;
@@ -141,6 +159,7 @@ async function loadDetail(taskId: string, resetLogs = false) {
   }
   detailLoading.value = true;
   actionError.value = '';
+  detailFailed.value = false;
   try {
     const [nextSteps, nextLogs] = await Promise.all([tasksApi.steps(taskId), tasksApi.logs(taskId, cursor)]);
     if (!detailRequests.isCurrent(requestId) || selectedTask.value?.id !== taskId) return;
@@ -149,6 +168,7 @@ async function loadDetail(taskId: string, resetLogs = false) {
     logCursor.value = nextLogs.nextCursor;
   } catch (err) {
     if (!detailRequests.isCurrent(requestId) || selectedTask.value?.id !== taskId) return;
+    detailFailed.value = true;
     actionError.value = err instanceof Error ? err.message : t('tasksPage.detailLoadFailed');
     notifyError(err instanceof Error ? err.message : t('tasksPage.detailLoadFailed'));
   } finally {
@@ -183,6 +203,7 @@ onMounted(async () => {
   startPolling();
 });
 onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
   window.clearInterval(timer);
   listRequests.invalidate();
   detailRequests.invalidate();
@@ -248,7 +269,7 @@ onBeforeUnmount(() => {
             <section class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
               <h3 class="m-0 mb-3 flex min-w-0 items-center gap-2 text-sm font-semibold"><ListFilter class="size-4 shrink-0" /><span class="min-w-0 truncate">{{ t('tasksPage.executionItems') }}</span></h3>
               <button v-for="task in selectedGroup.tasks" :key="task.id" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-1 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedTaskId === task.id ? 'border-border-strong bg-card' : 'border-border'" :aria-current="selectedTaskId === task.id ? 'true' : undefined" @click="selectedTaskId = task.id">
-                <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ task.summary }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" /></div>
+                <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ task.summary }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" :label="taskStatusLabel(task.status)" /></div>
                 <span class="min-w-0 truncate text-xs text-muted-foreground">{{ task.type }}</span>
               </button>
             </section>
@@ -258,6 +279,13 @@ onBeforeUnmount(() => {
                   <div v-if="detailLoading && !steps.length" class="relative grid min-h-48 place-items-center">
                     <LoadingOverlay :label="t('tasksPage.loadingDetail')" />
                   </div>
+                  <template v-else-if="detailFailed">
+                    <EmptyState :title="t('common.loadFailed')" :description="actionError || t('tasksPage.detailLoadFailed')">
+                      <template #actions>
+                        <Button size="sm" :loading="detailLoading" @click="selectedTask && loadDetail(selectedTask.id, true)"><RefreshCcw />{{ t('common.retry') }}</Button>
+                      </template>
+                    </EmptyState>
+                  </template>
                   <template v-else>
                     <div v-for="step in steps" :key="step.id" class="motion-reveal mb-2 grid min-w-0 gap-2 overflow-hidden rounded-xl border border-border p-3 text-sm">
                       <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ step.step }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="step.status" domain="task" /></div>
@@ -268,7 +296,12 @@ onBeforeUnmount(() => {
                   </template>
                 </div>
                 <div v-else-if="tab === 'logs'" class="relative h-full min-h-[420px] min-w-0">
-                  <pre class="h-full min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-xl border border-border bg-card p-3 text-xs [overflow-wrap:anywhere]">{{ logs.map((line) => `[${line.stream}] ${line.line}`).join('\n') || t('tasksPage.noLogs') }}</pre>
+                  <EmptyState v-if="detailFailed && !logs.length" :title="t('common.loadFailed')" :description="actionError || t('tasksPage.detailLoadFailed')">
+                    <template #actions>
+                      <Button size="sm" :loading="detailLoading" @click="selectedTask && loadDetail(selectedTask.id, true)"><RefreshCcw />{{ t('common.retry') }}</Button>
+                    </template>
+                  </EmptyState>
+                  <pre v-else class="h-full min-w-0 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words rounded-xl border border-border bg-card p-3 text-xs [overflow-wrap:anywhere]">{{ logs.map((line) => `[${line.stream}] ${line.line}`).join('\n') || t('tasksPage.noLogs') }}</pre>
                   <LoadingOverlay v-if="detailLoading && !logs.length" :label="t('tasksPage.loadingDetail')" />
                 </div>
                 <div v-else class="min-w-0 break-words rounded-xl border p-4 text-sm [overflow-wrap:anywhere]" :class="selectedTask?.error ? 'border-danger-border bg-danger-bg text-danger' : 'border-border text-muted-foreground'">{{ selectedTask?.error || t('tasksPage.noError') }}</div>

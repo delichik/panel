@@ -29,7 +29,7 @@ export interface Fail2BanState {
   panelConfigPresent: boolean;
   jails: string[];
   raw: string;
-  configYaml: string;
+  configYaml?: string;
   config: Fail2BanConfig;
   updatedAt?: string | null;
 }

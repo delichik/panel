@@ -72,7 +72,37 @@ func writePendingExport(dataRoot string, marker pendingExport) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "pending.json"), raw, 0600)
+	target := filepath.Join(dir, "pending.json")
+	tmp, err := os.CreateTemp(dir, ".pending.json.tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() {
+		if tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(raw); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, target); err != nil {
+		return err
+	}
+	tmpPath = ""
+	return syncDirectory(dir)
 }
 
 func readPendingExport(dataRoot string) (pendingExport, error) {

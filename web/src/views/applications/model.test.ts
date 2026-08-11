@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  applicationDraftWarnings,
   applicationStatus,
   applyYamlToDraft,
   cloneFacilityDomains,
@@ -17,6 +18,7 @@ import {
   statusTone,
   syncDraftToYaml,
   validateApplicationDraft,
+  validateFileName,
   validateFacilityDraft,
   validateFacilityDomainFields,
   validateFacilityPathFields,
@@ -100,6 +102,61 @@ describe('application editor model', () => {
     draft.deploymentServers = [];
     expect(diffApplications(app, draft).changed).toBe(1);
   });
+
+  it('preserves uncovered spec fields like capAdd through structured edits', () => {
+    const withCap = {
+      ...app,
+      specYaml: 'name: api\nimage: nginx\ncapAdd:\n  - NET_ADMIN\n  - SYS_PTRACE\nresources:\n  memoryMb: 256\n  limits:\n    cpus: "1.5"\n',
+    };
+    const draft = draftFromApplication(withCap);
+    draft.image = 'nginx:2';
+
+    const yaml = specYamlFromDraft(draft);
+    expect(yaml).toContain('NET_ADMIN');
+    expect(yaml).toContain('SYS_PTRACE');
+    expect(yaml).toContain('memoryMb: 256');
+    expect(yaml).toContain('cpus:');
+    expect(yaml).toContain('1.5');
+    expect(yaml).toContain('image: nginx:2');
+
+    const input = saveInputFromDraft(draft);
+    expect(input.specYaml).toContain('NET_ADMIN');
+    expect(input.specYaml).toContain('SYS_PTRACE');
+  });
+
+  it('reports no pending changes when uncovered spec fields are preserved', () => {
+    const withCap = { ...app, specYaml: 'name: api\nimage: nginx\ncapAdd:\n  - NET_ADMIN\n' };
+    const draft = draftFromApplication(withCap);
+    expect(diffApplications(withCap, draft)).toEqual({ added: 0, changed: 0, removed: 0, warnings: 0 });
+  });
+
+  it('reports staged YAML as a warning instead of a blocking error', () => {
+    const draft = draftFromApplication(app);
+    draft.specYaml = 'name: api\nimage: redis:7\n';
+    draft.yamlDirty = true;
+
+    expect(validateApplicationDraft(draft)).toEqual({});
+    expect(applicationDraftWarnings(draft)).toEqual({ specYaml: 'applicationsPage.validationSourceStaged' });
+  });
+
+  it('rejects non-numeric CPU and memory values', () => {
+    const draft = draftFromApplication(app);
+    draft.cpu = 'fast';
+    draft.memoryMb = 'lots';
+    const errors = validateApplicationDraft(draft);
+    expect(errors.cpu).toBe('applicationsPage.validationNumber');
+    expect(errors.memoryMb).toBe('applicationsPage.validationNumber');
+  });
+
+  it('validates application file names like the backend', () => {
+    expect(validateFileName('config.yaml')).toBeNull();
+    expect(validateFileName('../secret')).toBe('applicationsPage.validationFileName');
+    expect(validateFileName('a/b')).toBe('applicationsPage.validationFileName');
+    expect(validateFileName('a\\b')).toBe('applicationsPage.validationFileName');
+    expect(validateFileName('bad\u0000name')).toBe('applicationsPage.validationFileName');
+    expect(validateFileName('')).toBe('applicationsPage.validationFileName');
+  });
+
   it('starts create drafts blank without sample defaults', () => {
     const draft = draftFromApplication();
     expect(draft.name).toBe('');

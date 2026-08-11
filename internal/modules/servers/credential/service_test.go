@@ -255,3 +255,72 @@ func TestCredentialDetailPasswordHasNoKeySummary(t *testing.T) {
 		t.Fatalf("password credential should not carry a key summary: %#v", detail.KeySummary)
 	}
 }
+
+func TestUpdatePrivateKeyCredentialKeepsPassphraseWhenKeyBlank(t *testing.T) {
+	svc, _ := newCredentialService(t)
+	cred, err := svc.Create(context.Background(), CreateRequest{
+		Name: "prod", Type: TypePrivateKey, Username: "root",
+		PrivateKey: "old-private-key", Passphrase: "old-passphrase",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Editing metadata without supplying a new private key must preserve both
+	// the key and its passphrase.
+	updated, err := svc.Update(context.Background(), cred.ID, UpdateRequest{
+		Name: "prod2", Type: TypePrivateKey, Username: "deploy",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Name != "prod2" || updated.Username != "deploy" {
+		t.Fatalf("unexpected updated credential: %#v", updated)
+	}
+	resolved, err := svc.Resolve(context.Background(), cred.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(resolved.PrivateKey) != "old-private-key" || resolved.Passphrase != "old-passphrase" {
+		t.Fatalf("blank private key update overwrote secrets: %#v", resolved)
+	}
+
+	// Supplying a new private key is the only way to change the passphrase.
+	if _, err := svc.Update(context.Background(), cred.ID, UpdateRequest{
+		Name: "prod2", Type: TypePrivateKey, Username: "deploy",
+		PrivateKey: "new-private-key", Passphrase: "new-passphrase",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = svc.Resolve(context.Background(), cred.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(resolved.PrivateKey) != "new-private-key" || resolved.Passphrase != "new-passphrase" {
+		t.Fatalf("new private key update did not overwrite secrets: %#v", resolved)
+	}
+}
+
+func TestCredentialDetailOmitsKeySummaryWhenDecryptFails(t *testing.T) {
+	svc, store := newCredentialService(t)
+	cred, err := svc.Create(context.Background(), CreateRequest{
+		Name: "prod", Type: TypePrivateKey, Username: "root", PrivateKey: "some-key",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`UPDATE credentials SET secret_ciphertext='corrupt' WHERE id=?`, cred.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	detail, err := svc.GetWithSummary(context.Background(), cred.ID)
+	if err != nil {
+		t.Fatalf("expected metadata to still be returned when decrypt fails: %v", err)
+	}
+	if detail.ID != cred.ID || detail.Name != "prod" || detail.Username != "root" {
+		t.Fatalf("unexpected credential detail: %#v", detail)
+	}
+	if detail.KeySummary != nil {
+		t.Fatalf("expected key summary to be omitted, got %#v", detail.KeySummary)
+	}
+}

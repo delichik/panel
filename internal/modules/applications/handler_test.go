@@ -61,7 +61,7 @@ func serveTestRoute(handler *Handler, method, target string, body *bytes.Buffer)
 }
 
 func TestHandlerApplicationFiles(t *testing.T) {
-	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", ApplicationID: "app-1", Name: "config/app.conf", Kind: "template"}}}
+	fake := &fakeApplicationService{files: []ApplicationFile{{ID: "file-1", ApplicationID: "app-1", Name: "config-app.conf", Kind: "template"}}}
 	handler := NewHandler(fake)
 
 	rec := serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/files", nil)
@@ -204,8 +204,8 @@ func TestHandlerRuntimeAndLogs(t *testing.T) {
 		t.Fatalf("runtime status=%d id=%q body=%s", rec.Code, fake.runtimeID, rec.Body.String())
 	}
 
-	rec = serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/logs?instanceId=inst-1&containerName=web&tail=20", nil)
-	if rec.Code != http.StatusOK || fake.logID != "app-1" || fake.logInput.InstanceID != "inst-1" || fake.logInput.ContainerName != "web" || fake.logInput.Tail != 20 {
+	rec = serveTestRoute(handler, http.MethodGet, "/api/v1/applications/app-1/logs?instanceId=inst-1&tail=20", nil)
+	if rec.Code != http.StatusOK || fake.logID != "app-1" || fake.logInput.InstanceID != "inst-1" || fake.logInput.Tail != 20 {
 		t.Fatalf("logs status=%d id=%q input=%#v body=%s", rec.Code, fake.logID, fake.logInput, rec.Body.String())
 	}
 }
@@ -237,7 +237,6 @@ type fakeApplicationService struct {
 	restoredPersistentContent []byte
 	session                   SaveSessionResult
 	sessionID                 string
-	checkedID                 string
 	updatedImageID            string
 	records                   OperationRecordListResult
 	recordDetail              OperationRecordDetail
@@ -357,11 +356,6 @@ func (f *fakeApplicationService) Validate(ctx context.Context, id string) (Valid
 
 func (f *fakeApplicationService) Plan(ctx context.Context, id string) (PlanResult, error) {
 	return PlanResult{}, nil
-}
-
-func (f *fakeApplicationService) CheckImageUpdate(ctx context.Context, id string) (Application, error) {
-	f.checkedID = id
-	return f.app, nil
 }
 
 func (f *fakeApplicationService) UpdateImage(ctx context.Context, id string) (OperationResult, error) {

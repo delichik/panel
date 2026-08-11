@@ -178,7 +178,7 @@ func (h *Handler) DockerContainerAction(ctx context.Context, req *agentpb.Docker
 	case "restart":
 		err = h.runtime.ContainerRestart(ctx, req.Id)
 	default:
-		return nil, status.Error(codes.NotFound, "not found")
+		return nil, status.Error(codes.InvalidArgument, "unsupported container action")
 	}
 	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }

@@ -86,6 +86,21 @@ type migRebuildV2 struct {
 
 func (migRebuildV2) TableName() string { return "mig_rebuild" }
 
+type migRebuildTxV1 struct {
+	ID   string `orm:"primary_key"`
+	Name string `orm:"not_null"`
+}
+
+func (migRebuildTxV1) TableName() string { return "mig_rebuild_tx" }
+
+type migRebuildTxV2 struct {
+	ID   string `orm:"primary_key"`
+	Name string `orm:"not_null"`
+	Code string `orm:"unique"`
+}
+
+func (migRebuildTxV2) TableName() string { return "mig_rebuild_tx" }
+
 type migDropV1 struct {
 	ID   string `orm:"primary_key"`
 	Name string `orm:"not_null"`
@@ -414,6 +429,37 @@ func TestMigrateRebuildForUniqueColumn(t *testing.T) {
 	}
 }
 
+func TestMigrateRebuildDropsStaleTempTableAndCommits(t *testing.T) {
+	db := openTestDB(t)
+	if err := Register(&migRebuildTxV1{}); err != nil {
+		t.Fatal(err)
+	}
+	runMigrate(t, db, true)
+	if _, err := db.Exec(`INSERT INTO mig_rebuild_tx (id, name) VALUES (?, ?)`, "r1", "keep"); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crashed previous rebuild that left its temp table behind.
+	if _, err := db.Exec(`CREATE TABLE "__orm_rebuild_mig_rebuild_tx" (id TEXT PRIMARY KEY)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := Register(&migRebuildTxV2{}); err != nil {
+		t.Fatal(err)
+	}
+	r := runMigrate(t, db, true)
+	if !contains(r.RebuiltTables, "mig_rebuild_tx") {
+		t.Fatalf("RebuiltTables = %v", r.RebuiltTables)
+	}
+	if tableExists(t, db, "__orm_rebuild_mig_rebuild_tx") {
+		t.Fatal("stale rebuild temp table should be dropped")
+	}
+	var name string
+	if err := db.QueryRow(`SELECT name FROM mig_rebuild_tx WHERE id = ?`, "r1").Scan(&name); err != nil {
+		t.Fatal(err)
+	}
+	if name != "keep" {
+		t.Fatalf("data lost after rebuild: %q", name)
+	}
+}
 func TestMigrateDropColumn(t *testing.T) {
 	db := openTestDB(t)
 	if err := Register(&migDropV1{}); err != nil {

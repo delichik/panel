@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -335,4 +336,138 @@ func waitForPackageRefresh(t *testing.T, svc *Service, serverID string) {
 
 func registerPackageTestTasks(taskSvc *tasks.Service, svc *Service) {
 	svc.RegisterTasks(taskSvc, func() time.Duration { return time.Second })
+}
+
+type blockingUpgradeAdapter struct {
+	fakePackageAdapter
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingUpgradeAdapter) UpgradeAll(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target, sink linux.LogSink) error {
+	b.once.Do(func() { close(b.entered) })
+	<-b.release
+	return nil
+}
+
+func waitForTaskStatus(t *testing.T, taskSvc *tasks.Service, taskID, status string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		got, err := taskSvc.Get(context.Background(), taskID)
+		if err == nil && got.Status == status {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	got, _ := taskSvc.Get(context.Background(), taskID)
+	t.Fatalf("task %s did not reach status %s, got %#v", taskID, status, got)
+}
+
+// TestUpgradeMaintenanceMutexBlocksConcurrentUpgrade 验证升级使用 per-server
+// 维护互斥：第一个升级进行中时，第二个升级任务必须失败而不是并发执行。
+func TestUpgradeMaintenanceMutexBlocksConcurrentUpgrade(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.LogDB())
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	registerPackageTestTasks(taskSvc, svc)
+	adapter := &blockingUpgradeAdapter{entered: make(chan struct{}), release: make(chan struct{})}
+	svc.adapter = adapter
+
+	first, err := svc.UpgradeAll(ctx, "srv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-adapter.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first upgrade did not start")
+	}
+	second, err := svc.UpgradeSelected(ctx, "srv", []string{"openssl"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForTaskStatus(t, taskSvc, second.ID, tasks.StatusFailed)
+	secondTask, err := taskSvc.Get(ctx, second.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(secondTask.Error, "maintenance") {
+		t.Fatalf("expected maintenance conflict, got %#v", secondTask)
+	}
+	close(adapter.release)
+	waitForTaskStatus(t, taskSvc, first.ID, tasks.StatusCompleted)
+}
+
+// TestUpgradeQueuedTaskRecoversAfterRestart 验证注册 Execute 后，重启遗留的
+// queued 升级任务可以由 manager 恢复执行而不是死任务。
+func TestUpgradeQueuedTaskRecoversAfterRestart(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	ctx := context.Background()
+	if _, err := store.AppDB().Exec(`INSERT INTO credentials(id,name,type,username,created_at,updated_at) VALUES('cred','c','password','du','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO servers(id,name,host,port,ssh_username,credential_id,os_id,os_version_id,os_supported,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES('srv','s','h',22,'du','cred','debian','12',1,1,'passwordless_sudo','2024-01-01T00:00:00Z','2024-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	taskSvc := tasks.NewService(store.LogDB())
+	serverSvc := server.NewService(store.AppDB(), nil, taskSvc)
+	svc := NewService(store.AppDB(), serverSvc, nil, taskSvc)
+	registerPackageTestTasks(taskSvc, svc)
+	svc.adapter = fakePackageAdapter{updates: []linux.PackageUpdate{{Name: "openssl", InstalledVersion: "1", CandidateVersion: "2"}}}
+
+	// 模拟重启前遗留的 queued 升级任务（含 ParamsJSON 名称）。
+	task, err := taskSvc.Create(ctx, tasks.CreateInput{
+		Type:         "package_upgrade_selected",
+		ServerID:     "srv",
+		ResourceType: "server",
+		ResourceID:   "srv",
+		TriggerType:  "user",
+		Summary:      "Upgrading selected packages",
+		ParamsJSON:   `{"names":["openssl"]}`,
+		Status:       tasks.StatusQueued,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// manager 恢复执行（等价于 worker 拾取 queued 任务后调用已注册 Execute）。
+	if err := tasks.NewManager(taskSvc).Run(ctx, task); err != nil {
+		t.Fatal(err)
+	}
+	got, err := taskSvc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != tasks.StatusCompleted {
+		t.Fatalf("expected queued upgrade task to recover and complete, got %#v", got)
+	}
 }

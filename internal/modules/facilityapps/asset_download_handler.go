@@ -12,6 +12,9 @@ import (
 
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 type facilityAssetDownloadReader interface {
@@ -86,27 +89,44 @@ func serveFacilityAssetDownload(w http.ResponseWriter, r *http.Request, asset Fa
 		httpx.Error(w, err)
 		return
 	}
+	// 先预打开全部文件，任何读取失败都在写响应头之前以错误响应返回，
+	// 避免“下载出错仍返回 200”的半成品 zip。
+	handles := make([]*os.File, 0, len(files))
+	for _, filePath := range files {
+		file, openErr := os.Open(filePath)
+		if openErr != nil {
+			for _, opened := range handles {
+				_ = opened.Close()
+			}
+			httpx.Error(w, openErr)
+			return
+		}
+		handles = append(handles, file)
+	}
+	defer func() {
+		for _, file := range handles {
+			_ = file.Close()
+		}
+	}()
 	filename := facilityBundleDownloadName(asset.Filename)
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", contentDisposition(filename))
 	zw := zip.NewWriter(w)
-	for _, filePath := range files {
+	for i, filePath := range files {
 		rel, _ := filepath.Rel(asset.Root, filePath)
 		entry, createErr := zw.Create(filepath.ToSlash(rel))
 		if createErr != nil {
-			break
+			logging.L().Warn("facility asset zip entry create failed", zap.String("file", filePath), zap.Error(createErr))
+			return
 		}
-		file, openErr := os.Open(filePath)
-		if openErr != nil {
-			break
-		}
-		_, copyErr := io.Copy(entry, file)
-		_ = file.Close()
-		if copyErr != nil {
-			break
+		if _, copyErr := io.Copy(entry, handles[i]); copyErr != nil {
+			logging.L().Warn("facility asset zip copy failed", zap.String("file", filePath), zap.Error(copyErr))
+			return
 		}
 	}
-	_ = zw.Close()
+	if err := zw.Close(); err != nil {
+		logging.L().Warn("facility asset zip close failed", zap.String("root", asset.Root), zap.Error(err))
+	}
 }
 
 func facilityBundleFiles(root string) ([]string, error) {

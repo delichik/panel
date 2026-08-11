@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,6 +67,24 @@ func openLegacyReverseProxyMigrationDB(t *testing.T) *sql.DB {
 	return db
 }
 
+func TestOpenCreatesDirectoryForFileDSN(t *testing.T) {
+	dir := t.TempDir()
+	dbDir := filepath.Join(dir, "nested", "db")
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = "file:" + filepath.ToSlash(filepath.Join(dbDir, "app.db")) + "?cache=shared"
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	if _, err := os.Stat(dbDir); err != nil {
+		t.Fatalf("database directory was not created from file: DSN: %v", err)
+	}
+}
 func TestOpenCreatesSeparateSchemas(t *testing.T) {
 	dir := t.TempDir()
 	cfg := config.Default()

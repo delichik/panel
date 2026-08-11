@@ -2,9 +2,11 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue';
 import { Download, LogOut, Play, RefreshCcw, RotateCcw, ShieldCheck } from '@lucide/vue';
 import { maintenanceApi } from '@/api/maintenance';
+import { ApiError } from '@/api/client';
 import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Input from '@/components/ui/Input.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import { useI18n } from '@/i18n';
@@ -19,6 +21,7 @@ const status = ref<MaintenanceStatus | null>(null);
 const authenticated = ref(Boolean(maintenanceApi.storedToken('export') || maintenanceApi.storedToken('restore')));
 const loading = ref(false);
 const pending = ref('');
+const clearConfirmOpen = ref(false);
 const loggingOut = ref(false);
 const error = ref('');
 const mode = ref<'export' | 'restore'>('export');
@@ -61,6 +64,10 @@ async function load() {
     status.value = next;
   } catch (err) {
     if (requestId !== statusRequestId) return;
+    if (err instanceof ApiError && err.status === 401) {
+      await handleMaintenanceUnauthorized();
+      return;
+    }
     const message = err instanceof Error ? err.message : t('maintenancePage.loadFailed');
     notifyError(message);
     if (mode.value === 'export') {
@@ -93,12 +100,38 @@ async function command(name: 'start' | 'password' | 'retry' | 'clear' | 'exit') 
     if (name === 'exit') status.value = await maintenanceApi.exitExport();
     notifySuccess(t('maintenancePage.commandAccepted'));
   } catch (err) {
+    if (err instanceof ApiError && err.status === 401) {
+      await handleMaintenanceUnauthorized();
+      return;
+    }
     error.value = err instanceof Error ? err.message : t('common.operationFailed');
     notifyError(err instanceof Error ? err.message : t('common.operationFailed'));
   } finally {
     pending.value = '';
     schedulePoll();
   }
+}
+
+function openClearConfirm() {
+  clearConfirmOpen.value = true;
+}
+
+async function confirmClearPending() {
+  clearConfirmOpen.value = false;
+  await command('clear');
+}
+
+async function handleMaintenanceUnauthorized() {
+  stopPolling();
+  statusRequestId += 1;
+  try {
+    await maintenanceApi.logout(mode.value);
+  } catch {
+    // token cleanup already happened inside logout
+  }
+  authenticated.value = false;
+  status.value = null;
+  error.value = '';
 }
 
 async function logout() {
@@ -134,6 +167,10 @@ function schedulePoll(delay = status.value?.pollAfterMs || 2000) {
   timer = window.setTimeout(async () => {
     timer = undefined;
     if (!authenticated.value || status.value?.phase === 'completed' || status.value?.phase === 'failed') return;
+    if (document.visibilityState !== 'visible') {
+      schedulePoll();
+      return;
+    }
     await load();
     if (authenticated.value && status.value?.phase !== 'completed' && status.value?.phase !== 'failed') {
       schedulePoll(status.value?.pollAfterMs);
@@ -148,11 +185,19 @@ function stopPolling() {
   }
 }
 
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible') schedulePoll();
+}
+
 onMounted(async () => {
   if (authenticated.value) await load();
   schedulePoll();
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 });
-onBeforeUnmount(stopPolling);
+onBeforeUnmount(() => {
+  stopPolling();
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+});
 </script>
 
 <template>
@@ -169,6 +214,8 @@ onBeforeUnmount(stopPolling);
           <Button :loading="loggingOut" @click="logout"><LogOut />{{ t('layout.logout') }}</Button>
         </div>
       </header>
+
+      <div v-if="error" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ error }}</div>
 
       <section v-if="!authenticated" class="grid gap-4 rounded-2xl border border-border bg-card p-5 md:max-w-md">
         <div class="flex items-center gap-3"><ShieldCheck class="size-5 text-muted-foreground" /><h2 class="m-0 text-lg font-semibold">{{ t('maintenancePage.signIn') }}</h2></div>
@@ -205,7 +252,7 @@ onBeforeUnmount(stopPolling);
               <Button variant="primary" :disabled="!form.archivePassword" :loading="pending === 'password'" @click="command('password')">{{ t('maintenancePage.submitPassword') }}</Button>
             </template>
             <Button v-if="status?.capabilities.canRetry" :loading="pending === 'retry'" @click="command('retry')"><RotateCcw />{{ t('common.retry') }}</Button>
-            <Button v-if="status?.capabilities.canClearPending" variant="danger" :loading="pending === 'clear'" @click="command('clear')">{{ t('maintenancePage.clearPending') }}</Button>
+            <Button v-if="status?.capabilities.canClearPending && status.phase !== 'applying'" variant="danger" :loading="pending === 'clear'" @click="openClearConfirm">{{ t('maintenancePage.clearPending') }}</Button>
             <Button v-if="status?.capabilities.canDownload" :loading="pending === 'download'" @click="downloadArchive"><Download />{{ t('maintenancePage.download') }}</Button>
             <Button v-if="status?.capabilities.canExit" :loading="pending === 'exit'" @click="command('exit')">{{ t('maintenancePage.exit') }}</Button>
           </section>
@@ -221,6 +268,20 @@ onBeforeUnmount(stopPolling);
         </aside>
       </section>
     </section>
+
+    <ConfirmDialog
+      :open="clearConfirmOpen"
+      :title="t('maintenancePage.clearPending')"
+      :impact="t('maintenancePage.clearPendingImpact')"
+      tone="danger"
+      :loading="pending === 'clear'"
+      :confirm-label="t('common.delete')"
+      :cancel-label="t('common.cancel')"
+      :checkbox-label="t('common.confirm')"
+      @update:open="(value) => { if (!value) clearConfirmOpen = false }"
+      @confirm="confirmClearPending"
+      @cancel="clearConfirmOpen = false"
+    />
   </main>
 </template>
 

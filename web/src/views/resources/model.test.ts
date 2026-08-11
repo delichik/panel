@@ -65,6 +65,12 @@ describe('resources model', () => {
     expect(containerActionDisabled({ ...container, state: 'exited' }, 'restart')).toBe('resourcesPage.containerNotRunning');
   });
 
+  it('tolerates null package fields when filtering', () => {
+    const updates = [{ name: 'openssl', installedVersion: null as unknown as string, candidateVersion: '2', source: null as unknown as string }];
+    expect(filterPackages(updates, 'openssl')).toHaveLength(1);
+    expect(filterPackages(updates, 'zzz')).toHaveLength(0);
+  });
+
   it('labels images without relying on mock-only summaries', () => {
     const image: ImageDto = { id: 'sha256:abcdef123456', repoTags: [], repoDigests: [], created: 0, size: 0, containers: 0, reference: '', checkable: false, updateAvailable: false, inUse: false, applicationIds: [], upgradeable: false };
     expect(imageLabel(image)).toBe('sha256:abcde');

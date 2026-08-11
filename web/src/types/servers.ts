@@ -43,6 +43,7 @@ export interface ServerDto {
   loadAverage?: string;
   lastCheckedAt?: string | null;
   lastError?: string;
+  hostKeyMismatch?: boolean;
   initialTaskId?: string;
   createdAt?: string;
   updatedAt?: string;

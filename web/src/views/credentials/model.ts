@@ -1,11 +1,11 @@
 import type { CredentialInput, CredentialType } from '@/types/credentials';
 
-export function validateCredentialInput(input: CredentialInput, editing: boolean) {
+export function validateCredentialInput(input: CredentialInput, editing: boolean, typeChanged = false) {
   const errors: Partial<Record<keyof CredentialInput, string>> = {};
   if (!input.name.trim()) errors.name = 'credentialsPage.validationName';
   if (!input.username.trim()) errors.username = 'credentialsPage.validationUsername';
-  if (input.type === 'password' && !editing && !input.password?.trim()) errors.password = 'credentialsPage.validationPassword';
-  if (input.type === 'private_key' && !editing && !input.privateKey?.trim()) errors.privateKey = 'credentialsPage.validationPrivateKey';
+  if (input.type === 'password' && (!editing || typeChanged) && !input.password?.trim()) errors.password = 'credentialsPage.validationPassword';
+  if (input.type === 'private_key' && (!editing || typeChanged) && !input.privateKey?.trim()) errors.privateKey = 'credentialsPage.validationPrivateKey';
   return errors;
 }
 

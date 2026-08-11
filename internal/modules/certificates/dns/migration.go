@@ -44,11 +44,17 @@ func MigrateProviderCredentials(ctx context.Context, db *sql.DB, secrets *secret
 			domain.configJSON = "{}"
 		}
 		if strings.TrimSpace(domain.ciphertext) == "" {
-			domain.ciphertext, err = encryptProviderCredentials(secrets, domain.id, domain.provider, domain.apiToken)
-			if err != nil {
-				_ = rows.Close()
-				return err
+			if strings.TrimSpace(domain.apiToken) != "" {
+				domain.ciphertext, err = encryptProviderCredentials(secrets, domain.id, domain.provider, domain.apiToken)
+				if err != nil {
+					_ = rows.Close()
+					return err
+				}
 			}
+			// hasLegacyAccount without a legacy token column and without an
+			// existing ciphertext: leave the credential empty instead of
+			// failing startup with a confusing "token required" error. The
+			// domain will report a clear credential error when actually used.
 		}
 		domains = append(domains, domain)
 	}

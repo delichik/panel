@@ -51,6 +51,10 @@ export interface ApplicationDraftUi {
   deploymentMode: 'all' | 'selected';
   deploymentServers: string[];
   reverseProxy: ReverseProxyRule[];
+  /** Structured editing only covers a subset of spec keys; anything else
+   *  (capAdd, sysctls, healthcheck, resource limits, ...) is preserved here
+   *  and merged back when the YAML is regenerated. */
+  uncoveredSpec: Record<string, unknown>;
 }
 
 export interface FacilityDraftUi {
@@ -136,6 +140,7 @@ export function draftFromApplication(app?: ApplicationDto | null): ApplicationDr
     deploymentMode: app?.deploymentMode === 'selected' ? 'selected' : 'all',
     deploymentServers: [...(app?.deploymentServers ?? [])],
     reverseProxy: cloneProxyRules(app?.reverseProxy ?? []).map((rule) => (networkMode === 'host' && rule.targetType === 'container' ? { ...rule, targetType: 'local' } : rule)),
+    uncoveredSpec: uncoveredSpecFrom(parsed),
   };
 }
 
@@ -166,22 +171,22 @@ export function syncDraftToYaml(draft: ApplicationDraftUi) {
 }
 
 export function specYamlFromDraft(draft: ApplicationDraftUi) {
-  const doc: Record<string, unknown> = {
-    name: draft.name,
-    image: draft.image,
-    networkMode: draft.networkMode,
-  };
+  const uncovered = draft.uncoveredSpec ?? {};
+  const doc: Record<string, unknown> = { ...uncovered };
+  doc.name = draft.name;
+  doc.image = draft.image;
+  doc.networkMode = draft.networkMode;
   const command = draft.commandRows.map((row) => row.value.trim()).filter(Boolean);
-  if (command.length) doc.command = command;
+  if (command.length) doc.command = command; else delete doc.command;
   const env = recordFromPairs(draft.env);
-  if (Object.keys(env).length) doc.env = env;
+  if (Object.keys(env).length) doc.env = env; else delete doc.env;
   const ports = draft.ports.map((port) => compact({ label: port.label.trim(), to: numberOrString(port.to), static: numberOrUndefined(port.staticPort) })).filter((port) => port.to);
-  if (ports.length) doc.ports = ports;
+  if (ports.length) doc.ports = ports; else delete doc.ports;
   const mounts = draft.mounts.map((mount) => compact({ type: mount.type, source: mount.source.trim(), target: mount.target.trim(), readOnly: mount.readOnly || undefined, mode: mount.mode.trim() || undefined })).filter((mount) => mount.type && mount.target);
-  if (mounts.length) doc.mounts = mounts;
-  const resources = compact({ cpu: numberOrUndefined(draft.cpu), memoryMb: numberOrUndefined(draft.memoryMb) });
-  if (Object.keys(resources).length) doc.resources = resources;
-  if (draft.privileged) doc.privileged = true;
+  if (mounts.length) doc.mounts = mounts; else delete doc.mounts;
+  const resources = { ...(objectValue(uncovered.resources) ?? {}), ...compact({ cpu: numberOrUndefined(draft.cpu), memoryMb: numberOrUndefined(draft.memoryMb) }) };
+  if (Object.keys(resources).length) doc.resources = resources; else delete doc.resources;
+  if (draft.privileged) doc.privileged = true; else delete doc.privileged;
   return `${YAML.stringify(doc).trim()}\n`;
 }
 
@@ -202,20 +207,44 @@ export function validateApplicationDraft(draft: ApplicationDraftUi): FieldErrors
   if (!draft.name.trim()) errors.name = 'applicationsPage.validationName';
   if (draft.yamlDirty && !draft.specYaml.trim()) errors.specYaml = 'applicationsPage.validationSpec';
   if (!draft.yamlDirty && !draft.image.trim()) errors.image = 'applicationsPage.validationImage';
+  if (draft.cpu.trim() && !Number.isFinite(Number(draft.cpu))) errors.cpu = 'applicationsPage.validationNumber';
+  if (draft.memoryMb.trim() && !Number.isFinite(Number(draft.memoryMb))) errors.memoryMb = 'applicationsPage.validationNumber';
   if (draft.deploymentMode === 'selected' && !draft.deploymentServers.length) errors.deploymentServers = 'applicationsPage.validationDeploymentServers';
   if (draft.env.some((row) => !row.key.trim())) errors.env = 'applicationsPage.validationEnv';
   if (draft.ports.some((row) => !row.to.trim())) errors.ports = 'applicationsPage.validationPorts';
   if (draft.mounts.some((row) => !row.target.trim())) errors.mounts = 'applicationsPage.validationMounts';
-  if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetType || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxy';
+  if (draft.reverseProxy.some((rule) => !rule.domain.trim() || !rule.targetType || !rule.targetPort || !rule.paths.length || rule.paths.some((path) => !path.path.trim()))) errors.reverseProxy = 'applicationsPage.validationReverseProxyRule';
   if (draft.yamlDirty) {
     try {
       parseSpec(draft.specYaml);
-      errors.specYaml = 'applicationsPage.validationSourceStaged';
     } catch {
       errors.specYaml = 'applicationsPage.validationYaml';
     }
   }
   return errors;
+}
+
+export function applicationDraftWarnings(draft: ApplicationDraftUi): FieldErrors {
+  const warnings: FieldErrors = {};
+  if (draft.yamlDirty) {
+    try {
+      parseSpec(draft.specYaml);
+      // Valid YAML that has not been applied back to the structured form is a
+      // warning, not a blocking error: preview/commit still operate on the raw YAML.
+      warnings.specYaml = 'applicationsPage.validationSourceStaged';
+    } catch {
+      // Parse failures are reported as blocking errors by validateApplicationDraft.
+    }
+  }
+  return warnings;
+}
+
+export function validateFileName(name: string): string | null {
+  const value = name.trim();
+  if (!value || /[\\/]/.test(value) || value.includes('..') || /[\x00-\x1f\x7f]/.test(value)) {
+    return 'applicationsPage.validationFileName';
+  }
+  return null;
 }
 
 export function applicationSections(draft: ApplicationDraftUi, errors: FieldErrors): SectionState[] {
@@ -426,6 +455,27 @@ export function cloneFacilityPath(path: FacilityRoutePath) {
 
 export function defaultRouteOptions(): HttpRouteOptions {
   return { gzipMode: 'inherit', clientMaxBodySizeMb: 0, connectTimeoutSeconds: 0, readTimeoutSeconds: 0, sendTimeoutSeconds: 0, bufferingMode: 'inherit', webSocketMode: 'off', requestHeaders: [], responseHeaders: [] };
+}
+
+function uncoveredSpecFrom(parsed: Record<string, unknown>): Record<string, unknown> {
+  const uncovered: Record<string, unknown> = { ...parsed };
+  delete uncovered.name;
+  delete uncovered.image;
+  delete uncovered.command;
+  delete uncovered.env;
+  delete uncovered.ports;
+  delete uncovered.mounts;
+  delete uncovered.privileged;
+  delete uncovered.networkMode;
+  const resources = objectValue(parsed.resources);
+  if (resources) {
+    const rest = { ...resources };
+    delete rest.cpu;
+    delete rest.memoryMb;
+    if (Object.keys(rest).length) uncovered.resources = rest;
+    else delete uncovered.resources;
+  }
+  return uncovered;
 }
 
 function parseSpec(raw: string) {

@@ -777,8 +777,18 @@ func makeFacilityAssetNamesUnique(ctx context.Context, tx *sql.Tx, table, idColu
 }
 
 func (s *Store) migrateCertificateScopeConstraint(ctx context.Context) error {
+	// PRAGMA foreign_keys is a per-connection setting, so pin this migration to
+	// one dedicated connection; otherwise the OFF toggle and the transaction
+	// could run on different pooled connections, leaving FK enforcement off or
+	// leaking an ON toggle on a shared connection.
+	conn, err := s.appDB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
 	var createSQL string
-	if err := s.appDB.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='certificates'`).Scan(&createSQL); err != nil {
+	if err := conn.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name='certificates'`).Scan(&createSQL); err != nil {
 		if err == sql.ErrNoRows {
 			return nil
 		}
@@ -787,11 +797,13 @@ func (s *Store) migrateCertificateScopeConstraint(ctx context.Context) error {
 	if strings.Contains(createSQL, "'prefixes'") {
 		return nil
 	}
-	if _, err := s.appDB.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys = OFF`); err != nil {
 		return err
 	}
-	defer s.appDB.ExecContext(ctx, `PRAGMA foreign_keys = ON`)
-	tx, err := s.appDB.BeginTx(ctx, nil)
+	defer func() {
+		_, _ = conn.ExecContext(context.Background(), `PRAGMA foreign_keys = ON`)
+	}()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}

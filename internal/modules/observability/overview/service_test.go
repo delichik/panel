@@ -174,7 +174,8 @@ func TestGetCardDataSinceReturnsOnlyNewerPoints(t *testing.T) {
 		t.Fatalf("update cards: %v", err)
 	}
 
-	marker := time.Now().UTC().Add(time.Second)
+	// 使用整秒时间，避免 since 按秒截断后与采样点边界竞态。
+	marker := time.Now().UTC().Truncate(time.Second).Add(time.Second)
 	for i, serverID := range serverIDs {
 		if err := svc.metrics.Save(context.Background(), linux.MetricsSnapshot{
 			ServerID:        serverID,

@@ -3,6 +3,7 @@
 ## List Query Contract
 
 - List endpoints accept camelCase parameters only. Shared validation rejects unknown parameters, `limit`, snake_case aliases, invalid pages, and invalid timestamps with HTTP 400.
+- `GET /api/v1/tasks` 额外接受 `q` 做跨页搜索：对 `id`、`summary`、`type`、`error` 做 LIKE 过滤（`%`、`_`、`\` 已转义），供任务中心跨页搜索使用。
 
 ## 适用场景
 
@@ -75,7 +76,7 @@
 - 由内存 goroutine 直接执行、无法跨进程恢复的一次性 worker 任务，如果需要清理遗留 `queued`/`scheduled` 状态，必须在任务定义中设置 `StaleQueuedAfter`；tasks 内部 worker 只扫描注册表中声明了该能力的任务类型，并在超时后标记为失败提示用户重试。过期清理同时覆盖 `queued` 与 `scheduled` 两种状态，避免旧版本遗留或等待轮次超时的任务锚点永久占住并发键。
 - 长耗时后台操作应写入任务日志，并尽量拆出步骤，方便任务中心展示进度。
 - tasks 内部 worker 负责驱动注册的周期任务、唤醒到期队列任务、清理 stale queued 状态和检查 orphan running 状态。它不是独立业务模块，不注册任何特殊任务，也不通过业务 task type 字符串维护 executor 或 run-now/retry switch。
-- tasks 内部 worker 每 30 秒扫描一次 `queued`、`scheduled` 和到期 `failed_retryable` 任务作为兜底唤醒；队列唤醒、stale queued 清理和 orphan 检查统一为 30 秒一次，业务模块如果已经有自己的即时 dispatcher，仍应在创建任务后主动启动执行，不能依赖轮询满足低延迟契约。
+- tasks 内部 worker 每 30 秒扫描一次 `queued`、`scheduled` 和到期 `failed_retryable` 任务作为兜底唤醒；队列唤醒、stale queued 清理和 orphan 检查统一为 30 秒一次，业务模块如果已经有自己的即时 dispatcher，仍应在创建任务后主动启动执行，不能依赖轮询满足低延迟契约。到期扫描每类任务只取最早的一批（`created_at ASC`，`Limit 50`），避免旧任务被新任务挤掉而饿死。
 - 终态任务（completed/failed/failed_retryable/blocked/cancelled）历史默认保留 24 小时：任务记录不暴露在产品导航界面，`tasks.CleanupWorker` 每小时按 `finished_at` 分批删除超期 `tasks`/`task_steps`/`task_logs`；`tasks` 表维护 `(status, next_run_at)` 索引支撑到期查询与 orphan 检查，防止任务表无限增长拖慢轮询。应用协调记录在协调库中独立保留，不随任务表清理而丢失。
 - 证书续签、镜像刷新和软件包刷新的周期采集统一为 30 分钟一次；`application_reconcile` 保持 5 秒采集频率以满足容器变化即时性。
 - 全量备份导出不在正常业务运行期执行。设置页只写 pending export 并提示重启；下一次启动进入备份导出维护模式，此时正常 tasks worker 与周期驱动尚未启动，导出进度本身不依赖任务系统。
@@ -85,6 +86,13 @@
 - 任务 HTTP handler 依赖 `ServeMux` pattern 注入的 `PathValue` 读取任务 ID；新增任务 API 时在 `routes.go` 注册 method-pattern，不在 bootstrap 增加业务路径 switch。
 - 任务中心的 `run-now` / `retry` 必须按任务定义受控，不在 tasks worker 中维护硬编码 switch。允许手动运行或重试的任务必须同时注册对应能力和 `Execute`，实际执行统一经过 `tasks.Manager.Run`。
 - `retry` 创建的新任务会立即交给任务 manager 执行，并必须保留原任务的 `params_json`、必要 metadata、schedule/execution 上下文和资源定位字段；父子任务归属不自动复用，避免新 retry 错挂到已结束 batch。 如果执行器启动前返回错误，handler 会把新任务标记为失败，避免永久排队。
+- `run-now` / `retry` 的 HTTP 处理为异步分派：接口立即返回 `202 Accepted` 与任务快照，实际执行在后台 goroutine 中经 `Worker.RunNow` / `Manager.Run` 完成，避免长任务同步占用 HTTP 连接；后台执行失败且任务仍处于非终态时由 handler 标记失败。
+- 任务执行边界（worker 唤醒、`CreateAndRun`/`CreateBatchAndRun`、并行子任务收集）统一做 panic recover：executor panic 会转换为 `Fail(taskID, ...)` 并记录日志，单个任务崩溃不会拖垮整个进程。
+- 并行子任务错误收集通道容量按最多发送数分配并使用非阻塞兜底发送，避免子任务全部失败时死锁。
+- 单任务日志有上限：每任务最多保留 1000 条，单条日志超过 8192 个字符截断；超出后滚动删除最旧日志，防止长任务无限膨胀。
+- 任务失败对已处于终态的任务直接短路，不再向已完成任务日志流追加误导性失败行。
+- `ExpireStaleQueued` 只清理 `created_at` 超时且 `next_run_at` 已到期（或为空）的 `queued`/`scheduled` 任务，不再误杀未来的调度任务。
+- 周期任务启动后第一个执行推迟到首个 interval tick 之后（不立即触发），避免 Panel 重启瞬间所有周期任务同时触发。
 
 ## 跨模块依赖
 
@@ -97,6 +105,7 @@
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。该任务的注册 executor 必须同步执行到任务终态；业务 API 需要快速返回时只能在创建并标记 running 后使用模块内显式后台启动 helper。
 - 启用服务器 agent 后，`metrics_collect` 与普通 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、`metrics_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
 - 软件包刷新/升级、UFW 写操作、fail2ban 安装/接管/应用/取消接管和服务器重启必须路由到兼容 Agent，不允许回退 SSH。长耗时 APT 请求使用独立 Agent maintenance gRPC 超时并把命令输出写入 Panel 任务日志；软件包升级任务声明 `DisallowCancel`，Panel 重启、连接断开或删除服务器都不会取消远端 apt。SSH 只保留 Agent bootstrap、安装、修复和证书恢复。
+- 软件包升级任务（`package_upgrade_selected` / `package_upgrade_all`）注册了 `Execute` 并声明 `AllowRunNow` / `AllowRetry`：Panel 重启后遗留的 `queued` 升级任务可由 worker 恢复执行而不是死任务；升级与刷新共用 per-server 维护互斥，同一服务器同一时间只允许一种软件包维护动作，被互斥拒绝的任务会以明确的“维护中”错误进入失败态。
 
 ## 密钥资产任务
 
@@ -140,4 +149,4 @@
 - Business modules that create domain lifecycle rows before task rows must provide their own compensation path for task creation failures. The generic task manager cannot roll back domain lifecycle rows or infer their retry state.
 ## 列表读取约束
 
-`GET /api/v1/tasks` 保持分页响应，但必须使用列表专用查询，以空投影代替 `params_json` 和 `metadata_json`，也不得逐任务拼接 deployment operation/target；完整任务和 deployment projection 仅由 `GET /api/v1/tasks/{id}` 返回。内部协调与恢复代码继续使用完整 `Service.List`，HTTP handler 使用 `ListSummaries`，不得混用这两个读取边界。
+`GET /api/v1/tasks` 保持分页响应，但必须使用列表专用查询，以空投影代替 `params_json` 和 `metadata_json`，也不得逐任务拼接 deployment operation/target；完整任务和 deployment projection 仅由 `GET /api/v1/tasks/{id}` 返回。内部协调与恢复代码继续使用完整 `Service.List`，HTTP handler 使用 `ListSummaries`，不得混用这两个读取边界。跨页搜索通过 `q` 参数在列表专用查询内完成，不得退化为全表加载后在前端过滤。

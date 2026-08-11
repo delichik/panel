@@ -88,7 +88,7 @@ func TestApplicationEditSessionPersistsAndRecovers(t *testing.T) {
 	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-config", "file-op-1", EditSessionFileInput{
 		Revision:          session.Revision,
 		ClientOperationID: "file-op-1",
-		Path:              "config/app.conf",
+		Path:              "config-app.conf",
 		Kind:              ApplicationFileKindTemplate,
 		ContentBase64:     base64.StdEncoding.EncodeToString([]byte("hello")),
 	})
@@ -119,14 +119,14 @@ func TestApplicationEditSessionReadsFileWithoutChangingRevision(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-config", "file-read-1", EditSessionFileInput{
-		Revision: session.Revision, ClientOperationID: "file-read-1", Path: "config/app.conf", Kind: ApplicationFileKindTemplate,
+		Revision: session.Revision, ClientOperationID: "file-read-1", Path: "config-app.conf", Kind: ApplicationFileKindTemplate,
 		ContentType: "text/plain", ContentBase64: base64.StdEncoding.EncodeToString([]byte("hello {{ name }}\n")),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-empty", "file-read-empty", EditSessionFileInput{
-		Revision: session.Revision, ClientOperationID: "file-read-empty", Path: "config/empty.conf", Kind: ApplicationFileKindTemplate,
+		Revision: session.Revision, ClientOperationID: "file-read-empty", Path: "config-empty.conf", Kind: ApplicationFileKindTemplate,
 		ContentType: "text/plain", ContentBase64: base64.StdEncoding.EncodeToString(nil),
 	})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestApplicationEditSessionReadsFileWithoutChangingRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if file.ContentBase64 != base64.StdEncoding.EncodeToString([]byte("hello {{ name }}\n")) || file.Path != "config/app.conf" || file.Kind != ApplicationFileKindTemplate {
+	if file.ContentBase64 != base64.StdEncoding.EncodeToString([]byte("hello {{ name }}\n")) || file.Path != "config-app.conf" || file.Kind != ApplicationFileKindTemplate {
 		t.Fatalf("file = %#v", file)
 	}
 	refreshed, err := svc.GetEditSession(ctx, "admin", session.ID)
@@ -167,7 +167,7 @@ func TestApplicationEditSessionReadRejectsBlobMetadataMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "file-config", "file-integrity-1", EditSessionFileInput{
-		Revision: session.Revision, ClientOperationID: "file-integrity-1", Path: "config/app.conf", Kind: ApplicationFileKindTemplate,
+		Revision: session.Revision, ClientOperationID: "file-integrity-1", Path: "config-app.conf", Kind: ApplicationFileKindTemplate,
 		ContentBase64: base64.StdEncoding.EncodeToString([]byte("content")),
 	})
 	if err != nil {
@@ -802,5 +802,59 @@ func assertPanelErrorCode(t *testing.T, err error, code string) {
 	var target *panelerr.Error
 	if !errors.As(err, &target) || target.Code != code {
 		t.Fatalf("error = %#v, want code %q", err, code)
+	}
+}
+
+func TestApplicationEditSessionSameNamedNewFileAcrossApplications(t *testing.T) {
+	svc, _, _, closeStore := newTestService(t)
+	defer closeStore()
+	ctx := context.Background()
+
+	commitWithFile := func(name string) string {
+		t.Helper()
+		session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{Draft: &SaveInput{Name: name, SpecYAML: "name: " + name + "\nimage: nginx\n"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "shared.conf", "file-"+name, EditSessionFileInput{
+			Revision:          session.Revision,
+			ClientOperationID: "file-" + name,
+			Name:              "shared.conf",
+			Kind:              ApplicationFileKindTemplate,
+			ContentBase64:     base64.StdEncoding.EncodeToString([]byte("server {}")),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		preview, err := svc.PreviewEditSession(ctx, "admin", session.ID, session.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-"+name, CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: "0", PreviewToken: preview.Token.Value})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result.Application.ID
+	}
+
+	appA := commitWithFile("web-a")
+	appB := commitWithFile("web-b")
+
+	filesA, err := svc.ListFiles(ctx, appA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filesB, err := svc.ListFiles(ctx, appB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filesA) != 1 || filesA[0].Name != "shared.conf" {
+		t.Fatalf("filesA = %#v", filesA)
+	}
+	if len(filesB) != 1 || filesB[0].Name != "shared.conf" {
+		t.Fatalf("filesB = %#v", filesB)
+	}
+	if filesA[0].ID == "" || filesA[0].ID == filesB[0].ID {
+		t.Fatalf("expected distinct non-empty global file ids: %q vs %q", filesA[0].ID, filesB[0].ID)
 	}
 }

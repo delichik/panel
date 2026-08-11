@@ -105,11 +105,10 @@ func runPanel(panelPath, restartURL, token, mode string, restarts <-chan string)
 	for {
 		select {
 		case err := <-done:
-			select {
-			case nextMode := <-restarts:
-				return 0, nextMode, nil
-			default:
-			}
+			// A child that exits on its own may only trigger a queued restart
+			// when it exited cleanly. A non-zero exit is a failure and must not
+			// be masked by a pending restart request; that mode is only adopted
+			// when the supervisor actively stopped the child below.
 			if err != nil {
 				var exitErr *exec.ExitError
 				if errors.As(err, &exitErr) {
@@ -117,8 +116,28 @@ func runPanel(panelPath, restartURL, token, mode string, restarts <-chan string)
 				}
 				return 1, "", err
 			}
+			select {
+			case nextMode := <-restarts:
+				return 0, nextMode, nil
+			default:
+			}
 			return 0, "", nil
 		case nextMode := <-restarts:
+			// The child may have already exited on its own before the restart
+			// request won the select. Its exit status takes precedence: only a
+			// clean exit or an active stop may adopt the queued restart.
+			select {
+			case err := <-done:
+				if err != nil {
+					var exitErr *exec.ExitError
+					if errors.As(err, &exitErr) {
+						return exitErr.ExitCode(), "", nil
+					}
+					return 1, "", err
+				}
+				return 0, nextMode, nil
+			default:
+			}
 			if err := stopPanel(cmd, done); err != nil {
 				return 1, "", err
 			}

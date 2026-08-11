@@ -83,6 +83,44 @@ func TestRuntimeSettingsSetJWTSecretPersists(t *testing.T) {
 	}
 }
 
+func TestRuntimeSettingsFirstStartRandomizesDefaultJWTSecret(t *testing.T) {
+	svc := newTestService(t)
+	if svc.JWTSecret() == DefaultJWTSecret {
+		t.Fatal("default jwt secret should be randomized on first startup")
+	}
+	if !svc.Runtime().JWTSecretConfigured {
+		t.Fatal("randomized jwt secret should be marked as configured")
+	}
+	reloaded, err := NewService(svc.db, svc.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reloaded.JWTSecret() != svc.JWTSecret() {
+		t.Fatalf("randomized jwt secret should persist across reloads: %q != %q", reloaded.JWTSecret(), svc.JWTSecret())
+	}
+}
+
+func TestRuntimeSettingsPreservesExplicitConfigJWTSecret(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.JWTSecret = "explicit-configured-secret-value-123"
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	svc, err := NewService(store.AppDB(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.JWTSecret(); got != "explicit-configured-secret-value-123" {
+		t.Fatalf("explicit jwt secret not preserved: %q", got)
+	}
+}
 func TestRuntimeSettingsRejectInvalidSchedule(t *testing.T) {
 	svc := newTestService(t)
 	_, err := svc.Update(context.Background(), RuntimeUpdate{

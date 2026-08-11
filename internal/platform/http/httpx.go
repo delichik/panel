@@ -66,9 +66,19 @@ func Error(w http.ResponseWriter, err error) {
 	_ = json.NewEncoder(w).Encode(Envelope{Data: nil, Error: &APIError{Code: code, Message: message, Details: details}})
 }
 
+// MaxRequestBodyBytes caps JSON request bodies decoded through Decode. Uploads
+// handled via multipart parsing are not affected.
+const MaxRequestBodyBytes = 10 << 20 // 10 MiB
+
 func Decode(w http.ResponseWriter, r *http.Request, v any) bool {
 	defer r.Body.Close()
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			Error(w, panelerr.BadRequest("request_body_too_large", "Request body exceeds 10 MiB limit"))
+			return false
+		}
 		Error(w, panelerr.BadRequest("bad_request", "Invalid JSON request body"))
 		return false
 	}

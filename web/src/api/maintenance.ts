@@ -1,4 +1,4 @@
-import { ApiError, type ApiEnvelope } from './client';
+import { ApiError, fetchJson } from './client';
 import { fetchDownload, type DownloadResult } from './download';
 import type { MaintenanceSession, MaintenanceStatus } from '@/types/maintenance';
 
@@ -20,21 +20,18 @@ function headers(mode: MaintenanceMode, json = false): HeadersInit {
   };
 }
 
+/**
+ * Maintenance requests use their own maintenance session token, so they must
+ * never trigger the panel-wide 401 handler (a stale maintenance token must not
+ * sign the panel user out).
+ */
 async function request<T>(mode: MaintenanceMode, method: string, path: string, body?: unknown): Promise<T> {
-  const response = await fetch(`/api/v1${path}`, {
+  return fetchJson<T>(`/api/v1${path}`, {
     method,
     headers: headers(mode, body !== undefined),
-    body: body === undefined ? undefined : JSON.stringify(body),
+    body,
+    triggerUnauthorized: false,
   });
-  const envelope = await response.json().catch((error: unknown) => {
-    throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
-  }) as ApiEnvelope<T>;
-  if (!response.ok || envelope.error) {
-    const payload = envelope.error ?? {};
-    throw new ApiError(payload.message ?? `Request failed with status ${response.status}.`, response.status, payload.code ?? 'api_error', payload.details);
-  }
-  if (!('data' in envelope)) throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
-  return envelope.data as T;
 }
 
 export const maintenanceApi = {
@@ -84,6 +81,7 @@ export const maintenanceApi = {
     if (!status.exportId) throw new ApiError('Export archive is not ready.', 400, 'export_not_ready');
     return fetchDownload(`/api/v1/backups/export/${encodeURIComponent(status.exportId)}/download`, {
       headers: { Authorization: `Bearer ${token('export')}` },
+      triggerUnauthorized: false,
     }, `${status.exportId}.zip`);
   },
 };

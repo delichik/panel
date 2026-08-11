@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, Cable, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
+import { AlertTriangle, Cable, KeyRound, PlayCircle, Plus, RefreshCcw, ServerCog, ShieldPlus, Trash2, Wrench } from '@lucide/vue';
 import { credentialsApi } from '@/api/credentials';
 import { serversApi, type ServerMetricsRange, type ServerMetricsSeries } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
@@ -48,6 +49,7 @@ let detailController: AbortController | null = null;
 let metricsController: AbortController | null = null;
 let detailRequestId = 0;
 let metricsRequestId = 0;
+let metricsInFlight = false;
 let metricsAutoRefreshTimer: number | undefined;
 const listRequests = createLatestRequestGuard();
 const loading = ref(false);
@@ -64,6 +66,7 @@ const openingEdit = ref(false);
 const probeResult = ref<ServerProbeResult | null>(null);
 const editing = ref<ServerDto | null>(null);
 const confirmTarget = ref<ServerDto | null>(null);
+const confirmOperation = ref<'restart' | 'ufw' | 'trustHostKey' | null>(null);
 const pendingOperation = ref('');
 const metrics = ref<ServerMetricsSeries | null>(null);
 const metricsServerId = ref('');
@@ -143,10 +146,10 @@ watch(search, (value) => {
 watch(page, () => { void loadServers(); });
 watch(selectedId, () => {
   void loadServerDetail();
-  void loadMetrics();
+  void loadMetrics(true);
 });
 watch(metricsRange, () => {
-  void loadMetrics();
+  void loadMetrics(true);
 });
 
 async function loadServerDetail() {
@@ -195,6 +198,13 @@ async function load() {
       error.value = serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed');
       notifyError(serversResult.reason instanceof Error ? serversResult.reason.message : t('serversPage.loadFailed'));
     }
+    const detailId = selectedId.value;
+    if (detailId && serverDetails.value[detailId]) {
+      const nextDetails = { ...serverDetails.value };
+      delete nextDetails[detailId];
+      serverDetails.value = nextDetails;
+      void loadServerDetail();
+    }
     if (credentialsResult.status === 'fulfilled') {
       credentials.value = credentialsResult.value;
     } else {
@@ -225,8 +235,10 @@ async function loadServers() {
   }
 }
 
-async function loadMetrics() {
-  metricsController?.abort();
+async function loadMetrics(force = false) {
+  // 自动轮询期间已有在途请求时跳过本轮，避免自伤 abort；仅切换范围/服务器或手动刷新时强制中止旧请求。
+  if (!force && metricsInFlight) return;
+  if (force) metricsController?.abort();
   const requestId = ++metricsRequestId;
   const id = selectedId.value;
   metricsError.value = '';
@@ -237,11 +249,13 @@ async function loadMetrics() {
   }
   if (!id) {
     metricsLoading.value = false;
+    metricsInFlight = false;
     return;
   }
   const controller = new AbortController();
   metricsController = controller;
   metricsLoading.value = true;
+  metricsInFlight = true;
   try {
     const next = await serversApi.metrics(id, metricsRange.value, { signal: controller.signal });
     if (requestId !== metricsRequestId || selectedId.value !== id) return;
@@ -252,7 +266,10 @@ async function loadMetrics() {
     metricsError.value = err instanceof Error ? err.message : t('serversPage.metricsFailed');
     notifyError(err instanceof Error ? err.message : t('serversPage.metricsFailed'));
   } finally {
-    if (requestId === metricsRequestId) metricsLoading.value = false;
+    if (requestId === metricsRequestId) {
+      metricsLoading.value = false;
+      metricsInFlight = false;
+    }
   }
 }
 
@@ -338,6 +355,7 @@ async function saveServer() {
   try {
     const saved = editing.value ? await serversApi.update(editing.value.id, formPayload.value) : await serversApi.create(formPayload.value);
     selectedId.value = saved.id;
+    invalidateServerDetail(saved.id);
     notifySuccess(saved.initialTaskId ? t('serversPage.createdWithTask', { taskId: saved.initialTaskId }) : t(editing.value ? 'serversPage.updated' : 'serversPage.created'));
     serverDialog.value = false;
     await load();
@@ -354,6 +372,7 @@ async function testConnection(server: ServerDto) {
   try {
     await runInline(async () => {
       const tested = await serversApi.test(server.id);
+      invalidateServerDetail(tested.id);
       notifySuccess(t('serversPage.testSucceeded', { name: tested.name }));
       await load();
     });
@@ -372,6 +391,9 @@ async function deleteSelected() {
   if (!target) return;
   await runInline(async () => {
     await serversApi.delete(target.id);
+    const nextDetails = { ...serverDetails.value };
+    delete nextDetails[target.id];
+    serverDetails.value = nextDetails;
     notifySuccess(t('serversPage.deleted', { name: target.name }));
     confirmDialog.value = false;
     selectedId.value = '';
@@ -386,20 +408,55 @@ async function deployAgent(server: ServerDto) {
   }, 'agent');
 }
 
-async function restartServer(server: ServerDto) {
-  if (!canRunPrivilegedOperation(server)) return;
-  await runInline(async () => {
-    const accepted = await serversApi.restart(server.id);
-    notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }));
-  }, 'restart');
+function invalidateServerDetail(id?: string) {
+  const target = id || selectedId.value;
+  if (!target) return;
+  const next = { ...serverDetails.value };
+  delete next[target];
+  serverDetails.value = next;
+  if (target === selectedId.value) void loadServerDetail();
 }
 
-async function installUfw(server: ServerDto) {
+function confirmRestart(server: ServerDto) {
+  if (!canRunPrivilegedOperation(server)) return;
+  confirmTarget.value = server;
+  confirmOperation.value = 'restart';
+}
+
+function confirmInstallUfw(server: ServerDto) {
   if (!canInstallUfw(server)) return;
-  await runInline(async () => {
-    const accepted = await serversApi.installUfw(server.id);
-    notifySuccess(t('serversPage.ufwAccepted', { taskId: accepted.taskId }));
-  }, 'ufw');
+  confirmTarget.value = server;
+  confirmOperation.value = 'ufw';
+}
+function confirmTrustHostKey(server: ServerDto) {
+  confirmTarget.value = server;
+  confirmOperation.value = 'trustHostKey';
+}
+
+async function runConfirmedOperation() {
+  const server = confirmTarget.value;
+  const operation = confirmOperation.value;
+  if (!server || !operation) return;
+  confirmOperation.value = null;
+  if (operation === 'restart') {
+    await runInline(async () => {
+      const accepted = await serversApi.restart(server.id);
+      notifySuccess(t('serversPage.restartAccepted', { taskId: accepted.taskId }));
+    }, 'restart');
+  } else if (operation === 'ufw') {
+    await runInline(async () => {
+      const accepted = await serversApi.installUfw(server.id);
+      notifySuccess(t('serversPage.ufwAccepted', { taskId: accepted.taskId }));
+    }, 'ufw');
+  } else {
+    await runInline(async () => {
+      const trusted = await serversApi.trustHostKey(server.id);
+      invalidateServerDetail(trusted.id);
+      notifySuccess(t('serversPage.trustHostKeySucceeded', { name: trusted.name }));
+      await load();
+    }, 'trustHostKey');
+  }
+  confirmTarget.value = null;
 }
 
 async function runInline(action: () => Promise<void>, operation = 'default') {
@@ -571,7 +628,16 @@ onBeforeUnmount(() => {
             </div>
           </header>
 
-          <div v-if="selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
+          <div v-if="selectedServer.hostKeyMismatch || selectedServer.lastError" class="grid gap-2 border-b border-border p-4">
+            <div v-if="selectedServer.hostKeyMismatch" class="rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">
+              <div class="flex flex-wrap items-start justify-between gap-3">
+                <div class="grid min-w-0 gap-1">
+                  <strong>{{ t('serversPage.hostKeyMismatchTitle') }}</strong>
+                  <p class="m-0">{{ t('serversPage.hostKeyMismatchDescription') }}</p>
+                </div>
+                <Button size="sm" variant="danger" :loading="pendingOperation === 'trustHostKey'" @click="confirmTrustHostKey(selectedServer)"><KeyRound />{{ t('serversPage.trustHostKey') }}</Button>
+              </div>
+            </div>
             <div v-if="selectedServer.lastError" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ selectedServer.lastError }}</div>
           </div>
 
@@ -598,7 +664,7 @@ onBeforeUnmount(() => {
                         :long-label="t('autoRefresh.10s')"
                         :hint-label="t('autoRefresh.hint')"
                       />
-                      <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics"><RefreshCcw />{{ t('common.refresh') }}</Button>
+                      <Button size="sm" variant="ghost" :loading="metricsLoading" @click="loadMetrics(true)"><RefreshCcw />{{ t('common.refresh') }}</Button>
                     </div>
                   </div>
                   <LoadingOverlay v-if="metricsLoading && !metrics" />
@@ -633,13 +699,13 @@ onBeforeUnmount(() => {
                   <p class="mt-2 text-sm text-muted-foreground">{{ agentText(selectedServer) }}</p>
                   <div class="mt-3 grid gap-2">
                     <Button :loading="pendingOperation === 'agent'" @click="deployAgent(selectedServer)"><ServerCog />{{ t('serversPage.deployAgent') }}</Button>
-                    <Button :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="pendingOperation === 'restart'" @click="restartServer(selectedServer)"><PlayCircle />{{ t('serversPage.restart') }}</Button>
+                    <Button :disabled="!canRunPrivilegedOperation(selectedServer)" :loading="pendingOperation === 'restart'" @click="confirmRestart(selectedServer)"><PlayCircle />{{ t('serversPage.restart') }}</Button>
                   </div>
                 </section>
                 <section class="rounded-2xl border border-border bg-background p-4">
                   <h3 class="m-0 text-sm font-semibold text-foreground">{{ t('serversPage.privilegeAndSecurity') }}</h3>
                   <p class="mt-2 text-sm text-muted-foreground">{{ privilegeText(selectedServer) }}</p>
-                  <Button class="mt-3 w-full" :disabled="!canInstallUfw(selectedServer)" :loading="pendingOperation === 'ufw'" @click="installUfw(selectedServer)">
+                  <Button class="mt-3 w-full" :disabled="!canInstallUfw(selectedServer)" :loading="pendingOperation === 'ufw'" @click="confirmInstallUfw(selectedServer)">
                     <ShieldPlus />{{ t('serversPage.installUfw') }}
                   </Button>
                 </section>
@@ -662,6 +728,7 @@ onBeforeUnmount(() => {
           <label class="grid gap-1 text-sm">{{ t('serversPage.credential') }}<Select v-model="form.credentialId" :options="credentialOptions" :placeholder="t('serversPage.selectCredential')" /></label>
           <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.sshUsername') }}<Input v-model="form.sshUsername" :placeholder="t('serversPage.sshUsernameHint')" /></label>
           <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.dockerHost') }}<Input v-model="form.dockerHost" :invalid="Boolean(validation.dockerHost)" /></label>
+          <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.variables') }}<Textarea v-model="form.variables" :placeholder="t('serversPage.pairsHint')" class="font-mono" /></label>
           <label class="col-span-2 grid gap-1 text-sm max-sm:col-span-1">{{ t('serversPage.notes') }}<Textarea v-model="form.notes" /></label>
         </div>
         <div v-if="Object.values(validation).length" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">
@@ -673,7 +740,8 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <template #footer>
-        <Button variant="secondary" :loading="probing" @click="probe"><Cable />{{ t('serversPage.probe') }}</Button>
+        <div v-if="actionError" class="mr-auto min-w-0 rounded-xl border border-danger-border bg-danger-bg p-3 text-sm text-danger">{{ actionError }}</div>
+        <Button variant="secondary" :disabled="Boolean(Object.keys(validation).length)" :loading="probing" @click="probe"><Cable />{{ t('serversPage.probe') }}</Button>
         <Button variant="secondary" @click="serverDialog = false">{{ t('common.cancel') }}</Button>
         <Button variant="primary" :loading="saving" :disabled="Boolean(Object.keys(validation).length)" @click="saveServer">{{ editing ? t('common.save') : t('common.create') }}</Button>
       </template>
@@ -689,6 +757,22 @@ onBeforeUnmount(() => {
         <Button variant="danger" :loading="pendingOperation === 'default'" @click="deleteSelected">{{ t('common.delete') }}</Button>
       </template>
     </Dialog>
+
+    <ConfirmDialog
+      :open="Boolean(confirmOperation)"
+      :title="confirmOperation === 'restart' ? t('serversPage.confirmRestartTitle') : confirmOperation === 'ufw' ? t('serversPage.confirmUfwTitle') : t('serversPage.confirmTrustHostKeyTitle')"
+      :description="confirmTarget ? (confirmOperation === 'restart' ? t('serversPage.confirmRestartDescription', { name: confirmTarget.name }) : confirmOperation === 'ufw' ? t('serversPage.confirmUfwDescription', { name: confirmTarget.name }) : t('serversPage.confirmTrustHostKeyDescription', { name: confirmTarget.name })) : ''"
+      :impact="confirmOperation === 'restart' ? t('serversPage.confirmRestartImpact') : confirmOperation === 'ufw' ? t('serversPage.confirmUfwImpact') : t('serversPage.confirmTrustHostKeyImpact')"
+      tone="danger"
+      :loading="Boolean(pendingOperation)"
+      :confirm-label="t('common.confirm')"
+      :cancel-label="t('common.cancel')"
+      :require-checkbox="confirmOperation === 'trustHostKey'"
+      :checkbox-label="confirmOperation === 'trustHostKey' ? t('serversPage.trustHostKeyCheckbox') : t('serversPage.confirmCheckbox')"
+      @update:open="(value) => { if (!value) confirmOperation = null }"
+      @confirm="runConfirmedOperation"
+      @cancel="confirmOperation = null"
+    />
   </ConsolePage>
 </template>
 

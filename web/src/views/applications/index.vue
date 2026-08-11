@@ -36,6 +36,7 @@ import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomai
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import {
+  applicationDraftWarnings,
   applicationStatus,
   applyYamlToDraft,
   cloneFacilityDomains,
@@ -63,6 +64,7 @@ import {
   statusTone,
   syncDraftToYaml,
   validateApplicationDraft,
+  validateFileName,
   validateFacilityDraft,
   validateFacilityDomainFields,
   validateFacilityPathFields,
@@ -123,6 +125,8 @@ const logsLoading = ref(false);
 const confirmOpen = ref(false);
 const confirmKind = ref<'delete' | 'stop'>('delete');
 const confirmTarget = ref('');
+const restoreConfirmOpen = ref(false);
+let restoreFile: File | null = null;
 const discardDialogOpen = ref(false);
 let pendingLeaveTarget: string | null = null;
 let pendingFacilityCancel = false;
@@ -178,6 +182,7 @@ const appStatus = computed(() => currentApplicationSummary.value ? applicationSt
 const appDraft = reactive<ApplicationDraftUi>(draftFromApplication());
 const facilityDraft = reactive<FacilityDraftUi>(facilityDraftFromConfig());
 const appErrors = computed(() => validateApplicationDraft(appDraft));
+const appWarnings = computed(() => applicationDraftWarnings(appDraft));
 const facilityErrors = computed(() => validateFacilityDraft(facilityDraft));
 const appDiff = computed(() => diffApplications(mode.value === 'edit' ? currentApplication.value : null, appDraft));
 const facilityDiff = computed(() => diffFacility(facility.value, facilityDraft));
@@ -420,6 +425,8 @@ const applicationAssetAdapter: AssetFileAdapter = {
   },
   async saveText({ key: fileName, name, content }) {
     if (!editSession.value) return;
+    const nameError = validateFileName(name);
+    if (nameError) throw new Error(t(nameError));
     editSession.value = await applicationsApi.putEditSessionFile(editSession.value.id, fileName, editSession.value.revision, { name, contentBase64: encodeBase64Utf8(content) });
     markDirty();
   },
@@ -470,6 +477,8 @@ const facilityAssetAdapter: AssetFileAdapter = {
   },
   async saveText({ key: assetName, name, filename, content }) {
     if (!facilitySession.value || !filename) return;
+    const nameError = validateFileName(name) ?? validateFileName(filename);
+    if (nameError) throw new Error(t(nameError));
     const file = new File([content], filename, { type: 'text/plain;charset=utf-8' });
     facilitySession.value = await reverseProxyFacilityApi.putEditAsset(facilitySession.value.id, assetName, facilitySession.value.revision, { file, name: name || filename, kind: 'uploaded_file', contentMode: 'text' });
     markDirty();
@@ -532,6 +541,13 @@ watch(selectedId, async (value) => {
     await router.replace({ query: { ...route.query, application: value } });
     void loadApplicationDetail(value);
     await loadRuntime(value);
+  }
+});
+
+watch(facilityEditingView, (editing) => {
+  if (editing && dnsPollTimer) {
+    clearTimeout(dnsPollTimer);
+    dnsPollTimer = null;
   }
 });
 
@@ -674,7 +690,7 @@ async function loadFacilityData() {
     facility.value = primaryFacility;
     facilitiesLoaded.value = true;
     const pendingDns = primaryFacility?.dnsSync ? Object.values(primaryFacility.dnsSync).some((state) => state.state === 'pending') : false;
-    if (pendingDns && !facilityEditingView.value) {
+    if (pendingDns && !facilityEditingView.value && document.visibilityState === 'visible') {
       dnsPollTimer = setTimeout(() => { void loadFacilityData(); }, 3000);
     }
   } catch (err) {
@@ -812,6 +828,15 @@ async function downloadPersistentData(app: ApplicationDto) {
 
 async function restorePersistentData(fileOrFiles: File | File[]) {
   const file = Array.isArray(fileOrFiles) ? fileOrFiles[0] : fileOrFiles;
+  if (!file || !currentApplicationSummary.value) return;
+  restoreFile = file;
+  restoreConfirmOpen.value = true;
+}
+
+async function confirmRestorePersistentData() {
+  const file = restoreFile;
+  restoreFile = null;
+  restoreConfirmOpen.value = false;
   if (!file || !currentApplicationSummary.value) return;
   await runOperation('persistent-restore', () => applicationsApi.restorePersistentData(selectedApplication.value.id, file), 'applicationsPage.restoreAccepted', 'applicationsPage.restoreAcceptedWithoutId');
 }
@@ -1256,7 +1281,7 @@ function openProxyPathDialog(index = -1) {
   dialogKind.value = 'proxyPath';
   dialogParentIndex.value = dialogIndex.value;
   dialogIndex.value = index;
-  Object.assign(proxyPathDraft, index >= 0 ? proxyDraft.paths[index] : makeProxyPath());
+  Object.assign(proxyPathDraft, index >= 0 ? structuredClone(proxyDraft.paths[index]) : makeProxyPath());
   if (!proxyPathDraft.options) Object.assign(proxyPathDraft, { options: defaultRouteOptions() });
   proxyRequestHeaders.value = (proxyPathDraft.options?.requestHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
   proxyResponseHeaders.value = (proxyPathDraft.options?.responseHeaders ?? []).map((header) => makeKeyValueRow(header.name, header.value));
@@ -1404,6 +1429,13 @@ async function runAssetAction(key: string, action: () => Promise<void>) {
   } finally {
     assetActionPending.value = '';
   }
+}
+
+function instanceStatusLabel(status: string) {
+  if (!status) return t('common.notAvailable');
+  const key = `applicationsPage.instanceStatus.${status}`;
+  const label = t(key);
+  return label === key ? status : label;
 }
 
 function sourceSummary() {
@@ -1599,7 +1631,7 @@ onBeforeUnmount(() => {
                       <h3>{{ t('applicationsPage.nodeInstances') }}</h3>
                       <div v-if="!runtimeLoading && currentRuntime?.instances?.length" class="mt-3 grid gap-2">
                         <div v-for="instance in currentRuntime.instances" :key="instance.instanceId || instance.id" class="grid gap-1 rounded-xl border border-border p-3 text-sm">
-                          <div class="flex items-center justify-between gap-2"><strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong><StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instance.status || instance.state || t('common.notAvailable')" /></div>
+                          <div class="flex items-center justify-between gap-2"><strong>{{ instance.serverName || instance.serverId || instance.instanceId }}</strong><StatusBadge :status="instance.status || instance.state || 'unknown'" :tone="statusTone(instance.status || instance.state || 'unknown')" :label="instanceStatusLabel(instance.status || instance.state || '')" /></div>
                           <span class="text-muted-foreground">{{ instance.containerName || instance.containerId || t('common.notAvailable') }}</span>
                           <span v-if="instance.error" class="text-danger">{{ instance.error }}</span>
                         </div>
@@ -1641,7 +1673,6 @@ onBeforeUnmount(() => {
                 <section class="rounded-2xl border border-border bg-background p-4">
                   <h3>{{ t('applicationsPage.operations') }}</h3>
                   <div class="mt-3 grid gap-2">
-                    <Button :loading="pending === 'image-check'" @click="runOperation('image-check', () => applicationsApi.checkImage(selectedApplication.id), 'applicationsPage.imageChecked')"><RefreshCcw />{{ t('applicationsPage.checkImage') }}</Button>
                     <Button :disabled="!selectedApplication.imageUpdateAvailable" :loading="pending === 'image-update'" @click="runOperation('image-update', () => applicationsApi.updateImage(selectedApplication.id), 'applicationsPage.imageUpdateAccepted', 'applicationsPage.imageUpdateAcceptedWithoutId')"><UploadCloud />{{ t('applicationsPage.updateImage') }}</Button>
                     <Button @click="router.push({ path: '/application-operations', query: { applicationId: selectedApplication.id } })"><ClipboardList />{{ t('applicationsPage.operationRecords') }}</Button>
                     <Button :loading="logsLoading" @click="showLogs(selectedApplication)"><History />{{ t('applicationsPage.logs') }}</Button>
@@ -1950,8 +1981,8 @@ onBeforeUnmount(() => {
               <div class="form-grid">
                 <label class="field wide-field">{{ t('applicationsPage.image') }}<Input v-model="appDraft.image" :invalid="Boolean(appErrors.image)" @input="markAppStructuredDirty" /></label>
                 <label class="field">{{ t('applicationsPage.networkMode') }}<Select v-model="appDraft.networkMode" :options="[{ label: 'bridge', value: 'bridge' }, { label: 'host', value: 'host' }]" @change="onAppNetworkModeChange" /></label>
-                <label class="field">{{ t('applicationsPage.cpu') }}<Input v-model="appDraft.cpu" placeholder="0.5" @input="markAppStructuredDirty" /></label>
-                <label class="field">{{ t('applicationsPage.memoryMb') }}<Input v-model="appDraft.memoryMb" placeholder="512" @input="markAppStructuredDirty" /></label>
+                <label class="field">{{ t('applicationsPage.cpu') }}<Input v-model="appDraft.cpu" placeholder="0.5" :invalid="Boolean(appErrors.cpu)" @input="markAppStructuredDirty" /></label>
+                <label class="field">{{ t('applicationsPage.memoryMb') }}<Input v-model="appDraft.memoryMb" placeholder="512" :invalid="Boolean(appErrors.memoryMb)" @input="markAppStructuredDirty" /></label>
                 <div class="field wide-field">
                   <span>{{ t('applicationsPage.command') }}</span>
                   <div class="grid gap-2">
@@ -2012,6 +2043,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
               <div class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('applicationsPage.sourceGuardHint') }}</div>
+              <div v-if="appWarnings.specYaml" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t(appWarnings.specYaml) }}</div>
               <CodeEditor v-model="appDraft.specYaml" language="yaml" size="large" :editor-label="t('applicationsPage.specYaml')" :invalid="Boolean(appErrors.specYaml)" @update:model-value="markSpecDirty" />
             </section>
           </div>
@@ -2216,6 +2248,19 @@ onBeforeUnmount(() => {
             <Button variant="danger" :loading="Boolean(pending)" @click="confirmAction">{{ t('common.confirm') }}</Button>
     </template>
   </Dialog>
+
+  <ConfirmDialog
+    :open="restoreConfirmOpen"
+    :title="t('applicationsPage.restorePersistentData')"
+    :impact="t('applicationsPage.restorePersistentDataImpact')"
+    tone="danger"
+    :confirm-label="t('common.confirm')"
+    :cancel-label="t('common.cancel')"
+    :require-checkbox="true"
+    :checkbox-label="t('applicationsPage.restorePersistentDataCheckbox')"
+    @confirm="confirmRestorePersistentData"
+    @update:open="(open: boolean) => { if (!open) restoreConfirmOpen = false }"
+  />
 
   <ConfirmDialog
     :open="discardDialogOpen"

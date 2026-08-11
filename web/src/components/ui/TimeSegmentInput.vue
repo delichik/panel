@@ -35,6 +35,9 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 function onWheel(event: WheelEvent) {
+  // Only adjust the value while the field is focused; otherwise let the
+  // surrounding page scroll normally.
+  if (document.activeElement !== event.target) return;
   event.preventDefault();
   emit('update:modelValue', clamp(props.modelValue + (event.deltaY < 0 ? 1 : -1)));
 }

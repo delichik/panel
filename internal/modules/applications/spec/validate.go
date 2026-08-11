@@ -119,10 +119,17 @@ func Validate(spec Spec) []Issue {
 		issues = append(issues, Issue{Field: "restart.mode", Message: "restart mode must be fail or delay"})
 	}
 
+	for key := range spec.Env {
+		if strings.TrimSpace(key) == "" || strings.Contains(key, "=") {
+			issues = append(issues, Issue{Field: "env", Message: "environment variable names must be non-empty and must not contain ="})
+		}
+	}
+
 	portLabels := map[string]struct{}{}
 	if spec.NetworkMode == "host" && len(spec.Ports) > 0 {
 		issues = append(issues, Issue{Field: "ports", Message: "ports cannot be configured when networkMode is host"})
 	}
+	seenStatic := map[int]struct{}{}
 	for i, port := range spec.Ports {
 		if !validName(port.Label) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].label", i), Message: "port label must use application name format"})
@@ -134,6 +141,12 @@ func Validate(spec Spec) []Issue {
 		}
 		if port.Static != 0 && !validPort(port.Static) {
 			issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].static", i), Message: "static port must be between 1 and 65535"})
+		}
+		if port.Static != 0 {
+			if _, ok := seenStatic[port.Static]; ok {
+				issues = append(issues, Issue{Field: fmt.Sprintf("ports[%d].static", i), Message: "static port is duplicated"})
+			}
+			seenStatic[port.Static] = struct{}{}
 		}
 	}
 
@@ -161,6 +174,8 @@ func Validate(spec Spec) []Issue {
 	for i, volume := range spec.Volumes {
 		if strings.TrimSpace(volume.Source) == "" {
 			issues = append(issues, Issue{Field: fmt.Sprintf("volumes[%d].source", i), Message: "volume source is required"})
+		} else if !validDockerVolumeName(volume.Source) {
+			issues = append(issues, Issue{Field: fmt.Sprintf("volumes[%d].source", i), Message: "volume source must be a valid Docker volume name"})
 		}
 		if !strings.HasPrefix(volume.Target, "/") {
 			issues = append(issues, Issue{Field: fmt.Sprintf("volumes[%d].target", i), Message: "volume target must be an absolute Linux path"})
@@ -187,6 +202,9 @@ func Validate(spec Spec) []Issue {
 		}
 		if !strings.HasPrefix(mount.Target, "/") {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].target", i), Message: "mount target must be an absolute Linux path"})
+		}
+		if strings.TrimSpace(mount.Target) == "/" {
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].target", i), Message: "mount target cannot be the filesystem root"})
 		}
 		if mount.UID != nil && *mount.UID < 0 {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].uid", i), Message: "mount uid cannot be negative"})
@@ -256,6 +274,23 @@ func validName(value string) bool {
 
 func validPort(value int) bool {
 	return value >= 1 && value <= 65535
+}
+
+func validDockerVolumeName(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	first := value[0]
+	if !(first >= 'a' && first <= 'z' || first >= 'A' && first <= 'Z' || first >= '0' && first <= '9') {
+		return false
+	}
+	for _, r := range value {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '.' || r == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 func validWorkspacePath(value string) bool {

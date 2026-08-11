@@ -3,7 +3,7 @@
 ## List And Snapshot Contracts
 
 - Container list reads deserialize `container_observations.summary_json`, not full `container_json`. Reports persist both forms and migration backfills old observations.
-- Container, image, network, and volume GET responses use `items`, `observedAt`, `stale`, `refreshing`, optional `refreshTaskId`, and optional `lastRefreshError`.
+- Container, image, network, and volume GET responses use `items`, `observedAt`, `stale`, `refreshing`, optional `refreshTaskId`, and optional `lastRefreshError`. 镜像/网络/卷的 `refreshing`、`refreshTaskId` 从该服务器当前活跃刷新任务（queued/running）推导，`lastRefreshError` 从最新一次刷新任务（若为 failed/failed_retryable）推导；GET 不会联系 Agent。
 - Image, network, and volume refreshes are async task POSTs. Resource GET handlers never contact the Agent, and the frontend reloads snapshots after successful task completion.
 - When a network or volume page first opens with no local snapshot, the frontend automatically submits one `network_refresh` / `volume_refresh` task and waits for it before showing the empty state; failures keep the empty state and manual refresh remains available.
 
@@ -63,7 +63,7 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 - 静态站点配置保存域名、路径和宿主机根目录；部署时作为只读 bind mount 挂入 nginx 容器。
 - 应用里的 `reverseProxy` 规则只会被下发到反向代理设施应用覆盖的服务器；未指定为设施应用部署目标的服务器忽略这些规则。
 - 每个设施域名必须显式选择至少一台入口节点，且入口节点必须属于设施全局网关节点；新保存请求不得把空选择解释为全部节点。读取旧配置时，旧 `deploymentServers` 为空仍按当时全部全局网关节点展开，多个旧 Path 使用不同节点集合时取并集，避免迁移缩小已有访问范围。
-- 入口代理保存会联动 DNS：当前全部域名进入异步 `dns_proxy_records_sync` 任务检查生效状态，已生效且未变化的记录只比对不写入，只有与期望记录不一致时才创建/更新/删除。记录目标服务器与路由语义一致：anyAccess 关闭时用域名源站列表，开启时用全部全局网关节点；服务器 `ipv4` → A、`ipv6` → AAAA。每域名同步状态在设施配置响应 `dnsSync` 中返回并在页面展示。
+- 入口代理保存会联动 DNS：当前全部域名进入异步 `dns_proxy_records_sync` 任务检查生效状态，已生效且未变化的记录只比对不写入，只有与期望记录不一致时才创建/更新/删除。记录目标服务器与路由语义一致：anyAccess 关闭时用域名源站列表，开启时用全部全局网关节点；服务器 `ipv4` → A、`ipv6` → AAAA。每域名同步状态在设施配置响应 `dnsSync` 中返回并在页面展示。同步任务读取服务器列表失败时直接失败（域名保持 pending），不得把“读不到服务器”当成“没有服务器”进入清理分支误删记录。任务执行时会合并当前所有 pending 域名，同一任务活跃期间新触发的域名不会因 params 遗漏而停留在 pending。
 - 域名开启上游模式后，入口节点成为上游并保留原始静态、重定向和手工代理 Path；其余全局网关节点只生成域名级 `/` 转发。AnyAccess 的 `relayServerIds` 为空时转发节点为所有非源站全局网关节点；非空时只在指定节点生成转发，前端提供“所有未部署的服务器 / 指定服务器（多选）”两种范围。策略支持轮询、主备和客户端 IP 哈希，固定 `max_fails=3 fail_timeout=30s`。匹配到域名证书时节点间使用 HTTPS、SNI 和证书校验，否则使用 HTTP；上游全部不可用时由 Nginx 返回 502，不回退本地处理。
 - 上游模式域名由设施独占，不允许普通应用或 Panel 入口共享同一规范化域名。非上游模式仍按实际服务器上的精确 `domain + path` 检测设施、应用和 Panel 入口冲突。
 - 设施手工代理、普通应用代理、Panel 入口和跨节点转发的每个 Nginx location 都必须显式写入 `proxy_cache off;`。Panel 不管理客户端缓存 Header；用户如通过通用响应 Header 设置 `Cache-Control` 等字段，其语义由用户负责。
@@ -96,7 +96,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 
 ## 队列、同步操作与协调
 
-- 每台服务器一条独立 Docker 资源写操作队列；同服务器串行，不同服务器并行。
+- 每台服务器一条独立 Docker 资源写操作队列；同服务器串行，不同服务器并行。单个任务执行 panic 时会被队列 worker 捕获并记录日志，该任务以错误结束，不会带走整条队列。
 - 普通容器、镜像、卷页面发起的写操作进入队列同步执行，不创建操作任务；API 在 Agent 操作完成或失败后返回。
 - 镜像拉取是长耗时操作，Panel 到 agent 以及 agent 到 Docker Engine 的 pull 请求超时均为 15 分钟；未显式写 tag 的镜像引用按 Docker CLI 语义拉取 `latest`，agent 调 Docker Engine API 时必须显式传递 `tag=latest`；其它 Docker 查询、容器动作和卷动作保持常规短超时。
 - Application 部署、停止、重启也共享同一服务器队列，但保留 Application 自身任务记录；Application 部署由 Panel 编排写文件、拉镜像、删旧容器、创建、启动和状态刷新等原子 agent/Docker 调用，不使用 agent 侧胖部署接口。
@@ -159,12 +159,12 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - Facility actions follow the shared operation model: immediate sync and entering configuration live in the read-only detail header; the configuration page owns its Save and apply action. Domain/path/asset deletion requires a standard confirmation dialog. Path editing uses an independent dialog draft, and saving is blocked by a persistent progress overlay while assets and configuration are committed through the edit session.
 - Uploaded site content is distributed through agent managed files and mounted read-only into the nginx container. Managed file parent directories are fixed to `0755` and uploaded files to `0644` so the nginx worker can traverse and read them; server directories still use read-only bind mounts from the target node.
 - Agent managed files use full desired-set synchronization: ordinary files are written to temporary siblings and renamed, the manifest is committed last, and files managed by the previous manifest but absent from the new manifest are removed. Files that never belonged to a Panel manifest are preserved. This applies to both reload and recreate.
-- Facility reverse proxy deployment maintains a hidden managed application identity with id `facility-reverse-proxy` for application lifecycle deployment record queries. The facility configuration remains in `facility_app_configs`, the managed identity is filtered out of normal application lists, and each save/reconcile writes the latest `application_lifecycle_operations` plus per-node `application_lifecycle_targets` in `Store.LogDB()` shown on the facility app page. Operation records (`/api/v1/application-operations`) include these lifecycle operations; the frontend renders the facility app column with the translated “entrance proxy facility” name instead of the internal snapshot `__panel_facility_reverse_proxy__`. 设施配置响应额外暴露 `reconcileStopped`：入口代理连续失败 10 次后停止自动协调，并在设施详情页展示“需人工处理”特殊状态。
+- Facility reverse proxy deployment maintains a hidden managed application identity with id `facility-reverse-proxy` for application lifecycle deployment record queries. The facility configuration remains in `facility_app_configs`, the managed identity is filtered out of normal application lists, and each save/reconcile writes the latest `application_lifecycle_operations` plus per-node `application_lifecycle_targets` in the standalone coordination database `Store.CoordDB()` (the facility module receives it through `WithCoordDB`), shown on the facility app page. Operation records (`/api/v1/application-operations`) include these lifecycle operations; the frontend renders the facility app column with the translated “entrance proxy facility” name instead of the internal snapshot `__panel_facility_reverse_proxy__`. 设施配置响应额外暴露 `reconcileStopped`：入口代理连续失败 10 次后停止自动协调，并在设施详情页展示“需人工处理”特殊状态。
  
 ## Agent Report Cache
 
 - Container list reads use the latest `container_observations` snapshot saved from the agent report stream. They no longer pull `DockerContainers` during normal list or application reconciliation paths.
-- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report. Report 快照只包含协调与列表展示所需字段（id、names、image、image_id、state、status、ports、labels），不再携带 command/created/mounts；完整详情仍可按需通过 Docker 原子接口获取。镜像页的使用状态与关联 Application 依赖快照中的 image_id 与镜像 id 精确匹配。
+- The agent sends periodic full container snapshots and near-real-time change snapshots over the report stream. Panel replaces the per-server observation set atomically for each full report. 上报未携带容器快照（nil）时保留既有观察，不会清空；只有明确携带空列表时才允许清空。完整快照替换时，已消失实例的 `application_reconcile_states` 行也会同步清理，与 applications 侧删除实例时的行为一致。 Report 快照只包含协调与列表展示所需字段（id、names、image、image_id、state、status、ports、labels），不再携带 command/created/mounts；完整详情仍可按需通过 Docker 原子接口获取。镜像页的使用状态与关联 Application 依赖快照中的 image_id 与镜像 id 精确匹配。
 - Application reconciliation collectors read cached observations only. A server that reports a failed container, stale generation/spec hash, or managed file manifest drift can cause the application planner to create or reuse a lifecycle target for that server without redeploying other servers that are already healthy.
 - `application_reconcile_states` keeps the exponential backoff state. Automatic reconciliation must honor `reconcile_next_run_at`; healthy observations clear failures only after the configured success streak.
 - 自动协调连续失败达到 10 次后，应用进入 `reconcile_stopped` 停止状态；调度器扫描与 agent 上报的 `container_change` 漂移协调都不再创建新部署，用户显式操作清除状态后重新计数。

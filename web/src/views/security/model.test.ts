@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fail2BanPreset, fail2BanTone, jailsToYaml, parseSimpleJailsFromYaml, serverOptionState, ufwTone, validateUfwRule } from './model';
+import { fail2BanPreset, fail2BanTone, hasAdvancedJailConfig, jailsToYaml, parseSimpleJailsFromYaml, serverOptionState, ufwTone, validateUfwRule } from './model';
 import type { ServerDto } from '@/types/servers';
 
 const server: ServerDto = {
@@ -32,6 +32,16 @@ describe('security model', () => {
       protocol: 'securityPage.validationProtocol',
       from: 'securityPage.validationFrom',
     });
+  });
+
+
+  it('detects advanced Fail2Ban config that the visual draft would drop', () => {
+    expect(hasAdvancedJailConfig(jailsToYaml([fail2BanPreset('ssh')]))).toBe(false);
+    expect(hasAdvancedJailConfig('jails:\n  - name: sshd\n    enabled: true\n    options:\n      maxmemory: 128m\n')).toBe(true);
+    expect(hasAdvancedJailConfig('jails:\n  - name: sshd\n    enabled: true\n    custom_key: value\n')).toBe(true);
+    expect(hasAdvancedJailConfig('jails:\n  - name: sshd\n    enabled: true\n')).toBe(false);
+    expect(hasAdvancedJailConfig('')).toBe(false);
+    expect(hasAdvancedJailConfig('not: valid yaml: [')).toBe(false);
   });
 
   it('keeps fail2ban presets convertible between visual and YAML drafts', () => {

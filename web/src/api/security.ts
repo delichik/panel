@@ -39,7 +39,7 @@ export const securityApi = {
 
 function normalizeFail2BanState(state: Fail2BanState | null): Fail2BanState {
   const config = state?.config ?? { jails: [] };
-  return {
+  const normalized = {
     serverId: state?.serverId ?? '',
     installed: Boolean(state?.installed),
     active: Boolean(state?.active),
@@ -47,11 +47,17 @@ function normalizeFail2BanState(state: Fail2BanState | null): Fail2BanState {
     panelConfigPresent: Boolean(state?.panelConfigPresent),
     jails: Array.isArray(state?.jails) ? state.jails : [],
     raw: state?.raw ?? '',
-    configYaml: state?.configYaml ?? 'jails: []\n',
+    // Keep undefined when the backend did not return a YAML document (for
+    // example an unmanaged/uninstalled server) instead of fabricating a
+    // default; pages must force a refresh before saving when it is missing.
+    configYaml: state?.configYaml,
     config: {
       ...config,
       jails: Array.isArray(config.jails) ? config.jails : [],
     },
     updatedAt: state?.updatedAt ?? null,
   };
+  // The consumer type still declares configYaml: string; the runtime value may
+  // be undefined until the page task adds the required guards.
+  return normalized as Fail2BanState;
 }

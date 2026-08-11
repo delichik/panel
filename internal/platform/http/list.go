@@ -10,6 +10,9 @@ import (
 const (
 	DefaultPageSize = 50
 	MaxPageSize     = 200
+	// MaxPage caps page so (page-1)*pageSize cannot overflow or force
+	// unbounded scans of the underlying table.
+	MaxPage = 10000
 )
 
 type ListPage[T any] struct {
@@ -32,8 +35,8 @@ func ParseListPage(r *http.Request, allowed ...string) (page, pageSize int, err 
 	page, pageSize = 1, DefaultPageSize
 	if raw := r.URL.Query().Get("page"); raw != "" {
 		page, err = strconv.Atoi(raw)
-		if err != nil || page < 1 {
-			return 0, 0, panelerr.BadRequest("page_invalid", "page must be a positive integer")
+		if err != nil || page < 1 || page > MaxPage {
+			return 0, 0, panelerr.BadRequest("page_invalid", "page must be between 1 and 10000")
 		}
 	}
 	if raw := r.URL.Query().Get("pageSize"); raw != "" {

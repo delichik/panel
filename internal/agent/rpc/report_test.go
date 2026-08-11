@@ -1,10 +1,13 @@
 package rpc
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	agentsystem "panel/internal/agent/system"
+	"panel/internal/platform/linux"
 )
 
 func TestNextAlignedUsesUnixIntervalBoundary(t *testing.T) {
@@ -66,8 +69,18 @@ func TestReportIntervalDueUsesUnixBoundary(t *testing.T) {
 	}
 }
 
+type okReportCollector struct{}
+
+func (okReportCollector) MetricsSnapshot(context.Context, string) (linux.MetricsSnapshot, error) {
+	return linux.MetricsSnapshot{}, nil
+}
+
+func (okReportCollector) PackageUpdates(context.Context) ([]linux.PackageUpdate, error) {
+	return nil, nil
+}
+
 func TestReportHubKeepsSchedulingWhenWatchersChurn(t *testing.T) {
-	hub := newReportHub(agentsystem.LocalCollector{}, nil)
+	hub := newReportHub(okReportCollector{}, nil)
 	w := hub.add(reportConfig{serverID: "s1", metricsInterval: 1 * time.Second})
 	defer hub.remove(w.id)
 	for i := 0; i < 50; i++ {
@@ -78,5 +91,28 @@ func TestReportHubKeepsSchedulingWhenWatchersChurn(t *testing.T) {
 	case <-w.ch:
 	case <-time.After(3 * time.Second):
 		t.Fatal("watcher starved; hub did not keep scheduling reports")
+	}
+}
+
+type failingReportCollector struct{}
+
+func (failingReportCollector) MetricsSnapshot(context.Context, string) (linux.MetricsSnapshot, error) {
+	return linux.MetricsSnapshot{}, errors.New("metrics unavailable")
+}
+
+func (failingReportCollector) PackageUpdates(context.Context) ([]linux.PackageUpdate, error) {
+	return nil, errors.New("packages unavailable")
+}
+
+func TestCollectAndBroadcastKeepsFailedCollectionsNil(t *testing.T) {
+	hub := newReportHub(failingReportCollector{}, nil)
+	watcher := hub.add(reportConfig{serverID: "s1", metricsInterval: time.Second, containerInterval: time.Second})
+	defer hub.remove(watcher.id)
+
+	hub.collectAndBroadcast(time.Unix(10, 0).UTC(), false, "")
+	select {
+	case msg := <-watcher.ch:
+		t.Fatalf("expected no report when both collections fail, got %#v", msg)
+	case <-time.After(50 * time.Millisecond):
 	}
 }

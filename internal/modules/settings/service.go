@@ -2,7 +2,9 @@ package settings
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"net/mail"
 	"regexp"
@@ -284,6 +286,14 @@ func (s *Service) UpdateServerVariableDefinitions(ctx context.Context, input Ser
 
 func (s *Service) ensureDefaultRuntimeSettings(ctx context.Context) error {
 	defaults := defaultRuntimeSettings(s.cfg)
+	if !s.hasConfiguredJWTSecret() {
+		secret, err := randomJWTSecret()
+		if err != nil {
+			return err
+		}
+		defaults.JWTSecret = secret
+		defaults.JWTSecretConfigured = true
+	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for key, value := range runtimeValues(defaults, true) {
 		if _, err := orm.RawExec(ctx, s.db, `
@@ -560,6 +570,23 @@ func TokenExpirationDuration(value string) (time.Duration, bool) {
 	default:
 		return 0, false
 	}
+}
+
+// hasConfiguredJWTSecret reports whether the JWT secret was explicitly set in
+// the config file or environment rather than left at the public default
+// constant. Explicitly configured secrets are treated as intentional and are
+// preserved; the default constant is randomized on first startup instead.
+func (s *Service) hasConfiguredJWTSecret() bool {
+	secret := strings.TrimSpace(s.cfg.JWTSecret)
+	return secret != "" && secret != DefaultJWTSecret
+}
+
+func randomJWTSecret() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
 func firstNonEmpty(values ...string) string {

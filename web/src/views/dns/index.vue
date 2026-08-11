@@ -37,6 +37,12 @@ const pageSize = 50;
 const totalDomains = ref(0);
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 let recordsRequestId = 0;
+let syncController: AbortController | null = null;
+
+function syncTaskSignal() {
+  if (!syncController || syncController.signal.aborted) syncController = new AbortController();
+  return syncController.signal;
+}
 const listRequests = createLatestRequestGuard();
 const loadingDomains = ref(false);
 const loadingRecords = ref(false);
@@ -102,7 +108,10 @@ async function loadDomains() {
   }
 }
 
-onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
+onBeforeUnmount(() => {
+  if (searchTimer) clearTimeout(searchTimer);
+  if (syncController) syncController.abort();
+});
 
 async function loadRecords(domainId = selectedId.value, signal?: AbortSignal) {
   if (!domainId) return;
@@ -132,7 +141,7 @@ async function syncRecords() {
   try {
     const result = await dnsApi.refreshRecords(domainId);
     notifySuccess(t('resourcesPage.taskAccepted', { taskId: result.taskId }));
-    await waitForTask(result.taskId);
+    await waitForTask(result.taskId, 90_000, syncTaskSignal());
     if (selectedId.value !== domainId) return;
     await loadRecords(domainId);
   } catch (err) {
@@ -325,7 +334,8 @@ async function deleteRecord() {
                 </thead>
                 <tbody class="motion-stagger divide-y divide-border bg-background">
                   <tr v-if="loadingRecords && !records.length"><td colspan="5" class="px-3 py-3"><div class="grid gap-2"><Skeleton v-for="item in 4" :key="item" class="h-8" /></div></td></tr>
-                  <tr v-if="!records.length && !loadingRecords"><td colspan="5" class="px-3 py-8"><EmptyState :title="t('dnsPage.noRecords')" :description="t('dnsPage.noRecordsHint')" /></td></tr>
+                  <tr v-if="recordsError && !loadingRecords"><td colspan="5" class="px-3 py-8"><EmptyState :title="t('common.loadFailed')" :description="recordsError"><template #actions><Button size="sm" :loading="loadingRecords" @click="loadRecords()"><RefreshCcw />{{ t('common.retry') }}</Button></template></EmptyState></td></tr>
+                  <tr v-if="!records.length && !loadingRecords && !recordsError"><td colspan="5" class="px-3 py-8"><EmptyState :title="t('dnsPage.noRecords')" :description="t('dnsPage.noRecordsHint')" /></td></tr>
                   <tr v-for="record in records" :key="record.id" class="motion-table-row hover:bg-accent/60">
                     <td class="px-3 py-2"><Badge tone="info">{{ record.type }}</Badge></td>
                     <td class="px-3 py-2 font-medium">{{ record.name }}</td>

@@ -68,6 +68,29 @@ export function createOverviewCard(
   };
 }
 
+/**
+ * 多服务器指标按时间戳对齐后聚合（同一时刻取均值），避免按数组下标错位聚合。
+ */
+export function aggregateMetricValues(
+  pointsByServer: Array<Array<{ time: string }>>,
+  valueOf: (point: { time: string }) => number,
+): { times: string[]; values: number[] } {
+  const byTime = new Map<string, number[]>();
+  pointsByServer.forEach((points) => points.forEach((point) => {
+    const list = byTime.get(point.time);
+    if (list) list.push(valueOf(point));
+    else byTime.set(point.time, [valueOf(point)]);
+  }));
+  const times = [...byTime.keys()].sort((a, b) => Date.parse(a) - Date.parse(b));
+  return {
+    times,
+    values: times.map((time) => {
+      const list = byTime.get(time) ?? [];
+      return list.length ? list.reduce((sum, value) => sum + value, 0) / list.length : 0;
+    }),
+  };
+}
+
 export function mergeMetricPoints<T extends { time: string }>(existing: T[] | undefined, incoming: T[] | undefined): T[] {
   if (!incoming?.length) return existing ? [...existing] : [];
   if (!existing?.length) return [...incoming];

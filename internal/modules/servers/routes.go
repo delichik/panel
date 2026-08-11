@@ -14,6 +14,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("PUT /api/v1/servers/{id}", auth(http.HandlerFunc(h.Update)))
 	mux.Handle("DELETE /api/v1/servers/{id}", auth(http.HandlerFunc(h.Delete)))
 	mux.Handle("POST /api/v1/servers/{id}/test", auth(http.HandlerFunc(h.Test)))
+	mux.Handle("POST /api/v1/servers/{id}/trust-host-key", auth(http.HandlerFunc(h.TrustHostKey)))
 	mux.Handle("POST /api/v1/servers/{id}/restart", auth(http.HandlerFunc(h.Restart)))
 	mux.Handle("POST /api/v1/servers/{id}/agent/certificate", auth(http.HandlerFunc(h.IssueAgentCertificate)))
 	mux.Handle("POST /api/v1/servers/{id}/agent/deploy", auth(http.HandlerFunc(h.DeployAgent)))

@@ -191,23 +191,28 @@ func (s *Service) ensureAgentDeployTask(ctx context.Context, serverID, triggered
 			if err != nil {
 				return tasks.Task{}, err
 			}
-			s.startAgentDeployTask(task, srv)
+			if err := s.startAgentDeployTask(task, srv); err != nil {
+				return tasks.Task{}, err
+			}
 			task, _ = s.tasks.Get(ctx, task.ID)
 		}
 		return task, nil
 	}
 	if run {
-		s.startAgentDeployTask(task, srv)
+		if err := s.startAgentDeployTask(task, srv); err != nil {
+			return tasks.Task{}, err
+		}
 		task, _ = s.tasks.Get(ctx, task.ID)
 	}
 	return task, nil
 }
 
-func (s *Service) startAgentDeployTask(task tasks.Task, srv Server) {
+func (s *Service) startAgentDeployTask(task tasks.Task, srv Server) error {
 	if err := s.tasks.Start(context.Background(), task.ID); err != nil {
-		return
+		return err
 	}
 	go s.runDeployAgent(s.tasks.ExecutionContext(task.ID), task.ID, srv)
+	return nil
 }
 
 func (s *Service) agentAutoDeployNeeded(ctx context.Context, srv Server, now time.Time) (bool, error) {
@@ -352,16 +357,32 @@ func (s *Service) runDeployAgent(ctx context.Context, taskID string, srv Server)
 		s.failAgentDeployTask(ctx, taskID, srv, err)
 		return
 	}
-	time.Sleep(2 * time.Second)
 	_ = s.tasks.Advance(ctx, taskID, "checking", "checking panel agent compatibility")
-	refreshed, err := s.Get(ctx, srv.ID)
-	if err != nil {
-		s.failAgentDeployTask(ctx, taskID, srv, err)
-		return
+	var checkErr error
+	for attempt := 0; attempt < agentDeployCompatibilityMaxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				s.failAgentDeployTask(ctx, taskID, srv, ctx.Err())
+				return
+			case <-time.After(agentDeployCompatibilityPollInterval):
+			}
+		}
+		refreshed, err := s.Get(ctx, srv.ID)
+		if err != nil {
+			s.failAgentDeployTask(ctx, taskID, srv, err)
+			return
+		}
+		if err := s.checkAgent(ctx, refreshed); err != nil {
+			checkErr = err
+			continue
+		}
+		checkErr = nil
+		break
 	}
-	if err := s.checkAgent(ctx, refreshed); err != nil {
-		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusUnavailable, "", err.Error())
-		s.failAgentDeployTask(ctx, taskID, srv, err)
+	if checkErr != nil {
+		_ = s.markAgentStatus(ctx, srv.ID, agentcontract.StatusUnavailable, "", checkErr.Error())
+		s.failAgentDeployTask(ctx, taskID, srv, checkErr)
 		return
 	}
 	checked, err := s.Get(ctx, srv.ID)
@@ -443,7 +464,11 @@ func (s *Service) prepareAgentRestart(ctx context.Context, srv Server) error {
 	if !ok {
 		return nil
 	}
-	return readiness.PrepareRestart(ctx, baseURL)
+	// Bound the wait so a stuck agent cannot hold the deployment open
+	// forever. On timeout the caller logs and proceeds with the deployment.
+	readyCtx, cancel := context.WithTimeout(ctx, agentPrepareRestartTimeout)
+	defer cancel()
+	return readiness.PrepareRestart(readyCtx, baseURL)
 }
 func (s *Service) failAgentDeployTask(ctx context.Context, taskID string, srv Server, cause error) {
 	_ = s.tasks.Fail(ctx, taskID, cause)

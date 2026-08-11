@@ -20,6 +20,8 @@ const (
 	packageUpgradeTimeout = time.Hour
 )
 
+var packageNamePattern = regexp.MustCompile(`^[A-Za-z0-9+_.:-]+$`)
+
 func (aptAdapter) ListUpgradeable(ctx context.Context, exec sshx.RemoteExecutor, target sshx.Target) ([]PackageUpdate, error) {
 	res, err := exec.ExecSudo(ctx, target, sshx.CommandSpec{
 		Command: "apt-get update >/dev/null && apt list --upgradable 2>/dev/null",
@@ -36,7 +38,7 @@ func (aptAdapter) UpgradeSelected(ctx context.Context, exec sshx.RemoteExecutor,
 		return panelerr.Validation("packages_required", "At least one package is required")
 	}
 	for _, p := range packages {
-		if !regexp.MustCompile(`^[A-Za-z0-9+_.:-]+$`).MatchString(p) {
+		if !packageNamePattern.MatchString(p) {
 			return panelerr.Validation("package_name_invalid", "Package name contains invalid characters")
 		}
 	}

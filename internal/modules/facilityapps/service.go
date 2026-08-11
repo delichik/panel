@@ -25,6 +25,9 @@ import (
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 const reverseProxyEnabledTrait = "agent.reverse_proxy.enabled"
@@ -104,6 +107,7 @@ type PanelHostProvider interface {
 
 type Service struct {
 	db              *sql.DB
+	coordDB         *sql.DB
 	dataRoot        string
 	agent           AgentRuntimeClient
 	servers         ServerProvider
@@ -134,6 +138,12 @@ func WithContainerOperationQueue(queue ContainerOperationQueue) Option {
 
 func WithDataRoot(dataRoot string) Option {
 	return func(s *Service) { s.dataRoot = dataRoot }
+}
+
+// WithCoordDB 注入协调库（CoordDB），设施应用的 lifecycle 记录
+// application_lifecycle_operations / application_lifecycle_targets 位于该库。
+func WithCoordDB(db *sql.DB) Option {
+	return func(s *Service) { s.coordDB = db }
 }
 
 func WithCertificateProvider(provider CertificateProvider) Option {
@@ -186,33 +196,60 @@ func (s *Service) GetReverseProxy(ctx context.Context) (ReverseProxyConfig, erro
 	if err != nil {
 		return ReverseProxyConfig{}, err
 	}
+	var warnings []string
+	recordSubqueryError := func(component string, err error) {
+		if err == nil {
+			return
+		}
+		logging.L().Warn("facility reverse proxy subquery failed", zap.String("component", component), zap.Error(err))
+		warnings = append(warnings, component+": "+err.Error())
+	}
+	// 一次取回全部 Application 反向代理配置，在 routeCount / routeSummaries /
+	// cfg.ApplicationRoutes 三处复用，避免一次请求多次全表查询。
+	appRoutes := []applications.ApplicationReverseProxyConfig{}
+	if s.apps != nil {
+		appRoutes, err = s.apps.ApplicationReverseProxyConfigs(ctx)
+		recordSubqueryError("application_routes", err)
+	}
 	for _, domain := range cfg.Domains {
 		cfg.Routes += len(domain.Paths)
 	}
-	cfg.Routes += s.routeCount(ctx, cfg.DeploymentServers)
+	cfg.Routes += routeCount(cfg.DeploymentServers, appRoutes)
 	if cfg.PanelEntry.Enabled {
 		cfg.Routes++
 	}
 	if s.panelHost != nil {
-		cfg.PanelHostServerID, _ = s.panelHost.HostServerID(ctx)
-	}
-	cfg.EnabledServers = append([]string(nil), cfg.DeploymentServers...)
-	assets, err := s.listStaticAssets(ctx)
-	if err == nil {
-		cfg.StaticAssets = assets
-	}
-	if summaries, err := s.routeSummaries(ctx, cfg); err == nil {
-		cfg.RouteSummaries = summaries
-	}
-	if s.apps != nil {
-		if applicationRoutes, err := s.apps.ApplicationReverseProxyConfigs(ctx); err == nil {
-			cfg.ApplicationRoutes = applicationRoutes
+		if hostID, hostErr := s.panelHost.HostServerID(ctx); hostErr == nil {
+			cfg.PanelHostServerID = hostID
+		} else {
+			recordSubqueryError("panel_host", hostErr)
 		}
 	}
-	if operation, err := s.latestLifecycleOperation(ctx); err == nil && operation.ID != "" {
+	cfg.EnabledServers = append([]string(nil), cfg.DeploymentServers...)
+	if assets, assetErr := s.listStaticAssets(ctx); assetErr == nil {
+		cfg.StaticAssets = assets
+	} else {
+		recordSubqueryError("static_assets", assetErr)
+	}
+	if summaries, summaryErr := s.routeSummaries(ctx, cfg, appRoutes); summaryErr == nil {
+		cfg.RouteSummaries = summaries
+	} else {
+		recordSubqueryError("route_summaries", summaryErr)
+	}
+	cfg.ApplicationRoutes = appRoutes
+	if operation, opErr := s.latestLifecycleOperation(ctx); opErr == nil && operation.ID != "" {
 		cfg.Operation = &operation
+	} else if opErr != nil && !isPanelNotFound(opErr) {
+		// 还没有 lifecycle 记录是正常状态，不记录警告。
+		recordSubqueryError("lifecycle_operation", opErr)
 	}
 	cfg.ReconcileStopped = s.proxyReconcileStopped(ctx)
+	if len(warnings) > 0 {
+		cfg.Warnings = warnings
+		if strings.TrimSpace(cfg.LastError) == "" {
+			cfg.LastError = "Some reverse proxy details failed to load: " + strings.Join(warnings, "; ")
+		}
+	}
 	return cfg, nil
 }
 
@@ -532,11 +569,8 @@ func reverseProxyReconcilePayload(stopServers []string) map[string]any {
 	}
 }
 
-func (s *Service) routeCount(ctx context.Context, serverIDs []string) int {
-	routes, err := s.routesByServer(ctx, serverIDs)
-	if err != nil {
-		return 0
-	}
+func routeCount(serverIDs []string, appRoutes []applications.ApplicationReverseProxyConfig) int {
+	routes := routesByServerConfigs(appRoutes, serverIDs)
 	count := 0
 	for _, items := range routes {
 		for _, app := range items {
@@ -549,16 +583,25 @@ func (s *Service) routeCount(ctx context.Context, serverIDs []string) int {
 }
 
 func (s *Service) routesByServer(ctx context.Context, serverIDs []string) (map[string][]applications.ApplicationReverseProxyConfig, error) {
-	out := map[string][]applications.ApplicationReverseProxyConfig{}
-	for _, id := range serverIDs {
-		out[id] = []applications.ApplicationReverseProxyConfig{}
-	}
 	if s.apps == nil {
+		out := map[string][]applications.ApplicationReverseProxyConfig{}
+		for _, id := range serverIDs {
+			out[id] = []applications.ApplicationReverseProxyConfig{}
+		}
 		return out, nil
 	}
 	apps, err := s.apps.ApplicationReverseProxyConfigs(ctx)
 	if err != nil {
 		return nil, err
+	}
+	return routesByServerConfigs(apps, serverIDs), nil
+}
+
+// routesByServerConfigs 纯函数版本：按服务器筛选反向代理路由，供已一次取回配置的调用者复用。
+func routesByServerConfigs(apps []applications.ApplicationReverseProxyConfig, serverIDs []string) map[string][]applications.ApplicationReverseProxyConfig {
+	out := map[string][]applications.ApplicationReverseProxyConfig{}
+	for _, id := range serverIDs {
+		out[id] = []applications.ApplicationReverseProxyConfig{}
 	}
 	for _, app := range apps {
 		for _, serverID := range serverIDs {
@@ -575,7 +618,7 @@ func (s *Service) routesByServer(ctx context.Context, serverIDs []string) (map[s
 			}
 		}
 	}
-	return out, nil
+	return out
 }
 
 func (s *Service) proxySpec(ctx context.Context, serverID string, cfg ReverseProxyConfig, routes []applications.ApplicationReverseProxyConfig, certificates []proxycert.Certificate) (appruntime.Spec, error) {
@@ -1307,6 +1350,14 @@ func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg Reverse
 	return generation, cfgHash, nil
 }
 
+// lifecycleDB 返回协调库（CoordDB）；未注入时回退到 AppDB，保持旧调用与测试兼容。
+func (s *Service) lifecycleDB() *sql.DB {
+	if s.coordDB != nil {
+		return s.coordDB
+	}
+	return s.db
+}
+
 func (s *Service) createLifecycleOperation(ctx context.Context, cfg ReverseProxyConfig, stopServers []string, generation int, cfgHash string) (applications.LifecycleOperation, error) {
 	now := time.Now().UTC()
 	operation := applications.LifecycleOperation{
@@ -1321,7 +1372,7 @@ func (s *Service) createLifecycleOperation(ctx context.Context, cfg ReverseProxy
 		StartedAt:     &now,
 		UpdatedAt:     now,
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
+	_, err := s.lifecycleDB().ExecContext(ctx, `INSERT INTO application_lifecycle_operations(id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		operation.ID, operation.ApplicationID, operation.Type, operation.Status, "", operation.Generation, operation.SpecHash, operation.Trigger, "", formatTime(now), formatTime(now), nil, formatTime(now))
 	if err != nil {
@@ -1365,7 +1416,7 @@ func (s *Service) createLifecycleOperation(ctx context.Context, cfg ReverseProxy
 			CreatedAt:         now,
 			UpdatedAt:         now,
 		}
-		_, err := s.db.ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
+		_, err := s.lifecycleDB().ExecContext(ctx, `INSERT INTO application_lifecycle_targets(id,operation_id,application_id,server_id,action,state,status,target_key,desired_state,desired_generation,desired_spec_hash,priority,attempt,next_run_at,lease_owner,lease_expires_at,claimed_task_id,instance_id,container_name,container_id,stage,error,error_code,error_message,error_detail,created_at,started_at,finished_at,updated_at)
 			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 			target.ID, target.OperationID, target.ApplicationID, target.ServerID, target.Action, target.State, target.Status, target.TargetKey, target.DesiredState, target.DesiredGeneration, target.DesiredSpecHash, target.Priority, 0, "", "", "", "", target.InstanceID, target.ContainerName, "", "", "", "", "", "", formatTime(now), nil, nil, formatTime(now))
 		if err != nil {
@@ -1439,7 +1490,7 @@ func (s *Service) updateLifecycleTarget(ctx context.Context, targetID string, in
 	}
 	add("updated_at", now)
 	args = append(args, targetID)
-	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+` WHERE id=?`, args...)
+	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_targets SET `+strings.Join(updates, ",")+` WHERE id=?`, args...)
 	return err
 }
 
@@ -1458,12 +1509,12 @@ func (s *Service) finishLifecycleOperation(ctx context.Context, operationID, sta
 		errText = cause.Error()
 	}
 	now := formatTime(time.Now().UTC())
-	_, err := s.db.ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?,error=?,finished_at=?,updated_at=? WHERE id=?`, status, errText, now, now, operationID)
+	_, err := s.lifecycleDB().ExecContext(ctx, `UPDATE application_lifecycle_operations SET status=?,error=?,finished_at=?,updated_at=? WHERE id=?`, status, errText, now, now, operationID)
 	return err
 }
 
 func (s *Service) latestLifecycleOperation(ctx context.Context) (applications.LifecycleOperation, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
+	row := s.lifecycleDB().QueryRowContext(ctx, `SELECT id,application_id,type,status,task_id,generation,spec_hash,trigger,error,created_at,started_at,finished_at,updated_at
 		FROM application_lifecycle_operations WHERE application_id=? ORDER BY created_at DESC, id DESC LIMIT 1`, proxyApplicationID)
 	operation, err := scanLifecycleOperation(row)
 	if err == sql.ErrNoRows {
@@ -1481,8 +1532,8 @@ func (s *Service) latestLifecycleOperation(ctx context.Context) (applications.Li
 }
 
 func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]applications.LifecycleTarget, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT t.id,t.operation_id,t.application_id,t.server_id,COALESCE(s.name,''),t.action,t.state,t.status,t.target_key,t.desired_state,t.desired_generation,t.desired_spec_hash,t.priority,t.attempt,t.next_run_at,t.lease_owner,t.lease_expires_at,t.claimed_task_id,t.instance_id,t.container_name,t.container_id,t.stage,t.error,t.error_code,t.error_message,t.error_detail,t.created_at,t.started_at,t.finished_at,t.updated_at
-		FROM application_lifecycle_targets t LEFT JOIN servers s ON s.id=t.server_id WHERE t.operation_id=? ORDER BY t.server_id ASC`, operationID)
+	rows, err := s.lifecycleDB().QueryContext(ctx, `SELECT t.id,t.operation_id,t.application_id,t.server_id,'',t.action,t.state,t.status,t.target_key,t.desired_state,t.desired_generation,t.desired_spec_hash,t.priority,t.attempt,t.next_run_at,t.lease_owner,t.lease_expires_at,t.claimed_task_id,t.instance_id,t.container_name,t.container_id,t.stage,t.error,t.error_code,t.error_message,t.error_detail,t.created_at,t.started_at,t.finished_at,t.updated_at
+		FROM application_lifecycle_targets t WHERE t.operation_id=? ORDER BY t.server_id ASC`, operationID)
 	if err != nil {
 		return nil, err
 	}
@@ -1492,6 +1543,11 @@ func (s *Service) lifecycleTargets(ctx context.Context, operationID string) ([]a
 		target, err := scanLifecycleTarget(rows)
 		if err != nil {
 			return nil, err
+		}
+		if strings.TrimSpace(target.ServerName) == "" && s.servers != nil {
+			if srv, getErr := s.servers.Get(ctx, target.ServerID); getErr == nil {
+				target.ServerName = strings.TrimSpace(firstNonEmpty(srv.Name, srv.ID))
+			}
 		}
 		targets = append(targets, target)
 	}
@@ -1955,16 +2011,14 @@ func certPath(certID, kind string) string {
 	return proxyTLSMountRoot + "/" + sanitizeNginxPathSegment(certID) + "/" + kind + ".pem"
 }
 
-func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([]RouteSummary, error) {
+func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig, appRoutes []applications.ApplicationReverseProxyConfig) ([]RouteSummary, error) {
 	certificates, err := s.reverseProxyCertificates(ctx)
 	if err != nil {
 		return nil, err
 	}
-	routes, err := s.routesByServer(ctx, cfg.DeploymentServers)
-	if err != nil {
-		return nil, err
-	}
+	routes := routesByServerConfigs(appRoutes, cfg.DeploymentServers)
 	out := []RouteSummary{}
+	seenRoutes := map[string]struct{}{}
 	for _, routeDomain := range cfg.Domains {
 		domain := strings.TrimSpace(routeDomain.Domain)
 		if domain == "" {
@@ -1986,14 +2040,9 @@ func (s *Service) routeSummaries(ctx context.Context, cfg ReverseProxyConfig) ([
 					summary := routeSummary(route.Domain, firstNonEmpty(routePath.Path, "/"), "application", serverIDs, certificates)
 					summary.ApplicationID = app.ApplicationID
 					summary.ApplicationName = app.ApplicationName
-					duplicate := false
-					for _, existing := range out {
-						if existing.Source == summary.Source && existing.ApplicationID == summary.ApplicationID && existing.Domain == summary.Domain && existing.Path == summary.Path {
-							duplicate = true
-							break
-						}
-					}
-					if !duplicate {
+					key := summary.Source + "|" + summary.ApplicationID + "|" + summary.Domain + "|" + summary.Path
+					if _, seen := seenRoutes[key]; !seen {
+						seenRoutes[key] = struct{}{}
 						out = append(out, summary)
 					}
 				}
@@ -2129,6 +2178,13 @@ func parseTime(value string) time.Time {
 	}
 	parsed, _ := time.Parse(time.RFC3339Nano, value)
 	return parsed
+}
+
+func isPanelNotFound(err error) bool {
+	if pe, ok := err.(*panelerr.Error); ok {
+		return pe.Code == "not_found"
+	}
+	return false
 }
 
 func (cfg ReverseProxyConfig) String() string {

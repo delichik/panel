@@ -95,6 +95,14 @@ func (h *Handler) Test(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, srv)
 }
 
+func (h *Handler) TrustHostKey(w http.ResponseWriter, r *http.Request) {
+	srv, err := h.service.TrustHostKey(r.Context(), serverIDFromRequest(r))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, srv)
+}
 func (h *Handler) InstallUFW(w http.ResponseWriter, r *http.Request) {
 	task, err := h.service.InstallUFW(r.Context(), serverIDFromRequest(r))
 	if err != nil {

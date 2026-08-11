@@ -113,3 +113,10 @@
 - 单元测试覆盖元数据解析、builder、CRUD、批量、事务、AutoMigrate/AutoMigrateModels（幂等/补列/索引/删列/删表/重建/drift/非破坏）、RunSteps，以及内部表（orm_meta/orm_migrations）永不进入 DriftReport 与删除逻辑。
 - 模型扩展测试覆盖 `TableConstraints()` 建表拼入与重建保留、`ExtraIndexDDL()` 解析与存量 `sqlite_autoindex_*` 按列形状匹配、按库隔离不跨库建表。
 - 快速迭代：`go test ./internal/platform/database/orm/...`；回归基线：`task test:backend`。
+
+## 迁移与重建约定
+
+- 表重建事务：`orm/migrate.go` 的 `rebuildTable` 现在包在显式事务（`*sql.Conn.BeginTx`）中执行，崩溃窗口不再出现“原表已删、只剩临时表”的中间态；重建前先 `DROP TABLE IF EXISTS __orm_rebuild_<table>` 清理上次崩溃遗留的临时表，索引也在同一事务内创建。
+- 证书表约束迁移：`migrations.go` 的 `migrateCertificateScopeConstraint` 使用 `db.Conn` 在单一连接上完成 `PRAGMA foreign_keys = OFF`、事务与恢复 `ON`，避免共享连接池上 FK 约束失效或残留关闭。
+- `store.Open` 目录计算：对 `file:` 形式的 DSN 先去掉 `file:` 前缀与查询串（如 `?cache=shared`）再取目录 `MkdirAll`；内存库 DSN（`:memory:`）跳过目录创建。
+- tasks.db → log.db 边界：`migrateLegacyLogDatabasePath` 发现 `log.db-wal` / `log.db-shm` 已存在时不再静默跳过，而是记录 warn，避免覆盖活跃 WAL。

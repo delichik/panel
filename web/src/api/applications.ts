@@ -71,9 +71,7 @@ export const applicationsApi = {
   delete(applicationId: string) {
     return apiClient.delete<void>(`/applications/${id(applicationId)}`);
   },
-  checkImage(applicationId: string) {
-    return apiClient.post<ApplicationDto>(`/applications/${id(applicationId)}/image/check`);
-  },
+
   updateImage(applicationId: string) {
     return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/image/update`);
   },
@@ -89,7 +87,7 @@ export const applicationsApi = {
   runtime(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationRuntime>(`/applications/${id(applicationId)}/runtime`, options);
   },
-  logs(applicationId: string, params: { instanceId?: string; containerName?: string; type?: string; tail?: number } = {}) {
+  logs(applicationId: string, params: { instanceId?: string; type?: string; tail?: number } = {}) {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([name, value]) => {
       if (value !== undefined && value !== '') query.set(name, String(value));
@@ -118,37 +116,41 @@ export const applicationsApi = {
     return apiClient.get<ApplicationEditSessionFileContent>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileName)}`);
   },
   putEditSessionFile(sessionId: string, fileName: string, revision: number, input: { name: string; contentBase64: string }) {
+    const clientOperationId = key();
     return apiClient.put<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileName)}`, {
       revision,
-      clientOperationId: key(),
+      clientOperationId,
       ...input,
-    }, { headers: { 'Idempotency-Key': key() } });
+    }, { headers: { 'Idempotency-Key': clientOperationId } });
   },
   uploadEditSessionFile(sessionId: string, fileName: string, revision: number, input: { file: File; name: string }) {
+    const clientOperationId = key();
     const form = new FormData();
     form.set('file', input.file);
     form.set('revision', String(revision));
-    form.set('clientOperationId', key());
+    form.set('clientOperationId', clientOperationId);
     form.set('name', input.name);
-    return multipartJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/uploads/${id(fileName)}`, form, 'PUT', key());
+    return multipartJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/uploads/${id(fileName)}`, form, 'PUT', clientOperationId);
   },
   uploadEditSessionArchive(sessionId: string, revision: number, input: { file: File; name: string; kind: string }) {
+    const clientOperationId = key();
     const form = new FormData();
     form.set('file', input.file);
     form.set('revision', String(revision));
-    form.set('clientOperationId', key());
+    form.set('clientOperationId', clientOperationId);
     form.set('name', input.name);
     form.set('kind', input.kind);
-    return multipartJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/archives`, form);
+    return multipartJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/archives`, form, 'POST', clientOperationId);
   },
   downloadEditSessionFile(sessionId: string, fileName: string, filename: string): Promise<DownloadResult> {
     return fetchDownload(`/api/v1/application-edit-sessions/${id(sessionId)}/files/${id(fileName)}/content`, {}, filename);
   },
   deleteEditSessionFile(sessionId: string, fileName: string, revision: number) {
+    const clientOperationId = key();
     return deleteJson<ApplicationEditSession>(`/application-edit-sessions/${id(sessionId)}/files/${id(fileName)}`, {
       revision,
-      clientOperationId: key(),
-    });
+      clientOperationId,
+    }, clientOperationId);
   },
   validateEditSession(sessionId: string, revision: number) {
     return apiClient.post<ApplicationEditValidationResult>(`/application-edit-sessions/${id(sessionId)}/validate`, { revision });
@@ -157,11 +159,14 @@ export const applicationsApi = {
     return apiClient.post<ApplicationEditPreviewResult>(`/application-edit-sessions/${id(sessionId)}/preview`, { revision });
   },
   commitEditSession(session: ApplicationEditSession, preview: ApplicationEditPreviewResult) {
+    // The commit endpoint keys deduplication on the Idempotency-Key header
+    // only; the body intentionally carries no clientOperationId.
+    const clientOperationId = key();
     return apiClient.post<ApplicationEditCommitResult>(`/application-edit-sessions/${id(session.id)}/commit`, {
       revision: session.revision,
       baseResourceVersion: session.baseResourceVersion.value,
       previewToken: preview.token.value,
-    }, { headers: { 'Idempotency-Key': key() } });
+    }, { headers: { 'Idempotency-Key': clientOperationId } });
   },
   discardEditSession(sessionId: string) {
     return apiClient.delete<void>(`/application-edit-sessions/${id(sessionId)}`);

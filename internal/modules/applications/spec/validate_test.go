@@ -167,6 +167,74 @@ func TestValidateMountOwnershipAndPermissions(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsDuplicateStaticPorts(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Ports: []Port{
+			{Label: "http", To: 80, Static: 8080},
+			{Label: "admin", To: 81, Static: 8080},
+		},
+	})
+	if !hasIssue(issues, "ports[1].static") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsInvalidEnvKeys(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Env:   map[string]string{"": "x", "a=b": "y", "OK": "z"},
+	})
+	if !hasIssue(issues, "env") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsMountTargetRoot(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Mounts: []Mount{{
+			Type:   "volume",
+			Source: "data",
+			Target: "/",
+		}},
+	})
+	if !hasIssue(issues, "mounts[0].target") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateRejectsInvalidVolumeName(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Volumes: []Volume{{
+			Source: "../data",
+			Target: "/data",
+		}},
+	})
+	if !hasIssue(issues, "volumes[0].source") {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestValidateAcceptsValidVolumeName(t *testing.T) {
+	issues := Validate(Spec{
+		Name:  "web",
+		Image: "nginx",
+		Volumes: []Volume{{
+			Source: "web-data.v1",
+			Target: "/data",
+		}},
+	})
+	if len(issues) != 0 {
+		t.Fatalf("issues = %#v", issues)
+	}
+}
+
 func hasIssue(issues []Issue, field string) bool {
 	for _, issue := range issues {
 		if issue.Field == field {

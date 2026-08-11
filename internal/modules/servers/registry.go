@@ -13,6 +13,9 @@ import (
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 	id "panel/internal/platform/identity"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 func (s *Service) Create(ctx context.Context, req SaveRequest) (Server, error) {
@@ -90,8 +93,11 @@ func (s *Service) Update(ctx context.Context, serverID string, req SaveRequest) 
 		return Server{}, err
 	}
 	if s.exec != nil {
+		// The server is already persisted. A failed connectivity probe only
+		// marks the server unreachable (TestConnectivity records that) and must
+		// not fail the update or skip the DNS sync below.
 		if _, err := s.TestConnectivity(ctx, serverID); err != nil {
-			return Server{}, err
+			logging.L().Warn("server update connectivity probe failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}
 	s.notifyDNSSync(ctx, serverID, previousIPv4 != nextIPv4 || previousIPv6 != nextIPv6)

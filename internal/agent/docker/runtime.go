@@ -347,6 +347,9 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 	if r == nil {
 		return errors.New("runtime is not configured")
 	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir, err := safeApplicationRuntimeDir(r.root, applicationID, "persistent")
 	if err != nil {
 		return err
@@ -356,18 +359,34 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 		return err
 	}
 	for _, file := range reader.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if _, err := safeArchiveTarget(dir, file.Name); err != nil {
 			return err
 		}
 	}
-	if err := os.RemoveAll(dir); err != nil {
+	// Extract into a sibling temporary directory first so a failed or
+	// cancelled restore never destroys the existing persistent data. Only after
+	// the new tree is fully extracted is it swapped into place.
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	tmp, err := os.MkdirTemp(filepath.Dir(dir), filepath.Base(dir)+".restore-*")
+	if err != nil {
 		return err
 	}
+	keepTmp := false
+	defer func() {
+		if !keepTmp {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
 	for _, file := range reader.File {
-		target, err := safeArchiveTarget(dir, file.Name)
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		target, err := safeArchiveTarget(tmp, file.Name)
 		if err != nil {
 			return err
 		}
@@ -406,7 +425,37 @@ func (r *LocalRuntime) RestorePersistentArchive(ctx context.Context, application
 			return closeDstErr
 		}
 	}
-	_ = ctx
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Swap: keep the existing directory as a backup until the new tree is in
+	// place, then remove the backup.
+	backup, err := os.MkdirTemp(filepath.Dir(dir), filepath.Base(dir)+".old-*")
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(backup); err != nil {
+		return err
+	}
+	backupExists := false
+	if _, statErr := os.Stat(dir); statErr == nil {
+		if err := os.Rename(dir, backup); err != nil {
+			return err
+		}
+		backupExists = true
+	} else if !os.IsNotExist(statErr) {
+		return statErr
+	}
+	if err := os.Rename(tmp, dir); err != nil {
+		if backupExists {
+			_ = os.Rename(backup, dir)
+		}
+		return err
+	}
+	keepTmp = true
+	if backupExists {
+		_ = os.RemoveAll(backup)
+	}
 	return nil
 }
 

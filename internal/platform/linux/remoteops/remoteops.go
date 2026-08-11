@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	panelerr "panel/internal/platform/errors"
@@ -56,24 +57,24 @@ func (r Runner) RunSudoLogged(ctx context.Context, command string, timeout time.
 	if r.Exec == nil {
 		return sshx.CommandResult{}, panelerr.Validation("remote_executor_unavailable", "Remote executor is unavailable")
 	}
-	stdoutStreamed := false
-	stderrStreamed := false
+	var stdoutStreamed atomic.Bool
+	var stderrStreamed atomic.Bool
 	res, err := r.Exec.ExecSudo(ctx, r.Target, sshx.CommandSpec{
 		Command: command,
 		Timeout: timeout,
 		OnStdout: func(line string) {
-			stdoutStreamed = true
+			stdoutStreamed.Store(true)
 			AppendBufferedLog(ctx, r.Log, "stdout", line)
 		},
 		OnStderr: func(line string) {
-			stderrStreamed = true
+			stderrStreamed.Store(true)
 			AppendBufferedLog(ctx, r.Log, "stderr", line)
 		},
 	})
-	if !stdoutStreamed {
+	if !stdoutStreamed.Load() {
 		AppendBufferedLog(ctx, r.Log, "stdout", res.Stdout)
 	}
-	if !stderrStreamed {
+	if !stderrStreamed.Load() {
 		AppendBufferedLog(ctx, r.Log, "stderr", res.Stderr)
 	}
 	return res, err

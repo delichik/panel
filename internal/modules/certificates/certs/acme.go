@@ -46,7 +46,9 @@ func NewACMEProvider(cfg config.Config, dns DNSChallengeProvider, httpClient *ht
 		return nil, err
 	}
 	if httpClient == nil {
-		httpClient = http.DefaultClient
+		// A timeout prevents a hung ACME directory/order request from
+		// blocking the issuing task forever.
+		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
 	client := &acme.Client{
 		Key:          accountKey,

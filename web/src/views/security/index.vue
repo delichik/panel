@@ -7,6 +7,7 @@ import { serversApi } from '@/api/servers';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import CodeEditor from '@/components/ui/CodeEditor.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Input from '@/components/ui/Input.vue';
@@ -19,7 +20,7 @@ import { useI18n } from '@/i18n';
 import type { ServerDto } from '@/types/servers';
 import type { Fail2BanJail, Fail2BanState, UfwRule, UfwState } from '@/types/security';
 import { formatDateTime } from '@/utils/datetime';
-import { fail2BanPreset, fail2BanTone, jailsToYaml, parseSimpleJailsFromYaml, serverOptionState, ufwTone, validateUfwRule } from './model';
+import { fail2BanPreset, fail2BanTone, hasAdvancedJailConfig, jailsToYaml, parseSimpleJailsFromYaml, serverOptionState, ufwTone, validateUfwRule } from './model';
 
 const { t } = useI18n();
 const route = useRoute();
@@ -51,6 +52,7 @@ const confirmDialog = ref(false);
 const confirmKind = ref<'enable-ufw' | 'install-ufw' | 'delete-rule' | 'enable-fail2ban' | 'release-fail2ban' | ''>('');
 const targetRule = ref<UfwRule | null>(null);
 const takeoverConfirmed = ref(false);
+const yamlDiscardConfirm = ref(false);
 
 const ruleForm = reactive({ port: '443', protocol: 'tcp', from: 'Anywhere' });
 
@@ -73,7 +75,7 @@ const serverContextOptions = computed(() => servers.value.map((server) => {
 }));
 const selectedServerState = computed(() => selectedServer.value ? serverOptionState(selectedServer.value) : null);
 const ruleValidation = computed(() => validateUfwRule({ port: Number(ruleForm.port), protocol: ruleForm.protocol, from: ruleForm.from }));
-const hasYamlChanges = computed(() => fail2banState.value ? yamlDraft.value.trim() !== fail2banState.value.configYaml.trim() : false);
+const hasYamlChanges = computed(() => fail2banState.value ? yamlDraft.value.trim() !== (fail2banState.value.configYaml ?? '').trim() : false);
 const pageTitleKey = computed(() => activeTab.value === 'fail2ban' ? 'routes.fail2ban.title' : 'routes.firewall.title');
 const pageDescriptionKey = computed(() => activeTab.value === 'fail2ban' ? 'routes.fail2ban.description' : 'routes.firewall.description');
 const runtimeJails = computed(() => fail2banState.value?.jails ?? []);
@@ -88,8 +90,23 @@ watch(selectedId, (value) => {
 });
 
 watch(yamlMode, (enabled) => {
-  if (!enabled) jailDrafts.value = parseSimpleJailsFromYaml(yamlDraft.value);
+  if (enabled) return;
+  if (hasAdvancedJailConfig(yamlDraft.value)) {
+    yamlDiscardConfirm.value = true;
+    return;
+  }
+  jailDrafts.value = parseSimpleJailsFromYaml(yamlDraft.value);
 });
+
+function confirmYamlToVisual() {
+  yamlDiscardConfirm.value = false;
+  jailDrafts.value = parseSimpleJailsFromYaml(yamlDraft.value);
+}
+
+function cancelYamlToVisual() {
+  yamlDiscardConfirm.value = false;
+  yamlMode.value = true;
+}
 
 async function loadServers() {
   serversController?.abort();
@@ -151,9 +168,9 @@ async function loadPanel(options: { clear?: boolean } = {}) {
       const result = await securityApi.fail2BanState(server.id, { signal: controller.signal });
       if (requestId !== panelRequestId || tab !== activeTab.value) return;
       fail2banState.value = result;
-      yamlDraft.value = fail2banState.value.configYaml;
+      yamlDraft.value = fail2banState.value.configYaml ?? '';
       const configJails = fail2banState.value.config.jails ?? [];
-      jailDrafts.value = configJails.length ? [...configJails] : parseSimpleJailsFromYaml(fail2banState.value.configYaml);
+      jailDrafts.value = configJails.length ? [...configJails] : parseSimpleJailsFromYaml(fail2banState.value.configYaml ?? '');
     }
   } catch (err) {
     if (isAbortError(err)) return;
@@ -234,7 +251,7 @@ async function saveFail2BanDraft() {
   if (!selectedServer.value) return;
   await run('save-fail2ban', async () => {
     fail2banState.value = await securityApi.saveFail2Ban(selectedServer.value!.id, yamlDraft.value);
-    yamlDraft.value = fail2banState.value.configYaml;
+    yamlDraft.value = fail2banState.value.configYaml ?? '';
     jailDrafts.value = fail2banState.value.config.jails ?? [];
     notifySuccess(t('securityPage.draftSaved'));
   });
@@ -245,6 +262,7 @@ async function installFail2Ban() {
   await run('install-fail2ban', async () => {
     const accepted = await securityApi.installFail2Ban(selectedServer.value!.id);
     notifySuccess(t('securityPage.taskAccepted', { taskId: accepted.taskId }));
+    await loadPanel();
   });
 }
 
@@ -376,6 +394,11 @@ onBeforeUnmount(() => {
                       <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
                     </div>
                   </div>
+                  <EmptyState v-else-if="actionError && !ufwState?.rules.length" :title="t('common.loadFailed')" :description="actionError">
+                    <template #actions>
+                      <Button size="sm" :loading="loadingPanel" @click="refresh"><RefreshCcw />{{ t('common.retry') }}</Button>
+                    </template>
+                  </EmptyState>
                   <EmptyState v-else-if="!ufwState?.rules.length" :title="t('securityPage.noRules')" :description="t('securityPage.noRulesHint')" />
                   <div v-for="rule in ufwState?.rules" v-else :key="rule.number" class="motion-reveal mb-2 grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-border p-3">
                     <span class="text-xs font-semibold text-muted-foreground">#{{ rule.number }}</span>
@@ -444,6 +467,11 @@ onBeforeUnmount(() => {
                         </div>
                       </div>
                     </div>
+                    <EmptyState v-else-if="actionError && !jailDrafts.length" :title="t('common.loadFailed')" :description="actionError">
+                      <template #actions>
+                        <Button size="sm" :loading="loadingPanel" @click="refresh"><RefreshCcw />{{ t('common.retry') }}</Button>
+                      </template>
+                    </EmptyState>
                     <EmptyState v-else-if="!jailDrafts.length" :title="t('securityPage.noJails')" :description="t('securityPage.noJailsHint')" />
                     <article v-for="jail in jailDrafts" v-else :key="jail.name" class="grid gap-3 rounded-xl border border-border p-4">
                       <div class="flex items-start justify-between gap-3">
@@ -515,6 +543,18 @@ onBeforeUnmount(() => {
         <Button variant="primary" :loading="pending === 'add-rule'" :disabled="Boolean(Object.keys(ruleValidation).length)" @click="addRule">{{ t('common.create') }}</Button>
       </template>
     </Dialog>
+
+    <ConfirmDialog
+      :open="yamlDiscardConfirm"
+      :title="t('securityPage.discardAdvancedConfig')"
+      :impact="t('securityPage.discardAdvancedConfigImpact')"
+      tone="warning"
+      :confirm-label="t('common.discard')"
+      :cancel-label="t('common.cancel')"
+      checkbox-label=""
+      @confirm="confirmYamlToVisual"
+      @update:open="(open) => { if (!open) cancelYamlToVisual() }"
+    />
 
     <Dialog v-model:open="confirmDialog" :title="confirmTitle()" :description="t('securityPage.confirmDescription')" :close-label="t('common.close')">
       <div class="grid gap-3">

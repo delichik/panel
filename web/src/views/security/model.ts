@@ -1,3 +1,4 @@
+import YAML from 'yaml';
 import type { ServerDto } from '@/types/servers';
 import type { Fail2BanJail, Fail2BanState, UfwAllowInput, UfwState } from '@/types/security';
 
@@ -36,6 +37,34 @@ export function validateUfwRule(input: UfwAllowInput) {
   if (!['tcp', 'udp'].includes(input.protocol)) errors.protocol = 'securityPage.validationProtocol';
   if (!input.from.trim()) errors.from = 'securityPage.validationFrom';
   return errors;
+}
+
+
+const SIMPLE_JAIL_KEYS = new Set(['name', 'enabled', 'preset', 'filter', 'logpath', 'backend', 'port', 'protocol', 'action', 'maxretry', 'findtime', 'bantime', 'ignoreip']);
+
+/**
+ * Detects Fail2Ban YAML content that the simple visual draft cannot represent
+ * (unknown top-level keys, per-jail advanced keys, or an options map).
+ * Switching back to visual mode would silently drop this content.
+ */
+export function hasAdvancedJailConfig(raw: string): boolean {
+  const trimmed = (raw ?? '').trim();
+  if (!trimmed) return false;
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(trimmed);
+  } catch {
+    return false;
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const record = parsed as Record<string, unknown>;
+  if (Object.keys(record).some((key) => key !== 'jails')) return true;
+  const jails = record.jails;
+  if (!Array.isArray(jails)) return false;
+  return jails.some((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
+    return Object.keys(item as Record<string, unknown>).some((key) => !SIMPLE_JAIL_KEYS.has(key));
+  });
 }
 
 export function fail2BanPreset(name: 'ssh' | 'nginx-auth' | 'recidive'): Fail2BanJail {

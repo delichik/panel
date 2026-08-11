@@ -1,4 +1,4 @@
-﻿# 服务器、凭据、指标与软件包
+# 服务器、凭据、指标与软件包
 
 ## List API Contract
 
@@ -59,7 +59,7 @@
 - 服务器：`GET/POST /api/v1/servers`，`POST /api/v1/servers/probe`，`PUT/DELETE /api/v1/servers/{id}`
 - Agent 部署：`POST /api/v1/servers/{id}/agent/deploy`，Agent 证书包：`POST /api/v1/servers/{id}/agent/certificate`
 - Agent 系统证书：`GET /api/v1/key-assets/system`，重置：`POST /api/v1/key-assets/system/{id}/reset`
-- 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，任务型重启 `POST /api/v1/servers/{id}/restart`，任务型 UFW 安装 `POST /api/v1/servers/{id}/ufw/install`
+- 服务器操作：同步连通性检查 `POST /api/v1/servers/{id}/test`，信任新主机密钥 `POST /api/v1/servers/{id}/trust-host-key`，任务型重启 `POST /api/v1/servers/{id}/restart`，任务型 UFW 安装 `POST /api/v1/servers/{id}/ufw/install`
 - UFW：`GET /api/v1/servers/{id}/ufw`，`POST /api/v1/servers/{id}/ufw/enable`，`POST /api/v1/servers/{id}/ufw/rules`，`DELETE /api/v1/servers/{id}/ufw/rules/{number}`
 - fail2ban：`GET /api/v1/servers/{id}/fail2ban`，`PUT /api/v1/servers/{id}/fail2ban`，`POST /api/v1/servers/{id}/fail2ban/enable`，`POST /api/v1/servers/{id}/fail2ban/release`，`POST /api/v1/servers/{id}/fail2ban/install`
 - 指标：`GET /api/v1/servers/{id}/metrics?range=1h|6h|1d|7d`（默认 `1h`）。服务器详情指标区默认用折线图展示最近 1 小时数据（CPU、内存、磁盘、网络 RX/TX 四个图表），支持范围选择，页头提供共享自动刷新控件 `AutoRefreshControl`；刷新/切范围时保留旧数据避免闪跳。折线图 tooltip 单位按图表类型区分：CPU/内存/磁盘为百分比，网络为 B/s 自适应速率。
@@ -72,8 +72,11 @@
 ## 数据与行为约定
 
 - v3 页面经 `web/src/api/servers.ts` typed client 接真实后端；保存与 probe 语义分离（`POST /servers/probe` 只在添加/编辑对话框内预检，不落库）。
-- 详情错误横幅 `agent.last_error` 优先于 `lastError`；traits 对用户只读，编辑表单不展示也不提交 traits，后端保存接口忽略用户传入的 traits，服务器特征完全由系统探测、Agent 和设施/应用协调维护。旧数据中 `sudo_passwordless=1` 但 `privilege_mode=none` 的记录由一次性迁移修正为 `passwordless_sudo`，读取层兜底识别 `sudo.passwordless`。
-- 凭据 secret 只提交非空值，编辑时留空代表保留既有 secret；删除前用已加载服务器列表做引用预检并列出引用服务器，后端 409 `credential_in_use` 兜底。\n- `GET /api/v1/credentials/{id}` 对私钥类型凭据按需解密并返回非敏感密钥摘要（算法、位长、SHA256 指纹、密钥注释/名称），密码类型不返回摘要；摘要解析失败时仅省略摘要字段，任何响应都不返回秘密内容。
+- 详情错误横幅 `agent.last_error` 优先于 `lastError`；traits 对用户只读，编辑表单不展示也不提交 traits，后端保存接口忽略用户传入的 traits，服务器特征完全由系统探测、Agent 和设施/应用协调维护。旧数据中 `sudo_passwordless=1` 但 `privilege_mode=none` 的记录由一次性迁移修正为 `passwordless_sudo`，读取层兜底识别 `sudo.passwordless`；服务器摘要读取同样把 `none`+`sudo_passwordless=1` 归一化为 `passwordless_sudo`，保证摘要 `privileged` 信号与详情一致。
+- 凭据 secret 只提交非空值，编辑时留空代表保留既有 secret；删除前用已加载服务器列表做引用预检并列出引用服务器，后端 409 `credential_in_use` 兜底。
+- `GET /api/v1/credentials/{id}` 对私钥类型凭据按需解密并返回非敏感密钥摘要（算法、位长、SHA256 指纹、密钥注释/名称），密码类型不返回摘要；摘要解析失败时仅省略摘要字段，任何响应都不返回秘密内容。
+- SSH 执行器 `internal/platform/ssh` 默认开启主机密钥 TOFU：首次连接把目标机公钥按 `host:port` 身份记录到 known_hosts 文件并持久化，后续连接校验公钥；指纹不匹配拒绝连接并返回 `ssh_host_key_mismatch` 错误（BadGateway）。known_hosts 默认位于 `<dataRoot>/known_hosts`（`PANEL_DATA_ROOT` 未设置时回退 `data`），可用 `WithKnownHosts` 指定路径或 `WithoutKnownHosts` 显式关闭；涉及 SSH 的测试应提供临时目录或显式关闭 TOFU。
+- 主机密钥不一致时，服务器读取层（`Server`/`ServerSummary`）根据 `lastError` 是否包含稳定特征 `ssh host key mismatch` 暴露 `hostKeyMismatch`（JSON `hostKeyMismatch`，`omitempty`），List 与 Get 一致返回。`POST /api/v1/servers/{id}/trust-host-key` 是管理员显式信任流程：Service 先取服务器并按 `TestConnectivity` 相同方式构造 Target，调用执行器 `TrustHostKey` 建立一次性 SSH 连接（HostKeyCallback 只捕获公钥并接受连接，不校验 known_hosts），认证成功后以 `net.JoinHostPort(host, port)` 身份调用 `knownHosts.Replace` 覆盖记录；随后复用 `TestConnectivity` 刷新可达性并清空旧 `lastError`，成功返回更新后的服务器 JSON。known_hosts 未启用时返回 Validation `host_key_verification_disabled`；连接失败 `ssh_connection_failed`、认证失败 `ssh_auth_failed`、写入失败 `ssh_host_key_verification_failed`。前端在详情错误/状态区对 `hostKeyMismatch === true` 展示显著安全提示（说明可能是主机重装或中间人攻击），并提供“信任新主机密钥”按钮：`ConfirmDialog`（danger + requireCheckbox）确认后调用 `trustHostKey`，成功后 toast 并失效详情缓存重拉（`invalidateServerDetail` + `load`），失败显示错误。
 - 创建初始化、Agent 部署、重启、UFW 安装为任务型操作：前端只展示已提交/进行中，不承诺请求返回时已完成；新诊断入口应使用系统事件或后端返回的稳定任务引用，不能新增 `/tasks?task=<id>` 产品链接。
 - 本阶段验证仅限 `task test:web:unit` 与 `task build:web`。
 
@@ -83,8 +86,8 @@
 - 删除服务器是本地控制面操作，不连接目标机，也不得因为服务器失联而失败。删除时必须取消该服务器所有 `queued`、`scheduled`、`failed_retryable` 和 `running` 任务，已取消任务不得被后台 worker 后续覆盖为成功或失败；同时清理指标库中的该服务器指标、应用 `deployment_server_ids_json` 中的服务器 ID、概览卡片 `serverIds` 引用，并依赖应用数据库外键级联删除包缓存、镜像缓存、应用实例和协调状态。修剪应用部署节点属于应用配置变化，必须在同一删除事务中递增对应应用的 `version` 和配置 `updated_at`。
 - 服务器创建/编辑必须配置 `dockerHost`，默认值为 `unix:///var/run/docker.sock`。该值会写入 agent systemd 环境文件的 `PANEL_AGENT_DOCKER_HOST`，agent 使用 Docker Engine API 与 Docker 通信，不调用 Docker CLI。
 - 服务器连接地址由 `ipv4`/`ipv6` 派生，不再允许直接提交 `host`：创建/编辑时两个字段至少填写一个且必须是合法 IP 字面量，`ipv4` 优先作为连接地址。读取服务器时若 `ipv4`/`ipv6` 均为空且 `host` 是 IP 字面量，会自动从 `host` 派生（`SplitAddress`），因此旧服务器编辑表单可回显地址，入口代理 DNS 同步也会使用派生后的地址；仅当 `host` 不是 IP 字面量时才保持跳过并标记提示。
-- 服务器保存 `ipv4`/`ipv6` 或删除服务器时，会通过装配层桥接触发引用该服务器的入口代理域名 DNS 同步；同步为异步任务，失败不阻断服务器保存。
-- fail2ban 配置按服务器保存到应用数据库 `fail2ban_configs`，其中 `managed` 表示 Panel 是否接管目标机 fail2ban。前端默认展示“防护规则”列表，结构化 YAML 是高级编辑模式；YAML 是 Panel 自己的 `jails` 结构，不是直接写入目标机的原始 fail2ban 配置。`PUT /fail2ban` 只保存 Panel 草稿，不写目标机；`POST /fail2ban/enable` 在未安装时安装 fail2ban 并自动接管，在已安装未接管时必须由前端传入确认后才接管；接管后通过兼容 Agent 渲染为 `/etc/fail2ban/jail.d/panel.local`，目标机用 `fail2ban-client -t` 校验通过后才重启或 reload 服务，成功后 Panel 才把 `managed` 置为 true。`POST /fail2ban/release` 删除 Panel 生成配置并把 `managed` 置为 false，不导入或恢复用户原始 fail2ban 文件。
+- 服务器保存 `ipv4`/`ipv6` 或删除服务器时，会通过装配层桥接触发引用该服务器的入口代理域名 DNS 同步；同步为异步任务，失败不阻断服务器保存。编辑服务器先落库，保存后的连通性探测失败只把服务器标记为不可达并记录日志，不返回错误、不阻断保存与 DNS 同步。
+- fail2ban 配置按服务器保存到应用数据库 `fail2ban_configs`，其中 `managed` 表示 Panel 是否接管目标机 fail2ban。前端默认展示“防护规则”列表，结构化 YAML 是高级编辑模式；YAML 是 Panel 自己的 `jails` 结构，不是直接写入目标机的原始 fail2ban 配置。`PUT /fail2ban` 只保存 Panel 草稿，不写目标机；`POST /fail2ban/enable` 在未安装时安装 fail2ban 并自动接管，在已安装未接管时必须由前端传入确认后才接管；接管后通过兼容 Agent 渲染为 `/etc/fail2ban/jail.d/panel.local`，目标机用 `fail2ban-client -t` 校验通过后才重启或 reload 服务，成功后 Panel 才把 `managed` 置为 true。`POST /fail2ban/release` 删除 Panel 生成配置并把 `managed` 置为 false，不导入或恢复用户原始 fail2ban 文件。apply 与 release 分别使用 `server_fail2ban_apply`、`server_fail2ban_release` 两个任务类型，避免共用类型时互相去重。
 - 新增服务器响应可携带 `initialTaskId` 指向首次 bootstrap 探测任务。该任务只通过 SSH 读取发行版、CPU 架构并检查非交互特权能力；在架构信息成功落库前失败时必须标记任务失败并删除刚创建的服务器记录，让用户回到表单修正 SSH 信息。
 - 特权能力统一持久化为 `privilege.mode=root|passwordless_sudo|none`、派生的 `privilege.privileged` 和检查时间。UID 0 使用 `root` 并直接执行特权命令；非 root 且 `sudo -n` 成功时使用 `passwordless_sudo`；其他情况使用 `none`。软件包、UFW、重启和 Agent bootstrap 只按 `privilege.mode` 判断准入。
 - 服务器架构信息使用结构化 `architecture.os`、`architecture.arch` 和 `architecture.rawMachine`，数据库列为 `architecture_os`、`architecture_arch`、`architecture_machine`。Agent 部署选包优先读取结构化架构字段；字段缺失时通过 SSH `uname -m` 探测目标节点并写回结构化字段。
@@ -101,6 +104,8 @@
 - 软件包维护基于 APT，只对支持的系统执行；刷新和升级必须通过兼容 Agent 使用固定 `apt-get`/`apt` 可执行文件及参数调用，不拼接 shell，也不回退 SSH。
 - 软件包升级在 agent 端必须与 RPC 请求 context 隔离并保留独立超时，避免 Panel 重启或连接断开中断 apt 事务后留下 dpkg/Docker 半升级状态；对应 Panel 升级任务必须声明不可取消，删除服务器也不得取消正在运行的升级。
 - `POST /api/v1/servers/{id}/packages/refresh` 创建或复用 `package_refresh` 任务并返回 `taskId`；调度器一轮多服务器刷新必须共享同一个 `operationId`。
+- 软件包刷新与升级共用 per-server 维护互斥（`packages.Service` 的 refreshing 机制即“维护中”）：同一服务器同一时间只允许一种软件包维护动作，进行中被拒绝的刷新/升级任务会以明确的“维护中”错误进入失败态，不再被误标成功。
+- 升级任务（`package_upgrade_selected` / `package_upgrade_all`）已注册 `Execute` 并声明 `AllowRunNow` / `AllowRetry`，选中的软件包名单持久化在 `tasks.params_json`；Panel 重启后遗留的 `queued` 升级任务可由 tasks worker 恢复执行，不再是死任务。
 - 周期性指标采集依赖 agent，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器创建 `metrics_collect` 任务；不再因旧 `reachable=false` 跳过，以便恢复成功时重新标记可达。同一轮多服务器采集共享一个 `operationId`，任务中心默认常用类型会隐藏该高频类型。指标快照除 CPU、内存、磁盘和网络外，结构化保存 Linux 标准的 1、5、15 分钟负载 `load1`、`load5`、`load15`。
 - 指标历史清理由 `internal/modules/observability/metrics/cleanup_worker.go` 自主管理，按运行时设置中的保留天数和清理周期执行，不属于 tasks 内部 worker。
 - `POST /api/v1/servers/{id}/ufw/install` 返回 `server_ufw_install` 任务；该任务由内存 goroutine 执行，创建后必须先标记为 `running` 再返回。
@@ -108,7 +113,7 @@
 
 ## Panel Agent
 
-- `cmd/panel-agent` 是部署在目标服务器上的被动 gRPC agent，使用 Panel 专用 agent CA 做 mTLS 双向认证；Panel 启动时生成或复用 agent CA 与 Panel client 证书。
+- `cmd/panel-agent` 是部署在目标服务器上的被动 gRPC agent，使用 Panel 专用 agent CA 做 mTLS 双向认证；Panel 启动时生成或复用 agent CA 与 Panel client 证书。agent 服务端在 CA 校验之外通过 `VerifyPeerCertificate` 拒绝携带 `ServerAuth` EKU 的客户端证书，节点证书（ServerAuth+ClientAuth）不能作为客户端横向调用其他 agent；Panel client 证书只含 `ClientAuth`。
 - Agent gRPC service 契约定义在 `internal/agent/proto/agent.proto`，生成代码位于 `internal/agent/pb`；`internal/agent/rpc` 只负责 protobuf message 与现有业务类型之间的转换和服务实现。不要恢复 HTTP fallback，也不要在业务模块中直接拼远端路径。
 - Panel Agent 启动时必须先校验构建生成的 gRPC contract hash 非空；该 hash 基于生成代码暴露的 protobuf descriptor，缺少生成文件或生成流程失效时直接返回启动错误。
 - Agent 状态机固定为四类：`compatible` 表示正常，只有该状态允许依赖 Agent 的系统探测、UFW 状态、fail2ban 状态与配置应用、指标、应用运行时和容器化操作；`incompatible` 表示 agent 构建版本与 Panel 不一致或证书时间需要修复，系统定时检查必须自动创建或复用部署任务修复；`unavailable` 表示当前不可用，包括连不上、健康检查失败、Docker 不可用或尚未部署，其中尚未配置 agent URL 会自动部署，普通网络/远端不可达错误只记录状态并跳过依赖 agent 的工作，不得直接触发重装；`undeployable` 表示连续 2 次系统自动部署失败后的无法部署状态，系统定时检查不得继续部署，只保留手动重装入口，手动重装会清除自动部署停止标记。
@@ -118,7 +123,7 @@
 - 服务器必须启用 agent，通过 traits 记录：`agent.enabled=true` 且 `agent.url=https://host:9786`。该值表示 mTLS gRPC endpoint，沿用 `https://` 形式以兼容既有 trait 和证书部署逻辑，不再表示 HTTP API。Panel 启动后会扫描服务器，调度器也会周期检查已配置 agent；没有配置 agent URL 的服务器会自动创建 `server_agent_deploy` 任务；已配置 agent 但 URL 不是当前默认地址的服务器会标记为 `incompatible` 并自动重装；已配置当前默认 URL 的服务器会执行健康检查，检查结果写入 `agent.status`、`agent.last_checked_at`、`agent.version` 和 `agent.last_error` traits。`agent.version` 必须与当前 Panel 构建版本完全一致，否则标记 `incompatible` 并自动重装；健康检查返回的 `capabilities`、agent gRPC contract hash 和 Docker host 不作为兼容性门槛。连续系统自动部署失败达到上限后进入 `undeployable`。
 - Agent 健康检查必须返回 Docker 健康状态和 Docker host；Panel 要求 Docker 正常且 agent 报告的 Docker host 与服务器配置一致。
 - Application 运行时要求 agent 与 Panel 构建版本一致；部署编排在 Panel 侧完成，agent 只执行写托管文件、创建容器、容器动作和状态读取等原子接口。
-- Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、fail2ban status/apply、应用 runtime 文件写入/容器创建/stop/restart/status/logs/持久化目录打包与恢复，以及 Docker 容器、容器日志、镜像、网络和卷资源 API。应用 runtime stop 总会删除目标容器；`purge=true` 时额外删除实例运行目录，`removeApplicationData=true` 时删除整个应用运行目录。
+- Agent 当前覆盖健康检查、`/etc/os-release`、系统 traits、metrics snapshot、UFW status、fail2ban status/apply、应用 runtime 文件写入/容器创建/stop/restart/status/logs/持久化目录打包与恢复，以及 Docker 容器、容器日志、镜像、网络和卷资源 API。持久化目录恢复先解压到同目录临时目录并校验，再通过 rename 原子交换；失败或取消时删除临时目录并保留原目录，全程响应 context 取消。应用 runtime stop 总会删除目标容器；`purge=true` 时额外删除实例运行目录，`removeApplicationData=true` 时删除整个应用运行目录。
 - 反向代理设施应用依赖兼容 Agent 的 runtime 文件写入、容器创建、容器停止/删除、镜像拉取和容器启动能力；未部署、不兼容或不可用的 Agent 不会处理设施应用配置，也不回退 SSH。服务器 traits 中的 `agent.reverse_proxy.enabled` 由设施应用部署服务器列表派生维护，仅用于 UFW 安装时自动放行反向代理端口，不提供独立节点开关。
 - 依赖 agent 的读取和运行时能力必须只在 `agent.status=compatible` 且 `agent.url` 存在时执行；agent 未部署、异常、不兼容、无法部署或客户端不可用时，当前操作或定时任务不得执行，也不得回退 SSH。例外是 agent 部署、重装、证书同步等恢复 agent 本身的任务。
 - Docker 资源查询和操作只走 agent Docker Engine API，不回退 SSH。
@@ -126,7 +131,7 @@
 - 新增服务器完成首次信息采集且确认 root 或免密 sudo 特权能力后，会按自动部署修复判断创建 `server_agent_deploy` 任务安装 agent；后续 Agent 健康检查只在 agent 未配置、版本不一致、证书需要修复时自动部署，`agent.status=compatible` 且版本正常时不得重装，普通 `unavailable` 网络/远端错误和 Docker 不可用不得触发重装。
 - Panel 启动检查或周期检查发现服务器未配置 agent URL、agent URL 不是当前默认地址、`agent.status=incompatible`、agent 版本与 Panel 不一致、证书过期/尚未生效/距过期不足 7 天，或健康检查因 mTLS server 证书时间错误失败时，必须自动创建或复用 `server_agent_deploy` 任务安装/修复 agent；证书进入 7 天续期窗口时保持 `agent.status=compatible` 且不写错误提示，只静默刷新部署；缺少能力、agent gRPC contract hash 不一致和 Docker host 不一致不单独触发重装；单纯 `agent.status=unavailable`、网络超时、连接拒绝、服务器失联或 Docker 不可用不得触发自动重装。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent`，默认监听 `tcp/9786`，重启前必须停止 systemd 服务并清理残留 `panel-agent` 进程，写入后必须校验远端 `server.pem` 确实是新签发证书，启动失败必须输出 `systemctl status` 和 `journalctl -u panel-agent.service` 诊断，启动后必须等待 `tcp/9786` 进入监听状态，并校验实际吐出的服务端证书指纹匹配新证书；部署证书包的 `agent.url` 必须使用当前服务器 `host` 生成；如果服务器 `host` 被修改，Agent URL 和证书元数据必须失效并要求重部署。如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署、CA 重置、版本不一致、证书修复和服务器 host 变更触发的重装必须复用并立即启动该任务；系统自动触发复用任务时必须尊重任务 `next_run_at` 和自动部署退避时间，不得绕过指数退避立即重跑。同一服务器系统自动触发的 agent 部署失败达到 2 次后必须标记 `agent.status=undeployable` 并停止自动尝试；`undeployable` 状态不得由周期检查继续部署，失败计数只有在后续 Agent 健康检查连续 5 次正常后清空。
 - `POST /api/v1/servers/{id}/agent/deploy` 是手动兜底入口，返回并启动 `server_agent_deploy` 任务；任务中心重试或立即运行也支持该任务类型。该任务的注册 executor 必须同步执行安装、健康检查和终态写入，避免任务中心在远端部署完成前显示 completed；HTTP 创建入口如果需要快速返回，只能在任务已标记 running 后由模块内 helper 后台执行。未安装时前端显示安装按钮，已安装但异常时显示重装按钮。服务器详情页只显示一条紧凑的服务器错误提示，优先展示 `agent.last_error`，不再在访问信息区重复渲染第二条 Agent 错误横幅。
-- agent 部署任务通过 SSH 上传独立 `panel-agent` 二进制到目标机，再以 `/usr/local/bin/panel-agent` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url` 并立即执行健康检查。
+- agent 部署任务通过 SSH 上传独立 `panel-agent` 二进制到目标机，再以 `/usr/local/bin/panel-agent` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url`，并以最多 10 次、每次 1 秒的健康轮询替代固定 sleep 检查兼容性。
 - Panel 固定从 `/app/panel-agents/<goos>-<goarch>/panel-agent` 读取 agent bundle，并根据目标服务器结构化 `architecture.os`/`architecture.arch` 选择 `linux-amd64` 或 `linux-arm64`；结构化架构缺失时先探测目标节点并持久化结果。该位置不可通过配置或环境变量修改；发布镜像会把随 Panel 构建的 agent bundle 复制到 `/app/panel-agents`，部署任务每次直接读取对应文件并上传到目标机。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
@@ -135,7 +140,7 @@
 - Agent 新增流式 gRPC 接口 `PrepareRestart(Empty) returns (stream PrepareRestartResponse)`，响应 `state` 取值 `holdon` 或 `ready`；服务端实现位于 `internal/agent/rpc/prepare_restart.go`，Panel 侧客户端调用在 `internal/agent/client`，契约常量在 `internal/agent/contract`。
 - Agent 在 `HealthResponse.capabilities` 中额外声明可选能力 `prepare-restart`；它不加入 `RequiredCapabilities`，不作为兼容性门槛，旧 agent 缺失该能力时 Panel 直接继续部署。
 - Agent 进程内通过 `packageUpgradeTracker`（引用计数 + done channel）跟踪经 agent 发起的软件包升级（`UpgradePackages`）。`PrepareRestart` 在升级进行中每秒返回一次 `holdon`；升级结束后返回 `ready` 并关闭流；Panel 断开或取消（流上下文结束）时直接退出、不返回 ready。该检查只感知 agent 自己发起的升级，不检查外部 apt/dpkg 状态。
-- Panel 执行 agent 部署（`runDeployAgent`）时，只要 `agent.url` 已配置，就在任何停止/重启动作前先调用 `Health` 读取能力：能力包含 `prepare-restart` 且客户端实现 `RestartReadinessClient` 时调用 `PrepareRestart`，收到 `ready` 才继续；能力缺失（旧 agent）、Health 或调用失败时记录日志后直接继续；任务取消时中止部署。
+- Panel 执行 agent 部署（`runDeployAgent`）时，只要 `agent.url` 已配置，就在任何停止/重启动作前先调用 `Health` 读取能力：能力包含 `prepare-restart` 且客户端实现 `RestartReadinessClient` 时调用 `PrepareRestart`（客户端与 Panel 侧均有最长 10 分钟的等待上限），收到 `ready` 才继续；能力缺失（旧 agent）、Health 或调用失败（含等待超时）时记录日志后直接继续；任务取消时中止部署。
 - 部署任务按 `agentNeedsBinaryUpgrade` 拆分两条路径：需要完整安装/升级（未配置 URL、版本缺失或与 Panel 不一致、agent 状态非 compatible/incompatible）时上传二进制并执行 `agentInstallScript`；证书续期、URL 修正等仅需重启的场景只重写证书/env/systemd 配置并执行 `agentRestartScript`，不传输二进制。二进制 bundle 根路径仍固定为 `/app/panel-agents`。
 ## Agent 只读 CLI（--cli apps）
 
@@ -166,5 +171,6 @@
 - The report stream uses the same Panel Agent CA and endpoint as other agent gRPC calls.
 - Panel inspects report streams every 5 seconds, reconnects missing streams, rebuilds streams when `agent.url` changes, and marks streams with no incoming messages for `max(10s, min(metricsInterval, containerInterval) * 3)` as disconnected. This only updates `agent.report.status`, `agent.report.last_message_at`, and `agent.report.last_error`; it must not downgrade the normal Agent health status.
 - Periodic metrics and container reports use Unix-aligned sampleAt values. For an interval of 3 seconds, the stored timestamp must be divisible by 3 and must represent the scheduled sample boundary, not the receive time. Docker event-triggered container_change snapshots use the event sampling second and are accepted outside the periodic boundary.
-- Agent 观察到 Docker image 事件（pull/tag/untag/delete/import/load/save）或 dpkg 状态文件变化时，会在上报流直接推送镜像快照（`images` 字段）或软件包更新列表（`package_updates` 字段）；Panel 收到后直接落库，不再触发 Panel 侧刷新任务。Agent 侧做防抖：镜像推送至少间隔 30 秒，软件包推送至少间隔 10 分钟。Panel 的 30 分钟周期检查（`image_refresh` / `package_refresh`）继续作为主动兜底；推送或落库失败只记录日志，不中断上报流。
+- Agent 观察到 Docker image 事件（pull/tag/untag/delete/import/load/save）或 dpkg 状态文件变化时，会在上报流直接推送镜像快照（`images` 字段）或软件包更新列表（`package_updates` 字段）；Panel 收到后直接落库，不再触发 Panel 侧刷新任务。Agent 侧做防抖：镜像推送至少间隔 30 秒，软件包推送至少间隔 10 分钟。Panel 的 30 分钟周期检查（`image_refresh` / `package_refresh`）继续作为主动兜底；推送或落库失败只记录日志，不中断上报流。指标落库失败同样只记录日志，不中断上报流。
+- 容器快照 Panel 侧有空报告防御：agent 本次未携带容器快照（`Containers` 为空）时，Panel 不调用 `SaveReportedContainers`，不会用空列表清空既有容器观察；agent 侧不再广播空对象。
 - Agent metrics and Docker status collection is driven by a shared watcher hub: no active stream means no sampling, and multiple streams reuse the same sample instead of collecting multiple times. Docker container events also wake the hub to send immediate `container_change` full snapshots in addition to periodic samples.

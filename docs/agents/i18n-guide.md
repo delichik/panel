@@ -11,6 +11,8 @@
 - 后端翻译入口：`internal/platform/i18n/i18n.go`
 - 后端运行时语言设置：`internal/modules/settings/service.go`
 - 语言设置来源：`/api/v1/settings/runtime`
+- 前端运行时默认语言：`web/src/i18n/index.ts` 的 `state.locale` 缺省为 `en`（与默认语言约定一致），localStorage 已有值时保持用户选择。
+- en/zh-CN 词条 key 集合必须完全一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。
 
 ## 适用范围
 

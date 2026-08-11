@@ -176,3 +176,16 @@ func newTestService(t *testing.T) (*Service, func()) {
 	}
 	return NewService(store.LogDB()), func() { _ = store.Close() }
 }
+func TestBufferedWriterStopWithoutStartReturnsImmediately(t *testing.T) {
+	w := NewBufferedWriter(nil, time.Hour)
+	done := make(chan struct{})
+	go func() {
+		w.Stop()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("Stop before Start must not block")
+	}
+}

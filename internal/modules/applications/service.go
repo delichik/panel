@@ -106,10 +106,9 @@ type PlanResult struct {
 }
 
 type LogInput struct {
-	InstanceID    string `json:"instanceId"`
-	ContainerName string `json:"containerName"`
-	Type          string `json:"type"`
-	Tail          int    `json:"tail"`
+	InstanceID string `json:"instanceId"`
+	Type       string `json:"type"`
+	Tail       int    `json:"tail"`
 }
 
 type LogResult struct {
@@ -420,7 +419,7 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 		FROM application_lifecycle_operations
 		WHERE application_id IN (`+placeholders+`)
 	)
-	SELECT latest.application_id,target.status
+	SELECT latest.application_id,target.state,target.action
 	FROM latest
 	JOIN application_lifecycle_targets target ON target.operation_id=latest.id
 	WHERE latest.row_num=1`, pageIDs...)
@@ -429,12 +428,12 @@ func (s *Service) ListSummaries(ctx context.Context, page, pageSize int, query s
 	}
 	defer lifecycleRows.Close()
 	for lifecycleRows.Next() {
-		var appID, status string
-		if err := lifecycleRows.Scan(&appID, &status); err != nil {
+		var appID, state, action string
+		if err := lifecycleRows.Scan(&appID, &state, &action); err != nil {
 			return httpx.ListPage[ApplicationSummary]{}, err
 		}
 		if _, ok := byID[appID]; ok {
-			statuses[appID] = append(statuses[appID], appruntime.InstanceStatus{Status: runtimeStatusFromLifecycleTarget(status)})
+			statuses[appID] = append(statuses[appID], appruntime.InstanceStatus{Status: runtimeStatusFromLifecycleTargetState(state, action)})
 		}
 	}
 	if err := lifecycleRows.Err(); err != nil {
@@ -711,7 +710,7 @@ func (s *Service) Delete(ctx context.Context, appID string) error {
 	app.Enabled = false
 	app.DeletionRequested = true
 	app.UpdatedAt = time.Now().UTC()
-	if err := s.updateApplication(ctx, app); err != nil {
+	if err := s.updateApplicationLifecycleFlags(ctx, app.ID, false, true); err != nil {
 		return err
 	}
 	if instances, err := s.runtimeInstances(ctx, app.ID); err != nil {
@@ -766,17 +765,6 @@ func (s *Service) Plan(ctx context.Context, appID string) (PlanResult, error) {
 		serverIDs = append(serverIDs, target.ID)
 	}
 	return PlanResult{Application: app, Spec: spec, Plan: appruntime.PlanResponse{InstanceCount: len(serverIDs), TargetServers: serverIDs}}, nil
-}
-
-func (s *Service) CheckImageUpdate(ctx context.Context, appID string) (Application, error) {
-	app, err := s.checkImageUpdate(ctx, appID)
-	if err != nil {
-		return Application{}, err
-	}
-	if _, err := s.recordTask(ctx, TaskTypeImageCheck, app.ID, "Checking image for "+app.Name); err != nil {
-		return Application{}, err
-	}
-	return s.Get(ctx, app.ID)
 }
 
 func (s *Service) RunImageCheckTask(tc tasks.TaskContext) error {
@@ -923,7 +911,7 @@ func (s *Service) prepareImageUpdate(ctx context.Context, appID string) (Applica
 	if len(targets) == 0 {
 		return Application{}, appruntime.Spec{}, panelerr.Validation("application_no_runtime_targets", "No agent runtime targets are available")
 	}
-	if err := s.updateApplication(ctx, app); err != nil {
+	if err := s.updateApplicationDerived(ctx, app); err != nil {
 		return Application{}, appruntime.Spec{}, err
 	}
 	s.insertRevisionBestEffort(ctx, app, job)
@@ -1422,7 +1410,7 @@ func (s *Service) Stop(ctx context.Context, appID string, purge bool) (Operation
 	}
 	app.Enabled = false
 	app.UpdatedAt = time.Now().UTC()
-	if err := s.updateApplication(ctx, app); err != nil {
+	if err := s.updateApplicationLifecycleFlags(ctx, app.ID, false, false); err != nil {
 		return OperationResult{}, err
 	}
 	payload := map[string]any{
@@ -1679,7 +1667,7 @@ func mergeLifecycleTargetsIntoStatuses(statuses []appruntime.InstanceStatus, tar
 			ServerName:    target.ServerName,
 			ContainerName: target.ContainerName,
 			ContainerID:   target.ContainerID,
-			Status:        runtimeStatusFromLifecycleTarget(target.Status),
+			Status:        runtimeStatusFromLifecycleTargetState(target.State, target.Action),
 			DesiredState:  target.DesiredState,
 			Stage:         target.Stage,
 			LastError:     target.Error,
@@ -1695,16 +1683,27 @@ func mergeLifecycleTargetsIntoStatuses(statuses []appruntime.InstanceStatus, tar
 	return out
 }
 
-func runtimeStatusFromLifecycleTarget(status string) string {
-	switch status {
-	case LifecycleTargetStatusRunning:
-		return appruntime.StatusRunning
-	case LifecycleTargetStatusFailed:
+// runtimeStatusFromLifecycleTargetState 按 target.state（而非旧 status 投影）推导运行时展示状态。
+// 找不到实例时，stop/purge 成功意味着实例已停止或被移除，apply 成功保持 running 期望。
+func runtimeStatusFromLifecycleTargetState(state, action string) string {
+	switch state {
+	case LifecycleTargetStateSucceeded:
+		switch strings.TrimSpace(action) {
+		case LifecycleTargetActionStop:
+			return appruntime.StatusStopped
+		case LifecycleTargetActionPurge:
+			return appruntime.StatusMissing
+		default:
+			return appruntime.StatusRunning
+		}
+	case LifecycleTargetStateFailedRetryable, LifecycleTargetStateFailed, LifecycleTargetStateCancelled:
 		return appruntime.StatusFailed
-	case LifecycleTargetStatusDeploying, LifecycleTargetStatusPreparing:
-		return appruntime.StatusDeploying
-	case LifecycleTargetStatusSuperseded:
+	case LifecycleTargetStateSuperseded:
 		return appruntime.StatusPending
+	case LifecycleTargetStateClaimed, LifecycleTargetStatePreparing,
+		LifecycleTargetStateApplying, LifecycleTargetStateStopping,
+		LifecycleTargetStatePurging, LifecycleTargetStateVerifying:
+		return appruntime.StatusDeploying
 	default:
 		return appruntime.StatusPending
 	}
@@ -2729,7 +2728,10 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			instanceID = inst.ID
 			containerName = inst.ContainerName
 		}
-		observedAt := now
+		var observedAt *time.Time
+		if instance != nil {
+			observedAt = &now
+		}
 		targetRow := fromDomainLifecycleTarget(LifecycleTarget{
 			ID:                 targetID,
 			OperationID:        operation.ID,
@@ -2751,7 +2753,7 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			ObservedGeneration: observedGenerationOf(instance),
 			ObservedSpecHash:   observedSpecHashOf(instance),
 			ObservedImage:      observedImageOf(instance),
-			ObservedAt:         &observedAt,
+			ObservedAt:         observedAt,
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		})
@@ -2779,7 +2781,7 @@ func (s *Service) createLifecycleOperationForServerIDsWithOptions(ctx context.Co
 			ObservedGeneration: observedGenerationOf(instance),
 			ObservedSpecHash:   observedSpecHashOf(instance),
 			ObservedImage:      observedImageOf(instance),
-			ObservedAt:         &observedAt,
+			ObservedAt:         observedAt,
 			CreatedAt:          now,
 			UpdatedAt:          now,
 		}
@@ -3804,12 +3806,25 @@ func (s *Service) withLifecycleTargetLeaseHeartbeat(ctx context.Context, targetI
 	cancel()
 	select {
 	case heartbeatErr := <-errCh:
-		if err == nil || errors.Is(err, context.Canceled) {
-			return heartbeatErr
-		}
+		return lifecycleHeartbeatResult(heartbeatErr, err)
 	default:
 	}
 	return err
+}
+
+// lifecycleHeartbeatResult 决定心跳错误与运行错误的优先级：租约丢失是所有权交接信号，
+// 无论 run 返回什么普通错误都必须优先返回 errLifecycleTargetLeaseLost。
+func lifecycleHeartbeatResult(heartbeatErr, runErr error) error {
+	if heartbeatErr == nil {
+		return runErr
+	}
+	if errors.Is(heartbeatErr, errLifecycleTargetLeaseLost) {
+		return errLifecycleTargetLeaseLost
+	}
+	if runErr == nil || errors.Is(runErr, context.Canceled) {
+		return heartbeatErr
+	}
+	return runErr
 }
 
 func (s *Service) renewLifecycleTargetTaskLease(ctx context.Context, targetID, taskID string) error {
@@ -3867,6 +3882,15 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 	}
 	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
 		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+	return err
+}
+
+// updateApplicationLifecycleFlags 只更新 Stop/Delete 这类生命周期入口需要的列，
+// 避免用旧快照整行覆盖并发编辑产生的用户字段；version 递增让进行中的编辑会话在提交时自然冲突。
+func (s *Service) updateApplicationLifecycleFlags(ctx context.Context, appID string, enabled, deletionRequested bool) error {
+	now := formatTime(time.Now().UTC())
+	_, err := orm.RawExec(ctx, s.db, `UPDATE applications SET enabled=?,deletion_requested=?,version=version+1,updated_at=? WHERE id=?`,
+		boolInt(enabled), boolInt(deletionRequested), now, appID)
 	return err
 }
 
@@ -4024,6 +4048,11 @@ func replaceApplicationFiles(ctx context.Context, exec orm.Executor, appID strin
 	for _, file := range files {
 		item := fromDomainApplicationFile(file)
 		item.ApplicationID = appID
+		// 会话文件表的 file_key 对新建文件只是应用内 name（跨应用不唯一），
+		// 落库前必须为这些新文件分配全局唯一主键；已有全局 ID 的文件（含 legacy 暂存文件）保留原 ID。
+		if strings.TrimSpace(item.ID) == "" || item.ID == file.Name {
+			item.ID = id.New("afile")
+		}
 		items = append(items, item)
 	}
 	return orm.New(exec).From("application_files").InsertBatch(ctx, items)
@@ -5087,9 +5116,9 @@ func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID s
 }
 
 func (s *Service) markApplicationReconcileStopped(ctx context.Context, appID string) error {
+	// 协调停止是派生状态，不写 applications.updated_at，避免协调动作污染配置更新时间。
 	return orm.New(s.db).From("applications").Where("id=?", appID).UpdateColumns(ctx, map[string]any{
 		"reconcile_stopped": 1,
-		"updated_at":        formatTime(time.Now().UTC()),
 	})
 }
 
@@ -5099,7 +5128,6 @@ func (s *Service) resetApplicationReconcileStopped(ctx context.Context, appID st
 	}
 	return orm.New(s.db).From("applications").Where("id=?", appID).UpdateColumns(ctx, map[string]any{
 		"reconcile_stopped": 0,
-		"updated_at":        formatTime(time.Now().UTC()),
 	})
 }
 
@@ -5491,6 +5519,9 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		if domain == "" {
 			continue
 		}
+		if !validReverseProxyDomain(domain) {
+			return nil, panelerr.Validation("application_reverse_proxy_domain_invalid", "reverse proxy domain is invalid")
+		}
 		targetType := normalizeReverseProxyTargetType(rule.TargetType)
 		if targetType == "" {
 			return nil, panelerr.Validation("application_reverse_proxy_target_type_invalid", "reverse proxy target type is invalid")
@@ -5510,8 +5541,8 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 			if proxyPath == "" {
 				proxyPath = "/"
 			}
-			if !strings.HasPrefix(proxyPath, "/") {
-				return nil, panelerr.Validation("application_reverse_proxy_path_invalid", "reverse proxy path must start with /")
+			if !validNginxPath(proxyPath) {
+				return nil, panelerr.Validation("application_reverse_proxy_path_invalid", "reverse proxy path is invalid")
 			}
 			if _, ok := pathKeys[proxyPath]; ok {
 				return nil, panelerr.Validation("application_reverse_proxy_path_duplicate", "reverse proxy path is duplicated")
@@ -5565,7 +5596,7 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 		if domain == "" {
 			continue
 		}
-		if !validNginxToken(domain) {
+		if !validReverseProxyDomain(domain) {
 			return nil, panelerr.Validation("application_reverse_proxy_domain_invalid", "reverse proxy domain is invalid")
 		}
 		originServerIDs := uniqueSortedStrings(rule.OriginServerIDs)
@@ -5584,8 +5615,8 @@ func (s *Service) renderReverseProxyRules(ctx context.Context, rules []ReversePr
 			if proxyPath == "" {
 				proxyPath = "/"
 			}
-			if !strings.HasPrefix(proxyPath, "/") || !validNginxPath(proxyPath) {
-				return nil, panelerr.Validation("application_reverse_proxy_path_invalid", "reverse proxy path must start with /")
+			if !validNginxPath(proxyPath) {
+				return nil, panelerr.Validation("application_reverse_proxy_path_invalid", "reverse proxy path is invalid")
 			}
 			if _, ok := pathKeys[proxyPath]; ok {
 				return nil, panelerr.Validation("application_reverse_proxy_path_duplicate", "reverse proxy path is duplicated")
@@ -5737,8 +5768,37 @@ func validNginxToken(value string) bool {
 	return !strings.ContainsAny(value, " \t\r\n;{}")
 }
 
+// validReverseProxyDomain 按 DNS hostname 规则校验反向代理域名，支持单个 *. 通配前缀。
+func validReverseProxyDomain(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if value == "" {
+		return false
+	}
+	if strings.HasPrefix(value, "*.") {
+		value = strings.TrimPrefix(value, "*.")
+		if value == "" {
+			return false
+		}
+	}
+	if len(value) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(value, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func validNginxPath(value string) bool {
-	return value != "" && !strings.ContainsAny(value, " \t\r\n;{}")
+	// 排除空白、nginx 配置分隔符以及 # ? \ 等 URI/配置特殊字符。
+	return value != "" && strings.HasPrefix(value, "/") && !strings.ContainsAny(value, " \t\r\n;{}#?\\'\"")
 }
 
 func (s *Service) redeployIfEnabled(ctx context.Context, app Application) error {
@@ -5891,6 +5951,18 @@ func normalizeApplicationFileName(value string) (string, error) {
 	name := strings.TrimSpace(value)
 	if name == "" {
 		return "", panelerr.Validation("application_file_name_invalid", "application file name is invalid")
+	}
+	// 拒绝路径分隔符、目录穿越和控制字符，避免 zip-slip 与“能保存无法下载”的死数据；同时限制长度。
+	if len(name) > 255 {
+		return "", panelerr.Validation("application_file_name_invalid", "application file name is too long")
+	}
+	if strings.ContainsAny(name, "/\\") || strings.Contains(name, "..") {
+		return "", panelerr.Validation("application_file_name_invalid", "application file name is invalid")
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return "", panelerr.Validation("application_file_name_invalid", "application file name is invalid")
+		}
 	}
 	return name, nil
 }

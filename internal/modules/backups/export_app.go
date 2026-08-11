@@ -3,6 +3,8 @@ package backups
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -28,6 +30,10 @@ type ExportApp struct {
 	auth       *maintenanceAuth
 	operations map[string]maintenanceOperation
 	runFn      func(context.Context, string)
+	// downloadedAt records the first successful download of the completed
+	// export. It is intentionally not serialized into the status payload;
+	// the server uses it to refuse exit until the archive has been fetched.
+	downloadedAt time.Time
 }
 
 func PendingExportExists(dataRoot string) bool {
@@ -183,6 +189,13 @@ func (a *ExportApp) downloadAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	path := filepath.Join(a.cfg.DataRoot, "tmp", "backups", status.ExportID+".panel-backup")
+	if _, err := os.Stat(path); err != nil {
+		httpx.Error(w, panelerr.NotFound("backup export"))
+		return
+	}
+	a.mu.Lock()
+	a.downloadedAt = time.Now().UTC()
+	a.mu.Unlock()
 	w.Header().Set("Content-Disposition", `attachment; filename="panel-`+filepath.Base(path)+`"`)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	http.ServeFile(w, r, path)
@@ -194,7 +207,19 @@ func (a *ExportApp) exitAPI(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusConflict, status)
 		return
 	}
-	a.cleanupTemporaryFiles(status)
+	if status.DownloadAvailable && !a.downloadConfirmed() {
+		// The archive has not been downloaded yet. Deleting it here would
+		// silently destroy the only copy, so refuse and keep maintenance mode
+		// running until the frontend confirms the download.
+		httpx.Error(w, panelerr.Conflict("backup_export_not_downloaded", "Download the backup archive before exiting maintenance mode"))
+		return
+	}
+	if err := a.cleanupTemporaryFiles(status); err != nil {
+		// Cleanup failed: keep the files and the maintenance process so the
+		// user can retry instead of silently losing or leaking the archive.
+		httpx.Error(w, err)
+		return
+	}
 	httpx.JSON(w, http.StatusOK, status)
 	if status.RestartSupported {
 		a.restarter.RestartSoon(MaintenanceModeNormal)
@@ -203,11 +228,24 @@ func (a *ExportApp) exitAPI(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (a *ExportApp) cleanupTemporaryFiles(status Status) {
-	_ = os.RemoveAll(exportPendingDir(a.cfg.DataRoot))
-	if status.ExportID != "" {
-		_ = os.Remove(filepath.Join(a.cfg.DataRoot, "tmp", "backups", status.ExportID+".panel-backup"))
+func (a *ExportApp) downloadConfirmed() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return !a.downloadedAt.IsZero()
+}
+
+func (a *ExportApp) cleanupTemporaryFiles(status Status) error {
+	var joined error
+	if err := os.RemoveAll(exportPendingDir(a.cfg.DataRoot)); err != nil {
+		joined = errors.Join(joined, fmt.Errorf("remove pending export marker: %w", err))
 	}
+	if status.ExportID != "" {
+		path := filepath.Join(a.cfg.DataRoot, "tmp", "backups", status.ExportID+".panel-backup")
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			joined = errors.Join(joined, fmt.Errorf("remove backup archive: %w", err))
+		}
+	}
+	return joined
 }
 
 func (a *ExportApp) run(ctx context.Context, password string) {

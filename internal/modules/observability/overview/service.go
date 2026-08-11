@@ -84,16 +84,22 @@ func (s *Service) Get(ctx context.Context) (Overview, error) {
 	if err != nil {
 		return Overview{}, err
 	}
+	serverIDs := make([]string, 0, len(servers))
+	for _, srv := range servers {
+		serverIDs = append(serverIDs, srv.ID)
+	}
+	latestAt, err := s.metrics.LatestAtMany(ctx, serverIDs)
+	if err != nil {
+		return Overview{}, err
+	}
+	loads, err := s.metrics.LatestLoadMany(ctx, serverIDs)
+	if err != nil {
+		return Overview{}, err
+	}
 	out := Overview{Servers: []ServerSummary{}}
 	for _, srv := range servers {
-		lastMetrics, err := s.metrics.LatestAt(ctx, srv.ID)
-		if err != nil {
-			return Overview{}, err
-		}
-		load, err := s.metrics.LatestLoad(ctx, srv.ID)
-		if err != nil {
-			return Overview{}, err
-		}
+		lastMetrics := latestAt[srv.ID]
+		load := loads[srv.ID]
 		fresh := lastMetrics != nil && time.Since(*lastMetrics) < 5*time.Minute
 		out.Servers = append(out.Servers, ServerSummary{
 			ID: srv.ID, Name: srv.Name, Host: srv.Host, Supported: srv.OS.Supported, Reachable: srv.Reachable,
@@ -194,24 +200,20 @@ func (s *Service) GetCardDataSince(ctx context.Context, cardID string, since *ti
 	for _, serverID := range target.ServerIDs {
 		selected[serverID] = struct{}{}
 	}
+	serverIDs := []string{}
 	for _, srv := range servers {
 		if len(selected) > 0 {
 			if _, ok := selected[srv.ID]; !ok {
 				continue
 			}
 		}
-		var series metrics.Series
-		var err error
-		if since != nil {
-			series, err = s.metrics.QueryAfter(ctx, srv.ID, target.Range, *since)
-		} else {
-			series, err = s.metrics.Query(ctx, srv.ID, target.Range)
-		}
-		if err != nil {
-			return CardData{}, err
-		}
-		out.MetricsByServer[srv.ID] = series
+		serverIDs = append(serverIDs, srv.ID)
 	}
+	byServer, err := s.metrics.QueryMany(ctx, serverIDs, target.Range, since)
+	if err != nil {
+		return CardData{}, err
+	}
+	out.MetricsByServer = byServer
 	return out, nil
 }
 
@@ -273,7 +275,7 @@ func validCardKind(kind CardKind) bool {
 }
 
 func validRange(value string) bool {
-	return value == "1h" || value == "6h" || value == "1d" || value == "7d"
+	return value == "1h" || value == "6h" || value == "1d" || value == "24h" || value == "7d"
 }
 
 func defaultCards() []CardConfiguration {

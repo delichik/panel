@@ -86,7 +86,12 @@ func (s *Service) CleanupStages(ctx context.Context, retentionDays int) (int, er
 		return 0, nil
 	}
 	cutoff := formatTime(time.Now().UTC().AddDate(0, 0, -retentionDays))
-	res, err := orm.RawExec(ctx, s.lifecycleDB(), `DELETE FROM application_target_stages WHERE created_at < ?`, cutoff)
+	// 只清理终态步骤：状态已是 succeeded/failed，或已带早于保留期的 finished_at；
+	// 仍处于 running 且无 finished_at 的步骤即使很旧也可能是正在执行的活动步骤，不能误删。
+	res, err := orm.RawExec(ctx, s.lifecycleDB(), `DELETE FROM application_target_stages
+		WHERE created_at < ?
+		  AND (status IN ('succeeded','failed') OR (finished_at <> '' AND finished_at < ?))`,
+		cutoff, cutoff)
 	if err != nil {
 		return 0, err
 	}

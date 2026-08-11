@@ -56,6 +56,33 @@ describe('Dialog', () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     expect(document.activeElement).toBe(trigger);
   });
+
+  it('does not close via Escape or the close button while closeDisabled is set', async () => {
+    const Host = defineComponent({
+      components: { Dialog },
+      setup() {
+        const open = ref(true);
+        return { open };
+      },
+      template: `
+        <Dialog v-model:open="open" title="Saving" close-disabled>
+          <button id="body-action">Action</button>
+        </Dialog>
+      `,
+    });
+    const wrapper = mount(Host, { attachTo: document.body });
+    await nextTick();
+
+    const renderedDialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
+    const closeButton = document.querySelector<HTMLButtonElement>('button[aria-label="Close"]')!;
+    expect(closeButton.disabled).toBe(true);
+
+    renderedDialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+    await flushPromises();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+
+    wrapper.unmount();
+  });
 });
 
 describe('LoadingOverlay', () => {

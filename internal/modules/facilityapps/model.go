@@ -64,6 +64,7 @@ type ReverseProxyConfig struct {
 	Operation         *applications.LifecycleOperation             `json:"operation,omitempty"`
 	ReconcileStopped  bool                                         `json:"reconcileStopped,omitempty"`
 	LastError         string                                       `json:"lastError,omitempty"`
+	Warnings          []string                                     `json:"warnings,omitempty"`
 	UpdatedAt         time.Time                                    `json:"updatedAt"`
 	Routes            int                                          `json:"routes"`
 	EnabledServers    []string                                     `json:"enabledServers"`

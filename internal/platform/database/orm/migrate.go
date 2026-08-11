@@ -303,6 +303,12 @@ type migrator struct {
 	extraIndexes map[string][]extraIndexDecl
 }
 
+// execer is satisfied by both *sql.Conn and *sql.Tx so DDL helpers can run
+// either directly on the dedicated connection or inside a rebuild transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func (m *migrator) log(format string, args ...any) {
 	if m.logf != nil {
 		m.logf(format, args...)
@@ -1053,6 +1059,19 @@ func fieldNeedsRebuild(f *fieldInfo) bool {
 // Columns that exist in the database but are not in the model are
 // preserved unless they are managed by the ORM and destructive mode is on.
 func (m *migrator) rebuildTable(ctx context.Context, meta *modelInfo, actual *tableState, snap *snapshot) error {
+	// Rebuild inside an explicit transaction so a crash mid-rebuild cannot
+	// leave the original table dropped with only a temporary table behind.
+	tx, err := m.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("rebuild %s: begin transaction: %w", meta.table, err)
+	}
+	defer tx.Rollback()
+	tmp := "__orm_rebuild_" + meta.table
+	// A previous crashed rebuild may have left a stale temp table; drop it so
+	// the CREATE TABLE below never fails on an existing name.
+	if _, err := tx.ExecContext(ctx, `DROP TABLE IF EXISTS `+quoteIdent(tmp)); err != nil {
+		return fmt.Errorf("rebuild %s: drop stale temp table: %w", meta.table, err)
+	}
 	var preserve []*actualColumn
 	for _, name := range actual.columnOrder {
 		if _, inModel := meta.byColumn[name]; !inModel {
@@ -1062,9 +1081,8 @@ func (m *migrator) rebuildTable(ctx context.Context, meta *modelInfo, actual *ta
 			preserve = append(preserve, actual.columns[name])
 		}
 	}
-	tmp := "__orm_rebuild_" + meta.table
 	ddl := m.createTableDDL(tmp, meta, preserve)
-	if _, err := m.conn.ExecContext(ctx, ddl); err != nil {
+	if _, err := tx.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("rebuild %s: create %s: %w", meta.table, tmp, err)
 	}
 	copyCols := m.copyColumns(meta, actual, preserve)
@@ -1073,17 +1091,20 @@ func (m *migrator) rebuildTable(ctx context.Context, meta *modelInfo, actual *ta
 		quoted[i] = quoteIdent(c)
 	}
 	stmt := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s", quoteIdent(tmp), strings.Join(quoted, ", "), strings.Join(quoted, ", "), quoteIdent(meta.table))
-	if _, err := m.conn.ExecContext(ctx, stmt); err != nil {
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("rebuild %s: copy data: %w", meta.table, err)
 	}
-	if _, err := m.conn.ExecContext(ctx, `DROP TABLE `+quoteIdent(meta.table)); err != nil {
+	if _, err := tx.ExecContext(ctx, `DROP TABLE `+quoteIdent(meta.table)); err != nil {
 		return fmt.Errorf("rebuild %s: drop old table: %w", meta.table, err)
 	}
-	if _, err := m.conn.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s RENAME TO %s", quoteIdent(tmp), quoteIdent(meta.table))); err != nil {
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("ALTER TABLE %s RENAME TO %s", quoteIdent(tmp), quoteIdent(meta.table))); err != nil {
 		return fmt.Errorf("rebuild %s: rename: %w", meta.table, err)
 	}
-	if err := m.createModelIndexes(ctx, meta); err != nil {
+	if err := m.createModelIndexes(ctx, tx, meta); err != nil {
 		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("rebuild %s: commit: %w", meta.table, err)
 	}
 	m.log("orm: rebuilt table %s", meta.table)
 	return nil
@@ -1106,7 +1127,7 @@ func (m *migrator) createTable(ctx context.Context, meta *modelInfo) error {
 	if _, err := m.conn.ExecContext(ctx, m.createTableDDL(meta.table, meta, nil)); err != nil {
 		return fmt.Errorf("create table %s: %w", meta.table, err)
 	}
-	return m.createModelIndexes(ctx, meta)
+	return m.createModelIndexes(ctx, m.conn, meta)
 }
 
 func (m *migrator) createTableDDL(name string, meta *modelInfo, preserve []*actualColumn) string {
@@ -1205,7 +1226,7 @@ func (m *migrator) preservedColumnDef(c *actualColumn) string {
 	return b.String()
 }
 
-func (m *migrator) createModelIndexes(ctx context.Context, meta *modelInfo) error {
+func (m *migrator) createModelIndexes(ctx context.Context, db execer, meta *modelInfo) error {
 	for _, mi := range modelIndexes(meta) {
 		uniq := ""
 		if mi.unique {
@@ -1216,12 +1237,12 @@ func (m *migrator) createModelIndexes(ctx context.Context, meta *modelInfo) erro
 			cols[i] = quoteIdent(c)
 		}
 		stmt := fmt.Sprintf("CREATE %sINDEX IF NOT EXISTS %s ON %s (%s)", uniq, quoteIdent(mi.name), quoteIdent(meta.table), strings.Join(cols, ", "))
-		if _, err := m.conn.ExecContext(ctx, stmt); err != nil {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("create index %s: %w", mi.name, err)
 		}
 	}
 	for _, ex := range m.extraIndexes[meta.table] {
-		if _, err := m.conn.ExecContext(ctx, ex.ddl); err != nil {
+		if _, err := db.ExecContext(ctx, ex.ddl); err != nil {
 			return fmt.Errorf("create index %s: %w", ex.name, err)
 		}
 	}

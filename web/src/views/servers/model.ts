@@ -39,7 +39,18 @@ export function isIPv4(value: string) {
 
 export function isIPv6(value: string) {
   const trimmed = value.trim();
-  return trimmed.includes(':') && /^[0-9a-fA-F:.]+$/.test(trimmed);
+  if (!trimmed) return false;
+  const candidate = trimmed.startsWith('[') && trimmed.endsWith(']') ? trimmed.slice(1, -1) : trimmed;
+  if (!candidate.includes(':')) return false;
+  const groups = candidate.split('::');
+  if (groups.length > 2) return false;
+  const [head, tail] = groups;
+  const headGroups = head ? head.split(':') : [];
+  const tailGroups = tail ? tail.split(':') : [];
+  const all = [...headGroups, ...tailGroups];
+  if (all.some((group) => !/^[0-9a-fA-F]{1,4}$/.test(group))) return false;
+  const total = headGroups.length + tailGroups.length;
+  return groups.length === 2 ? total < 8 : total === 8;
 }
 
 export function connectionHost(input: Pick<ServerSaveInput, 'ipv4' | 'ipv6'>) {

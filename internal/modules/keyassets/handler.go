@@ -248,7 +248,7 @@ func (h *Handler) DownloadFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+safeContentDispositionFilename(filename)+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
 }
@@ -285,7 +285,7 @@ func (h *Handler) DownloadExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
+	w.Header().Set("Content-Disposition", `attachment; filename="`+safeContentDispositionFilename(filename)+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(content)
 }
@@ -518,4 +518,21 @@ func optionalTime(value time.Time) *time.Time {
 
 func ptr[T any](value T) *T {
 	return &value
+}
+
+// safeContentDispositionFilename sanitizes a filename for use inside a
+// Content-Disposition header value: quotes, backslashes and control characters
+// (including CR/LF) are replaced, preventing header injection and broken
+// download names. Falls back to a fixed name when nothing usable remains.
+func safeContentDispositionFilename(name string) string {
+	name = strings.Map(func(r rune) rune {
+		if r == '"' || r == '\'' || r == '\\' || r == '\r' || r == '\n' || r < 0x20 || r == 0x7f {
+			return '_'
+		}
+		return r
+	}, strings.TrimSpace(name))
+	if name == "" || name == "." || name == ".." {
+		return "download"
+	}
+	return name
 }

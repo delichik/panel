@@ -70,10 +70,16 @@ func main() {
 		}
 	}()
 
+	// WriteTimeout is intentionally left unset: long-running responses such as
+	// task logs, diagnostics streams and downloads must not be cut off by the
+	// HTTP server. IdleTimeout keeps dead keep-alive connections from piling
+	// up, and MaxHeaderBytes bounds request header memory.
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,
 		Handler:           application.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 	serve := server.ListenAndServe
 	if isolated, ok := application.(maintenanceApplication); ok {

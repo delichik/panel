@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	_ "modernc.org/sqlite"
 
 	"panel/internal/platform/config"
+	"panel/internal/platform/logging"
 )
 
 type Store struct {
@@ -25,14 +27,15 @@ func Open(cfg config.Config) (*Store, error) {
 	if err := migrateLegacyLogDatabasePath(cfg.LogDatabase); err != nil {
 		return nil, err
 	}
-	for _, p := range []string{cfg.AppDatabase, cfg.LogDatabase, cfg.CoordinationDatabase, cfg.MetricsDatabase, filepath.Join(cfg.DataRoot, "tmp")} {
-		dir := p
-		if filepath.Ext(p) != "" {
-			dir = filepath.Dir(p)
+	for _, p := range []string{cfg.AppDatabase, cfg.LogDatabase, cfg.CoordinationDatabase, cfg.MetricsDatabase} {
+		if dir := databaseDir(p); dir != "" {
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				return nil, err
+			}
 		}
-		if err := os.MkdirAll(dir, 0700); err != nil {
-			return nil, err
-		}
+	}
+	if err := os.MkdirAll(filepath.Join(cfg.DataRoot, "tmp"), 0700); err != nil {
+		return nil, err
 	}
 	appDB, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
 	if err != nil {
@@ -98,12 +101,40 @@ func migrateLegacyLogDatabasePath(logPath string) error {
 				if renameErr := os.Rename(oldSidecar, newSidecar); renameErr != nil {
 					return renameErr
 				}
+			} else if statErr == nil {
+				// The target already has a WAL/SHM sidecar; keeping the legacy
+				// sidecar around is safer than overwriting an active log.db WAL.
+				logging.L().Warn("legacy tasks.db sidecar not renamed because target already exists", zap.String("sidecar", newSidecar))
+			} else {
+				return statErr
 			}
 		} else if !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+// databaseDir returns the directory that must exist for a database DSN.
+// file: DSNs may carry a query string (e.g. ?cache=shared) that must be
+// stripped before the path is treated as a filesystem path; in-memory DSNs
+// have no directory to create.
+func databaseDir(dsn string) string {
+	normalized := filepath.ToSlash(dsn)
+	if strings.HasPrefix(normalized, "file:") {
+		normalized = strings.TrimPrefix(normalized, "file:")
+		if idx := strings.IndexByte(normalized, '?'); idx >= 0 {
+			normalized = normalized[:idx]
+		}
+	}
+	if normalized == "" || strings.HasPrefix(normalized, ":memory:") {
+		return ""
+	}
+	dir := normalized
+	if filepath.Ext(normalized) != "" {
+		dir = filepath.Dir(normalized)
+	}
+	return dir
 }
 
 func sqliteDSN(path string) string {

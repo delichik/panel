@@ -2,6 +2,7 @@ package tasks
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,7 +38,7 @@ func (h *Handler) SetDeploymentProjectionProvider(provider DeploymentProjectionP
 }
 
 func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
-	page, pageSize, err := httpx.ParseListPage(r, "status", "serverId", "type", "includeInternal", "commonOnly", "operationId", "operationPage")
+	page, pageSize, err := httpx.ParseListPage(r, "status", "serverId", "type", "includeInternal", "commonOnly", "operationId", "operationPage", "q")
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -51,6 +52,7 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 		ExcludeScheduled: truthyQuery(r, "commonOnly"),
 		OperationID:      r.URL.Query().Get("operationId"),
 		OperationPage:    truthyQuery(r, "operationPage"),
+		Q:                strings.TrimSpace(r.URL.Query().Get("q")),
 		Limit:            pageSize,
 		Offset:           offset,
 	})
@@ -117,11 +119,7 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.runner != nil {
-		if err := h.runner.RunNow(r.Context(), task); err != nil {
-			h.failIfUnfinished(r.Context(), task.ID, err)
-			httpx.Error(w, err)
-			return
-		}
+		go h.dispatchRunNow(task)
 	}
 	h.decorateTask(&task)
 	httpx.JSON(w, http.StatusAccepted, task)
@@ -147,14 +145,27 @@ func (h *Handler) RunNow(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if h.runner != nil {
-		if err := h.runner.RunNow(r.Context(), task); err != nil {
-			h.failIfUnfinished(r.Context(), task.ID, err)
-			httpx.Error(w, err)
-			return
-		}
+		go h.dispatchRunNow(task)
 	}
 	h.decorateTask(&task)
 	httpx.JSON(w, http.StatusAccepted, task)
+}
+
+// dispatchRunNow 异步执行任务并立即返回，避免同步执行占用 HTTP 连接。
+// 执行失败且任务仍处于非终态时标记失败；执行边界内的 panic 由
+// Worker/Manager 的 recover 转换，这里只做最后的兜底。
+func (h *Handler) dispatchRunNow(task Task) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("task run-now goroutine recovered from panic: %v", recovered)
+		}
+	}()
+	if h == nil || h.runner == nil {
+		return
+	}
+	if err := h.runner.RunNow(context.Background(), task); err != nil {
+		h.failIfUnfinished(context.Background(), task.ID, err)
+	}
 }
 
 func (h *Handler) decorateList(result *ListResult) {

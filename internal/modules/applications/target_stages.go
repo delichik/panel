@@ -58,7 +58,7 @@ func (s *Service) recordTargetStage(ctx context.Context, targetID, stage, status
 			status=excluded.status,
 			detail=CASE WHEN excluded.detail <> '' THEN excluded.detail ELSE application_target_stages.detail END,
 			started_at=COALESCE(application_target_stages.started_at, excluded.started_at),
-			finished_at=COALESCE(excluded.finished_at, application_target_stages.finished_at),
+			finished_at=CASE WHEN excluded.status='running' THEN '' ELSE COALESCE(excluded.finished_at, application_target_stages.finished_at) END,
 			updated_at=excluded.updated_at`,
 		id.New("atst"), operationID, targetID, applicationID, serverID, strings.TrimSpace(stage), strings.TrimSpace(status),
 		strings.TrimSpace(detail), formatTime(*start), optionalTimeString(finishedAt), formatTime(now), formatTime(now))

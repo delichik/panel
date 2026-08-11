@@ -48,6 +48,12 @@ let resourceController: AbortController | null = null;
 let serversRequestId = 0;
 let resourceRequestId = 0;
 const autoRefreshing = new Set<string>();
+let taskWaitController: AbortController | null = null;
+
+function taskWaitSignal() {
+  if (!taskWaitController || taskWaitController.signal.aborted) taskWaitController = new AbortController();
+  return taskWaitController.signal;
+}
 
 const servers = ref<ServerDto[]>([]);
 const selectedId = ref(String(route.query.server ?? ''));
@@ -70,7 +76,7 @@ const logsText = ref('');
 const logsTitle = ref('');
 const pullDialog = ref(false);
 const confirmDialog = ref(false);
-const confirmTarget = ref<{ kind: 'container' | 'image' | 'image-prune' | 'volume' | 'volume-prune' | 'network'; id?: string; label?: string } | null>(null);
+const confirmTarget = ref<{ kind: 'container' | 'image' | 'image-prune' | 'volume' | 'volume-prune' | 'network' | 'packages-upgrade-all' | 'container-action'; id?: string; label?: string; action?: 'stop' | 'restart' | 'delete'; managed?: boolean } | null>(null);
 const pullForm = reactive({ reference: 'nginx:1.28-alpine' });
 
 const selectedServer = computed(() => servers.value.find((item) => item.id === selectedId.value) ?? null);
@@ -220,19 +226,19 @@ async function refreshCurrent() {
     if (activeTab.value === 'packages') {
       const result = await packagesApi.refresh(server.id);
       notifySuccess(result.taskId ? t('resourcesPage.taskAccepted', { taskId: result.taskId }) : t('resourcesPage.refreshing'));
-      if (result.taskId) await waitForTask(result.taskId);
+      if (result.taskId) await waitForTask(result.taskId, 90_000, taskWaitSignal());
     } else if (activeTab.value === 'images') {
       const accepted = await containersApi.refreshImages(server.id);
       notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
-      await waitForTask(accepted.taskId);
+    await waitForTask(accepted.taskId, 90_000, taskWaitSignal());
     } else if (activeTab.value === 'networks') {
       const accepted = await containersApi.refreshNetworks(server.id);
       notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
-      await waitForTask(accepted.taskId);
+    await waitForTask(accepted.taskId, 90_000, taskWaitSignal());
     } else if (activeTab.value === 'volumes') {
       const accepted = await containersApi.refreshVolumes(server.id);
       notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
-      await waitForTask(accepted.taskId);
+    await waitForTask(accepted.taskId, 90_000, taskWaitSignal());
     } else {
       await loadResource();
       notifySuccess(t('resourcesPage.refreshed'));
@@ -248,7 +254,7 @@ async function ensureSnapshot(serverId: string, tab: 'networks' | 'volumes') {
   loadingResource.value = true;
   try {
     const accepted = tab === 'networks' ? await containersApi.refreshNetworks(serverId) : await containersApi.refreshVolumes(serverId);
-    await waitForTask(accepted.taskId);
+    await waitForTask(accepted.taskId, 90_000, taskWaitSignal());
     await loadResource();
   } catch (err) {
     if (!isAbortError(err)) {
@@ -273,20 +279,22 @@ async function upgradeSelectedPackages() {
 
 async function upgradeAllPackages() {
   if (!selectedServer.value) return;
-  await run('upgrade-all', async () => {
-    const accepted = await packagesApi.upgradeAll(selectedServer.value!.id);
-    notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
-    await loadResource();
-  });
+  confirmTarget.value = { kind: 'packages-upgrade-all' };
+  confirmDialog.value = true;
 }
 
-async function containerAction(container: ContainerDto, action: 'start' | 'stop' | 'restart') {
+async function containerAction(container: ContainerDto, action: 'start' | 'stop' | 'restart' | 'delete') {
   if (!selectedServer.value || containerActionDisabled(container, action)) return;
-  await run(`${action}-${container.id}`, async () => {
-    await containersApi.containerAction(selectedServer.value!.id, container.id, action);
-    notifySuccess(t('resourcesPage.operationCompleted'));
-    await loadResource();
-  });
+  if (action === 'start') {
+    await run(`start-${container.id}`, async () => {
+      await containersApi.containerAction(selectedServer.value!.id, container.id, 'start');
+      notifySuccess(t('resourcesPage.operationCompleted'));
+      await loadResource();
+    });
+    return;
+  }
+  confirmTarget.value = { kind: 'container-action', id: container.id, label: containerName(container), action, managed: container.managed };
+  confirmDialog.value = true;
 }
 
 async function openLogs(container: ContainerDto) {
@@ -299,8 +307,8 @@ async function openLogs(container: ContainerDto) {
   });
 }
 
-function confirm(kind: NonNullable<typeof confirmTarget.value>['kind'], id?: string, label?: string) {
-  confirmTarget.value = { kind, id, label };
+function confirm(kind: NonNullable<typeof confirmTarget.value>['kind'], id?: string, label?: string, action?: 'stop' | 'restart' | 'delete', managed?: boolean) {
+  confirmTarget.value = { kind, id, label, action, managed };
   confirmDialog.value = true;
 }
 
@@ -309,12 +317,21 @@ async function confirmDanger() {
   const target = confirmTarget.value;
   if (!server || !target) return;
   await run(`confirm-${target.kind}`, async () => {
+    if (target.kind === 'packages-upgrade-all') {
+      const accepted = await packagesApi.upgradeAll(server.id);
+      notifySuccess(t('resourcesPage.taskAccepted', { taskId: accepted.taskId }));
+    }
+    if (target.kind === 'container-action' && target.id) {
+      if (target.action === 'delete') await containersApi.deleteContainer(server.id, target.id);
+      else await containersApi.containerAction(server.id, target.id, target.action ?? 'stop');
+      notifySuccess(t('resourcesPage.operationCompleted'));
+    }
     if (target.kind === 'container' && target.id) await containersApi.deleteContainer(server.id, target.id);
     if (target.kind === 'image' && target.id) await containersApi.deleteImage(server.id, target.id);
     if (target.kind === 'image-prune') await containersApi.deleteUnusedImages(server.id);
     if (target.kind === 'volume' && target.id) await containersApi.deleteVolume(server.id, target.id);
     if (target.kind === 'volume-prune') await containersApi.deleteUnusedVolumes(server.id);
-    notifySuccess(t('resourcesPage.operationCompleted'));
+    if (target.kind !== 'packages-upgrade-all') notifySuccess(t('resourcesPage.operationCompleted'));
     confirmDialog.value = false;
     await loadResource();
   });
@@ -365,6 +382,43 @@ function formatBytes(value?: number) {
   }
   return `${amount.toFixed(index ? 1 : 0)} ${units[index]}`;
 }
+
+const confirmTitle = computed(() => {
+  const target = confirmTarget.value;
+  if (target?.kind === 'packages-upgrade-all') return t('resourcesPage.upgradeAll');
+  if (target?.kind === 'container-action') {
+    if (target.action === 'stop') return t('resourcesPage.stop');
+    if (target.action === 'restart') return t('resourcesPage.restart');
+    return t('common.delete');
+  }
+  return t('resourcesPage.confirmDanger');
+});
+const confirmImpact = computed(() => {
+  const target = confirmTarget.value;
+  if (!target) return t('resourcesPage.confirmDangerImpact');
+  if (target.kind === 'packages-upgrade-all') return t('resourcesPage.confirmUpgradeAllImpact');
+  if (target.kind === 'container-action') {
+    const base = target.action === 'delete' ? t('resourcesPage.confirmContainerDeleteImpact') : t('resourcesPage.confirmContainerActionImpact');
+    return target.managed ? `${base} ${t('resourcesPage.managedContainerConfirmImpact')}` : base;
+  }
+  return t('resourcesPage.confirmDangerImpact');
+});
+const confirmLabel = computed(() => {
+  const target = confirmTarget.value;
+  if (target?.kind === 'packages-upgrade-all') return t('resourcesPage.upgradeAll');
+  if (target?.kind === 'container-action') {
+    if (target.action === 'stop') return t('resourcesPage.stop');
+    if (target.action === 'restart') return t('resourcesPage.restart');
+    return t('common.delete');
+  }
+  return t('common.delete');
+});
+const confirmRequiresCheckbox = computed(() => {
+  const target = confirmTarget.value;
+  if (!target) return false;
+  if (target.kind === 'container-action') return target.action === 'delete';
+  return ['image', 'image-prune', 'volume', 'volume-prune'].includes(target.kind);
+});
 
 function isAbortError(error: unknown) {
   return Boolean(error && typeof error === 'object' && 'code' in error && (error as { code?: string }).code === 'request_aborted');
@@ -463,7 +517,7 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton h-4 w-36 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
-                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                <EmptyState v-else-if="error || actionError" :title="t('common.loadFailed')" :description="error || actionError">
                   <template #actions>
                     <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
                   </template>
@@ -500,7 +554,7 @@ onBeforeUnmount(() => {
                   </footer>
                 </article>
               </template>
-              <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+              <EmptyState v-else-if="error || actionError" :title="t('common.loadFailed')" :description="error || actionError">
                 <template #actions>
                   <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
                 </template>
@@ -526,7 +580,7 @@ onBeforeUnmount(() => {
                   <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'stop'))" :loading="pending === `stop-${item.id}`" @click="containerAction(item, 'stop')"><Square />{{ t('resourcesPage.stop') }}</Button>
                   <Button size="sm" :disabled="Boolean(containerActionDisabled(item, 'restart'))" :loading="pending === `restart-${item.id}`" @click="containerAction(item, 'restart')"><RefreshCcw />{{ t('resourcesPage.restart') }}</Button>
                   <Button size="sm" :loading="pending === `logs-${item.id}`" @click="openLogs(item)"><FileText />{{ t('resourcesPage.logs') }}</Button>
-                  <Button size="sm" variant="danger" :disabled="Boolean(containerActionDisabled(item, 'delete'))" @click="confirm('container', item.id, containerName(item))"><Trash2 />{{ t('common.delete') }}</Button>
+                  <Button size="sm" variant="danger" :disabled="Boolean(containerActionDisabled(item, 'delete'))" @click="containerAction(item, 'delete')"><Trash2 />{{ t('common.delete') }}</Button>
                 </footer>
               </article>
             </section>
@@ -550,7 +604,7 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
-                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                <EmptyState v-else-if="error || actionError" :title="t('common.loadFailed')" :description="error || actionError">
                   <template #actions>
                     <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
                   </template>
@@ -578,7 +632,7 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton mt-2 h-3 w-56 max-w-full rounded bg-muted animate-pulse" />
                   </article>
                 </div>
-                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                <EmptyState v-else-if="error || actionError" :title="t('common.loadFailed')" :description="error || actionError">
                   <template #actions>
                     <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
                   </template>
@@ -621,7 +675,7 @@ onBeforeUnmount(() => {
                     <div class="motion-skeleton h-8 w-20 rounded bg-muted animate-pulse" />
                   </div>
                 </div>
-                <EmptyState v-else-if="error" :title="t('common.loadFailed')" :description="error">
+                <EmptyState v-else-if="error || actionError" :title="t('common.loadFailed')" :description="error || actionError">
                   <template #actions>
                     <Button size="sm" :loading="loadingResource" @click="loadResource"><RefreshCcw />{{ t('common.retry') }}</Button>
                   </template>
@@ -665,12 +719,19 @@ onBeforeUnmount(() => {
       </template>
     </Dialog>
 
-    <Dialog v-model:open="confirmDialog" :title="t('resourcesPage.confirmDanger')" :description="confirmTarget?.label || t('resourcesPage.confirmDangerDescription')" :close-label="t('common.close')">
-      <div class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('resourcesPage.confirmDangerImpact') }}</div>
-      <template #footer>
-        <Button @click="confirmDialog = false">{{ t('common.cancel') }}</Button>
-        <Button variant="danger" :loading="pending.startsWith('confirm-')" @click="confirmDanger"><Trash2 />{{ t('common.delete') }}</Button>
-      </template>
-    </Dialog>
+    <ConfirmDialog
+      :open="confirmDialog"
+      :title="confirmTitle"
+      :description="confirmTarget?.label || t('resourcesPage.confirmDangerDescription')"
+      :impact="confirmImpact"
+      tone="danger"
+      :require-checkbox="confirmRequiresCheckbox"
+      :checkbox-label="t('resourcesPage.confirmDeleteCheckbox')"
+      :confirm-label="confirmLabel"
+      :cancel-label="t('common.cancel')"
+      :loading="pending.startsWith('confirm-')"
+      @confirm="confirmDanger"
+      @update:open="(open: boolean) => { if (!open) confirmDialog = false }"
+    />
   </ConsolePage>
 </template>

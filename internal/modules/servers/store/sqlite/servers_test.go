@@ -296,3 +296,37 @@ func isPanelNotFound(err error) bool {
 	var panel *panelerr.Error
 	return errors.As(err, &panel) && panel.HTTPStatus == 404
 }
+
+func TestServerRepositorySummariesNormalizeLegacyPrivilege(t *testing.T) {
+	repo, db, closeStore := newServerRepositoryTestStore(t)
+	defer closeStore()
+	ctx := context.Background()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	// Legacy row: privilege_mode=none persisted alongside sudo_passwordless=1.
+	if _, err := db.ExecContext(ctx, `INSERT INTO servers(id,name,host,port,ssh_username,credential_id,docker_host,traits,variables_json,reachable,sudo_passwordless,privilege_mode,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		"srv-legacy-sudo", "Legacy", "127.0.0.1", 22, "root", "cred-1", "unix:///var/run/docker.sock", "{}", "{}", 1, 1, "none", now, now); err != nil {
+		t.Fatalf("insert legacy server: %v", err)
+	}
+
+	items, err := repo.ListSummaries(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("summary count = %d, want 1", len(items))
+	}
+	if items[0].Privilege.Mode != "passwordless_sudo" || !items[0].Privilege.Privileged {
+		t.Fatalf("legacy summary privilege = %#v, want passwordless_sudo and privileged", items[0].Privilege)
+	}
+
+	page, err := repo.ListSummaryPage(ctx, 1, 50, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Total != 1 || len(page.Items) != 1 {
+		t.Fatalf("summary page = %#v, want one item", page)
+	}
+	if page.Items[0].Privilege.Mode != "passwordless_sudo" || !page.Items[0].Privilege.Privileged {
+		t.Fatalf("legacy summary page privilege = %#v, want passwordless_sudo and privileged", page.Items[0].Privilege)
+	}
+}

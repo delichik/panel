@@ -1,6 +1,12 @@
 package systeminfo
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
 
 func TestCompareVersions(t *testing.T) {
 	tests := []struct {
@@ -48,5 +54,41 @@ func TestUpdateCheckRequiresReleaseChannel(t *testing.T) {
 		if got := shouldCheckForUpdates(test.channel, test.version); got != test.want {
 			t.Fatalf("shouldCheckForUpdates(%q, %q) = %t, want %t", test.channel, test.version, got, test.want)
 		}
+	}
+}
+
+func TestStartIsIdempotentAndCloseAllowsRestart(t *testing.T) {
+	svc := NewService(nil)
+	svc.repository = "example/repo"
+	svc.info.Channel = "release"
+	svc.info.Version = "v0.1.7"
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc.Start(ctx)
+	svc.Start(ctx) // 重复 Start 不应再启动第二个 goroutine
+	svc.Close()
+	svc.Close() // Close 幂等
+	svc.Start(ctx)
+	svc.Close()
+}
+
+func TestCheckRecordsFailureState(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	svc := NewService(server.Client())
+	svc.repository = "example/repo"
+	svc.apiBaseURL = server.URL + "/"
+	svc.check(context.Background())
+	info := svc.Version()
+	if info.CheckedAt == nil {
+		t.Fatal("expected CheckedAt to be set on failure")
+	}
+	if !strings.Contains(info.CheckError, "500") {
+		t.Fatalf("expected check error state, got %#v", info)
+	}
+	if info.UpdateAvailable {
+		t.Fatal("failure must not report update available")
 	}
 }

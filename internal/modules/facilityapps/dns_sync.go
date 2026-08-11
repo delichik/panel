@@ -222,16 +222,23 @@ func (s *Service) runDNSSync(ctx context.Context, domains []string) error {
 	if s.dns == nil {
 		return nil
 	}
+	// 回收机制：执行时合并所有当前 pending 域名，避免同 key 活跃任务存在时
+	// 新触发标记的 pending 域名被现有任务 params 遗漏而长期停留在 pending。
+	domains = uniqueSorted(append(append([]string(nil), domains...), s.pendingDNSDomains(ctx)...))
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
 		return err
 	}
 	servers := map[string]server.Server{}
 	if s.servers != nil {
-		if list, err := s.servers.List(ctx); err == nil {
-			for _, srv := range list {
-				servers[srv.ID] = srv
-			}
+		list, err := s.servers.List(ctx)
+		if err != nil {
+			// 服务器列表读取失败时直接失败，绝不能把“读不到服务器”当成
+			// “没有服务器”而进入无服务器清理分支，导致误删 DNS 记录。
+			return err
+		}
+		for _, srv := range list {
+			servers[srv.ID] = srv
 		}
 	}
 	zones, err := s.dns.ListDomains(ctx)

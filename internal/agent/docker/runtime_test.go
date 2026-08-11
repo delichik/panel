@@ -551,3 +551,50 @@ func TestDecodeDockerLogsReaderReturnsPartialOnTruncatedFrame(t *testing.T) {
 		t.Fatalf("decoded = %q, want %q", got, "short")
 	}
 }
+
+func TestRestorePersistentArchiveSwapsAtomicallyAndPreservesOldOnFailure(t *testing.T) {
+	root := t.TempDir()
+	r := &LocalRuntime{root: root}
+	ctx := context.Background()
+	dir := filepath.Join(root, "app-1", "persistent")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "old.txt"), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	archive := testZipArchive(t, map[string]string{"new.txt": "hello", "sub/a.txt": "nested"})
+	if err := r.RestorePersistentArchive(ctx, "app-1", archive); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "old.txt")); !os.IsNotExist(err) {
+		t.Fatalf("old file still present after restore: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "new.txt")); err != nil || string(got) != "hello" {
+		t.Fatalf("new file = %q err=%v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "sub", "a.txt")); err != nil {
+		t.Fatalf("nested file missing: %v", err)
+	}
+
+	// An archive with an escaping path fails validation and must keep the
+	// previously restored tree intact.
+	bad := testZipArchive(t, map[string]string{"../escape.txt": "x"})
+	if err := r.RestorePersistentArchive(ctx, "app-1", bad); err == nil {
+		t.Fatal("expected escaping archive to be rejected")
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "new.txt")); err != nil || string(got) != "hello" {
+		t.Fatalf("existing tree was damaged by failed restore: %q err=%v", got, err)
+	}
+
+	// Cancellation before extraction must also preserve the directory.
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := r.RestorePersistentArchive(cancelled, "app-1", archive); err == nil {
+		t.Fatal("expected cancelled restore to fail")
+	}
+	if got, err := os.ReadFile(filepath.Join(dir, "new.txt")); err != nil || string(got) != "hello" {
+		t.Fatalf("existing tree was damaged by cancelled restore: %q err=%v", got, err)
+	}
+}

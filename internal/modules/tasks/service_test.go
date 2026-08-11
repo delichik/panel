@@ -2,15 +2,21 @@ package tasks
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"panel/internal/modules/runtimeevents"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	panelerr "panel/internal/platform/errors"
+	httpx "panel/internal/platform/http"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -744,8 +750,9 @@ func TestExpireStaleQueuedFailsOldScheduledTasks(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	svc.MustRegister(Definition{Type: "scheduled_stale", StaleQueuedAfter: time.Minute})
-	future := now.Add(time.Hour)
-	task, err := svc.Create(ctx, CreateInput{Type: "scheduled_stale", Status: StatusScheduled, NextRunAt: &future})
+	// scheduled 任务只有 next_run_at 已到期（<= now）才会被过期清理误杀修复后的行为。
+	past := now.Add(-time.Minute)
+	task, err := svc.Create(ctx, CreateInput{Type: "scheduled_stale", Status: StatusScheduled, NextRunAt: &past})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -767,5 +774,250 @@ func TestExpireStaleQueuedFailsOldScheduledTasks(t *testing.T) {
 	}
 	if got.Status != StatusFailed || got.FinishedAt == nil || !strings.Contains(got.Error, "worker startup timeout") {
 		t.Fatalf("expected stale scheduled task to fail, got %#v", got)
+	}
+}
+
+func TestListFiltersByQuery(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	web, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "deploy web frontend"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := svc.Create(ctx, CreateInput{Type: "package_refresh", Summary: "refresh certificates"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := svc.Create(ctx, CreateInput{Type: "sample_restart", Summary: "restart node"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Fail(ctx, failed.ID, errors.New("timeout while contacting agent")); err != nil {
+		t.Fatal(err)
+	}
+	underscore, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "foo_bar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := svc.Create(ctx, CreateInput{Type: "sample_task", Summary: "fooXbar"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertQueryIDs := func(q string, want ...string) {
+		t.Helper()
+		got, err := svc.List(ctx, ListFilter{Q: q, Limit: 50})
+		if err != nil {
+			t.Fatal(err)
+		}
+		gotIDs := map[string]bool{}
+		for _, item := range got.Items {
+			gotIDs[item.ID] = true
+		}
+		if len(got.Items) != len(want) {
+			t.Fatalf("q=%q: got %d items %#v, want %d", q, len(got.Items), got.Items, len(want))
+		}
+		for _, id := range want {
+			if !gotIDs[id] {
+				t.Fatalf("q=%q: missing %s in %#v", q, id, got.Items)
+			}
+		}
+	}
+	assertQueryIDs("web", web.ID)
+	assertQueryIDs("certificates", cert.ID)
+	assertQueryIDs("timeout", failed.ID)
+	assertQueryIDs("package_refresh", cert.ID)
+	assertQueryIDs(web.ID, web.ID)
+	// LIKE 通配符必须转义：foo_bar 只匹配字面下划线，不能匹配 fooXbar。
+	assertQueryIDs("foo_bar", underscore.ID)
+	_ = other
+}
+
+func TestHandlerListAcceptsQuery(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task", Summary: "deploy web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Create(context.Background(), CreateInput{Type: "sample_restart", Summary: "restart"}); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks?q=deploy&includeInternal=true", nil)
+	rec := httptest.NewRecorder()
+	NewHandler(svc).List(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected list to succeed, got %d", rec.Code)
+	}
+	var envelope httpx.Envelope
+	if err := json.NewDecoder(rec.Body).Decode(&envelope); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(envelope.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result ListResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 || result.Items[0].ID != task.ID {
+		t.Fatalf("expected one matching task, got %#v", result)
+	}
+}
+
+func TestAppendLogTrimsOldestBeyondCap(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for i := 0; i < maxTaskLogLinesPerTask+5; i++ {
+		if err := svc.AppendLog(ctx, task.ID, "stdout", "line "+strconv.Itoa(i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var count int
+	if err := svc.db.QueryRow(`SELECT COUNT(*) FROM task_logs WHERE task_id=?`, task.ID).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != maxTaskLogLinesPerTask {
+		t.Fatalf("expected %d logs after trim, got %d", maxTaskLogLinesPerTask, count)
+	}
+	logs, _, err := svc.Logs(ctx, task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) == 0 || logs[0].Line != "line 5" {
+		t.Fatalf("expected oldest logs to roll off, first=%#v", logs)
+	}
+}
+
+func TestAppendLogTruncatesOverlongLine(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	long := strings.Repeat("长", maxTaskLogLineLength+100)
+	if err := svc.AppendLog(context.Background(), task.ID, "stdout", long); err != nil {
+		t.Fatal(err)
+	}
+	logs, _, err := svc.Logs(context.Background(), task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 1 || len([]rune(logs[0].Line)) != maxTaskLogLineLength {
+		t.Fatalf("expected truncated log of %d runes, got %d", maxTaskLogLineLength, len([]rune(logs[0].Line)))
+	}
+}
+
+func TestFailDoesNotAppendLogToTerminalTask(t *testing.T) {
+	svc := newTestService(t)
+	task, err := svc.Create(context.Background(), CreateInput{Type: "sample_task"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Complete(context.Background(), task.ID, "done"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Fail(context.Background(), task.ID, errors.New("late failure")); err != nil {
+		t.Fatal(err)
+	}
+	logs, _, err := svc.Logs(context.Background(), task.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(logs) != 0 {
+		t.Fatalf("terminal task should not receive failure log, got %#v", logs)
+	}
+	got, err := svc.Get(context.Background(), task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusCompleted {
+		t.Fatalf("terminal status must not change, got %#v", got)
+	}
+}
+
+func TestExpireStaleQueuedKeepsFutureScheduledTask(t *testing.T) {
+	svc := newTestService(t)
+	svc.MustRegister(Definition{Type: "stale_scheduled", StaleQueuedAfter: time.Minute})
+	ctx := context.Background()
+	future := time.Now().UTC().Add(time.Hour)
+	task, err := svc.Create(ctx, CreateInput{Type: "stale_scheduled", Status: StatusScheduled, NextRunAt: &future})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().UTC().Add(-time.Hour).Format(time.RFC3339Nano)
+	if _, err := svc.db.Exec(`UPDATE tasks SET created_at=? WHERE id=?`, old, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := svc.ExpireStaleQueued(ctx, time.Now().UTC(), time.Minute, []string{"stale_scheduled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 0 {
+		t.Fatalf("future scheduled task must not expire, got %d", expired)
+	}
+	got, err := svc.Get(ctx, task.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != StatusScheduled {
+		t.Fatalf("expected scheduled, got %#v", got)
+	}
+	past := time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+	if _, err := svc.db.Exec(`UPDATE tasks SET next_run_at=? WHERE id=?`, past, task.ID); err != nil {
+		t.Fatal(err)
+	}
+	expired, err = svc.ExpireStaleQueued(ctx, time.Now().UTC(), time.Minute, []string{"stale_scheduled"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired != 1 {
+		t.Fatalf("due scheduled task should expire, got %d", expired)
+	}
+}
+
+func TestCancelByServerWritesCancelEvents(t *testing.T) {
+	svc := newTestService(t)
+	events := runtimeevents.NewService(svc.db)
+	svc.SetRuntimeEvents(events)
+	ctx := context.Background()
+	task, err := svc.Create(ctx, CreateInput{Type: "package_refresh", ServerID: "srv_1", ResourceType: "server", ResourceID: "srv_1", Status: StatusRunning})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := svc.CancelByServer(ctx, "srv_1", "server removed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("expected 1 cancelled, got %d", count)
+	}
+	result, err := events.ListSystemEvents(ctx, runtimeevents.ListFilter{EventType: runtimeevents.EventTaskCancelled, Category: runtimeevents.CategoryTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || len(result.Items) != 1 {
+		t.Fatalf("expected one cancel event, got %#v", result.Items)
+	}
+	if result.Items[0].Source != task.TriggerType && result.Items[0].Source != "task" {
+		t.Fatalf("unexpected event source: %#v", result.Items[0])
+	}
+	// 再次批量取消（已终态）不应追加新事件。
+	count, err = svc.CancelByServer(ctx, "srv_1", "server removed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("expected 0 cancelled on second pass, got %d", count)
+	}
+	result, err = events.ListSystemEvents(ctx, runtimeevents.ListFilter{EventType: runtimeevents.EventTaskCancelled, Category: runtimeevents.CategoryTask})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 {
+		t.Fatalf("expected still one cancel event, got %#v", result.Items)
 	}
 }

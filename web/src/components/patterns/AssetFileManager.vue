@@ -269,7 +269,7 @@ async function confirmDelete() {
     <EmptyState v-if="!items.length" :title="labels.noAssets" :description="labels.noAssetsHint" />
   </section>
 
-  <Dialog v-model:open="assetOpen" size="large" :title="assetTitle" :close-label="labels.close">
+  <Dialog v-model:open="assetOpen" size="large" :title="assetTitle" :close-label="labels.close" :close-disabled="textSaving">
     <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
       <div v-if="!textEditing" class="text-sm font-medium text-foreground">{{ labels.uploadType }}</div>
       <Tabs :model-value="uploadMode" :tabs="uploadTabs" @update:model-value="selectUploadMode">
@@ -310,12 +310,12 @@ async function confirmDelete() {
       </Tabs>
     </div>
     <template #footer>
-      <Button variant="secondary" @click="assetOpen = false">{{ labels.cancel }}</Button>
+      <Button variant="secondary" :disabled="textSaving" @click="assetOpen = false">{{ labels.cancel }}</Button>
       <Button v-if="uploadMode === 'text'" variant="primary" :loading="textSaving" :disabled="textSaveDisabled" @click="saveText">{{ labels.save }}</Button>
     </template>
   </Dialog>
 
-  <Dialog v-if="deleteTarget" v-model:open="deleteOpen" :title="labels.deleteTitle" :description="labels.deleteDescription" :close-label="labels.close">
+  <Dialog v-if="deleteTarget" v-model:open="deleteOpen" :title="labels.deleteTitle" :description="labels.deleteDescription" :close-label="labels.close" :close-disabled="pending === deleteTarget.key">
     <template #footer>
       <Button variant="secondary" @click="deleteTarget = undefined">{{ labels.cancel }}</Button>
       <Button variant="danger" :loading="pending === deleteTarget.key" @click="confirmDelete">{{ labels.confirmDelete }}</Button>

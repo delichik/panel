@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { onBeforeRouteLeave, useRouter } from 'vue-router';
 import { Activity, AlertTriangle, BarChart3, Boxes, Check, Grip, Gauge, Pencil, Plus, RefreshCcw, ShieldCheck, Server, Trash2 } from '@lucide/vue';
 import { overviewApi } from '@/api/overview';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
 import Select from '@/components/ui/Select.vue';
@@ -17,7 +18,7 @@ import AutoRefreshControl from '@/components/patterns/AutoRefreshControl.vue';
 import { useAutoRefresh } from '@/composables/useAutoRefresh';
 import { useI18n } from '@/i18n';
 import type { OverviewCardConfiguration, OverviewCardData, OverviewCardKind, OverviewCardRange, OverviewDto, OverviewMetricPoint, OverviewMetricsSeries } from '@/types/overview';
-import { cardHasData, createOverviewCard, defaultOverviewCards, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange } from './model';
+import { aggregateMetricValues, cardHasData, createOverviewCard, defaultOverviewCards, mergeCardData, overviewRisks, summarizeOverview, trimCardDataToRange } from './model';
 
 const MetricLineChart = defineAsyncComponent(() => import('./MetricLineChart.vue'));
 
@@ -39,6 +40,10 @@ const loading = ref(false);
 const pageError = ref('');
 const saveError = ref('');
 const editMode = ref(false);
+const savedCardsSnapshot = ref<OverviewCardConfiguration[]>([]);
+const deleteCardTarget = ref<string | null>(null);
+const leaveConfirmOpen = ref(false);
+let leaveTarget: Parameters<typeof router.push>[0] | null = null;
 const cardEditorOpen = ref(false);
 const editingCardId = ref<string | null>(null);
 const saving = ref(false);
@@ -74,7 +79,7 @@ const kindOptions = computed(() => [
   { value: 'disk', label: t('overviewPage.cardDisk') },
   { value: 'network', label: t('overviewPage.cardNetwork') },
   { value: 'packageUpdates', label: t('overviewPage.cardPackages') },
-  { value: 'containerUpdates', label: t('overviewPage.cardContainers') },
+  { value: 'containerUpdates', label: t('overviewPage.cardStaleMetrics') },
 ]);
 
 const rangeOptions = [
@@ -167,6 +172,10 @@ function addCard() {
   void loadCard(next.id);
 }
 
+function confirmRemoveCard(cardId: string) {
+  deleteCardTarget.value = cardId;
+}
+
 function removeCard(cardId: string) {
   cards.value = cards.value.filter((card) => card.id !== cardId);
   cardRequests.delete(cardId);
@@ -174,6 +183,7 @@ function removeCard(cardId: string) {
   delete nextLoading[cardId];
   cardLoading.value = nextLoading;
   if (editingCardId.value === cardId) closeCardEditor();
+  deleteCardTarget.value = null;
 }
 
 function resetCards() {
@@ -182,6 +192,7 @@ function resetCards() {
   cardErrors.value = {};
   cardData.value = {};
   cardValues.value = Object.fromEntries(cards.value.map((card) => [card.id, derivedCardValue(card)]));
+  void Promise.all(cards.value.map((card) => loadCard(card.id)));
 }
 
 async function saveCards() {
@@ -207,11 +218,39 @@ async function saveCards() {
 function toggleEditMode() {
   saveError.value = '';
   if (!editMode.value) {
+    savedCardsSnapshot.value = cards.value.map(normalizeCardSize);
     editMode.value = true;
     return;
   }
   void saveCards();
 }
+
+function cancelEdit() {
+  invalidateCardRequests();
+  cards.value = savedCardsSnapshot.value.map(normalizeCardSize);
+  cardErrors.value = {};
+  cardData.value = {};
+  cardValues.value = Object.fromEntries(cards.value.map((card) => [card.id, derivedCardValue(card)]));
+  editMode.value = false;
+  closeCardEditor();
+  void Promise.all(cards.value.map((card) => loadCard(card.id)));
+}
+
+function confirmLeave() {
+  cancelEdit();
+  if (leaveTarget) {
+    const target = leaveTarget;
+    leaveTarget = null;
+    void router.push(target);
+  }
+}
+
+onBeforeRouteLeave((to) => {
+  if (!editMode.value && !cardEditorOpen.value) return true;
+  leaveTarget = to;
+  leaveConfirmOpen.value = true;
+  return false;
+});
 
 function openCardEditor(cardId: string) {
   editingCardId.value = cardId;
@@ -297,6 +336,7 @@ function stopResize() {
 }
 
 function cardTitle(card: OverviewCardConfiguration) {
+  if (card.kind === 'containerUpdates') return t('overviewPage.cardStaleMetrics');
   return t(`overviewPage.card.${card.kind}`);
 }
 
@@ -359,47 +399,58 @@ function shouldShowDetail(card: OverviewCardConfiguration) {
   return card.width >= 3 || card.height >= 3;
 }
 
-function metricSeries(card: OverviewCardConfiguration, data?: OverviewCardData) {
-  const seriesByServer = Object.values(data?.metricsByServer ?? {}).map((series) => metricValues(card, series)).filter((series) => series.length > 0);
-  const maxLength = Math.max(0, ...seriesByServer.map((series) => series.length));
-  return Array.from({ length: maxLength }, (_, index) => {
-    const values = seriesByServer.map((series) => series[index]).filter((value) => value !== undefined);
-    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
-  });
+function metricPoints(card: OverviewCardConfiguration, series: OverviewMetricsSeries): OverviewMetricPoint[] {
+  if (card.kind === 'cpu') return series.cpu ?? [];
+  if (card.kind === 'memory') return series.memory ?? [];
+  if (card.kind === 'disk') return series.disk ?? [];
+  if (card.kind === 'network') return series.network ?? [];
+  return [];
 }
 
-function metricValues(card: OverviewCardConfiguration, series: OverviewMetricsSeries) {
-  if (card.kind === 'cpu') return (series.cpu ?? []).map((point) => point.usagePercent ?? 0);
-  if (card.kind === 'memory') return (series.memory ?? []).map(percentUsed);
-  if (card.kind === 'disk') return (series.disk ?? []).map(percentUsed);
+function metricValueOf(card: OverviewCardConfiguration, point: OverviewMetricPoint) {
+  if (card.kind === 'cpu') return point.usagePercent ?? 0;
+  if (card.kind === 'memory' || card.kind === 'disk') return percentUsed(point);
   if (card.kind === 'network') {
-    return (series.network ?? []).map((point) => {
-      if (card.networkDirection === 'rx') return point.rxBytesPerSecond ?? 0;
-      if (card.networkDirection === 'tx') return point.txBytesPerSecond ?? 0;
-      return (point.rxBytesPerSecond ?? 0) + (point.txBytesPerSecond ?? 0);
-    });
+    if (card.networkDirection === 'rx') return point.rxBytesPerSecond ?? 0;
+    if (card.networkDirection === 'tx') return point.txBytesPerSecond ?? 0;
+    return (point.rxBytesPerSecond ?? 0) + (point.txBytesPerSecond ?? 0);
   }
-  return [];
+  return 0;
+}
+
+function metricSeries(card: OverviewCardConfiguration, data?: OverviewCardData) {
+  const pointsByServer = Object.values(data?.metricsByServer ?? {}).map((series) => metricPoints(card, series)).filter((points) => points.length > 0);
+  return aggregateMetricValues(pointsByServer, (point) => metricValueOf(card, point)).values;
+}
+
+function cardChartData(card: OverviewCardConfiguration) {
+  const data = cardData.value[card.id];
+  const entries = Object.entries(data?.metricsByServer ?? {});
+  const aligned = entries.map(([serverId, series]) => ({
+    serverId,
+    name: overview.value.servers.find((server) => server.id === serverId)?.name ?? serverId,
+    points: metricPoints(card, series),
+  })).filter((item) => item.points.length > 0);
+  const times = [...new Set(aligned.flatMap((item) => item.points.map((point) => point.time)))].sort((a, b) => Date.parse(a) - Date.parse(b));
+  return {
+    times,
+    series: aligned.map((item) => ({
+      id: item.serverId,
+      name: item.name,
+      values: times.map((time) => {
+        const point = item.points.find((candidate) => candidate.time === time);
+        return point ? metricValueOf(card, point) : 0;
+      }),
+    })),
+  };
 }
 
 function cardChartSeries(card: OverviewCardConfiguration) {
-  const data = cardData.value[card.id];
-  return Object.entries(data?.metricsByServer ?? {}).map(([serverId, series]) => ({
-    id: serverId,
-    name: overview.value.servers.find((server) => server.id === serverId)?.name ?? serverId,
-    values: metricValues(card, series),
-  })).filter((series) => series.values.length > 0);
+  return cardChartData(card).series;
 }
 
 function cardChartLabels(card: OverviewCardConfiguration) {
-  const data = cardData.value[card.id];
-  const first = Object.values(data?.metricsByServer ?? {})[0];
-  if (!first) return [];
-  if (card.kind === 'cpu') return (first.cpu ?? []).map((point) => point.time);
-  if (card.kind === 'memory') return (first.memory ?? []).map((point) => point.time);
-  if (card.kind === 'disk') return (first.disk ?? []).map((point) => point.time);
-  if (card.kind === 'network') return (first.network ?? []).map((point) => point.time);
-  return [];
+  return cardChartData(card).times;
 }
 
 function cardChartValueKind(card: OverviewCardConfiguration) {
@@ -617,6 +668,11 @@ onBeforeUnmount(() => {
           <div v-if="loading && cards.length === 0" class="grid min-w-0 gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr))]">
             <Skeleton v-for="item in 6" :key="item" class="h-40" />
           </div>
+          <EmptyState v-else-if="pageError" :title="t('common.loadFailed')" :description="pageError">
+            <template #actions>
+              <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+            </template>
+          </EmptyState>
           <EmptyState v-else-if="overview.servers.length === 0" :title="t('overviewPage.noServersConnected')" :description="t('overviewPage.addServerHint')">
             <template #actions>
               <Button variant="primary" @click="router.push('/servers')">
@@ -625,10 +681,11 @@ onBeforeUnmount(() => {
               </Button>
             </template>
           </EmptyState>
-          <div v-else-if="editMode" class="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto] gap-2 max-sm:grid-cols-1">
+          <div v-else-if="editMode" class="mb-3 grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-2 max-sm:grid-cols-1">
             <Select v-model="newCardKind" :options="kindOptions" />
             <Button @click="addCard"><Plus />{{ t('overviewPage.addCard') }}</Button>
             <Button variant="ghost" @click="resetCards">{{ t('overviewPage.resetCards') }}</Button>
+            <Button variant="secondary" @click="cancelEdit">{{ t('overviewPage.cancelEdit') }}</Button>
           </div>
           <div v-if="overview.servers.length > 0" ref="overviewGrid" class="motion-stagger overview-card-grid grid min-w-0 gap-3" :class="editMode ? 'is-editing' : undefined">
             <article
@@ -655,7 +712,7 @@ onBeforeUnmount(() => {
                 <button type="button" class="grid size-7 place-items-center rounded-lg text-muted-foreground hover:bg-accent hover:text-foreground" :title="t('overviewPage.editCard')" @click.stop="openCardEditor(card.id)">
                   <Pencil class="size-4" aria-hidden="true" />
                 </button>
-                <button type="button" class="grid size-7 place-items-center rounded-lg text-danger hover:bg-danger-bg" :title="t('overviewPage.deleteCard')" @click.stop="removeCard(card.id)">
+                <button type="button" class="grid size-7 place-items-center rounded-lg text-danger hover:bg-danger-bg" :title="t('overviewPage.deleteCard')" @click.stop="confirmRemoveCard(card.id)">
                   <Trash2 class="size-4" aria-hidden="true" />
                 </button>
               </div>
@@ -703,7 +760,7 @@ onBeforeUnmount(() => {
         </section>
       </main>
 
-      <aside class="min-h-0 min-w-0 overflow-hidden xl:sticky xl:top-0">
+      <aside class="min-h-0 min-w-0 overflow-y-auto xl:sticky xl:top-0">
         <div class="grid content-start gap-4">
           <section class="min-w-0 rounded-2xl border border-border bg-card p-4">
             <div class="mb-3 flex items-center justify-between">
@@ -734,6 +791,32 @@ onBeforeUnmount(() => {
         </div>
       </aside>
     </div>
+
+    <ConfirmDialog
+      :open="Boolean(deleteCardTarget)"
+      :title="t('overviewPage.deleteCard')"
+      :impact="t('overviewPage.deleteCardImpact')"
+      tone="danger"
+      :confirm-label="t('common.delete')"
+      :cancel-label="t('common.cancel')"
+      :checkbox-label="t('common.confirm')"
+      @update:open="(value) => { if (!value) deleteCardTarget = null }"
+      @confirm="deleteCardTarget && removeCard(deleteCardTarget)"
+      @cancel="deleteCardTarget = null"
+    />
+
+    <ConfirmDialog
+      :open="leaveConfirmOpen"
+      :title="t('overviewPage.leaveEditTitle')"
+      :description="t('overviewPage.leaveEditDescription')"
+      tone="warning"
+      :confirm-label="t('common.discard')"
+      :cancel-label="t('common.cancel')"
+      :checkbox-label="t('common.confirm')"
+      @update:open="(value) => { if (!value) leaveConfirmOpen = false }"
+      @confirm="leaveConfirmOpen = false; confirmLeave()"
+      @cancel="leaveConfirmOpen = false"
+    />
 
     <Dialog v-model:open="cardEditorOpen" :title="t('overviewPage.editCard')" :description="t('overviewPage.cardEditDescription')" :close-label="t('common.close')">
       <div v-if="editingCard" class="grid gap-3">

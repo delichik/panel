@@ -38,12 +38,22 @@ const ufwEnableTaskType = "server_ufw_enable"
 const ufwInstallTimeout = 5 * time.Minute
 const ufwManageTimeout = time.Minute
 const fail2banApplyTaskType = "server_fail2ban_apply"
+const fail2banReleaseTaskType = "server_fail2ban_release"
 const restartTaskType = "server_restart"
 const restartTimeout = 15 * time.Second
 const agentDeployTaskType = "server_agent_deploy"
 const agentCertificateResetTaskType = "agent_certificate_reset"
 const agentCertificateResourceType = "agent_certificate"
 const agentDeployTimeout = 2 * time.Minute
+
+// agentPrepareRestartTimeout bounds how long a deployment waits for the agent
+// to report restart readiness before proceeding (logged as a degraded path).
+const agentPrepareRestartTimeout = 10 * time.Minute
+
+// agentDeployCompatibilityMaxAttempts and agentDeployCompatibilityPollInterval
+// bound the post-deploy health poll instead of a fixed sleep.
+const agentDeployCompatibilityMaxAttempts = 10
+const agentDeployCompatibilityPollInterval = time.Second
 const agentAutoDeployMaxFailures = 2
 const agentAutoDeployHealthyChecksToReset = 5
 const agentCertificateRenewBefore = 7 * 24 * time.Hour
@@ -81,6 +91,12 @@ type PanelHostGuard interface {
 	IsHostServer(ctx context.Context, serverID string) (bool, error)
 }
 
+// hostKeyTrustExecutor is the narrow capability the server service needs to
+// explicitly trust a changed SSH host key. It is intentionally not part of
+// sshx.RemoteExecutor so other consumers and test fakes are unaffected.
+type hostKeyTrustExecutor interface {
+	TrustHostKey(ctx context.Context, target sshx.Target) error
+}
 type agentTLSProvider interface {
 	EnsureAgentTLSAssets(ctx context.Context) (*agentsecurity.TLSAssets, error)
 	IssueAgentServerCertificate(ctx context.Context, serverID, serverName, host string) (agentsecurity.ServerCertificate, []byte, error)
@@ -174,6 +190,29 @@ func (s *Service) TestConnectivity(ctx context.Context, serverID string) (Server
 		return Server{}, err
 	}
 	return s.Get(ctx, serverID)
+}
+
+// TrustHostKey explicitly replaces the recorded SSH host key for a server
+// after an administrator confirms the changed key is expected. It connects
+// once with a callback that captures the presented host key, persists it, then
+// runs the normal connectivity probe to refresh reachability and clear the
+// stale mismatch error.
+func (s *Service) TrustHostKey(ctx context.Context, serverID string) (Server, error) {
+	if s.exec == nil {
+		return Server{}, panelerr.Validation("server_executor_unavailable", "Server connectivity test executor is unavailable")
+	}
+	truster, ok := s.exec.(hostKeyTrustExecutor)
+	if !ok {
+		return Server{}, panelerr.Validation("host_key_trust_unavailable", "Host key trust is not supported by the current executor")
+	}
+	srv, err := s.Get(ctx, serverID)
+	if err != nil {
+		return Server{}, err
+	}
+	if err := truster.TrustHostKey(ctx, serverTarget(srv)); err != nil {
+		return Server{}, err
+	}
+	return s.TestConnectivity(ctx, serverID)
 }
 
 func (s *Service) UFWState(ctx context.Context, serverID string) (UFWState, error) {
@@ -335,9 +374,6 @@ func (s *Service) InstallUFW(ctx context.Context, serverID string) (tasks.Task, 
 	}
 	task, err = s.tasks.Get(ctx, task.ID)
 	if err != nil {
-		return tasks.Task{}, err
-	}
-	if err := s.tasks.Start(ctx, task.ID); err != nil {
 		return tasks.Task{}, err
 	}
 	go s.runInstallUFW(s.tasks.ExecutionContext(task.ID), task.ID, srv, adapter)

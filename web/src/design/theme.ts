@@ -1,4 +1,4 @@
-import { computed, onBeforeUnmount, ref, watchEffect } from 'vue';
+import { computed, ref, watchEffect } from 'vue';
 
 export type ThemeMode = 'system' | 'light' | 'dark';
 export type ResolvedTheme = 'light' | 'dark';
@@ -19,6 +19,8 @@ function handleMediaChange(event: MediaQueryListEvent) {
   prefersDark.value = event.matches;
 }
 
+// Module-level singleton registration: the system-color-scheme listener lives
+// for the app lifetime and is not coupled to any single useThemeMode instance.
 media?.addEventListener('change', handleMediaChange);
 
 export function useThemeMode() {
@@ -39,8 +41,6 @@ export function useThemeMode() {
     document.documentElement.dataset.scheme = scheme.value;
     document.documentElement.style.colorScheme = resolved.value;
   });
-
-  onBeforeUnmount(() => media?.removeEventListener('change', handleMediaChange));
 
   return { mode, resolved, setMode, scheme, setScheme };
 }

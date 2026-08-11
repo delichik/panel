@@ -334,3 +334,118 @@ func (f *collectMetricsExecutor) Upload(context.Context, sshx.Target, sshx.Uploa
 func (f *collectMetricsExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error {
 	return nil
 }
+
+func TestMetricsCleanupRejectsInvalidRetention(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := NewService(store.MetricsDB(), nil, nil)
+	ctx := context.Background()
+	if err := svc.Save(ctx, linux.MetricsSnapshot{ServerID: "srv", Time: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Cleanup(ctx, 0); err == nil {
+		t.Fatal("expected invalid retention to be rejected")
+	}
+	latest, err := svc.LatestAt(ctx, "srv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest == nil {
+		t.Fatal("invalid retention must not clear the metrics table")
+	}
+}
+
+func TestQueryManyReturnsSeriesPerServer(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := NewService(store.MetricsDB(), nil, nil)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	older := base.Add(-2 * time.Minute)
+	newer := base.Add(-30 * time.Second)
+	for _, snap := range []linux.MetricsSnapshot{
+		{ServerID: "srv_a", Time: older, CPUUsagePercent: 10},
+		{ServerID: "srv_a", Time: newer, CPUUsagePercent: 20},
+		{ServerID: "srv_b", Time: older, CPUUsagePercent: 30},
+	} {
+		if err := svc.Save(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	byServer, err := svc.QueryMany(ctx, []string{"srv_a", "srv_b"}, "1h", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(byServer["srv_a"].CPU) != 2 || len(byServer["srv_b"].CPU) != 1 {
+		t.Fatalf("unexpected batch series: %#v", byServer)
+	}
+	if byServer["srv_b"].CPU[0].UsagePercent != 30 {
+		t.Fatalf("unexpected srv_b point: %#v", byServer["srv_b"].CPU[0])
+	}
+	after, err := svc.QueryMany(ctx, []string{"srv_a", "srv_b"}, "1h", &older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after["srv_a"].CPU) != 1 || after["srv_a"].CPU[0].UsagePercent != 20 || len(after["srv_b"].CPU) != 0 {
+		t.Fatalf("unexpected after-series: %#v", after)
+	}
+}
+func TestLatestBatchQueries(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	svc := NewService(store.MetricsDB(), nil, nil)
+	ctx := context.Background()
+	base := time.Now().UTC().Truncate(time.Second)
+	t1 := base.Add(-2 * time.Minute)
+	t2 := base.Add(-30 * time.Second)
+	for _, snap := range []linux.MetricsSnapshot{
+		{ServerID: "srv_a", Time: t1, CPUUsagePercent: 10, Status: linux.SystemStatus{LoadAverage: "1.00"}},
+		{ServerID: "srv_a", Time: t2, CPUUsagePercent: 20, Status: linux.SystemStatus{LoadAverage: "2.00"}},
+		{ServerID: "srv_b", Time: t1, CPUUsagePercent: 30, Status: linux.SystemStatus{LoadAverage: "3.00"}},
+	} {
+		if err := svc.Save(ctx, snap); err != nil {
+			t.Fatal(err)
+		}
+	}
+	latestAt, err := svc.LatestAtMany(ctx, []string{"srv_a", "srv_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latestAt["srv_a"] == nil || !latestAt["srv_a"].Equal(t2) || latestAt["srv_b"] == nil || !latestAt["srv_b"].Equal(t1) {
+		t.Fatalf("unexpected latest times: %#v", latestAt)
+	}
+	loads, err := svc.LatestLoadMany(ctx, []string{"srv_a", "srv_b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loads["srv_a"] != "2.00" || loads["srv_b"] != "3.00" {
+		t.Fatalf("unexpected latest loads: %#v", loads)
+	}
+}

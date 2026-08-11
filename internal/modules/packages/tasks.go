@@ -25,8 +25,24 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func(
 			CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectScheduledPackageRefreshInputs),
 		},
 	})
-	taskSvc.MustRegister(tasks.Definition{Type: "package_upgrade_selected", DisallowCancel: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed})
-	taskSvc.MustRegister(tasks.Definition{Type: "package_upgrade_all", DisallowCancel: true, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed})
+	taskSvc.MustRegister(tasks.Definition{
+		Type:              "package_upgrade_selected",
+		Summary:           "Upgrading selected packages",
+		AllowRunNow:       true,
+		AllowRetry:        true,
+		DisallowCancel:    true,
+		ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+		Execute:           s.RunUpgradeSelectedTask,
+	})
+	taskSvc.MustRegister(tasks.Definition{
+		Type:              "package_upgrade_all",
+		Summary:           "Upgrading all packages",
+		AllowRunNow:       true,
+		AllowRetry:        true,
+		DisallowCancel:    true,
+		ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed,
+		Execute:           s.RunUpgradeAllTask,
+	})
 }
 
 func (s *Service) CollectScheduledPackageRefreshInputs(ctx context.Context) (tasks.CreateBatchInput, bool, error) {

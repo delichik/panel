@@ -407,23 +407,26 @@ func (d *deploymentDispatcher) processExecuteTarget(ctx context.Context, targetI
 	if err != nil || !ok {
 		return err
 	}
-	d.runClaimedTask(claimed.ClaimedTaskID)
+	d.runClaimedTask(ctx, claimed.ClaimedTaskID)
 	return nil
 }
 
-func (d *deploymentDispatcher) runClaimedTask(taskID string) {
+func (d *deploymentDispatcher) runClaimedTask(ctx context.Context, taskID string) {
 	taskID = strings.TrimSpace(taskID)
 	if d == nil || d.service == nil || d.service.tasks == nil || taskID == "" {
 		return
 	}
-	task, err := d.service.tasks.Get(context.Background(), taskID)
+	task, err := d.service.tasks.Get(ctx, taskID)
 	if err != nil {
 		return
 	}
+	// goroutine 纳入 wg 并使用可取消 context，Stop 会等待收敛并取消仍在执行的任务。
+	d.wg.Add(1)
 	go func() {
+		defer d.wg.Done()
 		manager := tasks.NewManager(d.service.tasks)
 		defer d.service.tasks.FinishExecution(task.ID)
-		_ = manager.Run(context.Background(), task)
+		_ = manager.Run(ctx, task)
 	}()
 }
 

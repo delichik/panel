@@ -25,7 +25,7 @@ func TestDockerContainerActionRejectsUnknownAction(t *testing.T) {
 		Id:     "container-1",
 		Action: "pause",
 	})
-	if got, want := status.Code(err), codes.NotFound; got != want {
+	if got, want := status.Code(err), codes.InvalidArgument; got != want {
 		t.Fatalf("status.Code(DockerContainerAction unknown action) = %v, want %v", got, want)
 	}
 }

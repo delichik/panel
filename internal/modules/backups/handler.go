@@ -1,12 +1,18 @@
 package backups
 
 import (
+	"errors"
 	"net/http"
 	"os"
 
 	panelerr "panel/internal/platform/errors"
 	httpx "panel/internal/platform/http"
 )
+
+// maxRestoreUploadBytes caps a single restore archive upload (8 GiB). The
+// backup format itself uses a uint32 length prefix per encrypted segment, so
+// this is a generous ceiling that still prevents unbounded request bodies.
+const maxRestoreUploadBytes = 8 << 30
 
 type Handler struct {
 	service *Service
@@ -44,7 +50,13 @@ func (h *Handler) PreflightRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ConfirmRestore(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRestoreUploadBytes)
 	if err := r.ParseMultipartForm(1 << 30); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpx.Error(w, panelerr.New(http.StatusRequestEntityTooLarge, "restore_archive_too_large", "Backup archive exceeds the upload size limit"))
+			return
+		}
 		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request"))
 		return
 	}
@@ -66,7 +78,13 @@ func (h *Handler) ConfirmRestore(w http.ResponseWriter, r *http.Request) {
 }
 
 func receiveArchiveUpload(w http.ResponseWriter, r *http.Request) (string, func(), string, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRestoreUploadBytes)
 	if err := r.ParseMultipartForm(1 << 30); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			httpx.Error(w, panelerr.New(http.StatusRequestEntityTooLarge, "restore_archive_too_large", "Backup archive exceeds the upload size limit"))
+			return "", func() {}, "", false
+		}
 		httpx.Error(w, panelerr.BadRequest("bad_request", "Invalid multipart request"))
 		return "", func() {}, "", false
 	}

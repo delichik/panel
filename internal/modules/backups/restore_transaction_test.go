@@ -332,3 +332,36 @@ func jsonNumber(value uint64) string {
 	raw, _ := json.Marshal(value)
 	return string(raw)
 }
+
+func TestRestoreApplyStatFailureDoesNotOverwriteTarget(t *testing.T) {
+	cfg := maintenanceTestConfig(t)
+	// A NUL byte in the target path makes os.Stat fail with an error that is
+	// not os.ErrNotExist, simulating a permission/IO-style stat failure.
+	target := filepath.Join(cfg.DataRoot, "target\x00child")
+	staged := t.TempDir()
+	writeTextFile(t, filepath.Join(staged, "new.txt"), "new")
+	state := restoreTransactionState{
+		SchemaVersion: restoreTransactionSchemaVersion,
+		Phase:         "prepared",
+		Targets: []restoreSwapTarget{{
+			TargetPath: target,
+			StagedPath: staged,
+			BackupPath: filepath.Join(restoreTransactionDir(cfg.DataRoot), "backup", "data-root"),
+			State:      "pending",
+		}},
+	}
+	err := applyRestoreTransaction(cfg.DataRoot, state, nil)
+	if err == nil {
+		t.Fatal("expected stat failure to abort restore")
+	}
+	if _, statErr := os.Stat(filepath.Join(staged, "new.txt")); statErr != nil {
+		t.Fatalf("staged data should not have been swapped: %v", statErr)
+	}
+	recovered, readErr := readRestoreTransactionState(cfg.DataRoot)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if recovered.Phase != "rolled_back" {
+		t.Fatalf("transaction phase = %q, want rolled_back", recovered.Phase)
+	}
+}

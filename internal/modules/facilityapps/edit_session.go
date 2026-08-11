@@ -451,8 +451,14 @@ func (s *Service) PreviewFacilityEditSession(ctx context.Context, sessionID stri
 	}
 	diagnostics := append([]applications.Diagnostic(nil), validation.Diagnostics...)
 	diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_cross_module_insights_stale", Severity: "warning", Message: i18n.Translate("facility_cross_module_insights_stale", "DNS, certificate, firewall, and gateway port insights are temporarily unavailable")})
+	var appRoutes []applications.ApplicationReverseProxyConfig
+	if s.apps != nil {
+		if routes, routesErr := s.apps.ApplicationReverseProxyConfigs(ctx); routesErr == nil {
+			appRoutes = routes
+		}
+	}
 	if normalized, normalizeErr := normalizeInput(record.Draft); normalizeErr == nil {
-		if _, summaryErr := s.routeSummaries(ctx, normalized); summaryErr != nil {
+		if _, summaryErr := s.routeSummaries(ctx, normalized, appRoutes); summaryErr != nil {
 			diagnostics = append(diagnostics, applications.Diagnostic{Code: "facility_route_summary_stale", Severity: "warning", Message: i18n.Translate("facility_route_summary_stale", "Route summary could not be refreshed"), Details: map[string]any{"error": summaryErr.Error()}})
 		}
 	}
@@ -1282,7 +1288,11 @@ func cloneFacilityDomains(in []FacilityRouteDomain) []FacilityRouteDomain {
 func insertFacilityEditOperation(ctx context.Context, tx *sql.Tx, sessionID, operationID, idempotencyKey, requestHash string) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO facility_edit_session_operations(session_id,client_operation_id,idempotency_key,request_hash,result_json,created_at) VALUES(?,?,?,?,?,?)`, sessionID, operationID, idempotencyKey, requestHash, "", formatTime(time.Now().UTC()))
 	if err != nil {
-		return panelerr.Conflict("facility_edit_operation_conflict", "facility edit operation already exists")
+		// 仅唯一约束碰撞才是带应原等序的冗余冲突；其他 DB 错误原样传递，不能装成冗余冲突。
+		if strings.Contains(strings.ToLower(err.Error()), "unique") {
+			return panelerr.Conflict("facility_edit_operation_conflict", "facility edit operation already exists")
+		}
+		return err
 	}
 	return nil
 }

@@ -9,10 +9,13 @@ import { saveBlobDownload } from '@/api/download';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import CodeEditor from '@/components/ui/CodeEditor.vue';
+import ConfirmDialog from '@/components/ui/ConfirmDialog.vue';
 import Dialog from '@/components/ui/Dialog.vue';
 import EmptyState from '@/components/ui/EmptyState.vue';
+import FileUploadButton from '@/components/ui/FileUploadButton.vue';
 import Input from '@/components/ui/Input.vue';
 import PaginationBar from '@/components/ui/PaginationBar.vue';
+import SearchInput from '@/components/ui/SearchInput.vue';
 import Select from '@/components/ui/Select.vue';
 import Skeleton from '@/components/ui/Skeleton.vue';
 import Switch from '@/components/ui/Switch.vue';
@@ -39,7 +42,7 @@ const domains = ref<DnsDomainDto[]>([]);
 const certs = ref<DomainCertificateDto[]>([]);
 const selfSigned = ref<SelfSignedCertificateDto[]>([]);
 const assets = ref<KeyAssetDto[]>([]);
-const selectedId = ref('');
+const selectedId = ref(String(route.query.selected ?? ''));
 const loading = ref(false);
 const listRequests = createLatestRequestGuard();
 const error = ref('');
@@ -49,9 +52,17 @@ const confirmDelete = ref(false);
 const saving = ref(false);
 const importPlan = ref<ImportPreflightDto | null>(null);
 const editingCertificateId = ref('');
-const page = ref(1);
+const page = ref(parsePageQuery(route.query.page));
 const pageSize = 50;
 const total = ref(0);
+const search = ref(String(route.query.search ?? ''));
+let searchTimer: ReturnType<typeof setTimeout> | null = null;
+const importConfirmOpen = ref(false);
+
+function parsePageQuery(value: unknown) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 1;
+}
 
 const mode = computed(() => route.path.includes('/self-signed') ? 'self' : route.path.includes('/keys') ? 'keys' : 'domains');
 const title = computed(() => mode.value === 'self' ? t('routes.selfSigned.title') : mode.value === 'keys' ? t('routes.keys.title') : t('routes.certificates.title'));
@@ -85,16 +96,30 @@ const assetImportMaterialTabs = computed(() => [
 onMounted(load);
 watch(() => route.path, () => { void load(); });
 
+watch(search, (value) => {
+  void router.replace({ query: { ...route.query, search: value || undefined, page: undefined } });
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    if (page.value !== 1) page.value = 1;
+    void load();
+  }, 250);
+});
+
+watch(selectedId, (value) => {
+  void router.replace({ query: { ...route.query, selected: value || undefined } });
+});
+
 async function load() {
   const requestId = listRequests.begin();
   loading.value = true;
   error.value = '';
   try {
+    const q = search.value.trim() || undefined;
     const [domainsResult, certsResult, selfResult, assetsResult] = await Promise.allSettled([
       dnsApi.listDomains(),
-      certificatesApi.list({ page: page.value, pageSize }),
-      certificatesApi.listSelfSignedPage({ page: page.value, pageSize }),
-      keyAssetsApi.listPage({ page: page.value, pageSize }),
+      certificatesApi.list({ page: page.value, pageSize, q }),
+      certificatesApi.listSelfSignedPage({ page: page.value, pageSize, q }),
+      keyAssetsApi.listPage({ page: page.value, pageSize, q }),
     ]);
     if (!listRequests.isCurrent(requestId)) return;
     let firstError = '';
@@ -143,12 +168,14 @@ function switchMode(path: string) {
   listRequests.invalidate();
   selectedId.value = '';
   page.value = 1;
+  void router.replace({ query: { ...route.query, page: undefined, selected: undefined } });
   if (route.path === path) void load();
   else void router.push(path);
 }
 
 function changePage(value: number) {
   page.value = value;
+  void router.replace({ query: { ...route.query, page: value > 1 ? String(value) : undefined } });
   void load();
 }
 
@@ -290,6 +317,7 @@ async function executeImport(confirmDanger = false) {
     const result = await keyAssetsApi.executeImport(importPlan.value!.planId, { strategy: 'overwrite', confirmOverwriteInUse: confirmDanger, confirmDangerousOverwrite: confirmDanger, resolutions: [] });
     notifySuccess(t('certificatesPage.importTask', { taskId: result.taskId }));
     dialog.value = '';
+    importConfirmOpen.value = false;
     await load();
   });
 }
@@ -453,8 +481,17 @@ function removeEntry(entries: string[], index: number) {
   if (!entries.length) entries.push('');
 }
 
-function onFile(event: Event) {
-  importFile.value = ((event.target as HTMLInputElement).files ?? [])[0] ?? null;
+function openBatchImport() {
+  Object.assign(assetForm, { password: '' });
+  importPlan.value = null;
+  importFile.value = null;
+  assetActionError.value = '';
+  dialog.value = 'asset-preflight';
+}
+
+function onFileChange(value: File | File[]) {
+  importFile.value = Array.isArray(value) ? value[0] ?? null : value;
+  importPlan.value = null;
 }
 </script>
 
@@ -464,6 +501,7 @@ function onFile(event: Event) {
       <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
       <Button v-if="mode === 'domains'" size="sm" variant="primary" @click="openIssue"><Plus />{{ t('certificatesPage.issue') }}</Button>
       <Button v-else-if="mode === 'self'" size="sm" variant="primary" @click="openSelf('self-ca')"><Plus />{{ t('certificatesPage.generateCa') }}</Button>
+      <Button v-if="mode === 'keys'" size="sm" @click="openBatchImport"><FileArchive />{{ t('certificatesPage.batchImport') }}</Button>
       <Button v-else size="sm" variant="primary" @click="openAsset('asset-ssh')"><KeyRound />{{ t('certificatesPage.generateSsh') }}</Button>
     </template>
 
@@ -476,7 +514,10 @@ function onFile(event: Event) {
 
       <MasterDetailLayout class="min-h-0">
         <template #master>
-        <aside class="grid min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-card">
+        <aside class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden rounded-2xl border border-border bg-card">
+          <div class="border-b border-border p-3">
+            <SearchInput v-model="search" clearable :label="t('common.search')" :placeholder="t('certificatesPage.searchPlaceholder')" :clear-label="t('common.clearSearch')" />
+          </div>
           <div class="motion-stagger min-h-0 overflow-auto p-2">
           <div v-if="loading && ((mode === 'domains' && !certs.length) || (mode === 'self' && !selfSigned.length) || (mode === 'keys' && !userAssets.length))" class="grid gap-2">
             <Skeleton v-for="item in 6" :key="item" class="h-16" />
@@ -593,7 +634,7 @@ function onFile(event: Event) {
       </MasterDetailLayout>
     </div>
 
-    <Dialog :open="dialog === 'issue'" :title="editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
+    <Dialog :open="dialog === 'issue'" :title="editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
       <div class="grid gap-4">
         <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="issueForm.name" /></label>
         <label class="grid gap-1 text-sm">{{ t('routes.dns.title') }}<Select v-model="issueForm.domainId" :options="domainOptions" /></label>
@@ -617,12 +658,12 @@ function onFile(event: Event) {
       <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!issueForm.name || !issueForm.domainId" @click="issueCertificate">{{ editingCertificateId ? t('certificatesPage.adjustReissue') : t('certificatesPage.issue') }}</Button></template>
     </Dialog>
 
-    <Dialog :open="dialog === 'self-ca' || dialog === 'self-leaf'" :title="dialog === 'self-ca' ? t('certificatesPage.generateCa') : t('certificatesPage.generateLeaf')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
+    <Dialog :open="dialog === 'self-ca' || dialog === 'self-leaf'" :title="dialog === 'self-ca' ? t('certificatesPage.generateCa') : t('certificatesPage.generateLeaf')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
       <div class="grid gap-3"><label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="selfForm.name" /></label><label v-if="dialog === 'self-leaf'" class="grid gap-1 text-sm">{{ t('certificatesPage.kindCa') }}<Select v-model="selfForm.caId" :options="selfCas" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.commonName') }}<Input v-model="selfForm.commonName" /></label><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.dnsNames') }}</div><div v-for="(_, index) in selfForm.dnsNames" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.dnsNames[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.dnsNames, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.dnsNames)"><Plus />{{ t('certificatesPage.addDnsName') }}</Button></div><div v-if="dialog === 'self-leaf'" class="grid gap-2"><div class="text-sm font-medium">{{ t('certificatesPage.ipAddresses') }}</div><div v-for="(_, index) in selfForm.ipAddresses" :key="index" class="grid grid-cols-[minmax(0,1fr)_auto] gap-2"><Input v-model="selfForm.ipAddresses[index]" /><Button size="sm" variant="ghost" @click="removeEntry(selfForm.ipAddresses, index)"><Trash2 />{{ t('common.delete') }}</Button></div><Button size="sm" @click="addEntry(selfForm.ipAddresses)"><Plus />{{ t('certificatesPage.addIpAddress') }}</Button></div><label v-if="dialog === 'self-ca'" class="grid gap-1 text-sm">{{ t('certificatesPage.years') }}<Input v-model="selfForm.years" type="number" /></label><label v-else class="grid gap-1 text-sm">{{ t('certificatesPage.days') }}<Input v-model="selfForm.days" type="number" /></label></div>
       <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!selfForm.name || !selfForm.commonName" @click="saveSelf">{{ t('common.create') }}</Button></template>
     </Dialog>
 
-    <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :size="dialog === 'asset-import' ? 'large' : 'default'" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
+    <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :size="dialog === 'asset-import' ? 'large' : 'default'" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
       <div class="grid gap-3" :class="dialog === 'asset-import' ? 'h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]' : ''">
         <div :class="dialog === 'asset-import' ? 'grid gap-3 md:grid-cols-2' : 'contents'">
           <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="assetForm.type" :options="assetTypeOptions" /></label>
@@ -662,11 +703,42 @@ function onFile(event: Event) {
       <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button variant="primary" :loading="saving" :disabled="!assetForm.name" @click="saveAsset">{{ t('common.save') }}</Button></template>
     </Dialog>
 
-    <Dialog :open="dialog === 'asset-export'" :title="t('certificatesPage.exportAsset')" :close-label="t('common.close')" @update:open="(open) => { if (!open) dialog = '' }">
-      <div class="grid gap-3"><p class="m-0 text-sm text-muted-foreground">{{ t('certificatesPage.exportHint') }}</p><label class="grid gap-1 text-sm">{{ t('certificatesPage.archivePassword') }}<Input v-model="assetForm.password" type="password" /></label><label class="grid gap-1 text-sm">{{ t('certificatesPage.importArchive') }}<input type="file" class="text-sm" @change="onFile" /></label><Button :disabled="!importFile || !assetForm.password" @click="preflightImport">{{ t('certificatesPage.preflightImport') }}</Button></div>
-      <div v-if="importPlan" class="mt-4 rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('certificatesPage.importConflicts', { count: importPlan.summary.conflictCount }) }}</div>
-      <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button :loading="saving" :disabled="!assetForm.password" @click="createExport">{{ t('certificatesPage.exportAsset') }}</Button><Button v-if="importPlan" variant="danger" :loading="saving" @click="executeImport(true)">{{ t('certificatesPage.executeImport') }}</Button></template>
+    <Dialog :open="dialog === 'asset-export'" :title="t('certificatesPage.exportAsset')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
+      <div class="grid gap-3"><p class="m-0 text-sm text-muted-foreground">{{ t('certificatesPage.exportHint') }}</p><label class="grid gap-1 text-sm">{{ t('certificatesPage.archivePassword') }}<Input v-model="assetForm.password" type="password" /></label></div>
+      <template #footer><Button @click="dialog = ''">{{ t('common.cancel') }}</Button><Button :loading="saving" :disabled="!assetForm.password" @click="createExport">{{ t('certificatesPage.exportAsset') }}</Button></template>
     </Dialog>
+
+    <Dialog :open="dialog === 'asset-preflight'" :title="t('certificatesPage.batchImport')" :description="t('certificatesPage.batchImportHint')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
+      <div class="grid gap-3">
+        <div class="grid gap-1 text-sm">
+          <span>{{ t('certificatesPage.importArchive') }}</span>
+          <FileUploadButton accept=".zip,.tar,.tar.gz,.tgz,.panel-key-assets,application/zip,application/x-tar,application/gzip,application/octet-stream" :label="importFile ? importFile.name : t('certificatesPage.chooseImportArchive')" @change="onFileChange" />
+        </div>
+        <label class="grid gap-1 text-sm">{{ t('certificatesPage.archivePassword') }}<Input v-model="assetForm.password" type="password" /></label>
+        <Button :disabled="!importFile || !assetForm.password" :loading="saving" @click="preflightImport">{{ t('certificatesPage.preflightImport') }}</Button>
+        <div v-if="importPlan && importPlan.summary.conflictCount" class="rounded-xl border border-warning-border bg-warning-bg p-3 text-sm text-warning">{{ t('certificatesPage.importConflicts', { count: importPlan.summary.conflictCount }) }}</div>
+        <div v-if="importPlan && !importPlan.requiresDangerConfirm" class="rounded-xl border border-info-border bg-info-bg p-3 text-sm text-info">{{ t('certificatesPage.importReady') }}</div>
+      </div>
+      <template #footer>
+        <Button @click="dialog = ''">{{ t('common.cancel') }}</Button>
+        <Button v-if="importPlan && !importPlan.requiresDangerConfirm" variant="primary" :loading="saving" @click="executeImport(false)">{{ t('certificatesPage.executeImport') }}</Button>
+        <Button v-if="importPlan && importPlan.requiresDangerConfirm" variant="danger" :loading="saving" @click="importConfirmOpen = true">{{ t('certificatesPage.executeImport') }}</Button>
+      </template>
+    </Dialog>
+
+    <ConfirmDialog
+      :open="importConfirmOpen"
+      :title="t('certificatesPage.executeImport')"
+      :impact="t('certificatesPage.importConflictImpact')"
+      tone="danger"
+      :require-checkbox="true"
+      :checkbox-label="t('certificatesPage.importConflictCheckbox')"
+      :confirm-label="t('certificatesPage.executeImport')"
+      :cancel-label="t('common.cancel')"
+      :loading="saving"
+      @confirm="executeImport(true)"
+      @update:open="(open: boolean) => { if (!open) importConfirmOpen = false }"
+    />
 
     <Dialog v-model:open="confirmDelete" :title="t('certificatesPage.deleteTitle')" :close-label="t('common.close')">
       <p class="m-0 text-sm text-muted-foreground">{{ t('certificatesPage.deleteHint') }}</p>

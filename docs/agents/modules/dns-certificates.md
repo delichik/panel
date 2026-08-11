@@ -45,6 +45,8 @@
 - 升级旧数据库时，启动流程在主密钥加载后加密旧 Token，并事务重建 `dns_domains` 表以删除旧列。
 - 旧客户端提交的 `accountId` 会被 JSON 解码忽略。
 - 新增或编辑域名时，后端先使用最终生效的 Token 和域名访问 Cloudflare，验证失败不得写入本地记录。
+- Cloudflare provider 与 ACME 客户端在未显式传入 `http.Client` 时使用带 30s 超时的默认客户端，避免远端请求挂起阻塞 handler 或签发任务。
+- 升级迁移：仅存在 legacy `account_id` 列、无 token 来源且无已有 ciphertext 时保留空凭据并正常完成迁移，不阻塞启动；该域名实际使用时返回明确的凭据缺失错误。
 
 ## DNS 行为
 

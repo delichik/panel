@@ -135,7 +135,7 @@ func (s *Service) createFail2BanReleaseTask(ctx context.Context, serverID string
 		return tasks.Task{}, err
 	}
 	task, created, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
-		Type:         fail2banApplyTaskType,
+		Type:         fail2banReleaseTaskType,
 		ServerID:     serverID,
 		ResourceType: connectivityResourceType,
 		ResourceID:   serverID,

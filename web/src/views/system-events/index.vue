@@ -33,7 +33,8 @@ const page = ref(normalizePage(route.query.page));
 const pageSize = 20;
 const eventType = ref(String(route.query.eventType || ''));
 const severity = ref(String(route.query.severity || ''));
-const range = ref<DateTimeRangeValue>(initialRange());
+const initialRangeValue = initialRange();
+const range = ref<DateTimeRangeValue>(initialRangeValue);
 const loading = ref(false);
 const error = ref('');
 const listRequests = createLatestRequestGuard();
@@ -46,6 +47,7 @@ const columns = computed<Array<{ key: keyof EventRow & string; label: string; al
   { key: 'source', label: t('systemEventsPage.column.source'), width: 'w-28' },
 ]);
 
+const hasActiveFilters = computed(() => Boolean(eventType.value || severity.value || range.value.from !== initialRangeValue.from || range.value.to !== initialRangeValue.to));
 const severityOptions = computed(() => [
   { label: t('systemEventsPage.filter.allSeverities'), value: '' },
   { label: t('systemEventsPage.severity.info'), value: 'info' },
@@ -160,7 +162,7 @@ onMounted(load);
           <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
         </template>
       </EmptyState>
-      <EmptyState v-else :title="t('systemEventsPage.empty')" :description="t('systemEventsPage.emptyHint')" />
+      <EmptyState v-else :title="hasActiveFilters ? t('systemEventsPage.emptyFiltered') : t('systemEventsPage.empty')" :description="hasActiveFilters ? t('systemEventsPage.emptyFilteredHint') : t('systemEventsPage.emptyHint')" />
     </div>
 
     <template #pagination>

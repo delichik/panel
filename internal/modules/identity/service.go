@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"time"
 
@@ -24,6 +25,7 @@ type Service struct {
 	cfg     config.Config
 	db      *sql.DB
 	runtime *settings.Service
+	limiter *loginRateLimiter
 }
 
 type Session struct {
@@ -47,7 +49,7 @@ const (
 )
 
 func NewService(db *sql.DB, cfg config.Config, runtime *settings.Service) (*Service, error) {
-	s := &Service{cfg: cfg, db: db, runtime: runtime}
+	s := &Service{cfg: cfg, db: db, runtime: runtime, limiter: newLoginRateLimiter()}
 	if err := s.ensureAdminAccount(context.Background()); err != nil {
 		return nil, err
 	}
@@ -58,14 +60,30 @@ func NewService(db *sql.DB, cfg config.Config, runtime *settings.Service) (*Serv
 }
 
 func (s *Service) Login(ctx context.Context, username, password string) (Session, error) {
+	return s.login(ctx, username, password, "")
+}
+
+// LoginFrom is Login with a client IP for per-source brute-force throttling.
+func (s *Service) LoginFrom(ctx context.Context, username, password, clientIP string) (Session, error) {
+	return s.login(ctx, username, password, clientIP)
+}
+
+func (s *Service) login(ctx context.Context, username, password, clientIP string) (Session, error) {
+	key := loginRateLimitKey(clientIP, username)
+	now := time.Now().UTC()
+	if !s.limiter.allow(key, now) {
+		return Session{}, panelerr.New(http.StatusTooManyRequests, "login_rate_limited", "Too many login attempts; try again later")
+	}
 	account, err := s.currentAdminAccount(ctx)
 	if err != nil {
 		return Session{}, err
 	}
 	passwordMatches := bcrypt.CompareHashAndPassword([]byte(account.PasswordHash), []byte(password)) == nil
 	if username != account.Username || !passwordMatches {
+		s.limiter.recordFailure(key, time.Now().UTC())
 		return Session{}, panelerr.Unauthorized("Authentication failed")
 	}
+	s.limiter.recordSuccess(key)
 	return s.issueSession(ctx, account)
 }
 

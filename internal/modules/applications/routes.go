@@ -30,7 +30,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("GET /api/v1/applications/{id}/files/{name}/content", auth(http.HandlerFunc(h.DownloadFile)))
 	mux.Handle("GET /api/v1/applications/{id}/persistent-data", auth(http.HandlerFunc(h.PersistentData)))
 	mux.Handle("POST /api/v1/applications/{id}/persistent-data", auth(http.HandlerFunc(h.RestorePersistentData)))
-	mux.Handle("POST /api/v1/applications/{id}/image/check", auth(http.HandlerFunc(h.CheckImageUpdate)))
+
 	mux.Handle("POST /api/v1/applications/{id}/image/update", auth(http.HandlerFunc(h.UpdateImage)))
 	mux.Handle("POST /api/v1/applications/{id}/deploy", auth(http.HandlerFunc(h.Deploy)))
 	mux.Handle("POST /api/v1/applications/{id}/stop", auth(http.HandlerFunc(h.Stop)))

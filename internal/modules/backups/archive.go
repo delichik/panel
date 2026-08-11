@@ -223,7 +223,17 @@ func shouldSkipDir(root, path string) bool {
 		return false
 	}
 	parts := strings.Split(filepath.ToSlash(rel), "/")
-	return len(parts) >= 2 && parts[0] == "tmp" && (parts[1] == "backups" || parts[1] == "backup-export-pending" || parts[1] == "restore-pending" || parts[1] == "restore-staging" || parts[1] == "maintenance")
+	if len(parts) < 2 || parts[0] != "tmp" {
+		return false
+	}
+	switch parts[1] {
+	case "backups", "backup-export-pending", "restore-pending", "restore-pending.previous", "restore-staging", "maintenance", "key-assets", "key-asset-exports":
+		// These directories hold temporary working data or encrypted/private
+		// key material that must not be carried into an (possibly unencrypted)
+		// backup archive, and restore media must not be resurrected.
+		return true
+	}
+	return false
 }
 
 type ArchiveConfig struct {

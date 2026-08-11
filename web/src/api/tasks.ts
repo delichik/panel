@@ -1,4 +1,4 @@
-import { apiClient } from './client';
+import { apiClient, type ApiRequestOptions } from './client';
 import type { TaskDto, TaskListResult, TaskLogsResult, TaskStep } from '@/types/tasks';
 
 function id(value: string) {
@@ -6,15 +6,15 @@ function id(value: string) {
 }
 
 export const tasksApi = {
-  list(params: { status?: string; type?: string; page?: number; pageSize?: number; operationPage?: boolean } = {}) {
+  list(params: { status?: string; type?: string; page?: number; pageSize?: number; operationPage?: boolean; q?: string } = {}) {
     const query = new URLSearchParams();
     Object.entries(params).forEach(([key, value]) => {
       if (value !== undefined && value !== '' && value !== false) query.set(key, String(value));
     });
     return apiClient.get<TaskListResult>(`/tasks${query.size ? `?${query}` : ''}`);
   },
-  get(taskId: string) {
-    return apiClient.get<TaskDto>(`/tasks/${id(taskId)}`);
+  get(taskId: string, options?: ApiRequestOptions) {
+    return apiClient.get<TaskDto>(`/tasks/${id(taskId)}`, options);
   },
   steps(taskId: string) {
     return apiClient.get<TaskStep[]>(`/tasks/${id(taskId)}/steps`);

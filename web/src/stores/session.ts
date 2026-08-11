@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { ApiError } from '@/api/client';
 import { authApi, type AuthSession, type AccountUpdateInput } from '@/api/auth';
 
 const tokenStorageKey = 'panel.auth.token';
@@ -34,8 +35,15 @@ export const useSessionStore = defineStore('session', {
     async restore() {
       try {
         this.applySession(await authApi.session());
-      } catch {
-        this.clearSession();
+      } catch (error) {
+        // Only an explicit 401/unauthorized invalidates the stored token.
+        // Network errors and request timeouts keep the token so a later
+        // restore (or optimistic navigation) can still reuse it; the router
+        // guard decides how to proceed.
+        const apiError = error instanceof ApiError ? error : null;
+        if (apiError?.status === 401 || apiError?.code === 'unauthorized') {
+          this.clearSession();
+        }
       } finally {
         this.ready = true;
       }
@@ -54,6 +62,10 @@ export const useSessionStore = defineStore('session', {
         this.clearSession();
         this.ready = true;
       }
+    },
+    /** Global 401 handler entry point: drop the session so guards redirect to login. */
+    onUnauthorized() {
+      this.clearSession();
     },
     async updateAccount(input: AccountUpdateInput) {
       this.applySession(await authApi.updateAccount(input));

@@ -41,7 +41,7 @@ export function dockerBlockReason(server: ServerDto | null) {
 export function filterPackages(items: PackageUpdate[], term: string) {
   const needle = term.trim().toLowerCase();
   if (!needle) return items;
-  return items.filter((item) => [item.name, item.installedVersion, item.candidateVersion, item.source].some((value) => value.toLowerCase().includes(needle)));
+  return items.filter((item) => [item.name, item.installedVersion, item.candidateVersion, item.source].some((value) => String(value ?? '').toLowerCase().includes(needle)));
 }
 
 export function containerTone(container: ContainerDto): Tone {

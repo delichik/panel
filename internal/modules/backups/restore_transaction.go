@@ -221,7 +221,9 @@ func applyRestoreTransaction(dataRoot string, state restoreTransactionState, hoo
 				return handleRestoreApplyError(dataRoot, state, err)
 			}
 		}
-		if _, err := os.Stat(target.TargetPath); err == nil {
+		_, statErr := os.Stat(target.TargetPath)
+		switch {
+		case statErr == nil:
 			target.OriginalExisted = true
 			if err := os.MkdirAll(filepath.Dir(target.BackupPath), 0700); err != nil {
 				return handleRestoreApplyError(dataRoot, state, err)
@@ -240,6 +242,13 @@ func applyRestoreTransaction(dataRoot string, state restoreTransactionState, hoo
 			if err := syncDirectory(filepath.Dir(target.BackupPath)); err != nil {
 				return handleRestoreApplyError(dataRoot, state, err)
 			}
+		case errors.Is(statErr, os.ErrNotExist):
+			// Target does not exist; nothing to back up before swapping.
+		default:
+			// An unexpected stat failure (permission, broken path, I/O) must
+			// not be treated as "missing", otherwise we would overwrite data
+			// we could not safely inspect. Fail and roll back instead.
+			return handleRestoreApplyError(dataRoot, state, statErr)
 		}
 		target.State = "backup_moved"
 		if err := writeRestoreTransactionState(dataRoot, state); err != nil {

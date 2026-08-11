@@ -12,6 +12,13 @@
 - Searchable master lists send `q` to the backend and reset to page 1 when the query changes.
 - Async resource and DNS refresh actions wait for task completion and then reload the local snapshot. GET lists are never implicit refresh commands.
 - 主列表页（servers、credentials、applications、dns、certificates、tasks、application-operations、system-events）加载失败时在列表区显示错误空态（common.loadFailed + 错误详情 + 重试按钮），不得把加载失败伪装成“暂无数据”。
+- 资源页（packages/containers/images/networks/volumes）与安全页（UFW/fail2ban）的区块加载失败同样用 error/actionError 进入错误空态而不是“暂无数据”；DNS 记录区的 recordsError 必须在记录表格内渲染错误 + 重试，不能是死状态。
+- 证书页（domains/self-signed/keys）的 page、选中项、搜索词同步 URL query，初始化从 URL 恢复，搜索词通过 q 传给后端列表接口；密钥资产批量导入是独立入口（asset-preflight 对话框 + FileUploadButton），存在冲突时执行前必须经显式危险确认（requiresDangerConfirm），不能直接以 confirmDanger=true 执行。
+- 任务中心搜索透传 q 到 GET /api/v1/tasks 做跨页搜索（id/summary/type/error LIKE）并重置 page=1，不再只过滤当前页；状态筛选覆盖 scheduled/blocked/cancelled/failed_retryable，StatusBadge 显示本地化 label。
+- servers/credentials 主从工作台的搜索、分页与选中项同步到 URL query，并在刷新/回退时恢复；任务中心详情（steps/logs）加载失败显示错误 + 重试，与“无步骤/无日志”空态分离。
+- 服务器重启、UFW 安装、重置 JWT secret、清除待处理还原等危险操作必须经 danger 确认对话框并说明影响范围；维护页在 applying 阶段隐藏“清除待处理还原”按钮。
+- 概览页多服务器指标按时间戳对齐后聚合（不按数组下标）；进入编辑态提供取消/放弃按钮与路由离开保护；卡片删除需确认；containerUpdates 卡片当前展示“指标陈旧主机”计数（数据源未提供容器更新计数）。
+- 设置页保存语言时同步前端 i18n locale（setLocale + localStorage panel.locale）；数字字段带 min/范围就地校验；关闭加密导出显示身份可恢复性警示；还原文件选择使用 FileUploadButton。
 
 > **状态说明（2026-07-21）：前端基础设施已进入 v4。** 上一版“统一 CollectionPage + Naive UI”的重构判定不合格，当前已移除 Naive UI，不恢复 Vuetify。新标准为 Vue 3 + Vite + Vue Router + Pinia + Tailwind + Panel 自有 UI primitives + lucide + ECharts + YAML。`tmp/v1-archive/` 只能作为业务能力参照，禁止复制视觉、布局、操作流或旧 UI 组件写法。
 
@@ -136,7 +143,7 @@
 
 - 协调记录页（页面名“协调记录”，原“操作记录”）读取 `/api/v1/application-operations`，主体是协调库生命周期操作的读时聚合，支持按应用 ID、来源和状态筛选。页面为左列表 + 右详情：左侧每条显示应用/设施名、操作、结果徽标、涉及服务器（含“一致”服务器）、失败原因、时间/来源；右侧详情显示头部（结果与失败目标）、服务器列表（每台服务器的状态、不一致说明、期望 vs 实际、当前阶段、步骤日志按钮），“步骤日志”从右侧抽屉按时间展示每步（开始时间、耗时、结果、详情）。用户可见位置不展示 `applicationId` / `operationId` / `srv_xxx` 原始 id，设施统一显示“入口代理设施”。
 - 系统事件读取 `/api/v1/system-events`，主体是诊断事件，支持按关联对象 ID、级别和类别筛选。页面只展示后端提供的事件类型与类别，不假设独立 alert 服务。
-- 协调记录页使用 `MasterDetailLayout`、`SearchInput`、`Select`、`PaginationBar`、`StatusBadge`、`Badge` 和 `ConsolePage`，保持桌面内部滚动，不恢复页面级滚动；系统事件页保持原有列表结构。
+- 协调记录页使用 `MasterDetailLayout`、`SearchInput`、`Select`、`PaginationBar`、`StatusBadge`、`Badge` 和 `ConsolePage`，保持桌面内部滚动，不恢复页面级滚动；筛选变更带 250ms 防抖；步骤日志抽屉接入 `useOverlayBehavior`（Escape/显式关闭，不响应遮罩点击），`operationId` 不在当前页时详情区显示提示并允许清除；系统事件页保持原有列表结构。
 - Mock 模式覆盖同名正式路径，包含步骤日志、一致服务器、分页和筛选样本。
 
 ### 阶段 6：DNS + 证书 + 密钥资产
@@ -148,6 +155,7 @@
 - 自签证书页位于 `/certificates/self-signed`：管理用户 CA/leaf，支持生成 CA、生成 leaf、重签/重生成和删除。正式 API 使用 `/api/v1/self-signed-cas`、`/api/v1/self-signed-certificates`、`/api/v1/self-signed-certificates/{id}/renew`。
 - 密钥资产页位于 `/certificates/keys`：管理 CA/TLS/SSH key asset，支持生成、单资产导入、导出、下载、批量导入预检/执行、TLS 重签、SSH 重生成和删除。`GET /api/v1/key-assets` 和自签证书列表使用不含证书/私钥密文、public key 正文、metadata 与引用明细的摘要查询；引用安全校验在删除等定向操作中执行，不允许列表扫描全部应用 YAML 或反向代理配置。单资产文件与导出归档下载使用 blob 下载，不经 JSON `ApiClient`。
 - 批量导入预检是 multipart route，前端在 `web/src/api/keyAssets.ts` 中局部使用 `fetch` 并保持 envelope 校验；未改全局 `ApiClient`。
+- 证书页三个工作台的 `page`、选中项、搜索词同步 URL query（初始化从 URL 恢复），搜索词经 `q` 传给后端；密钥资产批量导入是独立入口（`asset-preflight` 对话框 + `FileUploadButton`），预检后若 `requiresDangerConfirm` 为真必须先经 `ConfirmDialog`（danger + requireCheckbox）确认才执行。
 - Mock 模式覆盖同名正式路径，包含正常、空记录、Cloudflare Provider 错误、域名删除冲突、多域名列表、证书签发/等待/过期/失败、任务创建、密钥资产引用冲突和批量导入冲突；未实现路径继续返回 `mock_route_not_found`。
 - 主列表 Mock 与正式 API 对齐为 `ListPage`：`/servers`、`/credentials`、`/applications`、`/dns/domains`、`/certificates`、`/self-signed-certificates`、`/key-assets` 支持 `page`/`pageSize`/`q`；`GET /servers/:id` 返回完整服务器详情。
 

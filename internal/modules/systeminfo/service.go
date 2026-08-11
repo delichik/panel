@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,14 +22,17 @@ type VersionInfo struct {
 	LatestVersion   string     `json:"latestVersion,omitempty"`
 	UpdateAvailable bool       `json:"updateAvailable"`
 	CheckedAt       *time.Time `json:"checkedAt,omitempty"`
+	CheckError      string     `json:"checkError,omitempty"`
 }
 
 type Service struct {
 	client     *http.Client
 	interval   time.Duration
 	repository string
+	apiBaseURL string
 	cancel     context.CancelFunc
 	mu         sync.RWMutex
+	started    bool
 	info       VersionInfo
 }
 
@@ -45,6 +49,7 @@ func NewService(client *http.Client) *Service {
 		client:     client,
 		interval:   defaultCheckInterval,
 		repository: strings.TrimSpace(buildinfo.Repository),
+		apiBaseURL: "https://api.github.com/repos/",
 		info: VersionInfo{
 			Version:    buildinfo.NormalizedVersion(),
 			Channel:    buildinfo.NormalizedChannel(),
@@ -58,8 +63,15 @@ func (s *Service) Start(parent context.Context) {
 	if s.repository == "" || !shouldCheckForUpdates(s.info.Channel, s.info.Version) {
 		return
 	}
+	s.mu.Lock()
+	if s.started {
+		s.mu.Unlock()
+		return
+	}
+	s.started = true
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
+	s.mu.Unlock()
 	go func() {
 		s.check(ctx)
 		ticker := time.NewTicker(s.interval)
@@ -76,8 +88,13 @@ func (s *Service) Start(parent context.Context) {
 }
 
 func (s *Service) Close() {
-	if s.cancel != nil {
-		s.cancel()
+	s.mu.Lock()
+	cancel := s.cancel
+	s.cancel = nil
+	s.started = false
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -88,29 +105,42 @@ func (s *Service) Version() VersionInfo {
 }
 
 func (s *Service) check(ctx context.Context) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+s.repository+"/releases/latest", nil)
+	now := time.Now().UTC()
+	markFailed := func(message string) {
+		s.mu.Lock()
+		s.info.LatestVersion = ""
+		s.info.UpdateAvailable = false
+		s.info.CheckedAt = &now
+		s.info.CheckError = message
+		s.mu.Unlock()
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.apiBaseURL+s.repository+"/releases/latest", nil)
 	if err != nil {
+		markFailed("failed to build update check request")
 		return
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("User-Agent", "panel-update-checker/"+s.info.Version)
 	resp, err := s.client.Do(req)
 	if err != nil {
+		markFailed(err.Error())
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		markFailed("update check returned HTTP " + strconv.Itoa(resp.StatusCode))
 		return
 	}
 	var release githubRelease
 	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil || release.Draft || strings.TrimSpace(release.TagName) == "" {
+		markFailed("update check returned no valid release")
 		return
 	}
-	now := time.Now().UTC()
 	s.mu.Lock()
 	s.info.LatestVersion = strings.TrimSpace(release.TagName)
 	s.info.UpdateAvailable = compareVersions(s.info.LatestVersion, s.info.Version) > 0
 	s.info.CheckedAt = &now
+	s.info.CheckError = ""
 	s.mu.Unlock()
 }
 

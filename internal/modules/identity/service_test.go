@@ -161,6 +161,54 @@ func TestValidateRejectsExpiredToken(t *testing.T) {
 	}
 }
 
+func TestLoginRateLimitLocksAfterRepeatedFailures(t *testing.T) {
+	svc := newTestService(t)
+	ip := "10.0.0.1"
+	for i := 0; i < loginMaxFailures; i++ {
+		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", ip); err == nil || err.Error() != "Authentication failed" {
+			t.Fatalf("attempt %d: expected unauthorized, got %v", i+1, err)
+		}
+	}
+	if _, err := svc.LoginFrom(context.Background(), "admin", "admin", ip); err == nil || err.Error() != "Too many login attempts; try again later" {
+		t.Fatalf("expected rate-limited login after repeated failures, got %v", err)
+	}
+}
+
+func TestLoginRateLimitIsPerIPAndUsername(t *testing.T) {
+	svc := newTestService(t)
+	for i := 0; i < loginMaxFailures; i++ {
+		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", "10.0.0.2"); err == nil {
+			t.Fatal("expected unauthorized")
+		}
+	}
+	if _, err := svc.LoginFrom(context.Background(), "admin", "admin", "10.0.0.3"); err != nil {
+		t.Fatalf("different IP should not be blocked: %v", err)
+	}
+	if _, err := svc.LoginFrom(context.Background(), "not-admin", "admin", "10.0.0.2"); err == nil || err.Error() != "Authentication failed" {
+		t.Fatalf("different username should still reach auth check: %v", err)
+	}
+}
+
+func TestLoginRateLimitResetsAfterSuccess(t *testing.T) {
+	svc := newTestService(t)
+	ip := "10.0.0.4"
+	for i := 0; i < loginMaxFailures-1; i++ {
+		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", ip); err == nil {
+			t.Fatal("expected unauthorized")
+		}
+	}
+	if _, err := svc.LoginFrom(context.Background(), "admin", "admin", ip); err != nil {
+		t.Fatalf("login after failures should succeed: %v", err)
+	}
+	for i := 0; i < loginMaxFailures-1; i++ {
+		if _, err := svc.LoginFrom(context.Background(), "admin", "wrong", ip); err == nil {
+			t.Fatal("expected unauthorized")
+		}
+	}
+	if _, err := svc.LoginFrom(context.Background(), "admin", "admin", ip); err != nil {
+		t.Fatalf("login should still succeed below threshold: %v", err)
+	}
+}
 func newTestService(t *testing.T) *Service {
 	t.Helper()
 	dir := t.TempDir()

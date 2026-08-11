@@ -361,10 +361,13 @@ func (c *agentReportCollector) handleReport(ctx context.Context, serverID string
 	rt := c.settings.Runtime()
 	if report.Metrics != nil && sampleAligned(report.SampleAt, rt.MetricsCollectionIntervalSeconds) {
 		if err := c.metrics.SaveReported(ctx, serverID, report.SampleAt, *report.Metrics); err != nil {
-			return err
+			// 与包/镜像推送路径一致：落库失败只记录日志，不中断上报流。
+			logging.L().Warn("agent metrics report save failed", zap.String("server_id", serverID), zap.Error(err))
 		}
 	}
-	if report.HasContainers && (sampleAligned(report.SampleAt, rt.ContainerReportIntervalSeconds) || report.Reason == "container_change") {
+	// 容器分支：仅当上报明确携带容器快照（非 nil）时才替换观察集合；
+	// 未携带快照（nil）时保留既有观察，由 SaveReportedContainers 内部保障。
+	if report.HasContainers && report.Containers != nil && (sampleAligned(report.SampleAt, rt.ContainerReportIntervalSeconds) || report.Reason == "container_change") {
 		if err := c.containers.SaveReportedContainers(ctx, serverID, report.SampleAt, report.Containers); err != nil {
 			return err
 		}

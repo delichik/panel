@@ -188,7 +188,7 @@ function dbTone(db: DebugDatabase) {
 
 function startPolling() {
   timer = window.setInterval(() => {
-    if (!paused.value && !loading.value) void load();
+    if (!paused.value && !loading.value && document.visibilityState === 'visible') void load();
   }, 8000);
 }
 
@@ -237,6 +237,11 @@ onBeforeUnmount(() => window.clearInterval(timer));
       <div v-if="loading && !view" class="relative grid min-h-[600px] place-items-center">
         <LoadingOverlay />
       </div>
+      <EmptyState v-else-if="error && !view" :title="t('common.loadFailed')" :description="error">
+        <template #actions>
+          <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.retry') }}</Button>
+        </template>
+      </EmptyState>
       <EmptyState v-else-if="!view" :title="t('debugPage.empty')" :description="t('debugPage.emptyHint')" />
       <Tabs v-else v-model="activeTab" class="h-full min-h-[600px]" :tabs="tabs">
         <section v-if="activeTab === 'runtime'" class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">

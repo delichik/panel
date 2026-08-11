@@ -266,7 +266,10 @@ func (s *Service) newAgentCAAsset(assetID string) (storedAsset, error) {
 		return storedAsset{}, err
 	}
 	now := time.Now().UTC()
-	template := newCertificateTemplate("Panel Agent CA", now.Add(-time.Hour), now.Add(agentsecurity.DefaultCAValidity), true, nil, nil)
+	template, err := newCertificateTemplate("Panel Agent CA", now.Add(-time.Hour), now.Add(agentsecurity.DefaultCAValidity), true, nil, nil)
+	if err != nil {
+		return storedAsset{}, err
+	}
 	certificatePEM, err := generateCertificate(template, template, key.public, key.private)
 	if err != nil {
 		return storedAsset{}, err
@@ -318,7 +321,10 @@ func (s *Service) newAgentLeafAsset(assetID, name string, ca storedAsset, role, 
 		return storedAsset{}, err
 	}
 	now := time.Now().UTC()
-	template := newCertificateTemplate(commonName, now.Add(-time.Hour), now.Add(agentsecurity.DefaultLeafValidity), false, dnsNames, ips)
+	template, err := newCertificateTemplate(commonName, now.Add(-time.Hour), now.Add(agentsecurity.DefaultLeafValidity), false, dnsNames, ips)
+	if err != nil {
+		return storedAsset{}, err
+	}
 	certificatePEM, err := generateCertificate(template, parentCert, key.public, parentPrivateKey)
 	if err != nil {
 		return storedAsset{}, err

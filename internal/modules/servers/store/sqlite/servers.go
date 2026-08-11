@@ -56,7 +56,8 @@ func (r *ServerRepository) ListSummaries(ctx context.Context) ([]domain.ServerSu
 		}
 		item.Reachable = reachable == 1
 		item.Sudo.Passwordless = sudo == 1
-		item.Privilege.Privileged = item.Privilege.Mode == "root" || item.Privilege.Mode == "passwordless_sudo"
+		item.HostKeyMismatch = strings.Contains(item.LastError, "ssh host key mismatch")
+		normalizeSummaryPrivilege(&item)
 		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
 		if lastChecked.Valid {
 			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
@@ -101,7 +102,8 @@ func (r *ServerRepository) ListSummaryPage(ctx context.Context, page, pageSize i
 			return httpx.ListPage[domain.ServerSummary]{}, err
 		}
 		item.Reachable, item.Sudo.Passwordless = reachable == 1, sudo == 1
-		item.Privilege.Privileged = item.Privilege.Mode == "root" || item.Privilege.Mode == "passwordless_sudo"
+		item.HostKeyMismatch = strings.Contains(item.LastError, "ssh host key mismatch")
+		normalizeSummaryPrivilege(&item)
 		item.Traits = map[string]string{"agent.enabled": agentEnabled, "agent.url": agentURL, "agent.status": agentStatus, "sys.ufw_supported": ufwSupported, "sys.ufw_installed": ufwInstalled}
 		if lastChecked.Valid {
 			parsed, _ := time.Parse(time.RFC3339Nano, lastChecked.String)
@@ -186,26 +188,27 @@ func (r *ServerRepository) Delete(ctx context.Context, serverID string) error {
 // scanServer 的默认值与归一化语义（空 privilege_mode -> none 等）。
 func toDomainServer(m models.Server) domain.Server {
 	srv := domain.Server{
-		ID:            m.ID,
-		Name:          m.Name,
-		Host:          m.Host,
-		IPv4:          m.IPv4,
-		IPv6:          m.IPv6,
-		Port:          m.Port,
-		SSHUsername:   m.SSHUsername,
-		CredentialID:  m.CredentialID,
-		DockerHost:    m.DockerHost,
-		Traits:        stringMap(m.Traits),
-		Variables:     stringMap(m.VariablesJSON),
-		Notes:         m.Notes,
-		OS:            linux.OSRelease{ID: m.OSID, VersionID: m.OSVersionID, PrettyName: m.OSPrettyName, Supported: m.OSSupported},
-		Architecture:  domain.ArchitectureInfo{OS: m.ArchitectureOS, Arch: m.ArchitectureArch, RawMachine: m.ArchitectureMachine},
-		Sudo:          domain.SudoState{Passwordless: m.SudoPasswordless, LastCheckedAt: m.SudoLastCheckedAt},
-		Reachable:     m.Reachable,
-		LastCheckedAt: m.LastCheckedAt,
-		LastError:     m.LastError,
-		CreatedAt:     m.CreatedAt,
-		UpdatedAt:     m.UpdatedAt,
+		ID:              m.ID,
+		Name:            m.Name,
+		Host:            m.Host,
+		IPv4:            m.IPv4,
+		IPv6:            m.IPv6,
+		Port:            m.Port,
+		SSHUsername:     m.SSHUsername,
+		CredentialID:    m.CredentialID,
+		DockerHost:      m.DockerHost,
+		Traits:          stringMap(m.Traits),
+		Variables:       stringMap(m.VariablesJSON),
+		Notes:           m.Notes,
+		OS:              linux.OSRelease{ID: m.OSID, VersionID: m.OSVersionID, PrettyName: m.OSPrettyName, Supported: m.OSSupported},
+		Architecture:    domain.ArchitectureInfo{OS: m.ArchitectureOS, Arch: m.ArchitectureArch, RawMachine: m.ArchitectureMachine},
+		Sudo:            domain.SudoState{Passwordless: m.SudoPasswordless, LastCheckedAt: m.SudoLastCheckedAt},
+		Reachable:       m.Reachable,
+		LastCheckedAt:   m.LastCheckedAt,
+		LastError:       m.LastError,
+		HostKeyMismatch: strings.Contains(m.LastError, "ssh host key mismatch"),
+		CreatedAt:       m.CreatedAt,
+		UpdatedAt:       m.UpdatedAt,
 	}
 	srv.Privilege = domain.PrivilegeState{Mode: m.PrivilegeMode, LastCheckedAt: m.PrivilegeLastCheckedAt}
 	if srv.Privilege.Mode == "" {
@@ -217,6 +220,17 @@ func toDomainServer(m models.Server) domain.Server {
 	}
 	srv.Privilege.Privileged = srv.Privilege.Mode == "root" || srv.Privilege.Mode == "passwordless_sudo"
 	return srv
+}
+
+// normalizeSummaryPrivilege applies the same legacy fallback as
+// toDomainServer: a stored privilege_mode of none with sudo_passwordless=1
+// (pre-migration data) is treated as passwordless_sudo so summaries agree
+// with the full server record and hasPrivilege.
+func normalizeSummaryPrivilege(item *domain.ServerSummary) {
+	if item.Privilege.Mode == "none" && item.Sudo.Passwordless {
+		item.Privilege.Mode = "passwordless_sudo"
+	}
+	item.Privilege.Privileged = item.Privilege.Mode == "root" || item.Privilege.Mode == "passwordless_sudo"
 }
 
 func fromDomainServer(srv domain.Server) *models.Server {

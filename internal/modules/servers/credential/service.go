@@ -115,9 +115,9 @@ func (s *Service) Update(ctx context.Context, credentialID string, req UpdateReq
 		privateKey = ""
 	} else {
 		password = ""
-		passphrase = req.Passphrase
 		if req.PrivateKey != "" {
 			privateKey = req.PrivateKey
+			passphrase = req.Passphrase
 		}
 	}
 	ciphertext, err := s.encrypt(credentialID, req.Type, storedSecret{
@@ -161,12 +161,13 @@ func (s *Service) GetWithSummary(ctx context.Context, credentialID string) (Cred
 	}
 	detail := CredentialDetail{Credential: toDomainCredential(row)}
 	if row.Type == TypePrivateKey {
-		secret, err := s.decrypt(row.ID, row.Type, row.SecretCiphertext)
-		if err != nil {
-			return CredentialDetail{}, err
-		}
-		if summary, ok := sshx.SummarizePrivateKey([]byte(secret.PrivateKey), secret.Passphrase); ok {
-			detail.KeySummary = &summary
+		// A private key that cannot be decrypted (for example when the secret
+		// store key changed) still returns metadata; only the key summary is
+		// omitted.
+		if secret, err := s.decrypt(row.ID, row.Type, row.SecretCiphertext); err == nil {
+			if summary, ok := sshx.SummarizePrivateKey([]byte(secret.PrivateKey), secret.Passphrase); ok {
+				detail.KeySummary = &summary
+			}
 		}
 	}
 	return detail, nil

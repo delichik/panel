@@ -86,7 +86,7 @@ func TestDeploymentDispatcherClaimTaskIsScheduledUntilBound(t *testing.T) {
 		target.ID); err != nil {
 		t.Fatal(err)
 	}
-	dispatcher.runClaimedTask(task.ID)
+	dispatcher.runClaimedTask(ctx, task.ID)
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		stored, err := svc.lifecycleTargetByID(ctx, target.ID)
