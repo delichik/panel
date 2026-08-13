@@ -39,3 +39,35 @@ func TestTranslateLocaleCoversReverseProxyFacilityValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestTranslateLocaleCoversNewErrorCodes(t *testing.T) {
+	tests := map[string]string{
+		"application_deletion_requested": "已请求删除该应用",
+		"task_cancel_unsupported":        "该任务类型不能取消",
+	}
+	for code, want := range tests {
+		if got := TranslateLocale(LocaleSimplifiedChinese, code, "fallback"); got != want {
+			t.Fatalf("translation for %s = %q, want %q", code, got, want)
+		}
+	}
+}
+
+func TestTranslateLocaleCoversNewExactMessages(t *testing.T) {
+	tests := []struct{ code, message, want string }{
+		{"not_found", "certificate not found", "证书不存在"},
+		{"not_found", "agent resource not found", "Agent 资源不存在"},
+		{"remote_timeout", "Remote command timed out", "远程命令超时"},
+	}
+	for _, tt := range tests {
+		if got := TranslateLocale(LocaleSimplifiedChinese, tt.code, tt.message); got != tt.want {
+			t.Fatalf("translation for %q = %q, want %q", tt.message, got, tt.want)
+		}
+	}
+}
+
+func TestTranslateLocaleUsesAgentRequestInvalidPrefix(t *testing.T) {
+	got := TranslateLocale(LocaleSimplifiedChinese, "agent_request_invalid", "Agent request invalid: bad input")
+	if got != "Agent 请求无效：bad input" {
+		t.Fatalf("translation = %q", got)
+	}
+}

@@ -15,7 +15,7 @@ import Table from '@/components/ui/Table.vue';
 import Tooltip from '@/components/ui/Tooltip.vue';
 import { useErrorToast } from '@/components/ui/toast';
 import ListPage from '@/components/templates/ListPage.vue';
-import { translateRuntimeEventType, useI18n } from '@/i18n';
+import { translateEventSummary, translateRuntimeEventType, useI18n } from '@/i18n';
 import type { SystemEventDto } from '@/types/systemEvents';
 import { createLatestRequestGuard, normalizePage } from '@/views/_shared/requestState';
 import { formatDateTime } from '@/utils/datetime';
@@ -151,8 +151,8 @@ onMounted(load);
         <template #severity="{ row }"><StatusBadge :status="row.severity" :tone="row.severity === 'error' ? 'danger' : row.severity === 'warning' ? 'warning' : 'info'" :label="severityLabel(row.severity)" /></template>
         <template #eventType="{ row }"><span class="block truncate">{{ eventTypeLabel(row.eventType) }}</span></template>
         <template #summary="{ row }">
-          <Tooltip trigger-class="block min-w-0 w-full" :text="row.summary">
-            <span class="block min-w-0 max-w-full truncate">{{ row.summary }}</span>
+          <Tooltip trigger-class="block min-w-0 w-full" :text="translateEventSummary(t, row.summary)">
+            <span class="block min-w-0 max-w-full truncate">{{ translateEventSummary(t, row.summary) }}</span>
           </Tooltip>
         </template>
         <template #source="{ row }"><span class="block min-w-0 truncate">{{ sourceLabel(row) }}</span></template>

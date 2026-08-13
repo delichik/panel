@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import { useI18n } from '@/i18n';
 import { ApiError, type ApiRequestOptions } from './client';
 import { fetchDownload, type DownloadResult } from './download';
 import { deleteJson, idempotencyKey as key, multipartJson } from './assetRequests';
@@ -17,6 +18,8 @@ import type {
   OperationResult,
 } from '@/types/applications';
 import type { ListPage } from '@/types/pagination';
+
+const { t } = useI18n();
 
 function id(value: string) {
   return encodeURIComponent(value);
@@ -47,7 +50,7 @@ function normalizeApplicationList(
     }
   }
 
-  throw new ApiError('Applications API returned an invalid list response.', 200, 'invalid_api_response', value);
+  throw new ApiError(t('api.invalidApplicationsList'), 200, 'invalid_api_response', value);
 }
 
 export const applicationsApi = {

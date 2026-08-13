@@ -2857,6 +2857,71 @@ export function translateRuntimeEventType(t: (key: string, params?: Record<strin
   return label === key ? value : label;
 }
 
+// 后端任务摘要与运行时事件摘要以英文存库，前端按当前语言翻译后展示。
+const taskSummaryTranslations: Array<[string, string]> = [
+  ['Application target coordination', '应用目标协调'],
+  ['Claiming application deployment target', '认领应用部署目标'],
+  ['Renewing due certificates', '续签到期证书'],
+  ['Renewing certificate for ', '续签证书：'],
+  ['Refreshing DNS records', '刷新 DNS 记录'],
+  ['Refreshing image updates', '刷新镜像更新'],
+  ['Updating application images', '更新应用镜像'],
+  ['Monitoring application containers', '监控应用容器'],
+  ['Refreshing scheduled image checks', '刷新计划镜像检查'],
+  ['Syncing reverse proxy DNS records', '同步反向代理 DNS 记录'],
+  ['Collecting scheduled metrics', '采集计划指标'],
+  ['Collecting metrics for ', '采集指标：'],
+  ['Refreshing package updates', '刷新软件包更新'],
+  ['Upgrading selected packages', '升级所选软件包'],
+  ['Upgrading all packages', '升级全部软件包'],
+  ['Refreshing scheduled packages', '刷新计划软件包'],
+  ['Resetting system-managed agent certificate', '重置系统托管的 Agent 证书'],
+  ['Deploying panel agent for ', '部署 panel-agent：'],
+  ['Enabling UFW', '启用 UFW'],
+  ['Installing UFW', '安装 UFW'],
+  ['Restarting server', '重启服务器'],
+  ['Collecting system information for ', '收集系统信息：'],
+  ['Collecting scheduled system information', '采集计划系统信息'],
+  ['Checking agent for ', '检查 Agent：'],
+  ['Checking configured agents', '检查已配置的 Agent'],
+  ['Retrying ', '重试：'],
+];
+
+const eventSummaryTranslations: Array<[string, string]> = [
+  ['Agent report stream connected: ', 'Agent 上报流已连接：'],
+  ['Agent report stream disconnected: ', 'Agent 上报流已断开：'],
+  ['Application operation created: ', '应用操作已创建：'],
+  ['Application operation failed: ', '应用操作失败：'],
+  ['Application operation completed: ', '应用操作已完成：'],
+];
+
+function translateBackendSummary(
+  t: (key: string, params?: Record<string, string | number>) => string,
+  summary: string,
+  dictionary: Array<[string, string]>,
+): string {
+  if (state.locale !== 'zh-CN') return summary;
+  const exact = dictionary.find(([source]) => source === summary);
+  if (exact) return exact[1];
+  let best: [string, string] | null = null;
+  for (const [source, translated] of dictionary) {
+    if (summary.startsWith(source) && (!best || source.length > best[0].length)) best = [source, translated];
+  }
+  if (best) return best[1] + translateBackendSummary(t, summary.slice(best[0].length), dictionary);
+  return summary;
+}
+
+export function translateTaskSummary(t: (key: string, params?: Record<string, string | number>) => string, summary: string): string {
+  return translateBackendSummary(t, summary, taskSummaryTranslations);
+}
+
+export function translateEventSummary(t: (key: string, params?: Record<string, string | number>) => string, summary: string): string {
+  if (state.locale !== 'zh-CN') return summary;
+  const translated = translateBackendSummary(t, summary, eventSummaryTranslations);
+  return translated.replace(/ \((\d+)\/(\d+) targets succeeded\)$/, '（$1/$2 个目标成功）');
+}
+
+
 // Runtime additions (integrated from module audit fixes)
 Object.assign(messages.en, {
   'applicationsPage.fileContent': 'File content',
@@ -3013,4 +3078,42 @@ Object.assign(messages['zh-CN'], {
   'maintenancePage.clearPendingImpact': '这将移除待处理还原标记且不会还原数据，之后无法继续该次还原。',
   'systemEventsPage.emptyFiltered': '没有符合筛选条件的事件',
   'systemEventsPage.emptyFilteredHint': '调整类型、级别或时间范围以查看更多事件。',
+});
+
+Object.assign(messages.en, {
+  'api.requestTimeout': 'Request timed out.',
+  'api.requestAborted': 'Request was aborted.',
+  'api.networkFailed': 'Network request failed.',
+  'api.authenticationRequired': 'Authentication is required.',
+  'api.requestFailedStatus': 'Request failed with status {status}.',
+  'api.htmlResponse': 'Server returned an HTML page instead of JSON.',
+  'api.nonJsonResponse': 'Server returned a non-JSON response.',
+  'api.invalidJson': 'Unable to parse JSON response.',
+  'api.missingDataEnvelope': 'API response is missing the data envelope.',
+  'api.downloadFailedStatus': 'Download failed with status {status}.',
+  'api.mockRouteNotImplemented': 'Mock API route is not implemented.',
+  'api.invalidApplicationsList': 'Applications API returned an invalid list response.',
+  'api.exportNotReady': 'Export archive is not ready.',
+  'api.taskWaitAborted': 'Task wait was aborted.',
+  'api.taskEndedStatus': 'Task ended with status {status}.',
+  'api.taskTimeout': 'Task did not finish before the refresh timeout.',
+});
+
+Object.assign(messages['zh-CN'], {
+  'api.requestTimeout': '请求超时。',
+  'api.requestAborted': '请求已中止。',
+  'api.networkFailed': '网络请求失败。',
+  'api.authenticationRequired': '需要身份验证。',
+  'api.requestFailedStatus': '请求失败，状态码 {status}。',
+  'api.htmlResponse': '服务器返回了 HTML 页面而非 JSON。',
+  'api.nonJsonResponse': '服务器返回了非 JSON 响应。',
+  'api.invalidJson': '无法解析 JSON 响应。',
+  'api.missingDataEnvelope': 'API 响应缺少 data 数据封装。',
+  'api.downloadFailedStatus': '下载失败，状态码 {status}。',
+  'api.mockRouteNotImplemented': 'Mock API 路由未实现。',
+  'api.invalidApplicationsList': '应用 API 返回了无效的列表响应。',
+  'api.exportNotReady': '导出归档尚未就绪。',
+  'api.taskWaitAborted': '任务等待已中止。',
+  'api.taskEndedStatus': '任务以状态 {status} 结束。',
+  'api.taskTimeout': '任务未在刷新超时前完成。',
 });

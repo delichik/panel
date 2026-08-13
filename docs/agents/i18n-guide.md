@@ -7,7 +7,7 @@
 - 默认语言：`en`
 - 第二语言：`zh-CN`
 - 前端翻译入口：`web/src/i18n/index.ts`
-- 前端运行时语言同步：`web/src/stores/settings.ts`
+- 前端运行时语言同步：`web/src/i18n/index.ts`
 - 后端翻译入口：`internal/platform/i18n/i18n.go`
 - 后端运行时语言设置：`internal/modules/settings/service.go`
 - 语言设置来源：`/api/v1/settings/runtime`
@@ -53,8 +53,9 @@ const { t } = useI18n();
 
 - `formatDateTime`
 - `formatTime`
-- `translateTaskStatus`
-- `translateCleanupSchedule`
+- `translateRuntimeEventType`
+- `translateTaskSummary`
+- `translateEventSummary`
 
 ### 3. 路由元信息使用 key，不直接写文案
 
@@ -145,6 +146,11 @@ if locale == "zh-CN" {
 - `RuntimeSettings`
 - `RuntimeUpdate`
 - `/api/v1/settings/runtime`
+
+### 4. 摘要存储与任务错误翻译
+
+- 任务摘要 / 运行时事件摘要以后端稳定英文存储、前端渲染翻译为原则；不要把摘要写入逻辑与展示语言耦合（任务中心用 `translateTaskSummary`、系统事件页用 `translateEventSummary` 渲染）。
+- 任务 error 对 panelerr 错误在写入前翻译，避免把当前语言下的文案固化进任务记录。
 
 ## 修改流程
 

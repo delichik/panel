@@ -1,6 +1,9 @@
 import { ApiError } from './client';
+import { useI18n } from '@/i18n';
 import { tasksApi } from './tasks';
 import type { TaskDto } from '@/types/tasks';
+
+const { t } = useI18n();
 
 const terminalStatuses = new Set(['completed', 'failed', 'failed_retryable', 'blocked', 'cancelled']);
 const POLL_INTERVAL_MS = 750;
@@ -22,7 +25,7 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 function abortedError(): ApiError {
-  return new ApiError('Task wait was aborted.', 0, 'request_aborted');
+  return new ApiError(t('api.taskWaitAborted'), 0, 'request_aborted');
 }
 
 /**
@@ -40,7 +43,7 @@ export async function waitForTask(taskId: string, timeoutMs = 90_000, signal?: A
       const task = await tasksApi.get(taskId, { signal });
       transientFailures = 0;
       if (terminalStatuses.has(task.status)) {
-        if (task.status !== 'completed') throw new Error(task.error || `Task ended with status ${task.status}.`);
+        if (task.status !== 'completed') throw new Error(task.error || t('api.taskEndedStatus', { status: task.status }));
         return task;
       }
     } catch (error) {
@@ -53,5 +56,5 @@ export async function waitForTask(taskId: string, timeoutMs = 90_000, signal?: A
     }
     await sleep(POLL_INTERVAL_MS, signal);
   }
-  throw new Error('Task did not finish before the refresh timeout.');
+  throw new Error(t('api.taskTimeout'));
 }

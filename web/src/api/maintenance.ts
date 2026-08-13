@@ -1,8 +1,11 @@
 import { ApiError, fetchJson } from './client';
+import { useI18n } from '@/i18n';
 import { fetchDownload, type DownloadResult } from './download';
 import type { MaintenanceSession, MaintenanceStatus } from '@/types/maintenance';
 
 type MaintenanceMode = 'export' | 'restore';
+
+const { t } = useI18n();
 
 function tokenKey(mode: MaintenanceMode) {
   return `panel.maintenance.${mode}.token`;
@@ -78,7 +81,7 @@ export const maintenanceApi = {
     return request<MaintenanceStatus>('restore', 'POST', '/restore/clear-pending', { expectedRevision: status.revision, clientOperationId: `restore-clear-${Date.now()}` });
   },
   downloadExport(status: MaintenanceStatus): Promise<DownloadResult> {
-    if (!status.exportId) throw new ApiError('Export archive is not ready.', 400, 'export_not_ready');
+    if (!status.exportId) throw new ApiError(t('api.exportNotReady'), 400, 'export_not_ready');
     return fetchDownload(`/api/v1/backups/export/${encodeURIComponent(status.exportId)}/download`, {
       headers: { Authorization: `Bearer ${token('export')}` },
       triggerUnauthorized: false,

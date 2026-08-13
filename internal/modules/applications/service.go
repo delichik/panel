@@ -2171,7 +2171,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 				result = reloadResult
 				return nil
 			}
-			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "write_files", StageDetail: fmt.Sprintf("写入 %d 个文件", len(files)), OwnerTaskID: taskID}); err != nil {
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "write_files", StageDetail: fmt.Sprintf("Wrote %d files", len(files)), OwnerTaskID: taskID}); err != nil {
 				return err
 			}
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "write files", func(context.Context) error {
@@ -2234,7 +2234,7 @@ func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Ta
 			if err := s.ensureLifecycleTargetStillOwnedByTask(runCtx, targetID, taskID); err != nil {
 				return err
 			}
-			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "start_container", StageDetail: "容器 " + instanceSpec.ContainerName, ContainerID: created.ContainerID, OwnerTaskID: taskID}); err != nil {
+			if err := s.updateLifecycleTarget(runCtx, targetID, lifecycleTargetUpdate{State: LifecycleTargetStateApplying, Stage: "start_container", StageDetail: "Container " + instanceSpec.ContainerName, ContainerID: created.ContainerID, OwnerTaskID: taskID}); err != nil {
 				return err
 			}
 			if err := s.runRuntimeDeployStep(runCtx, taskID, targetName, "start container", func(context.Context) error {

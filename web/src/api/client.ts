@@ -1,3 +1,5 @@
+import { useI18n } from '@/i18n';
+
 export interface ApiEnvelope<T> {
   data?: T;
   error?: ApiErrorPayload;
@@ -41,6 +43,8 @@ export interface DownloadResult {
 const defaultBaseUrl = '/api/v1';
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_DOWNLOAD_TIMEOUT_MS = 120_000;
+
+const { t } = useI18n();
 
 let authTokenProvider: (() => string) | null = null;
 
@@ -102,18 +106,18 @@ function createTimeout(timeoutMs: number, externalSignal?: AbortSignal): Timeout
 function networkError(error: unknown, timedOut: boolean): ApiError {
   if (error instanceof DOMException && error.name === 'AbortError') {
     return new ApiError(
-      timedOut ? 'Request timed out.' : 'Request was aborted.',
+      timedOut ? t('api.requestTimeout') : t('api.requestAborted'),
       0,
       timedOut ? 'request_timeout' : 'request_aborted',
     );
   }
-  return new ApiError(error instanceof Error ? error.message : 'Network request failed.', 0, 'network_error', error);
+  return new ApiError(error instanceof Error ? error.message : t('api.networkFailed'), 0, 'network_error', error);
 }
 
 function defaultMessage(status: number, code: string) {
-  if (code === 'mock_route_not_found') return 'Mock API route is not implemented.';
-  if (status === 401) return 'Authentication is required.';
-  return `Request failed with status ${status}.`;
+  if (code === 'mock_route_not_found') return t('api.mockRouteNotImplemented');
+  if (status === 401) return t('api.authenticationRequired');
+  return t('api.requestFailedStatus', { status });
 }
 
 /**
@@ -155,7 +159,7 @@ export async function fetchJson<T>(path: string, options: ApiRequestOptions = {}
       const text = await response.text().catch(() => '');
       const looksHtml = /^\s*</.test(text) || contentType.includes('text/html');
       throw new ApiError(
-        looksHtml ? 'Server returned an HTML page instead of JSON.' : 'Server returned a non-JSON response.',
+        looksHtml ? t('api.htmlResponse') : t('api.nonJsonResponse'),
         response.status,
         response.status === 401 ? 'unauthorized' : looksHtml ? 'html_response' : 'non_json_response',
         { contentType },
@@ -163,7 +167,7 @@ export async function fetchJson<T>(path: string, options: ApiRequestOptions = {}
     }
 
     const envelope = (await response.json().catch((error: unknown) => {
-      throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
+      throw new ApiError(t('api.invalidJson'), response.status, 'invalid_json_response', error);
     })) as ApiEnvelope<T>;
 
     if (!response.ok || envelope.error) {
@@ -173,7 +177,7 @@ export async function fetchJson<T>(path: string, options: ApiRequestOptions = {}
     }
 
     if (!('data' in envelope)) {
-      throw new ApiError('API response is missing the data envelope.', response.status, 'missing_data_envelope');
+      throw new ApiError(t('api.missingDataEnvelope'), response.status, 'missing_data_envelope');
     }
 
     return envelope.data as T;
@@ -204,13 +208,13 @@ export async function fetchBlob(path: string, options: ApiRequestOptions & { fal
       const contentType = response.headers.get('content-type') ?? '';
       if (contentType.includes('application/json')) {
         const envelope = (await response.json().catch((error: unknown) => {
-          throw new ApiError('Unable to parse JSON response.', response.status, 'invalid_json_response', error);
+          throw new ApiError(t('api.invalidJson'), response.status, 'invalid_json_response', error);
         })) as ApiEnvelope<unknown>;
         const code = envelope.error?.code ?? (response.status === 401 ? 'unauthorized' : 'api_error');
         throw new ApiError(envelope.error?.message ?? defaultMessage(response.status, code), response.status, code, envelope.error?.details);
       }
       throw new ApiError(
-        `Download failed with status ${response.status}.`,
+        t('api.downloadFailedStatus', { status: response.status }),
         response.status,
         response.status === 401 ? 'unauthorized' : 'download_failed',
       );

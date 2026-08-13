@@ -16,7 +16,7 @@ import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast } from '@/components/ui/toast';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
-import { useI18n } from '@/i18n';
+import { translateTaskSummary, useI18n } from '@/i18n';
 import type { TaskDto, TaskLog, TaskOperationGroup, TaskStep } from '@/types/tasks';
 import { createLatestRequestGuard } from '@/views/_shared/requestState';
 import { groupTasksByOperation } from './model';
@@ -236,7 +236,7 @@ onBeforeUnmount(() => {
           <EmptyState v-else-if="!groups.length" :title="t('tasksPage.empty')" :description="t('tasksPage.emptyHint')" />
           <button v-for="group in groups" v-else :key="group.operationId" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-2 overflow-hidden rounded-xl border p-3 text-left hover:bg-accent" :class="selectedOperationId === group.operationId ? 'border-border-strong bg-background' : 'border-transparent'" :aria-current="selectedOperationId === group.operationId ? 'true' : undefined" @click="selectedOperationId = group.operationId">
             <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1">
-              <strong class="min-w-0 truncate text-sm text-foreground">{{ group.title }}</strong>
+              <strong class="min-w-0 truncate text-sm text-foreground">{{ translateTaskSummary(t, group.title) }}</strong>
               <StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="group.status" domain="task" :label="t(`tasksPage.status.${group.status}`)" />
             </div>
             <span class="min-w-0 truncate text-xs text-muted-foreground">{{ group.type }}</span>
@@ -257,7 +257,7 @@ onBeforeUnmount(() => {
         <article v-else class="grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] overflow-hidden rounded-2xl border border-border bg-card">
           <header class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-4 border-b border-border p-5 max-lg:grid-cols-1">
             <div class="min-w-0 overflow-hidden">
-              <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><h2 class="m-0 min-w-0 truncate text-xl font-semibold">{{ selectedGroup.title }}</h2><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="selectedGroup.status" domain="task" :label="t(`tasksPage.status.${selectedGroup.status}`)" /></div>
+              <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><h2 class="m-0 min-w-0 truncate text-xl font-semibold">{{ translateTaskSummary(t, selectedGroup.title) }}</h2><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="selectedGroup.status" domain="task" :label="t(`tasksPage.status.${selectedGroup.status}`)" /></div>
               <p class="m-0 mt-1 min-w-0 truncate text-sm text-muted-foreground">{{ selectedGroup.type }}</p>
             </div>
             <div class="flex min-w-0 flex-wrap justify-end gap-2 max-lg:justify-start">
@@ -269,7 +269,7 @@ onBeforeUnmount(() => {
             <section class="motion-stagger min-h-0 min-w-0 overflow-y-auto overflow-x-hidden rounded-2xl border border-border bg-background p-3">
               <h3 class="m-0 mb-3 flex min-w-0 items-center gap-2 text-sm font-semibold"><ListFilter class="size-4 shrink-0" /><span class="min-w-0 truncate">{{ t('tasksPage.executionItems') }}</span></h3>
               <button v-for="task in selectedGroup.tasks" :key="task.id" type="button" class="motion-list-item mb-2 grid w-full min-w-0 gap-1 overflow-hidden rounded-xl border p-3 text-left text-sm hover:bg-accent" :class="selectedTaskId === task.id ? 'border-border-strong bg-card' : 'border-border'" :aria-current="selectedTaskId === task.id ? 'true' : undefined" @click="selectedTaskId = task.id">
-                <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ task.summary }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" :label="taskStatusLabel(task.status)" /></div>
+                <div class="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2 max-[420px]:grid-cols-1"><strong class="min-w-0 truncate">{{ translateTaskSummary(t, task.summary) }}</strong><StatusBadge class="max-w-full shrink-0 justify-self-start whitespace-nowrap" :status="task.status" domain="task" :label="taskStatusLabel(task.status)" /></div>
                 <span class="min-w-0 truncate text-xs text-muted-foreground">{{ task.type }}</span>
               </button>
             </section>

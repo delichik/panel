@@ -13,6 +13,7 @@ import (
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
+	"panel/internal/platform/i18n"
 	id "panel/internal/platform/identity"
 )
 
@@ -366,7 +367,7 @@ func (s *Service) Complete(ctx context.Context, taskID, summary string) error {
 }
 
 func (s *Service) Fail(ctx context.Context, taskID string, err error) error {
-	msg := Redact(err.Error())
+	msg := taskErrorText(err)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	s.runningMu.Lock()
 	defer s.runningMu.Unlock()
@@ -397,7 +398,7 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 	if isTerminalStatus(task.Status) {
 		return nil
 	}
-	msg := Redact(cause.Error())
+	msg := taskErrorText(cause)
 	if task.MaxRetries > 0 && task.RetryCount >= task.MaxRetries {
 		return s.Block(ctx, taskID, cause)
 	}
@@ -422,7 +423,7 @@ func (s *Service) FailRetryable(ctx context.Context, taskID string, cause error)
 }
 
 func (s *Service) Block(ctx context.Context, taskID string, cause error) error {
-	msg := Redact(cause.Error())
+	msg := taskErrorText(cause)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if logErr := s.AppendLog(ctx, taskID, "stderr", msg); logErr != nil {
 		return logErr
@@ -1392,6 +1393,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func taskErrorText(err error) string {
+	var pe *panelerr.Error
+	if errors.As(err, &pe) {
+		return Redact(i18n.Translate(pe.Code, pe.Message))
+	}
+	return Redact(err.Error())
 }
 
 func Redact(s string) string {

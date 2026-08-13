@@ -34,6 +34,7 @@
   - 删除服务器时 `CancelByServer` 也会逐任务写 `task.cancelled` 事件（复用 `DedupeKey`，重复取消不会重复落库）。
   - Agent 状态：`agent.connected` / `agent.disconnected`（仅状态转换时写入，避免刷屏）。
 - 失败/错误原因直接并入日志“内容”字段（summary），列表行内即可读，无详情弹窗。
+- 事件摘要（summary）以后端稳定英文写入存储，系统事件页用 `translateEventSummary` 按当前语言渲染翻译；不要把摘要写入逻辑与展示语言耦合。
 - 页面列表只展示：时间 / 级别 / 类型 / 内容 / 来源；无“查看”按钮与详情接口。
 - 保留策略：`runtimeEventRetentionDays` 控制系统日志保留天数；`runtimeEventDetailRetentionDays` 已改用于**应用操作阶段清理**（`applications.NewStageCleanupWorker`），不再用于系统事件详情。
 - `runtime_event_details` 表不再读写（表保留，避免破坏性迁移）。

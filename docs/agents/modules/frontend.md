@@ -173,6 +173,7 @@
 
 - 新增或修改用户可见文案必须写入 `web/src/i18n/index.ts` 英文和简体中文词条。
 - 路由元信息只写 `meta.titleKey`，不写用户可见文案。
+- 多语言入口为 `web/src/i18n/index.ts`（`state.locale` + `setLocale`）；任务中心 / 系统事件页使用 `translateTaskSummary` / `translateEventSummary` 对后端英文摘要按当前语言渲染翻译。
 
 ## 验证
 

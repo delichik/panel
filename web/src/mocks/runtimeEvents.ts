@@ -98,7 +98,7 @@ export function applicationOperationDetail(operationId: string): ApplicationOper
       stages,
     });
   }
-  // 一台“一致”服务器样本
+  // One "consistent" server sample
   targets.push({
     id: `${operationId}-consistent-edge-9`,
     operationId,
@@ -119,11 +119,11 @@ export function applicationOperationDetail(operationId: string): ApplicationOper
 function stageSamples(found: ApplicationOperationDto, index: number, status: string, failed: boolean, startedAt: string | undefined, endedAt: string): ApplicationOperationStageDto[] {
   const base = new Date(startedAt ?? now.toISOString()).getTime();
   const steps: Array<{ stage: string; seconds: number; detail: string }> = [
-    { stage: 'write_files', seconds: 36, detail: index === 0 ? '已写入 5 个文件：nginx.conf、app.env、docker-compose.yml、.env.production、health-check.sh' : '已写入 5 个文件：nginx.conf、app.env、docker-compose.yml、.env.production、health-check.sh' },
-    { stage: 'pull_image', seconds: 15, detail: '镜像 ghcr.io/example/storefront:1.9.0 已存在，跳过下载（digest abc123...）' },
-    { stage: 'create_container', seconds: 44, detail: `容器 storefront-edge${index + 1}（ID 8be2...d11）已创建，端口映射 3000:8080，内存 512MB` },
-    { stage: 'start_container', seconds: 12, detail: '容器已启动，状态 running' },
-    { stage: 'verify', seconds: 51, detail: failed ? 'GET /ready 返回 503 Service Unavailable，30 秒超时，错误码 verify_failed' : 'GET /ready 返回 200 OK，耗时 90ms' },
+    { stage: 'write_files', seconds: 36, detail: index === 0 ? 'Wrote 5 files: nginx.conf, app.env, docker-compose.yml, .env.production, health-check.sh' : 'Wrote 5 files: nginx.conf, app.env, docker-compose.yml, .env.production, health-check.sh' },
+    { stage: 'pull_image', seconds: 15, detail: 'Image ghcr.io/example/storefront:1.9.0 already exists, skipping download (digest abc123...)' },
+    { stage: 'create_container', seconds: 44, detail: `Container storefront-edge${index + 1} (ID 8be2...d11) created, port mapping 3000:8080, memory 512MB` },
+    { stage: 'start_container', seconds: 12, detail: 'Container started, status running' },
+    { stage: 'verify', seconds: 51, detail: failed ? 'GET /ready returned 503 Service Unavailable, 30s timeout, error code verify_failed' : 'GET /ready returned 200 OK, 90ms' },
   ];
   let cursor = base;
   return steps.map((step, stepIndex) => {
