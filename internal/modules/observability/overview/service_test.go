@@ -262,7 +262,7 @@ func newCardDataTestService(t *testing.T) (*Service, []string, func()) {
 	if err != nil {
 		t.Fatalf("create second server: %v", err)
 	}
-	metricsSvc := metricspkg.NewService(store.MetricsDB(), serverSvc, nil)
+	metricsSvc := metricspkg.NewService(store.MetricsDB(), serverSvc)
 	for i, serverID := range []string{first.ID, second.ID} {
 		if err := metricsSvc.Save(context.Background(), linux.MetricsSnapshot{
 			ServerID:           serverID,

@@ -60,7 +60,6 @@ import {
   routeSummary,
   runtimeSummary,
   saveInputFromDraft,
-  specYamlFromDraft,
   statusTone,
   syncDraftToYaml,
   validateApplicationDraft,

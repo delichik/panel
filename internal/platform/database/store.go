@@ -208,15 +208,3 @@ func (s *Store) Close() error {
 	}
 	return err
 }
-
-func (s *Store) WithAppTx(ctx context.Context, fn func(*sql.Tx) error) error {
-	tx, err := s.appDB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	if err := fn(tx); err != nil {
-		_ = tx.Rollback()
-		return err
-	}
-	return tx.Commit()
-}

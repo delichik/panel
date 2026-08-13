@@ -53,10 +53,3 @@ export interface OverviewCardData {
   card: OverviewCardConfiguration;
   metricsByServer: Record<string, OverviewMetricsSeries>;
 }
-
-export interface OverviewCardViewModel {
-  card: OverviewCardConfiguration;
-  status: 'ready' | 'loading' | 'error' | 'empty';
-  error?: string;
-  data?: OverviewCardData;
-}

@@ -81,12 +81,6 @@ type MaintenanceClient interface {
 	RestartSystem(ctx context.Context, url string) error
 }
 
-type ErrorResponse struct {
-	Error string `json:"error"`
-}
-
-type EmptyRequest struct{}
-
 type HealthResponse struct {
 	Status       string           `json:"status"`
 	Time         string           `json:"time"`
@@ -422,61 +416,4 @@ type DockerVolumeDeleteRequest struct {
 
 type OKResponse struct {
 	OK bool `json:"ok"`
-}
-
-func SnapshotResponse(s linux.MetricsSnapshot) MetricsSnapshotResponse {
-	out := MetricsSnapshotResponse{
-		ServerID:           s.ServerID,
-		Time:               s.Time,
-		CPUUsagePercent:    s.CPUUsagePercent,
-		MemoryUsedBytes:    s.MemoryUsedBytes,
-		MemoryTotalBytes:   s.MemoryTotalBytes,
-		DiskUsedBytes:      s.DiskUsedBytes,
-		DiskTotalBytes:     s.DiskTotalBytes,
-		NetworkRxBytesRate: s.NetworkRxBytesRate,
-		NetworkTxBytesRate: s.NetworkTxBytesRate,
-	}
-	out.Status.Hostname = s.Status.Hostname
-	out.Status.KernelVersion = s.Status.KernelVersion
-	out.Status.OSVersion = s.Status.OSVersion
-	out.Status.ServerTime = s.Status.ServerTime
-	out.Status.UptimeSeconds = s.Status.UptimeSeconds
-	out.Status.LoadAverage = s.Status.LoadAverage
-	out.Status.Load1 = s.Status.Load1
-	out.Status.Load5 = s.Status.Load5
-	out.Status.Load15 = s.Status.Load15
-	return out
-}
-
-func SnapshotFromResponse(r MetricsSnapshotResponse) linux.MetricsSnapshot {
-	return linux.MetricsSnapshot{
-		ServerID:           r.ServerID,
-		Time:               r.Time,
-		CPUUsagePercent:    r.CPUUsagePercent,
-		MemoryUsedBytes:    r.MemoryUsedBytes,
-		MemoryTotalBytes:   r.MemoryTotalBytes,
-		DiskUsedBytes:      r.DiskUsedBytes,
-		DiskTotalBytes:     r.DiskTotalBytes,
-		NetworkRxBytesRate: r.NetworkRxBytesRate,
-		NetworkTxBytesRate: r.NetworkTxBytesRate,
-		Status: linux.SystemStatus{
-			Hostname:      r.Status.Hostname,
-			KernelVersion: r.Status.KernelVersion,
-			OSVersion:     r.Status.OSVersion,
-			ServerTime:    r.Status.ServerTime,
-			UptimeSeconds: r.Status.UptimeSeconds,
-			LoadAverage:   r.Status.LoadAverage,
-			Load1:         r.Status.Load1,
-			Load5:         r.Status.Load5,
-			Load15:        r.Status.Load15,
-		},
-	}
-}
-
-func UFWStatusResponseFromStatus(s remoteops.UFWStatus) UFWStatusResponse {
-	return UFWStatusResponse{Installed: s.Installed, Active: s.Active, Status: s.Status, Default: s.Default, Rules: s.Rules, Raw: s.Raw}
-}
-
-func UFWStatusFromResponse(r UFWStatusResponse) remoteops.UFWStatus {
-	return remoteops.UFWStatus{Installed: r.Installed, Active: r.Active, Status: r.Status, Default: r.Default, Rules: r.Rules, Raw: r.Raw}
 }

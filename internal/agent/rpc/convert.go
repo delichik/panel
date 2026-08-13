@@ -1,7 +1,6 @@
 package rpc
 
 import (
-	"encoding/base64"
 	"strings"
 	"time"
 
@@ -466,14 +465,6 @@ func goDockerVolume(in *agentpb.DockerVolume) agentcontract.DockerVolume {
 		out.UsageData = &agentcontract.DockerVolumeUsage{Size: in.UsageData.Size, RefCount: in.UsageData.RefCount}
 	}
 	return out
-}
-
-func archiveContentBase64(content []byte) string {
-	return base64.StdEncoding.EncodeToString(content)
-}
-
-func archiveContentFromBase64(value string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(strings.TrimSpace(value))
 }
 
 func cloneMap(in map[string]string) map[string]string {

@@ -1,6 +1,6 @@
 import type { CredentialDto } from '@/types/credentials';
 import type { OperationAccepted, ServerDto, ServerProbeResult, ServerSaveInput } from '@/types/servers';
-import type { ServerMetricsSeries, AgentCertificateBundle } from '@/api/servers';
+import type { ServerMetricsSeries } from '@/api/servers';
 
 export let mockCredentials: CredentialDto[] = [
   { id: 'cred-root-key', name: 'Root deploy key', type: 'private_key', username: 'root', createdAt: '2026-07-20T10:00:00.000Z', updatedAt: '2026-07-20T10:00:00.000Z' },
@@ -279,19 +279,6 @@ export function mockServerMetrics(id: string, range: string = '1h'): ServerMetri
     disk: points.map((time, index) => ({ time, usedBytes: (34 + seed * 7 + index * 0.35) * 1024 ** 3, totalBytes: (120 + seed * 40) * 1024 ** 3 })),
     network: points.map((time, index) => ({ time, rxBytesPerSecond: 64_000 + seed * 19_000 + index * 4_200, txBytesPerSecond: 42_000 + seed * 13_000 + index * 3_100 })),
     load: points.map((time, index) => ({ time, load1: 0.25 + seed * 0.11 + index * 0.018, load5: 0.22 + seed * 0.09 + index * 0.014, load15: 0.2 + seed * 0.07 + index * 0.01 })),
-  };
-}
-
-export function mockAgentCertificate(id: string): AgentCertificateBundle | null {
-  const server = mockServers.find((item) => item.id === id);
-  if (!server) return null;
-  return {
-    ca: '-----BEGIN CERTIFICATE-----\\nMOCK-CA\\n-----END CERTIFICATE-----',
-    certificate: '-----BEGIN CERTIFICATE-----\\nMOCK-CERT\\n-----END CERTIFICATE-----',
-    privateKey: '-----BEGIN PRIVATE KEY-----\\nMOCK-KEY\\n-----END PRIVATE KEY-----',
-    listenAddress: ':9786',
-    agentUrl: `https://${server.host}:9786`,
-    dockerHost: server.dockerHost || 'unix:///var/run/docker.sock',
   };
 }
 

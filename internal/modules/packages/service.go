@@ -84,10 +84,6 @@ func (s *Service) Refresh(ctx context.Context, serverID string) (RefreshResult, 
 	return s.refresh(ctx, serverID, "user", false, "")
 }
 
-func (s *Service) RefreshScheduled(ctx context.Context, serverID string, operationID string) (RefreshResult, error) {
-	return s.refresh(ctx, serverID, "scheduler", true, operationID)
-}
-
 // SaveReportedUpdates persists package update snapshots pushed by the agent
 // after a dpkg change, keeping the resources page near real-time without a
 // Panel-triggered refresh.

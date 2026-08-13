@@ -59,7 +59,7 @@
 - 父任务汇总必须对已结束子任务保持幂等：子任务已是 `completed` 时应视为已经完成并跳过执行，不能把再次触碰已完成子任务产生的 `task_not_runnable` 记录成父任务失败；只有失败、可重试失败、阻塞或取消等终态才应让父任务失败。
 - 任务状态、触发来源、资源类型和操作 ID 是前后端筛选与追踪的稳定字段，改名需要迁移并同步前端。
 - 任务中心筛选控件清空时可能产生 `null`；前端页面应用筛选前、前端任务 API 组装查询参数前都应统一归一化空值和空白字符串，不发送空筛选参数。
-- 任务中心类型筛选默认使用“常用类型”，排除所有 `trigger_type=scheduler` 的定时任务，并隐藏内部高频的 `metrics_collect`。
+- 任务中心类型筛选默认使用“常用类型”，排除所有 `trigger_type=scheduler` 的定时任务。
 - 任务中心支持多选 `status` / `type`；API 使用重复的 `status` / `type` 查询参数，`commonOnly=true` 表示常用类型，`includeInternal=true` 表示所有类型。`所有类型` 是互斥筛选模式，搜索时必须保持 `includeInternal=true` 且不发送具体 `type`，不能在归一化过程中退回 `commonOnly=true`。任务中心左侧按“操作”展示时必须使用 `operationPage=true` 按 operation 分页，后端先分页去重后的 `operation_id`（空值退回任务 ID）再返回这些操作下的任务；不得用原始任务分页结果在前端折叠，否则批量任务会导致一页只显示少量操作。
 - 任务中心不做后台自动轮询刷新；进入页面、路由指定任务变化、筛选、分页、手动运行、重试和日志完成事件可以主动重新加载。需要恢复自动刷新时必须提供明确的用户可控开关并更新本文档。
 - 兼容任务中心启用用户可暂停的列表轮询时，同一时刻只允许一个轮询列表请求；手动刷新、筛选和分页可以取代旧请求，旧列表或旧任务详情响应不得覆盖当前选择。切换具体任务时必须先隔离步骤、日志和日志游标。
@@ -104,13 +104,13 @@
 - 网络和卷资源页首次打开且本地尚无快照时，前端会提交一次 `network_refresh` 或 `volume_refresh` 任务；刷新任务按任务类型、服务器和资源复用活跃任务。
 - 证书签发、续签、密钥资产重新签发、SSH 密钥重新生成和导入依赖本模块记录任务；ACME 签发/续签任务会记录 `acme_*` 阶段和对应步骤 metadata。新建证书签发在任务持久化后由证书模块主动调用 manager 启动，正常路径不依赖 worker 的周期扫描；worker 仍负责重启恢复和兜底唤醒。
 - `server_info_collect` 的首次 bootstrap 输入在服务器创建后立即执行，失败时允许回滚尚未完成初始化的服务器；普通 refresh 输入固定每小时收集一次完整系统信息，失败只记录为可重试任务，绝不能删除服务器。周期 refresh 仅为存在兼容 Agent 的服务器创建。该任务的注册 executor 必须同步执行到任务终态；业务 API 需要快速返回时只能在创建并标记 running 后使用模块内显式后台启动 helper。
-- 启用服务器 agent 后，`metrics_collect` 与普通 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、`metrics_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
+- 启用服务器 agent 后，`metrics_collect` 与普通 `server_info_collect` 中的读取能力会走目标机 `panel-agent` mTLS 通道，不允许在 agent 失败时回落 SSH。依赖 agent 的定时工作只在 `agent.status=compatible` 且存在 `agent.url` 时创建或执行；agent 未部署、异常、不可部署或版本不一致时跳过当前资源工作，不创建新的资源操作任务。`server_info_collect`、应用运行时任务和容器化任务遇到 agent mTLS server 证书过期或尚未生效时，会标记 agent 不兼容、按受限自动重装策略处理 `server_agent_deploy`，并按当前 agent 错误失败；恢复 agent 本身的 `server_agent_deploy` 不受该跳过规则限制。
 - 软件包刷新/升级、UFW 写操作、fail2ban 安装/接管/应用/取消接管和服务器重启必须路由到兼容 Agent，不允许回退 SSH。长耗时 APT 请求使用独立 Agent maintenance gRPC 超时并把命令输出写入 Panel 任务日志；软件包升级任务声明 `DisallowCancel`，Panel 重启、连接断开或删除服务器都不会取消远端 apt。SSH 只保留 Agent bootstrap、安装、修复和证书恢复。
 - 软件包升级任务（`package_upgrade_selected` / `package_upgrade_all`）注册了 `Execute` 并声明 `AllowRunNow` / `AllowRetry`：Panel 重启后遗留的 `queued` 升级任务可由 worker 恢复执行而不是死任务；升级与刷新共用 per-server 维护互斥，同一服务器同一时间只允许一种软件包维护动作，被互斥拒绝的任务会以明确的“维护中”错误进入失败态。
 
 ## 密钥资产任务
 
-- `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import`、`key_asset_sync` 记录密钥资产操作；当前这些记录型任务不注册 executor，因此不暴露任务中心手动运行或重试。
+- `key_asset_tls_reissue`、`key_asset_ssh_regenerate`、`key_asset_export`、`key_asset_import` 记录密钥资产操作；当前这些记录型任务不注册 executor，因此不暴露任务中心手动运行或重试。
 - 重新签发、重新生成和导入任务会触发已启用应用重新部署，任务终态必须注销 execution。
 - 导出任务完成后通过 `/api/v1/key-assets/exports/{taskId}/download` 下载短期加密归档。
 
@@ -125,7 +125,7 @@
  
 ## Active Agent Reporting
 
-- `metrics_collect` remains registered as an executable hidden task for manual recovery/debug compatibility, but it is no longer scheduled periodically. Normal metrics ingestion comes from the agent report stream.
+- The legacy `metrics_collect` task registration has been removed; normal metrics ingestion comes from the agent report stream.
 - Container status refresh no longer drives application reconciliation by pulling every compatible agent. Reconciliation uses cached reported observations and asks the application planner to create or reuse lifecycle targets for drifted app/server pairs; it does not create `application_target_*` task inputs itself.
 - Runtime report intervals are pushed to agents through Panel-initiated report streams, so changing settings must not require creating or retrying task records.
 - The agent report stream is a watcher of an agent-side shared collector hub. Task scheduling must not add separate metrics or Docker polling loops for the same data path.

@@ -60,28 +60,6 @@ curl/stable 8.0.1 amd64 [upgradable from: 8.0.0]`
 	}
 }
 
-func TestParseMetricsOutput(t *testing.T) {
-	out := "100 40\n8000 2000\n100000 50000\n1000000000 100000000000 200000000000\n2000000000 100000001024 200000002048\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3 1/2 3"
-	snap, err := ParseMetricsOutput("srv", out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snap.CPUUsagePercent != 60 || snap.MemoryUsedBytes != 2000 || snap.Status.Hostname != "host" || snap.NetworkRxBytesRate != 1024 || snap.NetworkTxBytesRate != 2048 {
-		t.Fatalf("unexpected snapshot: %#v", snap)
-	}
-}
-
-func TestParseMetricsOutputUsesNetworkDeltas(t *testing.T) {
-	out := "100 40\n8000 2000\n100000 50000\n1000000000 987654321000 123456789000\n3000000000 987654321512 123456789256\nhost\nkernel\nDebian\n123\n0.1 0.2 0.3 1/2 3"
-	snap, err := ParseMetricsOutput("srv", out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if snap.NetworkRxBytesRate != 256 || snap.NetworkTxBytesRate != 128 {
-		t.Fatalf("expected rates to be based on counter deltas, got rx=%v tx=%v", snap.NetworkRxBytesRate, snap.NetworkTxBytesRate)
-	}
-}
-
 func TestRemoteopsRunnerStreamsOutputBeforeCommandReturns(t *testing.T) {
 	sink := &recordingLogSink{}
 	exec := &streamingFakeExecutor{duringRun: func() {

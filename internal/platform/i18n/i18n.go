@@ -20,10 +20,10 @@ var (
 			"package_maintenance_in_progress":                        "该服务器上已有软件包维护正在进行",
 			"login_rate_limited":                                     "登录尝试过于频繁，请稍后再试",
 			"request_body_too_large":                                 "请求体超过 10 MiB 上限",
-		"backup_export_not_downloaded": "备份尚未下载，无法退出维护模式",
-		"restore_archive_too_large": "还原归档超过大小上限",
-		"auth_rate_limited": "尝试过于频繁，请稍后再试",
-		"key_asset_operation_in_progress": "该密钥资产已有操作正在进行",
+			"backup_export_not_downloaded":                           "备份尚未下载，无法退出维护模式",
+			"restore_archive_too_large":                              "还原归档超过大小上限",
+			"auth_rate_limited":                                      "尝试过于频繁，请稍后再试",
+			"key_asset_operation_in_progress":                        "该密钥资产已有操作正在进行",
 			"internal_error":                                         "服务器内部错误",
 			"bad_request":                                            "请求体 JSON 无效",
 			"unauthorized":                                           "未授权",
@@ -356,27 +356,27 @@ var (
 			"restore_compatibility_failed":                "备份归档版本不受支持",
 			"restore_archive_required":                    "必须上传备份归档",
 			"restore_confirmation_required":               "必须确认覆盖还原",
-			"application_deletion_requested":           "已请求删除该应用",
-			"application_operation_service_unavailable": "应用服务不可用",
-			"application_reconcile_collector_only":     "应用协调为仅采集任务",
-			"domain_list_unavailable":                  "域名摘要列表不可用",
-			"host_key_trust_unavailable":               "当前执行器不支持信任主机密钥",
-			"host_key_verification_disabled":           "主机密钥校验已禁用",
-			"idempotency_key_invalid":                  "幂等键过长",
-			"idempotency_key_mismatch":                 "幂等键与客户端操作 ID 不匹配",
-			"invalid_container_report_interval":        "容器上报间隔至少为 1 秒",
-			"page_invalid":                             "page 必须在 1 到 10000 之间",
-			"page_size_invalid":                        "pageSize 必须在 1 到 200 之间",
-			"runtime_event_category_invalid":           "运行时事件类别必须为 application、task、alert、log、runtime 或 system",
-			"runtime_event_retention_invalid":          "运行时事件保留时间至少为 1 天",
-			"runtime_event_service_unavailable":        "运行时事件服务不可用",
-			"runtime_event_summary_required":           "运行时事件摘要不能为空",
-			"runtime_event_type_required":              "运行时事件类型不能为空",
-			"since_invalid":                            "since 必须是 RFC3339 时间戳",
-			"ssh_host_key_unavailable":                 "SSH 服务器未提供主机密钥",
-			"task_cancel_unsupported":                  "该任务类型不能取消",
-			"task_periodic_unavailable":                "周期任务触发器不可用",
-			"time_invalid":                             "from 和 to 必须使用 RFC3339 格式",
+			"application_deletion_requested":              "已请求删除该应用",
+			"application_operation_service_unavailable":   "应用服务不可用",
+			"application_reconcile_collector_only":        "应用协调为仅采集任务",
+			"domain_list_unavailable":                     "域名摘要列表不可用",
+			"host_key_trust_unavailable":                  "当前执行器不支持信任主机密钥",
+			"host_key_verification_disabled":              "主机密钥校验已禁用",
+			"idempotency_key_invalid":                     "幂等键过长",
+			"idempotency_key_mismatch":                    "幂等键与客户端操作 ID 不匹配",
+			"invalid_container_report_interval":           "容器上报间隔至少为 1 秒",
+			"page_invalid":                                "page 必须在 1 到 10000 之间",
+			"page_size_invalid":                           "pageSize 必须在 1 到 200 之间",
+			"runtime_event_category_invalid":              "运行时事件类别必须为 application、task、alert、log、runtime 或 system",
+			"runtime_event_retention_invalid":             "运行时事件保留时间至少为 1 天",
+			"runtime_event_service_unavailable":           "运行时事件服务不可用",
+			"runtime_event_summary_required":              "运行时事件摘要不能为空",
+			"runtime_event_type_required":                 "运行时事件类型不能为空",
+			"since_invalid":                               "since 必须是 RFC3339 时间戳",
+			"ssh_host_key_unavailable":                    "SSH 服务器未提供主机密钥",
+			"task_cancel_unsupported":                     "该任务类型不能取消",
+			"task_periodic_unavailable":                   "周期任务触发器不可用",
+			"time_invalid":                                "from 和 to 必须使用 RFC3339 格式",
 		},
 	}
 
@@ -531,27 +531,27 @@ var (
 			"application_lifecycle_operation not found":                                        "应用操作记录不存在",
 			"application save session not found":                                               "应用保存会话不存在",
 			"internal file not found":                                                          "内部文件不存在",
-			"certificate not found":                              "证书不存在",
-			"credential not found":                               "凭据不存在",
-			"server not found":                                   "服务器不存在",
-			"task not found":                                     "任务不存在",
-			"runtime_event not found":                            "运行时事件不存在",
-			"dns_domain not found":                               "DNS 域不存在",
-			"key asset not found":                                "密钥资产不存在",
-			"key_asset_export not found":                         "密钥资产导出不存在",
-			"self-signed certificate not found":                  "自签名证书不存在",
-			"system certificate not found":                       "系统证书不存在",
-			"backup export not found":                            "备份导出不存在",
-			"api route not found":                                "API 路由不存在",
-			"route not found":                                    "路由不存在",
-			"overview_card not found":                            "概览卡片不存在",
-			"application_operation not found":                    "应用操作记录不存在",
-			"internal key asset file not found":                  "内部密钥资产文件不存在",
-			"facility reverse proxy save session not found":      "设施反向代理保存会话不存在",
-			"agent resource not found":                           "Agent 资源不存在",
-			"Remote upload timed out":                            "远程上传超时",
-			"Remote command timed out before connection completed": "连接完成前远程命令超时",
-			"Remote command timed out":                           "远程命令超时",
+			"certificate not found":                                                            "证书不存在",
+			"credential not found":                                                             "凭据不存在",
+			"server not found":                                                                 "服务器不存在",
+			"task not found":                                                                   "任务不存在",
+			"runtime_event not found":                                                          "运行时事件不存在",
+			"dns_domain not found":                                                             "DNS 域不存在",
+			"key asset not found":                                                              "密钥资产不存在",
+			"key_asset_export not found":                                                       "密钥资产导出不存在",
+			"self-signed certificate not found":                                                "自签名证书不存在",
+			"system certificate not found":                                                     "系统证书不存在",
+			"backup export not found":                                                          "备份导出不存在",
+			"api route not found":                                                              "API 路由不存在",
+			"route not found":                                                                  "路由不存在",
+			"overview_card not found":                                                          "概览卡片不存在",
+			"application_operation not found":                                                  "应用操作记录不存在",
+			"internal key asset file not found":                                                "内部密钥资产文件不存在",
+			"facility reverse proxy save session not found":                                    "设施反向代理保存会话不存在",
+			"agent resource not found":                                                         "Agent 资源不存在",
+			"Remote upload timed out":                                                          "远程上传超时",
+			"Remote command timed out before connection completed":                             "连接完成前远程命令超时",
+			"Remote command timed out":                                                         "远程命令超时",
 		},
 	}
 
@@ -619,10 +619,6 @@ var (
 	}
 )
 
-func SupportedLocales() []string {
-	return []string{LocaleEnglish, LocaleSimplifiedChinese}
-}
-
 func NormalizeLocale(value string) string {
 	candidate := strings.TrimSpace(strings.ToLower(value))
 	switch candidate {
@@ -633,10 +629,6 @@ func NormalizeLocale(value string) string {
 	default:
 		return ""
 	}
-}
-
-func IsSupportedLocale(value string) bool {
-	return NormalizeLocale(value) != ""
 }
 
 func DefaultLocale() string {

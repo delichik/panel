@@ -14,7 +14,6 @@ const (
 	TaskTypeSSHRegenerate = "key_asset_ssh_regenerate"
 	TaskTypeExport        = "key_asset_export"
 	TaskTypeImport        = "key_asset_import"
-	TaskTypeSync          = "key_asset_sync"
 )
 
 type Asset struct {
@@ -100,12 +99,6 @@ type ReissueResult struct {
 type RegenerateResult struct {
 	Asset  Asset  `json:"asset"`
 	TaskID string `json:"taskId,omitempty"`
-}
-
-type MutationResult struct {
-	Asset       *Asset `json:"asset,omitempty"`
-	TaskID      string `json:"taskId,omitempty"`
-	OperationID string `json:"operationId,omitempty"`
 }
 
 type ExportRequest struct {

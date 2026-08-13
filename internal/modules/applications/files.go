@@ -2,20 +2,15 @@ package applications
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/base64"
-	"encoding/hex"
 	"io"
 	"strings"
-	"time"
 
 	appruntime "panel/internal/modules/applications/runtime"
 	appspec "panel/internal/modules/applications/spec"
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
-	id "panel/internal/platform/identity"
 )
 
 func (s *Service) ListFiles(ctx context.Context, appID string) ([]ApplicationFile, error) {
@@ -34,103 +29,6 @@ func (s *Service) GetFile(ctx context.Context, appID, fileRef string) (Applicati
 		return ApplicationFile{}, panelerr.NotFound("application_file")
 	}
 	return file, err
-}
-
-func (s *Service) SaveFile(ctx context.Context, appID string, in FileSaveInput) (ApplicationFile, error) {
-	app, err := s.Get(ctx, appID)
-	if err != nil {
-		return ApplicationFile{}, err
-	}
-	name, err := normalizeApplicationFileName(firstNonEmpty(in.Name, in.Path))
-	if err != nil {
-		return ApplicationFile{}, err
-	}
-	kind := strings.TrimSpace(in.Kind)
-	if kind != ApplicationFileKindBinary && kind != ApplicationFileKindTemplate {
-		return ApplicationFile{}, panelerr.Validation("application_file_kind_invalid", "file kind must be binary or template")
-	}
-	content, err := base64.StdEncoding.DecodeString(strings.TrimSpace(in.ContentBase64))
-	if err != nil {
-		return ApplicationFile{}, panelerr.Validation("application_file_content_invalid", "file content must be base64 encoded")
-	}
-	sum := sha256.Sum256(content)
-	now := time.Now().UTC()
-	file := ApplicationFile{
-		ID:            id.New("afile"),
-		ApplicationID: appID,
-		Name:          name,
-		Kind:          kind,
-		ContentType:   strings.TrimSpace(in.ContentType),
-		Size:          int64(len(content)),
-		SHA256:        hex.EncodeToString(sum[:]),
-		Content:       content,
-		CreatedAt:     now,
-		UpdatedAt:     now,
-	}
-	if existing, existingErr := s.getFileByName(ctx, appID, name, false); existingErr == nil && existing.Kind == file.Kind && existing.ContentType == file.ContentType && existing.Size == file.Size && existing.SHA256 == file.SHA256 {
-		return existing, nil
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return ApplicationFile{}, err
-	}
-	defer func() { _ = tx.Rollback() }()
-	_, err = orm.RawExec(ctx, tx, `INSERT INTO application_files(id,application_id,name,kind,content_type,size,sha256,content,created_at,updated_at)
-		VALUES(?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(application_id,name) DO UPDATE SET kind=excluded.kind,content_type=excluded.content_type,size=excluded.size,sha256=excluded.sha256,content=excluded.content,updated_at=excluded.updated_at`,
-		file.ID, file.ApplicationID, file.Name, file.Kind, file.ContentType, file.Size, file.SHA256, file.Content, formatTime(file.CreatedAt), formatTime(file.UpdatedAt))
-	if err != nil {
-		return ApplicationFile{}, err
-	}
-	result, err := orm.RawExec(ctx, tx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
-	if err != nil {
-		return ApplicationFile{}, err
-	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
-		return ApplicationFile{}, resourceVersionConflict(app.Version, app.Version+1)
-	}
-	if err := tx.Commit(); err != nil {
-		return ApplicationFile{}, err
-	}
-	if err := s.redeployIfEnabled(ctx, app); err != nil {
-		return ApplicationFile{}, err
-	}
-	return s.getFileByName(ctx, appID, name, false)
-}
-
-func (s *Service) DeleteFile(ctx context.Context, appID, fileRef string) error {
-	app, err := s.Get(ctx, appID)
-	if err != nil {
-		return err
-	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	file, err := s.getFileByRef(ctx, appID, fileRef, false)
-	if err != nil {
-		return err
-	}
-	res, err := orm.RawExec(ctx, tx, `DELETE FROM application_files WHERE application_id=? AND id=?`, appID, file.ID)
-	if err != nil {
-		return err
-	}
-	if rows, _ := res.RowsAffected(); rows == 0 {
-		return panelerr.NotFound("application_file")
-	}
-	now := time.Now().UTC()
-	res, err = orm.RawExec(ctx, tx, `UPDATE applications SET version=version+1,updated_at=? WHERE id=? AND version=?`, formatTime(now), appID, app.Version)
-	if err != nil {
-		return err
-	}
-	if affected, _ := res.RowsAffected(); affected != 1 {
-		return resourceVersionConflict(app.Version, app.Version+1)
-	}
-	if err := tx.Commit(); err != nil {
-		return err
-	}
-	return s.redeployIfEnabled(ctx, app)
 }
 
 func fileQueryColumns(includeContent bool) []string {

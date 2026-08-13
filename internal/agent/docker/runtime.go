@@ -2558,11 +2558,6 @@ func isDockerNotModified(err error) bool {
 	return errors.As(err, &target)
 }
 
-func decodeDockerLogs(raw []byte) string {
-	out, _ := decodeDockerLogsReader(bytes.NewReader(raw))
-	return out
-}
-
 // maxDockerLogsBytes is the absolute hard ceiling for one log fetch. It is a
 // guard against a misbehaving daemon, not a working buffer size: normal Docker
 // log frames are far smaller and frames are streamed with their own sanity cap.

@@ -20,8 +20,14 @@ func TestMigrateReverseProxyConfigurationUpdatesApplicationOrigins(t *testing.T)
 	if _, err := db.Exec(`INSERT INTO applications VALUES('app-1','website','application','selected','["srv-b"]','[{"domain":"app.example.test","targetType":"local","targetPort":8080,"paths":[{"path":"/"}]}]')`); err != nil {
 		t.Fatal(err)
 	}
-	store := &Store{appDB: db}
-	if err := store.migrateReverseProxyConfiguration(context.Background()); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateReverseProxyConfigurationOn(context.Background(), tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	var raw string
@@ -42,8 +48,12 @@ func TestMigrateReverseProxyConfigurationRejectsDomainOwnerConflict(t *testing.T
 	if _, err := db.Exec(`INSERT INTO applications VALUES('app-1','website','application','selected','["srv-a"]','[{"domain":"shared.example.test","targetType":"local","targetPort":8080,"paths":[{"path":"/"}]}]')`); err != nil {
 		t.Fatal(err)
 	}
-	store := &Store{appDB: db}
-	err := store.migrateReverseProxyConfiguration(context.Background())
+	tx, txErr := db.Begin()
+	if txErr != nil {
+		t.Fatal(txErr)
+	}
+	defer tx.Rollback()
+	err := migrateReverseProxyConfigurationOn(context.Background(), tx)
 	if err == nil || !strings.Contains(err.Error(), "owned by both") {
 		t.Fatalf("conflict error = %v", err)
 	}
@@ -422,8 +432,7 @@ func TestMigrateApplicationFilePathsToOpaqueNames(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store := &Store{appDB: db}
-	if err := store.migrateApplicationFileNames(context.Background()); err != nil {
+	if err := migrateApplicationFileNamesOn(context.Background(), db); err != nil {
 		t.Fatal(err)
 	}
 	for table, want := range map[string]string{
@@ -463,8 +472,14 @@ func TestMigrateFacilityAssetNamesAddsScopedUniqueIndexes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store := &Store{appDB: db}
-	if err := store.migrateFacilityAssetNames(context.Background()); err != nil {
+	tx, err := db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrateFacilityAssetNamesOn(context.Background(), tx); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
 	}
 	assertNames := func(query string, want []string) {

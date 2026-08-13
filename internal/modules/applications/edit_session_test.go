@@ -381,39 +381,6 @@ func TestApplicationUpdateIdenticalConfigurationDoesNotIncrementVersion(t *testi
 	}
 }
 
-func TestApplicationFileMutationsIncrementConfigurationVersionOnlyWhenChanged(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-	app, err := svc.Create(ctx, SaveInput{Name: "web", SpecYAML: "name: web\nimage: nginx\n"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	input := FileSaveInput{Path: "config.txt", Kind: ApplicationFileKindBinary, ContentBase64: base64.StdEncoding.EncodeToString([]byte("one"))}
-	file, err := svc.SaveFile(ctx, app.ID, input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	afterSave, _ := svc.Get(ctx, app.ID)
-	if afterSave.Version != app.Version+1 {
-		t.Fatalf("save version = %d", afterSave.Version)
-	}
-	if _, err := svc.SaveFile(ctx, app.ID, input); err != nil {
-		t.Fatal(err)
-	}
-	afterNoop, _ := svc.Get(ctx, app.ID)
-	if afterNoop.Version != afterSave.Version {
-		t.Fatalf("identical file save changed version: %d -> %d", afterSave.Version, afterNoop.Version)
-	}
-	if err := svc.DeleteFile(ctx, app.ID, file.ID); err != nil {
-		t.Fatal(err)
-	}
-	afterDelete, _ := svc.Get(ctx, app.ID)
-	if afterDelete.Version != afterSave.Version+1 {
-		t.Fatalf("delete version = %d", afterDelete.Version)
-	}
-}
-
 func TestApplicationEditSessionFileConflictPreservesCurrentBlob(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()

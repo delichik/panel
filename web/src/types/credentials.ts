@@ -20,10 +20,6 @@ export interface CredentialInput {
   passphrase?: string;
 }
 
-export interface CredentialWithReferences extends CredentialDto {
-  references: ServerReference[];
-}
-
 export interface KeySummary {
   algorithm?: string;
   bits?: number;

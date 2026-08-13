@@ -13,7 +13,7 @@ import (
 	id "panel/internal/platform/identity"
 )
 
-func (s *Service) RegisterTasks(taskSvc *tasks.Service, collectionInterval func() time.Duration) {
+func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 	if taskSvc == nil {
 		return
 	}

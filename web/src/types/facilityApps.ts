@@ -14,8 +14,6 @@ export interface FacilityRoutePath {
   rootPath?: string;
   sourceType: StaticSourceType | string;
   assetName?: string;
-  /** @deprecated Only accepted while reading pre-assetName drafts. */
-  assetId?: string;
   redirectUrl?: string;
   redirectCode?: number;
   proxyUrl?: string;

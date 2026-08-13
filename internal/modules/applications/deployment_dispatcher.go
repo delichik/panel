@@ -63,14 +63,6 @@ func WithDeploymentDispatcherQueueSize(size int) DeploymentDispatcherOption {
 	}
 }
 
-func WithDeploymentDispatcherLeaseTTL(ttl time.Duration) DeploymentDispatcherOption {
-	return func(d *deploymentDispatcher) {
-		if ttl > 0 {
-			d.leaseTTL = ttl
-		}
-	}
-}
-
 func NewDeploymentDispatcher(svc *Service, opts ...DeploymentDispatcherOption) DeploymentDispatcher {
 	d := &deploymentDispatcher{
 		service:        svc,

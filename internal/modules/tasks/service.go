@@ -104,18 +104,13 @@ func (s *Service) MustRegister(def Definition) {
 }
 
 func (s *Service) Create(ctx context.Context, in CreateInput) (Task, error) {
-	return s.create(ctx, in, true)
+	return s.create(ctx, in)
 }
 
-func (s *Service) create(ctx context.Context, in CreateInput, validate bool) (Task, error) {
+func (s *Service) create(ctx context.Context, in CreateInput) (Task, error) {
 	def, ok := s.Registry().Definition(in.Type)
 	if !ok {
 		return Task{}, panelerr.Validation("task_type_unregistered", "Task type is not registered")
-	}
-	if validate && def.Validate != nil {
-		if err := def.Validate(ctx, in); err != nil {
-			return Task{}, err
-		}
 	}
 	if in.MaxRetries == 0 && def.DefaultMaxRetries > 0 {
 		in.MaxRetries = def.DefaultMaxRetries
@@ -154,19 +149,10 @@ func (s *Service) create(ctx context.Context, in CreateInput, validate bool) (Ta
 	return task, err
 }
 
-func (s *Service) CreateTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Task, error) {
-	return s.createTx(ctx, tx, in, true)
-}
-
-func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput, validate bool) (Task, error) {
+func (s *Service) createTx(ctx context.Context, tx *sql.Tx, in CreateInput) (Task, error) {
 	def, ok := s.Registry().Definition(in.Type)
 	if !ok {
 		return Task{}, panelerr.Validation("task_type_unregistered", "Task type is not registered")
-	}
-	if validate && def.Validate != nil {
-		if err := def.Validate(ctx, in); err != nil {
-			return Task{}, err
-		}
 	}
 	if in.MaxRetries == 0 && def.DefaultMaxRetries > 0 {
 		in.MaxRetries = def.DefaultMaxRetries
@@ -452,25 +438,6 @@ func (s *Service) RunNow(ctx context.Context, taskID string) (Task, error) {
 	return s.Get(ctx, taskID)
 }
 
-func (s *Service) FirstRunnable(ctx context.Context, taskType, resourceType, resourceID string) (Task, bool, error) {
-	var row taskRow
-	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
-		Where("type = ?", taskType).
-		And("resource_type = ?", resourceType).
-		And("resource_id = ?", resourceID).
-		AndIn("status", []string{StatusQueued, StatusScheduled, StatusFailedRetryable}).
-		And("(next_run_at IS NULL OR next_run_at='' OR next_run_at<=?)", time.Now().UTC().Format(time.RFC3339Nano)).
-		OrderBy("created_at ASC").
-		First(ctx, &row)
-	if err == sql.ErrNoRows {
-		return Task{}, false, nil
-	}
-	if err != nil {
-		return Task{}, false, err
-	}
-	return row.toTask(), true, nil
-}
-
 func (s *Service) Children(ctx context.Context, parentTaskID string) ([]Task, error) {
 	rows := []taskRow{}
 	if err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
@@ -506,35 +473,6 @@ func (s *Service) ExistingActiveByConcurrencyKey(ctx context.Context, concurrenc
 	return row.toTask(), true, nil
 }
 
-func (s *Service) ExistingActiveByConcurrencyKeyAndType(ctx context.Context, concurrencyKey, taskType string) (Task, bool, error) {
-	concurrencyKey = strings.TrimSpace(concurrencyKey)
-	taskType = strings.TrimSpace(taskType)
-	if concurrencyKey == "" || taskType == "" {
-		return Task{}, false, nil
-	}
-	var row taskRow
-	err := orm.New(s.db).From("tasks").SelectExpr(taskColumns).
-		Where("concurrency_key = ?", concurrencyKey).
-		And("type = ?", taskType).
-		AndIn("status", []string{StatusQueued, StatusScheduled, StatusRunning, StatusFailedRetryable}).
-		OrderBy("created_at DESC").
-		First(ctx, &row)
-	if err == sql.ErrNoRows {
-		return Task{}, false, nil
-	}
-	if err != nil {
-		return Task{}, false, err
-	}
-	return row.toTask(), true, nil
-}
-
-// FirstActiveByConcurrencyKey returns the earliest active task for a
-// concurrency key. Results are cached in memory per key: while the cached
-// first task stays active, callers (the resource-queue wait loop) avoid the
-// database entirely. The cache is invalidated whenever a task with the key
-// reaches a terminal state or is deleted, so a cache hit is only ever one
-// queue handoff behind the database. On a cache hit the returned Task carries
-// only its ID; callers that need the full row must use Get.
 func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKey string) (Task, bool, error) {
 	concurrencyKey = strings.TrimSpace(concurrencyKey)
 	if concurrencyKey == "" {
@@ -570,17 +508,6 @@ func (s *Service) FirstActiveByConcurrencyKey(ctx context.Context, concurrencyKe
 	}
 	s.firstActiveByKey[concurrencyKey] = row.ID
 	return row.toTask(), true, nil
-}
-
-func (s *Service) CountByServerStatuses(ctx context.Context, serverID string, statuses ...string) (int, error) {
-	statuses = cleanFilterValues(statuses...)
-	if len(statuses) == 0 {
-		return 0, nil
-	}
-	q := orm.New(s.db).From("tasks").Where("server_id = ?", serverID)
-	q.AndIn("status", statuses)
-	count, err := q.Count(ctx)
-	return int(count), err
 }
 
 func (s *Service) CancelByServer(ctx context.Context, serverID, message string) (int, error) {
@@ -683,42 +610,6 @@ func (s *Service) SetTriggeredBy(ctx context.Context, taskID, triggeredBy string
 		UpdateColumns(ctx, map[string]any{"triggered_by": triggeredBy})
 }
 
-func (s *Service) CountFailuresSinceLastSuccess(ctx context.Context, taskType, resourceType, resourceID string, failureStatuses []string, excludeTriggeredBy string) (int, error) {
-	var lastSuccess *string
-	if err := orm.New(s.db).From("tasks").
-		Where("type = ?", taskType).
-		And("resource_type = ?", resourceType).
-		And("resource_id = ?", resourceID).
-		And("status = ?", StatusCompleted).
-		SelectExpr("MAX(created_at)").
-		ScanValue(ctx, &lastSuccess); err != nil {
-		return 0, err
-	}
-	failureStatuses = cleanFilterValues(failureStatuses...)
-	if len(failureStatuses) == 0 {
-		return 0, nil
-	}
-	q := orm.New(s.db).From("tasks").
-		Where("type = ?", taskType).
-		And("resource_type = ?", resourceType).
-		And("resource_id = ?", resourceID).
-		AndIn("status", failureStatuses)
-	if strings.TrimSpace(excludeTriggeredBy) != "" {
-		q.And("COALESCE(triggered_by,'') <> ?", excludeTriggeredBy)
-	}
-	if lastSuccess != nil && strings.TrimSpace(*lastSuccess) != "" {
-		q.And("created_at > ?", *lastSuccess)
-	}
-	failures, err := q.Count(ctx)
-	if err != nil {
-		return 0, err
-	}
-	return int(failures), nil
-}
-
-// CleanupRetained deletes terminal task history older than retention in batches.
-// Child rows in task_steps/task_logs are removed explicitly so cleanup works
-// even without enforced foreign key cascades.
 func (s *Service) CleanupRetained(ctx context.Context, retention time.Duration) (int64, error) {
 	if retention <= 0 {
 		return 0, nil
@@ -1075,7 +966,7 @@ func (s *Service) registerRunningExecutionLocked(taskID string) *RunningExecutio
 		return existing
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	execution := &RunningExecution{TaskID: taskID, StartedAt: time.Now().UTC(), Context: ctx, Cancel: cancel}
+	execution := &RunningExecution{TaskID: taskID, Context: ctx, Cancel: cancel}
 	s.runningExecutions[taskID] = execution
 	return execution
 }

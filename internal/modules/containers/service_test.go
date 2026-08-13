@@ -641,6 +641,13 @@ func insertReconcileServerRow(t *testing.T, store *storage.Store) {
 	}
 }
 
+func enabledInt(value bool) int {
+	if value {
+		return 1
+	}
+	return 0
+}
+
 func insertReconcileFixtureRows(t *testing.T, store *storage.Store, app applications.Application) {
 	t.Helper()
 	if _, err := store.AppDB().Exec(`
@@ -654,7 +661,7 @@ func insertReconcileFixtureRows(t *testing.T, store *storage.Store, app applicat
 		t.Fatal(err)
 	}
 	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		app.ID, app.Name, boolInt(app.Enabled), "name: web\nimage: nginx\n", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
+		app.ID, app.Name, enabledInt(app.Enabled), "name: web\nimage: nginx\n", "all", "[]", "[]", app.Generation, app.SpecHash, "panel-web", "apps", "now", "now"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.AppDB().Exec(`INSERT INTO application_instances(id,application_id,server_id,container_name,desired_state,status,runtime_spec_json,created_at,updated_at)
@@ -756,9 +763,9 @@ func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	task, created, err := svc.TriggerApplicationReconcile(context.Background(), tasks.PeriodicTrigger{
 		Type:                "facility_app",
 		TriggerResourceType: "application",
-		TriggerResourceID:   applications.FacilityReverseProxyApplicationID,
+		TriggerResourceID:   "facility-reverse-proxy",
 		Payload: ApplicationReconcileTrigger{
-			ApplicationIDs: []string{applications.FacilityReverseProxyApplicationID},
+			ApplicationIDs: []string{"facility-reverse-proxy"},
 			StopServers:    []string{"server-old"},
 		},
 	})
@@ -768,7 +775,7 @@ func TestTriggerApplicationReconcileUsesPeriodicPayload(t *testing.T) {
 	if created || task.ID != "" {
 		t.Fatalf("reconcile trigger should only plan lifecycle targets, created=%v task=%#v", created, task)
 	}
-	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != applications.FacilityReverseProxyApplicationID || updater.plans[0].StopServers[0] != "server-old" {
+	if len(updater.plans) != 1 || updater.plans[0].ApplicationID != "facility-reverse-proxy" || updater.plans[0].StopServers[0] != "server-old" {
 		t.Fatalf("unexpected reconcile plans: %#v", updater.plans)
 	}
 }
@@ -796,7 +803,7 @@ func newContainerizationTestService(t *testing.T) (*Service, *tasks.Service, *fa
 			agentcontract.TraitStatus: agentcontract.StatusCompatible,
 		},
 	}}, fakeAgent, taskSvc)
-	svc.RegisterTasks(taskSvc, func() time.Duration { return time.Second })
+	svc.RegisterTasks(taskSvc)
 	return svc, taskSvc, fakeAgent, store
 }
 

@@ -148,7 +148,7 @@ func New(cfg config.Config) (*App, error) {
 	applicationSvc.SetApplicationReconcileTrigger(containerSvc)
 	deploymentDispatcher := applications.NewDeploymentDispatcher(applicationSvc)
 	applicationSvc.SetDeploymentDispatcher(deploymentDispatcher)
-	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc, executor, metrics.WithAgentClient(agentClient))
+	metricsSvc := metrics.NewService(store.MetricsDB(), serverSvc)
 	packageSvc := packages.NewService(store.AppDB(), serverSvc, executor, taskSvc, agentClient)
 	overviewSvc := overview.NewService(store.AppDB(), serverSvc, metricsSvc, packageSvc)
 	if err := dns.MigrateProviderCredentials(context.Background(), store.AppDB(), secretStore); err != nil {
@@ -182,7 +182,7 @@ func New(cfg config.Config) (*App, error) {
 	}
 	internalFileRegistry.Register("certificate", certSvc)
 	variableRegistry.Register("certs", certSvc)
-	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, metricsSvc, packageSvc, certSvc)
+	registerTaskDefinitions(taskSvc, settingsSvc, keyAssetSvc, serverSvc, applicationSvc, containerSvc, packageSvc, certSvc)
 	systemSvc := systeminfo.NewService(nil)
 	systemSvc.Start(context.Background())
 	taskWorker := tasks.NewWorker(taskSvc)
@@ -340,16 +340,12 @@ func (a *App) Handler() http.Handler {
 	return logging.HTTPMiddleware(a.mux)
 }
 
-func registerTaskDefinitions(taskSvc *tasks.Service, settingsSvc *settings.Service, keyAssetSvc *keyassets.Service, serverSvc *server.Service, applicationSvc *applications.Service, containerSvc *containerization.Service, metricsSvc *metrics.Service, packageSvc *packages.Service, certSvc *certs.Service) {
-	collectionInterval := func() time.Duration {
-		return time.Duration(settingsSvc.Runtime().MetricsCollectionIntervalSeconds) * time.Second
-	}
+func registerTaskDefinitions(taskSvc *tasks.Service, settingsSvc *settings.Service, keyAssetSvc *keyassets.Service, serverSvc *server.Service, applicationSvc *applications.Service, containerSvc *containerization.Service, packageSvc *packages.Service, certSvc *certs.Service) {
 	keyAssetSvc.RegisterTasks(taskSvc)
 	serverSvc.RegisterTasks(taskSvc)
 	applicationSvc.RegisterTasks(taskSvc)
-	containerSvc.RegisterTasks(taskSvc, collectionInterval)
-	metricsSvc.RegisterTasks(taskSvc, collectionInterval)
-	packageSvc.RegisterTasks(taskSvc, collectionInterval)
+	containerSvc.RegisterTasks(taskSvc)
+	packageSvc.RegisterTasks(taskSvc)
 	certSvc.RegisterTasks(taskSvc)
 }
 

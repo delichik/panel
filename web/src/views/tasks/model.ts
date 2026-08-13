@@ -40,10 +40,3 @@ export function operationTitle(tasks: TaskDto[]) {
   return first.summary || first.type.replace(/_/g, ' ');
 }
 
-export function taskTone(status: string): 'success' | 'warning' | 'danger' | 'info' | 'neutral' {
-  if (status === 'completed') return 'success';
-  if (status === 'running') return 'info';
-  if (status === 'queued' || status === 'scheduled' || status === 'failed_retryable') return 'warning';
-  if (status === 'failed' || status === 'blocked' || status === 'cancelled') return 'danger';
-  return 'neutral';
-}

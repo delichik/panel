@@ -39,8 +39,3 @@ func (s *Service) requireAuth(next http.Handler, allowPasswordChange bool) http.
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), sessionKey, sess)))
 	})
 }
-
-func FromContext(ctx context.Context) Session {
-	sess, _ := ctx.Value(sessionKey).(Session)
-	return sess
-}

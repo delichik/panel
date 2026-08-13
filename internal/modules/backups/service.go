@@ -21,13 +21,8 @@ var (
 )
 
 type Service struct {
-	cfg                ArchiveConfig
-	restarter          Restarter
-	restorePublishHook func(string) error
-}
-
-func withRestorePublishHook(hook func(string) error) Option {
-	return func(s *Service) { s.restorePublishHook = hook }
+	cfg       ArchiveConfig
+	restarter Restarter
 }
 
 type Option func(*Service)
@@ -162,7 +157,7 @@ func (s *Service) SavePendingRestore(uploadedPath, password string) (RestoreConf
 	if err != nil {
 		return RestoreConfirmResponse{}, err
 	}
-	if err := publishPendingRestore(s.cfg.DataRoot, archiveName, raw, markerBytes, s.restorePublishHook); err != nil {
+	if err := publishPendingRestore(s.cfg.DataRoot, archiveName, raw, markerBytes, nil); err != nil {
 		return RestoreConfirmResponse{}, err
 	}
 	restartSupported := s.restarter.Supported()

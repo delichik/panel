@@ -1,8 +1,6 @@
 package applications
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -13,7 +11,6 @@ import (
 	"fmt"
 	"log"
 	"math/rand/v2"
-	"path"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -87,23 +84,12 @@ type Service struct {
 	operationQueue   ContainerOperationQueue
 	facilityRuntime  FacilityRuntimeProvider
 	events           runtimeevents.EventWriter
-	sessionMu        sync.Mutex
-	saveSessions     map[string]*saveSession
-	cleanupOnce      sync.Once
 	editCleanupOnce  sync.Once
 }
 
 type ApplicationRuntime = Runtime
 
 var errLifecycleTargetLeaseLost = errors.New("application lifecycle target lease lost")
-
-const FacilityReverseProxyApplicationID = "facility-reverse-proxy"
-
-type PlanResult struct {
-	Application Application             `json:"application"`
-	Spec        appruntime.Spec         `json:"spec"`
-	Plan        appruntime.PlanResponse `json:"plan"`
-}
 
 type LogInput struct {
 	InstanceID string `json:"instanceId"`
@@ -164,8 +150,7 @@ func NewService(db *sql.DB, runtimeClient AgentRuntimeClient, taskSvc *tasks.Ser
 	if cfg.SaveSessionDir == "" {
 		cfg.SaveSessionDir = filepath.Join("tmp", "application-save-sessions")
 	}
-	s := &Service{db: db, runtimeClient: runtimeClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), builtinResolver: NewApplicationVariableRegistry(), imageResolver: NewRegistryImageResolver(), saveSessions: map[string]*saveSession{}}
-	s.startSaveSessionCleanup()
+	s := &Service{db: db, runtimeClient: runtimeClient, tasks: taskSvc, config: cfg, renderer: templatex.NewGoRenderer(), builtinResolver: NewApplicationVariableRegistry(), imageResolver: NewRegistryImageResolver()}
 	s.startEditSessionCleanup()
 	return s
 }
@@ -193,20 +178,8 @@ func WithContainerOperationQueue(queue ContainerOperationQueue) Option {
 	return func(s *Service) { s.operationQueue = queue }
 }
 
-func WithImageDigestResolver(resolver ImageDigestResolver) Option {
-	return func(s *Service) { s.imageResolver = resolver }
-}
-
-func WithReverseProxyReconciler(reconciler ReverseProxyReconciler) Option {
-	return func(s *Service) { s.proxyReconciler = reconciler }
-}
-
 func WithApplicationReconcileTrigger(trigger ApplicationReconcileTrigger) Option {
 	return func(s *Service) { s.reconcileTrigger = trigger }
-}
-
-func WithDeploymentDispatcher(dispatcher DeploymentDispatcher) Option {
-	return func(s *Service) { s.deployment = dispatcher }
 }
 
 func WithLogDB(db *sql.DB) Option {
@@ -228,10 +201,6 @@ func WithCoordDB(db *sql.DB) Option {
 
 func WithRuntimeEvents(events runtimeevents.EventWriter) Option {
 	return func(s *Service) { s.events = events }
-}
-
-func WithFacilityRuntimeProvider(provider FacilityRuntimeProvider) Option {
-	return func(s *Service) { s.facilityRuntime = provider }
 }
 
 func (s *Service) SetReverseProxyReconciler(reconciler ReverseProxyReconciler) {
@@ -744,29 +713,6 @@ func (s *Service) Validate(ctx context.Context, appID string) (ValidationResult,
 	return validationResult(issues), nil
 }
 
-func (s *Service) Plan(ctx context.Context, appID string) (PlanResult, error) {
-	app, err := s.Get(ctx, appID)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	spec, issues, err := s.renderApplication(ctx, app)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	if len(issues) > 0 {
-		return PlanResult{}, applicationValidationError(issues)
-	}
-	targets, err := s.deploymentTargets(ctx, app)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	serverIDs := make([]string, 0, len(targets))
-	for _, target := range targets {
-		serverIDs = append(serverIDs, target.ID)
-	}
-	return PlanResult{Application: app, Spec: spec, Plan: appruntime.PlanResponse{InstanceCount: len(serverIDs), TargetServers: serverIDs}}, nil
-}
-
 func (s *Service) RunImageCheckTask(tc tasks.TaskContext) error {
 	ctx, task := tc.Context, tc.Task
 	appID := firstNonEmpty(task.ResourceID, task.ServerID, task.NodeID)
@@ -1124,138 +1070,6 @@ func (s *Service) enableApplicationForDeploy(ctx context.Context, app Applicatio
 	}
 	app.Version++
 	return app, nil
-}
-
-func (s *Service) runDeployTask(ctx context.Context, taskID string, app Application, job appruntime.Spec, targetIDs []string, lifecycleOperationID string) error {
-	if err := s.deployRuntimeSpecTargets(ctx, taskID, app, job, targetIDs, lifecycleOperationID); err != nil {
-		return err
-	}
-	return s.reconcileReverseProxy(ctx)
-}
-
-func (s *Service) Migrate(ctx context.Context, appID string, in MigrationInput) (OperationResult, error) {
-	sourceServerID := strings.TrimSpace(in.SourceServerID)
-	targetServerID := strings.TrimSpace(in.TargetServerID)
-	if sourceServerID == "" || targetServerID == "" {
-		return OperationResult{}, panelerr.Validation("application_migration_servers_required", "Source and target servers are required")
-	}
-	if sourceServerID == targetServerID {
-		return OperationResult{}, panelerr.Validation("application_migration_servers_must_differ", "Source and target servers must differ")
-	}
-	app, err := s.Get(ctx, appID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if !app.Enabled {
-		return OperationResult{}, panelerr.Conflict("application_migration_requires_enabled", "Application must be enabled before migration")
-	}
-	if strings.TrimSpace(app.PersistentPath) != "" {
-		return OperationResult{}, panelerr.Conflict("application_migration_persistent_not_supported", "Applications with persistent storage cannot use lossless migration")
-	}
-	instances, err := s.runtimeInstances(ctx, app.ID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if len(instances) != 1 || instances[0].ServerID != sourceServerID {
-		return OperationResult{}, panelerr.Conflict("application_migration_source_not_exclusive", "Source server must be the only deployed application instance")
-	}
-	if _, err := s.runtimeInstanceForServer(ctx, app.ID, targetServerID); err == nil {
-		return OperationResult{}, panelerr.Conflict("application_migration_target_exists", "Target server already has an application deployment")
-	} else if !isNotFound(err) {
-		return OperationResult{}, err
-	}
-	sourceSrv, err := s.servers.Get(ctx, sourceServerID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if err := ensureAgentRuntimeReady(sourceSrv); err != nil {
-		return OperationResult{}, err
-	}
-	sourceBaseURL, _ := agentURLFromServer(sourceSrv)
-	sourceStatus, err := s.runtimeClient.RuntimeStatus(ctx, sourceBaseURL, instances[0].ID, instances[0].ContainerName)
-	if err != nil {
-		_ = s.handleAgentError(ctx, sourceSrv, err)
-		return OperationResult{}, runtimeOperationError(err)
-	}
-	if sourceStatus.Status != appruntime.StatusRunning {
-		return OperationResult{}, panelerr.Conflict("application_migration_source_not_running", "Source application instance must be running")
-	}
-	targetSrv, err := s.servers.Get(ctx, targetServerID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if err := ensureAgentRuntimeReady(targetSrv); err != nil {
-		return OperationResult{}, err
-	}
-	currentJob, issues, err := s.renderApplication(ctx, app)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if len(issues) > 0 {
-		return OperationResult{}, applicationValidationError(issues)
-	}
-	if runtimeSpecUsesExternalMounts(currentJob) {
-		return OperationResult{}, panelerr.Conflict("application_migration_mounts_not_supported", "Applications with host paths or Docker volumes cannot use lossless migration")
-	}
-	input := SaveInput{
-		Name:              app.Name,
-		Enabled:           app.Enabled,
-		SpecYAML:          app.SpecYAML,
-		DeploymentMode:    DeploymentModeSelected,
-		DeploymentServers: []string{targetServerID},
-		ReverseProxy:      app.ReverseProxy,
-	}
-	generation := app.Generation
-	prepared, err := s.prepare(ctx, input, generation, app.ID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if prepared.hash != app.SpecHash {
-		generation++
-		prepared, err = s.prepare(ctx, input, generation, app.ID)
-		if err != nil {
-			return OperationResult{}, err
-		}
-	}
-	migrated := app
-	migrated.DeploymentMode = prepared.deploymentMode
-	migrated.DeploymentServers = prepared.deploymentServers
-	migrated.PersistentPath = prepared.persistentPath
-	migrated.ReverseProxy = prepared.reverseProxy
-	migrated.Generation = generation
-	migrated.SpecHash = prepared.hash
-	migrated.JobID = prepared.job.ID
-	migrated.Namespace = s.currentConfig().Namespace
-	migrated.UpdatedAt = time.Now().UTC()
-	job, issues, err := s.renderApplication(ctx, migrated)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if len(issues) > 0 {
-		return OperationResult{}, applicationValidationError(issues)
-	}
-	if err := s.updateApplication(ctx, migrated); err != nil {
-		return OperationResult{}, applicationSaveError(err)
-	}
-	if prepared.hash != app.SpecHash {
-		s.insertRevisionBestEffort(ctx, migrated, job)
-	}
-	task, err := s.triggerApplicationReconcileTask(ctx, migrated.ID, "application_migrate", map[string]any{
-		"applicationIds": []string{migrated.ID},
-		"force":          true,
-		"reason":         "application_migrate",
-	})
-	if err != nil {
-		return OperationResult{}, err
-	}
-	if err := s.reconcileReverseProxy(ctx); err != nil {
-		return OperationResult{}, err
-	}
-	out, err := s.Get(ctx, app.ID)
-	if err != nil {
-		return OperationResult{}, err
-	}
-	return OperationResult{TaskID: task.ID, Application: out}, nil
 }
 
 func (s *Service) RedeployChangedApplications(ctx context.Context) (int, error) {
@@ -2088,10 +1902,6 @@ func (s *Service) templateData(ctx context.Context, app Application, files []App
 		}
 	}
 	return data, nil
-}
-
-func (s *Service) deployRuntimeSpec(ctx context.Context, taskID string, app Application, spec appruntime.Spec) error {
-	return s.deployRuntimeSpecTargets(ctx, taskID, app, spec, nil, "")
 }
 
 func (s *Service) runApplyLifecycleTargetTask(ctx context.Context, task tasks.Task, app Application, spec appruntime.Spec, targetRow LifecycleTarget) error {
@@ -3228,37 +3038,6 @@ func countLifecycleTargets(targets []LifecycleTarget, states ...string) int {
 	return count
 }
 
-func lifecycleTargetIDs(targets []LifecycleTarget, extra string) []string {
-	out := []string{}
-	seen := map[string]struct{}{}
-	add := func(value string) {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			return
-		}
-		if _, ok := seen[value]; ok {
-			return
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	add(extra)
-	for _, target := range targets {
-		add(target.ID)
-	}
-	return out
-}
-
-func nonEmptyStrings(values ...string) []string {
-	out := []string{}
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			out = append(out, strings.TrimSpace(value))
-		}
-	}
-	return out
-}
-
 func applicationOperationSummary(eventType string, app Application, op LifecycleOperation, failureSummary string) string {
 	summary := "Application operation created: " + app.Name
 	switch eventType {
@@ -3410,40 +3189,6 @@ func (s *Service) failLifecycleTargetForTask(ctx context.Context, task tasks.Tas
 	return joined
 }
 
-func (s *Service) FailPlannedLifecycleTargets(ctx context.Context, inputs []tasks.CreateInput, cause error) error {
-	message := "Application target task was not created"
-	if cause != nil && strings.TrimSpace(cause.Error()) != "" {
-		message = cause.Error()
-	}
-	seenOperations := map[string]bool{}
-	var joined error
-	for _, input := range inputs {
-		if strings.TrimSpace(input.ParamsJSON) == "" {
-			continue
-		}
-		var params deployTaskParams
-		if err := json.Unmarshal([]byte(input.ParamsJSON), &params); err != nil {
-			continue
-		}
-		operationID := strings.TrimSpace(params.LifecycleOperationID)
-		serverID := strings.TrimSpace(params.ServerID)
-		if operationID == "" || serverID == "" {
-			continue
-		}
-		targetID := lifecycleTargetID(operationID, serverID)
-		if _, err := s.failLifecycleTargetIfActive(ctx, targetID, message); err != nil {
-			joined = errors.Join(joined, err)
-		}
-		seenOperations[operationID] = true
-	}
-	for operationID := range seenOperations {
-		if err := s.finishDeploymentOperationFromTargets(ctx, operationID); err != nil {
-			joined = errors.Join(joined, err)
-		}
-	}
-	return joined
-}
-
 func deploymentTaskSuperseded(app Application, opts deployTaskRunOptions) bool {
 	if !app.Enabled || app.DeletionRequested {
 		return true
@@ -3582,30 +3327,6 @@ func lifecycleStatusForState(state string) string {
 	}
 }
 
-func lifecycleStateForStatus(status, action string) string {
-	switch strings.TrimSpace(status) {
-	case LifecycleTargetStatusPreparing:
-		return LifecycleTargetStatePreparing
-	case LifecycleTargetStatusDeploying:
-		switch strings.TrimSpace(action) {
-		case LifecycleTargetActionStop:
-			return LifecycleTargetStateStopping
-		case LifecycleTargetActionPurge:
-			return LifecycleTargetStatePurging
-		default:
-			return LifecycleTargetStateApplying
-		}
-	case LifecycleTargetStatusRunning:
-		return LifecycleTargetStateSucceeded
-	case LifecycleTargetStatusFailed:
-		return LifecycleTargetStateFailed
-	case LifecycleTargetStatusSuperseded:
-		return LifecycleTargetStateSuperseded
-	default:
-		return LifecycleTargetStatePlanned
-	}
-}
-
 func (s *Service) runRuntimeDeployStep(ctx context.Context, taskID, targetName, step string, run func(context.Context) error) error {
 	if s.tasks != nil && taskID != "" {
 		_ = s.tasks.AppendLog(ctx, taskID, "system", step+" on "+targetName)
@@ -3712,55 +3433,6 @@ func (s *Service) ensureRuntimeInstancesReady(ctx context.Context, appID string)
 		if err := ensureAgentRuntimeReady(srv); err != nil {
 			return err
 		}
-	}
-	return nil
-}
-
-func (s *Service) stopRuntimeInstances(ctx context.Context, taskID, appID string, purge bool, targetIDs ...[]string) error {
-	instances, err := s.runtimeInstances(ctx, appID)
-	if err != nil {
-		return err
-	}
-	var wanted map[string]bool
-	if len(targetIDs) > 0 {
-		wanted = stringBoolSet(targetIDs[0])
-	}
-	for _, instance := range instances {
-		if len(wanted) > 0 && !wanted[instance.ServerID] {
-			continue
-		}
-		srv, err := s.servers.Get(ctx, instance.ServerID)
-		if err != nil {
-			return err
-		}
-		if err := ensureAgentRuntimeReady(srv); err != nil {
-			return err
-		}
-		baseURL, _ := agentURLFromServer(srv)
-		if s.tasks != nil && taskID != "" {
-			_ = s.tasks.AppendLog(ctx, taskID, "system", "stopping "+instance.ContainerName+" on "+firstNonEmpty(srv.Name, srv.ID, srv.Host))
-		}
-		var result agentcontract.RuntimeInstanceResponse
-		err = s.executeContainerOperation(ctx, instance.ServerID, func(runCtx context.Context) error {
-			var runErr error
-			result, runErr = s.runtimeClient.RuntimeStop(runCtx, baseURL, agentcontract.RuntimeStopRequest{ApplicationID: appID, InstanceID: instance.ID, ContainerName: instance.ContainerName, Purge: purge})
-			return runErr
-		})
-		if err != nil {
-			_ = s.handleAgentError(ctx, srv, err)
-			_ = s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, appruntime.StatusFailed, "", err.Error())
-			return runtimeOperationError(err)
-		}
-		status := result.Status
-		if status == "purged" {
-			status = appruntime.StatusStopped
-		}
-		if err := s.markRuntimeInstance(ctx, instance.ID, appruntime.DesiredStopped, status, result.ContainerID, ""); err != nil {
-			return err
-		}
-	}
-	if s.tasks != nil && taskID != "" {
-		_ = s.tasks.Complete(ctx, taskID, "Application stopped")
 	}
 	return nil
 }
@@ -4102,37 +3774,6 @@ func isLifecycleTargetActiveConflict(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "application_lifecycle_targets.target_key") || strings.Contains(msg, "idx_application_lifecycle_targets_active_key")
-}
-
-func (s *Service) recordTask(ctx context.Context, taskType, appID, summary string) (string, error) {
-	if s.tasks == nil {
-		return "", nil
-	}
-	task, _, err := tasks.NewManager(s.tasks).Create(ctx, tasks.CreateInput{
-		Type:         taskType,
-		ResourceType: "application",
-		ResourceID:   appID,
-		Status:       tasks.StatusCompleted,
-		Summary:      summary,
-	}, tasks.Trigger{Type: "system"})
-	if err != nil {
-		return "", err
-	}
-	return task.ID, nil
-}
-
-func (s *Service) recordRunningTask(ctx context.Context, taskType, appID, summary string) (string, error) {
-	task, _, err := s.recordRunningTaskObjectWithParams(ctx, taskType, appID, summary, "")
-	return task.ID, err
-}
-
-func (s *Service) recordRunningTaskWithParams(ctx context.Context, taskType, appID, summary, paramsJSON string) (string, error) {
-	task, _, err := s.recordRunningTaskObjectWithParams(ctx, taskType, appID, summary, paramsJSON)
-	return task.ID, err
-}
-
-func (s *Service) recordRunningTaskObject(ctx context.Context, taskType, appID, summary string) (tasks.Task, bool, error) {
-	return s.recordRunningTaskObjectWithParams(ctx, taskType, appID, summary, "")
 }
 
 func (s *Service) recordRunningTaskObjectWithParams(ctx context.Context, taskType, appID, summary, paramsJSON string) (tasks.Task, bool, error) {
@@ -4548,24 +4189,6 @@ func (s *Service) triggerApplicationReconcileTask(ctx context.Context, appID, tr
 	return task, err
 }
 
-func (s *Service) deploymentOperationError(ctx context.Context, operationID string) error {
-	var op models.ApplicationLifecycleOperation
-	if err := orm.New(s.lifecycleDB()).From("application_lifecycle_operations").Where("id=?", operationID).First(ctx, &op); err != nil {
-		if err == sql.ErrNoRows {
-			return nil
-		}
-		return err
-	}
-	if op.Status != LifecycleStatusFailed && op.Status != LifecycleStatusPartiallyDeployed {
-		return nil
-	}
-	errText := op.Error
-	if strings.TrimSpace(errText) == "" {
-		errText = "Application sync failed"
-	}
-	return panelerr.BadGateway("application_runtime_operation_failed", errText)
-}
-
 type deployTaskRunOptions struct {
 	targetIDs             []string
 	lifecycleOperationID  string
@@ -4753,13 +4376,6 @@ func uniqueStringItems(values []string) []string {
 	return out
 }
 
-func stopTaskParamsJSON(purge bool) string {
-	if !purge {
-		return "{}"
-	}
-	return `{"purge":true}`
-}
-
 type stopTaskRunOptions struct {
 	purge     bool
 	targetIDs []string
@@ -4784,19 +4400,6 @@ func stopTaskOptions(task tasks.Task) (stopTaskRunOptions, error) {
 		out.targetIDs = []string{strings.TrimSpace(task.ServerID)}
 	}
 	return out, nil
-}
-
-func stopTaskPurge(paramsJSON string) (bool, error) {
-	if strings.TrimSpace(paramsJSON) == "" || strings.TrimSpace(paramsJSON) == "{}" {
-		return false, nil
-	}
-	var params struct {
-		Purge bool `json:"purge"`
-	}
-	if err := json.Unmarshal([]byte(paramsJSON), &params); err != nil {
-		return false, err
-	}
-	return params.Purge, nil
 }
 
 func applyDeploymentTargets(job appruntime.Spec, app Application) (appruntime.Spec, error) {
@@ -4999,31 +4602,6 @@ func (s *Service) deleteRuntimeInstanceForServer(ctx context.Context, appID, ser
 	return orm.New(s.db).From("application_reconcile_states").Where("instance_id=?", instance.ID).Delete(ctx)
 }
 
-func (s *Service) cleanupRemovedDeploymentInstances(ctx context.Context, taskID string, before, after Application) error {
-	if after.DeploymentMode != DeploymentModeSelected {
-		return nil
-	}
-	desired := map[string]struct{}{}
-	for _, serverID := range after.DeploymentServers {
-		serverID = strings.TrimSpace(serverID)
-		if serverID != "" {
-			desired[serverID] = struct{}{}
-		}
-	}
-	instances, err := s.runtimeInstances(ctx, before.ID)
-	if err != nil {
-		return err
-	}
-	for _, instance := range instances {
-		if _, keep := desired[instance.ServerID]; keep {
-			continue
-		}
-		if err := s.purgeRuntimeInstance(ctx, taskID, instance, false); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 func (s *Service) purgeRuntimeInstanceForServer(ctx context.Context, taskID, appID, serverID string, removeApplicationData bool) error {
 	instance, err := s.runtimeInstanceForServer(ctx, appID, serverID)
 	if err != nil {
@@ -5155,25 +4733,6 @@ func (s *Service) ensureApplicationReconcileStateRows(ctx context.Context, appID
 	return nil
 }
 
-func (s *Service) purgeApplicationRuntimeData(ctx context.Context, appID string) error {
-	instances, err := s.runtimeInstances(ctx, appID)
-	if err != nil {
-		return err
-	}
-	if len(instances) == 0 {
-		return nil
-	}
-	byServer := map[string]appruntime.Instance{}
-	for _, instance := range instances {
-		byServer[instance.ServerID] = instance
-	}
-	for _, instance := range byServer {
-		if err := s.purgeRuntimeInstance(ctx, "", instance, true); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 func (s *Service) purgeRuntimeInstance(ctx context.Context, taskID string, instance appruntime.Instance, removeApplicationData bool) error {
 	srv, err := s.servers.Get(ctx, instance.ServerID)
 	if err != nil {
@@ -6028,62 +5587,6 @@ func panelFilePerms(source string) string {
 		return "0600"
 	}
 	return "0644"
-}
-
-func (s *Service) Package(ctx context.Context, appID string) (PackageResult, error) {
-	app, err := s.Get(ctx, appID)
-	if err != nil {
-		return PackageResult{}, err
-	}
-	files, err := s.listFiles(ctx, app.ID, true)
-	if err != nil {
-		return PackageResult{}, err
-	}
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-	writeZipFile := func(name string, data []byte) error {
-		w, err := zw.Create(filepath.ToSlash(name))
-		if err != nil {
-			return err
-		}
-		_, err = w.Write(data)
-		return err
-	}
-	if err := writeZipFile("spec.yaml", []byte(app.SpecYAML)); err != nil {
-		return PackageResult{}, err
-	}
-	metadata, _ := json.MarshalIndent(map[string]any{
-		"id":                app.ID,
-		"name":              app.Name,
-		"generation":        app.Generation,
-		"specHash":          app.SpecHash,
-		"jobId":             app.JobID,
-		"namespace":         app.Namespace,
-		"persistentPath":    app.PersistentPath,
-		"deploymentMode":    app.DeploymentMode,
-		"deploymentServers": app.DeploymentServers,
-		"reverseProxy":      app.ReverseProxy,
-	}, "", "  ")
-	if err := writeZipFile("application.json", metadata); err != nil {
-		return PackageResult{}, err
-	}
-	for _, file := range files {
-		name := path.Join("files", strings.TrimPrefix(file.Name, "/"))
-		if err := writeZipFile(name, file.Content); err != nil {
-			return PackageResult{}, err
-		}
-	}
-	if name, content, err := s.renderReverseProxyConfig(ctx, app, files); err != nil {
-		return PackageResult{}, err
-	} else if name != "" {
-		if err := writeZipFile(path.Join("nginx", name), []byte(content)); err != nil {
-			return PackageResult{}, err
-		}
-	}
-	if err := zw.Close(); err != nil {
-		return PackageResult{}, err
-	}
-	return PackageResult{Filename: app.Name + "-package.zip", Content: buf.Bytes()}, nil
 }
 
 func validationResult(issues []ValidationIssue) ValidationResult {

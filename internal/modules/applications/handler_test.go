@@ -227,16 +227,10 @@ type fakeApplicationService struct {
 	logID                     string
 	logInput                  LogInput
 	deletedFileID             string
-	migratedID                string
-	migrateInput              MigrationInput
-	pkg                       PackageResult
-	packagedID                string
 	persistentData            PackageResult
 	persistentDataID          string
 	restoredPersistentID      string
 	restoredPersistentContent []byte
-	session                   SaveSessionResult
-	sessionID                 string
 	updatedImageID            string
 	records                   OperationRecordListResult
 	recordDetail              OperationRecordDetail
@@ -303,42 +297,6 @@ func (f *fakeApplicationService) DeleteFile(ctx context.Context, id, fileID stri
 	return nil
 }
 
-func (f *fakeApplicationService) BeginSaveSession(ctx context.Context, in BeginSaveSessionInput) (SaveSessionResult, error) {
-	f.saved = in.Save
-	if f.session.ID == "" {
-		f.session.ID = "asave_1"
-	}
-	return f.session, nil
-}
-
-func (f *fakeApplicationService) UploadSaveSessionFile(ctx context.Context, sessionID string, in FileSaveInput) (ApplicationFile, error) {
-	f.sessionID = sessionID
-	f.fileInput = in
-	return ApplicationFile{ID: "file-1", Path: in.Path, Kind: in.Kind}, nil
-}
-
-func (f *fakeApplicationService) UploadSaveSessionArchive(ctx context.Context, sessionID string, in FileArchiveInput) ([]ApplicationFile, error) {
-	f.sessionID = sessionID
-	f.fileArchiveInput = in
-	return f.files, nil
-}
-
-func (f *fakeApplicationService) DeleteSaveSessionFile(ctx context.Context, sessionID string, in FileDeleteInput) error {
-	f.sessionID = sessionID
-	f.fileInput.Path = in.Path
-	return nil
-}
-
-func (f *fakeApplicationService) CommitSaveSession(ctx context.Context, sessionID string) (Application, error) {
-	f.sessionID = sessionID
-	return f.app, nil
-}
-
-func (f *fakeApplicationService) Package(ctx context.Context, id string) (PackageResult, error) {
-	f.packagedID = id
-	return f.pkg, nil
-}
-
 func (f *fakeApplicationService) PersistentData(ctx context.Context, id string) (PackageResult, error) {
 	f.persistentDataID = id
 	return f.persistentData, nil
@@ -354,10 +312,6 @@ func (f *fakeApplicationService) Validate(ctx context.Context, id string) (Valid
 	return ValidationResult{Valid: true}, nil
 }
 
-func (f *fakeApplicationService) Plan(ctx context.Context, id string) (PlanResult, error) {
-	return PlanResult{}, nil
-}
-
 func (f *fakeApplicationService) UpdateImage(ctx context.Context, id string) (OperationResult, error) {
 	f.updatedImageID = id
 	return f.op, nil
@@ -365,12 +319,6 @@ func (f *fakeApplicationService) UpdateImage(ctx context.Context, id string) (Op
 
 func (f *fakeApplicationService) Deploy(ctx context.Context, id string) (OperationResult, error) {
 	f.deployedID = id
-	return f.op, nil
-}
-
-func (f *fakeApplicationService) Migrate(ctx context.Context, id string, in MigrationInput) (OperationResult, error) {
-	f.migratedID = id
-	f.migrateInput = in
 	return f.op, nil
 }
 

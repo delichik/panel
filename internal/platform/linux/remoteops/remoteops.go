@@ -131,14 +131,6 @@ func APTInstallCommands(packages []string) (string, error) {
 	return "apt_get update\napt_get install -y " + strings.Join(parts, " ") + "\n", nil
 }
 
-func MustAPTInstallCommands(packages ...string) string {
-	commands, err := APTInstallCommands(packages)
-	if err != nil {
-		panic(err)
-	}
-	return commands
-}
-
 func WriteFileSudoScript(remotePath string, content []byte, mode string) (string, error) {
 	remotePath = strings.TrimSpace(remotePath)
 	mode = strings.TrimSpace(mode)

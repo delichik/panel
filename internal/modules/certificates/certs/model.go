@@ -12,10 +12,9 @@ const (
 	StatusIssued  = "issued"
 	StatusFailed  = "failed"
 
-	TaskTypeIssue           = "certificate_issue"
-	TaskTypeReissue         = "certificate_reissue"
-	TaskTypeRenew           = "certificate_renew"
-	TaskTypeSelfSignedRenew = "certificate_self_signed_renew"
+	TaskTypeIssue   = "certificate_issue"
+	TaskTypeReissue = "certificate_reissue"
+	TaskTypeRenew   = "certificate_renew"
 )
 
 type Certificate struct {
@@ -100,11 +99,4 @@ type IssueRequest struct {
 type IssueResult struct {
 	Certificate Certificate `json:"certificate"`
 	TaskID      string      `json:"taskId,omitempty"`
-}
-
-type BuiltinVariable struct {
-	CertificatePEM string   `json:"certificatePem"`
-	PrivateKeyPEM  string   `json:"privateKeyPem"`
-	CAChainPEM     string   `json:"caChainPem,omitempty"`
-	Domains        []string `json:"domains"`
 }

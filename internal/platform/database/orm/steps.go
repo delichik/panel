@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -15,37 +14,8 @@ type Step struct {
 	Run func(ctx context.Context, tx *sql.Tx) error
 }
 
-var (
-	stepsMu sync.Mutex
-	steps   []Step
-)
-
 // RegisterSteps registers versioned migration steps. Duplicate IDs are
 // rejected.
-func RegisterSteps(newSteps ...Step) error {
-	stepsMu.Lock()
-	defer stepsMu.Unlock()
-	seen := map[string]bool{}
-	for _, s := range newSteps {
-		if strings.TrimSpace(s.ID) == "" {
-			return fmt.Errorf("orm: step id is required")
-		}
-		if s.Run == nil {
-			return fmt.Errorf("orm: step %s has a nil Run function", s.ID)
-		}
-		if seen[s.ID] {
-			return fmt.Errorf("orm: duplicate step id %s", s.ID)
-		}
-		for _, e := range steps {
-			if e.ID == s.ID {
-				return fmt.Errorf("orm: step %s is already registered", s.ID)
-			}
-		}
-		seen[s.ID] = true
-	}
-	steps = append(steps, newSteps...)
-	return nil
-}
 
 // RunSteps applies the given steps in order inside a single transaction on
 // the given database, recording each applied step in orm_migrations.
@@ -90,9 +60,3 @@ func RunSteps(ctx context.Context, db *sql.DB, steps []Step) error {
 // transaction, recording each applied step in orm_migrations. Already
 // applied steps are skipped. It delegates to RunSteps with the globally
 // registered steps.
-func MigrateSteps(ctx context.Context, db *sql.DB) error {
-	stepsMu.Lock()
-	snapshot := append([]Step{}, steps...)
-	stepsMu.Unlock()
-	return RunSteps(ctx, db, snapshot)
-}

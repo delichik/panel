@@ -53,9 +53,6 @@ export const maintenanceApi = {
       sessionStorage.removeItem(tokenKey(mode));
     }
   },
-  session(mode: MaintenanceMode) {
-    return request<MaintenanceSession>(mode, 'GET', '/auth/session');
-  },
   exportStatus() {
     return request<MaintenanceStatus>('export', 'GET', '/backups/export/current');
   },

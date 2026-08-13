@@ -163,10 +163,6 @@ func createExtraIndexes(ctx context.Context, db *sql.DB, ddlByTable map[string][
 	return nil
 }
 
-func (s *Store) resetLegacyTaskTables(ctx context.Context) error {
-	return resetLegacyTaskTablesOn(ctx, s.logDB)
-}
-
 func resetLegacyTaskTablesOn(ctx context.Context, q migrationExecutor) error {
 	rows, err := q.QueryContext(ctx, `PRAGMA table_info(tasks)`)
 	if err != nil {
@@ -211,10 +207,6 @@ func resetLegacyTaskTablesOn(ctx context.Context, q migrationExecutor) error {
 	return nil
 }
 
-func (s *Store) dropTaskTables(ctx context.Context) error {
-	return dropTaskTablesOn(ctx, s.logDB)
-}
-
 func dropTaskTablesOn(ctx context.Context, q migrationExecutor) error {
 	for _, stmt := range []string{
 		`DROP TABLE IF EXISTS task_logs`,
@@ -226,10 +218,6 @@ func dropTaskTablesOn(ctx context.Context, q migrationExecutor) error {
 		}
 	}
 	return nil
-}
-
-func (s *Store) normalizeAppDefaults(ctx context.Context) error {
-	return normalizeAppDefaultsOn(ctx, s.appDB)
 }
 
 func normalizeAppDefaultsOn(ctx context.Context, q migrationExecutor) error {
@@ -290,10 +278,6 @@ func normalizeAppDefaultsOn(ctx context.Context, q migrationExecutor) error {
 		}
 	}
 	return nil
-}
-
-func (s *Store) migrateApplicationLifecycleTargets(ctx context.Context) error {
-	return migrateApplicationLifecycleTargetsOn(ctx, s.logDB)
 }
 
 func migrateApplicationLifecycleTargetsOn(ctx context.Context, q migrationExecutor) error {
@@ -391,10 +375,6 @@ func migrateApplicationLifecycleTargetsOn(ctx context.Context, q migrationExecut
 	return nil
 }
 
-func (s *Store) ensureAppColumns(ctx context.Context, table string, columns map[string]string) error {
-	return ensureColumns(ctx, s.appDB, table, columns)
-}
-
 type legacyFacilityRoutePath struct {
 	Domain            string         `json:"domain"`
 	Path              string         `json:"path"`
@@ -429,18 +409,6 @@ type migratedAnyAccess struct {
 	Enabled               bool   `json:"enabled"`
 	Strategy              string `json:"strategy"`
 	PrimaryOriginServerID string `json:"primaryOriginServerId,omitempty"`
-}
-
-func (s *Store) migrateReverseProxyConfiguration(ctx context.Context) error {
-	tx, err := s.appDB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := migrateReverseProxyConfigurationOn(ctx, tx); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
@@ -665,10 +633,6 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
-func (s *Store) migrateApplicationFileNames(ctx context.Context) error {
-	return migrateApplicationFileNamesOn(ctx, s.appDB)
-}
-
 func migrateApplicationFileNamesOn(ctx context.Context, q migrationExecutor) error {
 	for _, table := range []string{"application_files", "application_edit_session_files"} {
 		columns, err := databaseTableColumnsOn(ctx, q, table)
@@ -683,18 +647,6 @@ func migrateApplicationFileNamesOn(ctx context.Context, q migrationExecutor) err
 		}
 	}
 	return nil
-}
-
-func (s *Store) migrateFacilityAssetNames(ctx context.Context) error {
-	tx, err := s.appDB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if err := migrateFacilityAssetNamesOn(ctx, tx); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func migrateFacilityAssetNamesOn(ctx context.Context, tx *sql.Tx) error {
@@ -862,10 +814,6 @@ func migrateCertificateScopeConstraintOn(ctx context.Context, tx *sql.Tx) error 
 	return nil
 }
 
-func databaseTableColumns(ctx context.Context, db *sql.DB, table string) (map[string]bool, error) {
-	return databaseTableColumnsOn(ctx, db, table)
-}
-
 func databaseTableColumnsOn(ctx context.Context, q migrationExecutor, table string) (map[string]bool, error) {
 	rows, err := q.QueryContext(ctx, `PRAGMA table_info(`+table+`)`)
 	if err != nil {
@@ -957,10 +905,6 @@ func stringSliceJSONValue(value any) []string {
 
 func sameMigratedProxyTarget(left, right map[string]any) bool {
 	return stringJSONValue(left["targetType"]) == stringJSONValue(right["targetType"]) && fmt.Sprint(left["targetPort"]) == fmt.Sprint(right["targetPort"])
-}
-
-func (s *Store) ensureLogColumns(ctx context.Context, table string, columns map[string]string) error {
-	return ensureColumns(ctx, s.logDB, table, columns)
 }
 
 func ensureColumns(ctx context.Context, db *sql.DB, table string, columns map[string]string) error {

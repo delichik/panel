@@ -6,7 +6,6 @@ import type {
   FacilityEditCommitResult,
   FacilityEditPreviewResult,
   FacilityEditSession,
-  FacilityEditValidationResult,
   ReverseProxyConfig,
   ReverseProxySaveInput,
 } from '@/types/facilityApps';
@@ -30,9 +29,6 @@ export const reverseProxyFacilityApi = {
   },
   patchEdit(sessionId: string, revision: number, baseResourceVersion: string, draft: ReverseProxySaveInput) {
     return apiClient.patch<FacilityEditSession>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/draft`, { revision, baseResourceVersion, draft });
-  },
-  validateEdit(sessionId: string, revision: number) {
-    return apiClient.post<FacilityEditValidationResult>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/validate`, { revision });
   },
   previewEdit(sessionId: string, revision: number) {
     return apiClient.post<FacilityEditPreviewResult>(`/facility-apps/reverse-proxy/edit-sessions/${id(sessionId)}/preview`, { revision });

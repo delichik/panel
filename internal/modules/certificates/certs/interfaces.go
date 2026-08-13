@@ -5,7 +5,6 @@ import "context"
 type Request struct {
 	Domain   string
 	Domains  []string
-	Email    string
 	Progress func(context.Context, ACMEProgress)
 }
 

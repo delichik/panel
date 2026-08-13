@@ -44,12 +44,6 @@ func WithKnownHosts(path string) SSHExecutorOption {
 // WithoutKnownHosts disables host key verification, matching the legacy
 // insecure behavior. Tests that do not want TOFU must pass this option or
 // provide a temporary known_hosts path.
-func WithoutKnownHosts() SSHExecutorOption {
-	return func(e *SSHExecutor) {
-		e.knownHosts = nil
-		e.knownHostsExplicitlyDisabled = true
-	}
-}
 
 // NewSSHExecutorWithOptions builds an executor with functional options. Host
 // key TOFU verification is enabled by default using the known_hosts file
@@ -63,10 +57,6 @@ func NewSSHExecutorWithOptions(resolver CredentialResolver, defaultTimeout time.
 		e.knownHosts = newKnownHostsStore(defaultKnownHostsPath())
 	}
 	return e
-}
-
-func NewSSHExecutor(resolver CredentialResolver, defaultTimeout time.Duration) *SSHExecutor {
-	return NewSSHExecutorWithOptions(resolver, defaultTimeout)
 }
 
 func NewSSHExecutorWithTimeoutProvider(resolver CredentialResolver, defaultTimeout time.Duration, provider func() time.Duration, options ...SSHExecutorOption) *SSHExecutor {

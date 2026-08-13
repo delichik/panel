@@ -6,7 +6,9 @@ import (
 	"testing"
 	"time"
 
+	agentclient "panel/internal/agent/client"
 	agentcontract "panel/internal/agent/contract"
+	containerization "panel/internal/modules/containers"
 	server "panel/internal/modules/servers"
 	"panel/internal/modules/settings"
 	"panel/internal/platform/config"
@@ -138,5 +140,48 @@ func (f *fakeReportServerProvider) List(context.Context) ([]server.Server, error
 
 func (f *fakeReportServerProvider) RecordAgentReportStream(_ context.Context, serverID string, connected bool, lastMessageAt time.Time, message string) error {
 	f.reportRecords = append(f.reportRecords, fakeReportRecord{serverID: serverID, connected: connected, lastMessageAt: lastMessageAt, message: message})
+	return nil
+}
+
+func TestAgentReportCollectorWiresImageReporter(t *testing.T) {
+	recorder := &fakeReportServerProvider{}
+	containerSvc := &containerization.Service{}
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, containerSvc, nil)
+	if collector.images != containerSvc {
+		t.Fatal("image reporter should be wired to the container service")
+	}
+}
+
+func TestAgentReportHandleReportSavesImages(t *testing.T) {
+	recorder := &fakeReportServerProvider{}
+	collector := newAgentReportCollector(recorder, nil, newReportCollectorSettings(t), nil, nil, nil)
+	saved := &fakeImageReporter{}
+	collector.images = saved
+	err := collector.handleReport(context.Background(), "srv-1", agentclient.AgentReport{
+		SampleAt: time.Unix(30, 0).UTC(),
+		Images:   []agentcontract.DockerImage{{ID: "sha256:abc"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.calls) != 1 {
+		t.Fatalf("expected one image report save, got %d", len(saved.calls))
+	}
+	if saved.calls[0].serverID != "srv-1" || len(saved.calls[0].images) != 1 || saved.calls[0].images[0].ID != "sha256:abc" {
+		t.Fatalf("unexpected image report save: %#v", saved.calls[0])
+	}
+}
+
+type fakeImageReportCall struct {
+	serverID string
+	images   []agentcontract.DockerImage
+}
+
+type fakeImageReporter struct {
+	calls []fakeImageReportCall
+}
+
+func (f *fakeImageReporter) SaveReportedImages(_ context.Context, serverID string, images []agentcontract.DockerImage) error {
+	f.calls = append(f.calls, fakeImageReportCall{serverID: serverID, images: images})
 	return nil
 }

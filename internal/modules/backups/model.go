@@ -7,13 +7,10 @@ const MaintenanceStatusSchemaVersion = 1
 type MaintenancePhase string
 
 const (
-	ModeNormal          = "normal"
 	ModeBackupExporting = "backup_exporting"
-	ModeRestorePending  = "restore_pending"
 	ModeRestoreRunning  = "restore_running"
 
 	PhaseIdle          MaintenancePhase = "idle"
-	PhaseFreezing                       = "freezing"
 	PhaseCheckpointing                  = "checkpointing"
 	PhaseArchiving                      = "archiving"
 	PhaseEncrypting                     = "encrypting"
@@ -95,10 +92,6 @@ type RestorePreflightResponse struct {
 	Manifest         Manifest `json:"manifest"`
 	Encrypted        bool     `json:"encrypted"`
 	PasswordRequired bool     `json:"passwordRequired"`
-}
-
-type RestoreConfirmRequest struct {
-	ConfirmOverwrite bool `json:"confirmOverwrite"`
 }
 
 type RestoreConfirmResponse struct {

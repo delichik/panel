@@ -70,13 +70,6 @@ export interface FieldErrors {
   [field: string]: string;
 }
 
-export interface SectionState {
-  id: string;
-  complete: boolean;
-  dirty?: boolean;
-  error?: boolean;
-}
-
 export interface PreviewDiff {
   added: number;
   changed: number;
@@ -247,18 +240,6 @@ export function validateFileName(name: string): string | null {
   return null;
 }
 
-export function applicationSections(draft: ApplicationDraftUi, errors: FieldErrors): SectionState[] {
-  return [
-    { id: 'identity', complete: Boolean(draft.name.trim() && draft.enabled !== undefined), error: Boolean(errors.name) },
-    { id: 'runtime', complete: draft.yamlDirty ? Boolean(draft.specYaml.trim()) : Boolean(draft.image.trim()), error: Boolean(errors.image || errors.specYaml) },
-    { id: 'networking', complete: true, error: Boolean(errors.ports || errors.reverseProxy) },
-    { id: 'storage', complete: true, error: Boolean(errors.env || errors.mounts) },
-    { id: 'deployment', complete: draft.deploymentMode === 'all' || draft.deploymentServers.length > 0, error: Boolean(errors.deploymentServers) },
-    { id: 'files', complete: true },
-    { id: 'source', complete: Boolean(draft.specYaml.trim()), dirty: draft.yamlDirty, error: Boolean(errors.specYaml) },
-  ];
-}
-
 export function facilityDraftFromConfig(config?: ReverseProxyConfig | null): FacilityDraftUi {
   return {
     deploymentServers: [...(config?.deploymentServers ?? [])],
@@ -327,15 +308,6 @@ export function validateFacilityDomainFields(domain: FacilityRouteDomain, existi
   }
   return errors;
 }
-export function facilitySections(draft: FacilityDraftUi, errors: FieldErrors): SectionState[] {
-  return [
-    { id: 'gateways', complete: draft.deploymentServers.length > 0, error: Boolean(errors.deploymentServers) },
-    { id: 'domains', complete: draft.domains.length > 0, error: Boolean(errors.domains || errors.originServers || errors.paths) },
-    { id: 'panel', complete: !draft.panelEnabled || Boolean(draft.panelServerId && draft.panelDomain), error: Boolean(errors.panelServerId || errors.panelDomain) },
-    { id: 'assets', complete: true },
-  ];
-}
-
 export function diffApplications(base?: ApplicationDto | null, draft?: ApplicationDraftUi | null): PreviewDiff {
   if (!draft) return { added: 0, changed: 0, removed: 0, warnings: 0 };
   if (!base?.id) return { added: 1 + draft.reverseProxy.length + draft.mounts.length + draft.ports.length, changed: 0, removed: 0, warnings: 0 };

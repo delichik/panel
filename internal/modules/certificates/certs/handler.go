@@ -16,7 +16,6 @@ type certificateService interface {
 	Reissue(ctx context.Context, certID string, in IssueRequest) (IssueResult, error)
 	Delete(ctx context.Context, certID string) error
 	Renew(ctx context.Context, certID string) error
-	ListSelfSigned(ctx context.Context) ([]SelfSignedCertificate, error)
 	ListSelfSignedPage(ctx context.Context, page, pageSize int, query string) (httpx.ListPage[SelfSignedCertificate], error)
 	CreateSelfSignedCA(ctx context.Context, in SelfSignedCARequest) (SelfSignedCertificate, error)
 	CreateSelfSignedLeaf(ctx context.Context, in SelfSignedLeafRequest) (SelfSignedCertificate, error)

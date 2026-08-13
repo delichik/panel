@@ -26,7 +26,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 		{Type: TaskTypeSSHRegenerate, ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive, ConcurrencyKey: keyAssetConcurrencyKey},
 		{Type: TaskTypeExport, ConcurrencyPolicy: tasks.ConcurrencyResourceExclusive, ConcurrencyKey: keyAssetConcurrencyKey},
 		{Type: TaskTypeImport, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
-		{Type: TaskTypeSync, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
 	} {
 		taskSvc.MustRegister(def)
 	}

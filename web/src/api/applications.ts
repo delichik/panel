@@ -9,7 +9,6 @@ import type {
   ApplicationEditPreviewResult,
   ApplicationEditSession,
   ApplicationEditSessionFileContent,
-  ApplicationEditValidationResult,
   ApplicationFile,
   ApplicationRuntime,
   ApplicationSaveInput,
@@ -84,9 +83,6 @@ export const applicationsApi = {
   stop(applicationId: string, purge = false) {
     return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/stop${purge ? '?purge=true' : ''}`);
   },
-  restart(applicationId: string) {
-    return apiClient.post<OperationResult>(`/applications/${id(applicationId)}/restart`);
-  },
   runtime(applicationId: string, options?: ApiRequestOptions) {
     return apiClient.get<ApplicationRuntime>(`/applications/${id(applicationId)}/runtime`, options);
   },
@@ -154,9 +150,6 @@ export const applicationsApi = {
       revision,
       clientOperationId,
     }, clientOperationId);
-  },
-  validateEditSession(sessionId: string, revision: number) {
-    return apiClient.post<ApplicationEditValidationResult>(`/application-edit-sessions/${id(sessionId)}/validate`, { revision });
   },
   previewEditSession(sessionId: string, revision: number) {
     return apiClient.post<ApplicationEditPreviewResult>(`/application-edit-sessions/${id(sessionId)}/preview`, { revision });

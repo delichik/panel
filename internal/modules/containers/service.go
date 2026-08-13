@@ -19,25 +19,15 @@ import (
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
-	id "panel/internal/platform/identity"
 	"panel/internal/platform/logging"
 
 	"go.uber.org/zap"
 )
 
 const (
-	TaskContainerStart       = "container_start"
-	TaskContainerStop        = "container_stop"
-	TaskContainerRestart     = "container_restart"
-	TaskContainerDelete      = "container_delete"
-	TaskImagePull            = "image_pull"
 	TaskImageRefresh         = "image_refresh"
-	TaskImageDelete          = "image_delete"
-	TaskImageDeleteUnused    = "image_delete_unused"
 	TaskImageUpgradeMany     = "application_image_upgrade_selected"
 	TaskImageUpgradeAll      = "application_image_upgrade_all"
-	TaskVolumeDelete         = "volume_delete"
-	TaskVolumeDeleteUnused   = "volume_delete_unused"
 	TaskVolumeRefresh        = "volume_refresh"
 	TaskNetworkRefresh       = "network_refresh"
 	TaskApplicationReconcile = "application_reconcile"
@@ -79,13 +69,6 @@ type ApplicationUpdater interface {
 
 type ApplicationReconcileLister interface {
 	ListForReconcile(context.Context) ([]applications.Application, error)
-}
-
-type Container struct {
-	agentcontract.DockerContainer
-	Managed       bool   `json:"managed"`
-	ApplicationID string `json:"applicationId,omitempty"`
-	InstanceID    string `json:"instanceId,omitempty"`
 }
 
 type ContainerSummary struct {
@@ -161,10 +144,6 @@ type Option func(*Service)
 
 func WithApplicationUpdater(updater ApplicationUpdater) Option {
 	return func(s *Service) { s.apps = updater }
-}
-
-func WithImageDigestResolver(resolver applications.ImageDigestResolver) Option {
-	return func(s *Service) { s.resolver = resolver }
 }
 
 func NewService(db *sql.DB, servers ServerProvider, agentClient AgentClient, taskSvc *tasks.Service, opts ...Option) *Service {
@@ -715,26 +694,6 @@ func (s *Service) SaveReportedImages(ctx context.Context, serverID string, items
 	return s.replaceResourceSnapshot(ctx, serverID, "images", items)
 }
 
-func (s *Service) RefreshAllScheduled(ctx context.Context) error {
-	servers, err := s.servers.List(ctx)
-	if err != nil {
-		return err
-	}
-	operationID := id.New("op")
-	for _, srv := range servers {
-		if !srv.Reachable || srv.Traits[agentcontract.TraitStatus] != agentcontract.StatusCompatible {
-			continue
-		}
-		if _, err := s.RefreshImages(ctx, srv.ID, "scheduler", operationID); err != nil {
-			var pe *panelerr.Error
-			if errors.As(err, &pe) && pe.Code == "image_refresh_running" {
-				continue
-			}
-		}
-	}
-	return nil
-}
-
 func (s *Service) TriggerApplicationReconcile(ctx context.Context, trigger tasks.PeriodicTrigger) (tasks.Task, bool, error) {
 	if s.tasks == nil {
 		return tasks.Task{}, false, panelerr.Validation("task_service_unavailable", "Task service is unavailable")
@@ -771,28 +730,6 @@ func (s *Service) RunImageRefreshTask(tc tasks.TaskContext) error {
 		return err
 	}
 	s.runImageRefresh(s.tasks.ExecutionContext(task.ID), task, serverID)
-	return nil
-}
-
-func (s *Service) MonitorApplications(ctx context.Context) error {
-	inputs, err := s.CollectApplicationReconcileTasks(ctx, id.New("op"), tasks.PeriodicTrigger{Type: "scheduler"})
-	if err != nil {
-		return err
-	}
-	manager := tasks.NewManager(s.tasks)
-	for _, input := range inputs {
-		task, created, err := manager.Create(ctx, input, tasks.Trigger{Type: "scheduler", Periodic: true})
-		if err != nil || !created {
-			continue
-		}
-		if task.NextRunAt != nil && task.NextRunAt.After(time.Now().UTC()) {
-			continue
-		}
-		go func(task tasks.Task) {
-			defer s.tasks.FinishExecution(task.ID)
-			_ = manager.Run(context.Background(), task)
-		}(task)
-	}
 	return nil
 }
 
@@ -1043,16 +980,6 @@ func (s *Service) updateApplicationReconcileBackoff(ctx context.Context, appID s
 		})
 }
 
-func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID string) error {
-	state, err := s.applicationReconcileState(ctx, appID)
-	if err != nil {
-		return err
-	}
-	failures := state.failures + 1
-	next := time.Now().UTC().Add(applicationReconcileBackoff(failures))
-	return s.updateApplicationReconcileBackoff(ctx, appID, failures, next)
-}
-
 func (s *Service) recordApplicationReconcileHealthy(ctx context.Context, appID string) error {
 	state, err := s.applicationReconcileState(ctx, appID)
 	if err != nil || state.failures <= 0 {
@@ -1079,12 +1006,6 @@ func (s *Service) resetApplicationReconcileHealthStreak(ctx context.Context, app
 		UpdateColumns(ctx, map[string]any{"reconcile_success_streak": 0})
 }
 
-func (s *Service) clearApplicationReconcileNextRun(ctx context.Context, appID string) error {
-	return orm.New(s.db).From("application_reconcile_states").
-		Where("application_id = ?", appID).
-		UpdateColumns(ctx, map[string]any{"reconcile_next_run_at": ""})
-}
-
 func applicationReconcileBackoff(failures int) time.Duration {
 	if failures <= 0 {
 		return 0
@@ -1097,10 +1018,6 @@ func applicationReconcileBackoff(failures int) time.Duration {
 		}
 	}
 	return delay
-}
-
-func (s *Service) RunApplicationReconcileTask(tc tasks.TaskContext) error {
-	return panelerr.Validation("application_reconcile_collector_only", "Application reconcile is a collector-only task")
 }
 
 func (s *Service) UpgradeApplications(ctx context.Context, applicationIDs []string, all bool) (tasks.Task, error) {
@@ -1542,13 +1459,6 @@ func stringSet(values []string) map[string]bool {
 		}
 	}
 	return out
-}
-
-func boolInt(value bool) int {
-	if value {
-		return 1
-	}
-	return 0
 }
 
 func firstNonEmpty(values ...string) string {

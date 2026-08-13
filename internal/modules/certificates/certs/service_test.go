@@ -243,19 +243,6 @@ func TestSelfSignedListsExcludeSystemManagedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	items, err := svc.ListSelfSigned(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, item := range items {
-		if item.ID == keyassets.SystemAgentCAAssetID || item.ID == keyassets.SystemAgentClientAssetID {
-			t.Fatalf("system managed asset leaked into ListSelfSigned: %#v", item)
-		}
-	}
-	if len(items) != 1 {
-		t.Fatalf("ListSelfSigned count = %d, want 1 user CA", len(items))
-	}
-
 	page, err := svc.ListSelfSignedPage(ctx, 1, 50, "")
 	if err != nil {
 		t.Fatal(err)

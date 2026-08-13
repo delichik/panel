@@ -64,6 +64,7 @@ func newAgentReportCollector(serverSvc interface {
 		settings:   settingsSvc,
 		metrics:    metricsSvc,
 		containers: containerSvc,
+		images:     containerSvc,
 		packages:   packageSvc,
 		streams:    map[string]*agentReportStream{},
 	}

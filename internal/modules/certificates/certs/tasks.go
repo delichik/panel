@@ -36,7 +36,6 @@ func (s *Service) RegisterTasks(taskSvc *tasks.Service) {
 				CollectInputs: tasks.NewIntervalCollector(30*time.Minute, nil, s.CollectRenewInputs),
 			},
 		},
-		{Type: TaskTypeSelfSignedRenew, ConcurrencyPolicy: tasks.ConcurrencyParallelAllowed},
 	} {
 		taskSvc.MustRegister(def)
 	}

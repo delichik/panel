@@ -37,15 +37,6 @@ export interface ServerMetricsSeries {
 
 export type ServerMetricsRange = '1h' | '6h' | '1d' | '7d';
 
-export interface AgentCertificateBundle {
-  ca: string;
-  certificate: string;
-  privateKey: string;
-  listenAddress: string;
-  agentUrl: string;
-  dockerHost: string;
-}
-
 export const serversApi = {
   list(options?: ApiRequestOptions) {
     return apiClient.get<ListPage<ServerDto>>('/servers?pageSize=200', options).then((result) => result.items);
@@ -81,9 +72,6 @@ export const serversApi = {
   },
   deployAgent(id: string) {
     return apiClient.post<OperationAccepted>(`/servers/${encodeURIComponent(id)}/agent/deploy`);
-  },
-  issueAgentCertificate(id: string) {
-    return apiClient.post<AgentCertificateBundle>(`/servers/${encodeURIComponent(id)}/agent/certificate`);
   },
   metrics(id: string, range: ServerMetricsRange = '1h', options?: ApiRequestOptions) {
     return apiClient.get<ServerMetricsSeries>(`/servers/${encodeURIComponent(id)}/metrics?range=${encodeURIComponent(range)}`, options);

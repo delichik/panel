@@ -1177,20 +1177,6 @@ func (s *Service) RecordAgentReportStream(ctx context.Context, serverID string, 
 	return s.saveServerTraits(ctx, serverID, traits)
 }
 
-func missingAgentCapabilities(values []string) []string {
-	have := map[string]struct{}{}
-	for _, value := range values {
-		have[strings.TrimSpace(value)] = struct{}{}
-	}
-	missing := []string{}
-	for _, required := range agentcontract.RequiredCapabilities {
-		if _, ok := have[required]; !ok {
-			missing = append(missing, required)
-		}
-	}
-	return missing
-}
-
 func agentEnvFile(bundle AgentCertificateBundle) string {
 	return strings.Join([]string{
 		"PANEL_AGENT_LISTEN_ADDRESS=" + systemdQuote(bundle.ListenAddress),

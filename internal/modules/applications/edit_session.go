@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1156,8 +1155,4 @@ func panelErrorCode(err error) string {
 func parseEditTime(value string) time.Time {
 	parsed, _ := time.Parse(time.RFC3339Nano, value)
 	return parsed
-}
-
-func editSessionError(message string, args ...any) error {
-	return panelerr.Conflict("application_edit_session_error", fmt.Sprintf(message, args...))
 }

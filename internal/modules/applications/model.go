@@ -36,9 +36,7 @@ const (
 	ApplicationFileKindTemplate = "template"
 	ApplicationFileKindArchive  = "archive"
 
-	LifecycleTypeDeploy      = "deploy"
-	LifecycleTypeRefresh     = "refresh"
-	LifecycleTypeImageUpdate = "image_update"
+	LifecycleTypeDeploy = "deploy"
 
 	LifecycleStatusPending           = "pending"
 	LifecycleStatusDeploying         = "deploying"
@@ -227,22 +225,8 @@ type FileArchiveInput struct {
 	Content  []byte
 }
 
-type BeginSaveSessionInput struct {
-	ApplicationID string    `json:"applicationId,omitempty"`
-	Save          SaveInput `json:"save"`
-}
-
-type SaveSessionResult struct {
-	ID            string            `json:"id"`
-	ApplicationID string            `json:"applicationId,omitempty"`
-	ExpiresAt     time.Time         `json:"expiresAt"`
-	Files         []ApplicationFile `json:"files"`
-}
-
 const (
 	EditSessionStateActive     = "active"
-	EditSessionStateValidating = "validating"
-	EditSessionStatePreviewing = "previewing"
 	EditSessionStateCommitting = "committing"
 	EditSessionStateCommitted  = "committed"
 	EditSessionStateConflict   = "conflict"
@@ -489,11 +473,6 @@ type DeploymentPlanResult struct {
 	ReusedTargets       []LifecycleTarget
 	SupersededTargets   []LifecycleTarget
 	BlockedTargets      []LifecycleTarget
-}
-
-type MigrationInput struct {
-	SourceServerID string `json:"sourceServerId"`
-	TargetServerID string `json:"targetServerId"`
 }
 
 type ValidationIssue struct {

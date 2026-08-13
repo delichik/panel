@@ -335,7 +335,7 @@ func waitForPackageRefresh(t *testing.T, svc *Service, serverID string) {
 }
 
 func registerPackageTestTasks(taskSvc *tasks.Service, svc *Service) {
-	svc.RegisterTasks(taskSvc, func() time.Duration { return time.Second })
+	svc.RegisterTasks(taskSvc)
 }
 
 type blockingUpgradeAdapter struct {

@@ -94,11 +94,6 @@ const failedTargets = computed<ApplicationOperationTargetDto[]>(() => {
   return targets.filter((target) => target.status === 'failed' || target.errorCode || target.errorMessage || target.errorDetail);
 });
 
-const consistentTargets = computed<ApplicationOperationTargetDto[]>(() => {
-  const targets = detail.value?.targets ?? [];
-  return targets.filter((target) => target.status === 'consistent');
-});
-
 function actionLabel(value: string): string {
   if (!value) return t('common.notAvailable');
   const key = `applicationOperationsPage.action.${value}`;

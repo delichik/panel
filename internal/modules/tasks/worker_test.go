@@ -49,7 +49,7 @@ func TestWorkerRunsDueTaskWithoutCreatingInternalTaskRecord(t *testing.T) {
 	svc.MustRegister(Definition{
 		Type: "due_task",
 		Execute: func(tc TaskContext) error {
-			return tc.Log("system", "ran due task")
+			return tc.Service.AppendLog(tc.Context, tc.Task.ID, "system", "ran due task")
 		},
 	})
 	task, err := svc.Create(context.Background(), CreateInput{Type: "due_task"})

@@ -22,11 +22,8 @@
 - `DateTimeRangePicker`（`web/src/components/ui/DateTimeRangePicker.vue`）：时间范围选择器。触发器样式与 Select/Input 一致（h-9、同边框/圆角/背景），点开是左右联动的双月历（支持跨月/跨年）：先点开始日期、再点结束日期，仅高亮起止之间的日期并带 hover 预览；开始/结束的 时:分:秒 用 `TimeSegmentInput`（无弹层的纯数字输入框）设置在同一行；带最近 24 小时/7 天/30 天快捷预设和应用/取消；无弹层套弹层。值以 ISO `{ from, to }` 双向绑定。
 - `TimeSegmentInput`（`web/src/components/ui/TimeSegmentInput.vue`）：两位数数字输入框。无弹层、无滚动条，直接输入数字、键盘上下键或滚轮微调，失焦自动补零；用于时分秒等数字段。
 
-- `FilterBar`：用于列表页顶部筛选区，组合搜索、状态筛选和操作槽。业务页仍负责 query 同步、过滤条件命名和空态区分。
 - `ServerContextSelector`：用于安全、资源、调试等单服务器上下文页面，是单一服务器选择器。组件只呈现服务器列表/卡片选择，不再叠加 Select 下拉；卡片负责展示 capability badge、状态和不可用原因；首次加载时传入 `loading` 显示服务器卡片骨架。
 - `ServerMultiPicker`：用于应用部署、设施覆盖节点、批量任务等服务器多选。支持禁用 id 与禁用原因，选中态、禁用态和能力标签保持一致。
-- `MasterList`：用于主从布局左侧列表容器，统一选中态、空态、加载骨架、滚动边界和 item slot。详情区标题与动作应由页面自己的 detail header 承载。
-- `EditorSectionRail`：用于编辑器左侧分区导航。支持 complete、error、dirty badge 和二级 child item list；编辑器页面不得再自造不同视觉的分区 rail，badge 文案由页面 i18n 传入。
 - `AssetFileManager`：用于应用文件和设施静态资产这两类同构的文件工作区。顶部只提供一个上传入口，弹窗内选择文本文件、普通文件或文件夹归档；文本类型显示编辑器，普通文件和归档显示文件选择控件。新建文本资产时下载文件名自动跟随引用名称，仍可单独修改，留空保存时使用引用名称；组件还统一提供文本编辑、替换、下载、删除、错误行展示和并发冲突重载；页面只通过 `AssetFileAdapter` 注入领域 API 和文案。`items[].key` 必须是应用内或设施内唯一的 `name`，不把物理 `id`、`fileKey` 或 `assetKey` 暴露给组件。
 
 ## 自动刷新模式
@@ -39,7 +36,7 @@
 3. `StatusBadge` 的 tone map 是默认规则；业务状态显示文案仍由页面翻译或格式化后传入 `label`。
 4. 上传、下载、确认对话框只负责交互入口；请求、错误摘要、任务入口和两阶段反馈由业务页面按照 [interaction-model.md](interaction-model.md) 实现。
 5. 应用文件与设施静态资产如果具备相同的上传、替换、下载、删除和文本编辑行为，必须复用 `AssetFileManager`，不得在页面内复制另一套文件行和弹窗；领域差异只能放在 adapter/API 中。
-6. 中大屏布局中，`MasterList`、`ServerContextSelector`、`EditorSectionRail`、`AssetFileManager` 必须放在模板提供的内部滚动区域，不得恢复页面级滚动。
+6. 中大屏布局中，`ServerContextSelector`、`AssetFileManager` 必须放在模板提供的内部滚动区域，不得恢复页面级滚动。
 
 ## 当前接入记录
 

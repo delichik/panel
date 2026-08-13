@@ -1,4 +1,4 @@
-import type { ApiEnvelope } from '@/types/api';
+import type { ApiEnvelope } from '@/api/client';
 import type { ApplicationDto, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
 import type { FacilityEditSession, ReverseProxyConfig } from '@/types/facilityApps';
 

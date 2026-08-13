@@ -1,4 +1,4 @@
-import type { ApiEnvelope } from '@/types/api';
+import type { ApiEnvelope } from '@/api/client';
 import {
   createAsset,
   createDomain,
@@ -30,7 +30,6 @@ import {
   createServer,
   deleteCredential,
   deleteServer,
-  mockAgentCertificate,
   mockCredentials,
   mockServerMetrics,
   mockServers,
@@ -230,11 +229,6 @@ export function installMockApi() {
       const range = url.searchParams.get('range') ?? '1h';
       const series = mockServerMetrics(decodeURIComponent(metricsMatch[1]), range);
       return series ? json(series) : error('server_not_found', 'Server was not found.', 404);
-    }
-    const agentCertMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)\/agent\/certificate$/);
-    if (agentCertMatch && method(init) === 'POST') {
-      const bundle = mockAgentCertificate(decodeURIComponent(agentCertMatch[1]));
-      return bundle ? json(bundle) : error('server_not_found', 'Server was not found.', 404);
     }
     const serverMatch = url.pathname.match(/^\/api\/v1\/servers\/([^/]+)$/);
     if (serverMatch && method(init) === 'GET') {

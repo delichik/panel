@@ -33,7 +33,6 @@ const (
 	ProxySourceHide     = "hide_source"
 
 	HTTPSDomainCertificate = "domain_certificate"
-	HTTPSSelfSigned        = "self_signed_certificate"
 	HTTPSDisabled          = "disabled"
 
 	dnsSyncTaskType = "dns_proxy_records_sync"
@@ -147,16 +146,6 @@ type StaticAsset struct {
 	UpdatedAt   time.Time `json:"updatedAt"`
 }
 
-type StaticAssetUploadInput struct {
-	AssetID   string
-	AssetName string
-	Name      string
-	Kind      string
-	FileName  string
-	Size      int64
-	Content   []byte
-}
-
 type RouteSummary struct {
 	Domain          string   `json:"domain"`
 	Path            string   `json:"path"`
@@ -172,31 +161,6 @@ type RouteSummary struct {
 
 type ReconcileResult struct {
 	Config ReverseProxyConfig `json:"config"`
-}
-
-type BeginSaveSessionInput struct {
-	BaseUpdatedAt time.Time `json:"baseUpdatedAt"`
-}
-
-type CommitSaveSessionInput struct {
-	Save ReverseProxySaveInput `json:"save"`
-}
-
-type StaticAssetDeleteInput struct {
-	AssetName string `json:"assetName,omitempty"`
-	// AssetID is accepted only by the legacy in-memory save-session endpoint.
-	AssetID string `json:"assetId,omitempty"`
-}
-
-type SaveSessionResult struct {
-	ID        string        `json:"id"`
-	ExpiresAt time.Time     `json:"expiresAt"`
-	Assets    []StaticAsset `json:"assets"`
-}
-
-type SaveSessionCommitResult struct {
-	Config         ReverseProxyConfig `json:"config"`
-	ApplyRequested bool               `json:"applyRequested"`
 }
 
 const (

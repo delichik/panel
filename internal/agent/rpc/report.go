@@ -603,10 +603,3 @@ func minOptionalTime(a, b time.Time) time.Time {
 	}
 	return a
 }
-
-func minTime(a, b time.Time) time.Time {
-	if a.IsZero() || b.Before(a) {
-		return b
-	}
-	return a
-}

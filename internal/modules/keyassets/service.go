@@ -1852,13 +1852,6 @@ func formatOptionalTime(value time.Time) string {
 	return formatTime(value)
 }
 
-func nullString(value string) any {
-	if strings.TrimSpace(value) == "" {
-		return nil
-	}
-	return strings.TrimSpace(value)
-}
-
 func cloneMetadata(value map[string]any) map[string]any {
 	if value == nil {
 		return map[string]any{}

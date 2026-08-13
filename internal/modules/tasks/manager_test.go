@@ -128,16 +128,11 @@ func TestManagerTriggerPeriodicNowPassesPayloadToCollector(t *testing.T) {
 
 func TestManagerRunInvokesHooksAndCompletes(t *testing.T) {
 	svc := newTestService(t)
-	completed := false
 	svc.MustRegister(Definition{
 		Type:              "managed_success",
 		ConcurrencyPolicy: ConcurrencyParallelAllowed,
 		Execute: func(tc TaskContext) error {
-			return tc.Advance("running", "managed run")
-		},
-		OnComplete: func(context.Context, Task) error {
-			completed = true
-			return nil
+			return tc.Service.Advance(tc.Context, tc.Task.ID, "running", "managed run")
 		},
 	})
 	task, err := svc.Create(context.Background(), CreateInput{Type: "managed_success"})
@@ -151,8 +146,8 @@ func TestManagerRunInvokesHooksAndCompletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Status != StatusCompleted || !completed {
-		t.Fatalf("expected completed task and hook, got task=%#v completed=%v", got, completed)
+	if got.Status != StatusCompleted {
+		t.Fatalf("expected completed task, got task=%#v", got)
 	}
 }
 

@@ -1,4 +1,3 @@
-export type ApplicationStatus = 'enabled' | 'disabled' | 'deploying' | 'partial' | 'failed' | 'deployed' | 'attention' | 'unknown';
 export type DeploymentMode = 'all' | 'selected';
 export type FileKind = 'binary' | 'template' | 'archive';
 export type ReverseProxyTargetType = 'local' | 'container';

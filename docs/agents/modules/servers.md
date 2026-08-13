@@ -95,7 +95,7 @@
 - `docker exec -it panel /app/panel setup` 通过 Panel 本地控制 socket 复用凭据创建、服务器首次 bootstrap 和 Agent 部署流程。Agent 兼容后节点才会从 `panel_installation.pending_server_id` 提升为唯一 `host_server_id`；Agent 或入口部署失败时保存阶段和错误供重复 setup 恢复。
 - 普通服务器删除流程必须拒绝删除 `panel_installation.host_server_id` 指向的 Panel 宿主节点。替换或解除宿主关系需要独立迁移流程，不能由普通 Delete 隐式完成。
 - 完整系统信息由兼容 Agent 读取并交给 `internal/platform/linux/` 解析支持的 Debian/Ubuntu 版本；Agent 内部直接读取 `/etc/os-release`、`/proc`、`/sys`、网络接口和 `statfs`，不再使用系统信息 bash 脚本。如果已启用 agent，读取必须要求 `agent.status=compatible` 并走 agent，不允许在 agent 未就绪、异常、不可部署或客户端缺失时回落 SSH。
-- 服务器列表和详情读取不得创建连通性或系统信息后台任务。`POST /api/v1/servers/{id}/test` 是同步普通函数，只验证 SSH 并更新可达状态与特权模式，不进入任务中心。周期可达状态以 `metrics_collect` 为准：采集成功标记可达，实际采集失败标记不可达。
+- 服务器列表和详情读取不得创建连通性或系统信息后台任务。`POST /api/v1/servers/{id}/test` 是同步普通函数，只验证 SSH 并更新可达状态与特权模式，不进入任务中心。周期可达状态以 agent 指标上报流为准：上报成功标记可达，实际采集失败标记不可达。
 - `server_info_collect` 首次 bootstrap 在创建服务器后立即运行；后续完整系统信息 refresh 固定每小时一次且只走兼容 Agent。refresh 失败只能使任务失败或可重试，不得回滚或删除已有服务器。任务中心、周期 worker 和 retry/run-now 通过注册 executor 执行时必须同步跑到任务终态，不能只启动后台 goroutine 后返回成功；创建服务器等需要快速返回任务 ID 的入口可使用模块内后台启动 helper。
 - 系统探测写入 `sys.*` traits；网卡采集要求 `/sys/class/net/{name}/device` 存在，并过滤 Docker、veth、bridge、CNI、隧道和 overlay 等常见虚拟接口。
 - Agent 写入 `sys.cpu_model` 时优先使用 `/proc/cpuinfo` 的 `model name` 或 `hardware`；`processor` 仅在不是纯数字 CPU 编号时作为兜底，避免把 `processor: 0` 展示成 CPU 型号。
@@ -106,7 +106,7 @@
 - `POST /api/v1/servers/{id}/packages/refresh` 创建或复用 `package_refresh` 任务并返回 `taskId`；调度器一轮多服务器刷新必须共享同一个 `operationId`。
 - 软件包刷新与升级共用 per-server 维护互斥（`packages.Service` 的 refreshing 机制即“维护中”）：同一服务器同一时间只允许一种软件包维护动作，进行中被拒绝的刷新/升级任务会以明确的“维护中”错误进入失败态，不再被误标成功。
 - 升级任务（`package_upgrade_selected` / `package_upgrade_all`）已注册 `Execute` 并声明 `AllowRunNow` / `AllowRetry`，选中的软件包名单持久化在 `tasks.params_json`；Panel 重启后遗留的 `queued` 升级任务可由 tasks worker 恢复执行，不再是死任务。
-- 周期性指标采集依赖 agent，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器创建 `metrics_collect` 任务；不再因旧 `reachable=false` 跳过，以便恢复成功时重新标记可达。同一轮多服务器采集共享一个 `operationId`，任务中心默认常用类型会隐藏该高频类型。指标快照除 CPU、内存、磁盘和网络外，结构化保存 Linux 标准的 1、5、15 分钟负载 `load1`、`load5`、`load15`。
+- 周期性指标采集依赖 agent 上报流，只对 `agent.enabled=true`、存在 `agent.url` 且 `agent.status=compatible` 的服务器采集并标记可达；不再因旧 `reachable=false` 跳过，以便恢复成功时重新标记可达。指标快照除 CPU、内存、磁盘和网络外，结构化保存 Linux 标准的 1、5、15 分钟负载 `load1`、`load5`、`load15`。
 - 指标历史清理由 `internal/modules/observability/metrics/cleanup_worker.go` 自主管理，按运行时设置中的保留天数和清理周期执行，不属于 tasks 内部 worker。
 - `POST /api/v1/servers/{id}/ufw/install` 返回 `server_ufw_install` 任务；该任务由内存 goroutine 执行，创建后必须先标记为 `running` 再返回。
 - `POST /api/v1/servers/{id}/restart` 要求服务器可达且已确认 root 或免密 sudo 特权能力，返回 `server_restart` 任务；前端必须二次确认并保留任务中心入口。

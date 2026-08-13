@@ -679,25 +679,44 @@ func TestApplicationFileMountCreatesManagedRuntimeFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
-		Name:          "config-app.conf",
-		Kind:          "template",
-		ContentBase64: base64.StdEncoding.EncodeToString([]byte("server={{ .app.name }}")),
+	session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{ApplicationID: app.ID, Draft: &SaveInput{Name: "web", Enabled: true, SpecYAML: app.SpecYAML}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "config-app.conf", "file-op-1", EditSessionFileInput{
+		Revision:          session.Revision,
+		ClientOperationID: "file-op-1",
+		Path:              "config-app.conf",
+		Kind:              ApplicationFileKindTemplate,
+		ContentBase64:     base64.StdEncoding.EncodeToString([]byte("server={{ .app.name }}")),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Update(ctx, app.ID, SaveInput{
-		Name:     "web",
-		Enabled:  true,
-		SpecYAML: app.SpecYAML,
-	}); err != nil {
+	preview, err := svc.PreviewEditSession(ctx, "admin", session.ID, session.Revision)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runtime.deploys) != 2 {
-		t.Fatalf("deploys = %#v", runtime.deploys)
+	if _, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-1", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
+		t.Fatal(err)
 	}
-	spec := runtime.deploys[0].Spec
+	stored, err := svc.ListFiles(ctx, app.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file ApplicationFile
+	for _, item := range stored {
+		if item.Name == "config-app.conf" {
+			file = item
+		}
+	}
+	if file.ID == "" {
+		t.Fatal("managed file not stored")
+	}
+	if len(runtime.deploys) == 0 {
+		t.Fatal("expected deployment")
+	}
+	spec := runtime.deploys[len(runtime.deploys)-1].Spec
 	allocation := applicationFileAllocationName(file.ID)
 	if len(spec.Files) != 1 || spec.Files[0].Path != allocation || string(spec.Files[0].Content) != "server=web" {
 		t.Fatalf("files = %#v", spec.Files)
@@ -715,7 +734,7 @@ func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
 	defer closeStore()
 	ctx := context.Background()
 	archive := testApplicationZipArchive(t, "index.html", "<h1>ok</h1>")
-	session, err := svc.BeginSaveSession(ctx, BeginSaveSessionInput{Save: SaveInput{
+	session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{Draft: &SaveInput{
 		Name:     "web",
 		Enabled:  true,
 		SpecYAML: "name: web\nimage: nginx\nmounts:\n  - type: file\n    source: public\n    target: /usr/share/nginx/html\n    readOnly: true\n",
@@ -723,23 +742,43 @@ func TestApplicationArchiveFileMountDeploysSingleManagedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	files, err := svc.UploadSaveSessionArchive(ctx, session.ID, FileArchiveInput{
-		Name:     "public",
-		Kind:     "binary",
-		FileName: "site.zip",
-		Content:  archive,
+	session, err = svc.UploadEditSessionArchive(ctx, "admin", session.ID, "archive-op-1", EditSessionArchiveInput{
+		Revision:          session.Revision,
+		ClientOperationID: "archive-op-1",
+		Name:              "public",
+		Kind:              "binary",
+		FileName:          "site.zip",
+		Content:           archive,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.CommitSaveSession(ctx, session.ID); err != nil {
+	preview, err := svc.PreviewEditSession(ctx, "admin", session.ID, session.Revision)
+	if err != nil {
 		t.Fatal(err)
+	}
+	commitResult, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-1", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: "0", PreviewToken: preview.Token.Value})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, err := svc.ListFiles(ctx, commitResult.Application.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file ApplicationFile
+	for _, item := range stored {
+		if item.Name == "public" {
+			file = item
+		}
+	}
+	if file.ID == "" {
+		t.Fatal("archive file not stored")
 	}
 	if len(runtimeClient.deploys) == 0 {
 		t.Fatal("expected deployment")
 	}
-	spec := runtimeClient.deploys[0].Spec
-	allocation := applicationFileAllocationName(files[0].ID)
+	spec := runtimeClient.deploys[len(runtimeClient.deploys)-1].Spec
+	allocation := applicationFileAllocationName(file.ID)
 	if len(spec.Files) != 1 || spec.Files[0].Kind != appruntime.ManagedFileKindArchive || spec.Files[0].Path != allocation || !bytes.Equal(spec.Files[0].Content, archive) {
 		t.Fatalf("files = %#v", spec.Files)
 	}
@@ -761,18 +800,25 @@ func TestApplicationFileTemplateRendersPerTargetServerVariables(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.SaveFile(ctx, app.ID, FileSaveInput{
-		Path:          "config-node.conf",
-		Kind:          "template",
-		ContentBase64: base64.StdEncoding.EncodeToString([]byte("name={{ .server.name }} role={{ index .server.variables \"role\" }} app={{ .app.name }}")),
-	}); err != nil {
+	session, err := svc.BeginEditSession(ctx, "admin", BeginEditSessionInput{ApplicationID: app.ID, Draft: &SaveInput{Name: app.Name, Enabled: true, SpecYAML: app.SpecYAML}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Update(ctx, app.ID, SaveInput{
-		Name:     app.Name,
-		Enabled:  true,
-		SpecYAML: app.SpecYAML,
-	}); err != nil {
+	session, err = svc.PutEditSessionFile(ctx, "admin", session.ID, "config-node.conf", "file-op-1", EditSessionFileInput{
+		Revision:          session.Revision,
+		ClientOperationID: "file-op-1",
+		Path:              "config-node.conf",
+		Kind:              ApplicationFileKindTemplate,
+		ContentBase64:     base64.StdEncoding.EncodeToString([]byte("name={{ .server.name }} role={{ index .server.variables \"role\" }} app={{ .app.name }}")),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := svc.PreviewEditSession(ctx, "admin", session.ID, session.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CommitEditSession(ctx, "admin", session.ID, "commit-1", CommitEditSessionInput{Revision: session.Revision, BaseResourceVersion: session.BaseResourceVersion.Value, PreviewToken: preview.Token.Value}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1637,74 +1683,6 @@ func TestRestorePersistentDataImportsBeforeFirstDeploy(t *testing.T) {
 	}
 }
 
-func TestMigrateDeploysTargetAndDropsSourceInstance(t *testing.T) {
-	svc, runtime, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{
-		Name:              "web",
-		Enabled:           true,
-		SpecYAML:          "name: web\nimage: nginx\n",
-		DeploymentMode:    DeploymentModeSelected,
-		DeploymentServers: []string{"srv-a"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	result, err := svc.Migrate(ctx, app.ID, MigrationInput{SourceServerID: "srv-a", TargetServerID: "srv-b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.TaskID == "" {
-		t.Fatal("expected migration task id")
-	}
-	migrated, err := svc.Get(ctx, app.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if migrated.DeploymentMode != DeploymentModeSelected || len(migrated.DeploymentServers) != 1 || migrated.DeploymentServers[0] != "srv-b" {
-		t.Fatalf("deployment target = %q %#v", migrated.DeploymentMode, migrated.DeploymentServers)
-	}
-	instances, err := svc.runtimeInstances(ctx, app.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(instances) != 1 || instances[0].ServerID != "srv-b" {
-		t.Fatalf("instances = %#v", instances)
-	}
-	if len(runtime.stops) != 1 {
-		t.Fatalf("source should be cleaned during migration: %#v", runtime.stops)
-	}
-	if runtime.stops[0].InstanceID != app.ID+"-srv-a" || !runtime.stops[0].Purge || runtime.stops[0].RemoveApplicationData {
-		t.Fatalf("source migration cleanup = %#v", runtime.stops[0])
-	}
-	lastDeploy := runtime.deploys[len(runtime.deploys)-1]
-	if lastDeploy.ServerID != "srv-b" {
-		t.Fatalf("last deploy server = %q", lastDeploy.ServerID)
-	}
-}
-
-func TestMigrateRejectsExternalMounts(t *testing.T) {
-	svc, _, _, closeStore := newTestService(t)
-	defer closeStore()
-	ctx := context.Background()
-
-	app, err := svc.Create(ctx, SaveInput{
-		Name:              "web",
-		Enabled:           true,
-		SpecYAML:          "name: web\nimage: nginx\nvolumes:\n  - source: web-data\n    target: /data\n",
-		DeploymentMode:    DeploymentModeSelected,
-		DeploymentServers: []string{"srv-a"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.Migrate(ctx, app.ID, MigrationInput{SourceServerID: "srv-a", TargetServerID: "srv-b"}); err == nil || !strings.Contains(err.Error(), "host paths or Docker volumes") {
-		t.Fatalf("expected migration mount validation, got %v", err)
-	}
-}
-
 func TestDecorateDeploymentTasksProjectsLifecycleDiagnostics(t *testing.T) {
 	svc, _, _, closeStore := newTestService(t)
 	defer closeStore()
@@ -1827,6 +1805,17 @@ func TestGetApplicationOperationRecordHandlesEmptyStageTimes(t *testing.T) {
 	if stage.StartedAt == nil || stage.FinishedAt != nil {
 		t.Fatalf("empty finished_at should scan as nil: %#v", stage)
 	}
+}
+
+func (s *Service) deploymentOperationErrorForTest(ctx context.Context, operationID string) error {
+	op, err := s.lifecycleOperationByID(ctx, operationID)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(op.Error) != "" {
+		return panelerr.BadGateway("application_runtime_operation_failed", "Application runtime operation failed: "+op.Error)
+	}
+	return nil
 }
 
 func newTestService(t *testing.T) (*Service, *fakeRuntimeClient, *fakeServerProvider, func()) {
@@ -1960,7 +1949,7 @@ func (f *fakeApplicationReconcileTrigger) TriggerApplicationReconcile(ctx contex
 			_ = json.Unmarshal([]byte(input.ParamsJSON), &params)
 		}
 		if strings.TrimSpace(params.LifecycleOperationID) != "" {
-			if err := f.svc.deploymentOperationError(ctx, params.LifecycleOperationID); err != nil {
+			if err := f.svc.deploymentOperationErrorForTest(ctx, params.LifecycleOperationID); err != nil {
 				return first, true, err
 			}
 		}

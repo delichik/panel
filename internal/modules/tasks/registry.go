@@ -42,18 +42,6 @@ type TaskContext struct {
 	Service *Service
 }
 
-func (tc TaskContext) Advance(stage, message string) error {
-	return tc.Service.Advance(tc.Context, tc.Task.ID, stage, message)
-}
-
-func (tc TaskContext) Log(stream, line string) error {
-	return tc.Service.AppendLog(tc.Context, tc.Task.ID, stream, line)
-}
-
-func (tc TaskContext) Step(in StepInput) (Step, error) {
-	return tc.Service.UpsertStep(tc.Context, tc.Task.ID, in)
-}
-
 type Definition struct {
 	Type              string
 	Summary           string
@@ -65,10 +53,7 @@ type Definition struct {
 	StaleQueuedAfter  time.Duration
 	ConcurrencyPolicy string
 	ConcurrencyKey    func(CreateInput) string
-	Validate          func(context.Context, CreateInput) error
-	BeforeStart       func(context.Context, CreateInput, Trigger) (bool, error)
 	Execute           func(TaskContext) error
-	OnComplete        func(context.Context, Task) error
 	OnFailure         func(context.Context, Task, error) error
 	Periodic          *Periodic
 }
