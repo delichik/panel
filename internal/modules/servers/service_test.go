@@ -238,8 +238,8 @@ func TestDeleteServerCancelsTasksAndCleansLocalReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	targets, _ := json.Marshal([]string{srv.ID, "srv_other"})
-	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)`,
-		"app_1", "app", 1, "name: app\nimage: nginx\n", "selected", string(targets), "[]", 1, "job_1", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,job_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`,
+		"app_1", "app", 1, "name: app\nimage: nginx\n", "selected", string(targets), 1, "job_1", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"); err != nil {
 		t.Fatal(err)
 	}
 	cards := `[{"id":"card_1","kind":"cpu","width":3,"height":2,"range":"1h","networkDirection":"both","serverIds":["` + srv.ID + `","srv_other"]}]`

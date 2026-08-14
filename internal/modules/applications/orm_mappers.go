@@ -18,17 +18,17 @@ import (
 // toDomainApplication 复刻原 scanApplication 的归一化语义。
 func toDomainApplication(m models.Application) Application {
 	app := Application{
-		ID:                   m.ID,
-		Version:              m.Version,
-		Kind:                 applicationKind(m.Kind),
-		Name:                 m.Name,
-		Enabled:              m.Enabled,
-		DeletionRequested:    m.DeletionRequested,
-		ReconcileStopped:     m.ReconcileStopped,
-		SpecYAML:             m.SpecYAML,
-		DeploymentMode:       m.DeploymentMode,
-		DeploymentServers:    m.DeploymentServerIDsJSON,
-		ReverseProxy:         reverseProxyFromMaps(m.ReverseProxyJSON),
+		ID:                m.ID,
+		Version:           m.Version,
+		Kind:              applicationKind(m.Kind),
+		Name:              m.Name,
+		Enabled:           m.Enabled,
+		DeletionRequested: m.DeletionRequested,
+		ReconcileStopped:  m.ReconcileStopped,
+		SpecYAML:          m.SpecYAML,
+		DeploymentMode:    m.DeploymentMode,
+		DeploymentServers: m.DeploymentServerIDsJSON,
+
 		Generation:           m.Generation,
 		SpecHash:             m.SpecHash,
 		ImageReference:       m.ImageReference,
@@ -70,46 +70,23 @@ func fromDomainApplication(app Application) *models.Application {
 		SpecYAML:                app.SpecYAML,
 		DeploymentMode:          app.DeploymentMode,
 		DeploymentServerIDsJSON: app.DeploymentServers,
-		ReverseProxyJSON:        reverseProxyToMaps(app.ReverseProxy),
-		Generation:              app.Generation,
-		SpecHash:                app.SpecHash,
-		ImageReference:          app.ImageReference,
-		ImageDigest:             app.ImageDigest,
-		ImageLatestDigest:       app.ImageLatestDigest,
-		ImageCheckedAt:          app.ImageCheckedAt,
-		ImageUpdateAvailable:    app.ImageUpdateAvailable,
-		ImageLastError:          app.ImageLastError,
-		JobID:                   app.JobID,
-		Namespace:               app.Namespace,
-		LastEvalID:              app.LastEvalID,
-		LastDeploymentID:        app.LastDeploymentID,
-		LastError:               app.LastError,
-		CreatedAt:               app.CreatedAt,
-		UpdatedAt:               app.UpdatedAt,
-	}
-}
 
-func reverseProxyFromMaps(items []map[string]any) []ReverseProxyRule {
-	out := make([]ReverseProxyRule, 0, len(items))
-	raw, err := json.Marshal(items)
-	if err != nil {
-		return out
+		Generation:           app.Generation,
+		SpecHash:             app.SpecHash,
+		ImageReference:       app.ImageReference,
+		ImageDigest:          app.ImageDigest,
+		ImageLatestDigest:    app.ImageLatestDigest,
+		ImageCheckedAt:       app.ImageCheckedAt,
+		ImageUpdateAvailable: app.ImageUpdateAvailable,
+		ImageLastError:       app.ImageLastError,
+		JobID:                app.JobID,
+		Namespace:            app.Namespace,
+		LastEvalID:           app.LastEvalID,
+		LastDeploymentID:     app.LastDeploymentID,
+		LastError:            app.LastError,
+		CreatedAt:            app.CreatedAt,
+		UpdatedAt:            app.UpdatedAt,
 	}
-	_ = json.Unmarshal(raw, &out)
-	return out
-}
-
-func reverseProxyToMaps(rules []ReverseProxyRule) []map[string]any {
-	if rules == nil {
-		return nil
-	}
-	raw, err := json.Marshal(rules)
-	if err != nil {
-		return nil
-	}
-	var out []map[string]any
-	_ = json.Unmarshal(raw, &out)
-	return out
 }
 
 func toDomainLifecycleOperation(m models.ApplicationLifecycleOperation) LifecycleOperation {

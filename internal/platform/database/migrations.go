@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"panel/internal/platform/database/models"
 	"panel/internal/platform/database/orm"
@@ -18,6 +19,13 @@ func (s *Store) Migrate(ctx context.Context) error {
 	//    place.
 	if err := orm.RunSteps(ctx, s.logDB, []orm.Step{legacyResetTaskTablesStep}); err != nil {
 		return fmt.Errorf("reset legacy task tables: %w", err)
+	}
+	// 1.5. AppDB pre-destructive migration: reverse proxy routes must be
+	//      backfilled before the destructive schema sync drops the legacy
+	//      applications.reverse_proxy_json / facility_app_configs.domains_json
+	//      columns that the unified reverse_proxy_routes table replaces.
+	if err := orm.RunSteps(ctx, s.appDB, preAppMigrationSteps()); err != nil {
+		return fmt.Errorf("pre-migrate reverse proxy routes: %w", err)
 	}
 	// 2. Per-database schema management: each library is migrated with the
 	//    model list of that library only, with destructive mode enabled.
@@ -93,6 +101,19 @@ var legacyResetTaskTablesStep = orm.Step{
 // appMigrationSteps are the one-time data migrations for the app database.
 // Each keeps its original guard so it is a no-op once applied or on fresh
 // databases.
+// preAppMigrationSteps run before the destructive ORM schema sync so the
+// legacy reverse proxy columns still exist while their data moves into the
+// unified reverse_proxy_routes table.
+func preAppMigrationSteps() []orm.Step {
+	return []orm.Step{
+		{ID: "legacy_migrate_reverse_proxy_configuration", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateReverseProxyConfigurationOn(ctx, tx)
+		}},
+		{ID: "migrate_reverse_proxy_routes_table", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateReverseProxyRoutesTableOn(ctx, tx)
+		}},
+	}
+}
 func appMigrationSteps() []orm.Step {
 	return []orm.Step{
 		{ID: "legacy_backfill_server_privilege_mode", Run: func(ctx context.Context, tx *sql.Tx) error {
@@ -101,9 +122,7 @@ func appMigrationSteps() []orm.Step {
 		{ID: "legacy_migrate_application_file_names", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateApplicationFileNamesOn(ctx, tx)
 		}},
-		{ID: "legacy_migrate_reverse_proxy_configuration", Run: func(ctx context.Context, tx *sql.Tx) error {
-			return migrateReverseProxyConfigurationOn(ctx, tx)
-		}},
+
 		{ID: "legacy_migrate_facility_asset_names", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateFacilityAssetNamesOn(ctx, tx)
 		}},
@@ -524,84 +543,90 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 		return err
 	}
 
-	appRows, err := tx.QueryContext(ctx, `SELECT id,name,deployment_mode,deployment_server_ids_json,reverse_proxy_json FROM applications WHERE kind <> 'facility'`)
+	appColumns, err := databaseTableColumnsOn(ctx, tx, "applications")
 	if err != nil {
 		return err
 	}
-	type appUpdate struct{ ID, Raw string }
-	updates := []appUpdate{}
-	for appRows.Next() {
-		var appID, appName, mode, deploymentsRaw, proxyRaw string
-		if err := appRows.Scan(&appID, &appName, &mode, &deploymentsRaw, &proxyRaw); err != nil {
-			appRows.Close()
-			return err
-		}
-		var rules []map[string]any
-		if err := json.Unmarshal([]byte(proxyRaw), &rules); err != nil {
-			appRows.Close()
-			return fmt.Errorf("reverse proxy migration: application %q has invalid proxy configuration: %w", appName, err)
-		}
-		var deployments []string
-		_ = json.Unmarshal([]byte(deploymentsRaw), &deployments)
-		validOrigins := globalGateways
-		if strings.TrimSpace(mode) == "selected" {
-			validOrigins = intersectDatabaseStrings(globalGateways, deployments)
-		}
-		merged := []map[string]any{}
-		byDomain := map[string]int{}
-		for _, rule := range rules {
-			domain := normalizeProxyDomain(stringJSONValue(rule["domain"]))
-			if domain == "" {
-				continue
-			}
-			owner := "application " + appName
-			if err := reserveProxyDomain(owners, domain, owner); err != nil {
-				if existing, ok := byDomain[domain]; !ok || !strings.Contains(err.Error(), owner) {
-					appRows.Close()
-					return err
-				} else if !sameMigratedProxyTarget(merged[existing], rule) {
-					appRows.Close()
-					return fmt.Errorf("reverse proxy migration: application %q has multiple targets for domain %q", appName, domain)
-				}
-			}
-			origins := stringSliceJSONValue(rule["originServerIds"])
-			if len(origins) == 0 {
-				origins = append([]string(nil), validOrigins...)
-			}
-			origins = intersectDatabaseStrings(globalGateways, origins)
-			if len(origins) == 0 {
-				appRows.Close()
-				return fmt.Errorf("reverse proxy migration: application %q domain %q has no valid origin server", appName, domain)
-			}
-			rule["domain"] = domain
-			rule["originServerIds"] = origins
-			if _, ok := rule["anyAccess"]; !ok {
-				rule["anyAccess"] = map[string]any{"enabled": false, "strategy": "round_robin"}
-			}
-			delete(rule, "entryServerIds")
-			delete(rule, "upstreamMode")
-			delete(rule, "strategy")
-			delete(rule, "primaryServerId")
-			if index, exists := byDomain[domain]; exists {
-				merged[index]["paths"] = append(anySliceJSONValue(merged[index]["paths"]), anySliceJSONValue(rule["paths"])...)
-				continue
-			}
-			byDomain[domain] = len(merged)
-			merged = append(merged, rule)
-		}
-		raw, err := json.Marshal(merged)
+	if appColumns["reverse_proxy_json"] {
+		appRows, err := tx.QueryContext(ctx, `SELECT id,name,deployment_mode,deployment_server_ids_json,reverse_proxy_json FROM applications WHERE kind <> 'facility'`)
 		if err != nil {
-			appRows.Close()
 			return err
 		}
-		updates = append(updates, appUpdate{ID: appID, Raw: string(raw)})
-	}
-	if err := appRows.Close(); err != nil {
-		return err
-	}
-	for _, update := range updates {
-		if _, err := tx.ExecContext(ctx, `UPDATE applications SET reverse_proxy_json=? WHERE id=?`, update.Raw, update.ID); err != nil {
+		type appUpdate struct{ ID, Raw string }
+		updates := []appUpdate{}
+		for appRows.Next() {
+			var appID, appName, mode, deploymentsRaw, proxyRaw string
+			if err := appRows.Scan(&appID, &appName, &mode, &deploymentsRaw, &proxyRaw); err != nil {
+				appRows.Close()
+				return err
+			}
+			var rules []map[string]any
+			if err := json.Unmarshal([]byte(proxyRaw), &rules); err != nil {
+				appRows.Close()
+				return fmt.Errorf("reverse proxy migration: application %q has invalid proxy configuration: %w", appName, err)
+			}
+			var deployments []string
+			_ = json.Unmarshal([]byte(deploymentsRaw), &deployments)
+			validOrigins := globalGateways
+			if strings.TrimSpace(mode) == "selected" {
+				validOrigins = intersectDatabaseStrings(globalGateways, deployments)
+			}
+			merged := []map[string]any{}
+			byDomain := map[string]int{}
+			for _, rule := range rules {
+				domain := normalizeProxyDomain(stringJSONValue(rule["domain"]))
+				if domain == "" {
+					continue
+				}
+				owner := "application " + appName
+				if err := reserveProxyDomain(owners, domain, owner); err != nil {
+					if existing, ok := byDomain[domain]; !ok || !strings.Contains(err.Error(), owner) {
+						appRows.Close()
+						return err
+					} else if !sameMigratedProxyTarget(merged[existing], rule) {
+						appRows.Close()
+						return fmt.Errorf("reverse proxy migration: application %q has multiple targets for domain %q", appName, domain)
+					}
+				}
+				origins := stringSliceJSONValue(rule["originServerIds"])
+				if len(origins) == 0 {
+					origins = append([]string(nil), validOrigins...)
+				}
+				origins = intersectDatabaseStrings(globalGateways, origins)
+				if len(origins) == 0 {
+					appRows.Close()
+					return fmt.Errorf("reverse proxy migration: application %q domain %q has no valid origin server", appName, domain)
+				}
+				rule["domain"] = domain
+				rule["originServerIds"] = origins
+				if _, ok := rule["anyAccess"]; !ok {
+					rule["anyAccess"] = map[string]any{"enabled": false, "strategy": "round_robin"}
+				}
+				delete(rule, "entryServerIds")
+				delete(rule, "upstreamMode")
+				delete(rule, "strategy")
+				delete(rule, "primaryServerId")
+				if index, exists := byDomain[domain]; exists {
+					merged[index]["paths"] = append(anySliceJSONValue(merged[index]["paths"]), anySliceJSONValue(rule["paths"])...)
+					continue
+				}
+				byDomain[domain] = len(merged)
+				merged = append(merged, rule)
+			}
+			raw, err := json.Marshal(merged)
+			if err != nil {
+				appRows.Close()
+				return err
+			}
+			updates = append(updates, appUpdate{ID: appID, Raw: string(raw)})
+		}
+		if err := appRows.Close(); err != nil {
 			return err
+		}
+		for _, update := range updates {
+			if _, err := tx.ExecContext(ctx, `UPDATE applications SET reverse_proxy_json=? WHERE id=?`, update.Raw, update.ID); err != nil {
+				return err
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE facility_app_configs_new (
@@ -633,6 +658,167 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 	return nil
 }
 
+// migrateReverseProxyRoutesTableOn moves application reverse proxy rules and
+// facility reverse proxy domains into the unified reverse_proxy_routes table,
+// then drops the legacy JSON columns. It is guarded per table/column so it is
+// a no-op on fresh databases.
+func migrateReverseProxyRoutesTableOn(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS reverse_proxy_routes (
+		domain TEXT PRIMARY KEY,
+		app_id TEXT NOT NULL,
+		origin_server_ids TEXT NOT NULL DEFAULT '[]',
+		any_access_json TEXT NOT NULL DEFAULT '{}',
+		target_type TEXT NOT NULL DEFAULT '',
+		target_port INTEGER NOT NULL DEFAULT 0,
+		target_container TEXT NOT NULL DEFAULT '',
+		paths_json TEXT NOT NULL DEFAULT '[]',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_reverse_proxy_routes_app_id ON reverse_proxy_routes(app_id)`); err != nil {
+		return err
+	}
+	if err := backfillApplicationReverseProxyRoutesOn(ctx, tx); err != nil {
+		return err
+	}
+	return backfillFacilityReverseProxyRoutesOn(ctx, tx)
+}
+
+func backfillApplicationReverseProxyRoutesOn(ctx context.Context, tx *sql.Tx) error {
+	columns, err := databaseTableColumnsOn(ctx, tx, "applications")
+	if err != nil {
+		return err
+	}
+	if !columns["reverse_proxy_json"] {
+		return nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT id, reverse_proxy_json FROM applications WHERE kind <> 'facility'`)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	type routeRow struct {
+		Domain     string
+		AppID      string
+		Origins    string
+		AnyAccess  string
+		TargetType string
+		TargetPort int
+		Paths      string
+	}
+	routes := []routeRow{}
+	for rows.Next() {
+		var appID, raw string
+		if err := rows.Scan(&appID, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var rules []map[string]any
+		if err := json.Unmarshal([]byte(raw), &rules); err != nil {
+			rows.Close()
+			return fmt.Errorf("reverse proxy migration: application %q has invalid proxy configuration: %w", appID, err)
+		}
+		for _, rule := range rules {
+			domain := normalizeProxyDomain(stringJSONValue(rule["domain"]))
+			if domain == "" {
+				continue
+			}
+			routes = append(routes, routeRow{
+				Domain:     domain,
+				AppID:      appID,
+				Origins:    marshalProxyJSONList(rule["originServerIds"]),
+				AnyAccess:  marshalProxyJSONObject(rule["anyAccess"]),
+				TargetType: stringJSONValue(rule["targetType"]),
+				TargetPort: intJSONValue(rule["targetPort"]),
+				Paths:      marshalProxyJSONList(rule["paths"]),
+			})
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			route.Domain, route.AppID, route.Origins, route.AnyAccess, route.TargetType, route.TargetPort, route.Paths, now, now); err != nil {
+			return fmt.Errorf("reverse proxy migration: insert application route %q for %q: %w", route.Domain, route.AppID, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE applications DROP COLUMN reverse_proxy_json`); err != nil {
+		return fmt.Errorf("reverse proxy migration: drop applications.reverse_proxy_json: %w", err)
+	}
+	return nil
+}
+
+func backfillFacilityReverseProxyRoutesOn(ctx context.Context, tx *sql.Tx) error {
+	columns, err := databaseTableColumnsOn(ctx, tx, "facility_app_configs")
+	if err != nil {
+		return err
+	}
+	if !columns["domains_json"] {
+		return nil
+	}
+	var raw string
+	err = tx.QueryRowContext(ctx, `SELECT domains_json FROM facility_app_configs WHERE id=?`, "reverse_proxy").Scan(&raw)
+	if err == sql.ErrNoRows {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE facility_app_configs DROP COLUMN domains_json`); err != nil {
+			return fmt.Errorf("reverse proxy migration: drop facility_app_configs.domains_json: %w", err)
+		}
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var domains []map[string]any
+	if err := json.Unmarshal([]byte(raw), &domains); err != nil {
+		return fmt.Errorf("reverse proxy migration: facility configuration has invalid domains: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, domain := range domains {
+		name := normalizeProxyDomain(stringJSONValue(domain["domain"]))
+		if name == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
+			name, "facility_reverse_proxy", marshalProxyJSONList(domain["originServerIds"]), marshalProxyJSONObject(domain["anyAccess"]), "", 0, marshalProxyJSONList(domain["paths"]), now, now); err != nil {
+			return fmt.Errorf("reverse proxy migration: insert facility route %q: %w", name, err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE facility_app_configs DROP COLUMN domains_json`); err != nil {
+		return fmt.Errorf("reverse proxy migration: drop facility_app_configs.domains_json: %w", err)
+	}
+	return nil
+}
+
+func marshalProxyJSONList(value any) string {
+	if value == nil {
+		return "[]"
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "[]"
+	}
+	return string(raw)
+}
+
+func marshalProxyJSONObject(value any) string {
+	if value == nil {
+		return "{}"
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func intJSONValue(value any) int {
+	if number, ok := value.(float64); ok {
+		return int(number)
+	}
+	return 0
+}
 func migrateApplicationFileNamesOn(ctx context.Context, q migrationExecutor) error {
 	for _, table := range []string{"application_files", "application_edit_session_files"} {
 		columns, err := databaseTableColumnsOn(ctx, q, table)

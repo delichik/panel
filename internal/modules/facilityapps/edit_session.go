@@ -996,13 +996,12 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 	}
 	serversRaw, _ := json.Marshal(normalized.DeploymentServers)
 	panelRaw, _ := json.Marshal(normalized.PanelEntry)
-	domainsRaw, _ := json.Marshal(normalized.Domains)
 	now := formatTime(time.Now().UTC())
 	var result sql.Result
 	if manifest.BaseVersion == 0 {
-		result, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES(?,1,?,?,?,?,?) ON CONFLICT(id) DO NOTHING`, ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), "", now)
+		result, err = tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,last_error,updated_at) VALUES(?,1,?,?,?,?) ON CONFLICT(id) DO NOTHING`, ReverseProxyID, string(serversRaw), string(panelRaw), "", now)
 	} else {
-		result, err = tx.ExecContext(ctx, `UPDATE facility_app_configs SET version=version+1,deployment_server_ids_json=?,panel_entry_json=?,domains_json=?,last_error='',updated_at=? WHERE id=? AND version=?`, string(serversRaw), string(panelRaw), string(domainsRaw), now, ReverseProxyID, manifest.BaseVersion)
+		result, err = tx.ExecContext(ctx, `UPDATE facility_app_configs SET version=version+1,deployment_server_ids_json=?,panel_entry_json=?,last_error='',updated_at=? WHERE id=? AND version=?`, string(serversRaw), string(panelRaw), now, ReverseProxyID, manifest.BaseVersion)
 	}
 	if err != nil {
 		return err
@@ -1011,6 +1010,9 @@ func (s *Service) commitFacilityManifestDB(ctx context.Context, manifest facilit
 		var currentVersion int
 		_ = tx.QueryRowContext(ctx, `SELECT version FROM facility_app_configs WHERE id=?`, ReverseProxyID).Scan(&currentVersion)
 		return panelerr.WithDetails(panelerr.Conflict("resource_version_conflict", "facility configuration changed while editing"), map[string]any{"expectedVersion": manifest.BaseVersion, "currentVersion": currentVersion})
+	}
+	if err := replaceFacilityRouteDomains(ctx, tx, normalized.Domains); err != nil {
+		return err
 	}
 	return tx.Commit()
 }

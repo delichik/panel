@@ -39,24 +39,16 @@ const (
 	proxyErrorPagePath          = proxyConfigRoot + "/errors/upstream-unavailable.html"
 )
 
-// applicationReverseProxyRow 保持 reverse_proxy_json 原始字节，
-// 与存量行解析逻辑（[]applications.ReverseProxyRule）逐字节一致。
-type applicationReverseProxyRow struct {
-	ID               string
-	Name             string
-	ReverseProxyJSON string
-}
-
 // facilityConfigRow 保持 facility_app_configs 各 JSON 列原始字节，
 // 与 loadConfig 的存量 json.Unmarshal 行为逐字节一致。
 type facilityConfigRow struct {
 	Version                 int
 	DeploymentServerIDsJSON string `orm:"column:deployment_server_ids_json"`
 	PanelEntryJSON          string `orm:"column:panel_entry_json"`
-	DomainsJSON             string `orm:"column:domains_json"`
-	DNSSyncJSON             string `orm:"column:dns_sync_json"`
-	LastError               string
-	UpdatedAt               string
+
+	DNSSyncJSON string `orm:"column:dns_sync_json"`
+	LastError   string
+	UpdatedAt   string
 }
 
 // DNSProxySyncer is the DNS provider surface used by the reverse proxy sync
@@ -416,21 +408,23 @@ func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicati
 	if cfg.PanelEntry.Enabled {
 		owners[cfg.PanelEntry.Domain] = "Panel entry"
 	}
-	var applicationRows []applicationReverseProxyRow
-	if err := orm.New(s.db).From("applications").Select("id", "name", "reverse_proxy_json").Where("kind<>?", applications.ApplicationKindFacility).And("id<>?", applicationID).All(ctx, &applicationRows); err != nil {
+	rows, err := orm.Raw(ctx, s.db, `SELECT r.domain, a.name FROM reverse_proxy_routes r JOIN applications a ON a.id = r.app_id WHERE r.app_id <> ? AND r.app_id <> ?`, proxyApplicationID, applicationID)
+	if err != nil {
 		return err
 	}
-	for _, row := range applicationRows {
-		var existing []applications.ReverseProxyRule
-		if err := json.Unmarshal([]byte(row.ReverseProxyJSON), &existing); err != nil {
+	defer rows.Close()
+	for rows.Next() {
+		var domain, appName string
+		if err := rows.Scan(&domain, &appName); err != nil {
 			return err
 		}
-		for _, rule := range existing {
-			domain := strings.ToLower(strings.TrimSpace(rule.Domain))
-			if domain != "" {
-				owners[domain] = "application " + row.Name
-			}
+		domain = strings.ToLower(strings.TrimSpace(domain))
+		if domain != "" {
+			owners[domain] = "application " + appName
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 	seen := map[string]struct{}{}
 	for _, rule := range rules {
@@ -1213,7 +1207,7 @@ func applicationProxyUpstream(route applications.ReverseProxyRoute, localUpstrea
 func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg := ReverseProxyConfig{ID: ReverseProxyID, DeploymentServers: []string{}, Domains: []FacilityRouteDomain{}}
 	var row facilityConfigRow
-	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "panel_entry_json", "domains_json", "dns_sync_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
+	if err := orm.New(s.db).From("facility_app_configs").Select("version", "deployment_server_ids_json", "panel_entry_json", "dns_sync_json", "last_error", "updated_at").Where("id=?", ReverseProxyID).First(ctx, &row); err != nil {
 		if err == sql.ErrNoRows {
 			return cfg, nil
 		}
@@ -1223,7 +1217,11 @@ func (s *Service) loadConfig(ctx context.Context) (ReverseProxyConfig, error) {
 	cfg.LastError = row.LastError
 	_ = json.Unmarshal([]byte(row.DeploymentServerIDsJSON), &cfg.DeploymentServers)
 	_ = json.Unmarshal([]byte(row.PanelEntryJSON), &cfg.PanelEntry)
-	_ = json.Unmarshal([]byte(row.DomainsJSON), &cfg.Domains)
+	domains, err := s.loadFacilityRouteDomains(ctx)
+	if err != nil {
+		return ReverseProxyConfig{}, err
+	}
+	cfg.Domains = domains
 	_ = json.Unmarshal([]byte(row.DNSSyncJSON), &cfg.DNSSync)
 	if cfg.DeploymentServers == nil {
 		cfg.DeploymentServers = []string{}
@@ -1279,16 +1277,66 @@ func (s *Service) normalizeStoredRouteAsset(ctx context.Context, path *FacilityR
 	path.AssetID = ""
 }
 
+func (s *Service) loadFacilityRouteDomains(ctx context.Context) ([]FacilityRouteDomain, error) {
+	var rows []models.ReverseProxyRoute
+	if err := orm.New(s.db).From("reverse_proxy_routes").Where("app_id=?", proxyApplicationID).OrderBy("domain ASC").All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]FacilityRouteDomain, 0, len(rows))
+	for _, row := range rows {
+		var anyAccess applications.AnyAccessConfig
+		anyAccessRaw, _ := json.Marshal(row.AnyAccessJSON)
+		_ = json.Unmarshal(anyAccessRaw, &anyAccess)
+		var paths []FacilityRoutePath
+		pathsRaw, _ := json.Marshal(row.PathsJSON)
+		_ = json.Unmarshal(pathsRaw, &paths)
+		out = append(out, FacilityRouteDomain{
+			Domain:          row.Domain,
+			OriginServerIDs: append([]string(nil), row.OriginServerIDs...),
+			AnyAccess:       anyAccess,
+			Paths:           paths,
+		})
+	}
+	return out, nil
+}
+
+func replaceFacilityRouteDomains(ctx context.Context, exec orm.Executor, domains []FacilityRouteDomain) error {
+	if err := orm.New(exec).From("reverse_proxy_routes").Where("app_id=?", proxyApplicationID).Delete(ctx); err != nil {
+		return err
+	}
+	if len(domains) == 0 {
+		return nil
+	}
+	now := time.Now().UTC()
+	items := make([]*models.ReverseProxyRoute, 0, len(domains))
+	for _, domain := range domains {
+		anyAccessRaw, _ := json.Marshal(domain.AnyAccess)
+		var anyAccess map[string]any
+		_ = json.Unmarshal(anyAccessRaw, &anyAccess)
+		pathsRaw, _ := json.Marshal(domain.Paths)
+		var paths []map[string]any
+		_ = json.Unmarshal(pathsRaw, &paths)
+		route := models.ReverseProxyRoute{
+			Domain:          strings.ToLower(strings.TrimSpace(domain.Domain)),
+			AppID:           proxyApplicationID,
+			OriginServerIDs: append([]string(nil), domain.OriginServerIDs...),
+			AnyAccessJSON:   anyAccess,
+			TargetType:      "",
+			TargetPort:      0,
+			PathsJSON:       paths,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		items = append(items, &route)
+	}
+	return orm.New(exec).From("reverse_proxy_routes").InsertBatch(ctx, items)
+}
 func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error {
 	serversRaw, err := json.Marshal(cfg.DeploymentServers)
 	if err != nil {
 		return err
 	}
 	panelRaw, err := json.Marshal(cfg.PanelEntry)
-	if err != nil {
-		return err
-	}
-	domainsRaw, err := json.Marshal(cfg.Domains)
 	if err != nil {
 		return err
 	}
@@ -1300,11 +1348,21 @@ func (s *Service) saveConfig(ctx context.Context, cfg ReverseProxyConfig) error 
 		dnsSyncRaw = []byte("{}")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err = orm.RawExec(ctx, s.db, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,dns_sync_json,last_error,updated_at)
-		VALUES(?,1,?,?,?,?,?,?)
-		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,domains_json=excluded.domains_json,dns_sync_json=excluded.dns_sync_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
-		ReverseProxyID, string(serversRaw), string(panelRaw), string(domainsRaw), string(dnsSyncRaw), cfg.LastError, now)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,dns_sync_json,last_error,updated_at)
+		VALUES(?,1,?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET version=facility_app_configs.version+1,deployment_server_ids_json=excluded.deployment_server_ids_json,panel_entry_json=excluded.panel_entry_json,dns_sync_json=excluded.dns_sync_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
+		ReverseProxyID, string(serversRaw), string(panelRaw), string(dnsSyncRaw), cfg.LastError, now); err != nil {
+		return err
+	}
+	if err := replaceFacilityRouteDomains(ctx, tx, cfg.Domains); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Service) setLastError(ctx context.Context, message string) error {
@@ -1333,15 +1391,15 @@ func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg Reverse
 			SpecYAML:                facilitySpecYAML(cfg),
 			DeploymentMode:          applications.DeploymentModeSelected,
 			DeploymentServerIDsJSON: cfg.DeploymentServers,
-			ReverseProxyJSON:        []map[string]any{},
-			Generation:              1,
-			SpecHash:                cfgHash,
-			ImageReference:          supportedProxyImage,
-			JobID:                   proxyApplicationID,
-			Namespace:               "facility",
-			LastError:               cfg.LastError,
-			CreatedAt:               now,
-			UpdatedAt:               now,
+
+			Generation:     1,
+			SpecHash:       cfgHash,
+			ImageReference: supportedProxyImage,
+			JobID:          proxyApplicationID,
+			Namespace:      "facility",
+			LastError:      cfg.LastError,
+			CreatedAt:      now,
+			UpdatedAt:      now,
 		}
 		if err := orm.Insert(ctx, s.db, &app); err != nil {
 			return 0, "", err

@@ -53,7 +53,7 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 
 ## 设施应用
 
-- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；当前持久字段为 `version`、`deployment_server_ids_json`、`panel_entry_json`、`domains_json`、错误和更新时间，旧 `domain_policies_json/static_sites_json` 已由迁移转换删除。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
+- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；当前持久字段为 `version`、`deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json`、错误和更新时间，域名路由统一存 `reverse_proxy_routes`（`app_id='facility_reverse_proxy'`），旧 `domain_policies_json/static_sites_json` 与 `domains_json` 已由迁移转换删除。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
 - 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
 - Panel 托管的 Nginx 配置目录只读挂载到独立的 `/etc/panel-nginx`，容器以 `nginx -c /etc/panel-nginx/nginx.conf` 显式启动；不得挂载或覆盖镜像原生 `/etc/nginx`，以保留 `mime.types` 等镜像资产。不能把主配置作为单文件 bind mount，否则宿主机原子 rename 后运行容器仍可能引用旧 inode。证书 managed directory 独立只读挂载到 `/etc/panel-certs`。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可使用显式指定 `/etc/panel-nginx/nginx.conf` 的 validate/reload，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
 - 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。
@@ -136,7 +136,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 
 ## 设施应用反向代理静态站点与 TLS
 
-- `facility_app_configs` 只持久化 `deployment_server_ids_json`、`panel_entry_json` 和 `domains_json`。`domains_json` 按域名保存 `originServerIds`、`anyAccess` 与嵌套 Path；旧 `image`、`static_sites_json`、`domain_policies_json` 在启动迁移中一次性转换并通过 SQLite 重建表删除。
+- `facility_app_configs` 只持久化 `deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json` 等设施级配置；域名路由统一存 `reverse_proxy_routes`，按 `domain`（全局唯一主键）保存 `originServerIds`、`anyAccess`、`targetType`/`targetPort` 与嵌套 Path。旧 `image`、`static_sites_json`、`domain_policies_json` 以及 `domains_json`/`applications.reverse_proxy_json` 在启动预迁移中一次性转换并删列。
 - 设施入口网关镜像固定为 `nginx:1.28-alpine`，API 和前端不提供镜像设置。
 - 每个设施域名至少选择一个源站节点，且源站必须属于全局网关节点。AnyAccess 关闭时只有源站节点开放域名；开启时其他全局网关作为转发节点（`relayServerIds` 为空表示全部非源站网关节点，非空表示指定子集），按轮询、主备或客户端 IP 哈希连接源站入口网关。转发节点必须属于全局网关节点且不能是源站节点。
 - 设施路由、应用路由和 Panel 入口的规范化域名全局唯一。旧库迁移发现跨所有者冲突时必须中止并列出冲突，不得静默合并。

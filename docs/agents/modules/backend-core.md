@@ -68,7 +68,7 @@
 - SQLite 连接由 `internal/platform/database` 统一配置为 WAL、5 秒 busy timeout 和小连接池；普通路径与 `file:` DSN 都必须保留这些默认 pragma，除非用户显式覆盖。
 - 当前处于 alpha 但已有使用者，修改表结构必须考虑旧版本迁移。
 - `Store.Migrate` 已由 ORM 驱动：对 app/log/metrics 三库分别调用 `orm.AutoMigrateModels(WithDestructive(true))`（DDL 由 `internal/platform/database/models` 的 42 个模型负责，CHECK 约束经 `TableConstraints()` 声明），随后按 `models.ExtraIndexDDL()` 幂等创建复合/部分/复合 UNIQUE 索引，并用 `orm.RunSteps` 执行一次性数据迁移；历史遗留表（旧 tasks/certificates）由对应 Step/直连迁移清理，不依赖自动删除。证书 scope 约束重建因需事务外切换 `PRAGMA foreign_keys`，由 Migrate 直接调用而非 Step。
-- 入口网关设施配置表 `facility_app_configs` 使用 `domains_json` 保存域名、源站、AnyAccess 和嵌套 Path。升级旧库时迁移会转换旧设施字段与应用 `reverse_proxy_json`，先检查设施、应用和 Panel 入口的域名所有权冲突，再重建设施表删除旧镜像、静态站点和域名策略列；迁移完成后业务代码不保留旧 JSON 字段兼容。
+- 入口网关设施配置表 `facility_app_configs` 只保存 `version`、`deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json`、`last_error`、`updated_at`；所有路由（设施域名与应用反向代理规则）统一保存在 `reverse_proxy_routes` 表：`domain` 主键全局唯一，`app_id` 标识所属应用（设施代理自身使用 `facility_reverse_proxy`），`origin_server_ids`/`any_access_json`/`target_type`/`target_port`/`paths_json` 为统一字段。升级旧库时启动预迁移先把旧 `facility_app_configs.domains_json` 与 `applications.reverse_proxy_json`（含 legacy 格式转换与域名所有权冲突检查）回填到新表，再删除旧列；迁移完成后业务代码不保留旧 JSON 字段兼容。
 - `panel_installation` 是固定 `default` 记录的单例安装状态，使用服务器外键保存待初始化节点和唯一 Panel 宿主节点。宿主节点不能通过普通服务器删除流程移除；Panel 入口启用时必须绑定该节点，宿主节点可由 setup 或设施应用网关配置首次保存登记。
 - 新字段或新表优先使用可重复执行的增量迁移，并在 `internal/platform/database/store_test.go` 或相关 service 测试覆盖旧库升级路径。
 - 数据库迁移兼容基线不再包含短期内部结构：`applications.persistent_path`、AppDB 中的 `application_lifecycle_operations`/`application_lifecycle_targets`、以及不支持 `application_files.kind='archive'` 的旧 `application_files` 约束；处理这些更早内部快照时应先用带兼容迁移的版本升级。

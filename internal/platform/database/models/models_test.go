@@ -21,7 +21,7 @@ var appTables = []string{
 	"container_observations", "docker_resource_snapshots", "dns_record_snapshots",
 	"applications", "application_edit_sessions", "application_edit_session_files",
 	"application_edit_session_operations", "application_files", "application_instances",
-	"facility_app_configs", "facility_static_assets", "facility_edit_sessions",
+	"facility_app_configs", "facility_static_assets", "reverse_proxy_routes", "facility_edit_sessions",
 	"facility_edit_session_assets", "facility_edit_session_operations", "storage_share_configs",
 	"storage_share_partitions", "dns_domains",
 	"certificates", "self_signed_certificates", "key_assets", "overview_card_configurations",

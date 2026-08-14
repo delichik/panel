@@ -90,8 +90,8 @@ func TestListSummariesDoesNotLoadApplicationDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET enabled=1,spec_yaml=?,reverse_proxy_json=?,image_update_available=1 WHERE id=?`,
-		"not: [valid", "not-json", app.ID); err != nil {
+	if _, err := svc.db.ExecContext(ctx, `UPDATE applications SET enabled=1,spec_yaml=?,image_update_available=1 WHERE id=?`,
+		"not: [valid", app.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.db.ExecContext(ctx, `INSERT INTO application_instances(id,application_id,server_id,container_name,container_id,desired_state,status,runtime_spec_json,last_deployed_generation,last_error,created_at,updated_at)

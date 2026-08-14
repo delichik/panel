@@ -760,15 +760,15 @@ func TestMigrateRebuildsLegacyFacilityRoutesAsDomains(t *testing.T) {
 	}
 	defer store.Close()
 	columns := tableColumns(t, store.AppDB(), "facility_app_configs")
-	if !columns["domains_json"] || columns["domain_policies_json"] || columns["static_sites_json"] || columns["image"] {
+	if columns["domains_json"] || columns["domain_policies_json"] || columns["static_sites_json"] || columns["image"] {
 		t.Fatalf("unexpected migrated facility columns: %#v", columns)
 	}
-	var domains string
-	if err := store.AppDB().QueryRow(`SELECT domains_json FROM facility_app_configs WHERE id='reverse_proxy'`).Scan(&domains); err != nil {
+	var routeDomain, routeAppID, routePaths string
+	if err := store.AppDB().QueryRow(`SELECT domain, app_id, paths_json FROM reverse_proxy_routes WHERE domain='legacy.example.test'`).Scan(&routeDomain, &routeAppID, &routePaths); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(domains, `"domain":"legacy.example.test"`) || !strings.Contains(domains, `"originServerIds":["srv-edge"]`) || !strings.Contains(domains, `"paths":[`) {
-		t.Fatalf("migrated facility domains=%q", domains)
+	if routeAppID != "facility_reverse_proxy" || !strings.Contains(routePaths, `"path":"/"`) {
+		t.Fatalf("migrated facility route app_id=%q paths=%q", routeAppID, routePaths)
 	}
 }
 
@@ -968,4 +968,95 @@ func tableColumns(t *testing.T, db *sql.DB, table string) map[string]bool {
 		t.Fatal(err)
 	}
 	return columns
+}
+
+func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	cfg.CoordinationDatabase = filepath.Join(dir, "coordination.db")
+
+	db, err := sql.Open("sqlite", sqliteDSN(cfg.AppDatabase))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE applications (
+		id TEXT PRIMARY KEY,
+		version INTEGER NOT NULL DEFAULT 1,
+		kind TEXT NOT NULL DEFAULT 'application',
+		name TEXT NOT NULL,
+		enabled INTEGER NOT NULL DEFAULT 0,
+		deletion_requested INTEGER NOT NULL DEFAULT 0,
+		spec_yaml TEXT NOT NULL,
+		deployment_mode TEXT NOT NULL DEFAULT 'all',
+		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+		reverse_proxy_json TEXT NOT NULL DEFAULT '[]',
+		generation INTEGER NOT NULL DEFAULT 1,
+		spec_hash TEXT NOT NULL DEFAULT '',
+		job_id TEXT NOT NULL,
+		namespace TEXT NOT NULL DEFAULT 'default',
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE facility_app_configs (
+		id TEXT PRIMARY KEY,
+		version INTEGER NOT NULL DEFAULT 1,
+		deployment_server_ids_json TEXT NOT NULL DEFAULT '[]',
+		panel_entry_json TEXT NOT NULL DEFAULT '{}',
+		domains_json TEXT NOT NULL DEFAULT '[]',
+		last_error TEXT NOT NULL DEFAULT '',
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app-1','web',1,'name: web\nimage: nginx\n','all','["srv-a"]','[{"domain":"app.example.test","targetType":"local","targetPort":8080,"originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","webSocket":"off"}]}]',1,'hash','job','default','now','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO facility_app_configs(id,version,deployment_server_ids_json,panel_entry_json,domains_json,last_error,updated_at) VALUES('reverse_proxy',1,'["srv-a"]','{}','[{"domain":"site.example.test","originServerIds":["srv-a"],"anyAccess":{"enabled":false,"strategy":"round_robin"},"paths":[{"path":"/","ruleType":"redirect","redirectUrl":"https://target.example.test"}]}]','','now')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := Open(cfg)
+	if err != nil {
+		t.Fatalf("open migrated store: %v", err)
+	}
+	defer store.Close()
+
+	var appRouteCount int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM reverse_proxy_routes WHERE app_id='app-1'`).Scan(&appRouteCount); err != nil {
+		t.Fatal(err)
+	}
+	if appRouteCount != 1 {
+		t.Fatalf("application route count = %d, want 1", appRouteCount)
+	}
+	var facilityRouteCount int
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM reverse_proxy_routes WHERE app_id='facility_reverse_proxy'`).Scan(&facilityRouteCount); err != nil {
+		t.Fatal(err)
+	}
+	if facilityRouteCount != 1 {
+		t.Fatalf("facility route count = %d, want 1", facilityRouteCount)
+	}
+	var routeDomain, routePaths string
+	if err := store.AppDB().QueryRow(`SELECT domain, paths_json FROM reverse_proxy_routes WHERE domain='app.example.test'`).Scan(&routeDomain, &routePaths); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(routePaths, `"path":"/"`) || !strings.Contains(routePaths, `"webSocket":"off"`) {
+		t.Fatalf("application route paths = %q", routePaths)
+	}
+	appColumns := tableColumns(t, store.AppDB(), "applications")
+	if appColumns["reverse_proxy_json"] {
+		t.Fatal("applications.reverse_proxy_json must be dropped after migration")
+	}
+	facilityColumns := tableColumns(t, store.AppDB(), "facility_app_configs")
+	if facilityColumns["domains_json"] {
+		t.Fatal("facility_app_configs.domains_json must be dropped after migration")
+	}
 }

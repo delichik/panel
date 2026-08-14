@@ -189,32 +189,32 @@ func (*DNSRecordSnapshot) TableName() string { return "dns_record_snapshots" }
 
 // Application 对应 applications。
 type Application struct {
-	ID                      string           `orm:"primary_key"`
-	Version                 int              `orm:"not_null;default:1"`
-	Kind                    string           `orm:"not_null;default:'application'"`
-	Name                    string           `orm:"not_null;unique"`
-	Enabled                 bool             `orm:"not_null;default:0"`
-	DeletionRequested       bool             `orm:"not_null;default:0"`
-	ReconcileStopped        bool             `orm:"not_null;default:0"`
-	SpecYAML                string           `orm:"not_null"`
-	DeploymentMode          string           `orm:"not_null;default:'all'"`
-	DeploymentServerIDsJSON []string         `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
-	ReverseProxyJSON        []map[string]any `orm:"json;not_null;default:'[]'"`
-	Generation              int              `orm:"not_null;default:1"`
-	SpecHash                string           `orm:"not_null;default:''"`
-	ImageReference          string           `orm:"not_null;default:''"`
-	ImageDigest             string           `orm:"not_null;default:''"`
-	ImageLatestDigest       string           `orm:"not_null;default:''"`
-	ImageCheckedAt          *time.Time
-	ImageUpdateAvailable    bool      `orm:"not_null;default:0"`
-	ImageLastError          string    `orm:"not_null;default:''"`
-	JobID                   string    `orm:"not_null"`
-	Namespace               string    `orm:"not_null;default:'default'"`
-	LastEvalID              string    `orm:"not_null;default:''"`
-	LastDeploymentID        string    `orm:"not_null;default:''"`
-	LastError               string    `orm:"not_null;default:''"`
-	CreatedAt               time.Time `orm:"not_null"`
-	UpdatedAt               time.Time `orm:"not_null"`
+	ID                      string   `orm:"primary_key"`
+	Version                 int      `orm:"not_null;default:1"`
+	Kind                    string   `orm:"not_null;default:'application'"`
+	Name                    string   `orm:"not_null;unique"`
+	Enabled                 bool     `orm:"not_null;default:0"`
+	DeletionRequested       bool     `orm:"not_null;default:0"`
+	ReconcileStopped        bool     `orm:"not_null;default:0"`
+	SpecYAML                string   `orm:"not_null"`
+	DeploymentMode          string   `orm:"not_null;default:'all'"`
+	DeploymentServerIDsJSON []string `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
+
+	Generation           int    `orm:"not_null;default:1"`
+	SpecHash             string `orm:"not_null;default:''"`
+	ImageReference       string `orm:"not_null;default:''"`
+	ImageDigest          string `orm:"not_null;default:''"`
+	ImageLatestDigest    string `orm:"not_null;default:''"`
+	ImageCheckedAt       *time.Time
+	ImageUpdateAvailable bool      `orm:"not_null;default:0"`
+	ImageLastError       string    `orm:"not_null;default:''"`
+	JobID                string    `orm:"not_null"`
+	Namespace            string    `orm:"not_null;default:'default'"`
+	LastEvalID           string    `orm:"not_null;default:''"`
+	LastDeploymentID     string    `orm:"not_null;default:''"`
+	LastError            string    `orm:"not_null;default:''"`
+	CreatedAt            time.Time `orm:"not_null"`
+	UpdatedAt            time.Time `orm:"not_null"`
 }
 
 func (*Application) TableName() string { return "applications" }
@@ -371,17 +371,42 @@ func (*ApplicationInstance) ExtraIndexDDL() map[string][]string {
 
 // FacilityAppConfig 对应 facility_app_configs。
 type FacilityAppConfig struct {
-	ID                      string           `orm:"primary_key"`
-	Version                 int              `orm:"not_null;default:1"`
-	DeploymentServerIDsJSON []string         `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
-	PanelEntryJSON          map[string]any   `orm:"json;not_null;default:'{}'"`
-	DomainsJSON             []map[string]any `orm:"json;not_null;default:'[]'"`
-	DNSSyncJSON             map[string]any   `orm:"json;not_null;default:'{}';column:dns_sync_json"`
-	LastError               string           `orm:"not_null;default:''"`
-	UpdatedAt               time.Time        `orm:"not_null"`
+	ID                      string         `orm:"primary_key"`
+	Version                 int            `orm:"not_null;default:1"`
+	DeploymentServerIDsJSON []string       `orm:"json;not_null;default:'[]';column:deployment_server_ids_json"`
+	PanelEntryJSON          map[string]any `orm:"json;not_null;default:'{}'"`
+
+	DNSSyncJSON map[string]any `orm:"json;not_null;default:'{}';column:dns_sync_json"`
+	LastError   string         `orm:"not_null;default:''"`
+	UpdatedAt   time.Time      `orm:"not_null"`
 }
 
 func (*FacilityAppConfig) TableName() string { return "facility_app_configs" }
+
+// ReverseProxyRoute 对应 reverse_proxy_routes。domain 全局唯一，app_id 为所属
+// 应用 id；设施代理自身的路由使用 facility_reverse_proxy 作为 app_id。
+type ReverseProxyRoute struct {
+	Domain          string           `orm:"primary_key;not_null"`
+	AppID           string           `orm:"not_null;column:app_id"`
+	OriginServerIDs []string         `orm:"json;not_null;default:'[]';column:origin_server_ids"`
+	AnyAccessJSON   map[string]any   `orm:"json;not_null;default:'{}';column:any_access_json"`
+	TargetType      string           `orm:"not_null;default:'';column:target_type"`
+	TargetPort      int              `orm:"not_null;default:0;column:target_port"`
+	PathsJSON       []map[string]any `orm:"json;not_null;default:'[]';column:paths_json"`
+	CreatedAt       time.Time        `orm:"not_null"`
+	UpdatedAt       time.Time        `orm:"not_null"`
+}
+
+func (*ReverseProxyRoute) TableName() string { return "reverse_proxy_routes" }
+
+// ExtraIndexDDL 返回 reverse_proxy_routes 无法用 orm tag 表达的索引。
+func (*ReverseProxyRoute) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"reverse_proxy_routes": {
+			"CREATE INDEX IF NOT EXISTS idx_reverse_proxy_routes_app_id ON reverse_proxy_routes(app_id)",
+		},
+	}
+}
 
 // FacilityStaticAsset 对应 facility_static_assets。
 type FacilityStaticAsset struct {

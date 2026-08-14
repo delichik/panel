@@ -45,13 +45,13 @@ func TestCreateAssetsExposeInternalFilesAndProtectDeletes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_1','web',0,'name: web
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_1','web',0,'name: web
 image: nginx
 mounts:
   - type: panel_file
     source: key_asset:` + sshAsset.ID + `:private_key
     target: /root/.ssh/id_ed25519
-','all','[]','[]',1,'hash','job','default','now','now')`); err != nil {
+','all','[]',1,'hash','job','default','now','now')`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -196,9 +196,11 @@ func TestListReportsExactPanelFileAndReverseProxyReferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,reverse_proxy_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_refs','Referenced app',0,?,'all','[]',?,1,'hash','job','default','now','now')`,
-		"name: refs\nmounts:\n  - type: panel_file\n    source: key_asset:"+sshAsset.ID+":private_key\n    target: /root/.ssh/id_ed25519\n",
-		`[{"domain":"api.example.com"}]`); err != nil {
+	if _, err := store.AppDB().Exec(`INSERT INTO applications(id,name,enabled,spec_yaml,deployment_mode,deployment_server_ids_json,generation,spec_hash,job_id,namespace,created_at,updated_at) VALUES('app_refs','Referenced app',0,?,'all','[]',1,'hash','job','default','now','now')`,
+		"name: refs\nmounts:\n  - type: panel_file\n    source: key_asset:"+sshAsset.ID+":private_key\n    target: /root/.ssh/id_ed25519\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AppDB().Exec(`INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at) VALUES('api.example.com','app_refs','[]','{}','',0,'[]','now','now')`); err != nil {
 		t.Fatal(err)
 	}
 

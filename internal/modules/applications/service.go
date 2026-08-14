@@ -308,9 +308,17 @@ func (s *Service) List(ctx context.Context) ([]Application, error) {
 	if err := orm.New(s.db).From("applications").Where("kind<>?", ApplicationKindFacility).And("deletion_requested=0").OrderBy("name ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
+	routesByApp, err := s.loadReverseProxyRoutesByApp(ctx)
+	if err != nil {
+		return nil, err
+	}
 	apps := make([]Application, 0, len(rows))
 	for _, m := range rows {
-		apps = append(apps, toDomainApplication(m))
+		app := toDomainApplication(m)
+		if routes := routesByApp[app.ID]; len(routes) > 0 {
+			app.ReverseProxy = routes
+		}
+		apps = append(apps, app)
 	}
 	for i := range apps {
 		app, err := s.withImageUpdateStatus(ctx, apps[i])
@@ -438,9 +446,17 @@ func (s *Service) ListForReconcile(ctx context.Context) ([]Application, error) {
 	if err := orm.New(s.db).From("applications").Where("deletion_requested=0").OrderBy("kind ASC", "name ASC").All(ctx, &rows); err != nil {
 		return nil, err
 	}
+	routesByApp, err := s.loadReverseProxyRoutesByApp(ctx)
+	if err != nil {
+		return nil, err
+	}
 	apps := make([]Application, 0, len(rows))
 	for _, m := range rows {
-		apps = append(apps, toDomainApplication(m))
+		app := toDomainApplication(m)
+		if routes := routesByApp[app.ID]; len(routes) > 0 {
+			app.ReverseProxy = routes
+		}
+		apps = append(apps, app)
 	}
 	return apps, nil
 }
@@ -462,7 +478,13 @@ func (s *Service) getApplication(ctx context.Context, appID string) (Application
 	if err != nil {
 		return Application{}, err
 	}
-	return toDomainApplication(m), nil
+	app := toDomainApplication(m)
+	routes, err := s.loadReverseProxyRoutes(ctx, appID)
+	if err != nil {
+		return Application{}, err
+	}
+	app.ReverseProxy = routes
+	return app, nil
 }
 
 func (s *Service) Create(ctx context.Context, in SaveInput) (Application, error) {
@@ -513,7 +535,7 @@ func (s *Service) createWithFilesID(ctx context.Context, appID string, in SaveIn
 		}
 	}
 	if files == nil {
-		if err := s.insertApplication(ctx, app); err != nil {
+		if err := s.insertApplicationWithRoutes(ctx, app); err != nil {
 			return Application{}, applicationSaveError(err)
 		}
 		s.insertRevisionBestEffort(ctx, app, prepared.job)
@@ -627,7 +649,7 @@ func (s *Service) updateWithFilesVersioned(ctx context.Context, appID string, ex
 	}
 	if files == nil {
 		if configurationChanged {
-			if err := s.updateApplication(ctx, app); err != nil {
+			if err := s.updateApplicationWithRoutes(ctx, app); err != nil {
 				return Application{}, applicationSaveError(err)
 			}
 		} else if err := s.updateApplicationDerived(ctx, app); err != nil {
@@ -3559,6 +3581,115 @@ func (s *Service) renewLifecycleTargetTaskLease(ctx context.Context, targetID, t
 	return nil
 }
 
+func (s *Service) loadReverseProxyRoutes(ctx context.Context, appID string) ([]ReverseProxyRule, error) {
+	var rows []models.ReverseProxyRoute
+	if err := orm.New(s.db).From("reverse_proxy_routes").Where("app_id=?", appID).OrderBy("domain ASC").All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := make([]ReverseProxyRule, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, reverseProxyRouteFromModel(row))
+	}
+	return out, nil
+}
+
+func (s *Service) loadReverseProxyRoutesByApp(ctx context.Context) (map[string][]ReverseProxyRule, error) {
+	var rows []models.ReverseProxyRoute
+	if err := orm.New(s.db).From("reverse_proxy_routes").OrderBy("domain ASC").All(ctx, &rows); err != nil {
+		return nil, err
+	}
+	out := map[string][]ReverseProxyRule{}
+	for _, row := range rows {
+		out[row.AppID] = append(out[row.AppID], reverseProxyRouteFromModel(row))
+	}
+	return out, nil
+}
+
+func replaceApplicationReverseProxyRoutes(ctx context.Context, exec orm.Executor, appID string, rules []ReverseProxyRule) error {
+	if err := orm.New(exec).From("reverse_proxy_routes").Where("app_id=?", appID).Delete(ctx); err != nil {
+		return err
+	}
+	if len(rules) == 0 {
+		return nil
+	}
+	items := make([]*models.ReverseProxyRoute, 0, len(rules))
+	for _, rule := range rules {
+		route := reverseProxyRuleToModel(appID, rule)
+		items = append(items, &route)
+	}
+	return orm.New(exec).From("reverse_proxy_routes").InsertBatch(ctx, items)
+}
+
+func reverseProxyRuleToModel(appID string, rule ReverseProxyRule) models.ReverseProxyRoute {
+	anyAccessRaw, _ := json.Marshal(rule.AnyAccess)
+	var anyAccess map[string]any
+	_ = json.Unmarshal(anyAccessRaw, &anyAccess)
+	pathsRaw, _ := json.Marshal(rule.Paths)
+	var paths []map[string]any
+	_ = json.Unmarshal(pathsRaw, &paths)
+	now := time.Now().UTC()
+	return models.ReverseProxyRoute{
+		Domain:          strings.ToLower(strings.TrimSpace(rule.Domain)),
+		AppID:           appID,
+		OriginServerIDs: append([]string(nil), rule.OriginServerIDs...),
+		AnyAccessJSON:   anyAccess,
+		TargetType:      normalizeReverseProxyTargetType(rule.TargetType),
+		TargetPort:      rule.TargetPort,
+		PathsJSON:       paths,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+}
+
+func reverseProxyRouteFromModel(m models.ReverseProxyRoute) ReverseProxyRule {
+	anyAccessRaw, _ := json.Marshal(m.AnyAccessJSON)
+	var anyAccess AnyAccessConfig
+	_ = json.Unmarshal(anyAccessRaw, &anyAccess)
+	pathsRaw, _ := json.Marshal(m.PathsJSON)
+	var paths []ReverseProxyPath
+	_ = json.Unmarshal(pathsRaw, &paths)
+	targetType := strings.TrimSpace(m.TargetType)
+	if targetType == "" {
+		targetType = ReverseProxyTargetLocal
+	}
+	return ReverseProxyRule{
+		Domain:          m.Domain,
+		TargetType:      targetType,
+		TargetPort:      m.TargetPort,
+		OriginServerIDs: append([]string(nil), m.OriginServerIDs...),
+		AnyAccess:       anyAccess,
+		Paths:           paths,
+	}
+}
+func (s *Service) insertApplicationWithRoutes(ctx context.Context, app Application) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.insertApplicationWithExec(ctx, tx, app); err != nil {
+		return err
+	}
+	if err := replaceApplicationReverseProxyRoutes(ctx, tx, app.ID, app.ReverseProxy); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Service) updateApplicationWithRoutes(ctx context.Context, app Application) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := s.updateApplicationWithExec(ctx, tx, app); err != nil {
+		return err
+	}
+	if err := replaceApplicationReverseProxyRoutes(ctx, tx, app.ID, app.ReverseProxy); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
 func (s *Service) insertApplication(ctx context.Context, app Application) error {
 	m := fromDomainApplication(app)
 	m.Version = 1
@@ -3570,12 +3701,9 @@ func (s *Service) updateApplication(ctx context.Context, app Application) error 
 	if err != nil {
 		return err
 	}
-	reverseProxy, err := json.Marshal(app.ReverseProxy)
-	if err != nil {
-		return err
-	}
-	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+
+	_, err = orm.RawExec(ctx, s.db, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -3655,6 +3783,11 @@ func (s *Service) commitApplicationStateVersioned(ctx context.Context, app Appli
 			return err
 		}
 	}
+	if insertApp || configurationChanged {
+		if err := replaceApplicationReverseProxyRoutes(ctx, tx, app.ID, app.ReverseProxy); err != nil {
+			return err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -3669,12 +3802,9 @@ func (s *Service) updateApplicationWithExecIfVersion(ctx context.Context, exec *
 	if err != nil {
 		return err
 	}
-	reverseProxy, err := json.Marshal(app.ReverseProxy)
-	if err != nil {
-		return err
-	}
-	result, err := orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
+
+	result, err := orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=? AND version=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID, expectedVersion)
 	if err != nil {
 		return err
 	}
@@ -3703,12 +3833,9 @@ func (s *Service) updateApplicationWithExec(ctx context.Context, exec orm.Execut
 	if err != nil {
 		return err
 	}
-	reverseProxy, err := json.Marshal(app.ReverseProxy)
-	if err != nil {
-		return err
-	}
-	_, err = orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,reverse_proxy_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
-		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), string(reverseProxy), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
+
+	_, err = orm.RawExec(ctx, exec, `UPDATE applications SET version=version+1,kind=?,name=?,enabled=?,deletion_requested=?,spec_yaml=?,deployment_mode=?,deployment_server_ids_json=?,generation=?,spec_hash=?,image_reference=?,image_digest=?,image_latest_digest=?,image_checked_at=?,image_update_available=?,image_last_error=?,job_id=?,namespace=?,last_eval_id=?,last_deployment_id=?,last_error=?,updated_at=? WHERE id=?`,
+		applicationKind(app.Kind), app.Name, boolInt(app.Enabled), boolInt(app.DeletionRequested), app.SpecYAML, app.DeploymentMode, string(deploymentServers), app.Generation, app.SpecHash, app.ImageReference, app.ImageDigest, app.ImageLatestDigest, nullableTime(app.ImageCheckedAt), boolInt(app.ImageUpdateAvailable), app.ImageLastError, app.JobID, app.Namespace, app.LastEvalID, app.LastDeploymentID, app.LastError, formatTime(app.UpdatedAt), app.ID)
 	return err
 }
 
@@ -4694,7 +4821,10 @@ func (s *Service) deleteApplicationIfRuntimeGone(ctx context.Context, appID stri
 	if len(instances) > 0 {
 		return nil
 	}
-	return orm.New(s.db).From("applications").Where("id=?", appID).And("deletion_requested=1").Delete(ctx)
+	if err := orm.New(s.db).From("applications").Where("id=?", appID).And("deletion_requested=1").Delete(ctx); err != nil {
+		return err
+	}
+	return orm.New(s.db).From("reverse_proxy_routes").Where("app_id=?", appID).Delete(ctx)
 }
 
 func (s *Service) recordApplicationReconcileFailure(ctx context.Context, appID string) error {

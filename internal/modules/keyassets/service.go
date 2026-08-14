@@ -1655,15 +1655,31 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 	if err != nil {
 		return nil, err
 	}
-	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,spec_yaml,reverse_proxy_json FROM applications`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT id,name,spec_yaml FROM applications`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	routeRows, err := orm.Raw(ctx, s.db, `SELECT app_id, domain FROM reverse_proxy_routes WHERE app_id <> 'facility_reverse_proxy'`)
+	if err != nil {
+		return nil, err
+	}
+	defer routeRows.Close()
+	routesByApp := map[string][]struct{ Domain string }{}
+	for routeRows.Next() {
+		var appID, domain string
+		if err := routeRows.Scan(&appID, &domain); err != nil {
+			return nil, err
+		}
+		routesByApp[appID] = append(routesByApp[appID], struct{ Domain string }{Domain: domain})
+	}
+	if err := routeRows.Err(); err != nil {
+		return nil, err
+	}
 	references := map[string][]AssetReference{}
 	for rows.Next() {
-		var applicationID, applicationName, specYAML, reverseProxyJSON string
-		if err := rows.Scan(&applicationID, &applicationName, &specYAML, &reverseProxyJSON); err != nil {
+		var applicationID, applicationName, specYAML string
+		if err := rows.Scan(&applicationID, &applicationName, &specYAML); err != nil {
 			return nil, err
 		}
 		for _, assetID := range extractAssetIDsFromSpec(specYAML, "key_asset:") {
@@ -1674,10 +1690,7 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 				Relation:     "panel_file",
 			})
 		}
-		var rules []struct {
-			Domain string `json:"domain"`
-		}
-		_ = json.Unmarshal([]byte(reverseProxyJSON), &rules)
+		rules := routesByApp[applicationID]
 		if len(rules) == 0 {
 			continue
 		}

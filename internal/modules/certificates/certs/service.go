@@ -676,14 +676,14 @@ func certificateInternalFilePath(cert Certificate, kind string) (string, string,
 }
 
 func (s *Service) certificateInUse(ctx context.Context, certID string, domains []string, variableName string) (bool, error) {
-	rows, err := orm.Raw(ctx, s.db, `SELECT spec_yaml,reverse_proxy_json FROM applications`)
+	rows, err := orm.Raw(ctx, s.db, `SELECT spec_yaml FROM applications`)
 	if err != nil {
 		return false, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var spec, proxy string
-		if err := rows.Scan(&spec, &proxy); err != nil {
+		var spec string
+		if err := rows.Scan(&spec); err != nil {
 			return false, err
 		}
 		if certID != "" && strings.Contains(spec, "certificate:"+certID+":") {
@@ -695,19 +695,27 @@ func (s *Service) certificateInUse(ctx context.Context, certID string, domains [
 		if variableName != "" && strings.Contains(spec, ".certs."+variableName) {
 			return true, nil
 		}
-		var rules []struct {
-			Domain string `json:"domain"`
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	routeRows, err := orm.Raw(ctx, s.db, `SELECT domain FROM reverse_proxy_routes`)
+	if err != nil {
+		return false, err
+	}
+	defer routeRows.Close()
+	for routeRows.Next() {
+		var domain string
+		if err := routeRows.Scan(&domain); err != nil {
+			return false, err
 		}
-		_ = json.Unmarshal([]byte(proxy), &rules)
-		for _, rule := range rules {
-			for _, domain := range domains {
-				if certificateDomainMatches(domain, rule.Domain) {
-					return true, nil
-				}
+		for _, want := range domains {
+			if certificateDomainMatches(want, domain) {
+				return true, nil
 			}
 		}
 	}
-	return false, rows.Err()
+	return false, routeRows.Err()
 }
 
 func certificateDomainMatches(pattern, domain string) bool {
