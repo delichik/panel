@@ -384,7 +384,7 @@ type FacilityAppConfig struct {
 func (*FacilityAppConfig) TableName() string { return "facility_app_configs" }
 
 // ReverseProxyRoute 对应 reverse_proxy_routes。domain 全局唯一，app_id 为所属
-// 应用 id；设施代理自身的路由使用 facility_reverse_proxy 作为 app_id。
+// 应用 id；设施代理自身的路由使用 facility-reverse-proxy 作为 app_id。
 type ReverseProxyRoute struct {
 	Domain          string           `orm:"primary_key;not_null"`
 	AppID           string           `orm:"not_null;column:app_id"`
@@ -678,13 +678,13 @@ func (*AuthAccount) TableConstraints() []string {
 }
 
 // StorageShareConfig 对应 storage_share_configs（存储共享设施配置）。
+// 每台存储服务器各自保存自己的根目录（servers_json）。
 type StorageShareConfig struct {
-	ID        string    `orm:"primary_key"`
-	Version   int       `orm:"not_null;default:1"`
-	ServerID  string    `orm:"not_null;default:''"`
-	Root      string    `orm:"not_null;default:''"`
-	LastError string    `orm:"not_null;default:''"`
-	UpdatedAt time.Time `orm:"not_null"`
+	ID          string           `orm:"primary_key"`
+	Version     int              `orm:"not_null;default:1"`
+	ServersJSON []map[string]any `orm:"json;not_null;default:'[]';column:servers_json"`
+	LastError   string           `orm:"not_null;default:''"`
+	UpdatedAt   time.Time        `orm:"not_null"`
 }
 
 func (*StorageShareConfig) TableName() string { return "storage_share_configs" }
@@ -709,7 +709,7 @@ func (*StorageSharePartition) TableName() string { return "storage_share_partiti
 func (*StorageSharePartition) ExtraIndexDDL() map[string][]string {
 	return map[string][]string{
 		"storage_share_partitions": {
-			"CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_share_partitions_application_server ON storage_share_partitions(application_id, server_id)",
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_share_partitions_storage_application_server ON storage_share_partitions(storage_server_id, application_id, server_id)",
 		},
 	}
 }

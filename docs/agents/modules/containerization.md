@@ -53,7 +53,7 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 
 ## 设施应用
 
-- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；当前持久字段为 `version`、`deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json`、错误和更新时间，域名路由统一存 `reverse_proxy_routes`（`app_id='facility_reverse_proxy'`），旧 `domain_policies_json/static_sites_json` 与 `domains_json` 已由迁移转换删除。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
+- 设施应用配置保存在 `facility_app_configs`，不写入普通 `applications` 表；当前持久字段为 `version`、`deployment_server_ids_json`、`panel_entry_json`、`dns_sync_json`、错误和更新时间，域名路由统一存 `reverse_proxy_routes`（`app_id='facility-reverse-proxy'`），旧 `domain_policies_json/static_sites_json` 与 `domains_json` 已由迁移转换删除。保存反向代理设施应用时会派生维护服务器 traits 中的 `agent.reverse_proxy.enabled`，该值只反映设施全局网关范围，不作为独立节点开关。
 - 反向代理设施应用使用普通 agent runtime 原子能力：拉取 nginx 镜像、写托管 nginx 配置、容器内执行结构化命令、reload 或重建容器；不得新增 agent 侧胖反向代理接口。
 - Panel 托管的 Nginx 配置目录只读挂载到独立的 `/etc/panel-nginx`，容器以 `nginx -c /etc/panel-nginx/nginx.conf` 显式启动；不得挂载或覆盖镜像原生 `/etc/nginx`，以保留 `mime.types` 等镜像资产。不能把主配置作为单文件 bind mount，否则宿主机原子 rename 后运行容器仍可能引用旧 inode。证书 managed directory 独立只读挂载到 `/etc/panel-certs`。设施为每次差异返回 reload 或 recreate：纯路由、upstream、Header 和现有挂载内证书变化可使用显式指定 `/etc/panel-nginx/nginx.conf` 的 validate/reload，网络、端口、镜像、命令或 mount 结构变化必须 recreate。validate 失败回滚 managed files 并保留旧 worker；reload 失败回退 recreate。
 - 默认情况下 nginx 容器使用 host network，监听节点本机端口并把应用反向代理规则转发到 `127.0.0.1:<targetPort>`。当任一应用反向代理规则选择 `targetType=container` 时，nginx 容器改用受管 `panel-apps` bridge 网络并绑定宿主机 80/443；本地目标改为通过 `host.docker.internal:<targetPort>` 访问节点本地端口，容器目标通过 Application 容器名访问目标端口。
@@ -71,13 +71,13 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 
 ### 存储共享设施（storage-share）
 
-- 存储共享是第二个设施应用：配置选一台存储服务器 + 根目录，保存后通过 SSH 在存储服务器上安装/启用 NFS kernel server，并把根目录导出给全部 Panel 纳管服务器（exports 白名单 = 服务器 Host IP/主机名，选项 `rw,sync,no_subtree_check,no_root_squash,insecure`）。托管导出块使用 `# panel-storage-share:managed` 标记，卸载时只移除该块并 `exportfs -ra`，不覆盖用户其它导出。
-- 设施配置保存在 `storage_share_configs`（单行 id=`storage-share`）；分区历史保存在 `storage_share_partitions`（按 `application_id + server_id` 唯一，记录存储服务器与分配目录）。
-- 应用挂载新增 `storage_share` 类型：来源固定为设施 id `storage-share`，目标为容器内路径；Panel 在按服务器渲染运行规格时解析为 `nfs` 挂载 `storageServerIP:<root>/<serverID>/<appID>`，并登记分区记录。每个（应用 × 应用节点）自动获得独立目录。
+- 存储共享是第二个设施应用：配置支持**多台存储服务器**（`serverIds`）+ 一个根目录，保存后通过 SSH 在每台存储服务器上安装/启用 NFS kernel server，并把根目录导出给全部 Panel 纳管服务器（exports 白名单 = 服务器 Host IP/主机名，选项 `rw,sync,no_subtree_check,no_root_squash,insecure`）。托管导出块使用 `# panel-storage-share:managed` 标记，卸载时只移除该块并 `exportfs -ra`，不覆盖用户其它导出。
+- 设施配置保存在 `storage_share_configs`（单行 id=`storage-share`，多服务器存于 `server_ids_json`，旧单服务器 `server_id` 由迁移回填）；分区历史保存在 `storage_share_partitions`（按 `storage_server_id + application_id + server_id` 唯一，记录存储服务器与分配目录）。
+- 应用挂载新增 `storage_share` 类型：来源为 `storage-share:<存储服务器ID>`（兼容旧值 `storage-share` = 配置的第一台服务器），目标为容器内路径；Panel 在按服务器渲染运行规格时解析为 `nfs` 挂载 `storageServerIP:<root>/<storageServerID>/<应用节点ID>/<appID>`，并登记分区记录。每个（存储服务器 × 应用 × 应用节点）自动获得独立目录。**只有挂载列表里确实包含 `storage_share` 的应用才会检查设施配置**，无关应用不受影响。
 - Agent 运行时对 `nfs` 挂载：部署前确保主机安装 `nfs-common`（缺失时 apt-get 安装），用 Docker local 卷 + NFS driver（`type=nfs, o=addr=<ip>,rw,nfsvers=4, device=:/<path>`）创建确定性命名卷 `panel-nfs-<hash>` 并挂入容器；purge 时清理不再被引用的 NFS 卷（NFS 侧数据不受影响）。
-- 卸载门禁：仅当没有任何应用 spec 再引用 `storage_share` 挂载时才允许；卸载只停止导出（移除托管 exports 块 + `exportfs -ra`）并删除配置，分区历史与数据保留。
+- 卸载门禁：仅当没有任何应用 spec 再引用 `storage_share` 挂载时才允许；远端导出清理为**尽力而为**——清理失败不阻塞卸载，配置照常删除、分区历史与数据保留，失败信息通过返回配置的 `lastError` 展示给前端。
 - 分区支持下载（SSH `tar -czf -` 流式返回 tgz）与删除记录+数据（SSH `rm -rf`，需应用已解除引用，前端二次确认）。
-- API：`GET/PUT /api/v1/facility-apps/storage-share`、`POST .../reconcile`、`DELETE ...`、`GET .../partitions/{id}/download`、`DELETE .../partitions/{id}`。
+- API：`GET/PUT /api/v1/facility-apps/storage-share`、`POST .../reconcile`、`DELETE ...`（返回卸载后配置）、`GET .../partitions/{id}/download`、`DELETE .../partitions/{id}`。
 
 ## 托管 Label
 
@@ -169,7 +169,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 - Facility actions follow the shared operation model: immediate sync and entering configuration live in the read-only detail header; the configuration page owns its Save and apply action. Domain/path/asset deletion requires a standard confirmation dialog. Path editing uses an independent dialog draft, and saving is blocked by a persistent progress overlay while assets and configuration are committed through the edit session.
 - Uploaded site content is distributed through agent managed files and mounted read-only into the nginx container. Managed file parent directories are fixed to `0755` and uploaded files to `0644` so the nginx worker can traverse and read them; server directories still use read-only bind mounts from the target node.
 - Agent managed files use full desired-set synchronization: ordinary files are written to temporary siblings and renamed, the manifest is committed last, and files managed by the previous manifest but absent from the new manifest are removed. Files that never belonged to a Panel manifest are preserved. This applies to both reload and recreate.
-- Facility reverse proxy deployment maintains a hidden managed application identity with id `facility-reverse-proxy` for application lifecycle deployment record queries. The facility configuration remains in `facility_app_configs`, the managed identity is filtered out of normal application lists, and each save/reconcile writes the latest `application_lifecycle_operations` plus per-node `application_lifecycle_targets` in the standalone coordination database `Store.CoordDB()` (the facility module receives it through `WithCoordDB`), shown on the facility app page. Operation records (`/api/v1/application-operations`) include these lifecycle operations; the frontend renders the facility app column with the translated “entrance proxy facility” name instead of the internal snapshot `__panel_facility_reverse_proxy__`. 设施配置响应额外暴露 `reconcileStopped`：入口代理连续失败 10 次后停止自动协调，并在设施详情页展示“需人工处理”特殊状态。
+- Facility reverse proxy deployment maintains a hidden managed application identity with id `facility-reverse-proxy` for application lifecycle deployment record queries. The facility configuration remains in `facility_app_configs`, the managed identity is filtered out of normal application lists, and each save/reconcile writes the latest `application_lifecycle_operations` plus per-node `application_lifecycle_targets` in the standalone coordination database `Store.CoordDB()` (the facility module receives it through `WithCoordDB`), shown on the facility app page. Operation records (`/api/v1/application-operations`) include these lifecycle operations; the frontend renders the facility app column with the translated “entrance proxy facility” name instead of the internal snapshot `__panel_facility-reverse-proxy__`. 设施配置响应额外暴露 `reconcileStopped`：入口代理连续失败 10 次后停止自动协调，并在设施详情页展示“需人工处理”特殊状态。
  
 ## Agent Report Cache
 

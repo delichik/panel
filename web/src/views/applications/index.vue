@@ -250,10 +250,17 @@ function serverDeployBlockReason(server: ServerDto) {
   if (!server.reachable) return t('resourcesPage.blockUnreachable');
   return t('resourcesPage.blockAgent');
 }
-const assetOptions = computed(() => [
-  ...(facility.value?.staticAssets ?? []).map((asset) => ({ value: asset.name, label: `${asset.name} / ${asset.filename}` })),
-  ...(facilitySession.value?.assets ?? []).map((asset) => ({ value: asset.name, label: `${asset.name} / ${asset.filename}` })),
-]);
+const assetOptions = computed(() => {
+  const byName = new Map<string, { value: string; label: string }>();
+  for (const asset of facility.value?.staticAssets ?? []) {
+    byName.set(asset.name, { value: asset.name, label: `${asset.name} / ${asset.filename}` });
+  }
+  // 编辑会话中的同名资产是未提交的新版本，优先展示并去重
+  for (const asset of facilitySession.value?.assets ?? []) {
+    byName.set(asset.name, { value: asset.name, label: `${asset.name} / ${asset.filename}` });
+  }
+  return [...byName.values()];
+});
 const fileLanguageOptions = computed(() => (['plain', 'yaml', 'json', 'shell', 'nginx', 'properties', 'dockerfile'] as TemplateLanguage[]).map((value) => ({
   value,
   label: t(`applicationsPage.templateLanguage.${value}`),

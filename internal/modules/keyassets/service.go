@@ -1660,7 +1660,7 @@ func (s *Service) assetReferences(ctx context.Context) (map[string][]AssetRefere
 		return nil, err
 	}
 	defer rows.Close()
-	routeRows, err := orm.Raw(ctx, s.db, `SELECT app_id, domain FROM reverse_proxy_routes WHERE app_id <> 'facility_reverse_proxy'`)
+	routeRows, err := orm.Raw(ctx, s.db, `SELECT app_id, domain FROM reverse_proxy_routes WHERE app_id <> 'facility-reverse-proxy'`)
 	if err != nil {
 		return nil, err
 	}

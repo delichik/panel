@@ -767,7 +767,7 @@ func TestMigrateRebuildsLegacyFacilityRoutesAsDomains(t *testing.T) {
 	if err := store.AppDB().QueryRow(`SELECT domain, app_id, paths_json FROM reverse_proxy_routes WHERE domain='legacy.example.test'`).Scan(&routeDomain, &routeAppID, &routePaths); err != nil {
 		t.Fatal(err)
 	}
-	if routeAppID != "facility_reverse_proxy" || !strings.Contains(routePaths, `"path":"/"`) {
+	if routeAppID != "facility-reverse-proxy" || !strings.Contains(routePaths, `"path":"/"`) {
 		t.Fatalf("migrated facility route app_id=%q paths=%q", routeAppID, routePaths)
 	}
 }
@@ -1038,7 +1038,7 @@ func TestMigrateMovesReverseProxyRoutesToUnifiedTable(t *testing.T) {
 		t.Fatalf("application route count = %d, want 1", appRouteCount)
 	}
 	var facilityRouteCount int
-	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM reverse_proxy_routes WHERE app_id='facility_reverse_proxy'`).Scan(&facilityRouteCount); err != nil {
+	if err := store.AppDB().QueryRow(`SELECT COUNT(*) FROM reverse_proxy_routes WHERE app_id='facility-reverse-proxy'`).Scan(&facilityRouteCount); err != nil {
 		t.Fatal(err)
 	}
 	if facilityRouteCount != 1 {

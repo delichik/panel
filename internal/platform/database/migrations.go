@@ -126,6 +126,12 @@ func appMigrationSteps() []orm.Step {
 		{ID: "legacy_migrate_facility_asset_names", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateFacilityAssetNamesOn(ctx, tx)
 		}},
+		{ID: "migrate_storage_share_server_ids", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateStorageShareServerIDsOn(ctx, tx)
+		}},
+		{ID: "fix_reverse_proxy_routes_facility_app_id", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return fixReverseProxyRoutesFacilityAppIDOn(ctx, tx)
+		}},
 	}
 }
 
@@ -662,6 +668,16 @@ func migrateReverseProxyConfigurationOn(ctx context.Context, tx *sql.Tx) error {
 // facility reverse proxy domains into the unified reverse_proxy_routes table,
 // then drops the legacy JSON columns. It is guarded per table/column so it is
 // a no-op on fresh databases.
+// fixReverseProxyRoutesFacilityAppIDOn repairs rows written by the first
+// release of the unified routes migration, which used the underscored
+// facility_reverse_proxy placeholder instead of the facility application id
+// facility-reverse-proxy.
+func fixReverseProxyRoutesFacilityAppIDOn(ctx context.Context, tx *sql.Tx) error {
+	if _, err := tx.ExecContext(ctx, `UPDATE reverse_proxy_routes SET app_id='facility-reverse-proxy' WHERE app_id='facility_reverse_proxy'`); err != nil {
+		return err
+	}
+	return nil
+}
 func migrateReverseProxyRoutesTableOn(ctx context.Context, tx *sql.Tx) error {
 	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS reverse_proxy_routes (
 		domain TEXT PRIMARY KEY,
@@ -781,7 +797,7 @@ func backfillFacilityReverseProxyRoutesOn(ctx context.Context, tx *sql.Tx) error
 			continue
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO reverse_proxy_routes(domain,app_id,origin_server_ids,any_access_json,target_type,target_port,paths_json,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)`,
-			name, "facility_reverse_proxy", marshalProxyJSONList(domain["originServerIds"]), marshalProxyJSONObject(domain["anyAccess"]), "", 0, marshalProxyJSONList(domain["paths"]), now, now); err != nil {
+			name, "facility-reverse-proxy", marshalProxyJSONList(domain["originServerIds"]), marshalProxyJSONObject(domain["anyAccess"]), "", 0, marshalProxyJSONList(domain["paths"]), now, now); err != nil {
 			return fmt.Errorf("reverse proxy migration: insert facility route %q: %w", name, err)
 		}
 	}
@@ -1124,6 +1140,56 @@ func ensureColumnsOn(ctx context.Context, q migrationExecutor, table string, col
 		if _, err := q.ExecContext(ctx, `ALTER TABLE `+table+` ADD COLUMN `+name+` `+definition); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// migrateStorageShareServerIDsOn 把存储共享设施的旧单服务器配置迁移为多服务器
+// 配置，并移除不允许同一应用/节点使用多台存储服务器的旧唯一索引。
+func migrateStorageShareServerIDsOn(ctx context.Context, q migrationExecutor) error {
+	if err := ensureColumnsOn(ctx, q, "storage_share_configs", map[string]string{"server_ids_json": "TEXT NOT NULL DEFAULT '[]'"}); err != nil {
+		return err
+	}
+	columns, err := databaseTableColumnsOn(ctx, q, "storage_share_configs")
+	if err != nil {
+		return err
+	}
+	if columns["server_id"] {
+		rows, err := q.QueryContext(ctx, `SELECT id, server_id, server_ids_json FROM storage_share_configs WHERE server_id <> ''`)
+		if err != nil {
+			return err
+		}
+		type pendingRow struct {
+			id       string
+			serverID string
+		}
+		var pending []pendingRow
+		for rows.Next() {
+			var id, serverID, serverIDsJSON string
+			if err := rows.Scan(&id, &serverID, &serverIDsJSON); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			trimmed := strings.TrimSpace(serverIDsJSON)
+			if trimmed == "" || trimmed == "[]" || trimmed == "null" {
+				pending = append(pending, pendingRow{id: id, serverID: serverID})
+			}
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, row := range pending {
+			raw, _ := json.Marshal([]string{row.serverID})
+			if _, err := q.ExecContext(ctx, `UPDATE storage_share_configs SET server_ids_json=? WHERE id=?`, string(raw), row.id); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := q.ExecContext(ctx, `DROP INDEX IF EXISTS uq_storage_share_partitions_application_server`); err != nil {
+		return err
 	}
 	return nil
 }
