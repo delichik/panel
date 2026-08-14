@@ -2166,11 +2166,6 @@ onBeforeUnmount(() => {
       <label class="field">{{ t('applicationsPage.targetType') }}<Select v-model="proxyDraft.targetType" :options="proxyTargetTypeOptions" /></label>
       <p v-if="appDraft.networkMode === 'host'" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.targetType.containerDisabledHint') }}</p>
       <div class="options-block">
-        <div class="section-copy"><h3>{{ t('applicationsPage.originServers') }}</h3><p>{{ t('applicationsPage.proxyOriginHint') }}</p></div>
-        <p class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.originServers', { count: proxyAutoOriginIds.length }) }} · {{ proxyAutoOriginIds.map((id) => serverDisplayName(id)).join(', ') || t('common.notAvailable') }}</p>
-        <p v-if="!proxyAutoOriginIds.length" class="m-0 text-sm text-danger">{{ t('applicationsPage.proxyOriginEmptyHint') }}</p>
-      </div>
-      <div class="options-block">
         <div class="section-copy"><h3>{{ t('applicationsPage.anyAccess') }}</h3><p>{{ t('applicationsPage.anyAccessHint') }}</p></div>
         <label class="switch-field">{{ t('applicationsPage.anyAccess') }}<Switch v-model="proxyAnyAccessModel" :label="t('applicationsPage.anyAccess')" /></label>
         <div v-if="proxyDraft.anyAccess.enabled" class="grid gap-3">
