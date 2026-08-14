@@ -3,30 +3,28 @@ package facilityapps
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"net"
-	"os"
-	"path"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/applications"
 	appruntime "panel/internal/modules/applications/runtime"
 	server "panel/internal/modules/servers"
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
-	sshx "panel/internal/platform/ssh"
+	"panel/internal/platform/logging"
+
+	"go.uber.org/zap"
 )
 
 const (
 	// StorageShareID 是存储共享设施的唯一配置 ID。
 	StorageShareID = "storage-share"
-
-	storageExportsMarker = "# panel-storage-share:managed"
-	storageExportsPath   = "/etc/exports"
 )
 
 var (
@@ -35,28 +33,30 @@ var (
 	storageHostPattern = regexp.MustCompile(`^[A-Za-z0-9.-]+$`)
 )
 
-// StorageShareConfig 是存储共享设施的对外配置与状态。
-type StorageShareConfig struct {
-	ID         string                            `json:"id"`
-	Version    int                               `json:"version"`
-	ServerID   string                            `json:"serverId"`
-	ServerName string                            `json:"serverName,omitempty"`
-	Root       string                            `json:"root"`
-	Enabled    bool                              `json:"enabled"`
-	Servers    []string                          `json:"servers"`
-	Partitions []StoragePartition                `json:"partitions"`
-	References []applications.StorageShareUsage  `json:"references,omitempty"`
-	LastError  string                            `json:"lastError,omitempty"`
-	UpdatedAt  time.Time                         `json:"updatedAt"`
-}
-
-// StorageShareSaveInput 是存储共享设施的保存输入。
-type StorageShareSaveInput struct {
+// StorageServerSetting 是一台存储服务器及其独立根目录。
+type StorageServerSetting struct {
 	ServerID string `json:"serverId"`
 	Root     string `json:"root"`
 }
 
-// StoragePartition 是按（应用 × 应用节点）分配的分区记录。
+// StorageShareConfig 是存储共享设施的对外配置与状态。
+type StorageShareConfig struct {
+	ID         string                           `json:"id"`
+	Version    int                              `json:"version"`
+	Servers    []StorageServerSetting           `json:"servers"`
+	Partitions []StoragePartition               `json:"partitions"`
+	References []applications.StorageShareUsage `json:"references,omitempty"`
+	LastError  string                           `json:"lastError,omitempty"`
+	UpdatedAt  time.Time                        `json:"updatedAt"`
+	Enabled    bool                             `json:"enabled"`
+}
+
+// StorageShareSaveInput 是存储共享设施的保存输入（每台服务器各自根目录）。
+type StorageShareSaveInput struct {
+	Servers []StorageServerSetting `json:"servers"`
+}
+
+// StoragePartition 是按（存储服务器 × 应用 × 应用节点）分配的分区记录。
 type StoragePartition struct {
 	ID                string    `json:"id"`
 	ApplicationID     string    `json:"applicationId"`
@@ -76,18 +76,38 @@ type StoragePartitionDownload struct {
 	Content  []byte
 }
 
+// StorageAgentClient 是存储共享设施依赖的 Agent 存储能力。存储服务器的
+// 导出配置、打包下载与目录删除都通过 Agent 执行，不使用 Panel 侧 SSH。
+type StorageAgentClient interface {
+	StorageConfigureExport(ctx context.Context, baseURL, root string, allowedHosts []string, enabled bool) error
+	StorageArchiveDirectory(ctx context.Context, baseURL, path string) ([]byte, string, error)
+	StorageDeleteDirectory(ctx context.Context, baseURL, path string) error
+}
+
 type storageConfigRow struct {
-	Version   int
-	ServerID  string
-	Root      string
-	LastError string
-	UpdatedAt string
+	Version     int
+	ServersJSON string `orm:"column:servers_json"`
+	LastError   string
+	UpdatedAt   string
+}
+
+func (s *Service) storageAgent() (StorageAgentClient, bool) {
+	client, ok := s.agent.(StorageAgentClient)
+	return client, ok
+}
+
+func storageAgentEndpoint(srv server.Server) (string, bool) {
+	if srv.Traits == nil || strings.TrimSpace(srv.Traits[agentcontract.TraitEnabled]) != "true" {
+		return "", false
+	}
+	u := strings.TrimSpace(srv.Traits[agentcontract.TraitURL])
+	return u, u != ""
 }
 
 func (s *Service) loadStorageConfig(ctx context.Context) (StorageShareConfig, error) {
 	cfg := StorageShareConfig{ID: StorageShareID}
 	var row storageConfigRow
-	err := orm.New(s.db).From("storage_share_configs").Select("version", "server_id", "root", "last_error", "updated_at").Where("id=?", StorageShareID).First(ctx, &row)
+	err := orm.New(s.db).From("storage_share_configs").Select("version", "servers_json", "last_error", "updated_at").Where("id=?", StorageShareID).First(ctx, &row)
 	if err == sql.ErrNoRows {
 		return cfg, nil
 	}
@@ -95,19 +115,42 @@ func (s *Service) loadStorageConfig(ctx context.Context) (StorageShareConfig, er
 		return StorageShareConfig{}, err
 	}
 	cfg.Version = row.Version
-	cfg.ServerID = strings.TrimSpace(row.ServerID)
-	cfg.Root = strings.TrimSpace(row.Root)
 	cfg.LastError = row.LastError
 	cfg.UpdatedAt = parseTime(row.UpdatedAt)
-	cfg.Enabled = cfg.ServerID != "" && cfg.Root != ""
+	_ = json.Unmarshal([]byte(row.ServersJSON), &cfg.Servers)
+	cfg.Servers = normalizeStorageServers(cfg.Servers)
+	cfg.Enabled = len(cfg.Servers) > 0
 	return cfg, nil
 }
 
+func normalizeStorageServers(servers []StorageServerSetting) []StorageServerSetting {
+	byID := map[string]string{}
+	order := []string{}
+	for _, item := range servers {
+		id := strings.TrimSpace(item.ServerID)
+		root := strings.TrimSpace(item.Root)
+		if id == "" || root == "" {
+			continue
+		}
+		if _, ok := byID[id]; !ok {
+			order = append(order, id)
+		}
+		byID[id] = root
+	}
+	sort.Strings(order)
+	out := make([]StorageServerSetting, 0, len(order))
+	for _, id := range order {
+		out = append(out, StorageServerSetting{ServerID: id, Root: byID[id]})
+	}
+	return out
+}
+
 func (s *Service) saveStorageConfig(ctx context.Context, cfg StorageShareConfig) error {
-	_, err := orm.RawExec(ctx, s.db, `INSERT INTO storage_share_configs(id,version,server_id,root,last_error,updated_at)
-VALUES(?,?,?,?,?,?)
-ON CONFLICT(id) DO UPDATE SET version=excluded.version,server_id=excluded.server_id,root=excluded.root,last_error=excluded.last_error,updated_at=excluded.updated_at`,
-		StorageShareID, cfg.Version, cfg.ServerID, cfg.Root, cfg.LastError, formatTime(cfg.UpdatedAt))
+	servers, _ := json.Marshal(cfg.Servers)
+	_, err := orm.RawExec(ctx, s.db, `INSERT INTO storage_share_configs(id,version,servers_json,last_error,updated_at)
+VALUES(?,?,?,?,?)
+ON CONFLICT(id) DO UPDATE SET version=excluded.version,servers_json=excluded.servers_json,last_error=excluded.last_error,updated_at=excluded.updated_at`,
+		StorageShareID, cfg.Version, string(servers), cfg.LastError, formatTime(cfg.UpdatedAt))
 	return err
 }
 
@@ -123,22 +166,11 @@ func (s *Service) GetStorageShare(ctx context.Context) (StorageShareConfig, erro
 	if err != nil {
 		return StorageShareConfig{}, err
 	}
-	if cfg.Enabled {
-		if srv, getErr := s.servers.Get(ctx, cfg.ServerID); getErr == nil {
-			cfg.ServerName = srv.Name
-		}
-	}
 	partitions, err := s.listStoragePartitions(ctx)
 	if err != nil {
 		return StorageShareConfig{}, err
 	}
 	cfg.Partitions = partitions
-	if servers, listErr := s.servers.List(ctx); listErr == nil {
-		for _, srv := range servers {
-			cfg.Servers = append(cfg.Servers, srv.ID)
-		}
-		sort.Strings(cfg.Servers)
-	}
 	if provider, ok := s.apps.(applications.StorageShareUsageProvider); ok {
 		if usages, usageErr := provider.ApplicationsUsingStorageShare(ctx); usageErr == nil {
 			cfg.References = usages
@@ -147,72 +179,88 @@ func (s *Service) GetStorageShare(ctx context.Context) (StorageShareConfig, erro
 	return cfg, nil
 }
 
-// SaveStorageShare 保存设施配置并立即尝试在存储服务器上导出 NFS。
+// SaveStorageShare 保存设施配置（多台存储服务器，各自根目录）并立即通过
+// Agent 在每台存储服务器上配置 NFS 导出。
 func (s *Service) SaveStorageShare(ctx context.Context, in StorageShareSaveInput) (StorageShareConfig, error) {
 	s.storageMu.Lock()
 	defer s.storageMu.Unlock()
-	serverID := strings.TrimSpace(in.ServerID)
-	root := strings.TrimSpace(in.Root)
-	if serverID == "" || root == "" {
-		return StorageShareConfig{}, panelerr.Validation("storage_share_config_required", "storage server and root are required")
+	servers := normalizeStorageServers(in.Servers)
+	if len(servers) == 0 {
+		return StorageShareConfig{}, panelerr.Validation("storage_share_config_required", "at least one storage server with a root is required")
 	}
-	if !validStorageRoot(root) {
-		return StorageShareConfig{}, panelerr.Validation("storage_share_root_invalid", "storage root must be an absolute Linux path without spaces")
-	}
-	srv, err := s.servers.Get(ctx, serverID)
-	if err != nil {
-		return StorageShareConfig{}, err
+	for _, item := range servers {
+		if !validStorageRoot(item.Root) {
+			return StorageShareConfig{}, panelerr.Validation("storage_share_root_invalid", "storage root must be an absolute Linux path without spaces")
+		}
+		if _, err := s.servers.Get(ctx, item.ServerID); err != nil {
+			return StorageShareConfig{}, err
+		}
 	}
 	cfg, err := s.loadStorageConfig(ctx)
 	if err != nil {
 		return StorageShareConfig{}, err
 	}
-	cfg.ServerID = serverID
-	cfg.ServerName = srv.Name
-	cfg.Root = root
+	cfg.Servers = servers
 	cfg.Version++
 	cfg.LastError = ""
 	cfg.UpdatedAt = time.Now().UTC()
 	if err := s.saveStorageConfig(ctx, cfg); err != nil {
 		return StorageShareConfig{}, err
 	}
-	if err := s.reconcileStorageServer(ctx, cfg); err != nil {
+	if err := s.reconcileStorageServers(ctx, cfg); err != nil {
 		_ = s.setStorageLastError(ctx, err.Error())
 	}
 	return s.GetStorageShare(ctx)
 }
 
-// DeleteStorageShare 卸载设施：仅当没有应用再引用时才允许；停止导出但保留
-// 分区历史与数据，用户仍可在设施页下载或删除分区。
-func (s *Service) DeleteStorageShare(ctx context.Context) error {
+// DeleteStorageShare 卸载设施：仅当没有应用再引用时才允许。远端清理通过
+// Agent 执行且为尽力而为——清理失败不阻塞卸载，配置照常删除、分区历史与
+// 数据保留，失败信息通过返回配置的 lastError 暴露给前端。
+func (s *Service) DeleteStorageShare(ctx context.Context) (StorageShareConfig, error) {
 	s.storageMu.Lock()
 	defer s.storageMu.Unlock()
 	cfg, err := s.loadStorageConfig(ctx)
 	if err != nil {
-		return err
+		return StorageShareConfig{}, err
 	}
 	if provider, ok := s.apps.(applications.StorageShareUsageProvider); ok {
 		usages, usageErr := provider.ApplicationsUsingStorageShare(ctx)
 		if usageErr != nil {
-			return usageErr
+			return StorageShareConfig{}, usageErr
 		}
 		if len(usages) > 0 {
 			names := make([]string, 0, len(usages))
 			for _, usage := range usages {
 				names = append(names, usage.ApplicationName)
 			}
-			return panelerr.Conflict("storage_share_in_use", "Storage share is still used by applications: "+strings.Join(names, ", "))
+			return StorageShareConfig{}, panelerr.Conflict("storage_share_in_use", "Storage share is still used by applications: "+strings.Join(names, ", "))
 		}
 	}
+	var cleanupErr error
 	if cfg.Enabled {
-		if err := s.removeStorageExports(ctx, cfg); err != nil {
-			return err
+		for _, item := range cfg.Servers {
+			if err := s.removeStorageExport(ctx, item); err != nil {
+				logging.L().Warn("storage share uninstall remote cleanup failed", zap.String("server_id", item.ServerID), zap.Error(err))
+				if cleanupErr == nil {
+					cleanupErr = err
+				}
+			}
 		}
 	}
-	return orm.New(s.db).From("storage_share_configs").Where("id=?", StorageShareID).Delete(ctx)
+	if err := orm.New(s.db).From("storage_share_configs").Where("id=?", StorageShareID).Delete(ctx); err != nil {
+		return StorageShareConfig{}, err
+	}
+	result, err := s.GetStorageShare(ctx)
+	if err != nil {
+		return StorageShareConfig{}, err
+	}
+	if cleanupErr != nil {
+		result.LastError = "Remote export cleanup failed: " + cleanupErr.Error()
+	}
+	return result, nil
 }
 
-// ReconcileStorageShareNow 手动触发一次存储服务器导出同步。
+// ReconcileStorageShareNow 手动触发一次全部存储服务器的导出同步。
 func (s *Service) ReconcileStorageShareNow(ctx context.Context) (StorageShareConfig, error) {
 	s.storageMu.Lock()
 	defer s.storageMu.Unlock()
@@ -223,7 +271,7 @@ func (s *Service) ReconcileStorageShareNow(ctx context.Context) (StorageShareCon
 	if !cfg.Enabled {
 		return StorageShareConfig{}, panelerr.Validation("storage_share_not_configured", "Storage share is not configured")
 	}
-	if err := s.reconcileStorageServer(ctx, cfg); err != nil {
+	if err := s.reconcileStorageServers(ctx, cfg); err != nil {
 		_ = s.setStorageLastError(ctx, err.Error())
 		return StorageShareConfig{}, err
 	}
@@ -231,10 +279,30 @@ func (s *Service) ReconcileStorageShareNow(ctx context.Context) (StorageShareCon
 	return s.GetStorageShare(ctx)
 }
 
-// ResolveStorageShareMounts 把应用运行时规格里的 storage_share 挂载解析为
-// NFS 挂载，并登记按（应用 × 应用节点）分配的分区记录。
+func (s *Service) reconcileStorageServers(ctx context.Context, cfg StorageShareConfig) error {
+	var firstErr error
+	for _, item := range cfg.Servers {
+		if err := s.reconcileStorageServer(ctx, item); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
+}
+
+// ResolveStorageShareMounts 把应用运行时规格里的 storage_share 挂载解析为 NFS
+// 挂载，并登记按（存储服务器 × 应用 × 应用节点）分配的分区记录。只有当挂载列表
+// 里确实包含 storage_share 时才检查设施配置，避免无关应用受设施状态影响。
 func (s *Service) ResolveStorageShareMounts(ctx context.Context, app applications.Application, srv server.Server, mounts []appruntime.Mount) ([]appruntime.Mount, error) {
-	if len(mounts) == 0 {
+	hasStorageShare := false
+	for _, mount := range mounts {
+		if strings.TrimSpace(mount.Type) == "storage_share" {
+			hasStorageShare = true
+			break
+		}
+	}
+	if !hasStorageShare {
 		return mounts, nil
 	}
 	cfg, err := s.loadStorageConfig(ctx)
@@ -244,9 +312,8 @@ func (s *Service) ResolveStorageShareMounts(ctx context.Context, app application
 	if !cfg.Enabled {
 		return nil, panelerr.Validation("storage_share_unavailable", "Storage share facility is not configured")
 	}
-	storageServer, err := s.servers.Get(ctx, cfg.ServerID)
-	if err != nil {
-		return nil, err
+	if !storageIDPattern.MatchString(app.ID) || !storageIDPattern.MatchString(srv.ID) {
+		return nil, panelerr.Validation("storage_share_partition_invalid", "storage share partition identifiers are invalid")
 	}
 	out := make([]appruntime.Mount, 0, len(mounts))
 	for _, mount := range mounts {
@@ -254,28 +321,50 @@ func (s *Service) ResolveStorageShareMounts(ctx context.Context, app application
 			out = append(out, mount)
 			continue
 		}
-		source := strings.TrimSpace(mount.Source)
-		if source != "" && source != StorageShareID {
-			return nil, panelerr.Validation("storage_share_source_invalid", "storage share mount source must reference the storage share facility")
+		setting, err := resolveStorageServerSetting(mount.Source, cfg.Servers)
+		if err != nil {
+			return nil, err
 		}
-		if !storageIDPattern.MatchString(app.ID) || !storageIDPattern.MatchString(srv.ID) {
-			return nil, panelerr.Validation("storage_share_partition_invalid", "storage share partition identifiers are invalid")
+		storageServer, err := s.servers.Get(ctx, setting.ServerID)
+		if err != nil {
+			return nil, err
 		}
-		partitionPath := storagePartitionPath(cfg.Root, srv.ID, app.ID)
+		partitionPath := storagePartitionPath(setting.Root, setting.ServerID, srv.ID, app.ID)
 		out = append(out, appruntime.Mount{
 			Type:     "nfs",
 			Source:   storageNFSSource(storageServer.Host, partitionPath),
 			Target:   mount.Target,
 			ReadOnly: mount.ReadOnly,
 		})
-		if err := s.upsertStoragePartition(ctx, app, srv, cfg, partitionPath); err != nil {
+		if err := s.upsertStoragePartition(ctx, app, srv, storageServer, setting.Root, partitionPath); err != nil {
 			return nil, err
 		}
 	}
 	return out, nil
 }
 
-// DownloadStoragePartition 通过存储服务器 SSH 打包分区目录并返回内容。
+func resolveStorageServerSetting(source string, servers []StorageServerSetting) (StorageServerSetting, error) {
+	source = strings.TrimSpace(source)
+	switch {
+	case source == "" || source == StorageShareID:
+		if len(servers) == 0 {
+			return StorageServerSetting{}, panelerr.Validation("storage_share_unavailable", "Storage share facility is not configured")
+		}
+		return servers[0], nil
+	case strings.HasPrefix(source, StorageShareID+":"):
+		id := strings.TrimPrefix(source, StorageShareID+":")
+		for _, item := range servers {
+			if item.ServerID == id {
+				return item, nil
+			}
+		}
+		return StorageServerSetting{}, panelerr.Validation("storage_share_server_invalid", "storage share mount source references a server that is not part of the facility")
+	default:
+		return StorageServerSetting{}, panelerr.Validation("storage_share_source_invalid", "storage share mount source must reference the storage share facility")
+	}
+}
+
+// DownloadStoragePartition 通过存储服务器 Agent 打包分区目录并返回内容。
 func (s *Service) DownloadStoragePartition(ctx context.Context, partitionID string) (StoragePartitionDownload, error) {
 	partition, err := s.getStoragePartition(ctx, strings.TrimSpace(partitionID))
 	if err != nil {
@@ -288,20 +377,19 @@ func (s *Service) DownloadStoragePartition(ctx context.Context, partitionID stri
 	if err != nil {
 		return StoragePartitionDownload{}, err
 	}
-	parent := path.Dir(partition.Path)
-	base := path.Base(partition.Path)
-	command := "tar -czf - -C " + parent + " " + base
-	result, err := s.ssh.ExecSudo(ctx, server.Target(storageServer), sshx.CommandSpec{Command: command, Timeout: 10 * time.Minute})
+	agent, ok := s.storageAgent()
+	if !ok {
+		return StoragePartitionDownload{}, panelerr.Validation("storage_share_agent_required", "storage share requires an agent with storage support; upgrade the agent on the storage server")
+	}
+	baseURL, ok := storageAgentEndpoint(storageServer)
+	if !ok {
+		return StoragePartitionDownload{}, panelerr.Validation("agent_required", "Agent is required for storage share operations")
+	}
+	content, _, err := agent.StorageArchiveDirectory(ctx, baseURL, partition.Path)
 	if err != nil {
 		return StoragePartitionDownload{}, err
 	}
-	if strings.TrimSpace(result.Stdout) == "" {
-		return StoragePartitionDownload{}, panelerr.NotFound("storage_share_partition_data")
-	}
-	return StoragePartitionDownload{
-		Filename: storagePartitionDownloadName(partition),
-		Content:  []byte(result.Stdout),
-	}, nil
+	return StoragePartitionDownload{Filename: storagePartitionDownloadName(partition), Content: content}, nil
 }
 
 // DeleteStoragePartition 删除分区记录并删除存储服务器上的实际数据。
@@ -329,7 +417,15 @@ func (s *Service) DeleteStoragePartition(ctx context.Context, partitionID string
 	if err != nil {
 		return err
 	}
-	if _, err := s.ssh.ExecSudo(ctx, server.Target(storageServer), sshx.CommandSpec{Command: "rm -rf -- " + partition.Path}); err != nil {
+	agent, ok := s.storageAgent()
+	if !ok {
+		return panelerr.Validation("storage_share_agent_required", "storage share requires an agent with storage support; upgrade the agent on the storage server")
+	}
+	baseURL, ok := storageAgentEndpoint(storageServer)
+	if !ok {
+		return panelerr.Validation("agent_required", "Agent is required for storage share operations")
+	}
+	if err := agent.StorageDeleteDirectory(ctx, baseURL, partition.Path); err != nil {
 		return err
 	}
 	return orm.New(s.db).From("storage_share_partitions").Where("id=?", partition.ID).Delete(ctx)
@@ -372,12 +468,13 @@ func (s *Service) listStoragePartitions(ctx context.Context) ([]StoragePartition
 	return out, rows.Err()
 }
 
-func (s *Service) upsertStoragePartition(ctx context.Context, app applications.Application, srv server.Server, cfg StorageShareConfig, partitionPath string) error {
+func (s *Service) upsertStoragePartition(ctx context.Context, app applications.Application, srv server.Server, storageServer server.Server, root, partitionPath string) error {
 	now := time.Now().UTC()
+	id := storageServer.ID + "-" + app.ID + "-" + srv.ID
 	_, err := orm.RawExec(ctx, s.db, `INSERT INTO storage_share_partitions(id,application_id,application_name,server_id,server_name,storage_server_id,storage_server_name,path,created_at,updated_at)
 VALUES(?,?,?,?,?,?,?,?,?,?)
 ON CONFLICT(id) DO UPDATE SET application_name=excluded.application_name,server_name=excluded.server_name,storage_server_id=excluded.storage_server_id,storage_server_name=excluded.storage_server_name,path=excluded.path,updated_at=excluded.updated_at`,
-		app.ID+"-"+srv.ID, app.ID, app.Name, srv.ID, srv.Name, cfg.ServerID, cfg.ServerName, partitionPath, formatTime(now), formatTime(now))
+		id, app.ID, app.Name, srv.ID, srv.Name, storageServer.ID, storageServer.Name, partitionPath, formatTime(now), formatTime(now))
 	return err
 }
 
@@ -388,7 +485,9 @@ func (s *Service) storageServerForPartition(ctx context.Context, partition Stora
 		if err != nil {
 			return server.Server{}, err
 		}
-		serverID = cfg.ServerID
+		if len(cfg.Servers) > 0 {
+			serverID = cfg.Servers[0].ServerID
+		}
 	}
 	if serverID == "" {
 		return server.Server{}, panelerr.Validation("storage_share_server_unavailable", "storage server is not known for this partition")
@@ -396,71 +495,43 @@ func (s *Service) storageServerForPartition(ctx context.Context, partition Stora
 	return s.servers.Get(ctx, serverID)
 }
 
-func (s *Service) reconcileStorageServer(ctx context.Context, cfg StorageShareConfig) error {
-	if s.ssh == nil {
-		return panelerr.Validation("storage_share_ssh_unavailable", "SSH executor is unavailable for storage share")
+func (s *Service) reconcileStorageServer(ctx context.Context, setting StorageServerSetting) error {
+	agent, ok := s.storageAgent()
+	if !ok {
+		return panelerr.Validation("storage_share_agent_required", "storage share requires an agent with storage support; upgrade the agent on the storage server")
 	}
-	srv, err := s.servers.Get(ctx, cfg.ServerID)
+	srv, err := s.servers.Get(ctx, setting.ServerID)
 	if err != nil {
 		return err
 	}
-	target := server.Target(srv)
-	if _, err := s.ssh.ExecSudo(ctx, target, sshx.CommandSpec{Command: "mkdir -p " + cfg.Root}); err != nil {
-		return fmt.Errorf("create storage root: %w", err)
-	}
-	installCommand := "dpkg -s nfs-kernel-server >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y --no-install-recommends nfs-kernel-server)"
-	if _, err := s.ssh.ExecSudo(ctx, target, sshx.CommandSpec{Command: installCommand, Timeout: 10 * time.Minute}); err != nil {
-		return fmt.Errorf("install nfs server: %w", err)
+	baseURL, ok := storageAgentEndpoint(srv)
+	if !ok {
+		return panelerr.Validation("agent_required", "Agent is required for storage share operations")
 	}
 	hosts, err := s.storageAllowedHosts(ctx)
 	if err != nil {
 		return err
 	}
-	next := storageExportsBlock(cfg.Root, hosts)
-	current := ""
-	if result, readErr := s.ssh.ExecSudo(ctx, target, sshx.CommandSpec{Command: "cat " + storageExportsPath}); readErr == nil {
-		current = result.Stdout
+	if err := agent.StorageConfigureExport(ctx, baseURL, setting.Root, hosts, true); err != nil {
+		return fmt.Errorf("configure storage export on %s: %w", setting.ServerID, err)
 	}
-	next = stripStorageExports(current, cfg.Root) + next
-	return s.writeStorageExports(ctx, target, next)
+	return nil
 }
 
-func (s *Service) removeStorageExports(ctx context.Context, cfg StorageShareConfig) error {
-	if s.ssh == nil {
-		return panelerr.Validation("storage_share_ssh_unavailable", "SSH executor is unavailable for storage share")
+func (s *Service) removeStorageExport(ctx context.Context, setting StorageServerSetting) error {
+	agent, ok := s.storageAgent()
+	if !ok {
+		return panelerr.Validation("storage_share_agent_required", "storage share requires an agent with storage support; upgrade the agent on the storage server")
 	}
-	srv, err := s.servers.Get(ctx, cfg.ServerID)
+	srv, err := s.servers.Get(ctx, setting.ServerID)
 	if err != nil {
 		return err
 	}
-	target := server.Target(srv)
-	current := ""
-	if result, readErr := s.ssh.ExecSudo(ctx, target, sshx.CommandSpec{Command: "cat " + storageExportsPath}); readErr == nil {
-		current = result.Stdout
+	baseURL, ok := storageAgentEndpoint(srv)
+	if !ok {
+		return panelerr.Validation("agent_required", "Agent is required for storage share operations")
 	}
-	return s.writeStorageExports(ctx, target, strings.TrimRight(stripStorageExports(current, cfg.Root), "\n"))
-}
-
-func (s *Service) writeStorageExports(ctx context.Context, target sshx.Target, content string) error {
-	local := filepath.Join(s.dataRoot, "tmp", fmt.Sprintf("storage-exports-%d", time.Now().UnixNano()))
-	if err := os.MkdirAll(filepath.Dir(local), 0o755); err != nil {
-		return err
-	}
-	defer os.Remove(local)
-	if err := os.WriteFile(local, []byte(content), 0o600); err != nil {
-		return err
-	}
-	remote := fmt.Sprintf("/tmp/panel-storage-exports-%d", time.Now().UnixNano())
-	if err := s.ssh.Upload(ctx, target, sshx.UploadSpec{LocalPath: local, RemotePath: remote}); err != nil {
-		return err
-	}
-	defer func() {
-		_, _ = s.ssh.ExecSudo(ctx, target, sshx.CommandSpec{Command: "rm -f " + remote})
-	}()
-	if _, err := s.ssh.ExecSudo(ctx, target, sshx.CommandSpec{Command: "mv -f " + remote + " " + storageExportsPath + " && exportfs -ra"}); err != nil {
-		return fmt.Errorf("apply nfs exports: %w", err)
-	}
-	return nil
+	return agent.StorageConfigureExport(ctx, baseURL, setting.Root, nil, false)
 }
 
 // storageAllowedHosts 返回允许挂载的服务器主机白名单（Panel 已纳管服务器）。
@@ -500,47 +571,8 @@ func storageHostSpec(host string) string {
 	return ""
 }
 
-func storageExportsBlock(root string, hosts []string) string {
-	var builder strings.Builder
-	builder.WriteString(storageExportsMarker)
-	builder.WriteString("\n")
-	builder.WriteString(root)
-	for _, host := range hosts {
-		builder.WriteString(" " + host + "(rw,sync,no_subtree_check,no_root_squash,insecure)")
-	}
-	builder.WriteString("\n")
-	return builder.String()
-}
-
-func stripStorageExports(content, root string) string {
-	lines := strings.Split(content, "\n")
-	out := make([]string, 0, len(lines))
-	skip := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == storageExportsMarker {
-			skip = true
-			continue
-		}
-		if skip {
-			// 我们的托管块是“标记 + 一条导出行”；跳过标记后的第一条非空行，
-			// 空行直接忽略，随后恢复正常解析。
-			if trimmed == "" {
-				continue
-			}
-			skip = false
-			continue
-		}
-		if strings.HasPrefix(trimmed, root+" ") {
-			continue
-		}
-		out = append(out, line)
-	}
-	return strings.TrimRight(strings.Join(out, "\n"), "\n")
-}
-
-func storagePartitionPath(root, serverID, appID string) string {
-	return root + "/" + serverID + "/" + appID
+func storagePartitionPath(root, storageServerID, nodeServerID, appID string) string {
+	return root + "/" + storageServerID + "/" + nodeServerID + "/" + appID
 }
 
 func storageNFSSource(host, partitionPath string) string {

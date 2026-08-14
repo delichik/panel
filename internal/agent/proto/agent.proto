@@ -43,6 +43,9 @@ service AgentService {
   rpc RuntimeLogs(RuntimeLogsRequest) returns (RuntimeLogsResponse);
   rpc RuntimePersistentArchive(RuntimePersistentArchiveRequest) returns (RuntimePersistentArchiveResponse);
   rpc RuntimePersistentRestore(RuntimePersistentRestoreRequest) returns (RuntimePersistentRestoreResponse);
+  rpc StorageConfigureExport(StorageConfigureExportRequest) returns (OKResponse);
+  rpc StorageArchiveDirectory(StorageArchiveDirectoryRequest) returns (StorageArchiveDirectoryResponse);
+  rpc StorageDeleteDirectory(StorageDeleteDirectoryRequest) returns (OKResponse);
 }
 
 service AgentReportService {
@@ -404,6 +407,25 @@ message RuntimePersistentRestoreRequest {
 message RuntimePersistentRestoreResponse {
   string application_id = 1;
   bool restored = 2;
+}
+
+message StorageConfigureExportRequest {
+  string root = 1;
+  repeated string allowed_hosts = 2;
+  bool enabled = 3;
+}
+
+message StorageArchiveDirectoryRequest {
+  string path = 1;
+}
+
+message StorageArchiveDirectoryResponse {
+  string filename = 1;
+  bytes content = 2;
+}
+
+message StorageDeleteDirectoryRequest {
+  string path = 1;
 }
 
 message DockerPort {

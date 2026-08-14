@@ -126,8 +126,8 @@ func appMigrationSteps() []orm.Step {
 		{ID: "legacy_migrate_facility_asset_names", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return migrateFacilityAssetNamesOn(ctx, tx)
 		}},
-		{ID: "migrate_storage_share_server_ids", Run: func(ctx context.Context, tx *sql.Tx) error {
-			return migrateStorageShareServerIDsOn(ctx, tx)
+		{ID: "migrate_storage_share_servers", Run: func(ctx context.Context, tx *sql.Tx) error {
+			return migrateStorageShareServersOn(ctx, tx)
 		}},
 		{ID: "fix_reverse_proxy_routes_facility_app_id", Run: func(ctx context.Context, tx *sql.Tx) error {
 			return fixReverseProxyRoutesFacilityAppIDOn(ctx, tx)
@@ -1144,36 +1144,64 @@ func ensureColumnsOn(ctx context.Context, q migrationExecutor, table string, col
 	return nil
 }
 
-// migrateStorageShareServerIDsOn 把存储共享设施的旧单服务器配置迁移为多服务器
-// 配置，并移除不允许同一应用/节点使用多台存储服务器的旧唯一索引。
-func migrateStorageShareServerIDsOn(ctx context.Context, q migrationExecutor) error {
-	if err := ensureColumnsOn(ctx, q, "storage_share_configs", map[string]string{"server_ids_json": "TEXT NOT NULL DEFAULT '[]'"}); err != nil {
+// migrateStorageShareServersOn 把存储共享设施的旧配置迁移为
+// 「每台存储服务器各自根目录」的 servers_json 结构，并移除不允许同一
+// 应用/节点使用多台存储服务器的旧唯一索引。
+func migrateStorageShareServersOn(ctx context.Context, q migrationExecutor) error {
+	if err := ensureColumnsOn(ctx, q, "storage_share_configs", map[string]string{"servers_json": "TEXT NOT NULL DEFAULT '[]'"}); err != nil {
 		return err
 	}
 	columns, err := databaseTableColumnsOn(ctx, q, "storage_share_configs")
 	if err != nil {
 		return err
 	}
-	if columns["server_id"] {
-		rows, err := q.QueryContext(ctx, `SELECT id, server_id, server_ids_json FROM storage_share_configs WHERE server_id <> ''`)
+	hasServerIDs := columns["server_ids_json"]
+	hasServerID := columns["server_id"]
+	hasRoot := columns["root"]
+	if hasServerIDs || hasServerID {
+		query := `SELECT id`
+		if hasServerIDs {
+			query += `, server_ids_json`
+		} else {
+			query += `, ''`
+		}
+		if hasServerID {
+			query += `, server_id`
+		} else {
+			query += `, ''`
+		}
+		if hasRoot {
+			query += `, root`
+		} else {
+			query += `, ''`
+		}
+		query += `, servers_json FROM storage_share_configs`
+		rows, err := q.QueryContext(ctx, query)
 		if err != nil {
 			return err
 		}
 		type pendingRow struct {
-			id       string
-			serverID string
+			id        string
+			serverIDs []string
+			serverID  string
+			root      string
 		}
 		var pending []pendingRow
 		for rows.Next() {
-			var id, serverID, serverIDsJSON string
-			if err := rows.Scan(&id, &serverID, &serverIDsJSON); err != nil {
+			var id, serverIDsRaw, serverID, root, serversJSON string
+			if err := rows.Scan(&id, &serverIDsRaw, &serverID, &root, &serversJSON); err != nil {
 				_ = rows.Close()
 				return err
 			}
-			trimmed := strings.TrimSpace(serverIDsJSON)
-			if trimmed == "" || trimmed == "[]" || trimmed == "null" {
-				pending = append(pending, pendingRow{id: id, serverID: serverID})
+			trimmed := strings.TrimSpace(serversJSON)
+			if trimmed != "" && trimmed != "[]" && trimmed != "null" {
+				continue
 			}
+			row := pendingRow{id: id, serverID: serverID, root: root}
+			if hasServerIDs {
+				_ = json.Unmarshal([]byte(serverIDsRaw), &row.serverIDs)
+			}
+			pending = append(pending, row)
 		}
 		if err := rows.Close(); err != nil {
 			return err
@@ -1182,8 +1210,19 @@ func migrateStorageShareServerIDsOn(ctx context.Context, q migrationExecutor) er
 			return err
 		}
 		for _, row := range pending {
-			raw, _ := json.Marshal([]string{row.serverID})
-			if _, err := q.ExecContext(ctx, `UPDATE storage_share_configs SET server_ids_json=? WHERE id=?`, string(raw), row.id); err != nil {
+			ids := row.serverIDs
+			if len(ids) == 0 && row.serverID != "" {
+				ids = []string{row.serverID}
+			}
+			if len(ids) == 0 {
+				continue
+			}
+			entries := make([]map[string]any, 0, len(ids))
+			for _, id := range ids {
+				entries = append(entries, map[string]any{"serverId": id, "root": row.root})
+			}
+			raw, _ := json.Marshal(entries)
+			if _, err := q.ExecContext(ctx, `UPDATE storage_share_configs SET servers_json=? WHERE id=?`, string(raw), row.id); err != nil {
 				return err
 			}
 		}

@@ -645,8 +645,8 @@ export function installMockApi() {
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/reconcile' && method(init) === 'POST') return json({ config: mockFacility }, 202);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'GET') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'PUT') {
-      const input = init?.body ? await new Response(init.body).json() as { serverId?: string; root?: string } : {};
-      return json(saveStorageShare({ serverId: input.serverId ?? '', root: input.root ?? '' }));
+      const input = init?.body ? await new Response(init.body).json() as { serverIds?: string[]; root?: string } : {};
+      return json(saveStorageShare({ serverIds: input.serverIds ?? [], root: input.root ?? '' }));
     }
     if (url.pathname === '/api/v1/facility-apps/storage-share/reconcile' && method(init) === 'POST') return json(mockStorageShare);
     if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'DELETE') {

@@ -36,7 +36,7 @@ function onKeydown(event: KeyboardEvent, value: string) {
 </script>
 
 <template>
-  <div class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+  <div class="grid min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)]">
     <div class="inline-flex max-w-full w-fit overflow-x-auto rounded-xl border border-border bg-muted p-1" role="tablist">
       <button
         v-for="tab in tabs"

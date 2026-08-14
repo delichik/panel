@@ -270,10 +270,10 @@ async function confirmDelete() {
   </section>
 
   <Dialog v-model:open="assetOpen" size="large" :title="assetTitle" :close-label="labels.close" :close-disabled="textSaving">
-    <div class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+    <div class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3">
       <div v-if="!textEditing" class="text-sm font-medium text-foreground">{{ labels.uploadType }}</div>
       <Tabs :model-value="uploadMode" :tabs="uploadTabs" @update:model-value="selectUploadMode">
-        <div v-if="uploadMode === 'text'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-3">
+        <div v-if="uploadMode === 'text'" class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-3">
           <div class="grid gap-3" :class="showFilename ? 'md:grid-cols-3' : 'md:grid-cols-2'">
             <label class="field">
               <span>{{ labels.name }}</span>

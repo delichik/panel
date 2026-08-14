@@ -27,7 +27,7 @@ export const storageShareFacilityApi = {
     return apiClient.post<StorageShareConfig>('/facility-apps/storage-share/reconcile');
   },
   uninstall() {
-    return apiClient.delete<void>('/facility-apps/storage-share');
+    return apiClient.delete<StorageShareConfig>('/facility-apps/storage-share');
   },
   downloadPartition(partitionId: string, filename: string): Promise<DownloadResult> {
     return fetchDownload(`/api/v1/facility-apps/storage-share/partitions/${id(partitionId)}/download`, {}, filename);

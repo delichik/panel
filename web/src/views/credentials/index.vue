@@ -383,7 +383,7 @@ onBeforeUnmount(() => { if (searchTimer) clearTimeout(searchTimer); });
           <label class="grid gap-1 text-sm">{{ t('credentialsPage.username') }}<Input v-model="form.username" :invalid="Boolean(validation.username)" /></label>
           <label class="grid gap-1 text-sm">{{ t('credentialsPage.passphrase') }}<Input v-model="form.passphrase" type="password" /></label>
         </div>
-        <label class="grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+        <label class="grid min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
           {{ t('credentialsPage.privateKey') }}
           <CodeEditor v-model="privateKeyModel" language="plain" :editor-label="t('credentialsPage.privateKey')" :invalid="Boolean(validation.privateKey)" />
         </label>

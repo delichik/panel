@@ -664,7 +664,7 @@ function onFileChange(value: File | File[]) {
     </Dialog>
 
     <Dialog :open="dialog.startsWith('asset-') && !['asset-export','asset-preflight'].includes(dialog)" :size="dialog === 'asset-import' ? 'large' : 'default'" :title="t('certificatesPage.assetForm')" :close-label="t('common.close')" @update:open="(open: boolean) => { if (!open) dialog = '' }">
-      <div class="grid gap-3" :class="dialog === 'asset-import' ? 'h-full min-h-0 grid-rows-[auto_minmax(0,1fr)]' : ''">
+      <div class="grid gap-3" :class="dialog === 'asset-import' ? 'h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] grid-cols-[minmax(0,1fr)]' : ''">
         <div :class="dialog === 'asset-import' ? 'grid gap-3 md:grid-cols-2' : 'contents'">
           <label v-if="dialog === 'asset-import'" class="grid gap-1 text-sm">{{ t('common.type') }}<Select v-model="assetForm.type" :options="assetTypeOptions" /></label>
           <label class="grid gap-1 text-sm">{{ t('common.name') }}<Input v-model="assetForm.name" /></label>
@@ -674,16 +674,16 @@ function onFileChange(value: File | File[]) {
           <label v-if="assetForm.algorithm === 'rsa'" class="grid gap-1 text-sm">{{ t('certificatesPage.keySize') }}<Input v-model="assetForm.keySize" type="number" /></label>
         </div>
         <div v-if="dialog === 'asset-import'" class="min-h-0">
-          <label v-if="!assetImportHasCertificate(assetForm.type)" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+          <label v-if="!assetImportHasCertificate(assetForm.type)" class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
             {{ t('certificatesPage.privateKeyPem') }}
             <CodeEditor v-model="assetForm.privateKeyPem" language="plain" :editor-label="t('certificatesPage.privateKeyPem')" />
           </label>
           <Tabs v-else v-model="assetImportMaterialTab" class="h-full" :tabs="assetImportMaterialTabs">
-            <label v-if="assetImportMaterialTab === 'privateKey'" class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+            <label v-if="assetImportMaterialTab === 'privateKey'" class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
               {{ t('certificatesPage.privateKeyPem') }}
               <CodeEditor v-model="assetForm.privateKeyPem" language="plain" :editor-label="t('certificatesPage.privateKeyPem')" />
             </label>
-            <label v-else class="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
+            <label v-else class="grid h-full min-h-0 grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)] gap-1 text-sm">
               {{ t('certificatesPage.certificatePem') }}
               <CodeEditor v-model="assetForm.certificatePem" language="plain" :editor-label="t('certificatesPage.certificatePem')" />
             </label>

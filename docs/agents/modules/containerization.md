@@ -71,11 +71,11 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 
 ### 存储共享设施（storage-share）
 
-- 存储共享是第二个设施应用：配置支持**多台存储服务器**（`serverIds`）+ 一个根目录，保存后通过 SSH 在每台存储服务器上安装/启用 NFS kernel server，并把根目录导出给全部 Panel 纳管服务器（exports 白名单 = 服务器 Host IP/主机名，选项 `rw,sync,no_subtree_check,no_root_squash,insecure`）。托管导出块使用 `# panel-storage-share:managed` 标记，卸载时只移除该块并 `exportfs -ra`，不覆盖用户其它导出。
-- 设施配置保存在 `storage_share_configs`（单行 id=`storage-share`，多服务器存于 `server_ids_json`，旧单服务器 `server_id` 由迁移回填）；分区历史保存在 `storage_share_partitions`（按 `storage_server_id + application_id + server_id` 唯一，记录存储服务器与分配目录）。
-- 应用挂载新增 `storage_share` 类型：来源为 `storage-share:<存储服务器ID>`（兼容旧值 `storage-share` = 配置的第一台服务器），目标为容器内路径；Panel 在按服务器渲染运行规格时解析为 `nfs` 挂载 `storageServerIP:<root>/<storageServerID>/<应用节点ID>/<appID>`，并登记分区记录。每个（存储服务器 × 应用 × 应用节点）自动获得独立目录。**只有挂载列表里确实包含 `storage_share` 的应用才会检查设施配置**，无关应用不受影响。
+- 存储共享是第二个设施应用：配置支持**多台存储服务器，每台各自指定根目录**（`servers: [{serverId, root}]`）。保存后由存储服务器上的 **Agent** 创建根目录、安装/启用 NFS kernel server 并把各自根目录导出给全部 Panel 纳管服务器（exports 白名单 = 服务器 Host IP/主机名，选项 `rw,sync,no_subtree_check,no_root_squash,insecure`）。托管导出块使用 `# panel-storage-share:managed` 标记，卸载时只移除该块并 `exportfs -ra`，不覆盖用户其它导出。
+- 设施配置保存在 `storage_share_configs`（单行 id=`storage-share`，多服务器及各自根目录存于 `servers_json`，旧 `server_ids_json`/`server_id` 由迁移回填）；分区历史保存在 `storage_share_partitions`（按 `storage_server_id + application_id + server_id` 唯一，记录存储服务器与分配目录）。
+- 应用挂载新增 `storage_share` 类型：来源为 `storage-share:<存储服务器ID>`（兼容旧值 `storage-share` = 配置的第一台服务器），目标为容器内路径；Panel 在按服务器渲染运行规格时解析为 `nfs` 挂载 `<该服务器根目录>/<storageServerID>/<应用节点ID>/<appID>`，并登记分区记录。每个（存储服务器 × 应用 × 应用节点）自动获得独立目录。**只有挂载列表里确实包含 `storage_share` 的应用才会检查设施配置**，无关应用不受影响。
 - Agent 运行时对 `nfs` 挂载：部署前确保主机安装 `nfs-common`（缺失时 apt-get 安装），用 Docker local 卷 + NFS driver（`type=nfs, o=addr=<ip>,rw,nfsvers=4, device=:/<path>`）创建确定性命名卷 `panel-nfs-<hash>` 并挂入容器；purge 时清理不再被引用的 NFS 卷（NFS 侧数据不受影响）。
-- 卸载门禁：仅当没有任何应用 spec 再引用 `storage_share` 挂载时才允许；远端导出清理为**尽力而为**——清理失败不阻塞卸载，配置照常删除、分区历史与数据保留，失败信息通过返回配置的 `lastError` 展示给前端。
+- 卸载门禁：仅当没有任何应用 spec 再引用 `storage_share` 挂载时才允许；导出配置、分区打包下载与目录删除**全部通过 Agent 执行**（`StorageConfigureExport` / `StorageArchiveDirectory` / `StorageDeleteDirectory`），不使用 Panel 侧 SSH。远端清理为**尽力而为**——清理失败不阻塞卸载，配置照常删除、分区历史与数据保留，失败信息通过返回配置的 `lastError` 展示给前端。
 - 分区支持下载（SSH `tar -czf -` 流式返回 tgz）与删除记录+数据（SSH `rm -rf`，需应用已解除引用，前端二次确认）。
 - API：`GET/PUT /api/v1/facility-apps/storage-share`、`POST .../reconcile`、`DELETE ...`（返回卸载后配置）、`GET .../partitions/{id}/download`、`DELETE .../partitions/{id}`。
 

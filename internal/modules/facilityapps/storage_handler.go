@@ -13,7 +13,7 @@ type storageShareService interface {
 	GetStorageShare(ctx context.Context) (StorageShareConfig, error)
 	SaveStorageShare(ctx context.Context, in StorageShareSaveInput) (StorageShareConfig, error)
 	ReconcileStorageShareNow(ctx context.Context) (StorageShareConfig, error)
-	DeleteStorageShare(ctx context.Context) error
+	DeleteStorageShare(ctx context.Context) (StorageShareConfig, error)
 	DownloadStoragePartition(ctx context.Context, partitionID string) (StoragePartitionDownload, error)
 	DeleteStoragePartition(ctx context.Context, partitionID string) error
 }
@@ -75,11 +75,12 @@ func (h *Handler) DeleteStorageShare(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, panelerr.New(http.StatusNotImplemented, "storage_share_unavailable", "Storage share facility is unavailable"))
 		return
 	}
-	if err := service.DeleteStorageShare(r.Context()); err != nil {
+	result, err := service.DeleteStorageShare(r.Context())
+	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpx.JSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) DownloadStoragePartition(w http.ResponseWriter, r *http.Request) {

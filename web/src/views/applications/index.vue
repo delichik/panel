@@ -1236,7 +1236,12 @@ async function loadStorageShareOptions() {
   try {
     const config = await storageShareFacilityApi.get();
     storageShareAvailable.value = config.enabled;
-    storageShareOptions.value = config.enabled ? [{ label: t('applicationsPage.storageShareMountOption', { server: config.serverName || config.serverId, root: config.root }), value: 'storage-share' }] : [];
+    storageShareOptions.value = config.enabled
+      ? config.servers.map((server) => ({
+          label: t('applicationsPage.storageShareMountOption', { server: serverNameMap.value.get(server.serverId) || server.serverId, root: server.root }),
+          value: `storage-share:${server.serverId}`,
+        }))
+      : [];
   } catch {
     storageShareAvailable.value = false;
     storageShareOptions.value = [];
@@ -1779,7 +1784,7 @@ onBeforeUnmount(() => {
               </template>
               <template v-else-if="item.kind === 'storage-share'">
                 <div class="facility-card-stat"><strong>{{ storageShareConfig?.partitions.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageSharePartitions') }}</span></div>
-                <div class="facility-card-stat"><strong class="facility-card-stat-truncate">{{ storageShareConfig?.enabled ? (storageShareConfig.serverName || storageShareConfig.serverId) : '—' }}</strong><span>{{ t('applicationsPage.storageShareServer') }}</span></div>
+                <div class="facility-card-stat"><strong>{{ storageShareConfig?.servers.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareServers') }}</span></div>
                 <div class="facility-card-stat"><strong class="facility-card-stat-truncate">{{ storageShareConfig?.root ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareRoot') }}</span></div>
               </template>
               <template v-else>

@@ -75,7 +75,7 @@ onBeforeUnmount(() => editor?.destroy());
 <template>
   <div
     ref="host"
-    class="min-h-0 overflow-hidden rounded-lg border"
+    class="w-full min-w-0 max-w-full min-h-0 overflow-hidden rounded-lg border"
     :class="[
       size === 'large' ? 'h-[min(620px,calc(100dvh-360px))] min-h-[420px]' : 'h-full',
       invalid ? 'border-danger-border' : 'border-border',

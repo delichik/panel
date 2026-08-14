@@ -2,17 +2,18 @@ package facilityapps
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	agentcontract "panel/internal/agent/contract"
 	"panel/internal/modules/applications"
 	appruntime "panel/internal/modules/applications/runtime"
 	server "panel/internal/modules/servers"
 	"panel/internal/platform/config"
 	storage "panel/internal/platform/database"
 	panelerr "panel/internal/platform/errors"
-	sshx "panel/internal/platform/ssh"
 )
 
 type fakeServerProvider struct {
@@ -40,29 +41,43 @@ func (f *fakeAppsProvider) ApplicationsUsingStorageShare(context.Context) ([]app
 	return f.usages, nil
 }
 
-type fakeSSHExecutor struct {
-	execSudoCalls int
-	uploadCalls   int
-	catOutput     string
+// fakeStorageAgent 同时满足设施服务的 AgentRuntimeClient 与 StorageAgentClient。
+type fakeStorageAgent struct {
+	configureCalls int
+	configureErr   error
+	archiveErr     error
+	deleteErr      error
+	archiveContent []byte
 }
 
-func (f *fakeSSHExecutor) Exec(context.Context, sshx.Target, sshx.CommandSpec) (sshx.CommandResult, error) {
-	return sshx.CommandResult{}, nil
+func (f *fakeStorageAgent) StorageConfigureExport(_ context.Context, _ string, _ string, _ []string, _ bool) error {
+	f.configureCalls++
+	return f.configureErr
 }
-func (f *fakeSSHExecutor) ExecSudo(_ context.Context, _ sshx.Target, command sshx.CommandSpec) (sshx.CommandResult, error) {
-	f.execSudoCalls++
-	if strings.Contains(command.Command, "cat ") {
-		return sshx.CommandResult{Stdout: f.catOutput}, nil
+func (f *fakeStorageAgent) StorageArchiveDirectory(_ context.Context, _ string, _ string) ([]byte, string, error) {
+	if f.archiveErr != nil {
+		return nil, "", f.archiveErr
 	}
-	return sshx.CommandResult{}, nil
+	return f.archiveContent, "partition.tgz", nil
 }
-func (f *fakeSSHExecutor) Upload(context.Context, sshx.Target, sshx.UploadSpec) error {
-	f.uploadCalls++
+func (f *fakeStorageAgent) StorageDeleteDirectory(_ context.Context, _ string, _ string) error {
+	return f.deleteErr
+}
+func (f *fakeStorageAgent) RuntimeWriteFiles(context.Context, string, agentcontract.RuntimeWriteFilesRequest) error {
 	return nil
 }
-func (f *fakeSSHExecutor) Download(context.Context, sshx.Target, sshx.DownloadSpec) error { return nil }
+func (f *fakeStorageAgent) RuntimeCreateContainer(context.Context, string, agentcontract.RuntimeCreateContainerRequest) (agentcontract.RuntimeCreateContainerResponse, error) {
+	return agentcontract.RuntimeCreateContainerResponse{}, nil
+}
+func (f *fakeStorageAgent) RuntimeStop(context.Context, string, agentcontract.RuntimeStopRequest) (agentcontract.RuntimeInstanceResponse, error) {
+	return agentcontract.RuntimeInstanceResponse{}, nil
+}
+func (f *fakeStorageAgent) DockerImagePull(context.Context, string, string) error { return nil }
+func (f *fakeStorageAgent) DockerContainerAction(context.Context, string, string, string) error {
+	return nil
+}
 
-func newStorageShareTestService(t *testing.T) (*Service, *fakeServerProvider, *fakeAppsProvider, *fakeSSHExecutor, *storage.Store) {
+func newStorageShareTestService(t *testing.T) (*Service, *fakeServerProvider, *fakeAppsProvider, *fakeStorageAgent, *storage.Store) {
 	t.Helper()
 	dir := t.TempDir()
 	cfg := config.Default()
@@ -76,35 +91,42 @@ func newStorageShareTestService(t *testing.T) (*Service, *fakeServerProvider, *f
 		t.Fatalf("open store: %v", err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
+	withAgent := func(host string) map[string]string {
+		return map[string]string{agentcontract.TraitEnabled: "true", agentcontract.TraitURL: "https://" + host + ":9786"}
+	}
 	servers := &fakeServerProvider{servers: []server.Server{
-		{ID: "srv-a", Name: "storage-a", Host: "10.0.0.5", Port: 22, SSHUsername: "root", CredentialID: "cred-a"},
-		{ID: "srv-b", Name: "app-node-b", Host: "10.0.0.6", Port: 22, SSHUsername: "root", CredentialID: "cred-b"},
+		{ID: "srv-a", Name: "storage-a", Host: "10.0.0.5", Port: 22, SSHUsername: "root", CredentialID: "cred-a", Traits: withAgent("10.0.0.5")},
+		{ID: "srv-b", Name: "app-node-b", Host: "10.0.0.6", Port: 22, SSHUsername: "root", CredentialID: "cred-b", Traits: withAgent("10.0.0.6")},
+		{ID: "srv-c", Name: "storage-c", Host: "10.0.0.7", Port: 22, SSHUsername: "root", CredentialID: "cred-c", Traits: withAgent("10.0.0.7")},
 	}}
 	apps := &fakeAppsProvider{}
-	ssh := &fakeSSHExecutor{}
-	svc := NewService(store.AppDB(), nil, servers, apps, WithSSHExecutor(ssh), WithDataRoot(cfg.DataRoot))
-	return svc, servers, apps, ssh, store
+	agent := &fakeStorageAgent{}
+	svc := NewService(store.AppDB(), agent, servers, apps, WithDataRoot(cfg.DataRoot))
+	return svc, servers, apps, agent, store
 }
 
 func TestStorageShareSaveAndResolveMounts(t *testing.T) {
-	svc, _, _, _, _ := newStorageShareTestService(t)
+	svc, _, _, agent, _ := newStorageShareTestService(t)
 	ctx := context.Background()
-	cfg, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{ServerID: "srv-a", Root: "/srv/panel-storage"})
+	cfg, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}})
 	if err != nil {
 		t.Fatalf("save storage share: %v", err)
 	}
-	if !cfg.Enabled || cfg.ServerID != "srv-a" || cfg.Root != "/srv/panel-storage" {
+	if !cfg.Enabled || len(cfg.Servers) != 1 || cfg.Servers[0].ServerID != "srv-a" || cfg.Servers[0].Root != "/srv/panel-storage" {
 		t.Fatalf("unexpected config: %#v", cfg)
+	}
+	if agent.configureCalls != 1 {
+		t.Fatalf("expected one agent configure call, got %d", agent.configureCalls)
 	}
 	resolved, err := svc.ResolveStorageShareMounts(ctx,
 		applications.Application{ID: "app-1", Name: "app-1"},
 		server.Server{ID: "srv-b", Name: "app-node-b"},
-		[]appruntime.Mount{{Type: "storage_share", Source: StorageShareID, Target: "/data"}},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share:srv-a", Target: "/data"}},
 	)
 	if err != nil {
 		t.Fatalf("resolve mounts: %v", err)
 	}
-	if len(resolved) != 1 || resolved[0].Type != "nfs" || resolved[0].Source != "10.0.0.5:/srv/panel-storage/srv-b/app-1" || resolved[0].Target != "/data" {
+	if len(resolved) != 1 || resolved[0].Type != "nfs" || resolved[0].Source != "10.0.0.5:/srv/panel-storage/srv-a/srv-b/app-1" || resolved[0].Target != "/data" {
 		t.Fatalf("unexpected resolved mount: %#v", resolved)
 	}
 	partitions, err := svc.listStoragePartitions(ctx)
@@ -116,14 +138,76 @@ func TestStorageShareSaveAndResolveMounts(t *testing.T) {
 	}
 }
 
+// TestStorageShareResolverIgnoresNonStorageMountsWhenUnconfigured 回归：应用没有
+// storage_share 挂载时，即使设施未配置也不得报错。
+func TestStorageShareResolverIgnoresNonStorageMountsWhenUnconfigured(t *testing.T) {
+	svc, _, _, _, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	mounts := []appruntime.Mount{
+		{Type: "persistent", Source: "data", Target: "/data"},
+		{Type: "volume", Source: "web-data", Target: "/srv"},
+	}
+	resolved, err := svc.ResolveStorageShareMounts(ctx,
+		applications.Application{ID: "app-1", Name: "app-1"},
+		server.Server{ID: "srv-b", Name: "app-node-b"},
+		mounts,
+	)
+	if err != nil {
+		t.Fatalf("non-storage mounts must not be affected by facility state: %v", err)
+	}
+	if len(resolved) != len(mounts) || resolved[0].Type != "persistent" {
+		t.Fatalf("mounts must pass through unchanged: %#v", resolved)
+	}
+}
+
+func TestStorageShareResolveMultiServerWithOwnRoots(t *testing.T) {
+	svc, _, _, _, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{
+		{ServerID: "srv-c", Root: "/srv/c-data"},
+		{ServerID: "srv-a", Root: "/srv/a-data"},
+	}}); err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	cfg, err := svc.GetStorageShare(ctx)
+	if err != nil {
+		t.Fatalf("get storage share: %v", err)
+	}
+	if len(cfg.Servers) != 2 || cfg.Servers[0].ServerID != "srv-a" || cfg.Servers[0].Root != "/srv/a-data" || cfg.Servers[1].Root != "/srv/c-data" {
+		t.Fatalf("server settings should be sorted with own roots: %#v", cfg.Servers)
+	}
+	resolved, err := svc.ResolveStorageShareMounts(ctx,
+		applications.Application{ID: "app-1", Name: "app-1"},
+		server.Server{ID: "srv-b", Name: "app-node-b"},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share:srv-c", Target: "/data"}},
+	)
+	if err != nil {
+		t.Fatalf("resolve mounts: %v", err)
+	}
+	if resolved[0].Source != "10.0.0.7:/srv/c-data/srv-c/srv-b/app-1" {
+		t.Fatalf("unexpected resolved mount for srv-c: %#v", resolved[0])
+	}
+	legacy, err := svc.ResolveStorageShareMounts(ctx,
+		applications.Application{ID: "app-2", Name: "app-2"},
+		server.Server{ID: "srv-b", Name: "app-node-b"},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share", Target: "/data"}},
+	)
+	if err != nil {
+		t.Fatalf("resolve legacy source: %v", err)
+	}
+	if legacy[0].Source != "10.0.0.5:/srv/a-data/srv-a/srv-b/app-2" {
+		t.Fatalf("legacy source should use the first configured server with its own root: %#v", legacy[0])
+	}
+}
+
 func TestStorageShareUninstallGatedByUsage(t *testing.T) {
 	svc, _, apps, _, _ := newStorageShareTestService(t)
 	ctx := context.Background()
-	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{ServerID: "srv-a", Root: "/srv/panel-storage"}); err != nil {
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
 		t.Fatalf("save storage share: %v", err)
 	}
 	apps.usages = []applications.StorageShareUsage{{ApplicationID: "app-1", ApplicationName: "app-1"}}
-	if err := svc.DeleteStorageShare(ctx); err == nil {
+	if _, err := svc.DeleteStorageShare(ctx); err == nil {
 		t.Fatal("expected uninstall to be blocked while an application uses the storage share")
 	}
 	cfg, err := svc.GetStorageShare(ctx)
@@ -134,8 +218,12 @@ func TestStorageShareUninstallGatedByUsage(t *testing.T) {
 		t.Fatal("storage share should still be enabled after blocked uninstall")
 	}
 	apps.usages = nil
-	if err := svc.DeleteStorageShare(ctx); err != nil {
+	result, err := svc.DeleteStorageShare(ctx)
+	if err != nil {
 		t.Fatalf("uninstall: %v", err)
+	}
+	if result.Enabled {
+		t.Fatal("storage share should be disabled after uninstall")
 	}
 	cfg, err = svc.GetStorageShare(ctx)
 	if err != nil {
@@ -146,16 +234,37 @@ func TestStorageShareUninstallGatedByUsage(t *testing.T) {
 	}
 }
 
+// TestStorageShareUninstallSucceedsWhenAgentCleanupFails 回归：Agent 清理失败时
+// 卸载不得报错，配置照常删除并把警告写入返回配置。
+func TestStorageShareUninstallSucceedsWhenAgentCleanupFails(t *testing.T) {
+	svc, _, _, agent, _ := newStorageShareTestService(t)
+	ctx := context.Background()
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
+		t.Fatalf("save storage share: %v", err)
+	}
+	agent.configureErr = errors.New("agent down")
+	result, err := svc.DeleteStorageShare(ctx)
+	if err != nil {
+		t.Fatalf("uninstall must succeed even when agent cleanup fails: %v", err)
+	}
+	if result.Enabled {
+		t.Fatal("storage share should be disabled after uninstall")
+	}
+	if !strings.Contains(result.LastError, "cleanup") {
+		t.Fatalf("expected cleanup warning in result, got %q", result.LastError)
+	}
+}
+
 func TestStorageShareDeletePartitionGatedByUsage(t *testing.T) {
 	svc, _, apps, _, _ := newStorageShareTestService(t)
 	ctx := context.Background()
-	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{ServerID: "srv-a", Root: "/srv/panel-storage"}); err != nil {
+	if _, err := svc.SaveStorageShare(ctx, StorageShareSaveInput{Servers: []StorageServerSetting{{ServerID: "srv-a", Root: "/srv/panel-storage"}}}); err != nil {
 		t.Fatalf("save storage share: %v", err)
 	}
 	if _, err := svc.ResolveStorageShareMounts(ctx,
 		applications.Application{ID: "app-1", Name: "app-1"},
 		server.Server{ID: "srv-b", Name: "app-node-b"},
-		[]appruntime.Mount{{Type: "storage_share", Source: StorageShareID, Target: "/data"}},
+		[]appruntime.Mount{{Type: "storage_share", Source: "storage-share:srv-a", Target: "/data"}},
 	); err != nil {
 		t.Fatalf("resolve mounts: %v", err)
 	}

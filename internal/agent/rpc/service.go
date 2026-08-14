@@ -2,11 +2,13 @@ package rpc
 
 import (
 	"context"
+	"path/filepath"
 	"time"
 
 	agentcontract "panel/internal/agent/contract"
 	agentdocker "panel/internal/agent/docker"
 	agentpb "panel/internal/agent/pb"
+	agentstorage "panel/internal/agent/storage"
 	agentsystem "panel/internal/agent/system"
 	"panel/internal/platform/linux/remoteops"
 
@@ -332,4 +334,26 @@ func (h *Handler) RuntimePersistentRestore(ctx context.Context, req *agentpb.Run
 	}
 	err := h.runtime.RestorePersistentArchive(ctx, req.ApplicationId, req.Content)
 	return &agentpb.RuntimePersistentRestoreResponse{ApplicationId: req.ApplicationId, Restored: err == nil}, remoteError(err)
+}
+
+func (h *Handler) StorageConfigureExport(ctx context.Context, req *agentpb.StorageConfigureExportRequest) (*agentpb.OKResponse, error) {
+	err := agentstorage.ConfigureExport(ctx, req.Root, req.AllowedHosts, req.Enabled)
+	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
+}
+
+func (h *Handler) StorageArchiveDirectory(ctx context.Context, req *agentpb.StorageArchiveDirectoryRequest) (*agentpb.StorageArchiveDirectoryResponse, error) {
+	content, err := agentstorage.ArchiveDirectory(ctx, req.Path)
+	if err != nil {
+		return nil, remoteError(err)
+	}
+	filename := "storage"
+	if base := filepath.Base(req.Path); base != "" && base != "." && base != "/" {
+		filename = base
+	}
+	return &agentpb.StorageArchiveDirectoryResponse{Filename: filename + ".tgz", Content: content}, nil
+}
+
+func (h *Handler) StorageDeleteDirectory(ctx context.Context, req *agentpb.StorageDeleteDirectoryRequest) (*agentpb.OKResponse, error) {
+	err := agentstorage.DeleteDirectory(ctx, req.Path)
+	return &agentpb.OKResponse{Ok: err == nil}, remoteError(err)
 }

@@ -848,11 +848,8 @@ function imageFromSpec(spec: string) {
 export let mockStorageShare: StorageShareConfig = {
   id: 'storage-share',
   version: 1,
-  serverId: 'srv-edge-sgp',
-  serverName: 'Singapore edge',
-  root: '/srv/panel-storage',
+  servers: [],
   enabled: false,
-  servers: ['srv-edge-sgp', 'srv-api-hkg', 'srv-edge-lax'],
   partitions: [],
   updatedAt: now,
 };
@@ -861,9 +858,8 @@ export function saveStorageShare(input: StorageShareSaveInput): StorageShareConf
   mockStorageShare = {
     ...mockStorageShare,
     version: mockStorageShare.version + 1,
-    serverId: input.serverId,
-    root: input.root,
-    enabled: true,
+    servers: (input.servers ?? []).map((item) => ({ serverId: item.serverId, root: item.root })),
+    enabled: (input.servers?.length ?? 0) > 0,
     lastError: undefined,
     updatedAt: now,
   };
@@ -874,8 +870,7 @@ export function uninstallStorageShare(): void {
   mockStorageShare = {
     ...mockStorageShare,
     version: mockStorageShare.version + 1,
-    serverId: '',
-    root: '',
+    servers: [],
     enabled: false,
     updatedAt: now,
   };

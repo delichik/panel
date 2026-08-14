@@ -449,6 +449,30 @@ func (c *GRPCClient) DockerVolumeDelete(ctx context.Context, endpoint, name stri
 	return err
 }
 
+func (c *GRPCClient) StorageConfigureExport(ctx context.Context, endpoint, root string, allowedHosts []string, enabled bool) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.StorageConfigureExport(ctx, &agentpb.StorageConfigureExportRequest{Root: root, AllowedHosts: allowedHosts, Enabled: enabled})
+	})
+	return err
+}
+
+func (c *GRPCClient) StorageArchiveDirectory(ctx context.Context, endpoint, pathValue string) ([]byte, string, error) {
+	out, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.StorageArchiveDirectoryResponse, error) {
+		return client.StorageArchiveDirectory(ctx, &agentpb.StorageArchiveDirectoryRequest{Path: pathValue})
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return out.Content, out.Filename, nil
+}
+
+func (c *GRPCClient) StorageDeleteDirectory(ctx context.Context, endpoint, pathValue string) error {
+	_, err := callRPC(c, ctx, endpoint, c.timeout, func(ctx context.Context, client agentpb.AgentServiceClient) (*agentpb.OKResponse, error) {
+		return client.StorageDeleteDirectory(ctx, &agentpb.StorageDeleteDirectoryRequest{Path: pathValue})
+	})
+	return err
+}
+
 func (c *GRPCClient) StreamReports(ctx context.Context, endpoint string, config func() ReportConfig, handle func(context.Context, AgentReport) error) error {
 	conn, err := c.dial(ctx, endpoint)
 	if err != nil {
