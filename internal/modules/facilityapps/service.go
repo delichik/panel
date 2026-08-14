@@ -25,6 +25,7 @@ import (
 	"panel/internal/platform/database/orm"
 	panelerr "panel/internal/platform/errors"
 	"panel/internal/platform/logging"
+	sshx "panel/internal/platform/ssh"
 
 	"go.uber.org/zap"
 )
@@ -120,6 +121,8 @@ type Service struct {
 	editCleanupOnce sync.Once
 	editSessionDir  string
 	editCommitMu    sync.Mutex
+	storageMu       sync.Mutex
+	ssh             sshx.RemoteExecutor
 	// beforeFacilityEditRevisionBump is a deterministic test synchronization point.
 	beforeFacilityEditRevisionBump func()
 }
@@ -158,6 +161,11 @@ func WithDNSProvider(provider DNSProxySyncer) Option {
 
 func WithTaskService(taskSvc *tasks.Service) Option {
 	return func(s *Service) { s.tasks = taskSvc }
+}
+
+// WithSSHExecutor 注入用于存储共享设施维护（NFS 导出、分区打包/删除）的 SSH 执行器。
+func WithSSHExecutor(executor sshx.RemoteExecutor) Option {
+	return func(s *Service) { s.ssh = executor }
 }
 
 func NewService(db *sql.DB, agent AgentRuntimeClient, servers ServerProvider, apps ApplicationProvider, opts ...Option) *Service {

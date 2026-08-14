@@ -1,4 +1,4 @@
-﻿# 容器化资源管理
+# 容器化资源管理
 
 ## List And Snapshot Contracts
 
@@ -14,7 +14,7 @@
 ## 关键入口
 
 - Panel 服务与 API：`internal/modules/containers/`；HTTP 路由在 `routes.go` 注册。
-- 设施应用服务与 API：`internal/modules/facilityapps/`；当前内置反向代理设施应用。
+- 设施应用服务与 API：`internal/modules/facilityapps/`；当前内置反向代理与存储共享两个设施应用。
 - Agent Docker Engine API：`internal/agent/docker/`；Agent gRPC service：`internal/agent/rpc/`
 - Application 运行时：`internal/modules/applications/service.go`
 - 周期任务：`internal/modules/containers/tasks.go`，由 `internal/modules/tasks/` 内部 worker 驱动
@@ -28,7 +28,7 @@
 
 资源页为服务器上下文资源维护台，外层左侧选择服务器、右侧为内部滚动工作区。软件包、容器、镜像、网络和卷是独立路由页面，不使用页内 tabs；可以复用同一个资源上下文，但必须保持不同的信息架构和操作闭环，不得退回同质通用列表。所有控件使用 Panel 自有 primitives，禁止引入 Naive UI / Vuetify。
 
-- 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”只是当前唯一设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。
+- 设施应用页面是 `/applications/facility-apps` 独立入口，必须先呈现设施目录；内置“反向代理”与“存储共享”两个设施项。`facilityKind=reverse-proxy` 的只读详情展示路由与部署状态；独立配置页保存 Nginx 镜像、全局网关节点、Panel 入口、域名策略、Path 规则和静态资产草稿。指定的全局网关节点即视为开启反向代理能力。`facilityKind=storage-share` 由独立组件 `web/src/views/applications/StorageShareFacility.vue` 渲染详情与配置，详见下文“存储共享设施”。
 - 容器支持查询、查看日志、启动、停止、重启、删除；日志入口与其他行操作使用带图标的小型操作，托管 Application 容器的直接停止、重启和删除入口必须禁用并提示改走 Application 生命周期。
 - 容器卡片端口行在没有发布端口时显示「无端口映射」，不使用「不可用」，避免与容器故障状态混淆。
 - 镜像支持查询、拉取、删除、删除未使用镜像、刷新更新状态、升级选中 Application 和全部升级；批量危险操作必须通过确认对话框触发。
@@ -68,6 +68,16 @@ commit 前必须重新散列每个新 blob 的 content 目录和每个 `source_a
 - 上游模式域名由设施独占，不允许普通应用或 Panel 入口共享同一规范化域名。非上游模式仍按实际服务器上的精确 `domain + path` 检测设施、应用和 Panel 入口冲突。
 - 设施手工代理、普通应用代理、Panel 入口和跨节点转发的每个 Nginx location 都必须显式写入 `proxy_cache off;`。Panel 不管理客户端缓存 Header；用户如通过通用响应 Header 设置 `Cache-Control` 等字段，其语义由用户负责。
 - 设施应用部署和普通 Docker/Application 写操作共享每服务器容器操作队列。
+
+### 存储共享设施（storage-share）
+
+- 存储共享是第二个设施应用：配置选一台存储服务器 + 根目录，保存后通过 SSH 在存储服务器上安装/启用 NFS kernel server，并把根目录导出给全部 Panel 纳管服务器（exports 白名单 = 服务器 Host IP/主机名，选项 `rw,sync,no_subtree_check,no_root_squash,insecure`）。托管导出块使用 `# panel-storage-share:managed` 标记，卸载时只移除该块并 `exportfs -ra`，不覆盖用户其它导出。
+- 设施配置保存在 `storage_share_configs`（单行 id=`storage-share`）；分区历史保存在 `storage_share_partitions`（按 `application_id + server_id` 唯一，记录存储服务器与分配目录）。
+- 应用挂载新增 `storage_share` 类型：来源固定为设施 id `storage-share`，目标为容器内路径；Panel 在按服务器渲染运行规格时解析为 `nfs` 挂载 `storageServerIP:<root>/<serverID>/<appID>`，并登记分区记录。每个（应用 × 应用节点）自动获得独立目录。
+- Agent 运行时对 `nfs` 挂载：部署前确保主机安装 `nfs-common`（缺失时 apt-get 安装），用 Docker local 卷 + NFS driver（`type=nfs, o=addr=<ip>,rw,nfsvers=4, device=:/<path>`）创建确定性命名卷 `panel-nfs-<hash>` 并挂入容器；purge 时清理不再被引用的 NFS 卷（NFS 侧数据不受影响）。
+- 卸载门禁：仅当没有任何应用 spec 再引用 `storage_share` 挂载时才允许；卸载只停止导出（移除托管 exports 块 + `exportfs -ra`）并删除配置，分区历史与数据保留。
+- 分区支持下载（SSH `tar -czf -` 流式返回 tgz）与删除记录+数据（SSH `rm -rf`，需应用已解除引用，前端二次确认）。
+- API：`GET/PUT /api/v1/facility-apps/storage-share`、`POST .../reconcile`、`DELETE ...`、`GET .../partitions/{id}/download`、`DELETE .../partitions/{id}`。
 
 ## 托管 Label
 

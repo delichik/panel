@@ -170,12 +170,14 @@ func New(cfg config.Config) (*App, error) {
 		facilityapps.WithPanelHostProvider(installationSvc),
 		facilityapps.WithDNSProvider(dnsSvc),
 		facilityapps.WithTaskService(taskSvc),
+		facilityapps.WithSSHExecutor(executor),
 	)
 	serverSvc.SetDNSSyncTrigger(facilitySvc.SyncServersDNSEntries)
 	containerBridge.facility = facilitySvc
 	applicationSvc.SetReverseProxyReconciler(facilitySvc)
 	applicationSvc.SetReverseProxyPolicyProvider(facilitySvc)
 	applicationSvc.SetFacilityRuntimeProvider(facilitySvc)
+	applicationSvc.SetStorageShareResolver(facilitySvc)
 	if err := applicationSvc.ReconcileInterruptedLifecycleTasks(context.Background()); err != nil {
 		_ = store.Close()
 		return nil, err

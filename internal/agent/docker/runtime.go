@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	goruntime "runtime"
@@ -51,6 +52,7 @@ const (
 	labelGeneration        = "panel.application.generation"
 	labelSpecHash          = "panel.application.spec.hash"
 	labelApplyMode         = "panel.application.apply.mode"
+	labelStorageNFS        = "panel.storage.nfs"
 )
 
 type LocalRuntime struct {
@@ -117,6 +119,7 @@ func (r *LocalRuntime) Stop(ctx context.Context, req agentcontract.RuntimeStopRe
 		return agentcontract.RuntimeInstanceResponse{}, err
 	}
 	if req.Purge {
+		_ = r.cleanupNFSVolumes(ctx)
 		if req.RemoveApplicationData {
 			appDir, err := safeApplicationRootDir(r.root, req.ApplicationID)
 			if err != nil {
@@ -566,6 +569,9 @@ func (r *LocalRuntime) CreateContainer(ctx context.Context, spec appruntime.Spec
 	if err := r.client.ensureManagedNetwork(ctx, dockerNetworkMode(spec.NetworkMode)); err != nil {
 		return "", err
 	}
+	if err := r.prepareNFSVolumes(ctx, spec); err != nil {
+		return "", err
+	}
 	id, err := r.client.createContainer(ctx, spec)
 	if err != nil {
 		return "", err
@@ -778,6 +784,103 @@ func (r *LocalRuntime) preparePersistentMounts(spec appruntime.Spec) error {
 	return nil
 }
 
+func (r *LocalRuntime) prepareNFSVolumes(ctx context.Context, spec appruntime.Spec) error {
+	for _, mount := range spec.Mounts {
+		if strings.TrimSpace(mount.Type) != "nfs" {
+			continue
+		}
+		name := nfsVolumeName(mount.Source, mount.Target)
+		volumes, err := r.client.listVolumes(ctx)
+		if err != nil {
+			return err
+		}
+		exists := false
+		for _, volume := range volumes {
+			if volume.Name == name {
+				exists = true
+				break
+			}
+		}
+		if exists {
+			continue
+		}
+		opts, err := nfsVolumeOptions(mount.Source)
+		if err != nil {
+			return err
+		}
+		if err := ensureNFSClient(); err != nil {
+			return fmt.Errorf("prepare nfs volume: %w", err)
+		}
+		if err := r.client.createVolume(ctx, name, opts); err != nil {
+			return fmt.Errorf("create nfs volume: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *LocalRuntime) cleanupNFSVolumes(ctx context.Context) error {
+	volumes, err := r.client.listVolumes(ctx)
+	if err != nil {
+		return err
+	}
+	for _, volume := range volumes {
+		if volume.Labels[labelStorageNFS] != "true" || volume.ContainerCount > 0 {
+			continue
+		}
+		_ = r.client.removeVolume(ctx, volume.Name)
+	}
+	return nil
+}
+
+func nfsVolumeName(source, target string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(source) + "|" + strings.TrimSpace(target)))
+	return "panel-nfs-" + hex.EncodeToString(sum[:12])
+}
+
+func nfsVolumeOptions(source string) (map[string]string, error) {
+	host, export, err := splitNFSSource(source)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]string{
+		"type":   "nfs",
+		"o":      "addr=" + host + ",rw,nfsvers=4",
+		"device": ":" + export,
+	}, nil
+}
+
+func splitNFSSource(source string) (string, string, error) {
+	source = strings.TrimSpace(source)
+	if strings.HasPrefix(source, "[") {
+		end := strings.Index(source, "]")
+		if end < 0 || end+1 >= len(source) || source[end+1] != ':' {
+			return "", "", fmt.Errorf("invalid nfs source %q", source)
+		}
+		return source[1:end], source[end+2:], nil
+	}
+	idx := strings.Index(source, ":")
+	if idx <= 0 || idx == len(source)-1 {
+		return "", "", fmt.Errorf("invalid nfs source %q", source)
+	}
+	return source[:idx], source[idx+1:], nil
+}
+
+func ensureNFSClient() error {
+	if _, err := exec.LookPath("mount.nfs"); err == nil {
+		return nil
+	}
+	if _, err := exec.LookPath("mount.nfs4"); err == nil {
+		return nil
+	}
+	if goruntime.GOOS != "linux" {
+		return errors.New("nfs client (nfs-common) is required on the host")
+	}
+	cmd := exec.Command("apt-get", "install", "-y", "--no-install-recommends", "nfs-common")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("install nfs-common failed: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
 func managedFileMode(value string) (os.FileMode, error) {
 	value = strings.TrimSpace(value)
 	if value == "" {
@@ -2274,6 +2377,39 @@ func (c *dockerAPIClient) listVolumes(ctx context.Context) ([]agentcontract.Dock
 	return raw.Volumes, nil
 }
 
+type dockerVolumeCreateRequest struct {
+	Name       string            `json:"Name"`
+	Driver     string            `json:"Driver"`
+	DriverOpts map[string]string `json:"DriverOpts"`
+	Labels     map[string]string `json:"Labels"`
+}
+
+func (c *dockerAPIClient) createVolume(ctx context.Context, name string, opts map[string]string) error {
+	payload := dockerVolumeCreateRequest{
+		Name:       name,
+		Driver:     "local",
+		DriverOpts: opts,
+		Labels:     map[string]string{labelStorageNFS: "true"},
+	}
+	body, _ := json.Marshal(payload)
+	req, err := c.newRequest(ctx, http.MethodPost, "/volumes/create", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode == http.StatusConflict {
+		return nil
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return dockerError(res, "create volume")
+	}
+	return nil
+}
 func (c *dockerAPIClient) removeVolume(ctx context.Context, name string) error {
 	req, err := c.newRequest(ctx, http.MethodDelete, "/volumes/"+url.PathEscape(name), nil)
 	if err != nil {
@@ -2485,6 +2621,8 @@ func dockerBinds(root string, spec appruntime.Spec) []string {
 			source = filepath.Join(root, spec.ApplicationID, "instances", spec.InstanceID, "files", filepath.FromSlash(path.Clean(strings.TrimPrefix(mount.Source, "/"))))
 		case "persistent":
 			source = mount.Source
+		case "nfs":
+			source = nfsVolumeName(mount.Source, mount.Target)
 		}
 		mode := "rw"
 		if mount.ReadOnly {

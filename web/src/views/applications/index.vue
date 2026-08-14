@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router';
-import { AlertTriangle, ClipboardList, Code2, Globe2, History, Plus, RefreshCw, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
+import { AlertTriangle, ClipboardList, Code2, Globe2, HardDrive, History, Plus, RefreshCw, RefreshCcw, Rocket, Save, Square, Trash2, UploadCloud, Wrench } from '@lucide/vue';
 import { applicationsApi } from '@/api/applications';
 import { serversApi } from '@/api/servers';
 import { saveBlobDownload } from '@/api/download';
-import { reverseProxyFacilityApi } from '@/api/facilityApps';
+import { reverseProxyFacilityApi, storageShareFacilityApi } from '@/api/facilityApps';
 import Badge from '@/components/ui/Badge.vue';
 import Button from '@/components/ui/Button.vue';
 import CodeEditor from '@/components/ui/CodeEditor.vue';
@@ -25,6 +25,7 @@ import LoadingOverlay from '@/components/ui/LoadingOverlay.vue';
 import { useErrorToast, useSuccessToast, useToast } from '@/components/ui/toast';
 import ServerMultiPicker from '@/components/patterns/ServerMultiPicker.vue';
 import ServerContextSelector from '@/components/patterns/ServerContextSelector.vue';
+import StorageShareFacility from './StorageShareFacility.vue';
 import AssetFileManager from '@/components/patterns/AssetFileManager.vue';
 import type { AssetFileAdapter, AssetFileItem } from '@/components/patterns/assetFileManager';
 import ConsolePage from '@/components/templates/ConsolePage.vue';
@@ -32,7 +33,7 @@ import EditorPage from '@/components/templates/EditorPage.vue';
 import MasterDetailLayout from '@/components/templates/MasterDetailLayout.vue';
 import { useI18n } from '@/i18n';
 import type { ApplicationDto, ApplicationEditPreviewResult, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, ReverseProxyRule } from '@/types/applications';
-import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset } from '@/types/facilityApps';
+import type { FacilityEditPreviewResult, FacilityEditSession, FacilityRouteDomain, FacilityRoutePath, ReverseProxyConfig, StaticAsset, StorageShareConfig } from '@/types/facilityApps';
 import type { ServerDto } from '@/types/servers';
 import { formatDateTime } from '@/utils/datetime';
 import {
@@ -104,6 +105,9 @@ const runtimes = ref<Record<string, ApplicationRuntime>>({});
 const rowImageLoading = ref<Record<string, boolean>>({});
 const rowImageControllers = new Map<string, AbortController>();
 const facility = ref<ReverseProxyConfig | null>(null);
+const storageShareOptions = ref<{ label: string; value: string }[]>([]);
+const storageShareAvailable = ref(false);
+const storageShareConfig = ref<StorageShareConfig | null>(null);
 const selectedId = ref(String(route.query.application ?? ''));
 const search = ref(String(route.query.search ?? ''));
 const page = ref(1);
@@ -114,7 +118,10 @@ const detailLoading = ref(false);
 const runtimeLoading = ref(false);
 const editorLoading = ref(false);
 const facilitiesLoaded = ref(true);
-const facilities = [{ kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' }];
+const facilities = [
+  { kind: 'reverse-proxy', icon: Globe2, titleKey: 'applicationsPage.entranceProxyFacility', descriptionKey: 'applicationsPage.entranceProxyFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryTraffic', status: 'available' },
+  { kind: 'storage-share', icon: HardDrive, titleKey: 'applicationsPage.storageShareFacility', descriptionKey: 'applicationsPage.storageShareFacilityDescription', categoryKey: 'applicationsPage.facilityCategoryStorage', status: 'available' },
+];
 const error = ref('');
 const actionError = ref('');
 const pending = ref('');
@@ -169,6 +176,7 @@ const facilityKind = computed(() => String(route.params.facilityKind ?? ''));
 const isAppEditor = computed(() => mode.value === 'create' || mode.value === 'edit');
 const isCreateMode = computed(() => mode.value === 'create');
 const isReverseProxyFacility = computed(() => !facilityKind.value || facilityKind.value === 'reverse-proxy');
+const isStorageShareFacility = computed(() => facilityKind.value === 'storage-share');
 const currentFacilitySummary = computed(() => facilities.find((item) => item.kind === (facilityKind.value || 'reverse-proxy')) ?? null);
 const isFacilityEditor = computed(() => mode.value === 'facilityConfig' && isReverseProxyFacility.value);
 const facilityEditing = ref(false);
@@ -268,7 +276,7 @@ const facilityAssetItems = computed<AssetFileItem[]>(() => (facilitySession.valu
   sha256: asset.sha256,
   editable: asset.contentMode === 'text',
 })));
-const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
+const mountTypeOptions = computed(() => ['persistent', 'volume', 'host', 'file', 'panel_file', 'storage_share'].map((value) => ({ label: t(`applicationsPage.mountType.${value}`), value })));
 const routeTypeOptions = computed(() => ['static', 'redirect'].map((value) => ({ label: t(`applicationsPage.routeType.${value}`), value })));
 const sourceTypeOptions = computed(() => ['uploaded_file', 'uploaded_bundle'].map((value) => ({ label: t(`applicationsPage.sourceType.${value}`), value })));
 const proxyTargetTypeOptions = computed(() => {
@@ -687,6 +695,11 @@ async function loadFacilityData() {
     const primaryFacility = isReverseProxyFacility.value ? await reverseProxyFacilityApi.getConfig({ signal: controller.signal }) : null;
     if (requestId !== pageLoadRequestId || mode.value !== modeAtStart) return;
     facility.value = primaryFacility;
+    try {
+      storageShareConfig.value = await storageShareFacilityApi.get({ signal: controller.signal });
+    } catch {
+      storageShareConfig.value = null;
+    }
     facilitiesLoaded.value = true;
     const pendingDns = primaryFacility?.dnsSync ? Object.values(primaryFacility.dnsSync).some((state) => state.state === 'pending') : false;
     if (pendingDns && !facilityEditingView.value && document.visibilityState === 'visible') {
@@ -1201,14 +1214,35 @@ function savePortDialog() {
   markAppStructuredDirty();
 }
 
+async function loadStorageShareOptions() {
+  if (storageShareOptions.value.length) return;
+  try {
+    const config = await storageShareFacilityApi.get();
+    storageShareAvailable.value = config.enabled;
+    storageShareOptions.value = config.enabled ? [{ label: t('applicationsPage.storageShareMountOption', { server: config.serverName || config.serverId, root: config.root }), value: 'storage-share' }] : [];
+  } catch {
+    storageShareAvailable.value = false;
+    storageShareOptions.value = [];
+  }
+}
+
+watch(() => mountDraft.type, (type) => {
+  if (type === 'storage_share') void loadStorageShareOptions();
+});
+
 function openMountDialog(index = -1) {
   dialogKind.value = 'mount';
   dialogIndex.value = index;
   Object.assign(mountDraft, index >= 0 ? appDraft.mounts[index] : makeMountRow());
+  if (mountDraft.type === 'storage_share') void loadStorageShareOptions();
   dialogOpen.value = true;
 }
 
 function saveMountDialog() {
+  if (mountDraft.type === 'storage_share' && !mountDraft.source) {
+    notifyError(t('applicationsPage.storageShareMountSourceRequired'));
+    return;
+  }
   const next = { ...mountDraft };
   if (dialogIndex.value >= 0) appDraft.mounts[dialogIndex.value] = next;
   else appDraft.mounts.push(next);
@@ -1727,6 +1761,11 @@ onBeforeUnmount(() => {
                   <div class="motion-skeleton mt-1 h-3 w-16 rounded bg-muted animate-pulse" />
                 </div>
               </template>
+              <template v-else-if="item.kind === 'storage-share'">
+                <div class="facility-card-stat"><strong>{{ storageShareConfig?.partitions.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageSharePartitions') }}</span></div>
+                <div class="facility-card-stat"><strong class="facility-card-stat-truncate">{{ storageShareConfig?.enabled ? (storageShareConfig.serverName || storageShareConfig.serverId) : '—' }}</strong><span>{{ t('applicationsPage.storageShareServer') }}</span></div>
+                <div class="facility-card-stat"><strong class="facility-card-stat-truncate">{{ storageShareConfig?.root ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareRoot') }}</span></div>
+              </template>
               <template v-else>
                 <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
                 <div class="facility-card-stat"><strong>{{ facility?.deploymentServers.length ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayNodes') }}</span></div>
@@ -1736,7 +1775,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="flex flex-wrap items-start gap-2 lg:justify-end">
             <Button size="sm" variant="primary" @click="router.push(`/applications/facility-apps/${item.kind}`)"><Wrench />{{ t('applicationsPage.manageFacility') }}</Button>
-            <Button size="sm" variant="secondary" :loading="pending === `facility-reconcile-${item.kind}`" @click="runOperation(`facility-reconcile-${item.kind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+            <Button size="sm" variant="secondary" :loading="pending === `facility-reconcile-${item.kind}`" @click="runOperation(`facility-reconcile-${item.kind}`, () => item.kind === 'storage-share' ? storageShareFacilityApi.reconcile() : reverseProxyFacilityApi.reconcile(), item.kind === 'storage-share' ? 'applicationsPage.storageShareReconcileAccepted' : 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ item.kind === 'storage-share' ? t('applicationsPage.storageShareReconcile') : t('applicationsPage.reconcileGateway') }}</Button>
           </div>
         </article>
         <EmptyState v-if="!facilities.length" :title="t('applicationsPage.emptyFacilityCatalog')" :description="t('applicationsPage.emptyFacilityCatalogHint')" />
@@ -1748,8 +1787,8 @@ onBeforeUnmount(() => {
     <template #actions>
       <template v-if="!facilityEditingView">
         <Button size="sm" :loading="loading" @click="load"><RefreshCcw />{{ t('common.refresh') }}</Button>
-        <Button v-if="currentFacilitySummary" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
-        <Button v-if="currentFacilitySummary" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
+        <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" @click="runOperation(`facility-reconcile-${facilityKind}`, () => reverseProxyFacilityApi.reconcile(), 'applicationsPage.gatewayReconcileAccepted', 'applicationsPage.gatewayReconcileAcceptedWithoutId')"><Rocket />{{ t('applicationsPage.reconcileGateway') }}</Button>
+        <Button v-if="currentFacilitySummary && isReverseProxyFacility" size="sm" variant="primary" @click="startInPlaceFacilityEdit"><Wrench />{{ t('common.edit') }}</Button>
       </template>
     </template>
     <template v-if="facilityEditingView">
@@ -1872,6 +1911,9 @@ onBeforeUnmount(() => {
           </div>
         </template>
       </EditorPage>
+    </template>
+    <template v-else-if="isStorageShareFacility">
+      <StorageShareFacility :mode="mode" :servers="servers" @back="goBackFromFacilityPage" />
     </template>
     <div v-else class="grid h-full min-h-[640px] gap-4 xl:grid-cols-[minmax(0,1fr)_340px]">
       <section class="min-h-0 overflow-auto rounded-2xl border border-border bg-card p-5">
@@ -2103,7 +2145,8 @@ onBeforeUnmount(() => {
     </div>
     <div v-else-if="dialogKind === 'mount'" class="grid gap-3">
       <label class="field">{{ t('common.type') }}<Select v-model="mountDraft.type" :options="mountTypeOptions" /></label>
-      <label class="field">{{ t('applicationsPage.source') }}<Input v-model="mountDraft.source" /></label>
+      <label class="field">{{ t('applicationsPage.source') }}<Select v-if="mountDraft.type === 'storage_share'" v-model="mountDraft.source" :options="storageShareOptions" :placeholder="t('applicationsPage.storageShareMountSourcePlaceholder')" :disabled="!storageShareAvailable" /><Input v-else v-model="mountDraft.source" /></label>
+      <p v-if="mountDraft.type === 'storage_share'" class="m-0 text-xs text-muted-foreground">{{ t('applicationsPage.storageShareMountHint') }}</p>
       <label class="field">{{ t('applicationsPage.target') }}<Input v-model="mountDraft.target" /></label>
       <label class="field">{{ t('applicationsPage.mode') }}<Input v-model="mountDraft.mode" placeholder="0755" /></label>
       <label class="flex items-center justify-between rounded-xl border border-border p-3 text-sm">{{ t('applicationsPage.readOnly') }}<Switch v-model="mountDraft.readOnly" :label="t('applicationsPage.readOnly')" /></label>
@@ -2646,6 +2689,7 @@ strong {
   min-width: 0;
 }
 
+.facility-card-stat-truncate { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .facility-card-stat strong {
   display: block;
   color: var(--panel-text);

@@ -134,3 +134,35 @@ export interface FacilityEditCommitResult {
   applyRequested: boolean;
   diagnostics?: Diagnostic[];
 }
+
+export interface StorageShareConfig {
+  id: string;
+  version: number;
+  serverId: string;
+  serverName?: string;
+  root: string;
+  enabled: boolean;
+  servers: string[];
+  partitions: StorageSharePartition[];
+  references?: Array<{ applicationId: string; applicationName: string }>;
+  lastError?: string;
+  updatedAt: string;
+}
+
+export interface StorageSharePartition {
+  id: string;
+  applicationId: string;
+  applicationName: string;
+  serverId: string;
+  serverName: string;
+  storageServerId?: string;
+  storageServerName?: string;
+  path: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StorageShareSaveInput {
+  serverId: string;
+  root: string;
+}

@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-- 前端词条：en / zh-CN 各 1482 个，key 集合一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。
+- 前端词条：en / zh-CN key 集合一致，由 `web/src/i18n/i18n.test.ts` 强制校验（含 en 不得残留中文值、词条非空）。本轮新增存储共享设施与共享存储挂载相关词条。
 - 前端语言逻辑：`web/src/i18n/index.ts`（`state.locale` + `setLocale`）。
 - 前端辅助函数：`translateRuntimeEventType`、`translateTaskSummary`、`translateEventSummary`；后两者用于把后端英文任务摘要 / 运行时事件摘要按当前语言渲染翻译，任务中心与系统事件页使用。
 - 本轮新增 `api.*` 前缀错误文案 key，供前端错误展示使用。

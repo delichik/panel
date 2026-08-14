@@ -184,9 +184,9 @@ func Validate(spec Spec) []Issue {
 	for i, mount := range spec.Mounts {
 		mountType := strings.TrimSpace(mount.Type)
 		switch mountType {
-		case "volume", "host", "global", "file", "panel_file", "persistent":
+		case "volume", "host", "global", "file", "panel_file", "persistent", "storage_share":
 		default:
-			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].type", i), Message: "mount type must be volume, host, global, file, panel_file, or persistent"})
+			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].type", i), Message: "mount type must be volume, host, global, file, panel_file, persistent, or storage_share"})
 		}
 		if strings.TrimSpace(mount.Source) == "" && mountType != "persistent" {
 			issues = append(issues, Issue{Field: fmt.Sprintf("mounts[%d].source", i), Message: "mount source is required"})

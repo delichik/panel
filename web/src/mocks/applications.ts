@@ -1,6 +1,6 @@
 import type { ApiEnvelope } from '@/api/client';
 import type { ApplicationDto, ApplicationEditSession, ApplicationFile, ApplicationRuntime, ApplicationSummaryDto, Diagnostic, LogResult, OperationResult } from '@/types/applications';
-import type { FacilityEditSession, ReverseProxyConfig } from '@/types/facilityApps';
+import type { FacilityEditSession, ReverseProxyConfig, StorageShareConfig, StorageShareSaveInput } from '@/types/facilityApps';
 
 const now = '2026-08-01T08:00:00.000Z';
 
@@ -843,4 +843,50 @@ export function data<T>(payload: T, status = 200) {
 function imageFromSpec(spec: string) {
   const line = spec.split('\n').find((item) => item.trim().startsWith('image:'));
   return line?.split(':').slice(1).join(':').trim() || 'nginx:1.28-alpine';
+}
+
+export let mockStorageShare: StorageShareConfig = {
+  id: 'storage-share',
+  version: 1,
+  serverId: 'srv-edge-sgp',
+  serverName: 'Singapore edge',
+  root: '/srv/panel-storage',
+  enabled: false,
+  servers: ['srv-edge-sgp', 'srv-api-hkg', 'srv-edge-lax'],
+  partitions: [],
+  updatedAt: now,
+};
+
+export function saveStorageShare(input: StorageShareSaveInput): StorageShareConfig {
+  mockStorageShare = {
+    ...mockStorageShare,
+    version: mockStorageShare.version + 1,
+    serverId: input.serverId,
+    root: input.root,
+    enabled: true,
+    lastError: undefined,
+    updatedAt: now,
+  };
+  return mockStorageShare;
+}
+
+export function uninstallStorageShare(): void {
+  mockStorageShare = {
+    ...mockStorageShare,
+    version: mockStorageShare.version + 1,
+    serverId: '',
+    root: '',
+    enabled: false,
+    updatedAt: now,
+  };
+}
+
+export function deleteStoragePartition(partitionId: string): boolean {
+  const before = mockStorageShare.partitions.length;
+  mockStorageShare = {
+    ...mockStorageShare,
+    partitions: mockStorageShare.partitions.filter((partition) => partition.id !== partitionId),
+    updatedAt: now,
+  };
+  return mockStorageShare.partitions.length !== before;
 }

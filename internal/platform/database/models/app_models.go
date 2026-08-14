@@ -651,3 +651,40 @@ func (*AuthAccount) TableName() string { return "auth_accounts" }
 func (*AuthAccount) TableConstraints() []string {
 	return []string{"CHECK(id = 'admin')"}
 }
+
+// StorageShareConfig 对应 storage_share_configs（存储共享设施配置）。
+type StorageShareConfig struct {
+	ID        string    `orm:"primary_key"`
+	Version   int       `orm:"not_null;default:1"`
+	ServerID  string    `orm:"not_null;default:''"`
+	Root      string    `orm:"not_null;default:''"`
+	LastError string    `orm:"not_null;default:''"`
+	UpdatedAt time.Time `orm:"not_null"`
+}
+
+func (*StorageShareConfig) TableName() string { return "storage_share_configs" }
+
+// StorageSharePartition 对应 storage_share_partitions（存储共享按应用/服务器分配的分区记录）。
+type StorageSharePartition struct {
+	ID                string    `orm:"primary_key"`
+	ApplicationID     string    `orm:"not_null"`
+	ApplicationName   string    `orm:"not_null;default:''"`
+	ServerID          string    `orm:"not_null"`
+	ServerName        string    `orm:"not_null;default:''"`
+	StorageServerID   string    `orm:"not_null;default:''"`
+	StorageServerName string    `orm:"not_null;default:''"`
+	Path              string    `orm:"not_null"`
+	CreatedAt         time.Time `orm:"not_null"`
+	UpdatedAt         time.Time `orm:"not_null"`
+}
+
+func (*StorageSharePartition) TableName() string { return "storage_share_partitions" }
+
+// ExtraIndexDDL 返回 storage_share_partitions 表无法用 orm tag 表达的复合 UNIQUE。
+func (*StorageSharePartition) ExtraIndexDDL() map[string][]string {
+	return map[string][]string{
+		"storage_share_partitions": {
+			"CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_share_partitions_application_server ON storage_share_partitions(application_id, server_id)",
+		},
+	}
+}

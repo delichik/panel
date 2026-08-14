@@ -55,6 +55,7 @@ import {
   deleteApp,
   deleteAppFile,
   deleteFacilityAsset,
+  deleteStoragePartition,
   deployedAppFileContent,
   facilityAssetContent,
   facilityDiagnostics,
@@ -65,11 +66,14 @@ import {
   mockApplications,
   listAppFiles,
   mockFacility,
+  mockStorageShare,
   patchAppSession,
   patchFacilitySession,
   putAppFile,
   putFacilityAsset,
   restorePersistentData,
+  saveStorageShare,
+  uninstallStorageShare,
   uploadAppArchive,
   uploadAppFile,
 } from './applications';
@@ -639,6 +643,25 @@ export function installMockApi() {
 
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy' && method(init) === 'GET') return json(mockFacility);
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/reconcile' && method(init) === 'POST') return json({ config: mockFacility }, 202);
+    if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'GET') return json(mockStorageShare);
+    if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'PUT') {
+      const input = init?.body ? await new Response(init.body).json() as { serverId?: string; root?: string } : {};
+      return json(saveStorageShare({ serverId: input.serverId ?? '', root: input.root ?? '' }));
+    }
+    if (url.pathname === '/api/v1/facility-apps/storage-share/reconcile' && method(init) === 'POST') return json(mockStorageShare);
+    if (url.pathname === '/api/v1/facility-apps/storage-share' && method(init) === 'DELETE') {
+      uninstallStorageShare();
+      return new Response(null, { status: 204 });
+    }
+    const storagePartitionDownloadMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/storage-share\/partitions\/([^/]+)\/download$/);
+    if (storagePartitionDownloadMatch && method(init) === 'GET') {
+      return blobResponse('mock storage partition data', `partition-${decodeURIComponent(storagePartitionDownloadMatch[1])}.tgz`, 'application/gzip');
+    }
+    const storagePartitionDeleteMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/storage-share\/partitions\/([^/]+)$/);
+    if (storagePartitionDeleteMatch && method(init) === 'DELETE') {
+      if (!deleteStoragePartition(decodeURIComponent(storagePartitionDeleteMatch[1]))) return error('storage_share_partition', 'Storage share partition is not found.', 404);
+      return new Response(null, { status: 204 });
+    }
     if (url.pathname === '/api/v1/facility-apps/reverse-proxy/edit-sessions' && method(init) === 'POST') return json(beginFacilitySession(), 201);
     const facilitySessionMatch = url.pathname.match(/^\/api\/v1\/facility-apps\/reverse-proxy\/edit-sessions\/([^/]+)$/);
     if (facilitySessionMatch && method(init) === 'GET') {

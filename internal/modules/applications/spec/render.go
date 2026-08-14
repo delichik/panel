@@ -100,6 +100,8 @@ func renderMounts(appID string, volumes []Volume, mounts []Mount) []appruntime.M
 			out = append(out, appruntime.Mount{Type: "volume", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly})
 		case "persistent":
 			out = append(out, appruntime.Mount{Type: "persistent", Source: persistentMountSource(appID, source), Target: mount.Target, ReadOnly: mount.ReadOnly, UID: cloneInt(mount.UID), GID: cloneInt(mount.GID), Mode: strings.TrimSpace(mount.Mode)})
+		case "storage_share":
+			out = append(out, appruntime.Mount{Type: "storage_share", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly})
 		default:
 			out = append(out, appruntime.Mount{Type: "bind", Source: source, Target: mount.Target, ReadOnly: mount.ReadOnly})
 		}

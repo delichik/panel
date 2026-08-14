@@ -19,4 +19,10 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux, auth httpx.Middleware) {
 	mux.Handle("POST /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}/commit", auth(http.HandlerFunc(h.CommitFacilityEditSession)))
 	mux.Handle("DELETE /api/v1/facility-apps/reverse-proxy/edit-sessions/{id}", auth(http.HandlerFunc(h.DiscardFacilityEditSession)))
 	mux.Handle("GET /api/v1/facility-apps/reverse-proxy/static-assets/{assetName}/content", auth(http.HandlerFunc(h.DownloadStaticAsset)))
+	mux.Handle("GET /api/v1/facility-apps/storage-share", auth(http.HandlerFunc(h.StorageShare)))
+	mux.Handle("PUT /api/v1/facility-apps/storage-share", auth(http.HandlerFunc(h.SaveStorageShare)))
+	mux.Handle("POST /api/v1/facility-apps/storage-share/reconcile", auth(http.HandlerFunc(h.ReconcileStorageShare)))
+	mux.Handle("DELETE /api/v1/facility-apps/storage-share", auth(http.HandlerFunc(h.DeleteStorageShare)))
+	mux.Handle("GET /api/v1/facility-apps/storage-share/partitions/{id}/download", auth(http.HandlerFunc(h.DownloadStoragePartition)))
+	mux.Handle("DELETE /api/v1/facility-apps/storage-share/partitions/{id}", auth(http.HandlerFunc(h.DeleteStoragePartition)))
 }

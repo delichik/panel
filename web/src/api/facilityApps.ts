@@ -8,11 +8,34 @@ import type {
   FacilityEditSession,
   ReverseProxyConfig,
   ReverseProxySaveInput,
+  StorageShareConfig,
+  StorageShareSaveInput,
 } from '@/types/facilityApps';
 
 function id(value: string) {
   return encodeURIComponent(value);
 }
+
+export const storageShareFacilityApi = {
+  get(options?: ApiRequestOptions) {
+    return apiClient.get<StorageShareConfig>('/facility-apps/storage-share', options);
+  },
+  save(input: StorageShareSaveInput) {
+    return apiClient.put<StorageShareConfig>('/facility-apps/storage-share', input);
+  },
+  reconcile() {
+    return apiClient.post<StorageShareConfig>('/facility-apps/storage-share/reconcile');
+  },
+  uninstall() {
+    return apiClient.delete<void>('/facility-apps/storage-share');
+  },
+  downloadPartition(partitionId: string, filename: string): Promise<DownloadResult> {
+    return fetchDownload(`/api/v1/facility-apps/storage-share/partitions/${id(partitionId)}/download`, {}, filename);
+  },
+  deletePartition(partitionId: string) {
+    return apiClient.delete<void>(`/facility-apps/storage-share/partitions/${id(partitionId)}`);
+  },
+};
 
 export const reverseProxyFacilityApi = {
   getConfig(options?: ApiRequestOptions) {

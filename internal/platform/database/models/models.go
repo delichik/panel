@@ -6,7 +6,7 @@ func AllModels() []any {
 	return append(append(append(append([]any{}, AppModels()...), LogModels()...), CoordinationModels()...), MetricsModels()...)
 }
 
-// AppModels 返回 app 库 31 张表的模型注册清单。
+// AppModels 返回 app 库 33 张表的模型注册清单。
 // 顺序满足 FK 依赖：父表（credentials、servers、applications、dns_domains、
 // 各 edit_sessions）先于引用它们的子表。
 func AppModels() []any {
@@ -18,7 +18,7 @@ func AppModels() []any {
 		&ApplicationEditSessionFile{}, &ApplicationEditSessionOperation{},
 		&ApplicationFile{}, &ApplicationInstance{}, &FacilityAppConfig{},
 		&FacilityStaticAsset{}, &FacilityEditSession{}, &FacilityEditSessionAsset{},
-		&FacilityEditSessionOperation{}, &Certificate{}, &SelfSignedCertificate{},
+		&FacilityEditSessionOperation{}, &StorageShareConfig{}, &StorageSharePartition{}, &Certificate{}, &SelfSignedCertificate{},
 		&KeyAsset{}, &OverviewCardConfiguration{}, &RuntimeSetting{}, &AuthState{},
 		&AuthAccount{},
 	}

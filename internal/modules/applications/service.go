@@ -83,6 +83,7 @@ type Service struct {
 	imageResolver    ImageDigestResolver
 	operationQueue   ContainerOperationQueue
 	facilityRuntime  FacilityRuntimeProvider
+	storageResolver  StorageShareResolver
 	events           runtimeevents.EventWriter
 	editCleanupOnce  sync.Once
 }
@@ -4464,6 +4465,13 @@ func (s *Service) runtimeSpecForServer(ctx context.Context, app Application, spe
 	out.ApplicationID = app.ID
 	out.InstanceID = runtimeInstanceID(app.ID, srv.ID)
 	out.ContainerName = runtimeContainerName(app)
+	if s.storageResolver != nil {
+		resolved, err := s.storageResolver.ResolveStorageShareMounts(ctx, app, srv, out.Mounts)
+		if err != nil {
+			return appruntime.Spec{}, err
+		}
+		out.Mounts = resolved
+	}
 	if out.Env == nil {
 		out.Env = map[string]string{}
 	} else {
