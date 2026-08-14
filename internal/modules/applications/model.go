@@ -143,6 +143,11 @@ type AnyAccessConfig struct {
 	Strategy              string   `json:"strategy"`
 	PrimaryOriginServerID string   `json:"primaryOriginServerId,omitempty"`
 	RelayServerIDs        []string `json:"relayServerIds,omitempty"`
+	// OriginPriority holds the user-arranged order of the origin servers for
+	// the primary_backup strategy; the first entry is the primary origin.
+	// Application reverse-proxy rules resolve the origin set from the global
+	// gateway nodes, so the client only provides this ordering.
+	OriginPriority []string `json:"originPriority,omitempty"`
 }
 
 type ReverseProxyPath struct {

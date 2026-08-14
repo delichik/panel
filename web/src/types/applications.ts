@@ -7,6 +7,7 @@ export interface AnyAccessConfig {
   strategy?: string;
   primaryOriginServerId?: string;
   relayServerIds?: string[];
+  originPriority?: string[];
 }
 
 export interface HttpHeader {

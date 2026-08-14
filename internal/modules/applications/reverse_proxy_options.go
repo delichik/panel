@@ -29,18 +29,68 @@ func NormalizeAnyAccessConfig(in AnyAccessConfig, originServerIDs []string) (Any
 		return AnyAccessConfig{}, panelerr.Validation("reverse_proxy_any_access_strategy_invalid", "AnyAccess traffic strategy is invalid")
 	}
 	primary := strings.TrimSpace(in.PrimaryOriginServerID)
+	var priority []string
 	if in.Enabled && strategy == AnyAccessStrategyPrimaryBackup {
+		// Application rules provide the origin ordering explicitly; the first
+		// entry is the primary origin. Facility rules keep the explicit primary.
+		if len(in.OriginPriority) > 0 {
+			var err error
+			priority, err = normalizeOriginPriority(in.OriginPriority, origins)
+			if err != nil {
+				return AnyAccessConfig{}, err
+			}
+			primary = priority[0]
+		}
 		if primary == "" || !containsStringValue(origins, primary) {
 			return AnyAccessConfig{}, panelerr.Validation("reverse_proxy_any_access_primary_origin_invalid", "AnyAccess primary origin server is invalid")
 		}
 	} else {
 		primary = ""
+		priority = nil
 	}
 	relay := uniqueSortedStrings(in.RelayServerIDs)
 	if !in.Enabled {
 		relay = nil
 	}
-	return AnyAccessConfig{Enabled: in.Enabled, Strategy: strategy, PrimaryOriginServerID: primary, RelayServerIDs: relay}, nil
+	return AnyAccessConfig{Enabled: in.Enabled, Strategy: strategy, PrimaryOriginServerID: primary, RelayServerIDs: relay, OriginPriority: priority}, nil
+}
+
+// normalizeOriginPriority validates that priority is exactly the origin
+// server set, in the user-arranged order and without duplicates.
+func normalizeOriginPriority(priority, origins []string) ([]string, error) {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(priority))
+	for _, item := range priority {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		if _, ok := seen[item]; ok {
+			return nil, panelerr.Validation("reverse_proxy_origin_priority_invalid", "AnyAccess origin priority contains duplicate servers")
+		}
+		seen[item] = struct{}{}
+		out = append(out, item)
+	}
+	if len(out) != len(origins) || !sameStringSet(out, origins) {
+		return nil, panelerr.Validation("reverse_proxy_origin_priority_invalid", "AnyAccess origin priority must contain exactly the origin servers")
+	}
+	return out, nil
+}
+
+func sameStringSet(items, reference []string) bool {
+	ref := map[string]struct{}{}
+	for _, item := range reference {
+		ref[item] = struct{}{}
+	}
+	if len(items) != len(ref) {
+		return false
+	}
+	for _, item := range items {
+		if _, ok := ref[item]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func uniqueSortedStrings(items []string) []string {

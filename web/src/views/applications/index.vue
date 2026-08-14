@@ -377,7 +377,17 @@ const proxyClientMaxBodySizeMb = proxyPathNumberOption('clientMaxBodySizeMb');
 const proxyConnectTimeoutSeconds = proxyPathNumberOption('connectTimeoutSeconds');
 const proxyReadTimeoutSeconds = proxyPathNumberOption('readTimeoutSeconds');
 const proxySendTimeoutSeconds = proxyPathNumberOption('sendTimeoutSeconds');
-const proxyPrimaryOriginOptions = computed(() => proxyAutoOriginIds.value.map((id) => ({ label: serverDisplayName(id), value: id })));
+const proxyOriginPriorityModel = computed({
+  get: () => (proxyDraft.anyAccess.originPriority?.length ? proxyDraft.anyAccess.originPriority : proxyAutoOriginIds.value),
+  set: (value: string[]) => { proxyDraft.anyAccess.originPriority = value; },
+});
+function moveProxyOriginPriority(index: number, delta: -1 | 1) {
+  const list = [...proxyOriginPriorityModel.value];
+  const target = index + delta;
+  if (target < 0 || target >= list.length) return;
+  [list[index], list[target]] = [list[target], list[index]];
+  proxyOriginPriorityModel.value = list;
+}
 const proxyAutoOriginIds = computed(() => {
   const gateways = new Set(facility.value?.deploymentServers ?? []);
   const deployed = appDraft.deploymentMode === 'selected' ? appDraft.deploymentServers : (facility.value?.deploymentServers ?? []);
@@ -1281,18 +1291,17 @@ function removeCommandRow(id: string) {
 }
 
 function saveProxyDialog() {
-  const origins = [...proxyAutoOriginIds.value];
   const port = Number(proxyDraft.targetPort);
   const targetType = proxyDraft.targetType === 'local' || proxyDraft.targetType === 'container' ? proxyDraft.targetType : undefined;
   const next: ReverseProxyRule = {
     domain: proxyDraft.domain.trim().toLowerCase(),
     targetType,
     targetPort: Number.isFinite(port) && port > 0 ? port : 0,
-    originServerIds: origins,
+    originServerIds: [],
     anyAccess: {
       enabled: Boolean(proxyDraft.anyAccess.enabled),
       strategy: proxyDraft.anyAccess.enabled ? (proxyDraft.anyAccess.strategy || 'round_robin') : '',
-      primaryOriginServerId: proxyDraft.anyAccess.enabled ? (proxyDraft.anyAccess.primaryOriginServerId || '') : '',
+      originPriority: proxyDraft.anyAccess.enabled && proxyDraft.anyAccess.strategy === 'primary_backup' ? [...proxyOriginPriorityModel.value] : [],
       relayServerIds: proxyDraft.anyAccess.enabled && proxyRelayScope.value === 'selected' ? [...(proxyDraft.anyAccess.relayServerIds ?? [])] : [],
     },
     paths: proxyDraft.paths.map((path) => ({
@@ -2169,7 +2178,17 @@ onBeforeUnmount(() => {
           <ServerMultiPicker v-if="proxyRelayScope === 'selected'" v-model="proxyRelayServerIdsModel" :servers="proxyRelayServerOptions" :label="t('applicationsPage.anyAccessRelayServers', { count: proxyDraft.anyAccess.relayServerIds?.length ?? 0 })" />
           <p v-if="proxyRelayScope === 'selected' && !proxyRelayServerOptions.length" class="m-0 text-sm text-muted-foreground">{{ t('applicationsPage.anyAccessNoRelayServers') }}</p>
           <label class="field">{{ t('applicationsPage.loadBalancingStrategy') }}<Select v-model="proxyDraft.anyAccess.strategy" :options="anyAccessStrategyOptions" /></label>
-          <label v-if="proxyDraft.anyAccess.strategy === 'primary_backup'" class="field">{{ t('applicationsPage.primaryOriginServer') }}<Select v-model="proxyDraft.anyAccess.primaryOriginServerId" :options="proxyPrimaryOriginOptions" /></label>
+          <div v-if="proxyDraft.anyAccess.strategy === 'primary_backup'" class="options-block">
+            <div class="section-copy"><h3>{{ t('applicationsPage.originPriority') }}</h3><p>{{ t('applicationsPage.originPriorityHint') }}</p></div>
+            <div v-for="(serverId, index) in proxyOriginPriorityModel" :key="serverId" class="item-row">
+              <div><strong>{{ index + 1 }}. {{ serverDisplayName(serverId) }}</strong><span v-if="index === 0" class="text-xs text-muted-foreground">{{ t('applicationsPage.primaryOriginServer') }}</span></div>
+              <div class="row-actions">
+                <Button size="sm" :disabled="index === 0" @click="moveProxyOriginPriority(index, -1)">{{ t('applicationsPage.moveUp') }}</Button>
+                <Button size="sm" :disabled="index === proxyOriginPriorityModel.length - 1" @click="moveProxyOriginPriority(index, 1)">{{ t('applicationsPage.moveDown') }}</Button>
+              </div>
+            </div>
+            <p v-if="!proxyOriginPriorityModel.length" class="m-0 text-sm text-danger">{{ t('applicationsPage.proxyOriginEmptyHint') }}</p>
+          </div>
         </div>
       </div>
       <div class="section-heading"><strong>{{ t('common.path') }}</strong><Button size="sm" @click="openProxyPathDialog()"><Plus />{{ t('common.addPath') }}</Button></div>

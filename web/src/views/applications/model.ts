@@ -191,7 +191,13 @@ export function saveInputFromDraft(draft: ApplicationDraftUi): ApplicationSaveIn
     specYaml,
     deploymentMode: draft.deploymentMode,
     deploymentServers: draft.deploymentMode === 'selected' ? [...draft.deploymentServers] : [],
-    reverseProxy: cloneProxyRules(draft.reverseProxy).map((rule) => (draft.networkMode === 'host' && rule.targetType === 'container' ? { ...rule, targetType: 'local' } : rule)),
+    // Origin servers and the primary origin are resolved by the backend from
+    // the global gateway nodes and the deployment targets. The client only
+    // sends the user-arranged priority order for primary_backup.
+    reverseProxy: cloneProxyRules(draft.reverseProxy).map((rule) => {
+      const next = { ...rule, originServerIds: [] as string[], anyAccess: { ...rule.anyAccess, primaryOriginServerId: '' } };
+      return draft.networkMode === 'host' && next.targetType === 'container' ? { ...next, targetType: 'local' } : next;
+    }),
   };
 }
 
@@ -361,7 +367,7 @@ export function makeMountRow(type = 'persistent'): MountRow {
 }
 
 export function makeProxyRule(): ReverseProxyRule {
-  return { domain: '', targetType: undefined, targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', primaryOriginServerId: '', relayServerIds: [] }, paths: [] };
+  return { domain: '', targetType: undefined, targetPort: 0, originServerIds: [], anyAccess: { enabled: false, strategy: '', originPriority: [], relayServerIds: [] }, paths: [] };
 }
 
 export function makeProxyPath(): ReverseProxyPath {
@@ -382,7 +388,7 @@ export function cloneProxyRules(rules: ReverseProxyRule[]) {
     targetType: rule.targetType || 'local',
     targetPort: Number(rule.targetPort || 0),
     originServerIds: [...(rule.originServerIds ?? [])],
-    anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', primaryOriginServerId: rule.anyAccess?.primaryOriginServerId || '', relayServerIds: [...(rule.anyAccess?.relayServerIds ?? [])] },
+    anyAccess: { enabled: Boolean(rule.anyAccess?.enabled), strategy: rule.anyAccess?.strategy || '', originPriority: [...(rule.anyAccess?.originPriority ?? [])], relayServerIds: [...(rule.anyAccess?.relayServerIds ?? [])] },
     paths: (rule.paths ?? []).map((path) => ({ path: path.path || '/', webSocket: Boolean(path.webSocket), options: { ...defaultRouteOptions(), ...(path.options ?? {}) } })),
   }));
 }

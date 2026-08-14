@@ -115,6 +115,7 @@ type ReverseProxyReconciler interface {
 }
 
 type ReverseProxyPolicyProvider interface {
+	ResolveApplicationOrigins(ctx context.Context, applicationID, deploymentMode string, deploymentServers []string) ([]string, error)
 	ValidateApplicationReverseProxy(ctx context.Context, applicationID, deploymentMode string, deploymentServers []string, rules []ReverseProxyRule) error
 }
 
@@ -1769,6 +1770,26 @@ func (s *Service) prepareWithFiles(ctx context.Context, in SaveInput, generation
 	reverseProxy, err := normalizeReverseProxyRules(in.ReverseProxy)
 	if err != nil {
 		return preparedApplication{}, err
+	}
+	if s.proxyPolicy != nil {
+		origins, err := s.proxyPolicy.ResolveApplicationOrigins(ctx, appID, deploymentMode, deploymentServers)
+		if err != nil {
+			return preparedApplication{}, err
+		}
+		for i := range reverseProxy {
+			if strings.TrimSpace(reverseProxy[i].Domain) == "" {
+				continue
+			}
+			if len(origins) == 0 {
+				return preparedApplication{}, panelerr.Validation("reverse_proxy_origin_servers_required", "Reverse proxy route requires at least one origin server")
+			}
+			reverseProxy[i].OriginServerIDs = append([]string(nil), origins...)
+			anyAccess, err := NormalizeAnyAccessConfig(reverseProxy[i].AnyAccess, origins)
+			if err != nil {
+				return preparedApplication{}, err
+			}
+			reverseProxy[i].AnyAccess = anyAccess
+		}
 	}
 	resolvedReverseProxy, err := s.renderReverseProxyRules(ctx, reverseProxy, data)
 	if err != nil {
@@ -5096,11 +5117,11 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 		if rule.TargetPort <= 0 || rule.TargetPort > 65535 {
 			return nil, panelerr.Validation("application_reverse_proxy_target_port_invalid", "reverse proxy target port must be between 1 and 65535")
 		}
-		originServerIDs := uniqueSortedStrings(rule.OriginServerIDs)
-		anyAccess, err := NormalizeAnyAccessConfig(rule.AnyAccess, originServerIDs)
-		if err != nil {
-			return nil, err
-		}
+		// Origin membership and the primary origin are resolved by the facility
+		// reverse-proxy policy from the global gateway nodes and the deployment
+		// targets; any client-provided values are ignored.
+		anyAccess := rule.AnyAccess
+		anyAccess.PrimaryOriginServerID = ""
 		paths := make([]ReverseProxyPath, 0, len(rule.Paths))
 		pathKeys := map[string]struct{}{}
 		for _, item := range rule.Paths {
@@ -5133,7 +5154,7 @@ func normalizeReverseProxyRules(rules []ReverseProxyRule) ([]ReverseProxyRule, e
 			Domain:          domain,
 			TargetType:      targetType,
 			TargetPort:      rule.TargetPort,
-			OriginServerIDs: originServerIDs,
+			OriginServerIDs: nil,
 			AnyAccess:       anyAccess,
 			Paths:           paths,
 		})
