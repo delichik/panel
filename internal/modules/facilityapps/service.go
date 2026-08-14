@@ -382,6 +382,23 @@ func (s *Service) ReconcileReverseProxy(ctx context.Context) error {
 	return s.triggerReverseProxyReconcile(ctx, "application_change", nil)
 }
 
+// ResolveApplicationOrigins returns the origin servers that may serve an
+// application reverse-proxy route: every node that both deploys the
+// application and belongs to the global gateway nodes. Application routes no
+// longer accept origin server ids from the client; the backend is the only
+// source of truth.
+func (s *Service) ResolveApplicationOrigins(ctx context.Context, applicationID, deploymentMode string, deploymentServers []string) ([]string, error) {
+	cfg, err := s.loadConfig(ctx)
+	if err != nil {
+		return nil, err
+	}
+	origins := append([]string(nil), cfg.DeploymentServers...)
+	if strings.TrimSpace(deploymentMode) == applications.DeploymentModeSelected {
+		origins = intersectStrings(cfg.DeploymentServers, deploymentServers)
+	}
+	return uniqueSorted(origins), nil
+}
+
 func (s *Service) ValidateApplicationReverseProxy(ctx context.Context, applicationID, deploymentMode string, deploymentServers []string, rules []applications.ReverseProxyRule) error {
 	cfg, err := s.loadConfig(ctx)
 	if err != nil {
@@ -1295,6 +1312,13 @@ func (s *Service) setLastError(ctx context.Context, message string) error {
 }
 
 func (s *Service) ensureReverseProxyApplication(ctx context.Context, cfg ReverseProxyConfig) (int, string, error) {
+	if s.apps != nil {
+		appRoutes, err := s.apps.ApplicationReverseProxyConfigs(ctx)
+		if err != nil {
+			return 0, "", err
+		}
+		cfg.ApplicationRoutes = appRoutes
+	}
 	cfgHash := facilityConfigHash(cfg)
 	now := time.Now().UTC()
 	var app models.Application
@@ -2056,6 +2080,7 @@ func facilityConfigHash(cfg ReverseProxyConfig) string {
 		"deploymentServers": cfg.DeploymentServers,
 		"panelEntry":        cfg.PanelEntry,
 		"domains":           cfg.Domains,
+		"applicationRoutes": cfg.ApplicationRoutes,
 	})
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:])

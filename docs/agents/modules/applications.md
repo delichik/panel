@@ -102,6 +102,7 @@
 - 应用右侧详情使用单张满高 outlined 卡片：运行状态和启用状态位于标题下方，操作按钮单独位于头部右侧；可滚动正文按基本信息、镜像更新和运行实例分区，运行时实例（节点实例）加载期间显示骨架动画。详情正文分区不得再次做成同等级 outlined/阴影/渐变卡片，只使用标题、分隔线和轻量信息单元表达层级。下载包、持久化数据、迁移和删除收进更多菜单，不再把运行时面板渲染为独立并列卡片。
 - 应用停止会更新应用为 disabled 并触发协调，由协调器为现有实例创建 `action=stop` 目标任务；停止必须删除容器以释放端口和容器名，但保留应用托管文件与 persistent 数据。删除应用会设置 `deletion_requested=true` 并触发 `action=purge` 目标任务，由协调清理整个应用运行目录，包含 persistent 数据。业务保存、停止和删除请求不得同步调用 agent runtime stop。
 - 应用保存、停止、删除、部署、镜像更新等需要刷新设施反向代理时，只触发 `application_reconcile` 周期任务并指定隐藏应用 `facility-reverse-proxy`，不得在当前请求内同步执行远端 Docker 操作；协调任务中的反向代理 runtime 错误仍必须包装为 `application_runtime_operation_failed` 并保留原始 Agent/Docker 诊断。设施反向代理重建前必须清理旧 `panel-facility-reverse-proxy` 容器，避免同名容器导致后续创建冲突。
+- 设施反向代理应用 `facility-reverse-proxy` 的 spec hash 纳入全部已启用应用的反向代理路由（模板渲染后的路由结构），因此只修改应用的 `reverseProxy` 字段也会提升代理应用 generation 并触发代理重新部署；路由不变时协调会复用现有部署目标，不产生无效重部署。
 - 应用日志按 `instanceId` 读取，容器名由后端从实例记录解析（DTO 不再接受 `containerName`）。日志必须从 runtime 实例提供入口并在弹窗中展示，不再使用 allocation/task 语义；tail 行数最大为 10000。运行时实例响应同时返回 `serverId`、`serverName` 和 lifecycle `stage`，前端优先展示服务器名称，并保留 ID 作为辅助信息；没有容器的 pending/failed target 不提供日志入口。
 - 应用运行时实例状态支持 `missing`，表示期望存在的托管容器在目标 Docker 中已找不到。Agent runtime status 遇到 Docker not found 必须返回 `missing`，不得映射为普通 `stopped`；前端以“缺失”展示，用于区分外部删除容器和正常停止。
 - 模板目录提供 `app.id`、`app.name`、`app.namespace`、`app.generation` 等内置模板变量，可用于 appspec YAML 和应用文件模板；应用不再提供应用级自定义变量。

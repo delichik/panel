@@ -604,3 +604,83 @@ func TestGetReverseProxyReadsLifecycleFromCoordDB(t *testing.T) {
 		t.Fatalf("targets = %#v", cfg.Operation.Targets)
 	}
 }
+
+type facilityTestApplicationRoutesProvider struct {
+	configs []applications.ApplicationReverseProxyConfig
+}
+
+func (p facilityTestApplicationRoutesProvider) ApplicationReverseProxyConfigs(context.Context) ([]applications.ApplicationReverseProxyConfig, error) {
+	return p.configs, nil
+}
+
+func TestFacilityConfigHashIncludesApplicationRoutes(t *testing.T) {
+	base := ReverseProxyConfig{DeploymentServers: []string{"srv-a"}}
+	withRoutes := base
+	withRoutes.ApplicationRoutes = []applications.ApplicationReverseProxyConfig{{
+		ApplicationID: "app-1",
+		Routes: []applications.ReverseProxyRoute{{
+			Domain:          "app.example.test",
+			TargetType:      applications.ReverseProxyTargetLocal,
+			TargetPort:      8080,
+			OriginServerIDs: []string{"srv-a"},
+		}},
+	}}
+	baseHash := facilityConfigHash(base)
+	if facilityConfigHash(withRoutes) == baseHash {
+		t.Fatal("facility config hash must include application routes")
+	}
+	if facilityConfigHash(withRoutes) != facilityConfigHash(withRoutes) {
+		t.Fatal("facility config hash must be stable")
+	}
+}
+
+func TestEnsureReverseProxyApplicationGenerationBumpsOnApplicationRouteChange(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataRoot = filepath.Join(dir, "data")
+	cfg.AppDatabase = filepath.Join(dir, "app.db")
+	cfg.MetricsDatabase = filepath.Join(dir, "metrics.db")
+	cfg.LogDatabase = filepath.Join(dir, "log.db")
+	store, err := storage.Open(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	provider := &facilityTestApplicationRoutesProvider{}
+	svc := NewService(store.AppDB(), nil, facilityTestServers{items: map[string]server.Server{"srv-a": {ID: "srv-a"}}}, provider, WithDataRoot(cfg.DataRoot))
+	ctx := context.Background()
+	base := ReverseProxyConfig{DeploymentServers: []string{"srv-a"}}
+	gen1, hash1, err := svc.ensureReverseProxyApplication(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen1 != 1 {
+		t.Fatalf("generation = %d, want 1", gen1)
+	}
+	gen2, hash2, err := svc.ensureReverseProxyApplication(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen2 != gen1 || hash2 != hash1 {
+		t.Fatalf("unchanged routes must keep generation/hash: generation %d -> %d, hash %q -> %q", gen1, gen2, hash1, hash2)
+	}
+	provider.configs = []applications.ApplicationReverseProxyConfig{{
+		ApplicationID: "app-1",
+		Routes: []applications.ReverseProxyRoute{{
+			Domain:          "app.example.test",
+			TargetType:      applications.ReverseProxyTargetLocal,
+			TargetPort:      8080,
+			OriginServerIDs: []string{"srv-a"},
+		}},
+	}}
+	gen3, hash3, err := svc.ensureReverseProxyApplication(ctx, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gen3 != gen2+1 {
+		t.Fatalf("generation = %d, want %d after application route change", gen3, gen2+1)
+	}
+	if hash3 == hash2 {
+		t.Fatal("hash must change when application routes change")
+	}
+}
