@@ -1785,7 +1785,7 @@ onBeforeUnmount(() => {
               <template v-else-if="item.kind === 'storage-share'">
                 <div class="facility-card-stat"><strong>{{ storageShareConfig?.partitions.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageSharePartitions') }}</span></div>
                 <div class="facility-card-stat"><strong>{{ storageShareConfig?.servers.length ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareServers') }}</span></div>
-                <div class="facility-card-stat"><strong class="facility-card-stat-truncate">{{ storageShareConfig?.root ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareRoot') }}</span></div>
+                <div class="facility-card-stat"><strong class="facility-card-stat-truncate">{{ storageShareConfig?.servers[0]?.root ?? '—' }}</strong><span>{{ t('applicationsPage.storageShareRoot') }}</span></div>
               </template>
               <template v-else>
                 <div class="facility-card-stat"><strong>{{ facility?.routes ?? '—' }}</strong><span>{{ t('applicationsPage.gatewayRoutes') }}</span></div>
