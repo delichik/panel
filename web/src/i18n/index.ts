@@ -2823,3 +2823,39 @@ Object.assign(messages['zh-CN'], {
   'applicationsPage.storageShareMountHint': '每个应用与服务器会自动在共享根目录下获得独立数据目录。',
   'applicationsPage.storageShareMountSourceRequired': '请先选择存储共享来源。',
 });
+
+Object.assign(messages.en, {
+  'codeEditor.find': 'Find',
+  'codeEditor.replaceInput': 'Replace',
+  'codeEditor.next': 'Next',
+  'codeEditor.previous': 'Previous',
+  'codeEditor.all': 'All',
+  'codeEditor.matchCase': 'Match case',
+  'codeEditor.regexp': 'Regexp',
+  'codeEditor.byWord': 'By word',
+  'codeEditor.replace': 'Replace',
+  'codeEditor.replaceAll': 'Replace all',
+  'codeEditor.close': 'Close',
+  'codeEditor.currentMatch': 'Current match',
+  'codeEditor.onLine': 'on line',
+  'codeEditor.replacedMatches': 'Replaced $ matches',
+  'codeEditor.replacedMatchOnLine': 'Replaced match on line $',
+});
+
+Object.assign(messages['zh-CN'], {
+  'codeEditor.find': '查找',
+  'codeEditor.replaceInput': '替换',
+  'codeEditor.next': '下一个',
+  'codeEditor.previous': '上一个',
+  'codeEditor.all': '全部',
+  'codeEditor.matchCase': '区分大小写',
+  'codeEditor.regexp': '正则',
+  'codeEditor.byWord': '整词',
+  'codeEditor.replace': '替换',
+  'codeEditor.replaceAll': '全部替换',
+  'codeEditor.close': '关闭',
+  'codeEditor.currentMatch': '当前匹配',
+  'codeEditor.onLine': '位于第',
+  'codeEditor.replacedMatches': '已替换 $ 个匹配',
+  'codeEditor.replacedMatchOnLine': '已替换第 $ 行的匹配',
+});
