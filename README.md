@@ -16,7 +16,7 @@ The project is built for people who run their own servers and for humans sharing
 - Deploy panel-agent to servers with mTLS and a configured Docker host.
 - Check agent compatibility, Docker health, and runtime status.
 - Deploy Docker-based applications through panel-agent using Docker Engine API.
-- Inspect Panel-managed containers from a node with the read-only panel-agent CLI (`panel-agent --cli apps list|inspect|where|cd`).
+- Inspect Panel-managed containers from a node with the read-only panel-agent CLI (`panel-agent --cli apps list|inspect|where`).
 - Configure application files, mounts, ports, placement, runtime actions, logs, and reverse proxy routes.
 - Manage Cloudflare domains and issue ACME certificates.
 - Track background tasks and task logs.

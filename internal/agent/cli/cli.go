@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -37,21 +36,6 @@ type containerSource interface {
 }
 
 type runtimeFactory func(dockerHost string) (containerSource, error)
-
-// execShell runs an interactive shell in dir. It is a package variable so
-// tests can stub it without launching a real shell.
-var execShell = func(dir string) error {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "sh"
-	}
-	cmd := exec.Command(shell)
-	cmd.Dir = dir
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
 
 // Run executes the CLI and returns a process exit code.
 func Run(args []string) int {
@@ -93,8 +77,6 @@ func runApps(args []string, stdout, stderr io.Writer, newRuntime runtimeFactory)
 		return runInspect(args[1:], stdout, stderr, newRuntime)
 	case "where":
 		return runWhere(args[1:], stdout, stderr, newRuntime)
-	case "cd":
-		return runCd(args[1:], stdout, stderr, newRuntime)
 	default:
 		fmt.Fprintf(stderr, "unknown apps command %q\n\n", args[0])
 		printAppsUsage(stderr)
@@ -265,22 +247,6 @@ func runWhere(args []string, stdout, stderr io.Writer, newRuntime runtimeFactory
 		return code
 	}
 	fmt.Fprintln(stdout, home)
-	return exitOK
-}
-
-func runCd(args []string, stdout, stderr io.Writer, newRuntime runtimeFactory) int {
-	home, code := resolveHomeCommand("apps cd", args, stdout, stderr, newRuntime)
-	if code != exitOK {
-		return code
-	}
-	if err := execShell(home); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return exitErr.ExitCode()
-		}
-		fmt.Fprintf(stderr, "apps cd: %v\n", err)
-		return exitError
-	}
 	return exitOK
 }
 
@@ -549,7 +515,6 @@ Commands:
   apps list [--json] [--docker-host <host>]   List Panel-managed containers
   apps inspect <selector> [--json] [...]      Show one container with Panel metadata and paths
   apps where <selector> [...]                 Print the application home directory
-  apps cd <selector> [...]                    Start a shell in the application home directory
   help                                        Show this help
 
 Selectors match a container name, an instance id, or an application id
@@ -569,8 +534,6 @@ Commands:
         Show one container's details, Panel metadata and paths.
   where <selector> [--docker-host <host>]
         Print the application home directory path.
-  cd <selector> [--docker-host <host>]
-        Start an interactive shell inside the application home directory.
 
 Flags:
   --docker-host <host>   Docker Engine host override

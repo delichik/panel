@@ -258,39 +258,3 @@ func TestRunWhereUsage(t *testing.T) {
 		t.Fatalf("where no selector: got exit %d, want %d", code, exitUsage)
 	}
 }
-
-func TestRunCd(t *testing.T) {
-	home := t.TempDir()
-	orig := execShell
-	defer func() { execShell = orig }()
-	var gotDir string
-	execShell = func(dir string) error {
-		gotDir = dir
-		return nil
-	}
-	f := &fakeRuntime{containers: []agentcontract.DockerContainer{
-		managedContainer("aaaaaaaaaaaa111111111111", "web", "app-a", "inst-a"),
-	}}
-	f.home = home
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"apps", "cd", "web"}, &stdout, &stderr, fakeFactory(f)); code != exitOK {
-		t.Fatalf("cd exit = %d, stderr = %q", code, stderr.String())
-	}
-	if gotDir != home {
-		t.Fatalf("cd dir = %q, want %q", gotDir, home)
-	}
-}
-
-func TestRunCdMissingDir(t *testing.T) {
-	orig := execShell
-	defer func() { execShell = orig }()
-	execShell = func(dir string) error { t.Fatal("shell must not start for missing dir"); return nil }
-	f := &fakeRuntime{containers: []agentcontract.DockerContainer{
-		managedContainer("aaaaaaaaaaaa111111111111", "web", "app-a", "inst-a"),
-	}}
-	f.home = filepath.Join(t.TempDir(), "missing")
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"apps", "cd", "web"}, &stdout, &stderr, fakeFactory(f)); code != exitError {
-		t.Fatalf("cd missing dir: got exit %d, want %d", code, exitError)
-	}
-}

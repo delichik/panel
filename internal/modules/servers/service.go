@@ -1196,7 +1196,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 EnvironmentFile=/etc/panel-agent/panel-agent.env
-ExecStart=/usr/local/bin/panel-agent
+ExecStart=/usr/local/bin/panel-agent --srv
 Restart=always
 RestartSec=5s
 

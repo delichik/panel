@@ -1502,6 +1502,16 @@ func TestAgentInstallScriptStopsOldProcessesAndChecksPortOwner(t *testing.T) {
 	}
 }
 
+func TestAgentSystemdUnitUsesSrvFlag(t *testing.T) {
+	unit := agentSystemdUnit()
+	if !strings.Contains(unit, "ExecStart=/usr/local/bin/panel-agent --srv") {
+		t.Fatalf("expected systemd unit to start panel-agent with --srv, got:\n%s", unit)
+	}
+	if strings.Contains(unit, "ExecStart=/usr/local/bin/panel-agent\n") {
+		t.Fatalf("systemd unit must not start panel-agent without --srv:\n%s", unit)
+	}
+}
+
 func TestVerifyRemoteAgentCertificateFileComparesNewCertificateHash(t *testing.T) {
 	certPEM := []byte("CERTIFICATE\n")
 	exec := &captureSudoExec{}

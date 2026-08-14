@@ -101,7 +101,7 @@ Application appspec 的 `capAdd` 会由 Panel 渲染到 agent runtime spec，并
 
 - 节点上可直接运行 `panel-agent --cli apps ...` 读取 Panel 管理的容器信息（判定标准：`panel.application.managed=true`），用于排查与脚本化；命令、selector 规则与退出码见 `docs/agents/modules/servers.md` 的 Agent 只读 CLI 小节。
 - `apps list` / `apps inspect` 直接查询节点 Docker Engine（复用 `internal/agent/docker`），不走 `container_observations` 快照。
-- `apps where` / `apps cd` 的应用主目录固定为 `/opt/panel/apps/<appID>`，实例目录为 `/opt/panel/apps/<appID>/instances/<instanceID>`，persistent 目录为 `/opt/panel/apps/<appID>/persistent`。
+- `apps where` 的应用主目录固定为 `/opt/panel/apps/<appID>`，实例目录为 `/opt/panel/apps/<appID>/instances/<instanceID>`，persistent 目录为 `/opt/panel/apps/<appID>/persistent`。
 - CLI 只读，不提供容器、镜像、网络或卷的任何变更操作。
 
 ## 队列、同步操作与协调

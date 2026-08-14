@@ -131,7 +131,7 @@
 - 新增服务器完成首次信息采集且确认 root 或免密 sudo 特权能力后，会按自动部署修复判断创建 `server_agent_deploy` 任务安装 agent；后续 Agent 健康检查只在 agent 未配置、版本不一致、证书需要修复时自动部署，`agent.status=compatible` 且版本正常时不得重装，普通 `unavailable` 网络/远端错误和 Docker 不可用不得触发重装。
 - Panel 启动检查或周期检查发现服务器未配置 agent URL、agent URL 不是当前默认地址、`agent.status=incompatible`、agent 版本与 Panel 不一致、证书过期/尚未生效/距过期不足 7 天，或健康检查因 mTLS server 证书时间错误失败时，必须自动创建或复用 `server_agent_deploy` 任务安装/修复 agent；证书进入 7 天续期窗口时保持 `agent.status=compatible` 且不写错误提示，只静默刷新部署；缺少能力、agent gRPC contract hash 不一致和 Docker host 不一致不单独触发重装；单纯 `agent.status=unavailable`、网络超时、连接拒绝、服务器失联或 Docker 不可用不得触发自动重装。安装/重装任务负责把当前 Panel 签发的 CA、服务端证书和私钥同步到目标机 `/etc/panel-agent`，默认监听 `tcp/9786`，重启前必须停止 systemd 服务并清理残留 `panel-agent` 进程，写入后必须校验远端 `server.pem` 确实是新签发证书，启动失败必须输出 `systemctl status` 和 `journalctl -u panel-agent.service` 诊断，启动后必须等待 `tcp/9786` 进入监听状态，并校验实际吐出的服务端证书指纹匹配新证书；部署证书包的 `agent.url` 必须使用当前服务器 `host` 生成；如果服务器 `host` 被修改，Agent URL 和证书元数据必须失效并要求重部署。如果已有排队或可重试的 `server_agent_deploy` 任务，手动部署、CA 重置、版本不一致、证书修复和服务器 host 变更触发的重装必须复用并立即启动该任务；系统自动触发复用任务时必须尊重任务 `next_run_at` 和自动部署退避时间，不得绕过指数退避立即重跑。同一服务器系统自动触发的 agent 部署失败达到 2 次后必须标记 `agent.status=undeployable` 并停止自动尝试；`undeployable` 状态不得由周期检查继续部署，失败计数只有在后续 Agent 健康检查连续 5 次正常后清空。
 - `POST /api/v1/servers/{id}/agent/deploy` 是手动兜底入口，返回并启动 `server_agent_deploy` 任务；任务中心重试或立即运行也支持该任务类型。该任务的注册 executor 必须同步执行安装、健康检查和终态写入，避免任务中心在远端部署完成前显示 completed；HTTP 创建入口如果需要快速返回，只能在任务已标记 running 后由模块内 helper 后台执行。未安装时前端显示安装按钮，已安装但异常时显示重装按钮。服务器详情页只显示一条紧凑的服务器错误提示，优先展示 `agent.last_error`，不再在访问信息区重复渲染第二条 Agent 错误横幅。
-- agent 部署任务通过 SSH 上传独立 `panel-agent` 二进制到目标机，再以 `/usr/local/bin/panel-agent` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url`，并以最多 10 次、每次 1 秒的健康轮询替代固定 sleep 检查兼容性。
+- agent 部署任务通过 SSH 上传独立 `panel-agent` 二进制到目标机，再以 `/usr/local/bin/panel-agent --srv` 的 systemd 服务运行；任务会写入 mTLS 证书、`PANEL_AGENT_DOCKER_HOST` 和 `/etc/systemd/system/panel-agent.service`，启动后回写 `agent.enabled=true`、`agent.url`，并以最多 10 次、每次 1 秒的健康轮询替代固定 sleep 检查兼容性。
 - Panel 固定从 `/app/panel-agents/<goos>-<goarch>/panel-agent` 读取 agent bundle，并根据目标服务器结构化 `architecture.os`/`architecture.arch` 选择 `linux-amd64` 或 `linux-arm64`；结构化架构缺失时先探测目标节点并持久化结果。该位置不可通过配置或环境变量修改；发布镜像会把随 Panel 构建的 agent bundle 复制到 `/app/panel-agents`，部署任务每次直接读取对应文件并上传到目标机。
 - `POST /api/v1/servers/{id}/agent/certificate` 签发目标机 `panel-agent` 的 mTLS server 证书包；响应包含 CA、server certificate、server private key、建议监听地址、agent URL 和 Docker host，只作为高级手动安装兜底，不会落库。
 
@@ -144,12 +144,11 @@
 - 部署任务按 `agentNeedsBinaryUpgrade` 拆分两条路径：需要完整安装/升级（未配置 URL、版本缺失或与 Panel 不一致、agent 状态非 compatible/incompatible）时上传二进制并执行 `agentInstallScript`；证书续期、URL 修正等仅需重启的场景只重写证书/env/systemd 配置并执行 `agentRestartScript`，不传输二进制。二进制 bundle 根路径仍固定为 `/app/panel-agents`。
 ## Agent 只读 CLI（--cli apps）
 
-- `panel-agent` 支持 `--cli` 命令行入口：`panel-agent --cli apps <command>`，用于在节点上直接读取本机 Docker 中 Panel 管理的容器信息；不带 `--cli` 时行为完全不变，仍启动 gRPC 服务。实现位于 `internal/agent/cli`，入口在 `cmd/panel-agent/main.go`。
+- `panel-agent` 支持 `--cli` 命令行入口：`panel-agent --cli apps <command>`，用于在节点上直接读取本机 Docker 中 Panel 管理的容器信息；systemd 以 `panel-agent --srv` 显式启动 gRPC 服务，不传 `--cli`/`--srv` 时打印用法并退出（退出码 2），防止误启动服务。实现位于 `internal/agent/cli`，入口在 `cmd/panel-agent/main.go`。
 - 命令：
   - `apps list [--json] [--docker-host <host>]`：列出 Panel 管理容器（标签 `panel.application.managed=true`），默认表格输出，`--json` 输出完整 `DockerContainer` 数组；
   - `apps inspect <selector> [--json]`：单个容器详情，含 Panel 关联字段（application/instance id、generation、spec hash、apply mode、managed files 观测字段）与路径（应用 home、实例目录、persistent 目录）；
   - `apps where <selector>`：打印应用主目录 `/opt/panel/apps/<appID>`（目录必须存在）；
-  - `apps cd <selector>`：在应用主目录下启动交互式子 shell（优先 `$SHELL`，回退 `sh`）。
 - selector 按 容器名 > 实例 ID > 应用 ID 匹配；应用 ID 对应多个实例时报错，提示使用容器名或实例 ID。
 - Docker host 优先级：`--docker-host` > `PANEL_AGENT_DOCKER_HOST` > `unix:///var/run/docker.sock`。
 - 退出码：0 成功；1 运行错误（Docker 不可达、selector 找不到/歧义、home 不存在）；2 用法错误。错误写 stderr，帮助写 stdout。
