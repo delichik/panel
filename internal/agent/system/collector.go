@@ -110,6 +110,86 @@ func (LocalCollector) MetricsSnapshot(ctx context.Context, serverID string) (lin
 	}, nil
 }
 
+func (LocalCollector) CPUUsage(ctx context.Context) (float64, error) {
+	firstCPU, err := readCPUStat()
+	if err != nil {
+		return 0, err
+	}
+	if err := sleepContext(ctx, time.Second); err != nil {
+		return 0, err
+	}
+	secondCPU, err := readCPUStat()
+	if err != nil {
+		return 0, err
+	}
+	return cpuUsage(firstCPU, secondCPU), nil
+}
+
+func (LocalCollector) NetworkRates(ctx context.Context) (rx, tx float64, err error) {
+	firstNet, err := readNetworkTotals()
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := sleepContext(ctx, time.Second); err != nil {
+		return 0, 0, err
+	}
+	secondNet, err := readNetworkTotals()
+	if err != nil {
+		return 0, 0, err
+	}
+	return float64(maxInt64(0, secondNet.rx-firstNet.rx)), float64(maxInt64(0, secondNet.tx-firstNet.tx)), nil
+}
+
+func (LocalCollector) MemoryStats(ctx context.Context) (total, used int64, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	total, available := readMemoryStats()
+	return total, maxInt64(0, total-available), nil
+}
+
+func (LocalCollector) DiskUsage(ctx context.Context) (total, used int64, err error) {
+	if err := ctx.Err(); err != nil {
+		return 0, 0, err
+	}
+	diskTotal, diskUsed := readRootDiskUsage()
+	return int64(diskTotal), int64(diskUsed), nil
+}
+
+func (LocalCollector) SystemStatus(ctx context.Context) (linux.SystemStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return linux.SystemStatus{}, err
+	}
+	hostname, _ := os.Hostname()
+	osInfo, _ := (LocalCollector{}).OSRelease(ctx)
+	kernel := readKernelVersion()
+	uptime := readUptimeSeconds()
+	load := readFirstLine("/proc/loadavg")
+	load1, load5, load15 := parseLoadAverage(load)
+	return linux.SystemStatus{
+		Hostname:      hostname,
+		KernelVersion: kernel,
+		OSVersion:     osInfo.PrettyName,
+		ServerTime:    time.Now().UTC(),
+		UptimeSeconds: uptime,
+		LoadAverage:   normalizedLoadAverage(load),
+		Load1:         load1,
+		Load5:         load5,
+		Load15:        load15,
+	}, nil
+}
+
+func sleepContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func parseLoadAverage(raw string) (float64, float64, float64) {
 	fields := strings.Fields(raw)
 	if len(fields) < 3 {

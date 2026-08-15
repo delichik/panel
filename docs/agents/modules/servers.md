@@ -173,3 +173,5 @@
 - Agent 观察到 Docker image 事件（pull/tag/untag/delete/import/load/save）或 dpkg 状态文件变化时，会在上报流直接推送镜像快照（`images` 字段）或软件包更新列表（`package_updates` 字段）；Panel 收到后直接落库，不再触发 Panel 侧刷新任务。Agent 侧做防抖：镜像推送至少间隔 30 秒，软件包推送至少间隔 10 分钟。Panel 的 30 分钟周期检查（`image_refresh` / `package_refresh`）继续作为主动兜底；推送或落库失败只记录日志，不中断上报流。指标落库失败同样只记录日志，不中断上报流。
 - 容器快照 Panel 侧有空报告防御：agent 本次未携带容器快照（`Containers` 为空）时，Panel 不调用 `SaveReportedContainers`，不会用空列表清空既有容器观察；agent 侧不再广播空对象。
 - Agent metrics and Docker status collection is driven by a shared watcher hub: no active stream means no sampling, and multiple streams reuse the same sample instead of collecting multiple times. Docker container events also wake the hub to send immediate `container_change` full snapshots in addition to periodic samples.
+- Agent 指标采集与上报解耦：CPU、内存、磁盘、网络、系统状态各由独立采样协程持续采集并写入内存缓存（一次采集后等待 1 秒再进行下一次）；上报循环是唯一提交方，到 Unix 对齐整点只从缓存读取快照并统一上报，因此单次采集耗时不会导致整点跳拍或延迟上报表。缓存尚未齐全（刚启动或采集持续失败）时上报不携带指标，Panel 保留既有数据。
+

@@ -71,10 +71,19 @@ func TestReportIntervalDueUsesUnixBoundary(t *testing.T) {
 
 type okReportCollector struct{}
 
-func (okReportCollector) MetricsSnapshot(context.Context, string) (linux.MetricsSnapshot, error) {
-	return linux.MetricsSnapshot{}, nil
+func (okReportCollector) CPUUsage(context.Context) (float64, error) { return 12, nil }
+func (okReportCollector) MemoryStats(context.Context) (int64, int64, error) {
+	return 2048, 1024, nil
 }
-
+func (okReportCollector) DiskUsage(context.Context) (int64, int64, error) {
+	return 8192, 4096, nil
+}
+func (okReportCollector) NetworkRates(context.Context) (float64, float64, error) {
+	return 100, 200, nil
+}
+func (okReportCollector) SystemStatus(context.Context) (linux.SystemStatus, error) {
+	return linux.SystemStatus{LoadAverage: "1.00 0.50 0.25", Load1: 1, Load5: 0.5, Load15: 0.25}, nil
+}
 func (okReportCollector) PackageUpdates(context.Context) ([]linux.PackageUpdate, error) {
 	return nil, nil
 }
@@ -96,10 +105,21 @@ func TestReportHubKeepsSchedulingWhenWatchersChurn(t *testing.T) {
 
 type failingReportCollector struct{}
 
-func (failingReportCollector) MetricsSnapshot(context.Context, string) (linux.MetricsSnapshot, error) {
-	return linux.MetricsSnapshot{}, errors.New("metrics unavailable")
+func (failingReportCollector) CPUUsage(context.Context) (float64, error) {
+	return 0, errors.New("cpu unavailable")
 }
-
+func (failingReportCollector) MemoryStats(context.Context) (int64, int64, error) {
+	return 0, 0, errors.New("memory unavailable")
+}
+func (failingReportCollector) DiskUsage(context.Context) (int64, int64, error) {
+	return 0, 0, errors.New("disk unavailable")
+}
+func (failingReportCollector) NetworkRates(context.Context) (float64, float64, error) {
+	return 0, 0, errors.New("network unavailable")
+}
+func (failingReportCollector) SystemStatus(context.Context) (linux.SystemStatus, error) {
+	return linux.SystemStatus{}, errors.New("status unavailable")
+}
 func (failingReportCollector) PackageUpdates(context.Context) ([]linux.PackageUpdate, error) {
 	return nil, errors.New("packages unavailable")
 }
@@ -114,5 +134,47 @@ func TestCollectAndBroadcastKeepsFailedCollectionsNil(t *testing.T) {
 	case msg := <-watcher.ch:
 		t.Fatalf("expected no report when both collections fail, got %#v", msg)
 	case <-time.After(50 * time.Millisecond):
+	}
+}
+func TestMetricCacheRequiresAllParts(t *testing.T) {
+	c := &metricCache{}
+	if _, ok := c.snapshot(); ok {
+		t.Fatal("cache without values must not be ready")
+	}
+	c.setCPU(12)
+	c.setMemory(2048, 1024)
+	c.setDisk(8192, 4096)
+	c.setNetwork(100, 200)
+	c.setStatus(linux.SystemStatus{LoadAverage: "1.00 0.50 0.25"})
+	snap, ok := c.snapshot()
+	if !ok {
+		t.Fatal("cache with all parts must be ready")
+	}
+	if snap.CPUUsagePercent != 12 || snap.MemoryUsedBytes != 1024 || snap.NetworkRxBytesRate != 100 {
+		t.Fatalf("unexpected snapshot: %#v", snap)
+	}
+}
+
+func TestCollectAndBroadcastUsesCachedMetrics(t *testing.T) {
+	hub := newReportHub(failingReportCollector{}, nil)
+	hub.metrics.setCPU(42)
+	hub.metrics.setMemory(2048, 1024)
+	hub.metrics.setDisk(8192, 4096)
+	hub.metrics.setNetwork(100, 200)
+	hub.metrics.setStatus(linux.SystemStatus{LoadAverage: "1.00 0.50 0.25"})
+	watcher := hub.add(reportConfig{serverID: "s1", metricsInterval: time.Second, containerInterval: 0})
+	defer hub.remove(watcher.id)
+
+	hub.collectAndBroadcast(time.Unix(10, 0).UTC(), false, "")
+	select {
+	case msg := <-watcher.ch:
+		if msg.GetMetrics() == nil {
+			t.Fatal("expected cached metrics in report")
+		}
+		if msg.GetMetrics().GetCpuUsagePercent() != 42 {
+			t.Fatalf("unexpected cpu value: %v", msg.GetMetrics().GetCpuUsagePercent())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected a report with cached metrics")
 	}
 }

@@ -32,15 +32,21 @@ type reportConfig struct {
 }
 
 // reportCollector is the subset of agentsystem.LocalCollector used by the
-// report hub; it exists so tests can inject failing collectors.
+// report hub; it exists so tests can inject failing collectors. 每个指标有
+// 独立的采样协程，上报循环只读取它们写入的内存缓存。
 type reportCollector interface {
-	MetricsSnapshot(ctx context.Context, serverID string) (linux.MetricsSnapshot, error)
+	CPUUsage(ctx context.Context) (float64, error)
+	MemoryStats(ctx context.Context) (total, used int64, err error)
+	DiskUsage(ctx context.Context) (total, used int64, err error)
+	NetworkRates(ctx context.Context) (rx, tx float64, err error)
+	SystemStatus(ctx context.Context) (linux.SystemStatus, error)
 	PackageUpdates(ctx context.Context) ([]linux.PackageUpdate, error)
 }
 
 type reportHub struct {
 	collector reportCollector
 	runtime   *agentdocker.LocalRuntime
+	metrics   *metricCache
 
 	mu                sync.Mutex
 	watchers          map[int]*reportWatcher
@@ -63,10 +69,87 @@ type reportWatcherSnapshot struct {
 	ch  chan *agentpb.AgentReport
 }
 
+// metricCache 保存各指标采样协程产出的最新值。上报循环只读取这份缓存并
+// 在整点统一提交，因此单次采集耗时不会拖慢或跳过上报表的整点调度。
+type metricCache struct {
+	mu sync.RWMutex
+
+	cpuUsagePercent    float64
+	hasCPU             bool
+	memoryUsedBytes    int64
+	memoryTotalBytes   int64
+	hasMemory          bool
+	diskUsedBytes      int64
+	diskTotalBytes     int64
+	hasDisk            bool
+	networkRxBytesRate float64
+	networkTxBytesRate float64
+	hasNetwork         bool
+	status             linux.SystemStatus
+	hasStatus          bool
+}
+
+func (c *metricCache) snapshot() (linux.MetricsSnapshot, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if !c.hasCPU || !c.hasMemory || !c.hasDisk || !c.hasNetwork || !c.hasStatus {
+		return linux.MetricsSnapshot{}, false
+	}
+	return linux.MetricsSnapshot{
+		CPUUsagePercent:    c.cpuUsagePercent,
+		MemoryUsedBytes:    c.memoryUsedBytes,
+		MemoryTotalBytes:   c.memoryTotalBytes,
+		DiskUsedBytes:      c.diskUsedBytes,
+		DiskTotalBytes:     c.diskTotalBytes,
+		NetworkRxBytesRate: c.networkRxBytesRate,
+		NetworkTxBytesRate: c.networkTxBytesRate,
+		Status:             c.status,
+	}, true
+}
+
+func (c *metricCache) setCPU(value float64) {
+	c.mu.Lock()
+	c.cpuUsagePercent = value
+	c.hasCPU = true
+	c.mu.Unlock()
+}
+
+func (c *metricCache) setMemory(total, used int64) {
+	c.mu.Lock()
+	c.memoryTotalBytes = total
+	c.memoryUsedBytes = used
+	c.hasMemory = true
+	c.mu.Unlock()
+}
+
+func (c *metricCache) setDisk(total, used int64) {
+	c.mu.Lock()
+	c.diskTotalBytes = total
+	c.diskUsedBytes = used
+	c.hasDisk = true
+	c.mu.Unlock()
+}
+
+func (c *metricCache) setNetwork(rx, tx float64) {
+	c.mu.Lock()
+	c.networkRxBytesRate = rx
+	c.networkTxBytesRate = tx
+	c.hasNetwork = true
+	c.mu.Unlock()
+}
+
+func (c *metricCache) setStatus(status linux.SystemStatus) {
+	c.mu.Lock()
+	c.status = status
+	c.hasStatus = true
+	c.mu.Unlock()
+}
+
 func newReportHub(collector reportCollector, runtime *agentdocker.LocalRuntime) *reportHub {
 	return &reportHub{
 		collector: collector,
 		runtime:   runtime,
+		metrics:   &metricCache{},
 		watchers:  map[int]*reportWatcher{},
 		wake:      make(chan struct{}, 1),
 	}
@@ -164,6 +247,7 @@ func (h *reportHub) run() {
 	go h.watchContainerEvents(eventCtx)
 	go h.watchImageEvents(eventCtx)
 	go h.watchPackageEvents(eventCtx)
+	go h.runMetricsSamplers(eventCtx)
 	for {
 		watchers := h.snapshot()
 		if len(watchers) == 0 {
@@ -185,6 +269,99 @@ func (h *reportHub) run() {
 			continue
 		}
 		h.collectAndBroadcast(dueAt, false, "")
+	}
+}
+
+// runMetricsSamplers 为每个指标启动独立的采样协程，采样结果只写入内存缓存；
+// 上报循环是唯一的提交方，在整点从缓存读取后统一上报。
+func (h *reportHub) runMetricsSamplers(ctx context.Context) {
+	var wg sync.WaitGroup
+	wg.Add(5)
+	go func() { defer wg.Done(); h.sampleCPU(ctx) }()
+	go func() { defer wg.Done(); h.sampleMemory(ctx) }()
+	go func() { defer wg.Done(); h.sampleDisk(ctx) }()
+	go func() { defer wg.Done(); h.sampleNetwork(ctx) }()
+	go func() { defer wg.Done(); h.sampleStatus(ctx) }()
+	wg.Wait()
+}
+
+func (h *reportHub) sampleCPU(ctx context.Context) {
+	for {
+		value, err := h.collector.CPUUsage(ctx)
+		if err == nil {
+			h.metrics.setCPU(value)
+		} else if ctx.Err() == nil {
+			logging.L().Warn("agent CPU sampling failed", zap.Error(err))
+		}
+		if !waitSamplerTick(ctx) {
+			return
+		}
+	}
+}
+
+func (h *reportHub) sampleMemory(ctx context.Context) {
+	for {
+		total, used, err := h.collector.MemoryStats(ctx)
+		if err == nil {
+			h.metrics.setMemory(total, used)
+		} else if ctx.Err() == nil {
+			logging.L().Warn("agent memory sampling failed", zap.Error(err))
+		}
+		if !waitSamplerTick(ctx) {
+			return
+		}
+	}
+}
+
+func (h *reportHub) sampleDisk(ctx context.Context) {
+	for {
+		total, used, err := h.collector.DiskUsage(ctx)
+		if err == nil {
+			h.metrics.setDisk(total, used)
+		} else if ctx.Err() == nil {
+			logging.L().Warn("agent disk sampling failed", zap.Error(err))
+		}
+		if !waitSamplerTick(ctx) {
+			return
+		}
+	}
+}
+
+func (h *reportHub) sampleNetwork(ctx context.Context) {
+	for {
+		rx, tx, err := h.collector.NetworkRates(ctx)
+		if err == nil {
+			h.metrics.setNetwork(rx, tx)
+		} else if ctx.Err() == nil {
+			logging.L().Warn("agent network sampling failed", zap.Error(err))
+		}
+		if !waitSamplerTick(ctx) {
+			return
+		}
+	}
+}
+
+func (h *reportHub) sampleStatus(ctx context.Context) {
+	for {
+		status, err := h.collector.SystemStatus(ctx)
+		if err == nil {
+			h.metrics.setStatus(status)
+		} else if ctx.Err() == nil {
+			logging.L().Warn("agent status sampling failed", zap.Error(err))
+		}
+		if !waitSamplerTick(ctx) {
+			return
+		}
+	}
+}
+
+// waitSamplerTick 是采样协程的固定节拍：一次采集完成后等待 1 秒再进行下一次。
+func waitSamplerTick(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(time.Second):
+		return true
 	}
 }
 
@@ -435,14 +612,11 @@ func (h *reportHub) collectAndBroadcast(sampleAt time.Time, forceContainers bool
 	defer cancel()
 	var metrics *agentpb.MetricsSnapshotResponse
 	if collectMetrics {
-		snap, err := h.collector.MetricsSnapshot(ctx, serverID)
-		if err == nil {
+		if snap, ok := h.metrics.snapshot(); ok {
 			metrics = pbSnapshot(snap)
-		} else {
-			// Keep the field nil so the panel never overwrites a previously
-			// collected snapshot with an empty one.
-			logging.L().Warn("agent report metrics collection failed", zap.String("server_id", serverID), zap.Error(err))
 		}
+		// 采样缓存尚未齐全（刚启动或采集持续失败）时保持 nil，
+		// Panel 不会用空快照覆盖旧数据。
 	}
 
 	var containers *agentpb.DockerContainersResponse
