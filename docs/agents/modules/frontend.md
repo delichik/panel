@@ -17,7 +17,7 @@
 - 任务中心搜索透传 q 到 GET /api/v1/tasks 做跨页搜索（id/summary/type/error LIKE）并重置 page=1，不再只过滤当前页；状态筛选覆盖 scheduled/blocked/cancelled/failed_retryable，StatusBadge 显示本地化 label。
 - servers/credentials 主从工作台的搜索、分页与选中项同步到 URL query，并在刷新/回退时恢复；任务中心详情（steps/logs）加载失败显示错误 + 重试，与“无步骤/无日志”空态分离。
 - 服务器重启、UFW 安装、重置 JWT secret、清除待处理还原等危险操作必须经 danger 确认对话框并说明影响范围；维护页在 applying 阶段隐藏“清除待处理还原”按钮。
-- 概览页多服务器指标按时间戳对齐后聚合（不按数组下标）；进入编辑态提供取消/放弃按钮与路由离开保护；卡片删除需确认；containerUpdates 卡片当前展示“指标陈旧主机”计数（数据源未提供容器更新计数）。
+- 概览页多服务器指标按时间戳对齐后聚合（不按数组下标）；进入编辑态提供取消/放弃按钮与路由离开保护；卡片删除需确认；containerUpdates 卡片当前展示“指标陈旧主机”计数（数据源未提供容器更新计数）。多服务器折线中某服务器缺失的时间点渲染为空缺（gap），不填充 0。
 - 设置页保存语言时同步前端 i18n locale（setLocale + localStorage panel.locale）；数字字段带 min/范围就地校验；关闭加密导出显示身份可恢复性警示；还原文件选择使用 FileUploadButton。
 
 > **状态说明（2026-07-21）：前端基础设施已进入 v4。** 上一版“统一 CollectionPage + Naive UI”的重构判定不合格，当前已移除 Naive UI，不恢复 Vuetify。新标准为 Vue 3 + Vite + Vue Router + Pinia + Tailwind + Panel 自有 UI primitives + lucide + ECharts + YAML。`tmp/v1-archive/` 只能作为业务能力参照，禁止复制视觉、布局、操作流或旧 UI 组件写法。

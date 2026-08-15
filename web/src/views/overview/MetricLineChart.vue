@@ -12,7 +12,7 @@ use([CanvasRenderer, LineChart, GridComponent, TooltipComponent]);
 
 const props = defineProps<{
   labels: string[];
-  series: Array<{ id: string; name: string; values: number[] }>;
+  series: Array<{ id: string; name: string; values: Array<number | null> }>;
   valueKind: 'percent' | 'bytes';
 }>();
 
@@ -48,21 +48,22 @@ function sampleLabels(labels: string[], maxPoints: number): string[] {
   return result;
 }
 
-function sampleValues(values: number[], length: number, maxPoints: number): number[] {
+function sampleValues(values: Array<number | null>, length: number, maxPoints: number): Array<number | null> {
   const count = Math.min(length, maxPoints);
   if (count === values.length) return values;
-  const result: number[] = [];
+  const result: Array<number | null> = [];
   for (let i = 0; i < count; i += 1) {
     const [start, end] = bucketBounds(length, i, count);
     let sum = 0;
     let n = 0;
     for (let j = start; j < end; j += 1) {
-      if (values[j] !== undefined) {
-        sum += values[j];
+      const value = values[j];
+      if (value !== undefined && value !== null) {
+        sum += value;
         n += 1;
       }
     }
-    result.push(n ? sum / n : 0);
+    result.push(n ? sum / n : null);
   }
   return result;
 }
@@ -86,8 +87,13 @@ const option = computed<EChartsOption>(() => {
     textStyle: { color: text.value, fontSize: 12 },
     formatter(params) {
       const rows = Array.isArray(params) ? params : [params];
+      const rendered = rows.filter((row) => {
+        const value = Array.isArray(row.value) ? row.value.at(-1) : row.value;
+        return value !== null && value !== undefined;
+      });
+      if (!rendered.length) return '';
       const time = rows[0]?.name ? formatDateTime(String(rows[0].name)) : '';
-      return `<div class="overview-metric-tooltip__body">${time ? `<div class="overview-metric-tooltip__time">${escapeHtml(time)}</div>` : ''}${rows.map((row) => {
+      return `<div class="overview-metric-tooltip__body">${time ? `<div class="overview-metric-tooltip__time">${escapeHtml(time)}</div>` : ''}${rendered.map((row) => {
         const value = Array.isArray(row.value) ? Number(row.value.at(-1)) : Number(row.value);
         return `<div class="overview-metric-tooltip__row">${row.marker ?? ''}<span class="overview-metric-tooltip__name">${escapeHtml(String(row.seriesName ?? ''))}</span><span class="overview-metric-tooltip__value">${formatValue(value)}</span></div>`;
       }).join('')}</div>`;

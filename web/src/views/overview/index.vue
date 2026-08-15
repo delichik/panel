@@ -439,7 +439,7 @@ function cardChartData(card: OverviewCardConfiguration) {
       name: item.name,
       values: times.map((time) => {
         const point = item.points.find((candidate) => candidate.time === time);
-        return point ? metricValueOf(card, point) : 0;
+        return point ? metricValueOf(card, point) : null;
       }),
     })),
   };
